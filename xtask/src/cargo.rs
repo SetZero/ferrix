@@ -24,6 +24,7 @@ pub(crate) fn build_kernel(arch: Arch, release: bool) -> Result<PathBuf> {
 
 /// Run `cargo build -p <package> --target <target>`.
 fn build(package: &str, target: &str, release: bool) -> Result<()> {
+    refuse_inherited_rustflags()?;
     println!("  building {package} for {target}");
 
     let mut command = Command::new(cargo());
@@ -39,6 +40,32 @@ fn build(package: &str, target: &str, release: bool) -> Result<()> {
     }
 
     run(command, &format!("cargo build -p {package}"))
+}
+
+/// Refuse to build with `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` set.
+///
+/// Either one *replaces* the per-target `rustflags` in `.cargo/config.toml`
+/// rather than adding to them, and those flags are what put the kernel where the
+/// loader maps it: the linker script, the page size, the static relocation
+/// model. Without them the build still succeeds and the image is still written,
+/// and the failure arrives at boot as a loader panic that names neither the
+/// variable nor the cause. CI set `RUSTFLAGS: -D warnings` for its whole
+/// workflow and lost its first boot test exactly that way.
+fn refuse_inherited_rustflags() -> Result<()> {
+    for variable in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"] {
+        if std::env::var_os(variable).is_some_and(|value| !value.is_empty()) {
+            return Err(Error::new(format!(
+                "{variable} is set. {}",
+                concat!(
+                    "It replaces the per-target rustflags in .cargo/config.toml rather ",
+                    "than adding to them, which drops the kernel's linker script: the ",
+                    "image would build and then fail to boot. Unset it, and deny ",
+                    "warnings with `cargo clippy -- -D warnings` instead.",
+                ),
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The path an artefact was written to, checked for existence so that a

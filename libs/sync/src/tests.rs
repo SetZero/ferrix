@@ -171,12 +171,29 @@ fn the_ticket_lock_starves_nobody() {
     // thread can wait indefinitely. A ticket lock hands out in arrival order,
     // so acquisitions by different threads must interleave heavily rather than
     // run in long unbroken stretches.
+    //
+    // That only holds while every thread is spinning at once, which needs a
+    // core each. Past that the test measures the OS scheduler instead of the
+    // lock: a thread handed a timeslice finishes all of its acquisitions before
+    // the others have taken a ticket, and a perfectly fair lock scores a handful
+    // of handovers. A CI runner with two vCPUs produced exactly that -- seven in
+    // sixteen hundred -- so the thread count is capped at the parallelism the
+    // process actually has.
     const PER_THREAD: usize = 200;
 
-    let order = Arc::new(SpinLock::new(Vec::new()));
-    let start = Arc::new(Barrier::new(THREADS));
+    let threads = thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(THREADS);
+    if threads < 2 {
+        // One core cannot show fairness at all: nothing ever waits while
+        // another thread holds the lock. No runner this tree uses is that small.
+        return;
+    }
 
-    let workers: Vec<_> = (0..THREADS)
+    let order = Arc::new(SpinLock::new(Vec::new()));
+    let start = Arc::new(Barrier::new(threads));
+
+    let workers: Vec<_> = (0..threads)
         .map(|id| {
             let order = Arc::clone(&order);
             let start = Arc::clone(&start);
@@ -196,7 +213,7 @@ fn the_ticket_lock_starves_nobody() {
     let acquisitions = order.lock();
     assert_eq!(
         acquisitions.len(),
-        THREADS * PER_THREAD,
+        threads * PER_THREAD,
         "every acquisition should have been recorded"
     );
 
@@ -204,7 +221,7 @@ fn the_ticket_lock_starves_nobody() {
     for &id in acquisitions.iter() {
         seen[id] += 1;
     }
-    for (id, count) in seen.iter().enumerate() {
+    for (id, count) in seen.iter().take(threads).enumerate() {
         assert_eq!(*count, PER_THREAD, "thread {id} did not finish its work");
     }
 
