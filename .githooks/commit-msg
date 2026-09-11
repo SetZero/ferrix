@@ -1,0 +1,37 @@
+#!/bin/sh
+#
+# Reject any Co-authored-by trailer.
+#
+# Ferrix records one author per commit. A trailer naming a second is either a
+# tool adding itself or a pairing convention this project does not use, and
+# both are easier to refuse now than to rewrite out of published history.
+#
+# This is the authoring-time check; `pre-push` repeats it over the whole range
+# being published, so a `--no-verify` or a rebase that never reopens the message
+# does not get a commit past it silently.
+
+set -eu
+
+message="$1"
+
+# What git will actually keep. Two things have to come off first or the check
+# fires on text that never reaches the commit:
+#
+#   * everything below the scissors line, which is the diff `git commit -v`
+#     appends -- and this very file is in that diff whenever the hook changes;
+#   * comment lines, which `cleanup` strips anyway.
+subject_and_body=$(
+    sed -e '/^# *-\{1,\} *>8 *-\{1,\}/,$d' -e '/^[[:space:]]*#/d' "$message"
+)
+
+if printf '%s\n' "$subject_and_body" | grep -qiE '^[[:space:]]*co-authored-by[[:space:]]*:'; then
+    offending=$(printf '%s\n' "$subject_and_body" | grep -inE '^[[:space:]]*co-authored-by[[:space:]]*:')
+    echo "commit-msg: refusing a Co-authored-by trailer." >&2
+    echo >&2
+    printf '  %s\n' "$offending" >&2
+    echo >&2
+    echo "Ferrix commits name one author. Remove the trailer and commit again." >&2
+    exit 1
+fi
+
+exit 0

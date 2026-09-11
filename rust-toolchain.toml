@@ -1,0 +1,18 @@
+[toolchain]
+# Pinned exactly rather than "stable": a floating channel means a compiler
+# upgrade lands as a red CI run on somebody's unrelated pull request. Bumping
+# this is its own commit.
+#
+# Kept in step with `rust-version` in Cargo.toml, which is what the v3 resolver
+# holds dependencies to.
+channel = "1.97.1"
+components = ["rustfmt", "clippy", "llvm-tools", "rust-src"]
+targets = [
+    # The kernel: freestanding, no red zone, soft float, kernel code model.
+    "x86_64-unknown-none",
+    "aarch64-unknown-none-softfloat",
+    # The loader: firmware calls it in 64-bit mode, which is why this project
+    # has no bootstrap assembly on either architecture.
+    "x86_64-unknown-uefi",
+    "aarch64-unknown-uefi",
+]

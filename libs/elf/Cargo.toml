@@ -1,0 +1,17 @@
+[package]
+name = "ferrix-elf"
+description = "Bounds-checked ELF64 reader for the Ferrix loader and kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+# The crate also carries `#![forbid(unsafe_code)]` in its own source. It cannot
+# be stated here -- `[lints] workspace = true` and a per-crate lint table cannot
+# coexist, which is what makes the layering check a straight yes or no -- so the
+# exception lives with the code that earns it, as docs/ARCHITECTURE.md requires.
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+# Normalise to LF in the repository and on checkout.
+#
+# `rustfmt.toml` sets `newline_style = "Unix"`, so a checkout that converted to
+# CRLF would fail `cargo fmt --check` on a clean clone, on Windows only, which
+# is the worst place for a gate to disagree with itself. Setting it here rather
+# than relying on each developer's `core.autocrlf` keeps the rule with the code.
+* text=auto eol=lf
+
+# Shell scripts must keep LF whatever the platform: CRLF makes a `#!` line
+# unparseable and the failure ("bad interpreter") does not name the cause.
+*.sh text eol=lf
+
+# Firmware images, disk images and anything else with a fixed byte layout.
+*.fd binary
+*.img binary
+*.bin binary
+*.png binary
+
+# Fuzz corpora: arbitrary bytes, chosen for the shape they have. `text=auto`
+# classifies the entries without a NUL byte as text and would rewrite their
+# line endings, changing the input the target replays.
+fuzz/corpus/** binary
+fuzz/artifacts/** binary

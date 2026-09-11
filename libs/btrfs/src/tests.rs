@@ -1,0 +1,940 @@
+//! Tests for the btrfs on-disk format.
+//!
+//! Structures are built here rather than checked in as an image, so a failure
+//! names the field that is wrong instead of pointing at an opaque blob. The
+//! builders below write the layout independently of the parsers under test —
+//! a builder that reused the parser's own offsets could not catch the parser
+//! putting a field in the wrong place.
+
+extern crate std;
+
+use std::vec;
+use std::vec::Vec;
+
+use super::chunk::{ChunkItem, ChunkMap, ChunkMapEntry, ChunkProfile};
+use super::crc32c::{POLYNOMIAL, TABLE, crc32c};
+use super::items::{DirItemIter, ExtentData, ExtentDataBody, InodeItem, name_hash};
+use super::superblock::{ChecksumType, MAGIC, SUPERBLOCK_SIZE, Superblock};
+use super::tree::{BtrfsKey, HEADER_SIZE, ITEM_SIZE, KEY_PTR_SIZE, Node};
+use super::*;
+
+// ---------------------------------------------------------------------------
+// CRC-32C
+// ---------------------------------------------------------------------------
+
+#[test]
+fn crc32c_matches_the_published_vectors() {
+    // Castagnoli, the polynomial btrfs checksums with. These three appear in
+    // every implementation's test suite, which is what makes them useful: an
+    // implementation that gets them right is talking to the same standard as
+    // `btrfs-progs`.
+    assert_eq!(crc32c(b""), 0, "the empty input has checksum zero");
+    assert_eq!(crc32c(b"a"), 0xC1D0_4330, "single byte vector");
+    assert_eq!(crc32c(b"123456789"), 0xE306_9283, "the check value");
+}
+
+#[test]
+fn crc32c_is_not_crc32() {
+    // The ordinary CRC-32 of "123456789" is 0xCBF43926. Getting the two
+    // confused produces a filesystem every other tool calls corrupt.
+    assert_ne!(crc32c(b"123456789"), 0xCBF4_3926, "this must be Castagnoli");
+}
+
+#[test]
+fn crc32c_covers_long_input() {
+    let long = vec![0x5Au8; 4096];
+    let whole = crc32c(&long);
+    assert_ne!(whole, 0, "a page of data should not check out as zero");
+    assert_ne!(
+        whole,
+        crc32c(&long[..4095]),
+        "dropping a byte must change the checksum"
+    );
+}
+
+#[test]
+fn the_name_hash_differs_from_a_plain_checksum() {
+    // Directory item offsets are the name's CRC-32C seeded with `!1`, not the
+    // plain checksum. Using the wrong one puts every directory entry at the
+    // wrong key and lookups silently find nothing.
+    assert_ne!(
+        name_hash(b"hello"),
+        u64::from(crc32c(b"hello")),
+        "the directory hash is seeded differently"
+    );
+    assert_eq!(name_hash(b"a"), name_hash(b"a"), "and is deterministic");
+    assert_ne!(name_hash(b"a"), name_hash(b"b"));
+}
+
+// ---------------------------------------------------------------------------
+// Superblock
+// ---------------------------------------------------------------------------
+
+/// Field offsets, written out here independently of the parser's own.
+mod offset {
+    pub(super) const CSUM: usize = 0;
+    pub(super) const FSID: usize = 32;
+    pub(super) const BYTENR: usize = 48;
+    pub(super) const MAGIC: usize = 64;
+    pub(super) const GENERATION: usize = 72;
+    pub(super) const ROOT: usize = 80;
+    pub(super) const CHUNK_ROOT: usize = 88;
+    pub(super) const TOTAL_BYTES: usize = 112;
+    pub(super) const SECTORSIZE: usize = 144;
+    pub(super) const NODESIZE: usize = 148;
+    pub(super) const SYS_CHUNK_ARRAY_SIZE: usize = 160;
+    pub(super) const INCOMPAT_FLAGS: usize = 188;
+    pub(super) const CSUM_TYPE: usize = 196;
+    pub(super) const ROOT_LEVEL: usize = 198;
+    pub(super) const CHUNK_ROOT_LEVEL: usize = 199;
+    pub(super) const LABEL: usize = 299;
+    pub(super) const SYS_CHUNK_ARRAY: usize = 811;
+}
+
+/// A superblock under construction.
+struct SuperblockBuilder {
+    bytes: Vec<u8>,
+}
+
+impl SuperblockBuilder {
+    fn new() -> SuperblockBuilder {
+        let mut bytes = vec![0u8; SUPERBLOCK_SIZE];
+        bytes[offset::MAGIC..offset::MAGIC + 8].copy_from_slice(&MAGIC);
+        bytes[offset::FSID..offset::FSID + 16].copy_from_slice(&[0xAB; 16]);
+        put_u64(&mut bytes, offset::BYTENR, 0x1_0000);
+        put_u64(&mut bytes, offset::GENERATION, 42);
+        put_u64(&mut bytes, offset::ROOT, 0x2000_0000);
+        put_u64(&mut bytes, offset::CHUNK_ROOT, 0x1000_0000);
+        put_u64(&mut bytes, offset::TOTAL_BYTES, 1 << 30);
+        put_u32(&mut bytes, offset::SECTORSIZE, 4096);
+        put_u32(&mut bytes, offset::NODESIZE, 16384);
+        put_u16(&mut bytes, offset::CSUM_TYPE, 0);
+        bytes[offset::ROOT_LEVEL] = 1;
+        bytes[offset::CHUNK_ROOT_LEVEL] = 0;
+        let label = b"ferrix";
+        bytes[offset::LABEL..offset::LABEL + label.len()].copy_from_slice(label);
+        SuperblockBuilder { bytes }
+    }
+
+    fn sys_chunk_array(mut self, array: &[u8]) -> Self {
+        put_u32(
+            &mut self.bytes,
+            offset::SYS_CHUNK_ARRAY_SIZE,
+            array.len() as u32,
+        );
+        self.bytes[offset::SYS_CHUNK_ARRAY..offset::SYS_CHUNK_ARRAY + array.len()]
+            .copy_from_slice(array);
+        self
+    }
+
+    fn checksum_type(mut self, raw: u16) -> Self {
+        put_u16(&mut self.bytes, offset::CSUM_TYPE, raw);
+        self
+    }
+
+    fn incompat(mut self, flags: u64) -> Self {
+        put_u64(&mut self.bytes, offset::INCOMPAT_FLAGS, flags);
+        self
+    }
+
+    /// Seal it: the checksum covers everything after the checksum field.
+    fn build(mut self) -> Vec<u8> {
+        let computed = crc32c(&self.bytes[32..SUPERBLOCK_SIZE]);
+        self.bytes[offset::CSUM..offset::CSUM + 4].copy_from_slice(&computed.to_le_bytes());
+        self.bytes
+    }
+
+    /// Seal it with a checksum that is wrong.
+    fn build_corrupt(mut self) -> Vec<u8> {
+        let computed = crc32c(&self.bytes[32..SUPERBLOCK_SIZE]);
+        self.bytes[offset::CSUM..offset::CSUM + 4]
+            .copy_from_slice(&computed.wrapping_add(1).to_le_bytes());
+        self.bytes
+    }
+}
+
+fn put_u16(bytes: &mut [u8], at: usize, value: u16) {
+    bytes[at..at + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u32(bytes: &mut [u8], at: usize, value: u32) {
+    bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(bytes: &mut [u8], at: usize, value: u64) {
+    bytes[at..at + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+#[test]
+fn a_well_formed_superblock_parses() {
+    let bytes = SuperblockBuilder::new().build();
+    let superblock = Superblock::parse(&bytes).unwrap();
+
+    assert_eq!(superblock.magic(), MAGIC, "magic must round trip");
+    assert_eq!(superblock.generation(), 42);
+    assert_eq!(
+        superblock.root(),
+        0x2000_0000,
+        "the root tree's logical address"
+    );
+    assert_eq!(superblock.chunk_root(), 0x1000_0000);
+    assert_eq!(superblock.sectorsize(), 4096);
+    assert_eq!(superblock.nodesize(), 16384);
+    assert_eq!(superblock.root_level(), 1);
+    assert_eq!(superblock.chunk_root_level(), 0);
+    assert_eq!(superblock.csum_type(), ChecksumType::Crc32c);
+    assert_eq!(
+        superblock.label(),
+        Some("ferrix"),
+        "the label is NUL padded"
+    );
+    assert_eq!(superblock.total_bytes(), 1 << 30);
+}
+
+#[test]
+fn a_superblock_with_the_wrong_magic_is_refused() {
+    let mut bytes = SuperblockBuilder::new().build();
+    bytes[offset::MAGIC] = b'X';
+    assert!(
+        matches!(Superblock::parse(&bytes), Err(BtrfsError::BadMagic)),
+        "without the magic this is not a btrfs superblock at all"
+    );
+}
+
+#[test]
+fn a_superblock_with_a_bad_checksum_is_refused() {
+    let bytes = SuperblockBuilder::new().build_corrupt();
+    assert!(
+        matches!(
+            Superblock::parse(&bytes),
+            Err(BtrfsError::BadChecksum { .. })
+        ),
+        "a superblock that does not check out must not be trusted"
+    );
+}
+
+#[test]
+fn a_truncated_superblock_is_refused() {
+    let bytes = SuperblockBuilder::new().build();
+    for length in [0, 1, 64, 810, SUPERBLOCK_SIZE - 1] {
+        assert!(
+            Superblock::parse(&bytes[..length]).is_err(),
+            "a {length}-byte superblock must not parse"
+        );
+    }
+}
+
+#[test]
+fn an_unsupported_checksum_type_is_reported() {
+    // 1, 2 and 3 are xxhash, sha256 and blake2. They are real, and this reader
+    // does not implement them; saying so beats verifying nothing.
+    let bytes = SuperblockBuilder::new().checksum_type(2).build();
+    match Superblock::parse(&bytes) {
+        Err(BtrfsError::UnsupportedChecksum(2)) => {}
+        other => panic!("expected an unsupported-checksum error, got {other:?}"),
+    }
+}
+
+#[test]
+fn incompatible_feature_bits_are_decoded() {
+    const SKINNY_METADATA: u64 = 256;
+    const NO_HOLES: u64 = 512;
+    let bytes = SuperblockBuilder::new()
+        .incompat(SKINNY_METADATA | NO_HOLES)
+        .build();
+    let superblock = Superblock::parse(&bytes).unwrap();
+
+    assert!(superblock.incompat_flags().skinny_metadata());
+    assert!(superblock.incompat_flags().no_holes());
+    assert!(!superblock.incompat_flags().extended_iref());
+    assert_eq!(
+        superblock.incompat_flags().unknown(),
+        0,
+        "every bit set here is one this reader understands"
+    );
+}
+
+#[test]
+fn an_unknown_feature_bit_is_reported_rather_than_ignored() {
+    let bytes = SuperblockBuilder::new().incompat(1 << 40).build();
+    let superblock = Superblock::parse(&bytes).unwrap();
+    assert_ne!(
+        superblock.incompat_flags().unknown(),
+        0,
+        "a filesystem using a feature we do not implement must be recognisable as such"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Chunks: the logical-to-physical mapping
+// ---------------------------------------------------------------------------
+
+/// Build a `CHUNK_ITEM` payload.
+fn chunk_item(length: u64, type_bits: u64, stripes: &[(u64, u64)]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&length.to_le_bytes());
+    bytes.extend_from_slice(&2u64.to_le_bytes()); // owner
+    bytes.extend_from_slice(&65536u64.to_le_bytes()); // stripe_len
+    bytes.extend_from_slice(&type_bits.to_le_bytes());
+    bytes.extend_from_slice(&4096u32.to_le_bytes()); // io_align
+    bytes.extend_from_slice(&4096u32.to_le_bytes()); // io_width
+    bytes.extend_from_slice(&4096u32.to_le_bytes()); // sector_size
+    bytes.extend_from_slice(&(stripes.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes()); // sub_stripes
+    for &(devid, offset) in stripes {
+        bytes.extend_from_slice(&devid.to_le_bytes());
+        bytes.extend_from_slice(&offset.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 16]);
+    }
+    bytes
+}
+
+/// Chunk type bits.
+const CHUNK_DATA: u64 = 1;
+const CHUNK_SYSTEM: u64 = 2;
+const CHUNK_RAID1: u64 = 16;
+const CHUNK_DUP: u64 = 32;
+const CHUNK_RAID0: u64 = 8;
+
+#[test]
+fn a_single_chunk_maps_logical_to_physical() {
+    let item_bytes = chunk_item(1 << 20, CHUNK_DATA, &[(1, 0x400_0000)]);
+    let item = ChunkItem::parse(&item_bytes).unwrap();
+
+    let mut storage = [ChunkMapEntry::default(); 4];
+    let mut map = ChunkMap::new(&mut storage);
+    map.insert(0x100_0000, &item).unwrap();
+
+    assert_eq!(
+        map.logical_to_physical(0x100_0000),
+        Some((1, 0x400_0000)),
+        "the first byte of the chunk"
+    );
+    assert_eq!(
+        map.logical_to_physical(0x100_1000),
+        Some((1, 0x400_1000)),
+        "an address inside translates by its offset"
+    );
+    assert_eq!(
+        map.logical_to_physical(0x100_0000 + (1 << 20) - 1),
+        Some((1, 0x400_0000 + (1 << 20) - 1)),
+        "the last byte"
+    );
+    assert_eq!(
+        map.logical_to_physical(0x100_0000 + (1 << 20)),
+        None,
+        "one past the end is outside the chunk"
+    );
+    assert_eq!(
+        map.logical_to_physical(0),
+        None,
+        "an address in no chunk maps nowhere"
+    );
+}
+
+#[test]
+fn mirrored_profiles_read_from_the_first_stripe() {
+    // DUP and RAID1 both keep a whole copy per stripe, so a *read* can be
+    // satisfied from stripe zero. RAID0 cannot: its data is interleaved, and
+    // pretending otherwise would return the wrong bytes rather than an error.
+    for (bits, mirrored) in [(CHUNK_DUP, true), (CHUNK_RAID1, true), (CHUNK_RAID0, false)] {
+        let item_bytes = chunk_item(1 << 20, CHUNK_DATA | bits, &[(1, 0x1000), (2, 0x9000)]);
+        let item = ChunkItem::parse(&item_bytes).unwrap();
+        assert_eq!(
+            item.profile().is_mirrored(),
+            mirrored,
+            "profile {bits:#x} mirroring"
+        );
+
+        let mut storage = [ChunkMapEntry::default(); 2];
+        let mut map = ChunkMap::new(&mut storage);
+        map.insert(0, &item).unwrap();
+
+        if mirrored {
+            assert_eq!(
+                map.logical_to_physical(0),
+                Some((1, 0x1000)),
+                "a mirrored chunk reads from stripe zero"
+            );
+        } else {
+            // Recording the chunk is fine -- knowing a RAID0 chunk exists is
+            // useful. What must not happen is *translating* through it, since
+            // its data is interleaved across stripes and stripe zero holds only
+            // part of it. Refusing at translation rather than at insertion
+            // keeps the map a description of the filesystem rather than of what
+            // this reader happens to support.
+            assert!(
+                map.logical_to_physical(0).is_none(),
+                "an interleaved profile must not translate"
+            );
+            assert!(
+                matches!(map.map(0), Err(BtrfsError::UnsupportedProfile(_))),
+                "and must say why rather than merely answering nothing"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_profile_of_an_unsupported_layout_is_reported() {
+    assert!(!ChunkProfile::from_type(CHUNK_RAID0).is_supported());
+    assert!(ChunkProfile::from_type(CHUNK_DATA).is_supported());
+    assert!(ChunkProfile::from_type(CHUNK_DATA | CHUNK_DUP).is_supported());
+}
+
+#[test]
+fn a_chunk_item_with_no_stripes_is_refused() {
+    let item_bytes = chunk_item(1 << 20, CHUNK_DATA, &[]);
+    assert!(
+        ChunkItem::parse(&item_bytes).is_err(),
+        "a chunk with no stripes describes no storage at all"
+    );
+}
+
+#[test]
+fn a_truncated_chunk_item_is_refused() {
+    let item_bytes = chunk_item(1 << 20, CHUNK_DATA, &[(1, 0x1000)]);
+    for length in [0, 16, 47, item_bytes.len() - 1] {
+        assert!(
+            ChunkItem::parse(&item_bytes[..length]).is_err(),
+            "a {length}-byte chunk item must not parse"
+        );
+    }
+}
+
+#[test]
+fn the_system_chunk_array_bootstraps_the_map() {
+    // This array is the only way to read the chunk tree, because finding the
+    // chunk tree needs a mapping and the mapping lives in the chunk tree.
+    let item_bytes = chunk_item(1 << 20, CHUNK_SYSTEM, &[(1, 0x400_0000)]);
+
+    let mut array = Vec::new();
+    array.extend_from_slice(&256u64.to_le_bytes()); // key objectid: FIRST_CHUNK_TREE
+    array.push(228); // key type: CHUNK_ITEM
+    array.extend_from_slice(&0x100_0000u64.to_le_bytes()); // key offset: logical
+    array.extend_from_slice(&item_bytes);
+
+    let bytes = SuperblockBuilder::new().sys_chunk_array(&array).build();
+    let superblock = Superblock::parse(&bytes).unwrap();
+
+    let mut storage = [ChunkMapEntry::default(); 8];
+    let mut map = ChunkMap::new(&mut storage);
+    let loaded = map
+        .load_sys_chunk_array(superblock.sys_chunk_array_bytes())
+        .unwrap();
+
+    assert_eq!(loaded, 1, "one chunk in the array");
+    assert_eq!(map.logical_to_physical(0x100_0000), Some((1, 0x400_0000)));
+}
+
+#[test]
+fn a_full_chunk_map_reports_rather_than_overruns() {
+    let item_bytes = chunk_item(1 << 20, CHUNK_DATA, &[(1, 0)]);
+    let item = ChunkItem::parse(&item_bytes).unwrap();
+
+    let mut storage = [ChunkMapEntry::default(); 2];
+    let mut map = ChunkMap::new(&mut storage);
+    map.insert(0, &item).unwrap();
+    map.insert(1 << 20, &item).unwrap();
+    assert!(
+        map.insert(2 << 20, &item).is_err(),
+        "a third chunk does not fit and must be refused"
+    );
+    assert_eq!(map.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Keys
+// ---------------------------------------------------------------------------
+
+#[test]
+fn keys_order_by_objectid_then_type_then_offset() {
+    // The order is the whole basis of every lookup, and comparing the fields in
+    // the wrong order still produces a total order — one that silently finds
+    // the wrong item. Each pair below would compare the other way round under
+    // some other field order.
+    assert!(
+        BtrfsKey::new(1, 200, 999) < BtrfsKey::new(2, 1, 0),
+        "objectid dominates type and offset"
+    );
+    assert!(
+        BtrfsKey::new(5, 1, 999) < BtrfsKey::new(5, 2, 0),
+        "within one objectid, type dominates offset"
+    );
+    assert!(
+        BtrfsKey::new(5, 2, 1) < BtrfsKey::new(5, 2, 2),
+        "offset breaks the tie"
+    );
+    assert_eq!(BtrfsKey::new(7, 3, 9), BtrfsKey::new(7, 3, 9));
+}
+
+// ---------------------------------------------------------------------------
+// B-tree nodes
+// ---------------------------------------------------------------------------
+
+/// Node size used by the fixtures. The smallest btrfs allows.
+const NODE_SIZE: usize = 4096;
+
+/// Build a leaf node holding `items`, each a key and its data.
+///
+/// Item headers grow forwards from the end of the node header while the data
+/// grows *backwards* from the end of the node — a layout worth writing out by
+/// hand here, because a parser that gets it the other way round still reads
+/// plausible-looking bytes.
+fn leaf(items: &[(BtrfsKey, Vec<u8>)], logical: u64) -> Vec<u8> {
+    let mut bytes = vec![0u8; NODE_SIZE];
+    put_u64(&mut bytes, 48, logical); // bytenr
+    put_u64(&mut bytes, 80, 1); // generation
+    put_u64(&mut bytes, 88, 5); // owner: FS_TREE
+    put_u32(&mut bytes, 96, items.len() as u32); // nritems
+    bytes[100] = 0; // level: a leaf
+
+    let mut data_end = NODE_SIZE - HEADER_SIZE;
+    for (slot, (key, data)) in items.iter().enumerate() {
+        let item_at = HEADER_SIZE + slot * ITEM_SIZE;
+        put_u64(&mut bytes, item_at, key.objectid);
+        bytes[item_at + 8] = key.item_type;
+        put_u64(&mut bytes, item_at + 9, key.offset);
+
+        data_end -= data.len();
+        put_u32(&mut bytes, item_at + 17, data_end as u32);
+        put_u32(&mut bytes, item_at + 21, data.len() as u32);
+
+        let absolute = HEADER_SIZE + data_end;
+        bytes[absolute..absolute + data.len()].copy_from_slice(data);
+    }
+
+    let computed = crc32c(&bytes[32..]);
+    bytes[0..4].copy_from_slice(&computed.to_le_bytes());
+    bytes
+}
+
+/// Build an internal node holding key pointers.
+fn internal(pointers: &[(BtrfsKey, u64)], logical: u64, level: u8) -> Vec<u8> {
+    let mut bytes = vec![0u8; NODE_SIZE];
+    put_u64(&mut bytes, 48, logical);
+    put_u64(&mut bytes, 80, 1);
+    put_u64(&mut bytes, 88, 5);
+    put_u32(&mut bytes, 96, pointers.len() as u32);
+    bytes[100] = level;
+
+    for (slot, (key, blockptr)) in pointers.iter().enumerate() {
+        let at = HEADER_SIZE + slot * KEY_PTR_SIZE;
+        put_u64(&mut bytes, at, key.objectid);
+        bytes[at + 8] = key.item_type;
+        put_u64(&mut bytes, at + 9, key.offset);
+        put_u64(&mut bytes, at + 17, *blockptr);
+        put_u64(&mut bytes, at + 25, 1); // generation
+    }
+
+    let computed = crc32c(&bytes[32..]);
+    bytes[0..4].copy_from_slice(&computed.to_le_bytes());
+    bytes
+}
+
+fn sample_leaf() -> Vec<u8> {
+    leaf(
+        &[
+            (BtrfsKey::new(256, 1, 0), vec![0xAA; 32]),
+            (BtrfsKey::new(256, 12, 256), vec![0xBB; 17]),
+            (BtrfsKey::new(257, 1, 0), vec![0xCC; 8]),
+        ],
+        0x4000,
+    )
+}
+
+#[test]
+fn a_leaf_yields_its_items_in_order() {
+    let bytes = sample_leaf();
+    let node = Node::parse(&bytes, 0x4000).unwrap();
+
+    assert!(node.is_leaf(), "level zero is a leaf");
+    assert_eq!(node.nritems(), 3);
+
+    let items: Vec<_> = node.items().collect();
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].key, BtrfsKey::new(256, 1, 0));
+    assert_eq!(items[0].data, &[0xAA; 32][..], "the first item's payload");
+    assert_eq!(items[1].key, BtrfsKey::new(256, 12, 256));
+    assert_eq!(items[1].data.len(), 17);
+    assert_eq!(items[2].data, &[0xCC; 8][..]);
+}
+
+#[test]
+fn item_data_really_does_grow_backwards() {
+    // The second item's data must sit at a *lower* offset than the first's,
+    // because the data area fills from the end of the node towards the middle.
+    let bytes = sample_leaf();
+    let node = Node::parse(&bytes, 0x4000).unwrap();
+    let items: Vec<_> = node.items().collect();
+
+    assert!(
+        items[1].offset < items[0].offset,
+        "later items are stored at lower offsets: {} then {}",
+        items[0].offset,
+        items[1].offset
+    );
+}
+
+#[test]
+fn an_internal_node_yields_its_key_pointers() {
+    let bytes = internal(
+        &[
+            (BtrfsKey::new(256, 1, 0), 0x8000),
+            (BtrfsKey::new(300, 1, 0), 0xC000),
+        ],
+        0x4000,
+        1,
+    );
+    let node = Node::parse(&bytes, 0x4000).unwrap();
+
+    assert!(!node.is_leaf(), "level one is not a leaf");
+    let pointers: Vec<_> = node.key_ptrs().collect();
+    assert_eq!(pointers.len(), 2);
+    assert_eq!(pointers[0].blockptr, 0x8000, "where the child lives");
+    assert_eq!(pointers[1].key, BtrfsKey::new(300, 1, 0));
+}
+
+#[test]
+fn searching_finds_a_key_and_reports_where_an_absent_one_would_go() {
+    let bytes = sample_leaf();
+    let node = Node::parse(&bytes, 0x4000).unwrap();
+
+    assert_eq!(node.search(&BtrfsKey::new(256, 1, 0)), Ok(0));
+    assert_eq!(node.search(&BtrfsKey::new(257, 1, 0)), Ok(2));
+    assert_eq!(
+        node.search(&BtrfsKey::new(256, 5, 0)),
+        Err(1),
+        "an absent key reports the slot it would occupy"
+    );
+    assert_eq!(
+        node.search(&BtrfsKey::new(1, 1, 0)),
+        Err(0),
+        "before everything"
+    );
+    assert_eq!(
+        node.search(&BtrfsKey::new(9999, 1, 0)),
+        Err(3),
+        "after everything"
+    );
+}
+
+#[test]
+fn a_node_read_from_the_wrong_address_is_refused() {
+    // The header records where the node was written. If it disagrees with where
+    // it was read from, the chunk mapping sent the read to the wrong place —
+    // and the bytes will parse perfectly, which is precisely the danger.
+    let bytes = sample_leaf();
+    match Node::parse(&bytes, 0x8000) {
+        Err(BtrfsError::WrongAddress { expected, found }) => {
+            assert_eq!(expected, 0x8000);
+            assert_eq!(found, 0x4000);
+        }
+        other => panic!("expected a wrong-address error, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_node_with_a_bad_checksum_is_refused() {
+    let mut bytes = sample_leaf();
+    bytes[HEADER_SIZE + 4] ^= 0xFF;
+    assert!(
+        matches!(
+            Node::parse(&bytes, 0x4000),
+            Err(BtrfsError::BadChecksum { .. })
+        ),
+        "a node that does not check out must not be trusted"
+    );
+}
+
+#[test]
+fn a_node_claiming_more_items_than_it_can_hold_is_refused() {
+    let mut bytes = sample_leaf();
+    put_u32(&mut bytes, 96, 100_000);
+    let computed = crc32c(&bytes[32..]);
+    bytes[0..4].copy_from_slice(&computed.to_le_bytes());
+
+    assert!(
+        matches!(
+            Node::parse(&bytes, 0x4000),
+            Err(BtrfsError::TooManyItems { .. })
+        ),
+        "nritems is attacker-controlled and must be checked against the node size"
+    );
+}
+
+#[test]
+fn an_item_running_past_the_node_is_refused() {
+    let mut bytes = sample_leaf();
+    // Inflate the first item's size so its data would run off the end.
+    put_u32(&mut bytes, HEADER_SIZE + 21, 60_000);
+    let computed = crc32c(&bytes[32..]);
+    bytes[0..4].copy_from_slice(&computed.to_le_bytes());
+
+    assert!(
+        matches!(
+            Node::parse(&bytes, 0x4000),
+            Err(BtrfsError::ItemOutOfBounds { .. })
+        ),
+        "an item extent outside the node must be caught before it is read"
+    );
+}
+
+#[test]
+fn items_out_of_order_are_refused() {
+    let bytes = leaf(
+        &[
+            (BtrfsKey::new(500, 1, 0), vec![0xAA; 8]),
+            (BtrfsKey::new(100, 1, 0), vec![0xBB; 8]),
+        ],
+        0x4000,
+    );
+    assert!(
+        matches!(
+            Node::parse(&bytes, 0x4000),
+            Err(BtrfsError::ItemsOutOfOrder { .. })
+        ),
+        "the binary search assumes order; an unordered node would silently mislead it"
+    );
+}
+
+#[test]
+fn a_truncated_node_is_refused() {
+    let bytes = sample_leaf();
+    for length in [0, 50, HEADER_SIZE - 1, HEADER_SIZE + 10] {
+        assert!(
+            Node::parse(&bytes[..length], 0x4000).is_err(),
+            "a {length}-byte node must not parse"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Item payloads
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_inode_item_is_decoded() {
+    let mut bytes = vec![0u8; 160];
+    put_u64(&mut bytes, 0, 7); // generation
+    put_u64(&mut bytes, 16, 4096); // size
+    put_u64(&mut bytes, 24, 8192); // nbytes
+    put_u32(&mut bytes, 40, 1); // nlink
+    put_u32(&mut bytes, 44, 1000); // uid
+    put_u32(&mut bytes, 48, 1000); // gid
+    put_u32(&mut bytes, 52, 0o100_644); // mode: a regular file
+
+    let inode = InodeItem::parse(&bytes).unwrap();
+    assert_eq!(inode.size, 4096, "the file's length");
+    assert_eq!(inode.uid, 1000);
+    assert!(inode.is_file(), "mode 0o100644 is a regular file");
+    assert!(!inode.is_dir());
+    assert!(!inode.is_symlink());
+}
+
+#[test]
+fn a_truncated_inode_item_is_refused() {
+    let bytes = vec![0u8; 100];
+    assert!(
+        InodeItem::parse(&bytes).is_err(),
+        "an inode item is 160 bytes; a short one must not be read past"
+    );
+}
+
+#[test]
+fn several_directory_entries_pack_into_one_item() {
+    // Names whose hashes collide land in the same item, so a reader that stops
+    // after the first entry loses files — and only for directories unlucky
+    // enough to collide, which is the worst kind of bug to find later.
+    let mut bytes = Vec::new();
+    for (name, inode) in [(&b"one"[..], 257u64), (&b"two"[..], 258)] {
+        bytes.extend_from_slice(&inode.to_le_bytes()); // location objectid
+        bytes.push(1); // location type: INODE_ITEM
+        bytes.extend_from_slice(&0u64.to_le_bytes()); // location offset
+        bytes.extend_from_slice(&1u64.to_le_bytes()); // transid
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // data_len
+        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.push(1); // type: regular file
+        bytes.extend_from_slice(name);
+    }
+
+    let entries: Vec<_> = DirItemIter::new(&bytes, 84).map(Result::unwrap).collect();
+    assert_eq!(entries.len(), 2, "both entries must be found");
+    assert_eq!(entries[0].name, b"one");
+    assert_eq!(entries[0].location.objectid, 257);
+    assert_eq!(entries[1].name, b"two");
+    assert_eq!(entries[1].location.objectid, 258);
+}
+
+#[test]
+fn a_directory_item_with_a_name_past_the_end_stops_cleanly() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&257u64.to_le_bytes());
+    bytes.push(1);
+    bytes.extend_from_slice(&0u64.to_le_bytes());
+    bytes.extend_from_slice(&1u64.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&9999u16.to_le_bytes()); // a name far longer than what follows
+    bytes.push(1);
+    bytes.extend_from_slice(b"short");
+
+    let entries: Vec<_> = DirItemIter::new(&bytes, 84).collect();
+    assert!(
+        entries.iter().all(Result::is_err) || entries.is_empty(),
+        "an entry whose name runs past the item must be refused, not read past"
+    );
+}
+
+#[test]
+fn extent_data_is_decoded_in_all_three_forms() {
+    // Inline: the data follows the twenty-one byte header.
+    let mut inline = vec![0u8; 21];
+    put_u64(&mut inline, 8, 5); // ram_bytes
+    inline[20] = 0; // type: inline
+    inline.extend_from_slice(b"hello");
+    let extent = ExtentData::parse(&inline).unwrap();
+    assert!(matches!(extent.body, ExtentDataBody::Inline(b"hello")));
+    assert_eq!(extent.inline_data(), Some(&b"hello"[..]));
+    assert_eq!(
+        extent.file_extent(),
+        None,
+        "an inline extent occupies no blocks"
+    );
+
+    // Regular: a reference to blocks elsewhere.
+    let mut regular = vec![0u8; 53];
+    put_u64(&mut regular, 8, 4096); // ram_bytes
+    regular[20] = 1; // type: regular
+    put_u64(&mut regular, 21, 0x50_0000); // disk_bytenr
+    put_u64(&mut regular, 29, 4096); // disk_num_bytes
+    put_u64(&mut regular, 37, 0); // offset
+    put_u64(&mut regular, 45, 4096); // num_bytes
+    let extent = ExtentData::parse(&regular).unwrap();
+    let file_extent = extent.file_extent().unwrap();
+    assert_eq!(file_extent.disk_bytenr, 0x50_0000);
+    assert_eq!(file_extent.num_bytes, 4096);
+    assert!(!file_extent.is_hole(), "a real extent is not a hole");
+    assert_eq!(file_extent.start(), Some(0x50_0000));
+
+    // A hole: disk_bytenr zero means the range reads as zeroes.
+    let mut hole = regular.clone();
+    put_u64(&mut hole, 21, 0);
+    let extent = ExtentData::parse(&hole).unwrap();
+    assert!(
+        extent.file_extent().unwrap().is_hole(),
+        "disk_bytenr zero is a hole, not block zero"
+    );
+}
+
+#[test]
+fn a_truncated_extent_item_is_refused() {
+    let bytes = vec![0u8; 10];
+    assert!(
+        ExtentData::parse(&bytes).is_err(),
+        "an extent header is 21 bytes"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The one that matters most
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parsing_never_panics_on_corrupt_input() {
+    // A disk can be corrupt, and from stage 11 this runs in ring 0 with nothing
+    // above it. Every accessor must answer or error for any bytes at all.
+    let superblock = SuperblockBuilder::new().build();
+    let node = sample_leaf();
+
+    for (name, good) in [("superblock", &superblock), ("node", &node)] {
+        for index in 0..good.len().min(1024) {
+            for patch in [0x00u8, 0x01, 0x7F, 0xFF] {
+                let mut bytes = good.clone();
+                bytes[index] = patch;
+
+                if name == "superblock" {
+                    poke_superblock(&bytes);
+                } else {
+                    poke_node(&bytes);
+                }
+            }
+        }
+    }
+}
+
+/// Call every superblock accessor, requiring only that none of them panics.
+fn poke_superblock(bytes: &[u8]) {
+    let Ok(parsed) = Superblock::parse(bytes) else {
+        return;
+    };
+    let _ = parsed.label();
+    let _ = parsed.sectorsize();
+    let _ = parsed.nodesize();
+    let _ = parsed.incompat_flags().unknown();
+
+    let mut storage = [ChunkMapEntry::default(); 4];
+    let mut map = ChunkMap::new(&mut storage);
+    let _ = map.load_sys_chunk_array(parsed.sys_chunk_array_bytes());
+}
+
+/// Call every node accessor, and every item parser on every item's payload.
+fn poke_node(bytes: &[u8]) {
+    let Ok(parsed) = Node::parse_unchecked_address(bytes) else {
+        return;
+    };
+    for item in parsed.items() {
+        poke_item(item.data);
+    }
+    for pointer in parsed.key_ptrs() {
+        let _ = pointer.blockptr;
+    }
+    let _ = parsed.search(&BtrfsKey::new(256, 1, 0));
+}
+
+/// Every item payload parser, on bytes that may be anything at all.
+fn poke_item(data: &[u8]) {
+    let _ = InodeItem::parse(data);
+    let _ = ExtentData::parse(data);
+    for entry in DirItemIter::new(data, 84) {
+        let _ = entry.map(|found| found.name.len());
+    }
+}
+
+#[test]
+fn parsing_never_panics_on_arbitrary_short_input() {
+    for length in 0..300usize {
+        let bytes = vec![0xFFu8; length];
+        let _ = Superblock::parse(&bytes);
+        let _ = Node::parse_unchecked_address(&bytes);
+        let _ = ChunkItem::parse(&bytes);
+        let _ = InodeItem::parse(&bytes);
+        let _ = ExtentData::parse(&bytes);
+        for entry in DirItemIter::new(&bytes, 84) {
+            let _ = entry.map(|found| found.name.len());
+        }
+    }
+}
+
+#[test]
+fn the_lookup_table_matches_the_polynomial() {
+    // The 256-entry table is written out as literals, so nothing in the build
+    // proves it corresponds to the polynomial it claims to. This recomputes
+    // every entry the slow way -- eight conditional shifts per byte, straight
+    // from the definition -- and compares. A single mistyped digit in the table
+    // would produce checksums that are wrong only for some inputs, which is
+    // the hardest kind of wrong to notice.
+    for byte in 0u32..256 {
+        let mut expected = byte;
+        for _ in 0..8 {
+            expected = if expected & 1 == 1 {
+                (expected >> 1) ^ POLYNOMIAL
+            } else {
+                expected >> 1
+            };
+        }
+        assert_eq!(
+            TABLE[byte as usize], expected,
+            "table entry {byte} does not match the Castagnoli polynomial"
+        );
+    }
+}

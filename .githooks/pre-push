@@ -1,0 +1,53 @@
+#!/bin/sh
+#
+# Refuse to publish a commit carrying a Co-authored-by trailer.
+#
+# `commit-msg` is the check that gives a useful error at the moment somebody
+# writes one. This is the one that makes the rule true: it runs over every
+# commit actually being pushed, so a `--no-verify`, a rebase that replays a
+# message without reopening it, or a commit that arrived from elsewhere is
+# still caught before it becomes public.
+
+set -eu
+
+empty=0000000000000000000000000000000000000000
+failed=0
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    # Branch deletion: nothing is being published.
+    [ "$local_sha" = "$empty" ] && continue
+
+    if [ "$remote_sha" = "$empty" ]; then
+        # A new branch. Anything already reachable from a remote-tracking ref
+        # has been published before, so only inspect what this push adds.
+        range=$(git rev-list "$local_sha" --not --remotes)
+    else
+        range=$(git rev-list "$remote_sha..$local_sha")
+    fi
+
+    [ -z "$range" ] && continue
+
+    for commit in $range; do
+        trailer=$(
+            git log -1 --format=%B "$commit" \
+                | grep -inE '^[[:space:]]*co-authored-by[[:space:]]*:' || true
+        )
+        if [ -n "$trailer" ]; then
+            if [ "$failed" -eq 0 ]; then
+                echo "pre-push: refusing to publish commits with a Co-authored-by trailer." >&2
+                echo >&2
+                failed=1
+            fi
+            echo "  $(git log -1 --format='%h %s' "$commit")" >&2
+            printf '%s\n' "$trailer" | sed 's/^/      /' >&2
+        fi
+    done
+done
+
+if [ "$failed" -ne 0 ]; then
+    echo >&2
+    echo "Rewrite them (git rebase -i, or git commit --amend for the tip) and push again." >&2
+    exit 1
+fi
+
+exit 0

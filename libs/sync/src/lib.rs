@@ -1,0 +1,1202 @@
+//! Kernel synchronisation primitives.
+//!
+//! # Why a ticket lock
+//!
+//! The obvious spin lock is a single flag swapped with a compare-exchange in a
+//! loop. It is three lines and it is unfair: whichever CPU happens to win the
+//! next cache-line transfer takes the lock, so a core can lose every race for
+//! an unbounded time while another core reacquires the same lock in a tight
+//! loop. On a kernel path that is a CPU that never makes progress, and it
+//! shows up as a hang nobody can attribute to a line of code.
+//!
+//! [`SpinLock`] therefore hands out numbered tickets. A CPU takes the next
+//! ticket, waits for the serving counter to reach it, and on release bumps the
+//! counter by one. Arrival order is acquisition order, so the worst-case wait
+//! is bounded by the number of CPUs ahead in the queue rather than by luck.
+//!
+//! # The rules these primitives do not enforce
+//!
+//! Nothing here can detect a deadlock at runtime — a spinning CPU looks exactly
+//! like a busy one — so the discipline has to be kept by the callers:
+//!
+//! * **Never take a plain [`SpinLock`] from an interrupt handler.** If the
+//!   handler interrupts the very CPU that holds the lock, the handler spins
+//!   waiting for a release that can only happen after the handler returns.
+//!   Data shared with a handler belongs in an [`IrqSpinLock`], which masks
+//!   interrupts for the duration and so cannot be interrupted while held.
+//! * **Never take a lock twice on one CPU.** None of these are reentrant; a
+//!   second acquisition waits for a release that the same CPU owes.
+//! * **Take nested locks in one global order.** Two CPUs taking the same pair
+//!   in opposite orders is the classic cycle, and no primitive can see it.
+//! * **Keep critical sections short and never sleep inside one.** A CPU that
+//!   holds a spin lock while blocked stops every other CPU that wants it.
+//!
+//! # What is here
+//!
+//! * [`SpinLock`] — mutual exclusion, first come first served.
+//! * [`IrqSpinLock`] — the same, with interrupts masked for the duration.
+//! * [`Once`] — run an initialiser exactly once, for globals set up at boot.
+//! * [`RwSpinLock`] — many readers or one writer, writer-preferring.
+//! * [`SpinLockedCell`] — a global that is filled in at boot and read after.
+//!
+//! ```
+//! use ferrix_sync::SpinLock;
+//!
+//! static COUNTER: SpinLock<u64> = SpinLock::new(0);
+//!
+//! *COUNTER.lock() += 1;
+//! assert_eq!(*COUNTER.lock(), 1);
+//! ```
+
+#![no_std]
+
+#[cfg(test)]
+mod tests;
+
+use core::cell::UnsafeCell;
+use core::fmt;
+use core::hint::spin_loop;
+use core::marker::PhantomData;
+use core::mem::MaybeUninit;
+use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+
+// ---------------------------------------------------------------------------
+// SpinLock
+// ---------------------------------------------------------------------------
+
+/// A mutual-exclusion lock that spins, handing the lock out in arrival order.
+///
+/// Acquisition is a ticket queue: [`lock`](Self::lock) takes the next ticket
+/// and waits until the lock is serving it. That costs one extra counter over a
+/// test-and-set lock and buys a bounded wait — at most one turn per CPU already
+/// in the queue — which is what keeps a contended lock from starving a core.
+///
+/// This lock must not be taken from an interrupt handler; see the module
+/// documentation for why, and for [`IrqSpinLock`], which can be.
+///
+/// ```
+/// # use ferrix_sync::SpinLock;
+/// let lock = SpinLock::new([0_u8; 4]);
+/// lock.lock()[0] = 1;
+/// assert!(lock.try_lock().is_some(), "the guard above was temporary");
+/// ```
+pub struct SpinLock<T: ?Sized> {
+    /// The ticket the next caller will take.
+    next_ticket: AtomicUsize,
+    /// The ticket currently entitled to the data.
+    ///
+    /// The lock is free exactly when this equals `next_ticket`.
+    now_serving: AtomicUsize,
+    /// The protected data, reachable only through a guard.
+    data: UnsafeCell<T>,
+}
+
+// SAFETY: sending the lock sends the data it owns, which is what `T: Send`
+// permits. The two counters are atomics and belong to no particular thread.
+unsafe impl<T: ?Sized + Send> Send for SpinLock<T> {}
+
+// SAFETY: sharing the lock lets another thread reach the data, but only after
+// winning the ticket queue, so at most one thread holds a reference at a time
+// and that reference moves between threads. That is exactly `T: Send`; `T` need
+// not be `Sync`, because two threads never hold the data simultaneously.
+unsafe impl<T: ?Sized + Send> Sync for SpinLock<T> {}
+
+impl<T> SpinLock<T> {
+    /// Creates a lock in the unlocked state.
+    ///
+    /// This is `const`, so a lock can be a `static` without a boot-time
+    /// initialiser — which is the point, since the globals it replaces are
+    /// reached before any allocator exists.
+    #[must_use]
+    pub const fn new(value: T) -> Self {
+        Self {
+            next_ticket: AtomicUsize::new(0),
+            now_serving: AtomicUsize::new(0),
+            data: UnsafeCell::new(value),
+        }
+    }
+
+    /// Consumes the lock and returns the protected value.
+    ///
+    /// Taking the lock by value proves no guard is outstanding, so this needs
+    /// no synchronisation at all.
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.data.into_inner()
+    }
+}
+
+impl<T: ?Sized> SpinLock<T> {
+    /// Takes the lock, spinning until this caller's ticket comes up.
+    #[must_use = "the lock is released as soon as the guard is dropped"]
+    pub fn lock(&self) -> SpinLockGuard<'_, T> {
+        self.acquire();
+        SpinLockGuard {
+            lock: self,
+            not_send: PhantomData,
+        }
+    }
+
+    /// Waits for this caller's turn, leaving the release to the caller.
+    ///
+    /// Split out from [`lock`](Self::lock) because [`IrqSpinLock`] needs the
+    /// acquisition without a guard whose drop would release at the wrong point
+    /// in its own drop order.
+    fn acquire(&self) {
+        // Relaxed: taking a ticket publishes nothing and reads nothing that the
+        // acquire load below does not already order. All that is required of
+        // the increment is that no two callers get the same number.
+        let ticket = self.next_ticket.fetch_add(1, Ordering::Relaxed);
+        // Acquire: this is the load that decides the lock is ours, so it has to
+        // pair with the releasing store of the previous holder and make that
+        // holder's writes to the data visible before any of ours.
+        while self.now_serving.load(Ordering::Acquire) != ticket {
+            spin_loop();
+        }
+    }
+
+    /// Takes the lock if it is free right now, and gives up otherwise.
+    ///
+    /// A failure means the lock was contended at some instant during the call,
+    /// which is the only honest thing a non-blocking attempt can report.
+    #[must_use = "the lock is released as soon as the guard is dropped"]
+    pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
+        self.try_acquire().then(|| SpinLockGuard {
+            lock: self,
+            not_send: PhantomData,
+        })
+    }
+
+    /// One attempt at the lock, leaving the release to the caller.
+    ///
+    /// The guardless counterpart of [`try_lock`](Self::try_lock), for the same
+    /// reason [`acquire`](Self::acquire) exists.
+    fn try_acquire(&self) -> bool {
+        // Relaxed: this load only proposes a ticket number. Claiming it is the
+        // compare-exchange below, and that is the operation carrying ordering.
+        let serving = self.now_serving.load(Ordering::Relaxed);
+        // The exchange succeeds only if nobody holds or is queued for the lock,
+        // because the ticket counter runs ahead of the serving counter exactly
+        // when someone does. Acquire on success for the reason given in
+        // `acquire`; Relaxed on failure, since a failed attempt reads no
+        // protected data. A concurrent release between the load and the
+        // exchange makes this report contention that has just ended, which is
+        // a permitted answer for a non-blocking attempt.
+        self.next_ticket
+            .compare_exchange(
+                serving,
+                serving.wrapping_add(1),
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+    }
+
+    /// Reports whether the lock was held at some instant during the call.
+    ///
+    /// It is a statistic, not a decision: by the time a caller acts on `false`
+    /// another CPU may hold the lock. Use it for diagnostics and assertions,
+    /// and [`try_lock`](Self::try_lock) to act.
+    #[must_use]
+    pub fn is_locked(&self) -> bool {
+        // Relaxed on both: the answer is already stale when it is returned, so
+        // ordering it against anything would buy nothing.
+        self.next_ticket.load(Ordering::Relaxed) != self.now_serving.load(Ordering::Relaxed)
+    }
+
+    /// Borrows the protected data directly.
+    ///
+    /// Safe, and free: `&mut self` is itself proof that no other reference to
+    /// the lock exists, so no other CPU can be inside it.
+    pub fn get_mut(&mut self) -> &mut T {
+        self.data.get_mut()
+    }
+
+    /// Releases the lock without consuming a guard.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be the current holder of this lock and must not touch
+    /// the protected data afterwards. Releasing a lock this CPU does not hold
+    /// hands the data to a CPU that is still inside its critical section.
+    unsafe fn release(&self) {
+        // Relaxed: only the holder writes this counter, and we are it, so no
+        // other CPU can have changed it since we were served.
+        let serving = self.now_serving.load(Ordering::Relaxed);
+        // Release: everything written under the lock has to be visible to the
+        // next holder, whose acquire load of this counter pairs with this
+        // store. `wrapping_add` because the ticket counter wraps too, and the
+        // lock only ever compares the two for equality.
+        self.now_serving
+            .store(serving.wrapping_add(1), Ordering::Release);
+    }
+}
+
+impl<T: ?Sized + fmt::Debug> fmt::Debug for SpinLock<T> {
+    /// Formats the lock without ever waiting for it.
+    ///
+    /// A `Debug` that took the lock would deadlock the moment anything
+    /// formatted a structure whose lock the same CPU already held — including a
+    /// panic handler dumping the state it locked in order to read.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.try_lock() {
+            Some(guard) => f.debug_struct("SpinLock").field("data", &&*guard).finish(),
+            None => f.write_str("SpinLock { data: <locked> }"),
+        }
+    }
+}
+
+impl<T: Default> Default for SpinLock<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+/// Proof that its holder is inside a [`SpinLock`]'s critical section.
+///
+/// The lock is released when this is dropped, so the guard's lifetime *is* the
+/// critical section: keep it short, and never hold it across a sleep.
+pub struct SpinLockGuard<'a, T: ?Sized> {
+    /// The lock to release on drop, and the data to hand out until then.
+    lock: &'a SpinLock<T>,
+    /// Makes the guard `!Send`.
+    ///
+    /// Releasing on a CPU other than the one that acquired would be legal for
+    /// this lock in isolation, but it breaks every caller that reasons about
+    /// per-CPU state across a critical section, and it is what
+    /// [`IrqSpinLockGuard`] has to forbid outright.
+    not_send: PhantomData<*const ()>,
+}
+
+// SAFETY: a shared reference to a guard reaches the data only through `Deref`,
+// so sharing one across threads shares `&T`, which is what `T: Sync` allows.
+unsafe impl<T: ?Sized + Sync> Sync for SpinLockGuard<'_, T> {}
+
+impl<T: ?Sized> Deref for SpinLockGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: this guard exists only while its thread holds the lock, and
+        // the lock serves one ticket at a time, so no other reference to the
+        // data can exist for the life of this borrow.
+        unsafe { &*self.lock.data.get() }
+    }
+}
+
+impl<T: ?Sized> DerefMut for SpinLockGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: as for `deref`, with `&mut self` additionally proving this is
+        // the only borrow taken through the guard itself.
+        unsafe { &mut *self.lock.data.get() }
+    }
+}
+
+impl<T: ?Sized> Drop for SpinLockGuard<'_, T> {
+    fn drop(&mut self) {
+        // SAFETY: an acquisition handed this guard to this thread, it is being
+        // consumed here so no further access can happen through it, and a guard
+        // is dropped exactly once.
+        unsafe { self.lock.release() };
+    }
+}
+
+impl<T: ?Sized + fmt::Debug> fmt::Debug for SpinLockGuard<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl<T: ?Sized + fmt::Display> fmt::Display for SpinLockGuard<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&**self, f)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IrqSpinLock
+// ---------------------------------------------------------------------------
+
+/// How to mask and restore interrupts on this CPU.
+///
+/// This crate is architecture-neutral, so it cannot write `cli`/`sti` or
+/// `msr daifset` itself. [`IrqSpinLock`] is parameterised over this trait
+/// instead, and each architecture supplies the two instructions.
+///
+/// The state is an opaque `usize` — on x86-64 the saved `RFLAGS`, on AArch64
+/// the saved `DAIF` — so that nesting works: restoring puts back whatever was
+/// there rather than unconditionally enabling interrupts, which would enable
+/// them in the middle of an outer critical section that had masked them.
+///
+/// # Safety
+///
+/// `disable` must actually prevent interrupt delivery on the current CPU, and
+/// `restore` must put the state back exactly as `disable` found it. An
+/// implementation that only pretends to mask leaves every [`IrqSpinLock`] open
+/// to the self-deadlock the type exists to prevent, and one that enables
+/// interrupts a caller had masked corrupts the caller's critical section.
+pub unsafe trait IrqControl {
+    /// Mask interrupts, returning the previous state.
+    fn disable() -> usize;
+    /// Restore the state a previous `disable` returned.
+    fn restore(state: usize);
+}
+
+/// A [`SpinLock`] that masks interrupts on the holding CPU for the duration.
+///
+/// This is the lock for data an interrupt handler also touches. Taking a plain
+/// [`SpinLock`] in a handler that interrupted the holder *on the same CPU* is a
+/// guaranteed deadlock: the handler spins for a release that cannot happen
+/// until the handler returns. Masking interrupts before taking the lock removes
+/// the interruption, so the handler cannot run while the lock is held.
+///
+/// Masking is per-CPU, so a handler on *another* CPU can still contend for the
+/// lock. That is fine — it waits, and the holder is not blocked on it — which
+/// is why the critical section still has to be short.
+pub struct IrqSpinLock<T: ?Sized, C: IrqControl> {
+    /// Names the interrupt-control implementation without storing anything.
+    ///
+    /// `fn() -> C` rather than `C` so that the lock's `Send` and `Sync` do not
+    /// depend on a zero-sized marker type's auto traits.
+    control: PhantomData<fn() -> C>,
+    /// The ticket lock underneath; masking adds no mutual exclusion of its own.
+    inner: SpinLock<T>,
+}
+
+impl<T, C: IrqControl> IrqSpinLock<T, C> {
+    /// Creates a lock in the unlocked state, with interrupts untouched.
+    #[must_use]
+    pub const fn new(value: T) -> Self {
+        Self {
+            control: PhantomData,
+            inner: SpinLock::new(value),
+        }
+    }
+
+    /// Consumes the lock and returns the protected value.
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.inner.into_inner()
+    }
+}
+
+impl<T: ?Sized, C: IrqControl> IrqSpinLock<T, C> {
+    /// Masks interrupts and then takes the lock, in that order.
+    ///
+    /// Masking first is the whole point: between taking the lock and masking,
+    /// an interrupt could arrive on this CPU and its handler could ask for the
+    /// same lock, which is the deadlock this type prevents.
+    #[must_use = "interrupts stay masked until the guard is dropped"]
+    pub fn lock(&self) -> IrqSpinLockGuard<'_, T, C> {
+        let irq_state = C::disable();
+        self.inner.acquire();
+        IrqSpinLockGuard {
+            lock: self,
+            irq_state,
+            not_send: PhantomData,
+        }
+    }
+
+    /// Masks interrupts and takes the lock if it is free, restoring the
+    /// interrupt state and giving up if it is not.
+    ///
+    /// A failed attempt leaves interrupts exactly as it found them, so a
+    /// caller that loops on `try_lock` does not accumulate masking.
+    #[must_use = "interrupts stay masked until the guard is dropped"]
+    pub fn try_lock(&self) -> Option<IrqSpinLockGuard<'_, T, C>> {
+        let irq_state = C::disable();
+        if self.inner.try_acquire() {
+            Some(IrqSpinLockGuard {
+                lock: self,
+                irq_state,
+                not_send: PhantomData,
+            })
+        } else {
+            C::restore(irq_state);
+            None
+        }
+    }
+
+    /// Reports whether the lock was held at some instant during the call.
+    ///
+    /// Interrupts are not touched: this reads two counters and decides nothing.
+    #[must_use]
+    pub fn is_locked(&self) -> bool {
+        self.inner.is_locked()
+    }
+
+    /// Borrows the protected data directly, with no lock and no masking.
+    ///
+    /// `&mut self` proves no other reference to the lock exists, so no
+    /// interrupt handler can be holding it either.
+    pub fn get_mut(&mut self) -> &mut T {
+        self.inner.get_mut()
+    }
+}
+
+impl<T: ?Sized + fmt::Debug, C: IrqControl> fmt::Debug for IrqSpinLock<T, C> {
+    /// Formats the lock without waiting for it, and without masking anything.
+    ///
+    /// Formatting must not change interrupt state: a `Debug` that masked and
+    /// restored would be a side effect in the middle of someone else's
+    /// critical section.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.inner.try_lock() {
+            Some(guard) => f
+                .debug_struct("IrqSpinLock")
+                .field("data", &&*guard)
+                .finish(),
+            None => f.write_str("IrqSpinLock { data: <locked> }"),
+        }
+    }
+}
+
+impl<T: Default, C: IrqControl> Default for IrqSpinLock<T, C> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+/// Proof that its holder is inside an [`IrqSpinLock`]'s critical section, with
+/// interrupts masked on this CPU.
+///
+/// Dropping it releases the lock and *then* restores the interrupt state. The
+/// order is not cosmetic: restoring first would open a window in which an
+/// interrupt arrives on this CPU while the lock is still held, and a handler
+/// that wants the same lock would spin on a release that can only happen after
+/// it returns — the deadlock this type exists to prevent.
+pub struct IrqSpinLockGuard<'a, T: ?Sized, C: IrqControl> {
+    /// The lock to release on drop, and the data to hand out until then.
+    lock: &'a IrqSpinLock<T, C>,
+    /// Whatever [`IrqControl::disable`] found, to be handed back on drop.
+    irq_state: usize,
+    /// Makes the guard `!Send`.
+    ///
+    /// Interrupt masking is per-CPU, so the restore has to happen on the CPU
+    /// that masked. A guard that could cross threads would restore the wrong
+    /// CPU's state and leave this one masked forever.
+    not_send: PhantomData<*const ()>,
+}
+
+// SAFETY: a shared reference to a guard reaches the data only through `Deref`,
+// so sharing one across threads shares `&T`, which is what `T: Sync` allows.
+// The interrupt state is a plain integer read only by the owning thread's drop.
+unsafe impl<T: ?Sized + Sync, C: IrqControl> Sync for IrqSpinLockGuard<'_, T, C> {}
+
+impl<T: ?Sized, C: IrqControl> Deref for IrqSpinLockGuard<'_, T, C> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: this guard exists only while its CPU holds the inner lock,
+        // which serves one ticket at a time, so no other reference to the data
+        // can exist for the life of this borrow.
+        unsafe { &*self.lock.inner.data.get() }
+    }
+}
+
+impl<T: ?Sized, C: IrqControl> DerefMut for IrqSpinLockGuard<'_, T, C> {
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: as for `deref`, with `&mut self` additionally proving this is
+        // the only borrow taken through the guard itself.
+        unsafe { &mut *self.lock.inner.data.get() }
+    }
+}
+
+impl<T: ?Sized, C: IrqControl> Drop for IrqSpinLockGuard<'_, T, C> {
+    fn drop(&mut self) {
+        // SAFETY: an acquisition handed this guard to this CPU, it is being
+        // consumed here so no further access can happen through it, and a guard
+        // is dropped exactly once.
+        unsafe { self.lock.inner.release() };
+        // Only now, with the lock free, is it safe to let interrupts in again.
+        C::restore(self.irq_state);
+    }
+}
+
+impl<T: ?Sized + fmt::Debug, C: IrqControl> fmt::Debug for IrqSpinLockGuard<'_, T, C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl<T: ?Sized + fmt::Display, C: IrqControl> fmt::Display for IrqSpinLockGuard<'_, T, C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&**self, f)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Once
+// ---------------------------------------------------------------------------
+
+/// Nobody has run the initialiser yet.
+const ONCE_INCOMPLETE: u32 = 0;
+/// A CPU is inside the initialiser; the value is not yet readable.
+const ONCE_RUNNING: u32 = 1;
+/// The value is initialised and readable by everyone, forever.
+const ONCE_COMPLETE: u32 = 2;
+
+/// A cell that runs an initialiser exactly once, whoever gets there first.
+///
+/// This is what a kernel global that needs a non-`const` setup becomes: the
+/// serial port that has to probe its divisor, the ACPI tables that have to be
+/// parsed, the heap that has to be told where memory is. The alternative — a
+/// `static mut` written during boot and read forever after — is exactly the
+/// pattern that stops being sound when a second CPU starts.
+///
+/// A caller arriving while the initialiser is running waits for it and then
+/// sees the finished value. It does not get `None`, and it does not run a
+/// second initialiser, because either would hand out a second instance of
+/// something the kernel has exactly one of.
+///
+/// # Panicking initialisers
+///
+/// If the initialiser panics, the cell stays in its running state and every
+/// later caller spins forever. The kernel builds with `panic = "abort"`, so
+/// there is no unwinding and no such state to recover from; a host test that
+/// wants to check panic behaviour should not use this type.
+///
+/// ```
+/// # use ferrix_sync::Once;
+/// static CONFIG: Once<u32> = Once::new();
+///
+/// assert!(CONFIG.get().is_none(), "nothing has initialised it yet");
+/// assert_eq!(*CONFIG.call_once(|| 7), 7, "the first caller's value wins");
+/// assert_eq!(*CONFIG.call_once(|| 9), 7, "and the second one does not run");
+/// ```
+pub struct Once<T> {
+    /// Which of the three states the cell is in.
+    ///
+    /// `AtomicU32` rather than `AtomicUsize` because every architecture this
+    /// kernel targets has 32-bit atomics, including the 32-bit early boot
+    /// environments where a 64-bit atomic would need a lock.
+    state: AtomicU32,
+    /// The value, valid only once the state is complete.
+    value: UnsafeCell<MaybeUninit<T>>,
+}
+
+// SAFETY: the value can be initialised on one thread and dropped on another
+// (whoever owns the cell at the end), so it has to be `Send`. Nothing else
+// about the cell is thread-affine.
+unsafe impl<T: Send> Send for Once<T> {}
+
+// SAFETY: every caller that observes the complete state gets `&T`, so the value
+// is shared across threads and must be `Sync`; and the initialising thread
+// hands its value to those threads, so it must be `Send`. The state machine
+// guarantees exactly one thread ever writes the slot, and only before the
+// release store that lets anyone read it.
+unsafe impl<T: Send + Sync> Sync for Once<T> {}
+
+impl<T> Once<T> {
+    /// Creates an empty cell.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            state: AtomicU32::new(ONCE_INCOMPLETE),
+            value: UnsafeCell::new(MaybeUninit::uninit()),
+        }
+    }
+
+    /// Returns the value, running `init` first if nobody else has.
+    ///
+    /// Exactly one call to `init` ever happens for a given cell, and every
+    /// caller — including the ones that arrived while it was running — returns
+    /// a reference to that one value.
+    pub fn call_once<F: FnOnce() -> T>(&self, init: F) -> &T {
+        // Acquire: the fast path reads the value, so it has to pair with the
+        // release store made by the initialising thread. Without it a CPU could
+        // see the complete state and a half-written value.
+        if self.state.load(Ordering::Acquire) == ONCE_COMPLETE {
+            // SAFETY: the load above observed the complete state through an
+            // acquire, so the value is initialised and visible here, and
+            // nothing ever writes the slot again.
+            return unsafe { self.value_unchecked() };
+        }
+        self.call_once_slow(init)
+    }
+
+    /// The contended path: claim the initialiser, or wait for whoever did.
+    ///
+    /// Split out of [`call_once`](Self::call_once) so that the common case —
+    /// an already-initialised global — stays small enough to inline.
+    fn call_once_slow<F: FnOnce() -> T>(&self, init: F) -> &T {
+        loop {
+            // Acquire on both outcomes: on success because this thread is about
+            // to write the slot and must not have its write reordered before
+            // the claim, and on failure because the observed state may be
+            // complete, in which case this is the load that publishes the
+            // value to us.
+            let claim = self.state.compare_exchange_weak(
+                ONCE_INCOMPLETE,
+                ONCE_RUNNING,
+                Ordering::Acquire,
+                Ordering::Acquire,
+            );
+            match claim {
+                Ok(_) => {
+                    self.initialise(init);
+                    break;
+                }
+                Err(ONCE_COMPLETE) => break,
+                // Either the state is running, in which case waiting is the
+                // whole contract, or the weak exchange failed spuriously.
+                Err(_) => spin_loop(),
+            }
+        }
+        // Acquire: for the waiter that broke out on `Err(ONCE_COMPLETE)` the
+        // ordering came from the failing exchange, but the initialiser's own
+        // release store is what this has to pair with in general.
+        while self.state.load(Ordering::Acquire) != ONCE_COMPLETE {
+            spin_loop();
+        }
+        // SAFETY: the loop above only exits on the complete state observed
+        // through an acquire load, so the value is initialised and visible.
+        unsafe { self.value_unchecked() }
+    }
+
+    /// Runs the initialiser and publishes its value.
+    ///
+    /// Only ever called by the thread whose exchange moved the state from
+    /// incomplete to running.
+    fn initialise<F: FnOnce() -> T>(&self, init: F) {
+        let value = init();
+        // SAFETY: this thread claimed the running state, so it is the only one
+        // that may touch the slot; every other thread waits for the complete
+        // state before reading it.
+        let slot = unsafe { &mut *self.value.get() };
+        // The `&mut T` this returns is not needed: readers reach the value
+        // through the cell, once the store below has published it.
+        let _initialised = slot.write(value);
+        // Release: this is the store that makes the value readable, so it has
+        // to be ordered after the write above, and it pairs with every acquire
+        // load of the state elsewhere in this type.
+        self.state.store(ONCE_COMPLETE, Ordering::Release);
+    }
+}
+
+impl<T> Once<T> {
+    /// Returns the value if it has been initialised, without waiting.
+    ///
+    /// A caller that arrives while the initialiser is running gets `None`
+    /// rather than blocking, which is the difference between this and
+    /// [`call_once`](Self::call_once): it is for code that has something else
+    /// to do, such as an early panic handler asking whether the console exists
+    /// yet.
+    #[must_use]
+    pub fn get(&self) -> Option<&T> {
+        // Acquire: this decides whether the value is readable, so it pairs with
+        // the initialiser's release store.
+        (self.state.load(Ordering::Acquire) == ONCE_COMPLETE).then(||
+            // SAFETY: the acquire load above observed the complete state, which
+            // the initialiser publishes with a release store *after* writing
+            // the value -- so the value is initialised and can no longer change.
+            unsafe { self.value_unchecked() })
+    }
+
+    /// Reports whether the initialiser has finished.
+    #[must_use]
+    pub fn is_completed(&self) -> bool {
+        // Acquire rather than Relaxed: callers use this to decide that a later
+        // `get` will succeed, so the same pairing has to hold here.
+        self.state.load(Ordering::Acquire) == ONCE_COMPLETE
+    }
+
+    /// Borrows the value directly, if there is one.
+    ///
+    /// `&mut self` proves no other CPU can be inside the cell, so no atomics
+    /// are needed to answer.
+    pub fn get_mut(&mut self) -> Option<&mut T> {
+        (*self.state.get_mut() == ONCE_COMPLETE).then(||
+            // SAFETY: the state says the initialiser finished, and `&mut self`
+            // proves nothing else can be inside the cell, so the value is
+            // initialised and exclusively ours.
+            unsafe { self.value.get_mut().assume_init_mut() })
+    }
+
+    /// Returns a reference to the value.
+    ///
+    /// # Safety
+    ///
+    /// The caller must have observed the complete state through an acquire
+    /// load, which is what makes the initialising thread's write both finished
+    /// and visible on this CPU.
+    unsafe fn value_unchecked(&self) -> &T {
+        // SAFETY: the caller guarantees the initialiser has published the
+        // value, and nothing writes the slot after that, so a shared reference
+        // into the cell cannot alias a mutable one.
+        let slot = unsafe { &*self.value.get() };
+        // SAFETY: the same guarantee, restated for the `MaybeUninit`: a
+        // complete state means this slot was written.
+        unsafe { slot.assume_init_ref() }
+    }
+}
+
+impl<T> Drop for Once<T> {
+    fn drop(&mut self) {
+        if *self.state.get_mut() == ONCE_COMPLETE {
+            // SAFETY: the state says the slot was initialised, and `&mut self`
+            // in a destructor proves this is the last reference to it, so the
+            // value is dropped exactly once.
+            unsafe { self.value.get_mut().assume_init_drop() };
+        }
+    }
+}
+
+impl<T> Default for Once<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for Once<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.get() {
+            Some(value) => f.debug_struct("Once").field("value", value).finish(),
+            None => f.write_str("Once { value: <uninitialised> }"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RwSpinLock
+// ---------------------------------------------------------------------------
+
+/// The top bit of the state word, set while a writer holds the lock.
+///
+/// It is the top bit so that the reader count can use every other bit and still
+/// be a plain increment.
+const RW_WRITER: usize = 1 << (usize::BITS - 1);
+
+/// The bits of the state word holding the number of readers inside the lock.
+const RW_READERS: usize = !RW_WRITER;
+
+/// A lock allowing many readers or one writer, preferring the writer.
+///
+/// For the tables the kernel reads constantly and writes almost never — the
+/// mount table, the interrupt vector table, the module list — a mutual
+/// exclusion lock would serialise every lookup against every other CPU's
+/// lookup for no reason. This lets them all in at once and only excludes them
+/// while something is being changed.
+///
+/// # Why writer-preferring
+///
+/// Once a writer is waiting, new readers are turned away and queue behind it,
+/// so the writer gets in as soon as the readers already inside have left. A
+/// reader-preferring lock has no such bound: on a table read by every CPU on
+/// every syscall, a continuous stream of overlapping readers means the count
+/// never reaches zero and the writer waits forever. The cost is the mirror
+/// image — a stream of writers delays readers — which is the right trade for
+/// data that is written rarely by construction.
+///
+/// # Not reentrant, in either direction
+///
+/// Taking a second read lock while holding one deadlocks if a writer arrived in
+/// between: the outer reader waits for the inner one, which waits for the
+/// writer, which waits for the outer one.
+///
+/// ```
+/// # use ferrix_sync::RwSpinLock;
+/// let table = RwSpinLock::new(0_u32);
+/// {
+///     let first = table.read();
+///     let second = table.read();
+///     assert_eq!(*first + *second, 0, "both readers are inside at once");
+/// }
+/// *table.write() = 5;
+/// assert_eq!(*table.read(), 5, "the writer's change is visible to readers");
+/// ```
+pub struct RwSpinLock<T: ?Sized> {
+    /// The writer bit and the reader count, in one word so that a reader
+    /// entering and a writer entering contend for a single atomic.
+    state: AtomicUsize,
+    /// How many writers are waiting to get in.
+    ///
+    /// Separate from `state` because readers only need to look at it, never to
+    /// change it, and a writer registering here must not disturb the reader
+    /// count it is waiting to see drain.
+    writers_waiting: AtomicUsize,
+    /// The protected data, reachable only through a guard.
+    data: UnsafeCell<T>,
+}
+
+// SAFETY: sending the lock sends the data it owns, which is what `T: Send`
+// permits.
+unsafe impl<T: ?Sized + Send> Send for RwSpinLock<T> {}
+
+// SAFETY: `T: Send` because a writer's `&mut T` moves between threads, and
+// `T: Sync` — unlike [`SpinLock`] — because read guards hand `&T` to several
+// threads simultaneously, which is exactly what `Sync` licenses.
+unsafe impl<T: ?Sized + Send + Sync> Sync for RwSpinLock<T> {}
+
+impl<T> RwSpinLock<T> {
+    /// Creates a lock in the unlocked state.
+    #[must_use]
+    pub const fn new(value: T) -> Self {
+        Self {
+            state: AtomicUsize::new(0),
+            writers_waiting: AtomicUsize::new(0),
+            data: UnsafeCell::new(value),
+        }
+    }
+
+    /// Consumes the lock and returns the protected value.
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.data.into_inner()
+    }
+}
+
+impl<T: ?Sized> RwSpinLock<T> {
+    /// Takes a read lock, waiting for any writer that holds or is waiting.
+    #[must_use = "the lock is released as soon as the guard is dropped"]
+    pub fn read(&self) -> RwSpinLockReadGuard<'_, T> {
+        loop {
+            if self.try_enter_read() {
+                return RwSpinLockReadGuard {
+                    lock: self,
+                    not_send: PhantomData,
+                };
+            }
+            spin_loop();
+        }
+    }
+
+    /// Takes a read lock if one is free right now.
+    ///
+    /// Fails while a writer holds the lock and also while one is merely
+    /// waiting, because letting this reader in would be the reader preference
+    /// the type does not have.
+    #[must_use = "the lock is released as soon as the guard is dropped"]
+    pub fn try_read(&self) -> Option<RwSpinLockReadGuard<'_, T>> {
+        self.try_enter_read().then(|| RwSpinLockReadGuard {
+            lock: self,
+            not_send: PhantomData,
+        })
+    }
+
+    /// One attempt to join the readers inside the lock.
+    fn try_enter_read(&self) -> bool {
+        // Relaxed: this is the writer-preference check, and it is advisory. A
+        // writer that registers just after this load simply catches the next
+        // reader instead of this one, which costs it one extra turn and no
+        // correctness.
+        if self.writers_waiting.load(Ordering::Relaxed) != 0 {
+            return false;
+        }
+        // Relaxed: the state read here is only a proposal for the exchange
+        // below, which is what carries the ordering.
+        let state = self.state.load(Ordering::Relaxed);
+        // A writer inside means no reader may enter; a saturated reader count
+        // means the next increment would overflow into the writer bit and
+        // silently hand this reader a writer's exclusion.
+        if state & RW_WRITER != 0 || state & RW_READERS == RW_READERS {
+            return false;
+        }
+        // Acquire on success: this is the operation that lets this CPU read the
+        // data, so it pairs with the release of the writer that left. Relaxed
+        // on failure, which reads nothing.
+        self.state
+            .compare_exchange(state, state + 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+    }
+}
+
+impl<T: ?Sized> RwSpinLock<T> {
+    /// Takes the write lock, waiting for every reader and writer inside to
+    /// leave, and turning away readers that arrive meanwhile.
+    #[must_use = "the lock is released as soon as the guard is dropped"]
+    pub fn write(&self) -> RwSpinLockWriteGuard<'_, T> {
+        // Relaxed: this counter is a hint to readers, not a handoff of data.
+        // What it has to be is visible soon, and any atomic increment is.
+        let _waiting = self.writers_waiting.fetch_add(1, Ordering::Relaxed);
+        while !self.try_enter_write() {
+            spin_loop();
+        }
+        // Deregister only after the lock is held: while this writer waits, the
+        // count is what keeps new readers out, and while it holds the lock the
+        // writer bit does that job instead.
+        let _waited = self.writers_waiting.fetch_sub(1, Ordering::Relaxed);
+        RwSpinLockWriteGuard {
+            lock: self,
+            not_send: PhantomData,
+        }
+    }
+
+    /// Takes the write lock if the lock is completely free right now.
+    ///
+    /// This does not register as a waiting writer: a caller that is willing to
+    /// give up should not leave readers queueing behind a writer that has gone.
+    #[must_use = "the lock is released as soon as the guard is dropped"]
+    pub fn try_write(&self) -> Option<RwSpinLockWriteGuard<'_, T>> {
+        self.try_enter_write().then(|| RwSpinLockWriteGuard {
+            lock: self,
+            not_send: PhantomData,
+        })
+    }
+
+    /// One attempt to claim the lock exclusively.
+    fn try_enter_write(&self) -> bool {
+        // Only a state of exactly zero — no writer, no readers — may be
+        // claimed. Acquire on success: this is the operation after which the
+        // writer reads and modifies the data, so it pairs with the release of
+        // every reader and writer that has left. Relaxed on failure.
+        self.state
+            .compare_exchange(0, RW_WRITER, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+    }
+
+    /// Reports whether a writer held the lock at some instant during the call.
+    #[must_use]
+    pub fn is_write_locked(&self) -> bool {
+        // Relaxed: a diagnostic, stale the moment it is returned.
+        self.state.load(Ordering::Relaxed) & RW_WRITER != 0
+    }
+
+    /// Returns how many readers were inside the lock at some instant during
+    /// the call, which is zero while a writer holds it.
+    #[must_use]
+    pub fn reader_count(&self) -> usize {
+        // Relaxed, for the same reason as `is_write_locked`.
+        let state = self.state.load(Ordering::Relaxed);
+        if state & RW_WRITER != 0 {
+            0
+        } else {
+            state & RW_READERS
+        }
+    }
+
+    /// Borrows the protected data directly.
+    ///
+    /// `&mut self` proves no reader and no writer can be inside.
+    pub fn get_mut(&mut self) -> &mut T {
+        self.data.get_mut()
+    }
+}
+
+impl<T: ?Sized + fmt::Debug> fmt::Debug for RwSpinLock<T> {
+    /// Formats the lock without waiting, for the reason given on
+    /// [`SpinLock`]'s `Debug`.
+    ///
+    /// It takes a *read* lock, which succeeds even while other readers are
+    /// inside, so formatting a shared table does not have to wait for them.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.try_read() {
+            Some(guard) => f
+                .debug_struct("RwSpinLock")
+                .field("data", &&*guard)
+                .finish(),
+            None => f.write_str("RwSpinLock { data: <locked> }"),
+        }
+    }
+}
+
+impl<T: Default> Default for RwSpinLock<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+/// Proof that its holder is one of the readers inside an [`RwSpinLock`].
+pub struct RwSpinLockReadGuard<'a, T: ?Sized> {
+    /// The lock to leave on drop, and the data to hand out until then.
+    lock: &'a RwSpinLock<T>,
+    /// Makes the guard `!Send`, for the reason given on [`SpinLockGuard`].
+    not_send: PhantomData<*const ()>,
+}
+
+// SAFETY: sharing a read guard shares `&T`, which is what `T: Sync` allows.
+unsafe impl<T: ?Sized + Sync> Sync for RwSpinLockReadGuard<'_, T> {}
+
+impl<T: ?Sized> Deref for RwSpinLockReadGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: this guard exists only while its thread is counted among the
+        // readers, and the writer bit cannot be set while the count is
+        // non-zero, so no `&mut T` to the data can exist.
+        unsafe { &*self.lock.data.get() }
+    }
+}
+
+impl<T: ?Sized> Drop for RwSpinLockReadGuard<'_, T> {
+    fn drop(&mut self) {
+        // Release: a reader publishes nothing, but a writer waiting for the
+        // count to reach zero acquires on the exchange that sees it, and that
+        // pairing is what orders this reader's reads before the writer's
+        // modifications.
+        let _remaining = self.lock.state.fetch_sub(1, Ordering::Release);
+    }
+}
+
+impl<T: ?Sized + fmt::Debug> fmt::Debug for RwSpinLockReadGuard<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl<T: ?Sized + fmt::Display> fmt::Display for RwSpinLockReadGuard<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&**self, f)
+    }
+}
+
+/// Proof that its holder is the one writer inside an [`RwSpinLock`].
+pub struct RwSpinLockWriteGuard<'a, T: ?Sized> {
+    /// The lock to release on drop, and the data to hand out until then.
+    lock: &'a RwSpinLock<T>,
+    /// Makes the guard `!Send`, for the reason given on [`SpinLockGuard`].
+    not_send: PhantomData<*const ()>,
+}
+
+// SAFETY: a shared reference to a write guard reaches the data only through
+// `Deref`, so sharing one across threads shares `&T`, which `T: Sync` allows.
+unsafe impl<T: ?Sized + Sync> Sync for RwSpinLockWriteGuard<'_, T> {}
+
+impl<T: ?Sized> Deref for RwSpinLockWriteGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: this guard exists only while its thread owns the writer bit,
+        // and no reader can be counted while that bit is set, so no other
+        // reference to the data exists.
+        unsafe { &*self.lock.data.get() }
+    }
+}
+
+impl<T: ?Sized> DerefMut for RwSpinLockWriteGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: as for `deref`, with `&mut self` additionally proving this is
+        // the only borrow taken through the guard itself.
+        unsafe { &mut *self.lock.data.get() }
+    }
+}
+
+impl<T: ?Sized> Drop for RwSpinLockWriteGuard<'_, T> {
+    fn drop(&mut self) {
+        // A plain store rather than clearing the bit: no reader can have joined
+        // while the writer bit was set, so the whole word is known to be
+        // exactly `RW_WRITER` and zero is the correct successor.
+        //
+        // Release: everything this writer changed has to be visible to the next
+        // reader or writer, each of which acquires on the exchange that sees
+        // this zero.
+        self.lock.state.store(0, Ordering::Release);
+    }
+}
+
+impl<T: ?Sized + fmt::Debug> fmt::Debug for RwSpinLockWriteGuard<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl<T: ?Sized + fmt::Display> fmt::Display for RwSpinLockWriteGuard<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&**self, f)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SpinLockedCell
+// ---------------------------------------------------------------------------
+
+/// A global that is empty until boot fills it in, and locked thereafter.
+///
+/// This is the shape of most of the kernel's globals: nothing at reset, a value
+/// installed once while the machine comes up, and mutation afterwards that is
+/// rare but real — the frame allocator's free lists, the scheduler's run queue,
+/// the console driver. [`Once`] is the wrong tool for them because it hands out
+/// only `&T`, and a bare [`SpinLock`] is awkward because there is nothing
+/// sensible to construct it with at compile time.
+///
+/// The difference from `SpinLock<Option<T>>`, which is what this is, is that
+/// the accessors say what the states mean: absent because boot has not reached
+/// it yet, rather than absent as a value in its own right.
+///
+/// The lock is a plain [`SpinLock`], so the module's rule applies: do not reach
+/// a cell from an interrupt handler, and do not call back into the same cell
+/// from inside [`with_mut`](Self::with_mut).
+///
+/// ```
+/// # use ferrix_sync::SpinLockedCell;
+/// static CONSOLE: SpinLockedCell<u32> = SpinLockedCell::new();
+///
+/// assert!(!CONSOLE.is_set(), "nothing is installed before boot runs");
+/// assert!(CONSOLE.set(0x3f8).is_none(), "installing returns no old value");
+/// assert_eq!(CONSOLE.with(|port| *port), Some(0x3f8), "and it reads back");
+/// ```
+#[derive(Debug, Default)]
+pub struct SpinLockedCell<T> {
+    /// The value once something has installed one.
+    inner: SpinLock<Option<T>>,
+}
+
+impl<T> SpinLockedCell<T> {
+    /// Creates an empty cell.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            inner: SpinLock::new(None),
+        }
+    }
+
+    /// Creates a cell that already holds a value.
+    #[must_use]
+    pub const fn with_value(value: T) -> Self {
+        Self {
+            inner: SpinLock::new(Some(value)),
+        }
+    }
+
+    /// Installs a value, returning whatever was there before.
+    ///
+    /// Returning the old value rather than refusing keeps the "installed twice"
+    /// decision with the caller: boot code can assert the result was `None`,
+    /// and a driver that legitimately re-registers can ignore it.
+    pub fn set(&self, value: T) -> Option<T> {
+        self.inner.lock().replace(value)
+    }
+
+    /// Removes the value, returning it.
+    pub fn take(&self) -> Option<T> {
+        self.inner.lock().take()
+    }
+
+    /// Reports whether a value was installed at some instant during the call.
+    ///
+    /// Answered with [`try_lock`](SpinLock::try_lock), so it never waits; a
+    /// cell that is locked at that instant reads as not set, which is the safe
+    /// answer for the diagnostic this is.
+    #[must_use]
+    pub fn is_set(&self) -> bool {
+        self.inner.try_lock().is_some_and(|value| value.is_some())
+    }
+
+    /// Runs `f` on the value, if there is one, holding the lock throughout.
+    ///
+    /// A closure rather than a returned reference, because the lock has to
+    /// outlive the borrow and a guard cannot be handed out with an `Option`
+    /// projection without pinning the caller to this crate's guard type.
+    pub fn with<R, F: FnOnce(&T) -> R>(&self, f: F) -> Option<R> {
+        self.inner.lock().as_ref().map(f)
+    }
+
+    /// Runs `f` on the value mutably, if there is one, holding the lock.
+    pub fn with_mut<R, F: FnOnce(&mut T) -> R>(&self, f: F) -> Option<R> {
+        self.inner.lock().as_mut().map(f)
+    }
+
+    /// Takes the lock and hands out the `Option` itself.
+    ///
+    /// For the caller that needs to look and then install without another CPU
+    /// slipping in between.
+    #[must_use = "the lock is released as soon as the guard is dropped"]
+    pub fn lock(&self) -> SpinLockGuard<'_, Option<T>> {
+        self.inner.lock()
+    }
+
+    /// Borrows the value directly, if there is one.
+    pub fn get_mut(&mut self) -> Option<&mut T> {
+        self.inner.get_mut().as_mut()
+    }
+}

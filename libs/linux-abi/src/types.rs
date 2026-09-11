@@ -1,0 +1,1003 @@
+//! Structure layouts and flag constants of the Linux system call ABI.
+//!
+//! Every structure here is `#[repr(C)]` and matches, byte for byte, what the
+//! kernel writes into a user buffer on a 64-bit target. The two architectures
+//! agree on everything except `stat` and `epoll_event`, which are given per
+//! architecture in [`x86_64`] and [`aarch64`]; the rest is shared, because the
+//! generic UAPI headers are what both use.
+//!
+//! Sizes and field offsets are asserted in this crate's tests rather than
+//! trusted. The failure mode of a wrong layout is not a compile error: it is a
+//! program that reads a file size out of the padding, and there is nothing in
+//! the resulting behaviour that points back at this file.
+
+// ---------------------------------------------------------------------------
+// Time
+// ---------------------------------------------------------------------------
+
+/// A time in seconds and nanoseconds, `struct timespec`.
+///
+/// Both fields are 64-bit on every target Ferrix supports, so there is no
+/// 2038 problem and no compat variant to carry.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Timespec {
+    /// Whole seconds.
+    pub tv_sec: i64,
+    /// Nanoseconds within the second, `0..1_000_000_000`.
+    pub tv_nsec: i64,
+}
+
+/// A time in seconds and microseconds, `struct timeval`.
+///
+/// Used by `gettimeofday` and by the two fields of [`Rusage`]; new interfaces
+/// use [`Timespec`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Timeval {
+    /// Whole seconds.
+    pub tv_sec: i64,
+    /// Microseconds within the second, `0..1_000_000`.
+    pub tv_usec: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Scatter/gather
+// ---------------------------------------------------------------------------
+
+/// One segment of a scatter/gather list, `struct iovec`.
+///
+/// `iov_base` is a `u64` rather than a pointer because it is a user address the
+/// kernel has not validated; keeping it a plain integer means it cannot be
+/// dereferenced by accident and this crate stays free of `unsafe`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Iovec {
+    /// User address of the segment.
+    pub iov_base: u64,
+    /// Length of the segment in bytes.
+    pub iov_len: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Per-architecture layouts
+// ---------------------------------------------------------------------------
+
+/// Layouts that are specific to x86-64.
+pub mod x86_64 {
+    /// File metadata as x86-64 lays it out, `struct stat` from
+    /// `arch/x86/include/uapi/asm/stat.h`.
+    ///
+    /// 144 bytes, and *not* interchangeable with [`super::aarch64::Stat`]:
+    /// x86-64 puts `st_nlink` before `st_mode` and pads differently. This is
+    /// the layout `stat`, `lstat`, `fstat` and `newfstatat` fill in on x86-64.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    #[repr(C)]
+    pub struct Stat {
+        /// Identifier of the device holding the file.
+        pub st_dev: u64,
+        /// Inode number within that device.
+        pub st_ino: u64,
+        /// Number of hard links.
+        pub st_nlink: u64,
+        /// File type and permission bits; see the `S_IF*` constants.
+        pub st_mode: u32,
+        /// Owning user identifier.
+        pub st_uid: u32,
+        /// Owning group identifier.
+        pub st_gid: u32,
+        /// Padding the kernel writes as zero.
+        pub __pad0: u32,
+        /// Device this file represents, for block and character devices.
+        pub st_rdev: u64,
+        /// Size in bytes, or the link target length for a symbolic link.
+        pub st_size: i64,
+        /// Preferred block size for input and output.
+        pub st_blksize: i64,
+        /// Number of 512-byte blocks allocated.
+        pub st_blocks: i64,
+        /// Seconds of the last access time.
+        pub st_atime: i64,
+        /// Nanoseconds of the last access time.
+        pub st_atime_nsec: i64,
+        /// Seconds of the last modification time.
+        pub st_mtime: i64,
+        /// Nanoseconds of the last modification time.
+        pub st_mtime_nsec: i64,
+        /// Seconds of the last status change time.
+        pub st_ctime: i64,
+        /// Nanoseconds of the last status change time.
+        pub st_ctime_nsec: i64,
+        /// Reserved space, written as zero.
+        pub __unused: [i64; 3],
+    }
+
+    /// One epoll registration, `struct epoll_event` as x86-64 defines it.
+    ///
+    /// x86-64 defines `EPOLL_PACKED`, so the structure is 12 bytes with
+    /// `data` at offset 4 and no trailing padding. This exists so that a
+    /// 32-bit x86 process sees the same layout as a 64-bit one; AArch64 never
+    /// had that compatibility problem and uses the natural 16-byte layout in
+    /// [`super::aarch64::EpollEvent`]. Getting this wrong misplaces the user
+    /// cookie by four bytes on every event delivered.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    #[repr(C, packed)]
+    pub struct EpollEvent {
+        /// Requested or reported event mask; see the `EPOLL*` constants.
+        pub events: u32,
+        /// Opaque value the caller registered and the kernel hands back.
+        pub data: u64,
+    }
+}
+
+/// Layouts that are specific to AArch64.
+pub mod aarch64 {
+    /// File metadata as the generic UAPI lays it out, `struct stat` from
+    /// `include/uapi/asm-generic/stat.h`.
+    ///
+    /// 128 bytes, sixteen fewer than [`super::x86_64::Stat`], with `st_mode`
+    /// and `st_nlink` in the opposite order and `st_blksize` only 32 bits
+    /// wide. AArch64 has no `stat` or `lstat` call; this is what `fstat` and
+    /// `newfstatat` fill in.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    #[repr(C)]
+    pub struct Stat {
+        /// Identifier of the device holding the file.
+        pub st_dev: u64,
+        /// Inode number within that device.
+        pub st_ino: u64,
+        /// File type and permission bits; see the `S_IF*` constants.
+        pub st_mode: u32,
+        /// Number of hard links.
+        pub st_nlink: u32,
+        /// Owning user identifier.
+        pub st_uid: u32,
+        /// Owning group identifier.
+        pub st_gid: u32,
+        /// Device this file represents, for block and character devices.
+        pub st_rdev: u64,
+        /// Padding the kernel writes as zero.
+        pub __pad1: u64,
+        /// Size in bytes, or the link target length for a symbolic link.
+        pub st_size: i64,
+        /// Preferred block size for input and output.
+        pub st_blksize: i32,
+        /// Padding the kernel writes as zero.
+        pub __pad2: i32,
+        /// Number of 512-byte blocks allocated.
+        pub st_blocks: i64,
+        /// Seconds of the last access time.
+        pub st_atime: i64,
+        /// Nanoseconds of the last access time.
+        pub st_atime_nsec: u64,
+        /// Seconds of the last modification time.
+        pub st_mtime: i64,
+        /// Nanoseconds of the last modification time.
+        pub st_mtime_nsec: u64,
+        /// Seconds of the last status change time.
+        pub st_ctime: i64,
+        /// Nanoseconds of the last status change time.
+        pub st_ctime_nsec: u64,
+        /// Reserved space, written as zero.
+        pub __unused: [u32; 2],
+    }
+
+    /// One epoll registration, `struct epoll_event` as AArch64 defines it.
+    ///
+    /// Unpacked, so `data` is naturally aligned at offset 8 and the structure
+    /// is 16 bytes. Contrast [`super::x86_64::EpollEvent`], which is packed.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    #[repr(C)]
+    pub struct EpollEvent {
+        /// Requested or reported event mask; see the `EPOLL*` constants.
+        pub events: u32,
+        /// Opaque value the caller registered and the kernel hands back.
+        pub data: u64,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// statx
+// ---------------------------------------------------------------------------
+
+/// A `statx` timestamp, `struct statx_timestamp`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct StatxTimestamp {
+    /// Whole seconds since the epoch, signed so pre-1970 times survive.
+    pub tv_sec: i64,
+    /// Nanoseconds within the second.
+    pub tv_nsec: u32,
+    /// Reserved, written as zero.
+    pub __reserved: i32,
+}
+
+/// Extended file metadata, `struct statx`.
+///
+/// The same on both architectures, which is half the reason it was added: it
+/// carries its own field mask, so the kernel need not fill in what the caller
+/// did not ask for, and it is 256 bytes with reserved space for growth rather
+/// than a new structure per architecture.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Statx {
+    /// Which fields the kernel actually filled in; see the `STATX_*` masks.
+    pub stx_mask: u32,
+    /// Preferred block size for input and output.
+    pub stx_blksize: u32,
+    /// File attribute flags the file system reports.
+    pub stx_attributes: u64,
+    /// Number of hard links.
+    pub stx_nlink: u32,
+    /// Owning user identifier.
+    pub stx_uid: u32,
+    /// Owning group identifier.
+    pub stx_gid: u32,
+    /// File type and permission bits.
+    pub stx_mode: u16,
+    /// Padding to the next 64-bit boundary.
+    pub __spare0: [u16; 1],
+    /// Inode number.
+    pub stx_ino: u64,
+    /// Size in bytes.
+    pub stx_size: u64,
+    /// Number of 512-byte blocks allocated.
+    pub stx_blocks: u64,
+    /// Which bits of `stx_attributes` the file system supports at all.
+    pub stx_attributes_mask: u64,
+    /// Last access time.
+    pub stx_atime: StatxTimestamp,
+    /// Creation time, if the file system records one.
+    pub stx_btime: StatxTimestamp,
+    /// Last status change time.
+    pub stx_ctime: StatxTimestamp,
+    /// Last modification time.
+    pub stx_mtime: StatxTimestamp,
+    /// Major number of the represented device, for device nodes.
+    pub stx_rdev_major: u32,
+    /// Minor number of the represented device, for device nodes.
+    pub stx_rdev_minor: u32,
+    /// Major number of the device holding the file.
+    pub stx_dev_major: u32,
+    /// Minor number of the device holding the file.
+    pub stx_dev_minor: u32,
+    /// Identifier of the mount the file was found through.
+    pub stx_mnt_id: u64,
+    /// Memory alignment required for direct input and output.
+    pub stx_dio_mem_align: u32,
+    /// File offset alignment required for direct input and output.
+    pub stx_dio_offset_align: u32,
+    /// Reserved space that keeps the structure at 256 bytes.
+    pub __spare3: [u64; 12],
+}
+
+// ---------------------------------------------------------------------------
+// Directories
+// ---------------------------------------------------------------------------
+
+/// The fixed head of a `getdents64` entry, `struct linux_dirent64`.
+///
+/// The real entry ends with a NUL-terminated name of variable length, so the
+/// kernel walks the buffer by `d_reclen` rather than by `size_of`. This type
+/// describes only the head; [`DIRENT64_NAME_OFFSET`] is where the name starts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+#[allow(
+    clippy::trailing_empty_array,
+    reason = "the zero-length array is what makes the C flexible array member's \
+              offset visible to offset_of!, and it is exactly what the UAPI \
+              header declares"
+)]
+pub struct LinuxDirent64 {
+    /// Inode number of the entry.
+    pub d_ino: u64,
+    /// Offset to pass to `lseek` to resume reading after this entry.
+    pub d_off: i64,
+    /// Length of this whole entry, including the name and its padding.
+    pub d_reclen: u16,
+    /// File type of the entry; see the `DT_*` constants.
+    pub d_type: u8,
+    /// Start of the NUL-terminated name, which extends past this structure.
+    pub d_name: [u8; 0],
+}
+
+/// Byte offset of `d_name` within a `getdents64` entry.
+///
+/// Named because `size_of::<LinuxDirent64>()` is 24, not 19: Rust rounds the
+/// structure up to its alignment exactly as C does, and using the size here
+/// would skip five bytes of every name.
+pub const DIRENT64_NAME_OFFSET: usize = 19;
+
+/// Directory entry type: unknown, so the caller must `stat` to find out.
+pub const DT_UNKNOWN: u8 = 0;
+/// Directory entry type: named pipe.
+pub const DT_FIFO: u8 = 1;
+/// Directory entry type: character device.
+pub const DT_CHR: u8 = 2;
+/// Directory entry type: directory.
+pub const DT_DIR: u8 = 4;
+/// Directory entry type: block device.
+pub const DT_BLK: u8 = 6;
+/// Directory entry type: regular file.
+pub const DT_REG: u8 = 8;
+/// Directory entry type: symbolic link.
+pub const DT_LNK: u8 = 10;
+/// Directory entry type: socket.
+pub const DT_SOCK: u8 = 12;
+
+// ---------------------------------------------------------------------------
+// System identity and resources
+// ---------------------------------------------------------------------------
+
+/// System identification strings, `struct new_utsname`.
+///
+/// Six fixed 65-byte fields, each holding a NUL-terminated string. The odd
+/// length is `__NEW_UTS_LEN + 1`, which is why the structure is 390 bytes and
+/// has an alignment of one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct Utsname {
+    /// Operating system name, which Ferrix reports as `Linux` so that build
+    /// systems and `libc` probes take the path they were tested on.
+    pub sysname: [u8; 65],
+    /// Host name.
+    pub nodename: [u8; 65],
+    /// Kernel release, the field configure scripts compare against.
+    pub release: [u8; 65],
+    /// Kernel version string.
+    pub version: [u8; 65],
+    /// Machine hardware name, such as `x86_64` or `aarch64`.
+    pub machine: [u8; 65],
+    /// NIS or YP domain name, almost always `(none)`.
+    pub domainname: [u8; 65],
+}
+
+/// A resource limit pair, `struct rlimit`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Rlimit {
+    /// Soft limit: the value actually enforced.
+    pub rlim_cur: u64,
+    /// Hard limit: the ceiling an unprivileged process may raise the soft
+    /// limit to.
+    pub rlim_max: u64,
+}
+
+/// Accumulated resource usage, `struct rusage`.
+///
+/// Linux fills in the two times, `ru_maxrss`, the fault counts and the context
+/// switch counts; the remaining fields exist for source compatibility with
+/// older UNIX systems and are always zero.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Rusage {
+    /// Processor time spent in user mode.
+    pub ru_utime: Timeval,
+    /// Processor time spent in the kernel on this process's behalf.
+    pub ru_stime: Timeval,
+    /// Maximum resident set size, in kilobytes.
+    pub ru_maxrss: i64,
+    /// Integral shared memory size; unused on Linux.
+    pub ru_ixrss: i64,
+    /// Integral unshared data size; unused on Linux.
+    pub ru_idrss: i64,
+    /// Integral unshared stack size; unused on Linux.
+    pub ru_isrss: i64,
+    /// Page faults served without reading from storage.
+    pub ru_minflt: i64,
+    /// Page faults that required reading from storage.
+    pub ru_majflt: i64,
+    /// Swap count; unused on Linux.
+    pub ru_nswap: i64,
+    /// Block input operations.
+    pub ru_inblock: i64,
+    /// Block output operations.
+    pub ru_oublock: i64,
+    /// Messages sent; unused on Linux.
+    pub ru_msgsnd: i64,
+    /// Messages received; unused on Linux.
+    pub ru_msgrcv: i64,
+    /// Signals received; unused on Linux.
+    pub ru_nsignals: i64,
+    /// Voluntary context switches.
+    pub ru_nvcsw: i64,
+    /// Involuntary context switches.
+    pub ru_nivcsw: i64,
+}
+
+/// System-wide statistics, `struct sysinfo`.
+///
+/// All the memory fields are counted in `mem_unit` bytes, not in bytes; the
+/// unit exists so that the 32-bit form of the structure could describe more
+/// than 4 GiB of memory, and 64-bit callers still have to multiply.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Sysinfo {
+    /// Seconds since boot.
+    pub uptime: i64,
+    /// One, five and fifteen minute load averages, scaled by 65536.
+    pub loads: [u64; 3],
+    /// Total usable main memory.
+    pub totalram: u64,
+    /// Available main memory.
+    pub freeram: u64,
+    /// Memory used by shared mappings.
+    pub sharedram: u64,
+    /// Memory used by buffers.
+    pub bufferram: u64,
+    /// Total swap space.
+    pub totalswap: u64,
+    /// Free swap space.
+    pub freeswap: u64,
+    /// Number of processes.
+    pub procs: u16,
+    /// Padding the kernel writes as zero.
+    pub pad: u16,
+    /// Total high memory; zero on 64-bit, which has no high memory.
+    pub totalhigh: u64,
+    /// Free high memory; zero on 64-bit.
+    pub freehigh: u64,
+    /// Size in bytes of the unit the memory fields are counted in.
+    pub mem_unit: u32,
+    /// Historical padding, empty on 64-bit because the fields above already
+    /// fill the reserved twenty bytes.
+    pub _f: [u8; 0],
+}
+
+// ---------------------------------------------------------------------------
+// Signals
+// ---------------------------------------------------------------------------
+
+/// A set of signals, the kernel's `sigset_t`.
+///
+/// One 64-bit word, because `_NSIG` is 64. This is *not* the C library's
+/// `sigset_t`, which musl and glibc both pad to 128 bytes; the system call
+/// takes the size as an argument precisely so the two can differ, and the
+/// kernel rejects anything but 8.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Sigset {
+    /// Bit `n - 1` is set when signal `n` is a member.
+    pub sig: [u64; 1],
+}
+
+/// A signal disposition, the kernel's `struct sigaction`.
+///
+/// The field order is the kernel's, not POSIX's: the mask comes last so the
+/// structure could be extended, and `sa_restorer` sits in the middle. Both
+/// architectures use this layout — `arch/arm64/include/uapi/asm/signal.h`
+/// defines `SA_RESTORER` for AArch32 compatibility, so the AArch64 structure
+/// keeps the field even though 64-bit code sets [`SA_RESTORER`] and returns
+/// through the trampoline the C library supplies.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Sigaction {
+    /// User address of the handler, or [`SIG_DFL`] or [`SIG_IGN`].
+    pub sa_handler: u64,
+    /// Behaviour flags; see the `SA_*` constants.
+    pub sa_flags: u64,
+    /// User address of the trampoline that issues `rt_sigreturn`.
+    pub sa_restorer: u64,
+    /// Signals blocked for the duration of the handler.
+    pub sa_mask: Sigset,
+}
+
+/// An alternate signal stack, `stack_t`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Stack {
+    /// User address of the stack's lowest byte.
+    pub ss_sp: u64,
+    /// [`SS_ONSTACK`] or [`SS_DISABLE`].
+    pub ss_flags: i32,
+    /// Size of the stack in bytes.
+    pub ss_size: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Polling
+// ---------------------------------------------------------------------------
+
+/// One entry of a `poll` or `ppoll` array, `struct pollfd`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Pollfd {
+    /// File descriptor to watch; a negative value makes the entry inert.
+    pub fd: i32,
+    /// Events the caller is interested in.
+    pub events: i16,
+    /// Events that occurred, written by the kernel.
+    pub revents: i16,
+}
+
+// ---------------------------------------------------------------------------
+// The auxiliary vector
+// ---------------------------------------------------------------------------
+
+/// End of the auxiliary vector.
+pub const AT_NULL: u64 = 0;
+/// Entry to be ignored.
+pub const AT_IGNORE: u64 = 1;
+/// File descriptor of the program, for the long-obsolete `execfd` path.
+pub const AT_EXECFD: u64 = 2;
+/// User address of the program headers.
+pub const AT_PHDR: u64 = 3;
+/// Size of one program header entry.
+pub const AT_PHENT: u64 = 4;
+/// Number of program header entries.
+pub const AT_PHNUM: u64 = 5;
+/// System page size.
+pub const AT_PAGESZ: u64 = 6;
+/// Base address at which the interpreter was loaded.
+pub const AT_BASE: u64 = 7;
+/// Flags; always zero on Linux.
+pub const AT_FLAGS: u64 = 8;
+/// Entry point of the program.
+pub const AT_ENTRY: u64 = 9;
+/// Non-zero if the program is not an ELF file.
+pub const AT_NOTELF: u64 = 10;
+/// Real user identifier.
+pub const AT_UID: u64 = 11;
+/// Effective user identifier.
+pub const AT_EUID: u64 = 12;
+/// Real group identifier.
+pub const AT_GID: u64 = 13;
+/// Effective group identifier.
+pub const AT_EGID: u64 = 14;
+/// String naming the platform, such as `x86_64`.
+pub const AT_PLATFORM: u64 = 15;
+/// Processor capability bits.
+pub const AT_HWCAP: u64 = 16;
+/// Clock ticks per second, the unit of `times`.
+pub const AT_CLKTCK: u64 = 17;
+/// Non-zero when the program was executed set-user-ID or set-group-ID.
+///
+/// musl reads this before deciding whether to honour environment variables
+/// such as `LD_PRELOAD`, so a kernel that omits it is choosing the unsafe
+/// default.
+pub const AT_SECURE: u64 = 23;
+/// Address of sixteen random bytes, which musl uses to seed the stack guard.
+pub const AT_RANDOM: u64 = 25;
+/// Second word of processor capability bits.
+pub const AT_HWCAP2: u64 = 26;
+/// Address of the path name the program was executed with.
+pub const AT_EXECFN: u64 = 31;
+/// Address of the vDSO's ELF header.
+pub const AT_SYSINFO_EHDR: u64 = 33;
+/// Minimum stack size a signal frame needs on this machine.
+pub const AT_MINSIGSTKSZ: u64 = 51;
+
+// ---------------------------------------------------------------------------
+// open flags
+// ---------------------------------------------------------------------------
+
+/// Open for reading only.
+pub const O_RDONLY: u32 = 0;
+/// Open for writing only.
+pub const O_WRONLY: u32 = 1;
+/// Open for reading and writing.
+pub const O_RDWR: u32 = 2;
+/// Create the file if it does not exist.
+pub const O_CREAT: u32 = 0o100;
+/// With [`O_CREAT`], fail if the file already exists.
+pub const O_EXCL: u32 = 0o200;
+/// Do not make the file the process's controlling terminal.
+pub const O_NOCTTY: u32 = 0o400;
+/// Truncate the file to zero length on open.
+pub const O_TRUNC: u32 = 0o1000;
+/// Append every write to the end of the file.
+pub const O_APPEND: u32 = 0o2000;
+/// Fail rather than block on operations that would wait.
+pub const O_NONBLOCK: u32 = 0o4000;
+/// Fail unless the path names a directory.
+pub const O_DIRECTORY: u32 = 0o200000;
+/// Fail if the final component is a symbolic link.
+pub const O_NOFOLLOW: u32 = 0o400000;
+/// Close the descriptor automatically on `execve`.
+pub const O_CLOEXEC: u32 = 0o2000000;
+/// Open only to name the file: no reading, writing or access check.
+pub const O_PATH: u32 = 0o10000000;
+
+// ---------------------------------------------------------------------------
+// Memory mapping
+// ---------------------------------------------------------------------------
+
+/// The mapping may not be accessed at all.
+pub const PROT_NONE: u32 = 0;
+/// The mapping may be read.
+pub const PROT_READ: u32 = 1;
+/// The mapping may be written.
+pub const PROT_WRITE: u32 = 2;
+/// The mapping may be executed.
+pub const PROT_EXEC: u32 = 4;
+
+/// Writes are visible to other mappers of the same object.
+pub const MAP_SHARED: u32 = 0x1;
+/// Writes are private, taken by copy on write.
+pub const MAP_PRIVATE: u32 = 0x2;
+/// Place the mapping exactly at the given address, replacing what is there.
+pub const MAP_FIXED: u32 = 0x10;
+/// Map zero-filled memory rather than a file.
+pub const MAP_ANONYMOUS: u32 = 0x20;
+/// Do not reserve swap space for the mapping.
+pub const MAP_NORESERVE: u32 = 0x4000;
+/// Populate the page tables immediately rather than faulting them in.
+pub const MAP_POPULATE: u32 = 0x8000;
+/// Mark the mapping as a stack, which on some architectures affects growth.
+pub const MAP_STACK: u32 = 0x20000;
+/// Like [`MAP_FIXED`], but fail rather than replace an existing mapping.
+pub const MAP_FIXED_NOREPLACE: u32 = 0x100000;
+
+/// `mremap` may move the mapping to a new address.
+pub const MREMAP_MAYMOVE: u32 = 1;
+/// `mremap` must place the mapping at the given address.
+pub const MREMAP_FIXED: u32 = 2;
+
+// ---------------------------------------------------------------------------
+// clone
+// ---------------------------------------------------------------------------
+
+/// Share the address space with the parent.
+pub const CLONE_VM: u64 = 0x100;
+/// Share file system information: working directory, root and umask.
+pub const CLONE_FS: u64 = 0x200;
+/// Share the file descriptor table.
+pub const CLONE_FILES: u64 = 0x400;
+/// Share the table of signal handlers.
+pub const CLONE_SIGHAND: u64 = 0x800;
+/// Allow the parent's tracer to trace the child.
+pub const CLONE_PTRACE: u64 = 0x2000;
+/// Suspend the parent until the child execs or exits.
+pub const CLONE_VFORK: u64 = 0x4000;
+/// Make the child a sibling rather than a child of the caller.
+pub const CLONE_PARENT: u64 = 0x8000;
+/// Put the child in the caller's thread group; what makes a thread a thread.
+pub const CLONE_THREAD: u64 = 0x10000;
+/// Give the child a new mount namespace.
+pub const CLONE_NEWNS: u64 = 0x20000;
+/// Share System V semaphore adjustment state.
+pub const CLONE_SYSVSEM: u64 = 0x40000;
+/// Set the child's thread pointer from the `tls` argument.
+pub const CLONE_SETTLS: u64 = 0x80000;
+/// Store the child's thread identifier at the parent's address.
+pub const CLONE_PARENT_SETTID: u64 = 0x100000;
+/// Clear and wake the address in the child when it exits; the futex a
+/// `pthread_join` waits on.
+pub const CLONE_CHILD_CLEARTID: u64 = 0x200000;
+/// Store the child's thread identifier at the child's address.
+pub const CLONE_CHILD_SETTID: u64 = 0x1000000;
+/// Give the child a new user namespace.
+pub const CLONE_NEWUSER: u64 = 0x10000000;
+/// Give the child a new process identifier namespace.
+pub const CLONE_NEWPID: u64 = 0x20000000;
+/// Give the child a new network namespace.
+pub const CLONE_NEWNET: u64 = 0x40000000;
+
+// ---------------------------------------------------------------------------
+// futex
+// ---------------------------------------------------------------------------
+
+/// Sleep if the futex word still holds the expected value.
+pub const FUTEX_WAIT: u32 = 0;
+/// Wake up to the given number of waiters.
+pub const FUTEX_WAKE: u32 = 1;
+/// Requeue waiters onto a second futex.
+pub const FUTEX_REQUEUE: u32 = 3;
+/// Requeue waiters, but only if the first futex still holds a given value.
+pub const FUTEX_CMP_REQUEUE: u32 = 4;
+/// Wake waiters on one futex after an atomic operation on a second.
+pub const FUTEX_WAKE_OP: u32 = 5;
+/// Wait, matching only the given bits, with an absolute timeout.
+pub const FUTEX_WAIT_BITSET: u32 = 9;
+/// Wake only waiters that registered matching bits.
+pub const FUTEX_WAKE_BITSET: u32 = 10;
+/// The futex is private to one address space, which skips the shared lookup.
+pub const FUTEX_PRIVATE_FLAG: u32 = 128;
+/// Interpret the timeout against `CLOCK_REALTIME` rather than the monotonic
+/// clock.
+pub const FUTEX_CLOCK_REALTIME: u32 = 256;
+
+// ---------------------------------------------------------------------------
+// The *at family
+// ---------------------------------------------------------------------------
+
+/// Directory file descriptor meaning "relative to the working directory".
+///
+/// Negative, and deliberately not `-1`, so that passing a closed descriptor by
+/// accident cannot be mistaken for it.
+pub const AT_FDCWD: i32 = -100;
+/// Do not follow a final symbolic link.
+pub const AT_SYMLINK_NOFOLLOW: u32 = 0x100;
+/// Remove a directory rather than a link, for `unlinkat`.
+pub const AT_REMOVEDIR: u32 = 0x200;
+/// Follow a final symbolic link, for the calls that default to not.
+pub const AT_SYMLINK_FOLLOW: u32 = 0x400;
+/// Operate on the directory file descriptor itself when the path is empty.
+pub const AT_EMPTY_PATH: u32 = 0x1000;
+
+// ---------------------------------------------------------------------------
+// File modes
+// ---------------------------------------------------------------------------
+
+/// File type: named pipe.
+pub const S_IFIFO: u32 = 0o010000;
+/// File type: character device.
+pub const S_IFCHR: u32 = 0o020000;
+/// File type: directory.
+pub const S_IFDIR: u32 = 0o040000;
+/// File type: block device.
+pub const S_IFBLK: u32 = 0o060000;
+/// File type: regular file.
+pub const S_IFREG: u32 = 0o100000;
+/// File type: symbolic link.
+pub const S_IFLNK: u32 = 0o120000;
+/// File type: socket.
+pub const S_IFSOCK: u32 = 0o140000;
+/// Mask selecting the file type bits of a mode.
+pub const S_IFMT: u32 = 0o170000;
+
+// ---------------------------------------------------------------------------
+// Seeking
+// ---------------------------------------------------------------------------
+
+/// Seek relative to the start of the file.
+pub const SEEK_SET: u32 = 0;
+/// Seek relative to the current position.
+pub const SEEK_CUR: u32 = 1;
+/// Seek relative to the end of the file.
+pub const SEEK_END: u32 = 2;
+/// Seek to the next byte that is not a hole.
+pub const SEEK_DATA: u32 = 3;
+/// Seek to the next hole.
+pub const SEEK_HOLE: u32 = 4;
+
+// ---------------------------------------------------------------------------
+// Signal numbers and dispositions
+// ---------------------------------------------------------------------------
+
+/// Hangup on the controlling terminal.
+pub const SIGHUP: u32 = 1;
+/// Interrupt from the keyboard.
+pub const SIGINT: u32 = 2;
+/// Quit from the keyboard.
+pub const SIGQUIT: u32 = 3;
+/// Illegal instruction.
+pub const SIGILL: u32 = 4;
+/// Breakpoint or trace trap.
+pub const SIGTRAP: u32 = 5;
+/// Abort, as raised by `abort` and by a failed Rust assertion.
+pub const SIGABRT: u32 = 6;
+/// Bus error: an access the hardware could not complete.
+pub const SIGBUS: u32 = 7;
+/// Arithmetic exception.
+pub const SIGFPE: u32 = 8;
+/// Kill, which cannot be caught, blocked or ignored.
+pub const SIGKILL: u32 = 9;
+/// First user-defined signal.
+pub const SIGUSR1: u32 = 10;
+/// Invalid memory reference.
+pub const SIGSEGV: u32 = 11;
+/// Second user-defined signal.
+pub const SIGUSR2: u32 = 12;
+/// Write to a pipe with no reader.
+pub const SIGPIPE: u32 = 13;
+/// Timer signal from `alarm`.
+pub const SIGALRM: u32 = 14;
+/// Termination request.
+pub const SIGTERM: u32 = 15;
+/// Stack fault on a coprocessor; unused on Linux.
+pub const SIGSTKFLT: u32 = 16;
+/// A child stopped or terminated.
+pub const SIGCHLD: u32 = 17;
+/// Continue if stopped.
+pub const SIGCONT: u32 = 18;
+/// Stop, which cannot be caught, blocked or ignored.
+pub const SIGSTOP: u32 = 19;
+/// Stop typed at the terminal.
+pub const SIGTSTP: u32 = 20;
+/// Background process read from the terminal.
+pub const SIGTTIN: u32 = 21;
+/// Background process wrote to the terminal.
+pub const SIGTTOU: u32 = 22;
+/// Urgent data on a socket.
+pub const SIGURG: u32 = 23;
+/// Processor time limit exceeded.
+pub const SIGXCPU: u32 = 24;
+/// File size limit exceeded.
+pub const SIGXFSZ: u32 = 25;
+/// Virtual alarm clock.
+pub const SIGVTALRM: u32 = 26;
+/// Profiling timer expired.
+pub const SIGPROF: u32 = 27;
+/// Terminal window size changed.
+pub const SIGWINCH: u32 = 28;
+/// Input or output is now possible.
+pub const SIGIO: u32 = 29;
+/// Power failure.
+pub const SIGPWR: u32 = 30;
+/// Bad system call, which is what a seccomp filter raises.
+pub const SIGSYS: u32 = 31;
+/// Lowest real-time signal as the kernel numbers them.
+///
+/// The C library reserves the first two for its own use and reports 34 as
+/// `SIGRTMIN` to programs; the kernel's own floor is 32.
+pub const SIGRTMIN: u32 = 32;
+/// One past the highest signal number, and the number of bits in a
+/// [`Sigset`].
+pub const NSIG: u32 = 64;
+
+/// Take the default action for the signal.
+pub const SIG_DFL: u64 = 0;
+/// Ignore the signal.
+pub const SIG_IGN: u64 = 1;
+
+/// `sigprocmask` operation: add the given signals to the blocked set.
+pub const SIG_BLOCK: u32 = 0;
+/// `sigprocmask` operation: remove the given signals from the blocked set.
+pub const SIG_UNBLOCK: u32 = 1;
+/// `sigprocmask` operation: replace the blocked set.
+pub const SIG_SETMASK: u32 = 2;
+
+/// Do not raise `SIGCHLD` when a child merely stops.
+pub const SA_NOCLDSTOP: u64 = 0x0000_0001;
+/// Do not turn children into zombies.
+pub const SA_NOCLDWAIT: u64 = 0x0000_0002;
+/// Deliver the three-argument handler with a `siginfo_t`.
+pub const SA_SIGINFO: u64 = 0x0000_0004;
+/// The handler address in `sa_restorer` is valid.
+pub const SA_RESTORER: u64 = 0x0400_0000;
+/// Run the handler on the alternate signal stack.
+pub const SA_ONSTACK: u64 = 0x0800_0000;
+/// Restart interruptible system calls rather than failing them with `EINTR`.
+pub const SA_RESTART: u64 = 0x1000_0000;
+/// Do not block the signal inside its own handler.
+pub const SA_NODEFER: u64 = 0x4000_0000;
+/// Reset the disposition to the default when the handler is entered.
+pub const SA_RESETHAND: u64 = 0x8000_0000;
+
+/// Alternate stack flag: the process is currently executing on it.
+pub const SS_ONSTACK: i32 = 1;
+/// Alternate stack flag: no alternate stack is installed.
+pub const SS_DISABLE: i32 = 2;
+
+// ---------------------------------------------------------------------------
+// Clocks
+// ---------------------------------------------------------------------------
+
+/// Wall clock, which can jump when the time is set.
+pub const CLOCK_REALTIME: u32 = 0;
+/// Monotonic clock, which never jumps and does not count suspended time.
+pub const CLOCK_MONOTONIC: u32 = 1;
+/// Processor time consumed by the whole process.
+pub const CLOCK_PROCESS_CPUTIME_ID: u32 = 2;
+/// Processor time consumed by the calling thread.
+pub const CLOCK_THREAD_CPUTIME_ID: u32 = 3;
+/// Monotonic clock without the adjustments `adjtime` applies.
+pub const CLOCK_MONOTONIC_RAW: u32 = 4;
+/// Wall clock read at tick granularity, which is cheap.
+pub const CLOCK_REALTIME_COARSE: u32 = 5;
+/// Monotonic clock read at tick granularity, which is cheap.
+pub const CLOCK_MONOTONIC_COARSE: u32 = 6;
+/// Monotonic clock that does count time spent suspended.
+pub const CLOCK_BOOTTIME: u32 = 7;
+
+// ---------------------------------------------------------------------------
+// poll and epoll
+// ---------------------------------------------------------------------------
+
+/// Data may be read without blocking.
+pub const POLLIN: i16 = 0x001;
+/// Urgent data may be read.
+pub const POLLPRI: i16 = 0x002;
+/// Data may be written without blocking.
+pub const POLLOUT: i16 = 0x004;
+/// An error occurred; reported whether or not it was requested.
+pub const POLLERR: i16 = 0x008;
+/// The peer closed its end; reported whether or not it was requested.
+pub const POLLHUP: i16 = 0x010;
+/// The descriptor is not open; reported whether or not it was requested.
+pub const POLLNVAL: i16 = 0x020;
+
+/// Epoll event: data may be read.
+pub const EPOLLIN: u32 = 0x001;
+/// Epoll event: urgent data may be read.
+pub const EPOLLPRI: u32 = 0x002;
+/// Epoll event: data may be written.
+pub const EPOLLOUT: u32 = 0x004;
+/// Epoll event: an error occurred.
+pub const EPOLLERR: u32 = 0x008;
+/// Epoll event: the descriptor hung up.
+pub const EPOLLHUP: u32 = 0x010;
+/// Epoll event: the peer shut down the writing half.
+pub const EPOLLRDHUP: u32 = 0x2000;
+/// Epoll flag: report this descriptor once, then disarm it.
+pub const EPOLLONESHOT: u32 = 1 << 30;
+/// Epoll flag: report edges rather than levels.
+pub const EPOLLET: u32 = 1 << 31;
+
+/// Add a descriptor to an epoll set.
+pub const EPOLL_CTL_ADD: u32 = 1;
+/// Remove a descriptor from an epoll set.
+pub const EPOLL_CTL_DEL: u32 = 2;
+/// Change the registration of a descriptor already in an epoll set.
+pub const EPOLL_CTL_MOD: u32 = 3;
+
+/// Create the epoll descriptor with the close-on-exec flag set.
+pub const EPOLL_CLOEXEC: u32 = O_CLOEXEC;
+
+// ---------------------------------------------------------------------------
+// fcntl
+// ---------------------------------------------------------------------------
+
+/// Duplicate onto the lowest free descriptor at or above the argument.
+pub const F_DUPFD: u32 = 0;
+/// Read the descriptor flags.
+pub const F_GETFD: u32 = 1;
+/// Set the descriptor flags.
+pub const F_SETFD: u32 = 2;
+/// Read the file status flags.
+pub const F_GETFL: u32 = 3;
+/// Set the file status flags.
+pub const F_SETFL: u32 = 4;
+/// Read a record lock.
+pub const F_GETLK: u32 = 5;
+/// Set a record lock without blocking.
+pub const F_SETLK: u32 = 6;
+/// Set a record lock, waiting if necessary.
+pub const F_SETLKW: u32 = 7;
+/// Like [`F_DUPFD`], but set close-on-exec on the new descriptor.
+pub const F_DUPFD_CLOEXEC: u32 = 1030;
+/// The only descriptor flag: close this descriptor on `execve`.
+pub const FD_CLOEXEC: u32 = 1;
+
+// ---------------------------------------------------------------------------
+// Miscellaneous flags
+// ---------------------------------------------------------------------------
+
+/// Fail rather than block when the entropy pool is not ready.
+pub const GRND_NONBLOCK: u32 = 0x0001;
+/// Draw from the blocking pool rather than the non-blocking one.
+pub const GRND_RANDOM: u32 = 0x0002;
+
+/// Set close-on-exec on the descriptor `memfd_create` returns.
+pub const MFD_CLOEXEC: u32 = 0x0001;
+/// Allow the memfd to be sealed against further change.
+pub const MFD_ALLOW_SEALING: u32 = 0x0002;
+
+/// Set close-on-exec on the descriptor `eventfd2` returns.
+pub const EFD_CLOEXEC: u32 = O_CLOEXEC;
+/// Make the descriptor `eventfd2` returns non-blocking.
+pub const EFD_NONBLOCK: u32 = O_NONBLOCK;
+/// Make the eventfd count semaphore-style, decrementing by one per read.
+pub const EFD_SEMAPHORE: u32 = 0x0000_0001;
+
+// ---------------------------------------------------------------------------
+// statx field mask
+// ---------------------------------------------------------------------------
+
+/// Want `stx_mode`'s file type bits.
+pub const STATX_TYPE: u32 = 0x0000_0001;
+/// Want `stx_mode`'s permission bits.
+pub const STATX_MODE: u32 = 0x0000_0002;
+/// Want `stx_nlink`.
+pub const STATX_NLINK: u32 = 0x0000_0004;
+/// Want `stx_uid`.
+pub const STATX_UID: u32 = 0x0000_0008;
+/// Want `stx_gid`.
+pub const STATX_GID: u32 = 0x0000_0010;
+/// Want `stx_atime`.
+pub const STATX_ATIME: u32 = 0x0000_0020;
+/// Want `stx_mtime`.
+pub const STATX_MTIME: u32 = 0x0000_0040;
+/// Want `stx_ctime`.
+pub const STATX_CTIME: u32 = 0x0000_0080;
+/// Want `stx_ino`.
+pub const STATX_INO: u32 = 0x0000_0100;
+/// Want `stx_size`.
+pub const STATX_SIZE: u32 = 0x0000_0200;
+/// Want `stx_blocks`.
+pub const STATX_BLOCKS: u32 = 0x0000_0400;
+/// Want everything the old `stat` call returned.
+pub const STATX_BASIC_STATS: u32 = 0x0000_07ff;
+/// Want `stx_btime`.
+pub const STATX_BTIME: u32 = 0x0000_0800;

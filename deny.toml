@@ -1,0 +1,69 @@
+# cargo-deny policy for the Ferrix workspace: RUSTSEC advisories, a licence
+# allow-list, banned/duplicate crates and registry sources. Run locally with:
+#
+#     cargo deny check advisories bans licenses sources
+#
+# This tree's dependency budget is deliberately near zero: code that runs in
+# ring 0 with no memory protection above it is code we want to have read. The
+# `bans.deny` list below is what keeps that true, and the ignore list is empty
+# on purpose. Add an entry only with a justification and no upgrade path --
+# never to silence a fixable vulnerability.
+
+[graph]
+all-features = true
+
+# ---------------------------------------------------------------------------
+# Security advisories (RUSTSEC)
+# ---------------------------------------------------------------------------
+[advisories]
+yanked = "deny"
+ignore = []
+
+# ---------------------------------------------------------------------------
+# Licences
+# ---------------------------------------------------------------------------
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+# ---------------------------------------------------------------------------
+# Banned / duplicate crates
+# ---------------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+# A crate that reaches for the host operating system cannot be in a kernel
+# build, and the failure mode if one sneaks in transitively is a link error
+# thousands of symbols long. Naming them here turns that into one line.
+deny = [
+    { name = "libc", reason = "a freestanding kernel has no host libc; if this appears, a dependency turned on a std feature" },
+    { name = "winapi" },
+    { name = "windows-sys" },
+    { name = "getrandom", reason = "entropy comes from the kernel's own RNG, not from a host syscall shim" },
+]
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# No git dependencies: adding one needs a deliberate decision, so leave this
+# empty and let cargo-deny fail.
+allow-git = []

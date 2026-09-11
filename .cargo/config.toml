@@ -1,0 +1,30 @@
+[alias]
+xtask = "run --quiet --package xtask --"
+
+# Flags for the two freestanding kernel targets. Set here rather than in an
+# environment variable so that `cargo build`, `cargo clippy` and `cargo xtask`
+# all agree, and so CI needs no wrapper.
+#
+# The path to the link script is relative to the workspace root, which is where
+# cargo runs the compiler from.
+
+[target.x86_64-unknown-none]
+rustflags = [
+    "-C", "link-arg=-Tkernel/linker/kernel.ld",
+    # lld defaults to a 4 KiB maximum page size here, but say so anyway: the
+    # AArch64 side below genuinely needs it and the two should not silently
+    # disagree about segment alignment.
+    "-C", "link-arg=-zmax-page-size=4096",
+    "-C", "relocation-model=static",
+]
+
+[target.aarch64-unknown-none-softfloat]
+rustflags = [
+    "-C", "link-arg=-Tkernel/linker/kernel.ld",
+    # **Required, not cosmetic.** lld defaults `max-page-size` to 64 KiB on
+    # AArch64, which pads every segment to a 64 KiB boundary and produces a
+    # kernel image several times larger with segments the 4 KiB granule cannot
+    # map at the alignment the headers claim.
+    "-C", "link-arg=-zmax-page-size=4096",
+    "-C", "relocation-model=static",
+]
