@@ -162,3 +162,56 @@ pub(crate) fn claim() -> Option<(u32, u32)> {
 pub(crate) fn complete(acknowledgement: u32) {
     window(&CPU_INTERFACE).write32(GICC_EOIR, acknowledgement);
 }
+
+// ---------------------------------------------------------------------------
+// More than one core
+// ---------------------------------------------------------------------------
+
+/// Interrupts 0..32 — software-generated and private peripheral — whose
+/// distributor registers are banked, one copy per core.
+const PRIVATE_LINES: u64 = 32;
+
+/// Software-generated interrupt register: writing it sends one.
+const GICD_SGIR: u64 = 0xF00;
+/// `GICD_SGIR` target list filter: every core but the one writing.
+const SGIR_ALL_BUT_SELF: u32 = 0b01 << 24;
+
+/// The software-generated interrupt inter-processor interrupts arrive on.
+pub(crate) const IPI_SGI: u32 = 1;
+
+/// Bring up this core's side of the controller, on a core other than the one
+/// that ran [`init`].
+///
+/// Two things are per core. The CPU interface, whose priority mask resets to
+/// blocking everything — it is banked, one address reaching whichever core
+/// reads it, so the window `init` mapped serves this one too. And the
+/// distributor's registers for interrupts 0..32, which are banked as well:
+/// `init` set priorities for the boot core's copy, and this core's copy is
+/// still at its reset value.
+pub(crate) fn init_this_cpu() {
+    let gicd = window(&DISTRIBUTOR);
+    for line in (0..PRIVATE_LINES).step_by(4) {
+        gicd.write32(
+            GICD_IPRIORITYR + line,
+            u32::from_ne_bytes([DEFAULT_PRIORITY; 4]),
+        );
+    }
+
+    let gicc = window(&CPU_INTERFACE);
+    gicc.write32(GICC_PMR, PMR_ALL);
+    gicc.write32(GICC_CTLR, CTLR_ENABLE);
+
+    // Its enable bit is banked too, so every core turns on its own.
+    enable(IPI_SGI);
+}
+
+/// Interrupt every core but this one on [`IPI_SGI`].
+///
+/// The caller orders its own stores first. The receiving core acts on memory
+/// this one wrote, and the interrupt is a device write that an ordinary memory
+/// barrier does not order against those stores — so the barrier is a `dsb`,
+/// which is an instruction, and this driver is shared by two architectures
+/// that each spell it for themselves.
+pub(crate) fn send_sgi_to_others() {
+    window(&DISTRIBUTOR).write32(GICD_SGIR, SGIR_ALL_BUT_SELF | IPI_SGI);
+}

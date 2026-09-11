@@ -2,7 +2,8 @@
 //!
 //! On AArch64 the firmware hands the loader a device tree and that blob is the
 //! only description of the machine the kernel gets: where RAM is, which UART is
-//! the console, where the interrupt controller lives. This crate turns those
+//! the console, where the interrupt controller lives, which processors there
+//! are. This crate turns those
 //! bytes into answers and nothing else — it does not modify a tree, resolve
 //! phandles or apply overlays.
 //!
@@ -1314,6 +1315,115 @@ impl<'a> Fdt<'a> {
             _ => None,
         }
     }
+
+    /// Every processor in `/cpus` that has not failed, in tree order.
+    ///
+    /// [`Cpus`] says which nodes count as processors and why.
+    #[must_use]
+    pub const fn cpus(&self) -> Cpus<'a> {
+        Cpus {
+            nodes: self.nodes(),
+            inside: false,
+            done: false,
+        }
+    }
+}
+
+/// One processor, from a `cpu` node under `/cpus`.
+#[derive(Clone, Copy, Debug)]
+pub struct Cpu<'a> {
+    /// The node, for anything else a caller wants from it.
+    pub node: Node<'a>,
+    /// The processor's hardware identifier: its first `reg` entry, decoded
+    /// with the `#address-cells` `/cpus` declares. On Arm this is the affinity
+    /// fields of `MPIDR` — `Aff3` in the upper cell when there are two — and
+    /// so the number PSCI's `CPU_ON` takes.
+    pub id: u64,
+}
+
+impl<'a> Cpu<'a> {
+    /// How the processor is started, if the tree says: `psci`, `spin-table`.
+    #[must_use]
+    pub fn enable_method(&self) -> Option<&'a str> {
+        self.node.property("enable-method")?.as_str()
+    }
+
+    /// The node's `status`, or `None` when it has none, which means `okay`.
+    ///
+    /// **For a processor, `disabled` does not mean absent.** The
+    /// specification defines it as quiescent — stopped, waiting to be started
+    /// through its enable-method — which is the state every secondary is in
+    /// before a kernel starts it. So it is reported rather than filtered, and
+    /// the caller decides what to do with one.
+    #[must_use]
+    pub fn status(&self) -> Option<&'a str> {
+        self.node.property("status")?.as_str()
+    }
+}
+
+/// Every processor in `/cpus` whose `status` is not `fail`.
+///
+/// A processor is a *direct* child of `/cpus` that is named `cpu` or has
+/// `device_type = "cpu"` — both spellings, for the reason [`MemoryRegions`]
+/// accepts both of its own — and has a `reg` to be addressed by. Its own
+/// children, the caches, are not processors; nor are `/cpus`' other children,
+/// `cpu-map` and `idle-states`; nor is a node called `cpu` anywhere else in
+/// the tree.
+///
+/// `fail` is the one status skipped: the specification's word for a processor
+/// that is broken, as opposed to one that is merely stopped. Linux draws the
+/// line in the same place.
+#[derive(Clone, Copy, Debug)]
+pub struct Cpus<'a> {
+    nodes: Nodes<'a>,
+    /// Whether the walk has reached `/cpus`.
+    inside: bool,
+    done: bool,
+}
+
+impl<'a> Iterator for Cpus<'a> {
+    type Item = Cpu<'a>;
+
+    fn next(&mut self) -> Option<Cpu<'a>> {
+        while !self.done {
+            let Some(node) = self.nodes.next() else {
+                self.done = true;
+                return None;
+            };
+            if !self.inside {
+                self.inside = node.depth == 1 && node.base_name() == "cpus";
+                continue;
+            }
+            // The walk is depth first, so the first node back at `/cpus`' own
+            // depth is the end of it.
+            if node.depth <= 1 {
+                self.done = true;
+                return None;
+            }
+            if let Some(cpu) = as_cpu(node) {
+                return Some(cpu);
+            }
+        }
+        None
+    }
+}
+
+/// `node`, a descendant of `/cpus`, as a processor — if it is one.
+fn as_cpu(node: Node<'_>) -> Option<Cpu<'_>> {
+    let named = node.base_name() == "cpu";
+    let typed = node.device_type() == Some("cpu");
+    if node.depth != 2 || !(named || typed) {
+        return None;
+    }
+    let failed = node
+        .property("status")
+        .and_then(|status| status.as_str())
+        .is_some_and(|status| status.starts_with("fail"));
+    if failed {
+        return None;
+    }
+    let id = node.reg().next()?.address;
+    Some(Cpu { node, id })
 }
 
 /// Every `reg` range of every `/memory` node.

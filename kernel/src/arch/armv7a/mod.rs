@@ -8,6 +8,7 @@
 //! coprocessor 15 rather than a system register.
 
 mod cpu;
+mod smp;
 mod timer;
 mod trap;
 
@@ -21,7 +22,30 @@ use crate::early::{EarlyError, EarlyMemory};
 use crate::irq::Report;
 
 pub(crate) use super::pl011 as console;
+pub(crate) use smp::{CpuStarter, describe_cpus, hardware_id};
 pub(crate) use trap::{TrapFrame, advance_past_breakpoint, breakpoint, classify, report_trap};
+
+/// Point this CPU's per-CPU register at `address`.
+///
+/// # Safety
+///
+/// `address` must be this processor's own `PerCpu` record, which must live for
+/// the rest of the system's life: `cpu_local` hands it back as a reference.
+/// It is below 4 GiB, as every address on this architecture is, so the
+/// narrowing to the register's width loses nothing.
+pub(crate) unsafe fn set_cpu_local(address: u64) {
+    cpu::write_tpidrprw(address as u32);
+}
+
+/// The address [`set_cpu_local`] installed on this CPU.
+///
+/// # Safety
+///
+/// [`set_cpu_local`] must have run on this CPU. Until it has, `TPIDRPRW` holds
+/// whatever firmware left there.
+pub(crate) unsafe fn cpu_local() -> u64 {
+    u64::from(cpu::read_tpidrprw())
+}
 
 /// Name for log lines.
 pub(crate) const NAME: &str = "armv7a";
@@ -61,10 +85,16 @@ pub(crate) unsafe fn init_traps() {
     unsafe { trap::init() };
 }
 
-/// Publish page table writes and invalidate the whole TLB.
+/// Publish page table writes and invalidate the whole TLB — every core's.
 pub(crate) fn flush_tlb() {
     cpu::flush_tlb();
 }
+
+/// Whether [`flush_tlb`] reaches every processor's TLB.
+///
+/// Yes, as on AArch64: `TLBIALLIS` is broadcast to the inner shareable
+/// domain, and the `dsb ish` after it waits for every core to finish.
+pub(crate) const TLB_FLUSH_IS_BROADCAST: bool = true;
 
 /// Root of the loader's identity map, while it still exists.
 ///
@@ -96,14 +126,19 @@ pub(crate) unsafe fn drop_identity_map(_view: &BootView<'_>) {
 /// been read, then 1 for `hvc` and 2 for `smc`.
 static PSCI: AtomicU8 = AtomicU8::new(0);
 
-/// Stop the machine.
-pub(crate) fn shutdown() -> ! {
-    let conduit = match PSCI.load(Ordering::Relaxed) {
+/// How this machine's PSCI firmware is called, once [`init_interrupts`] has
+/// read the device tree.
+fn psci_conduit() -> Option<PsciConduit> {
+    match PSCI.load(Ordering::Relaxed) {
         1 => Some(PsciConduit::Hvc),
         2 => Some(PsciConduit::Smc),
         _ => None,
-    };
-    if let Some(conduit) = conduit {
+    }
+}
+
+/// Stop the machine.
+pub(crate) fn shutdown() -> ! {
+    if let Some(conduit) = psci_conduit() {
         cpu::psci_system_off(conduit);
     }
     halt()
@@ -145,6 +180,9 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
     unsafe { gicv2::init(distributor.address, cpu_interface.address)? };
     timer::init(&tree)?;
     gicv2::enable(timer::irq());
+    // And the inter-processor interrupt, whose enable bit is this core's own:
+    // every secondary turns on its copy in `gicv2::init_this_cpu`.
+    gicv2::enable(gicv2::IPI_SGI);
 
     // Read now, used at the very end: `shutdown` must not have to parse
     // anything, since it is also what a panic ends in.
@@ -167,6 +205,33 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
 /// Unmask IRQs on this CPU.
 pub(crate) fn enable_interrupts() {
     cpu::enable_interrupts();
+}
+
+/// Mask every interrupt on this CPU.
+pub(crate) fn disable_interrupts() {
+    cpu::disable_interrupts();
+}
+
+/// With interrupts masked, wait for one and then unmask IRQs, so one that
+/// arrived since they were masked wakes the wait instead of being lost before
+/// it. Returns with IRQs unmasked.
+pub(crate) fn wait_for_work() {
+    cpu::wait_then_enable_interrupts();
+}
+
+/// The interrupt number inter-processor interrupts arrive on.
+pub(crate) const fn ipi_irq() -> u32 {
+    gicv2::IPI_SGI
+}
+
+/// Interrupt every core but this one.
+///
+/// The barrier is here rather than in the shared driver because it is an
+/// instruction, and each architecture spells its own.
+pub(crate) fn send_ipi_to_others() -> Result<(), &'static str> {
+    cpu::dsb_ishst();
+    gicv2::send_sgi_to_others();
+    Ok(())
 }
 
 /// How `ferrix_sync`'s interrupt-masking lock masks interrupts here.

@@ -350,12 +350,13 @@ pub(crate) fn report_trap(frame: &TrapFrame) {
     );
 }
 
-/// Install the vector table.
+/// Install the vector table on this core.
 ///
 /// # Safety
 ///
-/// Must be called once, on the boot CPU, before anything can fault
-/// deliberately and before interrupts are unmasked.
+/// Must be called once per CPU, before anything on it can fault and before it
+/// unmasks interrupts. `VBAR` and `SCTLR` are banked per core, and the one
+/// table serves every core: it holds code, and no per-core state.
 pub(crate) unsafe fn init() {
     // The kernel is linked below 4 GiB, so the address fits the register.
     let table = (&raw const ferrix_vectors).addr() as u32;

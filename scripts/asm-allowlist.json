@@ -87,6 +87,11 @@
       "reason": "CPU primitives, one instruction or one short sequence each. Every ARMv7-A system register is a coprocessor 15 transfer, which Rust has no syntax for -- VBAR, SCTLR, TTBCR, TTBR0 and the generic timer's four registers -- and so are the barriers, the TLB maintenance, cpsid and cpsie, wfi, and the PSCI call, made with whichever of hvc or smc the device tree names."
     },
     {
+      "file": "kernel/src/arch/armv7a/smp.rs",
+      "max_lines": 40,
+      "reason": "The secondary core entry: AArch64's, in coprocessor 15's spelling. PSCI CPU_ON starts a core in SVC mode at a physical address, with its MMU off and no stack, and everything the kernel runs on is in the upper half: the first instructions check the processor mode, load MAIR0/MAIR1, TTBCR and the two 64-bit TTBRs, and turn the MMU on while executing at an address only an identity map makes meaningful, then branch to a virtual one. No Rust function can be entered with the MMU off and no stack."
+    },
+    {
       "file": "kernel/src/arch/armv7a/trap.rs",
       "max_lines": 90,
       "reason": "The eight-entry vector table and its save/restore path. The CPU branches to a fixed offset in one of five banked processor modes, with the interrupted registers live and a return address off by a per-exception amount. Each stub corrects the address, stores it and the saved status on the SVC stack with srsdb, and switches to SVC mode with cps, so no other mode ever needs a stack; one common path saves the rest, calls Rust and returns with rfeia. Also bkpt, for the boot test."

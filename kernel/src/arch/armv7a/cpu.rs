@@ -22,7 +22,7 @@ const SCTLR_HIGH_VECTORS: u32 = 1 << 13;
 const SCTLR_THUMB_EXCEPTIONS: u32 = 1 << 30;
 
 /// `TTBCR.EPD0`: translations through `TTBR0` fault instead of walking.
-const TTBCR_EPD0: u32 = 1 << 7;
+pub(crate) const TTBCR_EPD0: u32 = 1 << 7;
 
 /// PSCI `SYSTEM_OFF`, in the 32-bit calling convention.
 const PSCI_SYSTEM_OFF: u32 = 0x8400_0008;
@@ -257,6 +257,180 @@ pub(crate) fn write_cntv_cval(instant: u64) {
             options(nomem, nostack, preserves_flags),
         );
     }
+}
+
+/// This core's multiprocessor affinity register.
+pub(crate) fn read_mpidr() -> u32 {
+    let mpidr: u32;
+    // SAFETY: reading `MPIDR` has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c0, c0, 5", out(reg) mpidr, options(nomem, nostack, preserves_flags));
+    }
+    mpidr
+}
+
+/// Set `TPIDRPRW`, the thread ID register the kernel keeps its per-CPU record
+/// in.
+///
+/// The PL1-only one of the three, which is the point: the hardware never reads
+/// it, and user mode can neither read nor write it — unlike `TPIDRURW`, which
+/// it can write, and `TPIDRURO`, which it can read.
+pub(crate) fn write_tpidrprw(value: u32) {
+    // SAFETY: writing a scratch register has no effect beyond the register.
+    unsafe {
+        asm!("mcr p15, 0, {}, c13, c0, 4", in(reg) value, options(nomem, nostack, preserves_flags));
+    }
+}
+
+/// Read `TPIDRPRW`.
+pub(crate) fn read_tpidrprw() -> u32 {
+    let value: u32;
+    // SAFETY: reading a scratch register has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c13, c0, 4", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// `MAIR0`: the first four memory attribute encodings.
+pub(crate) fn read_mair0() -> u32 {
+    let value: u32;
+    // SAFETY: reading `MAIR0` has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c10, c2, 0", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// `MAIR1`: the other four.
+pub(crate) fn read_mair1() -> u32 {
+    let value: u32;
+    // SAFETY: reading `MAIR1` has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c10, c2, 1", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// `TTBCR`: the long-descriptor format, and where the address space splits
+/// between `TTBR0` and `TTBR1`.
+pub(crate) fn read_ttbcr() -> u32 {
+    let value: u32;
+    // SAFETY: reading `TTBCR` has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c2, c0, 2", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// `SCTLR`: the MMU, the caches, where the vectors are.
+pub(crate) fn read_sctlr() -> u32 {
+    let value: u32;
+    // SAFETY: reading `SCTLR` has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c1, c0, 0", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// Write the data cache lines covering `start..start + len` back to the point
+/// of coherency.
+///
+/// For memory a core with its caches off is about to read: it reads RAM, and
+/// a line still dirty in this core's cache is a line it does not see.
+pub(crate) fn clean_to_poc(start: u64, len: u64) {
+    let cache_type: u32;
+    // SAFETY: reading `CTR` has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c0, c0, 1", out(reg) cache_type, options(nomem, nostack, preserves_flags));
+    }
+    // `DminLine` is log2 of the smallest data cache line in words.
+    let line = 4u64 << ((cache_type >> 16) & 0xF);
+
+    let mut at = start - start % line;
+    let end = start.saturating_add(len);
+    while at < end {
+        // SAFETY: `DCCMVAC` writes one line back by virtual address and changes
+        // no data; the caller's range is mapped, and below 4 GiB like every
+        // address on this architecture.
+        unsafe {
+            asm!("mcr p15, 0, {}, c7, c10, 1", in(reg) at as u32, options(nostack, preserves_flags));
+        }
+        at += line;
+    }
+    // SAFETY: a barrier, completing the maintenance above before anything
+    // after it — in particular the call that starts the core that reads it.
+    unsafe {
+        asm!("dsb", options(nostack, preserves_flags));
+    }
+}
+
+/// Order every store before this against the next write to device memory.
+///
+/// For sending a software-generated interrupt, as on AArch64: the core that
+/// takes it must see what this one wrote before asking, and the interrupt is
+/// a device write, which an ordinary memory barrier does not order.
+pub(crate) fn dsb_ishst() {
+    // SAFETY: a barrier has no effect beyond ordering.
+    unsafe {
+        asm!("dsb ishst", options(nostack, preserves_flags));
+    }
+}
+
+/// Wait for an interrupt with IRQs masked, then unmask them.
+///
+/// `wfi` wakes on a *pending* interrupt whether or not it is masked, so one
+/// that became pending after the caller masked is not lost: the wait returns
+/// at once, and the unmask after it lets the interrupt be taken.
+pub(crate) fn wait_then_enable_interrupts() {
+    // SAFETY: `wfi` is a hint and `cpsie i` only clears the IRQ mask bit; the
+    // vector table is installed long before this is used.
+    unsafe {
+        asm!("wfi", "cpsie i", options(nomem, nostack));
+    }
+}
+
+/// A PSCI call in the 32-bit convention, through whichever instruction the
+/// device tree says the firmware answers.
+///
+/// # Safety
+///
+/// `function` must be a PSCI function taking `a`, `b` and `c`, and what it
+/// does must be what the caller intends: `CPU_ON` starts a core executing at
+/// an address the caller chose.
+pub(crate) unsafe fn psci_call(conduit: PsciConduit, function: u32, a: u32, b: u32, c: u32) -> u32 {
+    let result: u32;
+    match conduit {
+        // SAFETY: the caller guarantees the function and its arguments. The
+        // calling convention lets the callee corrupt `r0`–`r3` and `r12`,
+        // which is what the outputs say.
+        PsciConduit::Hvc => unsafe {
+            asm!(
+                ".arch_extension virt",
+                "hvc #0",
+                inlateout("r0") function => result,
+                inlateout("r1") a => _,
+                inlateout("r2") b => _,
+                inlateout("r3") c => _,
+                lateout("r12") _,
+                options(nostack),
+            );
+        },
+        // SAFETY: as above, through the secure monitor.
+        PsciConduit::Smc => unsafe {
+            asm!(
+                ".arch_extension sec",
+                "smc #0",
+                inlateout("r0") function => result,
+                inlateout("r1") a => _,
+                inlateout("r2") b => _,
+                inlateout("r3") c => _,
+                lateout("r12") _,
+                options(nostack),
+            );
+        },
+    }
+    result
 }
 
 /// Enable or mask the virtual timer.

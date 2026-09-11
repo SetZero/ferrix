@@ -1270,6 +1270,9 @@ fn poke_at_everything(blob: &[u8]) {
     for reservation in fdt.reservations().take(64) {
         let _ = reservation;
     }
+    for cpu in fdt.cpus().take(64) {
+        let _ = (cpu.id, cpu.enable_method(), cpu.status());
+    }
     if let Some(console) = fdt.console() {
         let _ = console.compatible();
         let _ = console.reg().take(8).count();
@@ -1342,13 +1345,27 @@ fn parsing_never_panics_on_arbitrary_bytes() {
 // ---------------------------------------------------------------------------
 
 /// A tree shaped like QEMU's `virt` machine with a Cortex-A7, as QEMU 8.2
-/// generates it: the 32-bit timer binding, a GICv2, and PSCI over `hvc`.
+/// generates it: four processors started through PSCI, the 32-bit timer
+/// binding, a GICv2, and PSCI over `hvc`.
 fn virt_armv7() -> Vec<u8> {
     let mut builder = Builder::new();
     builder.begin("");
     builder.prop_u32("#address-cells", 2);
     builder.prop_u32("#size-cells", 2);
     builder.prop_str("compatible", "linux,dummy-virt");
+
+    builder.begin("cpus");
+    builder.prop_u32("#address-cells", 1);
+    builder.prop_u32("#size-cells", 0);
+    for id in 0..4u32 {
+        builder.begin(&std::format!("cpu@{id}"));
+        builder.prop_str("device_type", "cpu");
+        builder.prop_str("compatible", "arm,cortex-a7");
+        builder.prop_u32("reg", id);
+        builder.prop_str("enable-method", "psci");
+        builder.end();
+    }
+    builder.end();
 
     builder.begin("psci");
     builder.prop_strings("compatible", &["arm,psci-1.0", "arm,psci-0.2", "arm,psci"]);
@@ -1521,4 +1538,187 @@ fn the_psci_conduit_is_read_from_its_method() {
         None,
         "the AArch64 fixture has no PSCI node"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Processors
+// ---------------------------------------------------------------------------
+
+/// The hardware identifiers of the processors a tree describes, in order.
+fn cpu_ids(blob: &[u8]) -> Vec<u64> {
+    parse(blob).cpus().map(|cpu| cpu.id).collect()
+}
+
+/// A tree whose `/cpus` holds whatever `children` writes, with one address
+/// cell and no size cells, as every Arm tree has.
+fn with_cpus(children: impl FnOnce(&mut Builder)) -> Vec<u8> {
+    let mut builder = Builder::new();
+    builder.begin("");
+    builder.prop_u32("#address-cells", 2);
+    builder.prop_u32("#size-cells", 2);
+    builder.begin("cpus");
+    builder.prop_u32("#address-cells", 1);
+    builder.prop_u32("#size-cells", 0);
+    children(&mut builder);
+    builder.end();
+    builder.end();
+    builder.build()
+}
+
+/// One `cpu` node, with `extra` properties written after its `reg`.
+fn cpu_node(builder: &mut Builder, name: &str, reg: Option<u32>, extra: &[(&str, &str)]) {
+    builder.begin(name);
+    builder.prop_str("device_type", "cpu");
+    if let Some(reg) = reg {
+        builder.prop_u32("reg", reg);
+    }
+    for (property, value) in extra {
+        builder.prop_str(property, value);
+    }
+    builder.end();
+}
+
+#[test]
+fn qemu_armv7_virt_describes_four_processors_started_by_psci() {
+    let blob = virt_armv7();
+    let fdt = parse(&blob);
+    assert_eq!(cpu_ids(&blob), [0, 1, 2, 3]);
+    for cpu in fdt.cpus() {
+        assert_eq!(cpu.enable_method(), Some("psci"), "cpu {}", cpu.id);
+        assert_eq!(
+            cpu.status(),
+            None,
+            "cpu {} has no status, so is okay",
+            cpu.id
+        );
+        assert!(cpu.node.is_compatible("arm,cortex-a7"));
+    }
+}
+
+#[test]
+fn a_two_cell_identifier_carries_aff3() {
+    // AArch64 trees use two address cells under `/cpus`, with `Aff3` in the
+    // upper one: the identifier is the whole 64-bit value, not its low word.
+    let mut builder = Builder::new();
+    builder.begin("");
+    builder.begin("cpus");
+    builder.prop_u32("#address-cells", 2);
+    builder.prop_u32("#size-cells", 0);
+    builder.begin("cpu@100000000");
+    builder.prop_str("device_type", "cpu");
+    builder.prop_cells("reg", &[0x1, 0x0]);
+    builder.end();
+    builder.begin("cpu@101");
+    builder.prop_str("device_type", "cpu");
+    builder.prop_cells("reg", &[0x0, 0x101]);
+    builder.end();
+    builder.end();
+    builder.end();
+
+    assert_eq!(cpu_ids(&builder.build()), [0x1_0000_0000, 0x101]);
+}
+
+#[test]
+fn only_direct_children_of_cpus_that_are_processors_count() {
+    let blob = with_cpus(|builder| {
+        // The topology map and idle states live beside the processors and
+        // are not processors, however `cpu`-like their children look.
+        builder.begin("cpu-map");
+        builder.begin("cluster0");
+        builder.begin("core0");
+        builder.prop_u32("cpu", 1);
+        builder.end();
+        builder.end();
+        builder.end();
+        builder.begin("idle-states");
+        builder.end();
+
+        // A processor with a cache inside it: the cache is not a second one.
+        builder.begin("cpu@0");
+        builder.prop_str("device_type", "cpu");
+        builder.prop_u32("reg", 0);
+        builder.begin("l2-cache");
+        builder.prop_str("device_type", "cache");
+        builder.prop_u32("reg", 0x77);
+        builder.end();
+        builder.end();
+
+        // Typed but not named `cpu`: still a processor.
+        builder.begin("processor@5");
+        builder.prop_str("device_type", "cpu");
+        builder.prop_u32("reg", 5);
+        builder.end();
+
+        // Named `cpu` but untyped: also still one, the other spelling.
+        builder.begin("cpu@6");
+        builder.prop_u32("reg", 6);
+        builder.end();
+    });
+    assert_eq!(cpu_ids(&blob), [0, 5, 6]);
+
+    // And a `cpu` node anywhere but directly under `/cpus` is nobody's.
+    let mut builder = Builder::new();
+    builder.begin("");
+    builder.begin("cpus");
+    builder.prop_u32("#address-cells", 1);
+    builder.prop_u32("#size-cells", 0);
+    cpu_node(&mut builder, "cpu@0", Some(0), &[]);
+    builder.end();
+    builder.begin("soc");
+    builder.prop_u32("#address-cells", 1);
+    builder.prop_u32("#size-cells", 0);
+    cpu_node(&mut builder, "cpu@9", Some(9), &[]);
+    builder.end();
+    builder.end();
+    assert_eq!(
+        cpu_ids(&builder.build()),
+        [0],
+        "the walk must stop at the end of /cpus"
+    );
+}
+
+#[test]
+fn a_failed_processor_is_skipped_and_a_stopped_one_is_not() {
+    let blob = with_cpus(|builder| {
+        cpu_node(builder, "cpu@0", Some(0), &[("status", "okay")]);
+        cpu_node(builder, "cpu@1", Some(1), &[("status", "disabled")]);
+        cpu_node(builder, "cpu@2", Some(2), &[("status", "fail")]);
+        cpu_node(builder, "cpu@3", Some(3), &[("status", "fail-sss")]);
+    });
+    let fdt = parse(&blob);
+    let found: Vec<(u64, Option<&str>)> = fdt.cpus().map(|cpu| (cpu.id, cpu.status())).collect();
+    assert_eq!(
+        found,
+        [(0, Some("okay")), (1, Some("disabled"))],
+        "a disabled processor is quiescent, not absent; a failed one is broken"
+    );
+}
+
+#[test]
+fn a_processor_with_no_reg_cannot_be_addressed_and_is_skipped() {
+    let blob = with_cpus(|builder| {
+        cpu_node(builder, "cpu@0", None, &[("enable-method", "psci")]);
+        cpu_node(
+            builder,
+            "cpu@1",
+            Some(1),
+            &[("enable-method", "spin-table")],
+        );
+    });
+    let fdt = parse(&blob);
+    let found: Vec<(u64, Option<&str>)> = fdt
+        .cpus()
+        .map(|cpu| (cpu.id, cpu.enable_method()))
+        .collect();
+    assert_eq!(found, [(1, Some("spin-table"))]);
+}
+
+#[test]
+fn a_tree_without_cpus_describes_no_processors() {
+    assert!(
+        cpu_ids(&virt()).is_empty(),
+        "the AArch64 fixture has no /cpus node"
+    );
+    let blob = with_cpus(|_| {});
+    assert!(cpu_ids(&blob).is_empty(), "an empty /cpus holds none");
 }
