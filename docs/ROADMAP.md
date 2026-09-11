@@ -19,6 +19,12 @@ longer". This is a long program of work: stages 1–8 are a conventional kernel
 bring-up, 9–14 are the parts this design chose to do properly, and 15–17 are the
 goal. Nobody should read the table as a schedule.
 
+**Where it stands:** stages 0–3 are done and in the boot test on both
+architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-3`. Stage 4
+is next. Nothing of stages 4 onwards exists in `kernel/` yet — no second CPU,
+no task, no scheduler — though several of their byte-level crates do (see
+*Written ahead of their stage*).
+
 ---
 
 ## Stage 0 — Foundation ✅
@@ -107,8 +113,9 @@ entries, all verified to hold what was put in them.
   run at and requiring nothing back.
 * The loader's own memory and the ACPI-reclaim regions are handed to the buddy
   allocator once nothing points into them, which on a 512 MiB QEMU machine is
-  3 MiB — small in absolute terms and the entire difference between a kernel
-  that can reclaim boot memory and one that cannot.
+  3 MiB on x86-64 and 2 MiB on AArch64 — small in absolute terms and the
+  entire difference between a kernel that can reclaim boot memory and one that
+  cannot.
 * The W^X sweep walks the live tables through `Mapper::for_each_leaf` and
   asserts no leaf is both writable and executable. It reports what it swept as
   well as what it found, because a sweep that walks nothing also finds nothing.
@@ -134,7 +141,7 @@ per-CPU frame caches.
 
 ---
 
-## Stage 3 — Traps, interrupts, time  ·  *exit criterion met*
+## Stage 3 — Traps, interrupts, time ✅
 
 x86-64: GDT, TSS, IST stacks, IDT, exception handlers, LAPIC, IOAPIC, HPET/TSC
 deadline. AArch64: `VBAR_EL1` vector table, synchronous/IRQ/FIQ/SError
@@ -201,8 +208,10 @@ between a program and an operating system.
 thousand timer interrupts are counted, and the time they took is measured
 with the *counter* rather than by multiplying the tick count by the rate they
 were programmed at — which would be arithmetic that cannot fail rather than a
-measurement. x86-64 reports 990 Hz against a requested 1000 and AArch64 992,
-the shortfall being one interrupt entry and exit per period under an emulator.
+measurement. Against a requested 1000 Hz, x86-64 has reported between 970 and
+990 and AArch64 between 969 and 992, the shortfall being one interrupt entry
+and exit per period under an emulator, and the spread being how busy the host
+was. It is a measurement, so it moves.
 
 Before that, a one-shot is armed and the count required not to move for ten
 further intervals. That check is there for one specific bug: AArch64's timer
@@ -214,9 +223,10 @@ nothing in the log after the line before it.
 The boot marker reads `FERRIX-BOOT-OK stages 1-3`, and it is now the whole
 truth.
 
-**Still to do, and neither is reachable from a machine Ferrix boots on
-today.** Both are hardware variants rather than gaps in the stage: the
-facade above them does not change, and neither is on any later stage's path.
+**Deferred, and none of it is reachable from a machine Ferrix boots on
+today.** The first two are hardware variants rather than gaps in the stage:
+the facade above them does not change, and neither is on any later stage's
+path. The third is stage 4's by definition.
 
 * GICv3 and its redistributors. `gic::init` reads the version out of the
   MADT and refuses anything that is not a GICv2, rather than writing GICv2
@@ -396,28 +406,35 @@ worth stating plainly, because otherwise the tree looks further along than it is
 several crates for stages that have not started are already written and tested.
 
 They are parsers and data structures, not subsystems. None of them counts
-towards the stage that will consume it, and all but one are still unreachable
-from the kernel — `libs/acpi` is the exception, as of stage 3, which is what
-the rule was for: the MADT walk the interrupt controller needed was already
-written, tested and fuzz-shaped before a line of controller code existed. What they buy is that the stage in question begins with its
-byte-handling already fuzz-shaped, host-testable and argued about, rather than
-being written at three in the morning against a machine that reboots on a
-mistake.
+towards the stage that will consume it, and most are still unreachable from
+the kernel. Three are the exception, which is what the rule was for:
+`libs/acpi` as of stage 3 — the MADT walk the interrupt controller needed was
+already written, tested and fuzz-shaped before a line of controller code
+existed — and, as of stage 2, `libs/vma` and `libs/sync`, whose
+`AddressSpace` and `IrqSpinLock` the vmap arena is built on, with
+`IrqControl` implemented over each architecture's interrupt mask. Being
+reached early is not the same as their stage being done: the arena uses the
+interval tree as an allocator of kernel ranges, not as a process's address
+space, and a lock on one CPU has never been contended.
+
+What they buy is that the stage in question begins with its byte-handling
+already fuzz-shaped, host-testable and argued about, rather than being written
+at three in the morning against a machine that reboots on a mistake.
 
 | Crate | Waiting for | Tests |
 |---|---|---|
 | `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET. No AML, and there will be none. | 58 |
 | `libs/fdt` | 3, 10 — flattened device tree reader; on AArch64 the only description of the machine there is. | 49 |
-| `libs/sync` | 4 — ticket lock, rwlock, `Once`. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
-| `libs/vma` | 6 — the VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
+| `libs/sync` | 4 — ticket lock, rwlock, `Once`; `IrqSpinLock` already guards the vmap arena. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
+| `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
 | `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. | 42 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory. | 50 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
-With the five crates the kernel already uses — `bootinfo`, `elf`, `frame`,
-`heap`, `paging` — that is **444 host unit tests, all passing**, over code the
-kernel cannot reach yet.
+With the five crates the boot path was built on — `bootinfo`, `elf` (the
+loader's), `frame`, `heap`, `paging` — that is **448 host unit tests, all
+passing**, plus 15 doc-tests and the 24 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
 asks for a fuzz target *and* a Miri run per crate, and `fuzz/` currently has two
@@ -426,6 +443,12 @@ bytes that came from outside the system — a disk, a firmware table, an archive
 stranger built — which is precisely the population the rule was written for. The
 fuzz targets are owed, and are owed *before* the consuming stage starts, not
 when it ships.
+
+Miri is further behind than fuzzing. CI runs it over `libs/elf` and
+`libs/bootinfo` only, although the CI file's own comment names the page-table
+arithmetic and the allocators as the reason the job exists — so `frame`,
+`heap` and `paging`, all running in the kernel today, are owed a Miri step
+too, and ahead of every crate in the table.
 
 ---
 
