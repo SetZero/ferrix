@@ -15,7 +15,13 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
+  # No RUSTFLAGS here, and there must never be one. Cargo lets the variable
+  # *replace* `[target.*].rustflags` in `.cargo/config.toml` rather than add to
+  # it, which silently drops the kernel's linker script: the image still builds,
+  # and the loader refuses it at boot because nothing is linked where it maps
+  # it. That is how this workflow lost its first boot test. Warnings are denied
+  # where they are checked -- `-- -D warnings` on every clippy step below -- and
+  # `xtask` refuses to build a kernel with the variable set.
 
 jobs:
   # ----------------------------------------------------------------
