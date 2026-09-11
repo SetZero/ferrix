@@ -12,6 +12,7 @@ name = "ferrix-kernel"
 path = "src/main.rs"
 
 [dependencies]
+ferrix-acpi.workspace = true
 ferrix-bootinfo.workspace = true
 ferrix-frame.workspace = true
 ferrix-heap.workspace = true

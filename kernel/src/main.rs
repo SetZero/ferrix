@@ -12,10 +12,14 @@
 
 extern crate alloc;
 
+mod acpi;
 mod arch;
 mod console;
 mod early;
+mod irq;
 mod mm;
+mod mmio;
+mod timer;
 mod trap;
 
 use alloc::boxed::Box;
@@ -105,10 +109,42 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
         println!("FERRIX-PANIC stage 3 self-check failed: {problem}");
         arch::halt()
     }
+
+    // Everything above is synchronous: traps the kernel caused deliberately.
+    // From here something arrives that the kernel did not ask for at the
+    // moment it arrives, which is the whole difference between a program and
+    // an operating system.
+    //
+    // SAFETY: called once, on the boot CPU, after `init_traps` filled the
+    // vector table and while interrupts are still masked.
+    let clocks = match unsafe { arch::init_interrupts(view) } {
+        Ok(report) => report,
+        Err(problem) => {
+            println!("FERRIX-PANIC could not bring up interrupts: {problem}");
+            arch::halt()
+        }
+    };
+    report_clocks(&clocks);
+
+    if let Err(problem) = timer::init() {
+        println!("FERRIX-PANIC could not register the timer interrupt: {problem}");
+        arch::halt()
+    }
+    arch::enable_interrupts();
+
+    let measured = match timer_check() {
+        Ok(hertz) => hertz,
+        Err(problem) => {
+            println!("FERRIX-PANIC stage 3 self-check failed: {problem}");
+            arch::halt()
+        }
+    };
     println!(
-        "  stage 3  {} breakpoints and {} page faults handled",
+        "  stage 3  {} breakpoints, {} page faults, {} ticks at {} Hz",
         trap::breakpoint_count(),
-        trap::handled_fault_count()
+        trap::handled_fault_count(),
+        timer::ticks(),
+        measured,
     );
 
     println!("{SUCCESS_MARKER} stages 1-3");
@@ -223,6 +259,146 @@ fn check_demand_paging() -> Result<(), &'static str> {
         return Err("a faulted-in page was not zeroed");
     }
     Ok(())
+}
+
+/// A one-shot must fire exactly once.
+///
+/// **This is the check that catches the bug worth catching here.** AArch64's
+/// timer interrupt is level triggered: the line stays asserted while the
+/// comparator is in the past, so a handler that acknowledges the controller
+/// without disarming the timer is re-entered immediately, forever. That does
+/// not show up as a wrong number — it shows up as a machine that stops, with
+/// the last thing in the log being whatever it printed before arming.
+///
+/// So: arm once, wait for the tick, then wait several further intervals and
+/// require the count not to have moved.
+fn check_one_shot(interval_nanos: u64) -> Result<(), &'static str> {
+    let before = timer::ticks();
+    timer::after(interval_nanos);
+
+    let mut spins: u64 = 0;
+    while timer::ticks() == before {
+        arch::wait_for_interrupt();
+        spins = spins.saturating_add(1);
+        if spins > 10_000_000 {
+            timer::stop();
+            return Err("a one-shot timer never fired");
+        }
+    }
+
+    let settled = timer::ticks();
+    spin_nanos(interval_nanos.saturating_mul(10));
+    if timer::ticks() != settled {
+        timer::stop();
+        return Err("a one-shot timer fired more than once");
+    }
+    Ok(())
+}
+
+/// Spin on the counter for `nanos`.
+///
+/// Deliberately not `wait_for_interrupt`: the point is to let real time pass
+/// while *not* waiting for a timer, so that a timer which fires anyway is
+/// noticed.
+fn spin_nanos(nanos: u64) {
+    let until = timer::now_nanos().saturating_add(nanos);
+    while timer::now_nanos() < until {}
+}
+
+/// Print what interrupt and time bring-up found.
+fn report_clocks(report: &irq::Report) {
+    let (counter_mhz, counter_thousandths) = megahertz(report.counter_hz);
+    let (timer_mhz, timer_thousandths) = megahertz(report.timer_hz);
+    println!(
+        "  clock    {} at {}.{:03} MHz",
+        report.counter, counter_mhz, counter_thousandths
+    );
+    println!(
+        "  irqs     {}, {} at {}.{:03} MHz",
+        report.controller, report.timer, timer_mhz, timer_thousandths
+    );
+}
+
+/// A frequency split into megahertz and thousandths of one.
+///
+/// There is no floating point in this kernel and there is not going to be:
+/// the state a kernel has to save and restore on every trap is large enough
+/// without it. Two integers and a `{:03}` say the same thing.
+const fn megahertz(hz: u64) -> (u64, u64) {
+    (hz / 1_000_000, (hz % 1_000_000) / 1000)
+}
+
+/// The rest of stage 3's exit criterion: arm a timer, count a thousand ticks,
+/// and require the rate to be the one that was asked for.
+///
+/// The measurement is what makes this a test rather than a demonstration. A
+/// timer that fires is easy; a timer that fires at the frequency it was
+/// programmed to is the thing every later stage depends on, because a
+/// scheduler quantum, a `TCP` retransmit and a `futex` timeout are all this
+/// number multiplied by something.
+///
+/// Ticks are counted with the *interrupt* and elapsed time is measured with
+/// the *counter* — two independent pieces of hardware on x86-64. Counting
+/// ticks and then converting them to seconds by the rate they were programmed
+/// at would be arithmetic, not a measurement: it could not fail.
+fn timer_check() -> Result<u64, &'static str> {
+    /// Ticks to count.
+    const TICKS: u64 = 1000;
+    /// The interval to ask for, so a thousand ticks is about a second.
+    const INTERVAL_NANOS: u64 = 1_000_000;
+    /// How far the measured rate may sit from the requested one.
+    ///
+    /// Generous, and it has to be: the handler re-arms the timer, so every
+    /// period carries one interrupt entry and exit, and under an emulator
+    /// that is not a rounding error. What this is testing is that the clock
+    /// and the timer agree about how long a second is -- not the interrupt
+    /// latency, which is stage 14's subject and needs a different test.
+    const TOLERANCE_PERCENT: u64 = 25;
+
+    if timer::counter_hz() == 0 {
+        return Err("the counter reports no frequency");
+    }
+
+    check_one_shot(INTERVAL_NANOS)?;
+
+    let before = timer::ticks();
+    let started = timer::now_nanos();
+    timer::every(INTERVAL_NANOS);
+
+    let mut spins: u64 = 0;
+    while timer::ticks().wrapping_sub(before) < TICKS {
+        arch::wait_for_interrupt();
+        spins = spins.saturating_add(1);
+        // `wait_for_interrupt` can return without one having arrived, so this
+        // counts iterations rather than trusting it. Far more than a thousand
+        // ticks could need, and far less than the boot test's timeout.
+        if spins > 10_000_000 {
+            timer::stop();
+            return Err("the timer stopped arriving before a thousand ticks");
+        }
+    }
+
+    let elapsed = timer::now_nanos().saturating_sub(started);
+    timer::stop();
+
+    if elapsed == 0 {
+        return Err("a thousand ticks took no measurable time");
+    }
+    if irq::unclaimed() != 0 {
+        return Err("an interrupt arrived that nothing had registered for");
+    }
+    if irq::delivered() < TICKS {
+        return Err("fewer interrupts reached a handler than ticks were counted");
+    }
+
+    let measured = TICKS * 1_000_000_000 / elapsed;
+    let requested = 1_000_000_000 / INTERVAL_NANOS;
+    let lowest = requested * (100 - TOLERANCE_PERCENT) / 100;
+    let highest = requested * (100 + TOLERANCE_PERCENT) / 100;
+    if measured < lowest || measured > highest {
+        return Err("the timer and the counter disagree about how long a second is");
+    }
+    Ok(measured)
 }
 
 /// Print what the allocators came up with.

@@ -108,7 +108,7 @@ entries, all verified to hold what was put in them.
 
 ---
 
-## Stage 3 — Traps, interrupts, time  ·  *in progress*
+## Stage 3 — Traps, interrupts, time  ·  *exit criterion met*
 
 x86-64: GDT, TSS, IST stacks, IDT, exception handlers, LAPIC, IOAPIC, HPET/TSC
 deadline. AArch64: `VBAR_EL1` vector table, synchronous/IRQ/FIQ/SError
@@ -149,23 +149,62 @@ Resolving a fault by mapping a page and retrying *is* demand paging, arriving
 here rather than at stage 6 because it is the only honest way to show the fault
 path recovers. Stage 6 inherits it instead of writing it.
 
-**Still to do — the interrupt and time halves.** Everything above is
-synchronous: traps the kernel caused deliberately. Nothing yet arrives from
-outside the CPU, and no clock ticks.
+**Done — the interrupt and time halves.** Something now arrives that the
+kernel did not ask for at the moment it arrives, which is the difference
+between a program and an operating system.
 
-* x86-64 — LAPIC, IOAPIC, and HPET plus TSC-deadline once there is a clock to
-  calibrate the TSC against. The vector space is reserved (`IRQ_BASE`) and
-  nothing is wired to it.
-* AArch64 — GICv2 and GICv3, and the architected generic timer.
+* x86-64 — the local APIC is mapped from the MADT's address, enabled, and its
+  task priority dropped to accept everything; the local APIC timer is
+  calibrated against the HPET, whose period firmware states exactly in
+  femtoseconds so that nothing has to be measured. A machine with no HPET
+  table falls back to the TSC calibrated against the PIT, which is the only
+  clock a PC is guaranteed to have. Every I/O APIC firmware described is
+  mapped and every input masked — not configured, because nothing is wired to
+  a device line until stage 10, but quiesced, because a line firmware left
+  enabled would arrive at a vector chosen by whoever wrote the firmware.
+* AArch64 — GICv2's distributor and CPU interface, from the MADT; the
+  architected *virtual* timer, whose interrupt number comes from the GTDT.
+  Virtual rather than physical because a kernel at EL1 is by definition below
+  any hypervisor present, and on bare metal the two are the same counter.
 * The other two thirds of the facade: `irq::register` and `timer::after`.
-  `trap::Frame` is the third and exists.
-* The measurement the exit criterion asks for: arm a timer, count a thousand
-  ticks, report the frequency within tolerance.
+  One-shot is the primitive, because AArch64's timer has no periodic mode at
+  all — it compares against an absolute instant — and stage 5's tickless
+  scheduler wants one-shot anyway. Periodic is a re-arm inside the handler.
 
-The boot marker reads `FERRIX-BOOT-OK stages 1-3` and the timer half is what
-has to land before that is the whole truth.
+**Exit criterion met, and in the boot test on both architectures.** A
+thousand timer interrupts are counted, and the time they took is measured
+with the *counter* rather than by multiplying the tick count by the rate they
+were programmed at — which would be arithmetic that cannot fail rather than a
+measurement. x86-64 reports 990 Hz against a requested 1000 and AArch64 992,
+the shortfall being one interrupt entry and exit per period under an emulator.
 
----
+Before that, a one-shot is armed and the count required not to move for ten
+further intervals. That check is there for one specific bug: AArch64's timer
+interrupt is level triggered, so a handler that acknowledges the controller
+without disarming the timer is re-entered immediately and forever. It does
+not fail by producing a wrong number — it fails by never returning, with
+nothing in the log after the line before it.
+
+The boot marker reads `FERRIX-BOOT-OK stages 1-3`, and it is now the whole
+truth.
+
+**Still to do, and neither is reachable from a machine Ferrix boots on
+today.** Both are hardware variants rather than gaps in the stage: the
+facade above them does not change, and neither is on any later stage's path.
+
+* GICv3 and its redistributors. `gic::init` reads the version out of the
+  MADT and refuses anything that is not a GICv2, rather than writing GICv2
+  layouts into GICv3 registers and producing a machine that takes no
+  interrupts for reasons nothing explains. QEMU's `virt` gives a GICv2 unless
+  asked otherwise, so this needs a second boot-test configuration as much as
+  it needs code.
+* TSC-deadline mode, which replaces the local APIC timer's countdown with a
+  comparator against the TSC and is how a tickless kernel avoids
+  reprogramming a divider on every reschedule. The calibration it needs is
+  already here.
+* Per-CPU anything. The controller is brought up for the boot CPU because
+  there is only one; stage 4 is where a redistributor per core and a local
+  APIC per core start to mean something.
 
 ## Stage 4 — SMP  ·  *week*
 
@@ -330,16 +369,18 @@ bytes goes to `libs/` *before* it is called from the kernel — has a consequenc
 worth stating plainly, because otherwise the tree looks further along than it is:
 several crates for stages that have not started are already written and tested.
 
-They are parsers and data structures, not subsystems. None of them is wired into
-the kernel, none of them can be, and none of them counts towards the stage that
-will consume them. What they buy is that the stage in question begins with its
+They are parsers and data structures, not subsystems. None of them counts
+towards the stage that will consume it, and all but one are still unreachable
+from the kernel — `libs/acpi` is the exception, as of stage 3, which is what
+the rule was for: the MADT walk the interrupt controller needed was already
+written, tested and fuzz-shaped before a line of controller code existed. What they buy is that the stage in question begins with its
 byte-handling already fuzz-shaped, host-testable and argued about, rather than
 being written at three in the morning against a machine that reboots on a
 mistake.
 
 | Crate | Waiting for | Tests |
 |---|---|---|
-| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT. No AML, and there will be none. | 51 |
+| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET. No AML, and there will be none. | 58 |
 | `libs/fdt` | 3, 10 — flattened device tree reader; on AArch64 the only description of the machine there is. | 49 |
 | `libs/sync` | 4 — ticket lock, rwlock, `Once`. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — the VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
@@ -349,7 +390,7 @@ mistake.
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the kernel already uses — `bootinfo`, `elf`, `frame`,
-`heap`, `paging` — that is **437 host unit tests, all passing**, over code the
+`heap`, `paging` — that is **444 host unit tests, all passing**, over code the
 kernel cannot reach yet.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

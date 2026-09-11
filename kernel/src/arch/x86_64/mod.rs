@@ -1,11 +1,16 @@
 //! The x86-64 end of the kernel.
 
+mod apic;
+mod clock;
 pub(crate) mod console;
 mod cpu;
 mod gdt;
 mod trap;
 
+use ferrix_bootinfo::BootView;
+
 use crate::early::{EarlyError, EarlyMemory};
+use crate::irq::Report;
 
 /// Name for log lines.
 pub(crate) const NAME: &str = "x86_64";
@@ -58,4 +63,85 @@ pub(crate) fn halt() -> ! {
     loop {
         cpu::hlt();
     }
+}
+
+/// Bring up the local APIC, the counter and the timer.
+///
+/// Order matters twice over. The counter has to exist before the local APIC
+/// timer can be calibrated against it, and the interrupt descriptor table has
+/// to exist before the local APIC is enabled — an interrupt delivered to a
+/// vector with no gate is a fault the CPU cannot report.
+///
+/// # Safety
+///
+/// Must be called exactly once, on the boot CPU, after [`init_traps`] and
+/// while interrupts are still masked.
+pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'static str> {
+    let firmware =
+        crate::acpi::Firmware::open(view).map_err(|_| "the machine has no readable ACPI tables")?;
+    let acpi = firmware.acpi();
+
+    let counter = clock::init(&acpi)?;
+    // SAFETY: called once from `kmain`, on the boot CPU, after `init_traps`
+    // filled the IDT and with interrupts masked.
+    unsafe { apic::init(&acpi)? };
+
+    Ok(Report {
+        counter,
+        counter_hz: clock::counter_hz(),
+        controller: "APIC",
+        timer: "local APIC timer",
+        timer_hz: apic::timer_hz(),
+    })
+}
+
+/// Unmask interrupts on this CPU.
+pub(crate) fn enable_interrupts() {
+    cpu::enable_interrupts();
+}
+
+/// Wait until an interrupt arrives.
+pub(crate) fn wait_for_interrupt() {
+    cpu::hlt();
+}
+
+/// The free-running counter.
+pub(crate) fn counter_now() -> u64 {
+    clock::counter_now()
+}
+
+/// How fast it counts.
+pub(crate) fn counter_hz() -> u64 {
+    clock::counter_hz()
+}
+
+/// Fire the timer interrupt once, `nanos` from now.
+pub(crate) fn timer_arm(nanos: u64) {
+    apic::arm(nanos);
+}
+
+/// Stop the timer.
+pub(crate) fn timer_disarm() {
+    apic::disarm();
+}
+
+/// The interrupt number the timer arrives on.
+pub(crate) fn timer_irq() -> u32 {
+    apic::timer_irq()
+}
+
+/// Dispatch the interrupt that arrived and retire it at the controller.
+///
+/// x86-64 puts the vector in the frame, so there is nothing to claim: the
+/// work here is deciding what *not* to acknowledge. The spurious vector is
+/// raised by the local APIC when an interrupt is withdrawn between being
+/// signalled and being taken, and it is the one vector that must never be
+/// given an end-of-interrupt — doing so retires a different interrupt that
+/// was genuinely in service.
+pub(crate) fn service_interrupts(frame: &mut TrapFrame, handle: fn(u32)) {
+    if frame.vector == apic::SPURIOUS_VECTOR {
+        return;
+    }
+    handle((frame.vector - trap::IRQ_BASE) as u32);
+    apic::end_of_interrupt();
 }

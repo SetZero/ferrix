@@ -23,7 +23,9 @@ $ cargo xtask test-boot --arch both
     |   traps    vectors installed
     |   frames   499 MiB managed, 499 MiB free, 127879 entries at 0x1780000 (2048 KiB)
     |   stage 2  frame allocator and heap verified
-    |   stage 3  2 breakpoints and 4 page faults handled
+    |   clock    HPET at 100.000 MHz
+    |   irqs     APIC, local APIC timer at 62.712 MHz
+    |   stage 3  2 breakpoints, 4 page faults, 1001 ticks at 990 Hz
     | FERRIX-BOOT-OK stages 1-3
   x86_64: boot ok
   aarch64: boot ok
@@ -31,15 +33,20 @@ $ cargo xtask test-boot --arch both
 
 ## What exists today
 
-Stages 1 and 2 of `docs/ROADMAP.md`, and the trap half of stage 3. Both
-architectures boot from firmware to a Rust kernel which verifies the hand-off,
-brings up a buddy allocator over every usable frame, starts a kernel heap — so
-`Box`, `Vec` and `BTreeMap` work — installs its own trap vectors, and services a
-page fault by mapping the faulting address and letting the instruction retry.
+Stages 1, 2 and 3 of `docs/ROADMAP.md`. Both architectures boot from firmware
+to a Rust kernel which verifies the hand-off, brings up a buddy allocator over
+every usable frame, starts a kernel heap — so `Box`, `Vec` and `BTreeMap` work
+— installs its own trap vectors, services a page fault by mapping the faulting
+address and letting the instruction retry, brings up an interrupt controller,
+and runs a clock.
 
-What stage 3 still owes is everything asynchronous: no interrupt controller is
-programmed on either architecture and no clock ticks yet. The scheduler, the
-syscall layer and everything above them are ahead.
+Time works and interrupts arrive. The local APIC and the GICv2 are programmed,
+the local APIC timer is calibrated against the HPET, AArch64 uses the
+architected virtual timer, and both are reached through one facade —
+`irq::register`, `timer::after`, `trap::Frame`. What stage 3 still owes is
+hardware Ferrix cannot currently be booted on to test: GICv3, and the local
+APIC's TSC-deadline mode. The scheduler, the syscall layer and everything above
+them are ahead.
 
 The kernel proves it on every boot rather than asserting it: the memory map is
 checked to be sorted and to describe the loader's own allocations, the direct
@@ -53,7 +60,7 @@ Both architectures boot via UEFI, so firmware calls a Rust `efi_main` with the
 CPU already in 64-bit mode. There is no bootstrap assembly on either machine,
 which is unusual and is a direct consequence of choosing UEFI over Multiboot.
 
-The assembly that does exist — 96 lines, **99.58% Rust** — is confined to
+The assembly that does exist — 107 lines, **99.56% Rust** — is confined to
 constructs the machine defines before a Rust function could run: installing a
 translation regime and jumping to an address that did not exist a moment
 earlier, and the CPU primitives with no Rust spelling. `docs/ASSEMBLY.md` is the

@@ -454,3 +454,40 @@ pub(crate) fn translate(virt: u64) -> Option<u64> {
         .translate(&KernelPhysMem, VirtAddr(virt))
         .map(|at| at.0)
 }
+
+// ---------------------------------------------------------------------------
+// Device windows
+// ---------------------------------------------------------------------------
+
+/// Where device register windows are mapped, clear of the on-demand window.
+const DEVICE_WINDOW: u64 = ferrix_bootinfo::KERNEL_VMAP_BASE + 0x4000_0000;
+
+/// Size of that area. A register window is a few pages; a hundred of them is
+/// more devices than anything before stage 10 will ask for.
+const DEVICE_WINDOW_SIZE: u64 = 16 * 1024 * 1024;
+
+/// The next free virtual address in the device area.
+static NEXT_DEVICE: AtomicU64 = AtomicU64::new(DEVICE_WINDOW);
+
+/// Map `len` bytes of device registers at `phys` and return where they landed.
+///
+/// **A bump allocator, and it says so.** Nothing is ever unmapped, which is
+/// correct for an interrupt controller and wrong for a hot-pluggable device;
+/// the `vmap`/`vunmap` allocator stage 2 still owes is what replaces this, and
+/// the signature is the one that allocator will have.
+///
+/// The offset within the page is preserved, so a register block that does not
+/// start on a page boundary still reads correctly.
+pub(crate) fn map_device(phys: u64, len: u64) -> Result<u64, MemoryError> {
+    let offset = phys % PAGE_SIZE;
+    let base = phys - offset;
+    let span = (len + offset).next_multiple_of(PAGE_SIZE);
+
+    let at = NEXT_DEVICE.fetch_add(span, Ordering::Relaxed);
+    if at.saturating_add(span) > DEVICE_WINDOW + DEVICE_WINDOW_SIZE {
+        return Err(MemoryError::NoUsableMemory);
+    }
+
+    map_kernel(at, base, span, MapFlags::KERNEL_DEVICE).map_err(|_| MemoryError::NoUsableMemory)?;
+    Ok(at + offset)
+}
