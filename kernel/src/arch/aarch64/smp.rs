@@ -350,6 +350,6 @@ extern "C" fn secondary_start(record: u64) -> ! {
     // SAFETY: once on this core, before anything on it can fault, with every
     // exception masked.
     unsafe { super::trap::init() };
-    super::gic::init_this_cpu();
+    super::gicv2::init_this_cpu();
     crate::smp::secondary_main(record)
 }

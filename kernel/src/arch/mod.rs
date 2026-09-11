@@ -14,10 +14,11 @@ mod armv7a;
 mod x86_64;
 
 // Register-level drivers for hardware the Arm machines share, which the
-// architecture that uses them has already found in the machine's description.
-// `pl011` is visible to the crate only because it is re-exported as the
-// facade's `console`; the layering check keeps generic code from naming it.
-#[cfg(target_arch = "arm")]
+// architecture that uses them has already found in the machine's description
+// — the MADT on AArch64, the device tree on ARMv7-A. `pl011` is visible to the
+// crate only because it is re-exported as the facade's `console`; the layering
+// check keeps generic code from naming it.
+#[cfg(any(target_arch = "aarch64", target_arch = "arm"))]
 mod gicv2;
 #[cfg(target_arch = "arm")]
 pub(crate) mod pl011;

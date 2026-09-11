@@ -17,7 +17,9 @@ described so they can be repeated; none of them touched the tree.
 **Status: done.** Phases A to D have landed, and ARMv7-A is in the boot test
 beside the other two. Stage 4 arrived on `main` while the port was under way,
 so the target moved from `stages 1-3` to `stages 1-4`, and the port reached
-it with PSCI `CPU_ON` for its secondaries as AArch64 does. The plan below is
+it with PSCI `CPU_ON` for its secondaries as AArch64 does. Decision 6 is half
+done: AArch64 runs on the shared GICv2 driver, moved after the port landed and
+boot-tested on its own first; the PL011 half is still open. The plan below is
 kept as it was written; *To verify at first boot* records what the first boot
 answered.
 
@@ -252,6 +254,17 @@ layering script permits them. `aarch64/gic.rs` keeps the MADT walk and calls
 the shared driver; `armv7a/gic.rs` does the same with the device tree. The
 move is the first commit of the kernel phase and is boot-tested on AArch64
 before any ARMv7-A code is added, so a regression there is attributable.
+
+*What happened instead, for the GIC:* the port wrote `gicv2.rs` for ARMv7-A
+alone, and AArch64 moved onto it after the port had landed — by then carrying
+stage 4's per-core setup and SGI path, which the shared driver gained first.
+`aarch64/gic.rs` is now the MADT walk alone: the layout, the check that every
+core's CPU interface is the same banked address, the version check, and a
+call to `gicv2::init`. The move was boot-tested on AArch64 on its own before
+the other two, as this paragraph asks. The one change in behaviour is
+harmless: AArch64's old `configure` wrote each priority word four times, and
+the shared one steps by four. *The PL011 half has not moved*: AArch64's
+`console.rs` still has its own driver and its hard-coded address.
 
 The generic timer is the same counter reached through `cp15` rather than `mrs`,
 so `armv7a/timer.rs` mirrors `aarch64/timer.rs` rather than sharing it — the
@@ -534,6 +547,11 @@ it. `docs/BOOT-LOG.md` has U-Boot's lines.
 * **AArch64 from the device tree.** With `kernel/src/fdt.rs` in the tree, the
   hard-coded PL011 address in `aarch64/console.rs` could go; it stays, so that
   this port changes AArch64's boot only where the shared design forces it.
+* **The PL011 half of decision 6.** AArch64 is on the shared GICv2 driver;
+  its console is not yet on the shared `pl011.rs`. The same shape as the GIC
+  move — the architecture finds the UART, the shared driver drives it — and
+  the same rule: moved on its own, and boot-tested on AArch64 before anything
+  else rides on it.
 
 ## Conventions this work follows
 

@@ -11,6 +11,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::BootView;
 
+use super::gicv2;
 use crate::early::{EarlyError, EarlyMemory};
 use crate::irq::Report;
 
@@ -145,10 +146,10 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
     // The timer is a private peripheral interrupt, so enabling it is a
     // distributor operation like any other — it is only *private* in that
     // each core has its own copy of the number.
-    gic::enable(timer::irq());
+    gicv2::enable(timer::irq());
     // And the inter-processor interrupt, whose enable bit is this core's
-    // own: every secondary turns on its copy in `gic::init_this_cpu`.
-    gic::enable(gic::IPI_SGI);
+    // own: every secondary turns on its copy in `gicv2::init_this_cpu`.
+    gicv2::enable(gicv2::IPI_SGI);
 
     Ok(Report {
         counter: "generic timer",
@@ -181,15 +182,18 @@ pub(crate) fn wait_for_work() {
 
 /// The interrupt number inter-processor interrupts arrive on.
 pub(crate) const fn ipi_irq() -> u32 {
-    gic::IPI_SGI
+    gicv2::IPI_SGI
 }
 
 /// Interrupt every core but this one.
 ///
 /// Cannot fail here — it is one write to the distributor — but can on x86-64,
-/// where the local APIC has to accept the command.
+/// where the local APIC has to accept the command. The barrier is here rather
+/// than in the shared driver because it is an instruction, and each
+/// architecture spells its own.
 pub(crate) fn send_ipi_to_others() -> Result<(), &'static str> {
-    gic::send_ipi_to_others();
+    cpu::dsb_ishst();
+    gicv2::send_sgi_to_others();
     Ok(())
 }
 
@@ -252,8 +256,8 @@ pub(crate) fn timer_irq() -> u32 {
 /// asserted and take the exception again immediately. Reading `GICC_IAR` until
 /// it reports a special identifier is how the controller says it has no more.
 pub(crate) fn service_interrupts(_frame: &mut TrapFrame, handle: fn(u32)) {
-    while let Some((id, acknowledgement)) = gic::claim() {
+    while let Some((id, acknowledgement)) = gicv2::claim() {
         handle(id);
-        gic::complete(acknowledgement);
+        gicv2::complete(acknowledgement);
     }
 }
