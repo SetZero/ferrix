@@ -1,4 +1,4 @@
-//! Fuzz the ELF64 reader.
+//! Fuzz the ELF reader, both classes.
 //!
 //! This is the sharpest surface in the tree that takes bytes somebody else
 //! chose. Today the loader parses the kernel with it; from stage 6 the kernel
@@ -14,7 +14,7 @@
 
 #![no_main]
 
-use ferrix_elf::{EM_AARCH64, EM_X86_64, Elf};
+use ferrix_elf::{EM_AARCH64, EM_ARM, EM_X86_64, Elf};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -26,10 +26,12 @@ fuzz_target!(|data: &[u8]| {
     // validated something it had not read.
     let _ = elf.entry();
     let _ = elf.machine();
+    let _ = elf.class();
     let _ = elf.header().elf_type;
     let _ = elf.is_pie();
     let _ = elf.check_machine(EM_X86_64);
     let _ = elf.check_machine(EM_AARCH64);
+    let _ = elf.check_machine(EM_ARM);
 
     // The two the loader calls before it maps anything.
     let _ = elf.validate_segments();
@@ -60,12 +62,13 @@ fuzz_target!(|data: &[u8]| {
         for relocation in relocations.take(4096) {
             if let Ok(relocation) = relocation {
                 let _ = relocation.target(0x40_0000);
-                let _ = relocation.value(0x40_0000);
+                let _ = relocation.value(0x40_0000, 0x1234);
                 // A bias that wraps: the helpers promise wrapping arithmetic,
                 // not a panic, and release builds of the kernel have overflow
-                // checks on.
+                // checks on. The stored word is the in-place addend of a REL
+                // entry, so it has to be able to wrap too.
                 let _ = relocation.target(u64::MAX);
-                let _ = relocation.value(u64::MAX);
+                let _ = relocation.value(u64::MAX, u64::MAX);
             }
         }
     }

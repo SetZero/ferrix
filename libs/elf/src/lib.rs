@@ -1,9 +1,22 @@
-//! Bounds-checked ELF64 reader.
+//! Bounds-checked ELF reader, for both 64-bit and 32-bit images.
 //!
 //! Used twice: by the loader to place the kernel, and by the kernel to place
 //! user programs. It understands what those two jobs need — program headers,
 //! the load span, and the relative relocations a static PIE carries — and
 //! nothing else.
+//!
+//! # Two classes, one interface
+//!
+//! An ELF file is 64-bit or 32-bit, and the two differ in the width and order
+//! of their header fields rather than in what the fields mean. So both decode
+//! into the same [`Header`] and [`Segment`], every address widened to `u64`,
+//! and the only thing above this crate that asks which class an image was is
+//! the loader, refusing a kernel built for another word width.
+//!
+//! The relocation formats differ in substance as well as in width. The 64-bit
+//! architectures use `RELA`, whose entries carry their addend; 32-bit Arm uses
+//! `REL`, whose addend is the word already stored at the target. [`Addend`]
+//! says which, so a caller cannot apply one as though it were the other.
 //!
 //! # No unsafe
 //!
@@ -35,6 +48,8 @@ use core::fmt;
 /// The four bytes every ELF file starts with.
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 
+/// `e_ident[EI_CLASS]` for a 32-bit object.
+pub const ELFCLASS32: u8 = 1;
 /// `e_ident[EI_CLASS]` for a 64-bit object.
 pub const ELFCLASS64: u8 = 2;
 /// `e_ident[EI_DATA]` for a little-endian object.
@@ -46,6 +61,8 @@ pub const ET_EXEC: u16 = 2;
 /// executable is spelled.
 pub const ET_DYN: u16 = 3;
 
+/// `e_machine` for 32-bit Arm.
+pub const EM_ARM: u16 = 40;
 /// `e_machine` for x86-64.
 pub const EM_X86_64: u16 = 62;
 /// `e_machine` for AArch64.
@@ -87,11 +104,19 @@ pub const DT_RELA: i64 = 7;
 pub const DT_RELASZ: i64 = 8;
 /// `d_tag`: size of one entry in that table.
 pub const DT_RELAENT: i64 = 9;
+/// `d_tag`: address of the relocation table without addends.
+pub const DT_REL: i64 = 17;
+/// `d_tag`: size of that table in bytes.
+pub const DT_RELSZ: i64 = 18;
+/// `d_tag`: size of one entry in that table.
+pub const DT_RELENT: i64 = 19;
 
 /// `R_X86_64_RELATIVE`: add the load bias to the addend.
 pub const R_X86_64_RELATIVE: u32 = 8;
 /// `R_AARCH64_RELATIVE`: add the load bias to the addend.
 pub const R_AARCH64_RELATIVE: u32 = 1027;
+/// `R_ARM_RELATIVE`: add the load bias to the word at the target.
+pub const R_ARM_RELATIVE: u32 = 23;
 
 /// Size of an ELF64 file header.
 pub const EHDR_SIZE: usize = 64;
@@ -99,8 +124,83 @@ pub const EHDR_SIZE: usize = 64;
 pub const PHDR_SIZE: usize = 56;
 /// Size of an ELF64 relocation entry with an addend.
 pub const RELA_SIZE: usize = 24;
+/// Size of an ELF64 relocation entry without one.
+pub const REL_SIZE: usize = 16;
 /// Size of an ELF64 dynamic table entry.
 pub const DYN_SIZE: usize = 16;
+
+/// Size of an ELF32 file header.
+pub const EHDR32_SIZE: usize = 52;
+/// Size of an ELF32 program header.
+pub const PHDR32_SIZE: usize = 32;
+/// Size of an ELF32 relocation entry with an addend.
+pub const RELA32_SIZE: usize = 12;
+/// Size of an ELF32 relocation entry without one.
+pub const REL32_SIZE: usize = 8;
+/// Size of an ELF32 dynamic table entry.
+pub const DYN32_SIZE: usize = 8;
+
+/// The word width an image was built for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Class {
+    /// `ELFCLASS32`: 32-bit addresses and a 52-byte header.
+    Elf32,
+    /// `ELFCLASS64`: 64-bit addresses and a 64-byte header.
+    Elf64,
+}
+
+impl Class {
+    /// Bytes in the file header.
+    #[must_use]
+    pub const fn header_size(self) -> usize {
+        match self {
+            Class::Elf32 => EHDR32_SIZE,
+            Class::Elf64 => EHDR_SIZE,
+        }
+    }
+
+    /// Bytes in one program header.
+    #[must_use]
+    pub const fn phdr_size(self) -> usize {
+        match self {
+            Class::Elf32 => PHDR32_SIZE,
+            Class::Elf64 => PHDR_SIZE,
+        }
+    }
+
+    /// Bytes in one dynamic table entry.
+    const fn dyn_size(self) -> usize {
+        match self {
+            Class::Elf32 => DYN32_SIZE,
+            Class::Elf64 => DYN_SIZE,
+        }
+    }
+
+    /// Bytes in one relocation entry, with or without an addend.
+    const fn relocation_size(self, explicit: bool) -> usize {
+        match (self, explicit) {
+            (Class::Elf32, true) => RELA32_SIZE,
+            (Class::Elf32, false) => REL32_SIZE,
+            (Class::Elf64, true) => RELA_SIZE,
+            (Class::Elf64, false) => REL_SIZE,
+        }
+    }
+
+    /// One past the highest address an image of this class can name, or
+    /// `None` when that is the whole of `u64`.
+    ///
+    /// A 32-bit segment whose end lands past 4 GiB wraps on the machine it
+    /// was built for, and must be refused as one that wraps a `u64` would be.
+    /// Widening every address to `u64` is what makes that check necessary: a
+    /// sum that cannot overflow here would have overflowed there.
+    #[must_use]
+    pub const fn address_limit(self) -> Option<u64> {
+        match self {
+            Class::Elf32 => Some(1 << 32),
+            Class::Elf64 => None,
+        }
+    }
+}
 
 /// Why an image was rejected.
 ///
@@ -109,12 +209,12 @@ pub const DYN_SIZE: usize = 16;
 /// one call for very different responses from whoever sees the message.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ElfError {
-    /// The image is smaller than an ELF64 header.
+    /// The image is smaller than its class's file header.
     TooShort,
     /// The first four bytes are not `\x7fELF`.
     BadMagic,
-    /// Not a 64-bit object.
-    NotElf64,
+    /// Neither a 32-bit nor a 64-bit object. Carries the class byte found.
+    UnsupportedClass(u8),
     /// Not little-endian.
     NotLittleEndian,
     /// Built for a different CPU. Carries the `e_machine` found.
@@ -136,9 +236,11 @@ pub enum ElfError {
 impl fmt::Display for ElfError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ElfError::TooShort => f.write_str("image is shorter than an ELF64 header"),
+            ElfError::TooShort => f.write_str("image is shorter than an ELF header"),
             ElfError::BadMagic => f.write_str("not an ELF image"),
-            ElfError::NotElf64 => f.write_str("not a 64-bit ELF image"),
+            ElfError::UnsupportedClass(found) => {
+                write!(f, "ELF class {found} is neither 32-bit nor 64-bit")
+            }
             ElfError::NotLittleEndian => f.write_str("not a little-endian ELF image"),
             ElfError::BadMachine(found) => write!(f, "built for e_machine {found}"),
             ElfError::BadType(found) => write!(f, "e_type {found} is neither EXEC nor DYN"),
@@ -174,13 +276,23 @@ fn u64_at(bytes: &[u8], offset: usize) -> Option<u64> {
     Some(u64::from_le_bytes(field))
 }
 
+/// Read an address-sized little-endian field at `offset`, widened to `u64`.
+fn word_at(class: Class, bytes: &[u8], offset: usize) -> Option<u64> {
+    match class {
+        Class::Elf32 => u32_at(bytes, offset).map(u64::from),
+        Class::Elf64 => u64_at(bytes, offset),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Headers
 // ---------------------------------------------------------------------------
 
-/// The ELF64 file header, decoded.
+/// The ELF file header, decoded.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Header {
+    /// Whether the image is 32-bit or 64-bit.
+    pub class: Class,
     /// Object type: [`ET_EXEC`] or [`ET_DYN`].
     pub elf_type: u16,
     /// Target architecture.
@@ -193,6 +305,28 @@ pub struct Header {
     pub phentsize: u16,
     /// Number of program header table entries.
     pub phnum: u16,
+}
+
+impl Header {
+    /// Decode the fields past `e_ident`, at the offsets `class` puts them.
+    fn read(class: Class, image: &[u8]) -> Option<Header> {
+        // e_type and e_machine are at the same offsets in both classes; the
+        // entry point is where the two layouts start to diverge, because it is
+        // the first field whose width is the address width.
+        let (entry, phoff, phentsize, phnum) = match class {
+            Class::Elf32 => (24, 28, 42, 44),
+            Class::Elf64 => (24, 32, 54, 56),
+        };
+        Some(Header {
+            class,
+            elf_type: u16_at(image, 16)?,
+            machine: u16_at(image, 18)?,
+            entry: word_at(class, image, entry)?,
+            phoff: word_at(class, image, phoff)?,
+            phentsize: u16_at(image, phentsize)?,
+            phnum: u16_at(image, phnum)?,
+        })
+    }
 }
 
 /// One program header, decoded.
@@ -216,6 +350,34 @@ pub struct Segment {
 }
 
 impl Segment {
+    /// Decode the program header at `base`.
+    ///
+    /// The two classes do not merely widen the fields, they reorder them:
+    /// ELF64 moved `p_flags` up beside `p_type` so the 64-bit fields after it
+    /// are naturally aligned.
+    fn read(class: Class, image: &[u8], base: usize) -> Option<Segment> {
+        match class {
+            Class::Elf32 => Some(Segment {
+                kind: u32_at(image, base)?,
+                offset: u64::from(u32_at(image, base + 4)?),
+                vaddr: u64::from(u32_at(image, base + 8)?),
+                filesz: u64::from(u32_at(image, base + 16)?),
+                memsz: u64::from(u32_at(image, base + 20)?),
+                flags: u32_at(image, base + 24)?,
+                align: u64::from(u32_at(image, base + 28)?),
+            }),
+            Class::Elf64 => Some(Segment {
+                kind: u32_at(image, base)?,
+                flags: u32_at(image, base + 4)?,
+                offset: u64_at(image, base + 8)?,
+                vaddr: u64_at(image, base + 16)?,
+                filesz: u64_at(image, base + 32)?,
+                memsz: u64_at(image, base + 40)?,
+                align: u64_at(image, base + 48)?,
+            }),
+        }
+    }
+
     /// True if the segment must be loaded into memory.
     #[must_use]
     pub const fn is_load(&self) -> bool {
@@ -242,8 +404,10 @@ impl Segment {
 
     /// One past the last virtual address the segment occupies.
     ///
-    /// `None` if the range would wrap, which is a malformed image rather than
-    /// an address a loader should try to satisfy.
+    /// `None` if the range would wrap a `u64`, which is a malformed image
+    /// rather than an address a loader should try to satisfy. A 32-bit image
+    /// can wrap sooner than that; [`Elf::validate_segments`] and
+    /// [`Elf::load_span`] apply its class's limit too.
     #[must_use]
     pub const fn vaddr_end(&self) -> Option<u64> {
         self.vaddr.checked_add(self.memsz)
@@ -276,30 +440,26 @@ impl<'a> Elf<'a> {
         if ident.get(0..4) != Some(&ELF_MAGIC) {
             return Err(ElfError::BadMagic);
         }
-        if ident.get(4) != Some(&ELFCLASS64) {
-            return Err(ElfError::NotElf64);
-        }
+        let class = match ident.get(4).copied() {
+            Some(ELFCLASS64) => Class::Elf64,
+            Some(ELFCLASS32) => Class::Elf32,
+            Some(other) => return Err(ElfError::UnsupportedClass(other)),
+            None => return Err(ElfError::TooShort),
+        };
         if ident.get(5) != Some(&ELFDATA2LSB) {
             return Err(ElfError::NotLittleEndian);
         }
-        if image.len() < EHDR_SIZE {
+        if image.len() < class.header_size() {
             return Err(ElfError::TooShort);
         }
 
-        let header = Header {
-            elf_type: u16_at(image, 16).ok_or(ElfError::TooShort)?,
-            machine: u16_at(image, 18).ok_or(ElfError::TooShort)?,
-            entry: u64_at(image, 24).ok_or(ElfError::TooShort)?,
-            phoff: u64_at(image, 32).ok_or(ElfError::TooShort)?,
-            phentsize: u16_at(image, 54).ok_or(ElfError::TooShort)?,
-            phnum: u16_at(image, 56).ok_or(ElfError::TooShort)?,
-        };
+        let header = Header::read(class, image).ok_or(ElfError::TooShort)?;
 
         // The whole program header table has to be inside the image, and its
-        // entries at least as large as a program header. Checking it once here
-        // is what lets `segments()` be infallible.
+        // entries at least as large as a program header of this class.
+        // Checking it once here is what lets `segments()` be infallible.
         if header.phnum != 0 {
-            if (header.phentsize as usize) < PHDR_SIZE {
+            if (header.phentsize as usize) < class.phdr_size() {
                 return Err(ElfError::HeaderOutOfBounds);
             }
             let span = (header.phnum as u64)
@@ -321,6 +481,12 @@ impl<'a> Elf<'a> {
     #[must_use]
     pub const fn header(&self) -> &Header {
         &self.header
+    }
+
+    /// Whether the image is 32-bit or 64-bit.
+    #[must_use]
+    pub const fn class(&self) -> Class {
+        self.header.class
     }
 
     /// Virtual address of the entry point, before any load bias.
@@ -364,6 +530,7 @@ impl<'a> Elf<'a> {
     pub const fn segments(&self) -> Segments<'a> {
         Segments {
             image: self.image,
+            class: self.header.class,
             offset: self.header.phoff,
             entsize: self.header.phentsize as u64,
             left: self.header.phnum,
@@ -373,6 +540,16 @@ impl<'a> Elf<'a> {
     /// Just the segments that have to be loaded into memory.
     pub fn loadable(&self) -> impl Iterator<Item = Segment> + 'a {
         self.segments().filter(Segment::is_load)
+    }
+
+    /// One past the last address `segment` occupies, or `None` if that wraps
+    /// the address space of this image's class.
+    fn end_of(&self, segment: &Segment) -> Option<u64> {
+        let end = segment.vaddr_end()?;
+        match self.header.class.address_limit() {
+            Some(limit) if end > limit => None,
+            _ => Some(end),
+        }
     }
 
     /// Lowest and highest virtual address touched by loadable segments, page
@@ -385,7 +562,7 @@ impl<'a> Elf<'a> {
         let mut high = 0u64;
         for segment in self.loadable() {
             low = low.min(segment.vaddr);
-            high = high.max(segment.vaddr_end()?);
+            high = high.max(self.end_of(&segment)?);
         }
         if low == u64::MAX {
             return None;
@@ -407,7 +584,7 @@ impl<'a> Elf<'a> {
             if segment.memsz < segment.filesz {
                 return Err(ElfError::SegmentMalformed);
             }
-            if segment.vaddr_end().is_none() {
+            if self.end_of(&segment).is_none() {
                 return Err(ElfError::SegmentMalformed);
             }
             let _ = segment.data(self.image)?;
@@ -438,45 +615,78 @@ impl<'a> Elf<'a> {
     ///
     /// Returns an empty iterator for a non-relocatable executable, which is
     /// not an error — it is the common case for the kernel itself.
+    ///
+    /// An image carries a `RELA` table, a `REL` table, or neither; a static
+    /// PIE has one. Should a malformed one name both, the `RELA` table is the
+    /// one read, and the iterator's [`Addend`]s say so.
     pub fn relocations(&self) -> Result<Relocations<'a>, ElfError> {
         let Some(dynamic) = self.segments().find(|segment| segment.kind == PT_DYNAMIC) else {
             return Ok(Relocations::EMPTY);
         };
         let table = dynamic.data(self.image)?;
+        let class = self.header.class;
+        let step = class.dyn_size();
 
-        let mut addr = 0u64;
-        let mut size = 0u64;
-        let mut entsize = RELA_SIZE as u64;
-        for index in 0..(table.len() / DYN_SIZE) {
-            let base = index * DYN_SIZE;
-            let tag = u64_at(table, base).ok_or(ElfError::SegmentOutOfBounds)? as i64;
-            let value = u64_at(table, base + 8).ok_or(ElfError::SegmentOutOfBounds)?;
+        let mut rela = Table::default();
+        let mut rel = Table::default();
+        for index in 0..(table.len() / step) {
+            let base = index * step;
+            let (tag, value) = match class {
+                Class::Elf32 => (
+                    i64::from(u32_at(table, base).ok_or(ElfError::SegmentOutOfBounds)? as i32),
+                    u64::from(u32_at(table, base + 4).ok_or(ElfError::SegmentOutOfBounds)?),
+                ),
+                Class::Elf64 => (
+                    u64_at(table, base).ok_or(ElfError::SegmentOutOfBounds)? as i64,
+                    u64_at(table, base + 8).ok_or(ElfError::SegmentOutOfBounds)?,
+                ),
+            };
             match tag {
                 DT_NULL => break,
-                DT_RELA => addr = value,
-                DT_RELASZ => size = value,
-                DT_RELAENT => entsize = value,
+                DT_RELA => rela.addr = value,
+                DT_RELASZ => rela.size = value,
+                DT_RELAENT => rela.entsize = value,
+                DT_REL => rel.addr = value,
+                DT_RELSZ => rel.size = value,
+                DT_RELENT => rel.entsize = value,
                 _ => {}
             }
         }
 
-        if addr == 0 || size == 0 || entsize < RELA_SIZE as u64 {
+        let (found, explicit) = if rela.addr != 0 {
+            (rela, true)
+        } else {
+            (rel, false)
+        };
+        // An absent entry size means the format's own, which is what every
+        // linker writes anyway.
+        let minimum = class.relocation_size(explicit) as u64;
+        let entsize = if found.entsize == 0 {
+            minimum
+        } else {
+            found.entsize
+        };
+        if found.addr == 0 || found.size == 0 || entsize < minimum {
             return Ok(Relocations::EMPTY);
         }
 
         let expected = match self.header.machine {
             EM_X86_64 => R_X86_64_RELATIVE,
             EM_AARCH64 => R_AARCH64_RELATIVE,
+            EM_ARM => R_ARM_RELATIVE,
             other => return Err(ElfError::BadMachine(other)),
         };
 
-        // DT_RELA is a link-time address; find the file bytes behind it.
+        // DT_RELA and DT_REL are link-time addresses; find the file bytes
+        // behind them.
         let bytes = self
-            .vaddr_to_bytes(addr, size)
+            .vaddr_to_bytes(found.addr, found.size)
             .ok_or(ElfError::SegmentOutOfBounds)?;
 
         Ok(Relocations {
             bytes,
+            class,
+            explicit,
             entsize: usize::try_from(entsize).map_err(|_| ElfError::SegmentOutOfBounds)?,
             offset: 0,
             expected,
@@ -484,10 +694,19 @@ impl<'a> Elf<'a> {
     }
 }
 
+/// One relocation table as the dynamic section describes it.
+#[derive(Clone, Copy, Default, Debug)]
+struct Table {
+    addr: u64,
+    size: u64,
+    entsize: u64,
+}
+
 /// Iterator over an image's program headers.
 #[derive(Clone, Copy, Debug)]
 pub struct Segments<'a> {
     image: &'a [u8],
+    class: Class,
     offset: u64,
     entsize: u64,
     left: u16,
@@ -498,22 +717,13 @@ impl Iterator for Segments<'_> {
 
     fn next(&mut self) -> Option<Segment> {
         // `Elf::parse` checked that the whole table is inside the image and
-        // that entries are at least PHDR_SIZE, so every read here succeeds.
+        // that entries are at least a program header long, so every read
+        // here succeeds.
         if self.left != 0 {
             let base = usize::try_from(self.offset).ok()?;
             self.left -= 1;
             self.offset = self.offset.checked_add(self.entsize)?;
-
-            let segment = Segment {
-                kind: u32_at(self.image, base)?,
-                flags: u32_at(self.image, base + 4)?,
-                offset: u64_at(self.image, base + 8)?,
-                vaddr: u64_at(self.image, base + 16)?,
-                filesz: u64_at(self.image, base + 32)?,
-                memsz: u64_at(self.image, base + 40)?,
-                align: u64_at(self.image, base + 48)?,
-            };
-            return Some(segment);
+            return Segment::read(self.class, self.image, base);
         }
         None
     }
@@ -523,13 +733,23 @@ impl Iterator for Segments<'_> {
     }
 }
 
+/// Where a relocation's addend comes from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Addend {
+    /// A `RELA` entry: the addend is in the entry itself.
+    Explicit(i64),
+    /// A `REL` entry: the addend is the word stored at the target, which the
+    /// linker wrote there and the loader has to read before overwriting it.
+    InPlace,
+}
+
 /// One `R_*_RELATIVE` relocation: store `bias + addend` at `bias + offset`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Relocation {
     /// Link-time address of the word to patch.
     pub offset: u64,
-    /// Value to add the load bias to.
-    pub addend: i64,
+    /// The value to add the load bias to, or where to find it.
+    pub addend: Addend,
 }
 
 impl Relocation {
@@ -539,10 +759,19 @@ impl Relocation {
         self.offset.wrapping_add(bias)
     }
 
-    /// The value to store, given a load bias.
+    /// The value to store, given a load bias and `stored`, the word the
+    /// target held before relocation.
+    ///
+    /// `stored` is only read for an [`Addend::InPlace`] entry; for an
+    /// explicit one it is ignored, because reading it would be treating a
+    /// `RELA` image's placeholder as though it meant something.
     #[must_use]
-    pub const fn value(&self, bias: u64) -> u64 {
-        bias.wrapping_add(self.addend as u64)
+    pub const fn value(&self, bias: u64, stored: u64) -> u64 {
+        let addend = match self.addend {
+            Addend::Explicit(addend) => addend as u64,
+            Addend::InPlace => stored,
+        };
+        bias.wrapping_add(addend)
     }
 }
 
@@ -554,6 +783,8 @@ impl Relocation {
 #[derive(Clone, Copy, Debug)]
 pub struct Relocations<'a> {
     bytes: &'a [u8],
+    class: Class,
+    explicit: bool,
     entsize: usize,
     offset: usize,
     expected: u32,
@@ -562,6 +793,8 @@ pub struct Relocations<'a> {
 impl Relocations<'_> {
     const EMPTY: Relocations<'static> = Relocations {
         bytes: &[],
+        class: Class::Elf64,
+        explicit: true,
         entsize: RELA_SIZE,
         offset: 0,
         expected: 0,
@@ -574,16 +807,37 @@ impl Iterator for Relocations<'_> {
     fn next(&mut self) -> Option<Result<Relocation, ElfError>> {
         loop {
             let base = self.offset;
-            if base.checked_add(RELA_SIZE)? > self.bytes.len() {
+            let size = self.class.relocation_size(self.explicit);
+            if base.checked_add(size)? > self.bytes.len() {
                 return None;
             }
             self.offset = self.offset.checked_add(self.entsize)?;
 
-            let offset = u64_at(self.bytes, base)?;
-            let info = u64_at(self.bytes, base + 8)?;
-            let addend = u64_at(self.bytes, base + 16)? as i64;
+            let offset = word_at(self.class, self.bytes, base)?;
+            // The type is the low 32 bits of an ELF64 `r_info` and the low 8
+            // of an ELF32 one; the rest is a symbol index, which a relative
+            // relocation does not use.
+            let (kind, addend) = match self.class {
+                Class::Elf32 => {
+                    let info = u32_at(self.bytes, base + 4)?;
+                    let addend = if self.explicit {
+                        Addend::Explicit(i64::from(u32_at(self.bytes, base + 8)? as i32))
+                    } else {
+                        Addend::InPlace
+                    };
+                    (info & 0xFF, addend)
+                }
+                Class::Elf64 => {
+                    let info = u64_at(self.bytes, base + 8)?;
+                    let addend = if self.explicit {
+                        Addend::Explicit(u64_at(self.bytes, base + 16)? as i64)
+                    } else {
+                        Addend::InPlace
+                    };
+                    (info as u32, addend)
+                }
+            };
 
-            let kind = info as u32;
             if kind == 0 {
                 continue; // R_*_NONE, which is padding rather than work.
             }

@@ -1,11 +1,14 @@
 //! Tests for the page table builder.
 //!
 //! The mapper is generic over the encoding, so most of what follows runs
-//! against both architectures from one body: a walk that works for x86-64 and
-//! not for `AArch64` is exactly the failure this crate exists to prevent. The
-//! per-architecture tests below it assert the individual bits, because a
-//! descriptor with the right address and the wrong permission bit translates
-//! perfectly and protects nothing.
+//! against all three architectures from one body: a walk that works for x86-64
+//! and not for `AArch64` is exactly the failure this crate exists to prevent,
+//! and one that works on a four-level walk and not on ARMv7-A's three is the
+//! same failure in a different shape. So the generic bodies place every
+//! mapping relative to the start of the encoding's upper half, and count
+//! tables in levels rather than as a literal. The per-architecture tests below
+//! them assert the individual bits, because a descriptor with the right address
+//! and the wrong permission bit translates perfectly and protects nothing.
 
 extern crate std;
 
@@ -13,6 +16,7 @@ use std::collections::BTreeMap;
 use std::vec::Vec;
 
 use super::aarch64::{AArch64, MAIR_DEVICE, MAIR_EL1, MAIR_NORMAL, MAIR_NORMAL_NC};
+use super::armv7a::{Armv7a, MAIR0, MAIR1};
 use super::x86_64::X86_64;
 use super::*;
 
@@ -73,6 +77,28 @@ unsafe impl PhysMem for Memory {
 }
 
 // ---------------------------------------------------------------------------
+// Geometry
+// ---------------------------------------------------------------------------
+
+/// The first address of the encoding's upper half: `0xFFFF_8000_0000_0000` on
+/// a 48-bit geometry and `0x8000_0000` on a 32-bit one.
+fn upper<E: Encoding>() -> u64 {
+    E::canonical(1 << (E::VIRT_BITS - 1))
+}
+
+/// An address `offset` bytes into the upper half. Every offset the generic
+/// bodies use is below 2 GiB, which is the whole of ARMv7-A's upper half.
+fn high<E: Encoding>(offset: u64) -> VirtAddr {
+    VirtAddr(upper::<E>() + offset)
+}
+
+/// Tables a walk from the root to a 4 KiB leaf passes through, the root
+/// included: four on the 64-bit pair and three on ARMv7-A.
+fn levels<E: Encoding>() -> usize {
+    usize::from(Level::PAGE.depth() - E::ROOT_LEVEL.depth()) + 1
+}
+
+// ---------------------------------------------------------------------------
 // Address and level arithmetic
 // ---------------------------------------------------------------------------
 
@@ -106,25 +132,54 @@ fn level_spans_are_the_familiar_page_sizes() {
     assert_eq!(Level::new(4), None);
 }
 
+/// The 64-bit rule, for one encoding.
+fn forty_eight_bit_addresses_are_sign_extended<E: Encoding>() {
+    assert!(E::is_canonical(VirtAddr(0)));
+    assert!(E::is_canonical(VirtAddr(0x0000_7FFF_FFFF_FFFF)));
+    assert!(E::is_canonical(VirtAddr(0xFFFF_8000_0000_0000)));
+    assert!(E::is_canonical(VirtAddr(0xFFFF_FFFF_8000_0000)));
+    assert!(!E::is_canonical(VirtAddr(0x0000_8000_0000_0000)));
+    assert!(!E::is_canonical(VirtAddr(0x0001_0000_0000_0000)));
+    assert!(!E::is_canonical(VirtAddr(0xFFFF_7FFF_FFFF_FFFF)));
+    assert_eq!(E::canonical(0x0000_8000_0000_0000), 0xFFFF_8000_0000_0000);
+    assert_eq!(E::canonical(0x0000_7FFF_FFFF_F000), 0x0000_7FFF_FFFF_F000);
+}
+
 #[test]
 fn canonical_addresses_are_the_two_halves_and_nothing_between() {
-    assert!(VirtAddr(0).is_canonical());
-    assert!(VirtAddr(0x0000_7FFF_FFFF_FFFF).is_canonical());
-    assert!(VirtAddr(0xFFFF_8000_0000_0000).is_canonical());
-    assert!(VirtAddr(0xFFFF_FFFF_8000_0000).is_canonical());
-    assert!(!VirtAddr(0x0000_8000_0000_0000).is_canonical());
-    assert!(!VirtAddr(0x0001_0000_0000_0000).is_canonical());
-    assert!(!VirtAddr(0xFFFF_7FFF_FFFF_FFFF).is_canonical());
+    forty_eight_bit_addresses_are_sign_extended::<X86_64>();
+    forty_eight_bit_addresses_are_sign_extended::<AArch64>();
+}
+
+#[test]
+fn a_32_bit_address_is_canonical_exactly_when_it_fits() {
+    assert!(Armv7a::is_canonical(VirtAddr(0)));
+    assert!(Armv7a::is_canonical(VirtAddr(0x7FFF_FFFF)));
+    assert!(
+        Armv7a::is_canonical(VirtAddr(0x8000_0000)),
+        "a 32-bit space has no hole between its halves"
+    );
+    assert!(Armv7a::is_canonical(VirtAddr(0xFFFF_FFFF)));
+    assert!(!Armv7a::is_canonical(VirtAddr(0x1_0000_0000)));
+    assert!(
+        !Armv7a::is_canonical(VirtAddr(0xFFFF_FFFF_8000_0000)),
+        "a sign-extended 64-bit kernel address is not a 32-bit one"
+    );
+    assert_eq!(
+        Armv7a::canonical(0x8000_0000),
+        0x8000_0000,
+        "there is nothing above bit 31 to extend into"
+    );
 }
 
 // ---------------------------------------------------------------------------
-// The walk, run against both architectures
+// The walk, run against every architecture
 // ---------------------------------------------------------------------------
 
 /// A 4 KiB mapping resolves, offset and all, and costs one table per level.
 fn maps_a_page<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
-    let at = VirtAddr(0xFFFF_FFFF_8000_0000);
+    let at = high::<E>(0x7000_0000);
     mapper
         .map_range(
             &mut memory,
@@ -156,8 +211,8 @@ fn maps_a_page<E: Encoding>() {
     assert_eq!(mapper.mapping_level(&memory, at), Some(Level::PAGE));
     assert_eq!(
         memory.tables_allocated(),
-        4,
-        "{}: root, level 1, level 2, level 3",
+        levels::<E>(),
+        "{}: the root and one table per level below it",
         E::NAME
     );
 }
@@ -165,7 +220,7 @@ fn maps_a_page<E: Encoding>() {
 /// An aligned 2 MiB range becomes one block rather than 512 pages.
 fn maps_a_block<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
-    let at = VirtAddr(0xFFFF_8000_4000_0000);
+    let at = high::<E>(0x4000_0000);
     mapper
         .map_range(
             &mut memory,
@@ -190,15 +245,15 @@ fn maps_a_block<E: Encoding>() {
     );
     assert_eq!(
         memory.tables_allocated(),
-        3,
-        "{}: root and two levels, with no leaf table at all",
+        levels::<E>() - 1,
+        "{}: every table down to level 2, and no leaf table at all",
         E::NAME
     );
 }
 
 /// 1 GiB blocks are used only when asked for, because x86-64 may not have them.
 fn gigabyte_blocks_are_opt_in<E: Encoding>() {
-    let at = VirtAddr(0xFFFF_8000_0000_0000);
+    let at = high::<E>(0);
 
     let (mut memory, mapper) = Memory::with_root::<E>();
     mapper
@@ -224,8 +279,8 @@ fn gigabyte_blocks_are_opt_in<E: Encoding>() {
     );
     assert_eq!(
         memory.tables_allocated(),
-        2,
-        "{}: root and level 1",
+        levels::<E>() - 2,
+        "{}: every table down to level 1 — on ARMv7-A that is the root alone",
         E::NAME
     );
 }
@@ -236,7 +291,7 @@ fn misaligned_ranges_fall_back<E: Encoding>() {
     let (mut memory, mut mapper) = Memory::with_root::<E>();
     mapper.allow_gigabyte_blocks();
 
-    let start = VirtAddr(0xFFFF_8000_0000_0000 + PAGE_SIZE);
+    let start = high::<E>(PAGE_SIZE);
     let length = (4 << 20) + PAGE_SIZE;
     mapper
         .map_range(
@@ -255,7 +310,7 @@ fn misaligned_ranges_fall_back<E: Encoding>() {
         E::NAME
     );
     assert_eq!(
-        mapper.mapping_level(&memory, VirtAddr(0xFFFF_8000_0020_0000)),
+        mapper.mapping_level(&memory, high::<E>(0x20_0000)),
         Some(Level::MEGABYTE),
         "{}: the aligned middle should still use a block",
         E::NAME
@@ -274,7 +329,7 @@ fn misaligned_ranges_fall_back<E: Encoding>() {
 /// Mapping over something already mapped fails, and changes nothing.
 fn refuses_to_overwrite<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
-    let at = VirtAddr(0xFFFF_FFFF_8000_0000);
+    let at = high::<E>(0x7000_0000);
     mapper
         .map_range(
             &mut memory,
@@ -310,7 +365,7 @@ fn refuses_to_overwrite<E: Encoding>() {
 /// Mapping inside an existing block fails rather than corrupting the walk.
 fn refuses_to_split_a_block<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
-    let block = VirtAddr(0xFFFF_8000_0020_0000);
+    let block = high::<E>(0x20_0000);
     mapper
         .map_range(
             &mut memory,
@@ -362,14 +417,20 @@ fn validates_arguments<E: Encoding>() {
         mapper
             .map_range(
                 &mut memory,
-                VirtAddr(0x0000_8000_0000_0000),
+                VirtAddr(1 << E::VIRT_BITS),
                 PhysAddr(0),
                 PAGE_SIZE,
                 flags
             )
             .unwrap_err(),
         MapError::NotCanonical,
-        "{}: a non-canonical address is an entry nothing can reach",
+        "{}: an address the walk cannot translate is an entry nothing can reach",
+        E::NAME
+    );
+    assert_eq!(
+        memory.tables_allocated(),
+        1,
+        "{}: nothing was written",
         E::NAME
     );
 }
@@ -392,7 +453,7 @@ fn empty_range_is_a_noop<E: Encoding>() {
 /// Every generic property, for one encoding.
 ///
 /// A walk that works for x86-64 and not for `AArch64` is exactly the failure
-/// this crate exists to prevent, so both architectures run the same bodies.
+/// this crate exists to prevent, so every architecture runs the same bodies.
 fn walk_properties<E: Encoding>() {
     maps_a_page::<E>();
     maps_a_block::<E>();
@@ -416,7 +477,7 @@ fn walk_properties<E: Encoding>() {
 /// `unmap_range` clears descriptors and says which frames came out.
 fn unmapping_reports_what_it_removed<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
-    let at = VirtAddr(0xFFFF_FF00_0000_0000);
+    let at = high::<E>(0x1000_0000);
 
     mapper
         .map_range(
@@ -446,11 +507,16 @@ fn unmapping_reports_what_it_removed<E: Encoding>() {
             (PhysAddr(0x20_2000), Level::PAGE),
         ]
     );
-    // The three tables between the root and the leaves emptied out with the
-    // last page and were unlinked. Without this the arena leaks a table per
-    // region it ever touches, and the leak is invisible because the page count
+    // Every table between the root and the leaves emptied out with the last
+    // page and was unlinked. Without this the arena leaks a table per region
+    // it ever touches, and the leak is invisible because the page count
     // balances perfectly.
-    assert_eq!(tables.len(), 3, "emptied tables were not reclaimed");
+    assert_eq!(
+        tables.len(),
+        levels::<E>() - 1,
+        "{}: emptied tables were not reclaimed",
+        E::NAME
+    );
     for page in 0..3 {
         assert_eq!(
             mapper.translate(&memory, VirtAddr(at.0 + page * PAGE_SIZE)),
@@ -479,7 +545,7 @@ fn unmapping_reports_what_it_removed<E: Encoding>() {
 /// allocation walks straight across it.
 fn unmapping_walks_through_a_hole<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
-    let at = VirtAddr(0xFFFF_FF00_0010_0000);
+    let at = high::<E>(0x1010_0000);
 
     mapper
         .map_range(
@@ -506,7 +572,7 @@ fn unmapping_walks_through_a_hole<E: Encoding>() {
 /// Unmapping half a block is refused rather than rounded.
 fn unmapping_refuses_to_cut_a_block<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
-    let at = VirtAddr(0xFFFF_FF00_4000_0000);
+    let at = high::<E>(0x5000_0000);
 
     mapper
         .map_range(
@@ -532,7 +598,7 @@ fn unmapping_refuses_to_cut_a_block<E: Encoding>() {
 /// `protect_range` rewrites permissions and leaves the translation alone.
 fn protecting_keeps_the_frame_and_changes_the_permissions<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
-    let at = VirtAddr(0xFFFF_FF00_0020_0000);
+    let at = high::<E>(0x1020_0000);
 
     mapper
         .map_range(
@@ -566,7 +632,7 @@ fn protecting_keeps_the_frame_and_changes_the_permissions<E: Encoding>() {
 /// Protecting a range with nothing in it is an error rather than a no-op.
 fn protecting_a_hole_is_an_error<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
-    let at = VirtAddr(0xFFFF_FF00_0030_0000);
+    let at = high::<E>(0x1030_0000);
     assert_eq!(
         mapper
             .protect_range(&mut memory, at, PAGE_SIZE, MapFlags::KERNEL_RODATA)
@@ -612,12 +678,13 @@ fn every_flag_survives_a_descriptor<E: Encoding>() {
 fn the_walk_finds_every_leaf<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
 
-    // Three regions far enough apart to land in different top-level entries,
-    // so the walk has to descend more than one branch.
+    // Three regions far enough apart to land in different branches of the
+    // tree — on ARMv7-A, in both of the root entries the kernel half has — so
+    // the walk has to descend more than one.
     let regions = [
-        (VirtAddr(0xFFFF_FF00_0000_0000), PhysAddr(0x10_0000), 2u64),
-        (VirtAddr(0xFFFF_FF80_0000_0000), PhysAddr(0x20_0000), 1),
-        (VirtAddr(0xFFFF_FFFF_8000_0000), PhysAddr(0x30_0000), 3),
+        (high::<E>(0), PhysAddr(0x10_0000), 2u64),
+        (high::<E>(0x4000_0000), PhysAddr(0x20_0000), 1),
+        (high::<E>(0x7000_0000), PhysAddr(0x30_0000), 3),
     ];
     for (virt, phys, pages) in regions {
         mapper
@@ -645,7 +712,8 @@ fn the_walk_finds_every_leaf<E: Encoding>() {
             let offset = page * PAGE_SIZE;
             assert!(
                 found.contains(&(VirtAddr(virt.0 + offset), PhysAddr(phys.0 + offset))),
-                "the walk missed {:#x}",
+                "{}: the walk missed {:#x}",
+                E::NAME,
                 virt.0 + offset
             );
         }
@@ -658,14 +726,16 @@ fn the_walk_finds_every_leaf<E: Encoding>() {
     assert_eq!(found, sorted);
 }
 
-/// The walk rebuilds the sign extension a virtual address carries.
+/// The walk reports addresses in the form a caller compares them in.
 ///
-/// The address is assembled from table indices, which produces the 48-bit
-/// form. Reporting a kernel mapping as `0x0000_FF00_...` would be a correct
-/// walk of an address no caller can compare against a constant.
+/// The address is assembled from table indices. On a 48-bit geometry that is
+/// the unextended form, and reporting a kernel mapping as `0x0000_FF00_...`
+/// would be a correct walk of an address no caller can compare against a
+/// constant; on a 32-bit one there is nothing to extend, and extending anyway
+/// would be the same bug in reverse.
 fn the_walk_reports_canonical_addresses<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
-    let at = VirtAddr(0xFFFF_FFFF_8000_0000);
+    let at = high::<E>(0x7000_0000);
 
     mapper
         .map_range(
@@ -682,8 +752,8 @@ fn the_walk_reports_canonical_addresses<E: Encoding>() {
         seen = Some(leaf.virt);
         true
     });
-    assert_eq!(seen, Some(at));
-    assert!(seen.unwrap().is_canonical());
+    assert_eq!(seen, Some(at), "{}", E::NAME);
+    assert!(E::is_canonical(seen.unwrap()));
 }
 
 /// A visitor that returns `false` stops the whole recursion, not one table.
@@ -692,7 +762,7 @@ fn the_walk_can_stop_early<E: Encoding>() {
     mapper
         .map_range(
             &mut memory,
-            VirtAddr(0xFFFF_FF00_0000_0000),
+            high::<E>(0x1000_0000),
             PhysAddr(0x10_0000),
             8 * PAGE_SIZE,
             MapFlags::KERNEL_DATA,
@@ -717,6 +787,11 @@ fn the_walk_behaves_the_same_on_x86_64() {
 #[test]
 fn the_walk_behaves_the_same_on_aarch64() {
     walk_properties::<AArch64>();
+}
+
+#[test]
+fn the_walk_behaves_the_same_on_armv7a() {
+    walk_properties::<Armv7a>();
 }
 
 #[test]
@@ -1025,5 +1100,162 @@ mod aarch64_bits {
         assert_eq!(attr(MAIR_NORMAL), 0xFF, "normal write-back cacheable");
         assert_eq!(attr(MAIR_DEVICE), 0x00, "device-nGnRnE");
         assert_eq!(attr(MAIR_NORMAL_NC), 0x44, "normal non-cacheable");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ARMv7-A descriptor bits
+// ---------------------------------------------------------------------------
+
+mod armv7a_bits {
+    use super::*;
+
+    const VALID: u64 = 1 << 0;
+    const TABLE_OR_PAGE: u64 = 1 << 1;
+    const ACCESS_FLAG: u64 = 1 << 10;
+    const PXN: u64 = 1 << 53;
+    const XN: u64 = 1 << 54;
+
+    #[test]
+    fn the_walk_starts_at_level_one_over_thirty_two_bits() {
+        assert_eq!(Armv7a::ROOT_LEVEL, Level::GIGABYTE);
+        assert_eq!(Armv7a::VIRT_BITS, 32);
+        assert_eq!(levels::<Armv7a>(), 3, "root, level 2, level 3");
+    }
+
+    /// The kernel half lives in root entries 2 and 3, which is why the loader
+    /// points `TTBR1` at the root plus sixteen bytes.
+    ///
+    /// `TTBCR.T1SZ = 1` makes the `TTBR1` table two entries long, indexed by
+    /// address bit 30 alone. The mapper indexes the same root by bits 31:30.
+    /// This test is what stops the two disagreeing silently: if the mapper
+    /// ever put `0x8000_0000` anywhere but byte 16, the kernel would run on a
+    /// table the hardware reads from the wrong place.
+    #[test]
+    fn the_kernel_half_is_entries_two_and_three_of_the_root() {
+        let (mut memory, mapper) = Memory::with_root::<Armv7a>();
+        for at in [0x8000_0000u64, 0xC000_0000] {
+            mapper
+                .map_range(
+                    &mut memory,
+                    VirtAddr(at),
+                    PhysAddr(0x4000_0000),
+                    PAGE_SIZE,
+                    MapFlags::KERNEL_DATA,
+                )
+                .unwrap();
+        }
+
+        let root = mapper.root().0;
+        assert_eq!(memory.read(PhysAddr(root)), 0, "nothing in the user half");
+        assert_eq!(memory.read(PhysAddr(root + 8)), 0);
+        for slot in [root + 16, root + 24] {
+            let entry = memory.read(PhysAddr(slot));
+            assert_ne!(entry & VALID, 0, "no descriptor at {:#x}", slot - root);
+            assert_ne!(entry & TABLE_OR_PAGE, 0, "a table, not a block");
+        }
+        for slot in 4..ENTRIES as u64 {
+            assert_eq!(
+                memory.read(PhysAddr(root + slot * 8)),
+                0,
+                "a 32-bit root has four entries; slot {slot} is above 4 GiB"
+            );
+        }
+    }
+
+    #[test]
+    fn execute_never_binds_both_privilege_levels() {
+        let at = PhysAddr(0x4000_0000);
+        let code = Armv7a::leaf_descriptor(at, Level::PAGE, MapFlags::KERNEL_CODE);
+        assert_eq!(
+            code & (XN | PXN),
+            0,
+            "XN binds PL1 too, so kernel text must clear both"
+        );
+
+        let data = Armv7a::leaf_descriptor(at, Level::PAGE, MapFlags::KERNEL_DATA);
+        assert_ne!(data & XN, 0, "W^X: writable memory must not execute");
+        assert_ne!(data & PXN, 0);
+
+        let user = Armv7a::leaf_descriptor(at, Level::PAGE, MapFlags::USER_CODE);
+        assert_eq!(user & XN, 0, "user may execute its own text");
+        assert_ne!(user & PXN, 0, "the kernel must never execute user text");
+
+        let user_data = Armv7a::leaf_descriptor(at, Level::PAGE, MapFlags::USER_DATA);
+        assert_ne!(user_data & XN, 0);
+    }
+
+    /// Everything but the execute bits is AArch64's encoding, bit for bit.
+    ///
+    /// Which is the claim the whole port rests on for page tables: the same
+    /// access permissions, the same attribute indices, the same shareability
+    /// and access flag. If this ever fails, one of the two encoders has
+    /// drifted and the other is the reference.
+    #[test]
+    fn everything_but_execute_is_aarch64s_encoding() {
+        let execute_bits = !(XN | PXN);
+        let frame = PhysAddr(0x3F_C000_0000);
+        for flags in [
+            MapFlags::KERNEL_CODE,
+            MapFlags::KERNEL_RODATA,
+            MapFlags::KERNEL_DATA,
+            MapFlags::KERNEL_DEVICE,
+            MapFlags::USER_CODE,
+            MapFlags::USER_DATA,
+        ] {
+            for level in [Level::PAGE, Level::MEGABYTE, Level::GIGABYTE] {
+                assert_eq!(
+                    Armv7a::leaf_descriptor(frame, level, flags) & execute_bits,
+                    AArch64::leaf_descriptor(frame, level, flags) & execute_bits,
+                    "{flags:?} at level {}",
+                    level.depth()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_address_is_forty_bits() {
+        let frame = PhysAddr(0x0000_00FF_FFFF_F000);
+        let entry = Armv7a::leaf_descriptor(frame, Level::PAGE, MapFlags::KERNEL_DATA);
+        assert_eq!(Armv7a::address(entry), frame);
+
+        // Bits 40..47 hold an address on AArch64 and are reserved here. A frame
+        // up there is one this CPU cannot reach, and the encoder must not
+        // smuggle it into bits the MMU reads as something else.
+        let beyond = Armv7a::leaf_descriptor(
+            PhysAddr(0x0000_FF00_0000_1000),
+            Level::PAGE,
+            MapFlags::KERNEL_DATA,
+        );
+        assert_eq!(beyond & 0x0000_FF00_0000_0000, 0);
+        assert_eq!(Armv7a::address(beyond), PhysAddr(0x1000));
+    }
+
+    #[test]
+    fn blocks_are_allowed_at_levels_one_and_two() {
+        assert!(Armv7a::supports_block(Level::GIGABYTE));
+        assert!(Armv7a::supports_block(Level::MEGABYTE));
+
+        let block = Armv7a::leaf_descriptor(
+            PhysAddr(0x4000_0000),
+            Level::GIGABYTE,
+            MapFlags::KERNEL_DATA,
+        );
+        assert_eq!(block & TABLE_OR_PAGE, 0, "0b01 is a block at level 1");
+        assert!(Armv7a::is_leaf(block, Level::GIGABYTE));
+        assert_ne!(block & ACCESS_FLAG, 0);
+    }
+
+    #[test]
+    fn the_mair_halves_are_aarch64s_value_split_in_two() {
+        assert_eq!((u64::from(MAIR1) << 32) | u64::from(MAIR0), MAIR_EL1);
+        let attr = |index: u64| (u64::from(MAIR0) >> (8 * index)) & 0xFF;
+        assert_eq!(attr(MAIR_NORMAL), 0xFF, "normal write-back cacheable");
+        assert_eq!(
+            attr(MAIR_DEVICE),
+            0x00,
+            "strongly ordered — ARMv7's name for device-nGnRnE"
+        );
     }
 }

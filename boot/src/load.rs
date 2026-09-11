@@ -86,7 +86,8 @@ pub(crate) fn read_kernel_file(services: &Services, path: &str) -> Result<(Alloc
 
 /// Parse and vet a kernel image before anything is mapped.
 pub(crate) fn parse_kernel(bytes: &[u8]) -> Result<Elf<'_>> {
-    let elf = Elf::parse(bytes).map_err(|_| BootError::plain("the kernel is not a valid ELF64"))?;
+    let elf =
+        Elf::parse(bytes).map_err(|_| BootError::plain("the kernel is not a valid ELF image"))?;
     elf.check_machine(arch::ELF_MACHINE)
         .map_err(|_| BootError::plain("the kernel was built for another architecture"))?;
     elf.validate_segments()

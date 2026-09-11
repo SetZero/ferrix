@@ -102,11 +102,22 @@ pub const MAX_CELLS: u32 = 4;
 /// `compatible` string of a GICv3 interrupt controller.
 pub const GICV3_COMPATIBLE: &str = "arm,gic-v3";
 
-/// `compatible` string of the GICv2 that QEMU's `virt` machine describes.
-pub const GICV2_COMPATIBLE: &str = "arm,cortex-a15-gic";
+/// `compatible` strings of a GICv2. QEMU's `virt` machine says
+/// `cortex-a15-gic` whatever the CPU, the STM32MP1 says `cortex-a7-gic`, and
+/// `gic-400` is what most other boards of that generation carry. The register
+/// layout is the same for all three.
+pub const GICV2_COMPATIBLES: [&str; 3] = ["arm,cortex-a15-gic", "arm,cortex-a7-gic", "arm,gic-400"];
 
-/// `compatible` string of the architected timer.
+/// `compatible` string of the architected timer on a 64-bit CPU.
 pub const TIMER_COMPATIBLE: &str = "arm,armv8-timer";
+
+/// `compatible` string of the same timer on a 32-bit CPU. QEMU lists it after
+/// [`TIMER_COMPATIBLE`] for a 64-bit CPU and alone for a 32-bit one, so a
+/// reader that knew only the first would find no timer on a Cortex-A7.
+pub const TIMER_V7_COMPATIBLE: &str = "arm,armv7-timer";
+
+/// `compatible` strings of PSCI firmware, newest first.
+pub const PSCI_COMPATIBLES: [&str; 3] = ["arm,psci-1.0", "arm,psci-0.2", "arm,psci"];
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -1006,6 +1017,44 @@ impl InterruptController<'_> {
     }
 }
 
+/// One of the architected timer's four interrupts, in the order a timer node
+/// lists them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TimerInterrupt {
+    /// The secure physical timer, which belongs to the secure world.
+    SecurePhysical = 0,
+    /// The non-secure physical timer.
+    NonSecurePhysical = 1,
+    /// The virtual timer: the one a kernel below any hypervisor owns.
+    Virtual = 2,
+    /// The hypervisor's own physical timer.
+    Hypervisor = 3,
+}
+
+/// The instruction a PSCI call is made with.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PsciConduit {
+    /// `smc`: firmware is a secure monitor.
+    Smc,
+    /// `hvc`: firmware is a hypervisor, or is being emulated as one.
+    Hvc,
+}
+
+/// The GIC interrupt identifier a three-cell GIC specifier names.
+///
+/// The binding numbers the two peripheral kinds from zero each: type 0 is a
+/// shared peripheral, identifier 32 upwards; type 1 is a private one,
+/// identifiers 16 to 31. Any other type, or a number past the end of its
+/// range, is not an interrupt a GIC delivers.
+#[must_use]
+pub const fn gic_interrupt_id(kind: u32, number: u32) -> Option<u32> {
+    match kind {
+        0 if number < 988 => Some(32 + number),
+        1 if number < 16 => Some(16 + number),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Fdt
 // ---------------------------------------------------------------------------
@@ -1205,7 +1254,10 @@ impl<'a> Fdt<'a> {
                     node,
                 });
             }
-            if node.is_compatible(GICV2_COMPATIBLE) {
+            if GICV2_COMPATIBLES
+                .iter()
+                .any(|binding| node.is_compatible(binding))
+            {
                 return Some(InterruptController {
                     version: GicVersion::V2,
                     node,
@@ -1216,10 +1268,51 @@ impl<'a> Fdt<'a> {
     }
 
     /// The architected timer node, whose `interrupts` carry the four PPIs the
-    /// kernel programs.
+    /// kernel programs. Found by either the 64-bit or the 32-bit binding.
     #[must_use]
     pub fn timer(&self) -> Option<Node<'a>> {
-        self.find_compatible(TIMER_COMPATIBLE)
+        self.nodes().find(|node| {
+            node.is_compatible(TIMER_COMPATIBLE) || node.is_compatible(TIMER_V7_COMPATIBLE)
+        })
+    }
+
+    /// The GIC identifier one of the architected timer's interrupts arrives on.
+    ///
+    /// `None` if there is no timer, if it lists fewer interrupts than `which`
+    /// needs, or if the entry is not one a GIC could deliver. A timer's
+    /// `interrupts` are GIC specifiers of three cells each, in the order
+    /// [`TimerInterrupt`] gives — the binding's order, and not the order
+    /// anybody would guess.
+    #[must_use]
+    pub fn timer_interrupt(&self, which: TimerInterrupt) -> Option<u32> {
+        let mut cells = self.timer()?.interrupts()?.skip(which as usize * 3);
+        let kind = cells.next()?;
+        let number = cells.next()?;
+        // The third cell is the trigger type and CPU mask. It changes how the
+        // line is programmed, not which line it is — but it has to be there,
+        // or the specifier was cut short and the two before it are suspect.
+        let _flags = cells.next()?;
+        gic_interrupt_id(kind, number)
+    }
+
+    /// How this machine's PSCI firmware is called, or `None` if the tree
+    /// describes none or names a conduit this crate does not know.
+    ///
+    /// The difference is not cosmetic: `smc` on a machine with no secure
+    /// monitor, or `hvc` on one with no hypervisor, is an undefined-instruction
+    /// exception rather than a call.
+    #[must_use]
+    pub fn psci_conduit(&self) -> Option<PsciConduit> {
+        let node = self.nodes().find(|node| {
+            PSCI_COMPATIBLES
+                .iter()
+                .any(|binding| node.is_compatible(binding))
+        })?;
+        match node.property("method")?.as_str()? {
+            "smc" => Some(PsciConduit::Smc),
+            "hvc" => Some(PsciConduit::Hvc),
+            _ => None,
+        }
     }
 }
 

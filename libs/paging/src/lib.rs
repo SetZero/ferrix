@@ -1,10 +1,13 @@
-//! Page table construction for x86-64 and AArch64.
+//! Page table construction for x86-64, AArch64 and ARMv7-A.
 //!
-//! Both architectures use a four-level table of 512 eight-byte descriptors
-//! over a 4 KiB granule, indexed by the same bits of the virtual address. Only
-//! the *encoding* of a descriptor differs. So the walk is written once here,
-//! generic over an [`Encoding`], and each architecture supplies roughly forty
-//! lines of bit layout.
+//! All three use tables of 512 eight-byte descriptors over a 4 KiB granule,
+//! indexed by the same bits of the virtual address — ARMv7-A by way of the
+//! Large Physical Address Extension, whose long descriptors are AArch64's with
+//! a narrower address. Two things differ: the *encoding* of a descriptor, and
+//! the *geometry* of the walk, which is four levels over 48 bits on the 64-bit
+//! pair and three over 32 on ARMv7-A, starting at what the others call level
+//! one. So the walk is written once here, generic over an [`Encoding`] that
+//! supplies both, and each architecture is roughly forty lines of bit layout.
 //!
 //! This lives in `libs/` rather than in the kernel for the reason
 //! `docs/ARCHITECTURE.md` gives: it is pure arithmetic over bytes, so
@@ -37,6 +40,7 @@
 #![no_std]
 
 pub mod aarch64;
+pub mod armv7a;
 pub mod x86_64;
 
 use core::fmt;
@@ -48,7 +52,8 @@ pub const PAGE_SIZE: u64 = 4096;
 /// Descriptors in one table. 4 KiB / 8 bytes.
 pub const ENTRIES: usize = 512;
 
-/// Bits of virtual address a four-level 4 KiB-granule table walk covers.
+/// Bits of virtual address a four-level 4 KiB-granule table walk covers, and
+/// so the default [`Encoding::VIRT_BITS`].
 pub const VIRT_BITS: u32 = 48;
 
 /// A physical address.
@@ -91,16 +96,6 @@ impl VirtAddr {
             None => None,
         }
     }
-
-    /// True if bits 48..63 are a correct sign extension of bit 47.
-    ///
-    /// Both architectures fault on an address that is not, so a table built
-    /// for one is a table with an entry nothing can ever reach.
-    #[must_use]
-    pub const fn is_canonical(self) -> bool {
-        let high = self.0 >> (VIRT_BITS - 1);
-        high == 0 || high == 0x1_FFFF
-    }
 }
 
 impl fmt::Debug for PhysAddr {
@@ -115,15 +110,19 @@ impl fmt::Debug for VirtAddr {
     }
 }
 
-/// Which level of the four-level walk a descriptor belongs to.
+/// Which level of the walk a descriptor belongs to.
 ///
-/// Level 0 is the root — the x86-64 PML4 and the AArch64 level-0 table — and
-/// level 3 holds the 4 KiB leaves.
+/// Level 0 is the root of a four-level walk — the x86-64 PML4 and the AArch64
+/// level-0 table — and level 3 holds the 4 KiB leaves. A shorter walk starts
+/// further down rather than renumbering: ARMv7-A's root is level 1, and that
+/// is [`Encoding::ROOT_LEVEL`]. Naming a level by what one of its descriptors
+/// *covers* rather than by its distance from the root is what keeps a 2 MiB
+/// block at level 2 on every architecture.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Level(u8);
 
 impl Level {
-    /// The root table.
+    /// The root of a four-level walk.
     pub const ROOT: Level = Level(0);
     /// Where a 1 GiB block may be mapped.
     pub const GIGABYTE: Level = Level(1);
@@ -277,10 +276,48 @@ impl MapFlags {
     }
 }
 
-/// The bit layout of one architecture's page table descriptors.
+/// The bit layout of one architecture's page table descriptors, and the shape
+/// of the walk that reads them.
 pub trait Encoding {
     /// A short name, for diagnostics.
     const NAME: &'static str;
+
+    /// The level the hardware walk starts at.
+    ///
+    /// [`Level::ROOT`] for a four-level walk. A three-level walk starts at
+    /// [`Level::GIGABYTE`], and its root table is indexed by the same address
+    /// bits as a four-level walk's level-1 table: what differs is only that
+    /// there is nothing above it.
+    const ROOT_LEVEL: Level = Level::ROOT;
+
+    /// Bits of virtual address the walk translates.
+    const VIRT_BITS: u32 = VIRT_BITS;
+
+    /// True if the hardware can translate `virt` at all.
+    ///
+    /// The default is the 64-bit rule: every bit from `VIRT_BITS - 1` up must
+    /// be the same, which is what makes an upper-half address a sign-extended
+    /// one. Both 64-bit architectures fault on an address that breaks it, so
+    /// a table built for one is a table with an entry nothing can reach. An
+    /// encoding whose addresses are narrower than a `u64` overrides this.
+    fn is_canonical(virt: VirtAddr) -> bool {
+        let high = virt.0 >> (Self::VIRT_BITS - 1);
+        high == 0 || high == u64::MAX >> (Self::VIRT_BITS - 1)
+    }
+
+    /// The form of `address`, assembled by a walk from table indices, that a
+    /// caller compares against: sign extended, by default.
+    ///
+    /// A walk builds `0x0000_FF00_...` from indices, and every constant the
+    /// kernel compares a mapping against is written `0xFFFF_FF00_...`.
+    fn canonical(address: u64) -> u64 {
+        let sign = 1u64 << (Self::VIRT_BITS - 1);
+        if address & sign == 0 {
+            address
+        } else {
+            address | !((1u64 << Self::VIRT_BITS) - 1)
+        }
+    }
 
     /// Descriptor for an intermediate table at `table`.
     ///
@@ -356,7 +393,8 @@ pub unsafe trait PhysMem {
 pub enum MapError {
     /// The virtual address, physical address or length was not page aligned.
     Misaligned,
-    /// The virtual address is not a canonical 48-bit address.
+    /// The virtual address is not one the encoding's walk can translate: not
+    /// canonical on a 48-bit geometry, above 4 GiB on a 32-bit one.
     NotCanonical,
     /// No frame was available for an intermediate table.
     OutOfMemory,
@@ -438,7 +476,7 @@ impl<E: Encoding> Mapper<E> {
         if !len.is_multiple_of(PAGE_SIZE) {
             return Err(MapError::Misaligned);
         }
-        if !virt.is_canonical() {
+        if !E::is_canonical(virt) {
             return Err(MapError::NotCanonical);
         }
 
@@ -483,7 +521,7 @@ impl<E: Encoding> Mapper<E> {
         flags: MapFlags,
     ) -> Result<(), MapError> {
         let mut table = self.root;
-        let mut level = Level::ROOT;
+        let mut level = E::ROOT_LEVEL;
 
         while level < target {
             let slot = descriptor_address(table, level.index(virt));
@@ -514,7 +552,7 @@ impl<E: Encoding> Mapper<E> {
     /// Resolve `virt` the way the hardware would, or `None` if it is unmapped.
     pub fn translate(&self, memory: &impl PhysMem, virt: VirtAddr) -> Option<PhysAddr> {
         let mut table = self.root;
-        let mut level = Level::ROOT;
+        let mut level = E::ROOT_LEVEL;
 
         loop {
             let entry = memory.read(descriptor_address(table, level.index(virt)));
@@ -670,7 +708,7 @@ impl<E: Encoding> Mapper<E> {
             visit: &mut visit,
             leaves: 0,
         };
-        let stopped = !state.descend::<E>(self.root, Level::ROOT, 0);
+        let stopped = !state.descend::<E>(self.root, E::ROOT_LEVEL, 0);
         WalkOutcome {
             leaves: state.leaves,
             stopped,
@@ -690,7 +728,7 @@ impl<E: Encoding> Mapper<E> {
         mut path: Option<&mut Path>,
     ) -> Result<Option<(PhysAddr, u64, Level)>, MapError> {
         let mut table = self.root;
-        let mut level = Level::ROOT;
+        let mut level = E::ROOT_LEVEL;
 
         loop {
             let index = level.index(virt);
@@ -717,7 +755,7 @@ impl<E: Encoding> Mapper<E> {
     /// The level at which `virt` is mapped, for tests and diagnostics.
     pub fn mapping_level(&self, memory: &impl PhysMem, virt: VirtAddr) -> Option<Level> {
         let mut table = self.root;
-        let mut level = Level::ROOT;
+        let mut level = E::ROOT_LEVEL;
 
         loop {
             let entry = memory.read(descriptor_address(table, level.index(virt)));
@@ -767,10 +805,10 @@ struct Step {
 
 /// The intermediate tables a walk descended through, root first.
 ///
-/// A fixed array rather than a `Vec`: this crate allocates nothing, and a
-/// 48-bit address space has exactly four levels, so the bound is
-/// architectural rather than a guess. The root is not a step — nothing points
-/// at it — which is why there are at most three.
+/// A fixed array rather than a `Vec`: this crate allocates nothing, and no
+/// geometry here has more than four levels, so the bound is architectural
+/// rather than a guess. The root is not a step — nothing points at it — which
+/// is why there are at most three, and why a three-level walk uses two.
 #[derive(Clone, Copy, Default, Debug)]
 struct Path {
     steps: [Step; 3],
@@ -779,8 +817,8 @@ struct Path {
 
 impl Path {
     /// Record one level of descent. Silently ignores anything past the fourth
-    /// level, which cannot happen with [`VIRT_BITS`] at 48 and would mean a
-    /// walk that had lost its way if it did.
+    /// level, which no geometry here can produce and would mean a walk that
+    /// had lost its way if it did.
     fn push(&mut self, step: Step) {
         if let Some(slot) = self.steps.get_mut(self.depth) {
             *slot = step;
@@ -865,12 +903,12 @@ impl<M: PhysMem + ?Sized, F: FnMut(Leaf) -> bool> Walk<'_, M, F> {
                 continue;
             }
 
-            // Sign-extend at the top of the address space. The walk builds an
-            // address from table indices, which yields the 48-bit form; a
-            // kernel mapping reported as `0x0000_FF00_...` rather than
-            // `0xFFFF_FF00_...` would be a correct walk of the wrong-looking
-            // address, and every caller compares it against a constant.
-            let virt = VirtAddr(canonical(base | ((index as u64) << level.shift())));
+            // The walk builds an address from table indices, which yields the
+            // unextended form; a kernel mapping reported as `0x0000_FF00_...`
+            // rather than `0xFFFF_FF00_...` would be a correct walk of the
+            // wrong-looking address, and every caller compares it against a
+            // constant. The encoding knows which form its constants are in.
+            let virt = VirtAddr(E::canonical(base | ((index as u64) << level.shift())));
 
             if E::is_leaf(entry, level) {
                 self.leaves += 1;
@@ -894,16 +932,6 @@ impl<M: PhysMem + ?Sized, F: FnMut(Leaf) -> bool> Walk<'_, M, F> {
             }
         }
         true
-    }
-}
-
-/// Sign-extend a 48-bit virtual address into its canonical 64-bit form.
-const fn canonical(address: u64) -> u64 {
-    let sign = 1u64 << (VIRT_BITS - 1);
-    if address & sign == 0 {
-        address
-    } else {
-        address | !((1u64 << VIRT_BITS) - 1)
     }
 }
 

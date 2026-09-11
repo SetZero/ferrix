@@ -6,12 +6,27 @@
 //! — because the failure mode of a silent layout mismatch is a triple fault
 //! with nothing on the serial port to say why.
 //!
+//! # One layout per word width
+//!
+//! Where things live in the virtual address space is a [`Layout`], and there
+//! are two: [`LAYOUT_64`], which x86-64 and AArch64 share constant for
+//! constant, and [`LAYOUT_32`] for ARMv7-A, which cannot hold a single one of
+//! them. The crate root re-exports the one matching the target's pointer width
+//! under the names the rest of the tree uses, so generic code says
+//! [`PHYSMAP_BASE`] and never a width. Both layouts are checked at compile time
+//! on every build, and the host tests read both — which is how the 32-bit one
+//! is tested by a machine that is not 32-bit.
+//!
+//! [`BootInfo`] itself has *one* layout on every width. Its addresses are
+//! `u64` even where a pointer would be four bytes, so the structure the host
+//! tests build is the structure a 32-bit kernel reads.
+//!
 //! # Reading it safely
 //!
-//! [`BootInfo`] is a raw structure full of pointers the kernel did not create.
-//! Rather than sprinkle `unsafe` over every reader, the kernel validates it
-//! once through [`BootInfo::validate`] and works with the resulting
-//! [`BootView`], whose accessors are safe.
+//! [`BootInfo`] is a raw structure full of addresses the kernel did not
+//! create. Rather than sprinkle `unsafe` over every reader, the kernel
+//! validates it once through [`BootInfo::validate`] and works with the
+//! resulting [`BootView`], whose accessors are safe.
 //!
 //! ```
 //! # use ferrix_bootinfo::{BootInfo, BootInfoError};
@@ -35,79 +50,233 @@ use core::fmt;
 pub const BOOTINFO_MAGIC: u64 = 0x4645_5252_4958_4249;
 
 /// Layout version of [`BootInfo`], bumped on any change to this file.
-pub const BOOTINFO_VERSION: u32 = 1;
+///
+/// Version 2 added the physical origin of the direct map and the length of the
+/// device tree, and turned the two pointers into addresses so the structure
+/// has the same layout on every word width.
+pub const BOOTINFO_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Virtual memory layout
 // ---------------------------------------------------------------------------
 
+/// Where everything lives in the virtual address space, for one word width.
+///
+/// A user half at the bottom, and three kernel regions above it: the direct map
+/// of physical RAM, the dynamic mapping area, and the kernel image. The 64-bit
+/// layout puts them in that order; the 32-bit one puts the vmap area first,
+/// because 4 GiB is small enough that which region gets the address space left
+/// over from the others is a decision rather than a detail — and it is the
+/// direct map, which is what decides how much RAM a 32-bit kernel can use.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Layout {
+    /// Width of a virtual address.
+    pub address_bits: u32,
+    /// Highest user virtual address, exclusive.
+    pub user_end: u64,
+    /// Lowest address belonging to the kernel.
+    pub kernel_half: u64,
+    /// Base of the direct map of physical RAM.
+    pub physmap_base: u64,
+    /// End of the direct map, exclusive.
+    pub physmap_end: u64,
+    /// Base of the dynamic mapping area: `MMIO` windows, guard-paged kernel
+    /// stacks, anything whose virtual address is chosen at runtime.
+    pub vmap_base: u64,
+    /// Size of the dynamic mapping area, in bytes.
+    pub vmap_size: u64,
+    /// Bytes at the bottom of the dynamic mapping area kept out of the
+    /// allocator for the fixed windows early boot places there before there is
+    /// an allocator: the console, a framebuffer, stage 3's on-demand window.
+    pub vmap_reserved: u64,
+    /// Where the kernel image is linked. Everything from here to the top of
+    /// the address space is the image's.
+    pub kernel_base: u64,
+}
+
+impl Layout {
+    /// One past the last address of the dynamic mapping area.
+    #[must_use]
+    pub const fn vmap_end(&self) -> u64 {
+        self.vmap_base + self.vmap_size
+    }
+
+    /// Bytes of physical memory the direct map can cover.
+    #[must_use]
+    pub const fn physmap_size(&self) -> u64 {
+        self.physmap_end - self.physmap_base
+    }
+
+    /// The first rule this layout breaks, or `None` if it is consistent.
+    ///
+    /// A description rather than a boolean, so the test that runs this on both
+    /// layouts can say which rule failed.
+    #[must_use]
+    pub const fn violation(&self) -> Option<&'static str> {
+        let mask = PAGE_SIZE - 1;
+        if (self.user_end | self.kernel_half | self.physmap_base | self.physmap_end) & mask != 0
+            || (self.vmap_base | self.vmap_size | self.vmap_reserved | self.kernel_base) & mask != 0
+        {
+            return Some("every boundary must be page aligned");
+        }
+        if self.user_end > self.kernel_half {
+            return Some("the user half must end before the kernel half begins");
+        }
+        if self.physmap_base >= self.physmap_end {
+            return Some("the direct map must span a positive range");
+        }
+        if self.physmap_base < self.kernel_half || self.vmap_base < self.kernel_half {
+            return Some("the direct map and the vmap area are the kernel's");
+        }
+        if self.vmap_reserved >= self.vmap_size {
+            return Some("the vmap area must have room beyond its reserved windows");
+        }
+        if !(self.physmap_end <= self.vmap_base || self.vmap_end() <= self.physmap_base) {
+            return Some("the direct map must not overlap the vmap area");
+        }
+        if self.physmap_end > self.kernel_base || self.vmap_end() > self.kernel_base {
+            return Some("the kernel image must be above everything else");
+        }
+        if self.address_bits < 64 && self.kernel_base >= 1 << self.address_bits {
+            return Some("the kernel image must be inside the address space");
+        }
+        None
+    }
+}
+
+/// The layout x86-64 and AArch64 share.
+///
+/// The image is in the top -2 GiB, which is what the x86-64 "kernel" code
+/// model addresses. AArch64 does not require that and uses it anyway, because
+/// one layout across both is one set of bugs instead of two.
+pub const LAYOUT_64: Layout = Layout {
+    address_bits: 64,
+    user_end: 0x0000_8000_0000_0000,
+    kernel_half: 0xFFFF_8000_0000_0000,
+    physmap_base: 0xFFFF_8000_0000_0000,
+    physmap_end: 0xFFFF_FF00_0000_0000,
+    vmap_base: 0xFFFF_FF00_0000_0000,
+    vmap_size: 0x0000_00EF_0000_0000,
+    vmap_reserved: 0x1_0000_0000,
+    kernel_base: 0xFFFF_FFFF_8000_0000,
+};
+
+/// The layout of ARMv7-A: a 2/2 split of 4 GiB.
+///
+/// Two gibibytes of user space, because a 32-bit process wants the larger
+/// half; then 512 MiB of vmap, 1.25 GiB of direct map — the ceiling on RAM
+/// this kernel can use, and more than the boards it targets carry — and
+/// 256 MiB for the image at the top.
+pub const LAYOUT_32: Layout = Layout {
+    address_bits: 32,
+    user_end: 0x8000_0000,
+    kernel_half: 0x8000_0000,
+    vmap_base: 0x8000_0000,
+    vmap_size: 0x2000_0000,
+    vmap_reserved: 0x0400_0000,
+    physmap_base: 0xA000_0000,
+    physmap_end: 0xF000_0000,
+    kernel_base: 0xF000_0000,
+};
+
+// Compile-time rather than tests on purpose: an overlap between the direct map
+// and the vmap area is not something to discover from a failing test run, and
+// a `const` assertion fails in the build that introduced it. Both layouts are
+// checked on every build, whichever one the build uses.
+const _: () = assert!(
+    LAYOUT_64.violation().is_none(),
+    "LAYOUT_64 is inconsistent; the layout tests name the rule"
+);
+const _: () = assert!(
+    LAYOUT_32.violation().is_none(),
+    "LAYOUT_32 is inconsistent; the layout tests name the rule"
+);
+
+/// The layout this build uses.
+#[cfg(target_pointer_width = "64")]
+pub const LAYOUT: Layout = LAYOUT_64;
+/// The layout this build uses.
+#[cfg(target_pointer_width = "32")]
+pub const LAYOUT: Layout = LAYOUT_32;
+
 /// Base of the direct map of all physical RAM.
 ///
-/// Physical address `p` is readable at `PHYSMAP_BASE + p` once the loader's
-/// page tables are live, and stays that way for the life of the kernel.
-pub const PHYSMAP_BASE: u64 = 0xFFFF_8000_0000_0000;
+/// Physical address `p` is readable at `PHYSMAP_BASE + (p - physmap_phys)`
+/// once the loader's page tables are live, and stays that way for the life of
+/// the kernel. See [`BootInfo::physmap_phys`].
+pub const PHYSMAP_BASE: u64 = LAYOUT.physmap_base;
 
 /// End of the direct map, exclusive.
-pub const PHYSMAP_END: u64 = 0xFFFF_FF00_0000_0000;
+pub const PHYSMAP_END: u64 = LAYOUT.physmap_end;
 
 /// Base of the kernel's dynamic virtual allocation area.
-///
-/// Used for `MMIO` windows, guard-paged kernel stacks and large kernel
-/// mappings — anything whose virtual address is chosen at runtime.
-pub const KERNEL_VMAP_BASE: u64 = 0xFFFF_FF00_0000_0000;
+pub const KERNEL_VMAP_BASE: u64 = LAYOUT.vmap_base;
 
 /// Size of the kernel's dynamic virtual allocation area, in bytes.
-pub const KERNEL_VMAP_SIZE: u64 = 0x0000_00EF_0000_0000;
+pub const KERNEL_VMAP_SIZE: u64 = LAYOUT.vmap_size;
 
-/// Where the kernel image is linked.
-///
-/// The top -2 GiB, which is what the x86-64 "kernel" code model addresses.
-/// AArch64 does not require it and uses it anyway, because one layout across
-/// both architectures is one set of bugs instead of two.
-pub const KERNEL_VIRT_BASE: u64 = 0xFFFF_FFFF_8000_0000;
+/// Bytes at the bottom of the vmap area reserved for early boot's fixed
+/// windows. See [`Layout::vmap_reserved`].
+pub const KERNEL_VMAP_RESERVED: u64 = LAYOUT.vmap_reserved;
 
-/// Highest user virtual address, exclusive: a 47-bit user half on both
-/// architectures.
-pub const USER_VIRT_END: u64 = 0x0000_8000_0000_0000;
+/// Where the kernel image is linked. The linker script is told the same
+/// number by `.cargo/config.toml`, and the loader refuses a kernel linked
+/// anywhere else.
+pub const KERNEL_VIRT_BASE: u64 = LAYOUT.kernel_base;
 
-/// The page size both architectures are configured for.
+/// The lowest kernel address.
+pub const KERNEL_HALF_BASE: u64 = LAYOUT.kernel_half;
+
+/// Highest user virtual address, exclusive.
+pub const USER_VIRT_END: u64 = LAYOUT.user_end;
+
+/// The page size every architecture is configured for.
 pub const PAGE_SIZE: u64 = 4096;
 
-// The layout above has to be laid out. These are compile-time assertions
-// rather than tests on purpose: an overlap between the direct map and the
-// vmap area is not something to discover from a failing test run, and a
-// `const` assertion fails in the build that introduced it.
-const _: () = assert!(
-    PHYSMAP_BASE < PHYSMAP_END,
-    "the direct map must span a positive range"
-);
-const _: () = assert!(
-    PHYSMAP_END <= KERNEL_VMAP_BASE,
-    "the direct map must not overlap the vmap area"
-);
-const _: () = assert!(
-    KERNEL_VMAP_BASE + KERNEL_VMAP_SIZE <= KERNEL_VIRT_BASE,
-    "the vmap area must not overlap the kernel image"
-);
-const _: () = assert!(
-    USER_VIRT_END < PHYSMAP_BASE,
-    "the user half must end before the kernel half begins"
-);
+/// The alignment of the direct map's physical origin.
+///
+/// Two mebibytes, so the loader can map it with blocks rather than pages on
+/// every architecture: a direct map whose first byte is halfway through a
+/// block is 512 page descriptors where there should have been one.
+pub const PHYSMAP_ALIGN: u64 = 2 * 1024 * 1024;
 
 /// The stack the loader hands the kernel, in bytes. Replaced by a guard-paged
 /// per-CPU stack as soon as the kernel can allocate one.
 pub const BOOT_STACK_SIZE: u64 = 64 * 1024;
 
-/// True if `addr` is in the half of the address space reserved for the kernel.
+/// True if `addr` is in the part of the address space reserved for the kernel.
 #[must_use]
 pub const fn is_kernel_address(addr: u64) -> bool {
-    addr >= PHYSMAP_BASE
+    addr >= KERNEL_HALF_BASE
 }
 
 /// True if `addr` is a valid user virtual address.
 #[must_use]
 pub const fn is_user_address(addr: u64) -> bool {
     addr < USER_VIRT_END
+}
+
+/// The physical origin a direct map should have, given the lowest physical
+/// address of RAM: that address, rounded down to [`PHYSMAP_ALIGN`].
+///
+/// Zero on x86-64, where RAM starts at zero. A gibibyte on QEMU's Arm `virt`
+/// machines, whose first gibibyte is flash and device registers — which a
+/// direct map from zero would have covered, as cacheable memory, at the cost
+/// of a quarter of a 32-bit kernel's half.
+#[must_use]
+pub const fn physmap_origin(lowest_ram: u64) -> u64 {
+    lowest_ram & !(PHYSMAP_ALIGN - 1)
+}
+
+/// The direct-map address of `phys`, for a direct map whose physical origin
+/// is `physmap_phys`.
+///
+/// `phys` must not be below the origin; nothing below it is mapped, and the
+/// subtraction says so by overflowing rather than by wrapping into an address
+/// that happens to be mapped.
+#[must_use]
+pub const fn direct_map_address(physmap_phys: u64, phys: u64) -> u64 {
+    PHYSMAP_BASE + (phys - physmap_phys)
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +291,8 @@ pub enum Arch {
     X86_64 = 0,
     /// 64-bit Arm.
     AArch64 = 1,
+    /// 32-bit Arm, ARMv7-A with the Large Physical Address Extension.
+    Armv7a = 2,
 }
 
 impl Arch {
@@ -131,6 +302,7 @@ impl Arch {
         match self {
             Arch::X86_64 => 62,
             Arch::AArch64 => 183,
+            Arch::Armv7a => 40,
         }
     }
 
@@ -140,6 +312,7 @@ impl Arch {
         match self {
             Arch::X86_64 => "x86_64",
             Arch::AArch64 => "aarch64",
+            Arch::Armv7a => "armv7a",
         }
     }
 }
@@ -174,6 +347,9 @@ pub enum MemKind {
     BootStack = 8,
     /// The boot info structure and the memory map array inside it.
     BootInfo = 12,
+    /// The loader's copy of the flattened device tree, kept for the life of
+    /// the system: stage 10 enumerates devices from it long after boot.
+    DeviceTree = 13,
     /// A linear framebuffer.
     Framebuffer = 9,
     /// A device `MMIO` aperture.
@@ -299,9 +475,12 @@ impl Framebuffer {
 
 /// Everything the kernel learns from firmware, assembled by the loader.
 ///
-/// Pointer fields are *virtual* addresses valid in the page tables the loader
-/// installed before jumping to the kernel — that is, inside the direct map at
-/// [`PHYSMAP_BASE`]. Address fields named `_phys` are physical.
+/// Fields named for an address without a `_phys` suffix — `regions`,
+/// `cmdline`, the boot stack — are *virtual* addresses valid in the page
+/// tables the loader installed before jumping to the kernel, which is to say
+/// inside the direct map at [`PHYSMAP_BASE`]. Fields named `_phys` are
+/// physical. None of them is a pointer type, so the structure is the same
+/// 208 bytes on every word width.
 ///
 /// Read it through [`BootInfo::validate`] rather than field by field.
 #[repr(C)]
@@ -314,16 +493,21 @@ pub struct BootInfo {
     /// The architecture the loader ran on.
     pub arch: Arch,
 
-    /// Pointer to `regions_len` [`MemRegion`]s, sorted by base and
+    /// Virtual address of `regions_len` [`MemRegion`]s, sorted by base and
     /// non-overlapping.
-    pub regions: *const MemRegion,
-    /// Number of entries `regions` points at.
+    pub regions: u64,
+    /// Number of entries `regions` holds.
     pub regions_len: u64,
 
     /// Base of the direct physical map. Mirrors [`PHYSMAP_BASE`], carried
     /// explicitly so the kernel never has to assume.
     pub physmap_base: u64,
-    /// Bytes of physical address space the direct map covers.
+    /// The physical address that appears at `physmap_base`: the lowest RAM
+    /// address, rounded down to [`PHYSMAP_ALIGN`]. Nothing below it is in the
+    /// direct map.
+    pub physmap_phys: u64,
+    /// Bytes of physical address space the direct map covers, from
+    /// `physmap_phys` up.
     pub physmap_len: u64,
 
     /// Physical address the kernel image was loaded at.
@@ -333,11 +517,12 @@ pub struct BootInfo {
     /// Size of the kernel image in bytes, page rounded.
     pub kernel_len: u64,
 
-    /// Physical address of the root page table: the x86-64 PML4, or the
-    /// AArch64 `TTBR1_EL1` table.
+    /// Physical address of the root page table for the kernel half: the
+    /// x86-64 PML4, the AArch64 `TTBR1_EL1` table, or the ARMv7-A level-1
+    /// table whose last two entries `TTBR1` translates through.
     pub root_table_phys: u64,
-    /// AArch64 only: physical address of the identity-mapping `TTBR0_EL1`
-    /// table. Zero on x86-64, where one table covers both halves.
+    /// Physical address of the identity-mapping `TTBR0` table on the two Arm
+    /// architectures. Zero on x86-64, where one table covers both halves.
     pub ttbr0_phys: u64,
 
     /// Top of the stack the kernel is entered on, 16-byte aligned.
@@ -355,25 +540,38 @@ pub struct BootInfo {
 
     /// Physical address of the ACPI RSDP, or 0 if firmware offered none.
     pub rsdp: u64,
-    /// Physical address of the flattened device tree, or 0.
+    /// Physical address of the loader's copy of the flattened device tree, or
+    /// 0. A copy, in memory the map reports as [`MemKind::DeviceTree`], because
+    /// firmware's own tends to live somewhere the kernel would reclaim.
     pub dtb: u64,
+    /// Length of that copy in bytes.
+    pub dtb_len: u64,
     /// Physical address of the UEFI system table. Boot services are gone by
     /// the time the kernel sees this; runtime services are still callable.
     pub uefi_system_table: u64,
 
-    /// Pointer to `cmdline_len` bytes of UTF-8 kernel command line.
-    pub cmdline: *const u8,
+    /// Virtual address of `cmdline_len` bytes of UTF-8 kernel command line,
+    /// or 0.
+    pub cmdline: u64,
     /// Length of the command line in bytes.
     pub cmdline_len: u64,
 }
 
-// SAFETY: the loader writes this structure once, before the kernel exists, and
-// never touches it again; the kernel only reads it. There is no aliasing
-// writer, so the raw pointers may cross the hand-off.
-unsafe impl Send for BootInfo {}
-// SAFETY: as above — immutable for the whole life of the system once the
-// kernel is entered, so shared access from several CPUs is sound.
-unsafe impl Sync for BootInfo {}
+// The claim the module documentation makes, asserted where it can fail: a
+// field whose size follows the pointer width would break it, and the loader
+// and the host tests would then disagree about a layout neither of them sees.
+const _: () = assert!(
+    size_of::<BootInfo>() == 208,
+    "BootInfo must be laid out identically on every word width"
+);
+const _: () = assert!(
+    align_of::<BootInfo>() == 8,
+    "BootInfo must be eight-byte aligned on every ABI"
+);
+const _: () = assert!(
+    size_of::<MemRegion>() == 24,
+    "MemRegion must be laid out identically on every word width"
+);
 
 /// Why a [`BootInfo`] was rejected.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -383,10 +581,16 @@ pub enum BootInfoError {
     /// The loader and the kernel were built from different versions of this
     /// file. Carries the version the loader wrote.
     VersionMismatch(u32),
-    /// The memory map pointer was null, or its length zero.
+    /// The memory map address was zero, or its length zero.
     NoMemoryMap,
     /// The direct map does not start where the kernel was built to expect.
     PhysmapMismatch,
+    /// The direct map's physical origin is not a multiple of
+    /// [`PHYSMAP_ALIGN`].
+    PhysmapMisaligned,
+    /// The direct map claims to cover more than its region of the address
+    /// space can hold.
+    PhysmapTooLarge,
     /// The command line was not valid UTF-8.
     CmdlineNotUtf8,
 }
@@ -405,6 +609,12 @@ impl fmt::Display for BootInfoError {
             BootInfoError::PhysmapMismatch => {
                 f.write_str("direct map is not where the kernel expects")
             }
+            BootInfoError::PhysmapMisaligned => {
+                f.write_str("direct map's physical origin is not 2 MiB aligned")
+            }
+            BootInfoError::PhysmapTooLarge => {
+                f.write_str("direct map is larger than its region of the address space")
+            }
             BootInfoError::CmdlineNotUtf8 => f.write_str("kernel command line is not UTF-8"),
         }
     }
@@ -413,13 +623,13 @@ impl fmt::Display for BootInfoError {
 impl BootInfo {
     /// Check the hand-off and produce a view whose accessors are safe.
     ///
-    /// This is the only place the raw pointers are dereferenced, so it is the
-    /// only place that has to be reasoned about.
+    /// This is the only place the addresses in it are dereferenced, so it is
+    /// the only place that has to be reasoned about.
     ///
     /// # Safety
     ///
-    /// `self.regions` must point to `self.regions_len` initialised
-    /// [`MemRegion`]s, and `self.cmdline` to `self.cmdline_len` initialised
+    /// `self.regions` must be the address of `self.regions_len` initialised
+    /// [`MemRegion`]s, and `self.cmdline` of `self.cmdline_len` initialised
     /// bytes, both mapped and immutable for as long as the returned
     /// [`BootView`] lives. The loader guarantees this by construction; nothing
     /// else should call it.
@@ -430,24 +640,32 @@ impl BootInfo {
         if self.version != BOOTINFO_VERSION {
             return Err(BootInfoError::VersionMismatch(self.version));
         }
-        if self.regions.is_null() || self.regions_len == 0 {
+        if self.regions == 0 || self.regions_len == 0 {
             return Err(BootInfoError::NoMemoryMap);
         }
         if self.physmap_base != PHYSMAP_BASE {
             return Err(BootInfoError::PhysmapMismatch);
         }
+        if !self.physmap_phys.is_multiple_of(PHYSMAP_ALIGN) {
+            return Err(BootInfoError::PhysmapMisaligned);
+        }
+        if self.physmap_len > PHYSMAP_END - PHYSMAP_BASE {
+            return Err(BootInfoError::PhysmapTooLarge);
+        }
 
-        // SAFETY: the caller's contract is exactly that this pointer and length
-        // describe an initialised, immutable slice.
-        let regions =
-            unsafe { core::slice::from_raw_parts(self.regions, self.regions_len as usize) };
+        // The addresses were exposed by whoever wrote them — the loader, or a
+        // test — and are taken back with the provenance that exposure left.
+        let regions = core::ptr::with_exposed_provenance::<MemRegion>(self.regions as usize);
+        // SAFETY: the caller's contract is exactly that this address and length
+        // describe an initialised, immutable array.
+        let regions = unsafe { core::slice::from_raw_parts(regions, self.regions_len as usize) };
 
-        let cmdline = if self.cmdline.is_null() || self.cmdline_len == 0 {
+        let cmdline = if self.cmdline == 0 || self.cmdline_len == 0 {
             ""
         } else {
+            let bytes = core::ptr::with_exposed_provenance::<u8>(self.cmdline as usize);
             // SAFETY: as above, for the command line bytes.
-            let bytes =
-                unsafe { core::slice::from_raw_parts(self.cmdline, self.cmdline_len as usize) };
+            let bytes = unsafe { core::slice::from_raw_parts(bytes, self.cmdline_len as usize) };
             core::str::from_utf8(bytes).map_err(|_| BootInfoError::CmdlineNotUtf8)?
         };
 
@@ -525,6 +743,16 @@ impl<'a> BootView<'a> {
             .unwrap_or(0)
     }
 
+    /// One past the highest physical address the direct map covers.
+    ///
+    /// Below [`BootView::max_ram_address`] only on a 32-bit machine with more
+    /// RAM than its direct map can hold, where the difference is memory the
+    /// kernel cannot reach and does not pretend to.
+    #[must_use]
+    pub const fn physmap_limit(&self) -> u64 {
+        self.info.physmap_phys + self.info.physmap_len
+    }
+
     /// The region containing `phys`, if the map describes one.
     #[must_use]
     pub fn region_of(&self, phys: u64) -> Option<&'a MemRegion> {
@@ -538,6 +766,16 @@ impl<'a> BootView<'a> {
             None
         } else {
             Some((self.info.initrd_phys, self.info.initrd_len))
+        }
+    }
+
+    /// The device tree as a physical address and length, if present.
+    #[must_use]
+    pub const fn device_tree(&self) -> Option<(u64, u64)> {
+        if self.info.dtb == 0 || self.info.dtb_len == 0 {
+            None
+        } else {
+            Some((self.info.dtb, self.info.dtb_len))
         }
     }
 
@@ -603,9 +841,10 @@ mod tests {
             magic: BOOTINFO_MAGIC,
             version: BOOTINFO_VERSION,
             arch: Arch::X86_64,
-            regions: map.as_ptr(),
+            regions: map.as_ptr().expose_provenance() as u64,
             regions_len: map.len() as u64,
             physmap_base: PHYSMAP_BASE,
+            physmap_phys: 0,
             physmap_len: 0x1_0000_0000,
             kernel_phys: 0x20_0000,
             kernel_virt: KERNEL_VIRT_BASE,
@@ -619,8 +858,9 @@ mod tests {
             initrd_len: 0,
             rsdp: 0,
             dtb: 0,
+            dtb_len: 0,
             uefi_system_table: 0,
-            cmdline: cmdline.as_ptr(),
+            cmdline: cmdline.as_ptr().expose_provenance() as u64,
             cmdline_len: cmdline.len() as u64,
         }
     }
@@ -630,7 +870,7 @@ mod tests {
         let map = regions();
         let info = boot_info(&map, "console=ttyS0 quiet");
         // SAFETY: `map` and the command line outlive the view, and the
-        // structure was built by `boot_info` above, so its pointers
+        // structure was built by `boot_info` above, so its addresses
         // describe exactly what it says they do.
         let view = unsafe { info.validate() }.unwrap();
 
@@ -641,6 +881,7 @@ mod tests {
         );
         assert_eq!(view.arch(), Arch::X86_64);
         assert_eq!(view.cmdline(), "console=ttyS0 quiet");
+        assert_eq!(view.device_tree(), None);
     }
 
     #[test]
@@ -650,7 +891,7 @@ mod tests {
         info.version = BOOTINFO_VERSION + 1;
         assert_eq!(
             // SAFETY: `map` and the command line outlive the view, and the
-            // structure was built by `boot_info` above, so its pointers
+            // structure was built by `boot_info` above, so its addresses
             // describe exactly what it says they do.
             unsafe { info.validate() }.unwrap_err(),
             BootInfoError::VersionMismatch(BOOTINFO_VERSION + 1),
@@ -663,14 +904,45 @@ mod tests {
         let map = regions();
         let mut info = boot_info(&map, "");
         info.magic = 0;
-        info.regions = core::ptr::null();
+        info.regions = 0;
         assert_eq!(
             // SAFETY: `map` and the command line outlive the view, and the
-            // structure was built by `boot_info` above, so its pointers
+            // structure was built by `boot_info` above, so its addresses
             // describe exactly what it says they do.
             unsafe { info.validate() }.unwrap_err(),
             BootInfoError::BadMagic,
-            "magic is checked first so a wild pointer is never followed"
+            "magic is checked first so a wild address is never followed"
+        );
+    }
+
+    #[test]
+    fn rejects_a_direct_map_the_kernel_cannot_use() {
+        let map = regions();
+
+        let mut info = boot_info(&map, "");
+        info.physmap_phys = 0x4000_1000;
+        assert_eq!(
+            // SAFETY: as in the tests above.
+            unsafe { info.validate() }.unwrap_err(),
+            BootInfoError::PhysmapMisaligned,
+            "an origin inside a block would make the direct map pages, not blocks"
+        );
+
+        let mut info = boot_info(&map, "");
+        info.physmap_len = PHYSMAP_END - PHYSMAP_BASE + PHYSMAP_ALIGN;
+        assert_eq!(
+            // SAFETY: as in the tests above.
+            unsafe { info.validate() }.unwrap_err(),
+            BootInfoError::PhysmapTooLarge,
+            "a direct map larger than its region would run into the next one"
+        );
+
+        let mut info = boot_info(&map, "");
+        info.physmap_base = KERNEL_VMAP_BASE;
+        assert_eq!(
+            // SAFETY: as in the tests above.
+            unsafe { info.validate() }.unwrap_err(),
+            BootInfoError::PhysmapMismatch
         );
     }
 
@@ -679,7 +951,7 @@ mod tests {
         let map = regions();
         let info = boot_info(&map, "");
         // SAFETY: `map` and the command line outlive the view, and the
-        // structure was built by `boot_info` above, so its pointers
+        // structure was built by `boot_info` above, so its addresses
         // describe exactly what it says they do.
         let view = unsafe { info.validate() }.unwrap();
 
@@ -693,6 +965,10 @@ mod tests {
             !MemKind::Reserved.is_ram(),
             "a reserved aperture at 1 TiB must not size the direct map"
         );
+        assert!(
+            MemKind::DeviceTree.is_ram() && !MemKind::DeviceTree.is_reclaimable(),
+            "the device tree copy is RAM the kernel keeps"
+        );
     }
 
     #[test]
@@ -700,7 +976,7 @@ mod tests {
         let map = regions();
         let info = boot_info(&map, "");
         // SAFETY: `map` and the command line outlive the view, and the
-        // structure was built by `boot_info` above, so its pointers
+        // structure was built by `boot_info` above, so its addresses
         // describe exactly what it says they do.
         let view = unsafe { info.validate() }.unwrap();
 
@@ -723,7 +999,7 @@ mod tests {
         let map = regions();
         let info = boot_info(&map, "console=ttyS0 root=/dev/vda1 quiet sched=rt");
         // SAFETY: `map` and the command line outlive the view, and the
-        // structure was built by `boot_info` above, so its pointers
+        // structure was built by `boot_info` above, so its addresses
         // describe exactly what it says they do.
         let view = unsafe { info.validate() }.unwrap();
 
@@ -744,11 +1020,71 @@ mod tests {
         assert!(is_user_address(0));
         assert!(is_user_address(USER_VIRT_END - 1));
         assert!(!is_user_address(USER_VIRT_END));
+        assert!(is_kernel_address(KERNEL_HALF_BASE));
         assert!(is_kernel_address(PHYSMAP_BASE));
+        assert!(is_kernel_address(KERNEL_VMAP_BASE));
         assert!(is_kernel_address(KERNEL_VIRT_BASE));
-        assert!(!is_kernel_address(USER_VIRT_END));
+        assert!(!is_kernel_address(USER_VIRT_END - 1));
         // The layout constants themselves are checked at compile time, next
         // to where they are defined.
+    }
+
+    #[test]
+    fn both_layouts_are_consistent() {
+        assert_eq!(LAYOUT_64.violation(), None, "LAYOUT_64");
+        assert_eq!(LAYOUT_32.violation(), None, "LAYOUT_32");
+    }
+
+    #[test]
+    fn the_32_bit_layout_fits_four_gibibytes() {
+        let layout = LAYOUT_32;
+        assert_eq!(layout.user_end, 0x8000_0000, "a 2/2 split");
+        assert_eq!(
+            layout.kernel_half, layout.vmap_base,
+            "the vmap area is the bottom of the kernel half"
+        );
+        assert_eq!(
+            layout.physmap_size(),
+            0x5000_0000,
+            "1.25 GiB of direct map is the RAM a 32-bit kernel can reach"
+        );
+        assert!(layout.kernel_base < 1 << 32);
+        // `TTBR1` translates the top 2 GiB with `TTBCR.T1SZ = 1`, so the whole
+        // kernel half has to start exactly there.
+        assert_eq!(layout.kernel_half, 1 << 31);
+    }
+
+    #[test]
+    fn a_layout_that_overlaps_is_named_as_such() {
+        let overlapping = Layout {
+            physmap_end: LAYOUT_32.kernel_base + PAGE_SIZE,
+            ..LAYOUT_32
+        };
+        assert_eq!(
+            overlapping.violation(),
+            Some("the kernel image must be above everything else")
+        );
+
+        let inverted = Layout {
+            vmap_base: LAYOUT_32.physmap_base,
+            ..LAYOUT_32
+        };
+        assert_eq!(
+            inverted.violation(),
+            Some("the direct map must not overlap the vmap area")
+        );
+    }
+
+    #[test]
+    fn the_direct_map_starts_at_the_lowest_ram_rounded_down() {
+        assert_eq!(physmap_origin(0), 0, "RAM at zero, as on x86-64");
+        assert_eq!(physmap_origin(0x4000_0000), 0x4000_0000);
+        assert_eq!(physmap_origin(0x4012_3000), 0x4000_0000);
+        assert_eq!(
+            direct_map_address(0x4000_0000, 0x4000_2000),
+            PHYSMAP_BASE + 0x2000
+        );
+        assert_eq!(direct_map_address(0, 0x2000), PHYSMAP_BASE + 0x2000);
     }
 
     #[test]
@@ -765,5 +1101,13 @@ mod tests {
         assert!(region.contains(0x3FFF));
         assert!(!region.contains(0x4000), "end is exclusive");
         assert!(!region.contains(0xFFF));
+    }
+
+    #[test]
+    fn every_architecture_names_its_elf_machine() {
+        assert_eq!(Arch::X86_64.elf_machine(), 62);
+        assert_eq!(Arch::AArch64.elf_machine(), 183);
+        assert_eq!(Arch::Armv7a.elf_machine(), 40);
+        assert_eq!(Arch::Armv7a.name(), "armv7a");
     }
 }

@@ -216,9 +216,12 @@ fn write_boot_info(
         version: BOOTINFO_VERSION,
         arch: arch::ARCH,
         // Filled in by `finish_boot_info` once the final map has been taken.
-        regions: ptr::null(),
+        regions: 0,
         regions_len: 0,
         physmap_base: PHYSMAP_BASE,
+        // The direct map begins at physical zero, as it always has. Starting
+        // it at the lowest RAM address instead is what this field exists for.
+        physmap_phys: 0,
         physmap_len: ram,
         kernel_phys: kernel.memory.address,
         kernel_virt: kernel.virt_base,
@@ -239,8 +242,9 @@ fn write_boot_info(
             .or_else(|| services.configuration_table(&ACPI_10_GUID))
             .unwrap_or(0),
         dtb: services.configuration_table(&DEVICE_TREE_GUID).unwrap_or(0),
+        dtb_len: 0,
         uefi_system_table: services.system_table() as u64,
-        cmdline: ptr::null(),
+        cmdline: 0,
         cmdline_len: 0,
     };
 
@@ -304,7 +308,7 @@ fn finish_boot_info(info_area: Allocation, regions: u64) {
     let mut value = unsafe { ptr::read_volatile(info) };
     // The kernel reads this through the direct map, so the pointer it is given
     // has to be the virtual one.
-    value.regions = (PHYSMAP_BASE + info_area.address + REGIONS_OFFSET) as *const MemRegion;
+    value.regions = PHYSMAP_BASE + info_area.address + REGIONS_OFFSET;
     value.regions_len = regions;
     // SAFETY: as above.
     unsafe { ptr::write_volatile(info, value) };

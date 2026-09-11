@@ -1254,6 +1254,15 @@ fn poke_at_everything(blob: &[u8]) {
     let _ = fdt.find_node("/memory");
     let _ = fdt.find_compatible("arm,pl011");
     let _ = fdt.timer();
+    let _ = fdt.psci_conduit();
+    for which in [
+        TimerInterrupt::SecurePhysical,
+        TimerInterrupt::NonSecurePhysical,
+        TimerInterrupt::Virtual,
+        TimerInterrupt::Hypervisor,
+    ] {
+        let _ = fdt.timer_interrupt(which);
+    }
 
     for region in fdt.memory().take(64) {
         let _ = region;
@@ -1292,12 +1301,13 @@ fn parsing_never_panics_on_corrupted_blobs() {
     // byte by byte, corrupting each in turn, and require that every accessor
     // either answers or errors. Nothing about the answers is asserted; the
     // property under test is that ring 0 survives whatever firmware hands over.
-    let good = virt();
-    for index in 0..good.len().min(512) {
-        for patch_value in [0x00u8, 0x01, 0x7F, 0xFF] {
-            let mut blob = good.clone();
-            blob[index] = patch_value;
-            poke_at_everything(&blob);
+    for good in [virt(), virt_armv7()] {
+        for index in 0..good.len().min(512) {
+            for patch_value in [0x00u8, 0x01, 0x7F, 0xFF] {
+                let mut blob = good.clone();
+                blob[index] = patch_value;
+                poke_at_everything(&blob);
+            }
         }
     }
 }
@@ -1325,4 +1335,190 @@ fn parsing_never_panics_on_arbitrary_bytes() {
         patch(&mut blob, offset, 0);
         poke_at_everything(&blob);
     }
+}
+
+// ---------------------------------------------------------------------------
+// What a 32-bit Arm machine is described with
+// ---------------------------------------------------------------------------
+
+/// A tree shaped like QEMU's `virt` machine with a Cortex-A7, as QEMU 8.2
+/// generates it: the 32-bit timer binding, a GICv2, and PSCI over `hvc`.
+fn virt_armv7() -> Vec<u8> {
+    let mut builder = Builder::new();
+    builder.begin("");
+    builder.prop_u32("#address-cells", 2);
+    builder.prop_u32("#size-cells", 2);
+    builder.prop_str("compatible", "linux,dummy-virt");
+
+    builder.begin("psci");
+    builder.prop_strings("compatible", &["arm,psci-1.0", "arm,psci-0.2", "arm,psci"]);
+    builder.prop_str("method", "hvc");
+    builder.end();
+
+    builder.begin("intc@8000000");
+    builder.prop_strings("compatible", &["arm,cortex-a15-gic"]);
+    builder.prop_cells(
+        "reg",
+        &[0, 0x800_0000, 0, 0x1_0000, 0, 0x801_0000, 0, 0x1_0000],
+    );
+    builder.end();
+
+    builder.begin("timer");
+    builder.prop_strings("compatible", &["arm,armv7-timer"]);
+    builder.prop_cells(
+        "interrupts",
+        &[1, 13, 0x104, 1, 14, 0x104, 1, 11, 0x104, 1, 10, 0x104],
+    );
+    builder.end();
+
+    builder.end();
+    builder.build()
+}
+
+#[test]
+fn an_armv7_timer_is_found_by_its_own_binding() {
+    let blob = virt_armv7();
+    let fdt = parse(&blob);
+    let timer = fdt
+        .timer()
+        .expect("arm,armv7-timer is the architected timer on a 32-bit CPU");
+    assert_eq!(timer.name, "timer");
+}
+
+#[test]
+fn the_timer_interrupts_decode_to_gic_identifiers() {
+    for blob in [virt(), virt_armv7()] {
+        let fdt = parse(&blob);
+        assert_eq!(
+            fdt.timer_interrupt(TimerInterrupt::SecurePhysical),
+            Some(29)
+        );
+        assert_eq!(
+            fdt.timer_interrupt(TimerInterrupt::NonSecurePhysical),
+            Some(30)
+        );
+        assert_eq!(
+            fdt.timer_interrupt(TimerInterrupt::Virtual),
+            Some(27),
+            "the virtual timer is PPI 11, identifier 27"
+        );
+        assert_eq!(fdt.timer_interrupt(TimerInterrupt::Hypervisor), Some(26));
+    }
+}
+
+#[test]
+fn a_timer_specifier_cut_short_names_no_interrupt() {
+    let mut builder = Builder::new();
+    builder.begin("");
+    builder.begin("timer");
+    builder.prop_strings("compatible", &["arm,armv7-timer"]);
+    builder.prop_cells("interrupts", &[1, 13, 0x104, 1, 14]);
+    builder.end();
+    builder.end();
+    let blob = builder.build();
+    let fdt = parse(&blob);
+
+    assert_eq!(
+        fdt.timer_interrupt(TimerInterrupt::SecurePhysical),
+        Some(29)
+    );
+    assert_eq!(
+        fdt.timer_interrupt(TimerInterrupt::NonSecurePhysical),
+        None,
+        "a specifier missing its flags cell is not trusted"
+    );
+    assert_eq!(fdt.timer_interrupt(TimerInterrupt::Virtual), None);
+}
+
+#[test]
+fn gic_specifiers_follow_the_binding() {
+    assert_eq!(gic_interrupt_id(1, 11), Some(27));
+    assert_eq!(gic_interrupt_id(1, 15), Some(31));
+    assert_eq!(
+        gic_interrupt_id(1, 16),
+        None,
+        "there are sixteen private peripherals"
+    );
+    assert_eq!(gic_interrupt_id(0, 1), Some(33), "the PL011 on virt");
+    assert_eq!(gic_interrupt_id(0, 987), Some(1019));
+    assert_eq!(
+        gic_interrupt_id(0, 988),
+        None,
+        "identifiers from 1020 up are special, not interrupts"
+    );
+    assert_eq!(gic_interrupt_id(2, 0), None, "no third kind of peripheral");
+}
+
+#[test]
+fn every_gicv2_binding_is_recognised() {
+    for binding in GICV2_COMPATIBLES {
+        let mut builder = Builder::new();
+        builder.begin("");
+        builder.prop_u32("#address-cells", 1);
+        builder.prop_u32("#size-cells", 1);
+        builder.begin("interrupt-controller@a0021000");
+        builder.prop_strings("compatible", &[binding]);
+        builder.prop_cells("reg", &[0xA002_1000, 0x1000, 0xA002_2000, 0x2000]);
+        builder.end();
+        builder.end();
+        let blob = builder.build();
+        let fdt = parse(&blob);
+
+        let gic = fdt
+            .interrupt_controller()
+            .unwrap_or_else(|| panic!("{binding} is a GICv2"));
+        assert_eq!(gic.version, GicVersion::V2, "{binding}");
+        assert_eq!(
+            gic.cpu_interface(),
+            Some(Region {
+                address: 0xA002_2000,
+                size: 0x2000
+            }),
+            "{binding}: one address cell, as the STM32MP1 writes it"
+        );
+    }
+}
+
+/// The conduit a tree with one PSCI node of this shape reports.
+fn psci_conduit_of(compatible: &[&str], method: Option<&str>) -> Option<PsciConduit> {
+    let mut builder = Builder::new();
+    builder.begin("");
+    builder.begin("psci");
+    builder.prop_strings("compatible", compatible);
+    if let Some(method) = method {
+        builder.prop_str("method", method);
+    }
+    builder.end();
+    builder.end();
+    let blob = builder.build();
+    parse(&blob).psci_conduit()
+}
+
+#[test]
+fn the_psci_conduit_is_read_from_its_method() {
+    assert_eq!(
+        parse(&virt_armv7()).psci_conduit(),
+        Some(PsciConduit::Hvc),
+        "QEMU emulates PSCI as a hypervisor when the machine has no EL2 or EL3"
+    );
+    assert_eq!(
+        psci_conduit_of(&["arm,psci-0.2"], Some("smc")),
+        Some(PsciConduit::Smc)
+    );
+    assert_eq!(
+        psci_conduit_of(&["arm,psci"], Some("hvc")),
+        Some(PsciConduit::Hvc)
+    );
+    assert_eq!(
+        psci_conduit_of(&["arm,psci-1.0"], Some("mmio")),
+        None,
+        "an unknown conduit is not guessed at"
+    );
+    assert_eq!(psci_conduit_of(&["arm,psci-1.0"], None), None);
+    assert_eq!(psci_conduit_of(&["vendor,not-psci"], Some("smc")), None);
+    assert_eq!(
+        parse(&virt()).psci_conduit(),
+        None,
+        "the AArch64 fixture has no PSCI node"
+    );
 }
