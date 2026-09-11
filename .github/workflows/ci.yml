@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@v6
 
       # A CRLF in a shell script makes its `#!` line unparseable, and bash
-      # reports it as `$'': command not found` -- naming neither the file's
+      # reports it as `$'\r': command not found` -- naming neither the file's
       # real problem nor the line that has it.
       - name: Text files use LF
         run: python3 scripts/check-line-endings.py
