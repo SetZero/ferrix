@@ -13,25 +13,33 @@ survives a crash.
 $ cargo xtask test-boot --arch both
   x86_64: booting under QEMU (timeout 120s)
     | Ferrix 0.1.0 on x86_64
-    |   memory   507 MiB total, 501 MiB usable, 114 regions
-    |   kernel   0x1e026000 -> 0xffffffff80000000, 120 KiB
+    |   memory   507 MiB total, 501 MiB usable, 113 regions
+    |   kernel   0x1e00a000 -> 0xffffffff80000000, 152 KiB
     |   physmap  0xffff800000000000 covering 512 MiB
+    |   tables   root 0x1de0a000
     |   display  1280x800, stride 1280
     |   acpi     rsdp at 0x1fb7e014
     |   stage 1  loader hand-off verified
-    |   frames   499 MiB managed, 499 MiB free, 127910 entries at 0x1780000 (2048 KiB)
+    |   traps    vectors installed
+    |   frames   499 MiB managed, 499 MiB free, 127879 entries at 0x1780000 (2048 KiB)
     |   stage 2  frame allocator and heap verified
-    | FERRIX-BOOT-OK stages 1-2
+    |   stage 3  2 breakpoints and 4 page faults handled
+    | FERRIX-BOOT-OK stages 1-3
   x86_64: boot ok
   aarch64: boot ok
 ```
 
 ## What exists today
 
-Stages 1 and 2 of `docs/ROADMAP.md`. Both architectures boot from firmware to a
-Rust kernel which verifies the hand-off, brings up a buddy allocator over every
-usable frame, and starts a kernel heap — so `Box`, `Vec` and `BTreeMap` work.
-The scheduler, the syscall layer and everything above them are ahead.
+Stages 1 and 2 of `docs/ROADMAP.md`, and the trap half of stage 3. Both
+architectures boot from firmware to a Rust kernel which verifies the hand-off,
+brings up a buddy allocator over every usable frame, starts a kernel heap — so
+`Box`, `Vec` and `BTreeMap` work — installs its own trap vectors, and services a
+page fault by mapping the faulting address and letting the instruction retry.
+
+What stage 3 still owes is everything asynchronous: no interrupt controller is
+programmed on either architecture and no clock ticks yet. The scheduler, the
+syscall layer and everything above them are ahead.
 
 The kernel proves it on every boot rather than asserting it: the memory map is
 checked to be sorted and to describe the loader's own allocations, the direct
@@ -45,7 +53,7 @@ Both architectures boot via UEFI, so firmware calls a Rust `efi_main` with the
 CPU already in 64-bit mode. There is no bootstrap assembly on either machine,
 which is unusual and is a direct consequence of choosing UEFI over Multiboot.
 
-The assembly that does exist — 75 lines, **98.93% Rust** — is confined to
+The assembly that does exist — 96 lines, **99.58% Rust** — is confined to
 constructs the machine defines before a Rust function could run: installing a
 translation regime and jumping to an address that did not exist a moment
 earlier, and the CPU primitives with no Rust spelling. `docs/ASSEMBLY.md` is the
@@ -105,4 +113,4 @@ Three gates are this project's own:
 
 ## Licence
 
-MIT or Apache-2.0, at your option.
+MIT. See [LICENSE](LICENSE).

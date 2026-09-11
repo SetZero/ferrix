@@ -81,7 +81,7 @@ const _: () = assert!(
     "the trap frame and the save sequence in the assembly must agree"
 );
 const _: () = assert!(
-    FRAME_SIZE % 16 == 0,
+    FRAME_SIZE.is_multiple_of(16),
     "AArch64 requires a 16-byte aligned stack"
 );
 
