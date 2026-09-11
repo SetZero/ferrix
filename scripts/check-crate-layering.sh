@@ -97,11 +97,12 @@ forbid ferrix-paging   "page tables"  "ferrix-kernel|ferrix-boot"
 # ---------------------------------------------------------------------------
 # 3. Generic kernel code reaches architecture code through the facade.
 #
-# `kernel/src/arch/mod.rs` is the facade and is where the two names are
-# supposed to appear; everything else under kernel/src must go through it.
+# `kernel/src/arch/mod.rs` is the facade and is where the architecture names
+# are supposed to appear -- the three architectures', and the drivers the Arm
+# pair share; everything else under kernel/src must go through it.
 # ---------------------------------------------------------------------------
 if [[ -d kernel/src ]]; then
-    offenders=$(grep -rnE '(crate::)?arch::(x86_64|aarch64)::' kernel/src \
+    offenders=$(grep -rnE '(crate::)?arch::(x86_64|aarch64|armv7a|gicv2|pl011)::' kernel/src \
         --include='*.rs' \
         | grep -v '^kernel/src/arch/' || true)
     if [[ -n "$offenders" ]]; then

@@ -75,6 +75,21 @@
       "file": "kernel/src/arch/aarch64/trap.rs",
       "max_lines": 90,
       "reason": "The `VBAR_EL1` vector table and its save/restore path. The architecture defines a table of sixteen entries at fixed 128-byte offsets, and that layout *is* the interface -- a Rust array of function pointers is not what the CPU reads. Each entry is far too small for a register save, so it stashes two registers, records which entry it is, and branches to the common path. Also `brk`, for the boot test."
+    },
+    {
+      "file": "boot/src/arch/armv7a.rs",
+      "max_lines": 60,
+      "reason": "As AArch64, in coprocessor 15's spelling: TTBCR.EAE cannot be switched under a live translation regime, so the sequence turns the MMU off, installs MAIR0/MAIR1, TTBCR and the two 64-bit TTBRs, and turns it back on, with the program counter a physical address in between. Also DCCIMVAC cache maintenance, and the CPSR and ID_MMFR0 reads that check the processor mode and the Large Physical Address Extension before any of it."
+    },
+    {
+      "file": "kernel/src/arch/armv7a/cpu.rs",
+      "max_lines": 100,
+      "reason": "CPU primitives, one instruction or one short sequence each. Every ARMv7-A system register is a coprocessor 15 transfer, which Rust has no syntax for -- VBAR, SCTLR, TTBCR, TTBR0 and the generic timer's four registers -- and so are the barriers, the TLB maintenance, cpsid and cpsie, wfi, and the PSCI call, made with whichever of hvc or smc the device tree names."
+    },
+    {
+      "file": "kernel/src/arch/armv7a/trap.rs",
+      "max_lines": 90,
+      "reason": "The eight-entry vector table and its save/restore path. The CPU branches to a fixed offset in one of five banked processor modes, with the interrupted registers live and a return address off by a per-exception amount. Each stub corrects the address, stores it and the saved status on the SVC stack with srsdb, and switches to SVC mode with cps, so no other mode ever needs a stack; one common path saves the rest, calls Rust and returns with rfeia. Also bkpt, for the boot test."
     }
   ]
 }

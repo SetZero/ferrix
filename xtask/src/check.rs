@@ -71,9 +71,9 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     }
 
     // The freestanding halves, once per target. A lint pass for x86-64 cannot
-    // see AArch64 code at all, so skipping these means half the kernel is never
-    // linted by anybody until CI.
-    for arch in [Arch::X86_64, Arch::AArch64] {
+    // see Arm code at all, so skipping these means two thirds of the kernel go
+    // unlinted until CI.
+    for arch in Arch::ALL {
         step(&format!("clippy (kernel, {arch})"), || {
             clippy(&["-p", "ferrix-kernel", "--target", arch.kernel_target()])
         })?;

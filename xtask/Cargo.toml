@@ -8,9 +8,15 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# Deliberately none. This is the program that builds the operating system, and
-# a build tool that cannot be built is a bad day; the FAT32 writer and the
-# argument parser it would otherwise pull in are a few hundred lines each.
+# Nothing from crates.io, deliberately. This is the program that builds the
+# operating system, and a build tool that cannot be built is a bad day; the
+# FAT32 writer and the argument parser it would otherwise pull in are a few
+# hundred lines each.
+#
+# The one dependency is the tree's own ELF reader, for the ARMv7-A loader's
+# conversion to PE32. It is already fuzzed and host-tested, and the alternative
+# was a second ELF reader here that nothing fuzzes.
+ferrix-elf.workspace = true
 
 [lints]
 workspace = true

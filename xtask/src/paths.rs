@@ -1,5 +1,5 @@
-//! Where things are: the workspace, the build outputs, and the UEFI firmware
-//! QEMU needs.
+//! Where things are: the workspace, the build outputs, and the firmware QEMU
+//! needs.
 
 use std::path::{Path, PathBuf};
 
@@ -12,16 +12,22 @@ pub(crate) enum Arch {
     X86_64,
     /// 64-bit Arm.
     AArch64,
+    /// 32-bit Arm: ARMv7-A with the Large Physical Address Extension.
+    Armv7a,
 }
 
 impl Arch {
+    /// Every architecture, in the order `--arch all` takes them.
+    pub(crate) const ALL: [Arch; 3] = [Arch::X86_64, Arch::AArch64, Arch::Armv7a];
+
     /// Parse the `--arch` value.
     pub(crate) fn parse(name: &str) -> Result<Self> {
         match name {
             "x86_64" | "x86-64" | "amd64" => Ok(Arch::X86_64),
             "aarch64" | "arm64" => Ok(Arch::AArch64),
+            "armv7a" | "armv7" | "arm32" | "armhf" => Ok(Arch::Armv7a),
             other => Err(Error::new(format!(
-                "unknown architecture `{other}`; expected x86_64, aarch64 or both"
+                "unknown architecture `{other}`; expected x86_64, aarch64, armv7a or all"
             ))),
         }
     }
@@ -31,6 +37,8 @@ impl Arch {
     pub(crate) fn host() -> Self {
         if cfg!(target_arch = "aarch64") {
             Arch::AArch64
+        } else if cfg!(target_arch = "arm") {
+            Arch::Armv7a
         } else {
             Arch::X86_64
         }
@@ -41,6 +49,7 @@ impl Arch {
         match self {
             Arch::X86_64 => "x86_64",
             Arch::AArch64 => "aarch64",
+            Arch::Armv7a => "armv7a",
         }
     }
 
@@ -49,15 +58,28 @@ impl Arch {
         match self {
             Arch::X86_64 => "x86_64-unknown-none",
             Arch::AArch64 => "aarch64-unknown-none-softfloat",
+            Arch::Armv7a => "armv7a-none-eabi",
         }
     }
 
-    /// The Rust target the UEFI loader is built for.
+    /// The Rust target the loader is built for.
+    ///
+    /// A UEFI target on the 64-bit pair. There is no 32-bit Arm UEFI target,
+    /// and the one used instead is chosen for its position-independent `core`
+    /// — `docs/arm32.md` has the experiment — with no libc and no C runtime
+    /// linked.
     pub(crate) const fn loader_target(self) -> &'static str {
         match self {
             Arch::X86_64 => "x86_64-unknown-uefi",
             Arch::AArch64 => "aarch64-unknown-uefi",
+            Arch::Armv7a => "armv7-unknown-linux-musleabi",
         }
+    }
+
+    /// True if the loader rustc produces is an ELF static PIE that has to be
+    /// converted to PE32 before firmware can run it.
+    pub(crate) const fn loader_is_elf(self) -> bool {
+        matches!(self, Arch::Armv7a)
     }
 
     /// The file name firmware looks for on the EFI system partition when no
@@ -66,6 +88,7 @@ impl Arch {
         match self {
             Arch::X86_64 => "BOOTX64.EFI",
             Arch::AArch64 => "BOOTAA64.EFI",
+            Arch::Armv7a => "BOOTARM.EFI",
         }
     }
 
@@ -74,6 +97,7 @@ impl Arch {
         match self {
             Arch::X86_64 => "qemu-system-x86_64",
             Arch::AArch64 => "qemu-system-aarch64",
+            Arch::Armv7a => "qemu-system-arm",
         }
     }
 }
@@ -106,25 +130,40 @@ pub(crate) fn target_dir() -> PathBuf {
         .map_or_else(|| workspace_root().join("target"), PathBuf::from)
 }
 
-/// The UEFI firmware images QEMU needs for one architecture.
+/// The firmware QEMU boots an architecture with.
 #[derive(Debug)]
-pub(crate) struct Firmware {
-    /// The read-only firmware code image.
-    pub(crate) code: PathBuf,
-    /// A writable variable store, which AArch64's build of EDK2 insists on
-    /// even when nothing is stored in it.
-    pub(crate) vars: Option<PathBuf>,
+pub(crate) enum Firmware {
+    /// UEFI in flash: EDK2's read-only code image, and a writable variable
+    /// store, which the Arm builds of EDK2 insist on even when nothing is
+    /// stored in it.
+    Pflash {
+        /// The read-only firmware code image.
+        code: PathBuf,
+        /// A template for the variable store, if one was found.
+        vars: Option<PathBuf>,
+    },
+    /// A firmware image QEMU loads into RAM with `-bios`: U-Boot, on ARMv7-A,
+    /// which implements enough of UEFI to run the loader and is what the
+    /// boards this architecture targets ship with.
+    Bios(PathBuf),
 }
 
-/// Find the UEFI firmware for `arch`.
+/// Find the firmware for `arch`.
 ///
 /// Distributions and the Windows build of QEMU disagree about both the names
-/// and the location, so this is a search rather than a path. `FERRIX_OVMF_CODE`
-/// and `FERRIX_OVMF_VARS` override it, which is what a machine with firmware in
-/// an unusual place should set.
+/// and the location, so this is a search rather than a path. Two variables
+/// override it: `FERRIX_UBOOT` names U-Boot for ARMv7-A, and
+/// `FERRIX_OVMF_CODE` and `FERRIX_OVMF_VARS` name an EDK2 image for any
+/// architecture — which on ARMv7-A is a second opinion, since EDK2's 32-bit
+/// Arm build still exists where it has not yet been dropped.
 pub(crate) fn find_firmware(arch: Arch) -> Result<Firmware> {
+    if arch == Arch::Armv7a
+        && let Some(uboot) = std::env::var_os("FERRIX_UBOOT")
+    {
+        return Ok(Firmware::Bios(PathBuf::from(uboot)));
+    }
     if let Some(code) = std::env::var_os("FERRIX_OVMF_CODE") {
-        return Ok(Firmware {
+        return Ok(Firmware::Pflash {
             code: PathBuf::from(code),
             vars: std::env::var_os("FERRIX_OVMF_VARS").map(PathBuf::from),
         });
@@ -157,6 +196,7 @@ pub(crate) fn find_firmware(arch: Arch) -> Result<Firmware> {
             // template at all: an unrecognised store is one EDK2 formats.
             &["AAVMF_VARS.fd", "QEMU_VARS.fd", "edk2-aarch64-vars.fd"],
         ),
+        Arch::Armv7a => return find_uboot(),
     };
 
     let roots = firmware_search_path();
@@ -166,21 +206,50 @@ pub(crate) fn find_firmware(arch: Arch) -> Result<Firmware> {
              Looked for {code_names:?} under:\n{}\n  \
              Install it (Debian/Ubuntu: `ovmf` and `qemu-efi-aarch64`) or set \
              FERRIX_OVMF_CODE.",
-            roots
-                .iter()
-                .map(|root| format!("    {}", root.display()))
-                .collect::<Vec<_>>()
-                .join("\n")
+            listing(&roots)
         ))
     })?;
 
-    Ok(Firmware {
+    Ok(Firmware::Pflash {
         code,
         vars: find_in(&roots, vars_names),
     })
 }
 
-/// Directories that might hold firmware images, most specific first.
+/// Find U-Boot's build for QEMU's 32-bit Arm `virt` machine.
+///
+/// Debian and Ubuntu ship it in `u-boot-qemu`; Fedora spells the directory
+/// without the hyphen.
+fn find_uboot() -> Result<Firmware> {
+    let roots = [
+        "/usr/lib/u-boot/qemu_arm",
+        "/usr/share/u-boot/qemu_arm",
+        "/usr/share/uboot/qemu_arm",
+    ]
+    .map(PathBuf::from);
+
+    find_in(&roots, &["u-boot.bin"])
+        .map(Firmware::Bios)
+        .ok_or_else(|| {
+            Error::new(format!(
+                "could not find U-Boot for QEMU's 32-bit Arm `virt` machine.\n  \
+                 Looked for u-boot.bin under:\n{}\n  \
+                 Install it (Debian/Ubuntu: `u-boot-qemu`) or set FERRIX_UBOOT.",
+                listing(&roots)
+            ))
+        })
+}
+
+/// Directories, one per line, for an error message.
+fn listing(roots: &[PathBuf]) -> String {
+    roots
+        .iter()
+        .map(|root| format!("    {}", root.display()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Directories that might hold UEFI firmware images, most specific first.
 fn firmware_search_path() -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
@@ -264,7 +333,14 @@ mod tests {
         assert_eq!(Arch::parse("amd64").unwrap(), Arch::X86_64);
         assert_eq!(Arch::parse("arm64").unwrap(), Arch::AArch64);
         assert_eq!(Arch::parse("aarch64").unwrap(), Arch::AArch64);
+        for spelling in ["armv7a", "armv7", "arm32", "armhf"] {
+            assert_eq!(Arch::parse(spelling).unwrap(), Arch::Armv7a, "{spelling}");
+        }
         assert!(Arch::parse("riscv64").is_err());
+        assert!(
+            Arch::parse("arm").is_err(),
+            "`arm` alone names too many things to guess which"
+        );
     }
 
     #[test]
@@ -278,6 +354,33 @@ mod tests {
         );
         assert_eq!(Arch::AArch64.loader_target(), "aarch64-unknown-uefi");
         assert_eq!(Arch::AArch64.removable_boot_name(), "BOOTAA64.EFI");
+        assert_eq!(Arch::Armv7a.kernel_target(), "armv7a-none-eabi");
+        assert_eq!(Arch::Armv7a.loader_target(), "armv7-unknown-linux-musleabi");
+        assert_eq!(Arch::Armv7a.removable_boot_name(), "BOOTARM.EFI");
+        assert_eq!(Arch::Armv7a.qemu_binary(), "qemu-system-arm");
+    }
+
+    #[test]
+    fn only_the_loader_without_a_uefi_target_is_converted() {
+        assert!(Arch::Armv7a.loader_is_elf());
+        assert!(!Arch::X86_64.loader_is_elf());
+        assert!(!Arch::AArch64.loader_is_elf());
+        for arch in Arch::ALL {
+            assert_eq!(
+                arch.loader_is_elf(),
+                !arch.loader_target().ends_with("-uefi"),
+                "{arch}: a UEFI target already produces a PE"
+            );
+        }
+    }
+
+    #[test]
+    fn every_boot_name_is_a_short_name() {
+        for arch in Arch::ALL {
+            let name = arch.removable_boot_name();
+            let (stem, extension) = name.split_once('.').unwrap();
+            assert!(stem.len() <= 8 && extension.len() <= 3, "{name}");
+        }
     }
 
     #[test]

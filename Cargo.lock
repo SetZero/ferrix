@@ -49,6 +49,7 @@ version = "0.1.0"
 dependencies = [
  "ferrix-acpi",
  "ferrix-bootinfo",
+ "ferrix-fdt",
  "ferrix-frame",
  "ferrix-heap",
  "ferrix-paging",
@@ -79,3 +80,6 @@ version = "0.1.0"
 [[package]]
 name = "xtask"
 version = "0.1.0"
+dependencies = [
+ "ferrix-elf",
+]

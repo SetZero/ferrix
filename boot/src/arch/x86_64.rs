@@ -12,6 +12,9 @@ pub(crate) const ARCH: Arch = Arch::X86_64;
 /// The `e_machine` a kernel for this architecture must carry.
 pub(crate) const ELF_MACHINE: u16 = ferrix_elf::EM_X86_64;
 
+/// The ELF class a kernel for this architecture must be.
+pub(crate) const ELF_CLASS: ferrix_elf::Class = ferrix_elf::Class::Elf64;
+
 /// Extended Feature Enable Register.
 const IA32_EFER: u32 = 0xC000_0080;
 /// `EFER.NXE` — makes bit 63 of a page table entry mean "no execute".

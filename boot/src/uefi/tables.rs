@@ -50,6 +50,9 @@ impl MemoryType {
     pub(crate) const FERRIX_BOOT_STACK: MemoryType = MemoryType(0x8000_0002);
     /// The boot info structure and the memory map array inside it.
     pub(crate) const FERRIX_BOOT_INFO: MemoryType = MemoryType(0x8000_0003);
+    /// The loader's copy of the device tree, which the kernel keeps for good.
+    /// `0x8000_0004` is the initial ramdisk's, when there is one.
+    pub(crate) const FERRIX_DEVICE_TREE: MemoryType = MemoryType(0x8000_0005);
 }
 
 /// One entry of the UEFI memory map.
@@ -92,7 +95,8 @@ pub(crate) const ACPI_10_GUID: Guid = Guid::new(
     [0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d],
 );
 
-/// A flattened device tree, which is how an `AArch64` machine describes itself.
+/// A flattened device tree: how an ARMv7-A machine describes itself, and an
+/// `AArch64` one whose firmware offers no ACPI.
 pub(crate) const DEVICE_TREE_GUID: Guid = Guid::new(
     0xb1b6_21d5,
     0xf19c,

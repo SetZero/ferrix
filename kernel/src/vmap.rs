@@ -42,25 +42,32 @@
 
 use alloc::collections::BTreeMap;
 
-use ferrix_bootinfo::{KERNEL_VMAP_BASE, KERNEL_VMAP_SIZE, PAGE_SIZE};
+use ferrix_bootinfo::{KERNEL_VMAP_BASE, KERNEL_VMAP_RESERVED, KERNEL_VMAP_SIZE, PAGE_SIZE};
 use ferrix_paging::MapFlags;
 use ferrix_sync::IrqSpinLock;
 use ferrix_vma::{AddressSpace, Backing, PageRange, VmaFlags};
 
 use crate::mm;
 
-/// Address space below the arena, left to the fixed windows early boot placed
-/// there before there was an allocator: the `AArch64` console at offset zero,
-/// the framebuffer, and the on-demand window stage 3 faults into.
-///
-/// Four gibibytes for a handful of windows is extravagant, and deliberately
-/// so. The alternative is the arena handing out an address one of those
-/// windows already owns, which does not fail — it succeeds, over the top of
-/// the console.
-const RESERVED_LOW: u64 = 0x1_0000_0000;
+// The address space below the arena is left to the fixed windows early boot
+// places there before there is an allocator: the Arm consoles at offset zero,
+// the framebuffer, and the on-demand window stage 3 faults into.
+//
+// They sit at fractions of `KERNEL_VMAP_RESERVED` rather than at literal
+// offsets, because how much that is depends on the word width: four gibibytes
+// on the 64-bit pair — extravagant, and deliberately so — and 64 MiB of a
+// 32-bit kernel's 512 MiB. Either way the alternative is the arena handing out
+// an address one of those windows already owns, which does not fail; it
+// succeeds, over the top of the console.
+
+/// Where early boot maps a framebuffer, when firmware left one.
+pub(crate) const FRAMEBUFFER_WINDOW: u64 = KERNEL_VMAP_BASE + KERNEL_VMAP_RESERVED / 16;
+
+/// Where stage 3's on-demand window begins.
+pub(crate) const DEMAND_WINDOW: u64 = KERNEL_VMAP_BASE + KERNEL_VMAP_RESERVED / 8;
 
 /// Where the arena starts.
-pub(crate) const ARENA_BASE: u64 = KERNEL_VMAP_BASE + RESERVED_LOW;
+pub(crate) const ARENA_BASE: u64 = KERNEL_VMAP_BASE + KERNEL_VMAP_RESERVED;
 
 /// Where it ends: the rest of the kernel's dynamic area.
 pub(crate) const ARENA_END: u64 = KERNEL_VMAP_BASE + KERNEL_VMAP_SIZE;

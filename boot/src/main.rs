@@ -1,8 +1,8 @@
 //! The Ferrix UEFI loader.
 //!
-//! Firmware calls [`efi_main`] with the CPU already in 64-bit mode, a stack set
-//! up and the MMU on, which is why this project has no bootstrap assembly on
-//! either architecture. From there the job is:
+//! Firmware calls [`efi_main`] with a stack set up and the MMU on — in 64-bit
+//! mode on the 64-bit pair, in SVC mode on ARMv7-A — which is why this project
+//! has no bootstrap assembly on any architecture. From there the job is:
 //!
 //! 1. read the kernel off the volume the loader came from,
 //! 2. copy it to the address it was linked for,
@@ -32,7 +32,7 @@ use ferrix_bootinfo::{
 };
 
 use console::println;
-use load::{AddressSpace, KernelImage, LoaderMemory};
+use load::{AddressSpace, DirectMap, KernelImage, LoaderMemory};
 use services::{Allocation, BootError, MemoryMap, Result, Services};
 use uefi::tables::{ACPI_10_GUID, ACPI_20_GUID, DEVICE_TREE_GUID, MemoryType, SystemTable};
 use uefi::{Handle, Status};
@@ -47,6 +47,14 @@ const BOOT_INFO_BYTES: u64 = 64 * 1024;
 
 /// Offset of the memory region array within that allocation.
 const REGIONS_OFFSET: u64 = PAGE_SIZE;
+
+/// What every flattened device tree begins with, big-endian.
+const FDT_MAGIC: u32 = 0xD00D_FEED;
+
+/// The largest device tree the loader will copy. QEMU's is a few kilobytes and
+/// a board's a few tens; the bound is there so that a corrupt size field
+/// cannot make the loader try to allocate the machine.
+const MAX_DEVICE_TREE: u64 = 2 * 1024 * 1024;
 
 /// Firmware's entry point.
 ///
@@ -99,23 +107,40 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
         BOOT_INFO_BYTES,
         MemoryType::FERRIX_BOOT_INFO,
     )?;
+    let device_tree = copy_device_tree(&services)?;
     let map_buffer = services.allocate(
         "allocating the memory map buffer",
         services.memory_map_size()?,
         MemoryType::LOADER_DATA,
     )?;
 
-    // A first look at the memory map, only to learn how much RAM there is. The
-    // map fetched here is stale the moment anything else is allocated, which is
+    // A first look at the memory map, only to learn where RAM is. The map
+    // fetched here is stale the moment anything else is allocated, which is
     // why the one handed to the kernel is fetched again below.
-    let ram = highest_ram_address(&services.memory_map(map_buffer)?);
+    let direct = DirectMap::of(&services.memory_map(map_buffer)?)?;
     println!(
-        "  {} MiB of address space, kernel at {:#x}",
-        ram / (1024 * 1024),
+        "  direct map of {:#x}..{:#x}, kernel at {:#x}",
+        direct.origin,
+        direct.end(),
         kernel.image.memory.address
     );
 
-    let space = load::build_address_space(&mut memory, &kernel.elf()?, &kernel.image, ram)?;
+    // Everything the kernel is handed has to be reachable through the direct
+    // map. That is not a given on a 32-bit machine with more RAM than the
+    // direct map holds, because firmware allocates from the top down.
+    let handed_over = [kernel.image.memory, memory.pool(), stack, info_area];
+    let copied = device_tree.map(|(copy, _)| copy);
+    if !handed_over
+        .into_iter()
+        .chain(copied)
+        .all(|allocation| direct.covers(allocation))
+    {
+        return Err(BootError::plain(
+            "firmware placed a loader allocation above the direct map",
+        ));
+    }
+
+    let space = load::build_address_space(&mut memory, &kernel.elf()?, &kernel.image, direct)?;
     println!(
         "  {} page tables, roots {:#x}/{:#x}",
         memory.tables_used(),
@@ -123,20 +148,31 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
         space.identity_root.0
     );
 
-    write_boot_info(&services, &kernel.image, &space, stack, info_area, ram);
+    write_boot_info(
+        &services,
+        &kernel.image,
+        &space,
+        stack,
+        info_area,
+        direct,
+        device_tree,
+    );
 
     // Past this line firmware is gone: no allocation, no console, no protocols.
     console::shutdown();
     let map = leave_firmware(&services, map_buffer)?;
     let regions = record_memory_map(&map, info_area);
-    finish_boot_info(info_area, regions);
+    finish_boot_info(info_area, regions, direct);
 
-    // AArch64 turns the MMU off in the middle of the switch, so anything still
-    // dirty in a cache would vanish. No-op on x86-64.
+    // The Arm architectures turn the MMU off in the middle of the switch, so
+    // anything still dirty in a cache would vanish. No-op on x86-64.
     arch::clean_dcache(memory.pool().address, memory.pool().len);
     arch::clean_dcache(kernel.image.memory.address, kernel.image.memory.len);
     arch::clean_dcache(info_area.address, info_area.len);
     arch::clean_dcache(stack.address, stack.len);
+    if let Some((copy, _)) = device_tree {
+        arch::clean_dcache(copy.address, copy.len);
+    }
 
     // SAFETY: boot services are gone, `prepare_cpu` ran above, and the tables
     // in `space` identity map the loader's own code, which is what makes the
@@ -148,10 +184,59 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
             entry: kernel.image.entry,
             // Both the stack and the boot info are in RAM, so the direct map
             // already covers them and neither needs a mapping of its own.
-            stack_top: PHYSMAP_BASE + stack.address + stack.len,
-            boot_info: PHYSMAP_BASE + info_area.address,
+            stack_top: direct.address(stack.address + stack.len),
+            boot_info: direct.address(info_area.address),
         })
     }
+}
+
+/// Copy firmware's device tree into memory the kernel keeps.
+///
+/// Firmware's own copy lives wherever firmware put it — U-Boot uses
+/// `EfiACPIReclaimMemory`, which the kernel hands to the frame allocator once
+/// interrupt bring-up has read it — and stage 10 enumerates devices from the
+/// tree long after that. So the loader takes a copy, in memory the map reports
+/// as `DeviceTree`, which nothing reclaims.
+///
+/// `None` on a machine that offers no tree, which is the ordinary case on
+/// x86-64 and on AArch64 under ACPI.
+fn copy_device_tree(services: &Services) -> Result<Option<(Allocation, u64)>> {
+    let Some(tree) = services.configuration_table(&DEVICE_TREE_GUID) else {
+        return Ok(None);
+    };
+
+    // SAFETY: firmware published a device tree at this address, identity
+    // mapped under boot services, and every tree begins with a forty-byte
+    // header whose first eight bytes are read here.
+    let header = unsafe { core::slice::from_raw_parts(tree as *const u8, 8) };
+    let word = |at: usize| {
+        header
+            .get(at..at + 4)
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .map_or(0, u32::from_be_bytes)
+    };
+    if word(0) != FDT_MAGIC {
+        return Err(BootError::plain(
+            "firmware's device tree does not begin with the device tree magic",
+        ));
+    }
+    let len = u64::from(word(4));
+    if !(40..=MAX_DEVICE_TREE).contains(&len) {
+        return Err(BootError::plain(
+            "firmware's device tree claims an impossible size",
+        ));
+    }
+
+    let copy = services.allocate(
+        "copying the device tree",
+        len,
+        MemoryType::FERRIX_DEVICE_TREE,
+    )?;
+    // SAFETY: firmware's tree is `len` bytes long by its own header, the copy
+    // is a fresh allocation of at least that many, and the two cannot overlap.
+    unsafe { ptr::copy_nonoverlapping(tree as *const u8, copy.address as *mut u8, len as usize) };
+    println!("  device tree copied, {len} bytes");
+    Ok(Some((copy, len)))
 }
 
 /// The kernel file and the image copied out of it.
@@ -193,15 +278,6 @@ fn stage_kernel(services: &Services) -> Result<StagedKernel> {
     Ok(StagedKernel { image, ..staged })
 }
 
-/// One past the highest physical address that is real memory.
-fn highest_ram_address(map: &MemoryMap) -> u64 {
-    map.entries()
-        .filter(|descriptor| load::describe(descriptor).kind.is_ram())
-        .map(|descriptor| descriptor.physical_start + descriptor.number_of_pages * PAGE_SIZE)
-        .max()
-        .unwrap_or(0)
-}
-
 /// Fill in everything about the boot info that firmware can still be asked.
 fn write_boot_info(
     services: &Services,
@@ -209,7 +285,8 @@ fn write_boot_info(
     space: &AddressSpace,
     stack: Allocation,
     info_area: Allocation,
-    ram: u64,
+    direct: DirectMap,
+    device_tree: Option<(Allocation, u64)>,
 ) {
     let info = BootInfo {
         magic: BOOTINFO_MAGIC,
@@ -219,10 +296,8 @@ fn write_boot_info(
         regions: 0,
         regions_len: 0,
         physmap_base: PHYSMAP_BASE,
-        // The direct map begins at physical zero, as it always has. Starting
-        // it at the lowest RAM address instead is what this field exists for.
-        physmap_phys: 0,
-        physmap_len: ram,
+        physmap_phys: direct.origin,
+        physmap_len: direct.len,
         kernel_phys: kernel.memory.address,
         kernel_virt: kernel.virt_base,
         kernel_len: kernel.memory.len,
@@ -232,7 +307,7 @@ fn write_boot_info(
         } else {
             0
         },
-        boot_stack_top: PHYSMAP_BASE + stack.address + stack.len,
+        boot_stack_top: direct.address(stack.address + stack.len),
         boot_stack_size: stack.len,
         framebuffer: services.framebuffer().unwrap_or(Framebuffer::NONE),
         initrd_phys: 0,
@@ -241,8 +316,8 @@ fn write_boot_info(
             .configuration_table(&ACPI_20_GUID)
             .or_else(|| services.configuration_table(&ACPI_10_GUID))
             .unwrap_or(0),
-        dtb: services.configuration_table(&DEVICE_TREE_GUID).unwrap_or(0),
-        dtb_len: 0,
+        dtb: device_tree.map_or(0, |(copy, _)| copy.address),
+        dtb_len: device_tree.map_or(0, |(_, len)| len),
         uefi_system_table: services.system_table() as u64,
         cmdline: 0,
         cmdline_len: 0,
@@ -301,14 +376,14 @@ fn record_memory_map(map: &MemoryMap, info_area: Allocation) -> u64 {
 }
 
 /// Point the boot info at the memory map now that it exists.
-fn finish_boot_info(info_area: Allocation, regions: u64) {
+fn finish_boot_info(info_area: Allocation, regions: u64, direct: DirectMap) {
     let info = info_area.address as *mut BootInfo;
     // SAFETY: `write_boot_info` put a BootInfo here, and nothing else refers to
     // it.
     let mut value = unsafe { ptr::read_volatile(info) };
     // The kernel reads this through the direct map, so the pointer it is given
     // has to be the virtual one.
-    value.regions = PHYSMAP_BASE + info_area.address + REGIONS_OFFSET;
+    value.regions = direct.address(info_area.address + REGIONS_OFFSET);
     value.regions_len = regions;
     // SAFETY: as above.
     unsafe { ptr::write_volatile(info, value) };

@@ -49,6 +49,12 @@ pub(crate) enum EarlyError {
     /// The mapper refused the request. A pool in `.bss` that has run dry
     /// arrives here too, as `MapError::OutOfMemory`.
     MapFailed(ferrix_paging::MapError),
+    /// The machine's description names no console this kernel can drive.
+    #[allow(
+        dead_code,
+        reason = "only an architecture that looks its console up can fail to find one"
+    )]
+    NoConsole,
 }
 
 /// Physical memory as the kernel sees it during early boot.
@@ -56,6 +62,8 @@ pub(crate) enum EarlyError {
 pub(crate) struct EarlyMemory {
     /// Base of the loader's direct map of physical memory.
     physmap: u64,
+    /// The physical address that appears at `physmap`.
+    physmap_phys: u64,
     /// Where the kernel image is mapped, and where it physically is — the two
     /// together are what turns a `.bss` address into a physical frame number.
     kernel_virt: u64,
@@ -72,6 +80,7 @@ impl EarlyMemory {
         let info = view.raw();
         EarlyMemory {
             physmap: info.physmap_base,
+            physmap_phys: info.physmap_phys,
             kernel_virt: info.kernel_virt,
             kernel_phys: info.kernel_phys,
             root: PhysAddr(info.root_table_phys),
@@ -87,14 +96,20 @@ impl EarlyMemory {
         virt - self.kernel_virt + self.kernel_phys
     }
 
+    /// Where physical address `phys` is readable: in the direct map, which
+    /// begins at the lowest RAM address rather than at zero.
+    const fn direct(&self, phys: u64) -> u64 {
+        self.physmap + (phys - self.physmap_phys)
+    }
+
     /// Read one byte through the direct map.
     ///
     /// Used by the boot self-check to prove the direct map really does alias
     /// the same memory the kernel image is mapped from.
     pub(crate) fn read_physical_byte(&self, phys: u64) -> u8 {
-        // SAFETY: the loader mapped every byte of RAM at `physmap + phys`, and
+        // SAFETY: the loader mapped every byte of RAM into the direct map, and
         // the caller is reading an address that came from the memory map.
-        unsafe { core::ptr::read_volatile((self.physmap + phys) as *const u8) }
+        unsafe { core::ptr::read_volatile(self.direct(phys) as *const u8) }
     }
 
     /// Resolve a virtual address the way the hardware would.
@@ -136,12 +151,12 @@ impl EarlyMemory {
 unsafe impl PhysMem for EarlyMemory {
     fn read(&self, at: PhysAddr) -> u64 {
         // SAFETY: as above; `at` is a descriptor address inside a page table.
-        unsafe { core::ptr::read_volatile((self.physmap + at.0) as *const u64) }
+        unsafe { core::ptr::read_volatile(self.direct(at.0) as *const u64) }
     }
 
     fn write(&mut self, at: PhysAddr, value: u64) {
         // SAFETY: as above.
-        unsafe { core::ptr::write_volatile((self.physmap + at.0) as *mut u64, value) };
+        unsafe { core::ptr::write_volatile(self.direct(at.0) as *mut u64, value) };
     }
 
     fn allocate_table(&mut self) -> Option<PhysAddr> {

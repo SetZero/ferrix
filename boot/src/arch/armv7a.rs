@@ -1,0 +1,255 @@
+//! The ARMv7-A end of the loader.
+//!
+//! AArch64's sequence, in coprocessor 15's spelling. Firmware hands over in
+//! SVC mode, usually with the MMU on and short-descriptor tables of its own,
+//! and the architecture no more permits switching `TTBCR.EAE` under a live
+//! translation regime than AArch64 permits reprogramming `TCR_EL1`. So the
+//! loader cleans what it wrote out of the caches, turns the MMU off, installs
+//! a long-descriptor regime — `MAIR0` and `MAIR1`, `TTBCR` with `EAE` set,
+//! and the two 64-bit table base registers — and turns it back on. Firmware's
+//! identity map keeps the program counter meaning the same thing throughout,
+//! exactly as it does there.
+//!
+//! One thing has no AArch64 counterpart. The kernel half is translated
+//! through `TTBR1` with `TTBCR.T1SZ = 1`, whose level-1 table is two entries
+//! indexed by address bit 30, while `libs/paging` indexes the same root by
+//! bits 31:30 and so puts `0x8000_0000` in entry 2. `TTBR1` therefore holds
+//! the root's address plus sixteen — what Linux calls `TTBR1_OFFSET` — and a
+//! test in `libs/paging` pins the half of that arithmetic that lives there.
+
+use core::arch::asm;
+
+use ferrix_bootinfo::Arch;
+use ferrix_elf::Class;
+use ferrix_paging::armv7a::{MAIR0, MAIR1};
+
+use super::Handoff;
+
+/// The architecture the kernel is told it booted on.
+pub(crate) const ARCH: Arch = Arch::Armv7a;
+
+/// The `e_machine` a kernel for this architecture must carry.
+pub(crate) const ELF_MACHINE: u16 = ferrix_elf::EM_ARM;
+
+/// The ELF class a kernel for this architecture must be.
+pub(crate) const ELF_CLASS: Class = Class::Elf32;
+
+/// `CPSR.M`, the processor mode.
+const MODE_MASK: u32 = 0x1F;
+/// Supervisor mode: PL1, where the kernel runs.
+const MODE_SVC: u32 = 0x13;
+/// Hypervisor mode: PL2.
+const MODE_HYP: u32 = 0x1A;
+
+/// `ID_MMFR0.VMSA` values from here up have the long-descriptor format.
+const VMSA_WITH_LPAE: u32 = 5;
+
+/// `TTBCR` for the kernel's regime, assembled so each field can be named.
+///
+/// `EAE` selects the long-descriptor format. `T0SZ = 0` and `T1SZ = 1` split
+/// the address space at 2 GiB: `TTBR1` translates the top half, `TTBR0`
+/// everything below it. Both walks are write-back cacheable and inner
+/// shareable, as the descriptors they read are.
+const TTBCR: u32 = {
+    const EAE: u32 = 1 << 31;
+    const T0SZ: u32 = 0;
+    const T1SZ: u32 = 1;
+    const WRITE_BACK: u32 = 0b01;
+    const INNER_SHAREABLE: u32 = 0b11;
+    EAE | T0SZ
+        | (WRITE_BACK << 8)
+        | (WRITE_BACK << 10)
+        | (INNER_SHAREABLE << 12)
+        | (T1SZ << 16)
+        | (WRITE_BACK << 24)
+        | (WRITE_BACK << 26)
+        | (INNER_SHAREABLE << 28)
+};
+
+/// Where the kernel half's level-1 table starts within the root: entry 2.
+const TTBR1_OFFSET: u64 = 16;
+
+/// `SCTLR.M`, the MMU enable.
+const SCTLR_MMU: u32 = 1 << 0;
+/// `SCTLR.C`, the data cache enable.
+const SCTLR_DCACHE: u32 = 1 << 2;
+/// `SCTLR.I`, the instruction cache enable.
+const SCTLR_ICACHE: u32 = 1 << 12;
+/// `SCTLR.WXN`: every writable page execute-never. Cleared, because the
+/// identity map is both, and the instruction after the switch is fetched
+/// through it; the kernel's own W^X sweep is what enforces the rule after.
+const SCTLR_WXN: u32 = 1 << 19;
+
+/// Check the loader is somewhere it can install a translation regime.
+///
+/// Two assumptions to verify, as AArch64 verifies its exception level: that
+/// firmware handed over in SVC mode, since `enter_kernel` writes PL1 registers
+/// and a kernel entered in HYP would take its first exception somewhere it
+/// did not expect; and that the CPU has the Large Physical Address Extension,
+/// since every page table the loader builds is in its format. A Cortex-A7 or
+/// A15 has it; a Cortex-A9 does not, and learning that from a message beats
+/// learning it from a fault with the MMU off.
+pub(crate) fn prepare_cpu() -> Result<(), &'static str> {
+    match current_mode() {
+        MODE_SVC => {}
+        MODE_HYP => return Err("firmware handed off in HYP mode; the loader only supports SVC"),
+        _ => return Err("firmware handed off in an unexpected processor mode"),
+    }
+    if memory_model() < VMSA_WITH_LPAE {
+        return Err("this CPU has no Large Physical Address Extension, which the page tables need");
+    }
+    Ok(())
+}
+
+/// Clean and invalidate the data cache over a physical range.
+///
+/// For the reason AArch64 does: the tables are written with the caches on and
+/// read by a walker that starts with them off.
+pub(crate) fn clean_dcache(start: u64, len: u64) {
+    if len == 0 {
+        return;
+    }
+
+    let cache_type: u32;
+    // SAFETY: CTR is readable at PL1 and has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c0, c0, 1", out(reg) cache_type, options(nomem, nostack, preserves_flags));
+    }
+    // DminLine is log2 of the smallest data cache line in words.
+    let line = 4u64 << ((cache_type >> 16) & 0xF);
+
+    let mut at = start & !(line - 1);
+    let end = start.saturating_add(len);
+    while at < end {
+        // SAFETY: `DCCIMVAC` cleans and invalidates one line by address, which
+        // under firmware's identity map is this physical address. It has no
+        // effect beyond the cache. Every address firmware allocated is below
+        // 4 GiB, so the truncation is exact.
+        unsafe {
+            asm!("mcr p15, 0, {}, c7, c14, 1", in(reg) at as u32, options(nostack, preserves_flags));
+        }
+        at += line;
+    }
+
+    // SAFETY: barriers, ordering the maintenance above against what follows.
+    unsafe {
+        asm!("dsb", "isb", options(nostack, preserves_flags));
+    }
+}
+
+/// The processor mode the loader is running in.
+fn current_mode() -> u32 {
+    let cpsr: u32;
+    // SAFETY: reading CPSR has no side effects.
+    unsafe {
+        asm!("mrs {}, cpsr", out(reg) cpsr, options(nomem, nostack, preserves_flags));
+    }
+    cpsr & MODE_MASK
+}
+
+/// The virtual memory system this CPU implements, as `ID_MMFR0.VMSA`.
+fn memory_model() -> u32 {
+    let features: u32;
+    // SAFETY: ID_MMFR0 is readable at PL1 and has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c0, c1, 4", out(reg) features, options(nomem, nostack, preserves_flags));
+    }
+    features & 0xF
+}
+
+/// Install the loader's translation regime and jump to the kernel.
+///
+/// # Safety
+///
+/// Boot services must already have been exited; the loader must be running in
+/// SVC mode and identity mapped, because the middle of this sequence executes
+/// with the MMU off; and everything `handoff` points at must already have been
+/// cleaned out of the data cache with [`clean_dcache`].
+pub(crate) unsafe fn enter_kernel(handoff: Handoff) -> ! {
+    // Every address here is below 4 GiB by construction — the kernel's layout
+    // is `LAYOUT_32`, and firmware allocated the tables — so a register holds
+    // each exactly.
+    let identity = handoff.identity_table as u32;
+    let kernel_half = (handoff.root_table + TTBR1_OFFSET) as u32;
+
+    // As on AArch64, every operand is bound to a named register, because
+    // `options(noreturn)` forbids outputs and so forbids asking for scratch.
+    // `r6`, `r7`, `r9` and `r11` are the registers the compiler reserves on
+    // this architecture, so none of them is an operand; `r11`, the frame
+    // pointer, is only ever written, on the way out.
+    //
+    // SAFETY: the caller's contract is exactly the set of conditions that make
+    // this sequence sound. Interrupts and aborts are masked first, because
+    // firmware's handlers stopped existing at `exit_boot_services`.
+    unsafe {
+        asm!(
+            "cpsid aif",
+            "dsb",
+            "isb",
+
+            // The MMU and both caches off. From here until the MMU is back on
+            // the program counter is a physical address, which is fine only
+            // because firmware identity mapped us.
+            "mrc p15, 0, r12, c1, c0, 0",
+            "bic r12, r12, #{mmu}",
+            "bic r12, r12, #{dcache}",
+            "bic r12, r12, #{icache}",
+            "mcr p15, 0, r12, c1, c0, 0",
+            "isb",
+
+            // The kernel's text was written as data. The data cache was cleaned
+            // by the caller; the instruction cache and the branch predictor may
+            // still hold what was there before, and are discarded.
+            "mov r12, #0",
+            "mcr p15, 0, r12, c7, c5, 0",
+            "mcr p15, 0, r12, c7, c5, 6",
+
+            // Our own translation regime: attributes, split, then the two roots
+            // as 64-bit values whose upper words — and so ASIDs — are zero.
+            "mcr p15, 0, r1, c10, c2, 0",
+            "mcr p15, 0, r2, c10, c2, 1",
+            "mcr p15, 0, r3, c2, c0, 2",
+            "mcrr p15, 0, r4, r12, c2",
+            "mcrr p15, 1, r5, r12, c2",
+            "isb",
+            "mcr p15, 0, r12, c8, c7, 0",
+            "dsb",
+            "isb",
+
+            // And back on.
+            "mrc p15, 0, r12, c1, c0, 0",
+            "orr r12, r12, #{mmu}",
+            "orr r12, r12, #{dcache}",
+            "orr r12, r12, #{icache}",
+            "bic r12, r12, #{wxn}",
+            "mcr p15, 0, r12, c1, c0, 0",
+            "isb",
+
+            "mov sp, r8",
+            // Null frame and link registers terminate any backtrace the kernel
+            // walks, rather than letting it wander into the loader's frames.
+            "mov r11, #0",
+            "mov lr, #0",
+            "bx r10",
+
+            mmu = const SCTLR_MMU,
+            dcache = const SCTLR_DCACHE,
+            icache = const SCTLR_ICACHE,
+            wxn = const SCTLR_WXN,
+
+            // The AAPCS argument register: the kernel entry takes the boot
+            // info pointer as its only argument.
+            in("r0") handoff.boot_info as u32,
+            in("r1") MAIR0,
+            in("r2") MAIR1,
+            in("r3") TTBCR,
+            in("r4") identity,
+            in("r5") kernel_half,
+            in("r8") handoff.stack_top as u32,
+            in("r10") handoff.entry as u32,
+            // Claimed so the scratch above cannot collide with anything live.
+            in("r12") 0u32,
+            options(noreturn),
+        );
+    }
+}

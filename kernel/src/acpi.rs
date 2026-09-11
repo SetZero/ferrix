@@ -22,22 +22,27 @@ use ferrix_bootinfo::BootView;
 /// Physical memory, as the table parser is allowed to see it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DirectMap {
-    /// Virtual address physical address zero appears at.
+    /// Virtual address the direct map begins at.
     base: u64,
+    /// The physical address that appears there.
+    phys: u64,
     /// Bytes of physical address space the direct map covers.
     len: u64,
 }
 
 impl Tables for DirectMap {
     fn table(&self, physical_address: u64, len: usize) -> Option<&[u8]> {
-        let end = physical_address.checked_add(len as u64)?;
+        // Below the direct map's origin nothing is mapped at all — on the Arm
+        // machines that is the gigabyte of flash and devices beneath RAM.
+        let offset = physical_address.checked_sub(self.phys)?;
+        let end = offset.checked_add(len as u64)?;
         if end > self.len {
             return None;
         }
-        let at = self.base.checked_add(physical_address)?;
+        let at = self.base.checked_add(offset)?;
 
-        // SAFETY: the range [physical_address, end) is inside the direct map,
-        // checked immediately above, and the direct map is a live read-only
+        // SAFETY: the range is inside the direct map, checked immediately
+        // above against both of its ends, and the direct map is a live read-only
         // alias of physical memory for the whole life of the system. The
         // lifetime is tied to `&self`, and `DirectMap` outlives every table
         // reference taken from it.
@@ -68,6 +73,7 @@ impl Firmware {
         let info = view.raw();
         let memory = DirectMap {
             base: info.physmap_base,
+            phys: info.physmap_phys,
             len: info.physmap_len,
         };
 

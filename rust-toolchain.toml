@@ -8,11 +8,19 @@
 channel = "1.97.1"
 components = ["rustfmt", "clippy", "llvm-tools", "rust-src"]
 targets = [
-    # The kernel: freestanding, no red zone, soft float, kernel code model.
+    # The kernels: freestanding, no red zone, soft float, and on x86-64 the
+    # kernel code model.
     "x86_64-unknown-none",
     "aarch64-unknown-none-softfloat",
-    # The loader: firmware calls it in 64-bit mode, which is why this project
-    # has no bootstrap assembly on either architecture.
+    "armv7a-none-eabi",
+    # The loaders: firmware calls them with the MMU on and a stack set up,
+    # which is why this project has no bootstrap assembly on any architecture.
     "x86_64-unknown-uefi",
     "aarch64-unknown-uefi",
+    # The ARMv7-A loader, for which rustc has no UEFI target. It is linked as a
+    # static PIE and converted to PE32 by `xtask/src/pe.rs`, and it is built
+    # for this target rather than `armv7a-none-eabi` because this one's `core`
+    # is compiled position-independent; see docs/arm32.md, decision 2. No libc
+    # and no C runtime is linked: `.cargo/config.toml` says so.
+    "armv7-unknown-linux-musleabi",
 ]

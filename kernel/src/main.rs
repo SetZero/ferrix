@@ -12,10 +12,17 @@
 
 extern crate alloc;
 
+// ACPI is how the 64-bit pair describe themselves. An ARMv7-A machine has
+// none, and there this module is compiled and never called.
+#[allow(
+    dead_code,
+    reason = "ARMv7-A describes itself with a device tree, not ACPI"
+)]
 mod acpi;
 mod arch;
 mod console;
 mod early;
+mod fdt;
 mod irq;
 mod mm;
 mod mmio;
@@ -29,7 +36,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 
-use ferrix_bootinfo::{BootInfo, BootView, KERNEL_VMAP_BASE, MemKind, PAGE_SIZE};
+use ferrix_bootinfo::{BootInfo, BootView, MemKind, PAGE_SIZE};
 use ferrix_paging::MapFlags;
 
 use console::println;
@@ -62,7 +69,7 @@ extern "C" fn _start(boot_info: *const BootInfo) -> ! {
     };
 
     let mut memory = EarlyMemory::new(&view);
-    if arch::init_console(&mut memory).is_err() {
+    if arch::init_console(&view, &mut memory).is_err() {
         arch::halt()
     }
     // SAFETY: `init_console` configured the port and, on AArch64, mapped it.
@@ -988,10 +995,18 @@ fn report(view: &BootView<'_>) {
         info.kernel_len / 1024
     );
     println!(
-        "  physmap  {:#x} covering {} MiB",
+        "  physmap  {:#x} covering {} MiB from {:#x}",
         info.physmap_base,
-        mebibytes(info.physmap_len)
+        mebibytes(info.physmap_len),
+        info.physmap_phys
     );
+    let unreachable = view.max_ram_address().saturating_sub(view.physmap_limit());
+    if unreachable != 0 {
+        println!(
+            "  memory   {} MiB above the direct map, which this kernel cannot use",
+            mebibytes(unreachable)
+        );
+    }
     println!("  tables   root {:#x}", info.root_table_phys);
 
     if info.framebuffer.is_present() {
@@ -1003,8 +1018,14 @@ fn report(view: &BootView<'_>) {
     if info.rsdp != 0 {
         println!("  acpi     rsdp at {:#x}", info.rsdp);
     }
-    if info.dtb != 0 {
-        println!("  fdt      at {:#x}", info.dtb);
+    if let Some((at, len)) = view.device_tree() {
+        // The model is the machine's own name for itself, and reading it is
+        // the check that the copy the loader made still parses.
+        let model = fdt::open(view)
+            .ok()
+            .and_then(|tree| tree.model())
+            .unwrap_or("unreadable");
+        println!("  fdt      {model}, {len} bytes at {at:#x}");
     }
 }
 
@@ -1102,7 +1123,7 @@ fn check_early_mapper(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(
     // On QEMU's AArch64 `virt` there is no display, so this does not run there
     // — the PL011 console took the same path a moment ago.
     if info.framebuffer.is_present() {
-        let at = KERNEL_VMAP_BASE + FRAMEBUFFER_WINDOW;
+        let at = vmap::FRAMEBUFFER_WINDOW;
         if memory
             .map_device(at, info.framebuffer.phys, PAGE_SIZE)
             .is_err()
@@ -1116,10 +1137,6 @@ fn check_early_mapper(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(
 
     Ok(())
 }
-
-/// Offset within the kernel's dynamic mapping area for the framebuffer window,
-/// clear of the `AArch64` console at offset zero.
-const FRAMEBUFFER_WINDOW: u64 = 0x1000_0000;
 
 /// Where a kernel panic ends up.
 ///

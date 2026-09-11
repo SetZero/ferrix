@@ -2,12 +2,15 @@
 
 use core::ptr;
 
-use ferrix_bootinfo::{KERNEL_VIRT_BASE, MemKind, MemRegion, PAGE_SIZE, PHYSMAP_BASE};
+use ferrix_bootinfo::{
+    KERNEL_VIRT_BASE, MemKind, MemRegion, PAGE_SIZE, PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END,
+    USER_VIRT_END, direct_map_address, physmap_origin,
+};
 use ferrix_elf::{Elf, PF_W, PF_X, Segment};
 use ferrix_paging::{MapFlags, Mapper, PhysAddr, PhysMem, VirtAddr};
 
 use crate::arch::{self, PageEncoding};
-use crate::services::{Allocation, BootError, Result, Services};
+use crate::services::{Allocation, BootError, MemoryMap, Result, Services};
 use crate::uefi::tables::{MemoryDescriptor, MemoryType};
 
 /// Frames set aside for page tables.
@@ -88,6 +91,11 @@ pub(crate) fn read_kernel_file(services: &Services, path: &str) -> Result<(Alloc
 pub(crate) fn parse_kernel(bytes: &[u8]) -> Result<Elf<'_>> {
     let elf =
         Elf::parse(bytes).map_err(|_| BootError::plain("the kernel is not a valid ELF image"))?;
+    if elf.class() != arch::ELF_CLASS {
+        return Err(BootError::plain(
+            "the kernel was built for another word width",
+        ));
+    }
     elf.check_machine(arch::ELF_MACHINE)
         .map_err(|_| BootError::plain("the kernel was built for another architecture"))?;
     elf.validate_segments()
@@ -162,10 +170,69 @@ fn copy_segment(elf: &Elf<'_>, segment: &Segment, base: u64, virt_base: u64) -> 
     Ok(())
 }
 
+/// The part of physical memory the direct map covers.
+///
+/// From the lowest RAM address, rounded down to [`PHYSMAP_ALIGN`], to the
+/// highest, rounded up — and no further than the direct map's region of the
+/// address space holds, which only binds on a 32-bit machine. Starting at the
+/// lowest RAM rather than at zero is what lets a 32-bit kernel afford a direct
+/// map at all: QEMU's Arm `virt` machines have nothing but flash and device
+/// registers below 1 GiB, and mapping that as cacheable memory was never right
+/// on AArch64 either.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DirectMap {
+    /// The physical address at [`PHYSMAP_BASE`].
+    pub(crate) origin: u64,
+    /// Bytes from there that are mapped.
+    pub(crate) len: u64,
+}
+
+impl DirectMap {
+    /// The direct map a machine with this memory map gets.
+    pub(crate) fn of(map: &MemoryMap) -> Result<DirectMap> {
+        let mut low = u64::MAX;
+        let mut high = 0u64;
+        for descriptor in map.entries() {
+            if !describe(&descriptor).kind.is_ram() {
+                continue;
+            }
+            low = low.min(descriptor.physical_start);
+            high = high.max(descriptor.physical_start + descriptor.number_of_pages * PAGE_SIZE);
+        }
+        if high == 0 {
+            return Err(BootError::plain("firmware's memory map describes no RAM"));
+        }
+
+        let origin = physmap_origin(low);
+        let end = high.next_multiple_of(PHYSMAP_ALIGN);
+        Ok(DirectMap {
+            origin,
+            len: (end - origin).min(PHYSMAP_END - PHYSMAP_BASE),
+        })
+    }
+
+    /// Where physical address `phys` appears in the direct map.
+    pub(crate) const fn address(self, phys: u64) -> u64 {
+        direct_map_address(self.origin, phys)
+    }
+
+    /// One past the last physical address the direct map covers.
+    pub(crate) const fn end(self) -> u64 {
+        self.origin + self.len
+    }
+
+    /// True if every byte of `allocation` is inside the direct map, which is
+    /// the only way the kernel can reach it.
+    pub(crate) const fn covers(self, allocation: Allocation) -> bool {
+        allocation.address >= self.origin && allocation.address + allocation.len <= self.end()
+    }
+}
+
 /// The page tables the kernel will start on.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AddressSpace {
-    /// Root of the kernel half: x86-64's PML4, `AArch64`'s `TTBR1_EL1` table.
+    /// Root of the kernel half: x86-64's PML4, `AArch64`'s `TTBR1_EL1` table,
+    /// or the ARMv7-A root `TTBR1` translates the last two entries of.
     pub(crate) kernel_root: PhysAddr,
     /// Root of the identity map, which on x86-64 is the same table.
     pub(crate) identity_root: PhysAddr,
@@ -174,7 +241,7 @@ pub(crate) struct AddressSpace {
 /// Build the address space described in `docs/ARCHITECTURE.md` §4.
 ///
 /// Three mappings, and deliberately no more: an identity map so the
-/// instructions after the switch still fetch, a direct map of all physical
+/// instructions after the switch still fetch, a direct map of physical
 /// memory, and the kernel image at the address it was linked for. The boot
 /// stack and the boot info need no mapping of their own — they are in RAM, so
 /// the direct map already covers them.
@@ -182,7 +249,7 @@ pub(crate) fn build_address_space(
     memory: &mut LoaderMemory,
     elf: &Elf<'_>,
     image: &KernelImage,
-    ram_bytes: u64,
+    direct: DirectMap,
 ) -> Result<AddressSpace> {
     let kernel_root = memory
         .allocate_table()
@@ -197,15 +264,14 @@ pub(crate) fn build_address_space(
 
     let kernel: Mapper<PageEncoding> = Mapper::new(kernel_root);
     let identity: Mapper<PageEncoding> = Mapper::new(identity_root);
-    let ram = ram_bytes.next_multiple_of(Level2::SPAN);
 
-    map_identity(&identity, memory, ram)?;
+    map_identity(&identity, memory, direct)?;
     kernel
         .map_range(
             memory,
             VirtAddr(PHYSMAP_BASE),
-            PhysAddr(0),
-            ram,
+            PhysAddr(direct.origin),
+            direct.len,
             // Never executable: nothing is ever run through the direct map, and
             // it covers every byte of RAM including the kernel's own text.
             MapFlags::KERNEL_DATA,
@@ -222,24 +288,31 @@ pub(crate) fn build_address_space(
     })
 }
 
-/// Named for readability at the one place it is used.
-struct Level2;
-impl Level2 {
-    /// A level-2 block, on both architectures.
-    const SPAN: u64 = 2 * 1024 * 1024;
-}
-
-/// Map physical memory at its own address, temporarily and executably.
+/// Map RAM at its own address, temporarily and executably.
+///
+/// Only RAM: the loader's code, its stack and its tables are all in RAM, and
+/// nothing else needs to be reachable at its physical address for the few
+/// instructions between the switch and the jump.
 fn map_identity(
     identity: &Mapper<PageEncoding>,
     memory: &mut LoaderMemory,
-    ram: u64,
+    direct: DirectMap,
 ) -> Result<()> {
+    // Physical equals virtual here, so the mapping has to fit the lower half.
+    // On a 32-bit machine that is 2 GiB, and a board with RAM above it is one
+    // this loader cannot enter the kernel on — which it says, rather than
+    // mapping its own code into the kernel's half.
+    if direct.end() > USER_VIRT_END {
+        return Err(BootError::plain(
+            "RAM reaches the kernel's half of the address space, where the identity map cannot go",
+        ));
+    }
+
     // This mapping has to be executable, which is otherwise never true in this
     // tree: the instruction after the one that installs these tables is fetched
-    // through it, and on AArch64 so is the whole sequence that turns the MMU
-    // back on. It is transient — the kernel drops it once it is running on its
-    // own stack, and `docs/ARCHITECTURE.md` §4 says so.
+    // through it, and on the Arm architectures so is the whole sequence that
+    // turns the MMU back on. It is transient — the kernel drops it once it is
+    // running on its own stack, and `docs/ARCHITECTURE.md` §4 says so.
     let transient = MapFlags {
         read: true,
         write: true,
@@ -249,7 +322,13 @@ fn map_identity(
         device: false,
     };
     identity
-        .map_range(memory, VirtAddr(0), PhysAddr(0), ram, transient)
+        .map_range(
+            memory,
+            VirtAddr(direct.origin),
+            PhysAddr(direct.origin),
+            direct.len,
+            transient,
+        )
         .map_err(|_| BootError::plain("could not build the identity map"))
 }
 
@@ -306,6 +385,7 @@ pub(crate) fn describe(descriptor: &MemoryDescriptor) -> MemRegion {
         0x8000_0002 => MemKind::BootStack,
         0x8000_0003 => MemKind::BootInfo,
         0x8000_0004 => MemKind::Initrd,
+        0x8000_0005 => MemKind::DeviceTree,
         _ => MemKind::Reserved,
     };
 

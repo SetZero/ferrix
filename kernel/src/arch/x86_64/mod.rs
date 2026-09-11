@@ -21,10 +21,14 @@ pub(crate) type PageEncoding = ferrix_paging::x86_64::X86_64;
 
 /// Bring up the early console.
 ///
-/// Nothing to map: the 16550 is behind I/O ports, which are a separate address
-/// space with no page tables of their own. The `AArch64` counterpart has to map
-/// an `MMIO` window first, which is why this takes an argument it ignores.
-pub(crate) fn init_console(_memory: &mut EarlyMemory) -> Result<(), EarlyError> {
+/// Nothing to find and nothing to map: the 16550 is at a fixed port, behind
+/// I/O space, which has no page tables of its own. The Arm counterparts have
+/// to find a UART and map an `MMIO` window first, which is why this takes two
+/// arguments it ignores.
+pub(crate) fn init_console(
+    _view: &BootView<'_>,
+    _memory: &mut EarlyMemory,
+) -> Result<(), EarlyError> {
     console::init();
     Ok(())
 }

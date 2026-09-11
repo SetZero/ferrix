@@ -68,13 +68,15 @@ impl Args {
 
     /// The architectures this invocation applies to.
     ///
-    /// `--arch both` is the reason this returns a list: a change that breaks
-    /// one architecture and not the other is the characteristic failure of a
-    /// two-architecture kernel, and the default local workflow should catch it.
+    /// `--arch all` is the reason this returns a list: a change that breaks
+    /// one architecture and not the others is the characteristic failure of a
+    /// multi-architecture kernel, and the default local workflow should catch
+    /// it. `both` stays a synonym for `all`, so that a habit formed when there
+    /// were two does not quietly drop the third.
     pub(crate) fn arches(&self) -> Result<Vec<Arch>> {
         match self.arch.as_deref() {
             None => Ok(vec![Arch::host()]),
-            Some("both" | "all") => Ok(vec![Arch::X86_64, Arch::AArch64]),
+            Some("both" | "all") => Ok(Arch::ALL.to_vec()),
             Some(name) => Ok(vec![Arch::parse(name)?]),
         }
     }
@@ -139,13 +141,19 @@ mod tests {
     }
 
     #[test]
-    fn arch_both_expands_to_both() {
-        let args = parse(&["build", "--arch", "both"]).unwrap();
-        assert_eq!(args.arches().unwrap(), vec![Arch::X86_64, Arch::AArch64]);
-        assert!(
-            args.single_arch().is_err(),
-            "a command needing one architecture must refuse two"
-        );
+    fn arch_all_expands_to_every_architecture() {
+        for spelling in ["all", "both"] {
+            let args = parse(&["build", "--arch", spelling]).unwrap();
+            assert_eq!(
+                args.arches().unwrap(),
+                vec![Arch::X86_64, Arch::AArch64, Arch::Armv7a],
+                "`{spelling}` must not leave an architecture out"
+            );
+            assert!(
+                args.single_arch().is_err(),
+                "a command needing one architecture must refuse several"
+            );
+        }
     }
 
     #[test]

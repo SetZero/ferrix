@@ -103,14 +103,18 @@ static TABLES: IrqSpinLock<(), crate::arch::Irq> = IrqSpinLock::new(());
 /// every allocation, and there is no reason to spend an `unsafe` on a `u64`.
 static PHYSMAP: AtomicU64 = AtomicU64::new(0);
 
+/// The physical address that appears at [`PHYSMAP`]: the lowest RAM address,
+/// which is zero on x86-64 and a gibibyte on QEMU's Arm machines.
+static PHYSMAP_PHYS: AtomicU64 = AtomicU64::new(0);
+
 /// The virtual address at which physical address `phys` is readable.
 fn physmap(phys: u64) -> u64 {
-    PHYSMAP.load(Ordering::Relaxed) + phys
+    PHYSMAP.load(Ordering::Relaxed) + (phys - PHYSMAP_PHYS.load(Ordering::Relaxed))
 }
 
 /// The physical address behind a direct-map virtual address.
 fn unmap(virt: u64) -> u64 {
-    virt - PHYSMAP.load(Ordering::Relaxed)
+    virt - PHYSMAP.load(Ordering::Relaxed) + PHYSMAP_PHYS.load(Ordering::Relaxed)
 }
 
 /// Run `body` with the frame allocator, or return `None` before [`init`].
@@ -143,9 +147,16 @@ pub(crate) struct Stats {
 /// Bring up the frame allocator and the heap.
 pub(crate) fn init(view: &BootView<'_>) -> Result<Stats, MemoryError> {
     PHYSMAP.store(view.raw().physmap_base, Ordering::Relaxed);
+    PHYSMAP_PHYS.store(view.raw().physmap_phys, Ordering::Relaxed);
     ROOT_TABLE.store(view.raw().root_table_phys, Ordering::Relaxed);
 
-    let highest = view.max_ram_address().div_ceil(PAGE_SIZE);
+    // No higher than the direct map reaches: a frame the kernel cannot address
+    // is not a frame it can hand out. Only a 32-bit machine with more RAM than
+    // its direct map holds has any such frames, and `kmain` says how many.
+    let highest = view
+        .max_ram_address()
+        .min(view.physmap_limit())
+        .div_ceil(PAGE_SIZE);
     let lowest = lowest_ram_frame(view);
     if highest <= lowest {
         return Err(MemoryError::NoUsableMemory);
@@ -388,7 +399,7 @@ static ROOT_TABLE: AtomicU64 = AtomicU64::new(0);
 /// mechanism stage 6 uses for every anonymous user mapping, which is the point
 /// of testing it this way: a fault is resolved by *making the mapping true* and
 /// letting the instruction retry, never by stepping over it.
-pub(crate) const DEMAND_WINDOW: u64 = ferrix_bootinfo::KERNEL_VMAP_BASE + 0x2000_0000;
+pub(crate) const DEMAND_WINDOW: u64 = crate::vmap::DEMAND_WINDOW;
 
 /// Size of that window.
 pub(crate) const DEMAND_WINDOW_SIZE: u64 = 2 * 1024 * 1024;

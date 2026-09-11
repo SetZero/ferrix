@@ -26,6 +26,7 @@ mod cargo;
 mod check;
 mod fat;
 mod paths;
+mod pe;
 mod qemu;
 
 use std::process::ExitCode;
@@ -77,14 +78,14 @@ COMMANDS:
     check         Run every quality gate (fmt, clippy, layering, audits)
 
 OPTIONS:
-    --arch <x86_64|aarch64|both>   Target architecture         [default: host]
-    --release                      Build with optimisations
-    --smp <N>                      Virtual CPUs                [default: 4]
-    --memory <MiB>                 Guest memory                [default: 512]
-    --timeout <SECONDS>            test-boot patience          [default: 120]
-    --gdb                          Wait for a debugger on :1234
-    --fast                         check: skip the cross-target clippy passes
-    -h, --help                     This message
+    --arch <x86_64|aarch64|armv7a|all>   Target architecture   [default: host]
+    --release                            Build with optimisations
+    --smp <N>                            Virtual CPUs          [default: 4]
+    --memory <MiB>                       Guest memory          [default: 512]
+    --timeout <SECONDS>                  test-boot patience    [default: 120]
+    --gdb                                Wait for a debugger on :1234
+    --fast                               check: skip the cross-target clippy passes
+    -h, --help                           This message
 ";
 
 fn main() -> ExitCode {

@@ -148,7 +148,6 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
     })?;
 
     let firmware = paths::find_firmware(arch)?;
-    let vars = prepare_vars(arch, &firmware)?;
 
     let mut command = Command::new(binary);
     let _ = command.current_dir(paths::workspace_root());
@@ -195,12 +194,20 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
             ]);
             let _ = command.args(["-drive", &format!("format=raw,file={}", display(image))]);
         }
-        Arch::AArch64 => {
+        Arch::AArch64 | Arch::Armv7a => {
+            // The same `virt` machine for both: a GICv2, a PL011 at the same
+            // address, the architected timer, a virtio disk. Only the CPU
+            // differs, and with it the width of everything the CPU does.
+            let cpu = if arch == Arch::AArch64 {
+                "cortex-a72"
+            } else {
+                "cortex-a7"
+            };
             let _ = command.args([
                 "-machine",
                 "virt",
                 "-cpu",
-                "cortex-a72",
+                cpu,
                 "-drive",
                 &format!("format=raw,file={},if=none,id=disk", display(image)),
                 "-device",
@@ -209,17 +216,24 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
         }
     }
 
-    let _ = command.args([
-        "-drive",
-        &format!(
-            "if=pflash,format=raw,readonly=on,file={}",
-            display(&firmware.code)
-        ),
-    ]);
-    let _ = command.args([
-        "-drive",
-        &format!("if=pflash,format=raw,file={}", display(&vars)),
-    ]);
+    match &firmware {
+        Firmware::Pflash { code, vars } => {
+            let vars = prepare_vars(arch, code, vars.as_deref())?;
+            let _ = command.args([
+                "-drive",
+                &format!("if=pflash,format=raw,readonly=on,file={}", display(code)),
+            ]);
+            let _ = command.args([
+                "-drive",
+                &format!("if=pflash,format=raw,file={}", display(&vars)),
+            ]);
+        }
+        // U-Boot runs from RAM and keeps no variables: there is no store to
+        // prepare, and so none for a previous run to have poisoned.
+        Firmware::Bios(uboot) => {
+            let _ = command.args(["-bios", &display(uboot)]);
+        }
+    }
 
     Ok(command)
 }
@@ -233,10 +247,10 @@ fn display(path: &Path) -> String {
 /// Produce the writable UEFI variable store QEMU needs beside the firmware.
 ///
 /// It has to be writable and it has to survive between runs, so it is copied
-/// into `build/` rather than used from the read-only system location. On
-/// AArch64 the `virt` machine additionally requires both pflash images to be
-/// exactly the same size, which is why this pads.
-fn prepare_vars(arch: Arch, firmware: &Firmware) -> Result<PathBuf> {
+/// into `build/` rather than used from the read-only system location. On the
+/// Arm `virt` machine both pflash images additionally have to be exactly the
+/// same size, which is why this pads.
+fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<PathBuf> {
     let directory = paths::build_dir(arch);
     std::fs::create_dir_all(&directory)?;
     let target = directory.join("uefi-vars.fd");
@@ -253,7 +267,7 @@ fn prepare_vars(arch: Arch, firmware: &Firmware) -> Result<PathBuf> {
     // boot test whose result depends on what the previous boot test left behind
     // is not a test, so this starts from a known state every time.
 
-    let mut contents = match &firmware.vars {
+    let mut contents = match template {
         Some(source) => std::fs::read(source)
             .map_err(|error| Error::new(format!("reading {}: {error}", source.display())))?,
         // No template: an all-zero store is not a valid variable store, and
@@ -261,8 +275,8 @@ fn prepare_vars(arch: Arch, firmware: &Firmware) -> Result<PathBuf> {
         None => Vec::new(),
     };
 
-    if arch == Arch::AArch64 {
-        let code_size = std::fs::metadata(&firmware.code)?.len() as usize;
+    if arch != Arch::X86_64 {
+        let code_size = std::fs::metadata(code)?.len() as usize;
         contents.resize(code_size, 0);
     }
 

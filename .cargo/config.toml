@@ -1,15 +1,21 @@
 [alias]
 xtask = "run --quiet --package xtask --"
 
-# Flags for the two freestanding kernel targets. Set here rather than in an
-# environment variable so that `cargo build`, `cargo clippy` and `cargo xtask`
-# all agree, and so CI needs no wrapper.
+# Flags for the freestanding targets. Set here rather than in an environment
+# variable so that `cargo build`, `cargo clippy` and `cargo xtask` all agree,
+# and so CI needs no wrapper.
 #
-# The path to the link script is relative to the workspace root, which is where
-# cargo runs the compiler from.
+# Paths are relative to the workspace root, which is where cargo runs the
+# compiler from.
+#
+# The kernels share one link script, and each tells it where it is linked with
+# `--defsym`: the number is `KERNEL_VIRT_BASE` in libs/bootinfo for that word
+# width, and the loader refuses a kernel linked anywhere else. The `--defsym`
+# comes before the `-T` so the symbol exists before the script names it.
 
 [target.x86_64-unknown-none]
 rustflags = [
+    "-C", "link-arg=--defsym=KERNEL_VIRT_BASE=0xffffffff80000000",
     "-C", "link-arg=-Tkernel/linker/kernel.ld",
     # lld defaults to a 4 KiB maximum page size here, but say so anyway: the
     # AArch64 side below genuinely needs it and the two should not silently
@@ -20,6 +26,7 @@ rustflags = [
 
 [target.aarch64-unknown-none-softfloat]
 rustflags = [
+    "-C", "link-arg=--defsym=KERNEL_VIRT_BASE=0xffffffff80000000",
     "-C", "link-arg=-Tkernel/linker/kernel.ld",
     # **Required, not cosmetic.** lld defaults `max-page-size` to 64 KiB on
     # AArch64, which pads every segment to a 64 KiB boundary and produces a
@@ -27,4 +34,35 @@ rustflags = [
     # map at the alignment the headers claim.
     "-C", "link-arg=-zmax-page-size=4096",
     "-C", "relocation-model=static",
+]
+
+[target.armv7a-none-eabi]
+rustflags = [
+    "-C", "link-arg=--defsym=KERNEL_VIRT_BASE=0xf0000000",
+    "-C", "link-arg=-Tkernel/linker/kernel.ld",
+    "-C", "link-arg=-zmax-page-size=4096",
+    "-C", "relocation-model=static",
+]
+
+# The ARMv7-A loader: an ELF32 static PIE, laid out for `xtask/src/pe.rs` to
+# turn into a UEFI application. Every flag here is load-bearing:
+#
+#   * rust-lld as a plain ELF linker, and `link-self-contained=no`, so that
+#     the target's C runtime and musl's libc — which a UEFI application must
+#     not contain — are never linked. The target is used for its
+#     position-independent `core`, not for anything Linux about it;
+#   * `-pie` and `--no-dynamic-linker`, so every absolute address is a
+#     relocation firmware can apply, and nothing asks for an interpreter;
+#   * `-znotext`, because read-only data holds absolute pointers too, and a PE
+#     loader applies relocations before it applies section permissions.
+[target.armv7-unknown-linux-musleabi]
+linker = "rust-lld"
+rustflags = [
+    "-C", "linker-flavor=ld.lld",
+    "-C", "link-self-contained=no",
+    "-C", "link-arg=-Tboot/linker/armv7a.ld",
+    "-C", "link-arg=-pie",
+    "-C", "link-arg=--no-dynamic-linker",
+    "-C", "link-arg=-znotext",
+    "-C", "link-arg=-zmax-page-size=4096",
 ]

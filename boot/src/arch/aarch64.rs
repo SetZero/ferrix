@@ -22,6 +22,9 @@ pub(crate) const ARCH: Arch = Arch::AArch64;
 /// The `e_machine` a kernel for this architecture must carry.
 pub(crate) const ELF_MACHINE: u16 = ferrix_elf::EM_AARCH64;
 
+/// The ELF class a kernel for this architecture must be.
+pub(crate) const ELF_CLASS: ferrix_elf::Class = ferrix_elf::Class::Elf64;
+
 /// `TCR_EL1` with 48-bit addressing and a 4 KiB granule in both halves.
 ///
 /// Assembled here rather than inline so each field can be named. The one that

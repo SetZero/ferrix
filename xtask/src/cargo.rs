@@ -10,10 +10,26 @@ use std::process::Command;
 use crate::paths::{self, Arch};
 use crate::{Error, Result};
 
-/// Build the UEFI loader for `arch` and return the `.efi` it produced.
+/// Build the UEFI loader for `arch` and return the `.efi` firmware will run.
+///
+/// On the 64-bit pair that is what rustc produced. On ARMv7-A rustc produces
+/// an ELF static PIE, and the `.efi` is written beside it by `pe::convert` —
+/// which checks the ELF against `boot/linker/armv7a.ld`'s contract, so a
+/// loader that breaks it fails the build rather than the boot.
 pub(crate) fn build_loader(arch: Arch, release: bool) -> Result<PathBuf> {
     build("ferrix-boot", arch.loader_target(), release)?;
-    artifact(arch.loader_target(), release, "ferrix-boot.efi")
+    if !arch.loader_is_elf() {
+        return artifact(arch.loader_target(), release, "ferrix-boot.efi");
+    }
+
+    let elf = artifact(arch.loader_target(), release, "ferrix-boot")?;
+    let bytes = std::fs::read(&elf)
+        .map_err(|error| Error::new(format!("reading {}: {error}", elf.display())))?;
+    let image = crate::pe::convert(&bytes)?;
+    let efi = elf.with_extension("efi");
+    std::fs::write(&efi, &image)?;
+    println!("  converted the loader to PE32, {} KiB", image.len() / 1024);
+    Ok(efi)
 }
 
 /// Build the kernel for `arch` and return the ELF it produced.
