@@ -14,6 +14,7 @@
 //! `SYSRET` loads `CS` from `STAR[63:48] + 16` and `SS` from `STAR[63:48] + 8`,
 //! so user data has to precede user 64-bit code by exactly eight bytes.
 
+use alloc::boxed::Box;
 use core::cell::UnsafeCell;
 
 use super::cpu;
@@ -150,30 +151,52 @@ impl TaskStateSegment {
     }
 }
 
-/// Everything the CPU needs, in one place so it can be one static.
+/// One processor's descriptor tables.
+///
+/// **Per processor, and it has to be.** A TSS holds its processor's stack
+/// pointers, and loading one marks its descriptor busy — so a second processor
+/// loading the same descriptor takes a general protection fault. The GDT holds
+/// that descriptor, so it is per processor too.
 #[repr(C, align(16))]
 struct Tables {
     /// Seven eight-byte slots: the six selectors above plus the second half of
     /// the sixteen-byte TSS descriptor.
     gdt: [u64; 8],
     tss: TaskStateSegment,
-    /// Stack for the double-fault handler.
-    double_fault_stack: [u8; IST_STACK_SIZE],
 }
 
-/// The tables themselves.
+impl Tables {
+    const fn new() -> Tables {
+        Tables {
+            gdt: [0; 8],
+            tss: TaskStateSegment::new(),
+        }
+    }
+}
+
+/// The boot processor's tables.
 struct Global(UnsafeCell<Tables>);
 
 // SAFETY: written once by `init` on the boot CPU before interrupts are enabled,
-// and read-only thereafter. Stage 4 gives every CPU its own copy, because a TSS
-// holds *this* CPU's stack pointers and cannot be shared.
+// and read by the CPU alone thereafter. Every other processor has its own, from
+// `init_secondary`.
 unsafe impl Sync for Global {}
 
-static TABLES: Global = Global(UnsafeCell::new(Tables {
-    gdt: [0; 8],
-    tss: TaskStateSegment::new(),
-    double_fault_stack: [0; IST_STACK_SIZE],
-}));
+/// The boot processor's tables: static, because they are loaded before there
+/// is an allocator.
+static BOOT_TABLES: Global = Global(UnsafeCell::new(Tables::new()));
+
+/// The boot processor's double-fault stack, static for the same reason.
+///
+/// Every other processor's comes from the vmap arena, guard pages and all.
+#[repr(C, align(16))]
+struct BootStack(UnsafeCell<[u8; IST_STACK_SIZE]>);
+
+// SAFETY: nothing in the kernel reads or writes this: the CPU switches to it
+// on a double fault, which is its whole purpose.
+unsafe impl Sync for BootStack {}
+
+static BOOT_DOUBLE_FAULT_STACK: BootStack = BootStack(UnsafeCell::new([0; IST_STACK_SIZE]));
 
 /// The operand `lgdt` takes: a limit and a base.
 #[repr(C, packed)]
@@ -182,7 +205,7 @@ struct DescriptorTablePointer {
     base: u64,
 }
 
-/// Build the GDT and TSS and load them.
+/// Build the boot processor's GDT and TSS and load them.
 ///
 /// # Safety
 ///
@@ -190,16 +213,44 @@ struct DescriptorTablePointer {
 /// before interrupts are enabled.
 pub(crate) unsafe fn init() {
     // SAFETY: single-threaded early boot, and this is the only writer.
-    let tables = unsafe { &mut *TABLES.0.get() };
+    let tables = unsafe { &mut *BOOT_TABLES.0.get() };
 
-    let stack_top = tables.double_fault_stack.as_ptr() as u64 + IST_STACK_SIZE as u64;
     // The x86 stack grows down and `push` decrements first, so the top is one
     // past the last byte. Sixteen-byte aligned because the ABI says so and
     // because a misaligned stack breaks `movaps` in any handler that touches
     // floating point.
+    let stack_top = BOOT_DOUBLE_FAULT_STACK.0.get() as u64 + IST_STACK_SIZE as u64;
+    // SAFETY: the boot processor's own tables, loaded once, and a stack the
+    // CPU alone uses.
+    unsafe { load(tables, stack_top & !0xF) };
+}
+
+/// Build and load this secondary processor's own GDT and TSS.
+///
+/// # Safety
+///
+/// Must be called once, on the secondary processor itself, before it enables
+/// interrupts.
+pub(crate) unsafe fn init_secondary() -> Result<(), &'static str> {
+    let stack = crate::vmap::allocate_stack()
+        .map_err(|_| "no double-fault stack for a secondary processor")?;
+    // Leaked: the processor uses these for the rest of its life.
+    let tables: &'static mut Tables = Box::leak(Box::new(Tables::new()));
+    // SAFETY: fresh tables that nothing else refers to, and a fresh stack.
+    unsafe { load(tables, stack.top) };
+    Ok(())
+}
+
+/// Fill `tables` for this processor and make it use them.
+///
+/// # Safety
+///
+/// `tables` must belong to this processor alone and live as long as it runs,
+/// and `double_fault_top` must be the top of a stack nothing else uses.
+unsafe fn load(tables: &'static mut Tables, double_fault_top: u64) {
     tables
         .tss
-        .set_interrupt_stack(DOUBLE_FAULT_IST, stack_top & !0xF);
+        .set_interrupt_stack(DOUBLE_FAULT_IST, double_fault_top);
     tables.tss.deny_all_ports();
 
     let tss_address = (&raw const tables.tss) as u64;

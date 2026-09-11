@@ -328,12 +328,13 @@ pub(crate) fn report_trap(frame: &TrapFrame) {
     );
 }
 
-/// Install the vector table.
+/// Install the vector table on this core.
 ///
 /// # Safety
 ///
-/// Must be called once, on the boot CPU, before anything can fault
-/// deliberately and before interrupts are unmasked.
+/// Must be called on every core, once, before anything on it can fault and
+/// before it unmasks interrupts. One table serves every core: it holds code,
+/// and no per-core state.
 pub(crate) unsafe fn init() {
     let table = (&raw const ferrix_vectors) as u64;
     // SAFETY: `table` is the vector table in this image, 2048-byte aligned as

@@ -3,6 +3,7 @@
 pub(crate) mod console;
 mod cpu;
 mod gic;
+mod smp;
 mod timer;
 mod trap;
 
@@ -27,6 +28,27 @@ pub(crate) fn init_console(memory: &mut EarlyMemory) -> Result<(), EarlyError> {
     console::init(memory)
 }
 
+pub(crate) use smp::{CpuStarter, describe_cpus, hardware_id};
+
+/// Point this CPU's per-CPU register at `address`.
+///
+/// # Safety
+///
+/// `address` must be this processor's own `PerCpu` record, which must live for
+/// the rest of the system's life: `cpu_local` hands it back as a reference.
+pub(crate) unsafe fn set_cpu_local(address: u64) {
+    cpu::write_tpidr_el1(address);
+}
+
+/// The address [`set_cpu_local`] installed on this CPU.
+///
+/// # Safety
+///
+/// [`set_cpu_local`] must have run on this CPU. Until it has, `TPIDR_EL1`
+/// holds whatever it held at reset, which the architecture leaves unknown.
+pub(crate) unsafe fn cpu_local() -> u64 {
+    cpu::read_tpidr_el1()
+}
 pub(crate) use trap::{TrapFrame, advance_past_breakpoint, breakpoint, classify, report_trap};
 
 /// Install the exception vector table.
@@ -44,10 +66,18 @@ pub(crate) unsafe fn init_traps() {
     unsafe { trap::init() };
 }
 
-/// Publish page table writes and invalidate the whole TLB.
+/// Publish page table writes and invalidate the whole TLB — every core's.
 pub(crate) fn flush_tlb() {
     cpu::flush_tlb();
 }
+
+/// Whether [`flush_tlb`] reaches every processor's TLB.
+///
+/// Yes: `tlbi vmalle1is` is broadcast to the inner shareable domain, which
+/// every core of the machine is in, and the `dsb ish` after it does not
+/// complete until every one of them has done it. The TLB shootdown x86-64
+/// needs interrupts for, this architecture does in hardware.
+pub(crate) const TLB_FLUSH_IS_BROADCAST: bool = true;
 
 /// Root of the loader's identity map, while it still exists.
 ///
@@ -112,6 +142,9 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
     // distributor operation like any other — it is only *private* in that
     // each core has its own copy of the number.
     gic::enable(timer::irq());
+    // And the inter-processor interrupt, whose enable bit is this core's
+    // own: every secondary turns on its copy in `gic::init_this_cpu`.
+    gic::enable(gic::IPI_SGI);
 
     Ok(Report {
         counter: "generic timer",
@@ -128,6 +161,32 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
 /// Unmask `IRQ` on this CPU.
 pub(crate) fn enable_interrupts() {
     cpu::enable_interrupts();
+}
+
+/// Mask every interrupt on this CPU.
+pub(crate) fn disable_interrupts() {
+    cpu::disable_interrupts();
+}
+
+/// With interrupts masked, wait for one and then unmask, so one that arrived
+/// since they were masked wakes the wait instead of being lost before it.
+/// Returns with `IRQ` unmasked.
+pub(crate) fn wait_for_work() {
+    cpu::wait_then_enable_interrupts();
+}
+
+/// The interrupt number inter-processor interrupts arrive on.
+pub(crate) const fn ipi_irq() -> u32 {
+    gic::IPI_SGI
+}
+
+/// Interrupt every core but this one.
+///
+/// Cannot fail here — it is one write to the distributor — but can on x86-64,
+/// where the local APIC has to accept the command.
+pub(crate) fn send_ipi_to_others() -> Result<(), &'static str> {
+    gic::send_ipi_to_others();
+    Ok(())
 }
 
 /// How `ferrix_sync`'s interrupt-masking lock masks interrupts here.

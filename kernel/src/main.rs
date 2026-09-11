@@ -19,6 +19,7 @@ mod early;
 mod irq;
 mod mm;
 mod mmio;
+mod smp;
 mod timer;
 mod trap;
 mod vmap;
@@ -154,6 +155,12 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
         measured,
     );
 
+    // Stage 4. It has to be here: after interrupt bring-up, which maps the
+    // local APIC x86-64 reads its own identifier from, and before
+    // `finish_memory`, which reclaims the tables the processor list comes
+    // from and sweeps a set of mappings that bringing processors up adds to.
+    bring_up_processors(view);
+
     // The rest of stage 2, deliberately last. Each of these needs something a
     // later part of boot brought up — the arena needs the heap, the sweep
     // needs every mapping the kernel is ever going to make, and reclaiming
@@ -164,8 +171,85 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
         arch::halt()
     }
 
-    println!("{SUCCESS_MARKER} stages 1-3");
+    println!("{SUCCESS_MARKER} stages 1-4");
     arch::shutdown()
+}
+
+/// Stage 4: find every processor, start them, and require them to work
+/// together.
+///
+/// Halts rather than returning an error, like the rest of `kmain`: each step
+/// here has its own `FERRIX-PANIC` line, because "stage 4 failed" says
+/// nothing about which of a dozen processors, or which of the checks, did.
+fn bring_up_processors(view: &BootView<'_>) {
+    // Counting first, starting nothing.
+    let cpus = match smp::discover(view) {
+        Ok(topology) => topology,
+        Err(problem) => {
+            println!("FERRIX-PANIC could not enumerate the processors: {problem}");
+            arch::halt()
+        }
+    };
+
+    // Then the rest of them. Each is started, waited for, and required to
+    // find its own record through its own register before the next one is
+    // started.
+    if let Err(problem) = smp::start_secondaries(view) {
+        println!("FERRIX-PANIC could not start the secondary processors: {problem}");
+        arch::halt()
+    }
+    if cpus.online() != cpus.count() {
+        println!("FERRIX-PANIC not every processor firmware described came online");
+        arch::halt()
+    }
+    println!(
+        "  cpus     {} described by firmware, {} online, booted on {} {:#x}",
+        cpus.count(),
+        cpus.online(),
+        cpus.id_name(),
+        cpus.boot_id(),
+    );
+
+    let smp = match smp::check::run(cpus) {
+        Ok(report) => report,
+        Err(problem) => {
+            println!("FERRIX-PANIC stage 4 self-check failed: {problem}");
+            arch::halt()
+        }
+    };
+    println!(
+        "  smp      {} rounds of work on every processor, {} IPIs taken",
+        smp.rounds, smp.ipis,
+    );
+    if arch::TLB_FLUSH_IS_BROADCAST {
+        println!(
+            "  tlb      {} remaps seen by every processor, invalidated by broadcast",
+            smp.remaps,
+        );
+    } else {
+        println!(
+            "  tlb      {} remaps seen by every processor, {} shootdowns",
+            smp.remaps, smp.shootdowns,
+        );
+    }
+    println!(
+        "  grace    {} grace periods against {} reads, none of them stale",
+        smp.grace_periods, smp.reads,
+    );
+    println!(
+        "  counter  {} of {}, {} of {} shares overlapping, {} updates lost without the lock",
+        smp.counter,
+        smp.expected,
+        smp.overlapping,
+        cpus.online(),
+        smp.lost,
+    );
+    println!(
+        "  stage 4  {} processors online, a contended counter came to {} of {}",
+        cpus.online(),
+        smp.counter,
+        smp.expected,
+    );
 }
 
 /// The half of stage 2 that cannot run until the rest of boot has.
@@ -484,6 +568,13 @@ fn timer_check() -> Result<u64, &'static str> {
     let lowest = requested * (100 - TOLERANCE_PERCENT) / 100;
     let highest = requested * (100 + TOLERANCE_PERCENT) / 100;
     if measured < lowest || measured > highest {
+        // The numbers as well as the verdict: which way the rate is off, and
+        // by how much, is most of the diagnosis. Slow means interrupts arrive
+        // late; fast means the timer was programmed from a wrong frequency.
+        println!(
+            "  timer    {TICKS} ticks took {} ms: {measured} Hz against {requested} requested",
+            elapsed / 1_000_000
+        );
         return Err("the timer and the counter disagree about how long a second is");
     }
     Ok(measured)
@@ -1037,6 +1128,7 @@ const FRAMEBUFFER_WINDOW: u64 = 0x1000_0000;
 /// test rather than a two-minute timeout with no explanation.
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
+    console::begin_panic();
     println!();
     println!("FERRIX-PANIC {info}");
     arch::halt()

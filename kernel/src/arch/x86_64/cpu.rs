@@ -100,6 +100,114 @@ pub(crate) fn read_rflags() -> u64 {
     flags
 }
 
+/// Write a model-specific register.
+///
+/// # Safety
+///
+/// `msr` must be a register this CPU implements and `value` one it accepts. An
+/// invalid one is a general protection fault; a valid but wrong one changes how
+/// the CPU behaves.
+pub(crate) unsafe fn write_msr(msr: u32, value: u64) {
+    // SAFETY: the caller guarantees the register and the value.
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") value as u32,
+            in("edx") (value >> 32) as u32,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+}
+
+/// Read a model-specific register.
+///
+/// # Safety
+///
+/// `msr` must be a register this CPU implements; reading one it does not is a
+/// general protection fault.
+pub(crate) unsafe fn read_msr(msr: u32) -> u64 {
+    let low: u32;
+    let high: u32;
+    // SAFETY: the caller guarantees the register exists.
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    (u64::from(high) << 32) | u64::from(low)
+}
+
+/// Control register 0: protection, paging, write protection, caching.
+pub(crate) fn read_cr0() -> u64 {
+    let value: u64;
+    // SAFETY: reading CR0 has no side effects.
+    unsafe {
+        asm!("mov {}, cr0", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// Control register 4: the paging and instruction-set extensions in force.
+pub(crate) fn read_cr4() -> u64 {
+    let value: u64;
+    // SAFETY: reading CR4 has no side effects.
+    unsafe {
+        asm!("mov {}, cr4", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// Write control register 4.
+///
+/// # Safety
+///
+/// Every bit set must be a feature this processor has and a mode it can be in
+/// now: `PCIDE` outside long mode, or `LA57` under a four-level table, is a
+/// fault at best.
+pub(crate) unsafe fn write_cr4(value: u64) {
+    // SAFETY: the caller guarantees the value.
+    unsafe {
+        asm!("mov cr4, {}", in(reg) value, options(nostack, preserves_flags));
+    }
+}
+
+/// Switch to the page tables rooted at `root`.
+///
+/// # Safety
+///
+/// `root` must map everything this processor touches next — the code it is
+/// executing, its stack — at the addresses it is using them at.
+pub(crate) unsafe fn write_cr3(root: u64) {
+    // SAFETY: the caller guarantees the new tables map what runs next.
+    unsafe {
+        asm!("mov cr3, {}", in(reg) root, options(nostack, preserves_flags));
+    }
+}
+
+/// The word at offset zero from `GS`'s base.
+///
+/// # Safety
+///
+/// `GS`'s base must point at readable memory. Until the kernel writes it, it
+/// points wherever firmware left it.
+pub(crate) unsafe fn read_gs_word() -> u64 {
+    let word: u64;
+    // SAFETY: the caller guarantees the base is readable.
+    unsafe {
+        asm!(
+            "mov {}, qword ptr gs:[0]",
+            out(reg) word,
+            options(readonly, nostack, preserves_flags),
+        );
+    }
+    word
+}
+
 /// QEMU's `isa-debug-exit` device.
 ///
 /// Writing to it ends the emulator with `(value << 1) | 1`, which is how the
@@ -229,6 +337,20 @@ pub(crate) fn enable_interrupts() {
     // the time anything calls this — `init_traps` runs long before.
     unsafe {
         asm!("sti", options(nomem, nostack));
+    }
+}
+
+/// Unmask interrupts and halt until one arrives, with no gap between the two.
+///
+/// `sti` takes effect only after the instruction that follows it, so an
+/// interrupt that became pending while they were masked is delivered to the
+/// `hlt` — waking it — rather than slipping in between and leaving the
+/// processor asleep with the reason it should be awake already handled.
+pub(crate) fn enable_interrupts_and_halt() {
+    // SAFETY: `sti` and `hlt` change only the interrupt flag and whether the
+    // processor is running; every vector has a gate by the time this is used.
+    unsafe {
+        asm!("sti", "hlt", options(nomem, nostack));
     }
 }
 

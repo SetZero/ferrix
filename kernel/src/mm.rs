@@ -20,21 +20,40 @@
 //! handed to the allocator with the carved part left out. After that, every
 //! allocation goes through the allocator like anything else.
 //!
-//! # One CPU
+//! # Locks
 //!
-//! The two globals below are reached without a lock, which is sound today for
-//! the reason stated on each: no second CPU has been started and interrupts are
-//! masked. Stage 4 brings both of those to an end, and turns each of these into
-//! a per-CPU cache in front of a locked global.
+//! Three globals, each behind an interrupt-masking lock, nesting in one fixed
+//! order:
+//!
+//! * [`TABLES`] serialises every walk and change of the kernel's page tables.
+//!   A mapping that needs a new table takes a frame for it, and an unmap
+//!   writes down what it released in a `Vec`, so this is taken before both of
+//!   the others.
+//! * [`HEAP`] is the kernel heap. A slab that runs dry takes a page, so this is
+//!   taken before [`FRAMES`] too.
+//! * [`FRAMES`] is the buddy allocator, and the innermost lock in the kernel:
+//!   nothing is taken while it is held.
+//!
+//! Interrupt-masking rather than plain, because the page fault handler maps
+//! pages and so reaches the first and the last: a handler that interrupted a
+//! CPU holding either would spin on its own CPU's lock. Masking interrupts does
+//! not mask a *fault*, which is why nothing holding these touches the
+//! on-demand window.
+//!
+//! One lock in front of each is the simplest correct shape, and the
+//! architecture asks for more: per-CPU caches in front of the frame allocator
+//! and the heap, so the common allocation takes no lock at all. Those need a
+//! per-CPU area to live in, and come after it.
 
+use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
-use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use ferrix_bootinfo::{BootView, MemKind, MemRegion, PAGE_SIZE};
 use ferrix_frame::{Frame, Frames, PageEntry};
 use ferrix_heap::{Backing, Heap, Request};
 use ferrix_paging::{Leaf, MapFlags, Mapper, PhysAddr, PhysMem, Released, VirtAddr, WalkOutcome};
+use ferrix_sync::IrqSpinLock;
 
 /// Why memory could not be brought up.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -64,23 +83,19 @@ impl core::fmt::Display for MemoryError {
 // ---------------------------------------------------------------------------
 
 /// The buddy allocator, once [`init`] has run.
-struct FrameState(UnsafeCell<Option<Frames<'static>>>);
-
-// SAFETY: early boot is single-threaded — no other CPU has been started and
-// interrupts are masked — so there is never a second accessor. Stage 4 replaces
-// this with a per-CPU cache in front of a locked global, and the accessors
-// below are the only places that have to change.
-unsafe impl Sync for FrameState {}
-
-static FRAMES: FrameState = FrameState(UnsafeCell::new(None));
+///
+/// The innermost lock in the kernel; the module documentation gives the order.
+static FRAMES: IrqSpinLock<Option<Frames<'static>>, crate::arch::Irq> = IrqSpinLock::new(None);
 
 /// The kernel heap.
-struct HeapState(UnsafeCell<Heap>);
+static HEAP: IrqSpinLock<Heap, crate::arch::Irq> = IrqSpinLock::new(Heap::new());
 
-// SAFETY: as `FrameState`.
-unsafe impl Sync for HeapState {}
-
-static HEAP: HeapState = HeapState(UnsafeCell::new(Heap::new()));
+/// Held for every walk and every change of the kernel's page tables.
+///
+/// Guards no data of its own: the tables are physical memory reached through
+/// the direct map, and what this lock owns is the right to walk them.
+/// [`with_tables`] and [`sweep`] are the only places that take it.
+static TABLES: IrqSpinLock<(), crate::arch::Irq> = IrqSpinLock::new(());
 
 /// Base of the direct map, learned from the hand-off.
 ///
@@ -100,18 +115,12 @@ fn unmap(virt: u64) -> u64 {
 
 /// Run `body` with the frame allocator, or return `None` before [`init`].
 fn with_frames<T>(body: impl FnOnce(&mut Frames<'static>) -> T) -> Option<T> {
-    // SAFETY: single-threaded, as documented on the `Sync` impl for
-    // `FrameState`. The reference does not escape `body`.
-    let slot = unsafe { &mut *FRAMES.0.get() };
-    slot.as_mut().map(body)
+    FRAMES.lock().as_mut().map(body)
 }
 
 /// Run `body` with the heap.
 fn with_heap<T>(body: impl FnOnce(&mut Heap) -> T) -> T {
-    // SAFETY: single-threaded, as documented on the `Sync` impl for
-    // `HeapState`. The reference does not escape `body`.
-    let heap = unsafe { &mut *HEAP.0.get() };
-    body(heap)
+    body(&mut HEAP.lock())
 }
 
 // ---------------------------------------------------------------------------
@@ -177,9 +186,7 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Stats, MemoryError> {
         page_array_at: host.base,
     };
 
-    // SAFETY: single-threaded, as documented on the `Sync` impl for
-    // `FrameState`, and nothing has taken a reference to the slot yet.
-    unsafe { *FRAMES.0.get() = Some(frames) };
+    *FRAMES.lock() = Some(frames);
     Ok(stats)
 }
 
@@ -260,6 +267,18 @@ fn insert_region(frames: &mut Frames<'static>, region: &MemRegion, hole: u64, ho
 /// Take `2^order` contiguous frames.
 pub(crate) fn allocate_frames(order: u8) -> Option<Frame> {
     with_frames(|frames| frames.allocate(order))?
+}
+
+/// Take `2^order` contiguous frames lying wholly below frame `limit`.
+///
+/// For the one caller that cares where its memory is: x86-64's trampoline,
+/// which real mode can only reach below one mebibyte.
+#[allow(
+    dead_code,
+    reason = "only x86-64 starts processors from low memory; see the doc comment"
+)]
+pub(crate) fn allocate_frames_below(order: u8, limit: Frame) -> Option<Frame> {
+    with_frames(|frames| frames.allocate_below(order, limit))?
 }
 
 /// Give back frames taken with [`allocate_frames`].
@@ -422,15 +441,15 @@ pub(crate) fn map_kernel(
     len: u64,
     flags: MapFlags,
 ) -> Result<(), ferrix_paging::MapError> {
-    let root = PhysAddr(ROOT_TABLE.load(Ordering::Relaxed));
-    let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(root);
-    mapper.map_range(
-        &mut KernelPhysMem,
-        VirtAddr(virt),
-        PhysAddr(phys),
-        len.next_multiple_of(PAGE_SIZE),
-        flags,
-    )?;
+    with_tables(|mapper| {
+        mapper.map_range(
+            &mut KernelPhysMem,
+            VirtAddr(virt),
+            PhysAddr(phys),
+            len.next_multiple_of(PAGE_SIZE),
+            flags,
+        )
+    })?;
     // The table walker is a separate observer of memory: on AArch64 it cannot
     // see a descriptor still sitting in a store buffer, and the barrier inside
     // this is what makes the mapping real.
@@ -456,14 +475,112 @@ pub(crate) fn map_demand_page(address: u64) -> Result<(), MemoryError> {
 
 /// Translate a kernel virtual address the way the hardware would.
 pub(crate) fn translate(virt: u64) -> Option<u64> {
-    kernel_mapper()
-        .translate(&KernelPhysMem, VirtAddr(virt))
-        .map(|at| at.0)
+    with_tables(|mapper| {
+        mapper
+            .translate(&KernelPhysMem, VirtAddr(virt))
+            .map(|at| at.0)
+    })
 }
 
-/// The mapper over the live kernel page tables.
-fn kernel_mapper() -> Mapper<crate::arch::PageEncoding> {
-    Mapper::new(PhysAddr(ROOT_TABLE.load(Ordering::Relaxed)))
+/// Physical address of the kernel's root page table, for a processor about to
+/// install it.
+pub(crate) fn root_table() -> u64 {
+    ROOT_TABLE.load(Ordering::Relaxed)
+}
+
+/// Where physical address `phys` can be read and written: its alias in the
+/// direct map.
+pub(crate) fn direct_map(phys: u64) -> u64 {
+    physmap(phys)
+}
+
+// ---------------------------------------------------------------------------
+// Page tables beside the kernel's
+// ---------------------------------------------------------------------------
+
+/// Map `len` bytes at `virt` onto `phys` in the tree rooted at `root`.
+///
+/// What starting a processor needs: a mapping the kernel's own tables must not
+/// have — an identity map of the instructions that turn the MMU on — in a tree
+/// only that processor installs, and only for as long as it takes. The caller
+/// allocates and zeroes `root`, because where it may live differs: anywhere on
+/// `AArch64`, below 4 GiB for x86-64's trampoline.
+///
+/// Takes no lock: a tree no processor has installed is nobody else's to walk.
+/// `root` must not be the kernel's, which [`map_kernel`] is for.
+pub(crate) fn map_in(
+    root: u64,
+    virt: u64,
+    phys: u64,
+    len: u64,
+    flags: MapFlags,
+) -> Result<(), ferrix_paging::MapError> {
+    let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
+    mapper.map_range(
+        &mut KernelPhysMem,
+        VirtAddr(virt),
+        PhysAddr(phys),
+        len.next_multiple_of(PAGE_SIZE),
+        flags,
+    )
+}
+
+/// Make top-level `slots` of the tree rooted at `root` point where the
+/// kernel's do, so that part of the address space looks the same through
+/// either root.
+///
+/// Shared, not copied: the tables under those slots are the kernel's own. So
+/// nothing may be mapped or unmapped through `root` inside them — [`map_in`]
+/// and [`unmap_in`] on `root` have to stay in the slots that are its own.
+///
+/// x86-64 only, and deliberately not behind a conditional, for the reason
+/// [`clear_root_slots`] gives: `AArch64` splits the halves across two base
+/// registers, so a tree there never needs the kernel's half in it.
+#[allow(
+    dead_code,
+    reason = "only x86-64 keeps both halves in one root; see the doc comment"
+)]
+pub(crate) fn share_kernel_slots(root: u64, slots: core::ops::Range<usize>) {
+    let kernel = ROOT_TABLE.load(Ordering::Relaxed);
+    with_tables(|_| {
+        for slot in slots {
+            let offset = (slot as u64) * 8;
+            let entry = KernelPhysMem.read(PhysAddr(kernel + offset));
+            KernelPhysMem.write(PhysAddr(root + offset), entry);
+        }
+    });
+}
+
+/// Take down what [`map_in`] built at `virt`, giving back every table under
+/// `root` that it leaves empty.
+///
+/// Neither the root nor the frames the mappings pointed at are freed: the
+/// caller allocated both and knows what they are.
+pub(crate) fn unmap_in(root: u64, virt: u64, len: u64) -> Result<(), ferrix_paging::MapError> {
+    let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
+    let _ = mapper.unmap_range(
+        &mut KernelPhysMem,
+        VirtAddr(virt),
+        len.next_multiple_of(PAGE_SIZE),
+        |freed| {
+            if let Released::Table { phys } = freed {
+                deallocate_frames(phys.0 / PAGE_SIZE, 0);
+            }
+        },
+    )?;
+    Ok(())
+}
+
+/// Run `body` with a mapper over the live kernel page tables, holding
+/// [`TABLES`] throughout.
+///
+/// Reads take the lock as well as writes. A walk racing an unmap on another
+/// CPU can follow a descriptor into a table that has just been freed and
+/// handed to somebody else, and read whatever they wrote there as though it
+/// were a translation.
+fn with_tables<T>(body: impl FnOnce(Mapper<crate::arch::PageEncoding>) -> T) -> T {
+    let _held = TABLES.lock();
+    body(Mapper::new(PhysAddr(ROOT_TABLE.load(Ordering::Relaxed))))
 }
 
 /// Remove `len` bytes of kernel mapping at `virt`.
@@ -472,38 +589,103 @@ fn kernel_mapper() -> Mapper<crate::arch::PageEncoding> {
 /// the block it was mapped at, and is where the caller decides whether the
 /// memory behind the mapping goes back to the buddy allocator. A `vmap` of
 /// anonymous pages frees them; a device window never allocated them.
+///
+/// **Unmap, invalidate everywhere, and only then free** — in that order. A
+/// frame handed back before every processor has dropped its translation to it
+/// can be allocated to somebody else while another processor still reads and
+/// writes it through the old one. That is not a leak or a crash; it is two
+/// owners of one page, and the symptom appears in whichever of them notices
+/// first. So nothing is released until the shootdown returns — not even the
+/// page tables, which a processor's walker may have cached as well.
+///
+/// Must not be called holding any lock, for the reason
+/// [`crate::smp::flush_tlb_everywhere`] gives.
 pub(crate) fn unmap_kernel(
     virt: u64,
     len: u64,
     mut released: impl FnMut(Frame, u8),
 ) -> Result<u64, ferrix_paging::MapError> {
-    let removed = kernel_mapper().unmap_range(
-        &mut KernelPhysMem,
-        VirtAddr(virt),
-        len.next_multiple_of(PAGE_SIZE),
-        |freed| match freed {
-            Released::Page { phys, level } => {
-                // Levels run root-to-leaf and orders run small-to-large, so
-                // the conversion is a subtraction rather than a table: a
-                // level-3 leaf is order 0 and a 2 MiB block is order 9.
-                let order = (ferrix_paging::Level::PAGE.depth() - level.depth()) * 9;
-                released(phys.0 / PAGE_SIZE, order);
-            }
-            // A page table the mapper allocated through `KernelPhysMem`, which
-            // took it from the buddy allocator. It goes straight back there
-            // rather than to the caller: the caller asked to unmap a range and
-            // has no idea a table existed, and telling it about one would make
-            // every `released` closure in the tree have to know.
-            Released::Table { phys } => deallocate_frames(phys.0 / PAGE_SIZE, 0),
-        },
-    )?;
+    let mut pages: Deferred<(Frame, u8), 32> = Deferred::new((0, 0));
+    let mut tables: Deferred<Frame, 8> = Deferred::new(0);
 
-    // Until this runs the old translation is still in the TLB, and a read
-    // through it succeeds against a frame that now belongs to somebody else.
-    // Unmapping without invalidating is worse than not unmapping at all: it
-    // looks like it worked.
-    crate::arch::flush_tlb();
-    Ok(removed)
+    let removed = with_tables(|mapper| {
+        mapper.unmap_range(
+            &mut KernelPhysMem,
+            VirtAddr(virt),
+            len.next_multiple_of(PAGE_SIZE),
+            |freed| match freed {
+                Released::Page { phys, level } => {
+                    // Levels run root-to-leaf and orders run small-to-large,
+                    // so the conversion is a subtraction rather than a table:
+                    // a level-3 leaf is order 0 and a 2 MiB block is order 9.
+                    let order = (ferrix_paging::Level::PAGE.depth() - level.depth()) * 9;
+                    pages.push((phys.0 / PAGE_SIZE, order));
+                }
+                // A page table the mapper allocated through `KernelPhysMem`,
+                // which took it from the buddy allocator. It goes straight
+                // back there rather than to the caller: the caller asked to
+                // unmap a range and has no idea a table existed, and telling
+                // it about one would make every `released` closure in the
+                // tree have to know.
+                Released::Table { phys } => tables.push(phys.0 / PAGE_SIZE),
+            },
+        )
+    });
+
+    // Whatever was removed before an error is just as unmapped, and just as
+    // cached in somebody's TLB, as it would have been after a success.
+    crate::smp::flush_tlb_everywhere();
+    for &(frame, order) in pages.iter() {
+        released(frame, order);
+    }
+    for &frame in tables.iter() {
+        deallocate_frames(frame, 0);
+    }
+    removed
+}
+
+/// What an unmap released, held until every TLB has forgotten it.
+///
+/// Inline for an unmap of up to `N` things, which is every unmap the kernel
+/// makes today, and spilling to the heap past that. **Not a `Vec` from the
+/// start**, and not for speed: an unmap that allocated would, whenever its
+/// size class had no slab page, take one from the frame allocator and keep it
+/// — and the stage 2 checks, which require an unmap to give back exactly the
+/// frames its map took, would be measuring the heap's bookkeeping instead.
+#[derive(Debug)]
+struct Deferred<T: Copy, const N: usize> {
+    /// The first `N` items.
+    inline: [T; N],
+    /// How many of `inline` are in use.
+    held: usize,
+    /// The rest, for an unmap larger than `N`.
+    spill: Vec<T>,
+}
+
+impl<T: Copy, const N: usize> Deferred<T, N> {
+    /// An empty list; `blank` fills the unused inline slots.
+    const fn new(blank: T) -> Self {
+        Deferred {
+            inline: [blank; N],
+            held: 0,
+            spill: Vec::new(),
+        }
+    }
+
+    /// Hold on to `item`.
+    fn push(&mut self, item: T) {
+        if let Some(slot) = self.inline.get_mut(self.held) {
+            *slot = item;
+            self.held += 1;
+        } else {
+            self.spill.push(item);
+        }
+    }
+
+    /// Everything held, in the order it was pushed.
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.inline.iter().take(self.held).chain(self.spill.iter())
+    }
 }
 
 /// Change what an existing kernel mapping permits.
@@ -512,18 +694,28 @@ pub(crate) fn protect_kernel(
     len: u64,
     flags: MapFlags,
 ) -> Result<(), ferrix_paging::MapError> {
-    kernel_mapper().protect_range(
-        &mut KernelPhysMem,
-        VirtAddr(virt),
-        len.next_multiple_of(PAGE_SIZE),
-        flags,
-    )?;
-    crate::arch::flush_tlb();
+    with_tables(|mapper| {
+        mapper.protect_range(
+            &mut KernelPhysMem,
+            VirtAddr(virt),
+            len.next_multiple_of(PAGE_SIZE),
+            flags,
+        )
+    })?;
+    // Everywhere: a permission narrowed on one processor and still wide in
+    // another's TLB is not narrowed.
+    crate::smp::flush_tlb_everywhere();
     Ok(())
 }
 
-/// Visit every leaf in the tree rooted at `root`, in address order.
+/// Visit every leaf in the tree rooted at `root`, in address order, holding
+/// [`TABLES`] throughout.
+///
+/// Takes a root rather than going through [`with_tables`] because the W^X
+/// sweep also walks the loader's identity map, which on `AArch64` is a second
+/// tree with a root of its own.
 fn sweep(root: u64, visit: impl FnMut(Leaf) -> bool) -> WalkOutcome {
+    let _held = TABLES.lock();
     let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
     mapper.for_each_leaf(&KernelPhysMem, visit)
 }
@@ -714,10 +906,12 @@ pub(crate) unsafe fn reclaim_boot_memory(view: &BootView<'_>) -> Reclaimed {
 )]
 pub(crate) fn clear_root_slots(slots: core::ops::Range<usize>) {
     let root = ROOT_TABLE.load(Ordering::Relaxed);
-    for slot in slots {
-        KernelPhysMem.write(PhysAddr(root + (slot as u64) * 8), 0);
-    }
-    crate::arch::flush_tlb();
+    with_tables(|_| {
+        for slot in slots {
+            KernelPhysMem.write(PhysAddr(root + (slot as u64) * 8), 0);
+        }
+    });
+    crate::smp::flush_tlb_everywhere();
 }
 
 /// Zero a frame through the direct map.

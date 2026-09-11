@@ -15,9 +15,11 @@
 //! else. So it is measured against the counter `super::clock` brought up a
 //! moment earlier, which is the same thing every other kernel does.
 
+use core::hint::spin_loop;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use ferrix_acpi::{Acpi, MadtEntry};
+use ferrix_sync::IrqControl;
 
 use super::clock;
 use super::trap::IRQ_BASE;
@@ -29,14 +31,42 @@ const LAPIC_DEFAULT_BASE: u64 = 0xFEE0_0000;
 /// Bytes of register window a local APIC occupies.
 const LAPIC_WINDOW: u64 = 0x400;
 
+/// Local APIC identifier. In xAPIC mode it is the register's top byte.
+const LAPIC_ID: u64 = 0x020;
 /// Task priority: which interrupts this CPU is willing to take.
 const LAPIC_TPR: u64 = 0x080;
 /// End of interrupt.
 const LAPIC_EOI: u64 = 0x0B0;
 /// Spurious interrupt vector, and the software enable bit.
 const LAPIC_SVR: u64 = 0x0F0;
+/// Interrupt command, low half. Writing it sends.
+const LAPIC_ICR_LOW: u64 = 0x300;
+/// Interrupt command, high half: the destination.
+const LAPIC_ICR_HIGH: u64 = 0x310;
 /// Local vector table entry for the timer.
 const LAPIC_LVT_TIMER: u64 = 0x320;
+
+/// Interrupt command: delivery mode INIT, which resets the destination into
+/// waiting for a start-up IPI.
+const ICR_INIT: u32 = 0b101 << 8;
+/// Interrupt command: delivery mode start-up. The vector is a page number.
+const ICR_STARTUP: u32 = 0b110 << 8;
+/// Interrupt command: level assert, required for everything except the INIT
+/// de-assert that only processors older than the Pentium 4 ever needed.
+const ICR_ASSERT: u32 = 1 << 14;
+/// Interrupt command: the last one has not been accepted yet.
+const ICR_PENDING: u32 = 1 << 12;
+/// Interrupt command: destination shorthand "every processor but this one".
+const ICR_ALL_BUT_SELF: u32 = 0b11 << 18;
+
+/// The vector inter-processor interrupts arrive on: just below the timer's,
+/// and like it outside the range handed to I/O APIC inputs.
+pub(crate) const IPI_VECTOR: u64 = 0xFD;
+
+/// The interrupt number the generic layer knows an IPI by.
+pub(crate) const fn ipi_irq() -> u32 {
+    (IPI_VECTOR - IRQ_BASE) as u32
+}
 /// Timer initial count. Writing it starts the timer.
 const LAPIC_TIMER_ICR: u64 = 0x380;
 /// Timer current count, counting down towards zero.
@@ -202,6 +232,95 @@ fn mask_all_inputs(regs: Mmio) {
         let low = IOAPIC_REDIRECTION_BASE.saturating_add(input.saturating_mul(2));
         io_apic_write(regs, low, IOAPIC_ENTRY_MASKED);
     }
+}
+
+/// Bring up this processor's local APIC, on a processor other than the one
+/// that ran [`init`].
+///
+/// Every processor has its own, at the same address: the window `init` mapped
+/// reaches whichever local APIC belongs to the processor reading it. The timer
+/// is left masked, with the divider `init` calibrated against — the rate it
+/// measured holds for every processor sharing the crystal, which on every
+/// machine this runs on is all of them.
+pub(crate) fn init_this_cpu() {
+    let regs = lapic();
+    regs.write32(LAPIC_TPR, 0);
+    regs.write32(LAPIC_SVR, SVR_ENABLE | SPURIOUS_VECTOR as u32);
+    regs.write32(LAPIC_TIMER_DCR, DCR_DIVIDE_BY_16);
+    regs.write32(LAPIC_LVT_TIMER, TIMER_VECTOR as u32 | LVT_MASKED);
+}
+
+/// Reset processor `apic_id` into waiting for a start-up IPI.
+pub(crate) fn send_init(apic_id: u32) -> Result<(), &'static str> {
+    send(apic_id, ICR_INIT | ICR_ASSERT)
+}
+
+/// Start processor `apic_id` in real mode at the beginning of page `page`.
+pub(crate) fn send_startup(apic_id: u32, page: u8) -> Result<(), &'static str> {
+    send(apic_id, ICR_STARTUP | ICR_ASSERT | u32::from(page))
+}
+
+/// Interrupt every processor but this one on [`IPI_VECTOR`].
+///
+/// One write, with the destination shorthand doing the addressing — which is
+/// also why this needs no list of who is online: a processor still waiting
+/// for its start-up IPI ignores a fixed interrupt, and one with interrupts
+/// masked takes it when it unmasks.
+///
+/// No fence before it: the register is uncached memory, and x86 does not let
+/// an uncached store pass the ordinary stores before it. (An x2APIC's
+/// register is an MSR, which would need one. This is not an x2APIC.)
+pub(crate) fn send_ipi_to_others() -> Result<(), &'static str> {
+    issue(None, ICR_ALL_BUT_SELF | ICR_ASSERT | IPI_VECTOR as u32)
+}
+
+/// Send `command` to the local APIC `apic_id` and wait for it to be accepted.
+fn send(apic_id: u32, command: u32) -> Result<(), &'static str> {
+    if apic_id > 0xFF {
+        return Err("an APIC ID above 255 needs x2APIC mode, which is not written yet");
+    }
+    issue(Some(apic_id << 24), command)
+}
+
+/// Write an interrupt command, with its destination if it has one, and wait
+/// for the local APIC to accept it.
+fn issue(destination: Option<u32>, command: u32) -> Result<(), &'static str> {
+    let regs = lapic();
+
+    // Masked, because a command can be two writes: an interrupt handler that
+    // sent one of its own between them would send it to this destination.
+    let saved = <super::Irq as IrqControl>::disable();
+    if let Some(high) = destination {
+        regs.write32(LAPIC_ICR_HIGH, high);
+    }
+    regs.write32(LAPIC_ICR_LOW, command);
+    let mut accepted = false;
+    for _ in 0..1_000_000 {
+        if regs.read32(LAPIC_ICR_LOW) & ICR_PENDING == 0 {
+            accepted = true;
+            break;
+        }
+        spin_loop();
+    }
+    <super::Irq as IrqControl>::restore(saved);
+
+    if accepted {
+        Ok(())
+    } else {
+        Err("the local APIC never accepted an inter-processor interrupt")
+    }
+}
+
+/// This processor's local APIC identifier.
+///
+/// Read from the local APIC rather than from `CPUID`: it is the number an
+/// inter-processor interrupt is addressed to, and the register is the
+/// authority on that, where `CPUID` leaf 1 reports what it was at reset.
+///
+/// Zero before [`init`] has mapped the local APIC, which is also a valid
+/// identifier — so callers must not ask until it has.
+pub(crate) fn id() -> u32 {
+    lapic().read32(LAPIC_ID) >> 24
 }
 
 /// Retire the interrupt currently being serviced.

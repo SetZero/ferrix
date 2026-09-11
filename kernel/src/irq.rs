@@ -7,16 +7,23 @@
 //! protocol stays in `arch`, and what arrives here is the number and nothing
 //! else.
 //!
-//! # One CPU
+//! # Locking
 //!
-//! The table below is reached without a lock, which is sound today for the
-//! same reason `mm`'s globals are: no second CPU has been started, and a
-//! handler cannot re-enter this because the gate masks interrupts on entry.
-//! Stage 4 makes both of those false and turns this into a read-mostly
-//! structure behind the RCU-like grace period the roadmap already asks for.
+//! The table is behind an interrupt-masking lock, and [`dispatch`] holds it
+//! only long enough to copy a function pointer out. The handler runs after the
+//! lock is released, so two CPUs taking interrupts at once contend for a load
+//! rather than waiting on each other's handlers.
+//!
+//! What a lock does not give is safe *removal*: a handler unregistered on one
+//! CPU may still be running on another that copied it out a moment earlier.
+//! Nothing is unregistered before stage 10, and `smp::synchronize` is what
+//! will make it safe when something is — a running handler is a read-side
+//! section, because it runs with interrupts masked, so taking a handler out of
+//! the table and then waiting a grace period leaves nothing still running it.
 
-use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
+
+use ferrix_sync::IrqSpinLock;
 
 /// Interrupt numbers the table can hold.
 ///
@@ -51,15 +58,12 @@ impl core::fmt::Display for IrqError {
 }
 
 /// The handler table.
-struct Table(UnsafeCell<[Option<Handler>; SLOTS]>);
-
-// SAFETY: written only by `register` during single-threaded bring-up, and read
-// by `dispatch` from an interrupt handler on the same CPU. No second CPU exists
-// until stage 4, and the interrupt gate masks interrupts on entry, so a
-// handler cannot re-enter `dispatch` and observe a torn write.
-unsafe impl Sync for Table {}
-
-static HANDLERS: Table = Table(UnsafeCell::new([None; SLOTS]));
+///
+/// Interrupt-masking because [`dispatch`] takes it from interrupt context: a
+/// plain lock held by [`register`] on a CPU that then took an interrupt would
+/// be waited on by that same CPU's handler, forever.
+static HANDLERS: IrqSpinLock<[Option<Handler>; SLOTS], crate::arch::Irq> =
+    IrqSpinLock::new([None; SLOTS]);
 
 /// Interrupts delivered to a handler.
 static DELIVERED: AtomicU64 = AtomicU64::new(0);
@@ -78,9 +82,7 @@ static UNCLAIMED: AtomicU64 = AtomicU64::new(0);
 /// [`IrqError::OutOfRange`] past the end of the table, and
 /// [`IrqError::AlreadyTaken`] if something is already there.
 pub(crate) fn register(irq: u32, handler: Handler) -> Result<(), IrqError> {
-    // SAFETY: single-threaded bring-up, as documented on the `Sync` impl. The
-    // reference does not escape this function.
-    let table = unsafe { &mut *HANDLERS.0.get() };
+    let mut table = HANDLERS.lock();
     let slot = table
         .get_mut(irq as usize)
         .ok_or(IrqError::OutOfRange(irq))?;
@@ -96,10 +98,11 @@ pub(crate) fn register(irq: u32, handler: Handler) -> Result<(), IrqError> {
 /// Called from the architecture's interrupt path, which has already
 /// acknowledged the controller as that controller requires.
 pub(crate) fn dispatch(irq: u32) {
-    // SAFETY: as `register`. This runs with interrupts masked by the gate, so
-    // it cannot observe a half-written slot.
-    let table = unsafe { &*HANDLERS.0.get() };
-    match table.get(irq as usize).copied().flatten() {
+    // Copied out, and the guard dropped at the end of this statement: the
+    // handler runs without the table locked, so a handler that registers
+    // another line does not deadlock, and other CPUs are not held up by it.
+    let handler = HANDLERS.lock().get(irq as usize).copied().flatten();
+    match handler {
         Some(handler) => {
             let _ = DELIVERED.fetch_add(1, Ordering::Relaxed);
             handler(irq);

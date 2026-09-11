@@ -5,6 +5,7 @@ mod clock;
 pub(crate) mod console;
 mod cpu;
 mod gdt;
+mod smp;
 mod trap;
 
 use ferrix_bootinfo::BootView;
@@ -28,6 +29,38 @@ pub(crate) fn init_console(_memory: &mut EarlyMemory) -> Result<(), EarlyError> 
     Ok(())
 }
 
+pub(crate) use smp::{CpuStarter, describe_cpus, hardware_id};
+
+/// `IA32_GS_BASE`: the base address `GS`-relative accesses are made from.
+///
+/// The kernel's, for now. Once there is a user mode this is the register
+/// `swapgs` exchanges with `IA32_KERNEL_GS_BASE` on every entry and exit, and
+/// the per-CPU record moves to whichever of the two the kernel side holds.
+const IA32_GS_BASE: u32 = 0xC000_0101;
+
+/// Point this CPU's per-CPU register at `address`.
+///
+/// # Safety
+///
+/// `address` must be this processor's own `PerCpu` record, which must live for
+/// the rest of the system's life: `cpu_local` hands it back as a reference.
+pub(crate) unsafe fn set_cpu_local(address: u64) {
+    // SAFETY: `IA32_GS_BASE` exists on every 64-bit x86 and accepts any
+    // canonical address, which a kernel pointer is.
+    unsafe { cpu::write_msr(IA32_GS_BASE, address) };
+}
+
+/// The address [`set_cpu_local`] installed on this CPU.
+///
+/// # Safety
+///
+/// [`set_cpu_local`] must have run on this CPU. Before it has, `GS` points
+/// wherever firmware left it and the load below reads from there.
+pub(crate) unsafe fn cpu_local() -> u64 {
+    // SAFETY: the caller guarantees `GS` points at a per-CPU record, whose
+    // first word is its own address.
+    unsafe { cpu::read_gs_word() }
+}
 pub(crate) use trap::{TrapFrame, advance_past_breakpoint, breakpoint, classify, report_trap};
 
 /// Install the descriptor tables and the trap handlers.
@@ -46,10 +79,17 @@ pub(crate) unsafe fn init_traps() {
     unsafe { trap::init() };
 }
 
-/// Invalidate the whole TLB.
+/// Invalidate the whole TLB — this processor's.
 pub(crate) fn flush_tlb() {
     cpu::reload_cr3();
 }
+
+/// Whether [`flush_tlb`] reaches every processor's TLB.
+///
+/// No: reloading `CR3` and `invlpg` are both local. Another processor's
+/// stale translations are dropped by that processor, told to by an
+/// interrupt, which is what a TLB shootdown is.
+pub(crate) const TLB_FLUSH_IS_BROADCAST: bool = false;
 
 /// Root of the loader's identity map, while it still exists.
 ///
@@ -135,6 +175,20 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
 pub(crate) fn enable_interrupts() {
     cpu::enable_interrupts();
 }
+
+/// Mask interrupts on this CPU.
+pub(crate) fn disable_interrupts() {
+    cpu::disable_interrupts();
+}
+
+/// With interrupts masked, unmask them and wait for one, atomically: an
+/// interrupt that arrived since they were masked wakes the wait instead of
+/// being taken just before it. Returns with interrupts unmasked.
+pub(crate) fn wait_for_work() {
+    cpu::enable_interrupts_and_halt();
+}
+
+pub(crate) use apic::{ipi_irq, send_ipi_to_others};
 
 /// `RFLAGS.IF` — interrupts are unmasked.
 const RFLAGS_INTERRUPT: u64 = 1 << 9;

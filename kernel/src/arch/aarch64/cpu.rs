@@ -15,6 +15,32 @@ pub(crate) fn wfi() {
     }
 }
 
+/// Wait for an interrupt with `IRQ` masked, then unmask it.
+///
+/// `wfi` wakes on a *pending* interrupt whether or not it is masked, so one
+/// that became pending after the caller masked is not lost: the wait returns
+/// at once, and the unmask after it lets the interrupt be taken.
+pub(crate) fn wait_then_enable_interrupts() {
+    // SAFETY: `wfi` is a hint and `daifclr` only clears the `IRQ` mask bit;
+    // the vector table is installed long before this is used.
+    unsafe {
+        asm!("wfi", "msr daifclr, #0x2", options(nomem, nostack));
+    }
+}
+
+/// Order every store before this against the next write to device memory.
+///
+/// For sending a software-generated interrupt: the interrupt is a write to the
+/// distributor, and the core that takes it must see what this core wrote
+/// before asking — a `dmb` orders memory against memory, and this is memory
+/// against a device.
+pub(crate) fn dsb_ishst() {
+    // SAFETY: a barrier has no effect beyond ordering.
+    unsafe {
+        asm!("dsb ishst", options(nostack, preserves_flags));
+    }
+}
+
 /// Mask every interrupt on this CPU: debug, `SError`, `IRQ` and `FIQ`.
 pub(crate) fn disable_interrupts() {
     // SAFETY: `daifset` only sets mask bits in `PSTATE`.
@@ -138,7 +164,117 @@ pub(crate) unsafe fn write_daif(daif: u64) {
 }
 
 /// `TCR_EL1.EPD0` — translations through `TTBR0_EL1` fault instead of walking.
-const TCR_EPD0: u64 = 1 << 7;
+pub(crate) const TCR_EPD0: u64 = 1 << 7;
+
+/// Memory attribute indirection: what each attribute index in a descriptor
+/// means.
+pub(crate) fn read_mair() -> u64 {
+    let value: u64;
+    // SAFETY: reading `MAIR_EL1` has no side effects.
+    unsafe {
+        asm!("mrs {}, mair_el1", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// Translation control: sizes, granules and walk attributes of both halves.
+pub(crate) fn read_tcr() -> u64 {
+    let value: u64;
+    // SAFETY: reading `TCR_EL1` has no side effects.
+    unsafe {
+        asm!("mrs {}, tcr_el1", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// System control: the MMU, the caches, alignment checking.
+pub(crate) fn read_sctlr() -> u64 {
+    let value: u64;
+    // SAFETY: reading `SCTLR_EL1` has no side effects.
+    unsafe {
+        asm!("mrs {}, sctlr_el1", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// Write the data cache lines covering `start..start + len` back to the
+/// point of coherency.
+///
+/// For memory a core with its caches off is about to read: it reads RAM, and
+/// a line still dirty in this core's cache is a line it does not see.
+pub(crate) fn clean_to_poc(start: u64, len: u64) {
+    let cache_type: u64;
+    // SAFETY: reading `CTR_EL0` has no side effects.
+    unsafe {
+        asm!("mrs {}, ctr_el0", out(reg) cache_type, options(nomem, nostack, preserves_flags));
+    }
+    // `DminLine` is log2 of the smallest line in words.
+    let line = 4u64 << ((cache_type >> 16) & 0xF);
+
+    let mut at = start - start % line;
+    let end = start.saturating_add(len);
+    while at < end {
+        // SAFETY: `dc cvac` writes one line back by virtual address and
+        // changes no data; the caller's range is mapped.
+        unsafe {
+            asm!("dc cvac, {}", in(reg) at, options(nostack, preserves_flags));
+        }
+        at += line;
+    }
+    // SAFETY: a barrier, completing the maintenance above before anything
+    // after it — in particular the call that starts the core that reads it.
+    unsafe {
+        asm!("dsb sy", options(nostack, preserves_flags));
+    }
+}
+
+/// A PSCI call through the hypervisor conduit.
+///
+/// # Safety
+///
+/// `function` must be a PSCI function taking `a`, `b` and `c`, and what it
+/// does must be what the caller intends: `CPU_ON` starts a core executing at
+/// an address the caller chose.
+pub(crate) unsafe fn hvc_call(function: u64, a: u64, b: u64, c: u64) -> u64 {
+    let result: u64;
+    // SAFETY: the caller guarantees the function and its arguments. The SMC
+    // calling convention lets the callee corrupt every register the C ABI
+    // does, which is what the clobber says.
+    unsafe {
+        asm!(
+            "hvc #0",
+            inlateout("x0") function => result,
+            in("x1") a,
+            in("x2") b,
+            in("x3") c,
+            clobber_abi("C"),
+            options(nostack),
+        );
+    }
+    result
+}
+
+/// A PSCI call through the secure monitor conduit.
+///
+/// # Safety
+///
+/// As [`hvc_call`].
+pub(crate) unsafe fn smc_call(function: u64, a: u64, b: u64, c: u64) -> u64 {
+    let result: u64;
+    // SAFETY: as `hvc_call`.
+    unsafe {
+        asm!(
+            "smc #0",
+            inlateout("x0") function => result,
+            in("x1") a,
+            in("x2") b,
+            in("x3") c,
+            clobber_abi("C"),
+            options(nostack),
+        );
+    }
+    result
+}
 
 /// Stop the CPU translating the lower half of the address space at all.
 ///
@@ -175,6 +311,41 @@ pub(crate) unsafe fn disable_ttbr0() {
             options(nostack, preserves_flags),
         );
     }
+}
+
+/// This processor's multiprocessor affinity register.
+///
+/// Read-only and fixed at reset: it is how the processor is named to PSCI and
+/// to the interrupt controller, and nothing the kernel does can change it.
+pub(crate) fn read_mpidr() -> u64 {
+    let mpidr: u64;
+    // SAFETY: reading `MPIDR_EL1` has no side effects.
+    unsafe {
+        asm!("mrs {}, mpidr_el1", out(reg) mpidr, options(nomem, nostack, preserves_flags));
+    }
+    mpidr
+}
+
+/// Set `TPIDR_EL1`, the software thread ID register the kernel keeps its
+/// per-CPU record in.
+///
+/// A scratch register with no architectural meaning, which is the point: the
+/// hardware never reads it, and EL0 cannot see it.
+pub(crate) fn write_tpidr_el1(value: u64) {
+    // SAFETY: writing a scratch register has no effect beyond the register.
+    unsafe {
+        asm!("msr tpidr_el1, {}", in(reg) value, options(nomem, nostack, preserves_flags));
+    }
+}
+
+/// Read `TPIDR_EL1`.
+pub(crate) fn read_tpidr_el1() -> u64 {
+    let value: u64;
+    // SAFETY: reading a scratch register has no side effects.
+    unsafe {
+        asm!("mrs {}, tpidr_el1", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
 }
 
 /// The frequency of the architected counter, in hertz.

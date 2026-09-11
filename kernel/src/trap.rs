@@ -112,6 +112,7 @@ fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {
         return;
     }
 
+    crate::console::begin_panic();
     println!();
     println!(
         "FERRIX-PANIC page fault at {:#x} ({}{}{}{})",
@@ -130,6 +131,7 @@ fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {
 
 /// Report a trap the kernel cannot continue past, and stop the machine.
 fn fatal(frame: &arch::TrapFrame, what: &str) -> ! {
+    crate::console::begin_panic();
     println!();
     println!("FERRIX-PANIC {what}");
     arch::report_trap(frame);

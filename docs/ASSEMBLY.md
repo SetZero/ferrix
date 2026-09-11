@@ -58,6 +58,7 @@ Each entry names why Rust cannot express it. Entries are added to
 |---|---|
 | `VBAR_EL1` vector table | The architecture defines a table of sixteen entries at fixed 128-byte offsets. The layout is the interface; a Rust `static` of function pointers is not what the CPU reads. |
 | EL2 → EL1 drop | Firmware may hand off at EL2. Lowering to EL1 is an `eret` into a context that has to be constructed first, so the "return" goes somewhere the compiler cannot know about. |
+| Secondary core entry | PSCI `CPU_ON` starts a core at a physical address with its MMU and caches off and no stack. Installing the translation regime and turning the MMU on while executing at an address only an identity map makes meaningful is the loader's switch again, once per core. |
 
 ## The budget
 

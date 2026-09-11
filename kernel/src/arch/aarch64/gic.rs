@@ -107,6 +107,7 @@ fn layout(acpi: &Acpi<'_, DirectMap>) -> Result<Layout, &'static str> {
     let mut distributor = 0;
     let mut cpu_interface = 0;
     let mut version = 0;
+    let mut banked = true;
 
     for entry in madt.entries() {
         match entry {
@@ -114,10 +115,16 @@ fn layout(acpi: &Acpi<'_, DirectMap>) -> Result<Layout, &'static str> {
                 distributor = gicd.physical_base_address;
                 version = gicd.gic_version;
             }
-            // The first enabled processor is this one: nothing else has been
-            // started. Stage 4 reads the rest of them.
-            MadtEntry::Gicc(gicc) if cpu_interface == 0 && gicc.is_enabled() => {
-                cpu_interface = gicc.physical_base_address;
+            // A GICv2 CPU interface is banked: every core reaches its own
+            // through the same address, which is why one mapping serves them
+            // all. Firmware lists it once per core, and every copy is
+            // required to agree.
+            MadtEntry::Gicc(gicc) if gicc.is_enabled() => {
+                if cpu_interface == 0 {
+                    cpu_interface = gicc.physical_base_address;
+                } else if gicc.physical_base_address != cpu_interface {
+                    banked = false;
+                }
             }
             _ => {}
         }
@@ -125,6 +132,9 @@ fn layout(acpi: &Acpi<'_, DirectMap>) -> Result<Layout, &'static str> {
 
     if distributor == 0 {
         return Err("the MADT describes no GIC distributor");
+    }
+    if !banked {
+        return Err("the cores' GIC CPU interfaces are at different addresses, not banked");
     }
     Ok(Layout {
         distributor,
@@ -197,6 +207,50 @@ fn configure(gicd: Mmio, gicc: Mmio) {
     // interrupts at all.
     gicc.write32(GICC_PMR, PMR_ALL);
     gicc.write32(GICC_CTLR, CTLR_ENABLE);
+}
+
+/// Interrupts 0..32 — software-generated and private peripheral — whose
+/// distributor registers are banked, one copy per core.
+const PRIVATE_LINES: u64 = 32;
+
+/// Software-generated interrupt register: writing it sends one.
+const GICD_SGIR: u64 = 0xF00;
+/// `GICD_SGIR` target list filter: every core but the one writing.
+const SGIR_ALL_BUT_SELF: u32 = 0b01 << 24;
+
+/// The software-generated interrupt inter-processor interrupts arrive on.
+pub(crate) const IPI_SGI: u32 = 1;
+
+/// Interrupt every core but this one on [`IPI_SGI`].
+pub(crate) fn send_ipi_to_others() {
+    // The receiving core acts on memory this one wrote, and the interrupt is
+    // a device write, which an ordinary memory barrier does not order.
+    super::cpu::dsb_ishst();
+    distributor().write32(GICD_SGIR, SGIR_ALL_BUT_SELF | IPI_SGI);
+}
+
+/// Bring up this core's side of the controller, on a core other than the one
+/// that ran [`init`].
+///
+/// Two things are per core. The CPU interface, whose priority mask resets to
+/// blocking everything. And the distributor's registers for interrupts 0..32,
+/// which are banked: `init` set priorities for the boot core's copy, and this
+/// core's copy is still at its reset value.
+pub(crate) fn init_this_cpu() {
+    let gicd = distributor();
+    for line in (0..PRIVATE_LINES).step_by(4) {
+        gicd.write32(
+            GICD_IPRIORITYR + line,
+            u32::from_ne_bytes([DEFAULT_PRIORITY; 4]),
+        );
+    }
+
+    let gicc = cpu_interface();
+    gicc.write32(GICC_PMR, PMR_ALL);
+    gicc.write32(GICC_CTLR, CTLR_ENABLE);
+
+    // Its enable bit is banked too, so every core turns on its own.
+    enable(IPI_SGI);
 }
 
 /// Let interrupt `id` through to this core.

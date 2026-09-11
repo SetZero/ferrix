@@ -349,9 +349,49 @@ impl<'a> Frames<'a> {
         // The smallest order that has anything.
         let available = (order..=MAX_ORDER).find(|&candidate| self.head(candidate) != NONE)?;
         let frame = self.pop(available)?;
+        Some(self.take(frame, available, order))
+    }
 
-        // Split down, keeping the low half and freeing the high one, so the
-        // returned block is always the lowest address of what was taken.
+    /// Take a block of `2^order` frames lying wholly below frame `limit`.
+    ///
+    /// For the rare caller that needs memory in a particular place: x86-64
+    /// starts its application processors in real mode, which reaches only the
+    /// first mebibyte. Slower than [`Frames::allocate`] — it walks the free
+    /// lists looking for a low enough block instead of taking the head of one
+    /// — which is the right trade for something done a few times a boot.
+    ///
+    /// Smaller orders are searched first, so a low single frame is found
+    /// without splitting a large block when one is free.
+    pub fn allocate_below(&mut self, order: u8, limit: Frame) -> Option<Frame> {
+        if order > MAX_ORDER {
+            return None;
+        }
+        let size = 1u64 << order;
+
+        for available in order..=MAX_ORDER {
+            let mut cursor = self.head(available);
+            while cursor != NONE {
+                let frame = self.base + u64::from(cursor);
+                // What is handed out is the lowest `2^order` frames of this
+                // free block — where splitting leaves it — so that is the
+                // part that has to fit, not the whole block.
+                if frame.saturating_add(size) <= limit {
+                    self.unlink(frame, available);
+                    return Some(self.take(frame, available, order));
+                }
+                cursor = self.entries.get(cursor as usize)?.next;
+            }
+        }
+        None
+    }
+
+    /// Finish taking a block of order `available`, already off its free list:
+    /// split it down to `order`, freeing each unused upper half, and mark what
+    /// is left allocated.
+    ///
+    /// Keeps the low half at every split, so the block returned is always the
+    /// lowest address of what was taken.
+    fn take(&mut self, frame: Frame, available: u8, order: u8) -> Frame {
         let mut current = available;
         while current > order {
             current -= 1;
@@ -366,7 +406,7 @@ impl<'a> Frames<'a> {
             entry.refcount = 1;
         }
         self.free -= frames;
-        Some(frame)
+        frame
     }
 
     /// Take a single frame.

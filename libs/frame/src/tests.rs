@@ -323,6 +323,92 @@ fn blocks_never_straddle_a_hole() {
 }
 
 // ---------------------------------------------------------------------------
+// Allocating below a limit
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_block_below_a_limit_lies_wholly_below_it() {
+    // One order-8 block at 0x100. The request is for the four frames at its
+    // bottom, which is where splitting leaves the block handed out.
+    let (mut entries, base, count) = arena(0x100, 0x100);
+    let mut frames = frames!(entries, base, count);
+
+    let block = frames.allocate_below(2, 0x110).unwrap();
+    assert!(block + 4 <= 0x110, "block {block:#x} runs past the limit");
+    assert_eq!(frames.free_frames(), 0x100 - 4);
+    for offset in 0..4 {
+        assert_eq!(frames.state(block + offset), Some(State::Allocated));
+    }
+}
+
+#[test]
+fn a_low_block_is_found_behind_higher_ones() {
+    // Free lists are not sorted: each insert pushes at the head, so the list
+    // for order 0 here runs 17, 9, 0 and the one low frame is at its tail.
+    // Only a search finds it, and taking it from there must leave the rest of
+    // the list intact.
+    let mut entries = vec![PageEntry::RESERVED; 64];
+    let mut frames = Frames::new(&mut entries, 0);
+    frames.insert_free(0, 1);
+    frames.insert_free(9, 1);
+    frames.insert_free(17, 1);
+
+    assert_eq!(frames.allocate_below(0, 1), Some(0));
+    assert_eq!(frames.allocate_below(0, 1), None, "there was only one");
+    assert_eq!(frames.free_frames(), 2);
+    assert_eq!(frames.allocate_frame(), Some(17), "the head is untouched");
+    assert_eq!(frames.allocate_frame(), Some(9), "and so is the link to it");
+    assert_eq!(frames.allocate_frame(), None);
+}
+
+#[test]
+fn a_block_straddling_the_limit_is_not_taken() {
+    // 0..64 is one order-6 block. Its lowest four frames end at 4, which is
+    // past a limit of 3, so an order-2 request cannot be met from it even
+    // though the block *starts* below the limit.
+    let (mut entries, base, count) = arena(0, 64);
+    let mut frames = frames!(entries, base, count);
+
+    assert_eq!(frames.allocate_below(2, 3), None);
+    assert_eq!(frames.free_frames(), 64, "a refusal changes nothing");
+    assert_eq!(frames.free_blocks()[6], 1, "not even the free lists");
+}
+
+#[test]
+fn nothing_below_the_limit_is_reported_rather_than_wrapping() {
+    let (mut entries, base, count) = arena(0x1000, 64);
+    let mut frames = frames!(entries, base, count);
+
+    assert_eq!(
+        frames.allocate_below(0, 0x1000),
+        None,
+        "every frame is at or above the limit"
+    );
+    assert_eq!(
+        frames.allocate_below(MAX_ORDER + 1, u64::MAX),
+        None,
+        "nor is an order above the largest one granted"
+    );
+    assert_eq!(frames.free_frames(), 64);
+}
+
+#[test]
+fn a_block_taken_below_a_limit_frees_like_any_other() {
+    let (mut entries, base, count) = arena(0, 1024);
+    let mut frames = frames!(entries, base, count);
+    let original = frames.free_blocks();
+
+    let low = frames.allocate_below(0, 0x100).unwrap();
+    assert!(low < 0x100);
+    frames.deallocate(low, 0).unwrap();
+    assert_eq!(
+        frames.free_blocks(),
+        original,
+        "it should merge back to where it started"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The one that would actually catch a bug
 // ---------------------------------------------------------------------------
 

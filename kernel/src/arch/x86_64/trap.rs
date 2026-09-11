@@ -229,12 +229,26 @@ pub(crate) unsafe fn init() {
         *gate = Gate::new(stubs + (vector * STUB_SIZE) as u64, ist);
     }
 
+    // SAFETY: the table was filled just above, and the GDT is loaded.
+    unsafe { load_on_this_cpu() };
+}
+
+/// Point this processor at the interrupt descriptor table.
+///
+/// One table serves every processor: it holds entry points and nothing that
+/// belongs to any one of them.
+///
+/// # Safety
+///
+/// [`init`] must have filled the table, and this processor's GDT must hold a
+/// 64-bit kernel code segment at the selector every gate names.
+pub(crate) unsafe fn load_on_this_cpu() {
     let pointer = DescriptorTablePointer {
-        limit: (size_of_val(table) - 1) as u16,
-        base: (&raw const *table) as u64,
+        limit: (size_of::<[Gate; VECTORS]>() - 1) as u16,
+        base: IDT.0.get() as u64,
     };
-    // SAFETY: `pointer` describes the table just filled, every gate of which
-    // points at a stub in this image.
+    // SAFETY: `pointer` describes the one table, every gate of which points at
+    // a stub in this image once `init` has run.
     unsafe { cpu::load_idt(&raw const pointer as u64) };
 }
 

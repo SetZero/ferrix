@@ -9,19 +9,44 @@
 //! The port itself is architecture-specific — a 16550 behind x86-64 I/O ports,
 //! a PL011 behind `MMIO` on `AArch64` — so the bytes go out through
 //! `arch::console`.
+//!
+//! # One line at a time
+//!
+//! The port is behind a lock, taken once per [`println!`], so two CPUs
+//! printing at once produce two whole lines rather than one line of both.
+//!
+//! The lock is also the one way the console can make a failure *worse*: a CPU
+//! that faults while holding it — in the middle of formatting, say — would
+//! report the fault by printing, wait for its own lock, and turn a
+//! `FERRIX-PANIC` line into a boot test that times out saying nothing. So once
+//! [`begin_panic`] has been called, a writer waits a bounded time for the lock
+//! and then writes without it. A panic report interleaved with another CPU's
+//! line is legible; one that never appears is not.
 
-use core::cell::UnsafeCell;
 use core::fmt::{self, Write};
+use core::hint::spin_loop;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use ferrix_sync::IrqSpinLock;
 
 /// Whether [`crate::arch::init_console`] has run.
-struct Ready(UnsafeCell<bool>);
+static READY: AtomicBool = AtomicBool::new(false);
 
-// SAFETY: early boot is single-threaded — no other CPU has been started and
-// interrupts are masked — so there is never a second accessor. This becomes a
-// per-CPU lock in stage 4, when there is more than one CPU to lock against.
-unsafe impl Sync for Ready {}
+/// Whether something is reporting a failure the kernel will not survive.
+static PANICKING: AtomicBool = AtomicBool::new(false);
 
-static READY: Ready = Ready(UnsafeCell::new(false));
+/// The port, one writer at a time.
+///
+/// Interrupt-masking so that a handler that prints cannot interrupt a line
+/// being printed on its own CPU and wait for it.
+static PORT: IrqSpinLock<Port, crate::arch::Irq> = IrqSpinLock::new(Port);
+
+/// Attempts at the lock a panicking writer makes before writing without it.
+///
+/// Long enough for another CPU to finish any line it is part way through, and
+/// short enough that a lock nobody will ever release costs a moment rather
+/// than the boot test's timeout.
+const PANIC_SPINS: u32 = 10_000_000;
 
 /// Record that the port is configured and may be written.
 ///
@@ -30,14 +55,15 @@ static READY: Ready = Ready(UnsafeCell::new(false));
 /// The caller must have configured the port `arch::console::write_byte` writes
 /// to, including any mapping it needs.
 pub(crate) unsafe fn mark_ready() {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
-    unsafe { *READY.0.get() = true };
+    READY.store(true, Ordering::Release);
 }
 
-/// True once the console can be written.
-fn is_ready() -> bool {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
-    unsafe { *READY.0.get() }
+/// Say that what is printed from here on is a failure report.
+///
+/// Called by the panic handler and by the trap path's fatal reports, before
+/// they print anything.
+pub(crate) fn begin_panic() {
+    PANICKING.store(true, Ordering::Relaxed);
 }
 
 /// Somewhere for `format_args!` to go.
@@ -59,9 +85,23 @@ impl Write for Port {
 
 /// Write formatted output to the console, if there is one yet.
 pub(crate) fn write(arguments: fmt::Arguments<'_>) {
-    if !is_ready() {
+    if !READY.load(Ordering::Acquire) {
         return;
     }
+    if !PANICKING.load(Ordering::Relaxed) {
+        let _ = PORT.lock().write_fmt(arguments);
+        return;
+    }
+
+    for _ in 0..PANIC_SPINS {
+        if let Some(mut port) = PORT.try_lock() {
+            let _ = port.write_fmt(arguments);
+            return;
+        }
+        spin_loop();
+    }
+    // Whoever holds the lock is not going to release it — quite possibly
+    // because it is this CPU, part way through the line that failed.
     let _ = Port.write_fmt(arguments);
 }
 
