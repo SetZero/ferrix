@@ -14,6 +14,13 @@ Everything under *Decisions* was checked by experiment on this machine with
 the pinned toolchain (1.97.1) unless it says otherwise. The experiments are
 described so they can be repeated; none of them touched the tree.
 
+**Status: done.** Phases A to D have landed, and ARMv7-A is in the boot test
+beside the other two. Stage 4 arrived on `main` while the port was under way,
+so the target moved from `stages 1-3` to `stages 1-4`, and the port reached
+it with PSCI `CPU_ON` for its secondaries as AArch64 does. The plan below is
+kept as it was written; *To verify at first boot* records what the first boot
+answered.
+
 ---
 
 ## What survives, and what has to change
@@ -458,6 +465,14 @@ other two.
 
 ## To verify at first boot, with the fallback for each
 
+**Answered at first boot: all seven as expected, and no fallback was needed.**
+U-Boot's `efi_mgr` found `BOOTARM.EFI` on the table-less volume and ran it
+with its relocations applied; the kernel's check that the map describes the
+loader's own allocations passed; the tree carried `stdout-path` and the GIC
+and timer nodes; `CNTFRQ` read 62.5 MHz. The one that was wrong in the plan,
+(5), was caught by dumping QEMU's tree before the first boot rather than by
+it. `docs/BOOT-LOG.md` has U-Boot's lines.
+
 1. **U-Boot's autoboot finds `EFI/BOOT/BOOTARM.EFI` on a FAT volume with no
    partition table.** Expected: bootstd treats a table-less disk as one
    partition. Fallback: `fat.rs` writes a protective MBR with one partition —
@@ -509,7 +524,13 @@ other two.
   floating point and the trap frame does not save it.
 * **SMP.** The Cortex-A7 is dual-core on the board and `-smp 4` under QEMU; PSCI
   `CPU_ON` is stage 4's, and the plan leaves the `virt` GIC's second CPU
-  interface exactly as stage 3 leaves it on AArch64.
+  interface exactly as stage 3 leaves it on AArch64. *No longer deferred*:
+  stage 4 landed on `main` during the port, and ARMv7-A's secondaries came
+  up through it — see the status note at the top. One thing QEMU cannot
+  check stays owed to the board: `ACTLR.SMP`, which a Cortex-A7 needs set
+  before its caches are coherent with the other core's. The kernel leaves it
+  to the PSCI firmware, which sets it on real boards, because a non-secure
+  write can be undefined; the board's first two-core boot is what confirms it.
 * **AArch64 from the device tree.** With `kernel/src/fdt.rs` in the tree, the
   hard-coded PL011 address in `aarch64/console.rs` could go; it stays, so that
   this port changes AArch64's boot only where the shared design forces it.

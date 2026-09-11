@@ -17,7 +17,7 @@
   "max_total_lines": 800,
   "//max_total_lines": [
     "The cap that actually binds. Assembly is a fixed cost here: the list below",
-    "is meant to be finished once both architectures boot, and a scheduler, a",
+    "is meant to be finished once every architecture boots, and a scheduler, a",
     "filesystem or a driver must add nothing to it. 800 is the full intended",
     "set with headroom, not a target to grow into."
   ],

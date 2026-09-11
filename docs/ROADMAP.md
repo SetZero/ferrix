@@ -19,9 +19,9 @@ longer". This is a long program of work: stages 1–8 are a conventional kernel
 bring-up, 9–14 are the parts this design chose to do properly, and 15–17 are the
 goal. Nobody should read the table as a schedule.
 
-**Where it stands:** stages 0–4 are done and in the boot test on both
-architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-4`. Stage 5
-is next. Nothing of stages 5 onwards exists in `kernel/` yet — no task, no
+**Where it stands:** stages 0–4 are done and in the boot test on all three
+architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-4`.
+ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 5 is next. Nothing of stages 5 onwards exists in `kernel/` yet — no task, no
 scheduler, no user mode — though several of their byte-level crates do (see
 *Written ahead of their stage*).
 
@@ -32,23 +32,23 @@ scheduler, no user mode — though several of their byte-level crates do (see
 Workspace, the quality gates ported from Starling, CI, and the two host-testable
 libraries.
 
-**Exit:** `cargo xtask check` runs fmt, clippy on all four targets, the layering
-check, the assembly allow-list, the unsafe audit and the panic audit, and all
-pass on an empty tree.
+**Exit:** `cargo xtask check` runs fmt, clippy on every freestanding target,
+the layering check, the assembly allow-list, the unsafe audit and the panic
+audit, and all pass on an empty tree.
 
 ---
 
 ## Stage 1 — Boot, both architectures ✅
 
-UEFI loader in Rust: read the kernel from the ESP, parse ELF64, build page
+UEFI loader in Rust: read the kernel from the ESP, parse ELF, build page
 tables, take the memory map, `ExitBootServices`, switch to our own tables, jump
 to the kernel's Rust entry point. Kernel writes to a serial port and shuts the
 machine down.
 
-Zero assembly at boot on either architecture — firmware calls `efi_main` in
-64-bit mode. The only assembly is the page-table switch itself.
+Zero assembly at boot on any architecture — firmware calls `efi_main` with a
+stack and the MMU on. The only assembly is the page-table switch itself.
 
-**Exit, met:** `cargo xtask test-boot --arch both` boots firmware → loader →
+**Exit, met:** `cargo xtask test-boot --arch all` boots firmware → loader →
 kernel on each architecture, and the kernel verifies four things before it
 reports success:
 
@@ -134,7 +134,10 @@ stack is required to be 16-byte aligned and writable at both ends with guards
 beyond each, and freeing it is required to return every frame it held. Then the
 identity map is dropped and its absence checked, the sweep reports 318 mappings
 on x86-64 and 822 on AArch64 with none writable-and-executable, and the reclaim
-reports the frames it recovered.
+reports the frames it recovered. (Those were the counts when this landed.
+AArch64's fell to 311 when the direct map stopped covering the device hole
+below RAM — see *ARMv7-A* — and stage 4's per-processor stacks and records
+have raised all of them since.)
 
 **Deferred to stage 4, because it needs a second CPU to mean anything:**
 per-CPU frame caches. Deferred again there — see stage 4.
@@ -330,6 +333,60 @@ The boot marker reads `FERRIX-BOOT-OK stages 1-4`.
 
 ---
 
+## ARMv7-A — a third architecture ✅
+
+32-bit ARMv7-A — the Cortex-A7 of the STM32MP157 — on QEMU's `virt` machine,
+booted by U-Boot. `docs/arm32.md` is the plan and argues each decision; this
+records what the port changed and what it proved. None of stages 1–3 was
+rewritten to admit it.
+
+* **The same loader, converted.** rustc has no 32-bit UEFI target, so the
+  loader is built as an ELF static PIE and `xtask/src/pe.rs` rewrites it as a
+  PE32 with base relocations, tested against an independent reader of its own
+  output. U-Boot runs it as `BOOTARM.EFI`. No bootstrap assembly was added.
+* **A 32-bit address space, argued rather than shrunk.** A 2/2 split with a
+  1.25 GiB direct map; LPAE tables, which are AArch64's descriptors on a
+  three-level walk, so `libs/paging` gained a geometry rather than a second
+  mapper. The direct map now begins at the lowest RAM address on every
+  architecture — which on AArch64 stopped it mapping the device hole below RAM
+  as cacheable memory, and took that sweep from 822 leaves to 311.
+* **One hand-off layout on every width.** `BootInfo` version 2 carries `u64`
+  addresses where it had pointers, the direct map's physical origin, and a
+  device tree copied into memory of its own kind, so that it outlives the
+  reclaim that returns the firmware's copy.
+* **Device tree only.** `libs/fdt` got its first consumer nine stages early:
+  the console by `stdout-path`, the GICv2, the virtual timer's interrupt, and
+  the PSCI conduit — which on QEMU is `hvc`, not the `smc` the plan first
+  guessed; dumping the generated tree settled it before a line depended on it.
+* **Traps without mode stacks.** Eight vector entries, and one path through
+  `srsdb` and `rfeia` on the SVC stack, so no other processor mode is ever
+  given a stack to get wrong.
+
+**Exit criterion met, and in the boot test.** `cargo xtask test-boot --arch
+armv7a` runs the same self-checks as the other two and reaches the same
+marker: two breakpoints, four page faults with the exact frame bound, 1001
+ticks measured against the counter at 920 Hz for a requested 1000, the
+identity map dropped and its absence checked, 317 mappings swept with none
+writable-and-executable, and 3 MiB reclaimed.
+
+**And stage 4, which landed on `main` while the port was under way.** The
+secondaries are found in the device tree's `/cpus` rather than the MADT and
+started through PSCI `CPU_ON`, entering as AArch64's do: through an identity
+map of their entry sequence, with every parameter loaded in one `ldm` before
+the MMU goes on, and refused if the entry would sit above the 2 GiB that
+`TTBR0` covers. TLB invalidation is broadcast by the hardware, as on AArch64,
+so there is no shootdown IPI. The run recorded when it landed: four of four
+online, 100 rounds of work woken by 300 IPIs, 100 grace periods against 34,900
+reads with none stale, and the counter at exactly 100,000 with its shares
+overlapping and 39,725 updates lost by the unlocked count beside it. The
+sweep then found 341 mappings, and the reclaim 4 MiB.
+
+**Deferred, with the reasons in `docs/arm32.md`:** RAM above 2 GiB physical,
+which the board has and QEMU cannot place; RAM beyond the direct map; the
+board's own UART; Thumb-2; VFP.
+
+---
+
 ## Stage 5 — Tasks and the scheduler  ·  *week*
 
 `Task`, kernel stacks, context switch, per-CPU runqueues, the class stack, and
@@ -355,7 +412,7 @@ with a page fault serviced along the way.
 
 ## Stage 7 — The Linux syscall ABI  ·  *month*
 
-The syscall entry path on both architectures, the dispatch table, and the core
+The syscall entry path on every architecture, the dispatch table, and the core
 of the surface: memory (`mmap`, `mprotect`, `brk`), files, process
 (`clone`, `execve`, `wait4`, `exit_group`), threads and `futex`, signals with
 `sigaltstack` and `rt_sigreturn`, time, and identity.
@@ -483,11 +540,12 @@ several crates for stages that have not started are already written and tested.
 
 They are parsers and data structures, not subsystems. None of them counts
 towards the stage that will consume it, and most are still unreachable from
-the kernel. Three are the exception, which is what the rule was for:
+the kernel. Four are the exception, which is what the rule was for:
 `libs/acpi` as of stage 3 — the MADT walk the interrupt controller needed was
 already written, tested and fuzz-shaped before a line of controller code
-existed — and, as of stage 2, `libs/vma` and `libs/sync`, whose
-`AddressSpace` and `IrqSpinLock` the vmap arena is built on, with
+existed — `libs/fdt`, which the ARMv7-A port reached from stage 1 because that
+machine has no ACPI to read, and, as of stage 2, `libs/vma` and `libs/sync`,
+whose `AddressSpace` and `IrqSpinLock` the vmap arena is built on, with
 `IrqControl` implemented over each architecture's interrupt mask. Being
 reached early is not the same as their stage being done: the arena uses the
 interval tree as an allocator of kernel ranges, not as a process's address
@@ -501,7 +559,7 @@ at three in the morning against a machine that reboots on a mistake.
 | Crate | Waiting for | Tests |
 |---|---|---|
 | `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET. No AML, and there will be none. | 58 |
-| `libs/fdt` | 3, 10 — flattened device tree reader; on AArch64 the only description of the machine there is. | 55 |
+| `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Stage 10 is still the rest of it. | 61 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
 | `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. | 42 |
@@ -510,8 +568,8 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **484 host unit tests, all
-passing**, plus the doc-tests and the 24 of `xtask` itself.
+loader's), `frame`, `heap`, `paging` — that is **490 host unit tests, all
+passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
 asks for a fuzz target *and* a Miri run per crate, and `fuzz/` currently has two

@@ -4,7 +4,7 @@ name: CI
 #   fmt --check | clippy -D warnings | tests | cargo-deny | Miri | fuzz
 # plus the three this project needs and a userspace program cannot have: the
 # assembly allow-list, the unsafe audit that stands in for `unsafe_code =
-# "deny"`, and a QEMU boot on both architectures, which is the only test that
+# "deny"`, and a QEMU boot on every architecture, which is the only test that
 # can tell us the thing actually runs.
 
 on:
@@ -120,7 +120,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt, clippy
-          targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, x86_64-unknown-uefi, aarch64-unknown-uefi
+          targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, armv7a-none-eabi, x86_64-unknown-uefi, aarch64-unknown-uefi, armv7-unknown-linux-musleabi
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -153,6 +153,17 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo clippy -p ferrix-boot --target aarch64-unknown-uefi -- -D warnings
 
+      - name: Clippy (kernel, ARMv7-A)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p ferrix-kernel --target armv7a-none-eabi -- -D warnings
+
+      # Not a UEFI target -- rustc has none for 32-bit Arm. The loader is built
+      # as a static PIE for this one and converted to PE32 by xtask; see
+      # docs/arm32.md, decision 2.
+      - name: Clippy (loader, ARMv7-A)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p ferrix-boot --target armv7-unknown-linux-musleabi -- -D warnings
+
       # The freestanding crates cannot run tests -- there is no host to run
       # them on -- which is exactly why the algorithmic core lives in libs/.
       - name: Tests
@@ -179,14 +190,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, aarch64]
+        arch: [x86_64, aarch64, armv7a]
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.97.1
         with:
-          targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, x86_64-unknown-uefi, aarch64-unknown-uefi
+          targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, armv7a-none-eabi, x86_64-unknown-uefi, aarch64-unknown-uefi, armv7-unknown-linux-musleabi
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -217,27 +228,29 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, aarch64]
+        arch: [x86_64, aarch64, armv7a]
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.97.1
         with:
-          targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, x86_64-unknown-uefi, aarch64-unknown-uefi
+          targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, armv7a-none-eabi, x86_64-unknown-uefi, aarch64-unknown-uefi, armv7-unknown-linux-musleabi
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: build-${{ matrix.arch }}
 
-      # `ovmf` and `qemu-efi-aarch64` are the firmware images; without them
-      # QEMU boots to a SeaBIOS prompt and the test times out with no clue why.
-      - name: Install QEMU and UEFI firmware
+      # `ovmf` and `qemu-efi-aarch64` are the 64-bit pair's firmware images;
+      # without them QEMU boots to a SeaBIOS prompt and the test times out with
+      # no clue why. `u-boot-qemu` is ARMv7-A's: EDK2's 32-bit Arm build is on
+      # its way out of the distributions, and U-Boot is what the boards run.
+      - name: Install QEMU and firmware
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64
+            qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 u-boot-qemu
 
       - name: Boot
         run: cargo xtask test-boot --arch ${{ matrix.arch }} --release --timeout 120

@@ -2,7 +2,8 @@
 
 The AArch64 boot log opens with nine lines that look like failures. They are
 not ours, and this file is the evidence, so that the next person to read a boot
-log does not spend an afternoon on them the way the first one did.
+log does not spend an afternoon on them the way the first one did. The ARMv7-A
+log opens with U-Boot's equivalents, which have a section of their own below.
 
 Everything below was checked by experiment, not inferred.
 
@@ -109,10 +110,70 @@ A block device and a filesystem on it, which is why the loader boots at all.
 
 Note there is no `HD(...)` partition node in that path: the image
 `xtask` writes is a bare FAT32 filesystem with no partition table, and firmware
-mounts the whole disk. That is legal and works on both architectures. Adding a
+mounts the whole disk. That is legal and works on all three architectures —
+U-Boot's `efi_mgr` finds `BOOTARM.EFI` on it as EDK2 finds `BOOTAA64.EFI`. Adding a
 GPT with a proper EFI system partition would produce a conventional device path
 and a nicer description, and is worth doing when the image grows a second
 partition to put a root filesystem in — not before.
+
+## U-Boot's lines, on ARMv7-A
+
+ARMv7-A is booted by U-Boot rather than EDK2 — `docs/arm32.md`, decision 1 — and
+U-Boot has furniture of its own:
+
+```
+Bloblist at 0 not found (err=-2)
+alloc space exhausted ptr 400 limit 0
+Bloblist at 0 not found (err=-2)
+...
+Loading Environment from Flash... *** Warning - bad CRC, using default environment
+...
+No USB controllers found
+Net:   No ethernet found.
+...
+Cannot persist EFI variables without system partition
+Missing TPMv2 device for EFI_TCG_PROTOCOL
+Missing RNG device for EFI_RNG_PROTOCOL
+```
+
+**All of them are U-Boot taking stock of QEMU's `virt` machine, before any disk
+is considered.** Most say what they mean. There is no USB controller and, with
+`-net none`, no network card. The environment lives in flash that QEMU hands over
+blank, so its checksum cannot match and U-Boot uses its built-in one, which is
+the one that boots a disk. The three EFI lines are U-Boot's UEFI implementation
+listing what it cannot offer an application: nowhere to keep variables — the
+image is a bare FAT volume, not an EFI system partition — no TPM and no random
+number generator. The loader asks for none of the three. The bloblist is the
+table a previous boot stage would leave U-Boot at address zero, and on QEMU there
+is no previous stage; the allocation line comes out of the same early code, and
+has not been traced further than establishing that it is there with nothing of
+ours attached.
+
+Between the environment line and `Cannot persist` the raw log also carries a few
+bytes of escape sequences — `ESC 7`, `ESC [r`, `ESC [999;999H`, `ESC [6n`,
+`ESC 8`. That is the usual way of asking a terminal how large it is: move the
+cursor as far as it will go, ask where it ended up, and move it back. On a pipe
+nothing answers, and U-Boot carries on without a size.
+
+*How this was established:* run the same firmware with **no disk attached** —
+
+```
+qemu-system-arm -machine virt -cpu cortex-a7 -m 512 -display none \
+    -serial stdio -monitor none -net none \
+    -bios /usr/lib/u-boot/qemu_arm/u-boot.bin
+```
+
+— and every line above appears, followed by `fatal: no kernel available` from
+the `fw-cfg` boot device and a `=>` prompt. Nothing of ours is involved.
+
+The line that *is* about our image is U-Boot's counterpart of EDK2's
+`Non-Block Boot Device` above, for the same reason — the virtio transport's node
+in the device path is vendor-defined and has no model string to print:
+
+```
+** Booting bootflow '<NULL>' with efi_mgr
+Booting: Label: virtio 0 Device path: /VenHw(e61d73b9-a384-4acc-aeab-82e828f3628b,...)
+```
 
 ## The rule
 

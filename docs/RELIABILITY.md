@@ -97,6 +97,6 @@ rather than waiting for the fuzzer to rediscover it inside a timebox.
 ## The boot test
 
 The gate that answers the question the others cannot. Everything else checks the
-source; this one boots it — firmware to loader to kernel — on both
-architectures, and fails the build if the machine does not come up. An OS that
+source; this one boots it — firmware to loader to kernel — on every
+architecture, and fails the build if the machine does not come up. An OS that
 compiles and does not boot is not a passing build.

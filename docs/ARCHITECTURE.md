@@ -1,7 +1,7 @@
 # Ferrix — architecture
 
-Ferrix is an operating system written in Rust for x86-64 and AArch64, whose
-acceptance test is that it compiles Rust. Not "has a shell", not "draws a
+Ferrix is an operating system written in Rust for x86-64, AArch64 and ARMv7-A,
+whose acceptance test is that it compiles Rust. Not "has a shell", not "draws a
 window": it hosts `rustc`, which is the hardest thing a general-purpose OS is
 routinely asked to do and the only goal that forces every subsystem to be real.
 
@@ -80,8 +80,8 @@ built for it, which drags a C++ runtime into the tree — making the project
 
 Two ABIs coexist:
 
-* **Linux ABI**, syscall numbers 0.., x86-64 and AArch64 tables as Linux
-  defines them. Everything about it is a compatibility obligation; we do not get
+* **Linux ABI**, syscall numbers 0.., each architecture's table as Linux
+  defines it — on ARMv7-A, the EABI one. Everything about it is a compatibility obligation; we do not get
   to have opinions.
 * **Ferrix native ABI**, syscall numbers from `0x1000`, capability-handle based.
   This is what device drivers, `devmgr` and anything else Ferrix-specific speaks.
@@ -131,8 +131,13 @@ this is what makes reclaim and copy-on-write tractable.
 size-class caches for the general `alloc` path. Kernel object types get their
 own slabs, so a `Task` allocation is a pop off a list.
 
-**Virtual.** Four-level paging on both architectures, 48-bit addresses,
-*identical layout constants* on each:
+**Virtual.** Tables of 512 eight-byte descriptors over a 4 KiB granule on all
+three architectures: four levels over 48-bit addresses on the 64-bit pair, three
+over 32 on ARMv7-A, whose Large Physical Address Extension is AArch64's
+descriptor format with a narrower physical address. `libs/paging` is written
+once, over a *geometry* and an *encoding* each architecture supplies.
+
+The 64-bit pair share *identical layout constants*:
 
 ```
 0x0000_0000_0000_0000 .. 0x0000_7FFF_FFFF_FFFF   user
@@ -144,6 +149,25 @@ own slabs, so a `Task` allocation is a pop off a list.
 x86-64 puts the image in the top -2 GiB because that is what the "kernel" code
 model addresses; AArch64 does not need to, and does anyway, because one layout
 is one set of bugs instead of two.
+
+ARMv7-A cannot hold a single one of those constants, so its layout is argued
+rather than merely different — a 2/2 split, `TTBR0` translating the lower half
+and `TTBR1` the upper:
+
+```
+0x0000_0000 .. 0x7FFF_FFFF   user
+0x8000_0000 .. 0x9FFF_FFFF   kernel vmap (MMIO, guard-paged stacks)
+0xA000_0000 .. 0xEFFF_FFFF   direct map of RAM, 1.25 GiB
+0xF000_0000 .. 0xFFFF_FFFF   the kernel image
+```
+
+The user half is the larger because a 32-bit process wants it. The direct map
+gets what the vmap area and the image leave, and its size is the ceiling on the
+RAM a 32-bit kernel can use. On every architecture the direct map begins at the
+lowest RAM address rather than at zero — a gibibyte in on QEMU's Arm machines,
+whose first gibibyte is flash and device registers — and `BootInfo` says where.
+`libs/bootinfo` holds both layouts and checks both at compile time on every
+build, whichever the build is for.
 
 **Address spaces.** A red-black interval tree of `Vma`s, each naming a VMO, an
 offset, a protection and a share mode. `mmap` inserts, `munmap` splits,
@@ -226,8 +250,9 @@ no-new-privs. They sit on top of the handle system rather than beside it.
 
 ## 7. Device drivers in userspace
 
-The kernel enumerates buses, because that needs ACPI (x86-64) and device tree
-(AArch64) and privileged access. It does not drive devices.
+The kernel enumerates buses, because that needs ACPI (x86-64, AArch64) or a
+device tree (ARMv7-A, and AArch64 firmware that offers one) and privileged
+access. It does not drive devices.
 
 For each device found, the kernel creates a device node and hands `devmgr` a
 handle. `devmgr` matches a driver, spawns it in its own `Job`, and gives it:
@@ -308,7 +333,7 @@ written as one, in `libs/`, where all three tools reach it. `scripts/
 check-crate-layering.sh` keeps that from eroding.
 
 Architecture-specific code lives under `arch/` and is reached through one
-facade. Generic code never names `x86_64` or `aarch64`, and no
+facade. Generic code never names an architecture, and no
 `#[cfg(target_arch)]` appears outside those directories — both enforced by the
 same script, because a facade maintained by convention is a facade for about six
 weeks.
@@ -317,8 +342,9 @@ weeks.
 
 ## 10. Assembly
 
-There is none at boot on either architecture: UEFI calls a Rust `efi_main` in
-64-bit mode. What assembly exists is confined to constructs the machine defines
+There is none at boot on any architecture: UEFI firmware — EDK2 on the 64-bit
+pair, U-Boot on ARMv7-A — calls a Rust `efi_main` with a stack and the MMU
+already set up. What assembly exists is confined to constructs the machine defines
 before a Rust function could run — exception vectors, the syscall trampoline,
 context switch, and the CPU primitives with no Rust spelling. `docs/ASSEMBLY.md`
 is the list, `scripts/asm-allowlist.json` is its machine-readable form, and CI

@@ -46,7 +46,7 @@ pub mod x86_64;
 use core::fmt;
 use core::marker::PhantomData;
 
-/// Bytes in the smallest mapping either architecture is configured for.
+/// Bytes in the smallest mapping any architecture is configured for.
 pub const PAGE_SIZE: u64 = 4096;
 
 /// Descriptors in one table. 4 KiB / 8 bytes.
@@ -354,9 +354,9 @@ pub trait Encoding {
 
     /// The descriptor value that means "nothing is mapped here".
     ///
-    /// Zero on both architectures, and named rather than written as a literal
-    /// so that an architecture whose absent encoding is not zero has somewhere
-    /// to say so.
+    /// Zero on every architecture here, and named rather than written as a
+    /// literal so that an architecture whose absent encoding is not zero has
+    /// somewhere to say so.
     const ABSENT: u64 = 0;
 }
 

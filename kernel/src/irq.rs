@@ -1,6 +1,6 @@
 //! Device interrupts, once a controller is delivering them.
 //!
-//! The two architectures number interrupts differently and acknowledge them
+//! The architectures number interrupts differently and acknowledge them
 //! differently — x86-64 hands the kernel a vector and wants an end-of-interrupt
 //! written to the local APIC afterwards; the GIC hands over an identifier that
 //! must be given back to the same register it came from — so the acknowledge
@@ -27,7 +27,7 @@ use ferrix_sync::IrqSpinLock;
 
 /// Interrupt numbers the table can hold.
 ///
-/// Sized for the larger of the two architectures: the GIC's interrupt
+/// Sized for the largest of the architectures: the GIC's interrupt
 /// identifier space runs to 1020, while x86-64 has 224 usable vectors above
 /// the CPU's own exceptions.
 pub(crate) const SLOTS: usize = 1024;

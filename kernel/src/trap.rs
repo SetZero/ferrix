@@ -1,17 +1,18 @@
 //! What happens when the CPU stops running the program and enters the kernel.
 //!
-//! The two architectures disagree about almost everything here — x86-64 has 256
+//! The architectures disagree about almost everything here — x86-64 has 256
 //! vectors and an error code that exists for ten of them; AArch64 has sixteen
-//! vector-table entries and a syndrome register — so each `arch` module
-//! classifies its own frame into the [`Trap`] below, and the policy is written
-//! once.
+//! vector-table entries and a syndrome register; ARMv7-A has eight entries, five
+//! processor modes and a fault status register per kind of abort — so each
+//! `arch` module classifies its own frame into the [`Trap`] below, and the
+//! policy is written once.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::arch;
 use crate::console::println;
 
-/// Why the kernel was entered, in terms both architectures share.
+/// Why the kernel was entered, in terms every architecture shares.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Trap {
     /// A translation fault: the address was not mapped, or was mapped without
@@ -72,20 +73,20 @@ pub(crate) fn handled_fault_count() -> u64 {
     FAULTS_HANDLED.load(Ordering::Relaxed)
 }
 
-/// Where every trap arrives, from either architecture's entry stub.
+/// Where every trap arrives, from any architecture's entry stub.
 pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
     match arch::classify(frame) {
         Trap::Breakpoint => {
-            // The two architectures disagree about where the saved instruction
+            // The architectures disagree about where the saved instruction
             // pointer lands: x86-64's `int3` pushes the address after itself,
-            // AArch64's `brk` the address *of* itself. Returning without
-            // asking would loop forever on one of them.
+            // AArch64's `brk` and ARMv7-A's `bkpt` the address *of* themselves.
+            // Returning without asking would loop forever on two of them.
             arch::advance_past_breakpoint(frame);
             let _ = BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
         }
         Trap::PageFault(fault) => handle_page_fault(frame, fault),
         // The controller, not the CPU, knows which interrupt arrived and how
-        // it is acknowledged, and the two architectures disagree about both.
+        // it is acknowledged, and the architectures disagree about both.
         // So the architecture claims, dispatches and retires; what crosses
         // back into generic code is a number.
         Trap::Interrupt(_) => arch::service_interrupts(frame, crate::irq::dispatch),

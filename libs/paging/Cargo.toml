@@ -1,6 +1,6 @@
 [package]
 name = "ferrix-paging"
-description = "Architecture-neutral page table construction for x86-64 and AArch64"
+description = "Architecture-neutral page table construction for x86-64, AArch64 and ARMv7-A"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
