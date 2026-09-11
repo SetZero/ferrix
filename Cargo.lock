@@ -52,6 +52,8 @@ dependencies = [
  "ferrix-frame",
  "ferrix-heap",
  "ferrix-paging",
+ "ferrix-sync",
+ "ferrix-vma",
 ]
 
 [[package]]

@@ -21,7 +21,6 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use ferrix_acpi::{Acpi, MadtEntry};
 
 use crate::acpi::DirectMap;
-use crate::mm;
 use crate::mmio::Mmio;
 
 /// Distributor control.
@@ -157,9 +156,9 @@ pub(crate) unsafe fn init(acpi: &Acpi<'_, DirectMap>) -> Result<u8, &'static str
         return Err("the MADT describes a GICv2 with no CPU interface");
     }
 
-    let gicd = mm::map_device(layout.distributor, GICD_WINDOW)
+    let gicd = crate::vmap::map_device(layout.distributor, GICD_WINDOW)
         .map_err(|_| "could not map the GIC distributor")?;
-    let gicc = mm::map_device(layout.cpu_interface, GICC_WINDOW)
+    let gicc = crate::vmap::map_device(layout.cpu_interface, GICC_WINDOW)
         .map_err(|_| "could not map the GIC CPU interface")?;
     DISTRIBUTOR.store(gicd, Ordering::Relaxed);
     CPU_INTERFACE.store(gicc, Ordering::Relaxed);

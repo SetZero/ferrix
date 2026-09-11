@@ -21,11 +21,13 @@ $ cargo xtask test-boot --arch both
     |   acpi     rsdp at 0x1fb7e014
     |   stage 1  loader hand-off verified
     |   traps    vectors installed
-    |   frames   499 MiB managed, 499 MiB free, 127879 entries at 0x1780000 (2048 KiB)
-    |   stage 2  frame allocator and heap verified
+    |   frames   498 MiB managed, 498 MiB free, 127580 entries at 0x1780000 (2048 KiB)
+    |   stage 2  frame allocator, heap and vmap arena verified
     |   clock    HPET at 100.000 MHz
-    |   irqs     APIC, local APIC timer at 62.712 MHz
+    |   irqs     APIC, local APIC timer at 62.684 MHz
     |   stage 3  2 breakpoints, 4 page faults, 1001 ticks at 990 Hz
+    |   w^x      318 mappings swept, 21 executable, none writable
+    |   reclaim  3 MiB from the loader and ACPI, 501 free; arena 3 live, 36 KiB
     | FERRIX-BOOT-OK stages 1-3
   x86_64: boot ok
   aarch64: boot ok
@@ -39,6 +41,14 @@ every usable frame, starts a kernel heap — so `Box`, `Vec` and `BTreeMap` work
 — installs its own trap vectors, services a page fault by mapping the faulting
 address and letting the instruction retry, brings up an interrupt controller,
 and runs a clock.
+
+Virtual memory is finished rather than sketched: a `vmap` arena hands out
+guard-paged ranges and kernel stacks over them, the loader's identity map is
+dropped — which is what turns "higher-half" from a linker script's claim into a
+demonstrated fact — the loader's own memory and the ACPI-reclaim regions go back
+to the buddy allocator, empty slab pages are returned to it rather than hoarded,
+and a sweep of the live page tables asserts that no mapping is both writable and
+executable.
 
 Time works and interrupts arrive. The local APIC and the GICv2 are programmed,
 the local APIC timer is calibrated against the HPET, AArch64 uses the

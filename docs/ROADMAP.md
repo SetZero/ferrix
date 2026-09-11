@@ -64,7 +64,7 @@ volume label.
 
 ---
 
-## Stage 2 — Physical and virtual memory  ·  *in progress*
+## Stage 2 — Physical and virtual memory ✅
 
 The arithmetic lives in `libs/` and is unit-tested on the host; the parts that
 touch `CR3` or `TTBR1` do not.
@@ -92,19 +92,45 @@ the free-frame count required to return exactly to where it started; a `Box`, a
 `Vec` grown through several reallocations, and a `BTreeMap` of two thousand
 entries, all verified to hold what was put in them.
 
-**Still to do in this stage:**
+**Done — the virtual half, and the tidying the physical half was owed.**
 
-* a `vmap`/`vunmap` allocator over `KERNEL_VMAP_BASE`, and guard-paged kernel
-  stacks on top of it;
-* dropping the loader's identity map, which proves the kernel is genuinely
-  higher-half rather than accidentally depending on low addresses;
-* reclaiming the loader's own memory and the ACPI-reclaim regions;
-* a W^X sweep that walks the live page tables and asserts no mapping is both
-  writable and executable;
-* returning empty slab pages to the buddy — `libs/heap` documents that it does
-  not, and the fix wants a free-object count in the per-frame record rather
-  than a header stolen from the first object;
-* per-CPU frame caches, which have to wait for stage 4 to have a second CPU.
+* `kernel/src/vmap.rs` — an arena over `KERNEL_VMAP_BASE` that hands out
+  virtual ranges with an unmapped guard page either side, and guard-paged
+  kernel stacks on top of it. Free ranges are coalesced with their neighbours,
+  so a stack allocated and freed a thousand times does not fragment the arena
+  into a thousand holes.
+* The loader's identity map is dropped, in the one order that works: the W^X
+  sweep cannot pass while it is live — the loader mapped itself writable *and*
+  executable, and correctly so, since it was executing out of pages it was
+  still relocating — so the map goes first and the sweep runs after. The kernel
+  then proves the map is gone by translating the physical address it used to
+  run at and requiring nothing back.
+* The loader's own memory and the ACPI-reclaim regions are handed to the buddy
+  allocator once nothing points into them, which on a 512 MiB QEMU machine is
+  3 MiB — small in absolute terms and the entire difference between a kernel
+  that can reclaim boot memory and one that cannot.
+* The W^X sweep walks the live tables through `Mapper::for_each_leaf` and
+  asserts no leaf is both writable and executable. It reports what it swept as
+  well as what it found, because a sweep that walks nothing also finds nothing.
+* `libs/heap` returns empty slab pages to the buddy. The free-object count
+  lives in the per-frame record, as the note here asked — not in a header
+  stolen from the first object, which would have made the allocator's own
+  metadata the thing a use-after-free corrupts first. The last page of a class
+  stays, so a workload oscillating across a page boundary does not pay a buddy
+  allocation per cycle.
+
+**Exit criterion met, and in the boot test on both architectures.** On top of
+stage 2's allocator hammering: a vmap allocation is written through and read
+back, two allocations are required to be separated by their guard pages, the
+pages either side of a range are required to translate to nothing, a kernel
+stack is required to be 16-byte aligned and writable at both ends with guards
+beyond each, and freeing it is required to return every frame it held. Then the
+identity map is dropped and its absence checked, the sweep reports 318 mappings
+on x86-64 and 822 on AArch64 with none writable-and-executable, and the reclaim
+reports the frames it recovered.
+
+**Deferred to stage 4, because it needs a second CPU to mean anything:**
+per-CPU frame caches.
 
 ---
 

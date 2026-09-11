@@ -109,6 +109,74 @@ pub(crate) fn enable_interrupts() {
     }
 }
 
+/// The interrupt mask bits of `PSTATE`.
+///
+/// Read for the same reason x86-64 reads `RFLAGS`: a lock that masks
+/// interrupts has to put back the state it found, not unconditionally unmask.
+pub(crate) fn read_daif() -> u64 {
+    let daif: u64;
+    // SAFETY: reading `DAIF` has no side effects.
+    unsafe {
+        asm!("mrs {}, daif", out(reg) daif, options(nomem, nostack, preserves_flags));
+    }
+    daif
+}
+
+/// Restore the interrupt mask bits `read_daif` returned.
+///
+/// # Safety
+///
+/// `daif` must be a value a previous [`read_daif`] returned. Writing an
+/// arbitrary value unmasks exceptions the caller may not be ready for — an
+/// `SError` in particular, which Ferrix keeps masked until there is something
+/// that could act on one.
+pub(crate) unsafe fn write_daif(daif: u64) {
+    // SAFETY: the caller guarantees the value came from `read_daif`.
+    unsafe {
+        asm!("msr daif, {}", in(reg) daif, options(nomem, nostack));
+    }
+}
+
+/// `TCR_EL1.EPD0` — translations through `TTBR0_EL1` fault instead of walking.
+const TCR_EPD0: u64 = 1 << 7;
+
+/// Stop the CPU translating the lower half of the address space at all.
+///
+/// This is how `AArch64` drops the loader's identity map. Unlike x86-64, where
+/// the identity map is a set of entries in the same table as everything else
+/// and is dropped by clearing them, here it is a whole second translation
+/// regime with its own base register — so the way to drop it is to switch the
+/// regime off.
+///
+/// `TTBR0_EL1` is zeroed as well as disabled. With `EPD0` set the register is
+/// not consulted, so this changes no behaviour; it is here so that a later
+/// change that clears `EPD0` — stage 6, giving the lower half to a user
+/// process — cannot accidentally resurrect the loader's tables.
+///
+/// # Safety
+///
+/// Nothing may still be executing or reading through the lower half. The
+/// kernel runs entirely in the upper half from its first instruction, so this
+/// holds once the boot stack and the hand-off are being reached through the
+/// direct map, which they are.
+pub(crate) unsafe fn disable_ttbr0() {
+    // SAFETY: the caller guarantees nothing needs the lower half. The `isb`
+    // makes both writes take effect before the next instruction is fetched;
+    // without it the CPU is permitted to walk the old tables for a while yet.
+    unsafe {
+        asm!(
+            "mrs {scratch}, tcr_el1",
+            "orr {scratch}, {scratch}, {epd0}",
+            "msr tcr_el1, {scratch}",
+            "msr ttbr0_el1, xzr",
+            "isb",
+            scratch = out(reg) _,
+            epd0 = in(reg) TCR_EPD0,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
 /// The frequency of the architected counter, in hertz.
 ///
 /// Firmware programs this register at reset and it is read-only thereafter, so

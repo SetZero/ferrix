@@ -21,7 +21,6 @@ use ferrix_acpi::{Acpi, GenericAddress};
 
 use super::cpu;
 use crate::acpi::DirectMap;
-use crate::mm;
 use crate::mmio::Mmio;
 
 /// General capabilities: the counter's period lives in the top 32 bits.
@@ -98,7 +97,7 @@ fn hpet_address(acpi: &Acpi<'_, DirectMap>) -> Option<u64> {
 
 /// Map the timer block, start it, and prove it counts.
 fn start_hpet(phys: u64) -> Result<&'static str, &'static str> {
-    let base = mm::map_device(phys, HPET_WINDOW).map_err(|_| "could not map the HPET")?;
+    let base = crate::vmap::map_device(phys, HPET_WINDOW).map_err(|_| "could not map the HPET")?;
     let regs = Mmio::at(base);
 
     let period_fs = u64::from(regs.read32(HPET_CAPABILITIES + 4));

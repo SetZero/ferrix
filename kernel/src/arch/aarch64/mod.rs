@@ -6,6 +6,8 @@ mod gic;
 mod timer;
 mod trap;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use ferrix_bootinfo::BootView;
 
 use crate::early::{EarlyError, EarlyMemory};
@@ -45,6 +47,35 @@ pub(crate) unsafe fn init_traps() {
 /// Publish page table writes and invalidate the whole TLB.
 pub(crate) fn flush_tlb() {
     cpu::flush_tlb();
+}
+
+/// Root of the loader's identity map, while it still exists.
+///
+/// `Some` on `AArch64` because the identity map is a second translation regime
+/// with its own root, which nothing walking the kernel's tables would ever
+/// see. The W^X sweep asks for this so that it sweeps the whole of what the
+/// hardware can translate rather than the half the kernel happens to own.
+pub(crate) fn identity_root(view: &BootView<'_>) -> Option<u64> {
+    let ttbr0 = view.raw().ttbr0_phys;
+    // SAFETY-free: this is a read of a `u64` the loader filled in, and zero is
+    // how the loader says "the identity map is in the kernel's own table".
+    (ttbr0 != 0 && !IDENTITY_DROPPED.load(Ordering::Relaxed)).then_some(ttbr0)
+}
+
+/// Set once [`drop_identity_map`] has run.
+static IDENTITY_DROPPED: AtomicBool = AtomicBool::new(false);
+
+/// Drop the loader's identity map.
+///
+/// # Safety
+///
+/// Nothing may still be executing or reading through the lower half of the
+/// address space. See [`cpu::disable_ttbr0`].
+pub(crate) unsafe fn drop_identity_map(_view: &BootView<'_>) {
+    // SAFETY: the caller guarantees the lower half is unused, and the kernel
+    // has been running entirely in the upper half since its first instruction.
+    unsafe { cpu::disable_ttbr0() };
+    IDENTITY_DROPPED.store(true, Ordering::Relaxed);
 }
 
 /// Stop the machine.
@@ -97,6 +128,28 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
 /// Unmask `IRQ` on this CPU.
 pub(crate) fn enable_interrupts() {
     cpu::enable_interrupts();
+}
+
+/// How `ferrix_sync`'s interrupt-masking lock masks interrupts here.
+#[derive(Debug)]
+pub(crate) struct Irq;
+
+// SAFETY: `disable` masks every interrupt on this CPU and returns the `DAIF`
+// value it found; `restore` puts exactly that value back, so nesting two
+// critical sections cannot unmask halfway out of the outer one. `DAIF` is
+// four bits wide and fits a `usize` on every target this kernel builds for.
+unsafe impl ferrix_sync::IrqControl for Irq {
+    fn disable() -> usize {
+        let previous = cpu::read_daif();
+        cpu::disable_interrupts();
+        previous as usize
+    }
+
+    fn restore(state: usize) {
+        // SAFETY: `state` is a `DAIF` value this CPU's `disable` returned a
+        // moment ago, which is exactly `write_daif`'s contract.
+        unsafe { cpu::write_daif(state as u64) };
+    }
 }
 
 /// Wait until an interrupt arrives.

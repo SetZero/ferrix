@@ -22,7 +22,6 @@ use ferrix_acpi::{Acpi, MadtEntry};
 use super::clock;
 use super::trap::IRQ_BASE;
 use crate::acpi::DirectMap;
-use crate::mm;
 use crate::mmio::Mmio;
 
 /// Where the local APIC's registers are when the MADT does not say.
@@ -120,7 +119,8 @@ pub(crate) unsafe fn init(acpi: &Acpi<'_, DirectMap>) -> Result<(), &'static str
         0 => LAPIC_DEFAULT_BASE,
         address => address,
     };
-    let base = mm::map_device(phys, LAPIC_WINDOW).map_err(|_| "could not map the local APIC")?;
+    let base =
+        crate::vmap::map_device(phys, LAPIC_WINDOW).map_err(|_| "could not map the local APIC")?;
     LAPIC.store(base, Ordering::Relaxed);
 
     let regs = Mmio::at(base);
@@ -176,7 +176,7 @@ fn quiesce_io_apics(madt: &ferrix_acpi::Madt<'_>) -> Result<(), &'static str> {
         let MadtEntry::IoApic(io_apic) = entry else {
             continue;
         };
-        let base = mm::map_device(u64::from(io_apic.address), IOAPIC_WINDOW_BYTES)
+        let base = crate::vmap::map_device(u64::from(io_apic.address), IOAPIC_WINDOW_BYTES)
             .map_err(|_| "could not map an I/O APIC")?;
         mask_all_inputs(Mmio::at(base));
     }

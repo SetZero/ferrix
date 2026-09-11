@@ -83,6 +83,23 @@ pub(crate) fn reload_cr3() {
     }
 }
 
+/// The flags register.
+///
+/// Read for one bit: `IF`, which says whether interrupts are unmasked. A lock
+/// that masks interrupts has to restore the state it found rather than
+/// unconditionally unmasking, or taking one inside another silently enables
+/// interrupts halfway out of the outer critical section.
+pub(crate) fn read_rflags() -> u64 {
+    let flags: u64;
+    // SAFETY: `pushfq` and `pop` read the flags register through the stack and
+    // leave it as they found it. `nostack` is deliberately *not* claimed: this
+    // is the one primitive here that uses the stack.
+    unsafe {
+        asm!("pushfq", "pop {}", out(reg) flags, options(preserves_flags));
+    }
+    flags
+}
+
 /// QEMU's `isa-debug-exit` device.
 ///
 /// Writing to it ends the emulator with `(value << 1) | 1`, which is how the
