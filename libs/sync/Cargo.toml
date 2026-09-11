@@ -1,0 +1,13 @@
+[package]
+name = "ferrix-sync"
+description = "Kernel synchronisation primitives: ticket spin locks, RCU-free once, reader-writer locks"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

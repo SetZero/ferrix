@@ -1,0 +1,40 @@
+excessive-nesting-threshold = 5
+
+# `unwrap()` is denied in kernel and loader code and `expect()` too (see the
+# [workspace.lints.clippy] table in Cargo.toml); `panic!()` is denied alongside
+# them, and `scripts/check-panic-audit.py` asserts that the exemptions left
+# behind are argued ones. All three are idiomatic in tests, where a failed
+# assertion SHOULD panic with a clear message, so these settings exempt test
+# bodies rather than production code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+# Indexing is denied in production code for the same reason: `xs[i]` on a length
+# that firmware, an ELF header or a filesystem chose is a panic, and in a kernel
+# a panic is the machine. In a test an index is an assertion about a fixture the
+# test itself wrote.
+allow-indexing-slicing-in-tests = true
+
+# A kernel calls a lot of small primitives (`read_cr3`, `dsb`, one MMIO store)
+# whose whole body is one statement. Left at clippy's default of 25 the
+# `too_many_arguments` and trait-bound heuristics are fine, but the default
+# `too-many-lines-threshold` of 100 is what `too_many_lines = "deny"` uses;
+# arch bring-up routines that program a dozen system registers in sequence are
+# the one place that is genuinely one thing. They are split, not exempted.
+
+# Hardware, specification and architecture names that read fine unbackticked in
+# prose. `..` keeps clippy's built-in defaults (OpenGL, WebGL, ...).
+doc-valid-idents = [
+    "UEFI", "ACPI", "RSDP", "XSDT", "MADT", "HPET", "MMIO", "NUMA", "SMP",
+    "TLB", "MMU", "IOMMU", "ASID", "PCID", "VMSAv8", "AArch64", "AArch32",
+    "TTBR0", "TTBR1", "TCR", "MAIR", "SCTLR", "VBAR", "ELR", "SPSR", "ESR",
+    "GICv2", "GICv3", "GICD", "GICR", "GICC", "PL011", "PSCI", "SBBR",
+    "APIC", "IOAPIC", "LAPIC", "GDT", "IDT", "TSS", "IST", "CR0", "CR2",
+    "CR3", "CR4", "MSR", "XSAVE", "FXSAVE", "SYSCALL", "SYSRET", "IRETQ",
+    "PML4", "PDPT", "NX", "SMEP", "SMAP", "UMIP", "KPTI", "CPUID",
+    "VirtIO", "PCIe", "NVMe", "AHCI", "MSI", "MSI-X", "DMA",
+    "ELF64", "PIE", "TLS", "VDSO", "cpio", "initramfs", "tmpfs", "procfs",
+    "devfs", "ext2", "ext4", "FAT32", "vfat", "musl", "libc", "rustc", "LLVM",
+    "PhysAddr", "VirtAddr", "BootInfo", "FerrixOS",
+    "..",
+]

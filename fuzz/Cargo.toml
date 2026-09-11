@@ -1,0 +1,37 @@
+[package]
+name = "ferrix-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace, so `cargo fuzz` can pick its own profile and its
+# sanitizer-instrumented build does not disturb the main target directory.
+# `scripts/check-crate-layering.sh` knows to skip a manifest that declares one.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ferrix-elf = { path = "../libs/elf" }
+ferrix-frame = { path = "../libs/frame" }
+
+[[bin]]
+name = "elf_parse"
+path = "fuzz_targets/elf_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frame_alloc"
+path = "fuzz_targets/frame_alloc.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = true
+# The fuzzer's whole job is to find these, so they must not be compiled out.
+overflow-checks = true

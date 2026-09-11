@@ -1,0 +1,225 @@
+[workspace]
+# v3 makes the `rust-version` pin below bind, so a crate needing a newer
+# compiler is skipped rather than silently attempted.
+resolver = "3"
+members = [
+    # Architecture-neutral, host-testable logic. Everything that can be a pure
+    # function of bytes lives here rather than in the kernel, because this is
+    # the code `cargo test`, Miri and the fuzzers can actually reach.
+    "libs/acpi",
+    "libs/bootinfo",
+    "libs/elf",
+    "libs/fdt",
+    "libs/frame",
+    "libs/heap",
+    "libs/btrfs",
+    "libs/cpio",
+    "libs/linux-abi",
+    "libs/sync",
+    "libs/virtio",
+    "libs/vma",
+    "libs/paging",
+
+    # The UEFI loader. Firmware calls into it in 64-bit mode, so there is no
+    # bootstrap assembly on either architecture.
+    "boot",
+
+    # The kernel proper.
+    "kernel",
+
+    # Host-side build and test driver (`cargo xtask ...`).
+    "xtask",
+]
+# So a bare `cargo build` builds the host tool rather than trying to compile
+# freestanding crates for the host target.
+default-members = ["xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Matches rust-toolchain.toml: the version the resolver holds dependencies to.
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+ferrix-acpi = { path = "libs/acpi" }
+ferrix-bootinfo = { path = "libs/bootinfo" }
+ferrix-elf = { path = "libs/elf" }
+ferrix-fdt = { path = "libs/fdt" }
+ferrix-frame = { path = "libs/frame" }
+ferrix-heap = { path = "libs/heap" }
+ferrix-btrfs = { path = "libs/btrfs" }
+ferrix-cpio = { path = "libs/cpio" }
+ferrix-linux-abi = { path = "libs/linux-abi" }
+ferrix-sync = { path = "libs/sync" }
+ferrix-virtio = { path = "libs/virtio" }
+ferrix-vma = { path = "libs/vma" }
+ferrix-paging = { path = "libs/paging" }
+
+# ---------------------------------------------------------------------------
+# Workspace-wide lints
+#
+# Ported from the Starling workspace, with the deviations a kernel forces
+# argued below. The rule is the same one: a gate is only real if the build
+# fails, and an exemption is only acceptable if it is argued at the site.
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+# **The one gate this tree cannot inherit.** Starling denies `unsafe_code`
+# outright; a kernel writes page tables, MMIO and CPU system registers, so
+# denying unsafe would be denying the program. The principle is kept by moving
+# the burden onto every unsafe site instead:
+#
+#   * `clippy::undocumented_unsafe_blocks` (denied below) requires a `SAFETY:`
+#     comment on every `unsafe` block,
+#   * `clippy::missing_safety_doc` requires a `# Safety` section on every
+#     `unsafe fn`,
+#   * `unsafe_op_in_unsafe_fn` (deny-by-default in edition 2024) stops an
+#     `unsafe fn` body from being an unchecked region,
+#   * `scripts/check-unsafe-audit.py` fails the build on any `unsafe` block
+#     whose justification is missing, so the rule survives a clippy version
+#     that decides to soften a nursery lint.
+#
+# `xtask` needs no unsafe at all and denies it in its own manifest.
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "deny"
+unused_crate_dependencies = "warn"
+unused_results = "deny"
+missing_debug_implementations = "deny"
+unused_qualifications = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+
+needless_pass_by_value = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_let_else = "warn"
+cloned_instead_of_copied = "warn"
+implicit_clone = "warn"
+uninlined_format_args = "warn"
+doc_markdown = "warn"
+missing_errors_doc = "allow"
+module_name_repetitions = "allow"
+unwrap_used = "deny"
+excessive_nesting = "deny"
+too_many_lines = "deny"
+allow_attributes_without_reason = "deny"
+branches_sharing_code = "deny"
+collapsible_else_if = "deny"
+expect_used = "deny"
+# Every remaining explicit panic has to be argued at the site. In a kernel this
+# matters more than in a server, not less: there is no supervisor to restart
+# us, so a reachable `unwrap` is an unrecoverable machine. `.clippy.toml`
+# exempts test bodies, and `scripts/check-panic-audit.py` asserts that what is
+# left is argued.
+panic = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+# Same reasoning as Starling: clippy cannot tell a runtime divisor from a
+# constant one, and every division in this tree is by a constant (PAGE_SIZE,
+# entry counts, timer frequencies).
+integer_division = "allow"
+modulo_arithmetic = "allow"
+
+# -- The unsafe discipline, standing in for `unsafe_code = "deny"` ----------
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+# One unsafe operation per block, so a `SAFETY:` comment describes one claim
+# rather than covering a paragraph of them.
+multiple_unsafe_ops_per_block = "deny"
+# `transmute` between arbitrary types is how a kernel gets a silently wrong
+# layout. Named conversions or `from_bits` instead.
+transmute_ptr_to_ptr = "warn"
+cast_ptr_alignment = "deny"
+# Physical/virtual address confusion is this project's characteristic bug, and
+# these are the casts that hide it.
+ptr_as_ptr = "warn"
+borrow_as_ptr = "warn"
+
+# -- Bugs that are silent when they happen ---------------------------------
+debug_assert_with_mut_call = "deny"
+read_zero_byte_vec = "deny"
+path_buf_push_overwrite = "deny"
+fallible_impl_from = "deny"
+panic_in_result_fn = "deny"
+mem_forget = "deny"
+rc_mutex = "deny"
+rc_buffer = "warn"
+mutex_atomic = "warn"
+
+# -- Hygiene ----------------------------------------------------------------
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+exit = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+
+# -- Consistency ------------------------------------------------------------
+str_to_string = "warn"
+semicolon_if_nothing_returned = "warn"
+redundant_type_annotations = "warn"
+unnecessary_self_imports = "warn"
+try_err = "warn"
+unneeded_field_pattern = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+empty_drop = "warn"
+trailing_empty_array = "warn"
+pathbuf_init_then_push = "warn"
+if_then_some_else_none = "warn"
+missing_assert_message = "warn"
+verbose_file_reads = "warn"
+filetype_is_file = "warn"
+create_dir = "warn"
+lossy_float_literal = "warn"
+while_float = "warn"
+suspicious_xor_used_as_pow = "warn"
+
+# -- Correctness ------------------------------------------------------------
+float_cmp = "warn"
+unwrap_in_result = "warn"
+checked_conversions = "warn"
+unnested_or_patterns = "warn"
+needless_continue = "warn"
+string_slice = "deny"
+iter_over_hash_type = "warn"
+redundant_clone = "warn"
+unused_async = "deny"
+
+# ---------------------------------------------------------------------------
+# Profiles
+# ---------------------------------------------------------------------------
+
+# `panic = "abort"` everywhere: there is no unwinder in a freestanding binary,
+# and `eh_personality` would have to be stubbed out if there were.
+[profile.dev]
+panic = "abort"
+# `opt-level = 0` produces a kernel too large for a comfortable early boot and
+# leans on stack frames a 16 KiB kernel stack cannot afford.
+opt-level = 1
+debug = true
+overflow-checks = true
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+opt-level = 2
+# Keep symbols: the kernel's own backtraces resolve against them, and a stripped
+# kernel makes a panic report a list of hex numbers.
+strip = "none"
+debug = true
+# **Deliberately on**, which is the opposite of Starling's choice and for the
+# opposite reason. Starling is a long-lived server where an abort is an outage;
+# here a wrapped page count or frame number silently corrupts memory and the
+# symptom appears somewhere else entirely. A panic that names the line is
+# strictly better than a machine that limps.
+overflow-checks = true

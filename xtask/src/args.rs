@@ -1,0 +1,169 @@
+//! A very small argument parser.
+//!
+//! Hand-rolled rather than `clap`, for the reason given in `Cargo.toml`: this
+//! is the program that builds the operating system, and its dependency list
+//! should be short enough to read. The grammar is `command --flag --key value`,
+//! which is all `cargo xtask` ever needs.
+
+use crate::paths::Arch;
+use crate::{Error, Result};
+
+/// Parsed command line.
+#[derive(Debug, Default)]
+pub(crate) struct Args {
+    /// The subcommand, if one was given.
+    pub(crate) command: Option<String>,
+    /// `--arch`, unparsed. `None` means "whatever this host is".
+    pub(crate) arch: Option<String>,
+    /// `--release`.
+    pub(crate) release: bool,
+    /// `--gdb`: stop and wait for a debugger before the first instruction.
+    pub(crate) gdb: bool,
+    /// `--fast`: skip the slow half of `check`.
+    pub(crate) fast: bool,
+    /// `-h`/`--help`.
+    pub(crate) help: bool,
+    /// `--smp`, virtual CPUs.
+    pub(crate) smp: u32,
+    /// `--memory`, guest RAM in MiB.
+    pub(crate) memory: u32,
+    /// `--timeout`, seconds `test-boot` waits for the kernel to report.
+    pub(crate) timeout: u64,
+}
+
+impl Args {
+    /// Parse an iterator of arguments, `cargo xtask` and the command name
+    /// having already been stripped by the caller.
+    pub(crate) fn parse(raw: impl Iterator<Item = String>) -> Result<Self> {
+        let mut args = Args {
+            smp: 4,
+            memory: 512,
+            timeout: 120,
+            ..Args::default()
+        };
+
+        let mut items = raw.peekable();
+        while let Some(item) = items.next() {
+            match item.as_str() {
+                "-h" | "--help" => args.help = true,
+                "--release" => args.release = true,
+                "--gdb" => args.gdb = true,
+                "--fast" => args.fast = true,
+                "--arch" => args.arch = Some(value(&mut items, "--arch")?),
+                "--smp" => args.smp = number(&mut items, "--smp")?,
+                "--memory" => args.memory = number(&mut items, "--memory")?,
+                "--timeout" => args.timeout = number(&mut items, "--timeout")?,
+                other if other.starts_with('-') => {
+                    return Err(Error::new(format!("unknown option `{other}`")));
+                }
+                other if args.command.is_none() => args.command = Some(other.to_owned()),
+                other => {
+                    return Err(Error::new(format!("unexpected argument `{other}`")));
+                }
+            }
+        }
+
+        Ok(args)
+    }
+
+    /// The architectures this invocation applies to.
+    ///
+    /// `--arch both` is the reason this returns a list: a change that breaks
+    /// one architecture and not the other is the characteristic failure of a
+    /// two-architecture kernel, and the default local workflow should catch it.
+    pub(crate) fn arches(&self) -> Result<Vec<Arch>> {
+        match self.arch.as_deref() {
+            None => Ok(vec![Arch::host()]),
+            Some("both" | "all") => Ok(vec![Arch::X86_64, Arch::AArch64]),
+            Some(name) => Ok(vec![Arch::parse(name)?]),
+        }
+    }
+
+    /// The single architecture for a command that can only mean one.
+    pub(crate) fn single_arch(&self) -> Result<Arch> {
+        let arches = self.arches()?;
+        match arches.as_slice() {
+            [one] => Ok(*one),
+            _ => Err(Error::new("this command needs exactly one --arch")),
+        }
+    }
+}
+
+/// Take the value following a `--key`.
+fn value(items: &mut impl Iterator<Item = String>, key: &str) -> Result<String> {
+    items
+        .next()
+        .ok_or_else(|| Error::new(format!("{key} needs a value")))
+}
+
+/// Take and parse a numeric value following a `--key`.
+fn number<T: std::str::FromStr>(items: &mut impl Iterator<Item = String>, key: &str) -> Result<T> {
+    let raw = value(items, key)?;
+    raw.parse()
+        .map_err(|_| Error::new(format!("{key} wants a number, got `{raw}`")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(line: &[&str]) -> Result<Args> {
+        Args::parse(line.iter().map(|item| (*item).to_owned()))
+    }
+
+    #[test]
+    fn takes_a_command_and_its_options() {
+        let args = parse(&[
+            "test-boot",
+            "--arch",
+            "aarch64",
+            "--release",
+            "--timeout",
+            "30",
+        ])
+        .unwrap();
+
+        assert_eq!(args.command.as_deref(), Some("test-boot"));
+        assert_eq!(args.single_arch().unwrap(), Arch::AArch64);
+        assert!(args.release);
+        assert_eq!(args.timeout, 30);
+    }
+
+    #[test]
+    fn defaults_are_the_documented_ones() {
+        let args = parse(&["build"]).unwrap();
+        assert_eq!(args.smp, 4);
+        assert_eq!(args.memory, 512);
+        assert_eq!(args.timeout, 120);
+        assert!(!args.release);
+    }
+
+    #[test]
+    fn arch_both_expands_to_both() {
+        let args = parse(&["build", "--arch", "both"]).unwrap();
+        assert_eq!(args.arches().unwrap(), vec![Arch::X86_64, Arch::AArch64]);
+        assert!(
+            args.single_arch().is_err(),
+            "a command needing one architecture must refuse two"
+        );
+    }
+
+    #[test]
+    fn rejects_an_unknown_option() {
+        assert!(parse(&["build", "--wat"]).is_err());
+    }
+
+    #[test]
+    fn rejects_a_missing_or_unparseable_value() {
+        assert!(parse(&["build", "--arch"]).is_err());
+        assert!(parse(&["build", "--smp", "lots"]).is_err());
+    }
+
+    #[test]
+    fn rejects_a_second_bare_argument() {
+        assert!(
+            parse(&["build", "run"]).is_err(),
+            "two commands is a typo, not a request"
+        );
+    }
+}

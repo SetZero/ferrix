@@ -1,0 +1,16 @@
+[package]
+name = "xtask"
+description = "Host-side build, image and QEMU driver for Ferrix"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Deliberately none. This is the program that builds the operating system, and
+# a build tool that cannot be built is a bad day; the FAT32 writer and the
+# argument parser it would otherwise pull in are a few hundred lines each.
+
+[lints]
+workspace = true

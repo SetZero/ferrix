@@ -1,0 +1,20 @@
+[package]
+name = "ferrix-boot"
+description = "UEFI loader for the Ferrix kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ferrix-boot"
+path = "src/main.rs"
+
+[dependencies]
+ferrix-bootinfo.workspace = true
+ferrix-elf.workspace = true
+ferrix-paging.workspace = true
+
+[lints]
+workspace = true

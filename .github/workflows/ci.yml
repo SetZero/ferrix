@@ -1,0 +1,364 @@
+name: CI
+
+# The gate set ported from the Starling workspace:
+#   fmt --check | clippy -D warnings | tests | cargo-deny | Miri | fuzz
+# plus the three this project needs and a userspace program cannot have: the
+# assembly allow-list, the unsafe audit that stands in for `unsafe_code =
+# "deny"`, and a QEMU boot on both architectures, which is the only test that
+# can tell us the thing actually runs.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # ----------------------------------------------------------------
+  # The founding claim, checked rather than asserted: this OS is written
+  # in Rust, and assembly appears only where the machine leaves no choice.
+  # ----------------------------------------------------------------
+  assembly:
+    name: Assembly allow-list
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Through the interpreter rather than the shebang: the runner has it, and
+      # a contributor on Windows has `python` but no `python3`, where relying on
+      # the shebang fails with a Microsoft Store message instead of a result.
+      - name: Assembly stays inside its allow-list and budget
+        run: python3 scripts/check-asm-budget.py
+
+      # The number is the point, so put it in the run summary where it is read
+      # without opening a log.
+      - name: Report the Rust share
+        if: always()
+        run: |
+          {
+            echo '### Assembly budget'
+            echo '```'
+            python3 scripts/check-asm-budget.py || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ----------------------------------------------------------------
+  # `unsafe_code = "deny"` is the one Starling gate a kernel cannot
+  # inherit, so the burden moves to every unsafe site instead.
+  # ----------------------------------------------------------------
+  audits:
+    name: Unsafe and panic audits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # A CRLF in a shell script makes its `#!` line unparseable, and bash
+      # reports it as `$'': command not found` -- naming neither the file's
+      # real problem nor the line that has it.
+      - name: Text files use LF
+        run: python3 scripts/check-line-endings.py
+
+      - name: Every unsafe construct is justified at the site
+        run: python3 scripts/check-unsafe-audit.py
+
+      # The lints deny the panicking macros; this asserts that the exemptions
+      # left behind are argued ones. Without it the deny is one `#[allow]` away
+      # from meaning nothing, and nobody would notice.
+      - name: Every panic-lint exemption is argued
+        run: python3 scripts/check-panic-audit.py
+
+  # ----------------------------------------------------------------
+  # The loader and the kernel are two programs that meet at one struct,
+  # and the CPU is reached through one facade. A build failure enforces
+  # what a design document could not.
+  # ----------------------------------------------------------------
+  layering:
+    name: Crate layering
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Layering holds
+        run: scripts/check-crate-layering.sh
+
+  # ----------------------------------------------------------------
+  # Format, lint and test.
+  #
+  # Clippy runs three times: once on the host, where the libraries' tests
+  # live, and once per freestanding target, because `#[cfg(target_arch)]`
+  # code is invisible to a lint pass for the other machine. A kernel that
+  # only ever gets linted for x86 is a kernel whose AArch64 half is
+  # unreviewed.
+  # ----------------------------------------------------------------
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, x86_64-unknown-uefi, aarch64-unknown-uefi
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      # fmt, clippy and the doc checks are platform-portable, so they run once
+      # on Linux. Windows still builds and runs the tests below, the coverage
+      # that is actually OS-specific -- xtask writes a FAT image and drives
+      # QEMU, and both of those behave differently there.
+      - name: Formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (host libraries and xtask)
+        if: runner.os == 'Linux'
+        run: cargo clippy --workspace --exclude ferrix-kernel --exclude ferrix-boot --all-targets -- -D warnings
+
+      - name: Clippy (kernel, x86_64)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p ferrix-kernel --target x86_64-unknown-none -- -D warnings
+
+      - name: Clippy (kernel, AArch64)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p ferrix-kernel --target aarch64-unknown-none-softfloat -- -D warnings
+
+      - name: Clippy (loader, x86_64)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p ferrix-boot --target x86_64-unknown-uefi -- -D warnings
+
+      - name: Clippy (loader, AArch64)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p ferrix-boot --target aarch64-unknown-uefi -- -D warnings
+
+      # The freestanding crates cannot run tests -- there is no host to run
+      # them on -- which is exactly why the algorithmic core lives in libs/.
+      - name: Tests
+        run: cargo test --workspace --exclude ferrix-kernel --exclude ferrix-boot --all-targets
+
+      # `cargo test --all-targets` skips doctests; the lint config denies
+      # broken intra-doc links, so run them too.
+      - name: Doc tests
+        if: runner.os == 'Linux'
+        run: cargo test --workspace --exclude ferrix-kernel --exclude ferrix-boot --doc
+
+      - name: Documentation builds without warnings
+        if: runner.os == 'Linux'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --exclude ferrix-kernel --exclude ferrix-boot --no-deps
+
+  # ----------------------------------------------------------------
+  # The artefacts: a bootable image per architecture.
+  # ----------------------------------------------------------------
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, x86_64-unknown-uefi, aarch64-unknown-uefi
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-${{ matrix.arch }}
+
+      - name: Build the bootable image
+        run: cargo xtask build --arch ${{ matrix.arch }} --release
+
+      - name: Upload the image
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferrix-${{ matrix.arch }}
+          path: build/${{ matrix.arch }}/
+          if-no-files-found: error
+
+  # ----------------------------------------------------------------
+  # The only test that answers the question that matters.
+  #
+  # Everything above checks the source. This boots it: firmware hands off
+  # to the loader, the loader hands off to the kernel, and the kernel
+  # reports over the serial port and shuts the machine down. An OS that
+  # compiles and does not boot is not a passing build.
+  # ----------------------------------------------------------------
+  boot:
+    name: Boot in QEMU (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, x86_64-unknown-uefi, aarch64-unknown-uefi
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-${{ matrix.arch }}
+
+      # `ovmf` and `qemu-efi-aarch64` are the firmware images; without them
+      # QEMU boots to a SeaBIOS prompt and the test times out with no clue why.
+      - name: Install QEMU and UEFI firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64
+
+      - name: Boot
+        run: cargo xtask test-boot --arch ${{ matrix.arch }} --release --timeout 120
+
+      - name: Keep the serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-${{ matrix.arch }}
+          path: build/${{ matrix.arch }}/serial.log
+          if-no-files-found: ignore
+
+  # ----------------------------------------------------------------
+  # Dependency hygiene. The budget here is near zero on purpose: this is
+  # code that runs in ring 0 with nothing above it to contain a mistake.
+  # ----------------------------------------------------------------
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: cargo-deny (advisories, bans, licenses, sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+  # ----------------------------------------------------------------
+  # Miri (UB check).
+  #
+  # Miri cannot interpret a kernel: there is no `asm!`, no MMIO and no
+  # privileged instruction it can execute. What it can interpret is
+  # `libs/`, and that is the argument for `libs/` existing. The ELF
+  # reader, the page-table arithmetic and the allocators are the places a
+  # provenance or aliasing mistake would actually be made, and they are
+  # written as pure functions of bytes precisely so this job can reach
+  # them.
+  # ----------------------------------------------------------------
+  miri:
+    name: Miri (UB check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: miri
+
+      - name: Miri setup
+        run: cargo +nightly miri setup
+
+      - name: Miri (ELF reader)
+        run: cargo +nightly miri test -p ferrix-elf --lib
+
+      - name: Miri (handoff ABI)
+        run: cargo +nightly miri test -p ferrix-bootinfo --lib
+
+  # ----------------------------------------------------------------
+  # Fuzz the surfaces that parse bytes somebody else chose.
+  #
+  # In a kernel that set is small but it is the sharp end: an ELF header
+  # comes from whatever the user just ran, and a cpio archive from an
+  # initramfs assembled elsewhere. Both are parsed with the MMU on and no
+  # supervisor above.
+  #
+  # Replay first, search second. The committed corpus in `fuzz/corpus/` is
+  # what makes this a regression test: an input that crashed once fails
+  # again in seconds, rather than waiting for the fuzzer to rediscover it
+  # inside a timebox.
+  # ----------------------------------------------------------------
+  fuzz:
+    name: Fuzz (replay, then search)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fuzz
+          workspaces: fuzz
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      # Pin the gnu host target: cargo-fuzz otherwise selects
+      # x86_64-unknown-linux-musl, whose static libc is incompatible with
+      # AddressSanitizer and whose std the runner does not have.
+      - name: Build every target
+        run: cargo +nightly fuzz build --target x86_64-unknown-linux-gnu
+        working-directory: fuzz
+
+      - name: Replay the committed corpus
+        run: |
+          for target in $(cargo +nightly fuzz list); do
+            echo "::group::replay $target"
+            cargo +nightly fuzz run "$target" \
+              --target x86_64-unknown-linux-gnu -- -runs=0
+            echo "::endgroup::"
+          done
+        working-directory: fuzz
+
+      - name: Search
+        # Thirty seconds each: long enough to explore what the diff changed,
+        # short enough that the job stays inside a pull request's budget.
+        run: |
+          for target in $(cargo +nightly fuzz list); do
+            echo "::group::search $target"
+            cargo +nightly fuzz run "$target" \
+              --target x86_64-unknown-linux-gnu -- -max_total_time=30
+            echo "::endgroup::"
+          done
+        working-directory: fuzz
+
+      - name: Keep the crashing input
+        # Without this the run reports a crash and throws away the bytes that
+        # caused it, which costs a whole rediscovery to reproduce.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
