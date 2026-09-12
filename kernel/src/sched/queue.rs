@@ -28,7 +28,7 @@
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 
-use ferrix_sched::{Config, CpuLoad, EntityState, Load, RunQueue, slice_for};
+use ferrix_sched::{Config, EntityState, RunQueue};
 
 use super::task::{DEAD, RUNNABLE, Task, TaskId};
 
@@ -40,20 +40,7 @@ use super::task::{DEAD, RUNNABLE, Task, TaskId};
 /// the unit of the fairness bound — no task strays further than one of these
 /// from its share — so it is the number stage 5's exit criterion is stated
 /// in.
-pub(crate) const TARGET_LATENCY_NS: u64 = 3_000_000;
-
-/// The shortest slice the scheduler will hand out, however many tasks are
-/// runnable.
-///
-/// Below this a processor spends more time switching than running. Linux calls
-/// the same number `sched_min_granularity`, and the ratio between it and the
-/// target latency is what decides how many runnable tasks it takes before
-/// latency has to give: eight, here.
-pub(crate) const MIN_SLICE_NS: u64 = TARGET_LATENCY_NS / 8;
-
-/// The largest slice, which is what one runnable task gets and what the
-/// fairness bound is stated in.
-pub(crate) const SLICE_NS: u64 = TARGET_LATENCY_NS;
+pub(crate) const SLICE_NS: u64 = 3_000_000;
 
 /// The shortest interval worth arming the timer for: below this the interrupt
 /// costs more than the time it measures.
@@ -93,14 +80,6 @@ pub(crate) struct CpuQueue {
     pub(crate) previous: Option<Arc<Task>>,
     /// Tasks asleep on this CPU, by the instant they wake.
     pub(crate) sleepers: BTreeMap<(u64, TaskId), Arc<Task>>,
-    /// How busy this processor has been, decaying.
-    ///
-    /// "Busy" means running something that is not the idle task. It is
-    /// accumulated wherever time is already being accounted, so it costs a
-    /// pair of adds rather than a pass of its own.
-    load: Load,
-    /// When [`Self::account_load`] last folded time into `load`.
-    load_updated: u64,
     /// When the running task was last charged.
     pub(crate) exec_start: u64,
     /// What this CPU's scheduling has done.
@@ -110,18 +89,14 @@ pub(crate) struct CpuQueue {
 impl CpuQueue {
     /// An empty queue.
     pub(crate) fn new() -> Result<CpuQueue, &'static str> {
-        let fair = RunQueue::new(Config {
-            slice_ns: TARGET_LATENCY_NS,
-        })
-        .map_err(|_| "the scheduler's slice is not a slice")?;
+        let fair = RunQueue::new(Config { slice_ns: SLICE_NS })
+            .map_err(|_| "the scheduler's slice is not a slice")?;
         Ok(CpuQueue {
             fair,
             current: None,
             idle: None,
             previous: None,
             sleepers: BTreeMap::new(),
-            load: Load::new(),
-            load_updated: 0,
             exec_start: 0,
             stats: Stats::default(),
         })
@@ -134,7 +109,6 @@ impl CpuQueue {
     /// the scheduler asked for and the request it actually served, and it is
     /// what widens the fairness bound on a real machine.
     pub(crate) fn account(&mut self, now: u64) {
-        self.account_load(now);
         let delta = now.saturating_sub(self.exec_start);
         self.exec_start = now;
         if delta == 0 {
@@ -214,7 +188,6 @@ impl CpuQueue {
             return;
         }
         task.set_queued(true);
-        self.rescale_slice();
     }
 
     /// Take the running task out of the fair class, keeping what it needs to
@@ -237,44 +210,6 @@ impl CpuQueue {
     /// Whether this CPU has anything to run besides its idle task.
     pub(crate) fn has_work(&self) -> bool {
         !self.fair.is_empty()
-    }
-
-    /// Fold the time since the last call into the load average.
-    ///
-    /// Busy is "the fair queue had something runnable", not "a task was
-    /// current": the idle task is current when there is nothing to do, and
-    /// counting it would make every processor read as permanently full.
-    pub(crate) fn account_load(&mut self, now: u64) {
-        let elapsed = now.saturating_sub(self.load_updated);
-        if elapsed == 0 {
-            return;
-        }
-        self.load_updated = now;
-        // The level is the queue's total weight, so a processor with four
-        // runnable tasks reads four times one with a single task rather than
-        // the same "busy". The idle task is not in the fair queue, so an idle
-        // processor contributes nothing without a special case.
-        self.load.accumulate(elapsed, self.fair.load_weight());
-    }
-
-    /// This processor as the balancer sees it.
-    pub(crate) fn snapshot(&self) -> CpuLoad {
-        CpuLoad {
-            queued: self.len(),
-            average: self.load.average(),
-            // **Nothing to run, not "running the idle task".** A processor
-            // that has just been given a task still has the idle task current
-            // until it next schedules, so the second of a burst of placements
-            // would see it as idle and pile on behind the first. What the
-            // placer is asking is whether this processor has work, and an
-            // empty fair queue is that question answered.
-            idle: !self.has_work(),
-        }
-    }
-
-    /// The load average, for the boot log.
-    pub(crate) fn load_average(&self) -> u64 {
-        self.load.average()
     }
 
     /// Whether this processor is running its idle task, or nothing at all.
@@ -315,55 +250,21 @@ impl CpuQueue {
     }
 
     /// The task another CPU should take from this one, if any may be moved.
-    pub(crate) fn steal_candidate(&self, to: usize) -> Option<TaskId> {
-        // `may_run_on` is the one that matters now that affinity is a set:
-        // a task allowed on processors 0 and 1 must not be moved to 2 however
-        // idle 2 is. `is_pinned` stays because it says something different —
-        // a task with exactly one home should not be moved even *to* that
-        // home, since it is already there.
-        self.fair.latest_where(|task| {
-            !task.is_pinned() && task.may_run_on(to) && task.state() == RUNNABLE
-        })
+    pub(crate) fn steal_candidate(&self) -> Option<TaskId> {
+        self.fair
+            .latest_where(|task| !task.is_pinned() && task.state() == RUNNABLE)
     }
 
     /// Take a queued task off this queue, for another one to run.
     pub(crate) fn release(&mut self, id: TaskId) -> Option<(Arc<Task>, EntityState)> {
         let (task, state) = self.fair.remove(id)?;
         task.set_queued(false);
-        self.rescale_slice();
         Some((task, state))
-    }
-
-    /// Share the target latency out among however many are runnable now.
-    ///
-    /// A fixed slice is also a fixed latency bound *per task*, so the last of
-    /// `n` runnable tasks waits `n` slices — which at stage 5's thousand
-    /// threads and three milliseconds each is three seconds before the last
-    /// one is looked at. Scaling the slice makes the wait the target latency
-    /// instead, until the floor stops it.
-    fn rescale_slice(&mut self) {
-        let slice = slice_for(TARGET_LATENCY_NS, MIN_SLICE_NS, self.fair.len());
-        // The only refusal is a slice of zero, and `slice_for` floors at
-        // `MIN_SLICE_NS`, which is not zero.
-        let _ = self.fair.set_slice_ns(slice);
-    }
-
-    /// The slice this queue is currently handing out.
-    pub(crate) fn slice_ns(&self) -> u64 {
-        self.fair.config().slice_ns
     }
 
     /// Whether the running task should give way to something queued.
     pub(crate) fn should_preempt(&self) -> bool {
         self.fair.should_preempt()
-    }
-
-    /// Tasks waiting to run: everything on the queue but the running one.
-    ///
-    /// The number `arm_timer` decides on, so it is also the number that says
-    /// whether this processor's timer needs to exist at all.
-    pub(crate) fn waiting(&self) -> usize {
-        self.fair.queued()
     }
 
     /// Tasks on this queue, the running one included.

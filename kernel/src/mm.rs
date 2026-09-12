@@ -982,3 +982,28 @@ pub(crate) fn zero_frame(frame: Frame) {
     // and is writable.
     unsafe { core::ptr::write_bytes(physmap(frame * PAGE_SIZE) as *mut u8, 0, PAGE_SIZE as usize) };
 }
+
+/// Copy a whole frame through the direct map.
+///
+/// The copy in copy-on-write, and the only reason this is not
+/// [`zero_frame`]'s neighbour by accident: both exist because a frame handed
+/// to somebody must hold exactly what that somebody is entitled to see, and
+/// this is the case where that is the sharer's current contents rather than
+/// zeroes.
+///
+/// `destination` must be a frame the caller has just allocated and nothing
+/// else refers to; `source` may be shared with any number of readers, which is
+/// the situation that made the copy necessary.
+pub(crate) fn copy_frame(destination: Frame, source: Frame) {
+    // SAFETY: the direct map covers every frame of RAM and is writable. The
+    // two frames are distinct -- the caller allocated `destination` while
+    // `source` was already committed -- so the regions do not overlap, and
+    // nothing else refers to `destination`.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            physmap(source * PAGE_SIZE) as *const u8,
+            physmap(destination * PAGE_SIZE) as *mut u8,
+            PAGE_SIZE as usize,
+        );
+    }
+}

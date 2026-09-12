@@ -16,7 +16,7 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
-use ferrix_sched::{CpuSet, EntityState};
+use ferrix_sched::EntityState;
 
 use crate::vmap::Stack;
 
@@ -51,8 +51,7 @@ pub(crate) struct Task {
     /// Whether a run queue holds it, as a queued entity or as the running one.
     queued: AtomicBool,
     /// Whether it may be moved to another CPU.
-    /// The processors it may run on.
-    affinity: CpuSet,
+    pinned: bool,
     /// Its share of a CPU.
     weight: AtomicU32,
     /// The lag it left its last queue with.
@@ -108,9 +107,8 @@ pub(crate) struct NewTask {
     pub(crate) weight: u32,
     /// The processor it starts on.
     pub(crate) cpu: usize,
-    /// The processors it may run on. A task pinned to one is an affinity of
-    /// one, which is the same thing said once rather than twice.
-    pub(crate) affinity: CpuSet,
+    /// Whether it may be stolen by another processor.
+    pub(crate) pinned: bool,
 }
 
 impl Task {
@@ -125,7 +123,7 @@ impl Task {
             stack_pointer,
             weight,
             cpu,
-            affinity,
+            pinned,
         } = new;
         Task {
             id,
@@ -136,7 +134,7 @@ impl Task {
             state: AtomicU8::new(RUNNABLE),
             cpu: AtomicU64::new(cpu as u64),
             queued: AtomicBool::new(false),
-            affinity,
+            pinned,
             weight: AtomicU32::new(weight),
             vlag: AtomicI64::new(0),
             sum_exec: AtomicU64::new(0),
@@ -161,11 +159,7 @@ impl Task {
             state: AtomicU8::new(RUNNABLE),
             cpu: AtomicU64::new(cpu as u64),
             queued: AtomicBool::new(false),
-            // An adopted context — the boot task, or a processor's idle task —
-            // is the one thing that genuinely cannot move: it *is* that
-            // processor's context. An affinity of exactly its own processor
-            // says so in the same terms as everything else.
-            affinity: CpuSet::of(cpu),
+            pinned: true,
             weight: AtomicU32::new(weight),
             vlag: AtomicI64::new(0),
             sum_exec: AtomicU64::new(0),
@@ -219,15 +213,8 @@ impl Task {
     }
 
     /// Whether it may be moved to another CPU.
-    /// Whether it is confined to a single processor, which is what makes it
-    /// ineligible for stealing or balancing.
-    pub(crate) fn is_pinned(&self) -> bool {
-        self.affinity.len() <= 1
-    }
-
-    /// Whether `cpu` is one of the processors it may run on.
-    pub(crate) fn may_run_on(&self, cpu: usize) -> bool {
-        self.affinity.contains(cpu)
+    pub(crate) const fn is_pinned(&self) -> bool {
+        self.pinned
     }
 
     /// The queue that owns it.

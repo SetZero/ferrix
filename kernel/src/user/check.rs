@@ -38,6 +38,8 @@ pub(crate) struct Report {
     /// Pages the processor itself translated, through an address space
     /// installed on it.
     pub(crate) walked: u64,
+    /// Pages a write actually copied, out of those a fork shared.
+    pub(crate) copied: u64,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -61,6 +63,9 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let faulted = check_pages_arrive_on_demand_and_go_back()?;
     let walked = check_the_processor_walks_an_installed_space()?;
 
+    check_a_shared_region_survives_fork_as_one_object()?;
+    let copied = check_fork_shares_pages_and_a_write_copies_one()?;
+
     // Everything above dropped its objects before returning, so the allocator
     // must be exactly where it started. Signed, because a check that somehow
     // *gained* frames is as wrong as one that lost them and the number should
@@ -77,6 +82,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         leaked,
         faulted,
         walked,
+        copied,
     })
 }
 
@@ -543,4 +549,240 @@ fn walk_through_installed(
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// fork and copy-on-write
+// ---------------------------------------------------------------------------
+
+/// What the parent writes into each page before it forks.
+const PARENT_MARK: u64 = 0xBEEF_0000_0000_0001;
+
+/// What the child writes after its copy-on-write fault has resolved.
+const CHILD_MARK: u64 = 0xCAFE_0000_0000_0002;
+
+/// Read the first word of `frame` through the direct map.
+fn peek(phys: u64) -> u64 {
+    let at = mm::direct_map(phys) as *const u64;
+    // SAFETY: `phys` is a frame some address space maps, so it is allocated,
+    // and the direct map covers every frame of RAM.
+    unsafe { at.read_volatile() }
+}
+
+/// Write `value` into the first word of `frame` through the direct map.
+fn poke(phys: u64, value: u64) {
+    let at = mm::direct_map(phys) as *mut u64;
+    // SAFETY: as `peek`, and the page belongs to an object this check owns, so
+    // nothing else is reading it.
+    unsafe { at.write_volatile(value) };
+}
+
+/// A `MAP_SHARED` region is one object either side of a fork, and a write
+/// through one mapping is visible through the other.
+///
+/// The case that must *not* be copied. `MAP_SHARED|MAP_ANONYMOUS` is what
+/// `musl` uses for a process-shared mutex, and a fork that quietly gave the
+/// child a private copy would leave two processes each waiting on a lock the
+/// other cannot see.
+fn check_a_shared_region_survives_fork_as_one_object() -> Result<(), &'static str> {
+    let before = mm::free_frames();
+    let base = 0x7000_0000;
+
+    let parent = AddressSpace::new().map_err(|_| "could not make an address space")?;
+    let shared = VmaFlags {
+        shared: true,
+        ..VmaFlags::READ_WRITE
+    };
+    let _ = parent
+        .map_anonymous(base, PAGE_SIZE, shared)
+        .map_err(|_| "mapping a shared region failed")?;
+    parent
+        .fault(base, Access::WRITE)
+        .map_err(|_| "a fault in a shared region was not resolved")?;
+
+    let parent_phys =
+        mm::translate_in(parent.root_table(), base).ok_or("a faulted shared page does not map")?;
+    poke(parent_phys, PARENT_MARK);
+
+    let child = parent.fork().map_err(|_| "fork failed")?;
+
+    child
+        .fault(base, Access::WRITE)
+        .map_err(|_| "a write fault in a shared region was not resolved")?;
+    let child_phys =
+        mm::translate_in(child.root_table(), base).ok_or("the child's shared page does not map")?;
+
+    // The same frame, reached from two address spaces: nothing was copied and
+    // nothing was marked copy-on-write, which is what `MAP_SHARED` asks for.
+    if child_phys != parent_phys {
+        return Err("forking a shared region copied a page it was supposed to share");
+    }
+
+    // And one holder, not two. A shared region is one *object* seen twice, so
+    // the reference belongs to the object rather than to each space -- which
+    // is exactly why a write through it must not trigger a copy.
+    if mm::frame_references(parent_phys / PAGE_SIZE) != 1 {
+        return Err("a shared object's page gained a second holder at fork");
+    }
+
+    // The writes really do meet, which is the property rather than the
+    // identity of the frame.
+    poke(child_phys, CHILD_MARK);
+    if peek(parent_phys) != CHILD_MARK {
+        return Err("a write through a shared mapping was not visible through the other");
+    }
+
+    drop(child);
+    drop(parent);
+    if mm::free_frames() != before {
+        return Err("forking a shared region leaked frames");
+    }
+    Ok(())
+}
+
+/// Fork shares every private page, and the first write to one copies it.
+///
+/// The whole of copy-on-write in the order the mechanism runs: share, fault,
+/// copy, and then decline to copy once there is nobody left to copy away from.
+///
+/// # What this measures, and what it deliberately does not
+///
+/// Frame *identity* and reference counts, not the free-frame count. Fork takes
+/// the parent's mappings down, which gives its now-empty page tables back, and
+/// a fault puts tables back to install a page — so the number of free frames
+/// moves for reasons that have nothing to do with whether a page was copied.
+/// Identity is the property anyway: two spaces reaching one frame is sharing,
+/// and reaching different frames is a copy. The free count still has the last
+/// word on leaks, once everything is dropped.
+fn check_fork_shares_pages_and_a_write_copies_one() -> Result<u64, &'static str> {
+    let before = mm::free_frames();
+    let base = 0x6000_0000;
+    let pages = 2;
+
+    let parent = AddressSpace::new().map_err(|_| "could not make an address space")?;
+    let _ = parent
+        .map_anonymous(base, pages * PAGE_SIZE, VmaFlags::READ_WRITE)
+        .map_err(|_| "mapping failed")?;
+
+    let mut original = [0_u64; 2];
+    for index in 0..pages {
+        parent
+            .fault(base + index * PAGE_SIZE, Access::WRITE)
+            .map_err(|_| "a fault in a mapped region was not resolved")?;
+        let phys = mm::translate_in(parent.root_table(), base + index * PAGE_SIZE)
+            .ok_or("a faulted page does not map")?;
+        poke(phys, PARENT_MARK + index);
+        if let Some(slot) = original.get_mut(index as usize) {
+            *slot = phys;
+        }
+    }
+
+    let child = parent.fork().map_err(|_| "fork failed")?;
+
+    // The parent must have lost its writable translations, or its own next
+    // write would reach a page the child can see without faulting at all.
+    for index in 0..pages {
+        if mm::translate_in(parent.root_table(), base + index * PAGE_SIZE).is_some() {
+            return Err("fork left the parent a mapping it could still write through");
+        }
+    }
+
+    // Both sides fault both pages back in for reading. Every page must be the
+    // frame it was before the fork, with two holders and the parent's bytes
+    // intact -- that is sharing, and it is also the read fault reinstalling a
+    // copy-on-write page read-only.
+    for index in 0..pages {
+        let at = base + index * PAGE_SIZE;
+        parent
+            .fault(at, Access::READ)
+            .map_err(|_| "the parent could not fault its own page back in")?;
+        child
+            .fault(at, Access::READ)
+            .map_err(|_| "the child could not fault a shared page in")?;
+
+        let parent_phys =
+            mm::translate_in(parent.root_table(), at).ok_or("the parent's page does not map")?;
+        let child_phys =
+            mm::translate_in(child.root_table(), at).ok_or("the child's page does not map")?;
+        if parent_phys != child_phys || Some(&parent_phys) != original.get(index as usize) {
+            return Err("fork did not share a page: the two sides reach different frames");
+        }
+        if mm::frame_references(parent_phys / PAGE_SIZE) != 2 {
+            return Err("a page shared by two address spaces does not have two holders");
+        }
+        if peek(child_phys) != PARENT_MARK + index {
+            return Err("the child does not see what the parent wrote before forking");
+        }
+    }
+
+    let shared = *original.first().ok_or("no page was recorded")?;
+
+    // The copy. A different frame for the child, the parent left as the only
+    // holder of the original, and the contents carried across.
+    child
+        .fault(base, Access::WRITE)
+        .map_err(|_| "a write to a copy-on-write page was not resolved")?;
+    let copy = mm::translate_in(child.root_table(), base).ok_or("the child's copy does not map")?;
+    if copy == shared {
+        return Err("a write to a copy-on-write page was let through to the shared frame");
+    }
+    if mm::frame_references(shared / PAGE_SIZE) != 1 {
+        return Err("copying a page did not give back the copier's reference to it");
+    }
+    if mm::frame_references(copy / PAGE_SIZE) != 1 {
+        return Err("a freshly copied page is held by more than its copier");
+    }
+    if peek(copy) != PARENT_MARK {
+        return Err("the copy does not hold what the page it was copied from held");
+    }
+
+    // The parent's own page is untouched, which is the promise.
+    poke(copy, CHILD_MARK);
+    if peek(shared) != PARENT_MARK {
+        return Err("a write after copy-on-write reached the parent's page");
+    }
+    // And the parent's mapping of it is still the original frame.
+    if mm::translate_in(parent.root_table(), base) != Some(shared) {
+        return Err("the child's copy moved the parent's page");
+    }
+
+    // The fault must not keep copying. The region stays marked copy-on-write
+    // -- that is a property of the region and there is no per-page flag -- so
+    // a second write comes back here, finds one holder, and lets it through.
+    // Getting this wrong is an instruction that faults forever, whose symptom
+    // is a hang rather than a wrong answer.
+    child
+        .fault(base, Access::WRITE)
+        .map_err(|_| "a second write to a copied page was not resolved")?;
+    if mm::translate_in(child.root_table(), base) != Some(copy) {
+        return Err("a second write to a page already copied copied it again");
+    }
+    if peek(copy) != CHILD_MARK {
+        return Err("a second write fault overwrote a page it should have left alone");
+    }
+
+    // The sole-holder case, on the page neither side has written. Dropping the
+    // parent leaves the child the only holder, so its write must take the
+    // frame it already has rather than duplicate data nobody else can see.
+    drop(parent);
+    let untouched = *original.get(1).ok_or("no second page was recorded")?;
+    if mm::frame_references(untouched / PAGE_SIZE) != 1 {
+        return Err("dropping the parent did not leave the child as the only holder");
+    }
+
+    child
+        .fault(base + PAGE_SIZE, Access::WRITE)
+        .map_err(|_| "a write to the last holder's page was not resolved")?;
+    if mm::translate_in(child.root_table(), base + PAGE_SIZE) != Some(untouched) {
+        return Err("a write to a page with one holder copied it anyway");
+    }
+    if peek(untouched) != PARENT_MARK + 1 {
+        return Err("the last holder's page lost its contents");
+    }
+
+    drop(child);
+    if mm::free_frames() != before {
+        return Err("fork and copy-on-write leaked frames");
+    }
+    Ok(1)
 }

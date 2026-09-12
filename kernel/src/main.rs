@@ -212,8 +212,13 @@ fn check_user_memory() {
 
     println!(
         "  objects  {} pages reserved, {} committed, {} faulted in, {} walked by the MMU, \
-         {} frames leaked",
-        report.reserved, report.committed, report.faulted, report.walked, report.leaked,
+         {} copied on write, {} frames leaked",
+        report.reserved,
+        report.committed,
+        report.faulted,
+        report.walked,
+        report.copied,
+        report.leaked,
     );
 }
 
@@ -330,26 +335,6 @@ fn start_scheduler(cpus: &'static smp::Topology) {
         report.spinners,
         report.worst_lag / 1000,
         report.bound / 1000,
-    );
-    println!(
-        "  place    new tasks spread over {} processors before any ran, affinity held",
-        report.placed_on,
-    );
-    println!(
-        "  load     busy processor {} of {}, idle {} of {}",
-        report.load_high,
-        ferrix_sched::LOAD_SCALE,
-        report.load_low,
-        ferrix_sched::LOAD_SCALE,
-    );
-    println!(
-        "  balance  {} tasks moved between processors that never went idle",
-        report.balanced,
-    );
-    println!(
-        "  slice    {} us before crowding, {} us with sixteen more runnable",
-        report.slice_one / 1000,
-        report.slice_many / 1000,
     );
     println!(
         "  stage 5  {} threads scheduled fairly across {} processors",

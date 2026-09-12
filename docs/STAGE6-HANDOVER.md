@@ -4,15 +4,15 @@ Written for whoever picks stage 6 up next. **Delete this file when stage 6
 meets its exit criterion**; `docs/ROADMAP.md` is the durable record and this is
 scaffolding.
 
-State at the time of writing: `main` = `80a0083`, all three architectures boot
+State at the time of writing: `main` = `9daec68`, all three architectures boot
 to `FERRIX-BOOT-OK stages 1-5`.
 
 ---
 
 ## 1. What is built
 
-Roughly the memory substrate of stage 6, and now the processor walking it —
-call it two fifths. Five commits:
+The memory substrate of stage 6, the processor walking it, and `fork` — call
+it three fifths. Six commits:
 
 | Commit | What |
 |---|---|
@@ -20,7 +20,8 @@ call it two fifths. Five commits:
 | `f89135b` | `Vmo` — sparse anonymous page list, commit on demand |
 | `987fe1d` | `Backing::Anonymous` gains an `id` and `offset` |
 | `2fe57dc` | `AddressSpace` — region map, page tables, demand paging |
-| *this one* | `arch::install_user_root` / `uninstall_user_root`, and the `MMU` walking a user space in the boot test |
+| `f6da17b` | `arch::install_user_root` / `uninstall_user_root`, and the `MMU` walking a user space in the boot test |
+| *this one* | `AddressSpace::fork`, `Vmo::fork`, `mm::copy_frame`, and the copy-on-write fault |
 
 New code lives in `kernel/src/user/`:
 
@@ -32,7 +33,8 @@ New code lives in `kernel/src/user/`:
   `unmap`, plus `SpaceError` and `Access`. A root frame, a
   `ferrix_vma::AddressSpace`, a `BTreeMap<u64, Arc<Vmo>>`, and a `SpinLock`.
 * `check.rs` — the boot self-checks. Reports `objects 2048 pages reserved,
-  7 committed, 4 faulted in, 2 walked by the MMU, 0 frames leaked`.
+  7 committed, 4 faulted in, 2 walked by the MMU, 1 copied on write, 0 frames
+  leaked`.
 
 Supporting changes elsewhere:
 
@@ -42,6 +44,8 @@ Supporting changes elsewhere:
   kernel's top-level slots into the new root; AArch64 and ARMv7-A do nothing,
   because the kernel is reached through `TTBR1` and a user root only ever goes
   in `TTBR0`.
+* `kernel/src/mm.rs` — `copy_frame(destination, source)`, the copy in
+  copy-on-write, next to `zero_frame` and for the same reason.
 * `arch::install_user_root(root)` and `arch::uninstall_user_root()` — two more,
   with `AddressSpace::install()` and `user::space::uninstall()` over them.
   x86-64 is one `CR3` write each way, because that write drops the non-global
@@ -69,12 +73,20 @@ In dependency order. Nothing below exists, not even stubbed.
 2. **`Task` carrying an address space.** `Option<Arc<AddressSpace>>`, `None`
    meaning a kernel thread. See §4. The two calls the swap needs now exist, so
    this is the next thing to do and it is a small change.
-3. **fork and copy-on-write.** `libs/vma::AddressSpace::clone_for_fork` already
-   marks both sides; `Vma.cow` is *read* by `space.rs::fault` and set by
-   nothing. The frame refcount primitives exist for exactly this.
+3. **A TLB shootdown for user address spaces.** The one hole `fork` leaves.
+   `AddressSpace::fork` takes the parent's writable mappings down, and
+   [`AddressSpace::fault`] replaces entries, and neither invalidates any
+   *other* processor's translations. Harmless today because nothing runs in a
+   user address space, and the first real bug the moment a second thread does:
+   a parent that had been installed elsewhere keeps a stale writable entry to
+   a page it has agreed to share. `crate::smp::flush_tlb_everywhere` is the
+   shape, scoped to the processors running the space rather than all of them.
+   **Do this in the same change as item 2**, because item 2 is what makes a
+   user address space reachable from more than one processor.
 4. **The ELF loader for user binaries.** `libs/elf` parses; nothing maps a
    `PT_LOAD` into an `AddressSpace`. **Handed to the stage 7 owner** — §7.
-5. **The ring-3 / EL0 / USR transition**, and the syscall vectors.
+5. **The ring-3 / EL0 / USR transition**, and the syscall vectors. The seam
+   with stage 7 is settled: see §7.
 6. **`copy_from_user` / `copy_to_user`.** Also **handed to the stage 7 owner**,
    who needs it for `write(2)`. It must resolve through the `AddressSpace` and
    call `fault` rather than dereference, because a mapped page need not be
@@ -151,15 +163,31 @@ must survive it. Stage 4 has a writeup of the converse bug (`CR3` reload not
 invalidating global entries, which passed every test under `tcg` and failed
 instantly under a hardware accelerator).
 
-### 5.2 Copy-on-write's branch must go ABOVE the present-page check
+### 5.2 Copy-on-write's branch must go ABOVE the present-page check — HANDLED
 
 `space.rs::fault` returns `Ok(())` when the page already translates, because
 faults legitimately arrive on present pages — another processor resolved it
 first, or the faulting one walked a stale TLB entry. That early return is safe
 *only* while every present page carries its region's own permissions. A write
 to a deliberately read-only COW page is precisely the fault that must copy, and
-an early return would send the instruction back to fault forever. There is an
-imperative comment at the site.
+an early return would send the instruction back to fault forever.
+
+The copy-on-write branch is above it now, and the boot check catches the wrong
+order rather than trusting the comment: putting the present-page return back
+above it makes the check report *a write to a copy-on-write page was let
+through to the shared frame*. If you reorder that function, that message is
+what you will see.
+
+Two related things the same function now relies on, both worth not undoing:
+
+* A copy-on-write region keeps `cow` set forever — there is no per-page flag —
+  so correctness comes from the *frame refcount*, not from clearing a mark. A
+  write fault with one holder is let through without copying, which is both the
+  optimisation and the reason a second write to an already-copied page
+  terminates.
+* `mm::map_in` refuses to overwrite a live mapping, deliberately, so the COW
+  path unmaps the read-only entry before installing the writable one. If you
+  add a `protect_in`, that is the pair of calls it replaces.
 
 ### 5.3 Arm: setting `TTBR0` is not enough — HANDLED, but read this
 
@@ -250,9 +278,25 @@ you add one there.
 Work is spread across sessions sharing one object store, each in a worktree
 under `.claude/worktrees/`. Coordinate before touching:
 
-* `kernel/src/sched/`, `libs/sched` — the stage 5 owner. Also landing a per-task
-  affinity `CpuSet` (replacing `pinned: bool`), task placement on spawn/wake,
-  PELT load tracking and load balancing. None of it touches the facade.
+* `kernel/src/sched/`, `libs/sched` — **released to stage 6.** The stage 5 owner
+  finished and merged as `9daec68`, and said both of §4's sched changes are
+  yours to make. Three things changed under the handover's line numbers:
+  `NewTask` lost `pinned: bool` and gained `affinity: CpuSet`, so the address
+  space is a third field on the same descriptor, filled at `new_idle_task` and
+  `spawn_on`; `choose_next` is unchanged in shape, so the root swap still goes
+  there; and a new `balance()` can move a *queued* task between processors from
+  a third processor holding both run queue locks — so **do not cache a root
+  against a processor**, because a task can change processor while blocked.
+
+  They also confirmed PELT does not disturb §3's no-ASID decision: EEVDF still
+  charges real elapsed time, so a costlier switch widens the printed fairness
+  bound rather than breaking the check. Two numbers to watch when the root swap
+  lands: the invalidation is charged inside `choose_next` under the lock,
+  between `account(now)` and the switch, so it lands in the *incoming* task's
+  window — a small systematic bias, and if ASIDs ever make it matter the fix is
+  to account once more after the swap rather than to change EEVDF. And the
+  printed worst lag is about 1000 us against its bound; the bound is expected to
+  widen, but the lag approaching it is a real regression rather than noise.
 * `kernel/src/arch/armv7a/`, `xtask/src/flash.rs`, STM32MP157 board bring-up —
   the ARMv7-A owner. They have explicitly released `trap.rs` and the SVC vector
   to stage 6, and `cpu.rs` is free. `cargo xtask deploy --arch armv7a` flashes a

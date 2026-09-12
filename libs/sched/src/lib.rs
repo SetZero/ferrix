@@ -71,7 +71,6 @@
 
 extern crate alloc;
 
-mod balance;
 mod domain;
 mod tree;
 
@@ -81,10 +80,6 @@ mod tests;
 use alloc::collections::BTreeMap;
 use core::fmt;
 
-pub use balance::{
-    BALANCE_THRESHOLD, CpuLoad, LOAD_PERIOD_NS, LOAD_SCALE, Load, busiest, imbalance, place,
-    quietest, slice_for,
-};
 pub use domain::{Class, CpuSet, Domain, MAX_CPUS, Mode, check_partition};
 use tree::{Key, Tree, before};
 
@@ -319,37 +314,6 @@ impl<T> RunQueue<T> {
     #[must_use]
     pub const fn config(&self) -> Config {
         self.config
-    }
-
-    /// The total weight of everything runnable here, the running entity
-    /// included.
-    ///
-    /// This is the demand a balancer compares between processors: it counts
-    /// entities, weighted, rather than asking whether the processor is busy —
-    /// a distinction that does not exist on an idle machine and is the only
-    /// one that matters on a loaded one.
-    #[must_use]
-    pub const fn load_weight(&self) -> u64 {
-        self.load
-    }
-
-    /// Change the slice every entity asks for from now on.
-    ///
-    /// Deadlines already handed out are left alone: an entity part-way through
-    /// a request keeps the request it was given, and the new slice applies to
-    /// the next one. Rewriting live deadlines would be the other choice and it
-    /// is the wrong one — it would move entities relative to each other for a
-    /// reason that has nothing to do with what they have run.
-    ///
-    /// # Errors
-    ///
-    /// [`SchedError::ZeroSlice`], for the same reason [`new`](Self::new) does.
-    pub const fn set_slice_ns(&mut self, slice_ns: u64) -> Result<(), SchedError> {
-        if slice_ns == 0 {
-            return Err(SchedError::ZeroSlice);
-        }
-        self.config.slice_ns = slice_ns;
-        Ok(())
     }
 
     /// Entities on the queue, the running one included.

@@ -234,6 +234,106 @@ impl AddressSpace {
         Ok(id)
     }
 
+    /// A second address space holding everything this one does, shared
+    /// copy-on-write: the memory half of `fork`.
+    ///
+    /// Nothing is copied. Every private writable region is marked
+    /// copy-on-write in *both* spaces — `libs/vma`'s `clone_for_fork` does the
+    /// marking, and it must be both, because the parent's own writes have to
+    /// stop reaching pages the child can now see. Each private object is
+    /// cloned page-list and all, with a reference taken on every committed
+    /// frame, so a write on either side copies the page into that side's own
+    /// object and leaves the other's alone. A `MAP_SHARED` object is not
+    /// cloned but shared, since writes through it are meant to be visible.
+    ///
+    /// # Why the parent's mappings are taken down
+    ///
+    /// Marking the map is not enough. The parent's page tables still hold
+    /// *writable* translations to the pages it has just agreed to share, and a
+    /// write through one of those would never reach [`AddressSpace::fault`] at
+    /// all — it would land in a page the child can read. So every region now
+    /// marked copy-on-write is unmapped in the parent, and the next access
+    /// re-faults and is reinstalled read-only because `cow` is set.
+    ///
+    /// Unmapping rather than write-protecting in place costs the parent one
+    /// extra fault per page — a read that would have hit now faults once — and
+    /// is what [`crate::mm`] offers today: `map_in` refuses to overwrite a live
+    /// mapping, by design, and there is no `protect_in`. Adding one is the
+    /// obvious improvement and changes nothing about what is correct here.
+    ///
+    /// # What this does not yet do
+    ///
+    /// Invalidate other processors' translations. Nothing runs in a user
+    /// address space yet, so there are none to invalidate; when threads arrive
+    /// this needs the shootdown [`crate::smp::flush_tlb_everywhere`] does for
+    /// the kernel's own tables, scoped to the processors running this space.
+    /// Until then a parent that had been installed somewhere would keep a
+    /// stale writable entry, which is the one thing between this and a working
+    /// `fork(2)`.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::OutOfMemory`] if there is no frame for the child's root,
+    /// and [`SpaceError::Backing`] if an object cannot take a reference on one
+    /// of its pages. Both leave the parent usable: the child's root is freed,
+    /// and a map marked copy-on-write with nobody to share with merely costs
+    /// the parent a fault per page that then declines to copy anything,
+    /// because the refcount says it is the only holder.
+    pub(crate) fn fork(&self) -> Result<Arc<AddressSpace>, SpaceError> {
+        let mut inner = self.inner.lock();
+
+        // The child's root first, because it is the step most likely to fail
+        // and the only one that fails without leaving a trace.
+        let root = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
+        mm::zero_frame(root);
+        arch::prepare_user_root(root * PAGE_SIZE);
+
+        // Then the objects, while the map is still untouched, so that a
+        // failure here has changed nothing the parent can observe.
+        let mut objects = BTreeMap::new();
+        for (&id, vmo) in &inner.objects {
+            let forked = if shared_object(&inner.map, id) {
+                Arc::clone(vmo)
+            } else {
+                match vmo.fork() {
+                    Ok(forked) => forked,
+                    Err(why) => {
+                        mm::deallocate_frames(root, 0);
+                        return Err(SpaceError::Backing(why));
+                    }
+                }
+            };
+            let _ = objects.insert(id, forked);
+        }
+
+        // Only now the parent's map is marked and copied, and its writable
+        // translations to the shared pages taken down.
+        let map = inner.map.clone_for_fork();
+        for region in inner.map.iter() {
+            if region.cow {
+                let _ = mm::unmap_in(
+                    self.root * PAGE_SIZE,
+                    region.range.start(),
+                    region.range.bytes(),
+                );
+            }
+        }
+
+        Ok(Arc::new(AddressSpace {
+            root,
+            inner: SpinLock::new(Inner {
+                map,
+                objects,
+                // Continued rather than restarted, so that an id means the
+                // same object in a parent and a child for as long as they
+                // share one. Two spaces may hand out the same id afterwards,
+                // which is fine: an id is only ever looked up in its own
+                // space's table.
+                next_id: inner.next_id,
+            }),
+        }))
+    }
+
     /// Resolve a fault at `address`, and let the faulting instruction retry.
     ///
     /// This is demand paging, and stage 3 already proved the mechanism on the
@@ -274,30 +374,78 @@ impl AddressSpace {
             _ => return Err(SpaceError::NotMapped(address)),
         };
 
-        // Already present, and the fault was spurious: another processor
-        // resolved this same page between the fault and this lock, or the
-        // faulting processor walked a stale TLB entry. Both happen, and
-        // neither is an error -- the instruction retries and succeeds.
-        //
-        // **When copy-on-write lands, its branch goes above this one**, not
-        // below: a write to a present but deliberately read-only page is
-        // exactly the fault that has to copy, and returning early here would
-        // send the instruction back to fault forever. This is safe only while
-        // every present page carries its own region's permissions, which holds
-        // because nothing sets `cow` yet.
-        if mm::translate_in(self.root * PAGE_SIZE, page).is_some() {
-            return Ok(());
-        }
-
         let vmo = Arc::clone(
             inner
                 .objects
                 .get(&id)
                 .ok_or(SpaceError::NotMapped(address))?,
         );
-        let frame = vmo
-            .commit(offset / PAGE_SIZE)
-            .map_err(SpaceError::Backing)?;
+        let index = offset / PAGE_SIZE;
+
+        // Copy-on-write, and **this branch is above the present-page check on
+        // purpose**. A write to a page that is present but deliberately
+        // read-only is exactly the fault that has to copy; returning early
+        // because the page translates would send the instruction back to fault
+        // forever. The region's own `flags.write` was already checked above,
+        // so reaching here means the process is entitled to write and the
+        // read-only entry is the kernel's device rather than the region's
+        // permission.
+        if access.write && region.cow {
+            let shared = vmo.commit(index).map_err(SpaceError::Backing)?;
+
+            // The one real decision. A page nobody else holds any more needs
+            // no copy: the other side has already copied it, or unmapped, or
+            // exited, and copying would allocate a frame in order to duplicate
+            // data this space is the sole owner of.
+            let frame = if mm::frame_references(shared) > 1 {
+                let copy = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
+                mm::copy_frame(copy, shared);
+                // Replacing gives back this object's reference to the shared
+                // page, which is what leaves the other holder as the last one.
+                let _ = vmo.replace(index, copy);
+                copy
+            } else {
+                shared
+            };
+
+            // `map_in` refuses to overwrite a live mapping, deliberately, so
+            // the read-only entry comes down before the writable one goes in.
+            // The frames are the object's and are not freed by this.
+            let _ = mm::unmap_in(self.root * PAGE_SIZE, page, PAGE_SIZE);
+            mm::map_in(
+                self.root * PAGE_SIZE,
+                page,
+                frame * PAGE_SIZE,
+                PAGE_SIZE,
+                MapFlags {
+                    read: true,
+                    write: true,
+                    execute: region.flags.execute,
+                    user: true,
+                    global: false,
+                    device: false,
+                },
+            )
+            .map_err(|_| SpaceError::OutOfMemory)?;
+
+            drop(inner);
+            return Ok(());
+        }
+
+        // Already present, and the fault was spurious: another processor
+        // resolved this same page between the fault and this lock, or the
+        // faulting processor walked a stale TLB entry. Both happen, and
+        // neither is an error -- the instruction retries and succeeds.
+        //
+        // Safe to return early only because the copy-on-write case above has
+        // already been taken: every page that reaches here carries its own
+        // region's permissions, so a fault on a present one asked for nothing
+        // the mapping does not already grant.
+        if mm::translate_in(self.root * PAGE_SIZE, page).is_some() {
+            return Ok(());
+        }
+
+        let frame = vmo.commit(index).map_err(SpaceError::Backing)?;
 
         // A copy-on-write region is installed read-only however writable the
         // region is, so that the *next* write faults here again and can copy.
@@ -368,6 +516,25 @@ impl AddressSpace {
         objects.retain(|id, _| still_named(map, *id));
         Ok(())
     }
+}
+
+/// Whether object `id` is named by a region that shares it.
+///
+/// One region is enough. `MAP_SHARED` is a property of the mapping rather than
+/// of the object, so in principle an object could be mapped shared in one
+/// place and private in another; when that happens the object is the shared
+/// one and the private mapping of it has to see the shared writes, because
+/// that is what the other mapping was promised.
+fn shared_object(map: &ferrix_vma::AddressSpace, id: u64) -> bool {
+    map.iter().any(|region| {
+        region.flags.shared
+            && match region.backing {
+                Backing::Anonymous { id: named, .. } | Backing::File { id: named, .. } => {
+                    named == id
+                }
+                Backing::Device { .. } => false,
+            }
+    })
 }
 
 /// Whether any region still names object `id`.

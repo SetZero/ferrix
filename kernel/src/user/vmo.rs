@@ -102,6 +102,49 @@ impl Vmo {
         self.pages.lock().get(&index).copied()
     }
 
+    /// A second object naming every page this one holds, for `fork`.
+    ///
+    /// The pages are *shared*, not copied: each committed frame gains a
+    /// reference and both objects name it. What makes that safe is that the
+    /// regions mapping either object are marked copy-on-write at the same
+    /// moment, so the first write through either one copies the page and
+    /// replaces it in *its own* object, leaving the other's untouched.
+    ///
+    /// Which is the reason fork clones the object rather than sharing one
+    /// `Arc`. Two address spaces holding one `Arc<Vmo>` cannot diverge —
+    /// [`Vmo::replace`] would swap the page for *both* of them, and a child's
+    /// first write would be visible to its parent, which is precisely what
+    /// `MAP_PRIVATE` promises will not happen. Sharing the `Arc` is right for
+    /// `MAP_SHARED`, and [`crate::user::space::AddressSpace::fork`] is where
+    /// the two cases are told apart.
+    ///
+    /// # Errors
+    ///
+    /// [`VmoError::OutOfMemory`] if the allocator refuses a reference on a
+    /// page — which means the frame is not allocated or its count would wrap,
+    /// both kernel bugs rather than conditions to recover from. Nothing is
+    /// shared when that happens: the references taken so far are given back,
+    /// so a failed fork costs nothing.
+    pub(crate) fn fork(&self) -> Result<Arc<Vmo>, VmoError> {
+        let pages = self.pages.lock();
+
+        for (taken, &frame) in pages.values().enumerate() {
+            if mm::share_frame(frame).is_none() {
+                // Unwind, or the pages this got through would be held by an
+                // object that is never built and never dropped.
+                for &frame in pages.values().take(taken) {
+                    let _ = mm::release_frame(frame);
+                }
+                return Err(VmoError::OutOfMemory);
+            }
+        }
+
+        Ok(Arc::new(Vmo {
+            pages: SpinLock::new(pages.clone()),
+            len: self.len,
+        }))
+    }
+
     /// The frame holding page `index`, allocating and zeroing one if this is
     /// the first touch.
     ///

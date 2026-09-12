@@ -99,19 +99,6 @@ impl CpuSet {
         CpuSet { words: [0; WORDS] }
     }
 
-    /// Exactly one CPU, for a task confined to it.
-    ///
-    /// Answers the empty set for a CPU past [`MAX_CPUS`] rather than an error,
-    /// because a set that names a processor the machine does not have is a set
-    /// nothing can run on — which is what the empty set already means, and the
-    /// caller handles it in the same place either way.
-    #[must_use]
-    pub fn of(cpu: usize) -> CpuSet {
-        let mut set = CpuSet::empty();
-        let _ = set.insert(cpu);
-        set
-    }
-
     /// CPUs `0..count`.
     ///
     /// # Errors
