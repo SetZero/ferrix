@@ -276,6 +276,13 @@ package FerrixBoot {
                  * takes and gives back are mappings the sweep has to see
                  * settled. */
         }
+        then action stage6MemoryObjects {
+            @stage { number = 6; }
+            doc /* Stage 6 so far: a reservation costs nothing until it is
+                 * touched, and every frame an object was given comes back
+                 * when it is dropped — the leak that would otherwise kill the
+                 * machine an hour into a rustc build. */
+        }
         then action finishMemory : FinishMemory;
         then action reportSuccess;
         then action shutdown;

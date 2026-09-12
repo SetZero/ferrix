@@ -260,6 +260,11 @@ package FerrixMemory {
         attribute range : PageRange;
         attribute flags : MapFlags;
         attribute backing : Backing;
+        attribute cow : Boolean {
+            doc /* Copy on write: the fault handler installs the page
+                 * read-only when this is set. Read by the handler today; set
+                 * by nothing until fork exists. */
+        }
     }
 
     #implemented part def VmaMap {
@@ -285,56 +290,94 @@ package FerrixMemory {
     // Stage 6 and after
     // -----------------------------------------------------------------------
 
-    #planned part def Vmo {
+    #inProgress part def Vmo {
         @stage { number = 6; }
-        doc /* A pageable memory object: pages, not a mapping. Anonymous
-             * memory, page-cache pages, shared memory and DMA buffers are all
-             * VMOs. The load-bearing unification: a block driver filling a
-             * page-cache page fills the VMO the cache already holds, with no
-             * copy, which is what makes userspace drivers affordable for a
-             * compiler workload. */
+        doc /* kernel/src/user/vmo.rs. A pageable memory object: pages, not a
+             * mapping. Anonymous memory, page-cache pages, shared memory and
+             * DMA buffers are all VMOs. The load-bearing unification: a block
+             * driver filling a page-cache page fills the VMO the cache already
+             * holds, with no copy, which is what makes userspace drivers
+             * affordable for a compiler workload. Only the anonymous kind
+             * exists today; file VMOs want the page cache (stage 8) and DMA
+             * VMOs an IOMMU domain (stage 10), and the shape is the one they
+             * extend rather than unpick. Frames go back through the per-frame
+             * refcount. */
         attribute pages : Natural[0..*] ordered {
             doc /* Sparse: a map from page index to frame, absence meaning
-                 * uncommitted, with commit on demand. */
+                 * uncommitted, with commit on demand. A reservation costs
+                 * nothing until it is touched, which the stage 6 self-check
+                 * measures. */
         }
         attribute size : Natural;
         action commitPage;
         action lookupPage;
+        action replacePage;
+        action decommitRange {
+            doc /* What munmap of part of a mapping does to the object behind
+                 * it: the pages are gone, not merely unmapped, because a
+                 * process that unmaps half its heap expects the memory back.
+                 * Called only when the object has a single holder: a page of
+                 * a shared object is not one unmapper's to take away, and the
+                 * address space, not the VMO, decides. */
+        }
+        #planned action fileFill { @stage { number = 8; } }
     }
 
-    #planned part def ProcessAddressSpace {
+    #inProgress part def ProcessAddressSpace {
         @stage { number = 6; }
-        doc /* Page tables plus the VMA map, each Vma naming a VMO, an offset,
-             * a protection and a share mode. VMOs are shared through Arc, so
+        doc /* kernel/src/user/space.rs: a root frame, a libs/vma AddressSpace,
+             * and a map from id to VMO. Each Vma names a VMO, an offset, a
+             * protection and a share mode. VMOs are shared through Arc, so
              * this references them and never owns them. The kernel half is
-             * shared into the root. */
+             * shared into the root by prepare_user_root. */
         part tables : Mapper;
         part vmas : VmaMap;
         ref part vmos : Vmo[0..*];
+        action mapAnonymous;
         action fault : DemandFault;
-        action forkSpace {
-            doc /* Mark both sides read-only and copy on the first write
-                 * fault; the per-frame refcount is what makes it tractable. */
+        action unmap {
+            doc /* Reshape the map, change the tables to match, and decommit
+                 * the object's pages only if this space is its sole holder. */
         }
-        action mmap;
-        action munmap;
-        action mprotect;
-        action brk;
+        #planned action forkSpace {
+            doc /* Mark both sides read-only and copy on the first write
+                 * fault; the per-frame refcount is what makes it tractable.
+                 * The cow flag and the handler's read-only install exist; the
+                 * thing that sets the flag does not. */
+        }
+        #planned action mmap { @stage { number = 7; } }
+        #planned action mprotect { @stage { number = 7; } }
+        #planned action brk { @stage { number = 7; } }
+
+        assert constraint spaceLock {
+            doc /* One lock per address space, never a global one. The kernel's
+                 * own map_in takes no lock because the tree it was written
+                 * for is one nobody has installed; a user space is installed
+                 * on the processors running its threads, whose MMUs walk it
+                 * in hardware while another processor maps into it. The lock
+                 * is held across the pair that must not be split — reshaping
+                 * the map and changing the tables — so a fault between them
+                 * cannot find a region the tables lack or a mapping the map
+                 * does not know. Per space, so two processes faulting at once
+                 * contend for nothing, which a compiler workload needs. */
+        }
     }
 
-    #planned action def DemandFault {
+    #inProgress action def DemandFault {
         @stage { number = 6; }
         doc /* The stage 3 handler generalised: find the Vma, then either
              * allocate a zeroed page (anonymous, lazy), fault from the page
              * cache VMO (file mapping, so a mapped file and a read file are
              * the same pages), copy a shared page whose refcount is above one
-             * (copy-on-write), or deliver SIGSEGV. */
+             * (copy-on-write), or deliver SIGSEGV. Built today: find the Vma,
+             * commit the page in its VMO, install it, read-only when the Vma
+             * is marked cow. */
         in fault : FerrixBoot::PageFault;
         action findVma;
         action anonymousZeroPage;
-        action pageCacheFill;
-        action copyOnWrite;
-        action deliverSigsegv;
+        #planned action pageCacheFill { @stage { number = 8; } }
+        #planned action copyOnWrite;
+        #planned action deliverSigsegv { @stage { number = 7; } }
         first start;
         then findVma;
         then decide;
@@ -342,15 +385,18 @@ package FerrixMemory {
             else anonymousZeroPage;
     }
 
-    #planned part def VirtualMemory {
+    #inProgress part def VirtualMemory {
         @stage { number = 6; }
-        doc /* The VM subsystem above stage 2's allocators: VMOs, process
-             * address spaces, and from stage 13's memory controller onward,
-             * reclaim scoped by cgroup. */
+        doc /* kernel/src/user: the VM subsystem above stage 2's allocators.
+             * VMOs and address spaces exist and are self-checked at boot;
+             * still owed by stage 6 are fork and copy-on-write, the ELF
+             * loader, installing a user root on a processor, the
+             * ring-3/EL0/USR transition and the syscall vectors. Reclaim
+             * scoped by cgroup is stage 13's. */
         part vmos : Vmo[0..*];
         part spaces : ProcessAddressSpace[0..*];
-        part reclaim : Reclaim;
-        part elfLoader : UserElfLoader;
+        #planned part reclaim : Reclaim;
+        #planned part elfLoader : UserElfLoader;
     }
 
     #planned part def Reclaim {

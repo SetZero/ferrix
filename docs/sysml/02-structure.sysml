@@ -260,7 +260,7 @@ package FerrixStructure {
         #implemented part sched : Scheduler;
 
         // -- Ahead: stages 6 to 14 -------------------------------------------
-        #planned part vm : VirtualMemory;
+        #inProgress part vm : VirtualMemory;
         #planned part syscalls : LinuxSyscallLayer;
         #planned part native : NativeAbi;
         #planned part futex : Futex;
@@ -389,6 +389,14 @@ package FerrixStructure {
         action flushTlb;
         action dropIdentityMap;
         action identityRoot;
+        action prepareUserRoot {
+            @stage { number = 6; }
+            doc /* Make a freshly allocated user root usable. x86-64 keeps both
+                 * halves in one root, so it shares the kernel's top-level
+                 * slots into it — shared, not copied, so a later kernel
+                 * mapping appears in every space without walking any. The
+                 * two Arm architectures do nothing: the kernel is in TTBR1. */
+        }
 
         // Processors
         action describeCpus;

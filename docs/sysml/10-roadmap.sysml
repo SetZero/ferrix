@@ -4,7 +4,7 @@
  * docs/ROADMAP.md as requirements: one per stage, each with its exit
  * criterion, its status, the boot test that verifies it, and the part of
  * the system that satisfies or will satisfy it. Stages 0 to 5 and the
- * ARMv7-A port are done; stage 6 is next.
+ * ARMv7-A port are done; stage 6 is in progress.
  */
 package FerrixRoadmap {
     private import ScalarValues::*;
@@ -152,14 +152,19 @@ package FerrixRoadmap {
         requirement loadBalancing { @deferred { reason = "Nothing beyond work stealing on an idle processor."; } }
     }
 
-    #planned requirement <'S6'> stage6UserMode : Stage {
+    #inProgress requirement <'S6'> stage6UserMode : Stage {
         attribute :>> number = 6;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::InProgress;
         attribute :>> size = "week";
         doc /* AddressSpace, VMOs, the VMA tree as a process map, demand
              * paging inherited from stage 3, copy-on-write, the ELF loader,
              * the ring-3/EL0/USR transition. Exit: a user binary writes to
-             * fd 1 and exits, with a page fault serviced along the way. */
+             * fd 1 and exits, with a page fault serviced along the way.
+             * Landed: the frame refcount, the sparse VMO, anonymous memory
+             * with an identity, the address space with its own lock, and the
+             * zero-fill fault path, self-checked at boot on all three. Owed:
+             * fork and copy-on-write, the ELF loader, a user root on a
+             * processor, the privilege transition, the syscall vectors. */
     }
 
     #planned requirement <'S7'> stage7LinuxAbi : Stage {
