@@ -1671,6 +1671,10 @@ fn check_a_program_runs_in_user_mode() -> Result<Option<i32>, &'static str> {
 /// fastest, and a second or so under `tcg`, where it is slowest.
 const SPIN_ROUNDS: u32 = 30_000_000;
 
+/// The status a spinning program exits with when its stack pointer changed
+/// across the loop, which is to say while it was preempted.
+const SPIN_STACK_CHANGED: i32 = 99;
+
 /// How long the checks wait for a program before calling it lost.
 const PROGRAM_PATIENCE_NANOS: u64 = 120_000_000_000;
 
@@ -1711,7 +1715,19 @@ pub(crate) fn spinner(tag: u8, rounds: u32, status: u32) -> Result<Arc<Process>,
         image::Shape::Good,
         &program,
     );
-    process::load(&file, &[b"/spin"], &[], [0x5a; ferrix_ustack::RANDOM_BYTES])
+    // The second spinner's argument vector is longer by more than a stack
+    // alignment, so the two programs' stack pointers differ. With identical
+    // startup stacks, a kernel that handed one program the other's stack
+    // pointer would pass the comparison each makes.
+    let args: &[&[u8]] = if tag == b'2' {
+        &[
+            b"/spin",
+            b"an argument long enough to move the stack by more than sixteen bytes",
+        ]
+    } else {
+        &[b"/spin"]
+    };
+    process::load(&file, args, &[], [0x5a; ferrix_ustack::RANDOM_BYTES])
         .map_err(|_| "a spinning program could not be loaded")
 }
 
@@ -1743,10 +1759,17 @@ fn check_two_programs_take_turns_on_one_processor() -> Result<Option<(u64, u64)>
         .map_err(|_| "the second of two programs could not be started")?;
 
     let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
-    if first.wait_for_exit(deadline) != Some(41) {
+    let statuses = (
+        first.wait_for_exit(deadline),
+        second.wait_for_exit(deadline),
+    );
+    if statuses.0 == Some(SPIN_STACK_CHANGED) || statuses.1 == Some(SPIN_STACK_CHANGED) {
+        return Err("a program's stack pointer changed while another program ran on its processor");
+    }
+    if statuses.0 != Some(41) {
         return Err("the first of two programs did not exit with its own status");
     }
-    if second.wait_for_exit(deadline) != Some(43) {
+    if statuses.1 != Some(43) {
         return Err("the second of two programs did not exit with its own status");
     }
 

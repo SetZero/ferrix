@@ -130,6 +130,18 @@ pub(crate) struct UserState {
     /// `d0` to `d31`; only the first sixteen are used on a core that has
     /// sixteen.
     doubles: [u64; 32],
+    /// USR mode's banked stack pointer.
+    ///
+    /// No trap saves it: every exception is taken into a mode with a stack
+    /// pointer of its own, and USR's is simply left in the register. So a
+    /// second program running on the core between two of the first program's
+    /// traps hands the first one back the second one's stack. x86-64 pushes the
+    /// user stack pointer on every entry and AArch64 saves `SP_EL0` in the
+    /// frame; this architecture keeps it here, where the other registers no
+    /// trap saves already move from task to task.
+    user_sp: u32,
+    /// USR mode's banked link register, for the same reason.
+    user_lr: u32,
 }
 
 const _: () = assert!(
@@ -140,6 +152,10 @@ const _: () = assert!(
     core::mem::offset_of!(UserState, doubles) == 8,
     "the save sequence stores d0 at offset 8"
 );
+const _: () = assert!(
+    core::mem::offset_of!(UserState, user_lr) == core::mem::offset_of!(UserState, user_sp) + 4,
+    "the banked save stores lr one word after sp"
+);
 
 impl UserState {
     /// A program's state before it has run: no thread pointer, the default
@@ -149,6 +165,8 @@ impl UserState {
             thread_pointer: 0,
             fpscr: 0,
             doubles: [0; 32],
+            user_sp: 0,
+            user_lr: 0,
         }
     }
 }
@@ -158,6 +176,28 @@ global_asm!(
 .arm
 .fpu vfpv3
 .section .text
+
+// void ferrix_user_banked_save(u32 *out): out[0] = USR sp, out[1] = USR lr.
+// System mode shares USR's banked registers, so they are read from there, with
+// the mode put back before returning through SVC's own lr.
+.globl ferrix_user_banked_save
+ferrix_user_banked_save:
+    mrs    r3, cpsr
+    cps    #0x1f
+    str    sp, [r0]
+    str    lr, [r0, #4]
+    msr    cpsr_c, r3
+    bx     lr
+
+// void ferrix_user_banked_restore(const u32 *from)
+.globl ferrix_user_banked_restore
+ferrix_user_banked_restore:
+    mrs    r3, cpsr
+    cps    #0x1f
+    ldr    sp, [r0]
+    ldr    lr, [r0, #4]
+    msr    cpsr_c, r3
+    bx     lr
 
 // void ferrix_fpu_enable(void): FPEXC.EN
 .globl ferrix_fpu_enable
@@ -199,6 +239,10 @@ ferrix_user_fpu_restore:
 );
 
 unsafe extern "C" {
+    /// Store USR mode's banked stack pointer and link register at `out`.
+    fn ferrix_user_banked_save(out: *mut u32);
+    /// Load USR mode's banked stack pointer and link register from `from`.
+    fn ferrix_user_banked_restore(from: *const u32);
     /// Set `FPEXC.EN`.
     fn ferrix_fpu_enable();
     /// Read `MVFR0`.
@@ -239,6 +283,9 @@ pub(super) unsafe fn fpu_features() -> u32 {
 /// with user state to run on this processor.
 pub(crate) unsafe fn save_user_state(state: &mut UserState) {
     state.thread_pointer = super::cpu::read_tpidruro();
+    // SAFETY: `user_sp` and `user_lr` are two adjacent `u32`s in a `repr(C)`
+    // structure, which is the two words the assembly writes.
+    unsafe { ferrix_user_banked_save(core::ptr::from_mut(&mut state.user_sp)) };
     let doubles = super::cpu::user_fpu_doubles();
     if doubles != 0 {
         // SAFETY: the FPU exists and is enabled, and `state` is a live,
@@ -258,6 +305,8 @@ pub(crate) unsafe fn save_user_state(state: &mut UserState) {
 pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
     let _ = entry_stack;
     super::cpu::write_tpidruro(state.thread_pointer);
+    // SAFETY: as in `save_user_state`, read rather than written.
+    unsafe { ferrix_user_banked_restore(core::ptr::from_ref(&state.user_sp)) };
     let doubles = super::cpu::user_fpu_doubles();
     if doubles != 0 {
         // SAFETY: as above; loading user registers cannot affect the kernel,
