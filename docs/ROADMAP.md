@@ -29,8 +29,10 @@ surface still owes. Stages 8 and 9 have both begun where the continuous rule
 says a stage should: their byte-level halves are in `libs/` — the VFS in
 `libs/vfs`, the handle table in `libs/objects`. Stage 9's first kernel objects
 — handle tables, channels carrying handles, VMOs — are in the boot test, and
-so is stage 8's root filesystem, unpacked at boot from an initramfs the loader
-hands over.
+so is most of stage 8: the root filesystem unpacked from an initramfs, every
+process's descriptor table, the calls that take a path, `/dev` and `/proc`.
+Stage 8's exit test, `cargo xtask test-vfs`, passes nine of its eleven programs;
+its section says what the other two wait on.
 Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
 and its first kernel code — PCI enumeration, device nodes, and a device driven
 by DMA from the boot check — is in the boot test.
@@ -843,7 +845,7 @@ Inode and dentry caches, the mount table, file descriptors and their sharing
 rules, tmpfs, devfs, procfs (`self/maps`, `self/exe`, `self/fd`, `cpuinfo`,
 `meminfo`), and cpio initramfs unpacking.
 
-**Started — the VFS, host-tested before the kernel calls it.** `libs/vfs` is
+**Done — the VFS, host-tested before the kernel calls it.** `libs/vfs` is
 the half of the stage that needs no machine, written first for the reason the
 continuous rule gives: path resolution over names a program chose is exactly
 the code that should meet a fuzzer before it meets ring 0.
@@ -912,8 +914,61 @@ every architecture. The umask is per process, 0o022 to start, and applies to
   paths    145 path calls under /tmp, 42 names listed in 12 getdents64 calls, 0 frames leaked, dentry cache +0
 ```
 
-**Still to do.** devfs with the console in it; procfs; and the exit
-criterion's three commands under the boot test.
+**Done — descriptors, and the console as a file.** Every process has a
+descriptor table and a root and working directory, each behind an `Arc` so
+that `clone` can share them where `CLONE_FILES` and `CLONE_FS` ask and copy
+them where they do not. A new process's descriptors 0, 1 and 2 are one open
+description of `/dev/console`, whose inode carries the line discipline the
+shell prompt depends on. `openat`, `close`, `read`, `write`, `readv`,
+`writev`, `pread64`, `pwrite64`, `lseek` and `_llseek`, `dup`, `dup2`, `dup3`,
+`fcntl` and `ftruncate` answer through it. `fcntl(F_GETFL)` reports `O_RDWR` on
+the console, which is the one thing busybox's `printf` needed before it would
+print, and stage 7's shell test has its `printf` line back. The `O_*` bits
+x86-64 and the Arm architectures number differently are tables in
+`libs/linux-abi`, chosen through the architecture facade. `ioctl` on the
+console goes to `syscall/tty.rs`, which refuses `TCGETS` on purpose: with it
+answered, `sh -i` switches the terminal to raw mode and echoes for itself,
+doubling every character over the line discipline.
+
+**Done — `/dev` and `/proc`.** devfs holds `null`, `zero`, `full`, `random`,
+`urandom`, `tty` and `console`, numbered as Linux numbers them. procfs renders
+every file at open, so a program reading `maps` in small pieces sees one
+snapshot, and its directories opt out of the dentry cache, so a pid looked up
+before its process existed is not remembered as missing. `/proc/self` links to
+the caller's pid; each `/proc/<pid>` has `fd`, `status`, `comm`, `cmdline`,
+`stat`, `maps` and `exe`; and `/proc` has `cpuinfo`, `meminfo`, `mounts`,
+`filesystems`, `uptime` and `version`. The text is `libs/procfs`, pinned byte
+for byte against lines taken from a real Linux `/proc`. Behind it, every
+process now has a pid from a registry that finds a live process by it.
+
+```
+  devfs    7 nodes numbered as Linux numbers them; zero, null, full and urandom do what they are for
+  procfs   20 names listed and walked back to, 4 maps lines parsed, 2 of them named
+```
+
+**The exit test, and how far it gets.** `cargo xtask test-vfs --init PATH`
+puts a static musl busybox into the initramfs and has init run the exit
+criterion's commands from it, checking their output after the boot marker. It
+is a test of its own rather than part of `test-boot` for the reason stage 7's
+is: the binary is not the repository's. Measured before a line of it was
+written (`docs/STAGE8-WHAT-THE-EXIT-NEEDS.md`), this busybox runs every applet
+that touches a file — `mkdir`, `mv`, `ln`, `rm`, `cat` — through `fork`,
+`execve` and `wait4`, none of which exists yet. So the test runs eleven
+programs in turn over one tmpfs where the criterion says one script. On
+x86-64, nine of the eleven pass, `ls -R /proc` and `cat /proc/self/maps` among
+them; the two shell scripts fail on `poll`, which their `while read` issues
+first.
+
+**Still to do.**
+
+* `poll` and `ppoll` — stage 7's calls, over `OpenFile::poll`, which is here.
+  They are the last thing between the exit test and a pass.
+* `fork`, `execve` and `wait4` — stage 7's too — so that the tmpfs part of the
+  criterion can be the one shell script it describes rather than eleven
+  programs.
+* Pipes and FIFOs over `libs/vfs`'s pipe buffer, `statfs`, `sync` and its
+  kin, `truncate`, `fallocate`, `chroot`, `mount` and `umount2`, `sendfile`,
+  and extended attributes: in progress.
 
 **Exit:** `busybox ls -R /proc`, `cat /proc/self/maps` and a shell script that
 manipulates files under tmpfs, all under the boot test.
