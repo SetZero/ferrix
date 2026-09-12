@@ -226,6 +226,13 @@ impl<T: ?Sized> SpinLock<T> {
     ///
     /// Everything else should use [`lock`](Self::lock).
     ///
+    /// `clippy::mut_from_ref` is the right lint to fire here, and this is the
+    /// one place that answers it rather than obeys it: exclusivity does not
+    /// come from the `&self`, it comes from the ticket queue having served
+    /// this caller and nobody else. That is the same guarantee [`lock`] rests
+    /// on; it simply cannot be spelled in the signature, because the guard
+    /// that would carry it is exactly what a context switch cannot use.
+    ///
     /// # Safety
     ///
     /// The lock must be released exactly once, with
@@ -233,6 +240,7 @@ impl<T: ?Sized> SpinLock<T> {
     /// owning it; and the returned reference must not be used after that, nor
     /// alongside any other reference into the same lock.
     #[must_use = "the lock stays held until force_unlock"]
+    #[allow(clippy::mut_from_ref, reason = "the ticket queue makes it exclusive")]
     pub unsafe fn lock_manually(&self) -> &mut T {
         self.acquire();
         // SAFETY: the ticket queue serves one caller at a time and this one
@@ -247,12 +255,17 @@ impl<T: ?Sized> SpinLock<T> {
     /// that a switch handed the lock to did not take it, so it has no
     /// reference and needs one to finish what the previous context started.
     ///
+    /// `clippy::mut_from_ref` is exempted for the reason given on
+    /// [`lock_manually`](Self::lock_manually): holding the lock, not holding
+    /// the borrow, is what makes the reference exclusive.
+    ///
     /// # Safety
     ///
     /// The caller's CPU must hold this lock, and the reference must not
     /// outlive that: no other reference into the lock may exist, and it must
     /// not be used after [`force_unlock`](Self::force_unlock).
     #[must_use = "the lock is not released by reading the data"]
+    #[allow(clippy::mut_from_ref, reason = "holding the lock makes it exclusive")]
     pub unsafe fn locked_data(&self) -> &mut T {
         // SAFETY: the caller guarantees this CPU holds the lock, which is
         // what makes the reference exclusive.

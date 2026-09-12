@@ -26,6 +26,7 @@ mod fdt;
 mod irq;
 mod mm;
 mod mmio;
+mod sched;
 mod smp;
 mod timer;
 mod trap;
@@ -166,7 +167,12 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // local APIC x86-64 reads its own identifier from, and before
     // `finish_memory`, which reclaims the tables the processor list comes
     // from and sweeps a set of mappings that bringing processors up adds to.
-    bring_up_processors(view);
+    let cpus = bring_up_processors(view);
+
+    // Stage 5, after stage 4 because it needs every processor it is going to
+    // schedule on, and before `finish_memory` because the task stacks it
+    // takes and gives back are mappings the sweep below has to see settled.
+    start_scheduler(cpus);
 
     // The rest of stage 2, deliberately last. Each of these needs something a
     // later part of boot brought up — the arena needs the heap, the sweep
@@ -178,7 +184,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
         arch::halt()
     }
 
-    println!("{SUCCESS_MARKER} stages 1-4");
+    println!("{SUCCESS_MARKER} stages 1-5");
     arch::shutdown()
 }
 
@@ -188,7 +194,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
 /// Halts rather than returning an error, like the rest of `kmain`: each step
 /// here has its own `FERRIX-PANIC` line, because "stage 4 failed" says
 /// nothing about which of a dozen processors, or which of the checks, did.
-fn bring_up_processors(view: &BootView<'_>) {
+fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
     // Counting first, starting nothing.
     let cpus = match smp::discover(view) {
         Ok(topology) => topology,
@@ -256,6 +262,49 @@ fn bring_up_processors(view: &BootView<'_>) {
         cpus.online(),
         smp.counter,
         smp.expected,
+    );
+    cpus
+}
+
+/// Stage 5: start the scheduler, and require it to be fair.
+///
+/// Halts rather than returning, for the reason `bring_up_processors` does:
+/// "stage 5 failed" would say nothing about which of four checks, on which of
+/// a thousand threads, did.
+fn start_scheduler(cpus: &'static smp::Topology) {
+    if let Err(problem) = sched::init(cpus) {
+        println!("FERRIX-PANIC could not start the scheduler: {problem}");
+        arch::halt()
+    }
+
+    let report = match sched::run_checks(cpus) {
+        Ok(report) => report,
+        Err(problem) => {
+            println!("FERRIX-PANIC stage 5 self-check failed: {problem}");
+            arch::halt()
+        }
+    };
+
+    println!(
+        "  tasks    {} threads run to completion on {} processors, {} switches, {} steals",
+        report.threads, report.processors, report.switches, report.steals,
+    );
+    println!(
+        "  sleep    one task slept {} us and came back",
+        report.slept / 1000,
+    );
+    // Both numbers, because the bound moves: it is a slice plus the worst
+    // overrun the scheduler actually served, and a bound that moves is only
+    // honest if it is printed beside what it bounded.
+    println!(
+        "  fair     {} spinners, worst lag {} us within a bound of {} us",
+        report.spinners,
+        report.worst_lag / 1000,
+        report.bound / 1000,
+    );
+    println!(
+        "  stage 5  {} threads scheduled fairly across {} processors",
+        report.threads, report.processors,
     );
 }
 

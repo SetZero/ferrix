@@ -91,19 +91,25 @@ pub(crate) unsafe fn switch_to(save: *mut u64, next: u64) {
 ///
 /// `top` must be the top of a mapped, writable stack of at least
 /// [`FRAME_BYTES`], owned by the caller and not in use.
-pub(crate) unsafe fn prepare_stack(top: u64, entry: extern "C" fn(usize) -> !, argument: usize) -> u64 {
+pub(crate) unsafe fn prepare_stack(
+    top: u64,
+    entry: extern "C" fn(usize) -> !,
+    argument: usize,
+) -> u64 {
     let frame: [u64; 7] = [
-        0,                       // r15
-        0,                       // r14
-        argument as u64,         // r13
-        entry as usize as u64,   // r12
-        0,                       // rbx
-        0,                       // rbp
-        ferrix_task_entry as usize as u64,
+        0,                     // r15
+        0,                     // r14
+        argument as u64,       // r13
+        entry as usize as u64, // r12
+        0,                     // rbx
+        0,                     // rbp
+        ferrix_task_entry as *const () as usize as u64,
     ];
     let stack_pointer = top - FRAME_BYTES;
     // SAFETY: the caller guarantees the stack is mapped, writable and theirs,
     // and the frame is written entirely inside it.
-    unsafe { core::ptr::copy_nonoverlapping(frame.as_ptr(), stack_pointer as *mut u64, frame.len()) };
+    unsafe {
+        core::ptr::copy_nonoverlapping(frame.as_ptr(), stack_pointer as *mut u64, frame.len());
+    };
     stack_pointer
 }

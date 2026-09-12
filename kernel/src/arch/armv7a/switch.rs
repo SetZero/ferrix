@@ -80,20 +80,29 @@ pub(crate) unsafe fn switch_to(save: *mut u64, next: u64) {
 ///
 /// `top` must be the top of a mapped, writable stack of at least
 /// [`FRAME_BYTES`], owned by the caller and not in use.
-pub(crate) unsafe fn prepare_stack(top: u64, entry: extern "C" fn(usize) -> !, argument: usize) -> u64 {
-    // Lowest address first: the padding word, then r4 through r11, then the
-    // link register the `pop` loads into the program counter.
-    let mut frame = [0u32; 10];
-    let entry_slot = frame.get_mut(1);
-    let argument_slot = frame.get_mut(2);
-    let return_slot = frame.get_mut(9);
-    if let (Some(entry_slot), Some(argument_slot), Some(return_slot)) =
-        (entry_slot, argument_slot, return_slot)
-    {
-        *entry_slot = entry as usize as u32;
-        *argument_slot = argument as u32;
-        *return_slot = ferrix_task_entry as usize as u32;
-    }
+pub(crate) unsafe fn prepare_stack(
+    top: u64,
+    entry: extern "C" fn(usize) -> !,
+    argument: usize,
+) -> u64 {
+    // Lowest address first: the padding word the `sub` leaves, then r4
+    // through r11, then the link register the `pop` loads into the program
+    // counter. Written out rather than indexed so this reads against the
+    // `push` above. Two of the registers carry the entry point and its
+    // argument, because the trampoline named by the last word is the only
+    // code that runs before Rust does and has nowhere else to read them from.
+    let frame: [u32; 10] = [
+        0,                                              // the alignment padding word
+        entry as usize as u32,                          // r4
+        argument as u32,                                // r5
+        0,                                              // r6
+        0,                                              // r7
+        0,                                              // r8
+        0,                                              // r9
+        0,                                              // r10
+        0,                                              // r11
+        ferrix_task_entry as *const () as usize as u32, // lr, popped into pc
+    ];
 
     let stack_pointer = (top as u32) - FRAME_BYTES;
     // SAFETY: the caller guarantees the stack is mapped, writable and theirs,

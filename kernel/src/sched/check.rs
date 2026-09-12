@@ -51,8 +51,15 @@ const WINDOW_NANOS: u64 = 150_000_000;
 /// How long the sleep check sleeps.
 const SLEEP_NANOS: u64 = 20_000_000;
 
-/// How many times a wait loop yields before calling the machine wedged.
-const PATIENCE: u64 = 2_000_000;
+/// How long a wait loop gives the machine before calling it wedged.
+///
+/// Wall-clock rather than a spin count, because the wait blocks rather than
+/// spins: what is being waited for is a thousand tasks getting through their
+/// work, and how many times *this* task is woken meanwhile says nothing about
+/// how long that took. Generous, because under an emulator it genuinely is;
+/// finite, because a scheduler that has lost a task should be a sentence in
+/// the boot log rather than the boot test's timeout.
+const PATIENCE_NANOS: u64 = 20_000_000_000;
 
 /// What the checks found, for the boot log.
 #[derive(Clone, Copy, Debug, Default)]
@@ -138,32 +145,31 @@ fn spinner(_argument: usize) {
 
 /// Wait for `ready`, giving the processor up meanwhile, and give up rather
 /// than hang if it never becomes true.
-fn wait_for(ready: impl Fn() -> bool, what: &'static str) -> Result<(), &'static str> {
-    let mut spins = 0u64;
-    while !ready() {
-        super::yield_now();
-        spins += 1;
-        if spins > PATIENCE {
-            return Err(what);
-        }
+fn wait_for(ready: impl FnMut() -> bool, what: &'static str) -> Result<(), &'static str> {
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    if FINISHED.wait_until_deadline(ready, deadline) {
+        Ok(())
+    } else {
+        Err(what)
     }
-    Ok(())
 }
 
 /// Free every exited task's stack, and require the arena to come back to
 /// where it started.
 fn reap_to(allocations: usize) -> Result<(), &'static str> {
-    let mut spins = 0u64;
+    // Still a yielding loop, and deliberately: reaping is work *this* task
+    // does, so it has to keep being given the processor to do it. Blocking
+    // here would wait for something nobody is going to do.
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
     loop {
         let _ = super::reap();
         if crate::vmap::usage().allocations <= allocations {
             return Ok(());
         }
-        super::yield_now();
-        spins += 1;
-        if spins > PATIENCE {
+        if crate::timer::now_nanos() >= deadline {
             return Err("a task's stack was never given back");
         }
+        super::yield_now();
     }
 }
 
@@ -355,6 +361,16 @@ fn shares_are_proportional(
             let had = u128::from(task.since_baseline(task.runtime()));
             let share = total * u128::from(task.entity_state().weight) / weights;
             if share.abs_diff(had) > u128::from(bound) {
+                // Named, because "a task" is one of a dozen and which one it
+                // was says whether the weights or the accounting is at fault.
+                crate::console::println!(
+                    "  fair     {} on cpu {} had {} ns of {} due, bound {}",
+                    task.name,
+                    cpu,
+                    had,
+                    share,
+                    bound,
+                );
                 return Err("a task's share of its processor was not its weight's share");
             }
         }

@@ -56,7 +56,7 @@ use crate::smp::Topology;
 use queue::CpuQueue;
 use task::{DEAD, RUNNABLE, Task};
 
-pub(crate) use check::{Report, run as run_checks};
+pub(crate) use check::run as run_checks;
 pub(crate) use queue::SLICE_NS;
 pub(crate) use task::TaskId;
 pub(crate) use wait::WaitQueue;
@@ -120,6 +120,12 @@ fn mark_resched(cpu: usize) {
 /// nothing, and goes back to waiting. Stage 10 wants a targeted one anyway,
 /// for a device interrupt steered to one core.
 fn kick(cpu: usize) {
+    // The flag is set here, on the target's behalf, rather than by the target
+    // inside its own interrupt handler. So the interrupt carries no meaning
+    // of its own: it exists to make the target *reach* an interrupt exit,
+    // where `preempt_on_irq_exit` reads the flag. That is why there is no
+    // scheduler hook in the IPI handler, and why a processor woken by
+    // somebody else's shootdown finds this flag and acts on it just as well.
     mark_resched(cpu);
     let _ = arch::send_ipi_to_others();
 }
@@ -136,7 +142,8 @@ fn kick(cpu: usize) {
 /// no memory for a queue or an idle task's stack.
 pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
     let online = topology.count();
-    let cpus = CpuSet::first(online).map_err(|_| "more processors than a scheduling domain holds")?;
+    let cpus =
+        CpuSet::first(online).map_err(|_| "more processors than a scheduling domain holds")?;
     let domain =
         Domain::new(cpus, Mode::Throughput).map_err(|_| "the Throughput domain was refused")?;
     check_partition(core::slice::from_ref(&domain), online)
@@ -188,25 +195,23 @@ fn new_idle_task(cpu: usize) -> Result<Arc<Task>, &'static str> {
     // SAFETY: the stack was allocated a moment ago, is mapped and writable,
     // and nothing else refers to it.
     let stack_pointer = unsafe { arch::prepare_stack(stack.top, task_start, 0) };
-    Ok(Arc::new(Task::new(
-        next_id(),
-        "idle",
-        |_| idle_loop(),
-        0,
+    Ok(Arc::new(Task::new(task::NewTask {
+        id: next_id(),
+        name: "idle",
+        entry: |_| idle_loop(),
+        argument: 0,
         stack,
         stack_pointer,
-        NICE_0_WEIGHT,
+        weight: NICE_0_WEIGHT,
         cpu,
-        true,
-    )))
+        pinned: true,
+    })))
 }
 
 /// Where a secondary processor joins the scheduler: its bring-up context
 /// becomes its idle task, and it never returns.
 pub(crate) fn enter_idle() -> ! {
-    let Some(cpu) = this_cpu() else {
-        arch::halt()
-    };
+    let Some(cpu) = this_cpu() else { arch::halt() };
     let idle = Arc::new(Task::adopt(next_id(), "idle", NICE_0_WEIGHT, cpu));
 
     if let Some(lock) = queue_of(cpu) {
@@ -286,8 +291,8 @@ pub(crate) fn spawn_on(
     // SAFETY: the stack was allocated a moment ago, is mapped and writable,
     // and nothing else refers to it.
     let stack_pointer = unsafe { arch::prepare_stack(stack.top, task_start, 0) };
-    let task = Arc::new(Task::new(
-        next_id(),
+    let task = Arc::new(Task::new(task::NewTask {
+        id: next_id(),
         name,
         entry,
         argument,
@@ -296,7 +301,7 @@ pub(crate) fn spawn_on(
         weight,
         cpu,
         pinned,
-    ));
+    }));
 
     let lock = queue_of(cpu).ok_or("no such processor")?;
     let saved = <arch::Irq as IrqControl>::disable();
@@ -434,11 +439,6 @@ pub(crate) fn timer_expired() {
     }
 }
 
-/// The same, for an inter-processor interrupt.
-pub(crate) fn on_ipi() {
-    timer_expired();
-}
-
 /// Make the decision an interrupt asked for, on the way out of it.
 pub(crate) fn preempt_on_irq_exit() {
     if !started() {
@@ -499,7 +499,9 @@ fn choose_next(lock: &'static SpinLock<CpuQueue>, cpu: usize) -> Option<(*mut u6
     if let Some(previous) = previous.as_ref().filter(|task| task.state() != RUNNABLE) {
         queue.detach_current();
         if let Some(at) = previous.take_sleep_deadline() {
-            let _ = queue.sleepers.insert((at, previous.id), Arc::clone(previous));
+            let _ = queue
+                .sleepers
+                .insert((at, previous.id), Arc::clone(previous));
         }
     }
 

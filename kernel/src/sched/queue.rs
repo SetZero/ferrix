@@ -219,7 +219,9 @@ impl CpuQueue {
         // task alone on a CPU is left to run: interrupting it would change
         // nothing, and this is where tickless comes from.
         let slice = if self.fair.queued() > 0 {
-            self.fair.remaining_ns().map(|left| now.saturating_add(left))
+            self.fair
+                .remaining_ns()
+                .map(|left| now.saturating_add(left))
         } else {
             None
         };

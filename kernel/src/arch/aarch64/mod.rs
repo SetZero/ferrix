@@ -4,6 +4,7 @@ pub(crate) mod console;
 mod cpu;
 mod gic;
 mod smp;
+mod switch;
 mod timer;
 mod trap;
 
@@ -261,3 +262,6 @@ pub(crate) fn service_interrupts(_frame: &mut TrapFrame, handle: fn(u32)) {
         gicv2::complete(acknowledgement);
     }
 }
+
+/// The context switch, and the stack layout a new task starts on.
+pub(crate) use switch::{prepare_stack, switch_to};

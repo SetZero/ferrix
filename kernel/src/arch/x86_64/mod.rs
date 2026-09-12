@@ -6,6 +6,7 @@ pub(crate) mod console;
 mod cpu;
 mod gdt;
 mod smp;
+mod switch;
 mod trap;
 
 use ferrix_bootinfo::BootView;
@@ -261,3 +262,6 @@ pub(crate) fn service_interrupts(frame: &mut TrapFrame, handle: fn(u32)) {
     handle((frame.vector - trap::IRQ_BASE) as u32);
     apic::end_of_interrupt();
 }
+
+/// The context switch, and the stack layout a new task starts on.
+pub(crate) use switch::{prepare_stack, switch_to};

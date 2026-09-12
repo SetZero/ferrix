@@ -337,6 +337,22 @@ pub(crate) fn secondary_main(record: u64) -> ! {
         // an interrupt sent after the look wakes the wait rather than being
         // taken, and forgotten, just before it.
         arch::disable_interrupts();
+
+        // **Where this processor stops being stage 4's and becomes stage 5's.**
+        // Until the scheduler exists this loop is all there is to do; once it
+        // does, this processor's job is to run tasks, and `enter_idle` never
+        // returns. Checked inside the masked region so that the handover
+        // cannot happen between looking for work and waiting for it.
+        //
+        // Nothing after this point hands work out: `run_everywhere` belongs to
+        // stage 4's checks, which have finished by the time `sched::init`
+        // runs. What still reaches every processor — TLB shootdown, grace
+        // periods — arrives as an interrupt, and an idle processor takes those
+        // exactly as this loop did.
+        if crate::sched::started() {
+            crate::sched::enter_idle();
+        }
+
         match next_job(expected) {
             Some((generation, work)) => {
                 arch::enable_interrupts();

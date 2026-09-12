@@ -14,7 +14,7 @@
 //! that moment. That hand-over is what `SpinLock::lock_manually` exists for.
 
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use ferrix_sched::EntityState;
 
@@ -82,19 +82,49 @@ pub(crate) struct Task {
 // overlap.
 unsafe impl Sync for Task {}
 
+/// Everything a new task needs, which is more than a function should take as
+/// loose arguments: nine of them, four of which are integers, is a call whose
+/// meaning depends on getting the order right.
+///
+/// `Copy`, like the [`Stack`] it carries: nothing here owns a resource whose
+/// release the type system tracks, and a stack is freed by `vmap::free_stack`
+/// against the address in it rather than by dropping anything.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NewTask {
+    /// Its identifier, never reused.
+    pub(crate) id: TaskId,
+    /// What it is called, for the boot log and for diagnostics.
+    pub(crate) name: &'static str,
+    /// Where it starts, and the one argument it is handed.
+    pub(crate) entry: fn(usize),
+    /// That argument.
+    pub(crate) argument: usize,
+    /// The stack it owns, and the pointer into it a switch resumes.
+    pub(crate) stack: Stack,
+    /// Where in that stack `prepare_stack` left its first frame.
+    pub(crate) stack_pointer: u64,
+    /// Its scheduling weight.
+    pub(crate) weight: u32,
+    /// The processor it starts on.
+    pub(crate) cpu: usize,
+    /// Whether it may be stolen by another processor.
+    pub(crate) pinned: bool,
+}
+
 impl Task {
     /// A task that will start at `entry` on a stack of its own.
-    pub(crate) fn new(
-        id: TaskId,
-        name: &'static str,
-        entry: fn(usize),
-        argument: usize,
-        stack: Stack,
-        stack_pointer: u64,
-        weight: u32,
-        cpu: usize,
-        pinned: bool,
-    ) -> Task {
+    pub(crate) fn new(new: NewTask) -> Task {
+        let NewTask {
+            id,
+            name,
+            entry,
+            argument,
+            stack,
+            stack_pointer,
+            weight,
+            cpu,
+            pinned,
+        } = new;
         Task {
             id,
             name,

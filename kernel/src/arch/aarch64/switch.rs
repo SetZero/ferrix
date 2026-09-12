@@ -83,24 +83,36 @@ pub(crate) unsafe fn switch_to(save: *mut u64, next: u64) {
 ///
 /// `top` must be the top of a mapped, writable stack of at least
 /// [`FRAME_BYTES`], owned by the caller and not in use.
-pub(crate) unsafe fn prepare_stack(top: u64, entry: extern "C" fn(usize) -> !, argument: usize) -> u64 {
-    let mut frame = [0u64; 12];
-    // The pairs are stored lowest address first: x29 and x30 at the bottom,
-    // then x27 upwards, with x19 and x20 at the top of the frame.
-    let entry_slot = frame.get_mut(10);
-    let argument_slot = frame.get_mut(11);
-    let return_slot = frame.get_mut(1);
-    if let (Some(entry_slot), Some(argument_slot), Some(return_slot)) =
-        (entry_slot, argument_slot, return_slot)
-    {
-        *entry_slot = entry as usize as u64;
-        *argument_slot = argument as u64;
-        *return_slot = ferrix_task_entry as usize as u64;
-    }
+pub(crate) unsafe fn prepare_stack(
+    top: u64,
+    entry: extern "C" fn(usize) -> !,
+    argument: usize,
+) -> u64 {
+    // Written out in the order the switch stores them, lowest address first,
+    // so this reads against the `stp` sequence above rather than against a
+    // list of indices. Two of the registers carry the entry point and its
+    // argument, because the trampoline the link register names is the only
+    // code that runs before Rust does and has nowhere else to read them from.
+    let frame: [u64; 12] = [
+        0,                                              // x29
+        ferrix_task_entry as *const () as usize as u64, // x30, the link register
+        0,                                              // x27
+        0,                                              // x28
+        0,                                              // x25
+        0,                                              // x26
+        0,                                              // x23
+        0,                                              // x24
+        0,                                              // x21
+        0,                                              // x22
+        entry as usize as u64,                          // x19
+        argument as u64,                                // x20
+    ];
 
     let stack_pointer = top - FRAME_BYTES;
     // SAFETY: the caller guarantees the stack is mapped, writable and theirs,
     // and the frame is written entirely inside it.
-    unsafe { core::ptr::copy_nonoverlapping(frame.as_ptr(), stack_pointer as *mut u64, frame.len()) };
+    unsafe {
+        core::ptr::copy_nonoverlapping(frame.as_ptr(), stack_pointer as *mut u64, frame.len());
+    };
     stack_pointer
 }
