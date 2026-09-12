@@ -93,7 +93,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1410 elements, 155 relations. Model digest `2b95922caf026caf`.
+13 files, 16 packages, 1410 elements, 155 relations. Model digest `df35da37712f2520`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -2416,7 +2416,7 @@ docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code 
 | `libs/sync` | `#implemented` | — | allowed | 19 | Reached at stage 4: SpinLock and IrqSpinLock guard every shared kernel structure. |
 | `libs/sched` | `#implemented` | 5 | `forbid` | 34 | The half of the scheduler that is arithmetic: the EEVDF tree, weights, lag, the domain partition. cargo test drives a run queue through hundreds of thousands of decisions. |
 | `libs/vma` | `#implemented` | — | `forbid` | 65 | Written for stage 6; reached at stage 2 as the vmap arena's range map. |
-| `libs/linux-abi` | `#writtenAhead` | 7 | `forbid` | 52 | Three system call number tables, not two: x86-64's own, AArch64's generic one, and ARMv7-A's EABI one. |
+| `libs/linux-abi` | `#writtenAhead` | 7 | `forbid` | 53 | Three system call number tables, not two: x86-64's own, AArch64's generic one, and ARMv7-A's EABI one. |
 | `libs/ustack` | `#writtenAhead` | 7 | `forbid` | 22 | The initial process stack image: argc, argv, envp and the auxiliary vector, laid out as a program's \_start reads them, at both pointer widths. |
 | `libs/cpio` | `#writtenAhead` | 8 | `forbid` | 45 |  |
 | `libs/vfs` | `#writtenAhead` | 8 | `forbid` | 37 | Dentries with negative entries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store the kernel supplies, initramfs unpacking and the getdents64 packer. |

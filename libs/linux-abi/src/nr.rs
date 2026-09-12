@@ -323,6 +323,41 @@ pub mod x86_64 {
     pub const OPENAT2: usize = 437;
     /// Check accessibility with flags, the form musl now prefers.
     pub const FACCESSAT2: usize = 439;
+
+    // -- Filesystem control and extended attributes, from `syscall_64.tbl` --
+
+    /// Set an extended attribute by path, following symbolic links.
+    pub const SETXATTR: usize = 188;
+    /// Set an extended attribute by path, on a symbolic link itself.
+    pub const LSETXATTR: usize = 189;
+    /// Set an extended attribute of an open file.
+    pub const FSETXATTR: usize = 190;
+    /// Read an extended attribute by path, following symbolic links.
+    pub const GETXATTR: usize = 191;
+    /// Read an extended attribute by path, of a symbolic link itself.
+    pub const LGETXATTR: usize = 192;
+    /// Read an extended attribute of an open file.
+    pub const FGETXATTR: usize = 193;
+    /// List extended attribute names by path, following symbolic links.
+    pub const LISTXATTR: usize = 194;
+    /// List extended attribute names by path, of a symbolic link itself.
+    pub const LLISTXATTR: usize = 195;
+    /// List extended attribute names of an open file.
+    pub const FLISTXATTR: usize = 196;
+    /// Remove an extended attribute by path, following symbolic links.
+    pub const REMOVEXATTR: usize = 197;
+    /// Remove an extended attribute by path, from a symbolic link itself.
+    pub const LREMOVEXATTR: usize = 198;
+    /// Remove an extended attribute of an open file.
+    pub const FREMOVEXATTR: usize = 199;
+    /// Make another mount the root, and move the old root beneath it.
+    pub const PIVOT_ROOT: usize = 155;
+    /// Reserve or release storage for a range of an open file.
+    pub const FALLOCATE: usize = 285;
+    /// Change the calling process's root directory.
+    pub const CHROOT: usize = 161;
+    /// Flush the file system holding an open file.
+    pub const SYNCFS: usize = 306;
 }
 
 /// System call numbers for AArch64.
@@ -571,6 +606,41 @@ pub mod aarch64 {
     pub const OPENAT2: usize = 437;
     /// Check accessibility with flags, the form musl now prefers.
     pub const FACCESSAT2: usize = 439;
+
+    // -- Filesystem control and extended attributes, from the generic `unistd.h` --
+
+    /// Set an extended attribute by path, following symbolic links.
+    pub const SETXATTR: usize = 5;
+    /// Set an extended attribute by path, on a symbolic link itself.
+    pub const LSETXATTR: usize = 6;
+    /// Set an extended attribute of an open file.
+    pub const FSETXATTR: usize = 7;
+    /// Read an extended attribute by path, following symbolic links.
+    pub const GETXATTR: usize = 8;
+    /// Read an extended attribute by path, of a symbolic link itself.
+    pub const LGETXATTR: usize = 9;
+    /// Read an extended attribute of an open file.
+    pub const FGETXATTR: usize = 10;
+    /// List extended attribute names by path, following symbolic links.
+    pub const LISTXATTR: usize = 11;
+    /// List extended attribute names by path, of a symbolic link itself.
+    pub const LLISTXATTR: usize = 12;
+    /// List extended attribute names of an open file.
+    pub const FLISTXATTR: usize = 13;
+    /// Remove an extended attribute by path, following symbolic links.
+    pub const REMOVEXATTR: usize = 14;
+    /// Remove an extended attribute by path, from a symbolic link itself.
+    pub const LREMOVEXATTR: usize = 15;
+    /// Remove an extended attribute of an open file.
+    pub const FREMOVEXATTR: usize = 16;
+    /// Make another mount the root, and move the old root beneath it.
+    pub const PIVOT_ROOT: usize = 41;
+    /// Reserve or release storage for a range of an open file.
+    pub const FALLOCATE: usize = 47;
+    /// Change the calling process's root directory.
+    pub const CHROOT: usize = 51;
+    /// Flush the file system holding an open file.
+    pub const SYNCFS: usize = 267;
 }
 
 /// System call numbers for 32-bit ARMv7-A, the EABI table.
@@ -912,6 +982,41 @@ pub mod arm {
     pub const ARM_CACHEFLUSH: usize = ARM_PRIVATE_BASE + 2;
     /// Set the thread pointer read through `TPIDRURO`.
     pub const ARM_SET_TLS: usize = ARM_PRIVATE_BASE + 5;
+
+    // -- Filesystem control and extended attributes, from `unistd-common.h` --
+
+    /// Set an extended attribute by path, following symbolic links.
+    pub const SETXATTR: usize = 226;
+    /// Set an extended attribute by path, on a symbolic link itself.
+    pub const LSETXATTR: usize = 227;
+    /// Set an extended attribute of an open file.
+    pub const FSETXATTR: usize = 228;
+    /// Read an extended attribute by path, following symbolic links.
+    pub const GETXATTR: usize = 229;
+    /// Read an extended attribute by path, of a symbolic link itself.
+    pub const LGETXATTR: usize = 230;
+    /// Read an extended attribute of an open file.
+    pub const FGETXATTR: usize = 231;
+    /// List extended attribute names by path, following symbolic links.
+    pub const LISTXATTR: usize = 232;
+    /// List extended attribute names by path, of a symbolic link itself.
+    pub const LLISTXATTR: usize = 233;
+    /// List extended attribute names of an open file.
+    pub const FLISTXATTR: usize = 234;
+    /// Remove an extended attribute by path, following symbolic links.
+    pub const REMOVEXATTR: usize = 235;
+    /// Remove an extended attribute by path, from a symbolic link itself.
+    pub const LREMOVEXATTR: usize = 236;
+    /// Remove an extended attribute of an open file.
+    pub const FREMOVEXATTR: usize = 237;
+    /// Make another mount the root, and move the old root beneath it.
+    pub const PIVOT_ROOT: usize = 218;
+    /// Reserve or release storage for a range of an open file.
+    pub const FALLOCATE: usize = 352;
+    /// Change the calling process's root directory.
+    pub const CHROOT: usize = 61;
+    /// Flush the file system holding an open file.
+    pub const SYNCFS: usize = 373;
 }
 
 /// An architecture-neutral system call.
@@ -1268,6 +1373,38 @@ pub enum Syscall {
     /// ARMv7-A only, with the same explicit size argument as
     /// [`Syscall::Statfs64`].
     Fstatfs64,
+    /// Set an extended attribute by path, following symbolic links.
+    Setxattr,
+    /// Set an extended attribute by path, on a symbolic link itself.
+    Lsetxattr,
+    /// Set an extended attribute of an open file.
+    Fsetxattr,
+    /// Read an extended attribute by path, following symbolic links.
+    Getxattr,
+    /// Read an extended attribute by path, of a symbolic link itself.
+    Lgetxattr,
+    /// Read an extended attribute of an open file.
+    Fgetxattr,
+    /// List extended attribute names by path, following symbolic links.
+    Listxattr,
+    /// List extended attribute names by path, of a symbolic link itself.
+    Llistxattr,
+    /// List extended attribute names of an open file.
+    Flistxattr,
+    /// Remove an extended attribute by path, following symbolic links.
+    Removexattr,
+    /// Remove an extended attribute by path, from a symbolic link itself.
+    Lremovexattr,
+    /// Remove an extended attribute of an open file.
+    Fremovexattr,
+    /// Make another mount the root, and move the old root beneath it.
+    PivotRoot,
+    /// Reserve or release storage for a range of an open file.
+    Fallocate,
+    /// Change the calling process's root directory.
+    Chroot,
+    /// Flush the file system holding an open file.
+    Syncfs,
 }
 
 /// Translate an x86-64 system call number.
@@ -1456,6 +1593,22 @@ fn x86_64_recent(nr: usize) -> Option<Syscall> {
         x86_64::CLONE3 => Syscall::Clone3,
         x86_64::OPENAT2 => Syscall::Openat2,
         x86_64::FACCESSAT2 => Syscall::Faccessat2,
+        x86_64::SETXATTR => Syscall::Setxattr,
+        x86_64::LSETXATTR => Syscall::Lsetxattr,
+        x86_64::FSETXATTR => Syscall::Fsetxattr,
+        x86_64::GETXATTR => Syscall::Getxattr,
+        x86_64::LGETXATTR => Syscall::Lgetxattr,
+        x86_64::FGETXATTR => Syscall::Fgetxattr,
+        x86_64::LISTXATTR => Syscall::Listxattr,
+        x86_64::LLISTXATTR => Syscall::Llistxattr,
+        x86_64::FLISTXATTR => Syscall::Flistxattr,
+        x86_64::REMOVEXATTR => Syscall::Removexattr,
+        x86_64::LREMOVEXATTR => Syscall::Lremovexattr,
+        x86_64::FREMOVEXATTR => Syscall::Fremovexattr,
+        x86_64::PIVOT_ROOT => Syscall::PivotRoot,
+        x86_64::FALLOCATE => Syscall::Fallocate,
+        x86_64::CHROOT => Syscall::Chroot,
+        x86_64::SYNCFS => Syscall::Syncfs,
         _ => return None,
     };
     Some(call)
@@ -1621,6 +1774,22 @@ fn aarch64_recent(nr: usize) -> Option<Syscall> {
         aarch64::CLONE3 => Syscall::Clone3,
         aarch64::OPENAT2 => Syscall::Openat2,
         aarch64::FACCESSAT2 => Syscall::Faccessat2,
+        aarch64::SETXATTR => Syscall::Setxattr,
+        aarch64::LSETXATTR => Syscall::Lsetxattr,
+        aarch64::FSETXATTR => Syscall::Fsetxattr,
+        aarch64::GETXATTR => Syscall::Getxattr,
+        aarch64::LGETXATTR => Syscall::Lgetxattr,
+        aarch64::FGETXATTR => Syscall::Fgetxattr,
+        aarch64::LISTXATTR => Syscall::Listxattr,
+        aarch64::LLISTXATTR => Syscall::Llistxattr,
+        aarch64::FLISTXATTR => Syscall::Flistxattr,
+        aarch64::REMOVEXATTR => Syscall::Removexattr,
+        aarch64::LREMOVEXATTR => Syscall::Lremovexattr,
+        aarch64::FREMOVEXATTR => Syscall::Fremovexattr,
+        aarch64::PIVOT_ROOT => Syscall::PivotRoot,
+        aarch64::FALLOCATE => Syscall::Fallocate,
+        aarch64::CHROOT => Syscall::Chroot,
+        aarch64::SYNCFS => Syscall::Syncfs,
         _ => return None,
     };
     Some(call)
@@ -1814,6 +1983,22 @@ fn arm_recent(nr: usize) -> Option<Syscall> {
         arm::CLONE3 => Syscall::Clone3,
         arm::OPENAT2 => Syscall::Openat2,
         arm::FACCESSAT2 => Syscall::Faccessat2,
+        arm::SETXATTR => Syscall::Setxattr,
+        arm::LSETXATTR => Syscall::Lsetxattr,
+        arm::FSETXATTR => Syscall::Fsetxattr,
+        arm::GETXATTR => Syscall::Getxattr,
+        arm::LGETXATTR => Syscall::Lgetxattr,
+        arm::FGETXATTR => Syscall::Fgetxattr,
+        arm::LISTXATTR => Syscall::Listxattr,
+        arm::LLISTXATTR => Syscall::Llistxattr,
+        arm::FLISTXATTR => Syscall::Flistxattr,
+        arm::REMOVEXATTR => Syscall::Removexattr,
+        arm::LREMOVEXATTR => Syscall::Lremovexattr,
+        arm::FREMOVEXATTR => Syscall::Fremovexattr,
+        arm::PIVOT_ROOT => Syscall::PivotRoot,
+        arm::FALLOCATE => Syscall::Fallocate,
+        arm::CHROOT => Syscall::Chroot,
+        arm::SYNCFS => Syscall::Syncfs,
         arm::ARM_CACHEFLUSH => Syscall::ArmCacheflush,
         arm::ARM_SET_TLS => Syscall::ArmSetTls,
         _ => return None,

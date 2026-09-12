@@ -1010,15 +1010,15 @@ fn unknown_numbers_map_to_none_without_panicking() {
         );
     }
     for nr in [
+        0,
         1,
-        5,
-        10,
-        16,
+        2,
+        3,
+        4,
         18,
         26,
         30,
         42,
-        47,
         58,
         60,
         70,
@@ -1101,13 +1101,13 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        136,
-        "the x86-64 table maps 136 calls"
+        152,
+        "the x86-64 table maps 152 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        116,
-        "the AArch64 table maps 116 calls"
+        132,
+        "the AArch64 table maps 132 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -1484,5 +1484,35 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 145, "the ARMv7-A table maps 145 calls");
+    assert_eq!(mapped_arm().len(), 161, "the ARMv7-A table maps 161 calls");
+}
+
+/// The filesystem-control and extended-attribute calls, against the numbers in
+/// `arch/x86/entry/syscalls/syscall_64.tbl`, `include/uapi/asm-generic/unistd.h`
+/// and `arch/arm/include/uapi/asm/unistd-common.h`, read from the kernel's
+/// own headers rather than recalled.
+#[test]
+fn filesystem_control_calls_match_the_kernel_tables() {
+    for (x86, generic, eabi, call) in [
+        (188, 5, 226, Syscall::Setxattr),
+        (189, 6, 227, Syscall::Lsetxattr),
+        (190, 7, 228, Syscall::Fsetxattr),
+        (191, 8, 229, Syscall::Getxattr),
+        (192, 9, 230, Syscall::Lgetxattr),
+        (193, 10, 231, Syscall::Fgetxattr),
+        (194, 11, 232, Syscall::Listxattr),
+        (195, 12, 233, Syscall::Llistxattr),
+        (196, 13, 234, Syscall::Flistxattr),
+        (197, 14, 235, Syscall::Removexattr),
+        (198, 15, 236, Syscall::Lremovexattr),
+        (199, 16, 237, Syscall::Fremovexattr),
+        (155, 41, 218, Syscall::PivotRoot),
+        (285, 47, 352, Syscall::Fallocate),
+        (161, 51, 61, Syscall::Chroot),
+        (306, 267, 373, Syscall::Syncfs),
+    ] {
+        assert_eq!(from_x86_64(x86), Some(call), "x86-64 {x86}");
+        assert_eq!(from_aarch64(generic), Some(call), "AArch64 {generic}");
+        assert_eq!(from_arm(eabi), Some(call), "ARMv7-A {eabi}");
+    }
 }

@@ -804,7 +804,7 @@ package FerrixStructure {
         #writtenAhead part linuxAbi : LibraryCrate {
             attribute :>> path = "libs/linux-abi";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 52;
+            attribute :>> hostTests = 53;
             @stage { number = 7; }
             doc /* Three system call number tables, not two: x86-64's own,
                  * AArch64's generic one, and ARMv7-A's EABI one. The 32-bit
