@@ -351,11 +351,28 @@ package FerrixMemory {
             doc /* Reshape the map, change the tables to match, and decommit
                  * the object's pages only if this space is its sole holder. */
         }
-        #planned action forkSpace {
-            doc /* Mark both sides read-only and copy on the first write
-                 * fault; the per-frame refcount is what makes it tractable.
-                 * The cow flag and the handler's read-only install exist; the
-                 * thing that sets the flag does not. */
+        action forkSpace {
+            @stage { number = 6; }
+            doc /* Mark both sides read-only and copy on the first write fault;
+                 * the per-frame refcount is what makes it tractable. No memory
+                 * is copied: each private object is cloned page list and all,
+                 * with a reference taken on every committed frame, so a write
+                 * on either side copies that page into its own object. The
+                 * object is cloned rather than shared through one Arc because
+                 * two spaces holding one Arc cannot diverge -- replacing a
+                 * page would replace it for both, and a child's first write
+                 * would be visible to its parent. A MAP_SHARED object is the
+                 * case where sharing the Arc is right.
+                 *
+                 * Marking the map is not enough: the parent's tables still
+                 * hold writable translations to the pages it has agreed to
+                 * share, and a write through one never reaches the fault
+                 * handler. So every region newly marked is unmapped in the
+                 * parent and re-faults read-only. Unmapping rather than
+                 * write-protecting in place is what the mapper offers -- map_in
+                 * refuses to overwrite a live mapping by design and there is
+                 * no protect_in -- and costs the parent one extra fault per
+                 * page. */
         }
         #planned action mmap { @stage { number = 7; } }
         #planned action mprotect { @stage { number = 7; } }
@@ -385,27 +402,55 @@ package FerrixMemory {
              * commit the page in its VMO, install it, read-only when the Vma
              * is marked cow. */
         in fault : FerrixBoot::PageFault;
+        doc /* The guard below is the region's cow mark and *not* whether the
+             * page is present, which is the obvious guess and is wrong in both
+             * directions. A copy-on-write page that has not been faulted in
+             * yet is absent and still has to copy on a write; and a present
+             * page that is not copy-on-write needs nothing, because a fault on
+             * it is spurious -- another processor resolved it, or this one
+             * walked a stale entry. Presence decides only whether the
+             * read-only entry has to come down before the writable one goes
+             * in. */
         action findVma;
         action anonymousZeroPage;
         #planned action pageCacheFill { @stage { number = 8; } }
-        #planned action copyOnWrite;
+        action copyOnWrite {
+            @stage { number = 6; }
+            doc /* Copy the page, replace it in this space's own object, and
+                 * install it writable. A page with one holder left is let
+                 * through uncopied: the other side has copied, unmapped or
+                 * exited, so duplicating it would allocate a frame to hold a
+                 * second copy of data nobody else can see. That refcount test
+                 * is also why a second write to an already-copied page
+                 * terminates, because a region keeps its cow mark forever --
+                 * it is a property of the region and there is no per-page flag.
+                 *
+                 * This branch is above the handler's present-page early
+                 * return, not below it. A write to a page that is present but
+                 * deliberately read-only is exactly the fault that must copy,
+                 * so returning early because the page translates sends the
+                 * instruction back to fault forever. The boot check fails when
+                 * the order is wrong rather than trusting the comment. */
+        }
         #planned action deliverSigsegv { @stage { number = 7; } }
         first start;
         then findVma;
         then decide;
-            if fault.present and fault.write then copyOnWrite;
+            if fault.write and vma.cow then copyOnWrite;
             else anonymousZeroPage;
     }
 
     #inProgress part def VirtualMemory {
         @stage { number = 6; }
         doc /* kernel/src/user: the VM subsystem above stage 2's allocators.
-             * VMOs and address spaces exist and are self-checked at boot,
-             * and a space installed on a processor is walked by its MMU;
-             * still owed by stage 6 are fork and copy-on-write, the ELF
-             * loader, a Task carrying an address space with the root swap in
-             * choose_next, set_kernel_stack, the ring-3/EL0/USR transition and
-             * the syscall vectors. Reclaim scoped by cgroup is stage 13's. */
+             * VMOs and address spaces exist and are self-checked at boot, a
+             * space installed on a processor is walked by its MMU, and fork
+             * shares a process's memory copy-on-write; still owed by stage 6
+             * are a Task carrying an address space with the root swap in
+             * choose_next, a TLB shootdown for user spaces (which cannot bite
+             * until that lands, and is the first thing that will), the ELF
+             * loader, set_kernel_stack, the ring-3/EL0/USR transition and the
+             * syscall vectors. Reclaim scoped by cgroup is stage 13's. */
         part vmos : Vmo[0..*];
         part spaces : ProcessAddressSpace[0..*];
         #planned part reclaim : Reclaim;
