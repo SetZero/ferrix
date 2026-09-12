@@ -20,6 +20,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use ferrix_bootinfo::{Arch, BootView};
 use ferrix_fdt::{GicVersion, PsciConduit};
 use ferrix_linux_abi::nr::{self, Syscall};
+use ferrix_linux_abi::types::{self, OpenFlagBits};
 
 use super::gicv2;
 use crate::early::{EarlyError, EarlyMemory};
@@ -122,6 +123,10 @@ pub(crate) const TLB_FLUSH_IS_BROADCAST: bool = true;
 pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
     nr::from_arm(number)
 }
+
+/// The `open` flag bits that differ between architectures, as this one
+/// numbers them: `arch/arm/include/uapi/asm/fcntl.h`'s.
+pub(crate) const OPEN_FLAGS: OpenFlagBits = types::OPEN_FLAGS_ARM;
 
 /// A whole program, in machine code, for the self-check to run in USR mode.
 ///

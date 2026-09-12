@@ -12,6 +12,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::{Arch, BootView};
 use ferrix_linux_abi::nr::{self, Syscall};
+use ferrix_linux_abi::types::{self, OpenFlagBits};
 
 use super::gicv2;
 use crate::early::{EarlyError, EarlyMemory};
@@ -115,6 +116,12 @@ pub(crate) const TLB_FLUSH_IS_BROADCAST: bool = true;
 pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
     nr::from_aarch64(number)
 }
+
+/// The `open` flag bits that differ between architectures, as this one
+/// numbers them. AArch64 uses the generic *call* table but not the generic
+/// flags: `arch/arm64/include/uapi/asm/fcntl.h` keeps 32-bit Arm's, so that a
+/// compat program's flags mean the same thing to both kernels.
+pub(crate) const OPEN_FLAGS: OpenFlagBits = types::OPEN_FLAGS_ARM;
 
 /// A whole program, in machine code, for the self-check to run at EL0.
 ///

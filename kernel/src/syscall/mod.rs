@@ -41,6 +41,7 @@
 
 pub(crate) mod check;
 pub(crate) mod exec;
+pub(crate) mod fd;
 pub(crate) mod file;
 pub(crate) mod image;
 pub(crate) mod load;
@@ -51,10 +52,12 @@ pub(crate) mod registry;
 pub(crate) mod signal;
 pub(crate) mod system;
 pub(crate) mod time;
+pub(crate) mod tty;
 pub(crate) mod uaccess;
 
 use ferrix_linux_abi::errno::{self, Errno};
 use ferrix_linux_abi::nr::Syscall;
+use ferrix_linux_abi::types::AT_FDCWD;
 
 use crate::arch;
 use crate::sched;
@@ -188,6 +191,9 @@ fn stateless(call: Syscall, args: &SyscallArgs) -> Option<Result<usize, Errno>> 
 /// The calls that reshape or read the caller's address space.
 fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<usize, Errno> {
     let a = args.args;
+    if let Some(answer) = descriptors(call, &a, process) {
+        return answer;
+    }
     match call {
         // `mmap` and `mmap2` differ in one argument's unit and nothing else,
         // which is exactly why they are separate calls: the difference is
@@ -198,7 +204,6 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Mprotect => memory::sys_mprotect(process, a[0], a[1], truncate(a[2])),
         Syscall::Brk => memory::sys_brk(process, a[0]),
         Syscall::SetTidAddress => Ok(process.set_clear_child_tid(a[0], current_id())),
-        Syscall::Read => file::sys_read(process, a[0], a[1], a[2]),
         Syscall::ClockGettime => {
             time::sys_clock_gettime(process, a[0], a[1], time::TimeWidth::Native)
         }
@@ -213,10 +218,70 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
             signal::sys_rt_sigprocmask(process, truncate(a[0]), a[1], a[2], a[3])
         }
         Syscall::Sigaltstack => signal::sys_sigaltstack(process, a[0], a[1]),
-        Syscall::Write => file::sys_write(process, a[0], a[1], a[2]),
-        Syscall::Writev => file::sys_writev(process, a[0], a[1], a[2]),
         _ => Err(Errno::ENOSYS),
     }
+}
+
+/// The calls that take a descriptor, or make one.
+///
+/// A table of its own, like [`stateless`], so that `None` means "not one of
+/// mine" and the two can be read separately. Every descriptor is narrowed to
+/// the ABI's 32-bit `int` here, once, by [`fd::arg`].
+fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<usize, Errno>> {
+    let fd = fd::arg(a[0]);
+    let answer = match call {
+        Syscall::Openat => fd::sys_openat(process, fd, a[1], truncate(a[2]), truncate(a[3])),
+        Syscall::Open => fd::sys_openat(process, AT_FDCWD, a[0], truncate(a[1]), truncate(a[2])),
+        Syscall::Close => fd::sys_close(process, fd),
+        Syscall::Read => file::sys_read(process, fd, a[1], a[2]),
+        Syscall::Write => file::sys_write(process, fd, a[1], a[2]),
+        Syscall::Readv => file::sys_readv(process, fd, a[1], a[2]),
+        Syscall::Writev => file::sys_writev(process, fd, a[1], a[2]),
+        Syscall::Pread64 => file::sys_pread64(process, fd, a[1], a[2], wide(a, 3)),
+        Syscall::Pwrite64 => file::sys_pwrite64(process, fd, a[1], a[2], wide(a, 3)),
+        Syscall::Lseek => fd::sys_lseek(process, fd, native_signed(a[1]), truncate(a[2])),
+        Syscall::Llseek => fd::sys_llseek(process, fd, a[1], a[2], a[3], truncate(a[4])),
+        Syscall::Dup => fd::sys_dup(process, fd),
+        Syscall::Dup2 => fd::sys_dup2(process, fd, fd::arg(a[1])),
+        Syscall::Dup3 => fd::sys_dup3(process, fd, fd::arg(a[1]), truncate(a[2])),
+        Syscall::Fcntl | Syscall::Fcntl64 => fd::sys_fcntl(process, fd, truncate(a[1]), a[2]),
+        Syscall::Ftruncate => fd::sys_ftruncate(process, fd, native_signed(a[1])),
+        Syscall::Ftruncate64 => fd::sys_ftruncate(process, fd, wide(a, 1)),
+        Syscall::Ioctl => fd::sys_ioctl(process, fd, truncate(a[1]), a[2]),
+        _ => return None,
+    };
+    Some(answer)
+}
+
+/// A signed argument one native word wide: `off_t` and `long`.
+///
+/// Narrowed to the word before it is widened, so that a 32-bit caller's
+/// `-1`, which arrives as `0xFFFF_FFFF`, is `-1` and not four billion. On a
+/// 64-bit build the narrowing is the identity.
+fn native_signed(value: u64) -> i64 {
+    value as usize as isize as i64
+}
+
+/// A 64-bit argument the C prototype puts at position `slot`: `loff_t`.
+///
+/// One register on a 64-bit architecture. On ARMv7-A two, low word first,
+/// and -- because the EABI passes a 64-bit value in an even-numbered register
+/// pair -- starting at the next even register, which leaves a hole when
+/// `slot` is odd. `pread64(fd, buf, count, pos)` therefore takes `pos` from
+/// registers 4 and 5, not 3 and 4, and `ftruncate64(fd, length)` from 2 and 3.
+/// QEMU's user-mode emulator applies the same rule (`regpairs_aligned` in
+/// `linux-user/user-internals.h`, true for ARM EABI).
+///
+/// The only 32-bit ABI this kernel has is the EABI, so the word size decides
+/// it, as it does for `ferrix_ustack`'s layout.
+fn wide(a: &[u64; 6], slot: usize) -> i64 {
+    if size_of::<usize>() == 8 {
+        return a.get(slot).copied().unwrap_or(0) as i64;
+    }
+    let pair = slot + slot % 2;
+    let low = a.get(pair).copied().unwrap_or(0) & 0xFFFF_FFFF;
+    let high = a.get(pair + 1).copied().unwrap_or(0) & 0xFFFF_FFFF;
+    (high << 32 | low) as i64
 }
 
 /// `mmap`'s six registers as a request.

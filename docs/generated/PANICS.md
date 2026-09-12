@@ -42,6 +42,7 @@ Causes are listed most likely first.
 | [FX-0701](#fx-0701) | the system call dispatch path failed its self-check |
 | [FX-0801](#fx-0801) | the root filesystem could not be built |
 | [FX-0802](#fx-0802) | the root filesystem failed its self-check |
+| [FX-0810](#fx-0810) | a new process could not be given the console as descriptors 0, 1 and 2 |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -605,6 +606,25 @@ every frame back once it is gone.
 
 See: kernel/src/fs/check.rs run; kernel/src/fs/pages.rs; kernel/src/user/vmo.rs
 decommit_from; libs/vfs/src/namespace.rs; docs/ROADMAP.md stage 8.
+
+<a id="fx-0810"></a>
+
+## FX-0810 — a new process could not be given the console as descriptors 0, 1 and 2
+
+Every process starts with one open description of the console installed at
+descriptors 0, 1 and 2, opened through `/dev/console` when the namespace has the
+console there and through a namespace of its own otherwise. Neither route
+touches anything a program controls, so a failure is a kernel bug rather than a
+condition to report to one: a process created without them would have its first
+`open` land on descriptor 0 and its output written into that file.
+
+1. The console inode in `kernel/src/fs/console.rs` started refusing to be
+   opened, or `OpenFile::new` gained a check the console does not pass.
+2. A new descriptor table no longer starts empty or with room for three
+   descriptors, so installing them failed with EMFILE.
+
+See: kernel/src/syscall/fd.rs standard_streams; kernel/src/fs/console.rs
+open_console; libs/vfs/src/fd.rs; docs/ROADMAP.md stage 8.
 
 <a id="fx-0901"></a>
 

@@ -38,10 +38,14 @@ use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_sync::SpinLock;
+use ferrix_vfs::fd::FdTable;
+use ferrix_vfs::{Context, OpenFile};
 use ferrix_vma::VmaFlags;
 
+use crate::fs;
 use crate::object::{self, HandleTable};
 use crate::sched::{self, Task, WaitQueue};
+use crate::syscall::fd;
 use crate::syscall::registry;
 use crate::syscall::signal::Signals;
 use crate::user::space::{AddressSpace, SpaceError};
@@ -61,6 +65,23 @@ pub(crate) struct Process {
     /// handles up and takes them out, and has no business waiting on a `brk`
     /// or a signal mask to do it. See `crate::syscall::native`.
     handles: SpinLock<HandleTable>,
+    /// Its file descriptors, and the open file descriptions they name.
+    ///
+    /// A lock of its own for the reason `handles` has one, and one more: a
+    /// `read` of the console waits for a person to type, so the table is only
+    /// ever held for the lookup, and nothing else should have to wait behind a
+    /// lookup either. See `crate::syscall::fd`.
+    ///
+    /// Behind an `Arc` so that `clone(CLONE_FILES)` can give a second process
+    /// the same table rather than a copy of it.
+    files: Arc<SpinLock<FdTable<Arc<OpenFile>>>>,
+    /// Where its `/` and its working directory are.
+    ///
+    /// Cloned out by every call that walks a path, rather than held across
+    /// the walk: a walk calls into filesystems, and a `chdir` on another thread
+    /// has no reason to wait for one. Behind an `Arc` for `clone(CLONE_FS)`,
+    /// as `files` is for `CLONE_FILES`.
+    fs: Arc<SpinLock<Context>>,
     /// Everything else, behind one lock. One lock per process rather than a
     /// global one, for the same reason the address space has its own: two
     /// processes calling `brk` at once should contend for nothing.
@@ -122,6 +143,8 @@ impl Process {
             space,
             pid: registry::allocate().unwrap_or(0),
             handles: SpinLock::new(HandleTable::new(object::HANDLE_LIMIT)),
+            files: Arc::new(SpinLock::new(fd::standard_streams())),
+            fs: Arc::new(SpinLock::new(fs::namespace().context())),
             state: SpinLock::new(State::default()),
             startup: SpinLock::new(None),
             ending: AtomicBool::new(false),
@@ -140,6 +163,22 @@ impl Process {
     /// Its process id; zero if it was made with every pid in use.
     pub(crate) fn pid(&self) -> u32 {
         self.pid
+    }
+
+    /// Its descriptor table.
+    ///
+    /// A lock rather than a closure, unlike [`Process::with_handles`], because
+    /// the table's own methods already hand back what they displace. Hold the
+    /// guard for a table operation and no longer: clone the description out,
+    /// and drop what `remove` or `install` returns after the guard is gone.
+    pub(crate) fn files(&self) -> &Arc<SpinLock<FdTable<Arc<OpenFile>>>> {
+        &self.files
+    }
+
+    /// Its root and working directory. Clone the context out before walking a
+    /// path with it.
+    pub(crate) fn fs_context(&self) -> &Arc<SpinLock<Context>> {
+        &self.fs
     }
 
     /// Do something with the handle table, under its lock.

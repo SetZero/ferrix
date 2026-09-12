@@ -25,6 +25,7 @@
 //! decide what to do about a filesystem that does not exist.
 
 pub(crate) mod check;
+pub(crate) mod console;
 mod pages;
 
 use alloc::sync::Arc;

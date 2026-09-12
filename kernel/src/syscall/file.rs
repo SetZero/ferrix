@@ -1,82 +1,145 @@
-//! `write` and `writev`.
+//! `read` and `write`, and the calls that are those with a position or with
+//! several buffers: `pread64`, `pwrite64`, `readv` and `writev`.
 //!
-//! The third of the three calls a static binary cannot survive losing — the
-//! other two are TLS setup and `mprotect` — and the one that makes a program's
-//! output visible, which is what the first milestone is for.
+//! Stage 7 answered these for descriptors 0, 1 and 2 by name. The descriptor
+//! table replaced the *lookup* and not the calls, as stage 7 said it would:
+//! each still copies from or to user memory in bounded pieces and reports the
+//! count it managed. What a descriptor names is now a
+//! `ferrix_vfs::OpenFile`, and the console is one of those like any other.
 //!
-//! # No file descriptor table yet
+//! # Through a bounce buffer, a page at a time
 //!
-//! Descriptors 1 and 2 go to the console and everything else is `EBADF`. That
-//! is honest rather than a stub: there is no filesystem to open anything from,
-//! so a table would map two numbers onto one device and nothing else.
+//! A filesystem reads into and writes from kernel memory, and user memory is
+//! reached only through `uaccess`, so every transfer goes through a buffer of
+//! at most a page. A program is entitled to `read` a gigabyte in one call and
+//! the kernel must not try to hold it.
 //!
-//! It is also not something a later stage has to unpick. When stage 8 brings
-//! the VFS, the table replaces the *lookup* here — which descriptor names
-//! which object — and not the call: `sys_write` will still copy from user
-//! memory, still bound its chunks, and still report the count it managed. The
-//! two hardcoded numbers are one `match` that becomes a lookup.
+//! # Short counts, and the one case that needs undoing
+//!
+//! A transfer that fails part-way reports what it did rather than the error,
+//! as Linux does: a program that wrote half its buffer has to be told so, or
+//! it will write that half again. A read from a regular file that could not be
+//! copied out to the program moves the offset back over the bytes the program
+//! never got, because Linux copies straight into the program's buffer and so
+//! never advances past a fault. A stream cannot be moved back: a console line
+//! read into a buffer the program cannot receive is lost, which is also what
+//! happens to a terminal's input on Linux.
+//!
+//! # `iovec` is native words
+//!
+//! The structure is two pointer-sized words, so it is eight bytes wide on
+//! ARMv7-A and sixteen on the other two. Read as native words rather than
+//! through a fixed layout for that reason: `libs/linux-abi`'s `Iovec` is the
+//! 64-bit one, and using it here would read a 32-bit program's array at twice
+//! the stride and hand the kernel a pointer assembled from two halves of
+//! different segments.
 
 use alloc::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
-use ferrix_sync::SpinLock;
+use ferrix_vfs::{OpenFile, Whence};
 
-use crate::arch;
-use crate::console;
+use crate::syscall::fd;
 use crate::syscall::process::Process;
-use crate::syscall::uaccess::{self, UserError};
+use crate::syscall::uaccess;
 
-/// Standard input.
-const STDIN: u64 = 0;
-/// Standard output.
-const STDOUT: u64 = 1;
-/// Standard error.
-const STDERR: u64 = 2;
+/// The most one piece of a transfer carries: a page.
+const CHUNK: usize = 4096;
 
-/// How much of a program's buffer is copied in at a time.
-///
-/// On the stack, so it is bounded by what a kernel stack can afford rather
-/// than by what the program asked for. A program is entitled to `write` a
-/// gigabyte in one call and the kernel must not try to hold it.
-const CHUNK: usize = 256;
-
-/// Linux's `IOV_MAX`: the most segments one `writev` may carry.
+/// Linux's `IOV_MAX`: the most segments one `readv` or `writev` may carry.
 const IOV_MAX: u64 = 1024;
 
-/// Everything the copy layer can refuse, as the program sees it.
-fn refused(error: UserError) -> Errno {
-    match error {
-        // All three are `EFAULT` to a program. Which of its pages was wrong is
-        // a fact about the kernel's view of its address space, and not
-        // something the ABI has a way to say.
-        UserError::NotUserRange | UserError::Overflow | UserError::Fault => Errno::EFAULT,
-    }
+/// Linux's `MAX_RW_COUNT`: the most one call transfers, which is `INT_MAX`
+/// rounded down to a page. Larger requests are clamped rather than refused,
+/// so that the count always fits a 32-bit return register as a non-negative
+/// value.
+const MAX_RW_COUNT: u64 = 0x7FFF_F000;
+
+/// Where a transfer reads or writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Position {
+    /// At the description's offset, moving it: `read`, `write` and the
+    /// vectored calls.
+    Current,
+    /// At this offset, leaving the description's alone: `pread64`, `pwrite64`.
+    At(u64),
 }
 
-/// Whether this descriptor is one of the two that go somewhere.
-fn writable(fd: u64) -> Result<(), Errno> {
-    if fd == STDOUT || fd == STDERR {
-        Ok(())
-    } else {
-        Err(Errno::EBADF)
-    }
+/// `read`.
+pub(crate) fn sys_read(process: &Process, fd: i32, buf: u64, len: u64) -> Result<usize, Errno> {
+    let file = fd::file(process, fd)?;
+    count(read_into(process, &file, buf, len, Position::Current)?)
 }
 
 /// `write`.
 ///
-/// Reports the number of bytes written, which for the console is all of them
-/// or an error. A short count is legal in the ABI and every correct caller
-/// loops on it, but there is nothing here that can be short: the console does
-/// not block and has no buffer to fill.
-pub(crate) fn sys_write(process: &Process, fd: u64, buf: u64, len: u64) -> Result<usize, Errno> {
-    writable(fd)?;
-    if len == 0 {
-        // Not a no-op in the ABI: a zero-length write still validates the
-        // descriptor, which is why the check above comes first.
-        return Ok(0);
+/// A zero-length write is not a no-op: it still validates the descriptor,
+/// which is why the lookup comes first.
+pub(crate) fn sys_write(process: &Process, fd: i32, buf: u64, len: u64) -> Result<usize, Errno> {
+    let file = fd::file(process, fd)?;
+    count(write_from(process, &file, buf, len, Position::Current)?)
+}
+
+/// `pread64`. A negative offset is refused before the descriptor is looked
+/// at, as on Linux.
+pub(crate) fn sys_pread64(
+    process: &Process,
+    fd: i32,
+    buf: u64,
+    len: u64,
+    offset: i64,
+) -> Result<usize, Errno> {
+    let offset = u64::try_from(offset).map_err(|_| Errno::EINVAL)?;
+    let file = fd::file(process, fd)?;
+    count(read_into(process, &file, buf, len, Position::At(offset))?)
+}
+
+/// `pwrite64`. A negative offset is refused before the descriptor is looked
+/// at, as on Linux.
+pub(crate) fn sys_pwrite64(
+    process: &Process,
+    fd: i32,
+    buf: u64,
+    len: u64,
+    offset: i64,
+) -> Result<usize, Errno> {
+    let offset = u64::try_from(offset).map_err(|_| Errno::EINVAL)?;
+    let file = fd::file(process, fd)?;
+    count(write_from(process, &file, buf, len, Position::At(offset))?)
+}
+
+/// `readv`: fill the segments in order, stopping at the first that is not
+/// filled, since a short read means there was no more to read.
+pub(crate) fn sys_readv(
+    process: &Process,
+    fd: i32,
+    iov: u64,
+    entries: u64,
+) -> Result<usize, Errno> {
+    let file = fd::file(process, fd)?;
+    let segments = read_iovecs(process, iov, entries)?;
+    if segments.is_empty() {
+        return if file.readable() {
+            Ok(0)
+        } else {
+            Err(Errno::EBADF)
+        };
     }
-    let written = write_range(process, buf, len)?;
-    usize::try_from(written).map_err(|_| Errno::EINVAL)
+    let stream = file.inode().is_stream();
+    let mut done = 0_u64;
+    for (base, len) in segments {
+        let got = match read_into(process, &file, base, len, Position::Current) {
+            Ok(got) => got,
+            Err(_) if done > 0 => break,
+            Err(errno) => return Err(errno),
+        };
+        done = done.saturating_add(got);
+        // A stream has given what it had: asking it again would wait.
+        if got < len || (stream && got > 0) {
+            break;
+        }
+    }
+    count(done)
 }
 
 /// `writev`.
@@ -84,54 +147,196 @@ pub(crate) fn sys_write(process: &Process, fd: u64, buf: u64, len: u64) -> Resul
 /// musl's buffered output goes through this rather than `write`, so a program
 /// that prints with `printf` reaches here and not the simpler call.
 ///
-/// The segment count is validated and the lengths summed *before* anything is
+/// The whole array is read and the lengths summed *before* anything is
 /// written, because the ABI says `EINVAL` for a total that overflows and a
 /// program must not see half its output before being told no.
-pub(crate) fn sys_writev(process: &Process, fd: u64, iov: u64, count: u64) -> Result<usize, Errno> {
-    writable(fd)?;
-    if count == 0 {
-        return Ok(0);
+pub(crate) fn sys_writev(
+    process: &Process,
+    fd: i32,
+    iov: u64,
+    entries: u64,
+) -> Result<usize, Errno> {
+    let file = fd::file(process, fd)?;
+    let segments = read_iovecs(process, iov, entries)?;
+    if segments.is_empty() {
+        return if file.writable() {
+            Ok(0)
+        } else {
+            Err(Errno::EBADF)
+        };
     }
-    if count > IOV_MAX {
-        return Err(Errno::EINVAL);
-    }
-
-    // Two passes. The first reads every segment and checks the total, the
-    // second writes. Reading the array twice costs little and means a
-    // malformed later segment cannot leave earlier ones already printed.
-    let mut total = 0_u64;
-    for index in 0..count {
-        let (_, len) = read_iovec(process, iov, index)?;
-        total = total.checked_add(len).ok_or(Errno::EINVAL)?;
-    }
-    if i64::try_from(total).is_err() {
-        // Linux refuses a total that will not fit in the return value rather
-        // than reporting a negative count, which a caller would read as an
-        // error number.
-        return Err(Errno::EINVAL);
-    }
-
-    let mut written = 0_u64;
-    for index in 0..count {
-        let (base, len) = read_iovec(process, iov, index)?;
-        if len == 0 {
-            continue;
+    let mut done = 0_u64;
+    for (base, len) in segments {
+        let wrote = match write_from(process, &file, base, len, Position::Current) {
+            Ok(wrote) => wrote,
+            Err(_) if done > 0 => break,
+            Err(errno) => return Err(errno),
+        };
+        done = done.saturating_add(wrote);
+        if wrote < len.min(MAX_RW_COUNT) {
+            break;
         }
-        written = written
-            .checked_add(write_range(process, base, len)?)
-            .ok_or(Errno::EINVAL)?;
     }
-    usize::try_from(written).map_err(|_| Errno::EINVAL)
+    count(done)
 }
 
-/// Read one `struct iovec` out of the program's array.
+/// A transferred count as a return value.
+fn count(done: u64) -> Result<usize, Errno> {
+    usize::try_from(done).map_err(|_| Errno::EINVAL)
+}
+
+/// A buffer for one piece of a transfer of `len` bytes.
+fn bounce(len: u64) -> Result<Vec<u8>, Errno> {
+    let size = usize::try_from(len.min(CHUNK as u64)).map_err(|_| Errno::EINVAL)?;
+    let mut buffer = Vec::new();
+    buffer.try_reserve_exact(size).map_err(|_| Errno::ENOMEM)?;
+    buffer.resize(size, 0);
+    Ok(buffer)
+}
+
+/// Read from `file` into the program's `[buf, buf + len)`, reporting how much
+/// arrived.
+fn read_into(
+    process: &Process,
+    file: &OpenFile,
+    buf: u64,
+    len: u64,
+    position: Position,
+) -> Result<u64, Errno> {
+    let read = |done: u64, slot: &mut [u8]| match position {
+        Position::Current => file.read(slot),
+        Position::At(offset) => file.read_at(offset.checked_add(done).ok_or(Errno::EINVAL)?, slot),
+    };
+    let len = len.min(MAX_RW_COUNT);
+    if len == 0 {
+        // Still asked of the file: a zero-length read of a directory is
+        // `EISDIR` and of a stream by position is `ESPIPE`, not zero.
+        return read(0, &mut []).map(|_| 0);
+    }
+    let mut buffer = bounce(len)?;
+    let stream = file.inode().is_stream();
+    let mut done = 0_u64;
+    while done < len {
+        let want = usize::try_from((len - done).min(CHUNK as u64)).map_err(|_| Errno::EINVAL)?;
+        let slot = buffer.get_mut(..want).ok_or(Errno::EINVAL)?;
+        let got = match read(done, slot) {
+            Ok(got) => got,
+            Err(_) if done > 0 => break,
+            Err(errno) => return Err(errno),
+        };
+        let arrived = slot.get(..got).ok_or(Errno::EIO)?;
+        let at = buf.checked_add(done).ok_or(Errno::EFAULT)?;
+        if uaccess::copy_to_user(process.space(), at, arrived).is_err() {
+            unread(file, position, got);
+            if done > 0 {
+                break;
+            }
+            return Err(Errno::EFAULT);
+        }
+        done += got as u64;
+        // Short means the end of the file, and a stream that gave anything
+        // has given what it had: asking again would wait for more.
+        if got < want || stream {
+            break;
+        }
+    }
+    Ok(done)
+}
+
+/// Move the offset back over bytes a read took but could not deliver.
 ///
-/// The structure is two pointer-sized words, so it is eight bytes wide on
-/// ARMv7-A and sixteen on the other two. Read as native words rather than
-/// through a fixed layout for that reason: `libs/linux-abi`'s `Iovec` is the
-/// 64-bit one, and using it here would read a 32-bit program's array at twice
-/// the stride and hand the kernel a pointer assembled from two halves of
-/// different segments.
+/// Only for a read at the current offset, and only where there is an offset:
+/// a stream's `seek` is `ESPIPE`, and those bytes are gone.
+fn unread(file: &OpenFile, position: Position, got: usize) {
+    if position != Position::Current || got == 0 {
+        return;
+    }
+    if let Ok(back) = i64::try_from(got) {
+        let _ = file.seek(-back, Whence::Current);
+    }
+}
+
+/// Write the program's `[buf, buf + len)` to `file`, reporting how much went.
+fn write_from(
+    process: &Process,
+    file: &OpenFile,
+    buf: u64,
+    len: u64,
+    position: Position,
+) -> Result<u64, Errno> {
+    let write = |done: u64, data: &[u8]| match position {
+        Position::Current => file.write(data),
+        Position::At(offset) => file.write_at(offset.checked_add(done).ok_or(Errno::EINVAL)?, data),
+    };
+    let len = len.min(MAX_RW_COUNT);
+    if len == 0 {
+        return empty_write(file, position);
+    }
+    let mut buffer = bounce(len)?;
+    let mut done = 0_u64;
+    while done < len {
+        let want = usize::try_from((len - done).min(CHUNK as u64)).map_err(|_| Errno::EINVAL)?;
+        let slot = buffer.get_mut(..want).ok_or(Errno::EINVAL)?;
+        let at = buf.checked_add(done).ok_or(Errno::EFAULT)?;
+        if uaccess::copy_from_user(process.space(), at, slot).is_err() {
+            if done > 0 {
+                break;
+            }
+            return Err(Errno::EFAULT);
+        }
+        let wrote = match write(done, slot) {
+            Ok(wrote) => wrote,
+            Err(_) if done > 0 => break,
+            Err(errno) => return Err(errno),
+        };
+        done += wrote as u64;
+        if wrote < want {
+            break;
+        }
+    }
+    Ok(done)
+}
+
+/// A write of nothing: the checks a real write makes, and no call into the
+/// file, because under `O_APPEND` even an empty write would move the offset to
+/// the end, which Linux's does not.
+fn empty_write(file: &OpenFile, position: Position) -> Result<u64, Errno> {
+    if !file.writable() {
+        return Err(Errno::EBADF);
+    }
+    if matches!(position, Position::At(_)) && file.inode().is_stream() {
+        return Err(Errno::ESPIPE);
+    }
+    Ok(0)
+}
+
+/// Read and check a program's `iovec` array: at most `IOV_MAX` entries, and a
+/// total that fits a non-negative return value.
+fn read_iovecs(process: &Process, iov: u64, entries: u64) -> Result<Vec<(u64, u64)>, Errno> {
+    if entries > IOV_MAX {
+        return Err(Errno::EINVAL);
+    }
+    let entries = usize::try_from(entries).map_err(|_| Errno::EINVAL)?;
+    let mut segments = Vec::new();
+    segments
+        .try_reserve_exact(entries)
+        .map_err(|_| Errno::ENOMEM)?;
+    let mut total = 0_u64;
+    for index in 0..entries as u64 {
+        let (base, len) = read_iovec(process, iov, index)?;
+        total = total.checked_add(len).ok_or(Errno::EINVAL)?;
+        segments.push((base, len));
+    }
+    // Linux refuses a total that will not fit in the return value rather than
+    // reporting a negative count, which a caller would read as an error
+    // number. Measured against this architecture's word, not 64 bits.
+    if isize::try_from(total).is_err() {
+        return Err(Errno::EINVAL);
+    }
+    Ok(segments)
+}
+
+/// Read one `struct iovec` out of the program's array, as native words.
 fn read_iovec(process: &Process, iov: u64, index: u64) -> Result<(u64, u64), Errno> {
     let word = size_of::<usize>() as u64;
     let stride = word * 2;
@@ -148,133 +353,6 @@ fn read_word(process: &Process, at: u64) -> Result<u64, Errno> {
     let mut bytes = [0_u8; 8];
     let width = size_of::<usize>();
     let slot = bytes.get_mut(..width).ok_or(Errno::EINVAL)?;
-    uaccess::copy_from_user(process.space(), at, slot).map_err(refused)?;
+    uaccess::copy_from_user(process.space(), at, slot).map_err(|_| Errno::EFAULT)?;
     Ok(u64::from_le_bytes(bytes))
-}
-
-/// Copy a range out of the program and put it on the console.
-fn write_range(process: &Process, buf: u64, len: u64) -> Result<u64, Errno> {
-    let mut done = 0_u64;
-    let mut chunk = [0_u8; CHUNK];
-    while done < len {
-        let remaining = len - done;
-        let take = usize::try_from(remaining.min(CHUNK as u64)).map_err(|_| Errno::EINVAL)?;
-        let at = buf.checked_add(done).ok_or(Errno::EFAULT)?;
-        let slot = chunk.get_mut(..take).ok_or(Errno::EINVAL)?;
-
-        uaccess::copy_from_user(process.space(), at, slot).map_err(refused)?;
-        console::write_bytes(slot);
-        done += take as u64;
-    }
-    Ok(done)
-}
-
-// ---------------------------------------------------------------------------
-// Input
-// ---------------------------------------------------------------------------
-
-/// Bytes a finished line left behind because the reader asked for fewer.
-///
-/// One buffer for the machine, because there is one console. A program that
-/// reads a line in two calls must get the second half on the second call, not
-/// a fresh wait for the keyboard — which is the whole of canonical mode's
-/// contract, and the part a naive `read` gets wrong first.
-static PENDING: SpinLock<Vec<u8>> = SpinLock::new(Vec::new());
-
-/// Carriage return, which a terminal in raw mode sends for the Enter key.
-const CR: u8 = b'\r';
-/// Delete, which most terminals send for Backspace.
-const DEL: u8 = 0x7F;
-/// Backspace, which the rest send.
-const BS: u8 = 0x08;
-/// Ctrl-D: end of file, when it arrives on an empty line.
-const EOT: u8 = 0x04;
-
-/// `read`.
-///
-/// Descriptor 0 only, and canonical: nothing is returned until a whole line
-/// has been typed, the line is echoed as it is typed, Enter ends it, Backspace
-/// edits it, and Ctrl-D on an empty line is end of file.
-///
-/// # This is a line discipline, and it is standing in for one
-///
-/// QEMU puts the host terminal in raw mode for `-serial stdio`, so nothing
-/// echoes what is typed and Enter arrives as a carriage return. On Linux the
-/// tty layer's `ECHO` and `ICRNL` fix both, between the keyboard and the
-/// program. Ferrix has no tty layer yet, so the four rules above are here —
-/// and they move there when stage 15 brings ttys, at which point this becomes
-/// a read from a device like any other.
-pub(crate) fn sys_read(process: &Process, fd: u64, buf: u64, len: u64) -> Result<usize, Errno> {
-    if fd != STDIN {
-        return Err(Errno::EBADF);
-    }
-    if len == 0 {
-        return Ok(0);
-    }
-
-    if PENDING.lock().is_empty() {
-        let line = read_line();
-        if line.is_empty() {
-            // Ctrl-D on an empty line: end of file, which is a count of zero.
-            return Ok(0);
-        }
-        PENDING.lock().extend_from_slice(&line);
-    }
-
-    let mut pending = PENDING.lock();
-    let take = usize::try_from(len)
-        .unwrap_or(usize::MAX)
-        .min(pending.len());
-    let chunk = pending.get(..take).ok_or(Errno::EINVAL)?;
-    uaccess::copy_to_user(process.space(), buf, chunk).map_err(refused)?;
-    let _ = pending.drain(..take);
-    Ok(take)
-}
-
-/// How long a console read sleeps between looks for a keystroke.
-///
-/// Two milliseconds is shorter than anyone types, and long enough that a shell
-/// waiting at its prompt costs a processor nothing measurable.
-const CONSOLE_POLL_NANOS: u64 = 2_000_000;
-
-/// Collect one line from the keyboard, echoing it, until Enter or Ctrl-D.
-///
-/// The lock on [`PENDING`] is not held here: the wait may last minutes, and a
-/// lock held across it would be a lock nothing else could take.
-fn read_line() -> Vec<u8> {
-    let mut line = Vec::new();
-    loop {
-        let Some(byte) = arch::read_console_byte() else {
-            // Nothing typed yet. A program reading the console is a task like
-            // any other, so it sleeps between looks rather than spinning a
-            // processor away from everything else -- and a program killed while
-            // it waits stops waiting, and reads end of file.
-            let killed =
-                crate::syscall::process::current().is_some_and(|process| process.is_terminated());
-            if killed {
-                return Vec::new();
-            }
-            crate::sched::sleep_for(CONSOLE_POLL_NANOS);
-            continue;
-        };
-        match byte {
-            CR | b'\n' => {
-                console::write_bytes(b"\n");
-                line.push(b'\n');
-                return line;
-            }
-            DEL | BS => {
-                if line.pop().is_some() {
-                    // Back over the character, blank it, back again.
-                    console::write_bytes(b"\x08 \x08");
-                }
-            }
-            EOT if line.is_empty() => return line,
-            EOT => {}
-            other => {
-                console::write_bytes(&[other]);
-                line.push(other);
-            }
-        }
-    }
 }

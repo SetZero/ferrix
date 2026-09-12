@@ -12,6 +12,7 @@ mod trap;
 
 use ferrix_bootinfo::{Arch, BootView};
 use ferrix_linux_abi::nr::{self, Syscall};
+use ferrix_linux_abi::types::{self, OpenFlagBits};
 
 use crate::early::{EarlyError, EarlyMemory};
 use crate::irq::Report;
@@ -158,6 +159,10 @@ const ROOT_SLOTS: usize = 512;
 pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
     nr::from_x86_64(number)
 }
+
+/// The `open` flag bits that differ between architectures, as this one
+/// numbers them: the generic header's, which x86-64 does not override.
+pub(crate) const OPEN_FLAGS: OpenFlagBits = types::OPEN_FLAGS_GENERIC;
 
 /// A whole program, in machine code: write a line to file descriptor 1 and
 /// exit with a known status.

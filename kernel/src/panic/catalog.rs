@@ -693,6 +693,27 @@ pub(crate) static STAGE8_FILESYSTEM: Explanation = Explanation {
           decommit_from; libs/vfs/src/namespace.rs; docs/ROADMAP.md stage 8",
 };
 
+/// For `standard_streams` in `syscall/fd.rs`, when a new process cannot be
+/// given the console.
+pub(crate) static CONSOLE_DESCRIPTORS: Explanation = Explanation {
+    code: "FX-0810",
+    title: "a new process could not be given the console as descriptors 0, 1 and 2",
+    meaning: "Every process starts with one open description of the console installed at \
+              descriptors 0, 1 and 2, opened through `/dev/console` when the namespace has \
+              the console there and through a namespace of its own otherwise. Neither route \
+              touches anything a program controls, so a failure is a kernel bug rather than \
+              a condition to report to one: a process created without them would have its \
+              first `open` land on descriptor 0 and its output written into that file.",
+    causes: &[
+        "The console inode in `kernel/src/fs/console.rs` started refusing to be opened, or \
+         `OpenFile::new` gained a check the console does not pass.",
+        "A new descriptor table no longer starts empty or with room for three descriptors, \
+         so installing them failed with EMFILE.",
+    ],
+    see: "kernel/src/syscall/fd.rs standard_streams; kernel/src/fs/console.rs open_console; \
+          libs/vfs/src/fd.rs; docs/ROADMAP.md stage 8",
+};
+
 /// For `handle_page_fault` in `trap.rs`, the `unhandled page fault` report.
 pub(crate) static UNHANDLED_PAGE_FAULT: Explanation = Explanation {
     code: "FX-9001",
@@ -812,6 +833,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE7_SYSCALLS,
     &STAGE8_ROOT,
     &STAGE8_FILESYSTEM,
+    &CONSOLE_DESCRIPTORS,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,
