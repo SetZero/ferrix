@@ -43,6 +43,7 @@ Causes are listed most likely first.
 | [FX-0801](#fx-0801) | the root filesystem could not be built |
 | [FX-0802](#fx-0802) | the root filesystem failed its self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
+| [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -634,6 +635,30 @@ nothing.
 
 See: kernel/src/object/check.rs run; kernel/src/syscall/native.rs;
 kernel/src/object/channel.rs; docs/ROADMAP.md stage 9.
+
+<a id="fx-1001"></a>
+
+## FX-1001 — PCI enumeration failed its self-check
+
+`pci::check` reads where firmware put PCI Express configuration space — the MCFG
+table, or a `pci-host-ecam-generic` device tree node — maps it a bus at a time,
+and walks every function reachable from each root bus, sizing and restoring
+every BAR and walking every capability list to its end. Stage 10 hands user-mode
+drivers exactly the apertures this finds, so a walk that misses a device, sizes
+a BAR wrong or follows a broken list would give a driver the wrong memory or
+none.
+
+1. A host was described but nothing answered on its root bus, so the window was
+   mapped at the wrong address: an MCFG base taken as the first bus's rather
+   than bus zero's, or a device tree `reg` taken the other way.
+2. A bus's window could not be mapped, because the vmap arena is exhausted or
+   the physical address is beyond what this architecture's page tables can
+   express.
+3. `libs/pci` refused a BAR or a capability list. On QEMU that means the
+   accessor read the wrong width or offset, not that the device is malformed.
+
+See: kernel/src/pci.rs check; libs/pci; libs/acpi Mcfg; libs/fdt ecam_hosts;
+docs/ROADMAP.md stage 10.
 
 <a id="fx-9001"></a>
 

@@ -769,6 +769,11 @@ impl<'t, T: Tables> Acpi<'t, T> {
     pub fn hpet(&self) -> Result<Hpet<'t>, AcpiError> {
         Hpet::parse(self.find(HPET_SIGNATURE)?)
     }
+
+    /// The MCFG, decoded: where PCI Express configuration space is.
+    pub fn mcfg(&self) -> Result<Mcfg<'t>, AcpiError> {
+        Mcfg::parse(self.find(MCFG_SIGNATURE)?)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1755,6 +1760,131 @@ impl<'a> Hpet<'a> {
     #[must_use]
     pub fn page_protection(&self) -> Option<u8> {
         u8_at(self.table.bytes(), 55)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MCFG
+// ---------------------------------------------------------------------------
+
+/// Bytes of the MCFG before its first allocation: the header and eight
+/// reserved bytes.
+pub const MCFG_HEADER_LEN: usize = 44;
+
+/// Bytes of one MCFG allocation.
+pub const MCFG_ENTRY_LEN: usize = 16;
+
+/// Bytes of ECAM window each bus occupies.
+const ECAM_BYTES_PER_BUS: u64 = 1 << 20;
+
+/// One ECAM window the MCFG describes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EcamAllocation {
+    /// The address as firmware wrote it — where bus *zero* of the segment
+    /// would be, whatever bus the allocation starts at.
+    pub base_address: u64,
+    /// The PCI segment group.
+    pub segment: u16,
+    /// The first bus the window decodes.
+    pub start_bus: u8,
+    /// The last bus the window decodes, inclusive.
+    pub end_bus: u8,
+}
+
+impl EcamAllocation {
+    /// The physical address of the first byte the window decodes: bus
+    /// `start_bus`, device 0, function 0.
+    ///
+    /// Not [`EcamAllocation::base_address`] unless the window starts at bus
+    /// zero. The PCI Firmware Specification defines the MCFG's address as bus
+    /// zero's; a device tree's `pci-host-ecam-generic` `reg` is the first
+    /// bus's instead. A kernel reading both has to say which it means, and
+    /// this is the second. `None` if the sum overflows.
+    #[must_use]
+    pub const fn window_base(&self) -> Option<u64> {
+        self.base_address
+            .checked_add(self.start_bus as u64 * ECAM_BYTES_PER_BUS)
+    }
+
+    /// Bytes the window decodes, or `None` for an allocation whose last bus is
+    /// below its first.
+    #[must_use]
+    pub const fn window_len(&self) -> Option<u64> {
+        if self.end_bus < self.start_bus {
+            return None;
+        }
+        Some((self.end_bus as u64 - self.start_bus as u64 + 1) * ECAM_BYTES_PER_BUS)
+    }
+}
+
+/// The PCI Express memory-mapped configuration table.
+///
+/// A list of ECAM windows, one per segment and bus range. The allocations are
+/// decoded as firmware wrote them; a range whose last bus is below its first
+/// is reported rather than dropped, through [`EcamAllocation::window_len`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Mcfg<'a> {
+    /// The table the allocations are read out of.
+    table: Table<'a>,
+}
+
+impl<'a> Mcfg<'a> {
+    /// Interpret `table` as an MCFG.
+    ///
+    /// # Errors
+    ///
+    /// [`AcpiError::BadSignature`] if it is not one, and
+    /// [`AcpiError::TooShort`] if it ends inside the reserved bytes.
+    pub fn parse(table: Table<'a>) -> Result<Self, AcpiError> {
+        table.expect_signature(MCFG_SIGNATURE)?;
+        if table.bytes().len() < MCFG_HEADER_LEN {
+            return Err(AcpiError::TooShort {
+                got: table.bytes().len(),
+                need: MCFG_HEADER_LEN,
+            });
+        }
+        Ok(Mcfg { table })
+    }
+
+    /// The underlying table, for its header and checksum.
+    #[must_use]
+    pub const fn table(&self) -> &Table<'a> {
+        &self.table
+    }
+
+    /// Every allocation, in table order. A trailing partial entry is ignored,
+    /// as a root table's is.
+    #[must_use]
+    pub fn entries(&self) -> McfgEntries<'a> {
+        McfgEntries {
+            bytes: self.table.bytes().get(MCFG_HEADER_LEN..).unwrap_or(&[]),
+            offset: 0,
+        }
+    }
+}
+
+/// Iterator over an MCFG's allocations.
+#[derive(Clone, Copy, Debug)]
+pub struct McfgEntries<'a> {
+    /// Everything after the reserved bytes.
+    bytes: &'a [u8],
+    /// Where the next entry starts.
+    offset: usize,
+}
+
+impl Iterator for McfgEntries<'_> {
+    type Item = EcamAllocation;
+
+    fn next(&mut self) -> Option<EcamAllocation> {
+        let end = self.offset.checked_add(MCFG_ENTRY_LEN)?;
+        let entry = self.bytes.get(self.offset..end)?;
+        self.offset = end;
+        Some(EcamAllocation {
+            base_address: u64_at(entry, 0)?,
+            segment: u16_at(entry, 8)?,
+            start_bus: u8_at(entry, 10)?,
+            end_bus: u8_at(entry, 11)?,
+        })
     }
 }
 

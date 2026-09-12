@@ -1316,6 +1316,15 @@ impl<'a> Fdt<'a> {
         }
     }
 
+    /// Every PCI host bridge whose configuration space is an ECAM window,
+    /// in tree order. [`EcamHosts`] says what is read and what is skipped.
+    #[must_use]
+    pub const fn ecam_hosts(&self) -> EcamHosts<'a> {
+        EcamHosts {
+            nodes: self.nodes(),
+        }
+    }
+
     /// Every processor in `/cpus` that has not failed, in tree order.
     ///
     /// [`Cpus`] says which nodes count as processors and why.
@@ -1466,3 +1475,98 @@ impl Iterator for MemoryRegions<'_> {
 
 #[cfg(test)]
 mod tests;
+
+// ---------------------------------------------------------------------------
+// PCI host bridges
+// ---------------------------------------------------------------------------
+
+/// The binding for a host bridge whose configuration space is plain ECAM,
+/// which is what QEMU's `virt` machine describes.
+pub const PCI_HOST_ECAM_COMPATIBLE: &str = "pci-host-ecam-generic";
+
+/// Bytes of ECAM window one bus occupies.
+const ECAM_BYTES_PER_BUS: u64 = 1 << 20;
+
+/// A PCI host bridge whose configuration space is an ECAM window.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EcamHost {
+    /// The window: the first region of `reg`. Its address is bus
+    /// [`EcamHost::start_bus`]'s, which is *not* the MCFG's convention — an
+    /// MCFG allocation's address is bus zero's.
+    pub window: Region,
+    /// `linux,pci-domain`, or zero when the tree does not say.
+    pub segment: u16,
+    /// The first bus of `bus-range`, or zero when there is none.
+    pub start_bus: u8,
+    /// The last bus the window really reaches: `bus-range`'s last, or 255,
+    /// cut down to what [`EcamHost::window`] is large enough to hold.
+    pub end_bus: u8,
+}
+
+/// Every `pci-host-ecam-generic` node that can be used, in tree order.
+///
+/// A node is skipped if its `status` is anything but `okay`, if it has no
+/// `reg`, if its window is smaller than one bus, or if `bus-range` or
+/// `linux,pci-domain` does not decode to numbers PCI can have. A `bus-range`
+/// larger than the window is cut down to the buses the window holds, as
+/// Linux does, rather than letting the kernel map configuration space past
+/// the end of what firmware said is there.
+#[derive(Clone, Copy, Debug)]
+pub struct EcamHosts<'a> {
+    /// The walk the hosts are found in.
+    nodes: Nodes<'a>,
+}
+
+impl Iterator for EcamHosts<'_> {
+    type Item = EcamHost;
+
+    fn next(&mut self) -> Option<EcamHost> {
+        loop {
+            let node = self.nodes.next()?;
+            if let Some(host) = ecam_host(&node) {
+                return Some(host);
+            }
+        }
+    }
+}
+
+/// Decode `node` as an ECAM host bridge, if it is a usable one.
+fn ecam_host(node: &Node<'_>) -> Option<EcamHost> {
+    if !node.is_compatible(PCI_HOST_ECAM_COMPATIBLE) {
+        return None;
+    }
+    if let Some(status) = node.property("status")
+        && !matches!(status.as_str(), Some("okay" | "ok"))
+    {
+        return None;
+    }
+    let window = node.reg().next()?;
+    let (start_bus, last_bus) = match node.property("bus-range") {
+        None => (0, u8::MAX),
+        Some(range) => {
+            if range.len() != 8 {
+                return None;
+            }
+            let mut cells = range.cells();
+            let start = u8::try_from(cells.next()?).ok()?;
+            let end = u8::try_from(cells.next()?).ok()?;
+            (start, end)
+        }
+    };
+    if last_bus < start_bus {
+        return None;
+    }
+    let segment = match node.property("linux,pci-domain") {
+        None => 0,
+        Some(domain) => u16::try_from(domain.as_u32()?).ok()?,
+    };
+    let buses = window.size / ECAM_BYTES_PER_BUS;
+    let last_held = u64::from(start_bus).checked_add(buses.checked_sub(1)?)?;
+    let end_bus = u8::try_from(last_held).map_or(last_bus, |held| held.min(last_bus));
+    Some(EcamHost {
+        window,
+        segment,
+        start_bus,
+        end_bus,
+    })
+}

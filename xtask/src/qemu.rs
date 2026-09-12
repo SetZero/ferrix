@@ -370,6 +370,13 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
         }
     }
 
+    // A virtio device on PCI, on every machine, for stage 10's enumeration to
+    // find: a 64-bit BAR to size, MSI-X and virtio's vendor capabilities to
+    // walk. An entropy source because it needs no backend and nothing on the
+    // guest side depends on it, so it changes what firmware and the kernel see
+    // on the bus and nothing else.
+    let _ = command.args(["-device", "virtio-rng-pci"]);
+
     match &firmware {
         Firmware::Pflash { code, vars } => {
             let vars = prepare_vars(arch, code, vars.as_deref())?;

@@ -74,6 +74,7 @@ dependencies = [
  "ferrix-native-abi",
  "ferrix-objects",
  "ferrix-paging",
+ "ferrix-pci",
  "ferrix-qr",
  "ferrix-sched",
  "ferrix-sync",

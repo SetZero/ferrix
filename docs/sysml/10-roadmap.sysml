@@ -242,9 +242,11 @@ package FerrixRoadmap {
              * out-of-domain DMA attempt faulting.
              *
              * Built: PCI configuration space in libs/pci, host-tested, fuzzed
-             * and under Miri. Next, and needing nothing from stage 9: kernel
-             * enumeration from MCFG and the device tree, then IOMMU domains.
-             * Needing stage 9: everything that runs in ring 3. */
+             * and under Miri; kernel enumeration from the MCFG and the device
+             * tree, in the boot test on all three architectures against a
+             * virtio-rng-pci device. Next, and needing nothing from stage 9:
+             * IOMMU domains. Needing stage 9: everything that runs in
+             * ring 3. */
     }
 
     #planned requirement <'S11'> stage11BtrfsRead : Stage {

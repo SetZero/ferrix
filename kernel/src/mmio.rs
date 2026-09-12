@@ -37,6 +37,34 @@ impl Mmio {
         self.base.checked_add(offset)
     }
 
+    /// Read an 8-bit register.
+    pub(crate) fn read8(self, offset: u64) -> u8 {
+        let Some(at) = self.address(offset) else {
+            return 0;
+        };
+        // SAFETY: as `read32`; a byte has no alignment to get wrong.
+        unsafe { core::ptr::read_volatile(at as *const u8) }
+    }
+
+    /// Read a 16-bit register. The caller keeps `offset` even.
+    pub(crate) fn read16(self, offset: u64) -> u16 {
+        let Some(at) = self.address(offset) else {
+            return 0;
+        };
+        // SAFETY: as `read32`, with the caller holding the offset to a
+        // multiple of two.
+        unsafe { core::ptr::read_volatile(at as *const u16) }
+    }
+
+    /// Write a 16-bit register. The caller keeps `offset` even.
+    pub(crate) fn write16(self, offset: u64, value: u16) {
+        let Some(at) = self.address(offset) else {
+            return;
+        };
+        // SAFETY: as `read16`.
+        unsafe { core::ptr::write_volatile(at as *mut u16, value) };
+    }
+
     /// Read a 32-bit register.
     pub(crate) fn read32(self, offset: u64) -> u32 {
         let Some(at) = self.address(offset) else {

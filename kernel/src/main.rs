@@ -31,6 +31,7 @@ mod mm;
 mod mmio;
 mod object;
 mod panic;
+mod pci;
 mod sched;
 mod smp;
 mod syscall;
@@ -221,6 +222,13 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // driver.
     check_native_objects();
 
+    // Stage 10's enumeration: every PCI function the machine's ECAM windows
+    // reach, with every BAR sized and every capability list walked. Before
+    // `finish_memory`, which reclaims the ACPI tables the MCFG is read from
+    // and sweeps the kernel's mappings, so the bus windows this maps have to
+    // be given back first.
+    check_pci(view);
+
     // The rest of stage 2, deliberately last. Each of these needs something a
     // later part of boot brought up — the arena needs the heap, the sweep
     // needs every mapping the kernel is ever going to make, and reclaiming
@@ -368,6 +376,42 @@ fn check_native_objects() {
         "  native   {} messages and {} handles carried between two processes, \
          {} refusals as specified, {} frames leaked",
         report.messages, report.moved, report.refusals, report.leaked,
+    );
+}
+
+/// Stage 10: find every PCI function, size its BARs and walk its
+/// capabilities.
+///
+/// Halts rather than returning, as every other stage's check does. A machine
+/// that describes no ECAM host passes: the board has no PCI at all.
+fn check_pci(view: &BootView<'_>) {
+    let report = match pci::check(view) {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE10_PCI,
+            "stage 10 self-check failed: {problem}"
+        ),
+    };
+
+    if report.hosts == 0 {
+        println!(
+            "  pci      no ECAM host described, {} descriptions refused",
+            report.refused
+        );
+        return;
+    }
+    println!(
+        "  pci      {} functions from {} {} hosts, {} host bridges, {} unfollowed bridges; \
+         {} BARs sized ({} KiB), {} capabilities, {} virtio transports",
+        report.functions,
+        report.hosts,
+        report.source,
+        report.host_bridges,
+        report.unfollowed,
+        report.bars,
+        report.aperture_bytes / 1024,
+        report.capabilities,
+        report.virtio,
     );
 }
 

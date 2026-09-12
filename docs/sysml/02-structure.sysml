@@ -765,14 +765,14 @@ package FerrixStructure {
         #implemented part acpi : LibraryCrate {
             attribute :>> path = "libs/acpi";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 58;
+            attribute :>> hostTests = 62;
             doc /* Reached at stage 3: the MADT walk the interrupt controller
                  * needed. Stage 10 uses the rest. */
         }
         #implemented part fdt : LibraryCrate {
             attribute :>> path = "libs/fdt";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 61;
+            attribute :>> hostTests = 65;
             doc /* Reached at stage 1 on ARMv7-A: console, GIC, timer
                  * interrupt and PSCI conduit come from it there. */
         }

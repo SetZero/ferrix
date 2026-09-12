@@ -31,7 +31,8 @@ says a stage should: their byte-level halves are in `libs/` — the VFS in
 — handle tables, channels carrying handles, VMOs — are in the boot test, and
 so is stage 8's root filesystem, unpacked at boot from an initramfs the loader
 hands over.
-Stage 10 has begun the same way, with PCI configuration space in `libs/pci`.
+Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
+and its first kernel code — PCI enumeration — is in the boot test.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -1033,22 +1034,48 @@ required the bits that stuck to run all the way to bit 63. A device with a
 been refused as malformed. The
 check now requires one contiguous run, and a test sizes a 40-bit decoder.
 
+**Done — enumeration, in the boot test on all three architectures.**
+
+* **Where configuration space is.** `libs/acpi` reads the MCFG, `libs/fdt` the
+  `pci-host-ecam-generic` nodes. The two disagree about what their address
+  means: an MCFG allocation's is where bus *zero* would be, whatever bus it
+  starts at, and a device tree's `reg` is its first bus's. Both parsers hand
+  over the first bus's, so `kernel/src/pci.rs` never has to remember which it
+  read. Where the loader handed over ACPI tables the MCFG is authoritative;
+  otherwise the device tree is read. A `bus-range` larger than its window is
+  cut to what the window holds, as Linux does.
+* **A bus at a time.** An ECAM window is a megabyte per bus, and every machine
+  here describes 256 buses. Mapping all of it would take 256 MiB of address
+  space — more than half the 32-bit kernel's arena — to reach a handful of
+  functions on bus zero, so a bus's megabyte is mapped the first time the walk
+  reads from it, and every window is given back afterwards.
+* **The check** walks every host, sizes every BAR, walks both capability lists
+  of every function and finds its virtio transport. It fails if a described
+  host answers with nothing, if a bus cannot be mapped, or if `libs/pci`
+  refuses anything a device presents. A machine that describes no host passes
+  and says so, because the board has no PCI at all.
+* **A virtio device on every test machine.** `virtio-rng-pci`, because it needs
+  no backend and nothing depends on it, so the check meets a 64-bit BAR,
+  MSI-X and virtio's vendor capabilities rather than only host bridges.
+
+The run recorded when it landed: on x86-64, 6 functions from the MCFG with 8
+BARs sized, 8 capabilities and one virtio transport; on AArch64, 2 functions
+from the MCFG with 3 BARs, 6 capabilities and one virtio transport; on
+ARMv7-A the same 2 from the device tree, reaching a window at
+`0x40_1000_0000` — above 4 GiB, through LPAE.
+
 **Still to do, in the order it can be done:**
 
-* **Enumeration in the kernel, which needs nothing from stage 9.** MCFG in
-  `libs/acpi` and the `pci-host-ecam-generic` node in `libs/fdt`, the ECAM
-  window mapped as device memory, the walk, and a device node per function,
-  in the boot test on all three architectures. One consequence for the test
-  machine: under ACPI, QEMU describes AArch64's virtio-mmio devices only in
-  the DSDT, which is AML, which Ferrix will not interpret — so that disk has
-  to become `virtio-blk-pci` before AArch64 can find it.
 * **IOMMU domains, which need nothing from stage 9 either.** DMAR and IORT in
   `libs/acpi`, VT-d on `q35` with `intel-iommu`, SMMUv3 on `virt` with
   `iommu=smmuv3` — which this QEMU also offers on the 32-bit machine — and the
   deliberate out-of-domain DMA fault, driven from the kernel first.
 * **Everything that runs in ring 3, which does.** Device-node handles,
   `Interrupt` and `IoMapping` over stage 9's handle table, `devmgr`, the ring
-  protocol, and virtio-blk as a process.
+  protocol, and virtio-blk as a process. One consequence for the test machine:
+  under ACPI, QEMU describes AArch64's virtio-mmio devices only in the DSDT,
+  which is AML, which Ferrix will not interpret — so the disk that driver
+  reads has to be `virtio-blk-pci` there.
 
 ---
 
@@ -1154,8 +1181,8 @@ at three in the morning against a machine that reboots on a mistake.
 
 | Crate | Waiting for | Tests |
 |---|---|---|
-| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET. No AML, and there will be none. | 58 |
-| `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Stage 10 is still the rest of it. | 61 |
+| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG. No AML, and there will be none. | 62 |
+| `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges; stage 10 is still the rest of it. | 65 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
 | `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 52 |
@@ -1169,7 +1196,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **599 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **607 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

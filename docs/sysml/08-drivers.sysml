@@ -68,12 +68,15 @@ package FerrixDrivers {
         attribute interrupts : Natural[0..*];
     }
 
-    #planned part def DeviceEnumeration {
+    #inProgress part def DeviceEnumeration {
         @stage { number = 10; }
         doc /* ACPI on x86-64 and AArch64 under EDK2, device tree on ARMv7-A
              * and where AArch64 firmware offers one; PCIe bus walk from
-             * either. The walk, BAR sizing and capability lists are written
-             * ahead in libs/pci. */
+             * either. kernel/src/pci.rs: MCFG (libs/acpi) or
+             * pci-host-ecam-generic (libs/fdt), ECAM mapped a bus at a time,
+             * the libs/pci walk with every BAR sized and every capability
+             * list walked, in the boot test on all three architectures.
+             * Missing: device nodes, which are handles and wait on stage 9. */
         part nodes : DeviceNode[0..*];
         action enumerate;
     }

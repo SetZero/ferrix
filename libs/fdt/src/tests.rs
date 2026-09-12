@@ -1722,3 +1722,149 @@ fn a_tree_without_cpus_describes_no_processors() {
     let blob = with_cpus(|_| {});
     assert!(cpu_ids(&blob).is_empty(), "an empty /cpus holds none");
 }
+
+// ---------------------------------------------------------------------------
+// PCI host bridges
+// ---------------------------------------------------------------------------
+
+/// A root with two address and two size cells, holding whatever `body` adds.
+fn tree(body: impl FnOnce(&mut Builder)) -> Vec<u8> {
+    let mut builder = Builder::new();
+    builder.begin("");
+    builder.prop_u32("#address-cells", 2);
+    builder.prop_u32("#size-cells", 2);
+    body(&mut builder);
+    builder.end();
+    builder.build()
+}
+
+/// An ECAM host node with a window of `size` bytes at `address`.
+fn ecam_node(builder: &mut Builder, address: u64, size: u64, extra: impl FnOnce(&mut Builder)) {
+    builder.begin("pcie@10000000");
+    builder.prop_str("compatible", PCI_HOST_ECAM_COMPATIBLE);
+    builder.prop_cells(
+        "reg",
+        &[
+            (address >> 32) as u32,
+            address as u32,
+            (size >> 32) as u32,
+            size as u32,
+        ],
+    );
+    // A host's own children are addressed with three cells, which must not
+    // change how its own `reg` is read.
+    builder.prop_u32("#address-cells", 3);
+    builder.prop_u32("#size-cells", 2);
+    extra(builder);
+    builder.end();
+}
+
+fn hosts(blob: &[u8]) -> Vec<EcamHost> {
+    parse(blob).ecam_hosts().collect()
+}
+
+#[test]
+fn qemu_virt_describes_one_ecam_host_above_four_gibibytes() {
+    let blob = tree(|b| {
+        ecam_node(b, 0x40_1000_0000, 0x1000_0000, |b| {
+            b.prop_cells("bus-range", &[0, 0xff]);
+            b.prop_str("device_type", "pci");
+        });
+    });
+    assert_eq!(
+        hosts(&blob),
+        vec![EcamHost {
+            window: Region {
+                address: 0x40_1000_0000,
+                size: 0x1000_0000
+            },
+            segment: 0,
+            start_bus: 0,
+            end_bus: 0xff
+        }],
+        "the window QEMU's virt machine puts in highmem"
+    );
+}
+
+#[test]
+fn an_ecam_host_without_bus_range_or_domain_takes_the_defaults() {
+    let blob = tree(|b| {
+        ecam_node(b, 0x3f00_0000, 0x1000_0000, |_| {});
+        ecam_node(b, 0x5000_0000, 0x0100_0000, |b| {
+            b.prop_u32("linux,pci-domain", 2);
+            b.prop_cells("bus-range", &[0x10, 0x1f]);
+        });
+    });
+    let found = hosts(&blob);
+    assert_eq!(found.len(), 2, "both hosts, in order");
+    assert_eq!(
+        (found[0].segment, found[0].start_bus, found[0].end_bus),
+        (0, 0, 255),
+        "defaults"
+    );
+    assert_eq!(
+        (found[1].segment, found[1].start_bus, found[1].end_bus),
+        (2, 0x10, 0x1f),
+        "declared"
+    );
+}
+
+#[test]
+fn an_ecam_window_smaller_than_its_bus_range_reaches_only_the_buses_it_holds() {
+    let blob = tree(|b| {
+        ecam_node(b, 0x3f00_0000, 4 << 20, |b| {
+            b.prop_cells("bus-range", &[0x10, 0x20]);
+        });
+    });
+    assert_eq!(hosts(&blob)[0].end_bus, 0x13, "four buses from 0x10");
+
+    let blob = tree(|b| {
+        ecam_node(b, 0x3f00_0000, 0x8_0000, |_| {});
+    });
+    assert!(hosts(&blob).is_empty(), "half a megabyte is not one bus");
+
+    let blob = tree(|b| {
+        ecam_node(b, 0x3f00_0000, 1 << 40, |b| {
+            b.prop_cells("bus-range", &[0xf0, 0xff]);
+        });
+    });
+    assert_eq!(
+        hosts(&blob)[0].end_bus,
+        0xff,
+        "a huge window holds every bus it names"
+    );
+}
+
+#[test]
+fn an_ecam_host_that_cannot_be_used_is_skipped() {
+    let blob = tree(|b| {
+        ecam_node(b, 0x1000_0000, 1 << 28, |b| {
+            b.prop_str("status", "disabled");
+        });
+        ecam_node(b, 0x2000_0000, 1 << 28, |b| {
+            b.prop_cells("bus-range", &[2, 1]);
+        });
+        ecam_node(b, 0x3000_0000, 1 << 28, |b| {
+            b.prop_cells("bus-range", &[0, 300]);
+        });
+        ecam_node(b, 0x4000_0000, 1 << 28, |b| {
+            b.prop_cells("bus-range", &[0, 1, 2]);
+        });
+        ecam_node(b, 0x5000_0000, 1 << 28, |b| {
+            b.prop_u32("linux,pci-domain", 0x1_0000);
+        });
+        b.begin("pcie@60000000");
+        b.prop_str("compatible", "pci-host-cam-generic");
+        b.prop_cells("reg", &[0, 0x6000_0000, 0, 0x100_0000]);
+        b.end();
+        b.begin("pcie@70000000");
+        b.prop_str("compatible", PCI_HOST_ECAM_COMPATIBLE);
+        b.end();
+        ecam_node(b, 0x8000_0000, 1 << 28, |b| {
+            b.prop_str("status", "okay");
+        });
+    });
+    let found = hosts(&blob);
+    assert_eq!(found.len(), 1, "only the last: {found:?}");
+    assert_eq!(found[0].window.address, 0x8000_0000, "explicitly okay");
+}

@@ -93,14 +93,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1410 elements, 155 relations. Model digest `817143e8312c4e69`.
+13 files, 16 packages, 1410 elements, 155 relations. Model digest `305b7d03cd82035a`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
 | `#implemented` | 115 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 10 | The owning stage has started; part of the element runs. |
+| `#inProgress` | 11 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 9 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 106 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#planned` | 105 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -2094,9 +2094,9 @@ What the kernel creates per device found, and hands devmgr a handle to.
 
 #### DeviceEnumeration
 
-`#planned`  ·  stage 10
+`#inProgress`  ·  stage 10
 
-ACPI on x86-64 and AArch64 under EDK2, device tree on ARMv7-A and where AArch64 firmware offers one; PCIe bus walk from either. The walk, BAR sizing and capability lists are written ahead in libs/pci.
+ACPI on x86-64 and AArch64 under EDK2, device tree on ARMv7-A and where AArch64 firmware offers one; PCIe bus walk from either. kernel/src/pci.rs: MCFG (libs/acpi) or pci-host-ecam-generic (libs/fdt), ECAM mapped a bus at a time, the libs/pci walk with every BAR sized and every capability list walked, in the boot test on all three architectures. Missing: device nodes, which are handles and wait on stage 9.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -2411,8 +2411,8 @@ docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code 
 | `libs/frame` | `#implemented` | — | `forbid` | — |  |
 | `libs/heap` | `#implemented` | — | allowed | — | The body has no unsafe; the crate cannot forbid it because declaring Backing as an unsafe trait is the point. |
 | `libs/paging` | `#implemented` | — | allowed | — |  |
-| `libs/acpi` | `#implemented` | — | `forbid` | 58 | Reached at stage 3: the MADT walk the interrupt controller needed. |
-| `libs/fdt` | `#implemented` | — | `forbid` | 61 | Reached at stage 1 on ARMv7-A: console, GIC, timer interrupt and PSCI conduit come from it there. |
+| `libs/acpi` | `#implemented` | — | `forbid` | 62 | Reached at stage 3: the MADT walk the interrupt controller needed. |
+| `libs/fdt` | `#implemented` | — | `forbid` | 65 | Reached at stage 1 on ARMv7-A: console, GIC, timer interrupt and PSCI conduit come from it there. |
 | `libs/sync` | `#implemented` | — | allowed | 19 | Reached at stage 4: SpinLock and IrqSpinLock guard every shared kernel structure. |
 | `libs/sched` | `#implemented` | 5 | `forbid` | 34 | The half of the scheduler that is arithmetic: the EEVDF tree, weights, lag, the domain partition. cargo test drives a run queue through hundreds of thousands of decisions. |
 | `libs/vma` | `#implemented` | — | `forbid` | 65 | Written for stage 6; reached at stage 2 as the vmap arena's range map. |
@@ -2699,7 +2699,7 @@ Built: the byte-level half, in libs/native-abi and libs/objects, host-tested, fu
 
 Enumeration, IOMMU domains, devmgr, the shared-ring block protocol, virtio-blk as a user process. Exit: a sector read through a ring-3 driver with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting.
 
-Built: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri. Next, and needing nothing from stage 9: kernel enumeration from MCFG and the device tree, then IOMMU domains. Needing stage 9: everything that runs in ring 3.
+Built: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri; kernel enumeration from the MCFG and the device tree, in the boot test on all three architectures against a virtio-rng-pci device. Next, and needing nothing from stage 9: IOMMU domains. Needing stage 9: everything that runs in ring 3.
 
 **Allocated to: **`ferrix.kernel.devices` and `ferrix.kernel.iommu`
 
@@ -3287,7 +3287,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 10 | `FerrixStructure::Workspace::virtio` | part | `#writtenAhead` |
 | 10 | `FerrixStructure::Workspace::pci` | part | `#writtenAhead` |
 | 10 | `FerrixDrivers::DeviceNode` | part | `#planned` |
-| 10 | `FerrixDrivers::DeviceEnumeration` | part | `#planned` |
+| 10 | `FerrixDrivers::DeviceEnumeration` | part | `#inProgress` |
 | 10 | `FerrixDrivers::IommuDomain` | part | `#planned` |
 | 10 | `FerrixDrivers::IommuDomains` | part | `#planned` |
 | 10 | `FerrixDrivers::DriverProcess` | part | `#planned` |

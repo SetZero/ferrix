@@ -1498,6 +1498,12 @@ fn exercise(memory: &Memory) {
         let _ = hpet.page_protection();
         let _ = hpet.table();
     }
+    if let Ok(mcfg) = acpi.mcfg() {
+        let _ = mcfg.table();
+        for allocation in mcfg.entries() {
+            let _ = (allocation.window_base(), allocation.window_len());
+        }
+    }
 }
 
 /// Corrupt one byte of one table at a time and read the whole set again.
@@ -1758,4 +1764,120 @@ fn never_panics_on_a_corrupted_hpet() {
     // comes from firmware, and a kernel that maps whatever a flipped bit says
     // has written to an arbitrary physical page.
     corrupt_every_byte(&q35_with_hpet(), &[HPET_ADDR]);
+}
+
+// ---------------------------------------------------------------------------
+// MCFG
+// ---------------------------------------------------------------------------
+
+const MCFG_ADDR: u64 = 0x7FFF_7000;
+
+/// An MCFG allocation: base, segment, first and last bus.
+fn mcfg_entry(base: u64, segment: u16, start: u8, end: u8) -> Vec<u8> {
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&base.to_le_bytes());
+    entry.extend_from_slice(&segment.to_le_bytes());
+    entry.push(start);
+    entry.push(end);
+    entry.extend_from_slice(&[0; 4]);
+    entry
+}
+
+fn mcfg(entries: &[Vec<u8>]) -> Vec<u8> {
+    let mut builder = TableBuilder::new(MCFG_SIGNATURE).u64(0);
+    for entry in entries {
+        builder = builder.raw(entry);
+    }
+    builder.build()
+}
+
+#[test]
+fn q35s_mcfg_is_found_and_decoded() {
+    let mut memory = q35();
+    memory.put(XSDT_ADDR, xsdt(&[MADT_ADDR, FADT_ADDR, MCFG_ADDR]));
+    memory.put(MCFG_ADDR, mcfg(&[mcfg_entry(0xB000_0000, 0, 0, 0xFF)]));
+    let acpi = Acpi::new(&memory, XSDT_ADDR, RootKind::Xsdt);
+
+    let mcfg = acpi.mcfg().unwrap();
+    assert!(mcfg.table().checksum_valid(), "checksum");
+    let entries: Vec<_> = mcfg.entries().collect();
+    assert_eq!(
+        entries,
+        vec![EcamAllocation {
+            base_address: 0xB000_0000,
+            segment: 0,
+            start_bus: 0,
+            end_bus: 0xFF
+        }],
+        "one window"
+    );
+    assert_eq!(
+        entries[0].window_base(),
+        Some(0xB000_0000),
+        "starts at bus 0"
+    );
+    assert_eq!(entries[0].window_len(), Some(256 << 20), "256 MiB");
+}
+
+#[test]
+fn an_mcfg_window_starting_above_bus_zero_is_offset_from_bus_zeros_address() {
+    let allocation = EcamAllocation {
+        base_address: 0xE000_0000,
+        segment: 1,
+        start_bus: 0x80,
+        end_bus: 0x8F,
+    };
+    assert_eq!(allocation.window_base(), Some(0xE800_0000), "0x80 MiB in");
+    assert_eq!(allocation.window_len(), Some(16 << 20), "sixteen buses");
+
+    let backwards = EcamAllocation {
+        start_bus: 2,
+        end_bus: 1,
+        ..allocation
+    };
+    assert_eq!(backwards.window_len(), None, "last bus below first");
+    let high = EcamAllocation {
+        base_address: u64::MAX - 0xF_FFFF,
+        start_bus: 1,
+        ..allocation
+    };
+    assert_eq!(high.window_base(), None, "overflow");
+}
+
+#[test]
+fn an_mcfg_lists_every_allocation_and_ignores_a_trailing_partial_one() {
+    let mut table = mcfg(&[
+        mcfg_entry(0xB000_0000, 0, 0, 0x3F),
+        mcfg_entry(0xC000_0000, 1, 0, 0x0F),
+    ]);
+    table.extend_from_slice(&[0xAA; 7]);
+    let length = table.len() as u32;
+    table[4..8].copy_from_slice(&length.to_le_bytes());
+
+    let mcfg = Mcfg::parse(Table::parse(&table).unwrap()).unwrap();
+    let segments: Vec<_> = mcfg.entries().map(|entry| entry.segment).collect();
+    assert_eq!(segments, vec![0, 1], "two whole entries");
+}
+
+#[test]
+fn an_mcfg_that_ends_inside_its_reserved_bytes_is_refused() {
+    let table = TableBuilder::new(MCFG_SIGNATURE).u32(0).build();
+    assert_eq!(
+        Mcfg::parse(Table::parse(&table).unwrap()),
+        Err(AcpiError::TooShort { got: 40, need: 44 }),
+        "40 bytes"
+    );
+    let empty = mcfg(&[]);
+    let parsed = Mcfg::parse(Table::parse(&empty).unwrap()).unwrap();
+    assert_eq!(
+        parsed.entries().count(),
+        0,
+        "no allocations is not an error"
+    );
+    let madt_bytes = madt(0, 0, &[]);
+    assert_eq!(
+        Mcfg::parse(Table::parse(&madt_bytes).unwrap()),
+        Err(AcpiError::BadSignature(MADT_SIGNATURE)),
+        "a MADT"
+    );
 }
