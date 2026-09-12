@@ -416,12 +416,20 @@ impl Default for ChunkMapEntry {
     }
 }
 
+/// Storage for a [`ChunkMap`]: anything that is a slice of entries.
+///
+/// A borrowed array before the heap exists, and a boxed slice once a mount has
+/// to own its map — a mount cannot borrow from itself, and `unsafe` is not
+/// available here to pretend otherwise.
+pub trait ChunkStorage: AsRef<[ChunkMapEntry]> + AsMut<[ChunkMapEntry]> {}
+
+impl<T: AsRef<[ChunkMapEntry]> + AsMut<[ChunkMapEntry]> + ?Sized> ChunkStorage for T {}
+
 /// The accumulated logical-to-physical map.
 ///
-/// Borrows its storage rather than allocating, because it has to work before
-/// any allocator does — the first thing it maps is the chunk tree, and the
-/// heap on this system is set up from a filesystem this crate is reading.
-/// A caller supplies an array:
+/// Never allocates, because it has to work before any allocator does — the
+/// first thing it maps is the chunk tree, and the heap on this system may be
+/// set up from a filesystem this crate is reading. A caller supplies storage:
 ///
 /// ```
 /// # use ferrix_btrfs::chunk::{ChunkMap, ChunkMapEntry};
@@ -435,15 +443,15 @@ impl Default for ChunkMapEntry {
 /// it safe to load the system chunk array and then the chunk tree, whose
 /// contents overlap.
 #[derive(Debug)]
-pub struct ChunkMap<'a> {
-    entries: &'a mut [ChunkMapEntry],
+pub struct ChunkMap<S> {
+    entries: S,
     len: usize,
 }
 
-impl<'a> ChunkMap<'a> {
+impl<S: ChunkStorage> ChunkMap<S> {
     /// Create an empty map over caller-supplied storage.
     #[must_use]
-    pub fn new(storage: &'a mut [ChunkMapEntry]) -> Self {
+    pub fn new(storage: S) -> Self {
         ChunkMap {
             entries: storage,
             len: 0,
@@ -464,14 +472,14 @@ impl<'a> ChunkMap<'a> {
 
     /// How many chunks the storage can hold.
     #[must_use]
-    pub const fn capacity(&self) -> usize {
-        self.entries.len()
+    pub fn capacity(&self) -> usize {
+        self.entries.as_ref().len()
     }
 
     /// The chunks, in ascending logical order.
     #[must_use]
     pub fn entries(&self) -> &[ChunkMapEntry] {
-        self.entries.get(..self.len).unwrap_or(&[])
+        self.entries.as_ref().get(..self.len).unwrap_or(&[])
     }
 
     /// Add a chunk covering logical address `logical`.
@@ -495,7 +503,11 @@ impl<'a> ChunkMap<'a> {
         };
         match self.position(logical) {
             Ok(at) => {
-                let slot = self.entries.get_mut(at).ok_or(BtrfsError::ChunkMapFull)?;
+                let slot = self
+                    .entries
+                    .as_mut()
+                    .get_mut(at)
+                    .ok_or(BtrfsError::ChunkMapFull)?;
                 *slot = entry;
                 Ok(())
             }
@@ -506,11 +518,12 @@ impl<'a> ChunkMap<'a> {
     /// Shift the tail up by one and drop `entry` into the hole.
     fn insert_at(&mut self, at: usize, entry: ChunkMapEntry) -> Result<(), BtrfsError> {
         let end = self.len.checked_add(1).ok_or(BtrfsError::ChunkMapFull)?;
-        if end > self.entries.len() || at > self.len {
+        if end > self.capacity() || at > self.len {
             return Err(BtrfsError::ChunkMapFull);
         }
         let tail = self
             .entries
+            .as_mut()
             .get_mut(..end)
             .ok_or(BtrfsError::ChunkMapFull)?;
         tail.copy_within(at..self.len, at.saturating_add(1));

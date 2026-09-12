@@ -13,6 +13,7 @@ use std::vec;
 use std::vec::Vec;
 
 use super::*;
+use crate::chunk::ChunkMapEntry;
 use crate::items::INODE_ITEM_KEY;
 
 const BLOCK: usize = 4096;
@@ -78,7 +79,10 @@ impl Device for PackedDevice {
 }
 
 /// Open `packed` with generous storage, handing both to `test`.
-fn with_volume(packed: &[u8], test: impl FnOnce(&mut PackedDevice, &Volume<'_>, &mut [u8])) {
+fn with_volume(
+    packed: &[u8],
+    test: impl FnOnce(&mut PackedDevice, &Volume<&mut [ChunkMapEntry; 16]>, &mut [u8]),
+) {
     let mut device = PackedDevice::new(packed);
     let mut chunks = [ChunkMapEntry::EMPTY; 16];
     let mut node = vec![0u8; 65536];
@@ -89,7 +93,7 @@ fn with_volume(packed: &[u8], test: impl FnOnce(&mut PackedDevice, &Volume<'_>, 
 /// Every key in `root`, in the order the walk visits them.
 fn all_keys(
     device: &mut PackedDevice,
-    volume: &Volume<'_>,
+    volume: &Volume<&mut [ChunkMapEntry; 16]>,
     root: TreeRoot,
     node: &mut [u8],
 ) -> Vec<BtrfsKey> {

@@ -74,7 +74,7 @@ impl Fixture {
 
 /// Resolve `path` from the root directory, one component at a time.
 fn resolve(
-    sub: &Subvolume<'_, '_>,
+    sub: &Subvolume<'_, &mut [ChunkMapEntry; 16]>,
     device: &mut PackedDevice,
     path: &[u8],
     node: &mut [u8],
@@ -102,7 +102,7 @@ fn resolve(
 
 /// Read all of `ino` in `chunk`-byte pieces.
 fn read_all(
-    sub: &Subvolume<'_, '_>,
+    sub: &Subvolume<'_, &mut [ChunkMapEntry; 16]>,
     device: &mut PackedDevice,
     ino: u64,
     chunk: usize,
@@ -186,7 +186,7 @@ fn check_image(name: &str) {
 
 /// List `ino` and compare the names with the manifest's children of `path`.
 fn check_listing(
-    sub: &Subvolume<'_, '_>,
+    sub: &Subvolume<'_, &mut [ChunkMapEntry; 16]>,
     device: &mut PackedDevice,
     ino: u64,
     path: &[u8],

@@ -38,6 +38,7 @@
 
 use core::ops::ControlFlow;
 
+use crate::chunk::ChunkStorage;
 use crate::compress::{self, MAX_UNCOMPRESSED};
 use crate::items::{
     DIR_INDEX_KEY, DIR_ITEM_KEY, DirItem, DirItemIter, EXTENT_DATA_KEY, ExtentData, ExtentDataBody,
@@ -140,9 +141,9 @@ impl<'s> ReadBuffers<'s> {
     }
 
     /// Expand a compressed regular extent, or reuse it if it is the one held.
-    fn expand_extent<D: Device>(
+    fn expand_extent<D: Device, S: ChunkStorage>(
         &mut self,
-        volume: &Volume<'_>,
+        volume: &Volume<S>,
         device: &mut D,
         extent: &ExtentData<'_>,
         file: &FileExtent,
@@ -189,17 +190,27 @@ impl<'s> ReadBuffers<'s> {
 }
 
 /// One subvolume's tree, read through a [`Volume`].
-#[derive(Debug, Clone, Copy)]
-pub struct Subvolume<'v, 'm> {
-    volume: &'v Volume<'m>,
+#[derive(Debug)]
+pub struct Subvolume<'v, S> {
+    volume: &'v Volume<S>,
     tree: TreeRoot,
     root_dir: u64,
 }
 
-impl<'m> Volume<'m> {
+// Written out rather than derived: a derive would demand `S: Copy`, and a
+// `Subvolume` is only a reference and two numbers whatever `S` is.
+impl<S> Clone for Subvolume<'_, S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for Subvolume<'_, S> {}
+
+impl<S: ChunkStorage> Volume<S> {
     /// The subvolume mounted by default: the top-level fs tree.
     #[must_use]
-    pub const fn default_subvolume(&self) -> Subvolume<'_, 'm> {
+    pub const fn default_subvolume(&self) -> Subvolume<'_, S> {
         Subvolume {
             volume: self,
             tree: self.fs_tree(),
@@ -208,7 +219,7 @@ impl<'m> Volume<'m> {
     }
 }
 
-impl Subvolume<'_, '_> {
+impl<S: ChunkStorage> Subvolume<'_, S> {
     /// Inode number of the subvolume's root directory.
     #[must_use]
     pub const fn root_dir(&self) -> u64 {

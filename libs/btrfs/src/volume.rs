@@ -42,7 +42,7 @@
 
 use core::ops::ControlFlow;
 
-use crate::chunk::{ChunkItem, ChunkMap, ChunkMapEntry, FIRST_CHUNK_TREE_OBJECTID};
+use crate::chunk::{ChunkItem, ChunkMap, ChunkStorage, FIRST_CHUNK_TREE_OBJECTID};
 use crate::items::{CHUNK_ITEM_KEY, FS_TREE_OBJECTID, ROOT_ITEM_KEY, RootItem};
 use crate::superblock::{IncompatFlags, PRIMARY_OFFSET, SUPERBLOCK_SIZE, Superblock};
 use crate::tree::{BtrfsKey, Item, Node, NodeHeader};
@@ -109,8 +109,8 @@ impl<'b> Leaf<'b> {
 /// to keep for the life of a mount. Every read takes the device and a node
 /// buffer of at least [`Volume::nodesize`] bytes from the caller.
 #[derive(Debug)]
-pub struct Volume<'m> {
-    chunks: ChunkMap<'m>,
+pub struct Volume<S> {
+    chunks: ChunkMap<S>,
     fsid: [u8; 16],
     generation: u64,
     nodesize: u32,
@@ -122,7 +122,7 @@ pub struct Volume<'m> {
     root_dir: u64,
 }
 
-impl<'m> Volume<'m> {
+impl<S: ChunkStorage> Volume<S> {
     /// Open the volume on `device`.
     ///
     /// `chunks` is the storage for the chunk map, and bounds how many chunks
@@ -130,11 +130,7 @@ impl<'m> Volume<'m> {
     /// the primary superblock is read: the mirrors are for recovery, and a
     /// reader that silently fell back to one would mount a filesystem Linux
     /// refuses.
-    pub fn open<D: Device>(
-        device: &mut D,
-        chunks: &'m mut [ChunkMapEntry],
-        node: &mut [u8],
-    ) -> Result<Self, BtrfsError> {
+    pub fn open<D: Device>(device: &mut D, chunks: S, node: &mut [u8]) -> Result<Self, BtrfsError> {
         let mut block = [0u8; SUPERBLOCK_SIZE];
         device.read_at(PRIMARY_OFFSET, &mut block)?;
         let sb = Superblock::parse_at(&block, PRIMARY_OFFSET)?;
@@ -226,7 +222,7 @@ impl<'m> Volume<'m> {
 
     /// The logical-to-physical map, as loaded from the chunk tree.
     #[must_use]
-    pub const fn chunks(&self) -> &ChunkMap<'m> {
+    pub const fn chunks(&self) -> &ChunkMap<S> {
         &self.chunks
     }
 
