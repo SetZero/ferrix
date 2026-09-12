@@ -14,10 +14,10 @@
 //! `wait4` do not exist yet -- a command substitution or an external command
 //! would fail, and the test would be measuring that rather than the ABI.
 //!
-//! `printf` is missing for a reason of its own: busybox's builtin asks
-//! `fcntl(1, F_GETFL)` before it writes and gives up when that fails, and
-//! `fcntl` belongs to the file descriptor table stage 8 brings. When it
-//! answers, `printf 'script: %s %d\n' printf 42` and its line go back in.
+//! `printf` was left out until stage 8 for a reason of its own: busybox's
+//! builtin asks `fcntl(1, F_GETFL)` before it writes and prints nothing when
+//! that fails. Descriptor 1 is now an open file in a descriptor table, and the
+//! line below is what proves `fcntl` answers it.
 //!
 //! # Why the program is not in the repository
 //!
@@ -37,6 +37,7 @@ if [ "$n" -eq 15 ]; then echo "script: test agrees"; fi
 case ferrix in fer*) echo "script: case matched";; esac
 set -- a b c
 echo "script: $# positional parameters"
+printf 'script: %s %d\n' printf 42
 exit 7
 "#;
 
@@ -48,6 +49,7 @@ pub(crate) const EXPECTED: &[&str] = &[
     "script: test agrees",
     "script: case matched",
     "script: 3 positional parameters",
+    "script: printf 42",
 ];
 
 /// The status the script exits with. Not zero, so a shell that died and
