@@ -89,7 +89,15 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
         // it is acknowledged, and the architectures disagree about both.
         // So the architecture claims, dispatches and retires; what crosses
         // back into generic code is a number.
-        Trap::Interrupt(_) => arch::service_interrupts(frame, crate::irq::dispatch),
+        Trap::Interrupt(_) => {
+            arch::service_interrupts(frame, crate::irq::dispatch);
+            // And only now, with the controller told this interrupt is done,
+            // may the processor go and run something else. Switching inside
+            // the handler would leave an interrupt in service for as long as
+            // the next task ran, and a controller still servicing one delivers
+            // nothing further.
+            crate::sched::preempt_on_irq_exit();
+        }
         Trap::SystemCall => fatal(frame, "system call before stage 7"),
         Trap::IllegalInstruction => fatal(frame, "illegal instruction"),
         Trap::Fault { name, .. } => fatal(frame, name),

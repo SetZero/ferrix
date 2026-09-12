@@ -93,6 +93,7 @@ forbid ferrix-bootinfo "handoff ABI"  "ferrix-kernel|ferrix-boot|ferrix-elf|ferr
 forbid ferrix-elf      "ELF64 reader" "ferrix-kernel|ferrix-boot"
 forbid ferrix-frame    "frame allocator" "ferrix-kernel|ferrix-boot"
 forbid ferrix-paging   "page tables"  "ferrix-kernel|ferrix-boot"
+forbid ferrix-sched    "scheduler logic" "ferrix-kernel|ferrix-boot"
 
 # ---------------------------------------------------------------------------
 # 3. Generic kernel code reaches architecture code through the facade.

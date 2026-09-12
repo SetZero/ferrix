@@ -19,6 +19,7 @@ members = [
     "libs/virtio",
     "libs/vma",
     "libs/paging",
+    "libs/sched",
 
     # The UEFI loader. Firmware calls into it with a stack and the MMU on, so
     # there is no bootstrap assembly on any architecture.
@@ -56,6 +57,7 @@ ferrix-sync = { path = "libs/sync" }
 ferrix-virtio = { path = "libs/virtio" }
 ferrix-vma = { path = "libs/vma" }
 ferrix-paging = { path = "libs/paging" }
+ferrix-sched = { path = "libs/sched" }
 
 # ---------------------------------------------------------------------------
 # Workspace-wide lints

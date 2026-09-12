@@ -83,6 +83,11 @@ fn on_tick(_irq: u32) {
         // returned, and the machine would take that interrupt forever.
         arch::timer_disarm();
     }
+    // The scheduler arms this timer for the moment its processor next has a
+    // decision to make, so every expiry is one. It only sets a flag: the
+    // decision itself is made at interrupt exit, once the controller has been
+    // acknowledged. Nothing happens here before the scheduler is up.
+    crate::sched::timer_expired();
 }
 
 /// Fire the timer interrupt once, `nanos` from now.

@@ -66,6 +66,10 @@ name = "ferrix-paging"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-sched"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-sync"
 version = "0.1.0"
 

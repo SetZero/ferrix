@@ -18,6 +18,7 @@ ferrix-fdt.workspace = true
 ferrix-frame.workspace = true
 ferrix-heap.workspace = true
 ferrix-paging.workspace = true
+ferrix-sched.workspace = true
 ferrix-sync.workspace = true
 ferrix-vma.workspace = true
 

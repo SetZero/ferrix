@@ -213,6 +213,65 @@ impl<T: ?Sized> SpinLock<T> {
         self.data.get_mut()
     }
 
+    /// Takes the lock and hands out the data with no guard to release it.
+    ///
+    /// **For one caller: a context switch.** A scheduler takes its run
+    /// queue's lock, chooses what runs next, switches stacks, and the
+    /// *incoming* context releases the lock — which is what keeps the
+    /// outgoing task from being picked up by another CPU before its registers
+    /// have been saved. A guard cannot express that, because the release
+    /// would happen on the way out of a scope the switch never comes back to.
+    /// Linux hands its `rq` lock across `context_switch` for the same reason
+    /// and in the same way.
+    ///
+    /// Everything else should use [`lock`](Self::lock).
+    ///
+    /// # Safety
+    ///
+    /// The lock must be released exactly once, with
+    /// [`force_unlock`](Self::force_unlock), by whichever context ends up
+    /// owning it; and the returned reference must not be used after that, nor
+    /// alongside any other reference into the same lock.
+    #[must_use = "the lock stays held until force_unlock"]
+    pub unsafe fn lock_manually(&self) -> &mut T {
+        self.acquire();
+        // SAFETY: the ticket queue serves one caller at a time and this one
+        // has just been served, so no other reference to the data exists; the
+        // caller's contract carries that forward to whoever releases it.
+        unsafe { &mut *self.data.get() }
+    }
+
+    /// Reaches the data of a lock this CPU already holds.
+    ///
+    /// The other half of [`lock_manually`](Self::lock_manually): the context
+    /// that a switch handed the lock to did not take it, so it has no
+    /// reference and needs one to finish what the previous context started.
+    ///
+    /// # Safety
+    ///
+    /// The caller's CPU must hold this lock, and the reference must not
+    /// outlive that: no other reference into the lock may exist, and it must
+    /// not be used after [`force_unlock`](Self::force_unlock).
+    #[must_use = "the lock is not released by reading the data"]
+    pub unsafe fn locked_data(&self) -> &mut T {
+        // SAFETY: the caller guarantees this CPU holds the lock, which is
+        // what makes the reference exclusive.
+        unsafe { &mut *self.data.get() }
+    }
+
+    /// Releases a lock taken with [`lock_manually`](Self::lock_manually).
+    ///
+    /// # Safety
+    ///
+    /// The caller must own the lock — having taken it manually, or having
+    /// been handed it by a context switch — and must not touch the protected
+    /// data afterwards.
+    pub unsafe fn force_unlock(&self) {
+        // SAFETY: the caller guarantees ownership, which is `release`'s
+        // contract.
+        unsafe { self.release() };
+    }
+
     /// Releases the lock without consuming a guard.
     ///
     /// # Safety
