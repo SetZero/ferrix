@@ -137,7 +137,7 @@ reproducible.
 | `kernel/` | The kernel. |
 | `xtask/` | Host build driver: cross-compiles both halves, converts the 32-bit loader from ELF to PE, writes the FAT32 image, drives QEMU. |
 | `scripts/` | The quality gates. |
-| `docs/` | [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Assembly](docs/ASSEMBLY.md) · [Reliability](docs/RELIABILITY.md) · [Boot log](docs/BOOT-LOG.md) |
+| `docs/` | [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Assembly](docs/ASSEMBLY.md) · [Reliability](docs/RELIABILITY.md) · [Boot log](docs/BOOT-LOG.md) · [Conventions](docs/CONVENTIONS.md) |
 
 ## Quality gates
 

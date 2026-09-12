@@ -25,6 +25,37 @@ env:
 
 jobs:
   # ----------------------------------------------------------------
+  # One author per commit. `.githooks` checks this twice, and both of
+  # those checks are hooks -- so both are dormant until somebody runs
+  # `git config core.hooksPath .githooks` in their clone, which is local
+  # configuration and cannot be committed. Nobody ran it, and eight
+  # co-authored commits were written and seven pushed with neither hook
+  # ever executing. This is the check that does not have to be armed.
+  # ----------------------------------------------------------------
+  authorship:
+    name: One author per commit
+    runs-on: ubuntu-latest
+    steps:
+      # The full history, because the gate works over the range between two
+      # commits and a shallow clone does not contain the base.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # Only the range this push or pull request *adds*, never the whole tree:
+      # the history that already carries the trailer is public, and a gate that
+      # failed on it forever would be turned off within a day.
+      - name: No commit carries a Co-authored-by trailer
+        env:
+          BASE: ${{ github.event_name == 'pull_request'
+                    && github.event.pull_request.base.sha
+                    || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request'
+                    && github.event.pull_request.head.sha
+                    || github.sha }}
+        run: python3 scripts/check-commit-authors.py "$BASE" "$HEAD"
+
+  # ----------------------------------------------------------------
   # The founding claim, checked rather than asserted: this OS is written
   # in Rust, and assembly appears only where the machine leaves no choice.
   # ----------------------------------------------------------------

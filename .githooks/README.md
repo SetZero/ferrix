@@ -10,7 +10,23 @@ git config core.hooksPath .githooks
 
 `core.hooksPath` is local configuration and cannot be committed, which is the
 one thing about this arrangement that has to be remembered rather than enforced.
-That is why the rule is checked in two places rather than one.
+
+It was not remembered. Both checks below are hooks, so both were dormant in a
+clone where that line had never run: `.git/hooks` held nothing but Git's
+samples, and eight commits carrying the trailer were written and seven pushed
+without either hook executing once. Two checks behind one un-committable switch
+are not two places — they are one control with two names, and it failed closed
+for the rule and open for everything else.
+
+So the rule is now checked in a third place that needs no arming: the **One
+author per commit** job in `.github/workflows/ci.yml`, which runs
+`scripts/check-commit-authors.py` over the range a push or pull request adds.
+The hooks below are still worth arming — they fail in a second, where the fix
+is still a message edit rather than a rebase — but they are the convenience,
+and CI is the guarantee.
+
+`cargo xtask check` fails on its first gate when this clone is not armed, so
+the missing line reports itself rather than waiting to be noticed.
 
 ## `commit-msg` — no `Co-authored-by`
 

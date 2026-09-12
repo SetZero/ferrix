@@ -15,6 +15,14 @@ use crate::{Error, Result};
 pub(crate) fn run(args: &Args) -> Result<()> {
     let root = paths::workspace_root();
 
+    // First because it is the cheapest, and because it is the gate that says
+    // whether the *other* local gates -- the commit hooks -- are running at
+    // all. They are files until `core.hooksPath` points at them, and a clone
+    // where nobody ran that line refuses nothing.
+    step("commit hooks", || {
+        python_with("scripts/check-commit-authors.py", &["--hooks"])
+    })?;
+
     step("formatting", || {
         let mut command = Command::new(cargo_binary());
         let _ = command
@@ -110,12 +118,20 @@ fn clippy(arguments: &[&str]) -> Result<()> {
 /// prints an advertisement for the Microsoft Store and exits 9009. Looking the
 /// name up on PATH finds it, so the only reliable test is to run it.
 fn python(script: &str) -> Result<()> {
+    python_with(script, &[])
+}
+
+/// Run one of the gate scripts, passing it arguments.
+fn python_with(script: &str, arguments: &[&str]) -> Result<()> {
     let interpreter = python_interpreter().ok_or_else(|| {
         Error::new("no working Python interpreter on PATH (tried python3, python)")
     })?;
 
     let mut command = Command::new(interpreter);
-    let _ = command.current_dir(paths::workspace_root()).arg(script);
+    let _ = command
+        .current_dir(paths::workspace_root())
+        .arg(script)
+        .args(arguments);
     cargo::run(command, script)
 }
 
