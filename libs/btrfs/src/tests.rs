@@ -21,7 +21,6 @@ use super::*;
 // The oracle crates for `compress/`. Each line goes when that decoder's own
 // tests start using the crate; until then `unused_crate_dependencies` would
 // fail the build over a dependency that is declared ahead of its use.
-use miniz_oxide as _;
 use ruzstd as _;
 
 // ---------------------------------------------------------------------------
