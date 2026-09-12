@@ -59,6 +59,15 @@ pub(crate) enum Shape {
 
 /// Build one.
 pub(crate) fn build(class: Class, machine: u16, shape: Shape) -> Vec<u8> {
+    build_with(class, machine, shape, &[])
+}
+
+/// Build one carrying `code` at its entry point.
+///
+/// The payload is what makes the image a *program* rather than a shape: the
+/// loader checks use an empty one, and the check that actually enters ring 3
+/// passes the architecture's own machine code.
+pub(crate) fn build_with(class: Class, machine: u16, shape: Shape, code: &[u8]) -> Vec<u8> {
     let machine = match shape {
         // 0x3E is x86-64 and 0xB7 is AArch64; whichever this is not.
         Shape::ForeignMachine if machine == 0x003E => 0x00B7,
@@ -109,6 +118,14 @@ pub(crate) fn build(class: Class, machine: u16, shape: Shape) -> Vec<u8> {
     );
     if let Some(slot) = file.get_mut(data_offset..data_offset + DATA_FILESZ) {
         slot.copy_from_slice(&DATA_MARK);
+    }
+
+    // The entry point is `ENTRY - BASE` into the text segment, and that
+    // segment starts at file offset zero, so the payload goes at the same
+    // offset in the file.
+    let at = usize::try_from(ENTRY - BASE).unwrap_or(0);
+    if let Some(slot) = file.get_mut(at..at + code.len()) {
+        slot.copy_from_slice(code);
     }
     file
 }

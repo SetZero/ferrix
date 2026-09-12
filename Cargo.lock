@@ -57,6 +57,7 @@ dependencies = [
  "ferrix-paging",
  "ferrix-sched",
  "ferrix-sync",
+ "ferrix-ustack",
  "ferrix-vma",
 ]
 

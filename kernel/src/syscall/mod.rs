@@ -40,6 +40,7 @@
 //! trace back here.
 
 pub(crate) mod check;
+pub(crate) mod exec;
 pub(crate) mod file;
 pub(crate) mod image;
 pub(crate) mod load;

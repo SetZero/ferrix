@@ -249,6 +249,10 @@ fn check_syscalls() {
          {} frames leaked",
         report.pages, report.leaked,
     );
+    match report.user_status {
+        Some(status) => println!("  usermode a program ran in ring 3 and exited with {status}"),
+        None => println!("  usermode not on {} yet", arch::NAME),
+    }
 }
 
 /// Stage 4: find every processor, start them, and require them to work

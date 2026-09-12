@@ -434,3 +434,44 @@ pub(crate) fn rdtsc() -> u64 {
     }
     (u64::from(high) << 32) | u64::from(low)
 }
+
+/// Read this processor's task register: the selector of its loaded TSS.
+///
+/// # Safety
+///
+/// None beyond being x86-64; `STR` touches no memory.
+pub(crate) unsafe fn read_task_register() -> u16 {
+    let selector: u16;
+    // SAFETY: reads a register into a local.
+    unsafe {
+        core::arch::asm!(
+            "str {0:x}",
+            out(reg) selector,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    selector
+}
+
+/// Read this processor's GDT base and limit.
+///
+/// # Safety
+///
+/// None beyond being x86-64; `SGDT` writes ten bytes to the local below.
+pub(crate) unsafe fn read_gdt() -> (u64, u16) {
+    let mut pointer = [0_u8; 10];
+    // SAFETY: `SGDT` writes exactly ten bytes, which is the size of the array.
+    unsafe {
+        core::arch::asm!(
+            "sgdt [{0}]",
+            in(reg) pointer.as_mut_ptr(),
+            options(nostack, preserves_flags),
+        );
+    }
+    let limit = u16::from_le_bytes([pointer[0], pointer[1]]);
+    let base = u64::from_le_bytes([
+        pointer[2], pointer[3], pointer[4], pointer[5], pointer[6], pointer[7], pointer[8],
+        pointer[9],
+    ]);
+    (base, limit)
+}

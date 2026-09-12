@@ -7,6 +7,7 @@ mod cpu;
 mod gdt;
 mod smp;
 mod switch;
+mod syscall;
 mod trap;
 
 use ferrix_bootinfo::{Arch, BootView};
@@ -144,6 +145,53 @@ const ROOT_SLOTS: usize = 512;
 /// applies; `crate::syscall` dispatches on the answer.
 pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
     nr::from_x86_64(number)
+}
+
+/// A whole program, in machine code: write a line to file descriptor 1 and
+/// exit with a known status.
+///
+/// Forty-six bytes and a string, because the first thing to cross into ring 3
+/// should be something that can be read in full. A compiled test program would
+/// need a second crate, a second target and a build step, and when the
+/// transition did not work the first question would be whether the program was
+/// at fault. Nothing here can be: there is no libc, no relocation, no stack
+/// use, and every instruction is listed.
+///
+/// ```text
+///   mov  $1, %rax          ; __NR_write
+///   mov  $1, %rdi          ; fd 1
+///   lea  0x19(%rip), %rsi  ; the message, just past this code
+///   mov  $18, %rdx         ; its length
+///   syscall
+///   mov  $231, %rax        ; __NR_exit_group
+///   mov  $42, %rdi         ; a status nothing else would produce
+///   syscall
+/// ```
+pub(crate) const USER_TEST_PROGRAM: &[u8] = &[
+    0x48, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, // mov $1, %rax
+    0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00, // mov $1, %rdi
+    0x48, 0x8d, 0x35, 0x19, 0x00, 0x00, 0x00, // lea 0x19(%rip), %rsi
+    0x48, 0xc7, 0xc2, 0x12, 0x00, 0x00, 0x00, // mov $18, %rdx
+    0x0f, 0x05, // syscall
+    0x48, 0xc7, 0xc0, 0xe7, 0x00, 0x00, 0x00, // mov $231, %rax
+    0x48, 0xc7, 0xc7, 0x2a, 0x00, 0x00, 0x00, // mov $42, %rdi
+    0x0f, 0x05, // syscall
+    b'h', b'e', b'l', b'l', b'o', b' ', b'f', b'r', b'o', b'm', b' ', b'r', b'i', b'n', b'g', b' ',
+    b'3', b'\n',
+];
+
+/// The status [`USER_TEST_PROGRAM`] exits with.
+pub(crate) const USER_TEST_STATUS: i32 = 42;
+
+/// Run a program in ring 3, returning the status it exits with.
+///
+/// # Safety
+///
+/// A user address space must be installed on this processor, and `entry` and
+/// `stack` must be addresses within it.
+pub(crate) unsafe fn run_user(entry: u64, stack: u64) -> Result<i32, &'static str> {
+    // SAFETY: the caller's guarantee, passed straight through.
+    unsafe { syscall::run_user(entry, stack) }
 }
 
 /// Make a freshly allocated user root usable.

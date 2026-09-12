@@ -22,6 +22,7 @@ ferrix-linux-abi.workspace = true
 ferrix-paging.workspace = true
 ferrix-sched.workspace = true
 ferrix-sync.workspace = true
+ferrix-ustack.workspace = true
 ferrix-vma.workspace = true
 
 [lints]

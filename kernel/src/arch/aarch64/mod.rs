@@ -114,6 +114,32 @@ pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
     nr::from_aarch64(number)
 }
 
+/// A whole program, in machine code, for the self-check to run in user mode.
+///
+/// Empty on this architecture because there is nowhere yet to run it: see
+/// [`run_user`]. The self-check skips the program when this is empty rather
+/// than failing, so the boot test still reports what does exist here.
+pub(crate) const USER_TEST_PROGRAM: &[u8] = &[];
+
+/// The status [`USER_TEST_PROGRAM`] exits with.
+pub(crate) const USER_TEST_STATUS: i32 = 42;
+
+/// Run a program in ring 3, returning the status it exits with.
+///
+/// Not built on this architecture yet. The x86-64 transition landed first
+/// because that is where a static binary could be produced to test it; the
+/// EL0 one is stage 6's remaining work, and this reports the absence
+/// rather than pretending or halting, so the boot test still says what does
+/// and does not exist here.
+///
+/// # Safety
+///
+/// The same contract the x86-64 body has: a user address space installed on
+/// this processor, and `entry` and `stack` inside it.
+pub(crate) unsafe fn run_user(_entry: u64, _stack: u64) -> Result<i32, &'static str> {
+    Err("user mode is not built on this architecture yet")
+}
+
 /// Make a freshly allocated user root usable.
 ///
 /// Nothing to do: the kernel's half is reached through `TTBR1_EL1` and a user root is

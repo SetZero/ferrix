@@ -31,7 +31,7 @@ use ferrix_elf::Class;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{Outcome, SyscallArgs, dispatch, uaccess};
-use crate::syscall::{file, image, load};
+use crate::syscall::{exec, file, image, load};
 
 /// What the checks measured, for the boot log.
 #[derive(Debug)]
@@ -48,6 +48,9 @@ pub(crate) struct Report {
     /// Frames the whole check cost once everything was dropped. Zero, or a
     /// handler is leaking.
     pub(crate) leaked: i64,
+    /// The status a program run in user mode exited with, if this
+    /// architecture can run one yet.
+    pub(crate) user_status: Option<i32>,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -84,12 +87,15 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
 
+    let user_status = check_a_program_runs_in_user_mode()?;
+
     Ok(Report {
         dispatched: counter.dispatched,
         answered: counter.answered,
         getpid_number,
         pages,
         leaked,
+        user_status,
     })
 }
 
@@ -886,4 +892,49 @@ fn write_word(process: &Process, at: u64, value: u64) -> Result<(), &'static str
     let width = size_of::<usize>();
     let slot = bytes.get(..width).ok_or("impossible pointer width")?;
     uaccess::copy_to_user(process.space(), at, slot).map_err(|_| "could not stage a word")
+}
+
+// ---------------------------------------------------------------------------
+// Ring 3
+//
+// The one check here that cannot be faked. Everything above it calls handlers
+// from kernel code with a `Process` in hand; this hands the processor to an
+// address space the kernel built, at a privilege level where none of the
+// kernel's own memory is reachable, and waits to be asked for something.
+//
+// If the loader mapped the wrong page, the stack image put `argc` in the wrong
+// place, the trampoline mismatched its pushes, or `swapgs` went the wrong way,
+// the result is not a wrong answer. It is a fault in ring 3 with no handler
+// that can say anything useful -- which is why every part of this was checked
+// separately first.
+// ---------------------------------------------------------------------------
+
+/// Run a program in user mode and require it to come back correctly.
+fn check_a_program_runs_in_user_mode() -> Result<Option<i32>, &'static str> {
+    if arch::USER_TEST_PROGRAM.is_empty() {
+        // No transition on this architecture yet. Reported as absent rather
+        // than skipped silently: the boot log should say which architectures
+        // can do this and which cannot.
+        return Ok(None);
+    }
+
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_TEST_PROGRAM,
+    );
+
+    let status = exec::run(
+        &file,
+        &[b"/hello", b"--first"],
+        &[b"FERRIX=1"],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "the program could not be started")?;
+
+    if status != arch::USER_TEST_STATUS {
+        return Err("the program exited with the wrong status");
+    }
+    Ok(Some(status))
 }

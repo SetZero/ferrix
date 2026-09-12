@@ -111,12 +111,46 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
 /// the same shape the real handler will have: a fault is resolved by *making
 /// the mapping true* and returning, never by stepping over the instruction.
 /// Everything else is a bug in the kernel and is fatal.
+/// Try to make a user fault true through the running program's address space.
+///
+/// Returns whether the instruction may be retried. A `false` here is a real
+/// segmentation fault -- an address in no region, or an access the region
+/// forbids -- which will become `SIGSEGV` once there are signals, and is fatal
+/// until then.
+fn resolve_user_fault(fault: &PageFault) -> bool {
+    let Some(process) = crate::syscall::process::current() else {
+        // A fault from user mode with no process is not a program's mistake,
+        // it is the kernel having entered ring 3 without recording who was
+        // running. Reported as fatal rather than resolved.
+        return false;
+    };
+    let access = crate::user::space::Access {
+        write: fault.write,
+        execute: fault.execute,
+    };
+    process.space().fault(fault.address, access).is_ok()
+}
+
 fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {
     if !fault.present
         && !fault.user
         && crate::mm::is_demand_window(fault.address)
         && crate::mm::map_demand_page(fault.address).is_ok()
     {
+        let _ = FAULTS_HANDLED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+
+    // A fault in user mode is the ordinary case, not an error: every page a
+    // program touches arrives this way, and so does every copy-on-write copy.
+    // Resolved by making the mapping true and returning, which retries the
+    // instruction -- never by stepping over it.
+    //
+    // `present` is deliberately not consulted. A write to a present but
+    // read-only copy-on-write page is exactly the fault that must copy, and
+    // filtering on `!present` here would send that instruction back to fault
+    // for ever.
+    if fault.user && resolve_user_fault(&fault) {
         let _ = FAULTS_HANDLED.fetch_add(1, Ordering::Relaxed);
         return;
     }

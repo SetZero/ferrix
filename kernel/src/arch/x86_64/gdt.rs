@@ -225,6 +225,68 @@ pub(crate) unsafe fn init() {
     unsafe { load(tables, stack_top & !0xF) };
 }
 
+/// Point this processor's `RSP0` at `top`.
+///
+/// `RSP0` is the stack an interrupt or exception from ring 3 switches to, so
+/// this has to follow whichever task is running: land a page fault on the
+/// previous task's stack and two tasks share one, which corrupts quietly and
+/// at a distance.
+///
+/// # Finding the TSS
+///
+/// By asking the processor, rather than by remembering. `STR` gives this
+/// processor's task register and `SGDT` gives its GDT, so the descriptor --
+/// and the base address inside it -- can be read back from the hardware that
+/// is actually using them.
+///
+/// The alternative was to record each processor's `Tables` pointer somewhere
+/// per-processor, and the ordering makes that worse than it sounds: the GDT is
+/// loaded in `init_traps`, long before `smp` exists to hold anything per
+/// processor. A cached pointer would have to be filled in later by code that
+/// remembered to, and would be wrong rather than absent if it were not.
+///
+/// # Safety
+///
+/// A TSS must be loaded, which [`init`] or [`init_secondary`] has done by the
+/// time any task runs, and `top` must be the top of a stack this processor
+/// alone uses.
+pub(crate) unsafe fn set_privilege_stack(top: u64) {
+    // SAFETY: reads the task register; no memory is touched.
+    let selector = unsafe { cpu::read_task_register() };
+    // SAFETY: writes ten bytes of GDTR into a local.
+    let (gdt_base, gdt_limit) = unsafe { cpu::read_gdt() };
+
+    let index = usize::from(selector & !0x7);
+    // A 64-bit TSS descriptor is sixteen bytes, so both halves must be inside
+    // the table. A limit that says otherwise means the GDT is not the one this
+    // code built, and writing into it would be writing somewhere arbitrary.
+    if index + 16 > usize::from(gdt_limit) + 1 {
+        return;
+    }
+
+    let descriptor = (gdt_base as usize + index) as *const u64;
+    // SAFETY: `index` is inside the GDT the processor is using, which this
+    // module built and which lives for the life of the processor.
+    let low = unsafe { descriptor.read() };
+    // SAFETY: the second half of the same descriptor, whose sixteen bytes were
+    // bounds-checked above.
+    let upper = unsafe { descriptor.add(1) };
+    // SAFETY: as above; the pointer is inside the table.
+    let high = unsafe { upper.read() };
+
+    // The base is scattered across the descriptor in three pieces below 32
+    // bits and one above, an arrangement inherited from the 286 and preserved
+    // through two widenings.
+    let base =
+        ((low >> 16) & 0x00FF_FFFF) | (((low >> 56) & 0xFF) << 24) | ((high & 0xFFFF_FFFF) << 32);
+
+    let rsp0 = (base as usize + TSS_PRIVILEGE_STACK) as *mut u64;
+    // SAFETY: the TSS this processor has loaded, at the offset long mode puts
+    // `RSP0`. Unaligned because the 32-bit TSS layout put a `u32` before it,
+    // which is why `TaskStateSegment` is a byte array in the first place.
+    unsafe { rsp0.write_unaligned(top) };
+}
+
 /// Build and load this secondary processor's own GDT and TSS.
 ///
 /// # Safety

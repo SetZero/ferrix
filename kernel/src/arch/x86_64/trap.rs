@@ -112,8 +112,26 @@ ferrix_trap_common:
     pushq %r14
     pushq %r15
     cld
+
+    // If this trap came from ring 3, GS is the program's and every per-CPU
+    // read in the handler would go through a pointer it chose. `swapgs` is
+    // not idempotent and the processor will not say which way round GS is, so
+    // the decision is made from the one thing that does say: the CS the
+    // processor pushed. Offset 144 is `TrapFrame::cs`, which is asserted
+    // against the struct in Rust rather than counted by hand here.
+    testb $3, 144(%rsp)
+    jz 1f
+    swapgs
+1:
     movq %rsp, %rdi
     callq ferrix_trap_entry
+
+    // And back, on exactly the paths that swapped. The same test, because the
+    // handler cannot have changed where the frame says it came from.
+    testb $3, 144(%rsp)
+    jz 2f
+    swapgs
+2:
     popq %r15
     popq %r14
     popq %r13
@@ -133,6 +151,19 @@ ferrix_trap_common:
     iretq
 "#,
     options(att_syntax)
+);
+
+/// The offset the trap stub uses to reach the saved `CS`.
+///
+/// The stub decides whether to `swapgs` by testing the privilege bits of the
+/// `CS` the processor pushed, and it has to name that by a number. Asserting
+/// it here means a field added to [`TrapFrame`] fails the build instead of
+/// turning the test into a read of some other register -- which would swap
+/// `GS` on the wrong paths and leave the kernel reading its per-CPU record
+/// through whatever a program put there.
+const _: () = assert!(
+    core::mem::offset_of!(TrapFrame, cs) == 144,
+    "the trap stub tests CS at 144(%rsp)"
 );
 
 unsafe extern "C" {

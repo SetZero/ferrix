@@ -172,19 +172,39 @@ fn round_up(at: u64) -> Option<u64> {
         .map(|at| at & !(PAGE_SIZE - 1))
 }
 
+/// The process running on this processor, if any.
+///
+/// One slot, guarded, rather than a field on `Task` — which is where it
+/// belongs and where stage 6 is putting it. Until then this is what a system
+/// call and a page fault from user mode both need to find, and it is deliberately
+/// the *only* thing they use to find it: when `Task` gains its field, this
+/// function's body changes and nothing else does.
+///
+/// # Why a lock and not a per-CPU word
+///
+/// Because an `Arc` has to be kept alive for as long as the program runs, and
+/// a raw per-CPU pointer would not do that. Only one program runs at a time
+/// today, so contention is not a question; when the scheduler owns this, the
+/// reference will live in the task and the lock will go with the slot.
+static CURRENT: SpinLock<Option<Arc<Process>>> = SpinLock::new(None);
+
 /// The process the running thread belongs to.
 ///
-/// `None` for a kernel thread, and `None` for everything today, because
-/// nothing yet creates a process: `Task` does not carry one. **This is the
-/// single function that changes when stage 6 lands its address space field**,
-/// which is why the handlers take `&Process` and this is the only caller that
-/// has to find one.
-///
-/// It is not a stub in the sense the roadmap warns about. Nothing is being
-/// faked for a later stage to unpick — the answer is honestly "no process is
-/// running", and every caller already handles that.
+/// `None` for a kernel thread, which is every thread that is not inside
+/// [`set_current`]'s window.
 pub(crate) fn current() -> Option<Arc<Process>> {
-    None
+    CURRENT.lock().clone()
+}
+
+/// Make `process` the one this processor is running, and give back whatever
+/// was there.
+///
+/// The caller must put the old value back: this is a save/restore pair rather
+/// than a setter, so that a program started from inside another one cannot
+/// lose the outer one.
+pub(crate) fn set_current(process: Option<Arc<Process>>) -> Option<Arc<Process>> {
+    let mut slot = CURRENT.lock();
+    core::mem::replace(&mut slot, process)
 }
 
 /// Make a process over a fresh address space, for the self-checks.
