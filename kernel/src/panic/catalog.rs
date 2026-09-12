@@ -777,6 +777,23 @@ pub(crate) static STAGE8_PSEUDO_FILESYSTEMS: Explanation = Explanation {
           libs/procfs/src/maps.rs; docs/ROADMAP.md stage 8",
 };
 
+/// For `sysrq_trigger` in `fs/procfs.rs`, when a program writes `c` to
+/// /proc/sysrq-trigger.
+pub(crate) static SYSRQ_CRASH: Explanation = Explanation {
+    code: "FX-0850",
+    title: "a panic was requested through /proc/sysrq-trigger",
+    meaning: "Nothing is wrong. Writing `c` to /proc/sysrq-trigger stops the kernel on purpose, \
+              as it does on Linux, so the failure path -- the report, the backtrace, stopping \
+              the other processors, the screen and its QR code -- can be reached from a shell \
+              without building a kernel with a fault in it. The trace runs through the write \
+              system call that carried the request.",
+    causes: &[
+        "A program wrote `c` to /proc/sysrq-trigger: from the shell, `echo c > \
+         /proc/sysrq-trigger`.",
+    ],
+    see: "kernel/src/fs/procfs.rs sysrq_trigger; docs/RELIABILITY.md",
+};
+
 /// For `handle_page_fault` in `trap.rs`, the `unhandled page fault` report.
 pub(crate) static UNHANDLED_PAGE_FAULT: Explanation = Explanation {
     code: "FX-9001",
@@ -899,6 +916,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &CONSOLE_DESCRIPTORS,
     &STAGE8_PATH_CALLS,
     &STAGE8_PSEUDO_FILESYSTEMS,
+    &SYSRQ_CRASH,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,

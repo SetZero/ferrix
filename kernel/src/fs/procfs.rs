@@ -59,6 +59,7 @@ use ferrix_vfs::{
 };
 
 use crate::fs;
+use crate::panic::{catalog, fatal};
 use crate::syscall::process::Process;
 use crate::syscall::registry;
 
@@ -98,6 +99,11 @@ pub(crate) struct Entry<T: 'static> {
 }
 
 impl<T> Entry<T> {
+    /// Whether this entry is a file that takes writes.
+    const fn takes_writes(&self) -> bool {
+        matches!(self.content, Content::File { write: Some(_), .. })
+    }
+
     /// The kind of object this entry is.
     const fn kind(&self) -> FileType {
         match self.content {
@@ -120,8 +126,30 @@ const fn file<T>(name: &'static [u8], render: fn(&T) -> Result<Vec<u8>>) -> Entr
     }
 }
 
+/// What a write-only file renders: nothing, so a read is end of file.
+fn nothing(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(Vec::new())
+}
+
+/// `/proc/sysrq-trigger`: writing `c` panics the kernel, on purpose.
+///
+/// The one request of Linux's magic `SysRq` set that is implemented, because it
+/// is the one somebody working on the failure path needs: a way to reach the
+/// report, the backtrace, the screen and its QR code from a shell, without
+/// building a kernel with a fault in it. Linux looks only at the first byte,
+/// and so does this. Any other byte is accepted and does nothing.
+fn sysrq_trigger(_: &Kernel, data: &[u8]) -> Result<usize> {
+    if data.first() == Some(&b'c') {
+        fatal!(
+            catalog::SYSRQ_CRASH,
+            "panic requested through /proc/sysrq-trigger"
+        );
+    }
+    Ok(data.len())
+}
+
 /// `/proc`, less the process directories that follow these in a listing.
-pub(crate) static TOP: [Entry<Kernel>; 7] = [
+pub(crate) static TOP: [Entry<Kernel>; 8] = [
     Entry {
         name: b"self",
         permissions: 0o777,
@@ -133,6 +161,14 @@ pub(crate) static TOP: [Entry<Kernel>; 7] = [
     file(b"mounts", render::mounts),
     file(b"uptime", render::uptime),
     file(b"version", render::version),
+    Entry {
+        name: b"sysrq-trigger",
+        permissions: 0o200,
+        content: Content::File {
+            render: nothing,
+            write: Some(sysrq_trigger),
+        },
+    },
 ];
 
 /// `/proc/<pid>`.
@@ -311,6 +347,15 @@ impl Node {
         }
     }
 
+    /// Whether this node is a file in a table that takes writes.
+    fn writable(&self) -> bool {
+        match self.place {
+            Place::Top(index) => TOP.get(index).is_some_and(Entry::takes_writes),
+            Place::Entry(_, index) => PER_PROCESS.get(index).is_some_and(Entry::takes_writes),
+            _ => false,
+        }
+    }
+
     /// Whether this node is a process's descriptor directory, and whose.
     fn descriptors_of(&self) -> Option<u32> {
         match self.place {
@@ -379,6 +424,17 @@ impl Inode for Node {
         match self.snapshot()? {
             Some(snapshot) => snapshot.write_at(offset, data, append),
             None => Err(Errno::EINVAL),
+        }
+    }
+
+    /// Accepted and ignored on a file that takes writes, as Linux does for its
+    /// `/proc` files: a shell's `>` opens with `O_TRUNC`, and a generated file
+    /// has no length of its own to cut. Refused on everything else.
+    fn set_len(&self, _len: u64) -> Result<()> {
+        if self.writable() {
+            Ok(())
+        } else {
+            Err(Errno::EINVAL)
         }
     }
 

@@ -45,6 +45,7 @@ Causes are listed most likely first.
 | [FX-0810](#fx-0810) | a new process could not be given the console as descriptors 0, 1 and 2 |
 | [FX-0820](#fx-0820) | the system calls that take a path failed their self-check |
 | [FX-0830](#fx-0830) | /dev or /proc failed its self-check |
+| [FX-0850](#fx-0850) | a panic was requested through /proc/sysrq-trigger |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -678,6 +679,21 @@ here hands them wrong numbers without an error.
 
 See: kernel/src/fs/procfs/check.rs run; kernel/src/fs/procfs.rs;
 kernel/src/fs/devfs.rs; libs/procfs/src/maps.rs; docs/ROADMAP.md stage 8.
+
+<a id="fx-0850"></a>
+
+## FX-0850 — a panic was requested through /proc/sysrq-trigger
+
+Nothing is wrong. Writing `c` to /proc/sysrq-trigger stops the kernel on
+purpose, as it does on Linux, so the failure path -- the report, the backtrace,
+stopping the other processors, the screen and its QR code -- can be reached from
+a shell without building a kernel with a fault in it. The trace runs through the
+write system call that carried the request.
+
+1. A program wrote `c` to /proc/sysrq-trigger: from the shell, `echo c >
+   /proc/sysrq-trigger`.
+
+See: kernel/src/fs/procfs.rs sysrq_trigger; docs/RELIABILITY.md.
 
 <a id="fx-0901"></a>
 

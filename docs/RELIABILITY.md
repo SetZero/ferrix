@@ -129,6 +129,11 @@ explanation first, never the headline. The encoder is `libs/qr`, a port of Linux
 its MIT licence. It allocates nothing, and its tests read every symbol back
 through an independent decoder.
 
+All of it can be reached on purpose, as on Linux: `echo c > /proc/sysrq-trigger`
+from the shell panics the kernel through `fatal!` with FX-0850, whose
+explanation says nothing is wrong. Linux looks only at the first byte written
+there, and so does Ferrix; any other byte is accepted and ignored.
+
 ## Overflow checks are on in release
 
 This inverts Starling's choice, deliberately and for the opposite reason.
