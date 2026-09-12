@@ -30,7 +30,7 @@ use alloc::sync::Arc;
 
 use ferrix_sched::{Config, CpuLoad, EntityState, Load, RunQueue, slice_for};
 
-use super::task::{DEAD, RUNNABLE, Task, TaskId};
+use super::task::{RUNNABLE, Task, TaskId};
 
 /// How much CPU a task asks for at a time.
 ///
@@ -405,13 +405,10 @@ impl CpuQueue {
         if !running_is_current {
             return Err("the running task is not the fair class's running entity");
         }
-        if self
-            .previous
-            .as_ref()
-            .is_some_and(|previous| previous.state() == DEAD && previous.is_queued())
-        {
-            return Err("a dead task is still queued");
-        }
+        // Whether a dead task is still queued is not asked here. It was, of
+        // `previous`, which `finish_switch` empties before it releases the
+        // lock this runs under, so it could never fail. `finish_switch` asks
+        // it instead, at the moment it has an answer.
         Ok(())
     }
 }

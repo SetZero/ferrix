@@ -102,6 +102,15 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// and wait for them.
 static ZOMBIES: IrqSpinLock<Vec<Arc<Task>>, arch::Irq> = IrqSpinLock::new(Vec::new());
 
+/// Switches away from a dead task that a run queue still counted as queued.
+///
+/// Counted in [`finish_switch`], the one place that sees every dead task
+/// leave its processor for the last time, and reported by
+/// [`check_invariants`]. Sticky, because the moment passes: the reaper frees
+/// the task within milliseconds, and a check that went looking afterwards
+/// would find nothing to object to.
+static DEAD_STILL_QUEUED: AtomicU64 = AtomicU64::new(0);
+
 /// Whether the scheduler is running.
 pub(crate) fn started() -> bool {
     STARTED.load(Ordering::Acquire)
@@ -1016,12 +1025,23 @@ fn finish_switch() {
     // this one did and handed it over.
     let queue = unsafe { lock.locked_data() };
     let previous = queue.previous.take();
+    let dead = previous.as_ref().is_some_and(|task| task.is_dead());
+    // **The last moment a dead task's queue membership means anything.** It is
+    // switched away from for good, and anything that still counts it as
+    // queued will pick it again, on a stack the reaper is about to free. Read
+    // under the lock, which is what orders it against the detach in
+    // `choose_next`, and recorded rather than returned: nothing here can
+    // report, and a check that looked at `previous` later always found it
+    // already taken, so it could not fail.
+    if dead && previous.as_ref().is_some_and(|task| task.is_queued()) {
+        let _ = DEAD_STILL_QUEUED.fetch_add(1, Ordering::Relaxed);
+    }
     // SAFETY: held as above, released exactly once, and the queue is not
     // touched afterwards.
     unsafe { lock.force_unlock() };
 
     if let Some(previous) = previous
-        && previous.state() == DEAD
+        && dead
     {
         ZOMBIES.lock().push(previous);
     }
@@ -1379,6 +1399,9 @@ pub(crate) fn check_invariants() -> Result<(), &'static str> {
         outcome = outcome.and(queue.check_invariants());
     }
     <arch::Irq as IrqControl>::restore(saved);
+    if DEAD_STILL_QUEUED.load(Ordering::Relaxed) != 0 {
+        outcome = outcome.and(Err("a dead task is still queued"));
+    }
     outcome
 }
 

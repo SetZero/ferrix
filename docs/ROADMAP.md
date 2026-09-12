@@ -579,6 +579,17 @@ reasons about one of them moves a task something else still believes it owns.
 Naming those states and giving them an order is a change of its own, and the
 balancer covers the same ground less promptly in the meantime.
 
+**Found by the review of stages 1–7 on 2026-09-13**, each fixed with a boot
+check shown to fail without the fix:
+
+* **The check that a dead task has left its queue could not fail.** It looked
+  at a run queue's `previous` under the queue lock, but `finish_switch` empties
+  `previous` before it releases that lock. `finish_switch` now asks the
+  question itself, at the one moment a dead task leaves its processor for
+  good, and records the answer for the invariant check. A kernel broken on
+  purpose to leave dead tasks marked queued now ends stage 5 with "a dead task
+  is still queued".
+
 **Still missing against Linux**, none of it on stage 6's path: group scheduling
 and bandwidth control, which are stage 13; the real-time classes, which are
 stage 14; and NUMA and capacity awareness, which need a topology this kernel
