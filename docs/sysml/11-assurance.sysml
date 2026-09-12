@@ -133,7 +133,7 @@ package FerrixAssurance {
              * scheduler, a filesystem or a driver must add nothing to. The
              * ratio is a backstop and the target is the direction of travel:
              * reached by writing the operating system, not by shrinking the
-             * vector table. 281 lines and about 99.1% Rust when this was
+             * vector table. 303 lines and about 99.2% Rust when this was
              * written, across fifteen sites. */
         attribute maxTotalLines : Natural = 800;
         attribute maxRatio : Real = 0.06;

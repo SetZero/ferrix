@@ -335,6 +335,18 @@ package FerrixMemory {
         ref part vmos : Vmo[0..*];
         action mapAnonymous;
         action fault : DemandFault;
+        action install {
+            @stage { number = 6; }
+            doc /* Put this space's root in the processor's root register, so
+                 * that the MMU walks in hardware what the mapper has until now
+                 * only walked in software through the direct map. It does not
+                 * change privilege level: a processor translates through a
+                 * user space while still running kernel code, and has to — a
+                 * fault taken in user mode is handled in the space that
+                 * faulted. Something must hold a reference for as long as the
+                 * root is installed, or the tables are freed underneath a
+                 * processor still walking them. */
+        }
         action unmap {
             doc /* Reshape the map, change the tables to match, and decommit
                  * the object's pages only if this space is its sole holder. */
@@ -388,11 +400,12 @@ package FerrixMemory {
     #inProgress part def VirtualMemory {
         @stage { number = 6; }
         doc /* kernel/src/user: the VM subsystem above stage 2's allocators.
-             * VMOs and address spaces exist and are self-checked at boot;
+             * VMOs and address spaces exist and are self-checked at boot,
+             * and a space installed on a processor is walked by its MMU;
              * still owed by stage 6 are fork and copy-on-write, the ELF
-             * loader, installing a user root on a processor, the
-             * ring-3/EL0/USR transition and the syscall vectors. Reclaim
-             * scoped by cgroup is stage 13's. */
+             * loader, a Task carrying an address space with the root swap in
+             * choose_next, set_kernel_stack, the ring-3/EL0/USR transition and
+             * the syscall vectors. Reclaim scoped by cgroup is stage 13's. */
         part vmos : Vmo[0..*];
         part spaces : ProcessAddressSpace[0..*];
         #planned part reclaim : Reclaim;

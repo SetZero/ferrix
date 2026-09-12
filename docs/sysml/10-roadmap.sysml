@@ -161,10 +161,12 @@ package FerrixRoadmap {
              * the ring-3/EL0/USR transition. Exit: a user binary writes to
              * fd 1 and exits, with a page fault serviced along the way.
              * Landed: the frame refcount, the sparse VMO, anonymous memory
-             * with an identity, the address space with its own lock, and the
-             * zero-fill fault path, self-checked at boot on all three. Owed:
-             * fork and copy-on-write, the ELF loader, a user root on a
-             * processor, the privilege transition, the syscall vectors. */
+             * with an identity, the address space with its own lock, the
+             * zero-fill fault path, and a space installed on a processor and
+             * walked by its MMU — self-checked at boot on all three. Owed:
+             * a Task carrying an address space with the root swap in
+             * choose_next, set_kernel_stack, fork and copy-on-write, the ELF
+             * loader, the privilege transition, the syscall vectors. */
     }
 
     #planned requirement <'S7'> stage7LinuxAbi : Stage {

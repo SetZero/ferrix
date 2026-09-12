@@ -397,6 +397,27 @@ package FerrixStructure {
                  * mapping appears in every space without walking any. The
                  * two Arm architectures do nothing: the kernel is in TTBR1. */
         }
+        action installUserRoot {
+            @stage { number = 6; }
+            doc /* Translate this processor's user half through a given root.
+                 * x86-64 is one CR3 write, whose own side effect is to drop
+                 * every non-global entry while the kernel's global ones — set
+                 * because the loader enables CR4.PGE — survive. The two Arm
+                 * architectures write TTBR0, clear EPD0 (the lower half is
+                 * disabled rather than dismantled, so an install re-enables a
+                 * regime), and then invalidate by ASID, in that order: the
+                 * other order leaves the regime live with the register still
+                 * naming the previous space's tables. */
+        }
+        action uninstallUserRoot {
+            @stage { number = 6; }
+            doc /* Stop translating user addresses, which is the state a kernel
+                 * thread runs in. x86-64 goes back to the kernel's own root;
+                 * the Arm pair set EPD0 and invalidate, because EPD0 governs
+                 * walks and not the TLB. Not lazy TLB: keeping the outgoing
+                 * root installed is faster and has to keep an address space
+                 * alive under a thread that holds no reference to it. */
+        }
 
         // Processors
         action describeCpus;
