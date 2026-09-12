@@ -1,0 +1,193 @@
+//! What the ABI promises, held against itself and against `libs/linux-abi`.
+
+use core::mem::{offset_of, size_of};
+
+use ferrix_linux_abi::nr::{from_aarch64, from_arm, from_x86_64};
+
+use crate::handle::Handle;
+use crate::nr::{self, ALL, FIRST, LAST, NativeCall};
+use crate::rights::{Requested, Rights, SAME_RIGHTS};
+use crate::signals::Signals;
+use crate::status;
+use crate::types::{IoMappingSpec, PortPacket, ReadActual};
+
+#[test]
+fn no_native_number_is_a_linux_number_on_any_architecture() {
+    for number in FIRST..=LAST {
+        assert_eq!(from_x86_64(number), None, "{number:#x} is an x86-64 call");
+        assert_eq!(from_aarch64(number), None, "{number:#x} is an AArch64 call");
+        assert_eq!(from_arm(number), None, "{number:#x} is an ARMv7-A call");
+    }
+}
+
+#[test]
+fn every_call_round_trips_through_its_number() {
+    for call in ALL {
+        let number = nr::number(call);
+        assert!(nr::is_native(number), "{call:?} is outside the range");
+        assert_eq!(nr::decode(number), Some(call), "{call:?} does not decode");
+    }
+}
+
+#[test]
+fn every_number_in_the_range_is_a_call_or_a_gap_and_no_call_is_listed_twice() {
+    let decoded = (FIRST..=LAST).filter_map(nr::decode).count();
+    assert_eq!(decoded, ALL.len(), "a number decodes to a call ALL omits");
+    for (i, a) in ALL.iter().enumerate() {
+        for b in ALL.iter().skip(i + 1) {
+            assert_ne!(a, b, "{a:?} is listed twice");
+        }
+    }
+}
+
+#[test]
+fn all_is_in_number_order() {
+    let numbers = ALL.map(nr::number);
+    assert!(numbers.is_sorted(), "ALL is out of order: {numbers:x?}");
+}
+
+#[test]
+fn nothing_outside_the_range_decodes() {
+    for number in [0, 1, FIRST - 1, LAST + 1, 0x0F_0000, usize::MAX] {
+        assert!(!nr::is_native(number), "{number:#x} claimed as native");
+        assert_eq!(nr::decode(number), None, "{number:#x} decoded");
+    }
+}
+
+#[test]
+fn process_creation_block_is_left_free() {
+    for number in 0x1030..=0x1037 {
+        assert_eq!(nr::decode(number), None, "{number:#x} was assigned");
+    }
+    assert_eq!(
+        nr::decode(0x1029),
+        Some(NativeCall::JobKill),
+        "JobKill moved"
+    );
+}
+
+#[test]
+fn status_names_are_pairwise_distinct() {
+    for (i, a) in status::ALL.iter().enumerate() {
+        for b in status::ALL.iter().skip(i + 1) {
+            assert_ne!(a, b, "two native failures share errno {}", a.0);
+        }
+    }
+}
+
+#[test]
+fn a_handle_that_does_not_fit_is_refused_rather_than_truncated() {
+    assert_eq!(
+        Handle::from_register(0x1001),
+        Handle(0x1001),
+        "a real value"
+    );
+    assert_eq!(
+        Handle::from_register(0x1_0000_1001),
+        Handle::INVALID,
+        "upper bits must not be dropped"
+    );
+    assert_eq!(Handle::from_register(u64::MAX), Handle::INVALID, "all ones");
+    assert!(!Handle::INVALID.is_valid(), "zero names nothing");
+}
+
+#[test]
+fn rights_only_shrink() {
+    let held = Rights::CHANNEL;
+    assert_eq!(Requested::Same.resolve(held), Some(held), "same");
+    assert_eq!(
+        Requested::Exactly(Rights::READ).resolve(held),
+        Some(Rights::READ),
+        "a subset"
+    );
+    assert_eq!(
+        Requested::Exactly(Rights::READ | Rights::MAP).resolve(held),
+        None,
+        "MAP is not held"
+    );
+    assert_eq!(
+        Requested::Exactly(Rights::NONE).resolve(Rights::NONE),
+        Some(Rights::NONE),
+        "nothing from nothing"
+    );
+}
+
+#[test]
+fn a_rights_request_with_an_unknown_bit_is_refused() {
+    assert_eq!(
+        Requested::from_register(u64::from(SAME_RIGHTS)),
+        Some(Requested::Same),
+        "the sentinel"
+    );
+    assert_eq!(
+        Requested::from_register(u64::from(Rights::ALL.0)),
+        Some(Requested::Exactly(Rights::ALL)),
+        "every defined right"
+    );
+    assert_eq!(Requested::from_register(0x80), None, "bit 7 is not a right");
+    assert_eq!(
+        Requested::from_register(u64::from(SAME_RIGHTS | 1)),
+        None,
+        "the sentinel is exact"
+    );
+    assert_eq!(
+        Requested::from_register(1 << 32),
+        None,
+        "wider than 32 bits"
+    );
+}
+
+#[test]
+fn default_rights_are_defined_rights() {
+    for rights in [
+        Rights::CHANNEL,
+        Rights::PORT,
+        Rights::VMO,
+        Rights::JOB,
+        Rights::INTERRUPT,
+        Rights::IO_MAPPING,
+    ] {
+        assert!(rights.is_known(), "{rights:?} has an undefined bit");
+    }
+    assert!(!Rights::INTERRUPT.contains(Rights::DUPLICATE), "one owner");
+    assert!(
+        !Rights::IO_MAPPING.contains(Rights::DUPLICATE),
+        "one driver"
+    );
+    assert!(
+        Rights::INTERRUPT.contains(Rights::TRANSFER),
+        "devmgr hands it on"
+    );
+}
+
+#[test]
+fn a_wait_for_an_undefined_signal_is_refused() {
+    assert_eq!(
+        Signals::from_register(u64::from(Signals::ALL.0)),
+        Some(Signals::ALL),
+        "every defined signal"
+    );
+    assert_eq!(Signals::from_register(1 << 4), None, "bit 4");
+    assert_eq!(Signals::from_register(1 << 40), None, "a high bit");
+    assert!(
+        (Signals::READABLE | Signals::PEER_CLOSED).intersects(Signals::PEER_CLOSED),
+        "any, not all"
+    );
+}
+
+#[test]
+fn layouts_have_no_padding_and_match_on_every_target() {
+    assert_eq!(size_of::<PortPacket>(), 32, "PortPacket");
+    assert_eq!(offset_of!(PortPacket, key), 0, "key");
+    assert_eq!(offset_of!(PortPacket, kind), 8, "kind");
+    assert_eq!(offset_of!(PortPacket, signals), 12, "signals");
+    assert_eq!(offset_of!(PortPacket, data), 16, "data");
+
+    assert_eq!(size_of::<ReadActual>(), 8, "ReadActual");
+    assert_eq!(offset_of!(ReadActual, handles), 4, "handles");
+
+    assert_eq!(size_of::<IoMappingSpec>(), 16, "IoMappingSpec");
+    assert_eq!(offset_of!(IoMappingSpec, len), 8, "len");
+
+    assert_eq!(size_of::<Handle>(), 4, "Handle");
+}

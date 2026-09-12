@@ -838,6 +838,27 @@ package FerrixStructure {
             attribute :>> hostTests = 50;
             @stage { number = 10; }
         }
+        #writtenAhead part nativeAbi : LibraryCrate {
+            attribute :>> path = "libs/native-abi";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 13;
+            @stage { number = 9; }
+            doc /* The native ABI's numbers, handle values, rights, signals,
+                 * errno names and repr(C) layouts. One table on every
+                 * architecture, in 0x1000..=0x1FFF, tested clear of all three
+                 * Linux tables. No argument wider than a register. */
+        }
+        #writtenAhead part objects : LibraryCrate {
+            attribute :>> path = "libs/objects";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 15;
+            @stage { number = 9; }
+            doc /* The handle table and the channel message queue, generic
+                 * over what a handle names. A handle is a slot and a
+                 * generation, and a slot retires rather than wrap, so a closed
+                 * handle never resolves again -- which the handle_table fuzz
+                 * target checks against a model. */
+        }
         #writtenAhead part btrfs : LibraryCrate {
             attribute :>> path = "libs/btrfs";
             attribute :>> forbidsUnsafe = true;

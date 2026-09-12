@@ -387,6 +387,12 @@ jobs:
       - name: Miri (process stack image)
         run: cargo +nightly miri test -p ferrix-ustack --lib
 
+      # The handle table. Every native system call starts by turning a number
+      # a program chose into a slot index, and the table hands objects out by
+      # value across `mem::replace`; Miri checks both against real provenance.
+      - name: Miri (handle table and message queue)
+        run: cargo +nightly miri test -p ferrix-objects --lib
+
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.
   #

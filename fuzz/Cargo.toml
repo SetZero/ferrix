@@ -18,6 +18,8 @@ ferrix-elf = { path = "../libs/elf" }
 ferrix-frame = { path = "../libs/frame" }
 ferrix-ustack = { path = "../libs/ustack" }
 ferrix-linux-abi = { path = "../libs/linux-abi" }
+ferrix-native-abi = { path = "../libs/native-abi" }
+ferrix-objects = { path = "../libs/objects" }
 
 [[bin]]
 name = "elf_parse"
@@ -36,6 +38,13 @@ bench = false
 [[bin]]
 name = "ustack_build"
 path = "fuzz_targets/ustack_build.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "handle_table"
+path = "fuzz_targets/handle_table.rs"
 test = false
 doc = false
 bench = false

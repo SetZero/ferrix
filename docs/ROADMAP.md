@@ -24,7 +24,9 @@ architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-6`.
 ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 7 is under
 way: a program now runs at user privilege on every architecture and reaches the
 system call dispatch path, and stage 7's section says how much of the Linux
-surface a real shell needs and how much of it exists.
+surface a real shell needs and how much of it exists. Stage 9 has begun where
+the continuous rule says a stage should: its byte-level half is in `libs/`,
+and none of its kernel code exists yet.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -762,6 +764,39 @@ Handle tables, `Channel` with handle passing, `Port` event queues, `Interrupt`
 objects, `IoMapping`, and `Job`. The syscalls in the `0x1000` range. This is
 what stage 10 is written against.
 
+**Done — the ABI written down, and the table under it.** Host-tested, fuzzed
+and under Miri; not yet reached from the kernel.
+
+* `libs/native-abi` — the numbers, handle values, rights, signals, error names
+  and `repr(C)` layouts. One number table on every architecture, in
+  `0x1000..=0x1FFF`, held clear of all three Linux tables by a test rather than
+  by a comment. No argument is wider than a register — anything that must be
+  64 bits on ARMv7-A goes through a pointer — so no native call exists twice
+  the way sixteen Linux calls do there. Failures are `errno`, each native
+  failure a distinct one, because `devmgr` is a musl program. Rights live on
+  handles and only shrink, decided in one function.
+* `libs/objects` — the handle table and a channel's message queue. A handle is
+  a slot and a generation, and a slot is retired rather than let its
+  generation wrap, so a closed handle *never* names anything again: the
+  `handle_table` fuzz target checks that after every operation, against a
+  model. Batch take and insert are all-or-nothing, and a read that does not
+  fit takes nothing, because either failure half-done loses handles.
+
+**Still to do — everything that runs, and one thing that is not this stage's.**
+
+* The kernel objects over those structures: `Channel`, `Port` and signal
+  waiting, VMO handles, `Job`, `Interrupt`, `IoMapping`; a handle table on
+  `Process`; the native dispatch, branched off before the Linux decode.
+* **Processes that are tasks.** The exit criterion needs two user programs
+  running at once, and today a program is a guest of the boot task: run
+  synchronously, interrupts masked, one global current-process slot, one
+  parked return point per processor. Making a program a scheduled task —
+  per-task entry stacks (`arch::set_kernel_stack`), exit as teardown, and
+  `process::current()` read from the running task — is left for later by
+  stage 6 and not on stage 7's list, and stage 9 cannot finish without it.
+* Process creation in the native ABI. `0x1030..=0x1037` is held for it and
+  decided together with the item above.
+
 **Exit:** two user processes exchange messages and a handle over a channel, and
 a `Job` kill takes down a process tree.
 
@@ -889,15 +924,17 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory. | 50 |
+| `libs/native-abi` | 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
+| `libs/objects` | 9 — the handle table and the channel message queue, generic over what a handle names. Has its fuzz target and its Miri step already. | 15 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **490 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **518 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has three:
-`elf_parse`, `frame_alloc` and `ustack_build`. Every crate in the table above
+asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has four:
+`elf_parse`, `frame_alloc`, `ustack_build` and `handle_table`. Every crate in the table above
 parses bytes that came from outside the system — a disk, a firmware table, an
 archive a stranger built — which is precisely the population the rule was
 written for. The fuzz targets are owed, and are owed *before* the consuming
@@ -914,7 +951,7 @@ been found, if at all, by whoever was debugging a shell that mangled its own
 arguments.
 
 Miri is further behind than fuzzing. CI runs it over `libs/elf`,
-`libs/bootinfo` and `libs/ustack`, although the CI file's own comment names the
+`libs/bootinfo`, `libs/ustack` and `libs/objects`, although the CI file's own comment names the
 page-table arithmetic and the allocators as the reason the job exists — so
 `frame`, `heap` and `paging`, all running in the kernel today, are owed a Miri
 step too, and ahead of every crate in the table.

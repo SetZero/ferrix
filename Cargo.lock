@@ -84,6 +84,20 @@ name = "ferrix-linux-abi"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-native-abi"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+]
+
+[[package]]
+name = "ferrix-objects"
+version = "0.1.0"
+dependencies = [
+ "ferrix-native-abi",
+]
+
+[[package]]
 name = "ferrix-paging"
 version = "0.1.0"
 

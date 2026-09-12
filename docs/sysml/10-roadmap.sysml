@@ -205,14 +205,20 @@ package FerrixRoadmap {
              * cat /proc/self/maps, a script manipulating files under tmpfs. */
     }
 
-    #planned requirement <'S9'> stage9NativeAbi : Stage {
+    #inProgress requirement <'S9'> stage9NativeAbi : Stage {
         attribute :>> number = 9;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::InProgress;
         attribute :>> size = "week";
         doc /* Handle tables, Channel with handle passing, Port, Interrupt,
              * IoMapping, Job; the 0x1000 syscalls. Exit: two processes
              * exchange messages and a handle over a channel, and a Job kill
-             * takes down a process tree. */
+             * takes down a process tree.
+             *
+             * Built: the byte-level half, in libs/native-abi and libs/objects,
+             * host-tested, fuzzed and under Miri. Missing: every kernel object,
+             * the native dispatch, and processes that are scheduled tasks --
+             * left for later by stage 6, not on stage 7's list, and required
+             * by the exit criterion. */
     }
 
     #planned requirement <'S10'> stage10UserspaceDrivers : Stage {

@@ -1,0 +1,68 @@
+//! The native failures, and the `errno` each one travels as.
+//!
+//! Each name is what the failure *means* to a native caller; the value is
+//! whichever Linux error number reads closest, so that musl's `strerror`
+//! prints something a person can act on. The one requirement beyond that is
+//! that no two share a number — a caller that cannot tell "the peer has gone"
+//! from "try again" cannot write a correct loop — and the tests hold it.
+
+use ferrix_linux_abi::errno::Errno;
+
+/// The handle names nothing in this process: never issued, or closed.
+pub const BAD_HANDLE: Errno = Errno::EBADF;
+
+/// The handle is real but names the wrong kind of object for this call.
+pub const WRONG_TYPE: Errno = Errno::EOPNOTSUPP;
+
+/// The handle does not carry a right this call needs.
+pub const ACCESS_DENIED: Errno = Errno::EACCES;
+
+/// The other end of a channel is closed: nothing written will be read.
+pub const PEER_CLOSED: Errno = Errno::EPIPE;
+
+/// Nothing to read, or no room to write, right now. Wait for the matching
+/// signal and try again.
+pub const SHOULD_WAIT: Errno = Errno::EAGAIN;
+
+/// The next message is larger than the buffers offered for it. It is left
+/// queued, and the sizes it needs are reported.
+pub const BUFFER_TOO_SMALL: Errno = Errno::ENOBUFS;
+
+/// A message is larger than any channel will carry, in bytes or in handles.
+pub const TOO_BIG: Errno = Errno::EMSGSIZE;
+
+/// A deadline passed before the thing waited for happened.
+pub const TIMED_OUT: Errno = Errno::ETIMEDOUT;
+
+/// The kernel could not allocate what the call needed.
+pub const NO_MEMORY: Errno = Errno::ENOMEM;
+
+/// The process's handle table is full.
+pub const NO_HANDLES: Errno = Errno::EMFILE;
+
+/// An argument is outside what the call accepts.
+pub const INVALID_ARGS: Errno = Errno::EINVAL;
+
+/// A pointer argument did not name memory the caller may use.
+pub const FAULT: Errno = Errno::EFAULT;
+
+/// The object is already in the state this call would put it in: an
+/// interrupt already bound to a port.
+pub const ALREADY_BOUND: Errno = Errno::EBUSY;
+
+/// Every name above, for the tests that hold them distinct.
+pub const ALL: [Errno; 13] = [
+    BAD_HANDLE,
+    WRONG_TYPE,
+    ACCESS_DENIED,
+    PEER_CLOSED,
+    SHOULD_WAIT,
+    BUFFER_TOO_SMALL,
+    TOO_BIG,
+    TIMED_OUT,
+    NO_MEMORY,
+    NO_HANDLES,
+    INVALID_ARGS,
+    FAULT,
+    ALREADY_BOUND,
+];
