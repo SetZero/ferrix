@@ -1,0 +1,16 @@
+[package]
+name = "ferrix-vfs"
+description = "The virtual filesystem: dentries, mounts, path walking, open files, descriptor tables and tmpfs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrix-cpio.workspace = true
+ferrix-linux-abi.workspace = true
+ferrix-sync.workspace = true
+
+[lints]
+workspace = true

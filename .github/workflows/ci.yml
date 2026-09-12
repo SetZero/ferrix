@@ -393,6 +393,12 @@ jobs:
       - name: Miri (handle table and message queue)
         run: cargo +nightly miri test -p ferrix-objects --lib
 
+      # The VFS takes up to four inode locks for one rename and hands out
+      # dentries through weak references, which is aliasing Miri can see and
+      # a test that merely passes cannot.
+      - name: Miri (VFS)
+        run: cargo +nightly miri test -p ferrix-vfs --lib
+
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.
   #

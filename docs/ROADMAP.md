@@ -25,9 +25,10 @@ ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 7's exit is
 somebody else's static musl busybox running a script on every architecture,
 checked by `cargo xtask test-shell` rather than the boot test because it needs
 a binary the repository does not carry; its section lists what the Linux
-surface still owes. Stage 9 has begun where the continuous rule says a stage
-should: its byte-level half is in `libs/`, and none of its kernel code exists
-yet.
+surface still owes. Stages 8 and 9 have both begun where the continuous rule
+says a stage should: their byte-level halves are in `libs/` — the VFS in
+`libs/vfs`, the handle table in `libs/objects` — and none of their kernel code
+exists yet.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -819,6 +820,50 @@ Inode and dentry caches, the mount table, file descriptors and their sharing
 rules, tmpfs, devfs, procfs (`self/maps`, `self/exe`, `self/fd`, `cpuinfo`,
 `meminfo`), and cpio initramfs unpacking.
 
+**Started — the VFS, host-tested before the kernel calls it.** `libs/vfs` is
+the half of the stage that needs no machine, written first for the reason the
+continuous rule gives: path resolution over names a program chose is exactly
+the code that should meet a fuzzer before it meets ring 0.
+
+* **Dentries, with negative entries.** A name and the thing it names are
+  separate objects, which is what `..`, `getcwd`, mount points and
+  `/proc/self/fd` are answered from. A miss is cached like a hit. A child
+  holds its parent and a parent holds its children weakly, so what keeps a
+  dentry alive is a bounded queue of recent ones — the whole eviction policy,
+  replaceable without touching the tree. A lookup racing a create cannot cache
+  a stale miss: each directory carries a generation that every change bumps,
+  and a lookup inserts only if it is unchanged.
+* **Mounts and the walk.** One path walk for every call that takes a path,
+  following links from a heap stack rather than by recursion, crossing mounts
+  in both directions, and never climbing above a context's root. The
+  namespace takes the root and working directory as an argument rather than
+  knowing about processes, which is what lets stage 13's mount namespaces be
+  more of the same type.
+* **Open file descriptions and descriptor tables**, kept apart the way Linux
+  keeps them: `dup` and `fork` share an offset, separate `open`s do not, and
+  close-on-exec belongs to the number.
+* **tmpfs**, whose file contents are not a byte vector but a page store the
+  kernel supplies — a VMO there — so that `mmap` of a tmpfs file can later map
+  the file's own pages. Directory cursors are never reused, so `rm -rf`
+  reading a directory it is emptying sees every entry exactly once.
+* **initramfs unpacking** through the same calls a program makes, hard links
+  and device nodes included, and **the `getdents64` packer**, whose names start
+  at byte 19 rather than at the structure's size of 24.
+
+36 host tests, the `vfs_ops` fuzz target — which asserts that every name a
+listing reports resolves to the inode the listing gave, the property a stale
+cache entry breaks — and a Miri step.
+
+**Still to do — everything that needs the machine.** The loader handing the
+kernel an initramfs (`BootInfo.initrd_*` is written as zero today); the VMO
+page store; the kernel's namespace, and a descriptor table on `Process` in
+place of the three hardcoded console descriptors; the file system calls —
+`openat`, `getdents64`, `newfstatat`, `lseek`, `dup3`, `chdir` and `getcwd`,
+`mkdirat`, `unlinkat`, `renameat2`, `readlinkat`, and `fcntl`, whose
+`F_GETFL` on the console busybox's `printf` needs before it will print; devfs
+with the console in it; procfs; and the exit criterion's three commands under
+the boot test.
+
 **Exit:** `busybox ls -R /proc`, `cat /proc/self/maps` and a shell script that
 manipulates files under tmpfs, all under the boot test.
 
@@ -989,18 +1034,19 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 52 |
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
+| `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 36 |
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory. | 50 |
 | `libs/native-abi` | 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
 | `libs/objects` | 9 — the handle table and the channel message queue, generic over what a handle names. Has its fuzz target and its Miri step already. | 15 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **518 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **554 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has four:
-`elf_parse`, `frame_alloc`, `ustack_build` and `handle_table`. Every crate in the table above
+asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has five:
+`elf_parse`, `frame_alloc`, `ustack_build`, `handle_table` and `vfs_ops`. Every crate in the table above
 parses bytes that came from outside the system — a disk, a firmware table, an
 archive a stranger built — which is precisely the population the rule was
 written for. The fuzz targets are owed, and are owed *before* the consuming
@@ -1017,7 +1063,7 @@ been found, if at all, by whoever was debugging a shell that mangled its own
 arguments.
 
 Miri is further behind than fuzzing. CI runs it over `libs/elf`,
-`libs/bootinfo`, `libs/ustack` and `libs/objects`, although the CI file's own comment names the
+`libs/bootinfo`, `libs/ustack`, `libs/objects` and `libs/vfs`, although the CI file's own comment names the
 page-table arithmetic and the allocators as the reason the job exists — so
 `frame`, `heap` and `paging`, all running in the kernel today, are owed a Miri
 step too, and ahead of every crate in the table.

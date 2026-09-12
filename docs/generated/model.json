@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "518e122e6b4ddfc933949ac49fd964f6b399bd643bbd78bc82de1b5236e3f777",
+  "digest": "1163a96995f71610373684cac77355db89374956aa655cb4568806f7cbfc024a",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -57,12 +57,12 @@
   ],
   "summary": {
     "packages": 16,
-    "elements": 1402,
+    "elements": 1406,
     "maturity": {
       "implemented": 111,
-      "inProgress": 7,
-      "writtenAhead": 9,
-      "planned": 111
+      "inProgress": 8,
+      "writtenAhead": 10,
+      "planned": 110
     },
     "deferred": 22,
     "relations": 155,
@@ -4149,6 +4149,54 @@
               ]
             },
             {
+              "name": "vfs",
+              "qualifiedName": "FerrixStructure::Workspace::vfs",
+              "kind": "part",
+              "type": "LibraryCrate",
+              "maturity": "writtenAhead",
+              "stage": 8,
+              "doc": "Dentries with negative entries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store the kernel supplies, initramfs unpacking and the getdents64 packer. Not yet reached from the kernel.",
+              "source": {
+                "file": "docs/sysml/02-structure.sysml",
+                "line": 836
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixStructure::Workspace::vfs",
+                  "kind": "attribute",
+                  "redefines": "path",
+                  "value": "\"libs/vfs\"",
+                  "source": {
+                    "file": "docs/sysml/02-structure.sysml",
+                    "line": 837
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixStructure::Workspace::vfs",
+                  "kind": "attribute",
+                  "redefines": "forbidsUnsafe",
+                  "value": "true",
+                  "source": {
+                    "file": "docs/sysml/02-structure.sysml",
+                    "line": 838
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixStructure::Workspace::vfs",
+                  "kind": "attribute",
+                  "redefines": "hostTests",
+                  "value": "36",
+                  "source": {
+                    "file": "docs/sysml/02-structure.sysml",
+                    "line": 839
+                  }
+                }
+              ]
+            },
+            {
               "name": "virtio",
               "qualifiedName": "FerrixStructure::Workspace::virtio",
               "kind": "part",
@@ -4157,7 +4205,7 @@
               "stage": 10,
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 836
+                "line": 846
               },
               "children": [
                 {
@@ -4168,7 +4216,7 @@
                   "value": "\"libs/virtio\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 837
+                    "line": 847
                   }
                 },
                 {
@@ -4179,7 +4227,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 838
+                    "line": 848
                   }
                 },
                 {
@@ -4190,7 +4238,7 @@
                   "value": "50",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 839
+                    "line": 849
                   }
                 }
               ]
@@ -4205,7 +4253,7 @@
               "doc": "The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. One table on every architecture, in 0x1000..=0x1FFF, tested clear of all three Linux tables. No argument wider than a register.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 842
+                "line": 852
               },
               "children": [
                 {
@@ -4216,7 +4264,7 @@
                   "value": "\"libs/native-abi\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 843
+                    "line": 853
                   }
                 },
                 {
@@ -4227,7 +4275,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 844
+                    "line": 854
                   }
                 },
                 {
@@ -4238,7 +4286,7 @@
                   "value": "13",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 845
+                    "line": 855
                   }
                 }
               ]
@@ -4253,7 +4301,7 @@
               "doc": "The handle table and the channel message queue, generic over what a handle names. A handle is a slot and a generation, and a slot retires rather than wrap, so a closed handle never resolves again -- which the handle_table fuzz target checks against a model.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 852
+                "line": 862
               },
               "children": [
                 {
@@ -4264,7 +4312,7 @@
                   "value": "\"libs/objects\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 853
+                    "line": 863
                   }
                 },
                 {
@@ -4275,7 +4323,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 854
+                    "line": 864
                   }
                 },
                 {
@@ -4286,7 +4334,7 @@
                   "value": "15",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 855
+                    "line": 865
                   }
                 }
               ]
@@ -4300,7 +4348,7 @@
               "stage": 11,
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 863
+                "line": 873
               },
               "children": [
                 {
@@ -4311,7 +4359,7 @@
                   "value": "\"libs/btrfs\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 864
+                    "line": 874
                   }
                 },
                 {
@@ -4322,7 +4370,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 865
+                    "line": 875
                   }
                 },
                 {
@@ -4333,7 +4381,7 @@
                   "value": "38",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 866
+                    "line": 876
                   }
                 }
               ]
@@ -4348,7 +4396,7 @@
               "doc": "The classic-BPF interpreter as a pure function over bytes.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 871
+                "line": 881
               },
               "children": [
                 {
@@ -4359,7 +4407,7 @@
                   "value": "\"libs/seccomp\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 872
+                    "line": 882
                   }
                 },
                 {
@@ -4370,7 +4418,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 873
+                    "line": 883
                   }
                 }
               ]
@@ -4383,7 +4431,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 878
+                "line": 888
               },
               "children": [
                 {
@@ -4394,7 +4442,7 @@
                   "value": "\"boot\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 879
+                    "line": 889
                   }
                 },
                 {
@@ -4405,7 +4453,7 @@
                   "value": "CrateKind::Loader",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 880
+                    "line": 890
                   }
                 },
                 {
@@ -4416,7 +4464,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 881
+                    "line": 891
                   }
                 },
                 {
@@ -4427,7 +4475,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 882
+                    "line": 892
                   }
                 }
               ]
@@ -4440,7 +4488,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 884
+                "line": 894
               },
               "children": [
                 {
@@ -4451,7 +4499,7 @@
                   "value": "\"kernel\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 885
+                    "line": 895
                   }
                 },
                 {
@@ -4462,7 +4510,7 @@
                   "value": "CrateKind::Kernel",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 886
+                    "line": 896
                   }
                 },
                 {
@@ -4473,7 +4521,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 887
+                    "line": 897
                   }
                 },
                 {
@@ -4484,7 +4532,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 888
+                    "line": 898
                   }
                 }
               ]
@@ -4498,7 +4546,7 @@
               "doc": "Cross-compiles both halves, writes the FAT32 image with its own writer, converts the ARMv7-A loader ELF to PE32, drives QEMU. Nothing from crates.io.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 890
+                "line": 900
               },
               "children": [
                 {
@@ -4509,7 +4557,7 @@
                   "value": "\"xtask\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 891
+                    "line": 901
                   }
                 },
                 {
@@ -4520,7 +4568,7 @@
                   "value": "CrateKind::HostTool",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 892
+                    "line": 902
                   }
                 },
                 {
@@ -4531,7 +4579,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 893
+                    "line": 903
                   }
                 },
                 {
@@ -4542,7 +4590,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 894
+                    "line": 904
                   }
                 },
                 {
@@ -4553,7 +4601,7 @@
                   "value": "41",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 895
+                    "line": 905
                   }
                 },
                 {
@@ -4565,7 +4613,7 @@
                   "value": "(\"build\", \"run\", \"test-boot\", \"check\", \"flash\", \"watch-serial\", \"deploy\")",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 899
+                    "line": 909
                   }
                 }
               ]
@@ -4578,7 +4626,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 901
+                "line": 911
               },
               "children": [
                 {
@@ -4589,7 +4637,7 @@
                   "value": "\"fuzz\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 902
+                    "line": 912
                   }
                 },
                 {
@@ -4600,7 +4648,7 @@
                   "value": "CrateKind::FuzzTargets",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 903
+                    "line": 913
                   }
                 },
                 {
@@ -4611,7 +4659,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 904
+                    "line": 914
                   }
                 },
                 {
@@ -4622,7 +4670,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 905
+                    "line": 915
                   }
                 }
               ]
@@ -4636,7 +4684,7 @@
               "value": "(\"x86_64-unknown-none\", \"aarch64-unknown-none-softfloat\", \"armv7a-none-eabi\")",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 915
+                "line": 925
               }
             },
             {
@@ -4648,7 +4696,7 @@
               "value": "(\"x86_64-unknown-uefi\", \"aarch64-unknown-uefi\", \"armv7-unknown-linux-musleabi\")",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 916
+                "line": 926
               }
             },
             {
@@ -4659,7 +4707,7 @@
               "value": "\"1.97.1\"",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 917
+                "line": 927
               }
             }
           ]
@@ -14538,7 +14586,7 @@
           "kind": "requirement",
           "shortName": "S8",
           "type": "Stage",
-          "maturity": "planned",
+          "maturity": "inProgress",
           "doc": "Inode and dentry caches, the mount table, fd sharing rules, tmpfs, devfs, procfs, cpio initramfs. Exit: busybox ls -R /proc, cat /proc/self/maps, a script manipulating files under tmpfs.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
@@ -14561,7 +14609,7 @@
               "qualifiedName": "FerrixRoadmap::stage8Vfs",
               "kind": "attribute",
               "redefines": "status",
-              "value": "StageStatus::Planned",
+              "value": "StageStatus::InProgress",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
                 "line": 208
@@ -16430,7 +16478,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 909
+      "line": 919
     },
     {
       "kind": "dependency",
@@ -16442,7 +16490,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 910
+      "line": 920
     },
     {
       "kind": "dependency",
@@ -16452,7 +16500,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 911
+      "line": 921
     },
     {
       "kind": "dependency",
@@ -16463,7 +16511,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 912
+      "line": 922
     },
     {
       "kind": "import",
@@ -17878,8 +17926,8 @@
           "id": "FerrixRoadmap::stage8Vfs",
           "label": "S8  Stage 8 VFS",
           "kind": "requirement",
-          "sublabel": "Planned",
-          "maturity": "planned"
+          "sublabel": "InProgress",
+          "maturity": "inProgress"
         },
         {
           "id": "FerrixRoadmap::stage12BtrfsWrite",
@@ -19685,6 +19733,14 @@
           "stage": 8
         },
         {
+          "id": "FerrixStructure::Workspace::vfs",
+          "label": "vfs",
+          "kind": "box",
+          "sublabel": "libs/vfs",
+          "maturity": "writtenAhead",
+          "stage": 8
+        },
+        {
           "id": "FerrixStructure::Workspace::virtio",
           "label": "virtio",
           "kind": "box",
@@ -19920,8 +19976,8 @@
           "id": "FerrixRoadmap::stage8Vfs",
           "label": "S8  Stage 8 VFS",
           "kind": "requirement",
-          "sublabel": "Planned · month",
-          "maturity": "planned"
+          "sublabel": "InProgress · month",
+          "maturity": "inProgress"
         },
         {
           "id": "FerrixRoadmap::stage9NativeAbi",
@@ -20416,7 +20472,7 @@
           "id": "FerrixRoadmap::stage8Vfs",
           "label": "S8  Stage 8 VFS",
           "kind": "requirement",
-          "maturity": "planned"
+          "maturity": "inProgress"
         },
         {
           "id": "FerrixStructure::Kernel::vfs",

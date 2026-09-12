@@ -27,6 +27,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "ferrix-cpio"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-elf"
 version = "0.1.0"
 
@@ -44,6 +48,7 @@ dependencies = [
  "ferrix-native-abi",
  "ferrix-objects",
  "ferrix-ustack",
+ "ferrix-vfs",
  "libfuzzer-sys",
 ]
 
@@ -66,10 +71,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-sync"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-ustack"
 version = "0.1.0"
 dependencies = [
  "ferrix-linux-abi",
+]
+
+[[package]]
+name = "ferrix-vfs"
+version = "0.1.0"
+dependencies = [
+ "ferrix-cpio",
+ "ferrix-linux-abi",
+ "ferrix-sync",
 ]
 
 [[package]]

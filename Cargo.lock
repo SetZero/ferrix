@@ -125,6 +125,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-vfs"
+version = "0.1.0"
+dependencies = [
+ "ferrix-cpio",
+ "ferrix-linux-abi",
+ "ferrix-sync",
+]
+
+[[package]]
 name = "ferrix-virtio"
 version = "0.1.0"
 

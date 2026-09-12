@@ -833,6 +833,16 @@ package FerrixStructure {
             attribute :>> hostTests = 45;
             @stage { number = 8; }
         }
+        #writtenAhead part vfs : LibraryCrate {
+            attribute :>> path = "libs/vfs";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 36;
+            @stage { number = 8; }
+            doc /* Dentries with negative entries, mounts, the path walk, open
+                 * file descriptions, descriptor tables, tmpfs over a page
+                 * store the kernel supplies, initramfs unpacking and the
+                 * getdents64 packer. Not yet reached from the kernel. */
+        }
         #writtenAhead part virtio : LibraryCrate {
             attribute :>> path = "libs/virtio";
             attribute :>> forbidsUnsafe = false;

@@ -203,9 +203,9 @@ package FerrixRoadmap {
              * chip and an entropy source. */
     }
 
-    #planned requirement <'S8'> stage8Vfs : Stage {
+    #inProgress requirement <'S8'> stage8Vfs : Stage {
         attribute :>> number = 8;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::InProgress;
         attribute :>> size = "month";
         doc /* Inode and dentry caches, the mount table, fd sharing rules,
              * tmpfs, devfs, procfs, cpio initramfs. Exit: busybox ls -R /proc,

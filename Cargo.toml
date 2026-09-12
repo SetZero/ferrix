@@ -25,6 +25,7 @@ members = [
     "libs/paging",
     "libs/qr",
     "libs/sched",
+    "libs/vfs",
 
     # The UEFI loader. Firmware calls into it with a stack and the MMU on, so
     # there is no bootstrap assembly on any architecture.
@@ -66,6 +67,7 @@ ferrix-ustack = { path = "libs/ustack" }
 ferrix-virtio = { path = "libs/virtio" }
 ferrix-vma = { path = "libs/vma" }
 ferrix-qr = { path = "libs/qr" }
+ferrix-vfs = { path = "libs/vfs" }
 ferrix-paging = { path = "libs/paging" }
 ferrix-sched = { path = "libs/sched" }
 

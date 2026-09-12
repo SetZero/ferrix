@@ -20,6 +20,7 @@ ferrix-ustack = { path = "../libs/ustack" }
 ferrix-linux-abi = { path = "../libs/linux-abi" }
 ferrix-native-abi = { path = "../libs/native-abi" }
 ferrix-objects = { path = "../libs/objects" }
+ferrix-vfs = { path = "../libs/vfs" }
 
 [[bin]]
 name = "elf_parse"
@@ -45,6 +46,13 @@ bench = false
 [[bin]]
 name = "handle_table"
 path = "fuzz_targets/handle_table.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vfs_ops"
+path = "fuzz_targets/vfs_ops.rs"
 test = false
 doc = false
 bench = false
