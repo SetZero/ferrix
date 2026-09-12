@@ -835,12 +835,23 @@ package FerrixStructure {
         #writtenAhead part vfs : LibraryCrate {
             attribute :>> path = "libs/vfs";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 44;
+            attribute :>> hostTests = 45;
             @stage { number = 8; }
             doc /* Dentries with negative entries, mounts, the path walk, open
                  * file descriptions, descriptor tables, tmpfs over a page
                  * store the kernel supplies, initramfs unpacking and the
                  * getdents64 packer. Not yet reached from the kernel. */
+        }
+        #implemented part procfs : LibraryCrate {
+            attribute :>> path = "libs/procfs";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 14;
+            @stage { number = 8; }
+            doc /* The text of /proc as pure functions: maps lines padded to
+                 * their name column at both pointer widths, meminfo, status,
+                 * stat and mounts, pinned byte for byte against lines a real
+                 * Linux printed, and the maps parser the kernel's boot check
+                 * reads its own output back with. */
         }
         #implemented part virtio : LibraryCrate {
             attribute :>> path = "libs/virtio";
