@@ -330,16 +330,36 @@ under `.claude/worktrees/`. Coordinate before touching:
 **Stage 5 hangs intermittently, and it is not stage 6's.** Worth knowing before
 you spend an afternoon on it. `cargo xtask test-boot` sometimes stops after the
 `stage 4` line with no verdict at all — not a self-check failure, a hard hang in
-stage 5's thousand-thread run. Measured on `c2db560`: armv7a 4 of 6 runs passed,
-and aarch64 has done it too. At `9daec68`, the scheduler merge itself, 6 of 6
-passed, so it appears with later commits — but every one of those adds code that
-runs *after* stage 5, so the mechanism is timing or layout perturbing a latent
-race rather than anything those commits do. The absence of a verdict is the
-informative part: `wait_for` would have reported "not every thread finished", so
-nothing is progressing at all, which says deadlock rather than slowness. The
-stage 7 owner separately saw stage 5 fail the *assertion* "a task's stack was
-never given back" under load, which points at the same area from the other side.
-Report it to whoever owns `sched`; re-running is the workaround.
+stage 5's thousand-thread run. The absence of a verdict is the informative part:
+`wait_for` would have reported "not every thread finished", so nothing is
+progressing at all, which says deadlock rather than slowness. The stage 7 owner
+separately saw stage 5 fail the *assertion* "a task's stack was never given
+back" under load, which is probably the same race seen from the other side.
+It is the `sched` owner's, they have it, and re-running is the workaround.
+
+**It arrived with `9daec68`**, the scheduler merge. The `sched` owner ran the
+control: `c008979`, the commit immediately before their work, passed 8 of 8 on
+armv7a, while current `main` hangs. My own measurement said something weaker and
+I read it wrong, which is worth recording because the mistake is an easy one to
+repeat. I had armv7a pass 6 of 6 at `9daec68` and 4 of 6 at `c2db560`, and
+concluded the rate tracked later commits — so the hang must be a latent race
+those commits perturbed. It is not: 6 of 6 was luck on a one-in-three failure,
+and a rate that appears to follow unrelated commits is exactly what a
+timing-sensitive bug looks like from too few runs. **Six runs cannot tell a
+one-in-three failure from a clean commit.** If you find yourself bisecting an
+intermittent hang, get the control — the commit before the suspect work — and
+run it enough times to matter, before reasoning about mechanism at all.
+
+The `sched` owner has also ruled three mechanisms out, recorded here so nobody
+re-runs them: lock ordering in `balance()` (`steal_from` always locks the
+lower-numbered queue first, and the snapshot loops hold one at a time); a TLB
+shootdown deadlock (`flush_tlb_everywhere` returns immediately on both Arm
+architectures, because `TLB_FLUSH_IS_BROADCAST` is true, so there is no
+cross-processor wait to deadlock on); and the two classic Arm lost-wakeup shapes
+(the idle path is `wfi` then unmask, not the reverse, and `send_ipi_to_others`
+does `dsb ishst` before the distributor write). It is a heisenbug — one print
+per check phase makes it pass 6 of 6, because the console lock serialises the
+processors and closes the window.
 
 * `kernel/src/sched/`, `libs/sched` — **released to stage 6.** The stage 5 owner
   finished and merged as `9daec68`, and said both of §4's sched changes are
