@@ -17,6 +17,14 @@
 //! implies — a process's handle table, then a peer's queue — is never taken
 //! the other way round: a read releases its own queue before it touches the
 //! reader's table.
+//!
+//! # No cycles
+//!
+//! Two endpoints each queued in the other's inbox would keep each other alive
+//! after every handle to both is closed, with everything they hold. So a
+//! send carrying an endpoint is refused if it would close such a loop:
+//! [`check_carry`] walks from what the message carries, through the endpoints
+//! queued in each, looking for the end it is about to land in.
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
@@ -24,9 +32,10 @@ use alloc::vec::Vec;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES};
 use ferrix_objects::message::{Limits, Message, MessageQueue, ReceiveError, SendError};
+use ferrix_objects::reach::{Reach, reaches};
 use ferrix_sync::SpinLock;
 
-use super::{Transfer, dispose};
+use super::{Object, Transfer, dispose};
 
 /// The most messages an endpoint holds unread.
 ///
@@ -41,6 +50,15 @@ const LIMITS: Limits = Limits {
     max_handles: CHANNEL_MAX_HANDLES,
     max_queued: MAX_QUEUED,
 };
+
+/// The most queued endpoints one send's cycle check may walk.
+///
+/// A program can nest endpoints as deep as memory allows, and the walk runs
+/// under a lock every endpoint-carrying send waits on. A thousand and
+/// twenty-four is far past anything a driver's control plane builds, and a
+/// send that reaches it is refused as too big rather than allowed to hold
+/// that lock for as long as the program likes.
+const MAX_WALK: usize = 1024;
 
 /// A message as it sits in a queue.
 pub(crate) type ChannelMessage = Message<Transfer>;
@@ -187,11 +205,6 @@ impl Endpoint {
         self.peer.strong_count() == 0
     }
 
-    /// Whether `other` is this endpoint's peer.
-    pub(crate) fn is_peer(&self, other: &Arc<Endpoint>) -> bool {
-        core::ptr::eq(self.peer.as_ptr(), Arc::as_ptr(other))
-    }
-
     /// What a waiter on this end would see now.
     #[expect(
         dead_code,
@@ -209,6 +222,53 @@ impl Endpoint {
             Some(_) => signals,
         }
     }
+}
+
+/// Whether sending `carried` through `writer` would close a cycle.
+///
+/// The message lands in the writer's peer's inbox, so it closes a cycle
+/// exactly when that peer is reachable from something it carries, following
+/// each endpoint into the endpoints queued in its own inbox. The peer itself
+/// among `carried` is the one-step case.
+///
+/// Call it holding [`super::TOPOLOGY`], and make the send before releasing
+/// it: the answer is only about a graph nothing else is adding edges to.
+pub(crate) fn check_carry(writer: &Endpoint, carried: Vec<Arc<Endpoint>>) -> Reach {
+    // A closed peer is no cycle, and the write itself will say it is closed.
+    let Some(peer) = writer.peer.upgrade() else {
+        return Reach::Clear;
+    };
+    reaches(
+        carried,
+        identity,
+        identity(&peer),
+        queued_endpoints,
+        MAX_WALK,
+    )
+}
+
+/// An endpoint's address, which is how the walk tells endpoints apart. Stable
+/// for as long as the walk holds the `Arc`, which it does until it returns.
+fn identity(endpoint: &Arc<Endpoint>) -> usize {
+    Arc::as_ptr(endpoint) as usize
+}
+
+/// The endpoints queued, unread, in `endpoint`'s inbox: the edges the cycle
+/// walk follows.
+///
+/// The match is exhaustive on purpose. An object kind added later that can
+/// hold other objects has to be followed here, or it is a way round the check,
+/// and the compiler is what asks the question.
+fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Vec<Arc<Endpoint>> {
+    let inbox = endpoint.inbox.lock();
+    inbox
+        .iter()
+        .flat_map(|message| message.handles.iter())
+        .filter_map(|(object, _)| match object {
+            Object::Channel(queued) => Some(Arc::clone(queued)),
+            Object::Vmo(_) => None,
+        })
+        .collect()
 }
 
 impl Drop for Endpoint {

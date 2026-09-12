@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "612bc06e0deab05cc806f827c8c2b85ebbf4d5adb7937d28c2cbd312ec55ff49",
+  "digest": "e7da750fbf6125fec46de2311a3236b40a711435de3593858ccf630d40e76ec4",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -4379,7 +4379,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::objects",
                   "kind": "attribute",
                   "redefines": "hostTests",
-                  "value": "16",
+                  "value": "22",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 877

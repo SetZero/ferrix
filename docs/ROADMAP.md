@@ -930,10 +930,20 @@ architectures.**
   the handle that arrives reads back what the sender wrote; a read that does
   not fit is refused with the sizes and leaves the message queued; rights only
   shrink; a refused send keeps its handles; a full channel says wait; closing
-  a reader frees a VMO still queued in it, and the frame count says so.
+  a reader frees a VMO still queued in it; a send that would leave two
+  channels queued in each other is refused; and the frame count says nothing
+  leaked.
 * `libs/objects` now keeps every handle value below 2^31. A new handle comes
   back in the register an `errno` does, and on a 32-bit machine a larger value
   reads as negative.
+* **A send that would close a cycle of channels is refused.** Endpoints keep
+  each other alive only through their queues, so two endpoints each queued in
+  the other would outlive every handle to both. A send carrying an endpoint
+  walks from what it carries, through the endpoints queued in each, for the
+  end it would land in (`libs/objects`'s `reaches`), and holds a lock only
+  such sends take from the walk to the push, so two sends cannot build the
+  loop between them. A walk past 1024 endpoints is refused as too big rather
+  than allowed to hold that lock.
 
 **Still to do.**
 
@@ -946,11 +956,6 @@ architectures.**
   `process::kill` from outside, and `process::current()` read from the running
   task — and stage 9 builds its exit test on that seam.
 * Process creation in the native ABI. `0x1030..=0x1037` is held for it.
-* **A leak a program can cause, written down.** Two endpoints each queued in
-  the other's inbox keep each other alive after every handle to both is
-  closed. An endpoint cannot be sent through itself or to its own peer, which
-  rules out the one-object cycle, but a longer one needs either a cycle check
-  on send or a collector, and neither exists.
 
 **Exit:** two user processes exchange messages and a handle over a channel, and
 a `Job` kill takes down a process tree.
@@ -1143,11 +1148,11 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory. | 50 |
 | `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport. Has its fuzz target and its Miri step already. | 37 |
 | `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
-| `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one. Has its fuzz target and its Miri step. | 16 |
+| `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one; and the reachability walk a send makes before it queues an endpoint. Has its fuzz target and its Miri step. | 22 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **593 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **599 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

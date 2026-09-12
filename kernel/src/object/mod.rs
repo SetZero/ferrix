@@ -58,6 +58,20 @@ pub(crate) type HandleTable = ferrix_objects::table::HandleTable<Object>;
 /// read-only, which is what lets `devmgr` hand a driver less than it holds.
 pub(crate) type Transfer = (Object, Rights);
 
+/// Held by every send that carries a channel endpoint, from its cycle check
+/// to its push.
+///
+/// Endpoints keep each other alive only through their queues, so only such a
+/// send adds an edge to the graph of who keeps whom alive — and a cycle in
+/// that graph is memory nothing can free. Checking for one is a walk, and a
+/// walk is an answer only about a graph nobody is adding to, so the adders
+/// take turns. Reads remove edges and never take it; sends of bytes and VMOs
+/// add none and never take it.
+///
+/// Taken before a process's handle table or any queue, never while holding
+/// either.
+pub(crate) static TOPOLOGY: SpinLock<()> = SpinLock::new(());
+
 /// Objects waiting to be dropped.
 static ORPHANS: SpinLock<Vec<Object>> = SpinLock::new(Vec::new());
 

@@ -874,7 +874,7 @@ package FerrixStructure {
         #implemented part objects : LibraryCrate {
             attribute :>> path = "libs/objects";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 16;
+            attribute :>> hostTests = 22;
             @stage { number = 9; }
             doc /* The handle table and the channel message queue, generic
                  * over what a handle names. A handle is a slot and a

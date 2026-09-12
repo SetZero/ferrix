@@ -131,6 +131,7 @@ fn check_two_processes() -> Result<Counter, &'static str> {
         check_a_message_carries_a_handle_across(&sender, &receiver, near, far, &mut counter)?;
     check_rights_only_shrink(&receiver, arrived, &mut counter)?;
     check_a_refused_send_keeps_its_handles(&sender, near, &mut counter)?;
+    check_a_cycle_of_channels_is_refused(&sender, &mut counter)?;
     check_a_full_channel_says_wait(&sender, near, &receiver, far, &mut counter)?;
     check_a_closed_peer_frees_what_was_queued(&sender, near, &receiver, far, &mut counter)?;
     if sender.call(0x1030, &[]) != Err(Errno::ENOSYS) {
@@ -214,6 +215,14 @@ impl Side {
     /// Put a VMO offset at [`OFFSET`].
     fn put_offset(&self, offset: u64) -> Result<(), &'static str> {
         self.put(OFFSET, &offset.to_ne_bytes())
+    }
+
+    /// Make a channel inside this process, returning both ends.
+    fn channel(&self) -> Result<(Handle, Handle), &'static str> {
+        let _ = self
+            .call(nr::CHANNEL_CREATE, &[PAIR])
+            .map_err(|_| "channel_create failed")?;
+        Ok((Handle(self.get_u32(PAIR)?), Handle(self.get_u32(PAIR + 4)?)))
     }
 
     /// Close whatever is left, as a process's exit will.
@@ -544,5 +553,64 @@ fn check_a_closed_peer_frees_what_was_queued(
     let _ = sender
         .call(nr::HANDLE_CLOSE, &[reg(near)])
         .map_err(|_| "closing the near end failed")?;
+    Ok(())
+}
+
+/// Two channels cannot be made to hold each other, and the send that tries
+/// keeps its handle.
+///
+/// The leak this prevents is invisible to every other check: two endpoints
+/// each queued in the other's inbox outlive every handle to both, with
+/// whatever they hold. So a VMO with a committed page rides in one of the
+/// queues, and if the refusal ever stops happening, `run`'s frame count is
+/// what fails.
+fn check_a_cycle_of_channels_is_refused(
+    side: &Side,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let (first, first_far) = side.channel()?;
+    let (second, second_far) = side.channel()?;
+
+    let held = side.handle(nr::VMO_CREATE, &[PAGE_SIZE], "vmo_create failed")?;
+    side.put_offset(0)?;
+    side.put(PAYLOAD, b"x")?;
+    let _ = side
+        .call(nr::VMO_WRITE, &[reg(held), PAYLOAD, 1, OFFSET])
+        .map_err(|_| "vmo_write failed")?;
+    side.put_handles(&[held])?;
+    let _ = side
+        .call(nr::CHANNEL_WRITE, &[reg(second), PAYLOAD, 0, HANDLES, 1])
+        .map_err(|_| "queueing a VMO failed")?;
+
+    // One edge, which is fine: `second_far`, holding the VMO, is queued in
+    // `first_far`.
+    side.put_handles(&[second_far])?;
+    let _ = side
+        .call(nr::CHANNEL_WRITE, &[reg(first), PAYLOAD, 0, HANDLES, 1])
+        .map_err(|_| "queueing one endpoint inside another was refused")?;
+
+    // The edge back would close the loop: `first_far` into `second_far`.
+    side.put_handles(&[first_far])?;
+    refused(
+        side.call(nr::CHANNEL_WRITE, &[reg(second), PAYLOAD, 0, HANDLES, 1]),
+        status::INVALID_ARGS,
+        "a send closing a cycle of two channels was accepted",
+        counter,
+    )?;
+    // And the shortest loop: an end sent into its own inbox by its peer.
+    refused(
+        side.call(nr::CHANNEL_WRITE, &[reg(first), PAYLOAD, 0, HANDLES, 1]),
+        status::INVALID_ARGS,
+        "a channel end was sent into its own inbox",
+        counter,
+    )?;
+
+    // `first_far` was kept by both refusals. Closing it frees `second_far`
+    // queued in it, and the VMO queued in that.
+    for end in [first, second, first_far] {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(end)])
+            .map_err(|_| "closing a channel end after the cycle check failed")?;
+    }
     Ok(())
 }

@@ -39,9 +39,10 @@ use ferrix_native_abi::rights::{Requested, Rights};
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, ReadActual};
 use ferrix_objects::message::Message;
+use ferrix_objects::reach::Reach;
 use ferrix_objects::table::TableError;
 
-use crate::object::channel::{ChannelMessage, Endpoint, ReadError, WriteFailure};
+use crate::object::channel::{self, ChannelMessage, Endpoint, ReadError, WriteFailure};
 use crate::object::{self, HandleTable, Object};
 use crate::syscall::SyscallArgs;
 use crate::syscall::process::Process;
@@ -224,9 +225,35 @@ fn channel_write(
     let data = copy_in(process, bytes.at, byte_count)?;
     let values = copy_in_handles(process, handles.at, handle_count)?;
 
+    // The endpoints the message would carry, found first and let go of the
+    // table again: the cycle check below takes the topology lock, which comes
+    // before a handle table in the lock order, never inside one.
+    let (writer, carried) = process.with_handles(|table| {
+        let writer = channel_in(table, channel, Rights::WRITE)?;
+        let carried = carried_endpoints(table, &values);
+        refuse_the_writing_end(&writer, channel, &values, &carried)?;
+        Ok::<_, Errno>((writer, carried))
+    })?;
+
+    // Held from the check to the push, so no other send can close a cycle in
+    // between. Only a message carrying an endpoint takes it: nothing else can
+    // add an edge to the graph it guards.
+    let _topology = if carried.is_empty() {
+        None
+    } else {
+        let guard = object::TOPOLOGY.lock();
+        match channel::check_carry(&writer, carried) {
+            Reach::Clear => {}
+            Reach::Found => return Err(status::INVALID_ARGS),
+            Reach::TooFar => return Err(status::TOO_BIG),
+        }
+        Some(guard)
+    };
+
     process.with_handles(|table| {
+        // Looked up again rather than trusting `writer`: the handle may have
+        // been closed since, and a closed handle must not write.
         let endpoint = channel_in(table, channel, Rights::WRITE)?;
-        refuse_own_ends(table, &endpoint, channel, &values)?;
         endpoint
             .write(data, values.len(), || {
                 table.take_many(&values, Rights::TRANSFER)
@@ -241,31 +268,38 @@ fn channel_write(
     Ok(0)
 }
 
-/// Refuse a message carrying either end of the channel it is written to.
+/// Refuse a message carrying the end it is written through.
 ///
-/// The peer is a cycle: queued in its own inbox, it holds itself alive, and
-/// no close can ever free it. The writing end itself is Zircon's rule and the
-/// simpler one to reason about — the handle the call is acting through does
-/// not vanish half-way through the call. Longer cycles, two endpoints each
-/// queued in the other, are still possible and are recorded as debt in the
-/// roadmap rather than hidden.
-fn refuse_own_ends(
-    table: &HandleTable,
-    endpoint: &Arc<Endpoint>,
+/// Zircon's rule, for the reason it has one: the handle a call is acting
+/// through should not vanish half-way through the call. A duplicate of that
+/// handle is the same end, so it is compared by object as well as by number.
+/// The other end — the peer — needs no rule of its own: queued in its own
+/// inbox it is the shortest cycle, and `channel::check_carry` refuses it with
+/// the longer ones.
+fn refuse_the_writing_end(
+    writer: &Arc<Endpoint>,
     channel: Handle,
     values: &[Handle],
+    carried: &[Arc<Endpoint>],
 ) -> Result<(), Errno> {
-    for &value in values {
-        if value == channel {
-            return Err(status::INVALID_ARGS);
-        }
-        if let Ok((Object::Channel(other), _)) = table.get(value)
-            && (Arc::ptr_eq(other, endpoint) || endpoint.is_peer(other))
-        {
-            return Err(status::INVALID_ARGS);
-        }
+    if values.contains(&channel) || carried.iter().any(|other| Arc::ptr_eq(other, writer)) {
+        return Err(status::INVALID_ARGS);
     }
     Ok(())
+}
+
+/// The channel endpoints among `values`.
+///
+/// A value that names nothing is skipped here; taking the handles refuses it
+/// afterwards, with the status that says why.
+fn carried_endpoints(table: &HandleTable, values: &[Handle]) -> Vec<Arc<Endpoint>> {
+    values
+        .iter()
+        .filter_map(|&value| match table.get(value) {
+            Ok((Object::Channel(endpoint), _)) => Some(Arc::clone(endpoint)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `channel_read`.

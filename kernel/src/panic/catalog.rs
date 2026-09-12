@@ -553,7 +553,8 @@ pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
               from the sender, and the handle that arrives must name the same object. A read \
               that does not fit must report the sizes and leave the message queued; rights must \
               only shrink; a closed handle must be refused; a refused send must leave every \
-              handle with its sender; and closing a channel must free what was queued in it. A \
+              handle with its sender; a send closing a cycle of channels must be refused; and closing a channel must free \
+              what was queued in it. A \
               kernel failing any of these would give userspace drivers a capability system that \
               confines nothing.",
     causes: &[
@@ -561,6 +562,9 @@ pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
          a closed handle resolves again or a duplicate gains a right.",
         "`Endpoint::write` took the sender's handles before the peer's queue had accepted the \
          message, so a refused send lost them.",
+        "`channel::check_carry` missed an edge, or a send carrying an endpoint skipped the \
+         topology lock, so two channels were queued in each other and the VMO riding in one \
+         was never freed.",
         "A copy to or from user memory in `syscall::native` used the wrong length or width.",
         "`object::dispose` stopped draining, or an object was dropped under a lock its drop \
          needs, so the frames behind a VMO queued in a closed channel were never freed.",

@@ -7,6 +7,7 @@ use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::{Requested, Rights};
 
 use crate::message::{Limits, Message, MessageQueue, ReceiveError, SendError};
+use crate::reach::{Reach, reaches};
 use crate::table::{HandleTable, MAX_SLOTS, TableError};
 
 /// Enough closes of one slot to use up every generation it has.
@@ -303,4 +304,78 @@ fn every_handle_value_is_positive_in_a_32_bit_return_register() {
         largest < 1 << 31,
         "{largest:#x} reads as negative in a 32-bit register"
     );
+}
+
+/// Walk a graph given as adjacency lists.
+fn walk(graph: &[&[usize]], start: &[usize], target: usize, limit: usize) -> Reach {
+    reaches(
+        start.to_vec(),
+        |&node| node,
+        target,
+        |&node| graph.get(node).map_or_else(Vec::new, |next| next.to_vec()),
+        limit,
+    )
+}
+
+#[test]
+fn a_target_among_the_starting_nodes_is_found() {
+    assert_eq!(walk(&[&[], &[]], &[0, 1], 1, 8), Reach::Found, "one step");
+}
+
+#[test]
+fn a_target_several_edges_away_is_found() {
+    let graph: &[&[usize]] = &[&[1], &[2], &[3], &[]];
+    assert_eq!(walk(graph, &[0], 3, 8), Reach::Found, "0 -> 1 -> 2 -> 3");
+}
+
+#[test]
+fn an_unreachable_target_is_clear() {
+    let graph: &[&[usize]] = &[&[1], &[], &[0]];
+    assert_eq!(
+        walk(graph, &[0], 2, 8),
+        Reach::Clear,
+        "2 points at 0, not back"
+    );
+    assert_eq!(
+        walk(graph, &[], 0, 8),
+        Reach::Clear,
+        "nothing to start from"
+    );
+}
+
+#[test]
+fn a_loop_without_the_target_ends() {
+    let graph: &[&[usize]] = &[&[1], &[0], &[]];
+    assert_eq!(
+        walk(graph, &[0], 2, 8),
+        Reach::Clear,
+        "0 and 1 point at each other"
+    );
+}
+
+#[test]
+fn each_node_counts_once_against_the_limit() {
+    // A diamond: 3 is reached along two paths, and there are four nodes.
+    let graph: &[&[usize]] = &[&[1, 2], &[3], &[3], &[]];
+    assert_eq!(walk(graph, &[0], 9, 4), Reach::Clear, "exactly the limit");
+    assert_eq!(walk(graph, &[0], 9, 3), Reach::TooFar, "one past the limit");
+}
+
+#[test]
+fn a_node_reached_twice_is_expanded_once() {
+    let graph: &[&[usize]] = &[&[1, 2], &[3], &[3], &[]];
+    let mut expanded = Vec::new();
+    let answer = reaches(
+        vec![0],
+        |&node| node,
+        9,
+        |&node| {
+            expanded.push(node);
+            graph.get(node).map_or_else(Vec::new, |next| next.to_vec())
+        },
+        8,
+    );
+    expanded.sort_unstable();
+    assert_eq!(answer, Reach::Clear, "the target is not in the graph");
+    assert_eq!(expanded, vec![0, 1, 2, 3], "3 is expanded once");
 }

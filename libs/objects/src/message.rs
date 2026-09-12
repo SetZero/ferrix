@@ -128,6 +128,14 @@ impl<H> MessageQueue<H> {
         Ok(())
     }
 
+    /// Every waiting message, oldest first, without taking any.
+    ///
+    /// For the kernel's cycle check, which has to see which objects a queue
+    /// is holding.
+    pub fn iter(&self) -> impl Iterator<Item = &Message<H>> + '_ {
+        self.queue.iter()
+    }
+
     /// The size of the next message, without taking it.
     #[must_use]
     pub fn peek_sizes(&self) -> Option<(usize, usize)> {

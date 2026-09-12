@@ -17,6 +17,7 @@
 extern crate alloc;
 
 pub mod message;
+pub mod reach;
 pub mod table;
 
 #[cfg(test)]
