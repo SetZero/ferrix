@@ -247,8 +247,9 @@ package FerrixRoadmap {
              * Built: PCI configuration space in libs/pci, host-tested, fuzzed
              * and under Miri; kernel enumeration from the MCFG and the device
              * tree, in the boot test on all three architectures against a
-             * virtio-rng-pci device. Next, and needing nothing from stage 9:
-             * IOMMU domains. Needing stage 9: everything that runs in
+             * virtio-rng-pci device; device nodes whose apertures and vectors
+             * are tokens only device.rs mints. Next, and needing nothing from
+             * stage 9: MSI-X vectors, IOMMU domains. Needing stage 9: everything that runs in
              * ring 3. */
     }
 

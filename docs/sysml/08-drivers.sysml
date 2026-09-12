@@ -59,10 +59,16 @@ package FerrixDrivers {
     // Stage 10
     // -----------------------------------------------------------------------
 
-    #planned part def DeviceNode {
+    #inProgress part def DeviceNode {
         @stage { number = 10; }
         doc /* What the kernel creates per device found, and hands devmgr a
-             * handle to. */
+             * handle to. kernel/src/device.rs: one per PCI function and per
+             * virtio,mmio tree node, published at boot. Apertures and vectors
+             * are Aperture and Vector tokens only this module mints, and
+             * IoMapping and Interrupt take those rather than numbers, so a
+             * driver cannot name memory or an interrupt its device does not
+             * have. Missing: the handle (Object::Device), PCI vectors
+             * (MSI-X). */
         attribute compatible : String;
         attribute mmioWindows : Natural[0..*];
         attribute interrupts : Natural[0..*];
@@ -76,7 +82,7 @@ package FerrixDrivers {
              * pci-host-ecam-generic (libs/fdt), ECAM mapped a bus at a time,
              * the libs/pci walk with every BAR sized and every capability
              * list walked, in the boot test on all three architectures.
-             * Missing: device nodes, which are handles and wait on stage 9. */
+             * Device nodes are built from what it finds: see DeviceNode. */
         part nodes : DeviceNode[0..*];
         action enumerate;
     }

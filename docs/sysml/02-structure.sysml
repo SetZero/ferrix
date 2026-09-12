@@ -772,7 +772,7 @@ package FerrixStructure {
         #implemented part fdt : LibraryCrate {
             attribute :>> path = "libs/fdt";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 65;
+            attribute :>> hostTests = 69;
             doc /* Reached at stage 1 on ARMv7-A: console, GIC, timer
                  * interrupt and PSCI conduit come from it there. */
         }

@@ -1868,3 +1868,132 @@ fn an_ecam_host_that_cannot_be_used_is_skipped() {
     assert_eq!(found.len(), 1, "only the last: {found:?}");
     assert_eq!(found[0].window.address, 0x8000_0000, "explicitly okay");
 }
+
+// ---------------------------------------------------------------------------
+// Devices by binding, and their interrupts
+// ---------------------------------------------------------------------------
+
+/// A `virtio,mmio` node at `base` with `interrupts` and extra properties.
+fn virtio_node(builder: &mut Builder, base: u32, interrupts: &[u32], status: Option<&str>) {
+    builder.begin(&std::format!("virtio_mmio@{base:x}"));
+    builder.prop_cells("interrupts", interrupts);
+    builder.prop_cells("reg", &[0, base, 0, 0x200]);
+    builder.prop_str("compatible", VIRTIO_MMIO_COMPATIBLE);
+    if let Some(status) = status {
+        builder.prop_str("status", status);
+    }
+    builder.end();
+}
+
+#[test]
+fn qemu_virt_lists_its_virtio_mmio_transports_with_their_interrupts() {
+    let blob = tree(|b| {
+        b.begin("intc@8000000");
+        b.prop_strings("compatible", &["arm,cortex-a15-gic"]);
+        b.prop_u32("#interrupt-cells", 3);
+        b.end();
+        virtio_node(b, 0x0a00_0000, &[0, 0x10, 1], None);
+        virtio_node(b, 0x0a00_0200, &[0, 0x11, 1], Some("okay"));
+        virtio_node(b, 0x0a00_0400, &[0, 0x12, 1], Some("disabled"));
+    });
+    let fdt = parse(&blob);
+    let found: Vec<_> = fdt
+        .compatible_nodes(VIRTIO_MMIO_COMPATIBLE)
+        .map(|node| {
+            let base = node.reg().next().map(|region| region.address);
+            let interrupts: Vec<_> = node.gic_interrupts().collect();
+            (base, interrupts)
+        })
+        .collect();
+    let edge = |id| GicInterrupt {
+        id,
+        trigger: Some(Trigger::EdgeRising),
+    };
+    assert_eq!(
+        found,
+        vec![
+            (Some(0x0a00_0000), vec![edge(48)]),
+            (Some(0x0a00_0200), vec![edge(49)])
+        ],
+        "SPI 16 and 17, the disabled third skipped"
+    );
+    assert_eq!(
+        fdt.interrupt_controller()
+            .and_then(|gic| gic.interrupt_cells()),
+        Some(3),
+        "three-cell specifiers"
+    );
+}
+
+#[test]
+fn a_gic_specifier_carries_its_sense_when_it_names_exactly_one() {
+    let sense = |flags| gic_interrupt(0, 5, flags).map(|interrupt| interrupt.trigger);
+    assert_eq!(sense(1), Some(Some(Trigger::EdgeRising)), "1");
+    assert_eq!(sense(2), Some(Some(Trigger::EdgeFalling)), "2");
+    assert_eq!(sense(4), Some(Some(Trigger::LevelHigh)), "4");
+    assert_eq!(sense(8), Some(Some(Trigger::LevelLow)), "8");
+    assert_eq!(
+        sense(0x104),
+        Some(Some(Trigger::LevelHigh)),
+        "CPU mask ignored"
+    );
+    assert_eq!(sense(0), Some(None), "controller default");
+    assert_eq!(sense(3), Some(None), "two senses");
+    assert_eq!(gic_interrupt(1, 13, 4).map(|i| i.id), Some(29), "a PPI");
+    assert_eq!(gic_interrupt(2, 0, 4), None, "no such kind");
+}
+
+#[test]
+fn gic_interrupts_stop_at_the_first_bad_or_partial_specifier() {
+    let blob = tree(|b| {
+        b.begin("dev@0");
+        b.prop_cells("interrupts", &[0, 1, 4, 0, 2, 4, 7, 3, 4, 0, 4, 4, 0]);
+        b.end();
+        b.begin("tail@0");
+        b.prop_cells("interrupts", &[0, 1, 4, 0, 2]);
+        b.end();
+        b.begin("none@0");
+        b.end();
+    });
+    let fdt = parse(&blob);
+    let ids = |path| -> Vec<u32> {
+        fdt.find_node(path)
+            .unwrap()
+            .gic_interrupts()
+            .map(|interrupt| interrupt.id)
+            .collect()
+    };
+    assert_eq!(
+        ids("/dev@0"),
+        vec![33, 34],
+        "kind 7 ends it, the good one after is not renumbered"
+    );
+    assert_eq!(ids("/tail@0"), vec![33], "a partial specifier is not one");
+    assert!(ids("/none@0").is_empty(), "no property");
+}
+
+#[test]
+fn a_node_is_enabled_unless_its_status_says_otherwise() {
+    let blob = tree(|b| {
+        for (name, status) in [
+            ("a@0", None),
+            ("b@0", Some("okay")),
+            ("c@0", Some("ok")),
+            ("d@0", Some("disabled")),
+            ("e@0", Some("fail")),
+        ] {
+            b.begin(name);
+            if let Some(status) = status {
+                b.prop_str("status", status);
+            }
+            b.end();
+        }
+    });
+    let fdt = parse(&blob);
+    let enabled: Vec<_> = fdt
+        .nodes()
+        .filter(|node| node.depth == 1 && node.is_enabled())
+        .map(|node| node.name)
+        .collect();
+    assert_eq!(enabled, vec!["a@0", "b@0", "c@0"], "absent, okay and ok");
+}

@@ -566,6 +566,30 @@ pub(crate) static STAGE10_PCI: Explanation = Explanation {
           docs/ROADMAP.md stage 10",
 };
 
+/// For `check_devices` in `main.rs`, when `device::publish` fails.
+pub(crate) static STAGE10_DEVICES: Explanation = Explanation {
+    code: "FX-1002",
+    title: "a device node handed out memory or an interrupt it does not have",
+    meaning: "A driver in ring 3 is given an `IoMapping` for each of its device's apertures and \
+              nothing outside them, and an `Interrupt` for each of its vectors. Those objects are \
+              built only from `Aperture` and `Vector` values that `device.rs` mints from what \
+              enumeration found, so the rule holds if and only if a device node refuses every \
+              request that is not inside one of its own apertures. `device::publish` asks every \
+              node for each aperture, its last byte, a range past each edge, an empty range and \
+              one that wraps the address space, and requires exactly the right answers before \
+              any node is published.",
+    causes: &[
+        "`DeviceNode::aperture` was changed to accept a range spanning two apertures or \
+         running past one, which is the change that would let a driver map a neighbour's \
+         registers.",
+        "An aperture overlapping the boot framebuffer was minted, so a driver could be given \
+         the memory a panic is drawn in.",
+        "`DeviceNode::pci` minted an aperture from a BAR whose size or address enumeration had \
+         not checked.",
+    ],
+    see: "kernel/src/device.rs publish; kernel/src/pci.rs; docs/ROADMAP.md stage 10",
+};
+
 /// For `check_native_objects` in `main.rs`, when `object::check::run` fails.
 pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
     code: "FX-0901",
@@ -790,6 +814,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_FILESYSTEM,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
+    &STAGE10_DEVICES,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,

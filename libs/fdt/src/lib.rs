@@ -674,6 +674,27 @@ impl<'a> Node<'a> {
         }
     }
 
+    /// Whether the node is in use: its `status` is absent, `okay` or `ok`.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.property("status")
+            .is_none_or(|status| matches!(status.as_str(), Some("okay" | "ok")))
+    }
+
+    /// The node's `interrupts`, decoded as three-cell GIC specifiers.
+    ///
+    /// Only meaningful when the node's interrupt parent is a GIC, which the
+    /// caller has to establish. Stops at the first specifier that does not
+    /// name an interrupt a GIC delivers, and at a trailing partial one:
+    /// skipping a bad entry would renumber the ones after it, and a driver
+    /// asks for its interrupts by position.
+    #[must_use]
+    pub fn gic_interrupts(&self) -> GicInterrupts<'a> {
+        GicInterrupts {
+            cells: self.property("interrupts").map(|property| property.cells()),
+        }
+    }
+
     /// The words of the node's `interrupts` property. Their meaning is the
     /// interrupt controller's to define, so they are handed over undecoded.
     #[must_use]
@@ -992,6 +1013,13 @@ pub struct InterruptController<'a> {
 }
 
 impl InterruptController<'_> {
+    /// How many cells an interrupt specifier naming this controller takes:
+    /// three for every GIC binding, if the tree says so at all.
+    #[must_use]
+    pub fn interrupt_cells(&self) -> Option<u32> {
+        self.node.property("#interrupt-cells")?.as_u32()
+    }
+
     /// The distributor's `reg` range, which is the first one in both versions.
     #[must_use]
     pub fn distributor(&self) -> Option<Region> {
@@ -1316,6 +1344,16 @@ impl<'a> Fdt<'a> {
         }
     }
 
+    /// Every enabled node whose `compatible` list holds `binding`, in tree
+    /// order.
+    #[must_use]
+    pub const fn compatible_nodes<'b>(&self, binding: &'b str) -> CompatibleNodes<'a, 'b> {
+        CompatibleNodes {
+            nodes: self.nodes(),
+            binding,
+        }
+    }
+
     /// Every PCI host bridge whose configuration space is an ECAM window,
     /// in tree order. [`EcamHosts`] says what is read and what is skipped.
     #[must_use]
@@ -1535,9 +1573,7 @@ fn ecam_host(node: &Node<'_>) -> Option<EcamHost> {
     if !node.is_compatible(PCI_HOST_ECAM_COMPATIBLE) {
         return None;
     }
-    if let Some(status) = node.property("status")
-        && !matches!(status.as_str(), Some("okay" | "ok"))
-    {
+    if !node.is_enabled() {
         return None;
     }
     let window = node.reg().next()?;
@@ -1569,4 +1605,93 @@ fn ecam_host(node: &Node<'_>) -> Option<EcamHost> {
         start_bus,
         end_bus,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Devices by binding, and their interrupts
+// ---------------------------------------------------------------------------
+
+/// The binding for a virtio device on its memory-mapped transport.
+pub const VIRTIO_MMIO_COMPATIBLE: &str = "virtio,mmio";
+
+/// Every enabled node claiming one binding. See [`Fdt::compatible_nodes`].
+#[derive(Clone, Copy, Debug)]
+pub struct CompatibleNodes<'a, 'b> {
+    /// The walk the nodes are found in.
+    nodes: Nodes<'a>,
+    /// The binding asked for.
+    binding: &'b str,
+}
+
+impl<'a> Iterator for CompatibleNodes<'a, '_> {
+    type Item = Node<'a>;
+
+    fn next(&mut self) -> Option<Node<'a>> {
+        let binding = self.binding;
+        self.nodes
+            .find(|node| node.is_compatible(binding) && node.is_enabled())
+    }
+}
+
+/// How an interrupt line signals, from a GIC specifier's third cell.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Trigger {
+    /// On a rising edge.
+    EdgeRising,
+    /// On a falling edge.
+    EdgeFalling,
+    /// While the line is high.
+    LevelHigh,
+    /// While the line is low.
+    LevelLow,
+}
+
+/// One interrupt a GIC specifier names.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GicInterrupt {
+    /// The GIC interrupt identifier, as [`gic_interrupt_id`] computes it.
+    pub id: u32,
+    /// How the line signals, or `None` when the flags name no single sense —
+    /// zero, which the binding leaves to the controller's default, or more
+    /// than one bit.
+    pub trigger: Option<Trigger>,
+}
+
+/// Decode one three-cell GIC specifier: kind, number, flags.
+#[must_use]
+pub const fn gic_interrupt(kind: u32, number: u32, flags: u32) -> Option<GicInterrupt> {
+    let Some(id) = gic_interrupt_id(kind, number) else {
+        return None;
+    };
+    let trigger = match flags & 0xF {
+        1 => Some(Trigger::EdgeRising),
+        2 => Some(Trigger::EdgeFalling),
+        4 => Some(Trigger::LevelHigh),
+        8 => Some(Trigger::LevelLow),
+        _ => None,
+    };
+    Some(GicInterrupt { id, trigger })
+}
+
+/// A node's `interrupts`, three cells at a time. See [`Node::gic_interrupts`].
+#[derive(Clone, Copy, Debug)]
+pub struct GicInterrupts<'a> {
+    /// What is left of the property, or `None` once finished.
+    cells: Option<Cells<'a>>,
+}
+
+impl Iterator for GicInterrupts<'_> {
+    type Item = GicInterrupt;
+
+    fn next(&mut self) -> Option<GicInterrupt> {
+        let cells = self.cells.as_mut()?;
+        let decoded = match (cells.next(), cells.next(), cells.next()) {
+            (Some(kind), Some(number), Some(flags)) => gic_interrupt(kind, number, flags),
+            _ => None,
+        };
+        if decoded.is_none() {
+            self.cells = None;
+        }
+        decoded
+    }
 }

@@ -22,6 +22,7 @@ mod acpi;
 mod arch;
 mod backtrace;
 mod console;
+mod device;
 mod early;
 mod fdt;
 mod fs;
@@ -227,7 +228,13 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // `finish_memory`, which reclaims the ACPI tables the MCFG is read from
     // and sweeps the kernel's mappings, so the bus windows this maps have to
     // be given back first.
-    check_pci(view);
+    let pci = check_pci(view);
+
+    // Stage 10's device nodes: every PCI function above and every virtio,mmio
+    // node in the device tree, with the rule a driver's memory and interrupts
+    // rest on — nothing outside what the device has — required of each.
+    // Straight after enumeration, which builds the PCI half.
+    check_devices(view, pci);
 
     // The rest of stage 2, deliberately last. Each of these needs something a
     // later part of boot brought up — the arena needs the heap, the sweep
@@ -393,9 +400,9 @@ fn check_native_objects() {
 ///
 /// Halts rather than returning, as every other stage's check does. A machine
 /// that describes no ECAM host passes: the board has no PCI at all.
-fn check_pci(view: &BootView<'_>) {
-    let report = match pci::check(view) {
-        Ok(report) => report,
+fn check_pci(view: &BootView<'_>) -> Vec<device::DeviceNode> {
+    let (report, nodes) = match pci::check(view) {
+        Ok(found) => found,
         Err(problem) => fatal!(
             catalog::STAGE10_PCI,
             "stage 10 self-check failed: {problem}"
@@ -407,7 +414,7 @@ fn check_pci(view: &BootView<'_>) {
             "  pci      no ECAM host described, {} descriptions refused",
             report.refused
         );
-        return;
+        return nodes;
     }
     println!(
         "  pci      {} functions from {} {} hosts, {} host bridges, {} unfollowed bridges; \
@@ -421,6 +428,34 @@ fn check_pci(view: &BootView<'_>) {
         report.aperture_bytes / 1024,
         report.capabilities,
         report.virtio,
+    );
+    nodes
+}
+
+/// Stage 10: publish the device nodes, requiring each to hand out exactly the
+/// apertures and vectors it has.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>) {
+    let report = match device::publish(view, pci) {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE10_DEVICES,
+            "stage 10 self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  devices  {} nodes ({} from the device tree), {} apertures ({} not whole pages, \
+         {} withheld), {} vectors ({} edge), {} refusals as specified; {} published",
+        report.nodes,
+        report.tree,
+        report.apertures,
+        report.partial_pages,
+        report.withheld,
+        report.vectors,
+        report.edge,
+        report.refusals,
+        device::devices().len(),
     );
 }
 

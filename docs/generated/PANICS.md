@@ -44,6 +44,7 @@ Causes are listed most likely first.
 | [FX-0802](#fx-0802) | the root filesystem failed its self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
+| [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -663,6 +664,29 @@ none.
 
 See: kernel/src/pci.rs check; libs/pci; libs/acpi Mcfg; libs/fdt ecam_hosts;
 docs/ROADMAP.md stage 10.
+
+<a id="fx-1002"></a>
+
+## FX-1002 — a device node handed out memory or an interrupt it does not have
+
+A driver in ring 3 is given an `IoMapping` for each of its device's apertures
+and nothing outside them, and an `Interrupt` for each of its vectors. Those
+objects are built only from `Aperture` and `Vector` values that `device.rs`
+mints from what enumeration found, so the rule holds if and only if a device
+node refuses every request that is not inside one of its own apertures.
+`device::publish` asks every node for each aperture, its last byte, a range past
+each edge, an empty range and one that wraps the address space, and requires
+exactly the right answers before any node is published.
+
+1. `DeviceNode::aperture` was changed to accept a range spanning two apertures
+   or running past one, which is the change that would let a driver map a
+   neighbour's registers.
+2. An aperture overlapping the boot framebuffer was minted, so a driver could be
+   given the memory a panic is drawn in.
+3. `DeviceNode::pci` minted an aperture from a BAR whose size or address
+   enumeration had not checked.
+
+See: kernel/src/device.rs publish; kernel/src/pci.rs; docs/ROADMAP.md stage 10.
 
 <a id="fx-9001"></a>
 

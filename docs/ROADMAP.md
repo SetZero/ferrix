@@ -32,7 +32,8 @@ says a stage should: their byte-level halves are in `libs/` — the VFS in
 so is stage 8's root filesystem, unpacked at boot from an initramfs the loader
 hands over.
 Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
-and its first kernel code — PCI enumeration — is in the boot test.
+and its first kernel code — PCI enumeration and device nodes — is in the boot
+test.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -1080,15 +1081,49 @@ from the MCFG with 3 BARs, 6 capabilities and one virtio transport; on
 ARMv7-A the same 2 from the device tree, reaching a window at
 `0x40_1000_0000` — above 4 GiB, through LPAE.
 
+**Done — device nodes, and the only way to name a device's memory.**
+`kernel/src/device.rs`, written to the contract agreed with stage 9: its
+`IoMapping` and `Interrupt` take an `Aperture` and a `Vector`, and only this
+module can make either — from a sized memory BAR, from a `virtio,mmio` node's
+`reg` and GIC interrupts, or afterwards from `DeviceNode::aperture`, which
+answers only for a range inside *one* of the device's apertures. "Nothing
+outside it" is then a type rather than a comparison a handler can forget.
+
+* **The device tree is an allowlist** — `virtio,mmio` only — because most
+  nodes with a `reg` are devices the kernel drives itself, and a node for the
+  console would let a driver map it. An aperture overlapping the boot
+  framebuffer is withheld; on x86-64 that is the display adapter's BAR, which
+  is where a panic is drawn.
+* **Not every aperture is whole pages.** QEMU packs its 32 virtio-mmio
+  transports 0x200 bytes apart, several to a page, so a page mapping of one
+  would hand a driver its neighbours' registers. An `Aperture` says whether it
+  is whole pages, and `IoMapping` is to refuse one that is not. On QEMU's Arm
+  machines that makes virtio-pci the transport a ring-3 driver can be given.
+* **The check** asks every node for each aperture, its last byte, a range
+  across each edge, an empty range and one that wraps the address space, and
+  for every vector and the one past the end, before anything is published.
+
+The run recorded when it landed: x86-64 publishes 6 nodes with 4 apertures, 1
+withheld, and 24 refusals as specified; AArch64 2 nodes with 2 apertures;
+ARMv7-A 34 nodes — its 32 virtio-mmio transports among them — with 34
+apertures, 32 of them not whole pages, 32 edge-triggered vectors and 170
+refusals, at four processors and at two.
+
 **Still to do, in the order it can be done:**
 
+* **MSI-X vectors for PCI nodes, which need nothing from stage 9.** A PCI node
+  has apertures and no vectors. A PCI function's vector is an MSI-X table
+  entry pointing at an interrupt the controller allocated — a local APIC
+  vector on x86-64, a GICv2m frame on the Arm machines — and neither
+  allocator exists yet.
 * **IOMMU domains, which need nothing from stage 9 either.** DMAR and IORT in
   `libs/acpi`, VT-d on `q35` with `intel-iommu`, SMMUv3 on `virt` with
   `iommu=smmuv3` — which this QEMU also offers on the 32-bit machine — and the
   deliberate out-of-domain DMA fault, driven from the kernel first.
-* **Everything that runs in ring 3, which does.** Device-node handles,
-  `Interrupt` and `IoMapping` over stage 9's handle table, `devmgr`, the ring
-  protocol, and virtio-blk as a process. One consequence for the test machine:
+* **Everything that runs in ring 3, which does.** Device-node handles
+  (`Object::Device`); `Interrupt` and `IoMapping`, which stage 9 writes against
+  `device.rs`'s tokens; `devmgr`, the ring protocol, and virtio-blk as a
+  process. One consequence for the test machine:
   under ACPI, QEMU describes AArch64's virtio-mmio devices only in the DSDT,
   which is AML, which Ferrix will not interpret — so the disk that driver
   reads has to be `virtio-blk-pci` there.
@@ -1198,7 +1233,7 @@ at three in the morning against a machine that reboots on a mistake.
 | Crate | Waiting for | Tests |
 |---|---|---|
 | `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG. No AML, and there will be none. | 62 |
-| `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges; stage 10 is still the rest of it. | 65 |
+| `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges and `virtio,mmio` devices; stage 10 is still the rest of it. | 69 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
 | `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 53 |
@@ -1212,7 +1247,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **613 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **617 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

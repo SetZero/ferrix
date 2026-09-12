@@ -29,7 +29,7 @@ use core::cell::RefCell;
 use core::fmt;
 
 use ferrix_bootinfo::BootView;
-use ferrix_pci::bar;
+use ferrix_pci::bar::{self, Region};
 use ferrix_pci::capability::{Capabilities, ExtendedCapabilities};
 use ferrix_pci::ecam::{BYTES_PER_BUS, Window};
 use ferrix_pci::header::{CLASS_BRIDGE, SUBCLASS_HOST_BRIDGE};
@@ -37,6 +37,7 @@ use ferrix_pci::virtio::Transport;
 use ferrix_pci::walk::{Function, Walk};
 use ferrix_pci::{Address, ConfigSpace, PciError};
 
+use crate::device::{DeviceNode, Reserved};
 use crate::mmio::Mmio;
 use crate::vmap;
 use crate::{acpi, fdt};
@@ -265,9 +266,11 @@ impl From<PciError> for Failure {
     }
 }
 
-/// Find every function, size its BARs, walk its capabilities.
-pub(crate) fn check(view: &BootView<'_>) -> Result<Report, Failure> {
+/// Find every function, size its BARs, walk its capabilities, and build a
+/// device node for each from what its BARs decode.
+pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>), Failure> {
     let (hosts, refused, source) = hosts(view);
+    let reserved = Reserved::of(view);
     let mut report = Report {
         hosts: hosts.len(),
         refused,
@@ -280,14 +283,20 @@ pub(crate) fn check(view: &BootView<'_>) -> Result<Report, Failure> {
         capabilities: 0,
         virtio: 0,
     };
+    let mut nodes = Vec::new();
     for host in hosts {
-        check_host(host, &mut report)?;
+        check_host(host, reserved, &mut report, &mut nodes)?;
     }
-    Ok(report)
+    Ok((report, nodes))
 }
 
 /// Walk one host and examine everything it reaches.
-fn check_host(host: Host, report: &mut Report) -> Result<(), Failure> {
+fn check_host(
+    host: Host,
+    reserved: Reserved,
+    report: &mut Report,
+    nodes: &mut Vec<DeviceNode>,
+) -> Result<(), Failure> {
     let mut space = Space::new(host);
 
     // Collected first: the walk borrows the space, and sizing writes to it.
@@ -309,17 +318,19 @@ fn check_host(host: Host, report: &mut Report) -> Result<(), Failure> {
     }
 
     for function in found {
-        check_function(&mut space, function, report)?;
+        let regions = check_function(&mut space, function, report)?;
+        nodes.push(DeviceNode::pci(function.address, &regions, reserved));
     }
     Ok(())
 }
 
-/// Size every BAR of one function and walk both its capability lists.
+/// Size every BAR of one function and walk both its capability lists,
+/// returning the BARs it decodes.
 fn check_function(
     space: &mut Space,
     function: Function,
     report: &mut Report,
-) -> Result<(), Failure> {
+) -> Result<Vec<Region>, Failure> {
     let Function { address, identity } = function;
     report.functions += 1;
     if identity.class.base == CLASS_BRIDGE && identity.class.sub == SUBCLASS_HOST_BRIDGE {
@@ -335,11 +346,13 @@ fn check_function(
         report.capabilities += 1;
     }
 
+    let mut regions = Vec::new();
     for index in 0..identity.kind.bar_slots() {
         match bar::size(space, address, identity.kind, index) {
             Ok(Some(region)) => {
                 report.bars += 1;
                 report.aperture_bytes = report.aperture_bytes.saturating_add(region.size);
+                regions.push(region);
             }
             // An unimplemented slot, or the upper half of a 64-bit BAR.
             Ok(None) | Err(PciError::NoSuchBar { .. }) => {}
@@ -350,5 +363,5 @@ fn check_function(
     if Transport::find(&*space, address)?.is_some() {
         report.virtio += 1;
     }
-    Ok(())
+    Ok(regions)
 }
