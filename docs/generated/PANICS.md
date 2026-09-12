@@ -131,14 +131,16 @@ See: kernel/src/main.rs self_check; kernel/src/early.rs; docs/ROADMAP.md stage
 `mm::init` builds the buddy allocator that every physical frame is handed out
 by. It needs a per-frame array covering RAM from the lowest frame to the highest
 the direct map reaches, and carves that array, which has to be contiguous, from
-the front of the largest usable region. Without the allocator there are no page
-tables, no stacks and no heap, so nothing after this point can run.
+the front of the largest usable region inside the direct map. Without the
+allocator there are no page tables, no stacks and no heap, so nothing after this
+point can run.
 
 1. The memory map describes no usable region, or no RAM below the limit of the
    direct map.
-2. No single usable region is large enough for the per-frame array, which spans
-   from the lowest RAM frame to the highest and so grows with the gaps between
-   banks of RAM; the message gives the bytes it needed.
+2. No single usable region, clipped to the direct map, is large enough for the
+   per-frame array, which spans from the lowest RAM frame to the highest and so
+   grows with the gaps between banks of RAM; the message gives the bytes it
+   needed.
 
 See: kernel/src/mm.rs init; libs/frame; docs/ROADMAP.md stage 2.
 

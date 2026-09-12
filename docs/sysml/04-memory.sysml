@@ -56,7 +56,8 @@ package FerrixMemory {
         doc /* kernel/src/mm.rs: where the per-frame array goes, reaching
              * physical memory through the direct map, and the kernel's own
              * page tables. The per-frame array is carved from the front of the
-             * largest usable region before there is an allocator to make it.
+             * largest usable region inside the direct map before there is an
+             * allocator to make it.
              * Three globals behind interrupt-masking locks in a fixed order:
              * TABLES, then FRAMES, then HEAP. */
         part frames : FrameAllocator;

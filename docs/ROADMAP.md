@@ -106,8 +106,10 @@ touch `CR3` or `TTBR1` do not.
   `BTreeMap` now work in the kernel.
 * The chicken-and-egg — the per-frame array has to exist before there is an
   allocator to make it — is resolved by carving it from the front of the
-  largest usable region and handing that region over with the carved part
-  excluded.
+  largest usable region inside the direct map and handing that region over
+  with the carved part excluded. Inside, because the array is zeroed through
+  the direct map, and on ARMv7-A that map holds 1.25 GiB: a board with more
+  RAM whose longest region lay above it would have zeroed the kernel image.
 
 **Exit criterion met, and in the boot test on both architectures:** 4096 blocks
 of assorted orders allocated and freed in an order that forces coalescing, with

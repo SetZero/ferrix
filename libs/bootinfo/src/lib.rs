@@ -885,6 +885,41 @@ impl<'a> BootView<'a> {
         self.info.physmap_phys + self.info.physmap_len
     }
 
+    /// Where the frame allocator's `bytes`-long per-frame array can go: the
+    /// largest usable run of RAM *inside the direct map* that holds it.
+    ///
+    /// The kernel zeroes the array through the direct map before there is any
+    /// other way to reach physical memory, so a host region the direct map
+    /// does not cover is not a smaller mistake than no region at all. On a
+    /// 32-bit machine with more RAM than its direct map, the longest usable
+    /// region can lie wholly above the limit, and zeroing "its" direct-map
+    /// address lands on whatever is mapped past the end — the kernel image.
+    ///
+    /// Each usable region is clipped to the direct map first, page-rounded
+    /// inwards, and only then compared. `None` if no clipped region is long
+    /// enough.
+    #[must_use]
+    pub fn page_array_host(&self, bytes: u64) -> Option<MemRegion> {
+        let floor = self.info.physmap_phys.next_multiple_of(PAGE_SIZE);
+        let limit = self.physmap_limit() & !(PAGE_SIZE - 1);
+        self.regions
+            .iter()
+            .filter(|region| region.kind.is_free_at_boot())
+            .filter_map(|region| {
+                let base = region.base.max(floor).next_multiple_of(PAGE_SIZE);
+                let end = region.end().min(limit) & !(PAGE_SIZE - 1);
+                // `then`, not `then_some`: the length is only a number once
+                // the clipped region is known not to be empty.
+                (end > base).then(|| MemRegion {
+                    base,
+                    len: end - base,
+                    ..*region
+                })
+            })
+            .filter(|region| region.len >= bytes)
+            .max_by_key(|region| region.len)
+    }
+
     /// The region containing `phys`, if the map describes one.
     #[must_use]
     pub fn region_of(&self, phys: u64) -> Option<&'a MemRegion> {
@@ -1139,6 +1174,85 @@ mod tests {
             MemKind::DeviceTree.is_ram() && !MemKind::DeviceTree.is_reclaimable(),
             "the device tree copy is RAM the kernel keeps"
         );
+    }
+
+    /// A 32-bit board: 1.25 GiB of direct map from 1 GiB, and more RAM than
+    /// that, with the longest usable region above the limit.
+    fn beyond_the_direct_map() -> [MemRegion; 3] {
+        [
+            MemRegion {
+                base: 0x4000_0000,
+                len: 0x1000_0000,
+                kind: MemKind::Usable,
+                reserved: 0,
+            },
+            // Straddles the limit at 0x9000_0000: only the part below counts.
+            MemRegion {
+                base: 0x6000_0000,
+                len: 0x4000_0000,
+                kind: MemKind::Usable,
+                reserved: 0,
+            },
+            // The longest region of all, and wholly out of reach.
+            MemRegion {
+                base: 0xC000_0000,
+                len: 0x3000_0000,
+                kind: MemKind::Usable,
+                reserved: 0,
+            },
+        ]
+    }
+
+    #[test]
+    fn the_page_array_is_placed_where_the_direct_map_reaches() {
+        let map = beyond_the_direct_map();
+        let mut info = boot_info(&map, "");
+        info.physmap_phys = 0x4000_0000;
+        info.physmap_len = 0x5000_0000;
+        // SAFETY: as in the tests above.
+        let view = unsafe { info.validate() }.unwrap();
+        assert_eq!(view.physmap_limit(), 0x9000_0000);
+
+        let host = view.page_array_host(0x10_0000).unwrap();
+        assert!(
+            host.end() <= view.physmap_limit(),
+            "the array host {:#x}..{:#x} runs past the direct map",
+            host.base,
+            host.end()
+        );
+        // The straddling region, clipped, is longer than the first one.
+        assert_eq!((host.base, host.len), (0x6000_0000, 0x3000_0000));
+    }
+
+    #[test]
+    fn no_region_inside_the_direct_map_is_reported_rather_than_guessed() {
+        let map = beyond_the_direct_map();
+        let mut info = boot_info(&map, "");
+        info.physmap_phys = 0x4000_0000;
+        info.physmap_len = 0x5000_0000;
+        // SAFETY: as in the tests above.
+        let view = unsafe { info.validate() }.unwrap();
+
+        // Only the unreachable region is this large.
+        assert!(view.page_array_host(0x3000_0000 + PAGE_SIZE).is_none());
+        // A request the shorter reachable region can hold still falls to the
+        // longest one that holds it.
+        assert_eq!(
+            view.page_array_host(0x3000_0000).map(|host| host.base),
+            Some(0x6000_0000)
+        );
+    }
+
+    #[test]
+    fn a_direct_map_covering_everything_changes_nothing() {
+        let map = regions();
+        let info = boot_info(&map, "");
+        // SAFETY: as in the tests above.
+        let view = unsafe { info.validate() }.unwrap();
+
+        let host = view.page_array_host(0x1000).unwrap();
+        assert_eq!((host.base, host.len), (0x10_0000, 0x3F00_0000));
+        assert!(view.page_array_host(0x3F00_0000 + PAGE_SIZE).is_none());
     }
 
     #[test]

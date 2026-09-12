@@ -93,7 +93,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1414 elements, 155 relations. Model digest `c3e9c391a9e8da2d`.
+13 files, 16 packages, 1414 elements, 155 relations. Model digest `c757ab27962c3efa`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -784,7 +784,7 @@ kmain. Every stage's exit criterion runs here on every boot, and each failure pa
 3. `reportHandoff`
 4. `stage1SelfCheck`
 5. `installTraps` — Before anything can fault: until this runs the CPU still points at firmware's handlers, which stopped existing at ExitBootServices.
-6. `initPhysicalMemory` — mm::init: carve the per-frame array from the largest usable region, hand every usable frame to the buddy, start the heap.
+6. `initPhysicalMemory` — mm::init: carve the per-frame array from the largest usable region inside the direct map, hand every usable frame to the buddy, start the heap.
 7. `initVmapArena`
 8. `stage2SelfCheck`
 9. `stage3TrapCheck`
@@ -1020,7 +1020,7 @@ Buddy allocator over the memory map, orders 0 to 10 (up to 4 MiB blocks). Blocks
 
 `#implemented`  ·  stage 2
 
-kernel/src/mm.rs: where the per-frame array goes, reaching physical memory through the direct map, and the kernel's own page tables. The per-frame array is carved from the front of the largest usable region before there is an allocator to make it. Three globals behind interrupt-masking locks in a fixed order: TABLES, then FRAMES, then HEAP.
+kernel/src/mm.rs: where the per-frame array goes, reaching physical memory through the direct map, and the kernel's own page tables. The per-frame array is carved from the front of the largest usable region inside the direct map before there is an allocator to make it. Three globals behind interrupt-masking locks in a fixed order: TABLES, then FRAMES, then HEAP.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |

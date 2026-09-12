@@ -257,7 +257,8 @@ package FerrixBoot {
         }
         then action initPhysicalMemory {
             doc /* mm::init: carve the per-frame array from the largest usable
-                 * region, hand every usable frame to the buddy, start the heap. */
+                 * region inside the direct map, hand every usable frame to the
+                 * buddy, start the heap. */
         }
         then action initVmapArena;
         then action stage2SelfCheck : Stage2SelfCheck;

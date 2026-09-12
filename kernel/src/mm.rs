@@ -16,8 +16,11 @@
 //!
 //! The buddy allocator needs one [`PageEntry`] per frame, and that array has to
 //! be allocated before there is an allocator. So it is carved out of the front
-//! of the largest usable region firmware reported, and that region is then
-//! handed to the allocator with the carved part left out. After that, every
+//! of the largest usable region firmware reported *that the direct map
+//! reaches*, and that region is then handed to the allocator with the carved
+//! part left out. The qualification matters only on a 32-bit machine with more
+//! RAM than its direct map, and there it is the difference between an array
+//! and a zeroed kernel image. After that, every
 //! allocation goes through the allocator like anything else.
 //!
 //! # Locks
@@ -174,10 +177,15 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Stats, MemoryError> {
     // precisely so that change stays inside this function.
     let entries = Frames::entries_needed(lowest, highest);
     let bytes = (entries * size_of::<PageEntry>()) as u64;
-    let host = largest_usable(view).ok_or(MemoryError::NoUsableMemory)?;
-    if host.len < bytes {
-        return Err(MemoryError::NoRoomForPageArray(bytes));
+    if view.usable_ram() == 0 {
+        return Err(MemoryError::NoUsableMemory);
     }
+    // Among usable regions clipped to the direct map, not merely the longest
+    // one: the array is zeroed through the direct map, and on a 32-bit board
+    // with more RAM than that map holds the longest region can lie above it.
+    let host = view
+        .page_array_host(bytes)
+        .ok_or(MemoryError::NoRoomForPageArray(bytes))?;
 
     let array = place_page_array(host.base, entries);
     let mut frames = Frames::new(array, lowest);
@@ -215,15 +223,6 @@ fn lowest_ram_frame(view: &BootView<'_>) -> u64 {
         .unwrap_or(0)
 }
 
-/// The largest region firmware called usable.
-fn largest_usable(view: &BootView<'_>) -> Option<MemRegion> {
-    view.regions()
-        .iter()
-        .filter(|region| region.kind.is_free_at_boot())
-        .copied()
-        .max_by_key(|region| region.len)
-}
-
 /// Zero `entries` records at the front of `base` and take them as a slice.
 ///
 /// The array outlives everything, so `'static` is honest: it is carved out of
@@ -238,9 +237,12 @@ fn place_page_array(base: u64, entries: usize) -> &'static mut [PageEntry] {
     // is an enum, and an undefined discriminant is not merely a strange value.
     // `ferrix_frame` guarantees zero is a state it defines.
     //
-    // SAFETY: `base` is the start of a region firmware called usable and which
-    // is about to be excluded from the allocator, so nothing else refers to it;
-    // the direct map covers all of RAM, so `virt` is mapped and writable.
+    // SAFETY: `base` is the start of a run of RAM firmware called usable, and
+    // which is about to be excluded from the allocator, so nothing else refers
+    // to it. `BootView::page_array_host` chose that run from inside the direct
+    // map, so all `bytes` of it are mapped and writable at `virt` -- which is
+    // not the same as "the direct map covers all of RAM": on ARMv7-A it covers
+    // 1.25 GiB, and the rest is not mapped anywhere.
     unsafe { core::ptr::write_bytes(virt.cast::<u8>(), 0, bytes) };
 
     // SAFETY: the range was just zeroed, is inside a usable region large enough

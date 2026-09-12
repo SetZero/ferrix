@@ -205,8 +205,8 @@ pub enum Released {
 ///
 /// Borrows its side array rather than owning one, because the array has to be
 /// carved out of memory before there is anything to carve it with. The kernel
-/// bump-allocates it from the largest usable region and hands it here; a test
-/// passes a slice of a `Vec`.
+/// bump-allocates it from the largest usable region the direct map reaches and
+/// hands it here; a test passes a slice of a `Vec`.
 #[derive(Debug)]
 pub struct Frames<'a> {
     entries: &'a mut [PageEntry],
