@@ -1,11 +1,11 @@
 //! What happens when the kernel cannot go on.
 //!
-//! A fatal condition in the kernel is a `panic!` with a sentence saying what
-//! went wrong, or, where the catalog explains it, [`fatal!`], which names the
-//! catalog entry and then panics. The crate root argues why `panic!` is exempt
-//! from its lint here. This module is the other half, the report, so that no
-//! site prints a marker and halts by hand and every failure arrives in the same
-//! shape:
+//! A fatal condition in the kernel is [`fatal!`], which names the catalog entry
+//! that explains it and then panics with a sentence saying what went wrong. A
+//! bare `panic!` is denied here as everywhere; the one inside the macro is out
+//! of the lint's sight, so a fatal site cannot be written without choosing its
+//! entry. This module is the other half, the report, so that no site prints a
+//! marker and halts by hand and every failure arrives in the same shape:
 //!
 //! ```text
 //! FERRIX-PANIC stage 3 self-check failed: the timer never fired
