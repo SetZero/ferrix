@@ -231,14 +231,19 @@ package FerrixRoadmap {
              * needs and which is being built as stage 7's follow-up. */
     }
 
-    #planned requirement <'S10'> stage10UserspaceDrivers : Stage {
+    #inProgress requirement <'S10'> stage10UserspaceDrivers : Stage {
         attribute :>> number = 10;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::InProgress;
         attribute :>> size = "month";
         doc /* Enumeration, IOMMU domains, devmgr, the shared-ring block
              * protocol, virtio-blk as a user process. Exit: a sector read
              * through a ring-3 driver with the IOMMU on, and a deliberate
-             * out-of-domain DMA attempt faulting. */
+             * out-of-domain DMA attempt faulting.
+             *
+             * Built: PCI configuration space in libs/pci, host-tested, fuzzed
+             * and under Miri. Next, and needing nothing from stage 9: kernel
+             * enumeration from MCFG and the device tree, then IOMMU domains.
+             * Needing stage 9: everything that runs in ring 3. */
     }
 
     #planned requirement <'S11'> stage11BtrfsRead : Stage {

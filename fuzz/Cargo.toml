@@ -21,6 +21,7 @@ ferrix-linux-abi = { path = "../libs/linux-abi" }
 ferrix-native-abi = { path = "../libs/native-abi" }
 ferrix-objects = { path = "../libs/objects" }
 ferrix-vfs = { path = "../libs/vfs" }
+ferrix-pci = { path = "../libs/pci" }
 
 [[bin]]
 name = "elf_parse"
@@ -53,6 +54,13 @@ bench = false
 [[bin]]
 name = "vfs_ops"
 path = "fuzz_targets/vfs_ops.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pci_walk"
+path = "fuzz_targets/pci_walk.rs"
 test = false
 doc = false
 bench = false

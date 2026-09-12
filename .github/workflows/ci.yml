@@ -399,6 +399,13 @@ jobs:
       - name: Miri (VFS)
         run: cargo +nightly miri test -p ferrix-vfs --lib
 
+      # PCI configuration space. The crate forbids unsafe, so what Miri adds
+      # here is narrower than for the crates above: every offset a device's
+      # pointer produces is used to index the test bus's buffers, and Miri
+      # checks those indices against the buffers' real extent.
+      - name: Miri (PCI configuration space)
+        run: cargo +nightly miri test -p ferrix-pci --lib
+
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.
   #

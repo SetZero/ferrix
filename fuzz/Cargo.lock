@@ -47,6 +47,7 @@ dependencies = [
  "ferrix-linux-abi",
  "ferrix-native-abi",
  "ferrix-objects",
+ "ferrix-pci",
  "ferrix-ustack",
  "ferrix-vfs",
  "libfuzzer-sys",
@@ -69,6 +70,10 @@ version = "0.1.0"
 dependencies = [
  "ferrix-native-abi",
 ]
+
+[[package]]
+name = "ferrix-pci"
+version = "0.1.0"
 
 [[package]]
 name = "ferrix-sync"

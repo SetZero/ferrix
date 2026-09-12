@@ -72,7 +72,8 @@ package FerrixDrivers {
         @stage { number = 10; }
         doc /* ACPI on x86-64 and AArch64 under EDK2, device tree on ARMv7-A
              * and where AArch64 firmware offers one; PCIe bus walk from
-             * either. */
+             * either. The walk, BAR sizing and capability lists are written
+             * ahead in libs/pci. */
         part nodes : DeviceNode[0..*];
         action enumerate;
     }

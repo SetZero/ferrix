@@ -23,6 +23,7 @@ members = [
     "libs/virtio",
     "libs/vma",
     "libs/paging",
+    "libs/pci",
     "libs/qr",
     "libs/sched",
     "libs/vfs",
@@ -69,6 +70,7 @@ ferrix-vma = { path = "libs/vma" }
 ferrix-qr = { path = "libs/qr" }
 ferrix-vfs = { path = "libs/vfs" }
 ferrix-paging = { path = "libs/paging" }
+ferrix-pci = { path = "libs/pci" }
 ferrix-sched = { path = "libs/sched" }
 
 # ---------------------------------------------------------------------------

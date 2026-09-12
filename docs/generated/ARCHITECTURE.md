@@ -93,14 +93,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1406 elements, 155 relations. Model digest `ea8a0b0cfeae7313`.
+13 files, 16 packages, 1410 elements, 155 relations. Model digest `f200ee3b1c1bcbc8`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
 | `#implemented` | 115 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 9 | The owning stage has started; part of the element runs. |
-| `#writtenAhead` | 8 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 107 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#inProgress` | 10 | The owning stage has started; part of the element runs. |
+| `#writtenAhead` | 9 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
+| `#planned` | 106 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -2096,7 +2096,7 @@ What the kernel creates per device found, and hands devmgr a handle to.
 
 `#planned`  ·  stage 10
 
-ACPI on x86-64 and AArch64 under EDK2, device tree on ARMv7-A and where AArch64 firmware offers one; PCIe bus walk from either.
+ACPI on x86-64 and AArch64 under EDK2, device tree on ARMv7-A and where AArch64 firmware offers one; PCIe bus walk from either. The walk, BAR sizing and capability lists are written ahead in libs/pci.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -2421,6 +2421,7 @@ docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code 
 | `libs/cpio` | `#writtenAhead` | 8 | `forbid` | 45 |  |
 | `libs/vfs` | `#writtenAhead` | 8 | `forbid` | 36 | Dentries with negative entries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store the kernel supplies, initramfs unpacking and the getdents64 packer. |
 | `libs/virtio` | `#writtenAhead` | 10 | allowed | 50 |  |
+| `libs/pci` | `#writtenAhead` | 10 | `forbid` | 37 | PCI configuration space over a ConfigSpace the caller implements: ECAM geometry, headers, BAR decoding and sizing, both capability lists with a visited set, MSI-X, the bus walk without recursion or allocation, and virtio's PCI transport. |
 | `libs/native-abi` | `#implemented` | 9 | `forbid` | 13 | The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. |
 | `libs/objects` | `#implemented` | 9 | `forbid` | 16 | The handle table and the channel message queue, generic over what a handle names. |
 | `libs/btrfs` | `#writtenAhead` | 11 | `forbid` | 38 |  |
@@ -2449,35 +2450,36 @@ flowchart LR
   n12_FerrixStructure_Workspace_cpio["cpio<br>libs/cpio"]
   n13_FerrixStructure_Workspace_vfs["vfs<br>libs/vfs"]
   n14_FerrixStructure_Workspace_virtio["virtio<br>libs/virtio"]
-  n15_FerrixStructure_Workspace_nativeAbi["nativeAbi<br>libs/native-abi"]
-  n16_FerrixStructure_Workspace_objects["objects<br>libs/objects"]
-  n17_FerrixStructure_Workspace_btrfs["btrfs<br>libs/btrfs"]
-  n18_FerrixStructure_Workspace_seccompBpf["seccompBpf<br>libs/seccomp"]
-  n19_FerrixStructure_Workspace_bootCrate["bootCrate<br>boot"]
-  n20_FerrixStructure_Workspace_kernelCrate["kernelCrate<br>kernel"]
-  n21_FerrixStructure_Workspace_xtask["xtask<br>xtask"]
-  n22_FerrixStructure_Workspace_fuzz["fuzz<br>fuzz"]
-  n20_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n5_FerrixStructure_Workspace_acpi
-  n20_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n0_FerrixStructure_Workspace_bootinfo
-  n20_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n6_FerrixStructure_Workspace_fdt
-  n20_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n2_FerrixStructure_Workspace_frameCrate
-  n20_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n3_FerrixStructure_Workspace_heap
-  n20_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n4_FerrixStructure_Workspace_paging
-  n20_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n8_FerrixStructure_Workspace_sched
-  n20_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n7_FerrixStructure_Workspace_sync
-  n20_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n9_FerrixStructure_Workspace_vma
-  n19_FerrixStructure_Workspace_bootCrate -. "depends on" .-> n0_FerrixStructure_Workspace_bootinfo
-  n19_FerrixStructure_Workspace_bootCrate -. "depends on" .-> n1_FerrixStructure_Workspace_elf
-  n19_FerrixStructure_Workspace_bootCrate -. "depends on" .-> n4_FerrixStructure_Workspace_paging
-  n21_FerrixStructure_Workspace_xtask -. "depends on" .-> n1_FerrixStructure_Workspace_elf
-  n22_FerrixStructure_Workspace_fuzz -. "depends on" .-> n1_FerrixStructure_Workspace_elf
-  n22_FerrixStructure_Workspace_fuzz -. "depends on" .-> n2_FerrixStructure_Workspace_frameCrate
+  n15_FerrixStructure_Workspace_pci["pci<br>libs/pci"]
+  n16_FerrixStructure_Workspace_nativeAbi["nativeAbi<br>libs/native-abi"]
+  n17_FerrixStructure_Workspace_objects["objects<br>libs/objects"]
+  n18_FerrixStructure_Workspace_btrfs["btrfs<br>libs/btrfs"]
+  n19_FerrixStructure_Workspace_seccompBpf["seccompBpf<br>libs/seccomp"]
+  n20_FerrixStructure_Workspace_bootCrate["bootCrate<br>boot"]
+  n21_FerrixStructure_Workspace_kernelCrate["kernelCrate<br>kernel"]
+  n22_FerrixStructure_Workspace_xtask["xtask<br>xtask"]
+  n23_FerrixStructure_Workspace_fuzz["fuzz<br>fuzz"]
+  n21_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n5_FerrixStructure_Workspace_acpi
+  n21_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n0_FerrixStructure_Workspace_bootinfo
+  n21_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n6_FerrixStructure_Workspace_fdt
+  n21_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n2_FerrixStructure_Workspace_frameCrate
+  n21_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n3_FerrixStructure_Workspace_heap
+  n21_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n4_FerrixStructure_Workspace_paging
+  n21_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n8_FerrixStructure_Workspace_sched
+  n21_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n7_FerrixStructure_Workspace_sync
+  n21_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n9_FerrixStructure_Workspace_vma
+  n20_FerrixStructure_Workspace_bootCrate -. "depends on" .-> n0_FerrixStructure_Workspace_bootinfo
+  n20_FerrixStructure_Workspace_bootCrate -. "depends on" .-> n1_FerrixStructure_Workspace_elf
+  n20_FerrixStructure_Workspace_bootCrate -. "depends on" .-> n4_FerrixStructure_Workspace_paging
+  n22_FerrixStructure_Workspace_xtask -. "depends on" .-> n1_FerrixStructure_Workspace_elf
+  n23_FerrixStructure_Workspace_fuzz -. "depends on" .-> n1_FerrixStructure_Workspace_elf
+  n23_FerrixStructure_Workspace_fuzz -. "depends on" .-> n2_FerrixStructure_Workspace_frameCrate
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef writtenAhead fill:#e5dff0,stroke:#6b4fa0,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixStructure_Workspace_bootinfo,n1_FerrixStructure_Workspace_elf,n2_FerrixStructure_Workspace_frameCrate,n3_FerrixStructure_Workspace_heap,n4_FerrixStructure_Workspace_paging,n5_FerrixStructure_Workspace_acpi,n6_FerrixStructure_Workspace_fdt,n7_FerrixStructure_Workspace_sync,n8_FerrixStructure_Workspace_sched,n9_FerrixStructure_Workspace_vma,n15_FerrixStructure_Workspace_nativeAbi,n16_FerrixStructure_Workspace_objects,n19_FerrixStructure_Workspace_bootCrate,n20_FerrixStructure_Workspace_kernelCrate,n21_FerrixStructure_Workspace_xtask,n22_FerrixStructure_Workspace_fuzz implemented
-  class n10_FerrixStructure_Workspace_linuxAbi,n11_FerrixStructure_Workspace_ustack,n12_FerrixStructure_Workspace_cpio,n13_FerrixStructure_Workspace_vfs,n14_FerrixStructure_Workspace_virtio,n17_FerrixStructure_Workspace_btrfs writtenAhead
-  class n18_FerrixStructure_Workspace_seccompBpf planned
+  class n0_FerrixStructure_Workspace_bootinfo,n1_FerrixStructure_Workspace_elf,n2_FerrixStructure_Workspace_frameCrate,n3_FerrixStructure_Workspace_heap,n4_FerrixStructure_Workspace_paging,n5_FerrixStructure_Workspace_acpi,n6_FerrixStructure_Workspace_fdt,n7_FerrixStructure_Workspace_sync,n8_FerrixStructure_Workspace_sched,n9_FerrixStructure_Workspace_vma,n16_FerrixStructure_Workspace_nativeAbi,n17_FerrixStructure_Workspace_objects,n20_FerrixStructure_Workspace_bootCrate,n21_FerrixStructure_Workspace_kernelCrate,n22_FerrixStructure_Workspace_xtask,n23_FerrixStructure_Workspace_fuzz implemented
+  class n10_FerrixStructure_Workspace_linuxAbi,n11_FerrixStructure_Workspace_ustack,n12_FerrixStructure_Workspace_cpio,n13_FerrixStructure_Workspace_vfs,n14_FerrixStructure_Workspace_virtio,n15_FerrixStructure_Workspace_pci,n18_FerrixStructure_Workspace_btrfs writtenAhead
+  class n19_FerrixStructure_Workspace_seccompBpf planned
 ```
 
 **Figure 15 — The crate graph.** 15 `dependency` statements; an arrow points from the thing that needs to the thing it needs. [SVG](diagrams/crate-dependencies.svg) Source: `02-structure.sysml`.
@@ -2510,7 +2512,7 @@ flowchart TB
   n8_FerrixRoadmap_stage7LinuxAbi["S7  Stage 7 Linux ABI<br>Done · month"]
   n9_FerrixRoadmap_stage8Vfs["S8  Stage 8 VFS<br>InProgress · month"]
   n10_FerrixRoadmap_stage9NativeAbi["S9  Stage 9 native ABI<br>InProgress · week"]
-  n11_FerrixRoadmap_stage10UserspaceDrivers["S10  Stage 10 userspace drivers<br>Planned · month"]
+  n11_FerrixRoadmap_stage10UserspaceDrivers["S10  Stage 10 userspace drivers<br>InProgress · month"]
   n12_FerrixRoadmap_stage11BtrfsRead["S11  Stage 11 btrfs read<br>Planned · month"]
   n13_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>Planned · longer"]
   n14_FerrixRoadmap_stage13Isolation["S13  Stage 13 isolation<br>Planned · month"]
@@ -2541,8 +2543,8 @@ flowchart TB
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi implemented
-  class n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi inProgress
-  class n11_FerrixRoadmap_stage10UserspaceDrivers,n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stage12BtrfsWrite,n14_FerrixRoadmap_stage13Isolation,n15_FerrixRoadmap_stage14RealTime,n16_FerrixRoadmap_stage15Userland,n17_FerrixRoadmap_stage16Rustc,n18_FerrixRoadmap_stage17SelfHosting planned
+  class n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers inProgress
+  class n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stage12BtrfsWrite,n14_FerrixRoadmap_stage13Isolation,n15_FerrixRoadmap_stage14RealTime,n16_FerrixRoadmap_stage15Userland,n17_FerrixRoadmap_stage16Rustc,n18_FerrixRoadmap_stage17SelfHosting planned
 ```
 
 **Figure 16 — The roadmap, stage by stage.** An arrow points from a stage to the stage it unblocks. The two stages with a second arrow into them are the ones that need more than their predecessor. [SVG](diagrams/roadmap-stages.svg) Source: `10-roadmap.sysml`.
@@ -2560,7 +2562,7 @@ flowchart TB
 | `S7` | 7 | Stage 7 Linux ABI | Done | month | `#implemented` |
 | `S8` | 8 | Stage 8 VFS | InProgress | month | `#inProgress` |
 | `S9` | 9 | Stage 9 native ABI | InProgress | week | `#inProgress` |
-| `S10` | 10 | Stage 10 userspace drivers | Planned | month | `#planned` |
+| `S10` | 10 | Stage 10 userspace drivers | InProgress | month | `#inProgress` |
 | `S11` | 11 | Stage 11 btrfs read | Planned | month | `#planned` |
 | `S12` | 12 | Stage 12 btrfs write | Planned | longer | `#planned` |
 | `S13` | 13 | Stage 13 isolation | Planned | month | `#planned` |
@@ -2693,9 +2695,11 @@ Built: the byte-level half, in libs/native-abi and libs/objects, host-tested, fu
 
 ### S10 — Stage 10 userspace drivers
 
-**Planned**  ·  size month  ·  `#planned`
+**InProgress**  ·  size month  ·  `#inProgress`
 
 Enumeration, IOMMU domains, devmgr, the shared-ring block protocol, virtio-blk as a user process. Exit: a sector read through a ring-3 driver with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting.
+
+Built: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri. Next, and needing nothing from stage 9: kernel enumeration from MCFG and the device tree, then IOMMU domains. Needing stage 9: everything that runs in ring 3.
 
 **Allocated to: **`ferrix.kernel.devices` and `ferrix.kernel.iommu`
 
@@ -2964,8 +2968,8 @@ flowchart LR
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   class n0_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixStructure_Kernel_mm,n4_FerrixStructure_Kernel_vmap,n5_FerrixRoadmap_stage3TrapsInterruptsTime,n6_FerrixStructure_Kernel_trap,n7_FerrixStructure_Kernel_irq,n8_FerrixStructure_Kernel_timer,n9_FerrixRoadmap_stage4Smp,n10_FerrixStructure_Kernel_smp,n11_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_stage5Scheduler,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_tasks,n16_FerrixRoadmap_stage6UserMode,n18_FerrixRoadmap_stage7LinuxAbi implemented
-  class n17_FerrixStructure_Kernel_vm,n19_FerrixStructure_Kernel_syscalls,n20_FerrixStructure_Kernel_signals,n22_FerrixRoadmap_stage8Vfs,n25_FerrixRoadmap_stage9NativeAbi inProgress
-  class n21_FerrixStructure_Kernel_futex,n23_FerrixStructure_Kernel_vfs,n24_FerrixStructure_Kernel_filesystems,n26_FerrixStructure_Kernel_native,n27_FerrixRoadmap_stage10UserspaceDrivers,n30_FerrixRoadmap_stage11BtrfsRead,n31_FerrixStructure_Kernel_blockCore,n32_FerrixRoadmap_stage13Isolation,n33_FerrixStructure_Kernel_namespaces,n34_FerrixStructure_Kernel_cgroups,n35_FerrixStructure_Kernel_seccomp,n36_FerrixRoadmap_stage14RealTime,n37_FerrixRoadmap_stage15Userland,n38_FerrixStructure_Ferrix_userland,n39_FerrixRoadmap_stage16Rustc planned
+  class n17_FerrixStructure_Kernel_vm,n19_FerrixStructure_Kernel_syscalls,n20_FerrixStructure_Kernel_signals,n22_FerrixRoadmap_stage8Vfs,n25_FerrixRoadmap_stage9NativeAbi,n27_FerrixRoadmap_stage10UserspaceDrivers inProgress
+  class n21_FerrixStructure_Kernel_futex,n23_FerrixStructure_Kernel_vfs,n24_FerrixStructure_Kernel_filesystems,n26_FerrixStructure_Kernel_native,n30_FerrixRoadmap_stage11BtrfsRead,n31_FerrixStructure_Kernel_blockCore,n32_FerrixRoadmap_stage13Isolation,n33_FerrixStructure_Kernel_namespaces,n34_FerrixStructure_Kernel_cgroups,n35_FerrixStructure_Kernel_seccomp,n36_FerrixRoadmap_stage14RealTime,n37_FerrixRoadmap_stage15Userland,n38_FerrixStructure_Ferrix_userland,n39_FerrixRoadmap_stage16Rustc planned
 ```
 
 **Figure 18 — Stages and the parts that answer them.** Each line carries the word the model wrote: `satisfy` where the part exists, `allocate` where it is one the stage still owes. [SVG](diagrams/stages-and-parts.svg) Source: `10-roadmap.sysml`.
@@ -3130,7 +3134,7 @@ flowchart LR
 | `S7` | `stage7LinuxAbi` | `allocate` and `dependency` | — | `#implemented` |
 | `S8` | `stage8Vfs` | `allocate` and `dependency` | — | `#inProgress` |
 | `S9` | `stage9NativeAbi` | `allocate` and `dependency` | — | `#inProgress` |
-| `S10` | `stage10UserspaceDrivers` | `allocate` and `dependency` | — | `#planned` |
+| `S10` | `stage10UserspaceDrivers` | `allocate` and `dependency` | — | `#inProgress` |
 | `S11` | `stage11BtrfsRead` | `allocate` and `dependency` | — | `#planned` |
 | `S12` | `stage12BtrfsWrite` | `dependency` | — | `#planned` |
 | `S13` | `stage13Isolation` | `allocate` and `dependency` | — | `#planned` |
@@ -3281,6 +3285,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 10 | `FerrixStructure::X86_64Arch::vtd` | part | `#planned` |
 | 10 | `FerrixStructure::AArch64Arch::smmu` | part | `#planned` |
 | 10 | `FerrixStructure::Workspace::virtio` | part | `#writtenAhead` |
+| 10 | `FerrixStructure::Workspace::pci` | part | `#writtenAhead` |
 | 10 | `FerrixDrivers::DeviceNode` | part | `#planned` |
 | 10 | `FerrixDrivers::DeviceEnumeration` | part | `#planned` |
 | 10 | `FerrixDrivers::IommuDomain` | part | `#planned` |
@@ -3319,7 +3324,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 14 | `FerrixAssurance::CyclicTest` | verification | `#planned` |
 | 15 | `FerrixObjects::PosixIpc` | part | `#planned` |
 
-138 elements across 15 stages.
+139 elements across 15 stages.
 
 ## Figures
 
@@ -3341,7 +3346,7 @@ Every diagram in this document, drawn from the model by scripts/sysml/diagrams.p
 | 12 | Kernel object and its subtypes | 10 nodes, 9 edges | `06-objects.sysml` | [ferrix-objects-kernel-object.svg](diagrams/ferrix-objects-kernel-object.svg) |
 | 13 | Driver bootstrap | 8 nodes, 7 edges | `08-drivers.sysml` | [ferrix-drivers-driver-bootstrap.svg](diagrams/ferrix-drivers-driver-bootstrap.svg) |
 | 14 | Filesystem and its subtypes | 7 nodes, 6 edges | `09-storage.sysml` | [ferrix-storage-filesystem.svg](diagrams/ferrix-storage-filesystem.svg) |
-| 15 | The crate graph | 23 nodes, 15 edges | `02-structure.sysml` | [crate-dependencies.svg](diagrams/crate-dependencies.svg) |
+| 15 | The crate graph | 24 nodes, 15 edges | `02-structure.sysml` | [crate-dependencies.svg](diagrams/crate-dependencies.svg) |
 | 16 | The roadmap, stage by stage | 19 nodes, 19 edges | `10-roadmap.sysml` | [roadmap-stages.svg](diagrams/roadmap-stages.svg) |
 | 17 | The gates and the rules they uphold | 16 nodes, 10 edges | `11-assurance.sysml` | [gates-and-rules.svg](diagrams/gates-and-rules.svg) |
 | 18 | Stages and the parts that answer them | 41 nodes, 26 edges | `10-roadmap.sysml` | [stages-and-parts.svg](diagrams/stages-and-parts.svg) |

@@ -30,6 +30,7 @@ says a stage should: their byte-level halves are in `libs/` — the VFS in
 `libs/vfs`, the handle table in `libs/objects`. Stage 9's first kernel objects
 — handle tables, channels carrying handles, VMOs — are in the boot test;
 stage 8's kernel code does not exist yet.
+Stage 10 has begun the same way, with PCI configuration space in `libs/pci`.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -951,6 +952,67 @@ virtio-blk — as a user process.
 running in ring 3, with the IOMMU on and a deliberate out-of-domain DMA
 attempt faulting.
 
+**Done — configuration space, ahead of the kernel code that reads it.**
+Started while stage 9 is still under way, because the exit criterion needs
+stage 9's objects but most of what stands between here and it does not.
+
+* `libs/pci` — configuration space as arithmetic over a `ConfigSpace` the
+  caller implements, answering as hardware does: all ones for a function that
+  is not there. `#![forbid(unsafe_code)]`, no allocation, no recursion.
+  * **ECAM**: the window geometry, and an adapter that turns "read these bytes
+    at this offset" into configuration space, so the kernel's half is its
+    volatile access and nothing else.
+  * **Headers**, types 0 and 1, and the class code.
+  * **BARs**, decoded and sized. Sizing is where the two classic mistakes live
+    — probing a BAR while its function still decodes, so it briefly answers
+    for whatever sits at the top of the address space, and sizing or
+    restoring only the lower half of a 64-bit BAR — and neither is visible on
+    a machine with one device. The tests' fake bus records the first and
+    compares every register before and after for the second.
+  * **Both capability lists**, walked with a visited set over every offset the
+    list could use, so a list that points back at itself ends in an error, not
+    a kernel that never finishes enumerating. MSI-X decoded from its
+    capability.
+  * **The bus walk**: every function reachable from a root bus through bridges
+    firmware numbered. A bridge whose numbers make no sense — not above its
+    own bus, outside the window, already claimed — is reported and skipped,
+    and no arrangement of bridges scans a bus twice. Bus numbers are
+    firmware's and are not renumbered, because the number is also where the
+    function sits in the ECAM window and in the IOMMU's tables.
+  * **virtio's PCI transport**: the vendor capabilities that say where in its
+    BARs a modern virtio device keeps each register block, and a check that
+    each block fits the sized BAR it names — the kernel will map exactly those
+    blocks into a driver, and a block that overhangs its BAR would map
+    whatever is next to it.
+* The `pci_walk` fuzz target builds configuration spaces from its input and
+  requires every walk to end, every function to be found once, and sizing to
+  restore every register without probing a decoding function; 5.1 million runs
+  found nothing when it landed. Miri runs the host tests in CI.
+
+**One bug, found in review before anything ran.** The first BAR sizing
+required the bits that stuck to run all the way to bit 63. A device with a
+64-bit BAR that decodes only 40 bits of address reads back zeros above bit 40
+— which the specification allows and Linux's sizing expects — and would have
+been refused as malformed. The
+check now requires one contiguous run, and a test sizes a 40-bit decoder.
+
+**Still to do, in the order it can be done:**
+
+* **Enumeration in the kernel, which needs nothing from stage 9.** MCFG in
+  `libs/acpi` and the `pci-host-ecam-generic` node in `libs/fdt`, the ECAM
+  window mapped as device memory, the walk, and a device node per function,
+  in the boot test on all three architectures. One consequence for the test
+  machine: under ACPI, QEMU describes AArch64's virtio-mmio devices only in
+  the DSDT, which is AML, which Ferrix will not interpret — so that disk has
+  to become `virtio-blk-pci` before AArch64 can find it.
+* **IOMMU domains, which need nothing from stage 9 either.** DMAR and IORT in
+  `libs/acpi`, VT-d on `q35` with `intel-iommu`, SMMUv3 on `virt` with
+  `iommu=smmuv3` — which this QEMU also offers on the 32-bit machine — and the
+  deliberate out-of-domain DMA fault, driven from the kernel first.
+* **Everything that runs in ring 3, which does.** Device-node handles,
+  `Interrupt` and `IoMapping` over stage 9's handle table, `devmgr`, the ring
+  protocol, and virtio-blk as a process.
+
 ---
 
 ## Stage 11 — Block core and btrfs, read  ·  *month*
@@ -1064,17 +1126,18 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 36 |
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory. | 50 |
+| `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport. Has its fuzz target and its Miri step already. | 37 |
 | `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
 | `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one. Has its fuzz target and its Miri step. | 16 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **555 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **592 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has five:
-`elf_parse`, `frame_alloc`, `ustack_build`, `handle_table` and `vfs_ops`. Every crate in the table above
+asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has six:
+`elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`, `vfs_ops` and `pci_walk`. Every crate in the table above
 parses bytes that came from outside the system — a disk, a firmware table, an
 archive a stranger built — which is precisely the population the rule was
 written for. The fuzz targets are owed, and are owed *before* the consuming
@@ -1091,7 +1154,7 @@ been found, if at all, by whoever was debugging a shell that mangled its own
 arguments.
 
 Miri is further behind than fuzzing. CI runs it over `libs/elf`,
-`libs/bootinfo`, `libs/ustack`, `libs/objects` and `libs/vfs`, although the CI file's own comment names the
+`libs/bootinfo`, `libs/ustack`, `libs/objects`, `libs/vfs` and `libs/pci`, although the CI file's own comment names the
 page-table arithmetic and the allocators as the reason the job exists — so
 `frame`, `heap` and `paging`, all running in the kernel today, are owed a Miri
 step too, and ahead of every crate in the table.

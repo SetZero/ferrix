@@ -104,6 +104,10 @@ name = "ferrix-paging"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-pci"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-qr"
 version = "0.1.0"
 dependencies = [

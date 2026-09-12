@@ -849,6 +849,18 @@ package FerrixStructure {
             attribute :>> hostTests = 50;
             @stage { number = 10; }
         }
+        #writtenAhead part pci : LibraryCrate {
+            attribute :>> path = "libs/pci";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 37;
+            @stage { number = 10; }
+            doc /* PCI configuration space over a ConfigSpace the caller
+                 * implements: ECAM geometry, headers, BAR decoding and sizing,
+                 * both capability lists with a visited set, MSI-X, the bus
+                 * walk without recursion or allocation, and virtio's PCI
+                 * transport. The pci_walk fuzz target requires every walk to
+                 * end and sizing to restore every register. */
+        }
         #implemented part nativeAbi : LibraryCrate {
             attribute :>> path = "libs/native-abi";
             attribute :>> forbidsUnsafe = true;
