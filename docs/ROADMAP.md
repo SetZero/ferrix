@@ -389,6 +389,12 @@ been waited for reads the poison. Two of those were tested by breaking what
 they test: with the shootdown disabled, x86-64 fails on a stale read; with
 the grace period skipped, both architectures fail on a poisoned one.
 
+Once the scheduler runs, the shootdown is checked again against what only
+preemption makes possible: a task that moves to another processor while it
+waits for its turn must answer for the processor it is on. The wait first read
+its per-CPU record once, on entry, and so flushed one processor and recorded
+the flush for the one it had left; put back, x86-64 fails on exactly that.
+
 The boot marker reads `FERRIX-BOOT-OK stages 1-5`.
 
 **Deferred, none of it on stage 5's path:**

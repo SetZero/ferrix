@@ -469,9 +469,13 @@ rely on each of these whenever more than one processor runs.
    masked.
 5. The spin lock let two processors in at once, or the processors never ran
    their increments at the same time, so the lock was never contended.
+6. Run again once the scheduler is up: a task that moved to another processor
+   while waiting for a shootdown recorded its flushes for the processor it left,
+   because the wait used a per-CPU record read before the move rather than the
+   processor it was on.
 
-See: kernel/src/smp/check.rs run; kernel/src/smp.rs run_everywhere;
-docs/ROADMAP.md stage 4.
+See: kernel/src/smp/check.rs run; kernel/src/smp/check.rs migrating_shootdown;
+kernel/src/smp.rs run_everywhere; docs/ROADMAP.md stage 4.
 
 <a id="fx-0501"></a>
 

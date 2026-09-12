@@ -466,8 +466,12 @@ pub(crate) static STAGE4_SMP: Explanation = Explanation {
          missed the interrupt meant to wake it or sat with interrupts masked.",
         "The spin lock let two processors in at once, or the processors never ran their \
          increments at the same time, so the lock was never contended.",
+        "Run again once the scheduler is up: a task that moved to another processor while \
+         waiting for a shootdown recorded its flushes for the processor it left, because the \
+         wait used a per-CPU record read before the move rather than the processor it was on.",
     ],
-    see: "kernel/src/smp/check.rs run; kernel/src/smp.rs run_everywhere; docs/ROADMAP.md stage 4",
+    see: "kernel/src/smp/check.rs run; kernel/src/smp/check.rs migrating_shootdown; \
+          kernel/src/smp.rs run_everywhere; docs/ROADMAP.md stage 4",
 };
 
 /// For `start_scheduler` in `main.rs`, when `sched::init` fails.

@@ -451,11 +451,29 @@ pub(crate) fn run_everywhere(work: Work) -> Result<(), &'static str> {
                 return Err("a processor did not finish its share of the work");
             }
             // The work may be waiting on this processor's TLB.
-            service_tlb(me);
+            as_this_cpu(service_tlb);
             spin_loop();
         }
     }
     Ok(())
+}
+
+/// Run `answer` in the name of the processor this is running on, at the
+/// moment it runs.
+///
+/// **Never with a record read earlier.** Kernel code is preemptible and a task
+/// can be resumed on another processor, so a record read on entry to a long
+/// wait names the processor the task *was* on. Flushing the TLB and recording
+/// the flush in that record flushes one processor and vouches for another: the
+/// shootdown then frees memory the processor left behind can still reach
+/// through a stale translation. So the register is read, and the answer made,
+/// with interrupts masked, which is what makes the two one step.
+fn as_this_cpu(answer: fn(&'static PerCpu)) {
+    let saved = <arch::Irq as IrqControl>::disable();
+    if let Some(me) = this_cpu() {
+        answer(me);
+    }
+    <arch::Irq as IrqControl>::restore(saved);
 }
 
 /// The work `me` has not done yet, if there is any, with its generation.
@@ -536,7 +554,7 @@ pub(crate) fn flush_tlb_everywhere() {
         return;
     }
     // Before discovery, or with nobody else running, there is nobody to tell.
-    let (Some(topology), Some(me)) = (TOPOLOGY.get(), this_cpu()) else {
+    let Some(topology) = TOPOLOGY.get().filter(|_| this_cpu().is_some()) else {
         return;
     };
     if topology.online() <= 1 {
@@ -547,21 +565,23 @@ pub(crate) fn flush_tlb_everywhere() {
         if let Some(turn) = SHOOTING.try_lock() {
             break turn;
         }
-        service_tlb(me);
+        as_this_cpu(service_tlb);
         spin_loop();
     };
 
-    // This processor flushed above, after every change the caller made.
+    // The flush at the top was on whichever processor this was then. The one
+    // it answers for has to be the one it is on now, which `service_tlb` sees
+    // is behind the generation just taken, and flushes.
     let generation = TLB_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    let _ = me.tlb_seen.fetch_max(generation, Ordering::SeqCst);
+    as_this_cpu(service_tlb);
     let _ = arch::send_ipi_to_others();
 
     wait_for_everyone(
         topology,
-        me,
         SHOOTDOWN_TIMEOUT_NANOS,
         "flushed its TLB for a shootdown",
         &crate::panic::catalog::SHOOTDOWN_TIMEOUT,
+        service_tlb,
         |cpu| cpu.tlb_seen.load(Ordering::SeqCst) >= generation,
     );
     let _ = SHOOTDOWNS.fetch_add(1, Ordering::Relaxed);
@@ -570,18 +590,20 @@ pub(crate) fn flush_tlb_everywhere() {
 /// Wait until `done` holds for every online processor.
 ///
 /// Shared by the two things that interrupt every other processor and wait for
-/// each to answer. While it waits it answers other processors' shootdowns —
-/// two processors each waiting for the other would otherwise wait forever —
-/// and re-sends its own interrupt every [`KICK_NANOS`]. After `timeout` it
-/// gives up on the machine: a processor that never answers is one whose TLB
-/// or whose read-side section nothing can vouch for any more, and carrying on
-/// would be carrying on regardless.
+/// each to answer. While it waits it runs `answer` for the processor it is on,
+/// which answers other processors' shootdowns — two processors each waiting
+/// for the other would otherwise wait forever — and answers for this
+/// processor itself if the waiting task has moved to one the interrupt was not
+/// sent to. It re-sends its own interrupt every [`KICK_NANOS`]. After
+/// `timeout` it gives up on the machine: a processor that never answers is one
+/// whose TLB or whose read-side section nothing can vouch for any more, and
+/// carrying on would be carrying on regardless.
 fn wait_for_everyone(
     topology: &Topology,
-    me: &PerCpu,
     timeout: u64,
     what: &str,
     entry: &'static crate::panic::catalog::Explanation,
+    answer: fn(&'static PerCpu),
     done: impl Fn(&PerCpu) -> bool,
 ) {
     let started = crate::timer::now_nanos();
@@ -589,7 +611,7 @@ fn wait_for_everyone(
     for cpu in topology.cpus.iter().filter(|cpu| cpu.is_online()) {
         while !done(cpu) {
             halt_if_stopping();
-            service_tlb(me);
+            as_this_cpu(answer);
             let now = crate::timer::now_nanos();
             if now.saturating_sub(started) > timeout {
                 crate::panic::fatal!(*entry, "processor {} never {what}", cpu.logical);
@@ -607,6 +629,9 @@ fn wait_for_everyone(
 ///
 /// One flush answers every shootdown requested so far: each asks for the whole
 /// TLB, and a flush drops whatever any of them wanted dropped.
+///
+/// `me` must be the record of the processor running this, read with
+/// interrupts masked since: the interrupt handler, or [`as_this_cpu`].
 fn service_tlb(me: &PerCpu) {
     let wanted = TLB_GENERATION.load(Ordering::SeqCst);
     if me.tlb_seen.load(Ordering::SeqCst) < wanted {
@@ -676,27 +701,39 @@ pub(crate) fn read_section<T>(body: impl FnOnce() -> T) -> T {
 /// itself; nor holding a lock another processor may be spinning on with
 /// interrupts masked, for the reason [`flush_tlb_everywhere`] gives.
 pub(crate) fn synchronize() {
-    let (Some(topology), Some(me)) = (TOPOLOGY.get(), this_cpu()) else {
+    let Some(topology) = TOPOLOGY.get().filter(|_| this_cpu().is_some()) else {
         return;
     };
 
     let generation = GRACE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    // This processor is outside any section: that is this function's
-    // contract, and why it may answer for itself.
-    let _ = me.gp_seen.fetch_max(generation, Ordering::SeqCst);
+    // The processor running this is outside any section: that is this
+    // function's contract, and why it may answer for itself. For itself as it
+    // is at the moment of answering, not as it was on entry -- a processor this
+    // task has left may be running somebody else's section by now.
+    as_this_cpu(answer_grace);
 
     if topology.online() > 1 {
         let _ = arch::send_ipi_to_others();
         wait_for_everyone(
             topology,
-            me,
             GRACE_TIMEOUT_NANOS,
             "left a read-side section for a grace period",
             &crate::panic::catalog::GRACE_PERIOD_TIMEOUT,
+            answer_grace,
             |cpu| cpu.gp_seen.load(Ordering::SeqCst) >= generation,
         );
     }
     let _ = GRACE_PERIODS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// What a processor waiting in [`synchronize`] answers for itself: any
+/// shootdown, and every grace period so far, because the task running on it is
+/// outside a read-side section and interrupts are masked around the answer.
+fn answer_grace(me: &'static PerCpu) {
+    service_tlb(me);
+    let _ = me
+        .gp_seen
+        .fetch_max(GRACE_GENERATION.load(Ordering::SeqCst), Ordering::SeqCst);
 }
 
 /// How many grace periods have completed.

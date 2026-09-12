@@ -7,13 +7,14 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_paging::MapFlags;
+use ferrix_sched::{CpuSet, NICE_0_WEIGHT};
 use ferrix_sync::{Once, SpinLock};
 
-use super::{PerCpu, Topology, run_everywhere};
+use super::{PerCpu, SHOOTING, TLB_GENERATION, Topology, run_everywhere};
 use crate::{arch, mm, vmap};
 
 /// What the checks found, for the boot log.
@@ -462,4 +463,212 @@ fn everywhere(topology: &Topology, report: &mut Report) -> Result<(), &'static s
     report.rounds = ROUNDS;
     report.ipis = topology.cpus().iter().map(PerCpu::ipis_taken).sum::<u64>() - ipis_before;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// A shootdown waited for on one processor and answered on another
+//
+// Run after the scheduler is up, because what it tests only exists once
+// kernel code can be preempted and a task resumed somewhere else.
+// ---------------------------------------------------------------------------
+
+/// The processor the migrating task began waiting on, plus one; zero until it
+/// has.
+static MIGRANT_STARTED_ON: AtomicUsize = AtomicUsize::new(0);
+
+/// Set once the migrating task's shootdown has returned.
+static MIGRANT_DONE: AtomicBool = AtomicBool::new(false);
+
+/// Tells the task keeping the migrant's first processor busy to stop.
+static HOG_STOP: AtomicBool = AtomicBool::new(false);
+
+/// Set once that task has stopped.
+static HOG_DONE: AtomicBool = AtomicBool::new(false);
+
+/// How long any one step of [`migrating_shootdown`] waits.
+const MIGRATION_PATIENCE_NANOS: u64 = 10_000_000_000;
+
+/// How long the migrant is left to settle on its new processor, so that no
+/// interrupt sent while moving it is still on its way when the check starts
+/// counting answers.
+const MIGRATION_SETTLE_NANOS: u64 = 50_000_000;
+
+/// Record where this started, then run a shootdown, which waits for its turn.
+fn migrant(_argument: usize) {
+    if let Some(me) = super::this_cpu() {
+        MIGRANT_STARTED_ON.store(me.logical + 1, Ordering::Release);
+    }
+    super::flush_tlb_everywhere();
+    MIGRANT_DONE.store(true, Ordering::Release);
+}
+
+/// Keep a processor busy, so that the task waiting beside it is worth taking.
+fn hog(_argument: usize) {
+    while !HOG_STOP.load(Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+    HOG_DONE.store(true, Ordering::Release);
+}
+
+/// Spin, with interrupts open, until `ready` or `patience` runs out.
+///
+/// A spin rather than a yield, because the caller may be holding the
+/// shootdown turn, and a spin lock is not held across a switch.
+fn spin_until(
+    patience: u64,
+    mut ready: impl FnMut() -> bool,
+    what: &'static str,
+) -> Result<(), &'static str> {
+    let deadline = crate::timer::now_nanos().saturating_add(patience);
+    while !ready() {
+        if crate::timer::now_nanos() > deadline {
+            return Err(what);
+        }
+        core::hint::spin_loop();
+    }
+    Ok(())
+}
+
+/// Spin on the counter for `nanos`, with interrupts open.
+fn spin_for(nanos: u64) {
+    let until = crate::timer::now_nanos().saturating_add(nanos);
+    while crate::timer::now_nanos() < until {
+        core::hint::spin_loop();
+    }
+}
+
+/// A task that moves to another processor while it waits for its turn at a
+/// shootdown answers shootdowns for the processor it is on, and never for the
+/// one it left.
+///
+/// The task waits because this holds the turn. A second task pinned beside it
+/// makes it worth stealing, and broadcast interrupts wake the idle processors
+/// to steal it -- each sent with a shootdown generation of its own, which
+/// every processor answers by flushing, so the kicks vouch for nothing. Once
+/// it has moved and settled, one more generation is requested with no
+/// interrupt at all. Nothing then flushes for it except the waiting task, in
+/// its loop: the processor it is on must come to answer, and the processor it
+/// left, busy with the pinned task and interrupted by nobody, must not.
+///
+/// A task that kept the record it started with flushes where it is and
+/// records the flush for where it was, so the processor it moved to never
+/// answers and the one it left is recorded as flushed without flushing. That
+/// is the case in which a real shootdown frees memory a stale translation
+/// still reaches.
+///
+/// Returns the processors it moved between; `None` where the architecture's
+/// invalidation is broadcast and no processor waits for another, or where
+/// there are too few processors to keep this one out of the way and still
+/// have two to move between.
+///
+/// # Errors
+///
+/// If the task never moves, never answers where it is, or answers for the
+/// processor it left.
+pub(crate) fn migrating_shootdown(
+    topology: &Topology,
+) -> Result<Option<(usize, usize)>, &'static str> {
+    if arch::TLB_FLUSH_IS_BROADCAST || topology.online() < 3 {
+        return Ok(None);
+    }
+    let here = super::this_cpu()
+        .ok_or("no processor to run the migration check on")?
+        .logical;
+    let mut elsewhere = CpuSet::empty();
+    for cpu in (0..topology.count()).filter(|cpu| *cpu != here) {
+        elsewhere
+            .insert(cpu)
+            .map_err(|_| "more processors than a set of them holds")?;
+    }
+    let first = (here + 1) % topology.count();
+
+    MIGRANT_STARTED_ON.store(0, Ordering::Release);
+    MIGRANT_DONE.store(false, Ordering::Release);
+    HOG_STOP.store(false, Ordering::Release);
+    HOG_DONE.store(false, Ordering::Release);
+    let arena_before = vmap::usage().allocations;
+
+    let turn = SHOOTING.lock();
+    let migrant_task = crate::sched::spawn_on(
+        "shootdown-migrant",
+        migrant,
+        0,
+        NICE_0_WEIGHT,
+        first,
+        elsewhere,
+    )?;
+    spin_until(
+        MIGRATION_PATIENCE_NANOS,
+        || MIGRANT_STARTED_ON.load(Ordering::Acquire) != 0,
+        "the task that was to wait for a shootdown never started",
+    )?;
+    let left = MIGRANT_STARTED_ON.load(Ordering::Acquire) - 1;
+    let hog_task = crate::sched::spawn_on(
+        "shootdown-hog",
+        hog,
+        0,
+        NICE_0_WEIGHT,
+        left,
+        CpuSet::of(left),
+    )?;
+
+    // Wake the idle processors until one of them takes the waiting task.
+    let deadline = crate::timer::now_nanos().saturating_add(MIGRATION_PATIENCE_NANOS);
+    while migrant_task.cpu() == left {
+        if crate::timer::now_nanos() > deadline {
+            return Err("the task waiting for a shootdown was never moved off its processor");
+        }
+        let _ = TLB_GENERATION.fetch_add(1, Ordering::SeqCst);
+        let _ = arch::send_ipi_to_others();
+        spin_for(1_000_000);
+    }
+    spin_for(MIGRATION_SETTLE_NANOS);
+
+    let generation = TLB_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let cpus = topology.cpus();
+    let answered = |cpu: usize| {
+        cpus.get(cpu)
+            .is_some_and(|record| record.tlb_seen.load(Ordering::SeqCst) >= generation)
+    };
+    let moved_to_answered = spin_until(
+        MIGRATION_PATIENCE_NANOS / 5,
+        || {
+            let now_on = migrant_task.cpu();
+            now_on != left && answered(now_on)
+        },
+        "",
+    );
+    if moved_to_answered.is_err() {
+        return Err(if answered(left) {
+            "a task that moved while waiting for a shootdown answered for the processor it left"
+        } else {
+            "a task that moved while waiting for a shootdown never answered where it was"
+        });
+    }
+    let moved_to = migrant_task.cpu();
+
+    // Let both go: the migrant takes the turn and runs a real shootdown, which
+    // brings every processor, this one included, up to date.
+    HOG_STOP.store(true, Ordering::Release);
+    drop(turn);
+    spin_until(
+        MIGRATION_PATIENCE_NANOS,
+        || MIGRANT_DONE.load(Ordering::Acquire) && HOG_DONE.load(Ordering::Acquire),
+        "the tasks of the migration check never finished",
+    )?;
+    drop(migrant_task);
+    drop(hog_task);
+
+    let deadline = crate::timer::now_nanos().saturating_add(MIGRATION_PATIENCE_NANOS);
+    loop {
+        let _ = crate::sched::reap();
+        if vmap::usage().allocations <= arena_before {
+            break;
+        }
+        if crate::timer::now_nanos() > deadline {
+            return Err("a task of the migration check never gave its stack back");
+        }
+        crate::sched::yield_now();
+    }
+    Ok(Some((left, moved_to)))
 }

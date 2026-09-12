@@ -738,6 +738,24 @@ fn start_scheduler(cpus: &'static smp::Topology) {
         "  stage 5  {} threads scheduled fairly across {} processors",
         report.threads, report.processors,
     );
+
+    // Stage 4's shootdown again, now that a task waiting in one can be
+    // preempted and resumed on another processor, which before the scheduler
+    // nothing could.
+    match smp::check::migrating_shootdown(cpus) {
+        Ok(Some((left, moved_to))) => println!(
+            "  migrate  a task waiting for a shootdown moved from processor {left} to \
+             {moved_to} and answered for {moved_to}"
+        ),
+        Ok(None) => println!(
+            "  migrate  no processor waits for another's shootdown on {}",
+            arch::NAME
+        ),
+        Err(problem) => fatal!(
+            catalog::STAGE4_SMP,
+            "stage 4 self-check failed under the scheduler: {problem}"
+        ),
+    }
 }
 
 /// The half of stage 2 that cannot run until the rest of boot has.
