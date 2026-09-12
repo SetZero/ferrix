@@ -1855,6 +1855,47 @@ images `mkfs.btrfs` produced.
 **Exit:** Ferrix mounts an image made by real `mkfs.btrfs`, and reads a file
 tree out of it that byte-for-byte matches what the host wrote.
 
+**Done — the read path, host-side, against real images.** Started while
+stages 8 to 10 are under way, because everything short of the kernel mount is
+logic `cargo test`, Miri and a fuzzer can reach.
+
+* `libs/btrfs` — the read path, allocating nothing and forbidding `unsafe`.
+  `volume.rs` mounts: superblock, system chunk array, chunk tree, root tree,
+  default fs tree. It holds one node buffer rather than a path, re-descending
+  from the root to reach the next leaf, and checks every node against the
+  level, generation and fsid its parent promised. `fs.rs` answers what a VFS
+  asks: stat data, lookup by name hash, `readdir` from a resumable
+  `DIR_INDEX` cursor, and `read`, which zero-fills and copies extents over the
+  top so every kind of hole reads the same way. `compress/` holds zlib, LZO and
+  zstd decoders, each written for btrfs's framing of its format.
+* **Real images.** `scripts/gen-btrfs-fixtures.py` builds four images with real
+  `mkfs.btrfs` — uncompressed, zlib, LZO and zstd, with 4 KiB nodes so the fs
+  tree is deeper than a leaf — packed to their non-zero blocks, beside a
+  manifest of every path's size and CRC-32C. All four read back exactly. Each
+  decoder is also checked against an independent implementation:
+  `miniz_oxide`, `lzokay-native` and `ruzstd`.
+* `libs/btrfs-vfs` — the mount: stage 8's `FileSystem` and `Inode` over the
+  read path, read-only, holding no lock across I/O. Tested through the trait,
+  and through `Namespace` at `/mnt` on a tmpfs root.
+* `libs/block` — the block core's queue: merging, flush and FUA barriers that
+  no request crosses, and deadline scheduling, checked against a model by the
+  tests and the `block_queue` fuzz target.
+* The `btrfs_read` fuzz target starts each run from a real image and applies
+  the input as edits, re-checksumming what it edited, so a hostile image that
+  checksums correctly reaches the walker and the extent arithmetic.
+
+**Still to do.**
+
+* **The kernel mount**, which needs a block device: stage 10's virtio-blk driver
+  and ring protocol, with `libs/block` between it and `libs/btrfs-vfs`. Then
+  the exit criterion, in QEMU.
+* Data checksums from the checksum tree are not verified yet; metadata
+  checksums are.
+* Device numbers are passed through as btrfs stores them, not yet checked
+  against how Linux reports them.
+* A file's hole is tested only by construction: `mkfs.btrfs --rootdir` writes a
+  sparse file's gap out as data.
+
 ---
 
 ## Networking — sockets, a net core, virtio-net  ·  *month*

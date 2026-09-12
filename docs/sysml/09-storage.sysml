@@ -2,7 +2,7 @@
  * Ferrix — SysML v2 model, part 9: storage.
  *
  * docs/ARCHITECTURE.md §8. Block core, VFS, the small in-kernel filesystems
- * and btrfs in three stages. Only the btrfs and cpio parsers exist today.
+ * and btrfs in three stages. What exists today is marked on each part.
  */
 package FerrixStorage {
     private import ScalarValues::*;
@@ -18,7 +18,8 @@ package FerrixStorage {
         doc /* Request queues, merging, an I/O scheduler with per-cgroup
              * bandwidth, and the ring protocol to userspace block drivers. A
              * read into a page-cache page fills the VMO the cache already
-             * holds. */
+             * holds. The queue itself (merging, flush and FUA barriers,
+             * deadline scheduling) is written ahead in libs/block. */
         part queues : RequestQueue[0..*];
         part ioScheduler : IoScheduler;
         action submit;
@@ -117,8 +118,8 @@ package FerrixStorage {
         doc /* libs/btrfs: superblock, sys chunk array and chunk map
              * (logical to physical), B-tree nodes and leaves, item payloads
              * (inode, inode ref, dir, extent data), crc32c. Pure functions over
-             * bytes, forbid(unsafe_code); no device, no cache, no transactions.
-             * Fuzzed against images mkfs.btrfs produced. */
+             * bytes, forbid(unsafe_code); no cache, no transactions. Fuzzed
+             * from images mkfs.btrfs produced. */
     }
 
     #planned part def Btrfs :> Filesystem {
@@ -131,12 +132,16 @@ package FerrixStorage {
         part subvolumes : BtrfsSubvolumes;
     }
 
-    #planned part def BtrfsRead {
+    #writtenAhead part def BtrfsRead {
         @stage { number = 11; }
         doc /* Stage A: superblock, chunk tree, root tree, fs trees, extent
              * data inline and regular, directory and inode items, crc32c
              * verification, zstd/zlib/lzo. Enough to mount what mkfs.btrfs
-             * produced and read a sysroot out of it. */
+             * produced and read a sysroot out of it.
+             *
+             * Written ahead in libs/btrfs and libs/btrfs-vfs, host-tested
+             * against four real images; not yet mounted by the kernel, which
+             * needs a block device. Data checksums are not verified yet. */
     }
 
     #planned part def BtrfsWrite {

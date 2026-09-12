@@ -284,13 +284,19 @@ package FerrixRoadmap {
              * decoding-off BARs last. */
     }
 
-    #planned requirement <'S11'> stage11BtrfsRead : Stage {
+    #inProgress requirement <'S11'> stage11BtrfsRead : Stage {
         attribute :>> number = 11;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::InProgress;
         attribute :>> size = "month";
         doc /* Block core, then btrfs stage A. Exit: an image made by real
              * mkfs.btrfs is mounted and a file tree read out byte-for-byte
-             * matching what the host wrote. */
+             * matching what the host wrote.
+             *
+             * Built, host-side: the btrfs read path in libs/btrfs (mount
+             * bootstrap, lookup, readdir, read, zlib/LZO/zstd), reading four
+             * real mkfs.btrfs images back exactly; the mount over stage 8's
+             * traits in libs/btrfs-vfs; the block queue in libs/block. Next:
+             * the kernel mount, which needs stage 10's block driver. */
     }
 
     #planned requirement <'SN'> stageNetworking : Stage {

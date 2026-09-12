@@ -897,8 +897,29 @@ package FerrixStructure {
         #writtenAhead part btrfs : LibraryCrate {
             attribute :>> path = "libs/btrfs";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 38;
+            attribute :>> hostTests = 137;
             @stage { number = 11; }
+            doc /* The btrfs read path, allocating nothing: parsing, mount
+                 * bootstrap, lookup, readdir and read, and zlib, LZO and zstd
+                 * decoders. Tested against four real mkfs.btrfs images, and
+                 * fuzzed from them by btrfs_read. */
+        }
+        #writtenAhead part btrfsVfs : LibraryCrate {
+            attribute :>> path = "libs/btrfs-vfs";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 14;
+            @stage { number = 11; }
+            doc /* btrfs mounted into the VFS: FileSystem and Inode over the
+                 * read path, read-only, holding no lock across I/O. */
+        }
+        #writtenAhead part blockQueue : LibraryCrate {
+            attribute :>> path = "libs/block";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 36;
+            @stage { number = 11; }
+            doc /* The block core's request queue: merging, flush and FUA
+                 * barriers no request crosses, deadline scheduling. Checked
+                 * against a model by the block_queue fuzz target. */
         }
 
         // Owed by later stages.
