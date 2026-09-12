@@ -47,9 +47,11 @@ pub(crate) mod image;
 pub(crate) mod load;
 pub(crate) mod memory;
 pub(crate) mod native;
+pub(crate) mod path;
 pub(crate) mod process;
 pub(crate) mod registry;
 pub(crate) mod signal;
+pub(crate) mod stat;
 pub(crate) mod system;
 pub(crate) mod time;
 pub(crate) mod tty;
@@ -231,6 +233,9 @@ fn stateless(call: Syscall, args: &SyscallArgs) -> Option<Result<usize, Errno>> 
 fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<usize, Errno> {
     let a = args.args;
     if let Some(answer) = descriptors(call, &a, process) {
+        return answer;
+    }
+    if let Some(answer) = path::dispatch(call, args, process) {
         return answer;
     }
     match call {

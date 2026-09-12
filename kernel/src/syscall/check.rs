@@ -1799,3 +1799,756 @@ fn check_a_program_is_killed_from_outside() -> Result<Option<i32>, &'static str>
     }
     Ok(Some(KILL_STATUS))
 }
+
+// ---------------------------------------------------------------------------
+// Stage 8: the calls that take a path
+// ---------------------------------------------------------------------------
+
+pub(crate) use paths::run_paths;
+
+/// The path calls, against the real namespace under `/tmp`.
+///
+/// Every call goes in by its number, decoded by this build's own table, and
+/// through the table `dispatch` uses once it has found a process -- so the one
+/// line that hands path calls to `syscall::path` is exercised with the
+/// handlers. Names and buffers live in a real user address space, and every
+/// `stat` record is decoded back out of it in this architecture's layout.
+///
+/// A module of its own inside this file so that its imports stay its own.
+mod paths {
+    use alloc::vec;
+    use alloc::vec::Vec;
+    use core::mem::offset_of;
+
+    use ferrix_bootinfo::PAGE_SIZE;
+    use ferrix_linux_abi::errno::Errno;
+    use ferrix_linux_abi::nr::Syscall;
+    use ferrix_linux_abi::types::{
+        self, AT_EMPTY_PATH, AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_NOFOLLOW, DT_REG, R_OK,
+        RENAME_EXCHANGE, RENAME_NOREPLACE, S_IFLNK, S_IFREG, STATX_BASIC_STATS, Statx, UTIME_OMIT,
+        W_OK, X_OK,
+    };
+    use ferrix_vfs::dirent::{self, Record};
+    use ferrix_vfs::{FileType, Metadata, OpenFlags, Stat, Timespec};
+
+    use super::{map_rw, number_for};
+    use crate::arch;
+    use crate::fs;
+    use crate::mm;
+    use crate::syscall::process::{self, Process};
+    use crate::syscall::stat::StatLayout;
+    use crate::syscall::{SyscallArgs, memory, uaccess};
+
+    /// What the path checks measured, for the boot log.
+    #[derive(Debug)]
+    pub(crate) struct PathReport {
+        /// Calls made on the measured run.
+        pub(crate) calls: u32,
+        /// Names `getdents64` reported from the directory it read in pieces.
+        pub(crate) listed: usize,
+        /// How many `getdents64` calls that took.
+        pub(crate) listing_calls: u32,
+        /// Frames the measured run cost once everything was removed. Zero, or
+        /// a path call is leaking.
+        pub(crate) leaked: i64,
+        /// Dentries the namespace's cache held after the measured run that it
+        /// did not hold before it. Reported beside `leaked` because the cache
+        /// is the one thing that may legitimately keep memory across runs, and
+        /// a frame it keeps is not a frame a call lost.
+        pub(crate) cache_growth: i64,
+    }
+
+    /// Where the checks work. The last of them removes it again.
+    const ROOT: &[u8] = b"/tmp/pathcheck";
+
+    /// How many names the listing check makes.
+    const LISTED: usize = 40;
+
+    /// The `getdents64` buffer the listing is read with: four short entries.
+    const LISTING_BUFFER: u64 = 96;
+
+    /// What the symbolic link points at. Nothing: a dangling link is still a
+    /// link, and following it must say so.
+    ///
+    /// Absolute, and directly in `/tmp`, for the same reason as [`LINK`].
+    const TARGET: &[u8] = b"/tmp/pathcheck-nowhere";
+
+    /// Where the link is made, and where the rename check looks for it after
+    /// moving it away.
+    ///
+    /// In `/tmp` rather than under [`ROOT`], so that a lookup that misses
+    /// leaves its negative dentry in a directory that outlives the run, where
+    /// the next run finds it and reuses it. A negative entry cached under
+    /// `ROOT` would keep `ROOT`'s own dentry alive after `rmdir`, and the
+    /// second run's measurement would count a directory the cache kept as a
+    /// leak.
+    const LINK: &[u8] = b"/tmp/pathcheck-link";
+
+    /// `AT_FDCWD`, as a register carries it.
+    const CWD: u64 = AT_FDCWD as i64 as u64;
+
+    /// Where the second string argument of a call is staged.
+    const SECOND: u64 = PAGE_SIZE / 2;
+
+    /// Run the checks twice and measure the second run, for the reason
+    /// `check::run` gives: the first pays for size classes the heap keeps.
+    pub(crate) fn run_paths() -> Result<PathReport, &'static str> {
+        let _warm = check_path_calls()?;
+        let cached = fs::namespace().cached();
+        let before = mm::free_frames();
+        let mut report = check_path_calls()?;
+        report.leaked = i64::try_from(before).unwrap_or(i64::MAX)
+            - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+        report.cache_growth = i64::try_from(fs::namespace().cached()).unwrap_or(i64::MAX)
+            - i64::try_from(cached).unwrap_or(i64::MAX);
+        Ok(report)
+    }
+
+    /// One run of every check, in a process of its own.
+    fn check_path_calls() -> Result<PathReport, &'static str> {
+        check_every_encoder_round_trips()?;
+        let process = process::new_for_check().map_err(|_| "could not make a process")?;
+        let mut p = Paths::new(&process)?;
+        check_names_are_made_and_read(&mut p)?;
+        check_renames_replace_only_when_allowed(&mut p)?;
+        check_every_stat_describes_the_same_file(&mut p)?;
+        let (listed, listing_calls) = check_a_listing_in_pieces_sees_each_name_once(&mut p)?;
+        check_the_working_directory_follows_chdir(&mut p)?;
+        check_access_and_attributes(&mut p)?;
+        check_names_are_removed(&mut p)?;
+        let calls = p.calls;
+        p.release()?;
+        Ok(PathReport {
+            calls,
+            listed,
+            listing_calls,
+            leaked: 0,
+            cache_growth: 0,
+        })
+    }
+
+    /// A process, a page for the strings a call takes, and a page for what it
+    /// gives back.
+    struct Paths<'a> {
+        process: &'a Process,
+        strings: u64,
+        out: u64,
+        calls: u32,
+    }
+
+    impl<'a> Paths<'a> {
+        fn new(process: &'a Process) -> Result<Paths<'a>, &'static str> {
+            Ok(Paths {
+                process,
+                strings: map_rw(process, PAGE_SIZE)?,
+                out: map_rw(process, PAGE_SIZE)?,
+                calls: 0,
+            })
+        }
+
+        fn release(self) -> Result<(), &'static str> {
+            for at in [self.strings, self.out] {
+                let _ = memory::sys_munmap(self.process, at, PAGE_SIZE)
+                    .map_err(|_| "munmap was refused")?;
+            }
+            Ok(())
+        }
+
+        /// Copy `bytes` into the program at `at`.
+        fn stage(&self, at: u64, bytes: &[u8]) -> Result<u64, &'static str> {
+            uaccess::copy_to_user(self.process.space(), at, bytes)
+                .map_err(|_| "could not stage an argument")?;
+            Ok(at)
+        }
+
+        /// A path argument, NUL-terminated.
+        fn path(&self, text: &[u8]) -> Result<u64, &'static str> {
+            let mut string = Vec::from(text);
+            string.push(0);
+            self.stage(self.strings, &string)
+        }
+
+        /// A second path argument, alongside [`Paths::path`]'s.
+        fn second(&self, text: &[u8]) -> Result<u64, &'static str> {
+            let mut string = Vec::from(text);
+            string.push(0);
+            self.stage(self.strings + SECOND, &string)
+        }
+
+        /// Make `call` as a program on this architecture would.
+        fn call(&mut self, call: Syscall, args: [u64; 6]) -> Result<usize, Errno> {
+            self.calls = self.calls.saturating_add(1);
+            let number = number_for(call).ok_or(Errno::ENOSYS)?;
+            let decoded = arch::decode_syscall(number).ok_or(Errno::ENOSYS)?;
+            crate::syscall::handle(decoded, &SyscallArgs { number, args }, Some(self.process))
+        }
+
+        /// Fill the start of the output page with `byte`.
+        fn fill_out(&self, len: usize, byte: u8) -> Result<(), &'static str> {
+            let _ = self.stage(self.out, &vec![byte; len])?;
+            Ok(())
+        }
+
+        /// The start of the output page.
+        fn read_out(&self, len: usize) -> Result<Vec<u8>, &'static str> {
+            let mut bytes = vec![0_u8; len];
+            uaccess::copy_from_user(self.process.space(), self.out, &mut bytes)
+                .map_err(|_| "could not read a result back")?;
+            Ok(bytes)
+        }
+    }
+
+    /// The first of `calls` this architecture has a number for.
+    fn first_of(calls: &[Syscall]) -> Option<Syscall> {
+        calls
+            .iter()
+            .copied()
+            .find(|&call| number_for(call).is_some())
+    }
+
+    /// `newfstatat`, or `fstatat64` where that is the only form.
+    fn fstatat() -> Result<Syscall, &'static str> {
+        first_of(&[Syscall::Newfstatat, Syscall::Fstatat64])
+            .ok_or("no fstatat on this architecture")
+    }
+
+    /// Open `path` and install it in the process's descriptor table.
+    ///
+    /// Directly rather than through `openat`, which belongs to the descriptor
+    /// calls: what is checked here is the calls that take the descriptor.
+    fn install(process: &Process, path: &[u8], directory: bool) -> Result<u64, &'static str> {
+        let ns = fs::namespace();
+        let flags = OpenFlags {
+            read: true,
+            directory,
+            ..OpenFlags::default()
+        };
+        let file = ns
+            .open(&ns.context(), None, path, &flags, 0)
+            .map_err(|_| "could not open a file for a descriptor check")?;
+        let fd = process
+            .files()
+            .lock()
+            .insert(file, false)
+            .map_err(|_| "the descriptor table was full")?;
+        u64::try_from(fd).map_err(|_| "a negative descriptor")
+    }
+
+    /// Take a descriptor [`install`] made out of the table again.
+    fn uninstall(process: &Process, fd: u64) -> Result<(), &'static str> {
+        let fd = i32::try_from(fd).map_err(|_| "an impossible descriptor")?;
+        let file = process.files().lock().remove(fd);
+        file.map(drop).map_err(|_| "a descriptor vanished")
+    }
+
+    // -- stat records -------------------------------------------------------
+
+    /// The fields of a `stat` record the checks compare.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Decoded {
+        dev: u64,
+        ino: u64,
+        mode: u32,
+        nlink: u64,
+        uid: u64,
+        size: u64,
+        mtime: u64,
+    }
+
+    /// An unsigned little-endian field of `width` bytes.
+    fn le(bytes: &[u8], at: usize, width: usize) -> Option<u64> {
+        let mut word = [0_u8; 8];
+        word.get_mut(..width)?
+            .copy_from_slice(bytes.get(at..at.checked_add(width)?)?);
+        Some(u64::from_le_bytes(word))
+    }
+
+    /// Read a record back the way a C library would, at the offsets the
+    /// `libs/linux-abi` structure gives -- a second reading of the layout,
+    /// independent of the encoder that wrote it.
+    fn decode(layout: StatLayout, b: &[u8]) -> Option<Decoded> {
+        use types::aarch64::Stat as Generic;
+        use types::arm::Stat64;
+        use types::x86_64::Stat as Legacy;
+        Some(match layout {
+            StatLayout::Legacy => Decoded {
+                dev: le(b, offset_of!(Legacy, st_dev), 8)?,
+                ino: le(b, offset_of!(Legacy, st_ino), 8)?,
+                mode: u32::try_from(le(b, offset_of!(Legacy, st_mode), 4)?).ok()?,
+                nlink: le(b, offset_of!(Legacy, st_nlink), 8)?,
+                uid: le(b, offset_of!(Legacy, st_uid), 4)?,
+                size: le(b, offset_of!(Legacy, st_size), 8)?,
+                mtime: le(b, offset_of!(Legacy, st_mtime), 8)?,
+            },
+            StatLayout::Generic => Decoded {
+                dev: le(b, offset_of!(Generic, st_dev), 8)?,
+                ino: le(b, offset_of!(Generic, st_ino), 8)?,
+                mode: u32::try_from(le(b, offset_of!(Generic, st_mode), 4)?).ok()?,
+                nlink: le(b, offset_of!(Generic, st_nlink), 4)?,
+                uid: le(b, offset_of!(Generic, st_uid), 4)?,
+                size: le(b, offset_of!(Generic, st_size), 8)?,
+                mtime: le(b, offset_of!(Generic, st_mtime), 8)?,
+            },
+            StatLayout::Stat64 => Decoded {
+                dev: le(b, offset_of!(Stat64, st_dev), 8)?,
+                ino: le(b, offset_of!(Stat64, st_ino), 8)?,
+                mode: u32::try_from(le(b, offset_of!(Stat64, st_mode), 4)?).ok()?,
+                nlink: le(b, offset_of!(Stat64, st_nlink), 4)?,
+                uid: le(b, offset_of!(Stat64, st_uid), 4)?,
+                size: le(b, offset_of!(Stat64, st_size), 8)?,
+                mtime: le(b, offset_of!(Stat64, st_mtime), 4)?,
+            },
+        })
+    }
+
+    /// Every encoder puts every field where its layout says -- all three, on
+    /// every architecture, not only the one this build answers with.
+    ///
+    /// The size is over four gibibytes and the inode number over 32 bits, so
+    /// a field written at half its width, or a layout that truncates the size,
+    /// cannot pass.
+    fn check_every_encoder_round_trips() -> Result<(), &'static str> {
+        let time = |tv_sec| Timespec { tv_sec, tv_nsec: 5 };
+        let stat = Stat {
+            dev: 0x0803,
+            metadata: Metadata {
+                ino: 0x1_0000_0042,
+                kind: FileType::Regular,
+                permissions: 0o640,
+                nlink: 3,
+                uid: 7,
+                gid: 9,
+                size: 0x1_2345_6789,
+                rdev: 0,
+                blocks: 11,
+                block_size: 4096,
+                atime: time(1000),
+                mtime: time(2000),
+                ctime: time(3000),
+            },
+        };
+        let want = Decoded {
+            dev: 0x0803,
+            ino: 0x1_0000_0042,
+            mode: S_IFREG | 0o640,
+            nlink: 3,
+            uid: 7,
+            size: 0x1_2345_6789,
+            mtime: 2000,
+        };
+        for layout in [StatLayout::Legacy, StatLayout::Generic, StatLayout::Stat64] {
+            let bytes = layout.encode(&stat);
+            if bytes.len() != layout.size() {
+                return Err("a stat record is not the size of its layout");
+            }
+            if decode(layout, &bytes) != Some(want) {
+                return Err("a stat encoder put a field where its layout does not");
+            }
+        }
+        // `stat64`'s other inode field: the low half, for old readers.
+        let stat64 = StatLayout::Stat64.encode(&stat);
+        if le(&stat64, offset_of!(types::arm::Stat64, __st_ino), 4) != Some(0x42) {
+            return Err("stat64's truncated inode field is not the low half");
+        }
+        Ok(())
+    }
+
+    /// Make `call` fill the output page with a record, and decode it --
+    /// checking that it wrote exactly its layout's size and not a byte more.
+    fn stat_into(
+        p: &mut Paths<'_>,
+        call: Syscall,
+        args: [u64; 6],
+    ) -> Result<Decoded, &'static str> {
+        const SENTINEL: u8 = 0xA5;
+        let size = arch::STAT_LAYOUT.size();
+        p.fill_out(size + 8, SENTINEL)?;
+        if p.call(call, args) != Ok(0) {
+            return Err("a stat call was refused");
+        }
+        let bytes = p.read_out(size + 8)?;
+        if bytes.get(size..) != Some(&[SENTINEL; 8][..]) {
+            return Err("a stat call wrote past the end of its layout");
+        }
+        if bytes.get(size - 1) == Some(&SENTINEL) {
+            return Err("a stat call did not write to the end of its layout");
+        }
+        decode(arch::STAT_LAYOUT, &bytes).ok_or("a stat record could not be decoded")
+    }
+
+    // -- the checks ---------------------------------------------------------
+
+    /// `mkdirat`, `mknodat` and `symlinkat` make names, and `readlinkat` reads
+    /// a link back unterminated and cut silently to the buffer.
+    fn check_names_are_made_and_read(p: &mut Paths<'_>) -> Result<(), &'static str> {
+        let root = p.path(ROOT)?;
+        if p.call(Syscall::Mkdirat, [CWD, root, 0o777, 0, 0, 0]) != Ok(0) {
+            return Err("mkdirat under /tmp was refused");
+        }
+        if p.call(Syscall::Mkdirat, [CWD, root, 0o777, 0, 0, 0]) != Err(Errno::EEXIST) {
+            return Err("mkdirat over an existing name was not EEXIST");
+        }
+        // The file the stat checks describe, and the one the link is renamed
+        // over: a rename onto an existing name, which is what `mv` does to a
+        // file it replaces.
+        let regular = u64::from(S_IFREG | 0o666);
+        for name in [&b"/tmp/pathcheck/file"[..], b"/tmp/pathcheck/moved"] {
+            let name = p.path(name)?;
+            if p.call(Syscall::Mknodat, [CWD, name, regular, 0, 0, 0]) != Ok(0) {
+                return Err("mknodat of a regular file was refused");
+            }
+        }
+        let target = p.path(TARGET)?;
+        let link = p.second(LINK)?;
+        if p.call(Syscall::Symlinkat, [target, CWD, link, 0, 0, 0]) != Ok(0) {
+            return Err("symlinkat was refused");
+        }
+
+        let link = p.path(LINK)?;
+        p.fill_out(64, 0xEE)?;
+        if p.call(Syscall::Readlinkat, [CWD, link, p.out, 64, 0, 0]) != Ok(TARGET.len()) {
+            return Err("readlinkat did not report the target's length");
+        }
+        let read = p.read_out(TARGET.len() + 1)?;
+        if read.get(..TARGET.len()) != Some(TARGET) || read.get(TARGET.len()) != Some(&0xEE) {
+            return Err("readlinkat did not return the target, unterminated");
+        }
+        if p.call(Syscall::Readlinkat, [CWD, link, p.out, 4, 0, 0]) != Ok(4) {
+            return Err("readlinkat did not cut the target to the buffer");
+        }
+        if p.call(Syscall::Readlinkat, [CWD, link, p.out, 0, 0, 0]) != Err(Errno::EINVAL) {
+            return Err("readlinkat with no room was not EINVAL");
+        }
+        if p.call(Syscall::Readlinkat, [CWD, root, p.out, 64, 0, 0]) != Err(Errno::EINVAL) {
+            // `root` still points at the first string slot, now the link's path,
+            // so restage the directory before asking.
+            let root = p.path(ROOT)?;
+            if p.call(Syscall::Readlinkat, [CWD, root, p.out, 64, 0, 0]) != Err(Errno::EINVAL) {
+                return Err("readlinkat of a directory was not EINVAL");
+            }
+        }
+        Ok(())
+    }
+
+    /// `renameat2` moves a name across directories and over an existing file,
+    /// refuses to replace one under `RENAME_NOREPLACE`, and refuses
+    /// `RENAME_EXCHANGE` outright.
+    fn check_renames_replace_only_when_allowed(p: &mut Paths<'_>) -> Result<(), &'static str> {
+        let from = p.path(LINK)?;
+        let to = p.second(b"/tmp/pathcheck/moved")?;
+        if p.call(Syscall::Renameat2, [CWD, from, CWD, to, 0, 0]) != Ok(0) {
+            return Err("renameat2 over an existing file was refused");
+        }
+        if p.call(Syscall::Readlinkat, [CWD, from, p.out, 64, 0, 0]) != Err(Errno::ENOENT) {
+            return Err("a name survived being renamed away");
+        }
+        let to = p.path(b"/tmp/pathcheck/moved")?;
+        if p.call(Syscall::Readlinkat, [CWD, to, p.out, 64, 0, 0]) != Ok(TARGET.len()) {
+            return Err("the renamed link is not where it was renamed to");
+        }
+        let from = p.path(b"/tmp/pathcheck/moved")?;
+        let to = p.second(b"/tmp/pathcheck/file")?;
+        let noreplace = u64::from(RENAME_NOREPLACE);
+        if p.call(Syscall::Renameat2, [CWD, from, CWD, to, noreplace, 0]) != Err(Errno::EEXIST) {
+            return Err("RENAME_NOREPLACE replaced a name");
+        }
+        let exchange = u64::from(RENAME_EXCHANGE);
+        if p.call(Syscall::Renameat2, [CWD, from, CWD, to, exchange, 0]) != Err(Errno::EINVAL) {
+            return Err("RENAME_EXCHANGE was not EINVAL");
+        }
+        Ok(())
+    }
+
+    /// Every form of `stat` this architecture has describes the same file the
+    /// same way, and `statx` agrees with them.
+    fn check_every_stat_describes_the_same_file(p: &mut Paths<'_>) -> Result<(), &'static str> {
+        let at = fstatat()?;
+        let file = p.path(b"/tmp/pathcheck/file")?;
+        let by_path = stat_into(p, at, [CWD, file, p.out, 0, 0, 0])?;
+        // 0o666 through the default umask of 0o022.
+        if by_path.mode != S_IFREG | 0o644 || by_path.nlink != 1 || by_path.size != 0 {
+            return Err("fstatat did not describe a new file with the umask applied");
+        }
+
+        let link = p.path(b"/tmp/pathcheck/moved")?;
+        let nofollow = u64::from(AT_SYMLINK_NOFOLLOW);
+        let as_link = stat_into(p, at, [CWD, link, p.out, nofollow, 0, 0])?;
+        if as_link.mode != S_IFLNK | 0o777 || as_link.size != TARGET.len() as u64 {
+            return Err("AT_SYMLINK_NOFOLLOW did not describe the link itself");
+        }
+        if p.call(at, [CWD, link, p.out, 0, 0, 0]) != Err(Errno::ENOENT) {
+            return Err("following a dangling link found something");
+        }
+        if let Some(lstat) = first_of(&[Syscall::Lstat, Syscall::Lstat64])
+            && stat_into(p, lstat, [link, p.out, 0, 0, 0, 0])? != as_link
+        {
+            return Err("lstat and fstatat disagree about a link");
+        }
+
+        let fd = install(p.process, b"/tmp/pathcheck/file", false)?;
+        let fstat = first_of(&[Syscall::Fstat, Syscall::Fstat64]).ok_or("no fstat here")?;
+        let by_fd = stat_into(p, fstat, [fd, p.out, 0, 0, 0, 0]);
+        let empty = p.path(b"")?;
+        let empty_path = u64::from(AT_EMPTY_PATH);
+        let by_empty = stat_into(p, at, [fd, empty, p.out, empty_path, 0, 0]);
+        uninstall(p.process, fd)?;
+        if by_fd? != by_path || by_empty? != by_path {
+            return Err("fstat, AT_EMPTY_PATH and a path disagree about one file");
+        }
+
+        let statx_size = size_of::<Statx>();
+        p.fill_out(statx_size, 0xA5)?;
+        let basic = u64::from(STATX_BASIC_STATS);
+        let link = p.path(b"/tmp/pathcheck/moved")?;
+        if p.call(Syscall::Statx, [CWD, link, nofollow, basic, p.out, 0]) != Ok(0) {
+            return Err("statx was refused");
+        }
+        let record = p.read_out(statx_size)?;
+        let field = |at, width| le(&record, at, width).unwrap_or(u64::MAX);
+        if field(offset_of!(Statx, stx_mask), 4) & basic != basic
+            || field(offset_of!(Statx, stx_ino), 8) != as_link.ino
+            || field(offset_of!(Statx, stx_size), 8) != as_link.size
+            || field(offset_of!(Statx, stx_mode), 2) != u64::from(as_link.mode)
+        {
+            return Err("statx disagrees with fstatat about a link");
+        }
+        Ok(())
+    }
+
+    /// The path of the listing check's `index`th name, `e00` to `e39`.
+    fn entry(index: usize) -> Vec<u8> {
+        let mut path = Vec::from(&b"/tmp/pathcheck/many/e"[..]);
+        path.extend_from_slice(&[b'0' + (index / 10) as u8, b'0' + (index % 10) as u8]);
+        path
+    }
+
+    /// `getdents64` over forty names with room for four at a time reports
+    /// every name exactly once, and `EINVAL` when there is no room for one.
+    fn check_a_listing_in_pieces_sees_each_name_once(
+        p: &mut Paths<'_>,
+    ) -> Result<(usize, u32), &'static str> {
+        let dir = p.path(b"/tmp/pathcheck/many")?;
+        if p.call(Syscall::Mkdirat, [CWD, dir, 0o755, 0, 0, 0]) != Ok(0) {
+            return Err("mkdirat of the listing directory was refused");
+        }
+        for index in 0..LISTED {
+            let name = p.path(&entry(index))?;
+            if p.call(
+                Syscall::Mknodat,
+                [CWD, name, u64::from(S_IFREG | 0o600), 0, 0, 0],
+            ) != Ok(0)
+            {
+                return Err("mknodat in the listing directory was refused");
+            }
+        }
+
+        let fd = install(p.process, b"/tmp/pathcheck/many", true)?;
+        let listing = list(p, fd);
+        uninstall(p.process, fd)?;
+        let (seen, dots, listed, calls) = listing?;
+        if dots != 2 || seen.iter().any(|&count| count != 1) || listed != LISTED + 2 {
+            return Err("getdents64 did not report every name exactly once");
+        }
+        if calls < 3 {
+            return Err("the listing was not split across calls");
+        }
+        Ok((listed, calls))
+    }
+
+    /// Read the directory open on `fd` to its end.
+    fn list(p: &mut Paths<'_>, fd: u64) -> Result<([u8; LISTED], usize, usize, u32), &'static str> {
+        if p.call(Syscall::Getdents64, [fd, p.out, 16, 0, 0, 0]) != Err(Errno::EINVAL) {
+            return Err("getdents64 with no room for an entry was not EINVAL");
+        }
+        let (mut seen, mut dots, mut listed, mut calls) = ([0_u8; LISTED], 0, 0, 0_u32);
+        loop {
+            calls += 1;
+            if calls > 64 {
+                return Err("getdents64 never reached the end of the directory");
+            }
+            let used = p
+                .call(Syscall::Getdents64, [fd, p.out, LISTING_BUFFER, 0, 0, 0])
+                .map_err(|_| "getdents64 was refused")?;
+            if used == 0 {
+                return Ok((seen, dots, listed, calls));
+            }
+            for record in dirent::records(&p.read_out(used)?) {
+                listed += 1;
+                tally(&record, &mut seen, &mut dots)?;
+            }
+        }
+    }
+
+    /// Count one listed name.
+    fn tally(
+        record: &Record<'_>,
+        seen: &mut [u8; LISTED],
+        dots: &mut usize,
+    ) -> Result<(), &'static str> {
+        let [b'e', tens, ones] = *record.name else {
+            if record.name == b"." || record.name == b".." {
+                *dots += 1;
+                return Ok(());
+            }
+            return Err("getdents64 reported a name nobody made");
+        };
+        let index =
+            usize::from(tens.wrapping_sub(b'0')) * 10 + usize::from(ones.wrapping_sub(b'0'));
+        let count = seen
+            .get_mut(index)
+            .ok_or("getdents64 reported a name nobody made")?;
+        *count = count.saturating_add(1);
+        if record.kind != DT_REG {
+            return Err("getdents64 reported a regular file as something else");
+        }
+        Ok(())
+    }
+
+    /// `getcwd` reports exactly `want`, terminated, and counts the terminator.
+    fn expect_cwd(p: &mut Paths<'_>, want: &[u8]) -> Result<(), &'static str> {
+        let len = p
+            .call(Syscall::Getcwd, [p.out, 256, 0, 0, 0, 0])
+            .map_err(|_| "getcwd was refused")?;
+        let got = p.read_out(len)?;
+        if len != want.len() + 1 || got.get(..want.len()) != Some(want) || got.last() != Some(&0) {
+            return Err("getcwd did not report the directory chdir chose");
+        }
+        Ok(())
+    }
+
+    /// `chdir`, `fchdir` and a relative path agree about where the process is,
+    /// and `getcwd` says `ERANGE` for a short buffer and `ENOENT` once the
+    /// directory is gone.
+    fn check_the_working_directory_follows_chdir(p: &mut Paths<'_>) -> Result<(), &'static str> {
+        let many = p.path(b"/tmp/pathcheck/many")?;
+        if p.call(Syscall::Chdir, [many, 0, 0, 0, 0, 0]) != Ok(0) {
+            return Err("chdir was refused");
+        }
+        expect_cwd(p, b"/tmp/pathcheck/many")?;
+        // One byte short: the terminator counts.
+        if p.call(Syscall::Getcwd, [p.out, 19, 0, 0, 0, 0]) != Err(Errno::ERANGE) {
+            return Err("getcwd into a buffer one byte short was not ERANGE");
+        }
+
+        let sub = p.path(b"sub")?;
+        if p.call(Syscall::Mkdirat, [CWD, sub, 0o755, 0, 0, 0]) != Ok(0)
+            || p.call(Syscall::Chdir, [sub, 0, 0, 0, 0, 0]) != Ok(0)
+        {
+            return Err("a relative mkdirat or chdir was refused");
+        }
+        expect_cwd(p, b"/tmp/pathcheck/many/sub")?;
+        let gone = p.path(b"/tmp/pathcheck/many/sub")?;
+        if p.call(
+            Syscall::Unlinkat,
+            [CWD, gone, u64::from(AT_REMOVEDIR), 0, 0, 0],
+        ) != Ok(0)
+        {
+            return Err("rmdir of the working directory was refused");
+        }
+        if p.call(Syscall::Getcwd, [p.out, 256, 0, 0, 0, 0]) != Err(Errno::ENOENT) {
+            return Err("getcwd in a removed directory was not ENOENT");
+        }
+
+        let fd = install(p.process, ROOT, true)?;
+        let moved = p.call(Syscall::Fchdir, [fd, 0, 0, 0, 0, 0]);
+        uninstall(p.process, fd)?;
+        if moved != Ok(0) {
+            return Err("fchdir was refused");
+        }
+        expect_cwd(p, ROOT)?;
+        let slash = p.path(b"/")?;
+        if p.call(Syscall::Chdir, [slash, 0, 0, 0, 0, 0]) != Ok(0) {
+            return Err("chdir to the root was refused");
+        }
+        expect_cwd(p, b"/")
+    }
+
+    /// Two `timespec`s at this architecture's `long` width.
+    fn timespecs(values: [i64; 4]) -> Vec<u8> {
+        let width = size_of::<usize>();
+        let mut bytes = Vec::new();
+        for value in values {
+            bytes.extend_from_slice(value.to_le_bytes().get(..width).unwrap_or(&[]));
+        }
+        bytes
+    }
+
+    /// `faccessat` answers as root does, and `chmod`, `chown`, `utimensat`
+    /// and `umask` change what they say they change.
+    fn check_access_and_attributes(p: &mut Paths<'_>) -> Result<(), &'static str> {
+        let file = p.path(b"/tmp/pathcheck/file")?;
+        if p.call(
+            Syscall::Faccessat,
+            [CWD, file, u64::from(R_OK | W_OK), 0, 0, 0],
+        ) != Ok(0)
+        {
+            return Err("root could not read and write a file");
+        }
+        if p.call(Syscall::Faccessat, [CWD, file, u64::from(X_OK), 0, 0, 0]) != Err(Errno::EACCES) {
+            return Err("a file with no execute bit passed X_OK");
+        }
+        if p.call(Syscall::Fchmodat, [CWD, file, 0o755, 0, 0, 0]) != Ok(0)
+            || p.call(Syscall::Faccessat2, [CWD, file, u64::from(X_OK), 0, 0, 0]) != Ok(0)
+        {
+            return Err("chmod did not make a file executable");
+        }
+        if p.call(Syscall::Fchownat, [CWD, file, 7, u64::from(u32::MAX), 0, 0]) != Ok(0) {
+            return Err("fchownat was refused");
+        }
+        let times = p.stage(p.strings + SECOND, &timespecs([1, UTIME_OMIT, 1234, 0]))?;
+        if p.call(Syscall::Utimensat, [CWD, file, times, 0, 0, 0]) != Ok(0) {
+            return Err("utimensat was refused");
+        }
+        let after = stat_into(p, fstatat()?, [CWD, file, p.out, 0, 0, 0])?;
+        if after.mode != S_IFREG | 0o755 || after.uid != 7 || after.mtime != 1234 {
+            return Err("chmod, chown or utimensat did not show in stat");
+        }
+        if p.call(Syscall::Umask, [0o7077, 0, 0, 0, 0, 0]) != Ok(0o022)
+            || p.call(Syscall::Umask, [0o022, 0, 0, 0, 0, 0]) != Ok(0o077)
+        {
+            return Err("umask did not swap the mask, keeping permission bits only");
+        }
+        Ok(())
+    }
+
+    /// `unlinkat` removes names, with and without `AT_REMOVEDIR`, and refuses
+    /// the wrong kind of each; nothing the checks made is left.
+    fn check_names_are_removed(p: &mut Paths<'_>) -> Result<(), &'static str> {
+        let removedir = u64::from(AT_REMOVEDIR);
+        let many = p.path(b"/tmp/pathcheck/many")?;
+        if p.call(Syscall::Unlinkat, [CWD, many, removedir, 0, 0, 0]) != Err(Errno::ENOTEMPTY) {
+            return Err("rmdir of a directory with entries was not ENOTEMPTY");
+        }
+        if p.call(Syscall::Unlinkat, [CWD, many, 0, 0, 0, 0]) != Err(Errno::EISDIR) {
+            return Err("unlink of a directory was not EISDIR");
+        }
+        for index in 0..LISTED {
+            let name = p.path(&entry(index))?;
+            if p.call(Syscall::Unlinkat, [CWD, name, 0, 0, 0, 0]) != Ok(0) {
+                return Err("unlinkat of a listed file was refused");
+            }
+        }
+        let many = p.path(b"/tmp/pathcheck/many")?;
+        if p.call(Syscall::Unlinkat, [CWD, many, removedir, 0, 0, 0]) != Ok(0) {
+            return Err("rmdir of an emptied directory was refused");
+        }
+        let file = p.path(b"/tmp/pathcheck/file")?;
+        if p.call(Syscall::Unlinkat, [CWD, file, removedir, 0, 0, 0]) != Err(Errno::ENOTDIR) {
+            return Err("rmdir of a file was not ENOTDIR");
+        }
+        for name in [&b"/tmp/pathcheck/file"[..], b"/tmp/pathcheck/moved"] {
+            let name = p.path(name)?;
+            if p.call(Syscall::Unlinkat, [CWD, name, 0, 0, 0, 0]) != Ok(0) {
+                return Err("unlinkat of a file was refused");
+            }
+        }
+        let root = p.path(ROOT)?;
+        if p.call(Syscall::Unlinkat, [CWD, root, removedir, 0, 0, 0]) != Ok(0) {
+            return Err("rmdir of the check's own directory was refused");
+        }
+        if p.call(fstatat()?, [CWD, root, p.out, 0, 0, 0]) != Err(Errno::ENOENT) {
+            return Err("a removed directory could still be described");
+        }
+        Ok(())
+    }
+}

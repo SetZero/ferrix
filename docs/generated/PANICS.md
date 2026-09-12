@@ -43,6 +43,7 @@ Causes are listed most likely first.
 | [FX-0801](#fx-0801) | the root filesystem could not be built |
 | [FX-0802](#fx-0802) | the root filesystem failed its self-check |
 | [FX-0810](#fx-0810) | a new process could not be given the console as descriptors 0, 1 and 2 |
+| [FX-0820](#fx-0820) | the system calls that take a path failed their self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -625,6 +626,30 @@ condition to report to one: a process created without them would have its first
 
 See: kernel/src/syscall/fd.rs standard_streams; kernel/src/fs/console.rs
 open_console; libs/vfs/src/fd.rs; docs/ROADMAP.md stage 8.
+
+<a id="fx-0820"></a>
+
+## FX-0820 — the system calls that take a path failed their self-check
+
+`syscall::check::run_paths` makes the calls a shell makes on files -- mkdirat,
+mknodat, symlinkat, readlinkat, renameat2, the stat family and statx,
+getdents64, chdir, fchdir and getcwd, faccessat, chmod, chown, utimensat and
+unlinkat -- by their numbers, through the dispatch table, against the real
+namespace under /tmp, and decodes every stat record back out of the user buffer
+in this architecture's layout. A failure means a program would be told something
+false about a file: a size read out of padding, a listing that skips or repeats
+a name, or a working directory that is not where chdir put it.
+
+1. `arch::STAT_LAYOUT` names the wrong `struct stat` for this architecture, or a
+   layout in `libs/linux-abi` moved a field.
+2. An arm of `syscall::path::dispatch` reads its arguments in the wrong order or
+   at the wrong width.
+3. The namespace in `libs/vfs` changed what a walk, a rename or a directory
+   cursor does.
+4. /tmp is not mounted, or a previous run left /tmp/pathcheck behind.
+
+See: kernel/src/syscall/check.rs run_paths; kernel/src/syscall/path.rs;
+kernel/src/syscall/stat.rs; libs/vfs; docs/ROADMAP.md stage 8.
 
 <a id="fx-0901"></a>
 

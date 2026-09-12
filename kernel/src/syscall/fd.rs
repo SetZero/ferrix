@@ -202,7 +202,13 @@ pub(crate) fn sys_openat(
     // A copy of the context rather than the lock: the walk calls into
     // filesystems, and `chdir` on another thread must not wait for it.
     let context = process.fs_context().lock().clone();
-    let file = fs::namespace().open(&context, start.as_ref(), &path, &flags, mode & 0o7777)?;
+    let file = fs::namespace().open(
+        &context,
+        start.as_ref(),
+        &path,
+        &flags,
+        mode & 0o7777 & !process.umask(),
+    )?;
     number(process.files().lock().insert(file, cloexec)?)
 }
 

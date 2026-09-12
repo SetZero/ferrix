@@ -34,7 +34,7 @@
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_sync::SpinLock;
@@ -59,6 +59,11 @@ pub(crate) struct Process {
     /// and what `/proc`, `kill` and `wait4` find it by. Zero only if every
     /// pid was in use when it was made, in which case nothing can find it.
     pid: u32,
+    /// The file mode creation mask: the permission bits a new file or
+    /// directory is made without. An atomic rather than a field under the
+    /// state lock, because `umask` is a swap and nothing reads it together
+    /// with anything else.
+    umask: AtomicU32,
     /// The handles it holds, for the native ABI.
     ///
     /// A lock of its own rather than a field of `state`: a channel write looks
@@ -142,6 +147,7 @@ impl Process {
         Process {
             space,
             pid: registry::allocate().unwrap_or(0),
+            umask: AtomicU32::new(DEFAULT_UMASK),
             handles: SpinLock::new(HandleTable::new(object::HANDLE_LIMIT)),
             files: Arc::new(SpinLock::new(fd::standard_streams())),
             fs: Arc::new(SpinLock::new(fs::namespace().context())),
@@ -312,6 +318,26 @@ impl Process {
         };
         state.heap = Some(heap);
         heap.brk
+    }
+}
+
+/// The mask a process starts with: group and others may not write.
+///
+/// Linux's own default for `init`, and what nearly every login leaves in
+/// place, so a file a program creates before anything has called `umask` gets
+/// the mode it would get on Linux.
+const DEFAULT_UMASK: u32 = 0o022;
+
+impl Process {
+    /// The permission bits new files and directories are made without.
+    pub(crate) fn umask(&self) -> u32 {
+        self.umask.load(Ordering::Relaxed)
+    }
+
+    /// `umask`: replace the mask, keeping only permission bits, and report
+    /// the old one.
+    pub(crate) fn set_umask(&self, mask: u32) -> u32 {
+        self.umask.swap(mask & 0o777, Ordering::Relaxed)
     }
 }
 

@@ -29,6 +29,12 @@ pub(crate) const NAME: &str = "aarch64";
 /// checked against each other by the image simply booting.
 pub(crate) const ARCH: Arch = Arch::AArch64;
 
+/// Which `struct stat` the stat calls fill in: the generic one, 128 bytes,
+/// from `include/uapi/asm-generic/stat.h`, as on every architecture added
+/// after 2011.
+pub(crate) const STAT_LAYOUT: crate::syscall::stat::StatLayout =
+    crate::syscall::stat::StatLayout::Generic;
+
 /// The page table descriptor layout this machine uses.
 pub(crate) type PageEncoding = ferrix_paging::aarch64::AArch64;
 

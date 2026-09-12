@@ -590,6 +590,30 @@ pub(crate) static STAGE10_DEVICES: Explanation = Explanation {
     see: "kernel/src/device.rs publish; kernel/src/pci.rs; docs/ROADMAP.md stage 10",
 };
 
+/// For `check_path_calls` in `main.rs`, when `syscall::check::run_paths` fails.
+pub(crate) static STAGE8_PATH_CALLS: Explanation = Explanation {
+    code: "FX-0820",
+    title: "the system calls that take a path failed their self-check",
+    meaning: "`syscall::check::run_paths` makes the calls a shell makes on files -- mkdirat, \
+              mknodat, symlinkat, readlinkat, renameat2, the stat family and statx, getdents64, \
+              chdir, fchdir and getcwd, faccessat, chmod, chown, utimensat and unlinkat -- by \
+              their numbers, through the dispatch table, against the real namespace under /tmp, \
+              and decodes every stat record back out of the user buffer in this architecture's \
+              layout. A failure means a program would be told something false about a file: a \
+              size read out of padding, a listing that skips or repeats a name, or a working \
+              directory that is not where chdir put it.",
+    causes: &[
+        "`arch::STAT_LAYOUT` names the wrong `struct stat` for this architecture, or a layout in \
+         `libs/linux-abi` moved a field.",
+        "An arm of `syscall::path::dispatch` reads its arguments in the wrong order or at the \
+         wrong width.",
+        "The namespace in `libs/vfs` changed what a walk, a rename or a directory cursor does.",
+        "/tmp is not mounted, or a previous run left /tmp/pathcheck behind.",
+    ],
+    see: "kernel/src/syscall/check.rs run_paths; kernel/src/syscall/path.rs; \
+          kernel/src/syscall/stat.rs; libs/vfs; docs/ROADMAP.md stage 8",
+};
+
 /// For `check_native_objects` in `main.rs`, when `object::check::run` fails.
 pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
     code: "FX-0901",
@@ -834,6 +858,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_ROOT,
     &STAGE8_FILESYSTEM,
     &CONSOLE_DESCRIPTORS,
+    &STAGE8_PATH_CALLS,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,

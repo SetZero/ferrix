@@ -73,6 +73,13 @@ pub(crate) const NAME: &str = "armv7a";
 /// checked against each other by the image simply booting.
 pub(crate) const ARCH: Arch = Arch::Armv7a;
 
+/// Which `struct stat` the stat calls fill in: `struct stat64`, 104 bytes,
+/// from `arch/arm/include/uapi/asm/stat.h`. This architecture's plain
+/// `struct stat` cannot hold a 64-bit size, so musl calls only the `64` forms,
+/// and the table carries no `newfstatat` for the plain one to be filled by.
+pub(crate) const STAT_LAYOUT: crate::syscall::stat::StatLayout =
+    crate::syscall::stat::StatLayout::Stat64;
+
 /// The page table descriptor layout this machine uses.
 pub(crate) type PageEncoding = ferrix_paging::armv7a::Armv7a;
 

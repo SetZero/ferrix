@@ -215,6 +215,11 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // ring-3 transition, is a debugging session nobody wants.
     check_syscalls();
 
+    // Stage 8's path calls, through the same dispatch table. After stage 7's
+    // check because they share its table and its copy layer, and after the
+    // root was built because they work under /tmp.
+    check_path_calls();
+
     // Stage 9's objects, driven through the native handlers between two
     // processes this check builds. After stage 7 because it shares the
     // dispatch path and the user copy layer, and here rather than under a
@@ -323,6 +328,24 @@ fn check_filesystems(view: &BootView<'_>) {
     println!(
         "  tmpfs    {} pages written through a VMO and read back, {} frames leaked",
         report.pages, report.leaked,
+    );
+}
+
+/// Stage 8: the system calls that take a path, against the real namespace.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_path_calls() {
+    let report = match syscall::check::run_paths() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE8_PATH_CALLS,
+            "stage 8 path call self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  paths    {} path calls under /tmp, {} names listed in {} getdents64 calls, \
+         {} frames leaked, dentry cache {:+}",
+        report.calls, report.listed, report.listing_calls, report.leaked, report.cache_growth,
     );
 }
 

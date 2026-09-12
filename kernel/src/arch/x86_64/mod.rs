@@ -28,6 +28,12 @@ pub(crate) const NAME: &str = "x86_64";
 /// checked against each other by the image simply booting.
 pub(crate) const ARCH: Arch = Arch::X86_64;
 
+/// Which `struct stat` the stat calls fill in: x86-64's own, 144 bytes, from
+/// `arch/x86/include/uapi/asm/stat.h`. x86-64 kept the layout it grew rather
+/// than adopting the generic one, so this is not the AArch64 answer.
+pub(crate) const STAT_LAYOUT: crate::syscall::stat::StatLayout =
+    crate::syscall::stat::StatLayout::Legacy;
+
 /// The page table descriptor layout this machine uses.
 pub(crate) type PageEncoding = ferrix_paging::x86_64::X86_64;
 
