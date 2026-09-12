@@ -406,7 +406,14 @@ pub(crate) unsafe fn init() {
     unsafe { cpu::write_msr(IA32_EFER, efer | EFER_SCE) };
 
     // STAR[47:32] is the kernel selector base, STAR[63:48] the user one.
-    let star = (u64::from(gdt::KERNEL_CODE) << 32) | (u64::from(gdt::SYSRET_BASE) << 48);
+    //
+    // The user base carries RPL 3, and has to. `SYSRET` loads CS from base + 16
+    // and forces RPL 3 into it, but loads SS from base + 8 *as written*. With a
+    // bare `0x18` a program runs at CPL 3 on SS `0x20`, which nothing checks
+    // until an exception pushes that SS and `iretq` back to ring 3 refuses it
+    // with `#GP(0x20)` -- on hardware and under KVM, never under `tcg`, which
+    // is why it passed the boot test. Linux uses `__USER32_CS | 3` for this.
+    let star = (u64::from(gdt::KERNEL_CODE) << 32) | (u64::from(gdt::SYSRET_BASE | 3) << 48);
     // SAFETY: the selectors are this processor's own GDT entries, and the
     // layout `SYSRET` computes from is asserted at their definition.
     unsafe { cpu::write_msr(IA32_STAR, star) };

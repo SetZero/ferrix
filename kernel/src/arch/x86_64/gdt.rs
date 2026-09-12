@@ -33,7 +33,11 @@ pub(crate) const USER_CODE: u16 = 0x28;
 /// The task state segment. Sixteen bytes, so it occupies two slots.
 const TSS_SELECTOR: u16 = 0x30;
 
-/// The base `SYSRET` computes user selectors from.
+/// The base `SYSRET` computes user selectors from, without its RPL.
+///
+/// `STAR[63:48]` holds this OR 3, not this: `SYSRET` forces RPL 3 into the CS it
+/// computes but loads SS exactly as written, and an RPL-0 SS in ring 3 is
+/// refused by the next `iretq` back there. See `syscall::init`.
 pub(crate) const SYSRET_BASE: u16 = USER_CODE32;
 
 // `SYSRET` does not take a selector: it *computes* one, loading `CS` from
