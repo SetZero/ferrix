@@ -107,7 +107,7 @@ fn read_all(
     ino: u64,
     chunk: usize,
     node: &mut [u8],
-    buffers: &mut ReadBuffers<'_>,
+    buffers: &mut ReadBuffers<impl ExtentBuffers>,
 ) -> Vec<u8> {
     let mut contents = Vec::new();
     let mut piece = vec![0xAAu8; chunk];
@@ -144,7 +144,8 @@ fn check_image(name: &str) {
     let f = &mut Fixture::new(packed);
     let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
     let sub = volume.default_subvolume();
-    let mut buffers = ReadBuffers::new(&mut f.compressed, &mut f.plain, &mut f.zstd).unwrap();
+    let mut buffers =
+        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut *f.zstd)).unwrap();
     let manifest = manifest();
 
     check_listing(
@@ -250,7 +251,8 @@ fn a_read_past_the_end_returns_nothing_and_a_listing_can_resume() {
     let f = &mut Fixture::new(IMAGES[0].1);
     let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
     let sub = volume.default_subvolume();
-    let mut buffers = ReadBuffers::new(&mut f.compressed, &mut f.plain, &mut f.zstd).unwrap();
+    let mut buffers =
+        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut *f.zstd)).unwrap();
     let entry = resolve(&sub, &mut f.device, b"big.txt", &mut f.node);
     let Target::Inode(ino) = entry.target else {
         panic!("big.txt is a file");
@@ -298,7 +300,8 @@ fn a_hole_reads_as_zeroes() {
     let f = &mut Fixture::new(IMAGES[0].1);
     let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
     let sub = volume.default_subvolume();
-    let mut buffers = ReadBuffers::new(&mut f.compressed, &mut f.plain, &mut f.zstd).unwrap();
+    let mut buffers =
+        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut *f.zstd)).unwrap();
     let entry = resolve(&sub, &mut f.device, b"sparse.bin", &mut f.node);
     let Target::Inode(ino) = entry.target else {
         panic!("sparse.bin is a file");
@@ -326,7 +329,7 @@ fn read_buffers_smaller_than_an_extent_are_refused() {
     let mut zstd = Box::<compress::zstd::Workspace>::default();
     assert!(
         matches!(
-            ReadBuffers::new(&mut small, &mut plain, &mut zstd),
+            ReadBuffers::new((&mut small[..], &mut plain[..], &mut *zstd)),
             Err(BtrfsError::Truncated { .. })
         ),
         "a 4 KiB buffer cannot hold a compressed extent"

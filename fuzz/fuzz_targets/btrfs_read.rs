@@ -40,7 +40,7 @@ use std::sync::OnceLock;
 
 use ferrix_btrfs::compress::MAX_UNCOMPRESSED;
 use ferrix_btrfs::compress::zstd::Workspace;
-use ferrix_btrfs::fs::{ReadBuffers, Subvolume};
+use ferrix_btrfs::fs::{ExtentBuffers, ReadBuffers, Subvolume};
 use ferrix_btrfs::items::{INODE_ITEM_KEY, S_IFDIR, S_IFLNK, S_IFMT, S_IFREG};
 use ferrix_btrfs::superblock::PRIMARY_OFFSET;
 use ferrix_btrfs::volume::{Device, Volume};
@@ -192,7 +192,7 @@ fn read_file(
     size: u64,
     node: &mut [u8],
     piece: &mut [u8],
-    buffers: &mut ReadBuffers<'_>,
+    buffers: &mut ReadBuffers<impl ExtentBuffers>,
 ) {
     let mut total = 0u64;
     while total < size.min(MAX_FILE_BYTES) {
@@ -222,7 +222,7 @@ fn exercise(
         zstd,
         piece,
     } = scratch;
-    let Ok(mut buffers) = ReadBuffers::new(compressed, plain, zstd) else {
+    let Ok(mut buffers) = ReadBuffers::new((&mut compressed[..], &mut plain[..], &mut **zstd)) else {
         return;
     };
     for &ino in inodes {

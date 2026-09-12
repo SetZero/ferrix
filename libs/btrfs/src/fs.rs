@@ -81,15 +81,34 @@ pub struct DirEntry<'a> {
     pub kind: u8,
 }
 
+/// The memory a compressed extent is read and expanded in.
+///
+/// Two buffers of at least [`MAX_UNCOMPRESSED`] bytes and the zstd workspace,
+/// handed out as three disjoint borrows. A tuple of borrows is one; a mount
+/// implements it over buffers it owns.
+pub trait ExtentBuffers {
+    /// The buffer compressed bytes are read into, the buffer they expand
+    /// into, and zstd's workspace.
+    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut compress::zstd::Workspace);
+}
+
+impl ExtentBuffers for (&mut [u8], &mut [u8], &mut compress::zstd::Workspace) {
+    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut compress::zstd::Workspace) {
+        (&mut *self.0, &mut *self.1, &mut *self.2)
+    }
+}
+
 /// The working memory a file read needs beyond the node buffer.
 ///
 /// Two 128 KiB buffers and the zstd workspace: too large for a kernel stack,
-/// and worth keeping between reads because of the extent cache.
+/// and worth keeping between reads because of the extent cache. It owns its
+/// [`ExtentBuffers`] rather than borrowing them, so a mount can keep one
+/// across calls: rebuilt around borrowed buffers on every call, the cache
+/// would never hit, and carrying the cache over to buffers it did not fill
+/// would hand back somebody else's bytes.
 #[derive(Debug)]
-pub struct ReadBuffers<'s> {
-    compressed: &'s mut [u8],
-    plain: &'s mut [u8],
-    zstd: &'s mut compress::zstd::Workspace,
+pub struct ReadBuffers<B> {
+    buffers: B,
     cached: Option<Expanded>,
 }
 
@@ -102,22 +121,17 @@ struct Expanded {
     len: usize,
 }
 
-impl<'s> ReadBuffers<'s> {
-    /// Wrap caller-allocated memory. Both byte buffers must hold at least
+impl<B: ExtentBuffers> ReadBuffers<B> {
+    /// Take over caller-allocated memory. Both byte buffers must hold at least
     /// [`MAX_UNCOMPRESSED`] bytes.
-    pub fn new(
-        compressed: &'s mut [u8],
-        plain: &'s mut [u8],
-        zstd: &'s mut compress::zstd::Workspace,
-    ) -> Result<Self, BtrfsError> {
+    pub fn new(mut buffers: B) -> Result<Self, BtrfsError> {
+        let (compressed, plain, _) = buffers.parts();
         let shortest = compressed.len().min(plain.len());
         if shortest < MAX_UNCOMPRESSED {
             return Err(truncated(MAX_UNCOMPRESSED, shortest));
         }
         Ok(ReadBuffers {
-            compressed,
-            plain,
-            zstd,
+            buffers,
             cached: None,
         })
     }
@@ -132,12 +146,12 @@ impl<'s> ReadBuffers<'s> {
     ) -> Result<&[u8], BtrfsError> {
         // The buffer is about to be overwritten, so whatever it cached is gone.
         self.cached = None;
-        let out = self
-            .plain
+        let (_, plain, zstd) = self.buffers.parts();
+        let out = plain
             .get_mut(..expanded_len(ram_bytes)?)
             .unwrap_or_default();
-        let len = compress::decompress(compression, data, out, sectorsize, self.zstd)?;
-        Ok(self.plain.get(..len).unwrap_or_default())
+        let len = compress::decompress(compression, data, out, sectorsize, zstd)?;
+        Ok(plain.get(..len).unwrap_or_default())
     }
 
     /// Expand a compressed regular extent, or reuse it if it is the one held.
@@ -157,9 +171,12 @@ impl<'s> ReadBuffers<'s> {
         let hit = self
             .cached
             .filter(|held| Expanded { len: 0, ..*held } == wanted);
+        let (compressed, plain, zstd) = self.buffers.parts();
         let len = match hit {
             Some(held) => held.len,
             None => {
+                // Forgotten before the read, so a failed read or decode cannot
+                // leave the cache naming bytes the buffer no longer holds.
                 self.cached = None;
                 let stored = usize::try_from(file.disk_num_bytes)
                     .ok()
@@ -167,25 +184,24 @@ impl<'s> ReadBuffers<'s> {
                     .ok_or(BtrfsError::BadItem {
                         item_type: EXTENT_DATA_KEY,
                     })?;
-                let input = self.compressed.get_mut(..stored).unwrap_or_default();
+                let input = compressed.get_mut(..stored).unwrap_or_default();
                 volume.read_logical(device, file.disk_bytenr, input)?;
-                let out = self
-                    .plain
+                let out = plain
                     .get_mut(..expanded_len(extent.ram_bytes)?)
                     .unwrap_or_default();
-                let input = self.compressed.get(..stored).unwrap_or_default();
+                let input = compressed.get(..stored).unwrap_or_default();
                 let len = compress::decompress(
                     extent.compression,
                     input,
                     out,
                     volume.sectorsize(),
-                    self.zstd,
+                    zstd,
                 )?;
                 self.cached = Some(Expanded { len, ..wanted });
                 len
             }
         };
-        Ok(self.plain.get(..len).unwrap_or_default())
+        Ok(plain.get(..len).unwrap_or_default())
     }
 }
 
@@ -306,14 +322,14 @@ impl<S: ChunkStorage> Subvolume<'_, S> {
     ///
     /// Stops at end of file, so a short count means end of file and nothing
     /// else. A symlink's target is read the same way, from offset zero.
-    pub fn read<D: Device>(
+    pub fn read<D: Device, B: ExtentBuffers>(
         &self,
         device: &mut D,
         ino: u64,
         offset: u64,
         out: &mut [u8],
         node: &mut [u8],
-        buffers: &mut ReadBuffers<'_>,
+        buffers: &mut ReadBuffers<B>,
     ) -> Result<usize, BtrfsError> {
         let inode = self
             .inode(device, ino, node)?
@@ -352,13 +368,13 @@ impl<S: ChunkStorage> Subvolume<'_, S> {
     }
 
     /// Copy the part of one extent that `place` selects into `out`.
-    fn copy_extent<D: Device>(
+    fn copy_extent<D: Device, B: ExtentBuffers>(
         &self,
         device: &mut D,
         extent: &ExtentData<'_>,
         place: Placement,
         out: &mut [u8],
-        buffers: &mut ReadBuffers<'_>,
+        buffers: &mut ReadBuffers<B>,
     ) -> Result<(), BtrfsError> {
         let dest = out
             .get_mut(place.dest_start..place.dest_end)
