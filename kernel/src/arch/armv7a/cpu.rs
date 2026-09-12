@@ -152,6 +152,85 @@ pub(crate) fn psci_system_off(conduit: PsciConduit) {
     }
 }
 
+/// Set `TPIDRURO`, the thread ID register a USR-mode program can read and
+/// cannot write.
+///
+/// It is where a program's thread pointer lives. musl built for ARMv7-A reads
+/// it with `mrc p15, 0, rX, c13, c0, 3` on every access to a thread-local
+/// variable, and asks for it to be set through the ARM-private `set_tls` call
+/// -- because being read-only to USR mode is the point, the kernel is the only
+/// thing that can put the value there.
+pub(crate) fn write_tpidruro(value: u32) {
+    // SAFETY: a software register the kernel keeps nothing of its own in, so
+    // writing it changes no state the kernel depends on.
+    unsafe {
+        asm!(
+            "mcr p15, 0, {}, c13, c0, 3",
+            in(reg) value,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+}
+
+/// `CPACR` bits 20 to 23: full access to coprocessors 10 and 11, which are the
+/// FPU's.
+const CPACR_CP10_CP11_FULL: u32 = 0xF << 20;
+
+/// `FPEXC.EN`: the FPU is enabled.
+const FPEXC_EN: u32 = 1 << 30;
+
+/// Let USR mode use the FPU, on this core.
+///
+/// A hard-float program -- which is what an ARMv7-A Linux distribution builds
+/// -- saves VFP registers in its first function prologue, and without this
+/// that instruction is undefined. Two switches, because the architecture has
+/// two: `CPACR` grants access to the coprocessors, and `FPEXC.EN` turns the
+/// FPU on.
+///
+/// `FPEXC` is written as a coprocessor 10 transfer rather than as `vmsr`,
+/// which is the same instruction without asking the assembler for an FPU the
+/// soft-float kernel target does not declare. It is only written if `CPACR`
+/// kept the access bits: on a core without an FPU they read back as zero, and
+/// touching `FPEXC` there would be an undefined instruction in the kernel
+/// rather than in the program.
+///
+/// # What this does not do
+///
+/// Save or restore the FPU's registers. The kernel is built soft-float and
+/// never touches them, and one program runs at a time as a guest of the boot
+/// task, so nothing else can disturb its state. A second concurrent program
+/// needs lazy switching, and that arrives with programs as scheduled tasks.
+pub(crate) fn enable_user_fpu() {
+    let mut granted: u32 = 0;
+    // SAFETY: `CPACR` only gates coprocessor access; the kernel does not rely
+    // on the FPU being denied. The `isb` makes the grant visible to the read
+    // that follows.
+    unsafe {
+        asm!(
+            "mrc p15, 0, {scratch}, c1, c0, 2",
+            "orr {scratch}, {scratch}, #{bits}",
+            "mcr p15, 0, {scratch}, c1, c0, 2",
+            "isb",
+            "mrc p15, 0, {scratch}, c1, c0, 2",
+            scratch = inout(reg) granted,
+            bits = const CPACR_CP10_CP11_FULL,
+            options(nostack, preserves_flags),
+        );
+    }
+    if granted & CPACR_CP10_CP11_FULL != CPACR_CP10_CP11_FULL {
+        return;
+    }
+    // SAFETY: access to coprocessor 10 was just granted and read back, so the
+    // FPU exists and `FPEXC` is accessible.
+    unsafe {
+        asm!(
+            "mcr p10, 7, {}, c8, c0, 0",
+            in(reg) FPEXC_EN,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+}
+
 /// Install the exception vector table.
 ///
 /// Also clears `SCTLR.V` and `SCTLR.TE`, which firmware may have left set and

@@ -21,6 +21,10 @@ use crate::syscall::exec;
 /// The embedded program, or nothing. See `kernel/build.rs`.
 pub(crate) static IMAGE: &[u8] = include_bytes!(env!("FERRIX_INIT_IMAGE"));
 
+/// A script for the shell to run with `-c`, or nothing for an interactive
+/// one. See `kernel/build.rs`.
+static SCRIPT: &[u8] = include_bytes!(env!("FERRIX_INIT_SCRIPT_FILE"));
+
 /// Start the shell, and report how it ended.
 ///
 /// Returns when the shell exits, which on an interactive session is when
@@ -29,14 +33,21 @@ pub(crate) fn run() {
     if IMAGE.is_empty() {
         return;
     }
+    let interactive: [&[u8]; 2] = [b"sh", b"-i"];
+    let scripted: [&[u8]; 3] = [b"sh", b"-c", SCRIPT];
+    let (args, how): (&[&[u8]], _) = if SCRIPT.is_empty() {
+        (&interactive, "`sh -i`")
+    } else {
+        (&scripted, "`sh -c` with a built-in script")
+    };
     println!(
-        "  init     {} KiB program built in, starting `sh -i`",
+        "  init     {} KiB program built in, starting {how}",
         IMAGE.len() / 1024
     );
 
     let status = exec::run(
         IMAGE,
-        &[b"sh", b"-i"],
+        args,
         &[b"PATH=/bin", b"HOME=/", b"TERM=dumb", b"PS1=ferrix# "],
         random_bytes(),
     );

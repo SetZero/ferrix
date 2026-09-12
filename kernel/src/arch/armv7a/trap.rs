@@ -223,7 +223,8 @@ core::arch::global_asm!(
 .section .text
 .arm
 
-// r0 = entry, r1 = user stack. Returns the exit status in r0, via leave_user.
+// r0 = entry, r1 = user stack, r2 = the program's CPSR. Returns the exit
+// status in r0, via leave_user.
 .globl ferrix_run_user
 .balign 4
 ferrix_run_user:
@@ -258,7 +259,6 @@ ferrix_run_user:
     // What `rfeia` takes: the program's first instruction, then its status.
     sub   sp, sp, #8
     str   r0, [sp]
-    mov   r2, #{user_cpsr}
     str   r2, [sp, #4]
 
     // Nothing of the kernel's survives into USR mode.
@@ -289,7 +289,6 @@ ferrix_leave_user:
 "#,
     user_return = const USER_RETURN_OFFSET,
     kernel_stack = const KERNEL_STACK_OFFSET,
-    user_cpsr = const USER_CPSR,
 );
 
 /// Where the parked stack pointer lives in this processor's record. The field
@@ -299,8 +298,9 @@ const USER_RETURN_OFFSET: usize = core::mem::offset_of!(crate::smp::PerCpu, user
 /// Where the entry stack for exceptions from USR mode lives in the same record.
 const KERNEL_STACK_OFFSET: usize = core::mem::offset_of!(crate::smp::PerCpu, kernel_stack);
 
-/// `CPSR` for a program: USR mode, ARM state, little-endian, with asynchronous
-/// aborts, IRQs and FIQs masked.
+/// `CPSR` for a program: USR mode, little-endian, with asynchronous aborts,
+/// IRQs and FIQs masked. ARM state, unless the entry point says Thumb -- see
+/// [`CPSR_THUMB`].
 ///
 /// IRQs masked for AArch64's reason, and just as temporarily: a program is a
 /// guest of the boot task, whose address space is `None`, so a tick taken in
@@ -308,9 +308,19 @@ const KERNEL_STACK_OFFSET: usize = core::mem::offset_of!(crate::smp::PerCpu, ker
 /// back uninstalls the program's root.
 const USER_CPSR: u32 = MODE_USR | (1 << 8) | (1 << 7) | (1 << 6);
 
+/// `CPSR.T`: execute Thumb instructions.
+///
+/// Set when the entry point's bit 0 is, which is the interworking convention an
+/// ELF follows and the one Linux's `start_thread` honours. Toolchains building
+/// for ARMv7-A default to Thumb-2, so this is the common case rather than an
+/// exotic one: Alpine's busybox enters at an odd address, and entered in ARM
+/// state its first Thumb instructions decode as undefined three words in.
+const CPSR_THUMB: u32 = 1 << 5;
+
 unsafe extern "C" {
-    /// Enter USR mode at `entry` on `stack`; returns when the program exits.
-    fn ferrix_run_user(entry: u32, stack: u32) -> i32;
+    /// Enter USR mode at `entry` on `stack` with `cpsr`; returns when the
+    /// program exits.
+    fn ferrix_run_user(entry: u32, stack: u32, cpsr: u32) -> i32;
     /// Return from [`ferrix_run_user`] with `status`.
     fn ferrix_leave_user(status: i32) -> !;
 }
@@ -323,6 +333,11 @@ unsafe extern "C" {
 /// `stack` must be addresses within it.
 pub(crate) unsafe fn run_user(entry: u64, stack: u64) -> Result<i32, &'static str> {
     let entry = u32::try_from(entry).map_err(|_| "a program entry point above 4 GiB")?;
+    let (entry, cpsr) = if entry & 1 == 0 {
+        (entry, USER_CPSR)
+    } else {
+        (entry & !1, USER_CPSR | CPSR_THUMB)
+    };
     let stack = u32::try_from(stack).map_err(|_| "a program stack above 4 GiB")?;
     let entry_stack = crate::vmap::allocate_stack().map_err(|_| "no kernel stack for user mode")?;
     let Some(cpu) = crate::smp::this_cpu() else {
@@ -332,8 +347,13 @@ pub(crate) unsafe fn run_user(entry: u64, stack: u64) -> Result<i32, &'static st
     // SAFETY: this processor's own record, a `u64` field aligned by `repr(C)`.
     unsafe { at.write(entry_stack.top) };
 
+    // A program starts with no thread pointer, not the last one's. musl sets
+    // its own with `set_tls` before it reads it, but a program that read first
+    // would otherwise be handed an address in somebody else's memory.
+    cpu::write_tpidruro(0);
+
     // SAFETY: the caller guarantees the address space and the stack.
-    let status = unsafe { ferrix_run_user(entry, stack) };
+    let status = unsafe { ferrix_run_user(entry, stack, cpsr) };
 
     // SAFETY: the program is gone, so nothing is running on the entry stack.
     let _ = unsafe { crate::vmap::free_stack(entry_stack) };
@@ -371,13 +391,26 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         ],
     };
 
-    if matches!(
-        super::decode_syscall(args.number),
-        Some(Syscall::Exit | Syscall::ExitGroup)
-    ) {
-        // SAFETY: `came_from_user` above, and only `run_user` enters USR mode,
-        // so the parked stack pointer and registers are where it left them.
-        unsafe { leave_user(args.args[0] as i32) }
+    match super::decode_syscall(args.number) {
+        Some(Syscall::Exit | Syscall::ExitGroup) => {
+            // SAFETY: `came_from_user` above, and only `run_user` enters USR
+            // mode, so the parked stack pointer and registers are where it
+            // left them.
+            unsafe { leave_user(args.args[0] as i32) }
+        }
+        // `set_tls` writes a coprocessor register, which is a fact about this
+        // processor rather than about the process, so it is answered here for
+        // the same reason x86-64 answers `arch_prctl` in its own trap path.
+        // It cannot fail: any value is a valid thread pointer to hold, and
+        // Linux returns zero without looking at it.
+        Some(Syscall::ArmSetTls) => {
+            cpu::write_tpidruro(r0);
+            if let Some(result) = frame.r.first_mut() {
+                *result = 0;
+            }
+            return Ok(());
+        }
+        _ => {}
     }
 
     match dispatch(&args) {
@@ -554,6 +587,8 @@ pub(crate) unsafe fn init() {
     // SAFETY: `table` is the vector table in this image, 32-byte aligned as
     // `VBAR` requires, and every entry branches to a real stub.
     unsafe { cpu::install_vectors(table) };
+    // Here because this runs on every core, and both registers are per core.
+    cpu::enable_user_fpu();
 }
 
 /// Raise a breakpoint, so the boot self-check can prove the trap path runs.

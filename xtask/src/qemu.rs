@@ -44,11 +44,125 @@ pub(crate) fn run(arch: Arch, image: &Path, args: &Args) -> Result<()> {
 
 /// Boot the image headless and require the kernel to report success.
 pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> Result<()> {
+    println!("  {arch}: booting under QEMU (timeout {}s)", args.timeout);
+    let watched = watch(arch, image, kernel, args, SUCCESS_MARKER)?;
+    match watched.verdict {
+        Verdict::Reached => {
+            let code = watched.status.code().unwrap_or(0);
+            if code != 0 && code != DEBUG_EXIT_SUCCESS {
+                return Err(Error::new(format!(
+                    "the {arch} kernel reported success but QEMU exited {code}"
+                )));
+            }
+            println!("  {arch}: boot ok");
+            Ok(())
+        }
+        Verdict::Panicked => Err(panicked(arch, &watched.log)),
+        Verdict::Silent => Err(Error::new(format!(
+            "the {arch} kernel never printed `{SUCCESS_MARKER}` within {}s.\n  \
+             Serial output is in {}",
+            args.timeout,
+            watched.log.display()
+        ))),
+    }
+}
+
+/// Boot an image with a program and a script built in, and require the
+/// script's output, in order, and its exit status.
+///
+/// The lines are looked for *after* the boot marker, so a kernel that happened
+/// to print one of them during its self-checks cannot satisfy the test.
+pub(crate) fn test_shell(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> Result<()> {
+    println!(
+        "  {arch}: running the built-in script under QEMU (timeout {}s)",
+        args.timeout
+    );
+    let watched = watch(arch, image, kernel, args, crate::shell::EXITED)?;
+    let log = watched.log.display();
+    let after_boot = watched
+        .lines
+        .iter()
+        .position(|line| line.contains(SUCCESS_MARKER))
+        .and_then(|at| watched.lines.get(at..))
+        .unwrap_or_default();
+
+    if let Some(line) = after_boot
+        .iter()
+        .find(|line| line.contains(crate::shell::NOT_STARTED))
+    {
+        return Err(Error::new(format!(
+            "{arch}: {}\n  Serial output is in {log}",
+            line.trim()
+        )));
+    }
+    match watched.verdict {
+        Verdict::Reached => {}
+        Verdict::Panicked => return Err(panicked(arch, &watched.log)),
+        Verdict::Silent => {
+            return Err(Error::new(format!(
+                "{arch}: the shell never exited within {}s.\n  Serial output is in {log}",
+                args.timeout
+            )));
+        }
+    }
+
+    let mut remaining = after_boot.iter();
+    for want in crate::shell::EXPECTED {
+        if !remaining.any(|line| line.trim_end() == *want) {
+            return Err(Error::new(format!(
+                "{arch}: the script's output is missing `{want}`, or it came out of order.\n  \
+                 Serial output is in {log}"
+            )));
+        }
+    }
+    let status = format!("{} {}", crate::shell::EXITED, crate::shell::STATUS);
+    if !after_boot.iter().any(|line| line.trim() == status) {
+        return Err(Error::new(format!(
+            "{arch}: the shell did not exit with {}.\n  Serial output is in {log}",
+            crate::shell::STATUS
+        )));
+    }
+    println!(
+        "  {arch}: busybox ran the script and exited with {}",
+        crate::shell::STATUS
+    );
+    Ok(())
+}
+
+/// How a watched boot ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    /// The line being waited for arrived.
+    Reached,
+    /// The kernel panicked first.
+    Panicked,
+    /// Neither, before the timeout or before QEMU closed the port.
+    Silent,
+}
+
+/// What watching a boot produced.
+#[derive(Debug)]
+struct Watched {
+    /// Every line the guest printed, in order.
+    lines: Vec<String>,
+    /// How it ended.
+    verdict: Verdict,
+    /// QEMU's exit status.
+    status: std::process::ExitStatus,
+    /// Where the serial output was saved.
+    log: PathBuf,
+}
+
+/// Boot headless, echo and save the serial port, and stop at the first line
+/// containing `until`, at a panic, or at the timeout.
+///
+/// `kernel` is the ELF the image was built from, which is what a panic
+/// report's backtrace addresses are resolved against.
+fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> Result<Watched> {
     let symbols = Symbolizer::open(kernel);
     let mut command = qemu_command(arch, image, args)?;
     let _ = command.stdout(Stdio::piped()).stderr(Stdio::inherit());
 
-    println!("  {arch}: booting under QEMU (timeout {}s)", args.timeout);
     let mut child = command
         .spawn()
         .map_err(|error| Error::new(format!("could not start QEMU: {error}")))?;
@@ -74,9 +188,10 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
     let log_path = paths::build_dir(arch).join("serial.log");
     let mut log = std::fs::File::create(&log_path)?;
     let deadline = Instant::now() + Duration::from_secs(args.timeout);
-    let mut outcome = None;
+    let mut lines = Vec::new();
+    let mut verdict = Verdict::Silent;
 
-    while outcome.is_none() {
+    while verdict == Verdict::Silent {
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             break;
         };
@@ -84,49 +199,41 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
             Ok(line) => {
                 println!("    | {line}");
                 writeln!(log, "{line}")?;
-                if line.contains(SUCCESS_MARKER) {
-                    outcome = Some(Ok(()));
+                if line.contains(until) {
+                    verdict = Verdict::Reached;
                 } else if line.contains(PANIC_MARKER) {
-                    outcome = Some(Err(Error::new(format!(
-                        "the {arch} kernel panicked during boot; see {}",
-                        log_path.display()
-                    ))));
+                    verdict = Verdict::Panicked;
                 }
+                lines.push(line);
             }
             // The guest closed the serial port: QEMU is on its way out, so stop
             // reading and judge on the exit status below.
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected | mpsc::RecvTimeoutError::Timeout) => break,
         }
     }
 
-    if matches!(outcome, Some(Err(_))) {
+    if verdict == Verdict::Panicked {
         take_panic_report(&receiver, &mut log, symbols.as_ref())?;
     }
-    let status = finish(&mut child, outcome.is_some())?;
+    let status = finish(&mut child, verdict != Verdict::Silent)?;
     drop(receiver);
     let _ = reader.join();
     log.flush()?;
 
-    match outcome {
-        Some(Ok(())) => {
-            let code = status.code().unwrap_or(0);
-            if code != 0 && code != DEBUG_EXIT_SUCCESS {
-                return Err(Error::new(format!(
-                    "the {arch} kernel reported success but QEMU exited {code}"
-                )));
-            }
-            println!("  {arch}: boot ok");
-            Ok(())
-        }
-        Some(Err(error)) => Err(error),
-        None => Err(Error::new(format!(
-            "the {arch} kernel never printed `{SUCCESS_MARKER}` within {}s.\n  \
-             Serial output is in {}",
-            args.timeout,
-            log_path.display()
-        ))),
-    }
+    Ok(Watched {
+        lines,
+        verdict,
+        status,
+        log: log_path,
+    })
+}
+
+/// The error for a boot that panicked.
+fn panicked(arch: Arch, log: &Path) -> Error {
+    Error::new(format!(
+        "the {arch} kernel panicked during boot; see {}",
+        log.display()
+    ))
 }
 
 /// Copy the rest of a panic report to the terminal and the log, naming the

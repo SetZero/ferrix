@@ -554,6 +554,8 @@ pub(crate) unsafe fn init() {
     // SAFETY: `table` is the vector table in this image, 2048-byte aligned as
     // `VBAR_EL1` requires, and every entry branches to a real save sequence.
     unsafe { cpu::write_vbar(table) };
+    // Here because this runs on every core, and `CPACR_EL1` is per core.
+    cpu::enable_user_fpu();
 }
 
 /// Raise a breakpoint, so the boot self-check can prove the trap path runs.

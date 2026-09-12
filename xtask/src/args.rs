@@ -37,6 +37,9 @@ pub(crate) struct Args {
     /// `--port`, the serial device `watch-serial` reads. `None` means "find
     /// the only one".
     pub(crate) port: Option<String>,
+    /// `--init`, the program `test-shell` builds in. `{arch}` in it is
+    /// replaced by each architecture's name, so one path serves `--arch all`.
+    pub(crate) init: Option<String>,
 }
 
 impl Args {
@@ -64,6 +67,7 @@ impl Args {
                 "--accel" => args.accel = Some(value(&mut items, "--accel")?),
                 "--to" => args.to = Some(value(&mut items, "--to")?),
                 "--port" => args.port = Some(value(&mut items, "--port")?),
+                "--init" => args.init = Some(value(&mut items, "--init")?),
                 other if other.starts_with('-') => {
                     return Err(Error::new(format!("unknown option `{other}`")));
                 }

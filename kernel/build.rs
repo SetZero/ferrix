@@ -106,5 +106,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
     println!("cargo::rustc-env=FERRIX_INIT_IMAGE={}", init.display());
+
+    // What the first program is told to do. Empty means an interactive shell;
+    // anything else is handed to `sh -c`, which is how `cargo xtask test-shell`
+    // makes stage 7's exit criterion a check rather than a transcript. Written
+    // to a file rather than passed as `rustc-env`, because a script has
+    // newlines and a `cargo::` directive is one line.
+    println!("cargo::rerun-if-env-changed=FERRIX_INIT_SCRIPT");
+    let script = std::env::var("FERRIX_INIT_SCRIPT").unwrap_or_default();
+    if script.contains('\0') {
+        return Err(
+            "FERRIX_INIT_SCRIPT contains a NUL, which cannot survive being an argument".into(),
+        );
+    }
+    let script_file = PathBuf::from(std::env::var("OUT_DIR")?).join("init-script");
+    std::fs::write(&script_file, script)?;
+    println!(
+        "cargo::rustc-env=FERRIX_INIT_SCRIPT_FILE={}",
+        script_file.display()
+    );
     Ok(())
 }

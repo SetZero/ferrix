@@ -390,6 +390,38 @@ pub(crate) fn read_mpidr() -> u64 {
     mpidr
 }
 
+/// `CPACR_EL1.FPEN`, both bits: floating point and SIMD do not trap at EL0 or
+/// EL1.
+const CPACR_FPEN_NO_TRAP: u64 = 0b11 << 20;
+
+/// Let EL0 use floating point and SIMD, on this core.
+///
+/// musl's `memcpy` and every AArch64 Linux program's string handling use SIMD
+/// registers, so without this a program's first copy traps. Firmware usually
+/// leaves `FPEN` open, which is why busybox ran before this existed; the
+/// architecture resets it to an unknown value, and a kernel that depends on
+/// firmware for a register it could set itself fails on the first board whose
+/// firmware does not.
+///
+/// Nothing is saved or restored: the kernel is built soft-float and one
+/// program runs at a time, as ARMv7-A's version of this explains.
+pub(crate) fn enable_user_fpu() {
+    // SAFETY: `FPEN` only controls trapping; the kernel does not rely on
+    // floating point trapping, and the `isb` makes the change take effect
+    // before the next instruction.
+    unsafe {
+        asm!(
+            "mrs {scratch}, cpacr_el1",
+            "orr {scratch}, {scratch}, #{fpen}",
+            "msr cpacr_el1, {scratch}",
+            "isb",
+            scratch = out(reg) _,
+            fpen = const CPACR_FPEN_NO_TRAP,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
 /// Set `TPIDR_EL1`, the software thread ID register the kernel keeps its
 /// per-CPU record in.
 ///

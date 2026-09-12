@@ -5,6 +5,7 @@
 //! cargo xtask run       --arch x86_64 [--release] [--gdb] [--smp N] [--memory M]
 //!                       [--accel auto|tcg|whpx|kvm|hvf]
 //! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS]
+//! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask check     [--fast]
 //! cargo xtask flash     [--arch armv7a] [--to MOUNT]
 //! cargo xtask watch-serial            [--port DEVICE] [--timeout SECONDS]
@@ -34,6 +35,7 @@ mod paths;
 mod pe;
 mod qemu;
 mod serial;
+mod shell;
 mod symbolize;
 
 use std::process::ExitCode;
@@ -82,6 +84,7 @@ COMMANDS:
     build         Compile the loader and kernel and write a bootable image
     run           Boot the image under QEMU, attached to the terminal
     test-boot     Boot the image under QEMU and assert the kernel came up
+    test-shell    Boot with a static busybox built in and require its script's output
     check         Run every quality gate (fmt, clippy, layering, audits)
     model-doc     Regenerate docs/generated/ from the SysML model
     flash         Copy the loader and kernel onto a board's boot partition
@@ -99,6 +102,7 @@ OPTIONS:
     --fast                               check: skip the cross-target clippy passes
     --to <MOUNT>                         flash: the card's mounted boot partition
     --port <DEVICE>                      watch-serial: e.g. /dev/ttyACM0
+    --init <PATH>                        test-shell: the busybox; {arch} is replaced
     -h, --help                           This message
 ";
 
@@ -142,6 +146,29 @@ fn run() -> Result<()> {
             for arch in args.arches()? {
                 let (image, kernel) = build_image(arch, &args)?;
                 qemu::test_boot(arch, &image, &kernel, &args)?;
+            }
+            Ok(())
+        }
+        "test-shell" => {
+            let init = args.init.as_deref().ok_or_else(|| {
+                Error::new(
+                    "test-shell needs --init PATH, a static busybox for each architecture; \
+                     `{arch}` in the path is replaced by the architecture's name",
+                )
+            })?;
+            for arch in args.arches()? {
+                let program = std::path::PathBuf::from(init.replace("{arch}", arch.name()));
+                if !program.is_file() {
+                    return Err(Error::new(format!(
+                        "no program at {} for {arch}",
+                        program.display()
+                    )));
+                }
+                let loader = cargo::build_loader(arch, args.release)?;
+                let kernel =
+                    cargo::build_kernel_with_init(arch, args.release, &program, shell::SCRIPT)?;
+                let image = fat::write_image(arch, &loader, &kernel)?;
+                qemu::test_shell(arch, &image, &kernel, &args)?;
             }
             Ok(())
         }

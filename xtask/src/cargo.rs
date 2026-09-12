@@ -4,7 +4,8 @@
 //! workspace, which is why neither can be a default member and why `cargo
 //! build` at the root builds only this tool.
 
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::paths::{self, Arch};
@@ -17,7 +18,7 @@ use crate::{Error, Result};
 /// which checks the ELF against `boot/linker/armv7a.ld`'s contract, so a
 /// loader that breaks it fails the build rather than the boot.
 pub(crate) fn build_loader(arch: Arch, release: bool) -> Result<PathBuf> {
-    build("ferrix-boot", arch.loader_target(), release)?;
+    build("ferrix-boot", arch.loader_target(), release, &[])?;
     if !arch.loader_is_elf() {
         return artifact(arch.loader_target(), release, "ferrix-boot.efi");
     }
@@ -34,12 +35,35 @@ pub(crate) fn build_loader(arch: Arch, release: bool) -> Result<PathBuf> {
 
 /// Build the kernel for `arch` and return the ELF it produced.
 pub(crate) fn build_kernel(arch: Arch, release: bool) -> Result<PathBuf> {
-    build("ferrix-kernel", arch.kernel_target(), release)?;
+    build("ferrix-kernel", arch.kernel_target(), release, &[])?;
     artifact(arch.kernel_target(), release, "ferrix-kernel")
 }
 
-/// Run `cargo build -p <package> --target <target>`.
-fn build(package: &str, target: &str, release: bool) -> Result<()> {
+/// Compile the kernel with `init` built in, told to run `script` with `sh -c`.
+///
+/// Set on the child rather than taken from this process's environment, so the
+/// command a person typed is the whole of what was built: a `FERRIX_INIT` left
+/// exported in the shell cannot quietly substitute a different program.
+pub(crate) fn build_kernel_with_init(
+    arch: Arch,
+    release: bool,
+    init: &Path,
+    script: &str,
+) -> Result<PathBuf> {
+    build(
+        "ferrix-kernel",
+        arch.kernel_target(),
+        release,
+        &[
+            ("FERRIX_INIT", init.as_os_str()),
+            ("FERRIX_INIT_SCRIPT", OsStr::new(script)),
+        ],
+    )?;
+    artifact(arch.kernel_target(), release, "ferrix-kernel")
+}
+
+/// Run `cargo build -p <package> --target <target>`, with `env` added.
+fn build(package: &str, target: &str, release: bool, env: &[(&str, &OsStr)]) -> Result<()> {
     refuse_inherited_rustflags()?;
     println!("  building {package} for {target}");
 
@@ -53,6 +77,9 @@ fn build(package: &str, target: &str, release: bool) -> Result<()> {
     ]);
     if release {
         let _ = command.arg("--release");
+    }
+    for (key, value) in env {
+        let _ = command.env(key, value);
     }
 
     run(command, &format!("cargo build -p {package}"))
