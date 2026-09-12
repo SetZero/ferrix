@@ -9,7 +9,6 @@
 extern crate std;
 
 use core::ops::ControlFlow;
-use std::boxed::Box;
 use std::collections::{BTreeMap, BTreeSet};
 use std::vec;
 use std::vec::Vec;
@@ -56,7 +55,7 @@ struct Fixture {
     node: Vec<u8>,
     compressed: Vec<u8>,
     plain: Vec<u8>,
-    zstd: Box<compress::zstd::Workspace>,
+    zstd: Vec<u8>,
 }
 
 impl Fixture {
@@ -67,7 +66,7 @@ impl Fixture {
             node: vec![0; 65536],
             compressed: vec![0; MAX_UNCOMPRESSED],
             plain: vec![0; MAX_UNCOMPRESSED],
-            zstd: Box::default(),
+            zstd: vec![0; compress::zstd::Workspace::SIZE],
         }
     }
 }
@@ -145,7 +144,7 @@ fn check_image(name: &str) {
     let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
     let sub = volume.default_subvolume();
     let mut buffers =
-        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut *f.zstd)).unwrap();
+        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut f.zstd[..])).unwrap();
     let manifest = manifest();
 
     check_listing(
@@ -230,7 +229,6 @@ fn the_lzo_image_reads_back_exactly() {
 }
 
 #[test]
-#[ignore = "the zstd decoder is still a stub; un-ignore when it lands"]
 fn the_zstd_image_reads_back_exactly() {
     check_image("zstd");
 }
@@ -250,7 +248,7 @@ fn a_read_past_the_end_returns_nothing_and_a_listing_can_resume() {
     let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
     let sub = volume.default_subvolume();
     let mut buffers =
-        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut *f.zstd)).unwrap();
+        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut f.zstd[..])).unwrap();
     let entry = resolve(&sub, &mut f.device, b"big.txt", &mut f.node);
     let Target::Inode(ino) = entry.target else {
         panic!("big.txt is a file");
@@ -299,7 +297,7 @@ fn a_hole_reads_as_zeroes() {
     let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
     let sub = volume.default_subvolume();
     let mut buffers =
-        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut *f.zstd)).unwrap();
+        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut f.zstd[..])).unwrap();
     let entry = resolve(&sub, &mut f.device, b"sparse.bin", &mut f.node);
     let Target::Inode(ino) = entry.target else {
         panic!("sparse.bin is a file");
@@ -324,10 +322,10 @@ fn a_hole_reads_as_zeroes() {
 fn read_buffers_smaller_than_an_extent_are_refused() {
     let mut small = vec![0u8; 4096];
     let mut plain = vec![0u8; MAX_UNCOMPRESSED];
-    let mut zstd = Box::<compress::zstd::Workspace>::default();
+    let mut zstd = vec![0u8; compress::zstd::Workspace::SIZE];
     assert!(
         matches!(
-            ReadBuffers::new((&mut small[..], &mut plain[..], &mut *zstd)),
+            ReadBuffers::new((&mut small[..], &mut plain[..], &mut zstd[..])),
             Err(BtrfsError::Truncated { .. })
         ),
         "a 4 KiB buffer cannot hold a compressed extent"

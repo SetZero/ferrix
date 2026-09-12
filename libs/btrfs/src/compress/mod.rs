@@ -50,7 +50,7 @@ pub fn decompress(
     input: &[u8],
     output: &mut [u8],
     sectorsize: u32,
-    workspace: &mut zstd::Workspace,
+    workspace: &mut zstd::Workspace<'_>,
 ) -> Result<usize, BtrfsError> {
     match compression {
         COMPRESS_NONE => {

@@ -115,7 +115,8 @@ fn a_larger_buffer_is_a_short_read_not_an_error() {
 fn the_compress_entry_point_routes_zlib_here() {
     let plain = yes("inline me", 1800);
     let mut out = vec![0u8; plain.len()];
-    let mut workspace = zstd::Workspace::default();
+    let mut bytes = vec![0u8; zstd::Workspace::SIZE];
+    let mut workspace = zstd::Workspace::new(&mut bytes).unwrap();
     let written = compress::decompress(COMPRESS_ZLIB, INLINE, &mut out, 4096, &mut workspace);
     assert_eq!(written, Ok(plain.len()), "length");
     assert_eq!(out, plain, "contents");

@@ -170,7 +170,7 @@ struct Scratch {
     node: Vec<u8>,
     compressed: Vec<u8>,
     plain: Vec<u8>,
-    zstd: Box<Workspace>,
+    zstd: Vec<u8>,
     piece: Vec<u8>,
 }
 
@@ -179,7 +179,7 @@ thread_local! {
         node: vec![0; 65536],
         compressed: vec![0; MAX_UNCOMPRESSED],
         plain: vec![0; MAX_UNCOMPRESSED],
-        zstd: Box::default(),
+        zstd: vec![0; Workspace::SIZE],
         piece: vec![0; PIECE],
     });
 }
@@ -222,7 +222,7 @@ fn exercise(
         zstd,
         piece,
     } = scratch;
-    let Ok(mut buffers) = ReadBuffers::new((&mut compressed[..], &mut plain[..], &mut **zstd)) else {
+    let Ok(mut buffers) = ReadBuffers::new((&mut compressed[..], &mut plain[..], &mut zstd[..])) else {
         return;
     };
     for &ino in inodes {

@@ -83,17 +83,18 @@ pub struct DirEntry<'a> {
 
 /// The memory a compressed extent is read and expanded in.
 ///
-/// Two buffers of at least [`MAX_UNCOMPRESSED`] bytes and the zstd workspace,
-/// handed out as three disjoint borrows. A tuple of borrows is one; a mount
+/// Two buffers of at least [`MAX_UNCOMPRESSED`] bytes and one of at least
+/// [`compress::zstd::Workspace::SIZE`] for zstd's tables, handed out as three disjoint
+/// borrows. A tuple of borrows is one; a mount
 /// implements it over buffers it owns.
 pub trait ExtentBuffers {
     /// The buffer compressed bytes are read into, the buffer they expand
-    /// into, and zstd's workspace.
-    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut compress::zstd::Workspace);
+    /// into, and the bytes zstd builds its tables in.
+    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut [u8]);
 }
 
-impl ExtentBuffers for (&mut [u8], &mut [u8], &mut compress::zstd::Workspace) {
-    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut compress::zstd::Workspace) {
+impl ExtentBuffers for (&mut [u8], &mut [u8], &mut [u8]) {
+    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut [u8]) {
         (&mut *self.0, &mut *self.1, &mut *self.2)
     }
 }
@@ -122,14 +123,17 @@ struct Expanded {
 }
 
 impl<B: ExtentBuffers> ReadBuffers<B> {
-    /// Take over caller-allocated memory. Both byte buffers must hold at least
-    /// [`MAX_UNCOMPRESSED`] bytes.
+    /// Take over caller-allocated memory: the two extent buffers must hold at
+    /// least [`MAX_UNCOMPRESSED`] bytes, and zstd's at least [`compress::zstd::Workspace::SIZE`].
     pub fn new(mut buffers: B) -> Result<Self, BtrfsError> {
-        let (compressed, plain, _) = buffers.parts();
+        let (compressed, plain, zstd) = buffers.parts();
         let shortest = compressed.len().min(plain.len());
         if shortest < MAX_UNCOMPRESSED {
             return Err(truncated(MAX_UNCOMPRESSED, shortest));
         }
+        // Checked now rather than at the first zstd extent, so memory set up
+        // too small fails where it was set up, not in the middle of a read.
+        let _: compress::zstd::Workspace<'_> = compress::zstd::Workspace::new(zstd)?;
         Ok(ReadBuffers {
             buffers,
             cached: None,
@@ -150,7 +154,8 @@ impl<B: ExtentBuffers> ReadBuffers<B> {
         let out = plain
             .get_mut(..expanded_len(ram_bytes)?)
             .unwrap_or_default();
-        let len = compress::decompress(compression, data, out, sectorsize, zstd)?;
+        let mut workspace = compress::zstd::Workspace::new(zstd)?;
+        let len = compress::decompress(compression, data, out, sectorsize, &mut workspace)?;
         Ok(plain.get(..len).unwrap_or_default())
     }
 
@@ -190,12 +195,13 @@ impl<B: ExtentBuffers> ReadBuffers<B> {
                     .get_mut(..expanded_len(extent.ram_bytes)?)
                     .unwrap_or_default();
                 let input = compressed.get(..stored).unwrap_or_default();
+                let mut workspace = compress::zstd::Workspace::new(zstd)?;
                 let len = compress::decompress(
                     extent.compression,
                     input,
                     out,
                     volume.sectorsize(),
-                    zstd,
+                    &mut workspace,
                 )?;
                 self.cached = Some(Expanded { len, ..wanted });
                 len
