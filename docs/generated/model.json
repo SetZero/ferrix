@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "b4697b2b0962e77fe3743b0cd0dc7fc12d3650c43a7a4148db5b3bc2b3cd7129",
+  "digest": "53892f2aae2cceb5bc364cfcab599d2bff91a6500cb42c5ff8709b3863591806",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -4045,7 +4045,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::linuxAbi",
                   "kind": "attribute",
                   "redefines": "hostTests",
-                  "value": "53",
+                  "value": "56",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 807
