@@ -85,8 +85,16 @@ pub enum State {
     Free = 1,
     /// Inside a free block but not its head.
     FreeTail = 2,
-    /// Handed out.
+    /// Handed out. Only the first frame of an allocated block is marked this
+    /// way, and it carries the block's order and its reference count.
     Allocated = 3,
+    /// Inside an allocated block but not its head.
+    ///
+    /// A separate state rather than [`State::Allocated`] on every frame,
+    /// because a tail carries neither an order nor a count: those live on the
+    /// head. A tail that looked like a head would accept a `share` whose count
+    /// nothing reads, or a `deallocate` that frees part of somebody's block.
+    AllocatedTail = 4,
 }
 
 /// The per-frame record.
@@ -106,7 +114,8 @@ pub struct PageEntry {
     /// Unused by the allocator itself, and the reason the side array exists at
     /// all: copy-on-write is a refcount on a frame.
     refcount: u32,
-    /// Order of the block this frame heads, meaningful only when [`State::Free`].
+    /// Order of the block this frame heads, meaningful only when [`State::Free`]
+    /// or [`State::Allocated`].
     order: u8,
     /// What the frame is doing.
     state: State,
@@ -170,6 +179,13 @@ pub enum FrameError {
     StillShared(Frame),
     /// The reference count is saturated and cannot record another sharer.
     TooManyReferences(Frame),
+    /// The frame is inside an allocated block rather than at its head. A block
+    /// is freed, shared and released through its head, which is the only
+    /// frame that knows the block's order and count.
+    InsideBlock(Frame),
+    /// The block was allocated at another order than the one given, or the
+    /// call takes single frames and the block is larger.
+    WrongOrder(Frame),
 }
 
 impl fmt::Display for FrameError {
@@ -186,6 +202,12 @@ impl fmt::Display for FrameError {
             }
             FrameError::TooManyReferences(frame) => {
                 write!(f, "frame {frame:#x} has too many references")
+            }
+            FrameError::InsideBlock(frame) => {
+                write!(f, "frame {frame:#x} is inside a block, not its head")
+            }
+            FrameError::WrongOrder(frame) => {
+                write!(f, "frame {frame:#x} heads a block of another order")
             }
         }
     }
@@ -422,12 +444,32 @@ impl<'a> Frames<'a> {
         }
 
         let frames = 1u64 << order;
-        self.set_state_range(frame, frames, State::Allocated);
+        self.set_state_range(frame, frames, State::AllocatedTail);
         if let Some(entry) = self.entry_mut(frame) {
+            entry.state = State::Allocated;
+            entry.order = order;
             entry.refcount = 1;
         }
         self.free -= frames;
         frame
+    }
+
+    /// The head of an allocated block of exactly `order`, or why `frame` is
+    /// not one.
+    ///
+    /// The one check `deallocate`, `share` and `release` all need. A count is
+    /// kept per *block*, on its head, so a call naming a tail or the wrong
+    /// order is acting on a count that does not describe what it is about to
+    /// change: a `release` of an order-3 head would free one frame of eight,
+    /// and a `share` of a tail would raise a count nothing ever lowers.
+    fn allocated_head(&self, frame: Frame, order: u8) -> Result<(), FrameError> {
+        let entry = self.entry(frame).ok_or(FrameError::OutOfRange(frame))?;
+        match entry.state {
+            State::Allocated if entry.order == order => Ok(()),
+            State::Allocated => Err(FrameError::WrongOrder(frame)),
+            State::AllocatedTail => Err(FrameError::InsideBlock(frame)),
+            State::Reserved | State::Free | State::FreeTail => Err(FrameError::NotAllocated(frame)),
+        }
     }
 
     /// Take a single frame.
@@ -450,9 +492,10 @@ impl<'a> Frames<'a> {
         if !frame.is_multiple_of(1u64 << order) {
             return Err(FrameError::Misaligned(frame));
         }
-        if self.state(frame) != Some(State::Allocated) {
-            return Err(FrameError::NotAllocated(frame));
-        }
+        // The head, at the order it was taken with. Freeing a block at a
+        // smaller order leaks the rest of it; at a larger one, or from a tail,
+        // it hands out frames somebody else still holds.
+        self.allocated_head(frame, order)?;
         // A frame two address spaces share is not one caller's to free. Without
         // this the other sharer keeps a mapping to a frame the allocator has
         // since handed to somebody else, which is the quietest memory
@@ -484,26 +527,23 @@ impl<'a> Frames<'a> {
     /// frame, and because the alternative is a second array indexed the same
     /// way.
     ///
-    /// Shared frames are single frames: a higher-order block carries its count
-    /// on its head frame, and nothing shares one, because the unit a fault
-    /// copies is a page.
+    /// Shared frames are single frames, and that is enforced rather than
+    /// assumed: the unit a fault copies is a page, and [`Frames::release`]
+    /// frees at order 0, so a count on a larger block would free one frame of
+    /// it when the count ran out. Sharing a huge page wants its own call.
     ///
     /// # Errors
     ///
     /// [`FrameError::OutOfRange`] if the frame is not this allocator's;
     /// [`FrameError::NotAllocated`] if it is free, since a free frame has no
-    /// contents to share; and [`FrameError::TooManyReferences`] if the count
-    /// would wrap. Wrapping is refused rather than allowed because a wrapped
-    /// count frees memory that somebody is still reading out of, and the
-    /// refusal is a mapping that fails where the alternative is corruption
-    /// that does not.
+    /// contents to share; [`FrameError::InsideBlock`] for a frame inside a
+    /// larger allocation and [`FrameError::WrongOrder`] for the head of one;
+    /// and [`FrameError::TooManyReferences`] if the count would wrap. Wrapping
+    /// is refused rather than allowed because a wrapped count frees memory
+    /// that somebody is still reading out of, and the refusal is a mapping
+    /// that fails where the alternative is corruption that does not.
     pub fn share(&mut self, frame: Frame) -> Result<u32, FrameError> {
-        if self.index(frame).is_none() {
-            return Err(FrameError::OutOfRange(frame));
-        }
-        if self.state(frame) != Some(State::Allocated) {
-            return Err(FrameError::NotAllocated(frame));
-        }
+        self.allocated_head(frame, 0)?;
 
         let Some(entry) = self.entry_mut(frame) else {
             return Err(FrameError::OutOfRange(frame));
@@ -529,15 +569,13 @@ impl<'a> Frames<'a> {
     ///
     /// # Errors
     ///
-    /// [`FrameError::OutOfRange`] if the frame is not this allocator's, and
-    /// [`FrameError::NotAllocated`] if it is already free.
+    /// [`FrameError::OutOfRange`] if the frame is not this allocator's,
+    /// [`FrameError::NotAllocated`] if it is already free, and
+    /// [`FrameError::InsideBlock`] or [`FrameError::WrongOrder`] for any frame
+    /// of an allocation larger than one frame — the same refusals as
+    /// [`Frames::share`], and for the same reason.
     pub fn release(&mut self, frame: Frame) -> Result<Released, FrameError> {
-        if self.index(frame).is_none() {
-            return Err(FrameError::OutOfRange(frame));
-        }
-        if self.state(frame) != Some(State::Allocated) {
-            return Err(FrameError::NotAllocated(frame));
-        }
+        self.allocated_head(frame, 0)?;
 
         let Some(entry) = self.entry_mut(frame) else {
             return Err(FrameError::OutOfRange(frame));

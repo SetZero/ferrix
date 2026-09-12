@@ -74,9 +74,14 @@ fuzz_target!(|data: &[u8]| {
 
             for offset in 0..(1u64 << order) {
                 let index = usize::try_from(block + offset).expect("frame inside the arena");
+                let expected = if offset == 0 {
+                    State::Allocated
+                } else {
+                    State::AllocatedTail
+                };
                 assert_eq!(
                     frames.state(block + offset),
-                    Some(State::Allocated),
+                    Some(expected),
                     "frame {} of an allocated block is not marked allocated",
                     block + offset,
                 );

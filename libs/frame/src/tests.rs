@@ -82,11 +82,12 @@ fn a_block_covers_every_frame_it_claims() {
 
     let block = frames.allocate(3).unwrap();
     assert_eq!(frames.free_frames(), 64 - 8);
-    for offset in 0..8 {
+    assert_eq!(frames.state(block), Some(State::Allocated));
+    for offset in 1..8 {
         assert_eq!(
             frames.state(block + offset),
-            Some(State::Allocated),
-            "frame {offset} of the block should be allocated"
+            Some(State::AllocatedTail),
+            "frame {offset} of the block should be allocated, as a tail"
         );
     }
     assert_eq!(
@@ -336,8 +337,9 @@ fn a_block_below_a_limit_lies_wholly_below_it() {
     let block = frames.allocate_below(2, 0x110).unwrap();
     assert!(block + 4 <= 0x110, "block {block:#x} runs past the limit");
     assert_eq!(frames.free_frames(), 0x100 - 4);
-    for offset in 0..4 {
-        assert_eq!(frames.state(block + offset), Some(State::Allocated));
+    assert_eq!(frames.state(block), Some(State::Allocated));
+    for offset in 1..4 {
+        assert_eq!(frames.state(block + offset), Some(State::AllocatedTail));
     }
 }
 
@@ -445,7 +447,12 @@ fn a_long_random_workload_never_hands_out_the_same_frame_twice() {
                     *slot
                 );
                 *slot = id;
-                assert_eq!(frames.state(block + offset), Some(State::Allocated));
+                let expected = if offset == 0 {
+                    State::Allocated
+                } else {
+                    State::AllocatedTail
+                };
+                assert_eq!(frames.state(block + offset), Some(expected));
             }
             live.push((block, order));
         } else {
@@ -538,6 +545,7 @@ fn zero_is_a_valid_state() {
     assert_eq!(State::Free as u8, 1);
     assert_eq!(State::FreeTail as u8, 2);
     assert_eq!(State::Allocated as u8, 3);
+    assert_eq!(State::AllocatedTail as u8, 4);
     assert_eq!(
         size_of::<State>(),
         1,
@@ -719,4 +727,87 @@ fn a_shared_frame_is_reallocatable_only_after_the_last_reference() {
 
     assert_eq!(frames.release(shared), Ok(Released::Freed));
     assert_eq!(frames.allocate_frame(), Some(shared));
+}
+
+// ---------------------------------------------------------------------------
+// Counts belong to single-frame heads
+// ---------------------------------------------------------------------------
+//
+// A count lives on the head of an allocation, and `release` frees at order 0.
+// So the only frame a count can describe honestly is the head of an order-0
+// block. Before these were refused, a tail's count was whatever the last owner
+// left and nothing read it, and releasing the head of a larger block freed one
+// frame of it.
+
+#[test]
+fn a_tail_frame_can_be_neither_shared_nor_released() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let block = frames.allocate(3).unwrap();
+    let tail = block + 1;
+    assert_eq!(frames.share(tail), Err(FrameError::InsideBlock(tail)));
+    assert_eq!(frames.release(tail), Err(FrameError::InsideBlock(tail)));
+    assert_eq!(frames.entry(block).unwrap().refcount(), 1);
+    assert_eq!(frames.state(tail), Some(State::AllocatedTail));
+}
+
+#[test]
+fn the_head_of_a_larger_block_can_be_neither_shared_nor_released() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let block = frames.allocate(3).unwrap();
+    let free = frames.free_frames();
+
+    // Released at order 0, this frees one frame of eight and leaves seven
+    // marked allocated with nobody holding them.
+    assert_eq!(frames.release(block), Err(FrameError::WrongOrder(block)));
+    assert_eq!(frames.share(block), Err(FrameError::WrongOrder(block)));
+    assert_eq!(frames.free_frames(), free, "nothing came back");
+    assert_eq!(frames.state(block), Some(State::Allocated));
+    assert_eq!(frames.deallocate(block, 3), Ok(()));
+}
+
+#[test]
+fn a_block_freed_at_the_wrong_order_is_refused() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let block = frames.allocate(3).unwrap();
+    let free = frames.free_frames();
+
+    // Smaller: would leak the rest of the block.
+    assert_eq!(
+        frames.deallocate(block, 0),
+        Err(FrameError::WrongOrder(block))
+    );
+    // Larger: would free frames the block never had.
+    assert_eq!(
+        frames.deallocate(block, 4),
+        Err(FrameError::WrongOrder(block))
+    );
+    assert_eq!(frames.free_frames(), free);
+    assert_eq!(frames.deallocate(block, 3), Ok(()));
+    assert_eq!(frames.free_frames(), 32);
+}
+
+#[test]
+fn a_tail_cannot_be_freed_as_a_block_of_its_own() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let block = frames.allocate(3).unwrap();
+    let free = frames.free_frames();
+
+    // Aligned to its own order, so only the state can tell it is a tail.
+    assert_eq!(
+        frames.deallocate(block + 4, 2),
+        Err(FrameError::InsideBlock(block + 4))
+    );
+    assert_eq!(frames.free_frames(), free);
+    assert_eq!(frames.state(block + 4), Some(State::AllocatedTail));
+    // The block is intact, and still frees whole through its head.
+    assert_eq!(frames.deallocate(block, 3), Ok(()));
+    assert_eq!(frames.free_frames(), 32);
 }
