@@ -269,6 +269,26 @@ pub(crate) unsafe fn read_gs_word() -> u64 {
     word
 }
 
+/// This function's frame pointer.
+///
+/// With `force-frame-pointers` on (see `.cargo/config.toml`) this register
+/// holds the address of this function's frame record: the caller's frame
+/// pointer, and the address it will return to. Walking that chain is how a
+/// panic reports who called what.
+///
+/// Always inlined: read out of line, it would name this function's own frame,
+/// which has been left by the time anything walks it — and which the walk
+/// then reuses for its own frames.
+#[inline(always)]
+pub(crate) fn frame_pointer() -> u64 {
+    let value: u64;
+    // SAFETY: reading a register has no side effects.
+    unsafe {
+        asm!("mov {}, rbp", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
 /// QEMU's `isa-debug-exit` device.
 ///
 /// Writing to it ends the emulator with `(value << 1) | 1`, which is how the

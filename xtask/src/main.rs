@@ -34,6 +34,7 @@ mod paths;
 mod pe;
 mod qemu;
 mod serial;
+mod symbolize;
 
 use std::process::ExitCode;
 
@@ -127,20 +128,20 @@ fn run() -> Result<()> {
     match command {
         "build" => {
             for arch in args.arches()? {
-                let image = build_image(arch, &args)?;
+                let (image, _) = build_image(arch, &args)?;
                 println!("built {}", image.display());
             }
             Ok(())
         }
         "run" => {
             let arch = args.single_arch()?;
-            let image = build_image(arch, &args)?;
+            let (image, _) = build_image(arch, &args)?;
             qemu::run(arch, &image, &args)
         }
         "test-boot" => {
             for arch in args.arches()? {
-                let image = build_image(arch, &args)?;
-                qemu::test_boot(arch, &image, &args)?;
+                let (image, kernel) = build_image(arch, &args)?;
+                qemu::test_boot(arch, &image, &kernel, &args)?;
             }
             Ok(())
         }
@@ -151,7 +152,7 @@ fn run() -> Result<()> {
             let (loader, kernel) = build_halves(arch, &args)?;
             flash::run(arch, &loader, &kernel, &args)
         }
-        "watch-serial" => serial::watch(&args),
+        "watch-serial" => serial::watch(None, &args),
         // The whole of a board round-trip. Separate commands exist because
         // each half is useful alone — reflashing without watching, watching a
         // board someone else reset — but the common case is both, and a
@@ -160,16 +161,21 @@ fn run() -> Result<()> {
             let arch = args.single_arch()?;
             let (loader, kernel) = build_halves(arch, &args)?;
             flash::run(arch, &loader, &kernel, &args)?;
-            serial::watch(&args)
+            serial::watch(Some(&kernel), &args)
         }
         other => Err(Error::new(format!("unknown command `{other}`\n\n{USAGE}"))),
     }
 }
 
 /// Compile both halves for `arch` and assemble the bootable image.
-fn build_image(arch: Arch, args: &Args) -> Result<std::path::PathBuf> {
+///
+/// The kernel ELF comes back beside the image, because it is what a panic
+/// report's backtrace is resolved against: the image holds the same kernel
+/// with nothing to look a symbol up in.
+fn build_image(arch: Arch, args: &Args) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
     let (loader, kernel) = build_halves(arch, args)?;
-    fat::write_image(arch, &loader, &kernel)
+    let image = fat::write_image(arch, &loader, &kernel)?;
+    Ok((image, kernel))
 }
 
 /// Compile both halves for `arch`, without assembling an image.

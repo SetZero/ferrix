@@ -29,7 +29,11 @@ const BAUD: &str = "115200";
 const CANDIDATE_PREFIXES: [&str; 2] = ["ttyACM", "ttyUSB"];
 
 /// Watch `port` until the kernel reports, or the patience runs out.
-pub(crate) fn watch(args: &Args) -> Result<()> {
+pub(crate) fn watch(kernel: Option<&Path>, args: &Args) -> Result<()> {
+    // `deploy` knows which kernel it just flashed; `watch-serial` on its own
+    // is watching whatever is already on the board, and says so by passing
+    // none rather than guessing at a build in this tree.
+    let symbols = kernel.and_then(crate::symbolize::Symbolizer::open);
     let port = match args.port.as_deref() {
         Some(given) => PathBuf::from(given),
         None => discover()?,
@@ -89,7 +93,7 @@ pub(crate) fn watch(args: &Args) -> Result<()> {
                     return Ok(());
                 }
                 if line.contains(PANIC_MARKER) {
-                    crate::qemu::take_panic_report(&receiver, &mut log)?;
+                    crate::qemu::take_panic_report(&receiver, &mut log, symbols.as_ref())?;
                     return Err(Error::new(format!(
                         "the kernel panicked on the board; see {}",
                         log_path.display()

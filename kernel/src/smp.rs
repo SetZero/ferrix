@@ -222,6 +222,14 @@ static TOPOLOGY: Once<Topology> = Once::new();
 /// that could ask, so this only ever needs to cover the boot processor.
 static LOCAL_READY: AtomicBool = AtomicBool::new(false);
 
+/// Set by a panic and never cleared: a processor that sees it stops.
+///
+/// Looked at where every processor arrives whether or not it has work — the
+/// inter-processor interrupt, and the wait that answers other processors'
+/// shootdowns — and not in the scheduler, whose locks the panicking processor
+/// may be holding.
+static STOPPING: AtomicBool = AtomicBool::new(false);
+
 /// Find every processor firmware describes, and install the boot processor's
 /// record.
 ///
@@ -468,6 +476,7 @@ fn next_job(me: &PerCpu) -> Option<(u64, Work)> {
 /// time is what lets one interrupt stand for several, which is what two sent
 /// before the first is taken become.
 fn on_ipi(_irq: u32) {
+    halt_if_stopping();
     if let Some(me) = this_cpu() {
         let _ = me.ipis.fetch_add(1, Ordering::Relaxed);
         service_tlb(me);
@@ -574,6 +583,7 @@ fn wait_for_everyone(
     let mut kicked = started;
     for cpu in topology.cpus.iter().filter(|cpu| cpu.is_online()) {
         while !done(cpu) {
+            halt_if_stopping();
             service_tlb(me);
             let now = crate::timer::now_nanos();
             if now.saturating_sub(started) > timeout {
@@ -702,6 +712,33 @@ pub(crate) fn this_cpu() -> Option<&'static PerCpu> {
     // in the slice `Topology::from_described` leaked, which lives forever and
     // is only ever reached through shared references.
     Some(unsafe { &*(at as *const PerCpu) })
+}
+
+/// Ask every other processor to stop, for a panic, and return how many were
+/// asked.
+///
+/// None before the secondaries are started: until then there is nobody to
+/// ask, and on x86-64 the local APIC the interrupt would be sent through may
+/// not be mapped yet. A processor running with interrupts masked outside the
+/// shootdown wait does not stop until it next looks; this is the best a
+/// panic can do without a non-maskable interrupt.
+pub(crate) fn stop_others() -> usize {
+    STOPPING.store(true, Ordering::Release);
+    let Some(topology) = TOPOLOGY.get() else {
+        return 0;
+    };
+    let others = topology.online().saturating_sub(1);
+    if others > 0 {
+        let _ = arch::send_ipi_to_others();
+    }
+    others
+}
+
+/// Stop this processor if a panic has asked every processor to.
+fn halt_if_stopping() {
+    if STOPPING.load(Ordering::Acquire) {
+        arch::halt()
+    }
 }
 
 /// Which processor this is, for a failure report.

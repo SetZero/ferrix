@@ -28,6 +28,7 @@ extern crate alloc;
 )]
 mod acpi;
 mod arch;
+mod backtrace;
 mod console;
 mod early;
 mod fdt;

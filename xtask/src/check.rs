@@ -49,6 +49,10 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         python_with("scripts/gen-arch-doc.py", &["--check"])
     })?;
 
+    // The panic screen's font is generated from the BDF committed beside it,
+    // and a hand edit to either would otherwise drift silently.
+    step("font", || python_with("scripts/gen-font.py", &["--check"]))?;
+
     step("crate layering", || {
         let mut command = Command::new("bash");
         let _ = command

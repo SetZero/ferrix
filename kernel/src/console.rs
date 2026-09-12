@@ -25,7 +25,7 @@
 
 use core::fmt::{self, Write};
 use core::hint::spin_loop;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use ferrix_sync::IrqSpinLock;
 
@@ -47,6 +47,24 @@ static PORT: IrqSpinLock<Port, crate::arch::Irq> = IrqSpinLock::new(Port);
 /// short enough that a lock nobody will ever release costs a moment rather
 /// than the boot test's timeout.
 const PANIC_SPINS: u32 = 10_000_000;
+
+/// How much recent console output is kept for a failure report.
+///
+/// A little more than the largest QR code carries, which is the most any
+/// reader of it can use.
+const RECENT_BYTES: usize = 4096;
+
+/// The last [`RECENT_BYTES`] written to the port, as a ring.
+///
+/// Atomics rather than a lock, because the moment this is read is a panic,
+/// possibly on a processor holding the port's lock or part way through a
+/// line. A racing writer can leave a byte stale; nothing can leave the ring
+/// unreadable.
+static RECENT: [AtomicU8; RECENT_BYTES] = [const { AtomicU8::new(0) }; RECENT_BYTES];
+
+/// How many bytes have ever gone into [`RECENT`]. The next one goes at this
+/// count modulo the ring's length.
+static RECENT_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 
 /// Record that the port is configured and may be written.
 ///
@@ -78,9 +96,37 @@ impl Write for Port {
                 crate::arch::console::write_byte(b'\r');
             }
             crate::arch::console::write_byte(byte);
+            remember(byte);
         }
         Ok(())
     }
+}
+
+/// Keep `byte` in the recent-output ring.
+fn remember(byte: u8) {
+    let at = RECENT_WRITTEN.fetch_add(1, Ordering::Relaxed);
+    if let Some(slot) = RECENT.get(at % RECENT_BYTES) {
+        slot.store(byte, Ordering::Relaxed);
+    }
+}
+
+/// Copy the most recent console output into `out`, oldest byte first, and
+/// return how many bytes were copied: at most `out.len()`, and never more
+/// than the ring has kept.
+#[expect(
+    dead_code,
+    reason = "the panic screen prints and encodes it; nothing else has a use for it yet"
+)]
+pub(crate) fn recent(out: &mut [u8]) -> usize {
+    let written = RECENT_WRITTEN.load(Ordering::Relaxed);
+    let count = written.min(RECENT_BYTES).min(out.len());
+    let start = written.saturating_sub(count);
+    for (offset, slot) in out.iter_mut().take(count).enumerate() {
+        *slot = RECENT
+            .get(start.wrapping_add(offset) % RECENT_BYTES)
+            .map_or(b'?', |byte| byte.load(Ordering::Relaxed));
+    }
+    count
 }
 
 /// Write formatted output to the console, if there is one yet.

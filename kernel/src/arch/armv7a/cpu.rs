@@ -377,6 +377,22 @@ pub(crate) fn read_tpidrprw() -> u32 {
     value
 }
 
+/// This function's frame pointer.
+///
+/// With `force-frame-pointers` on (see `.cargo/config.toml`) this register
+/// holds the address of this function's frame record: the caller's frame
+/// pointer, and the address it will return to. Walking that chain is how a
+/// panic reports who called what.
+#[inline(always)]
+pub(crate) fn frame_pointer() -> u32 {
+    let value: u32;
+    // SAFETY: reading a register has no side effects.
+    unsafe {
+        asm!("mov {}, r11", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
 /// `MAIR0`: the first four memory attribute encodings.
 pub(crate) fn read_mair0() -> u32 {
     let value: u32;

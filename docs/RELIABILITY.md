@@ -59,15 +59,35 @@ site printed its own `FERRIX-PANIC` line and called `arch::halt()` by hand; now
 it is a `panic!` with a sentence, and `kernel/src/panic.rs` writes the report:
 
 ```text
-FERRIX-PANIC stage 3 self-check failed: the timer never fired
-  at        kernel/src/main.rs:153:23
-  on        processor 0 (hardware id 0x0)
+FERRIX-PANIC stage 2 self-check failed: the heap lost an allocation
+  at        kernel/src/main.rs:742:5
+  on        the boot processor, before any other was started
   stopped   this processor halts here; nothing will recover it
+  trace     #0  0xffffffff80002428  __rustc::rust_begin_unwind+0x1b4
+  trace     #1  0xffffffff800074fc  core::panicking::panic_fmt+0x28
+  trace     #2  0xffffffff80002e54  ferrix_kernel::memory_check+0x20
+  trace     #3  0xffffffff80003268  ferrix_kernel::kmain+0x414
+  trace     #4  0xffffffff800000fc  _start+0xfc
 ```
 
 The marker and the message share the first line, because that is the line the
 boot test judges on. What follows is context, which `xtask` keeps reading for a
 moment so that the log holds the whole report.
+
+The report masks interrupts on its own processor and then asks every other one
+to stop, through the inter-processor interrupt they already answer. Otherwise
+the machine keeps running around a failure it cannot survive, and the other
+processors' output lands in the middle of the report.
+
+The backtrace follows the frame-pointer chain, which is why every kernel target
+is built with `force-frame-pointers`. Every step of the walk is checked before
+it is trusted. A frame has to be aligned and above the last one. It has to be
+within one stack's worth of where the walk began, and on a mapped page, read
+from the page tables without taking their lock. A return address has to fall
+inside the kernel image. Anything else ends the walk, because a fault inside
+the panic handler is a report nobody sees. The kernel prints only addresses. It
+carries no symbol table, so `xtask` names each frame from the ELF it booted, in
+the terminal and in the log.
 
 The exemption is deliberately narrow. `unwrap`, `expect`, `unreachable!` and
 indexing are still denied in the kernel, because each of those panics without

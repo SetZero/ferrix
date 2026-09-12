@@ -269,6 +269,12 @@ fn psci_conduit() -> Option<PsciConduit> {
     }
 }
 
+/// Where a backtrace starts: this function's frame pointer.
+#[inline(always)]
+pub(crate) fn frame_pointer() -> u64 {
+    u64::from(cpu::frame_pointer())
+}
+
 /// Stop the machine.
 pub(crate) fn shutdown() -> ! {
     if let Some(conduit) = psci_conduit() {

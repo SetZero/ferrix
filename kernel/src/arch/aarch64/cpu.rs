@@ -412,6 +412,22 @@ pub(crate) fn read_tpidr_el1() -> u64 {
     value
 }
 
+/// This function's frame pointer.
+///
+/// With `force-frame-pointers` on (see `.cargo/config.toml`) this register
+/// holds the address of this function's frame record: the caller's frame
+/// pointer, and the address it will return to. Walking that chain is how a
+/// panic reports who called what.
+#[inline(always)]
+pub(crate) fn frame_pointer() -> u64 {
+    let value: u64;
+    // SAFETY: reading a register has no side effects.
+    unsafe {
+        asm!("mov {}, x29", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
 /// The frequency of the architected counter, in hertz.
 ///
 /// Firmware programs this register at reset and it is read-only thereafter, so

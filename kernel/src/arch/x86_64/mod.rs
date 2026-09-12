@@ -282,6 +282,12 @@ pub(crate) unsafe fn drop_identity_map(_view: &BootView<'_>) {
     crate::mm::clear_root_slots(0..UPPER_HALF_SLOT);
 }
 
+/// Where a backtrace starts: this function's frame pointer.
+#[inline(always)]
+pub(crate) fn frame_pointer() -> u64 {
+    cpu::frame_pointer()
+}
+
 /// Stop the machine, and QEMU with it.
 pub(crate) fn shutdown() -> ! {
     cpu::debug_exit();

@@ -1,9 +1,10 @@
 //! Bounds-checked ELF reader, for both 64-bit and 32-bit images.
 //!
-//! Used twice: by the loader to place the kernel, and by the kernel to place
-//! user programs. It understands what those two jobs need — program headers,
-//! the load span, and the relative relocations a static PIE carries — and
-//! nothing else.
+//! Used three times: by the loader to place the kernel, by the kernel to place
+//! user programs, and by `xtask` to name the functions in a kernel panic's
+//! backtrace. It understands what those jobs need — program headers, the load
+//! span, the relative relocations a static PIE carries, and the symbol table —
+//! and nothing else.
 //!
 //! # Two classes, one interface
 //!
@@ -851,3 +852,9 @@ impl Iterator for Relocations<'_> {
 
 #[cfg(test)]
 mod tests;
+
+mod symbols;
+pub use symbols::{
+    MAX_LABEL_SPAN, SHDR_SIZE, SHDR32_SIZE, SHT_STRTAB, SHT_SYMTAB, STT_FUNC, STT_NOTYPE,
+    STT_OBJECT, SYM_SIZE, SYM32_SIZE, Symbol, Symbols,
+};

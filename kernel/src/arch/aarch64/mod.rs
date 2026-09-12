@@ -238,6 +238,12 @@ pub(crate) unsafe fn drop_identity_map(_view: &BootView<'_>) {
     IDENTITY_DROPPED.store(true, Ordering::Relaxed);
 }
 
+/// Where a backtrace starts: this function's frame pointer.
+#[inline(always)]
+pub(crate) fn frame_pointer() -> u64 {
+    cpu::frame_pointer()
+}
+
 /// Stop the machine.
 pub(crate) fn shutdown() -> ! {
     cpu::psci_system_off();

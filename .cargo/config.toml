@@ -21,6 +21,9 @@ rustflags = [
     # disagree about segment alignment.
     "-C", "link-arg=-zmax-page-size=4096",
     "-C", "relocation-model=static",
+    # A panic report walks the frame-pointer chain for its backtrace, and
+    # without this the compiler is free to use the register for anything.
+    "-C", "force-frame-pointers=yes",
 ]
 
 [target.aarch64-unknown-none-softfloat]
@@ -31,12 +34,18 @@ rustflags = [
     # map at the alignment the headers claim.
     "-C", "link-arg=-zmax-page-size=4096",
     "-C", "relocation-model=static",
+    # A panic report walks the frame-pointer chain for its backtrace, and
+    # without this the compiler is free to use the register for anything.
+    "-C", "force-frame-pointers=yes",
 ]
 
 [target.armv7a-none-eabi]
 rustflags = [
     "-C", "link-arg=-zmax-page-size=4096",
     "-C", "relocation-model=static",
+    # A panic report walks the frame-pointer chain for its backtrace, and
+    # without this the compiler is free to use the register for anything.
+    "-C", "force-frame-pointers=yes",
 ]
 
 # The ARMv7-A loader: an ELF32 static PIE, laid out for `xtask/src/pe.rs` to

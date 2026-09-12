@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use crate::args::Args;
 use crate::cargo;
 use crate::paths::{self, Arch, Firmware};
+use crate::symbolize::Symbolizer;
 use crate::{Error, Result};
 
 /// What the kernel prints when it has finished its self-checks.
@@ -42,7 +43,8 @@ pub(crate) fn run(arch: Arch, image: &Path, args: &Args) -> Result<()> {
 }
 
 /// Boot the image headless and require the kernel to report success.
-pub(crate) fn test_boot(arch: Arch, image: &Path, args: &Args) -> Result<()> {
+pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> Result<()> {
+    let symbols = Symbolizer::open(kernel);
     let mut command = qemu_command(arch, image, args)?;
     let _ = command.stdout(Stdio::piped()).stderr(Stdio::inherit());
 
@@ -99,7 +101,7 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, args: &Args) -> Result<()> {
     }
 
     if matches!(outcome, Some(Err(_))) {
-        take_panic_report(&receiver, &mut log)?;
+        take_panic_report(&receiver, &mut log, symbols.as_ref())?;
     }
     let status = finish(&mut child, outcome.is_some())?;
     drop(receiver);
@@ -127,7 +129,8 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, args: &Args) -> Result<()> {
     }
 }
 
-/// Copy the rest of a panic report to the terminal and the log.
+/// Copy the rest of a panic report to the terminal and the log, naming the
+/// function beside each backtrace address when `symbols` can.
 ///
 /// Stops when the guest goes quiet for [`PANIC_REPORT_GRACE`] or closes the
 /// port. The verdict is already decided; this is only so that it arrives with
@@ -135,8 +138,12 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, args: &Args) -> Result<()> {
 pub(crate) fn take_panic_report(
     receiver: &mpsc::Receiver<String>,
     log: &mut impl Write,
+    symbols: Option<&Symbolizer>,
 ) -> Result<()> {
     while let Ok(line) = receiver.recv_timeout(PANIC_REPORT_GRACE) {
+        let line = symbols
+            .and_then(|symbols| symbols.annotate(&line))
+            .unwrap_or(line);
         println!("    | {line}");
         writeln!(log, "{line}")?;
         if line.contains(SUCCESS_MARKER) || line.contains(PANIC_MARKER) {
