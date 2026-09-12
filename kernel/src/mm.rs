@@ -297,6 +297,37 @@ pub(crate) fn deallocate_frames(frame: Frame, order: u8) {
     let _ = with_frames(|frames| frames.deallocate(frame, order));
 }
 
+/// Record another reference to a frame, for a page two address spaces share.
+///
+/// Returns the new count, or `None` if the allocator refused — which it does
+/// for a frame that is not allocated, or one whose count would wrap. Both are
+/// kernel bugs rather than conditions a caller can recover from, so the caller
+/// that maps the page must treat `None` as "do not map it".
+pub(crate) fn share_frame(frame: Frame) -> Option<u32> {
+    with_frames(|frames| frames.share(frame).ok())?
+}
+
+/// Drop one reference to a frame, freeing it if it was the last.
+///
+/// Returns true if the frame went back to the allocator. Anonymous memory is
+/// freed through here rather than through [`deallocate_frames`], because a
+/// copy-on-write page may still be mapped by somebody else and the allocator
+/// refuses to free it while it is.
+pub(crate) fn release_frame(frame: Frame) -> bool {
+    // Qualified: `Released` is already `ferrix_paging`'s in this module, and
+    // the two mean different things -- a page table given back versus a frame.
+    with_frames(|frames| matches!(frames.release(frame), Ok(ferrix_frame::Released::Freed)))
+        .unwrap_or(false)
+}
+
+/// How many references there are to a frame.
+///
+/// For the fault handler's one real decision: a copy-on-write fault on a page
+/// nobody else holds any more does not need to copy anything.
+pub(crate) fn frame_references(frame: Frame) -> u32 {
+    with_frames(|frames| frames.entry(frame).map_or(0, PageEntry::refcount)).unwrap_or(0)
+}
+
 /// Frames currently free.
 pub(crate) fn free_frames() -> u64 {
     with_frames(|frames| frames.free_frames()).unwrap_or(0)

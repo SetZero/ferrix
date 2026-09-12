@@ -30,6 +30,7 @@ mod sched;
 mod smp;
 mod timer;
 mod trap;
+mod user;
 mod vmap;
 
 use alloc::boxed::Box;
@@ -174,6 +175,12 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // takes and gives back are mappings the sweep below has to see settled.
     start_scheduler(cpus);
 
+    // Stage 6, so far only the memory objects a process is built from. Here
+    // rather than after `finish_memory` because it allocates and frees frames
+    // and requires the count to return to where it started, which is a
+    // measurement the reclaim below would otherwise move under it.
+    check_user_memory();
+
     // The rest of stage 2, deliberately last. Each of these needs something a
     // later part of boot brought up — the arena needs the heap, the sweep
     // needs every mapping the kernel is ever going to make, and reclaiming
@@ -186,6 +193,25 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
 
     println!("{SUCCESS_MARKER} stages 1-5");
     arch::shutdown()
+}
+
+/// Stage 6: the memory objects, and the frames they must give back.
+///
+/// Halts rather than returning, as every other stage's check does: the useful
+/// report is which property failed, not that stage 6 did.
+fn check_user_memory() {
+    let report = match user::check::run() {
+        Ok(report) => report,
+        Err(problem) => {
+            println!("FERRIX-PANIC stage 6 self-check failed: {problem}");
+            arch::halt()
+        }
+    };
+
+    println!(
+        "  objects  {} pages reserved, {} committed, {} frames leaked",
+        report.reserved, report.committed, report.leaked,
+    );
 }
 
 /// Stage 4: find every processor, start them, and require them to work
