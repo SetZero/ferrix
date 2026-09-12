@@ -23,6 +23,7 @@ ferrix-objects = { path = "../libs/objects" }
 ferrix-vfs = { path = "../libs/vfs" }
 ferrix-pci = { path = "../libs/pci" }
 ferrix-btrfs = { path = "../libs/btrfs" }
+ferrix-block = { path = "../libs/block", features = ["model"] }
 
 [[bin]]
 name = "elf_parse"
@@ -69,6 +70,13 @@ bench = false
 [[bin]]
 name = "btrfs_read"
 path = "fuzz_targets/btrfs_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "block_queue"
+path = "fuzz_targets/block_queue.rs"
 test = false
 doc = false
 bench = false

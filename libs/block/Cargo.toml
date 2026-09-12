@@ -1,0 +1,19 @@
+[package]
+name = "ferrix-block"
+description = "The block core: request queues, merging, write barriers and the deadline I/O scheduler"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[features]
+# The reference model and the harness that holds the queue to it. The unit
+# tests always have it; `fuzz/` turns it on so its target drives the same
+# model from fuzzer bytes. The kernel never enables it.
+model = []
+
+[lints]
+workspace = true

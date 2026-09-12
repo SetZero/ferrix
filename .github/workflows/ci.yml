@@ -406,6 +406,14 @@ jobs:
       - name: Miri (PCI configuration space)
         run: cargo +nightly miri test -p ferrix-pci --lib
 
+      # The block core. It forbids unsafe too, so again the gain is narrower
+      # than aliasing: it keeps a unit's parts in one allocation that is moved
+      # between three indexes, a barrier list and the in-flight map, and hands
+      # a dispatch back as a borrow of the entry it just inserted. Miri runs
+      # the model-based sequences over exactly that churn.
+      - name: Miri (block request queue)
+        run: cargo +nightly miri test -p ferrix-block --lib
+
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.
   #

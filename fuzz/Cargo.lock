@@ -27,6 +27,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "ferrix-block"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-btrfs"
 version = "0.1.0"
 
@@ -46,6 +50,7 @@ version = "0.1.0"
 name = "ferrix-fuzz"
 version = "0.0.0"
 dependencies = [
+ "ferrix-block",
  "ferrix-btrfs",
  "ferrix-elf",
  "ferrix-frame",

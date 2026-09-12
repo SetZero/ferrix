@@ -31,6 +31,10 @@ name = "ferrix-acpi"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-block"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-boot"
 version = "0.1.0"
 dependencies = [
