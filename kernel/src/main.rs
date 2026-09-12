@@ -336,6 +336,19 @@ fn check_filesystems(view: &BootView<'_>) {
         report.pages, report.leaked,
     );
 
+    let calls = match fs::check::run_calls() {
+        Ok(calls) => calls,
+        Err(problem) => fatal!(
+            catalog::STAGE8_PIPES_AND_FILESYSTEM_CALLS,
+            "stage 8 pipe and filesystem call self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  pipes    {} bytes through a pipe, a FIFO and sendfile; statfs, truncate and \
+         fallocate answered; {} frames leaked",
+        calls.bytes, calls.leaked,
+    );
+
     let pseudo = match fs::procfs::check::run() {
         Ok(pseudo) => pseudo,
         Err(problem) => fatal!(

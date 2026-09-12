@@ -46,6 +46,7 @@ Causes are listed most likely first.
 | [FX-0820](#fx-0820) | the system calls that take a path failed their self-check |
 | [FX-0830](#fx-0830) | /dev or /proc failed its self-check |
 | [FX-0850](#fx-0850) | a panic was requested through /proc/sysrq-trigger |
+| [FX-0860](#fx-0860) | pipes, a FIFO or the filesystem calls failed their self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -694,6 +695,34 @@ write system call that carried the request.
    /proc/sysrq-trigger`.
 
 See: kernel/src/fs/procfs.rs sysrq_trigger; docs/RELIABILITY.md.
+
+<a id="fx-0860"></a>
+
+## FX-0860 — pipes, a FIFO or the filesystem calls failed their self-check
+
+`fs::check::run_calls` builds a process and drives the handlers with paths and
+buffers in its own memory. A pipe must carry what is written into it, report
+pipefs to fstatfs, read end of file once its writer closes, answer EAGAIN when
+empty and non-blocking and EPIPE with no reader, and pipe2 must close both
+descriptors again when it cannot hand them back. A FIFO under /tmp must be one
+pipe for its openers. statfs of /tmp must decode TMPFS_MAGIC, and statfs64 must
+take 84 and musl's 88 as its size. truncate and fallocate must grow a file and
+fallocate never shrink one, and sendfile must copy a file with and without an
+offset. The whole run is done twice and must leave no frame behind.
+
+1. A pipe end's drop no longer counts it out of the buffer, so a reader never
+   sees end of file and the pipe outlives its descriptors as leaked frames.
+2. `attach_fifo` is not called from `openat`, or keys its table by something two
+   opens of one FIFO do not share, so each opener gets a pipe of its own.
+3. A `statfs` layout in `libs/linux-abi` or its encoder in
+   `libs/vfs/src/statfs.rs` moved a field, so the magic number is not where a
+   program reads it.
+4. tmpfs's `grow_to` shrinks a file, or `sendfile` stopped putting its offset
+   back.
+
+See: kernel/src/fs/check.rs run_calls; kernel/src/fs/pipe.rs;
+kernel/src/syscall/pipe.rs; kernel/src/syscall/fsctl.rs; libs/vfs/src/pipe.rs;
+libs/vfs/src/statfs.rs; docs/ROADMAP.md stage 8.
 
 <a id="fx-0901"></a>
 

@@ -6,15 +6,31 @@
 //! map — hard link and symbolic link included. And that tmpfs over VMO pages
 //! stores what it is given, gives zeros where nothing was written, and gives
 //! every frame back once the file is gone.
+//!
+//! And, in [`run_calls`], a third: that pipes, a FIFO and the calls about
+//! filesystems answer as a program meets them. Those waits and wake-ups, the
+//! user-memory byte layouts and the descriptors left behind are the kernel's,
+//! not the library's, so they are driven through the system call handlers
+//! against a process built for the check.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::PAGE_SIZE;
-use ferrix_vfs::{Errno, FileType, Namespace, OpenFlags, RenameMode};
+use ferrix_linux_abi::types::{
+    AT_FDCWD, F_GETFD, FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE, FD_CLOEXEC, MAP_ANONYMOUS,
+    MAP_PRIVATE, O_APPEND, O_CLOEXEC, O_CREAT, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY,
+    PROT_READ, PROT_WRITE, SEEK_CUR,
+};
+use ferrix_vfs::pipe::PIPEFS_MAGIC;
+use ferrix_vfs::tmpfs::TMPFS_MAGIC;
+use ferrix_vfs::{Errno, FileType, Namespace, NewNode, OpenFlags, RenameMode};
 
 use crate::fs::{self, Report as Built};
 use crate::mm;
+use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
+use crate::syscall::process::{self, Process};
+use crate::syscall::{fd, file, fsctl, pipe, uaccess};
 
 /// The marker `xtask/src/initramfs.rs` writes, byte for byte.
 const MARKER: &[u8] = b"unpacked by the kernel from a cpio archive the loader handed it\n";
@@ -217,4 +233,531 @@ fn check_tmpfs_stores_pages() -> Result<u64, &'static str> {
         .map_err(|_| "a tmpfs file would not unlink")?;
     drop(file);
     Ok(pages)
+}
+
+// ---------------------------------------------------------------------------
+// Pipes and the calls about filesystems
+//
+// Every path and buffer lives in the check process's own memory, so what is
+// checked is what a program meets: the flag words, the byte layouts, the
+// errors, and which descriptors are left behind. No step waits: every read has
+// something to read or is non-blocking, and every FIFO writer opens after its
+// reader. The boot task has no process to be woken for.
+// ---------------------------------------------------------------------------
+
+/// What the pipe and filesystem call checks measured, for the boot log.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CallsReport {
+    /// Bytes the checks moved through a pipe, a FIFO and `sendfile`.
+    pub(crate) bytes: u64,
+    /// Frames the second run cost. Zero, or a pipe, a FIFO's pipe or a file
+    /// outlives its last descriptor.
+    pub(crate) leaked: i64,
+}
+
+/// Where the checks keep their paths and buffers in the process's page.
+const AT_FDS: u64 = 0;
+/// `statfs`'s path.
+const AT_TMP: u64 = 16;
+/// The FIFO's path.
+const AT_FIFO: u64 = 32;
+/// The file `truncate`, `fallocate` and `sendfile` work on.
+const AT_FILE: u64 = 64;
+/// Where `sendfile` copies it to.
+const AT_COPY: u64 = 96;
+/// The bytes written into pipes.
+const AT_DATA: u64 = 128;
+/// Where reads land.
+const AT_BACK: u64 = 256;
+/// Where `statfs` writes, room for the widest layout.
+const AT_STATFS: u64 = 512;
+/// `sendfile`'s offset.
+const AT_OFFSET: u64 = 768;
+
+const TMP: &[u8] = b"/tmp\0";
+const FIFO: &[u8] = b"/tmp/stage8-fifo\0";
+const FILE: &[u8] = b"/tmp/stage8-calls\0";
+const COPY: &[u8] = b"/tmp/stage8-calls.copy\0";
+const DATA: &[u8] = b"through a pipe\n";
+
+/// An address no program may write, for the check that `pipe2` hands back
+/// nothing it could not deliver.
+const KERNEL_ADDRESS: u64 = u64::MAX - 0xFFF;
+
+/// Run the pipe and filesystem call checks: twice, measured on the second,
+/// for the reason [`run`] gives.
+pub(crate) fn run_calls() -> Result<CallsReport, &'static str> {
+    let process = process::new_for_check()
+        .map_err(|_| "could not make a process for the file system calls")?;
+    let _warm = check_the_calls(&process)?;
+    let before = mm::free_frames();
+    let bytes = check_the_calls(&process)?;
+    let leaked = i64::try_from(before).unwrap_or(i64::MAX)
+        - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+    Ok(CallsReport { bytes, leaked })
+}
+
+/// A path without the terminator a program's copy carries.
+fn name(path: &[u8]) -> &[u8] {
+    path.strip_suffix(b"\0").unwrap_or(path)
+}
+
+/// One run: stage the page, check, and clean up whatever happened.
+fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
+    let page = memory::sys_mmap(
+        process,
+        &MmapRequest {
+            addr: 0,
+            len: PAGE_SIZE,
+            prot: PROT_READ | PROT_WRITE,
+            flags: MAP_ANONYMOUS | MAP_PRIVATE,
+            fd: -1,
+            offset: 0,
+            unit: OffsetUnit::Bytes,
+        },
+    )
+    .map_err(|_| "a page for the file system call checks was refused")?;
+    let page = u64::try_from(page).map_err(|_| "mmap returned an impossible address")?;
+    for (offset, bytes) in [
+        (AT_TMP, TMP),
+        (AT_FIFO, FIFO),
+        (AT_FILE, FILE),
+        (AT_COPY, COPY),
+        (AT_DATA, DATA),
+    ] {
+        uaccess::copy_to_user(process.space(), page + offset, bytes)
+            .map_err(|_| "could not stage the file system call checks")?;
+    }
+
+    let outcome = check_a_pipe_carries_bytes_and_then_ends(process, page)
+        .and_then(|piped| check_a_pipe_refuses_as_linux_does(process, page).map(|()| piped))
+        .and_then(|piped| check_a_fifo_is_one_pipe(process, page).map(|fifo| piped + fifo))
+        .and_then(|bytes| check_statfs_says_tmp_is_tmpfs(process, page).map(|()| bytes))
+        .and_then(|bytes| check_truncate_and_fallocate_grow(process, page).map(|()| bytes))
+        .and_then(|bytes| check_sendfile_copies_a_file(process, page).map(|sent| bytes + sent));
+
+    // Cleaned up whatever happened, so a failure reports itself and not also
+    // leaked frames.
+    for fd in 3..32 {
+        let _ = fd::sys_close(process, fd);
+    }
+    let ns = fs::namespace();
+    let ctx = ns.context();
+    for path in [FIFO, FILE, COPY] {
+        let _ = ns.unlink(&ctx, None, name(path));
+    }
+    let _ = memory::sys_munmap(process, page, PAGE_SIZE);
+    outcome
+}
+
+/// Require a handler to have answered `want`.
+fn answers(got: Result<usize, Errno>, want: usize, what: &'static str) -> Result<(), &'static str> {
+    if got == Ok(want) { Ok(()) } else { Err(what) }
+}
+
+/// Require a handler to have refused with `errno`.
+fn refuses(
+    got: Result<usize, Errno>,
+    errno: Errno,
+    what: &'static str,
+) -> Result<(), &'static str> {
+    if got == Err(errno) { Ok(()) } else { Err(what) }
+}
+
+/// A descriptor a handler returned.
+fn descriptor(got: Result<usize, Errno>, what: &'static str) -> Result<i32, &'static str> {
+    got.ok().and_then(|fd| i32::try_from(fd).ok()).ok_or(what)
+}
+
+/// `len` bytes of the process's memory at `at`.
+fn read_back(process: &Process, at: u64, len: usize) -> Result<Vec<u8>, &'static str> {
+    let mut out = vec![0_u8; len];
+    uaccess::copy_from_user(process.space(), at, &mut out)
+        .map_err(|_| "the check could not read its own page back")?;
+    Ok(out)
+}
+
+/// The two descriptors `pipe2` wrote.
+fn pair(process: &Process, page: u64) -> Result<(i32, i32), &'static str> {
+    let bytes = read_back(process, page + AT_FDS, 8)?;
+    let [a, b, c, d, e, f, g, h] = <[u8; 8]>::try_from(bytes).map_err(|_| "a short pair")?;
+    Ok((
+        i32::from_le_bytes([a, b, c, d]),
+        i32::from_le_bytes([e, f, g, h]),
+    ))
+}
+
+/// The filesystem magic number `statfs` wrote: the first four bytes in every
+/// layout, because `f_type` comes first and the magic numbers fit in 32 bits.
+fn magic(process: &Process, page: u64) -> Result<u64, &'static str> {
+    let bytes = read_back(process, page + AT_STATFS, 4)?;
+    let word = <[u8; 4]>::try_from(bytes).map_err(|_| "a short magic number")?;
+    Ok(u64::from(u32::from_le_bytes(word)))
+}
+
+/// The size of the file at `path`, as `stat` reports it.
+fn size_is(path: &[u8], want: u64, what: &'static str) -> Result<(), &'static str> {
+    let ns = fs::namespace();
+    let size = ns
+        .resolve(&ns.context(), None, name(path), true)
+        .and_then(|at| ns.stat(&at))
+        .map_err(|_| "a file the check made would not stat")?
+        .metadata
+        .size;
+    if size == want { Ok(()) } else { Err(what) }
+}
+
+/// Bytes written into a pipe come out of it; a pipe says it is on pipefs and
+/// cannot be sought or synced; and once its writer is closed its reader reads
+/// end of file.
+fn check_a_pipe_carries_bytes_and_then_ends(
+    process: &Process,
+    page: u64,
+) -> Result<u64, &'static str> {
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, 0),
+        0,
+        "pipe2 was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    let len = DATA.len();
+    answers(
+        file::sys_write(process, writer, page + AT_DATA, len as u64),
+        len,
+        "a write into a pipe came back short",
+    )?;
+    answers(
+        file::sys_read(process, reader, page + AT_BACK, 64),
+        len,
+        "a read from a pipe did not return what was queued",
+    )?;
+    if read_back(process, page + AT_BACK, len)? != DATA {
+        return Err("a pipe gave back different bytes than were written into it");
+    }
+
+    answers(
+        fsctl::sys_fstatfs(process, reader, page + AT_STATFS),
+        0,
+        "fstatfs on a pipe was refused",
+    )?;
+    if magic(process, page)? != PIPEFS_MAGIC {
+        return Err("fstatfs on a pipe did not report PIPEFS_MAGIC");
+    }
+    refuses(
+        fd::sys_lseek(process, reader, 0, SEEK_CUR),
+        Errno::ESPIPE,
+        "a pipe could be sought",
+    )?;
+    refuses(
+        fsctl::sys_fsync(process, writer),
+        Errno::EINVAL,
+        "fsync on a pipe was not EINVAL",
+    )?;
+
+    answers(
+        fd::sys_close(process, writer),
+        0,
+        "a pipe's write end would not close",
+    )?;
+    answers(
+        file::sys_read(process, reader, page + AT_BACK, 64),
+        0,
+        "a pipe with no writer left did not read end of file",
+    )?;
+    answers(
+        fd::sys_close(process, reader),
+        0,
+        "a pipe's read end would not close",
+    )?;
+    Ok(len as u64)
+}
+
+/// An empty non-blocking pipe answers `EAGAIN`; a write with no reader left is
+/// `EPIPE`; `pipe2` takes only its two flags; and a pair it cannot hand back
+/// is closed again.
+fn check_a_pipe_refuses_as_linux_does(process: &Process, page: u64) -> Result<(), &'static str> {
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK | O_CLOEXEC),
+        0,
+        "pipe2 with O_NONBLOCK and O_CLOEXEC was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    refuses(
+        file::sys_read(process, reader, page + AT_BACK, 1),
+        Errno::EAGAIN,
+        "an empty non-blocking pipe did not answer EAGAIN",
+    )?;
+    answers(
+        fd::sys_fcntl(process, writer, F_GETFD, 0),
+        FD_CLOEXEC as usize,
+        "pipe2's O_CLOEXEC did not reach the descriptor",
+    )?;
+    answers(
+        fd::sys_close(process, reader),
+        0,
+        "a pipe's read end would not close",
+    )?;
+    refuses(
+        file::sys_write(process, writer, page + AT_DATA, 1),
+        Errno::EPIPE,
+        "a write with no reader left was not EPIPE",
+    )?;
+    answers(
+        fd::sys_close(process, writer),
+        0,
+        "a pipe's write end would not close",
+    )?;
+
+    refuses(
+        pipe::sys_pipe2(process, page + AT_FDS, O_APPEND),
+        Errno::EINVAL,
+        "pipe2 accepted a flag it does not take",
+    )?;
+    refuses(
+        pipe::sys_pipe2(process, KERNEL_ADDRESS, 0),
+        Errno::EFAULT,
+        "pipe2 into memory the program cannot write was not EFAULT",
+    )?;
+    refuses(
+        fd::sys_close(process, 3),
+        Errno::EBADF,
+        "a pipe2 that failed left a descriptor behind",
+    )
+}
+
+/// A FIFO under /tmp is one pipe for every opener: a non-blocking writer with
+/// no reader is `ENXIO`, and once a reader is open what one descriptor writes
+/// the other reads.
+fn check_a_fifo_is_one_pipe(process: &Process, page: u64) -> Result<u64, &'static str> {
+    let ns = fs::namespace();
+    ns.mknod(&ns.context(), None, name(FIFO), NewNode::Fifo, 0o600)
+        .map_err(|_| "a FIFO could not be made under /tmp")?;
+    refuses(
+        fd::sys_openat(process, AT_FDCWD, page + AT_FIFO, O_WRONLY | O_NONBLOCK, 0),
+        Errno::ENXIO,
+        "a non-blocking open of a FIFO for writing, with no reader, was not ENXIO",
+    )?;
+    let reader = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_FIFO, O_RDONLY | O_NONBLOCK, 0),
+        "a FIFO would not open for reading",
+    )?;
+    // A blocking open, which does not wait: a reader is already there.
+    let writer = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_FIFO, O_WRONLY, 0),
+        "a FIFO would not open for writing",
+    )?;
+    let len = DATA.len();
+    answers(
+        file::sys_write(process, writer, page + AT_DATA, len as u64),
+        len,
+        "a write into a FIFO came back short",
+    )?;
+    answers(
+        file::sys_read(process, reader, page + AT_BACK, 64),
+        len,
+        "a second open of a FIFO did not read what the first wrote",
+    )?;
+    if read_back(process, page + AT_BACK, len)? != DATA {
+        return Err("a FIFO gave back different bytes than were written into it");
+    }
+    refuses(
+        file::sys_read(process, reader, page + AT_BACK, 64),
+        Errno::EAGAIN,
+        "a drained FIFO with a writer still open did not answer EAGAIN",
+    )?;
+    answers(
+        fd::sys_close(process, writer),
+        0,
+        "a FIFO's writer would not close",
+    )?;
+    answers(
+        fd::sys_close(process, reader),
+        0,
+        "a FIFO's reader would not close",
+    )?;
+    Ok(len as u64)
+}
+
+/// `statfs` of /tmp reports tmpfs in this word size's layout, and in
+/// ARMv7-A's packed `statfs64`, whose size argument takes the kernel's 84 and
+/// musl's 88 and nothing else.
+fn check_statfs_says_tmp_is_tmpfs(process: &Process, page: u64) -> Result<(), &'static str> {
+    answers(
+        fsctl::sys_statfs(process, page + AT_TMP, page + AT_STATFS),
+        0,
+        "statfs of /tmp was refused",
+    )?;
+    if magic(process, page)? != TMPFS_MAGIC {
+        return Err("statfs of /tmp did not report TMPFS_MAGIC");
+    }
+    for size in [84, 88] {
+        answers(
+            fsctl::sys_statfs64(process, page + AT_TMP, size, page + AT_STATFS),
+            0,
+            "statfs64 refused the size the kernel or musl passes",
+        )?;
+    }
+    // TMPFS_MAGIC, then a block size of 4096, both 32 bits little-endian.
+    if read_back(process, page + AT_STATFS, 8)? != [0x94, 0x19, 0x02, 0x01, 0, 0x10, 0, 0] {
+        return Err("statfs64 did not pack the magic number and block size first");
+    }
+    refuses(
+        fsctl::sys_statfs64(process, page + AT_TMP, 120, page + AT_STATFS),
+        Errno::EINVAL,
+        "statfs64 accepted a size that is neither structure's",
+    )
+}
+
+/// `truncate` by path and `fallocate` on a descriptor both grow a file under
+/// /tmp; `fallocate` never shrinks one, keeps its size when asked to, and
+/// refuses a mode it does not have.
+fn check_truncate_and_fallocate_grow(process: &Process, page: u64) -> Result<(), &'static str> {
+    let made = descriptor(
+        fd::sys_openat(
+            process,
+            AT_FDCWD,
+            page + AT_FILE,
+            O_RDWR | O_CREAT | O_TRUNC,
+            0o644,
+        ),
+        "a file could not be created under /tmp",
+    )?;
+    let len = DATA.len();
+    answers(
+        file::sys_write(process, made, page + AT_DATA, len as u64),
+        len,
+        "a write to a file under /tmp came back short",
+    )?;
+    answers(
+        fsctl::sys_truncate(process, page + AT_FILE, 5000),
+        0,
+        "truncate to a larger size was refused",
+    )?;
+    size_is(FILE, 5000, "truncate did not grow the file")?;
+    answers(
+        fsctl::sys_fallocate(process, made, 0, 0, 9000),
+        0,
+        "fallocate was refused",
+    )?;
+    size_is(FILE, 9000, "fallocate did not grow the file")?;
+    answers(
+        fsctl::sys_fallocate(process, made, 0, 0, 100),
+        0,
+        "fallocate of a range inside the file was refused",
+    )?;
+    answers(
+        fsctl::sys_fallocate(process, made, FALLOC_FL_KEEP_SIZE, 0, 20_000),
+        0,
+        "fallocate with FALLOC_FL_KEEP_SIZE was refused",
+    )?;
+    size_is(
+        FILE,
+        9000,
+        "fallocate shrank the file, or grew it despite KEEP_SIZE",
+    )?;
+    refuses(
+        fsctl::sys_fallocate(
+            process,
+            made,
+            FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+            0,
+            1,
+        ),
+        Errno::EOPNOTSUPP,
+        "fallocate accepted a mode it does not have",
+    )?;
+    refuses(
+        fsctl::sys_truncate(process, page + AT_FILE, -1),
+        Errno::EINVAL,
+        "truncate to a negative length was not EINVAL",
+    )?;
+    refuses(
+        fsctl::sys_truncate(process, page + AT_TMP, 0),
+        Errno::EISDIR,
+        "truncate of a directory was not EISDIR",
+    )?;
+    answers(
+        fsctl::sys_fsync(process, made),
+        0,
+        "fsync of a file was refused",
+    )?;
+    answers(fd::sys_close(process, made), 0, "a file would not close")
+}
+
+/// `sendfile` copies a file: from an offset it reads there, moves the offset
+/// and leaves the file position alone; without one it moves the position; and
+/// an input not open for reading is `EBADF`.
+fn check_sendfile_copies_a_file(process: &Process, page: u64) -> Result<u64, &'static str> {
+    let source = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_FILE, O_RDONLY, 0),
+        "the file to send would not open",
+    )?;
+    let copy = descriptor(
+        fd::sys_openat(
+            process,
+            AT_FDCWD,
+            page + AT_COPY,
+            O_WRONLY | O_CREAT | O_TRUNC,
+            0o644,
+        ),
+        "a file to send into could not be created",
+    )?;
+    uaccess::copy_to_user(process.space(), page + AT_OFFSET, &10_u64.to_le_bytes())
+        .map_err(|_| "could not stage sendfile's offset")?;
+    answers(
+        pipe::sys_sendfile(process, copy, source, page + AT_OFFSET, 1 << 20),
+        8990,
+        "sendfile from an offset did not send the rest of the file",
+    )?;
+    if read_back(process, page + AT_OFFSET, 8)? != 9000_u64.to_le_bytes() {
+        return Err("sendfile did not move its offset past what it sent");
+    }
+    answers(
+        fd::sys_lseek(process, source, 0, SEEK_CUR),
+        0,
+        "sendfile with an offset moved the file position",
+    )?;
+    answers(
+        pipe::sys_sendfile(process, copy, source, 0, 1 << 20),
+        9000,
+        "sendfile from the file position did not send the whole file",
+    )?;
+    answers(
+        fd::sys_lseek(process, source, 0, SEEK_CUR),
+        9000,
+        "sendfile without an offset did not move the file position",
+    )?;
+    refuses(
+        pipe::sys_sendfile(process, source, copy, 0, 1),
+        Errno::EBADF,
+        "sendfile read from a descriptor open only for writing",
+    )?;
+    answers(fd::sys_close(process, copy), 0, "the copy would not close")?;
+    answers(
+        fd::sys_close(process, source),
+        0,
+        "the source would not close",
+    )?;
+
+    // The copy is the file from byte 10, then the whole file again: its first
+    // bytes are the data's from byte 10 on.
+    let ns = fs::namespace();
+    let read = OpenFlags {
+        read: true,
+        ..OpenFlags::default()
+    };
+    let copied = ns
+        .open(&ns.context(), None, name(COPY), &read, 0)
+        .map_err(|_| "the copy sendfile made would not open")?;
+    let mut head = [0_u8; 5];
+    let expected = DATA.get(10..15).unwrap_or_default();
+    if copied.read_at(0, &mut head) != Ok(5) || head.as_slice() != expected {
+        return Err("sendfile copied different bytes than the file holds");
+    }
+    size_is(
+        COPY,
+        17_990,
+        "sendfile's copy is not as long as what it sent",
+    )?;
+    Ok(17_990)
 }

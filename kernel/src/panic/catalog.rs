@@ -794,6 +794,34 @@ pub(crate) static SYSRQ_CRASH: Explanation = Explanation {
     see: "kernel/src/fs/procfs.rs sysrq_trigger; docs/RELIABILITY.md",
 };
 
+/// For `check_filesystems` in `main.rs`, when the pipe and filesystem call
+/// checks fail.
+pub(crate) static STAGE8_PIPES_AND_FILESYSTEM_CALLS: Explanation = Explanation {
+    code: "FX-0860",
+    title: "pipes, a FIFO or the filesystem calls failed their self-check",
+    meaning: "`fs::check::run_calls` builds a process and drives the handlers with paths and \
+              buffers in its own memory. A pipe must carry what is written into it, report \
+              pipefs to fstatfs, read end of file once its writer closes, answer EAGAIN when \
+              empty and non-blocking and EPIPE with no reader, and pipe2 must close both \
+              descriptors again when it cannot hand them back. A FIFO under /tmp must be one \
+              pipe for its openers. statfs of /tmp must decode TMPFS_MAGIC, and statfs64 must \
+              take 84 and musl's 88 as its size. truncate and fallocate must grow a file and \
+              fallocate never shrink one, and sendfile must copy a file with and without an \
+              offset. The whole run is done twice and must leave no frame behind.",
+    causes: &[
+        "A pipe end's drop no longer counts it out of the buffer, so a reader never sees end \
+         of file and the pipe outlives its descriptors as leaked frames.",
+        "`attach_fifo` is not called from `openat`, or keys its table by something two opens \
+         of one FIFO do not share, so each opener gets a pipe of its own.",
+        "A `statfs` layout in `libs/linux-abi` or its encoder in `libs/vfs/src/statfs.rs` \
+         moved a field, so the magic number is not where a program reads it.",
+        "tmpfs's `grow_to` shrinks a file, or `sendfile` stopped putting its offset back.",
+    ],
+    see: "kernel/src/fs/check.rs run_calls; kernel/src/fs/pipe.rs; kernel/src/syscall/pipe.rs; \
+          kernel/src/syscall/fsctl.rs; libs/vfs/src/pipe.rs; libs/vfs/src/statfs.rs; \
+          docs/ROADMAP.md stage 8",
+};
+
 /// For `handle_page_fault` in `trap.rs`, the `unhandled page fault` report.
 pub(crate) static UNHANDLED_PAGE_FAULT: Explanation = Explanation {
     code: "FX-9001",
@@ -917,6 +945,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_PATH_CALLS,
     &STAGE8_PSEUDO_FILESYSTEMS,
     &SYSRQ_CRASH,
+    &STAGE8_PIPES_AND_FILESYSTEM_CALLS,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,
