@@ -931,17 +931,38 @@ impl<'a> BootView<'a> {
     /// Options are whitespace separated; the first match wins.
     #[must_use]
     pub fn option(&self, key: &str) -> Option<&'a str> {
-        self.cmdline.split_whitespace().find_map(|word| {
-            let (name, value) = word.split_once('=')?;
-            (name == key).then_some(value)
-        })
+        option_in(self.cmdline, key)
     }
 
     /// True if the command line carries `flag` as a bare word.
     #[must_use]
     pub fn flag(&self, name: &str) -> bool {
-        self.cmdline.split_whitespace().any(|word| word == name)
+        flag_in(self.cmdline, name)
     }
+}
+
+/// Look up a `key=value` option in a command line the caller already has.
+///
+/// The same grammar as [`BootView::option`], against a string from anywhere.
+/// It exists because the loader does not fill the command line in on every
+/// machine, while the Arm boards carry one regardless: U-Boot writes what it
+/// was told to pass into the device tree's `/chosen/bootargs`, and a kernel
+/// that already parsed the tree can read it from there. One grammar for both
+/// sources means an option means the same thing whichever way it arrived.
+#[must_use]
+pub fn option_in<'a>(cmdline: &'a str, key: &str) -> Option<&'a str> {
+    cmdline.split_whitespace().find_map(|word| {
+        let (name, value) = word.split_once('=')?;
+        (name == key).then_some(value)
+    })
+}
+
+/// True if `cmdline` carries `name` as a bare word.
+///
+/// The companion to [`option_in`], and [`BootView::flag`]'s grammar.
+#[must_use]
+pub fn flag_in(cmdline: &str, name: &str) -> bool {
+    cmdline.split_whitespace().any(|word| word == name)
 }
 
 /// The signature the loader calls.
@@ -1162,6 +1183,32 @@ mod tests {
             !view.flag("console"),
             "a key=value option is not a bare flag"
         );
+    }
+
+    #[test]
+    fn the_free_functions_parse_what_the_view_does() {
+        // The device tree path: a string the kernel got from `/chosen`, with
+        // no `BootInfo` anywhere near it.
+        let line = "console=stm32 nosmp root=/dev/mmcblk0p4";
+
+        assert_eq!(option_in(line, "console"), Some("stm32"));
+        assert_eq!(option_in(line, "root"), Some("/dev/mmcblk0p4"));
+        assert_eq!(option_in(line, "nosmp"), None, "a bare flag has no value");
+        assert_eq!(option_in(line, "absent"), None);
+
+        assert!(flag_in(line, "nosmp"));
+        assert!(!flag_in(line, "console"));
+        assert!(!flag_in(line, "absent"));
+    }
+
+    #[test]
+    fn an_empty_command_line_yields_nothing_rather_than_panicking() {
+        // A tree with no `bootargs` hands the kernel this, and it is the
+        // common case on a board that was told to pass no arguments.
+        for line in ["", "   ", "\t\n"] {
+            assert_eq!(option_in(line, "console"), None);
+            assert!(!flag_in(line, "nosmp"));
+        }
     }
 
     #[test]

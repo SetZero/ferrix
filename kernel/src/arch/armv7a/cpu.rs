@@ -269,6 +269,25 @@ pub(crate) fn read_mpidr() -> u32 {
     mpidr
 }
 
+/// This core's auxiliary control register.
+///
+/// Read only, and deliberately: on a Cortex-A7 the bit worth knowing about is
+/// `ACTLR.SMP`, which has to be set before the caches and MMU come on or the
+/// core is not coherent with the others, and the secure world decides whether
+/// the non-secure world may write it at all. Reading is permitted regardless,
+/// so this can report what firmware did without depending on being allowed to
+/// change it. What the bits mean is implementation defined, which is why the
+/// caller names the one it wants rather than this returning anything richer
+/// than the register.
+pub(crate) fn read_actlr() -> u32 {
+    let actlr: u32;
+    // SAFETY: reading `ACTLR` has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c1, c0, 1", out(reg) actlr, options(nomem, nostack, preserves_flags));
+    }
+    actlr
+}
+
 /// Set `TPIDRPRW`, the thread ID register the kernel keeps its per-CPU record
 /// in.
 ///

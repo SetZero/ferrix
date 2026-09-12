@@ -10,6 +10,7 @@
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
+use ferrix_bootinfo::option_in;
 use ferrix_fdt::{Fdt, Node};
 
 use crate::arch::{pl011, stm32_usart};
@@ -23,7 +24,7 @@ const PL011: &str = "arm,pl011";
 const STM32_USART: &str = "st,stm32h7-uart";
 
 /// A port this kernel can drive.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Port {
     /// The Arm primecell.
     Pl011 = 1,
@@ -41,6 +42,15 @@ impl Port {
             return Some(Port::Stm32);
         }
         None
+    }
+
+    /// The port `console=` names, if it names one this kernel can drive.
+    fn named(name: &str) -> Option<Port> {
+        match name {
+            "pl011" => Some(Port::Pl011),
+            "stm32" => Some(Port::Stm32),
+            _ => None,
+        }
     }
 }
 
@@ -64,12 +74,17 @@ fn port() -> Option<Port> {
 /// any the tree has turned off: an STM32MP15 describes eight UARTs and a board
 /// enables the one it wired to a connector.
 pub(crate) fn init(tree: &Fdt<'_>, memory: &mut EarlyMemory) -> Result<(), EarlyError> {
-    let named = tree
-        .console()
-        .and_then(|node| Port::of(&node).map(|port| (node, port)));
-    let (node, port) = named
-        .or_else(|| first_enabled(tree))
-        .ok_or(EarlyError::NoConsole)?;
+    let (node, port) = match forced(tree) {
+        Some(found) => found,
+        None => {
+            let named = tree
+                .console()
+                .and_then(|node| Port::of(&node).map(|port| (node, port)));
+            named
+                .or_else(|| first_enabled(tree))
+                .ok_or(EarlyError::NoConsole)?
+        }
+    };
 
     let registers = node.reg().next().ok_or(EarlyError::NoConsole)?;
     match port {
@@ -79,6 +94,31 @@ pub(crate) fn init(tree: &Fdt<'_>, memory: &mut EarlyMemory) -> Result<(), Early
 
     PORT.store(port as u8, Ordering::Relaxed);
     Ok(())
+}
+
+/// The port `console=` on the command line insists on, if it named one.
+///
+/// # Why an override exists at all
+///
+/// Everything [`init`] does otherwise is inference from the machine's own
+/// description, and on a board being brought up for the first time that
+/// description is exactly what is in question. If `stdout-path` points
+/// somewhere unexpected, or a board wires its connector to a UART the tree
+/// leaves disabled, the symptom is a kernel that comes up perfectly and says
+/// nothing — the one failure that cannot be diagnosed from the console,
+/// because it *is* the console. `console=stm32` in `/chosen/bootargs`, which
+/// U-Boot sets without reflashing anything, turns that into a boot that talks.
+///
+/// The address still comes from the tree: this chooses between the ports the
+/// machine describes, it does not invent one. A name matching no node this
+/// kernel can drive falls through to the ordinary search rather than failing,
+/// so a stale argument in a saved U-Boot environment cannot take the console
+/// away.
+fn forced<'a>(tree: &Fdt<'a>) -> Option<(Node<'a>, Port)> {
+    let wanted = Port::named(option_in(tree.bootargs()?, "console")?)?;
+    tree.nodes()
+        .find(|node| Port::of(node) == Some(wanted) && node.reg().next().is_some())
+        .map(|node| (node, wanted))
 }
 
 /// The first port in the tree this kernel can drive and the machine has not

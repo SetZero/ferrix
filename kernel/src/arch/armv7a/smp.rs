@@ -39,10 +39,19 @@
 //! go; PSCI firmware on real boards — TF-A, U-Boot's own — sets it before
 //! entering the kernel, and QEMU does not model the bit at all. A board that
 //! turns out not to is where this changes.
+//!
+//! So every core reads the bit once it is safely in Rust and reports it, and
+//! the boot log says how many had it. That is worth a line of its own because
+//! of what the alternative looks like: a core without it runs, takes
+//! interrupts and passes every check that only reads its own memory, and
+//! fails stage 4's shared counter — which reads as a bug in the lock, in the
+//! barriers, or in the scheduler, anywhere but in a bit firmware did not set.
+//! Reporting it costs one register read and turns that into a sentence.
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use ferrix_bootinfo::{BootView, PAGE_SIZE};
+use ferrix_bootinfo::{BootView, PAGE_SIZE, flag_in};
 use ferrix_fdt::PsciConduit;
 use ferrix_paging::MapFlags;
 
@@ -59,6 +68,38 @@ const MPIDR_AFFINITY: u64 = 0x00FF_FFFF;
 
 /// PSCI `CPU_ON`, in the 32-bit calling convention.
 const PSCI_CPU_ON: u32 = 0x8400_0003;
+
+/// `ACTLR.SMP`: this core takes part in coherency. Cortex-A7 and A15 bit 6.
+const ACTLR_SMP: u32 = 1 << 6;
+
+/// How many cores have reached Rust and looked at their own `ACTLR`.
+static COHERENCY_SEEN: AtomicU32 = AtomicU32::new(0);
+
+/// How many of those had [`ACTLR_SMP`] set.
+static COHERENCY_SET: AtomicU32 = AtomicU32::new(0);
+
+/// Whether to read `ACTLR` at all, cleared by `noactlr` on the command line.
+///
+/// A escape hatch rather than a feature. Reading the register is architecturally
+/// permitted from the non-secure world, but "permitted" here means every
+/// Cortex-A7 the specification describes, and this kernel is about to meet
+/// silicon it has never run on. If some part turns the read into an undefined
+/// instruction, the symptom would be a panic in the middle of bring-up with
+/// the console already working — diagnosable, but only if there is a way to
+/// turn it off without rebuilding, which on a board means a word in U-Boot's
+/// `bootargs`.
+static READ_ACTLR: AtomicBool = AtomicBool::new(true);
+
+/// Record this core's coherency bit, if the command line left the read on.
+fn note_coherency() {
+    if !READ_ACTLR.load(Ordering::Relaxed) {
+        return;
+    }
+    let _ = COHERENCY_SEEN.fetch_add(1, Ordering::Relaxed);
+    if cpu::read_actlr() & ACTLR_SMP != 0 {
+        let _ = COHERENCY_SET.fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 /// Where the kernel half's level-1 table starts within the root: entry 2,
 /// eight bytes each. `boot/src/arch/armv7a.rs` says why.
@@ -95,6 +136,31 @@ pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static s
     // all, so requiring one would silently boot a dual-core board on one core.
     // A node naming some *other* method is still left out, because this kernel
     // cannot start one that way.
+    let args = tree.bootargs().unwrap_or("");
+    if flag_in(args, "noactlr") {
+        READ_ACTLR.store(false, Ordering::Relaxed);
+    }
+    // The boot core is in Rust already, so it can be counted here; the others
+    // count themselves as they arrive.
+    note_coherency();
+
+    // `nosmp` keeps the boot processor and leaves the rest described but not
+    // started. The reason it exists is the first boot on a new board: bring-up
+    // failures that involve a second core — an entry sequence that faults, a
+    // core that never reports in, caches that turn out not to be coherent —
+    // all look like a machine that stops partway through stage 4, and none of
+    // them can be told apart from a machine whose *first* core is wrong. One
+    // core reaching the end of stage 3 says the loader, the hand-off, the page
+    // tables, the console and the timer are all right, and narrows what is
+    // left to the thing this flag turned off.
+    if flag_in(args, "nosmp") {
+        return Ok(Described {
+            id_name: "MPIDR",
+            boot,
+            ids: alloc::vec![boot],
+        });
+    }
+
     let psci = tree.psci_conduit().is_some();
     let ids: Vec<u64> = tree
         .cpus()
@@ -399,8 +465,61 @@ impl CpuStarter {
             }
         }
         crate::mm::deallocate_frames(self.block / PAGE_SIZE, 0);
+        report_coherency();
         Ok(())
     }
+}
+
+/// Say what the processors' coherency bits looked like, once they are all up.
+///
+/// Never a failure on its own, and deliberately careful about which of the
+/// three answers is actually alarming. Stage 4 gives the real verdict a few
+/// lines further down by making every core share one counter; this says, in
+/// advance, what to suspect if that goes wrong.
+///
+/// # Why "clear everywhere" is not an alarm
+///
+/// Reading zero from every core has two causes that cannot be told apart by
+/// reading: firmware left the bit alone, or nothing implements the register.
+/// QEMU is the second — `cortex-a7` there does not model `ACTLR`, so every
+/// boot test in this repository reports zero and then passes stage 4, because
+/// emulated memory is coherent whatever the bit says. Printing "unsound" for
+/// that would put a false alarm in the log of every green CI run, and a log
+/// that cries wolf on every run is one nobody reads on the run that matters.
+///
+/// # Why "set on some but not all" is
+///
+/// That one is unambiguous. The register is implemented, firmware set it for
+/// at least one core, and the cores it missed will run incoherently with the
+/// ones it did not. There is no reading of that which is benign.
+fn report_coherency() {
+    let seen = COHERENCY_SEEN.load(Ordering::Relaxed);
+    let set = COHERENCY_SET.load(Ordering::Relaxed);
+
+    if seen == 0 {
+        crate::println!("  coherency ACTLR not read; `noactlr` was on the command line");
+    } else if seen == 1 {
+        // Nothing to be coherent with.
+        crate::println!("  coherency one processor, ACTLR.SMP {}", yes_no(set == 1));
+    } else if set == seen {
+        crate::println!("  coherency ACTLR.SMP set on all {seen} processors");
+    } else if set == 0 {
+        crate::println!(
+            "  coherency ACTLR.SMP clear on all {seen} processors — firmware left it, or the \
+             register is not implemented; stage 4 below is the arbiter"
+        );
+    } else {
+        crate::println!(
+            "  coherency ACTLR.SMP set on {set} of {seen} processors — the {} without it are \
+             not coherent with the rest; expect stage 4 to lose counts",
+            seen - set,
+        );
+    }
+}
+
+/// `set` or `clear`, for a bit being reported to a human.
+const fn yes_no(set: bool) -> &'static str {
+    if set { "set" } else { "clear" }
 }
 
 /// Make a PSCI call and return its status.
@@ -426,5 +545,6 @@ extern "C" fn secondary_start(record: u32) -> ! {
     // `SCTLR` bits; the table it points them at is code every core shares.
     unsafe { super::trap::init() };
     gicv2::init_this_cpu();
+    note_coherency();
     crate::smp::secondary_main(u64::from(record))
 }
