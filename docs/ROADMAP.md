@@ -31,8 +31,9 @@ says a stage should: their byte-level halves are in `libs/` — the VFS in
 — handle tables, channels carrying handles, VMOs — are in the boot test, and
 so is most of stage 8: the root filesystem unpacked from an initramfs, every
 process's descriptor table, the calls that take a path, `/dev` and `/proc`.
-Stage 8's exit test, `cargo xtask test-vfs`, passes nine of its eleven programs;
-its section says what the other two wait on.
+Stage 8's exit test, `cargo xtask test-vfs`, passes all eleven of its programs
+on all three architectures; the section says what still stands between that and
+the stage being done.
 Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
 and its first kernel code — PCI enumeration, device nodes, and a device driven
 by DMA from the boot check — is in the boot test.
@@ -954,15 +955,18 @@ is: the binary is not the repository's. Measured before a line of it was
 written (`docs/STAGE8-WHAT-THE-EXIT-NEEDS.md`), this busybox runs every applet
 that touches a file — `mkdir`, `mv`, `ln`, `rm`, `cat` — through `fork`,
 `execve` and `wait4`, none of which exists yet. So the test runs eleven
-programs in turn over one tmpfs where the criterion says one script. On
-x86-64, nine of the eleven pass, `ls -R /proc` and `cat /proc/self/maps` among
-them; the two shell scripts fail on `poll`, which their `while read` issues
-first.
+programs in turn over one tmpfs where the criterion says one script. With
+stage 7's `poll` on top, all eleven pass on all three architectures, each
+judged on its output rather than only its exit status:
+
+```
+  x86_64: stage 8's exit programs all passed
+  aarch64: stage 8's exit programs all passed
+  armv7a: stage 8's exit programs all passed
+```
 
 **Still to do.**
 
-* `poll` and `ppoll` — stage 7's calls, over `OpenFile::poll`, which is here.
-  They are the last thing between the exit test and a pass.
 * `fork`, `execve` and `wait4` — stage 7's too — so that the tmpfs part of the
   criterion can be the one shell script it describes rather than eleven
   programs.
