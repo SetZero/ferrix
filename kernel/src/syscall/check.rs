@@ -352,6 +352,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_an_image_loads_where_its_headers_say(&process)?;
     check_the_loader_refuses_what_it_cannot_run(&process)?;
     check_descriptors(&process)?;
+    check_what_an_applet_asks_of_the_system(&process)?;
     if output == Output::Show {
         check_write_reaches_the_console(&process)?;
         check_writev_gathers_in_order(&process)?;
@@ -3021,4 +3022,531 @@ fn futex_waiter(_argument: usize) {
     };
     *FUTEX_ANSWER.lock() = Some(answer);
     FUTEX_ANSWERED.wake_all();
+}
+
+// ---------------------------------------------------------------------------
+// What a busybox applet asks of the system
+//
+// `free`, `ulimit`, `nproc`, `renice`, `hostname`, `date -s`, `sleep`: each is
+// one or two calls about the machine, its limits or its clocks, and each call
+// writes a structure whose size changes with the word. So every check below
+// poisons the buffer first and requires the byte after the structure to
+// survive -- a handler that wrote the 64-bit layout on ARMv7-A fails here, not
+// under a program that reads the wrong field and prints nonsense.
+// ---------------------------------------------------------------------------
+
+/// The byte the checks below fill a buffer with before a handler writes it.
+const UNWRITTEN: u8 = 0xAA;
+
+/// The system, limit, clock, credential and socket calls, on one page.
+fn check_what_an_applet_asks_of_the_system(process: &Process) -> Result<(), &'static str> {
+    let page = map_rw(process, PAGE_SIZE)?;
+    let outcome = check_sysinfo_describes_the_machine(process, page)
+        .and_then(|()| check_limits_read_back_and_reach_the_descriptor_table(process, page))
+        .and_then(|()| check_affinity_names_the_running_processors(process, page))
+        .and_then(|()| check_a_task_name_round_trips(process, page))
+        .and_then(|()| check_credentials_refuse_another_user(process, page))
+        .and_then(|()| check_nanosleep_takes_its_time(process, page))
+        .and_then(|()| check_setting_the_clock_moves_only_realtime(process, page))
+        .and_then(|()| check_a_host_name_reaches_uname(process, page))
+        .and_then(|()| check_sockets_are_refused_honestly(process));
+    let _ = memory::sys_munmap(process, page, PAGE_SIZE);
+    outcome
+}
+
+/// Fill `len` bytes at `at` with [`UNWRITTEN`].
+fn poison_user(process: &Process, at: u64, len: usize) -> Result<(), &'static str> {
+    let bytes = [UNWRITTEN; 256];
+    let span = bytes
+        .get(..len)
+        .ok_or("a poisoned span longer than the check allows")?;
+    uaccess::copy_to_user(process.space(), at, span).map_err(|_| "could not poison a buffer")
+}
+
+/// Read `N` bytes back from `at`.
+fn read_user<const N: usize>(process: &Process, at: u64) -> Result<[u8; N], &'static str> {
+    let mut out = [0_u8; N];
+    uaccess::copy_from_user(process.space(), at, &mut out)
+        .map_err(|_| "could not read a buffer back")?;
+    Ok(out)
+}
+
+/// A little-endian unsigned field of `width` bytes at `at`, or `u64::MAX` if
+/// the field is not inside `bytes` -- which no check below expects to see.
+fn le_at(bytes: &[u8], at: usize, width: usize) -> u64 {
+    bytes.get(at..at + width).map_or(u64::MAX, |field| {
+        field
+            .iter()
+            .rev()
+            .fold(0, |value, &byte| value << 8 | u64::from(byte))
+    })
+}
+
+/// Whether every byte of `bytes[from..to]` is `value`.
+fn all_are(bytes: &[u8], from: usize, to: usize, value: u8) -> bool {
+    bytes
+        .get(from..to)
+        .is_some_and(|span| span.iter().all(|&byte| byte == value))
+}
+
+/// `sysinfo` writes exactly `struct sysinfo`, its memory counts are the frame
+/// allocator's in the unit it names, and every field it has nothing for is
+/// zero rather than whatever the buffer held.
+fn check_sysinfo_describes_the_machine(process: &Process, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::system::{SYSINFO_SIZE, sysinfo_at};
+    const WORD: usize = size_of::<usize>();
+
+    poison_user(process, page, 128)?;
+    answers(system::sys_sysinfo(process, page), 0, "sysinfo was refused")?;
+    let out: [u8; 128] = read_user(process, page)?;
+
+    let unit = le_at(&out, sysinfo_at::MEM_UNIT, 4);
+    if unit != 1 && unit != PAGE_SIZE {
+        return Err("sysinfo's mem_unit is neither a byte nor a page");
+    }
+    let total = le_at(&out, sysinfo_at::TOTALRAM, WORD).saturating_mul(unit);
+    let free = le_at(&out, sysinfo_at::FREERAM, WORD).saturating_mul(unit);
+    if total != mm::managed_frames() * PAGE_SIZE {
+        return Err("sysinfo's total memory is not the frame allocator's");
+    }
+    if free == 0 || free > total {
+        return Err("sysinfo's free memory is not a part of its total");
+    }
+    if le_at(&out, sysinfo_at::UPTIME, WORD) == 0 {
+        return Err("sysinfo reported no uptime on a machine that has been up");
+    }
+    if le_at(&out, sysinfo_at::PROCS, 2) == 0 {
+        return Err("sysinfo counted no processes while this one is registered");
+    }
+    // Loads; shared, buffer and swap; the padding after procs; high memory;
+    // and the tail after mem_unit. All zero, and all written.
+    let zero = [
+        (WORD, WORD * 4),
+        (WORD * 6, WORD * 10),
+        (sysinfo_at::PROCS + 2, WORD * 11),
+        (WORD * 11, WORD * 13),
+        (sysinfo_at::MEM_UNIT + 4, SYSINFO_SIZE),
+    ];
+    if !zero.iter().all(|&(from, to)| all_are(&out, from, to, 0)) {
+        return Err("a sysinfo field with nothing to report was not written as zero");
+    }
+    if !all_are(&out, SYSINFO_SIZE, out.len(), UNWRITTEN) {
+        return Err("sysinfo wrote past the end of this build's struct sysinfo");
+    }
+    refuses(
+        system::sys_sysinfo(process, KERNEL_HALF_BASE),
+        Errno::EFAULT,
+        "sysinfo into a kernel address was not EFAULT",
+    )
+}
+
+/// Stage a 16-byte `struct rlimit64` at `at`.
+fn stage_rlimit64(process: &Process, at: u64, soft: u64, hard: u64) -> Result<(), &'static str> {
+    let mut bytes = [0_u8; 16];
+    let fields = soft.to_le_bytes().into_iter().chain(hard.to_le_bytes());
+    for (slot, byte) in bytes.iter_mut().zip(fields) {
+        *slot = byte;
+    }
+    uaccess::copy_to_user(process.space(), at, &bytes).map_err(|_| "could not stage an rlimit64")
+}
+
+/// `RLIMIT_NOFILE` is the descriptor table's limit in both directions, a limit
+/// set through `setrlimit` reads back through `prlimit64`, and the refusals
+/// are `do_prlimit`'s.
+fn check_limits_read_back_and_reach_the_descriptor_table(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    use crate::syscall::limits::{sys_getrlimit, sys_prlimit64, sys_setrlimit};
+    const WORD: usize = size_of::<usize>();
+    const NOFILE: u32 = 7;
+    let table_limit = || u64::from(process.files().lock().limit());
+    let own = i32::try_from(process.pid()).map_err(|_| "a pid does not fit a pid_t")?;
+
+    poison_user(process, page, WORD * 3)?;
+    answers(
+        sys_getrlimit(process, NOFILE, page),
+        0,
+        "getrlimit(RLIMIT_NOFILE) was refused",
+    )?;
+    let out: [u8; 24] = read_user(process, page)?;
+    if le_at(&out, 0, WORD) != table_limit() || le_at(&out, WORD, WORD) < table_limit() {
+        return Err("RLIMIT_NOFILE does not read as the descriptor table's limit");
+    }
+    if !all_are(&out, WORD * 2, WORD * 3, UNWRITTEN) {
+        return Err("getrlimit wrote past this build's struct rlimit");
+    }
+
+    write_word(process, page, 64)?;
+    write_word(process, page + WORD as u64, 128)?;
+    answers(
+        sys_setrlimit(process, NOFILE, page),
+        0,
+        "setrlimit(RLIMIT_NOFILE) was refused",
+    )?;
+    if table_limit() != 64 {
+        return Err("setrlimit(RLIMIT_NOFILE) did not reach the descriptor table");
+    }
+
+    // prlimit64 by the caller's own pid: set {1024, 4096}, get back {64, 128}.
+    stage_rlimit64(process, page, 1024, 4096)?;
+    poison_user(process, page + 64, 24)?;
+    answers(
+        sys_prlimit64(process, own, NOFILE, page, page + 64),
+        0,
+        "prlimit64 on the caller's own pid was refused",
+    )?;
+    let old: [u8; 24] = read_user(process, page + 64)?;
+    if le_at(&old, 0, 8) != 64 || le_at(&old, 8, 8) != 128 || !all_are(&old, 16, 24, UNWRITTEN) {
+        return Err("prlimit64 did not report the limit setrlimit set, in a 16-byte rlimit64");
+    }
+    if table_limit() != 1024 {
+        return Err("prlimit64(RLIMIT_NOFILE) did not reach the descriptor table");
+    }
+    check_limits_are_refused_as_linux_refuses_them(process, page)
+}
+
+/// The refusals, and the two defaults a shell's `ulimit` prints.
+fn check_limits_are_refused_as_linux_refuses_them(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    use crate::syscall::limits::{sys_getrlimit, sys_prlimit64};
+    const WORD: usize = size_of::<usize>();
+    const STACK: u32 = 3;
+    const CORE: u32 = 4;
+    const NOFILE: u32 = 7;
+
+    stage_rlimit64(process, page, 10, 5)?;
+    refuses(
+        sys_prlimit64(process, 0, NOFILE, page, 0),
+        Errno::EINVAL,
+        "a soft limit above its hard limit was not EINVAL",
+    )?;
+    stage_rlimit64(
+        process,
+        page,
+        1024,
+        u64::from(ferrix_vfs::fd::MAX_LIMIT) + 1,
+    )?;
+    refuses(
+        sys_prlimit64(process, 0, NOFILE, page, 0),
+        Errno::EPERM,
+        "RLIMIT_NOFILE above nr_open was not EPERM",
+    )?;
+    refuses(
+        sys_getrlimit(process, 16, page),
+        Errno::EINVAL,
+        "RLIM_NLIMITS was accepted as a resource",
+    )?;
+    let nobody = i32::try_from(crate::syscall::registry::PID_MAX).unwrap_or(i32::MAX);
+    refuses(
+        sys_prlimit64(process, nobody, NOFILE, 0, 0),
+        Errno::ESRCH,
+        "prlimit64 on a pid nothing has was not ESRCH",
+    )?;
+
+    // The stack's default, at the native width: 8 MiB and RLIM_INFINITY.
+    answers(
+        sys_getrlimit(process, STACK, page),
+        0,
+        "getrlimit(RLIMIT_STACK) was refused",
+    )?;
+    let stack: [u8; 16] = read_user(process, page)?;
+    if le_at(&stack, 0, WORD) != 8 << 20 || le_at(&stack, WORD, WORD) != usize::MAX as u64 {
+        return Err("RLIMIT_STACK is not 8 MiB soft and unlimited hard");
+    }
+    // Any other resource keeps what it was given.
+    stage_rlimit64(process, page, 0, u64::MAX)?;
+    answers(
+        sys_prlimit64(process, 0, CORE, page, 0),
+        0,
+        "prlimit64(RLIMIT_CORE) was refused",
+    )?;
+    answers(
+        sys_getrlimit(process, CORE, page),
+        0,
+        "getrlimit(RLIMIT_CORE) was refused",
+    )?;
+    if le_at(&read_user::<16>(process, page)?, 0, WORD) != 0 {
+        return Err("RLIMIT_CORE did not read back the limit it was set to");
+    }
+    Ok(())
+}
+
+/// `sched_getaffinity` returns the bytes it wrote, writes no more, and sets
+/// one bit per running processor; a mask naming none is refused.
+fn check_affinity_names_the_running_processors(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    use crate::syscall::limits::{sys_sched_getaffinity, sys_sched_setaffinity};
+    const WORD: usize = size_of::<usize>();
+
+    poison_user(process, page, 64)?;
+    let written = sys_sched_getaffinity(process, 0, 64, page)
+        .map_err(|_| "sched_getaffinity with a 64-byte mask was refused")?;
+    if written != crate::smp::count().div_ceil(WORD * 8) * WORD {
+        return Err("sched_getaffinity did not return whole words covering every processor");
+    }
+    let out: [u8; 64] = read_user(process, page)?;
+    if !all_are(&out, written, out.len(), UNWRITTEN) {
+        return Err("sched_getaffinity wrote past the length it returned");
+    }
+    let bits: u32 = out
+        .get(..written)
+        .unwrap_or_default()
+        .iter()
+        .copied()
+        .map(u8::count_ones)
+        .sum();
+    let running = crate::smp::topology().map_or(1, crate::smp::Topology::online);
+    if usize::try_from(bits).ok() != Some(running) || out.first().is_none_or(|byte| byte & 1 == 0) {
+        return Err("the affinity mask does not have one bit per running processor");
+    }
+    refuses(
+        sys_sched_getaffinity(process, 0, WORD as u32 - 1, page),
+        Errno::EINVAL,
+        "an affinity length that is not whole words was accepted",
+    )?;
+    uaccess::copy_to_user(process.space(), page, &[0_u8; 8])
+        .map_err(|_| "could not stage a mask")?;
+    refuses(
+        sys_sched_setaffinity(process, 0, 8, page),
+        Errno::EINVAL,
+        "an affinity mask naming no processor was accepted",
+    )
+}
+
+/// `PR_SET_NAME` keeps fifteen bytes and `PR_GET_NAME` gives them back in
+/// sixteen, NUL-terminated, writing nothing past them.
+fn check_a_task_name_round_trips(process: &Process, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::attributes::sys_prctl;
+    const PR_GET_DUMPABLE: i32 = 3;
+    const PR_SET_NAME: i32 = 15;
+    const PR_GET_NAME: i32 = 16;
+
+    uaccess::copy_to_user(process.space(), page, b"a-name-longer-than-fifteen\0")
+        .map_err(|_| "could not stage a task name")?;
+    answers(
+        sys_prctl(process, PR_SET_NAME, [page, 0, 0, 0]),
+        0,
+        "PR_SET_NAME was refused",
+    )?;
+    poison_user(process, page + 64, 24)?;
+    answers(
+        sys_prctl(process, PR_GET_NAME, [page + 64, 0, 0, 0]),
+        0,
+        "PR_GET_NAME was refused",
+    )?;
+    let out: [u8; 24] = read_user(process, page + 64)?;
+    if out.get(..16) != Some(b"a-name-longer-t\0".as_slice()) || !all_are(&out, 16, 24, UNWRITTEN) {
+        return Err("PR_GET_NAME did not give back fifteen bytes of the name in sixteen");
+    }
+    answers(
+        sys_prctl(process, PR_GET_DUMPABLE, [0; 4]),
+        1,
+        "a new process is not dumpable",
+    )?;
+    refuses(
+        sys_prctl(process, 0x7FFF, [0; 4]),
+        Errno::EINVAL,
+        "an unknown prctl option was not EINVAL",
+    )
+}
+
+/// Becoming root again is accepted and becoming anyone else is `EPERM`: see
+/// `credentials` for why that refusal is the honest answer.
+fn check_credentials_refuse_another_user(process: &Process, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::credentials::dispatch as credential;
+    use ferrix_linux_abi::nr::Syscall as Call;
+    let unchanged = u64::from(u32::MAX);
+
+    if credential(Call::Setuid, &[1000, 0, 0, 0, 0, 0], process) != Some(Err(Errno::EPERM)) {
+        return Err("setuid to another user was not refused with EPERM");
+    }
+    if credential(Call::Setuid, &[0; 6], process) != Some(Ok(0)) {
+        return Err("setuid(0) was refused to a process that is already root");
+    }
+    if credential(Call::Setuid, &[unchanged, 0, 0, 0, 0, 0], process) != Some(Err(Errno::EINVAL)) {
+        return Err("setuid(-1) was not EINVAL");
+    }
+    if credential(
+        Call::Setresgid,
+        &[unchanged, 0, unchanged, 0, 0, 0],
+        process,
+    ) != Some(Ok(0))
+    {
+        return Err("setresgid to root, leaving the rest unchanged, was refused");
+    }
+    poison_user(process, page, 16)?;
+    let ids = [page, page + 4, page + 8, 0, 0, 0];
+    if credential(Call::Getresuid, &ids, process) != Some(Ok(0)) {
+        return Err("getresuid was refused");
+    }
+    let out: [u8; 16] = read_user(process, page)?;
+    if !all_are(&out, 0, 12, 0) || !all_are(&out, 12, 16, UNWRITTEN) {
+        return Err("getresuid did not write three 32-bit zeros and nothing else");
+    }
+
+    // `id` asks for the count with a size of zero, then for the list.
+    use crate::syscall::credentials::sys_getgroups;
+    answers(
+        sys_getgroups(process, 0, 0),
+        1,
+        "getgroups(0, NULL) did not count group 0",
+    )?;
+    poison_user(process, page, 8)?;
+    answers(
+        sys_getgroups(process, 4, page),
+        1,
+        "getgroups did not fill its list",
+    )?;
+    let groups: [u8; 8] = read_user(process, page)?;
+    if !all_are(&groups, 0, 4, 0) || !all_are(&groups, 4, 8, UNWRITTEN) {
+        return Err("getgroups did not write group 0 as one 32-bit gid_t");
+    }
+    if credential(Call::Setgroups, &[1, page + 4, 0, 0, 0, 0], process) != Some(Err(Errno::EPERM)) {
+        return Err("setgroups joining a group other than root's was not EPERM");
+    }
+    Ok(())
+}
+
+/// `nanosleep` does not come back until its time has passed, and refuses a
+/// nanosecond field of a whole second.
+fn check_nanosleep_takes_its_time(process: &Process, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::time::sys_nanosleep;
+    const NAP: u64 = 20_000_000;
+    let word = size_of::<usize>() as u64;
+
+    write_word(process, page, 0)?;
+    write_word(process, page + word, NAP)?;
+    let start = crate::timer::now_nanos();
+    answers(sys_nanosleep(process, page, 0), 0, "nanosleep was refused")?;
+    if crate::timer::now_nanos().saturating_sub(start) < NAP {
+        return Err("nanosleep returned before its time had passed");
+    }
+    write_word(process, page + word, 1_000_000_000)?;
+    refuses(
+        sys_nanosleep(process, page, 0),
+        Errno::EINVAL,
+        "a nanosecond field of a whole second was accepted",
+    )
+}
+
+/// `clock_settime(CLOCK_REALTIME)` moves what `CLOCK_REALTIME` reads and
+/// leaves `CLOCK_MONOTONIC` alone, which cannot be set at all. The clock is put
+/// back afterwards whatever happened, so nothing that runs later reads 2001.
+fn check_setting_the_clock_moves_only_realtime(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    use crate::syscall::time;
+    let saved = time::realtime_offset();
+    let outcome = set_the_clock_and_read_it_back(process, page);
+    time::restore_realtime_offset(saved);
+    outcome
+}
+
+/// The body of [`check_setting_the_clock_moves_only_realtime`], which puts
+/// the clock back whatever this returns.
+fn set_the_clock_and_read_it_back(process: &Process, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::time::{self, TimeWidth};
+    use ferrix_linux_abi::types::{CLOCK_MONOTONIC, CLOCK_REALTIME};
+    const SEPTEMBER_2001: u64 = 1_000_000_000;
+    let word = size_of::<usize>() as u64;
+
+    write_word(process, page, SEPTEMBER_2001)?;
+    write_word(process, page + word, 0)?;
+    answers(
+        time::sys_clock_settime(process, CLOCK_REALTIME as i32, page, TimeWidth::Native),
+        0,
+        "clock_settime(CLOCK_REALTIME) was refused",
+    )?;
+    let read = |clock: u32| -> Result<u64, &'static str> {
+        answers(
+            time::sys_clock_gettime(process, u64::from(clock), page + 32, TimeWidth::Native),
+            0,
+            "clock_gettime was refused",
+        )?;
+        Ok(le_at(
+            &read_user::<8>(process, page + 32)?,
+            0,
+            size_of::<usize>(),
+        ))
+    };
+    if !(SEPTEMBER_2001..SEPTEMBER_2001 + 60).contains(&read(CLOCK_REALTIME)?) {
+        return Err("CLOCK_REALTIME did not read the time it was set to");
+    }
+    if read(CLOCK_MONOTONIC)? >= SEPTEMBER_2001 {
+        return Err("setting CLOCK_REALTIME moved CLOCK_MONOTONIC");
+    }
+    refuses(
+        time::sys_clock_settime(process, CLOCK_MONOTONIC as i32, page, TimeWidth::Native),
+        Errno::EINVAL,
+        "CLOCK_MONOTONIC could be set",
+    )
+}
+
+/// A name `sethostname` sets is the `nodename` `uname` reports, and a name
+/// longer than 64 bytes is refused. The name is forgotten afterwards, so the
+/// `uname` check and a person reading `uname -a` both still see `ferrix`.
+fn check_a_host_name_reaches_uname(process: &Process, page: u64) -> Result<(), &'static str> {
+    uaccess::copy_to_user(process.space(), page, b"check-host")
+        .map_err(|_| "could not stage a host name")?;
+    let outcome = answers(
+        system::sys_sethostname(process, page, 10),
+        0,
+        "sethostname was refused",
+    )
+    .and_then(|()| {
+        answers(
+            system::sys_uname(process, page + 512),
+            0,
+            "uname was refused",
+        )
+    })
+    .and_then(|()| {
+        let out: [u8; 130] = read_user(process, page + 512)?;
+        if out.get(65..76) != Some(b"check-host\0".as_slice()) || !all_are(&out, 75, 130, 0) {
+            return Err("uname's nodename is not the name sethostname set");
+        }
+        Ok(())
+    })
+    .and_then(|()| {
+        refuses(
+            system::sys_sethostname(process, page, 65),
+            Errno::EINVAL,
+            "a 65-byte host name was accepted",
+        )
+    });
+    system::forget_hostname();
+    outcome
+}
+
+/// `socket` is `EAFNOSUPPORT` for a family Linux has, a socket call on the
+/// console is `ENOTSOCK`, and one on a closed descriptor is `EBADF`.
+fn check_sockets_are_refused_honestly(process: &Process) -> Result<(), &'static str> {
+    use crate::syscall::sockets;
+    use ferrix_linux_abi::nr::Syscall as Call;
+    const AF_INET: i32 = 2;
+    const SOCK_STREAM: u32 = 1;
+
+    refuses(
+        sockets::sys_socket(AF_INET, SOCK_STREAM),
+        Errno::EAFNOSUPPORT,
+        "socket(AF_INET, SOCK_STREAM) was not EAFNOSUPPORT",
+    )?;
+    refuses(
+        sockets::sys_socket(AF_INET, SOCK_STREAM | 0x100),
+        Errno::EINVAL,
+        "a socket type with an unknown flag was not EINVAL",
+    )?;
+    if sockets::dispatch(Call::Bind, &[1, 0, 0, 0, 0, 0], process) != Some(Err(Errno::ENOTSOCK)) {
+        return Err("bind on the console was not ENOTSOCK");
+    }
+    if sockets::dispatch(Call::Listen, &[99, 0, 0, 0, 0, 0], process) != Some(Err(Errno::EBADF)) {
+        return Err("listen on a closed descriptor was not EBADF");
+    }
+    Ok(())
 }

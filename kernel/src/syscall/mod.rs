@@ -39,7 +39,9 @@
 //! succeed, is how a program ends up wrong much later for reasons nobody can
 //! trace back here.
 
+pub(crate) mod attributes;
 pub(crate) mod check;
+pub(crate) mod credentials;
 pub(crate) mod exec;
 pub(crate) mod family;
 pub(crate) mod fd;
@@ -47,6 +49,7 @@ pub(crate) mod file;
 pub(crate) mod fsctl;
 pub(crate) mod futex;
 pub(crate) mod image;
+pub(crate) mod limits;
 pub(crate) mod load;
 pub(crate) mod memory;
 pub(crate) mod native;
@@ -56,6 +59,7 @@ pub(crate) mod poll;
 pub(crate) mod process;
 pub(crate) mod registry;
 pub(crate) mod signal;
+pub(crate) mod sockets;
 pub(crate) mod stat;
 pub(crate) mod system;
 pub(crate) mod time;
@@ -282,7 +286,29 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
     if let Some(answer) = fsctl::dispatch(call, &a, process) {
         return answer;
     }
+    let answer = attributes::dispatch(call, &a, process)
+        .or_else(|| limits::dispatch(call, &a, process))
+        .or_else(|| credentials::dispatch(call, &a, process))
+        .or_else(|| sockets::dispatch(call, &a, process))
+        .or_else(|| system::dispatch(call, &a, process))
+        .or_else(|| time::dispatch(call, &a, process));
+    if let Some(answer) = answer {
+        return answer;
+    }
     match call {
+        // Still `ENOSYS`, each on purpose. There is no swap to turn on or off.
+        Syscall::Swapon | Syscall::Swapoff => Err(Errno::ENOSYS),
+        // There are no loadable modules: the kernel is one image.
+        Syscall::InitModule | Syscall::FinitModule | Syscall::DeleteModule => Err(Errno::ENOSYS),
+        // No namespaces to join until stage 13.
+        Syscall::Setns => Err(Errno::ENOSYS),
+        // No System V shared memory; `mmap(MAP_SHARED)` is what there is.
+        Syscall::Shmget | Syscall::Shmat | Syscall::Shmdt | Syscall::Shmctl => Err(Errno::ENOSYS),
+        // No process accounting to switch on.
+        Syscall::Acct => Err(Errno::ENOSYS),
+        // No controlling terminals to hang up until stage 15's tty layer.
+        Syscall::Vhangup => Err(Errno::ENOSYS),
+        // `rseq` is refused in `attributes::dispatch`, which says why.
         // `mmap` and `mmap2` differ in one argument's unit and nothing else,
         // which is exactly why they are separate calls: the difference is
         // invisible at the call site and catastrophic if guessed.

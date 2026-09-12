@@ -45,6 +45,7 @@
 //! the walk stayed inside it.
 
 use ferrix_bootinfo::{PAGE_SIZE, is_user_address};
+use ferrix_linux_abi::errno::Errno;
 
 use crate::mm;
 use crate::user::space::{Access, AddressSpace, SpaceError};
@@ -233,4 +234,59 @@ pub(crate) fn copy_cstr_from_user(
             .ok_or(UserError::Overflow)?;
     }
     Err(UserError::Fault)
+}
+
+/// Bytes in a C `long`, `size_t` or pointer on this build: eight on the two
+/// 64-bit architectures, four on ARMv7-A.
+///
+/// Every structure a system call writes that is made of `long`s changes size
+/// with this, which is why the handlers compute their layouts from it rather
+/// than writing a size down.
+pub(crate) const WORD: usize = size_of::<usize>();
+
+/// Write one C `int` or `unsigned int` -- four bytes on every architecture.
+///
+/// # Errors
+///
+/// `EFAULT` if the address is not writable user memory.
+pub(crate) fn put_u32(space: &AddressSpace, at: u64, value: u32) -> Result<(), Errno> {
+    copy_to_user(space, at, &value.to_le_bytes()).map_err(|_| Errno::EFAULT)
+}
+
+/// Write one native word: a `long`, a `size_t` or a pointer.
+///
+/// Truncated to four bytes on a 32-bit build, which is the caller's to have
+/// made safe: a value that does not fit has to be decided about (clamped to
+/// `RLIM_INFINITY`, reported as `EOVERFLOW`) before it gets here.
+///
+/// # Errors
+///
+/// `EFAULT` if the address is not writable user memory.
+pub(crate) fn put_word(space: &AddressSpace, at: u64, value: u64) -> Result<(), Errno> {
+    let bytes = value.to_le_bytes();
+    let word = bytes.get(..WORD).ok_or(Errno::EFAULT)?;
+    copy_to_user(space, at, word).map_err(|_| Errno::EFAULT)
+}
+
+/// Read one C `int`, four bytes on every architecture.
+///
+/// # Errors
+///
+/// `EFAULT` if the address is not readable user memory.
+pub(crate) fn get_u32(space: &AddressSpace, at: u64) -> Result<u32, Errno> {
+    let mut bytes = [0_u8; 4];
+    copy_from_user(space, at, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+/// Read one native word, zero-extended: an `unsigned long` or a pointer.
+///
+/// # Errors
+///
+/// `EFAULT` if the address is not readable user memory.
+pub(crate) fn get_word(space: &AddressSpace, at: u64) -> Result<u64, Errno> {
+    let mut bytes = [0_u8; 8];
+    let word = bytes.get_mut(..WORD).ok_or(Errno::EFAULT)?;
+    copy_from_user(space, at, word).map_err(|_| Errno::EFAULT)?;
+    Ok(u64::from_le_bytes(bytes))
 }
