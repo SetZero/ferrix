@@ -41,6 +41,7 @@
 //! hard.
 
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use ferrix_bootinfo::{KERNEL_VMAP_BASE, KERNEL_VMAP_RESERVED, KERNEL_VMAP_SIZE, PAGE_SIZE};
 use ferrix_paging::MapFlags;
@@ -121,7 +122,10 @@ enum Kind {
     /// A physical aperture that was never allocated, so there is nothing to
     /// give back — and handing the buddy allocator a frame number that is
     /// really a `PCI` window would corrupt the per-frame array.
-    Device,
+    Device {
+        /// The page-aligned physical address mapped.
+        phys: u64,
+    },
 }
 
 /// One live allocation.
@@ -330,7 +334,7 @@ pub(crate) fn free(base: u64) -> Result<(), VmapError> {
     let allocation = claim(base)?;
     let removed = match allocation.kind {
         Kind::Anonymous => mm::unmap_kernel(base, allocation.len, mm::deallocate_frames),
-        Kind::Device => mm::unmap_kernel(base, allocation.len, |_, _| {}),
+        Kind::Device { .. } => mm::unmap_kernel(base, allocation.len, |_, _| {}),
     };
     // The span goes back whether or not the unmapping succeeded: an address
     // nobody can reuse is a leak, and the mapper's error is reported either
@@ -350,7 +354,7 @@ pub(crate) fn map_device(phys: u64, len: u64) -> Result<u64, VmapError> {
     let base = phys - offset;
     let span = (len + offset).next_multiple_of(PAGE_SIZE);
 
-    let mapping = reserve(span, VmaFlags::READ_WRITE, Kind::Device)?;
+    let mapping = reserve(span, VmaFlags::READ_WRITE, Kind::Device { phys: base })?;
     mm::map_kernel(mapping.base, base, span, MapFlags::KERNEL_DEVICE).map_err(|error| {
         let _ = release(mapping.base);
         VmapError::MapFailed(error)
@@ -365,6 +369,25 @@ pub(crate) fn map_device(phys: u64, len: u64) -> Result<u64, VmapError> {
 /// does not have to remember how its register block was aligned.
 pub(crate) fn unmap_device(at: u64) -> Result<(), VmapError> {
     free(at - at % PAGE_SIZE)
+}
+
+/// Every device window mapped right now, as physical `start..end` ranges.
+///
+/// What stage 10 withholds from device apertures: the registers of every
+/// controller the kernel drives through here — the local and I/O APICs, the
+/// HPET, the GIC — are ones no driver may be given.
+pub(crate) fn device_windows() -> Vec<(u64, u64)> {
+    let locked = ARENA.lock();
+    locked.as_ref().map_or_else(Vec::new, |arena| {
+        arena
+            .live
+            .values()
+            .filter_map(|allocation| match allocation.kind {
+                Kind::Device { phys } => Some((phys, phys.saturating_add(allocation.len))),
+                Kind::Anonymous => None,
+            })
+            .collect()
+    })
 }
 
 /// What the arena has handed out, for the boot report.

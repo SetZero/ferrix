@@ -93,6 +93,17 @@ pub(crate) fn register(irq: u32, handler: Handler) -> Result<(), IrqError> {
     Ok(())
 }
 
+/// Whether something is registered on `irq`.
+///
+/// For stage 10's device nodes: a line the kernel handles itself is not one a
+/// driver may be given.
+pub(crate) fn is_registered(irq: u32) -> bool {
+    HANDLERS
+        .lock()
+        .get(irq as usize)
+        .is_some_and(Option::is_some)
+}
+
 /// Run whatever is registered for `irq`.
 ///
 /// Called from the architecture's interrupt path, which has already

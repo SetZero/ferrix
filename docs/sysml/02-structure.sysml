@@ -856,13 +856,13 @@ package FerrixStructure {
         #implemented part virtio : LibraryCrate {
             attribute :>> path = "libs/virtio";
             attribute :>> forbidsUnsafe = false;
-            attribute :>> hostTests = 61;
+            attribute :>> hostTests = 62;
             @stage { number = 10; }
         }
         #writtenAhead part pci : LibraryCrate {
             attribute :>> path = "libs/pci";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 45;
+            attribute :>> hostTests = 46;
             @stage { number = 10; }
             doc /* PCI configuration space over a ConfigSpace the caller
                  * implements: ECAM geometry, headers, BAR decoding and sizing,

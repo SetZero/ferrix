@@ -54,6 +54,12 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
                     "the {arch} kernel reported success but QEMU exited {code}"
                 )));
             }
+            if let Some(problem) = entropy_problem(&watched.lines) {
+                return Err(Error::new(format!(
+                    "{arch}: {problem}.\n  Serial output is in {}",
+                    watched.log.display()
+                )));
+            }
             println!("  {arch}: boot ok");
             Ok(())
         }
@@ -64,6 +70,36 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
             args.timeout,
             watched.log.display()
         ))),
+    }
+}
+
+/// What stage 10's PCI check prints after the number of bytes a virtio-rng
+/// device wrote into memory the kernel gave it.
+const ENTROPY_READ: &str = " entropy bytes read by DMA";
+
+/// Why a boot that reached the marker still failed the DMA check, if it did.
+///
+/// The kernel skips a virtio-rng device that refuses or stalls rather than
+/// halting, because on a hypervisor somebody else configured — libvirt adds
+/// one to every guest — that is not the kernel's fault. Every machine this
+/// tool boots has one it configured itself, so here a boot that read no
+/// entropy has lost DMA. A device may legitimately write fewer bytes than it
+/// was asked for, so any positive count passes.
+fn entropy_problem(lines: &[String]) -> Option<String> {
+    let Some(line) = lines.iter().find(|line| line.contains(ENTROPY_READ)) else {
+        return Some("the kernel never reported reading entropy by DMA".to_owned());
+    };
+    let before = line.split(ENTROPY_READ).next().unwrap_or_default();
+    match before
+        .rsplit(' ')
+        .next()
+        .and_then(|count| count.parse::<u32>().ok())
+    {
+        Some(count) if count > 0 => None,
+        _ => Some(format!(
+            "the kernel read no entropy by DMA: `{}`",
+            line.trim()
+        )),
     }
 }
 
@@ -641,4 +677,34 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 
     std::fs::write(&target, contents)?;
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::entropy_problem;
+
+    fn lines(text: &[&str]) -> Vec<String> {
+        text.iter().map(|line| (*line).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_boot_that_read_entropy_passes_however_little_it_read() {
+        for count in ["64", "1"] {
+            let boot = lines(&[
+                &format!(
+                    "  pci      2 functions, 1 virtio transports, {count} entropy bytes read by DMA"
+                ),
+                "FERRIX-BOOT-OK stages 1-9",
+            ]);
+            assert_eq!(entropy_problem(&boot), None, "{count} bytes");
+        }
+    }
+
+    #[test]
+    fn a_boot_that_read_none_or_never_said_fails() {
+        let none = lines(&["  pci      1 virtio transports, 0 entropy bytes read by DMA"]);
+        assert!(entropy_problem(&none).is_some(), "zero bytes");
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-9"]);
+        assert!(entropy_problem(&silent).is_some(), "no line at all");
+    }
 }

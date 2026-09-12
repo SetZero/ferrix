@@ -11,17 +11,32 @@
 //! writes into exactly that memory. Then it resets the device and gives
 //! everything back.
 //!
+//! # What halts the boot, and what does not
+//!
+//! A completion that cannot be right — naming a request nobody made, claiming
+//! a length the device was not given, or leaving the bytes it claims to have
+//! written untouched — halts the boot everywhere, because it is the broken
+//! DMA path this check exists to find.
+//!
+//! A device that merely refuses, stalls or will not reset is reported and
+//! skipped. On the machines `xtask` boots that would still be a regression,
+//! and `xtask test-boot` fails the boot that reads no entropy. But Ferrix does
+//! not only boot where its own tools configured the hypervisor: libvirt adds a
+//! virtio-rng to every guest it defines, and one backed by a rate-limited or
+//! drained entropy source can miss any deadline chosen here without anything
+//! in the kernel being wrong.
+//!
 //! This is also the harness the next two pieces of stage 10 need: MSI-X is
 //! proven when this completion arrives as an interrupt rather than by
 //! polling, and an IOMMU domain when a descriptor pointing outside it faults.
 
 use ferrix_bootinfo::PAGE_SIZE;
-use ferrix_pci::bar::Region;
+use ferrix_pci::bar::{Bar, Region};
 use ferrix_pci::header::{COMMAND, COMMAND_BUS_MASTER, COMMAND_MEMORY_SPACE};
 use ferrix_pci::virtio::{Location, Transport};
 use ferrix_pci::{Address, ConfigSpace};
 use ferrix_virtio::pci::{
-    self as transport, COMMON_CONFIG_LEN, CommonConfig, NO_VECTOR, QueueAddresses,
+    self as transport, COMMON_CONFIG_LEN, CommonConfig, NO_VECTOR, QueueAddresses, TransportError,
 };
 use ferrix_virtio::{Buffer, Layout, QueueMemory, SplitQueue};
 
@@ -35,14 +50,28 @@ use crate::vmap;
 /// that the rings fit in one page.
 const QUEUE_SIZE: u16 = 8;
 
-/// Bytes of entropy asked for.
+/// Bytes of entropy asked for. A device may write fewer: virtio lets an
+/// entropy device use less than the whole buffer.
 const REQUEST: u32 = 64;
+
+/// Bytes below which an all-zero completion is not evidence of anything: one
+/// correct byte is zero one time in 256.
+const ZERO_EVIDENCE: u32 = 8;
 
 /// Reads of `device_status` a reset may take.
 const RESET_POLLS: u32 = 100_000;
 
 /// How long the device has to complete the request.
 const DEADLINE_NANOS: u64 = 2_000_000_000;
+
+/// What the check found.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Entropy {
+    /// The device wrote this many bytes where it was told to.
+    Read(u32),
+    /// The device refused or stalled, for this reason, and was left alone.
+    Skipped(&'static str),
+}
 
 /// One register block from a BAR, mapped for as long as this lives.
 #[derive(Debug)]
@@ -56,25 +85,26 @@ struct Block {
 }
 
 impl Block {
-    /// Map the block `location` names, in the BAR `regions` holds for it.
+    /// Map the block `location` names, in the memory BAR `regions` holds for
+    /// it.
     ///
-    /// `Transport::verify` has already required the block to lie inside its
-    /// BAR, so this only turns BAR-relative into physical.
-    fn map(location: Location, regions: &[Region]) -> Result<Self, Failure> {
+    /// `Transport::verify` has already required the block to lie inside a
+    /// memory BAR; the BAR kind is checked again here because the address of
+    /// an I/O BAR is a port number, and mapping it as physical memory would
+    /// write the device's registers into whatever RAM that number names.
+    fn map(location: Location, regions: &[Region]) -> Result<Self, &'static str> {
         let region = regions
             .iter()
             .find(|region| region.index == location.bar)
-            .ok_or(Failure::Entropy(
-                "a virtio block names a BAR that was not sized",
-            ))?;
-        let phys = region
-            .bar
-            .address()
+            .ok_or("a virtio block names a BAR that was not sized")?;
+        let Bar::Memory { address, .. } = region.bar else {
+            return Err("a virtio block is in an I/O BAR");
+        };
+        let phys = address
             .checked_add(u64::from(location.offset))
-            .ok_or(Failure::Entropy("a virtio block's address overflows"))?;
+            .ok_or("a virtio block's address overflows")?;
         let len = u64::from(location.length);
-        let virt = vmap::map_device(phys, len)
-            .map_err(|_| Failure::Entropy("a virtio block could not be mapped"))?;
+        let virt = vmap::map_device(phys, len).map_err(|_| "a virtio block could not be mapped")?;
         Ok(Block {
             registers: Mmio::at(virt),
             virt,
@@ -123,10 +153,10 @@ struct DmaPage {
 
 impl DmaPage {
     /// Take and zero a frame.
-    fn new() -> Result<Self, Failure> {
-        let frame = mm::allocate_frames(0).ok_or(Failure::Entropy("no frame for DMA"))?;
+    fn new() -> Option<Self> {
+        let frame = mm::allocate_frames(0)?;
         mm::zero_frame(frame);
-        Ok(DmaPage { frame })
+        Some(DmaPage { frame })
     }
 
     /// The physical address the device is given.
@@ -137,6 +167,12 @@ impl DmaPage {
     /// Where the kernel reads and writes the same page.
     fn virt(&self) -> u64 {
         mm::direct_map(self.phys())
+    }
+
+    /// Keep the frame out of the allocator for good, because a device that
+    /// would not reset may still hold its address and write to it.
+    fn leak(self) {
+        let _ = core::mem::ManuallyDrop::new(self);
     }
 }
 
@@ -176,29 +212,49 @@ unsafe impl QueueMemory for Rings {
     fn barrier(&self) {}
 }
 
-/// Read entropy from the virtio-rng device at `address`, returning how many
-/// bytes it wrote.
+/// Why a device that refused or failed the protocol was left alone.
+const fn refusal(error: TransportError) -> &'static str {
+    match error {
+        TransportError::ResetTimedOut => "the device did not finish resetting",
+        TransportError::MissingFeatures { .. } => "the device does not offer virtio 1.x",
+        TransportError::FeaturesRefused => "the device refused the features the driver wrote",
+        TransportError::NoSuchQueue { .. } => "the device has no request queue",
+        TransportError::QueueSize { .. } => "the device's queue cannot be sized for the check",
+        TransportError::NeedsReset => "the device needs a reset",
+    }
+}
+
+/// Read entropy from the virtio-rng device at `address`.
 ///
 /// Memory decoding and bus mastering are on only for the duration, and the
 /// device is reset — so it holds no address into memory this gives back —
-/// before the pages are freed or the command register restored, whatever
-/// happened in between.
+/// before the pages are freed or the command register restored. A device
+/// that will not reset keeps both off and its pages are never given back.
+///
+/// # Errors
+///
+/// Only a completion that cannot be right; see the module documentation.
 pub(super) fn entropy(
     space: &mut Space,
     address: Address,
     transport: &Transport,
     regions: &[Region],
-) -> Result<u32, Failure> {
-    transport.verify(regions)?;
+) -> Result<Entropy, Failure> {
     if transport.common.length < COMMON_CONFIG_LEN {
-        return Err(Failure::Entropy(
+        return Ok(Entropy::Skipped(
             "the common configuration block is shorter than virtio 1.x defines",
         ));
     }
-    let common = Block::map(transport.common, regions)?;
-    let notify = Block::map(transport.notify, regions)?;
-    let rings = DmaPage::new()?;
-    let buffer = DmaPage::new()?;
+    let (common, notify) = match (
+        Block::map(transport.common, regions),
+        Block::map(transport.notify, regions),
+    ) {
+        (Ok(common), Ok(notify)) => (common, notify),
+        (Err(why), _) | (_, Err(why)) => return Ok(Entropy::Skipped(why)),
+    };
+    let (Some(rings), Some(buffer)) = (DmaPage::new(), DmaPage::new()) else {
+        return Ok(Entropy::Skipped("no frame for DMA"));
+    };
 
     let command = space.read16(address, COMMAND);
     space.write16(
@@ -207,7 +263,7 @@ pub(super) fn entropy(
         command | COMMAND_MEMORY_SPACE | COMMAND_BUS_MASTER,
     );
 
-    let result = drive(
+    let outcome = drive(
         &common,
         &notify,
         transport.notify_multiplier,
@@ -215,11 +271,23 @@ pub(super) fn entropy(
         &buffer,
     );
 
-    let reset = transport::reset(&mut Common(&common), RESET_POLLS);
+    if transport::reset(&mut Common(&common), RESET_POLLS).is_err() {
+        space.write16(
+            address,
+            COMMAND,
+            command & !(COMMAND_BUS_MASTER | COMMAND_MEMORY_SPACE),
+        );
+        rings.leak();
+        buffer.leak();
+        return match outcome {
+            Err(failure) => Err(failure),
+            Ok(_) => Ok(Entropy::Skipped(
+                "the device did not reset, so its DMA pages are kept out of the allocator",
+            )),
+        };
+    }
     space.write16(address, COMMAND, command);
-    let written = result?;
-    reset?;
-    Ok(written)
+    outcome
 }
 
 /// Bring the device up, make one request and wait for it.
@@ -229,37 +297,44 @@ fn drive(
     multiplier: u32,
     rings: &DmaPage,
     buffer: &DmaPage,
-) -> Result<u32, Failure> {
+) -> Result<Entropy, Failure> {
     let mut config = Common(common);
-    let _ = transport::negotiate(&mut config, 0, 0, RESET_POLLS)?;
-
-    let max = transport::queue_max_size(&mut config, 0)?;
+    if let Err(error) = transport::negotiate(&mut config, 0, 0, RESET_POLLS) {
+        return Ok(Entropy::Skipped(refusal(error)));
+    }
+    let max = match transport::queue_max_size(&mut config, 0) {
+        Ok(max) => max,
+        Err(error) => return Ok(Entropy::Skipped(refusal(error))),
+    };
     // The largest power of two no bigger than either.
     let size = QUEUE_SIZE.min(1 << (15 - max.leading_zeros()));
-    let layout = Layout::for_size(size)?;
+    let Ok(layout) = Layout::for_size(size) else {
+        return Ok(Entropy::Skipped(
+            "the device's queue cannot be sized for the check",
+        ));
+    };
     if layout.total_size as u64 > PAGE_SIZE {
-        return Err(Failure::Entropy("the rings do not fit in a page"));
+        return Ok(Entropy::Skipped("the rings do not fit in a page"));
     }
     let base = rings.phys();
-    let active = transport::activate_queue(
-        &mut config,
-        0,
-        size,
-        QueueAddresses {
-            descriptors: base + layout.descriptor_table as u64,
-            driver: base + layout.available_ring as u64,
-            device: base + layout.used_ring as u64,
-        },
-        NO_VECTOR,
-    )?;
-    transport::driver_ok(&mut config)?;
+    let addresses = QueueAddresses {
+        descriptors: base + layout.descriptor_table as u64,
+        driver: base + layout.available_ring as u64,
+        device: base + layout.used_ring as u64,
+    };
+    let active = match transport::activate_queue(&mut config, 0, size, addresses, NO_VECTOR)
+        .and_then(|active| transport::driver_ok(&mut config).map(|()| active))
+    {
+        Ok(active) => active,
+        Err(error) => return Ok(Entropy::Skipped(refusal(error))),
+    };
 
     let mut queue = SplitQueue::new(layout, Rings { virt: rings.virt() });
     let head = queue.add_chain(&[Buffer::writable(buffer.phys(), REQUEST)])?;
 
     let doorbell = transport::notify_offset(active.notify_off, multiplier);
     if doorbell.checked_add(2).is_none_or(|end| end > notify.len) {
-        return Err(Failure::Entropy(
+        return Ok(Entropy::Skipped(
             "the queue's doorbell is outside its block",
         ));
     }
@@ -271,7 +346,9 @@ fn drive(
             break completion;
         }
         if timer::now_nanos() > deadline {
-            return Err(Failure::Entropy("the device never completed the request"));
+            return Ok(Entropy::Skipped(
+                "the device did not complete the request in time",
+            ));
         }
         core::hint::spin_loop();
     };
@@ -292,12 +369,12 @@ fn drive(
     let bytes = unsafe {
         core::slice::from_raw_parts(buffer.virt() as *const u8, completion.written as usize)
     };
-    // Sixty-four zero bytes from an entropy source is a one in 2^512 event;
-    // a buffer the device never wrote is not.
-    if bytes.iter().all(|byte| *byte == 0) {
+    // Eight or more zero bytes from an entropy source is a one in 2^64 event;
+    // a buffer the device never wrote is not. Fewer is no evidence either way.
+    if completion.written >= ZERO_EVIDENCE && bytes.iter().all(|byte| *byte == 0) {
         return Err(Failure::Entropy(
             "the device wrote nothing into the buffer it was given",
         ));
     }
-    Ok(completion.written)
+    Ok(Entropy::Read(completion.written))
 }

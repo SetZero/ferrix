@@ -179,6 +179,10 @@ pub enum QueueError {
     AvailableIndexJumped,
     /// The caller's output slice is too short for the chain being read.
     OutputTooSmall,
+    /// Freeing a chain reached a descriptor already on the free list, or would
+    /// have made more descriptors free than the queue has. The device changed
+    /// the chain's links after it was validated.
+    FreeListCorrupt,
 }
 
 /// Where the three areas of a split virtqueue sit within one block of memory.
@@ -511,7 +515,10 @@ impl<M: QueueMemory> SplitQueue<M> {
         let mut index = layout.queue_size;
         while index > 0 {
             index -= 1;
-            queue.push_free(index);
+            // A fresh queue has nothing free, so this cannot refuse.
+            if queue.push_free(index).is_err() {
+                break;
+            }
         }
 
         queue.memory.write_u16(layout.available_flags(), 0);
@@ -729,7 +736,15 @@ impl<M: QueueMemory> SplitQueue<M> {
     ///
     /// The wipe is not hygiene: a stale address left in a descriptor the device
     /// is not supposed to be looking at is one bug away from being DMA'd to.
-    fn push_free(&mut self, index: u16) {
+    ///
+    /// # Errors
+    ///
+    /// [`QueueError::FreeListCorrupt`] if every descriptor is already free,
+    /// which a correct free list cannot reach and a hostile device can.
+    fn push_free(&mut self, index: u16) -> Result<(), QueueError> {
+        if self.free_count >= self.layout.queue_size {
+            return Err(QueueError::FreeListCorrupt);
+        }
         let offset = self.layout.descriptor(index);
         self.memory.write_u64(offset, 0);
         self.memory.write_u32(offset + DESC_LEN, 0);
@@ -737,6 +752,7 @@ impl<M: QueueMemory> SplitQueue<M> {
         self.memory.write_u16(offset + DESC_NEXT, self.free_head);
         self.free_head = index;
         self.free_count += 1;
+        Ok(())
     }
 
     /// Take a descriptor off the free list.
@@ -883,7 +899,14 @@ impl<M: QueueMemory> SplitQueue<M> {
             // Both are read before `push_free` overwrites them.
             let flags = self.memory.read_u16(offset + DESC_FLAGS);
             let next = self.memory.read_u16(offset + DESC_NEXT);
-            self.push_free(index);
+            // The chain was validated, and then read again here from memory
+            // the device can write: a link it moved in between can reach a
+            // descriptor already free, and freeing that twice would put one
+            // descriptor on the list twice and hand it to two chains.
+            if flags & DESC_F_FREE != 0 {
+                return Err(QueueError::FreeListCorrupt);
+            }
+            self.push_free(index)?;
             freed += 1;
             if flags & DESC_F_NEXT == 0 {
                 return Ok(freed);

@@ -11,7 +11,7 @@
 //! claim about where they are. A region that does not fit in the BAR it names
 //! would hand the driver a mapping of whatever is next to that BAR.
 
-use crate::bar::Region;
+use crate::bar::{Bar, Region};
 use crate::capability::{Capabilities, Capability, ID_VENDOR};
 use crate::header::Identity;
 use crate::{Address, ConfigSpace, LEGACY_CONFIG_SPACE_SIZE, PciError};
@@ -88,10 +88,13 @@ pub struct Location {
 
 impl Location {
     /// Whether the block lies inside `region`, which must be the sized BAR
-    /// this location names.
+    /// this location names, and that BAR is memory. An I/O BAR's address is a
+    /// port number, so a block in one has no physical address to map.
     #[must_use]
     pub const fn fits(self, region: &Region) -> bool {
-        region.index == self.bar && region.contains(self.offset as u64, self.length as u64)
+        matches!(region.bar, Bar::Memory { .. })
+            && region.index == self.bar
+            && region.contains(self.offset as u64, self.length as u64)
     }
 }
 

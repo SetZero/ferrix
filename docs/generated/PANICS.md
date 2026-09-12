@@ -789,10 +789,11 @@ none.
    express.
 3. `libs/pci` refused a BAR or a capability list. On QEMU that means the
    accessor read the wrong width or offset, not that the device is malformed.
-4. The virtio-rng self-check in `pci/virtio.rs` failed: the device refused the
-   features or the queue, or never wrote into the page whose physical address it
-   was given — which is what a wrong DMA address, bus mastering left off, or a
-   doorbell rung at the wrong offset all look like.
+4. The virtio-rng self-check in `pci/virtio.rs` saw a completion that cannot be
+   right: a request nobody made, a length it was not given, or bytes it never
+   wrote — which is what a wrong DMA address looks like. A device that merely
+   refuses or stalls is skipped and reported instead, because on a hypervisor
+   somebody else configured that is not a fault in the kernel.
 
 See: kernel/src/pci.rs check; libs/pci; libs/acpi Mcfg; libs/fdt ecam_hosts;
 docs/ROADMAP.md stage 10.
@@ -813,8 +814,10 @@ exactly the right answers before any node is published.
 1. `DeviceNode::aperture` was changed to accept a range spanning two apertures
    or running past one, which is the change that would let a driver map a
    neighbour's registers.
-2. An aperture overlapping the boot framebuffer was minted, so a driver could be
-   given the memory a panic is drawn in.
+2. An aperture overlapping memory the kernel owns — RAM, an ECAM window, a
+   controller the kernel drives, the boot framebuffer — or another device's
+   aperture was minted, so a driver could be given memory that is not its
+   device's.
 3. `DeviceNode::pci` minted an aperture from a BAR whose size or address
    enumeration had not checked.
 

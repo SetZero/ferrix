@@ -39,6 +39,8 @@ const ADDRESS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 pub struct X86_64;
 
 impl Encoding for X86_64 {
+    const PHYS_BITS: u32 = 52;
+
     const NAME: &'static str = "x86-64";
 
     fn table_descriptor(table: PhysAddr, flags: MapFlags) -> u64 {

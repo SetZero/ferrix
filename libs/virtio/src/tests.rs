@@ -1403,3 +1403,26 @@ fn the_queues_format_without_their_memory() {
         "with the queue size, which is what a dump is for"
     );
 }
+
+#[test]
+fn a_chain_the_device_relinks_to_a_free_descriptor_is_not_freed_twice() {
+    let layout = Layout::for_size(4).unwrap();
+    let memory = Shared::new(layout.total_size);
+    let mut queue = SplitQueue::new(layout, memory.clone());
+    let head = queue.add_chain(&[Buffer::readable(0x1000, 16)]).unwrap();
+    assert_eq!(queue.free_descriptors(), 3, "one in flight");
+
+    // After validation, the device points the tail at descriptor 1, which is
+    // already free.
+    let offset = layout.descriptor(head);
+    memory.poke_u32(offset + DESC_FLAGS, u32::from(DESC_F_NEXT) | 1 << 16);
+    assert_eq!(
+        queue.free_chain(head),
+        Err(QueueError::FreeListCorrupt),
+        "refused"
+    );
+    assert!(
+        queue.free_descriptors() <= 4,
+        "never more free than the queue has"
+    );
+}

@@ -1323,8 +1323,49 @@ The run recorded when it landed: x86-64 publishes 3 apertures where it had 4,
 with one MSI-X range withheld; AArch64 and ARMv7-A publish one PCI aperture
 each where they had two.
 
+**Done — what a review found.** A read-only review of stage 10 found ten
+defects, and all ten are fixed. Two mattered most. A common Intel chipset would
+have stopped the boot, because every function's vendor capabilities were read
+as virtio's. And an aperture could be minted over RAM, which stopped being
+theoretical the day `IoMapping` began mapping apertures for drivers.
+
+* **Apertures are screened against everything the kernel owns:** the memory
+  map (less firmware's own MMIO descriptions), every ECAM window, every
+  controller window the kernel mapped for itself — `vmap` now records their
+  physical addresses — the device tree's console, the framebuffer, and every
+  other node's apertures. A function with memory decoding off contributes
+  none. The publish check sorts every aperture and compares neighbours, which
+  replaces a check that repeated the minting condition and so could not fail.
+* **Device tree vectors** are shared peripheral interrupts only, never a line
+  the kernel registered, never one another node holds.
+* **virtio**: only a virtio device's vendor capabilities are read as virtio's;
+  its blocks must lie in memory BARs, and every transport is verified. Freeing
+  a virtqueue chain refuses a descriptor already free, since the device can
+  move a link between validation and the free.
+* **Hosts** whose segment and buses overlap one already accepted are refused;
+  a device tree host without `linux,pci-domain` gets a segment of its own.
+* **Mapping** refuses a physical range wider than the encoding's descriptors
+  hold, which would otherwise have been masked onto low memory.
+* **The entropy check** halts the boot only on a completion that cannot be
+  right. A device that refuses, stalls or will not reset is reported and
+  skipped — libvirt adds a virtio-rng to every guest, and a rate-limited
+  backend is not the kernel's fault — and one that will not reset keeps bus
+  mastering off and its pages out of the allocator. `xtask test-boot` fails a
+  boot that reads no entropy, so on the machines it configures the regression
+  is still caught.
+
+One consequence, recorded rather than hidden: EDK2 on AArch64 leaves memory
+decoding off for a function no firmware driver binds, so virtio-rng there now
+publishes no aperture. A driver for such a device waits on the item below.
+
 **Still to do, in the order it can be done:**
 
+* **Trusting a BAR firmware placed but did not enable.** Check a function's
+  BAR against its host bridge's memory windows — the device tree's `ranges` on
+  the Arm machines — and turn decoding on for one that fits, so a device no
+  firmware driver used can still be given to a ring-3 one. Under ACPI the
+  windows are in AML, which Ferrix will not interpret, so there it needs
+  another source or stays refused.
 * **MSI-X vectors for PCI nodes.** A PCI node has apertures and no vectors.
   The messages and the table layout are written; what is missing is the
   allocator behind the architecture facade — local APIC vectors on x86-64, the
@@ -1461,14 +1502,14 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 51 |
 | `libs/procfs` | Reached at 8 — the text of `/proc`: the `maps` line padded to its name column at both pointer widths, `meminfo`, `status`, `stat` and `mounts`, pinned byte for byte against lines a real Linux printed, and the `maps` parser the kernel's boot check reads its own output back with. No fuzz target: it arranges the kernel's own numbers rather than parsing a stranger's bytes. | 14 |
-| `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory, and the PCI transport's status protocol, feature negotiation and queue activation. Reached at 10 by the boot check's virtio-rng driver. | 61 |
-| `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport, MSI-X messages and the pages of a BAR a driver must not be given. Has its fuzz target and its Miri step already. | 51 |
+| `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory, and the PCI transport's status protocol, feature negotiation and queue activation. Reached at 10 by the boot check's virtio-rng driver. | 62 |
+| `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport, MSI-X messages and the pages of a BAR a driver must not be given. Has its fuzz target and its Miri step already. | 52 |
 | `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
 | `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one; and the reachability walk a send makes before it queues an endpoint. Has its fuzz target and its Miri step. | 22 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **679 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **682 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

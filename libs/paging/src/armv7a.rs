@@ -84,6 +84,8 @@ const fn attr_index(index: u64) -> u64 {
 pub struct Armv7a;
 
 impl Encoding for Armv7a {
+    const PHYS_BITS: u32 = 40;
+
     const NAME: &'static str = "ARMv7-A";
 
     const ROOT_LEVEL: Level = Level::GIGABYTE;

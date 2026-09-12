@@ -1454,3 +1454,22 @@ fn a_gicv2m_frame_says_which_spis_it_raises() {
     );
     assert_eq!(msix::gicv2m_message(u64::MAX, 81), None, "overflow");
 }
+
+#[test]
+fn a_virtio_block_in_an_io_bar_fits_nothing() {
+    let (bus, f) = virtio_blk();
+    let transport = Transport::find(&bus, f).unwrap().unwrap();
+    let io = Region {
+        index: 4,
+        bar: Bar::Io { port: 0xC000 },
+        size: 0x4000,
+    };
+    assert_eq!(
+        transport.verify(&[io]),
+        Err(PciError::VirtioRegion {
+            function: f,
+            at: 0x40
+        }),
+        "an I/O BAR is not memory"
+    );
+}

@@ -1540,8 +1540,10 @@ pub struct EcamHost {
     /// [`EcamHost::start_bus`]'s, which is *not* the MCFG's convention — an
     /// MCFG allocation's address is bus zero's.
     pub window: Region,
-    /// `linux,pci-domain`, or zero when the tree does not say.
-    pub segment: u16,
+    /// `linux,pci-domain`, or `None` when the tree does not say — which is
+    /// not the same as zero, because two hosts that both leave it out are
+    /// still two segments.
+    pub segment: Option<u16>,
     /// The first bus of `bus-range`, or zero when there is none.
     pub start_bus: u8,
     /// The last bus the window really reaches: `bus-range`'s last, or 255,
@@ -1601,8 +1603,8 @@ fn ecam_host(node: &Node<'_>) -> Option<EcamHost> {
         return None;
     }
     let segment = match node.property("linux,pci-domain") {
-        None => 0,
-        Some(domain) => u16::try_from(domain.as_u32()?).ok()?,
+        None => None,
+        Some(domain) => Some(u16::try_from(domain.as_u32()?).ok()?),
     };
     let buses = window.size / ECAM_BYTES_PER_BUS;
     let last_held = u64::from(start_bus).checked_add(buses.checked_sub(1)?)?;

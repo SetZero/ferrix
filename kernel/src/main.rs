@@ -233,13 +233,13 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // `finish_memory`, which reclaims the ACPI tables the MCFG is read from
     // and sweeps the kernel's mappings, so the bus windows this maps have to
     // be given back first.
-    let pci = check_pci(view);
+    let (pci, reserved) = check_pci(view);
 
     // Stage 10's device nodes: every PCI function above and every virtio,mmio
     // node in the device tree, with the rule a driver's memory and interrupts
     // rest on — nothing outside what the device has — required of each.
     // Straight after enumeration, which builds the PCI half.
-    check_devices(view, pci);
+    check_devices(view, pci, &reserved);
 
     // Stage 9's device objects, on the nodes just published: an I/O mapping of
     // a device's own aperture and nothing past it, reached from a forked
@@ -490,8 +490,8 @@ fn check_device_objects() {
 ///
 /// Halts rather than returning, as every other stage's check does. A machine
 /// that describes no ECAM host passes: the board has no PCI at all.
-fn check_pci(view: &BootView<'_>) -> Vec<device::DeviceNode> {
-    let (report, nodes) = match pci::check(view) {
+fn check_pci(view: &BootView<'_>) -> (Vec<device::DeviceNode>, device::Reserved) {
+    let (report, nodes, reserved) = match pci::check(view) {
         Ok(found) => found,
         Err(problem) => fatal!(
             catalog::STAGE10_PCI,
@@ -504,15 +504,16 @@ fn check_pci(view: &BootView<'_>) -> Vec<device::DeviceNode> {
             "  pci      no ECAM host described, {} descriptions refused",
             report.refused
         );
-        return nodes;
+        return (nodes, reserved);
     }
     println!(
-        "  pci      {} functions from {} {} hosts, {} host bridges, {} unfollowed bridges; \
-         {} BARs sized ({} KiB), {} capabilities, {} virtio transports, \
+        "  pci      {} functions from {} {} hosts ({} descriptions refused), {} host bridges, \
+         {} unfollowed bridges; {} BARs sized ({} KiB), {} capabilities, {} virtio transports, \
          {} entropy bytes read by DMA",
         report.functions,
         report.hosts,
         report.source,
+        report.refused,
         report.host_bridges,
         report.unfollowed,
         report.bars,
@@ -521,15 +522,21 @@ fn check_pci(view: &BootView<'_>) -> Vec<device::DeviceNode> {
         report.virtio,
         report.entropy_bytes,
     );
-    nodes
+    if let Some(why) = report.entropy_skip {
+        println!(
+            "  pci      {} entropy checks skipped: {why}",
+            report.entropy_skipped
+        );
+    }
+    (nodes, reserved)
 }
 
 /// Stage 10: publish the device nodes, requiring each to hand out exactly the
 /// apertures and vectors it has.
 ///
 /// Halts rather than returning, as every other stage's check does.
-fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>) {
-    let report = match device::publish(view, pci) {
+fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &device::Reserved) {
+    let report = match device::publish(view, pci, reserved) {
         Ok(report) => report,
         Err(problem) => fatal!(
             catalog::STAGE10_DEVICES,
@@ -537,16 +544,19 @@ fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>) {
         ),
     };
     println!(
-        "  devices  {} nodes ({} from the device tree), {} apertures ({} not whole pages, \
-         {} withheld, {} MSI-X ranges withheld), {} vectors ({} edge), {} refusals as specified; {} published",
+        "  devices  {} nodes ({} from the device tree, {} with decoding off), {} apertures \
+         ({} not whole pages, {} withheld, {} MSI-X ranges withheld), {} vectors ({} edge, \
+         {} withheld), {} refusals as specified; {} published",
         report.nodes,
         report.tree,
+        report.undecoded,
         report.apertures,
         report.partial_pages,
         report.withheld,
         report.msix_withheld,
         report.vectors,
         report.edge,
+        report.vectors_withheld,
         report.refusals,
         device::devices().len(),
     );

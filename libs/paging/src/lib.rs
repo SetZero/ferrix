@@ -293,6 +293,11 @@ pub trait Encoding {
     /// Bits of virtual address the walk translates.
     const VIRT_BITS: u32 = VIRT_BITS;
 
+    /// Bits of physical address a descriptor can hold. An address at or
+    /// above `1 << PHYS_BITS` does not fit, and a descriptor that masked it
+    /// would map low memory instead.
+    const PHYS_BITS: u32 = 48;
+
     /// True if the hardware can translate `virt` at all.
     ///
     /// The default is the 64-bit rule: every bit from `VIRT_BITS - 1` up must
@@ -405,6 +410,9 @@ pub enum MapError {
     BlockInTheWay(VirtAddr),
     /// The range wraps the end of the address space.
     RangeOverflow,
+    /// The physical range reaches past what the encoding's descriptors can
+    /// hold.
+    PhysicalOutOfRange,
 }
 
 impl fmt::Display for MapError {
@@ -416,6 +424,9 @@ impl fmt::Display for MapError {
             MapError::AlreadyMapped(at) => write!(f, "{at:?} is already mapped"),
             MapError::BlockInTheWay(at) => write!(f, "{at:?} is inside a larger block mapping"),
             MapError::RangeOverflow => f.write_str("range wraps the address space"),
+            MapError::PhysicalOutOfRange => {
+                f.write_str("physical address is wider than a descriptor can hold")
+            }
         }
     }
 }
@@ -478,6 +489,10 @@ impl<E: Encoding> Mapper<E> {
         }
         if !E::is_canonical(virt) {
             return Err(MapError::NotCanonical);
+        }
+        let limit = 1_u64.checked_shl(E::PHYS_BITS).unwrap_or(u64::MAX);
+        if phys.0.checked_add(len).is_none_or(|end| end > limit) {
+            return Err(MapError::PhysicalOutOfRange);
         }
 
         let mut done = 0u64;

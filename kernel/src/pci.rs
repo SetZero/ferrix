@@ -14,6 +14,12 @@
 //! device tree — and both parsers hand over the first bus's, so nothing here
 //! has to remember which it read.
 //!
+//! Two descriptions of the same buses would enumerate every function on them
+//! twice — two device nodes, two drivers, one device — so a host whose segment
+//! and buses overlap one already accepted is refused. A device tree host that
+//! does not say which segment it is gets the lowest one no other host names,
+//! as Linux does, rather than every such host sharing segment zero.
+//!
 //! # A bus at a time
 //!
 //! An ECAM window is a megabyte per bus, and a machine describes 256 buses
@@ -23,10 +29,11 @@
 //! functions on bus zero. So [`Space`] maps a bus's megabyte the first time
 //! the walk reads from it, and gives every window back when it is dropped.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt;
+use core::ops::RangeInclusive;
 
 use ferrix_bootinfo::BootView;
 use ferrix_pci::bar::{self, Region};
@@ -34,7 +41,9 @@ use ferrix_pci::capability::{
     self as pci_capability, Capabilities, ExtendedCapabilities, ID_MSIX, MsiX,
 };
 use ferrix_pci::ecam::{BYTES_PER_BUS, Window};
-use ferrix_pci::header::{CLASS_BRIDGE, Endpoint, HeaderKind, SUBCLASS_HOST_BRIDGE};
+use ferrix_pci::header::{
+    CLASS_BRIDGE, COMMAND, COMMAND_MEMORY_SPACE, Endpoint, HeaderKind, SUBCLASS_HOST_BRIDGE,
+};
 use ferrix_pci::virtio::{self as virtio_pci, TYPE_ENTROPY, Transport};
 use ferrix_pci::walk::{Function, Walk};
 use ferrix_pci::{Address, ConfigSpace, PciError};
@@ -73,38 +82,90 @@ pub(crate) struct Host {
     pub(crate) phys: u64,
 }
 
+/// One description of a host, before it is given a segment and checked
+/// against the others.
+struct Described {
+    /// The segment, if the description names one.
+    segment: Option<u16>,
+    /// The first bus.
+    start_bus: u8,
+    /// The last bus.
+    end_bus: u8,
+    /// The physical address of the first bus.
+    phys: u64,
+}
+
+/// Whether two bus ranges share a bus.
+fn buses_overlap(a: &RangeInclusive<u8>, b: &RangeInclusive<u8>) -> bool {
+    a.start() <= b.end() && b.start() <= a.end()
+}
+
 /// Every ECAM host the machine describes, and how many descriptions could not
 /// be used.
 fn hosts(view: &BootView<'_>) -> (Vec<Host>, usize, Source) {
-    let mut hosts = Vec::new();
     let mut refused = 0;
+    let mut described = Vec::new();
 
-    if let Ok(firmware) = acpi::Firmware::open(view) {
+    let source = if let Ok(firmware) = acpi::Firmware::open(view) {
         if let Ok(mcfg) = firmware.acpi().mcfg() {
             for allocation in mcfg.entries() {
-                let window =
-                    Window::new(allocation.segment, allocation.start_bus, allocation.end_bus);
-                match (window, allocation.window_base()) {
-                    (Some(window), Some(phys)) => hosts.push(Host { window, phys }),
-                    _ => refused += 1,
+                match allocation.window_base() {
+                    Some(phys) => described.push(Described {
+                        segment: Some(allocation.segment),
+                        start_bus: allocation.start_bus,
+                        end_bus: allocation.end_bus,
+                        phys,
+                    }),
+                    None => refused += 1,
                 }
             }
         }
-        return (hosts, refused, Source::Mcfg);
-    }
-
-    if let Ok(tree) = fdt::open(view) {
-        for host in tree.ecam_hosts() {
-            match Window::new(host.segment, host.start_bus, host.end_bus) {
-                Some(window) => hosts.push(Host {
-                    window,
+        Source::Mcfg
+    } else {
+        if let Ok(tree) = fdt::open(view) {
+            for host in tree.ecam_hosts() {
+                described.push(Described {
+                    segment: host.segment,
+                    start_bus: host.start_bus,
+                    end_bus: host.end_bus,
                     phys: host.window.address,
-                }),
-                None => refused += 1,
+                });
             }
         }
+        Source::DeviceTree
+    };
+
+    let named: BTreeSet<u16> = described.iter().filter_map(|host| host.segment).collect();
+    let mut hosts: Vec<Host> = Vec::new();
+    for host in described {
+        let segment = host.segment.or_else(|| {
+            (0..=u16::MAX).find(|candidate| {
+                !named.contains(candidate)
+                    && !hosts
+                        .iter()
+                        .any(|taken| taken.window.segment() == *candidate)
+            })
+        });
+        let Some(window) =
+            segment.and_then(|segment| Window::new(segment, host.start_bus, host.end_bus))
+        else {
+            refused += 1;
+            continue;
+        };
+        let overlaps = hosts.iter().any(|taken| {
+            taken.window.segment() == window.segment()
+                && buses_overlap(&taken.window.buses(), &window.buses())
+        });
+        if overlaps {
+            refused += 1;
+            continue;
+        }
+        hosts.push(Host {
+            window,
+            phys: host.phys,
+        });
     }
-    (hosts, refused, Source::DeviceTree)
+    (hosts, refused, source)
 }
 
 /// One host's configuration space, mapped a bus at a time.
@@ -208,7 +269,8 @@ impl Drop for Space {
 pub(crate) struct Report {
     /// ECAM hosts described and walked.
     pub(crate) hosts: usize,
-    /// Descriptions that could not be turned into a window.
+    /// Descriptions that could not be turned into a window, or that overlap
+    /// one already accepted.
     pub(crate) refused: usize,
     /// Where the hosts were described.
     pub(crate) source: Source,
@@ -224,11 +286,15 @@ pub(crate) struct Report {
     pub(crate) aperture_bytes: u64,
     /// Standard and extended capabilities walked.
     pub(crate) capabilities: usize,
-    /// Functions with a complete virtio PCI transport.
+    /// Virtio functions with a complete transport inside their memory BARs.
     pub(crate) virtio: usize,
     /// Bytes of entropy virtio-rng devices wrote into memory the kernel gave
     /// them.
     pub(crate) entropy_bytes: u32,
+    /// Entropy checks skipped because the device refused or stalled.
+    pub(crate) entropy_skipped: usize,
+    /// Why the last one was skipped.
+    pub(crate) entropy_skip: Option<&'static str>,
 }
 
 /// Why enumeration failed.
@@ -248,11 +314,9 @@ pub(crate) enum Failure {
     },
     /// `libs/pci` refused what a function presented.
     Refused(PciError),
-    /// A virtio device could not be brought up.
-    Transport(ferrix_virtio::pci::TransportError),
-    /// A virtio queue said something impossible.
+    /// A virtio queue said something impossible about a request in flight.
     Queue(ferrix_virtio::QueueError),
-    /// The entropy self-check failed.
+    /// The entropy self-check saw a completion that cannot be right.
     Entropy(&'static str),
 }
 
@@ -269,7 +333,6 @@ impl fmt::Display for Failure {
                 )
             }
             Failure::Refused(error) => write!(f, "{error}"),
-            Failure::Transport(error) => write!(f, "virtio: {error}"),
             Failure::Queue(error) => write!(f, "virtio queue: {error:?}"),
             Failure::Entropy(what) => write!(f, "virtio-rng: {what}"),
         }
@@ -282,12 +345,6 @@ impl From<PciError> for Failure {
     }
 }
 
-impl From<ferrix_virtio::pci::TransportError> for Failure {
-    fn from(error: ferrix_virtio::pci::TransportError) -> Self {
-        Failure::Transport(error)
-    }
-}
-
 impl From<ferrix_virtio::QueueError> for Failure {
     fn from(error: ferrix_virtio::QueueError) -> Self {
         Failure::Queue(error)
@@ -296,9 +353,16 @@ impl From<ferrix_virtio::QueueError> for Failure {
 
 /// Find every function, size its BARs, walk its capabilities, and build a
 /// device node for each from what its BARs decode.
-pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>), Failure> {
+///
+/// Returns what apertures may not overlap too, which publishing the device
+/// tree's nodes needs as well.
+pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>, Reserved), Failure> {
     let (hosts, refused, source) = hosts(view);
-    let reserved = Reserved::of(view);
+    let ecam: Vec<(u64, u64)> = hosts
+        .iter()
+        .map(|host| (host.phys, host.phys.saturating_add(host.window.len())))
+        .collect();
+    let reserved = Reserved::of(view, &ecam);
     let mut report = Report {
         hosts: hosts.len(),
         refused,
@@ -311,18 +375,20 @@ pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>), Fa
         capabilities: 0,
         virtio: 0,
         entropy_bytes: 0,
+        entropy_skipped: 0,
+        entropy_skip: None,
     };
     let mut nodes = Vec::new();
     for host in hosts {
-        check_host(host, reserved, &mut report, &mut nodes)?;
+        check_host(host, &reserved, &mut report, &mut nodes)?;
     }
-    Ok((report, nodes))
+    Ok((report, nodes, reserved))
 }
 
 /// Walk one host and examine everything it reaches.
 fn check_host(
     host: Host,
-    reserved: Reserved,
+    reserved: &Reserved,
     report: &mut Report,
     nodes: &mut Vec<DeviceNode>,
 ) -> Result<(), Failure> {
@@ -347,11 +413,12 @@ fn check_host(
     }
 
     for function in found {
-        let (regions, msix) = check_function(&mut space, function, report)?;
+        let (regions, msix, decoding) = check_function(&mut space, function, report)?;
         nodes.push(DeviceNode::pci(
             function.address,
             &regions,
             msix.as_ref(),
+            decoding,
             reserved,
         ));
     }
@@ -359,17 +426,20 @@ fn check_host(
 }
 
 /// Size every BAR of one function and walk both its capability lists,
-/// returning the BARs it decodes and its MSI-X capability, if it has one.
+/// returning the BARs it decodes, its MSI-X capability if it has one, and
+/// whether firmware left its memory decoding on.
 fn check_function(
     space: &mut Space,
     function: Function,
     report: &mut Report,
-) -> Result<(Vec<Region>, Option<MsiX>), Failure> {
+) -> Result<(Vec<Region>, Option<MsiX>, bool), Failure> {
     let Function { address, identity } = function;
     report.functions += 1;
     if identity.class.base == CLASS_BRIDGE && identity.class.sub == SUBCLASS_HOST_BRIDGE {
         report.host_bridges += 1;
     }
+    // Read before sizing, which switches decoding off and back to this.
+    let decoding = space.read16(address, COMMAND) & COMMAND_MEMORY_SPACE != 0;
 
     for capability in Capabilities::new(&*space, address) {
         let _ = capability?;
@@ -399,17 +469,30 @@ fn check_function(
         }
     }
 
-    if let Some(transport) = Transport::find(&*space, address)? {
+    // Only a virtio device's vendor capabilities are virtio's: an Intel
+    // bridge carries one of its own, shorter than virtio's format, and
+    // reading it as virtio's would refuse a perfectly ordinary chipset.
+    let subsystem = if identity.kind == HeaderKind::Endpoint {
+        Endpoint::read(&*space, address)?.subsystem
+    } else {
+        0
+    };
+    if let Some(kind) = virtio_pci::device_type(&identity, subsystem)
+        && let Some(transport) = Transport::find(&*space, address)?
+    {
+        transport.verify(&regions)?;
         report.virtio += 1;
-        let subsystem = if identity.kind == HeaderKind::Endpoint {
-            Endpoint::read(&*space, address)?.subsystem
-        } else {
-            0
-        };
-        if virtio_pci::device_type(&identity, subsystem) == Some(TYPE_ENTROPY) {
-            let written = virtio::entropy(space, address, &transport, &regions)?;
-            report.entropy_bytes = report.entropy_bytes.saturating_add(written);
+        if kind == TYPE_ENTROPY {
+            match virtio::entropy(space, address, &transport, &regions)? {
+                virtio::Entropy::Read(written) => {
+                    report.entropy_bytes = report.entropy_bytes.saturating_add(written);
+                }
+                virtio::Entropy::Skipped(why) => {
+                    report.entropy_skipped += 1;
+                    report.entropy_skip = Some(why);
+                }
+            }
         }
     }
-    Ok((regions, msix))
+    Ok((regions, msix, decoding))
 }

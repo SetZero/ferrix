@@ -1259,3 +1259,44 @@ mod armv7a_bits {
         );
     }
 }
+
+#[test]
+fn a_physical_address_wider_than_a_descriptor_is_refused() {
+    let (mut memory, mapper) = Memory::with_root::<Armv7a>();
+    let virt = VirtAddr(0x8000_0000);
+    let top = 1_u64 << 40;
+    assert_eq!(
+        mapper.map_range(
+            &mut memory,
+            virt,
+            PhysAddr(top),
+            PAGE_SIZE,
+            MapFlags::KERNEL_DEVICE
+        ),
+        Err(MapError::PhysicalOutOfRange),
+        "1 TiB is beyond LPAE"
+    );
+    assert_eq!(
+        mapper.map_range(
+            &mut memory,
+            virt,
+            PhysAddr(top - PAGE_SIZE),
+            2 * PAGE_SIZE,
+            MapFlags::KERNEL_DEVICE
+        ),
+        Err(MapError::PhysicalOutOfRange),
+        "one page past"
+    );
+    assert!(
+        mapper
+            .map_range(
+                &mut memory,
+                virt,
+                PhysAddr(top - PAGE_SIZE),
+                PAGE_SIZE,
+                MapFlags::KERNEL_DEVICE
+            )
+            .is_ok(),
+        "the last page LPAE holds"
+    );
+}

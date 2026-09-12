@@ -1778,7 +1778,7 @@ fn qemu_virt_describes_one_ecam_host_above_four_gibibytes() {
                 address: 0x40_1000_0000,
                 size: 0x1000_0000
             },
-            segment: 0,
+            segment: None,
             start_bus: 0,
             end_bus: 0xff
         }],
@@ -1799,12 +1799,12 @@ fn an_ecam_host_without_bus_range_or_domain_takes_the_defaults() {
     assert_eq!(found.len(), 2, "both hosts, in order");
     assert_eq!(
         (found[0].segment, found[0].start_bus, found[0].end_bus),
-        (0, 0, 255),
+        (None, 0, 255),
         "defaults"
     );
     assert_eq!(
         (found[1].segment, found[1].start_bus, found[1].end_bus),
-        (2, 0x10, 0x1f),
+        (Some(2), 0x10, 0x1f),
         "declared"
     );
 }
