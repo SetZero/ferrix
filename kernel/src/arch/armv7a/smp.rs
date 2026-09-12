@@ -18,6 +18,11 @@
 //! `TTBR1`, which holds the kernel's root plus sixteen, for the reason
 //! `boot/src/arch/armv7a.rs` gives.
 //!
+//! Which tree that identity map is in depends on where the machine keeps its
+//! RAM, exactly as it does for the loader's own switch: a `TTBR0` tree of the
+//! kernel's making where the kernel's text is below the split, and the
+//! kernel's own tree where it is above it.
+//!
 //! One stack is all a secondary needs. The trap stubs store on the SVC stack
 //! from whichever mode an exception arrives in, so no other mode has one —
 //! which is also why the entry sequence checks that the core is in SVC mode
@@ -61,9 +66,11 @@ const TTBR1_OFFSET: u64 = 16;
 
 /// Where `TTBR0`'s half of the address space ends, with `TTBCR.T1SZ = 1`.
 ///
-/// The identity map lives under `TTBR0`, so the entry sequence has to be
-/// below this to be identity mapped at all. On QEMU's `virt` RAM starts at
-/// 1 GiB and it is; the loader refuses a machine where it would not be.
+/// The entry sequence has to be below this for a `TTBR0` tree to be able to
+/// identity map it. On QEMU's `virt` RAM starts at 1 GiB and it is; on a
+/// machine where it is not — the STM32MP157, whose DDR is at 3 GiB — the
+/// mapping goes in the kernel's own tree instead, which is the only one that
+/// translates those addresses.
 const LOWER_HALF_END: u64 = 0x8000_0000;
 
 /// Every processor the device tree says can be started, and which one this is.
@@ -81,10 +88,24 @@ const LOWER_HALF_END: u64 = 0x8000_0000;
 pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static str> {
     let tree = crate::fdt::open(view)?;
     let boot = hardware_id();
+    // A tree that describes PSCI and says nothing about how a given processor
+    // is started means PSCI. That is not a guess: it is what Linux does on
+    // this architecture, where `enable-method` is optional, and the
+    // STM32MP157 relies on it — its `/cpus` nodes carry no `enable-method` at
+    // all, so requiring one would silently boot a dual-core board on one core.
+    // A node naming some *other* method is still left out, because this kernel
+    // cannot start one that way.
+    let psci = tree.psci_conduit().is_some();
     let ids: Vec<u64> = tree
         .cpus()
         .map(|cpu| (cpu.id & MPIDR_AFFINITY, cpu.enable_method()))
-        .filter(|&(id, method)| id == boot || method == Some("psci"))
+        .filter(|&(id, method)| {
+            id == boot
+                || match method {
+                    Some(named) => named == "psci",
+                    None => psci,
+                }
+        })
         .map(|(id, _)| id)
         .collect();
 
@@ -203,6 +224,47 @@ fn register(value: u64, what: &'static str) -> Result<u32, &'static str> {
     u32::try_from(value).map_err(|_| what)
 }
 
+/// Where the identity mapping the entry sequence runs through lives.
+#[derive(Clone, Copy, Debug)]
+enum Identity {
+    /// A `TTBR0` tree of this starter's own, which a started core leaves
+    /// behind by disabling `TTBR0` as soon as it is running virtually.
+    Own {
+        /// Its root, by physical address.
+        root: u64,
+    },
+    /// The kernel's own tree, because the entry sequence is at an address in
+    /// the kernel's half and `TTBR0` translates none of those. The mapping is
+    /// still transient — [`CpuStarter::finish`] takes it down — but while it
+    /// exists every processor can see it.
+    Kernel,
+}
+
+/// Map the entry sequence at its own address, in whichever tree can hold it.
+fn install_identity(base: u64, len: u64) -> Result<Identity, &'static str> {
+    // Not global: these entries are retired while the system runs, and a
+    // global one would be free to survive in a TLB past the invalidation that
+    // retires it.
+    let flags = MapFlags {
+        global: false,
+        ..MapFlags::KERNEL_CODE
+    };
+
+    if base + len > LOWER_HALF_END {
+        crate::mm::map_kernel(base, base, len, flags)
+            .map_err(|_| "could not identity map the secondary entry sequence")?;
+        return Ok(Identity::Kernel);
+    }
+
+    let root_frame =
+        crate::mm::allocate_frames(0).ok_or("no frame for the secondary cores' identity map")?;
+    crate::mm::zero_frame(root_frame);
+    let root = root_frame * PAGE_SIZE;
+    crate::mm::map_in(root, base, base, len, flags)
+        .map_err(|_| "could not identity map the secondary entry sequence")?;
+    Ok(Identity::Own { root })
+}
+
 /// Starts secondary cores, one at a time.
 #[derive(Debug)]
 pub(crate) struct CpuStarter {
@@ -214,8 +276,8 @@ pub(crate) struct CpuStarter {
     identity_base: u64,
     /// Bytes of it.
     identity_len: u64,
-    /// Root of the identity tree.
-    identity_root: u64,
+    /// Which tree holds it.
+    identity: Identity,
     /// The frame the start block is written to, by physical address.
     block: u64,
     /// Everything in the start block that is the same for every core.
@@ -236,28 +298,7 @@ impl CpuStarter {
         let end_phys = physical((&raw const ferrix_secondary_entry_end).addr() as u64);
         let identity_base = entry_phys - entry_phys % PAGE_SIZE;
         let identity_len = (end_phys - identity_base).next_multiple_of(PAGE_SIZE);
-        if identity_base + identity_len > LOWER_HALF_END {
-            return Err("the secondary entry is above 2 GiB, where TTBR0 cannot identity map it");
-        }
-
-        let root_frame = crate::mm::allocate_frames(0)
-            .ok_or("no frame for the secondary cores' identity map")?;
-        crate::mm::zero_frame(root_frame);
-        let identity_root = root_frame * PAGE_SIZE;
-        // Not global: these entries belong to one short-lived tree, and a
-        // global one would survive in a TLB past the switch that retires it.
-        let flags = MapFlags {
-            global: false,
-            ..MapFlags::KERNEL_CODE
-        };
-        crate::mm::map_in(
-            identity_root,
-            identity_base,
-            identity_base,
-            identity_len,
-            flags,
-        )
-        .map_err(|_| "could not identity map the secondary entry sequence")?;
+        let identity = install_identity(identity_base, identity_len)?;
 
         let block = crate::mm::allocate_frames(0)
             .ok_or("no frame for the secondary start block")?
@@ -268,13 +309,25 @@ impl CpuStarter {
             entry_phys: register(entry_phys, "the secondary entry is above 4 GiB")?,
             identity_base,
             identity_len,
-            identity_root,
+            identity,
             block,
             template: StartBlock {
                 mair0: cpu::read_mair0(),
                 mair1: cpu::read_mair1(),
-                ttbcr: cpu::read_ttbcr() & !cpu::TTBCR_EPD0,
-                ttbr0: register(identity_root, "the identity map's root is above 4 GiB")?,
+                // The lower half walks only where the identity map is a tree
+                // of its own. Where it is the kernel's, `TTBR0` stays off and
+                // the entry sequence is translated through `TTBR1` like
+                // everything else the kernel runs.
+                ttbcr: match identity {
+                    Identity::Own { .. } => cpu::read_ttbcr() & !cpu::TTBCR_EPD0,
+                    Identity::Kernel => cpu::read_ttbcr(),
+                },
+                ttbr0: match identity {
+                    Identity::Own { root } => {
+                        register(root, "the identity map's root is above 4 GiB")?
+                    }
+                    Identity::Kernel => 0,
+                },
                 ttbr1: register(
                     crate::mm::root_table() + TTBR1_OFFSET,
                     "the kernel's root table is above 4 GiB",
@@ -330,9 +383,21 @@ impl CpuStarter {
     /// Only once every core that was started has reported in: each one leaves
     /// the identity map before it does.
     pub(crate) fn finish(self) -> Result<(), &'static str> {
-        crate::mm::unmap_in(self.identity_root, self.identity_base, self.identity_len)
-            .map_err(|_| "could not take down the secondary cores' identity map")?;
-        crate::mm::deallocate_frames(self.identity_root / PAGE_SIZE, 0);
+        const FAILED: &str = "could not take down the secondary cores' identity map";
+
+        match self.identity {
+            Identity::Own { root } => {
+                crate::mm::unmap_in(root, self.identity_base, self.identity_len)
+                    .map_err(|_| FAILED)?;
+                crate::mm::deallocate_frames(root / PAGE_SIZE, 0);
+            }
+            // Nothing is freed but the tables, which `unmap_kernel` gives back
+            // itself: what this mapping pointed at is the kernel's own text.
+            Identity::Kernel => {
+                let _ = crate::mm::unmap_kernel(self.identity_base, self.identity_len, |_, _| {})
+                    .map_err(|_| FAILED)?;
+            }
+        }
         crate::mm::deallocate_frames(self.block / PAGE_SIZE, 0);
         Ok(())
     }

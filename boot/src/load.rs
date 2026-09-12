@@ -3,8 +3,8 @@
 use core::ptr;
 
 use ferrix_bootinfo::{
-    KERNEL_VIRT_BASE, MemKind, MemRegion, PAGE_SIZE, PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END,
-    USER_VIRT_END, direct_map_address, physmap_origin,
+    IdentityPlan, IdentityTree, KERNEL_VIRT_BASE, LAYOUT, MemKind, MemRegion, PAGE_SIZE,
+    PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END, direct_map_address, physmap_origin,
 };
 use ferrix_elf::{Elf, PF_W, PF_X, Segment};
 use ferrix_paging::{MapFlags, Mapper, PhysAddr, PhysMem, VirtAddr};
@@ -236,6 +236,10 @@ pub(crate) struct AddressSpace {
     pub(crate) kernel_root: PhysAddr,
     /// Root of the identity map, which on x86-64 is the same table.
     pub(crate) identity_root: PhysAddr,
+    /// The identity mapping that had to go in the kernel's own tree, as an
+    /// address and a length, on a machine whose RAM is above the split. The
+    /// kernel is told, because it is the one that unmaps it.
+    pub(crate) loader_alias: Option<(u64, u64)>,
 }
 
 /// Build the address space described in `docs/ARCHITECTURE.md` §4.
@@ -250,6 +254,7 @@ pub(crate) fn build_address_space(
     elf: &Elf<'_>,
     image: &KernelImage,
     direct: DirectMap,
+    loader: (u64, u64),
 ) -> Result<AddressSpace> {
     let kernel_root = memory
         .allocate_table()
@@ -265,7 +270,19 @@ pub(crate) fn build_address_space(
     let kernel: Mapper<PageEncoding> = Mapper::new(kernel_root);
     let identity: Mapper<PageEncoding> = Mapper::new(identity_root);
 
-    map_identity(&identity, memory, direct)?;
+    // Where the loader may map itself is a property of the machine's memory,
+    // and is decided in `libs/bootinfo` so that the answer for a board nobody
+    // here can boot is still something the host tests pin down.
+    let plan = LAYOUT
+        .plan_identity_map(
+            direct.origin,
+            direct.len,
+            loader.0,
+            loader.1,
+            image.memory.len,
+        )
+        .map_err(BootError::plain)?;
+    map_identity(&kernel, &identity, memory, plan)?;
     kernel
         .map_range(
             memory,
@@ -285,34 +302,40 @@ pub(crate) fn build_address_space(
     Ok(AddressSpace {
         kernel_root,
         identity_root,
+        loader_alias: matches!(plan.tree, IdentityTree::Kernel).then_some((plan.base, plan.len)),
     })
 }
 
-/// Map RAM at its own address, temporarily and executably.
+/// Map what the switch fetches through at its own address, temporarily and
+/// executably.
 ///
-/// Only RAM: the loader's code, its stack and its tables are all in RAM, and
-/// nothing else needs to be reachable at its physical address for the few
-/// instructions between the switch and the jump.
+/// Usually that is all of RAM, in a tree of the loader's own: the loader's
+/// code, its stack and its tables are all in RAM, and nothing else has to be
+/// reachable at its physical address for the few instructions between the
+/// switch and the jump.
+///
+/// On a machine whose RAM is above the split — the STM32MP157, whose DDR
+/// starts at 3 GiB — those addresses are the kernel's half, which the tree of
+/// the loader's own does not translate at all. There the mapping is the
+/// loader's own image, in the kernel's tree, and the kernel unmaps it when it
+/// drops the rest of the identity map. [`ferrix_bootinfo::Layout`] is where
+/// the two cases are told apart.
 fn map_identity(
+    kernel: &Mapper<PageEncoding>,
     identity: &Mapper<PageEncoding>,
     memory: &mut LoaderMemory,
-    direct: DirectMap,
+    plan: IdentityPlan,
 ) -> Result<()> {
-    // Physical equals virtual here, so the mapping has to fit the lower half.
-    // On a 32-bit machine that is 2 GiB, and a board with RAM above it is one
-    // this loader cannot enter the kernel on — which it says, rather than
-    // mapping its own code into the kernel's half.
-    if direct.end() > USER_VIRT_END {
-        return Err(BootError::plain(
-            "RAM reaches the kernel's half of the address space, where the identity map cannot go",
-        ));
-    }
-
     // This mapping has to be executable, which is otherwise never true in this
     // tree: the instruction after the one that installs these tables is fetched
     // through it, and on the Arm architectures so is the whole sequence that
     // turns the MMU back on. It is transient — the kernel drops it once it is
     // running on its own stack, and `docs/ARCHITECTURE.md` §4 says so.
+    //
+    // Writable as well as executable in both cases, and deliberately: the
+    // kernel's W^X sweep requires the identity map to be a violation it can
+    // see before it is dropped, which is what makes the sweep's later silence
+    // mean something.
     let transient = MapFlags {
         read: true,
         write: true,
@@ -321,12 +344,16 @@ fn map_identity(
         global: false,
         device: false,
     };
-    identity
+    let mapper = match plan.tree {
+        IdentityTree::Separate => identity,
+        IdentityTree::Kernel => kernel,
+    };
+    mapper
         .map_range(
             memory,
-            VirtAddr(direct.origin),
-            PhysAddr(direct.origin),
-            direct.len,
+            VirtAddr(plan.base),
+            PhysAddr(plan.base),
+            plan.len,
             transient,
         )
         .map_err(|_| BootError::plain("could not build the identity map"))

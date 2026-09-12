@@ -13,15 +13,19 @@ mod armv7a;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
-// Register-level drivers for hardware the Arm machines share, which the
-// architecture that uses them has already found in the machine's description
-// — the MADT on AArch64, the device tree on ARMv7-A. `pl011` is visible to the
-// crate only because it is re-exported as the facade's `console`; the layering
-// check keeps generic code from naming it.
+// Register-level drivers for hardware the architecture that uses them has
+// already found in the machine's description — the MADT on AArch64, the device
+// tree on ARMv7-A. The GICv2 is shared by both Arm architectures. The two
+// serial ports are ARMv7-A's, which has to pick between them because the
+// machines it targets do not agree on one: `armv7a::console` is where the
+// device tree decides, and the layering check keeps generic code from naming
+// any of the three.
 #[cfg(any(target_arch = "aarch64", target_arch = "arm"))]
 mod gicv2;
 #[cfg(target_arch = "arm")]
-pub(crate) mod pl011;
+mod pl011;
+#[cfg(target_arch = "arm")]
+mod stm32_usart;
 
 #[cfg(target_arch = "aarch64")]
 pub(crate) use aarch64::{

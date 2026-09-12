@@ -2,11 +2,13 @@
 //!
 //! Everything the facade asks of an architecture, for a 32-bit Arm CPU with
 //! the Large Physical Address Extension — a Cortex-A7 or A15 — described by a
-//! device tree rather than by ACPI. The register-level drivers it shares with
-//! AArch64, the GICv2 and the PL011, are `super::gicv2` and `super::pl011`;
-//! what is here is how this architecture finds them, and everything that is
+//! device tree rather than by ACPI. The register-level drivers live beside
+//! this directory in `kernel/src/arch/`: the GICv2, which AArch64 shares, and
+//! the two serial ports, one of which every machine here has. What is in this
+//! directory is how this architecture finds them, and everything that is
 //! coprocessor 15 rather than a system register.
 
+pub(crate) mod console;
 mod cpu;
 mod smp;
 mod timer;
@@ -21,7 +23,6 @@ use super::gicv2;
 use crate::early::{EarlyError, EarlyMemory};
 use crate::irq::Report;
 
-pub(crate) use super::pl011 as console;
 pub(crate) use smp::{CpuStarter, describe_cpus, hardware_id};
 pub(crate) use trap::{TrapFrame, advance_past_breakpoint, breakpoint, classify, report_trap};
 
@@ -53,25 +54,17 @@ pub(crate) const NAME: &str = "armv7a";
 /// The page table descriptor layout this machine uses.
 pub(crate) type PageEncoding = ferrix_paging::armv7a::Armv7a;
 
-/// Bring up the early console: the UART the device tree names.
+/// Bring up the early console: the port the device tree names.
 ///
-/// `/chosen`'s `stdout-path` first, which is the machine saying which of its
-/// UARTs is the console; the first PL011 in the tree if it does not say, or
-/// says something this kernel cannot drive.
+/// Which port that is, and which of the two drivers it wants, is
+/// [`console::init`]'s decision. This is where the tree it decides from comes
+/// from, and the only reason the two are separate functions.
 pub(crate) fn init_console(
     view: &BootView<'_>,
     memory: &mut EarlyMemory,
 ) -> Result<(), EarlyError> {
-    const PL011: &str = "arm,pl011";
-
     let tree = crate::fdt::open(view).map_err(|_| EarlyError::NoConsole)?;
-    let node = tree
-        .console()
-        .filter(|node| node.is_compatible(PL011))
-        .or_else(|| tree.find_compatible(PL011))
-        .ok_or(EarlyError::NoConsole)?;
-    let registers = node.reg().next().ok_or(EarlyError::NoConsole)?;
-    console::init(memory, registers.address)
+    console::init(&tree, memory)
 }
 
 /// Install the exception vector table.
@@ -109,13 +102,31 @@ pub(crate) fn identity_root(view: &BootView<'_>) -> Option<u64> {
 /// Set once [`drop_identity_map`] has run.
 static IDENTITY_DROPPED: AtomicBool = AtomicBool::new(false);
 
-/// Drop the loader's identity map.
+/// Drop the loader's identity map, wherever the loader had to put it.
+///
+/// Usually that is the `TTBR0` regime and nothing else, which is switched off
+/// rather than dismantled. On a machine whose RAM is above the split — the
+/// STM32MP157, whose DDR starts at 3 GiB — `TTBR0` does not translate those
+/// addresses at all, so the loader mapped its own image inside the kernel's
+/// tree and that mapping is unmapped by hand first. It cannot be left: the
+/// memory under it is the loader's, which [`crate::mm::reclaim_boot_memory`]
+/// is about to hand to the frame allocator, and an executable mapping of
+/// memory somebody else now owns is a worse version of the thing this function
+/// exists to remove.
 ///
 /// # Safety
 ///
 /// Nothing may still be executing or reading through the lower half of the
-/// address space. See [`cpu::disable_ttbr0`].
-pub(crate) unsafe fn drop_identity_map(_view: &BootView<'_>) {
+/// address space, or through that mapping. See [`cpu::disable_ttbr0`].
+pub(crate) unsafe fn drop_identity_map(view: &BootView<'_>) {
+    if let Some((base, len)) = view.loader_alias() {
+        // The frames under it are the loader's own image and not this
+        // mapping's to free; the memory map is what gives those back. A
+        // failure here needs no report of its own, because the mapping is
+        // writable and executable and the W^X sweep immediately after this is
+        // exactly what notices one that survived.
+        let _ = crate::mm::unmap_kernel(base, len, |_, _| {});
+    }
     // SAFETY: the caller guarantees the lower half is unused, and the kernel
     // has run entirely in the upper half since its first instruction.
     unsafe { cpu::disable_ttbr0() };

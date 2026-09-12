@@ -140,13 +140,20 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
         ));
     }
 
-    let space = load::build_address_space(&mut memory, &kernel.elf()?, &kernel.image, direct)?;
+    let loader = services.image_range()?;
+    let space =
+        load::build_address_space(&mut memory, &kernel.elf()?, &kernel.image, direct, loader)?;
     println!(
         "  {} page tables, roots {:#x}/{:#x}",
         memory.tables_used(),
         space.kernel_root.0,
         space.identity_root.0
     );
+    // Only on a machine that needed it, so that the log of a machine that did
+    // not is the log it always was.
+    if let Some((base, len)) = space.loader_alias {
+        println!("  loader mapped at {base:#x} inside the kernel tree, {len} bytes");
+    }
 
     write_boot_info(
         &services,
@@ -167,6 +174,10 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     // The Arm architectures turn the MMU off in the middle of the switch, so
     // anything still dirty in a cache would vanish. No-op on x86-64.
     arch::clean_dcache(memory.pool().address, memory.pool().len);
+    // The loader's own image, because the switch turns the caches off and then
+    // fetches the rest of itself from RAM — and firmware wrote this image, and
+    // its relocations, as data.
+    arch::clean_dcache(loader.0, loader.1);
     arch::clean_dcache(kernel.image.memory.address, kernel.image.memory.len);
     arch::clean_dcache(info_area.address, info_area.len);
     arch::clean_dcache(stack.address, stack.len);
@@ -307,6 +318,8 @@ fn write_boot_info(
         } else {
             0
         },
+        loader_alias_phys: space.loader_alias.map_or(0, |(base, _)| base),
+        loader_alias_len: space.loader_alias.map_or(0, |(_, len)| len),
         boot_stack_top: direct.address(stack.address + stack.len),
         boot_stack_size: stack.len,
         framebuffer: services.framebuffer().unwrap_or(Framebuffer::NONE),

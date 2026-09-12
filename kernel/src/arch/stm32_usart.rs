@@ -1,0 +1,98 @@
+//! The USART on an STM32MP1, which is the console on every board in that
+//! family.
+//!
+//! The second port this architecture can put a boot console on, and the reason
+//! there is a choice at all: the STM32MP157's UART4 is ST's own design rather
+//! than an Arm primecell. The same three things happen as in the PL011 driver
+//! beside it — wait for room, write the byte, leave the baud rate alone — at
+//! different offsets and with the flag the other way up.
+//!
+//! The layout is the one Linux calls `stm32h7`, which is what every UART on an
+//! STM32MP15 declares itself to be. As with the PL011, these are `MMIO`
+//! registers and have to be mapped as device memory before a write means
+//! anything.
+
+use core::cell::UnsafeCell;
+
+use ferrix_bootinfo::{KERNEL_VMAP_BASE, PAGE_SIZE};
+
+use crate::early::{EarlyError, EarlyMemory};
+
+/// Where the register window is mapped: the bottom of the kernel's dynamic
+/// mapping area, which is where the PL011 would have gone — exactly one of the
+/// two is ever brought up.
+const WINDOW: u64 = KERNEL_VMAP_BASE;
+
+/// Interrupt and status register.
+const ISR: u64 = 0x1C;
+/// `ISR`: there is room for another byte, in the transmit register or in the
+/// transmit FIFO on a port configured to have one. The same bit either way.
+const ISR_TXE: u32 = 1 << 7;
+/// Transmit data register: writing it sends.
+const TDR: u64 = 0x28;
+
+/// The mapped base address, once [`init`] has run.
+struct Base(UnsafeCell<u64>);
+
+// SAFETY: early boot is single-threaded — no other CPU has been started and
+// interrupts are masked — so there is never a second accessor.
+unsafe impl Sync for Base {}
+
+static BASE: Base = Base(UnsafeCell::new(0));
+
+/// Map the registers at physical address `phys` and record where they landed.
+///
+/// The offset within the page is kept, so a port whose registers do not start
+/// on a page boundary still reads correctly — and on an STM32MP15 none of them
+/// does: UART4 is at `0x4001_0000`, a kilobyte into its page.
+pub(crate) fn init(memory: &mut EarlyMemory, phys: u64) -> Result<(), EarlyError> {
+    let offset = phys % PAGE_SIZE;
+    memory.map_device(WINDOW, phys - offset, PAGE_SIZE)?;
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    unsafe { *BASE.0.get() = WINDOW + offset };
+    Ok(())
+}
+
+/// Read one of the port's registers.
+fn read(offset: u64) -> u32 {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    let base = unsafe { *BASE.0.get() };
+    // SAFETY: `base` is the device window `init` mapped — the only caller
+    // checks it is not zero first — and `offset` is a register inside it.
+    unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
+}
+
+/// Write one of the port's registers.
+fn write(offset: u64, value: u32) {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    let base = unsafe { *BASE.0.get() };
+    // SAFETY: as in `read`.
+    unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) };
+}
+
+/// Send one byte, waiting for room in the transmit register.
+///
+/// Firmware configured the baud rate and the line format and this driver does
+/// not disturb them, for the reason the PL011 driver gives: reprogramming a
+/// port that a terminal is already attached to turns a boot log into line noise
+/// halfway through. On these boards firmware is U-Boot and the terminal is the
+/// debugger's virtual serial port.
+///
+/// The wait is bounded rather than a bare loop, because a panic that hangs
+/// inside the console because nothing answered is worse than one nobody reads.
+pub(crate) fn write_byte(byte: u8) {
+    const SPIN_LIMIT: u32 = 100_000;
+
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return;
+    }
+
+    for _ in 0..SPIN_LIMIT {
+        if read(ISR) & ISR_TXE != 0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    write(TDR, u32::from(byte));
+}

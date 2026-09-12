@@ -53,8 +53,10 @@ pub const BOOTINFO_MAGIC: u64 = 0x4645_5252_4958_4249;
 ///
 /// Version 2 added the physical origin of the direct map and the length of the
 /// device tree, and turned the two pointers into addresses so the structure
-/// has the same layout on every word width.
-pub const BOOTINFO_VERSION: u32 = 2;
+/// has the same layout on every word width. Version 3 added the loader's
+/// identity mapping of its own image inside the kernel's tree, which a board
+/// whose RAM is above the split needs and which the kernel has to take down.
+pub const BOOTINFO_VERSION: u32 = 3;
 
 // ---------------------------------------------------------------------------
 // Virtual memory layout
@@ -280,6 +282,128 @@ pub const fn direct_map_address(physmap_phys: u64, phys: u64) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
+// The loader's identity map
+// ---------------------------------------------------------------------------
+
+/// Which tree the loader's transient identity mapping of its own code lives in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IdentityTree {
+    /// One of the loader's own, which the kernel drops whole: the low entries
+    /// of the single tree on x86-64, the `TTBR0` regime on the two Arm
+    /// architectures.
+    Separate,
+    /// The kernel's own. The addresses to be mapped are in the kernel's half,
+    /// which is the only half that tree translates, so there is nowhere else
+    /// for the mapping to go — and the kernel has to unmap it rather than
+    /// abandon a table.
+    Kernel,
+}
+
+/// Where the loader may map its own code at its own address.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct IdentityPlan {
+    /// The tree the mapping belongs in.
+    pub tree: IdentityTree,
+    /// Lowest address mapped. Physical and virtual are the same number here,
+    /// which is the whole point of the mapping.
+    pub base: u64,
+    /// Bytes from there.
+    pub len: u64,
+}
+
+/// True if `a_start..a_end` and `b_start..b_end` share an address.
+const fn overlaps(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> bool {
+    a_start < b_end && b_start < a_end
+}
+
+impl Layout {
+    /// Decide where the loader's identity map goes on a machine with this
+    /// memory.
+    ///
+    /// The instruction after the one that installs the loader's tables is
+    /// fetched from the address it would have been fetched from before them,
+    /// so something has to map the loader's own code at its own address for
+    /// the length of the switch. Which tree can hold that mapping depends on
+    /// where the machine keeps its RAM:
+    ///
+    /// * **All of it below the split**, which is every machine QEMU boots
+    ///   here. The loader maps all of RAM in a tree of its own: a handful of
+    ///   tables, and it keeps the identity map a separate thing that is
+    ///   dropped whole.
+    /// * **RAM above the split**, which is the STM32MP157 with its DDR at
+    ///   3 GiB. Those addresses are the kernel's half, so only the kernel's
+    ///   tree translates them, and what gets mapped is the loader's image
+    ///   alone rather than all of RAM.
+    ///
+    /// `physmap_phys` and `physmap_len` are the direct map, which is also the
+    /// RAM the first case maps; `loader_base` and `loader_len` are the loader
+    /// image as firmware placed it; `kernel_len` is the kernel image, which is
+    /// at [`Layout::kernel_base`] by construction.
+    ///
+    /// # Errors
+    ///
+    /// When the loader's image sits where the kernel's address space is
+    /// already spoken for, naming the region it collided with. Each of those
+    /// has a different answer — move the direct map, move the image, move the
+    /// arena — and none of them is this function's to choose.
+    pub const fn plan_identity_map(
+        &self,
+        physmap_phys: u64,
+        physmap_len: u64,
+        loader_base: u64,
+        loader_len: u64,
+        kernel_len: u64,
+    ) -> Result<IdentityPlan, &'static str> {
+        // Every byte of RAM is translatable through a tree of the loader's
+        // own, so map all of it there, as every machine with RAM below the
+        // split has always done.
+        if physmap_phys + physmap_len <= self.user_end {
+            return Ok(IdentityPlan {
+                tree: IdentityTree::Separate,
+                base: physmap_phys,
+                len: physmap_len,
+            });
+        }
+
+        // Otherwise only the loader's own image is mapped, by whole pages,
+        // because that is all the switch fetches through.
+        let base = loader_base & !(PAGE_SIZE - 1);
+        let end = (loader_base + loader_len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+
+        if end <= self.user_end {
+            return Ok(IdentityPlan {
+                tree: IdentityTree::Separate,
+                base,
+                len: end - base,
+            });
+        }
+        if base < self.user_end {
+            return Err("firmware placed the loader's image across the split between the halves");
+        }
+        if overlaps(
+            base,
+            end,
+            self.physmap_base,
+            self.physmap_base + physmap_len,
+        ) {
+            return Err("the loader's image is where the kernel's direct map already is");
+        }
+        if overlaps(base, end, self.vmap_base, self.vmap_base + self.vmap_size) {
+            return Err("the loader's image is where the kernel's mapping arena already is");
+        }
+        if overlaps(base, end, self.kernel_base, self.kernel_base + kernel_len) {
+            return Err("the loader's image is where the kernel image itself is");
+        }
+
+        Ok(IdentityPlan {
+            tree: IdentityTree::Kernel,
+            base,
+            len: end - base,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Machine description
 // ---------------------------------------------------------------------------
 
@@ -480,7 +604,7 @@ impl Framebuffer {
 /// tables the loader installed before jumping to the kernel, which is to say
 /// inside the direct map at [`PHYSMAP_BASE`]. Fields named `_phys` are
 /// physical. None of them is a pointer type, so the structure is the same
-/// 208 bytes on every word width.
+/// 224 bytes on every word width.
 ///
 /// Read it through [`BootInfo::validate`] rather than field by field.
 #[repr(C)]
@@ -524,6 +648,14 @@ pub struct BootInfo {
     /// Physical address of the identity-mapping `TTBR0` table on the two Arm
     /// architectures. Zero on x86-64, where one table covers both halves.
     pub ttbr0_phys: u64,
+    /// Physical address of the loader's own image, where the loader had to map
+    /// it at that same address inside the *kernel's* tree; 0 when the identity
+    /// map was a tree of its own, which is every machine whose RAM is below the
+    /// split. [`Layout::plan_identity_map`] decides which, and the kernel
+    /// unmaps this where it drops the identity map.
+    pub loader_alias_phys: u64,
+    /// Length of that mapping in bytes, or 0 when there is none.
+    pub loader_alias_len: u64,
 
     /// Top of the stack the kernel is entered on, 16-byte aligned.
     pub boot_stack_top: u64,
@@ -561,7 +693,7 @@ pub struct BootInfo {
 // field whose size follows the pointer width would break it, and the loader
 // and the host tests would then disagree about a layout neither of them sees.
 const _: () = assert!(
-    size_of::<BootInfo>() == 208,
+    size_of::<BootInfo>() == 224,
     "BootInfo must be laid out identically on every word width"
 );
 const _: () = assert!(
@@ -779,6 +911,21 @@ impl<'a> BootView<'a> {
         }
     }
 
+    /// The loader's identity mapping of its own image inside the kernel's own
+    /// tree, if the machine needed one: an address that is both the virtual and
+    /// the physical one, and a length.
+    ///
+    /// Present only where RAM is above the split between the two halves of the
+    /// address space; see [`Layout::plan_identity_map`].
+    #[must_use]
+    pub const fn loader_alias(&self) -> Option<(u64, u64)> {
+        if self.info.loader_alias_phys == 0 || self.info.loader_alias_len == 0 {
+            None
+        } else {
+            Some((self.info.loader_alias_phys, self.info.loader_alias_len))
+        }
+    }
+
     /// Look up a `key=value` option on the kernel command line.
     ///
     /// Options are whitespace separated; the first match wins.
@@ -851,6 +998,8 @@ mod tests {
             kernel_len: 0x10_0000,
             root_table_phys: 0x1000,
             ttbr0_phys: 0,
+            loader_alias_phys: 0,
+            loader_alias_len: 0,
             boot_stack_top: KERNEL_VIRT_BASE,
             boot_stack_size: BOOT_STACK_SIZE,
             framebuffer: Framebuffer::NONE,
@@ -1101,6 +1250,103 @@ mod tests {
         assert!(region.contains(0x3FFF));
         assert!(!region.contains(0x4000), "end is exclusive");
         assert!(!region.contains(0xFFF));
+    }
+
+    #[test]
+    fn ram_below_the_split_maps_all_of_it_in_a_tree_of_its_own() {
+        // QEMU's 32-bit `virt`: 512 MiB at 1 GiB, and the loader wherever
+        // firmware put it inside that.
+        let plan = LAYOUT_32
+            .plan_identity_map(0x4000_0000, 0x2000_0000, 0x5D00_0000, 0x2_0000, 0x4_1000)
+            .unwrap();
+
+        assert_eq!(plan.tree, IdentityTree::Separate);
+        assert_eq!(
+            (plan.base, plan.len),
+            (0x4000_0000, 0x2000_0000),
+            "the machine that works today must keep mapping all of RAM"
+        );
+    }
+
+    #[test]
+    fn the_sixty_four_bit_layout_never_needs_the_kernel_tree() {
+        let plan = LAYOUT_64
+            .plan_identity_map(0, 0x2_0000_0000, 0x1DF5_A000, 0x4_0000, 0x4_1000)
+            .unwrap();
+        assert_eq!(
+            plan.tree,
+            IdentityTree::Separate,
+            "no machine has RAM above a 128 TiB split"
+        );
+    }
+
+    #[test]
+    fn ram_above_the_split_maps_the_loader_in_the_kernels_tree() {
+        // An STM32MP157 discovery board: 512 MiB of DDR at 3 GiB, with
+        // firmware having placed the loader inside it.
+        let plan = LAYOUT_32
+            .plan_identity_map(0xC000_0000, 0x2000_0000, 0xDC34_5000, 0x3_0000, 0x4_1000)
+            .unwrap();
+
+        assert_eq!(plan.tree, IdentityTree::Kernel);
+        assert_eq!(
+            (plan.base, plan.len),
+            (0xDC34_5000, 0x3_0000),
+            "only the loader image is mapped, not all of RAM"
+        );
+    }
+
+    #[test]
+    fn a_loader_image_is_mapped_by_whole_pages() {
+        let plan = LAYOUT_32
+            .plan_identity_map(0xC000_0000, 0x2000_0000, 0xDC34_5678, 0x1234, 0x4_1000)
+            .unwrap();
+
+        assert_eq!(plan.base, 0xDC34_5000, "the first page holding it");
+        assert_eq!(plan.len, 0x2000, "through the last page holding it");
+    }
+
+    #[test]
+    fn a_loader_image_under_a_kernel_region_is_refused() {
+        // A gibibyte at 3 GiB — an ED1 or an EV1 — puts the direct map's
+        // virtual range over physical addresses the loader may land at.
+        let over_direct_map =
+            LAYOUT_32.plan_identity_map(0xC000_0000, 0x4000_0000, 0xC800_0000, 0x3_0000, 0x4_1000);
+        assert_eq!(
+            over_direct_map,
+            Err("the loader's image is where the kernel's direct map already is")
+        );
+
+        let over_kernel_image =
+            LAYOUT_32.plan_identity_map(0xC000_0000, 0x4000_0000, 0xF000_0000, 0x3_0000, 0x4_1000);
+        assert_eq!(
+            over_kernel_image,
+            Err("the loader's image is where the kernel image itself is")
+        );
+
+        // RAM starting exactly at the split puts it over the arena instead.
+        let over_arena =
+            LAYOUT_32.plan_identity_map(0x8000_0000, 0x2000_0000, 0x8800_0000, 0x3_0000, 0x4_1000);
+        assert_eq!(
+            over_arena,
+            Err("the loader's image is where the kernel's mapping arena already is")
+        );
+    }
+
+    #[test]
+    fn the_loader_alias_is_reported_only_when_there_is_one() {
+        let map = regions();
+        let mut info = boot_info(&map, "");
+        // SAFETY: `map` and the command line outlive the view, and the
+        // structure was built by `boot_info` above, so its addresses describe
+        // exactly what it says they do.
+        assert_eq!(unsafe { info.validate() }.unwrap().loader_alias(), None);
+
+        info.loader_alias_phys = 0xDC34_5000;
+        info.loader_alias_len = 0x3_0000;
+        // SAFETY: as above.
+        let view = unsafe { info.validate() }.unwrap();
+        assert_eq!(view.loader_alias(), Some((0xDC34_5000, 0x3_0000)));
     }
 
     #[test]

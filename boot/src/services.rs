@@ -326,6 +326,21 @@ impl Services {
         Ok((allocation, size))
     }
 
+    /// Where firmware loaded this program, and how many bytes of it there are.
+    ///
+    /// The switch to the loader's own tables fetches its next instruction at
+    /// the address it was fetching from before them, so the loader's own code
+    /// has to be mapped at its own address across it. On a machine whose RAM
+    /// is above the split that mapping is these pages rather than all of RAM,
+    /// so the loader has to know which pages are its own.
+    pub(crate) fn image_range(&self) -> Result<(u64, u64)> {
+        let image: *mut LoadedImage =
+            self.protocol(self.image, &LOADED_IMAGE_GUID, "loaded image")?;
+        // SAFETY: firmware returned a live `LoadedImage` for our own handle.
+        let loaded = unsafe { &*image };
+        Ok((loaded.image_base.addr() as u64, loaded.image_size))
+    }
+
     /// Open the root directory of the loader's own volume.
     fn open_volume(&self) -> Result<*mut FileProtocol> {
         let image: *mut LoadedImage =
