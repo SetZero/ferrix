@@ -233,8 +233,10 @@ package FerrixRoadmap {
              * handles, IoMapping and Interrupt minted from stage 10's device
              * nodes, with AddressSpace::map_device. Missing: ports and
              * asynchronous waits, binding an interrupt to a port, an interrupt
-             * wake from interrupt context, vmo_map, and the exit test itself,
-             * on processes that are now scheduled tasks. */
+             * wake from interrupt context, and vmo_map. The exit criterion is
+             * met in the boot test: two user-mode programs exchange a message
+             * and a VMO handle over a channel, and a job kill ends every
+             * program in the job and beneath it. */
     }
 
     #inProgress requirement <'S10'> stage10UserspaceDrivers : Stage {

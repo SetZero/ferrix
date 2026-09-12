@@ -439,6 +439,10 @@ fn check_native_objects() {
          {} wait woken by a message rather than its deadline",
         report.killed, report.woken,
     );
+    println!(
+        "  exit     two programs in user mode exchanged {} messages and a handle over a channel",
+        report.exchanged,
+    );
 }
 
 /// Stage 9: interrupts and I/O mappings, minted from stage 10's device nodes.

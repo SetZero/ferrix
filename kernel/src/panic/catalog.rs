@@ -634,7 +634,9 @@ pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
               and none above it. `object::check::run_devices`, once the device nodes are \
               published, requires an I/O mapping of a device's own aperture to translate to \
               its physical pages, in a forked child too, and nothing past it to be granted, \
-              and an interrupt to be held pending from delivery to acknowledgement. A \
+              and an interrupt to be held pending from delivery to acknowledgement. Two \
+              programs in user mode must exchange a message and a VMO handle over a channel \
+              and both exit 0. A \
               kernel failing any of these would give userspace drivers a capability system that \
               confines nothing.",
     causes: &[

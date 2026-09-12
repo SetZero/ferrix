@@ -95,6 +95,8 @@ pub(crate) struct Report {
     pub(crate) woken: u32,
     /// Processes ended by killing a job they were in.
     pub(crate) killed: u32,
+    /// Messages two programs in user mode exchanged with each other.
+    pub(crate) exchanged: u32,
 }
 
 /// Counts what happened, so the report is a measurement and not a claim.
@@ -110,6 +112,8 @@ struct Counter {
     woken: u32,
     /// See [`Report::killed`].
     killed: u32,
+    /// See [`Report::exchanged`].
+    exchanged: u32,
     /// See [`Report::mapped`].
     mapped: u32,
     /// See [`Report::interrupts`].
@@ -134,6 +138,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let mut after = Counter::default();
     check_a_wait_is_woken_by_what_it_waits_for(&mut after)?;
     check_a_job_kill_takes_down_a_process_tree(&mut after)?;
+    check_two_programs_talk_over_a_channel(&mut after)?;
 
     Ok(Report {
         messages: counter.messages,
@@ -142,6 +147,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         leaked,
         woken: after.woken,
         killed: after.killed,
+        exchanged: after.exchanged,
     })
 }
 
@@ -854,6 +860,13 @@ fn check_a_job_kill_takes_down_a_process_tree(counter: &mut Counter) -> Result<(
     let top_task = run_in(&side, root, &top)?;
     let inner_task = run_in(&side, middle, &inner)?;
     let deepest_task = run_in(&side, leaf, &deepest)?;
+    // A spinning member as well, alone on whatever processor it lands on.
+    // Nothing but the kill's interrupt reaches a task that never enters the
+    // kernel, so without it this program spins to the end of its rounds and
+    // reports its own status, and the check fails every time rather than now
+    // and then.
+    let spinning = spinner(b's', u32::MAX, 6)?;
+    let spinning_task = run_in(&side, middle, &spinning)?;
     let _bystander_task =
         process::start(&bystander).map_err(|_| "the bystander could not be started")?;
     crate::sched::sleep_for(KILL_AFTER_NANOS);
@@ -863,10 +876,11 @@ fn check_a_job_kill_takes_down_a_process_tree(counter: &mut Counter) -> Result<(
         .map_err(|_| "job_kill failed")?;
     ended_by_the_kill(&inner, &inner_task)?;
     ended_by_the_kill(&deepest, &deepest_task)?;
+    ended_by_the_kill(&spinning, &spinning_task)?;
     if top.is_terminated() {
         return Err("killing a child job ended a process in its parent");
     }
-    counter.killed += 2;
+    counter.killed += 3;
 
     refused(
         side.call(nr::JOB_CREATE, &[reg(middle)]),
@@ -1201,5 +1215,81 @@ fn check_an_interrupt_is_held_until_acknowledged(
         .map_err(|_| "closing a reclaimed interrupt failed")?;
     counter.interrupts += 1;
     side.close_everything();
+    Ok(())
+}
+
+/// Wait for a task to stop, up to `deadline`.
+fn task_stops(task: &Task, deadline: u64) -> Result<(), &'static str> {
+    while !task.is_dead() {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("a program that exited kept running");
+        }
+        crate::sched::sleep_for(1_000_000);
+    }
+    Ok(())
+}
+
+/// Stage 9's exit criterion: two user processes exchange messages and a
+/// handle over a channel.
+///
+/// Everything else in this file drives the handlers from the kernel; this does
+/// not. Both ends are programs running in user mode as tasks of their own,
+/// and every native call goes through the real trap path of this
+/// architecture: `channel_write` with a handle in the message,
+/// `object_wait_one` blocking until the other side has written, `channel_read`,
+/// and a VMO read through a handle that arrived from the other process. The
+/// kernel only makes the channel and puts one end in each process before
+/// either starts, which is what a parent does for a child.
+///
+/// The sender exits 0 only if the reply it reads is the secret it wrote into
+/// its VMO, and the receiver could only have read that secret through the
+/// handle it was sent.
+fn check_two_programs_talk_over_a_channel(counter: &mut Counter) -> Result<(), &'static str> {
+    if arch::USER_NATIVE_PROGRAM.is_empty() {
+        return Ok(());
+    }
+    let sender = native_program(b's')?;
+    let receiver = native_program(b'r')?;
+    let (first, second) = Endpoint::pair().ok_or("could not make a channel")?;
+    for (program, end) in [(&sender, first), (&receiver, second)] {
+        let placed = program
+            .with_handles(|table| table.insert(Object::Channel(end), Rights::CHANNEL))
+            .map_err(|_| "no room for a bootstrap handle")?;
+        if placed != BOOTSTRAP {
+            return Err("a fresh process's first handle is not the one its program was built for");
+        }
+    }
+
+    // The receiver first, so that its wait usually really blocks. If the
+    // sender is scheduled first anyway, the level is already asserted when the
+    // receiver looks, and returning at once is also the right answer.
+    let receiver_task =
+        process::start(&receiver).map_err(|_| "the receiving program could not be started")?;
+    let sender_task =
+        process::start(&sender).map_err(|_| "the sending program could not be started")?;
+
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    let received = receiver.wait_for_exit(deadline);
+    let sent = sender.wait_for_exit(deadline);
+    if received != Some(0) || sent != Some(0) {
+        // The program exits with the number of the step that failed, so the
+        // statuses are the diagnosis; a static message cannot carry them.
+        crate::console::println!(
+            "  exit     receiver exited with {received:?}, sender with {sent:?} \
+             (steps: sender 1 vmo_create, 2 vmo_write, 3 channel_write, 4 wait, 5 channel_read, \
+             6 reply; receiver 11 wait, 12 channel_read, 20 handle count, 13 vmo_read, \
+             14 channel_write)"
+        );
+    }
+    if received != Some(0) {
+        return Err("the receiving program did not read the message and the handle and reply");
+    }
+    if sent != Some(0) {
+        return Err("the sending program did not get back the secret it put in its VMO");
+    }
+    task_stops(&receiver_task, deadline)?;
+    task_stops(&sender_task, deadline)?;
+    // The message carrying the handle, and the reply.
+    counter.exchanged += 2;
     Ok(())
 }

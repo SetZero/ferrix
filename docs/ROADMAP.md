@@ -1078,6 +1078,20 @@ architectures.**
   every machine having checked nothing; it now runs after them and fails if a
   machine with an aperture or a vector mapped or held none.
 
+**The exit criterion is met in the boot test**, on all three architectures.
+Two copies of `arch::USER_NATIVE_PROGRAM`, assembled per architecture, run
+as user-mode tasks of their own: one creates a VMO, writes a secret into it and
+sends a message carrying its handle; the other blocks in `object_wait_one`,
+reads the message, reads the secret back through the handle it was sent, and
+replies with it; and the first exits 0 only if the reply is the secret. The job
+check is the other half: a `job_kill` ends every program in the job and beneath
+it, blocked in a native wait or spinning alone on a processor, and none above
+it. The exit test found, on four-processor ARMv7-A, that a program blocked in
+a system call could resume with another program's user stack pointer; stage
+7's `144b0cc` fixed it. The job check found that a kill never reached a
+program spinning alone on its processor; `301aec4` fixed that. The stage stays
+open for what stage 10 needs beyond the criterion.
+
 **Still to do.**
 
 * Ports and asynchronous waits (`object_wait_async`, `port_*`), binding an
@@ -1089,11 +1103,6 @@ architectures.**
 * An `Interrupt` on x86-64, where device interrupts are MSI-X and are masked
   in the device's own table, which stage 10's `Vector::mask` will route to;
   and sub-page apertures, which need each access trapped.
-* **The exit test itself**, on processes that are now tasks: stage 7's
-  follow-up landed `process::load` and `process::start`, a terminated level plus
-  a wake-up on `Process`, `process::kill` from outside, and `process::current()`
-  read from the running task, with two programs taking turns on one processor in
-  the boot test.
 * Process creation in the native ABI. `0x1030..=0x1037` is held for it.
 
 **Exit:** two user processes exchange messages and a handle over a channel, and
