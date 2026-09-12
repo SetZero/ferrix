@@ -385,125 +385,112 @@ you add one there.
 Work is spread across sessions sharing one object store, each in a worktree
 under `.claude/worktrees/`. Coordinate before touching:
 
-**Stage 5 hangs intermittently, and it is not stage 6's.** Worth knowing before
-you spend an afternoon on it. `cargo xtask test-boot` sometimes stops after the
-`stage 4` line with no verdict at all. The stage 7 owner separately saw stage 5
-fail the *assertion* "a task's stack was never given back", and the two came out
-of one binary on one architecture minutes apart. It is the `sched` owner's, they
-have it, and re-running is the workaround.
+**Stage 5 got slow, and under QEMU that reads as a hang.** Worth knowing before
+you spend an afternoon on it, and worth reading to the end, because four
+sessions chased this and almost every intermediate conclusion — including both
+of mine — was wrong. It is the `sched` owner's, they have it, and the workaround
+is `--timeout 600`.
 
-**Two explanations are live and they are not the same problem.** Read this
-before you reason from the silence, because I did and I was wrong.
+### Under QEMU it is settled: nothing hangs
 
-I wrote here that the missing verdict was the informative part — that `wait_for`
-would have reported "not every thread finished", so nothing could be
-progressing, so it must be a deadlock rather than slowness. That inference does
-not hold. It assumes the run reached the check and stalled there; a run that is
-merely *slow* and gets killed by `xtask` at its 120-second timeout before
-reaching the verdict prints exactly the same nothing. The `sched` owner then
-measured the thing I should have: the armv7a boot test took **23.5 s before
-their scheduler work and 64 s typical after it, with one passing run at 104 s,
-against a 120 s timeout**. A sixteen-second margin on a run that *passed*. That
-is a boot-time regression large enough to explain a "hang" that is really
-`xtask` giving up, and it is a defect in its own right whatever else is true.
+`cargo xtask test-boot` sometimes stops after the `stage 4` line with no verdict
+at all, which looks exactly like a deadlock. It is not. Ten runs of the unfixed
+code at `--timeout 600`, on the same build and machine where the default had been
+producing failures:
 
-**It reproduces on real hardware, and there is a specific suspect.** The board
-owner sees it on an STM32MP157D-DK1, which retires "it is a QEMU artifact" as a
-hypothesis. Two distinct shapes across runs of the same build:
+```
+63.95  63.91  63.92  64.20  83.92  64.24  63.92  104.44  84.28  64.24
+```
+
+**Ten of ten passed.** A typical run is 64 s, three exceeded 83 s, and one took
+104.4 s against a default timeout of 120 s. Nothing was ever hung; `xtask` was
+giving up on runs that were still making progress.
+
+The real defect underneath is a **boot-time regression**: the armv7a boot test
+took 23.5 s before the scheduler merge and 64 s after it, plus run-to-run
+variance of another 40 s. The `sched` owner controlled it properly — `c008979`,
+the commit immediately before their work, passed 8 of 8, and it arrived with
+`9daec68`. The fix is to make stage 5 cheap again, not to find a deadlock.
+
+### The default timeout is the amplifier, and it manufactured two wrong verdicts
+
+**Investigate at `--timeout 600` and conclude nothing from a 120 s failure.** The
+reason matters more than the rule, because the rule will be forgotten and the
+reason generalises: **a 120 s default against a 68 s typical run is a coin flip
+dressed as a verdict.** The board owner condemned a placement change as
+regressing aarch64 on the strength of one such failure, and had told their user
+so; at 600 s it measured 67.64 s against the baseline's 67.78 s — *faster* than
+the thing it supposedly regressed, by less than the run-to-run noise. Mine was
+the first wrong conclusion of the day, from a six-run bisect; that was the
+second. Any default sitting that close to the typical time keeps making verdicts
+out of scheduling jitter until it moves.
+
+### The board is the part that is still open
+
+Real STM32MP157D-DK1 hardware fails too, and there is no host contention and no
+emulation there, so "slow run killed by the harness" does not obviously apply.
+Two shapes, alternating **on identical bits** — same flashed kernel, no rebuild
+between runs:
 
 * **Inside `fairness()`.** Markers put it past `start_spinners` and past the
-  "a spinner never started" wait, then silence. That narrows it hard, because
-  every other wait in that function is `wait_for`, which has a deadline and
-  would *print* — the one wait with no deadline at all is
-  `super::sleep_for(WINDOW_NANOS)` (`kernel/src/sched/check.rs`, in
-  `fairness`, between `open_window` and `close_window`). A task that sleeps and
-  is never woken hangs exactly like this: forever, silently, with no verdict.
-  That is the classic lost wakeup for a tickless scheduler — a sleeper on the
-  queue's `sleepers` map whose timer was never armed, or armed and not
-  rearmed — and it fits every symptom recorded here. **Look there first.**
+  "a spinner never started" wait, then silence.
 * **In `many_tasks`.** Other runs get further and fail its reap: *arena holds 8
-  allocations, expected 4* — four kernel stacks not returned inside the five
-  second patience. Same family as the stage 7 owner's "a task's stack was never
-  given back".
+  allocations, expected 4* — four kernel stacks not returned inside `reap_to`'s
+  five-second budget.
 
-So: either this is that regression, or it is a genuine race and the timeout is a
-red herring. The experiment that separates them is running twelve boots with
-`--timeout 600`. A failure that completes at 150 s was never hung; one that
-produces nothing in 600 seconds is a real hang. That also settles, without gdb,
-the question neither the `sched` owner nor I could answer — whether anything is
-progressing at all.
+Both are in-guest patience budgets expiring, which is the same shape as the
+harness timeout one level up — so the likeliest reading is that those budgets
+are simply too tight for that machine, and the board is telling us what QEMU is.
+**The experiment that separates it**, and the one the `sched` owner wants run:
+raise `PATIENCE_NANOS` in `kernel/src/sched/check.rs` from 20 s to 120 s and
+`reap_to`'s budget with it. If the board then completes late, it is the same
+slowness and the fix is the `sched` owner's. If it still fails at 120 s of
+*guest* time, the board has found something real that no emulator has
+reproduced — and it is then the only instrument that can.
 
-**It is not architecture-specific and the trigger is host CPU starvation.**
-That is the single most useful thing to know about reproducing it, and it took
-three of us to find out. It has been seen on armv7a and on aarch64, on plain
-`main` with nothing uncommitted, and the stage 7 owner pinned the condition:
-their aarch64 failures came with the host at load ~4.6 and two other sessions'
-QEMUs taking 297% and 243% of a core, and it passed on the next attempt once
-those quietened. **But plain host load is not the lever**: the `sched` owner ran
-three boots under twelve spinners at load 4.7 and all passed, at a steady 63.9 s.
-The correlation was with other *QEMUs* taking 297% and 243% of a core, which is
-contention for the vCPU threads specifically rather than load average. If you
-want to reproduce this deliberately, run competing emulators, not busy loops —
-and do not conclude much from an idle-machine pass rate either way.
+### Dead leads — do not re-run these
 
-**It arrived with `9daec68`**, the scheduler merge. The `sched` owner ran the
-control: `c008979`, the commit immediately before their work, passed 8 of 8 on
-armv7a, while current `main` hangs. My own measurement said something weaker and
-I read it wrong, which is worth recording because the mistake is an easy one to
-repeat. I had armv7a pass 6 of 6 at `9daec68` and 4 of 6 at `c2db560`, and
-concluded the rate tracked later commits — so the hang must be a latent race
-those commits perturbed. It is not: 6 of 6 was luck on a one-in-three failure,
-and a rate that appears to follow unrelated commits is exactly what a
-timing-sensitive bug looks like from too few runs. **Six runs cannot tell a
-one-in-three failure from a clean commit.** If you find yourself bisecting an
-intermittent hang, get the control — the commit before the suspect work — and
-run it enough times to matter, before reasoning about mechanism at all.
+* **A lost wakeup at `sleep_for(WINDOW_NANOS)`.** This was my lead and it is
+  wrong. It is true that it is the only wait in `fairness` with no deadline of
+  its own, so its silence carries no information — but `arm_timer` takes the
+  *minimum* of the earliest sleeper and the slice end and only disarms when
+  there is neither, so a queue with nothing runnable and one sleeper does arm
+  for the sleeper. Read the function before believing the story.
+* **Lock ordering in `balance()`** — `steal_from` always locks the
+  lower-numbered queue first, and the snapshot loops hold one at a time.
+* **A TLB shootdown deadlock** — `flush_tlb_everywhere` returns immediately on
+  both Arm architectures, because `TLB_FLUSH_IS_BROADCAST` is true, so there is
+  no cross-processor wait to deadlock on.
+* **The two classic Arm lost-wakeup shapes** — the idle path is `wfi` then
+  unmask, not the reverse, and `send_ipi_to_others` does `dsb ishst` before the
+  distributor write.
+* **Kernel size or layout.** Same x86_64 binary hung and then passed back to
+  back; a kernel that does both is not failing because it grew.
+* **`[CpuLoad; MAX_CPUS]` on the stack** — 6 KiB of a 16 KiB kernel stack, at
+  *two* call sites (`choose_cpu` and `balance`, the latter reached from
+  `preempt_on_irq_exit`). A real defect, and fixed by folding one processor at a
+  time. Not this bug: the fixed build passed 10 of 10 against the unfixed
+  reproducing once in 10, which cannot tell a fix from luck. The `sched` owner
+  withdrew that themselves rather than let it stand.
 
-**It is a race and not a size or layout effect**, which is worth stating because
-it is the obvious next hypothesis and it is dead. The stage 7 session had the
-cleanest demonstration: on x86_64, the first boot after a rebase hung at stage 5
-with no verdict and the second passed — *same binary, back to back, nothing else
-changed*. A kernel that both hangs and passes cannot be hanging because it grew.
-Their running tally at roughly today's kernel size is 6 passes and 3 real
-failures on x86_64, and nothing systematic about which of the two faces shows.
+### One live fragility, not claimed as the cause
 
-The `sched` owner has also ruled three mechanisms out, recorded here so nobody
-re-runs them: lock ordering in `balance()` (`steal_from` always locks the
-lower-numbered queue first, and the snapshot loops hold one at a time); a TLB
-shootdown deadlock (`flush_tlb_everywhere` returns immediately on both Arm
-architectures, because `TLB_FLUSH_IS_BROADCAST` is true, so there is no
-cross-processor wait to deadlock on); and the two classic Arm lost-wakeup shapes
-(the idle path is `wfi` then unmask, not the reverse, and `send_ipi_to_others`
-does `dsb ishst` before the distributor write).
+`has_work()` is `!fair.is_empty()` and ignores sleepers entirely, so `idle_loop`
+decides whether to sleep on a question that does not mention them. That is safe
+only because `arm_timer` gets it right, which is a load-bearing coincidence
+rather than a design.
 
-**Use `--timeout 600` whenever you are investigating this**, not the 120 s
-default, and do not conclude anything from a default-timeout failure. The board
-owner concluded a placement change "regresses aarch64" from exactly that, and
-had told their user so; re-run at 600 s it was 67.64 s with the change against
-67.78 s without — identical within noise, no regression, just flakiness against
-a marginal default. That is the second wrong conclusion the 120 s default has
-produced today.
+### What this cost, and the two lessons worth keeping
 
-A fourth candidate was found, fixed, and then **withdrawn as the cause** — worth
-recording for both halves. `[CpuLoad; MAX_CPUS]` is 6 KiB of a 16 KiB kernel
-stack, and `balance()` was allocating it from interrupt context on the
-interrupted task's stack — at *two* call sites, not one: `choose_cpu` and
-`balance` both declare `[CpuLoad::idle(); MAX_CPUS]` on the stack, and `balance`
-is reached from `preempt_on_irq_exit`. That is a real defect and it is fixed, by folding one
-processor at a time. It is *not* established as this bug: the fixed build passed
-10 of 10 and the unfixed one reproduced once in 10, which cannot distinguish a
-fix from luck at a one-in-three rate. The `sched` owner withdrew the claim
-themselves rather than let it stand, which is the right call and the same
-arithmetic that caught my own bad bisect above. It is a heisenbug — one print
-per check phase makes it pass 6 of 6, because the console lock serialises the
-processors and closes the window.
-
-And one symptom nobody had connected until the stage 7 session saw both from one
-build: the assertion *a task's stack was never given back* and the no-verdict
-hang came out of the same binary on the same architecture minutes apart. That
-reads as one bug rather than two — reaping not completing, with the assertion
-being the run where the check got to execute and the hang the run where it did
-not — so the reap path and `ZOMBIES` are worth as much attention as `balance()`.
+Both of my contributions to the account above were wrong before they were right.
+I concluded from a six-run bisect that the hang was a latent race later commits
+perturbed — **six runs cannot tell a one-in-three failure from a clean
+commit**, and the control is what settles it. And I reasoned from the silence
+that nothing could be progressing, so it had to be a deadlock — which assumed
+the run had *reached* the check rather than been killed short of it. Both
+corrections came from somebody else measuring rather than anyone thinking
+harder, and the measurements that mattered were ten runs with a generous
+timeout and reading `arm_timer` instead of imagining it.
 
 * `kernel/src/sched/`, `libs/sched` — **released to stage 6.** The stage 5 owner
   finished and merged as `9daec68`, and said both of §4's sched changes are
