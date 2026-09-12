@@ -975,10 +975,15 @@ architectures.**
   processes. A kill walks the tree without recursion, ends every process in
   the job and beneath it through `process::kill`, and marks each job under the
   lock that adding to it takes, so nothing can join a job being killed and
-  survive it. The check kills the middle of a three-job tree of spinning
-  programs and requires the two beneath to end with 137 and their tasks to
-  stop, the one above to keep running, and a program outside every job to
-  finish with its own status; then it kills the root.
+  survive it. The check kills the middle of a three-job tree of programs,
+  each blocked in `object_wait_one` on a channel nobody writes to, and
+  requires the two beneath to end with 137 and their tasks to stop, the one
+  above to keep running, and a program outside every job to finish with its
+  own status; then it kills the root. The members were spinning programs at
+  first, and on a loaded four-processor ARMv7-A boot a spin of `u32::MAX`
+  rounds finished before the kill it was meant to survive — so the check
+  failed three boots in four on `main` until they became programs only a kill
+  can end.
 
 **Still to do.**
 

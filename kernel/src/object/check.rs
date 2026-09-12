@@ -30,12 +30,15 @@ use ferrix_vma::VmaFlags;
 
 use crate::arch;
 use crate::mm;
+use crate::object::channel::Endpoint;
 use crate::object::job::{Job, KILLED_STATUS};
 use crate::object::{self, Object};
 use crate::sched::Task;
 use crate::syscall::check::spinner;
+use crate::syscall::image;
 use crate::syscall::process::{self, Process};
 use crate::syscall::{self as linux, Outcome, SyscallArgs, native, uaccess};
+use ferrix_elf::Class;
 
 /// Where each check process keeps its buffers.
 const SCRATCH: u64 = 0x4000_0000;
@@ -66,8 +69,6 @@ const WAKE_AFTER_NANOS: u64 = 20_000_000;
 const PATIENCE_NANOS: u64 = 120_000_000_000;
 /// How long the spinning programs run before a job is killed under them.
 const KILL_AFTER_NANOS: u64 = 20_000_000;
-/// A spin longer than any check waits, so only a kill ends it.
-const FOREVER_ROUNDS: u32 = u32::MAX;
 
 /// What travels in the VMO, to show the handle that arrives names it.
 const SECRET: &[u8] = b"carried by a handle";
@@ -788,11 +789,35 @@ fn ended_by_the_kill(process: &Process, task: &Task) -> Result<(), &'static str>
 /// Killing a job ends every process in it and beneath it, and nothing above
 /// or beside it; a killed job stays killed.
 ///
-/// A tree of three jobs, root, middle and leaf, with a program that would
-/// spin for minutes in each, and a fourth program in no job at all. Killing
+/// A tree of three jobs, root, middle and leaf, with a program in each that
+/// is blocked in a native wait nobody will ever satisfy, and a fourth program
+/// in no job at all. Killing
 /// the middle job must end the middle and leaf programs and leave the root's
 /// running; killing the root must end that one; the bystander must finish
 /// with its own status.
+/// A copy of the native program as a receiver with nobody to talk to.
+///
+/// It blocks in `object_wait_one` with no deadline, so only a kill ends it,
+/// which is also the case `process::kill` has to get right for a waiting
+/// task: the wait must notice. A program told to spin a fixed number of
+/// rounds is not a substitute -- on four emulated ARMv7-A processors
+/// `u32::MAX` rounds took seconds, and the root job's program finished and
+/// exited before the kill it was meant to survive had even been sent.
+///
+/// The far end is returned and must be held until the check is done, or the
+/// wait sees `PEER_CLOSED` and the program ends by itself.
+fn waiting_program() -> Result<(Arc<Process>, Arc<Endpoint>), &'static str> {
+    let program = native_program(b'r')?;
+    let (near, far) = Endpoint::pair().ok_or("could not make a channel")?;
+    let placed = program
+        .with_handles(|table| table.insert(Object::Channel(near), Rights::CHANNEL))
+        .map_err(|_| "no room for a bootstrap handle")?;
+    if placed != BOOTSTRAP {
+        return Err("a fresh process's first handle is not the one its program was built for");
+    }
+    Ok((program, far))
+}
+
 fn check_a_job_kill_takes_down_a_process_tree(counter: &mut Counter) -> Result<(), &'static str> {
     if arch::USER_SPIN_PROGRAM.is_empty() {
         return Ok(());
@@ -813,9 +838,9 @@ fn check_a_job_kill_takes_down_a_process_tree(counter: &mut Counter) -> Result<(
         "job_create under a child failed",
     )?;
 
-    let top = spinner(b'r', FOREVER_ROUNDS, 1)?;
-    let inner = spinner(b'm', FOREVER_ROUNDS, 2)?;
-    let deepest = spinner(b'l', FOREVER_ROUNDS, 3)?;
+    let (top, _top_far) = waiting_program()?;
+    let (inner, _inner_far) = waiting_program()?;
+    let (deepest, _deepest_far) = waiting_program()?;
     let bystander = spinner(b'b', 1_000_000, 44)?;
     let top_task = run_in(&side, root, &top)?;
     let inner_task = run_in(&side, middle, &inner)?;
@@ -840,7 +865,7 @@ fn check_a_job_kill_takes_down_a_process_tree(counter: &mut Counter) -> Result<(
         "a killed job made a child",
         counter,
     )?;
-    let late = spinner(b'x', FOREVER_ROUNDS, 5)?;
+    let late = native_program(b'r')?;
     if job_of(&side, leaf)?.adopt(&late).is_ok() {
         return Err("a job beneath a killed one took a new process");
     }
@@ -865,4 +890,48 @@ fn check_a_job_kill_takes_down_a_process_tree(counter: &mut Counter) -> Result<(
     }
     side.close_everything();
     Ok(())
+}
+
+/// Where the eight patchable bytes of [`arch::USER_NATIVE_PROGRAM`] begin.
+const NATIVE_TAIL: usize = 28;
+
+/// The handle a fresh process's first handle gets: slot 0, generation 1.
+///
+/// The program cannot be told its bootstrap handle after it is loaded -- its
+/// text is not writable -- so it is built for this value, and the check
+/// asserts the value when it places the handle. A change to how the table
+/// encodes handles fails there, by name, rather than as a program talking to
+/// a handle it does not hold.
+const BOOTSTRAP: Handle = Handle(1);
+
+/// Load a copy of the native program playing `role`.
+fn native_program(role: u8) -> Result<Arc<Process>, &'static str> {
+    let mut program = arch::USER_NATIVE_PROGRAM.to_vec();
+    let tail = program
+        .get_mut(NATIVE_TAIL..NATIVE_TAIL + 8)
+        .ok_or("the native program is shorter than its own layout")?;
+    if tail.first() != Some(&b'?') || tail.get(1) != Some(&b'\n') {
+        return Err("the native program's tail is not where its layout says");
+    }
+    let [h0, h1, h2, h3] = BOOTSTRAP.0.to_le_bytes();
+    tail.copy_from_slice(&[role, b'\n', 0, 0, h0, h1, h2, h3]);
+
+    let class = if size_of::<usize>() == 8 {
+        Class::Elf64
+    } else {
+        Class::Elf32
+    };
+    let file = image::build_with(
+        class,
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        &program,
+    );
+    process::load(
+        &file,
+        &[b"/native"],
+        &[],
+        [0x39; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "the native program could not be loaded")
 }
