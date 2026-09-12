@@ -526,7 +526,11 @@ the boot test that fails without it.
   shape of Linux's PELT. It measures *weighted demand* rather than occupancy,
   which is the distinction the balancer lives on: a processor is either running
   something or not, so "busy" saturates at one task and says nothing after
-  that.
+  that. Folding in a long stretch costs no more than a short one: past 512
+  periods, whatever came before is gone, and the average is set to the level
+  held rather than walked there one period at a time. The walk had been done
+  under the run queue lock with interrupts masked, three and a half million
+  steps for a processor idle for an hour.
 * **Placement.** A new task goes where it should rather than where it was
   created — the processor it prefers if that one is idle, any idle processor
   otherwise, the least loaded if none is.

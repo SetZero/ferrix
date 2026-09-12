@@ -72,12 +72,16 @@ const DECAY_DEN: u64 = 4096;
 /// increment, and the fixed point comes out exact.
 const PRECISION: u32 = 10;
 
-/// How many periods of decay are worth applying before the answer is zero.
+/// How many periods of history are worth walking one at a time.
 ///
-/// After this many the average has been multiplied by about `2^-11`, which
-/// takes even a full [`LOAD_SCALE`] below one. Bounding the loop matters
-/// because a processor that has been idle for a second would otherwise decay
-/// a thousand times to reach a number it reached after a hundred and fifty.
+/// After this many the average has been multiplied by about `2^-16`, so what
+/// it held before them is gone and what is left is the level held throughout.
+/// [`Load::accumulate`] writes that down directly rather than walking there.
+///
+/// Bounding the walk is not tidiness. The kernel folds time in under a run
+/// queue's lock with interrupts masked, and a processor idle for an hour hands
+/// over an hour: three and a half million periods, each with a 64-bit division
+/// that ARMv7-A does in a library call.
 const MAX_DECAY_PERIODS: u32 = 512;
 
 /// A decaying average of how busy something has been.
@@ -143,7 +147,23 @@ impl Load {
     /// accumulated, so calling this often and calling it rarely give the same
     /// answer.
     pub const fn accumulate(&mut self, elapsed_ns: u64, level: u64) {
-        self.elapsed_ns = self.elapsed_ns.saturating_add(elapsed_ns);
+        let total_ns = self.elapsed_ns.saturating_add(elapsed_ns);
+        // **More history than the average remembers: write down the answer.**
+        // Every whole period but the partial one at the end was spent at
+        // `level`, and more than `MAX_DECAY_PERIODS` of them leave nothing of
+        // what came before. The per-period walk would settle at `level` too,
+        // or a unit short of it from below, where its truncating steps stall.
+        // Checked before anything is multiplied, because `level` times a long
+        // enough stretch also saturates the demand accumulator.
+        if total_ns / LOAD_PERIOD_NS > MAX_DECAY_PERIODS as u64 {
+            let partial_ns = total_ns % LOAD_PERIOD_NS;
+            self.scaled = level.saturating_mul(1 << PRECISION);
+            self.elapsed_ns = partial_ns;
+            self.weighted_ns = level.saturating_mul(partial_ns);
+            return;
+        }
+
+        self.elapsed_ns = total_ns;
         self.weighted_ns = self
             .weighted_ns
             .saturating_add(level.saturating_mul(elapsed_ns));
@@ -170,18 +190,11 @@ impl Load {
 
     /// Age the average by `elapsed_ns` of doing nothing.
     ///
-    /// The same as [`accumulate`](Self::accumulate) with no busy time, and
+    /// The same as [`accumulate`](Self::accumulate) with no busy time, and as
     /// bounded: a processor that has been idle for a second decays to the same
-    /// place as one idle for a minute, and looping a thousand times to say so
-    /// is work for nothing.
+    /// place as one idle for a minute, and neither walks every period to say
+    /// so.
     pub const fn decay(&mut self, elapsed_ns: u64) {
-        let periods = elapsed_ns / LOAD_PERIOD_NS;
-        if periods > MAX_DECAY_PERIODS as u64 {
-            self.scaled = 0;
-            self.elapsed_ns = 0;
-            self.weighted_ns = 0;
-            return;
-        }
         self.accumulate(elapsed_ns, 0);
     }
 }

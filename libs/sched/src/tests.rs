@@ -852,6 +852,62 @@ fn decaying_for_a_very_long_time_reaches_zero_without_looping_forever() {
     assert_eq!(load.average(), 0, "a long idle period left load behind");
 }
 
+/// A year, in nanoseconds: far more load periods than any loop should walk.
+const YEAR_NS: u64 = 365 * 24 * 3600 * 1_000_000_000;
+
+#[test]
+fn a_long_stretch_is_accounted_in_bounded_work() {
+    // The kernel folds time in under its run queue lock, with interrupts
+    // masked, and a processor that has been idle for an hour hands it an hour.
+    // A loop over every elapsed period is three and a half million iterations
+    // for that hour and thirty billion for this year, so the check is made on
+    // a thread with a deadline: without the bound this does not fail, it hangs.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let _worker = std::thread::spawn(move || {
+        let mut load = Load::new();
+        load.accumulate(LOAD_PERIOD_NS * 64, LOAD_SCALE);
+        load.accumulate(YEAR_NS, LOAD_SCALE * 3);
+        let busy = load.average();
+        load.accumulate(YEAR_NS, 0);
+        let _ = sender.send((busy, load.average()));
+    });
+    let (busy, idle) = receiver
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("accounting a year of load walked every period of it");
+    // Within one unit, which is as close as the per-period loop itself settles
+    // on a constant level: its truncating steps stop a unit short from below.
+    assert!(
+        busy.abs_diff(LOAD_SCALE * 3) <= 1,
+        "a year at three nice-0 entities read {busy}"
+    );
+    assert_eq!(idle, 0, "a year idle left load behind");
+}
+
+#[test]
+fn a_long_stretch_reads_as_the_same_stretch_in_short_pieces() {
+    // The bound must not change the answer: one call covering many thousands
+    // of periods reads as the same history handed over a few hundred periods
+    // at a time, which never reaches the bound and so walks every period.
+    let mut whole = Load::new();
+    let mut pieces = Load::new();
+    for load in [&mut whole, &mut pieces] {
+        for _ in 0..64 {
+            load.accumulate(LOAD_PERIOD_NS, LOAD_SCALE / 2);
+        }
+        load.accumulate(LOAD_PERIOD_NS / 3, LOAD_SCALE * 5);
+    }
+    whole.accumulate(LOAD_PERIOD_NS * 10_000, LOAD_SCALE * 2);
+    for _ in 0..20 {
+        pieces.accumulate(LOAD_PERIOD_NS * 500, LOAD_SCALE * 2);
+    }
+    assert!(
+        whole.average().abs_diff(pieces.average()) <= 1,
+        "one long call read {} where the same time in pieces read {}",
+        whole.average(),
+        pieces.average()
+    );
+}
+
 #[test]
 fn several_runnable_entities_read_as_more_than_one() {
     // The property the balancer needs and a busy/idle signal cannot give:
