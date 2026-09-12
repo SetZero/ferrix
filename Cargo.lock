@@ -75,6 +75,13 @@ name = "ferrix-sync"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-ustack"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+]
+
+[[package]]
 name = "ferrix-virtio"
 version = "0.1.0"
 

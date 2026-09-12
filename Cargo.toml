@@ -16,6 +16,7 @@ members = [
     "libs/cpio",
     "libs/linux-abi",
     "libs/sync",
+    "libs/ustack",
     "libs/virtio",
     "libs/vma",
     "libs/paging",
@@ -54,6 +55,7 @@ ferrix-btrfs = { path = "libs/btrfs" }
 ferrix-cpio = { path = "libs/cpio" }
 ferrix-linux-abi = { path = "libs/linux-abi" }
 ferrix-sync = { path = "libs/sync" }
+ferrix-ustack = { path = "libs/ustack" }
 ferrix-virtio = { path = "libs/virtio" }
 ferrix-vma = { path = "libs/vma" }
 ferrix-paging = { path = "libs/paging" }

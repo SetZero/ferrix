@@ -783,8 +783,27 @@ package FerrixStructure {
         #writtenAhead part linuxAbi : LibraryCrate {
             attribute :>> path = "libs/linux-abi";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 42;
+            attribute :>> hostTests = 52;
             @stage { number = 7; }
+            doc /* Three system call number tables, not two: x86-64's own,
+                 * AArch64's generic one, and ARMv7-A's EABI one. The 32-bit
+                 * architecture needs its own Syscall variants as well as its
+                 * own numbers -- mmap2 counts its offset in pages, _llseek
+                 * returns through a pointer, fstat64 writes a different
+                 * structure -- so they are separate calls rather than the
+                 * same calls renumbered. */
+        }
+        #writtenAhead part ustack : LibraryCrate {
+            attribute :>> path = "libs/ustack";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 22;
+            @stage { number = 7; }
+            doc /* The initial process stack image: argc, argv, envp and the
+                 * auxiliary vector, laid out as a program's _start reads them,
+                 * at both pointer widths. Carries a reader as well as a
+                 * writer, because the writer is checked by walking the bytes
+                 * back out with nothing but a stack pointer -- which is also
+                 * what the fuzz target does. */
         }
         #writtenAhead part cpio : LibraryCrate {
             attribute :>> path = "libs/cpio";

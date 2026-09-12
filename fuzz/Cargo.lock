@@ -40,7 +40,20 @@ version = "0.0.0"
 dependencies = [
  "ferrix-elf",
  "ferrix-frame",
+ "ferrix-linux-abi",
+ "ferrix-ustack",
  "libfuzzer-sys",
+]
+
+[[package]]
+name = "ferrix-linux-abi"
+version = "0.1.0"
+
+[[package]]
+name = "ferrix-ustack"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
 ]
 
 [[package]]

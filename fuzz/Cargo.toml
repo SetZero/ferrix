@@ -16,6 +16,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 ferrix-elf = { path = "../libs/elf" }
 ferrix-frame = { path = "../libs/frame" }
+ferrix-ustack = { path = "../libs/ustack" }
+ferrix-linux-abi = { path = "../libs/linux-abi" }
 
 [[bin]]
 name = "elf_parse"
@@ -27,6 +29,13 @@ bench = false
 [[bin]]
 name = "frame_alloc"
 path = "fuzz_targets/frame_alloc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ustack_build"
+path = "fuzz_targets/ustack_build.rs"
 test = false
 doc = false
 bench = false

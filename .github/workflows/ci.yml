@@ -380,6 +380,13 @@ jobs:
       - name: Miri (handoff ABI)
         run: cargo +nightly miri test -p ferrix-bootinfo --lib
 
+      # The initial process stack. Every address in the image is arithmetic on
+      # a stack top, and the image is read back through a second set of index
+      # calculations; Miri checks both against the buffer's real provenance
+      # rather than against the crate's own idea of where the buffer ends.
+      - name: Miri (process stack image)
+        run: cargo +nightly miri test -p ferrix-ustack --lib
+
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.
   #

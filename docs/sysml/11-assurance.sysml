@@ -96,13 +96,17 @@ package FerrixAssurance {
     }
     #implemented verification miri : Gate {
         attribute :>> command = "cargo miri test";
-        doc /* libs/elf and libs/bootinfo today. frame, heap and paging are
-             * owed. */
+        doc /* libs/elf, libs/bootinfo and libs/ustack today. frame, heap and
+             * paging are owed. */
     }
     #implemented verification fuzz : Gate {
-        attribute :>> command = "cargo fuzz run elf_parse; cargo fuzz run frame_alloc";
+        attribute :>> command = "cargo fuzz run elf_parse; cargo fuzz run frame_alloc; cargo fuzz run ustack_build";
         doc /* Replays the committed corpus first, searches second: an input
-             * that crashed once fails again in seconds. */
+             * that crashed once fails again in seconds. ustack_build asserts a
+             * round trip rather than the absence of a crash -- whatever the
+             * builder accepts, a walk that knows only the stack pointer must
+             * recover exactly what went in -- which is how it found that a
+             * string containing a NUL built an image that read back short. */
     }
     #implemented verification buildImages : Gate {
         attribute :>> command = "cargo xtask build --arch all --release";

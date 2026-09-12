@@ -719,6 +719,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
 | `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 52 |
+| `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory. | 50 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
@@ -728,18 +729,28 @@ loader's), `frame`, `heap`, `paging` — that is **490 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `fuzz/` currently has two
-targets: `elf_parse` and `frame_alloc`. Every crate in the table above parses
-bytes that came from outside the system — a disk, a firmware table, an archive a
-stranger built — which is precisely the population the rule was written for. The
-fuzz targets are owed, and are owed *before* the consuming stage starts, not
-when it ships.
+asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has three:
+`elf_parse`, `frame_alloc` and `ustack_build`. Every crate in the table above
+parses bytes that came from outside the system — a disk, a firmware table, an
+archive a stranger built — which is precisely the population the rule was
+written for. The fuzz targets are owed, and are owed *before* the consuming
+stage starts, not when it ships.
 
-Miri is further behind than fuzzing. CI runs it over `libs/elf` and
-`libs/bootinfo` only, although the CI file's own comment names the page-table
-arithmetic and the allocators as the reason the job exists — so `frame`,
-`heap` and `paging`, all running in the kernel today, are owed a Miri step
-too, and ahead of every crate in the table.
+`ustack_build` is what the rule looks like when it is followed rather than
+recorded as debt: written before a line of stage 7 kernel code existed, and it
+found a real gap within a minute. A string with a NUL byte inside it built a
+perfectly well-formed image that read back as a *different, shorter* string,
+because everything on that stack is recovered by scanning for a NUL. The
+builder now refuses it. Nothing about that bug is visible from the kernel side
+— it is a program receiving an argument nobody passed it — and it would have
+been found, if at all, by whoever was debugging a shell that mangled its own
+arguments.
+
+Miri is further behind than fuzzing. CI runs it over `libs/elf`,
+`libs/bootinfo` and `libs/ustack`, although the CI file's own comment names the
+page-table arithmetic and the allocators as the reason the job exists — so
+`frame`, `heap` and `paging`, all running in the kernel today, are owed a Miri
+step too, and ahead of every crate in the table.
 
 ---
 
