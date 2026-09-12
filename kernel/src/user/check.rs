@@ -503,6 +503,102 @@ fn check_the_processor_walks_an_installed_space() -> Result<u64, &'static str> {
 /// [`check_the_processor_walks_an_installed_space`] gives at length.
 const ROUNDS: u64 = 2;
 
+/// After a fork, both sides must reach the same frames, each with two holders.
+///
+/// Faults every page back in on both sides for *reading*, which is also what
+/// exercises the read fault reinstalling a copy-on-write page read-only — the
+/// parent has no mappings left at this point, because fork took them down.
+fn check_both_sides_share(
+    parent: &AddressSpace,
+    child: &AddressSpace,
+    base: u64,
+    pages: u64,
+    original: &[u64],
+) -> Result<(), &'static str> {
+    for index in 0..pages {
+        let at = base + index * PAGE_SIZE;
+        parent
+            .fault(at, Access::READ)
+            .map_err(|_| "the parent could not fault its own page back in")?;
+        child
+            .fault(at, Access::READ)
+            .map_err(|_| "the child could not fault a shared page in")?;
+
+        let parent_phys =
+            mm::translate_in(parent.root_table(), at).ok_or("the parent's page does not map")?;
+        let child_phys =
+            mm::translate_in(child.root_table(), at).ok_or("the child's page does not map")?;
+        if parent_phys != child_phys || Some(&parent_phys) != original.get(index as usize) {
+            return Err("fork did not share a page: the two sides reach different frames");
+        }
+        if mm::frame_references(parent_phys / PAGE_SIZE) != 2 {
+            return Err("a page shared by two address spaces does not have two holders");
+        }
+        if peek(child_phys) != PARENT_MARK + index {
+            return Err("the child does not see what the parent wrote before forking");
+        }
+    }
+    Ok(())
+}
+
+/// Resolve a copy-on-write fault *while the space is installed*, then write
+/// through the faulting address, as the retrying instruction would.
+///
+/// # Why the installation has to bracket the fault
+///
+/// Because the defect this catches lives in the TLB, and a space that is not
+/// installed has nothing in one. The first version of this check installed the
+/// space only for the final write, and it passed with the invalidation deleted
+/// — installing a root is itself a flush on x86-64, so the stale entry was
+/// gone before the write went looking for it. The check was testing its own
+/// setup.
+///
+/// So the order here is the order a real fault happens in. The space goes on
+/// the processor, a read through the user address puts the *read-only* entry
+/// in the TLB, the handler copies the page and installs a writable entry in
+/// the tables, and only then does the write go through the same address. With
+/// the invalidation deleted that write meets the stale read-only entry and
+/// faults, which is the hang the branch exists to avoid, made loud.
+///
+/// Nothing else in this file can see a user page's hardware permissions at
+/// all: the kernel reaches a page through the direct map, which is writable
+/// for all of RAM, so `poke` lands whatever the user entry says. A check that
+/// writes that way has tested the region bookkeeping and not one permission
+/// bit.
+fn fault_and_write_installed(
+    space: &AddressSpace,
+    at: u64,
+    value: u64,
+) -> Result<(), &'static str> {
+    // Interrupts masked for `install`'s reason: the scheduler does not know
+    // about address spaces yet.
+    let state = <arch::Irq as IrqControl>::disable();
+
+    // SAFETY: `space` is borrowed across the whole window so its tables
+    // outlive the installation, interrupts are masked, and it is uninstalled
+    // below before anything else can want a user address.
+    unsafe { space.install() };
+
+    let through = at as *mut u64;
+    // SAFETY: the caller faulted this page in read-only through `space`, which
+    // is installed on this processor. This read is what puts the entry the
+    // rest of this function is about into the TLB.
+    let _seen = unsafe { through.read_volatile() };
+
+    let resolved = space.fault(at, Access::WRITE);
+    if resolved.is_ok() {
+        // SAFETY: the handler above has just made this page writable in the
+        // tables of the space installed on this processor.
+        unsafe { through.write_volatile(value) };
+    }
+
+    // SAFETY: nothing after this wants a user address.
+    unsafe { space::uninstall() };
+    <arch::Irq as IrqControl>::restore(state);
+
+    resolved.map_err(|_| "a write to a copy-on-write page was not resolved")
+}
+
 /// Install `space`, use `pages` pages of it at `base`, and check each write
 /// landed in the frame that backs it.
 ///
@@ -687,41 +783,15 @@ fn check_fork_shares_pages_and_a_write_copies_one() -> Result<u64, &'static str>
         }
     }
 
-    // Both sides fault both pages back in for reading. Every page must be the
-    // frame it was before the fork, with two holders and the parent's bytes
-    // intact -- that is sharing, and it is also the read fault reinstalling a
-    // copy-on-write page read-only.
-    for index in 0..pages {
-        let at = base + index * PAGE_SIZE;
-        parent
-            .fault(at, Access::READ)
-            .map_err(|_| "the parent could not fault its own page back in")?;
-        child
-            .fault(at, Access::READ)
-            .map_err(|_| "the child could not fault a shared page in")?;
-
-        let parent_phys =
-            mm::translate_in(parent.root_table(), at).ok_or("the parent's page does not map")?;
-        let child_phys =
-            mm::translate_in(child.root_table(), at).ok_or("the child's page does not map")?;
-        if parent_phys != child_phys || Some(&parent_phys) != original.get(index as usize) {
-            return Err("fork did not share a page: the two sides reach different frames");
-        }
-        if mm::frame_references(parent_phys / PAGE_SIZE) != 2 {
-            return Err("a page shared by two address spaces does not have two holders");
-        }
-        if peek(child_phys) != PARENT_MARK + index {
-            return Err("the child does not see what the parent wrote before forking");
-        }
-    }
+    check_both_sides_share(&parent, &child, base, pages, &original)?;
 
     let shared = *original.first().ok_or("no page was recorded")?;
 
-    // The copy. A different frame for the child, the parent left as the only
-    // holder of the original, and the contents carried across.
-    child
-        .fault(base, Access::WRITE)
-        .map_err(|_| "a write to a copy-on-write page was not resolved")?;
+    // The copy, taken with the child installed on this processor so that both
+    // the fault and the write after it go through real translations. A
+    // different frame for the child, the parent left as the only holder of the
+    // original, and the contents carried across.
+    fault_and_write_installed(&child, base, CHILD_MARK)?;
     let copy = mm::translate_in(child.root_table(), base).ok_or("the child's copy does not map")?;
     if copy == shared {
         return Err("a write to a copy-on-write page was let through to the shared frame");
@@ -732,12 +802,13 @@ fn check_fork_shares_pages_and_a_write_copies_one() -> Result<u64, &'static str>
     if mm::frame_references(copy / PAGE_SIZE) != 1 {
         return Err("a freshly copied page is held by more than its copier");
     }
-    if peek(copy) != PARENT_MARK {
-        return Err("the copy does not hold what the page it was copied from held");
-    }
 
-    // The parent's own page is untouched, which is the promise.
-    poke(copy, CHILD_MARK);
+    // The write went through the child's own virtual address, so this reads
+    // back the proof that the processor -- not merely the fault handler -- let
+    // it through, and that it landed in the copy and not the original.
+    if peek(copy) != CHILD_MARK {
+        return Err("a write through the child's own address did not reach its copy");
+    }
     if peek(shared) != PARENT_MARK {
         return Err("a write after copy-on-write reached the parent's page");
     }

@@ -73,16 +73,16 @@ In dependency order. Nothing below exists, not even stubbed.
 2. **`Task` carrying an address space.** `Option<Arc<AddressSpace>>`, `None`
    meaning a kernel thread. See §4. The two calls the swap needs now exist, so
    this is the next thing to do and it is a small change.
-3. **A TLB shootdown for user address spaces.** The one hole `fork` leaves.
-   `AddressSpace::fork` takes the parent's writable mappings down, and
-   [`AddressSpace::fault`] replaces entries, and neither invalidates any
-   *other* processor's translations. Harmless today because nothing runs in a
-   user address space, and the first real bug the moment a second thread does:
-   a parent that had been installed elsewhere keeps a stale writable entry to
-   a page it has agreed to share. `crate::smp::flush_tlb_everywhere` is the
-   shape, scoped to the processors running the space rather than all of them.
-   **Do this in the same change as item 2**, because item 2 is what makes a
-   user address space reachable from more than one processor.
+3. **Scoping the user TLB shootdown.** The invalidation itself now exists —
+   `space.rs::invalidate` on the three paths that take a translation down or
+   make one less permissive (`unmap`, `fork`, and the copy-on-write branch of
+   `fault`) — but it is the global broadcast flush, and it tells every
+   processor. Two refinements, neither a correctness question: invalidate the
+   one page that changed, and tell only the processors with this space
+   installed, which wants a `CpuSet` on the `AddressSpace` maintained by
+   `install` and `uninstall`. Worth doing with item 2, since item 2 is what
+   first makes the difference measurable. **Read §5.7 before touching any of
+   it.**
 4. **The ELF loader for user binaries.** `libs/elf` parses; nothing maps a
    `PT_LOAD` into an `AddressSpace`. **Handed to the stage 7 owner** — §7.
 5. **The ring-3 / EL0 / USR transition**, and the syscall vectors. The seam
@@ -242,7 +242,56 @@ walk. A user address space is the opposite. `AddressSpace` holds its own lock
 across map-and-reshape for this reason; anything new that maps into a live root
 must do the same.
 
-### 5.6 GICv2 private interrupt enables are banked per core
+### 5.6 The boot test cannot see a missing TLB invalidation
+
+This is the one place in stage 6 where the contract — "the boot test is the
+contract" — does not hold, so it is written down rather than discovered.
+
+The copy-on-write branch of `fault` takes down a read-only entry and installs
+a writable one. If the stale read-only entry is left in a TLB, the retrying
+instruction faults on it, arrives at the handler again, finds one holder and
+nothing to copy, installs the same entry again, and retries into the same
+stale entry. Forever. A hang with no message.
+
+`space.rs::invalidate` prevents that and is architecturally required. **Deleting
+it does not fail the boot test on any of the three architectures.** That was
+measured, not assumed: the check was strengthened until it resolved the fault
+with the space actually installed on the processor and wrote through the
+faulting address as the retrying instruction would — and it still passed with
+the call deleted, because QEMU's `tcg` does not keep a stale entry to trip
+over. Stage 4 has the writeup of the converse case, a `CR3` reload not
+invalidating global entries, which "passed every test under `tcg` and failed
+instantly under a hardware accelerator".
+
+Two things follow. Do not remove an invalidation because nothing fails;
+`cargo xtask deploy --arch armv7a` on the STM32MP157 is the only arbiter this
+tree has, and `docs/stm32mp157-dk.md` has the procedure. And when you add
+per-page or `CpuSet`-scoped invalidation, the boot test will not tell you if
+you get the scope wrong either.
+
+An intermediate step worth knowing about: the first version of the check
+installed the space only for the *final write*, which passed trivially —
+installing a root is itself a flush on x86-64, so the stale entry was gone
+before the write looked for it. A check that installs has to bracket the
+*fault*, not just the access after it.
+
+### 5.7 A check that reaches a page through the direct map tests no permission
+
+Related to §5.6 and more general. The kernel reads and writes user pages
+through the direct map, which is writable for all of RAM, so any check that
+verifies content with a direct-map read or write has tested the region
+bookkeeping and not one page-table bit. The stage 7 owner found this in their
+own `mprotect` check: it asserted a read-only region could not be written and
+claimed that proved the stale writable translation was gone, and it passed with
+the `unmap_in` deleted — the copy had been refused by the region flags in
+`fault`, which happens either way.
+
+So a check that means to verify the *tables* must ask `mm::translate_in`, or
+install the space and go through the address. The fork and copy-on-write checks
+do the former throughout and the latter once; `check_the_processor_walks_an_installed_space`
+is the pattern.
+
+### 5.8 GICv2 private interrupt enables are banked per core
 
 If stage 6 adds a per-core interrupt source on Arm, go through the driver's
 recorded bitmask (`kernel/src/arch/gicv2.rs`) rather than writing the
@@ -277,6 +326,20 @@ you add one there.
 
 Work is spread across sessions sharing one object store, each in a worktree
 under `.claude/worktrees/`. Coordinate before touching:
+
+**Stage 5 hangs intermittently, and it is not stage 6's.** Worth knowing before
+you spend an afternoon on it. `cargo xtask test-boot` sometimes stops after the
+`stage 4` line with no verdict at all — not a self-check failure, a hard hang in
+stage 5's thousand-thread run. Measured on `c2db560`: armv7a 4 of 6 runs passed,
+and aarch64 has done it too. At `9daec68`, the scheduler merge itself, 6 of 6
+passed, so it appears with later commits — but every one of those adds code that
+runs *after* stage 5, so the mechanism is timing or layout perturbing a latent
+race rather than anything those commits do. The absence of a verdict is the
+informative part: `wait_for` would have reported "not every thread finished", so
+nothing is progressing at all, which says deadlock rather than slowness. The
+stage 7 owner separately saw stage 5 fail the *assertion* "a task's stack was
+never given back" under load, which points at the same area from the other side.
+Report it to whoever owns `sched`; re-running is the workaround.
 
 * `kernel/src/sched/`, `libs/sched` — **released to stage 6.** The stage 5 owner
   finished and merged as `9daec68`, and said both of §4's sched changes are

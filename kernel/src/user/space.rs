@@ -24,6 +24,7 @@
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt;
 
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END, is_user_address};
@@ -319,6 +320,18 @@ impl AddressSpace {
             }
         }
 
+        // Read before the lock goes, because the child inherits it.
+        let next_id = inner.next_id;
+
+        // The parent's writable translations to the shared pages are out of
+        // its tables, but may still be in some processor's TLB — and a write
+        // through one of those would reach a page the child can read, which is
+        // the whole thing fork just promised would not happen. Dropped here,
+        // where the lock is about to go out of scope, rather than inside the
+        // loop above: one invalidation covers every region.
+        drop(inner);
+        invalidate();
+
         Ok(Arc::new(AddressSpace {
             root,
             inner: SpinLock::new(Inner {
@@ -329,7 +342,7 @@ impl AddressSpace {
                 // share one. Two spaces may hand out the same id afterwards,
                 // which is fine: an id is only ever looked up in its own
                 // space's table.
-                next_id: inner.next_id,
+                next_id,
             }),
         }))
     }
@@ -428,7 +441,18 @@ impl AddressSpace {
             )
             .map_err(|_| SpaceError::OutOfMemory)?;
 
+            // A translation that existed a moment ago has just been replaced
+            // by a more permissive one, so every processor's cached copy of
+            // the old one has to go. **This is not optional and it is not a
+            // performance matter**: the entry that was there says read-only,
+            // and the instruction that faulted is about to retry its write.
+            // If it finds the stale entry it faults again, arrives here again,
+            // finds one holder and no copy to make, installs the same writable
+            // entry again, and retries into the same stale entry — forever.
+            // The symptom is a hang with no message, which is the hardest kind
+            // to attribute.
             drop(inner);
+            invalidate();
             return Ok(());
         }
 
@@ -481,32 +505,53 @@ impl AddressSpace {
     /// [`SpaceError::BadRange`] if the range is malformed.
     pub(crate) fn unmap(&self, at: u64, len: u64) -> Result<(), SpaceError> {
         let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
-        let mut inner = self.inner.lock();
+        // Three phases, and the order between them is the whole point:
+        // translations down, then every processor told, and only then the
+        // frames given back. It used to be one phase that freed the pages
+        // *before* it took their translations down, under a comment claiming
+        // it did the opposite — which is the bug `mm::unmap_kernel` documents
+        // at length: a frame handed to the allocator while another processor
+        // can still reach it through a cached translation is two owners of one
+        // page, and the symptom turns up in whichever of them writes second.
+        //
+        // Phase one, under the lock: take the range out of the map and take
+        // its translations out of the tables. What was removed is remembered
+        // rather than acted on, because the acting has to happen after the
+        // invalidation and the invalidation may not hold a lock.
+        let mut freeing: Vec<(u64, u64, u64)> = Vec::new();
+        {
+            let mut inner = self.inner.lock();
+            let removed = inner.map.remove(range).map_err(|_| SpaceError::BadRange)?;
+            for unmapping in removed {
+                let _ = mm::unmap_in(
+                    self.root * PAGE_SIZE,
+                    unmapping.range.start(),
+                    unmapping.range.bytes(),
+                );
+                if let Backing::Anonymous { id, offset } = unmapping.backing {
+                    freeing.push((id, offset / PAGE_SIZE, unmapping.range.bytes() / PAGE_SIZE));
+                }
+            }
+        }
 
-        let removed = inner.map.remove(range).map_err(|_| SpaceError::BadRange)?;
-        for unmapping in removed {
-            // Give the pages back, not just the mapping. A process that unmaps
-            // half its heap expects the memory returned now, not when the
-            // other half goes.
-            //
-            // Only if nothing else holds the object: a page of memory shared
-            // with another address space is not this unmapper's to take away,
-            // and a strong count of one means this map is the only holder.
-            if let Backing::Anonymous { id, offset } = unmapping.backing
-                && let Some(vmo) = inner.objects.get(&id)
+        // Phase two. Nothing can reach these pages through this address space
+        // any more, on any processor.
+        invalidate();
+
+        // Phase three: give the pages back, not just the mapping. A process
+        // that unmaps half its heap expects the memory returned now, not when
+        // the other half goes.
+        //
+        // Only if nothing else holds the object: a page of memory shared with
+        // another address space is not this unmapper's to take away, and a
+        // strong count of one means this map is the only holder.
+        let mut inner = self.inner.lock();
+        for (id, first, pages) in freeing {
+            if let Some(vmo) = inner.objects.get(&id)
                 && Arc::strong_count(vmo) == 1
             {
-                let _ = vmo.decommit_range(offset / PAGE_SIZE, unmapping.range.bytes() / PAGE_SIZE);
+                let _ = vmo.decommit_range(first, pages);
             }
-
-            // The tables first, then the object: a page still reachable
-            // through a stale translation while its frame goes back to the
-            // allocator is the bug this order exists to make impossible.
-            let _ = mm::unmap_in(
-                self.root * PAGE_SIZE,
-                unmapping.range.start(),
-                unmapping.range.bytes(),
-            );
         }
 
         // An object nothing maps any more is dropped here, which releases
@@ -516,6 +561,39 @@ impl AddressSpace {
         objects.retain(|id, _| still_named(map, *id));
         Ok(())
     }
+}
+
+/// Drop every processor's cached translations for this address space.
+///
+/// Called after a change that takes a translation down or makes it *less*
+/// permissive. Adding a translation where there was none needs nothing: a
+/// processor that faults on an absent page walks the tables and finds the new
+/// entry, because no architecture here caches the absence of one.
+///
+/// # Why this is the global flush, which the switch path must never use
+///
+/// `arch::flush_tlb` discards the kernel's global entries as well, and
+/// broadcasts. In the address-space switch path that would be simply wrong —
+/// the global entries are exactly what has to survive a root register write,
+/// and stage 4 has the writeup of the bug that comes from getting it wrong. It
+/// is right *here* for the opposite reason: a mapping change has to reach
+/// processors that are not this one, and this is the call that already knows
+/// how — broadcast in hardware on the Arm pair, by inter-processor interrupt on
+/// x86-64. [`crate::mm::unmap_kernel`] uses it for the kernel's own tables on
+/// the same argument.
+///
+/// It is coarser than it needs to be, in two ways worth naming because both
+/// are straightforward to fix and neither is a correctness question. It
+/// invalidates everything rather than the one page that changed, and it tells
+/// every processor rather than the ones with this space installed — which
+/// wants a `CpuSet` on the address space, maintained by
+/// [`AddressSpace::install`] and [`uninstall`]. Until a user thread exists
+/// there is nothing to measure the difference on.
+///
+/// Must not be called holding this address space's lock, for the reason
+/// [`crate::smp::flush_tlb_everywhere`] gives about locks in general.
+fn invalidate() {
+    crate::smp::flush_tlb_everywhere();
 }
 
 /// Whether object `id` is named by a region that shares it.
