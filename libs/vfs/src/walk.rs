@@ -237,7 +237,7 @@ impl Namespace {
             }
             Component::DotDot => {
                 at.parent = at.current.clone();
-                at.current = up(&at.current, &ctx.root);
+                at.current = up(&at.current, Some(&ctx.root));
                 at.last = LastPart::DotDot;
                 return Ok(None);
             }
@@ -346,15 +346,20 @@ fn require_directory(at: &Location) -> Result<()> {
     }
 }
 
-/// `..` from `at`, which never climbs above `root`.
+/// `..` from `at`, which never climbs above `root`, nor above the top of the
+/// tree `at` is in when there is no `root` to stop at.
 ///
 /// At the root of a mount, `..` means the directory holding the mount point
 /// — possibly several mounts up — which is why this is a loop and why the
 /// answer is a location in the mount *above*.
-pub(crate) fn up(at: &Location, root: &Location) -> Location {
+///
+/// The root is only compared on the way, never assumed to be `at`: a caller
+/// asking for `..` without a context's root passes `None` rather than `at`
+/// itself, which would stop at once and answer `.`.
+pub(crate) fn up(at: &Location, root: Option<&Location>) -> Location {
     let mut here = at.clone();
     loop {
-        if here.same(root) {
+        if root.is_some_and(|root| here.same(root)) {
             return here;
         }
         if Arc::ptr_eq(&here.dentry, here.mount.root()) {

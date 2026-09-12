@@ -96,10 +96,11 @@ impl Location {
         Arc::ptr_eq(&self.mount, &other.mount) && Arc::ptr_eq(&self.dentry, &other.dentry)
     }
 
-    /// `..`, with no root to stop at but the namespace's own.
+    /// `..`, with no root to stop at but the top of the tree: the namespace's
+    /// root, or a [`Location::detached`] one, which is its own parent.
     #[must_use]
     pub fn parent(&self) -> Location {
-        up(self, self)
+        up(self, None)
     }
 
     /// A place for an object no directory holds: a pipe.
