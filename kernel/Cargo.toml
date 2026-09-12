@@ -15,6 +15,7 @@ path = "src/main.rs"
 ferrix-acpi.workspace = true
 ferrix-bootinfo.workspace = true
 ferrix-fdt.workspace = true
+ferrix-fbtext.workspace = true
 ferrix-frame.workspace = true
 ferrix-elf.workspace = true
 ferrix-heap.workspace = true

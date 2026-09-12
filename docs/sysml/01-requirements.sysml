@@ -165,9 +165,10 @@ package FerrixRequirements {
             doc /* panic!, unreachable!, unwrap, expect and unchecked indexing
                  * are denied in production code; every exemption is an
                  * #[expect] whose reason begins AUDIT:. A reachable panic is
-                 * an unrecoverable machine. The kernel crate exempts panic!
-                 * alone, once, at its root: it is how a fatal condition with
-                 * nowhere to return stops the machine and says why. */
+                 * an unrecoverable machine. A fatal condition in the kernel
+                 * is fatal!, which names the catalog entry that explains it
+                 * and panics from inside the macro; a bare panic! is denied
+                 * there as everywhere. */
         }
         requirement <'P.14'> overflowChecksInRelease : DesignRule {
             doc /* Overflow checks stay on in release. A wrapped frame number

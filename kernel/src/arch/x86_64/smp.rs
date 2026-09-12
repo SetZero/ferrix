@@ -384,7 +384,10 @@ extern "C" fn secondary_start(record: u64) -> ! {
     unsafe { super::trap::load_on_this_cpu() };
     // SAFETY: once, on this processor, with interrupts masked.
     if let Err(problem) = unsafe { super::gdt::init_secondary() } {
-        panic!("a secondary processor could not build its GDT: {problem}");
+        crate::panic::fatal!(
+            crate::panic::catalog::SECONDARY_GDT,
+            "a secondary processor could not build its GDT: {problem}"
+        );
     }
     apic::init_this_cpu();
     crate::smp::secondary_main(record)

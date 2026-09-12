@@ -244,7 +244,11 @@ package FerrixStructure {
         #implemented part printer : Console {
             doc /* kernel/src/console.rs: println over the arch console, behind
                  * a lock that a panicking CPU waits a bounded time for, so a
-                 * fault while printing still produces its FERRIX-PANIC line. */
+                 * fault while printing still produces its FERRIX-PANIC line.
+                 * It keeps its last 4 KiB in a lock-free ring, which a panic
+                 * draws on the firmware framebuffer when there is one
+                 * (kernel/src/panic/screen.rs): the second in-kernel output
+                 * device, write-only and used for nothing else. */
         }
         #implemented part early : EarlyMemory;
         #implemented part trap : TrapDispatch;

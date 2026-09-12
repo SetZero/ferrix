@@ -53,6 +53,12 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // and a hand edit to either would otherwise drift silently.
     step("font", || python_with("scripts/gen-font.py", &["--check"]))?;
 
+    // The explanations a panic prints are rendered into a document, which
+    // goes stale the moment an entry changes without it.
+    step("panic catalog", || {
+        python_with("scripts/gen-panic-catalog.py", &["--check"])
+    })?;
+
     step("crate layering", || {
         let mut command = Command::new("bash");
         let _ = command

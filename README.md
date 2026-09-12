@@ -143,10 +143,11 @@ reproducible.
 
 Ported from the [Starling](https://github.com/Fancy-Mumble/starling) workspace:
 `cargo fmt --check`, clippy at `-D warnings` on all six targets, `cargo-deny`,
-Miri, fuzzing, and a lint table that denies `unwrap`, `expect`, `unreachable!`
-and unchecked indexing in production code, and `panic!` everywhere but the
-kernel, where it is how a fatal condition stops the machine — with every
-exemption argued at the site and checked by `scripts/check-panic-audit.py`.
+Miri, fuzzing, and a lint table that denies `unwrap`, `expect`, `panic!`,
+`unreachable!` and unchecked indexing in production code — a kernel that cannot
+go on says so with `fatal!`, which names the catalog entry explaining the
+failure — with every exemption argued at the site and checked by
+`scripts/check-panic-audit.py`.
 
 Three gates are this project's own:
 

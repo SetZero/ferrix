@@ -329,7 +329,10 @@ pub(crate) fn secondary_main(record: u64) -> ! {
         .get()
         .and_then(|topology| topology.cpus.iter().find(|cpu| cpu.this == record));
     let Some(expected) = expected else {
-        panic!("a secondary processor arrived with no record of its own");
+        crate::panic::fatal!(
+            crate::panic::catalog::SECONDARY_NO_RECORD,
+            "a secondary processor arrived with no record of its own"
+        );
     };
 
     // SAFETY: `expected` is a record in the leaked slice, and it is this
@@ -337,7 +340,11 @@ pub(crate) fn secondary_main(record: u64) -> ! {
     // exactly this processor and no other.
     unsafe { arch::set_cpu_local(expected.this) };
     if let Err(problem) = check_this_cpu(expected) {
-        panic!("secondary processor {}: {problem}", expected.logical);
+        crate::panic::fatal!(
+            crate::panic::catalog::SECONDARY_RECORD_MISMATCH,
+            "secondary processor {}: {problem}",
+            expected.logical
+        );
     }
     // Work handed out before this processor existed is not its to do.
     expected
@@ -558,6 +565,7 @@ pub(crate) fn flush_tlb_everywhere() {
         me,
         SHOOTDOWN_TIMEOUT_NANOS,
         "flushed its TLB for a shootdown",
+        &crate::panic::catalog::SHOOTDOWN_TIMEOUT,
         |cpu| cpu.tlb_seen.load(Ordering::SeqCst) >= generation,
     );
     let _ = SHOOTDOWNS.fetch_add(1, Ordering::Relaxed);
@@ -577,6 +585,7 @@ fn wait_for_everyone(
     me: &PerCpu,
     timeout: u64,
     what: &str,
+    entry: &'static crate::panic::catalog::Explanation,
     done: impl Fn(&PerCpu) -> bool,
 ) {
     let started = crate::timer::now_nanos();
@@ -587,7 +596,7 @@ fn wait_for_everyone(
             service_tlb(me);
             let now = crate::timer::now_nanos();
             if now.saturating_sub(started) > timeout {
-                panic!("processor {} never {what}", cpu.logical);
+                crate::panic::fatal!(*entry, "processor {} never {what}", cpu.logical);
             }
             if now.saturating_sub(kicked) > KICK_NANOS {
                 let _ = arch::send_ipi_to_others();
@@ -687,6 +696,7 @@ pub(crate) fn synchronize() {
             me,
             GRACE_TIMEOUT_NANOS,
             "left a read-side section for a grace period",
+            &crate::panic::catalog::GRACE_PERIOD_TIMEOUT,
             |cpu| cpu.gp_seen.load(Ordering::SeqCst) >= generation,
         );
     }

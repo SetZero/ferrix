@@ -1,8 +1,10 @@
 //! The kernel's early console.
 //!
-//! This is the one device driver inside the kernel, and `docs/ARCHITECTURE.md`
-//! §1 names it as the exception it is: every other device is driven from
-//! userspace. It exists because a panic before `devmgr` starts has to say
+//! This is one of the two output devices the kernel drives itself, and
+//! `docs/ARCHITECTURE.md` §1 names both as the exceptions they are: every other
+//! device is driven from userspace. The other is the framebuffer a panic is
+//! drawn on (`panic/screen.rs`), which draws what this module keeps of its
+//! recent output. It exists because a panic before `devmgr` starts has to say
 //! something, and because a boot test with no serial output cannot tell a
 //! kernel that hung from one that never ran.
 //!
@@ -113,10 +115,6 @@ fn remember(byte: u8) {
 /// Copy the most recent console output into `out`, oldest byte first, and
 /// return how many bytes were copied: at most `out.len()`, and never more
 /// than the ring has kept.
-#[expect(
-    dead_code,
-    reason = "the panic screen prints and encodes it; nothing else has a use for it yet"
-)]
 pub(crate) fn recent(out: &mut [u8]) -> usize {
     let written = RECENT_WRITTEN.load(Ordering::Relaxed);
     let count = written.min(RECENT_BYTES).min(out.len());

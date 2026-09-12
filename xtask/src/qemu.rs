@@ -252,6 +252,14 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
                 "-device",
                 "virtio-blk-device,drive=disk",
             ]);
+            if arch == Arch::AArch64 {
+                // A framebuffer for the panic screen. `virt` has no display
+                // device, and firmware offers graphics output only when there
+                // is one; ramfb is the simplest one edk2 drives, and it needs
+                // no display attached. ARMv7-A boots through U-Boot, which
+                // this has not been tried with.
+                let _ = command.args(["-device", "ramfb"]);
+            }
         }
     }
 

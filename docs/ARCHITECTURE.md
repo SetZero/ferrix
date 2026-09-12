@@ -59,9 +59,12 @@ fault is a process fault. The line is drawn at *devices*: filesystems and the
 page cache stay in the kernel because `rustc` touches them on every path, while
 the code that pokes a PCIe BAR does not.
 
-The one in-kernel device is a serial port writer, used for early boot and panic
-output only, when no userspace exists to talk to. It is named as an exception
-here so that it stays one.
+The kernel drives two output devices of its own, both write-only, and both named
+as exceptions here so that they stay the only ones. The serial port writer
+carries early boot and panic output, when no userspace exists to talk to. The
+firmware's framebuffer is drawn on only by a panic, once, with the same text the
+serial port carried, for a machine that has a screen and no cable. Neither is
+ever read, and neither is configured beyond what firmware left.
 
 ---
 

@@ -9,14 +9,6 @@
 
 #![no_std]
 #![no_main]
-// `panic!` is how the kernel stops on purpose: a fatal condition says what it
-// is, and `panic.rs` turns that into the report. The other panic lints —
-// `unwrap`, `expect`, `unreachable!`, indexing — stay denied here, and all of
-// them stay denied in `libs/`, which return their errors rather than raise them.
-#![expect(
-    clippy::panic,
-    reason = "AUDIT: panic! is the kernel's one way to stop on a fatal condition; see panic.rs"
-)]
 
 extern crate alloc;
 
@@ -54,6 +46,7 @@ use ferrix_paging::MapFlags;
 
 use console::println;
 use early::EarlyMemory;
+use panic::{catalog, fatal};
 
 /// What the boot test waits for. Changing it means changing
 /// `xtask/src/qemu.rs`, and the two are checked against each other there.
@@ -99,7 +92,10 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     report(view);
 
     if let Err(problem) = self_check(view, memory) {
-        panic!("stage 1 self-check failed: {problem}");
+        fatal!(
+            catalog::STAGE1_HANDOFF,
+            "stage 1 self-check failed: {problem}"
+        );
     }
     println!("  stage 1  loader hand-off verified");
 
@@ -114,21 +110,33 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
 
     let stats = match mm::init(view) {
         Ok(stats) => stats,
-        Err(problem) => panic!("could not bring up memory: {problem}"),
+        Err(problem) => fatal!(
+            catalog::MEMORY_BRING_UP,
+            "could not bring up memory: {problem}"
+        ),
     };
     report_memory(&stats);
 
     if let Err(problem) = vmap::init() {
-        panic!("could not bring up the kernel address arena: {problem}");
+        fatal!(
+            catalog::VMAP_ARENA_BRING_UP,
+            "could not bring up the kernel address arena: {problem}"
+        );
     }
 
     if let Err(problem) = memory_check(&stats, view.raw().kernel_phys) {
-        panic!("stage 2 self-check failed: {problem}");
+        fatal!(
+            catalog::STAGE2_ALLOCATORS,
+            "stage 2 self-check failed: {problem}"
+        );
     }
     println!("  stage 2  frame allocator, heap and vmap arena verified");
 
     if let Err(problem) = trap_check() {
-        panic!("stage 3 self-check failed: {problem}");
+        fatal!(
+            catalog::STAGE3_TRAPS,
+            "stage 3 self-check failed: {problem}"
+        );
     }
 
     // Everything above is synchronous: traps the kernel caused deliberately.
@@ -140,18 +148,27 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // vector table and while interrupts are still masked.
     let clocks = match unsafe { arch::init_interrupts(view) } {
         Ok(report) => report,
-        Err(problem) => panic!("could not bring up interrupts: {problem}"),
+        Err(problem) => fatal!(
+            catalog::INTERRUPT_BRING_UP,
+            "could not bring up interrupts: {problem}"
+        ),
     };
     report_clocks(&clocks);
 
     if let Err(problem) = timer::init() {
-        panic!("could not register the timer interrupt: {problem}");
+        fatal!(
+            catalog::TIMER_REGISTRATION,
+            "could not register the timer interrupt: {problem}"
+        );
     }
     arch::enable_interrupts();
 
     let measured = match timer_check() {
         Ok(hertz) => hertz,
-        Err(problem) => panic!("stage 3 self-check failed: {problem}"),
+        Err(problem) => fatal!(
+            catalog::STAGE3_TIMER,
+            "stage 3 self-check failed: {problem}"
+        ),
     };
     println!(
         "  stage 3  {} breakpoints, {} page faults, {} ticks at {} Hz",
@@ -195,7 +212,10 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // ACPI memory needs the tables to have been read, which happened in
     // `init_interrupts` above.
     if let Err(problem) = finish_memory(view) {
-        panic!("stage 2 self-check failed: {problem}");
+        fatal!(
+            catalog::STAGE2_FINISH_MEMORY,
+            "stage 2 self-check failed: {problem}"
+        );
     }
 
     println!("{SUCCESS_MARKER} stages 1-6");
@@ -214,7 +234,10 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
 fn check_user_memory() {
     let report = match user::check::run() {
         Ok(report) => report,
-        Err(problem) => panic!("stage 6 self-check failed: {problem}"),
+        Err(problem) => fatal!(
+            catalog::STAGE6_USER_MEMORY,
+            "stage 6 self-check failed: {problem}"
+        ),
     };
 
     println!(
@@ -240,7 +263,10 @@ fn check_user_memory() {
 fn check_syscalls() {
     let report = match syscall::check::run() {
         Ok(report) => report,
-        Err(problem) => panic!("stage 7 self-check failed: {problem}"),
+        Err(problem) => fatal!(
+            catalog::STAGE7_SYSCALLS,
+            "stage 7 self-check failed: {problem}"
+        ),
     };
 
     println!(
@@ -271,17 +297,26 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
     // Counting first, starting nothing.
     let cpus = match smp::discover(view) {
         Ok(topology) => topology,
-        Err(problem) => panic!("could not enumerate the processors: {problem}"),
+        Err(problem) => fatal!(
+            catalog::PROCESSOR_DISCOVERY,
+            "could not enumerate the processors: {problem}"
+        ),
     };
 
     // Then the rest of them. Each is started, waited for, and required to
     // find its own record through its own register before the next one is
     // started.
     if let Err(problem) = smp::start_secondaries(view) {
-        panic!("could not start the secondary processors: {problem}");
+        fatal!(
+            catalog::SECONDARY_START,
+            "could not start the secondary processors: {problem}"
+        );
     }
     if cpus.online() != cpus.count() {
-        panic!("not every processor firmware described came online");
+        fatal!(
+            catalog::PROCESSORS_MISSING,
+            "not every processor firmware described came online"
+        );
     }
     println!(
         "  cpus     {} described by firmware, {} online, booted on {} {:#x}",
@@ -293,7 +328,7 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
 
     let smp = match smp::check::run(cpus) {
         Ok(report) => report,
-        Err(problem) => panic!("stage 4 self-check failed: {problem}"),
+        Err(problem) => fatal!(catalog::STAGE4_SMP, "stage 4 self-check failed: {problem}"),
     };
     println!(
         "  smp      {} rounds of work on every processor, {} IPIs taken",
@@ -338,12 +373,18 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
 /// a thousand threads, did.
 fn start_scheduler(cpus: &'static smp::Topology) {
     if let Err(problem) = sched::init(cpus) {
-        panic!("could not start the scheduler: {problem}");
+        fatal!(
+            catalog::SCHEDULER_BRING_UP,
+            "could not start the scheduler: {problem}"
+        );
     }
 
     let report = match sched::run_checks(cpus) {
         Ok(report) => report,
-        Err(problem) => panic!("stage 5 self-check failed: {problem}"),
+        Err(problem) => fatal!(
+            catalog::STAGE5_SCHEDULER,
+            "stage 5 self-check failed: {problem}"
+        ),
     };
 
     println!(
@@ -1250,6 +1291,13 @@ fn check_direct_map(view: &BootView<'_>, memory: &EarlyMemory) -> Result<(), &'s
     Ok(())
 }
 
+/// How many bytes of a framebuffer hold visible lines: `stride` pixels of four
+/// bytes on each of `height` lines, and never more than firmware said it has.
+fn framebuffer_bytes(framebuffer: &ferrix_bootinfo::Framebuffer) -> u64 {
+    let pixels = u64::from(framebuffer.stride).saturating_mul(u64::from(framebuffer.height));
+    pixels.saturating_mul(4).min(framebuffer.size)
+}
+
 /// Prove the kernel can read and extend the page tables the loader left.
 ///
 /// Two things, both of which everything after stage 1 depends on. First that
@@ -1267,20 +1315,20 @@ fn check_early_mapper(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(
         None => return Err("the kernel image is not mapped in its own page tables"),
     }
 
-    // A device window the kernel has a real use for, when firmware left one.
-    // On QEMU's AArch64 `virt` there is no display, so this does not run there
-    // — the PL011 console took the same path a moment ago.
-    if info.framebuffer.is_present() {
+    // A device window the kernel has a real use for, when firmware left one:
+    // the visible part of the framebuffer, which is where a panic is drawn.
+    // The PL011 console took the same path a moment ago.
+    let framebuffer = info.framebuffer;
+    if framebuffer.is_present() {
         let at = vmap::FRAMEBUFFER_WINDOW;
-        if memory
-            .map_device(at, info.framebuffer.phys, PAGE_SIZE)
-            .is_err()
-        {
+        let len = framebuffer_bytes(&framebuffer).min(vmap::FRAMEBUFFER_WINDOW_SIZE);
+        if memory.map_device(at, framebuffer.phys, len).is_err() {
             return Err("could not map the framebuffer");
         }
-        if memory.translate(at) != Some(info.framebuffer.phys) {
+        if memory.translate(at) != Some(framebuffer.phys) {
             return Err("the framebuffer mapping does not resolve to the framebuffer");
         }
+        panic::screen::install(&framebuffer, at, len);
     }
 
     Ok(())

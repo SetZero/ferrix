@@ -104,11 +104,17 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
         // the registers mean.
         Trap::SystemCall => {
             if let Err(why) = arch::system_call(frame) {
-                fatal(frame, why);
+                fatal(frame, why, &crate::panic::catalog::SYSTEM_CALL_TRAP);
             }
         }
-        Trap::IllegalInstruction => fatal(frame, "illegal instruction"),
-        Trap::Fault { name, .. } => fatal(frame, name),
+        Trap::IllegalInstruction => fatal(
+            frame,
+            "illegal instruction",
+            &crate::panic::catalog::ILLEGAL_INSTRUCTION,
+        ),
+        Trap::Fault { name, .. } => {
+            fatal(frame, name, &crate::panic::catalog::UNEXPECTED_EXCEPTION)
+        }
     }
 }
 
@@ -163,28 +169,51 @@ fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {
         return;
     }
 
-    crate::console::begin_panic();
-    println!();
-    println!(
-        "FERRIX-PANIC page fault at {:#x} ({}{}{}{})",
-        fault.address,
-        if fault.user { "user " } else { "kernel " },
-        if fault.write { "write" } else { "read" },
-        if fault.execute { ", fetch" } else { "" },
-        if fault.present {
-            ", protection"
-        } else {
-            ", not mapped"
-        },
+    report(
+        frame,
+        format_args!(
+            "page fault at {:#x} ({}{}{}{})",
+            fault.address,
+            if fault.user { "user " } else { "kernel " },
+            if fault.write { "write" } else { "read" },
+            if fault.execute { ", fetch" } else { "" },
+            if fault.present {
+                ", protection"
+            } else {
+                ", not mapped"
+            },
+        ),
+        &crate::panic::catalog::UNHANDLED_PAGE_FAULT,
     );
-    fatal(frame, "unhandled page fault");
 }
 
 /// Report a trap the kernel cannot continue past, and stop the machine.
-fn fatal(frame: &arch::TrapFrame, what: &str) -> ! {
-    crate::console::begin_panic();
+fn fatal(
+    frame: &arch::TrapFrame,
+    what: &str,
+    entry: &'static crate::panic::catalog::Explanation,
+) -> ! {
+    report(frame, format_args!("{what}"), entry)
+}
+
+/// Report a trap under `headline`, with the registers it saved, and stop.
+///
+/// The opening lines are the trap's own. Everything after them — the
+/// processor, stopping the others, the trace, the explanation, the screen — is
+/// what every failure report has, and comes from `panic.rs`, so a fatal trap
+/// is drawn on the framebuffer as a panic is. One marker line, not two: the
+/// page fault's description is the headline, not a line above it.
+fn report(
+    frame: &arch::TrapFrame,
+    headline: core::fmt::Arguments<'_>,
+    entry: &'static crate::panic::catalog::Explanation,
+) -> ! {
+    let first = crate::panic::begin_report();
     println!();
-    println!("FERRIX-PANIC {what}");
+    println!("FERRIX-PANIC {headline}");
     arch::report_trap(frame);
-    arch::halt()
+    if !first {
+        crate::panic::abridged()
+    }
+    crate::panic::conclude(Some(entry))
 }

@@ -63,6 +63,9 @@ use crate::mm;
 /// Where early boot maps a framebuffer, when firmware left one.
 pub(crate) const FRAMEBUFFER_WINDOW: u64 = KERNEL_VMAP_BASE + KERNEL_VMAP_RESERVED / 16;
 
+/// How much the framebuffer window holds: up to where the demand window starts.
+pub(crate) const FRAMEBUFFER_WINDOW_SIZE: u64 = DEMAND_WINDOW - FRAMEBUFFER_WINDOW;
+
 /// Where stage 3's on-demand window begins.
 pub(crate) const DEMAND_WINDOW: u64 = KERNEL_VMAP_BASE + KERNEL_VMAP_RESERVED / 8;
 

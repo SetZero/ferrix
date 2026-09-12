@@ -49,14 +49,19 @@ Two rules, enforced by `scripts/check-panic-audit.py`:
 `.clippy.toml` exempts test bodies, where a failed assertion *should* panic with
 a clear message.
 
-### `panic!` in the kernel
+### Failing in the kernel: `fatal!`
 
-The kernel crate is the one exemption from the `panic` lint, and it takes it
-once, at the crate root. A self-check that fails in `kmain`, or a processor
-that never answers an interrupt, has nowhere to return an error to: the only
-thing left to do is say what happened and stop. Before this exemption every such
-site printed its own `FERRIX-PANIC` line and called `arch::halt()` by hand; now
-it is a `panic!` with a sentence, and `kernel/src/panic.rs` writes the report:
+A self-check that fails in `kmain`, or a processor that never answers an
+interrupt, has nowhere to return an error to. The only thing left to do is say
+what happened and stop. So a fatal site in the kernel is one line that names
+the catalog entry explaining the failure and says what went wrong there:
+
+```rust
+fatal!(catalog::STAGE3_TIMER, "stage 3 self-check failed: {problem}")
+```
+
+`fatal!` records the entry and panics, and `kernel/src/panic.rs` writes the
+report:
 
 ```text
 FERRIX-PANIC stage 2 self-check failed: the heap lost an allocation
@@ -89,15 +94,28 @@ the panic handler is a report nobody sees. The kernel prints only addresses. It
 carries no symbol table, so `xtask` names each frame from the ELF it booted, in
 the terminal and in the log.
 
-The exemption is deliberately narrow. `unwrap`, `expect`, `unreachable!` and
-indexing are still denied in the kernel, because each of those panics without
-saying why; `panic!` is only allowed because it has to. And nothing in `libs/`
-gets it: code that can be a pure function of its input returns its errors, and
-the kernel decides which of them are fatal.
+`panic!` itself stays denied in the kernel, as everywhere. The one inside
+`fatal!` is out of clippy's sight, and that is the design: a fatal site cannot be
+written without choosing the entry that explains it. `unwrap`, `expect`,
+`unreachable!` and indexing, which panic without saying why, stay denied too.
+Nothing in `libs/` gets `fatal!`. Code that can be a pure function of its input
+returns its errors, and the kernel decides which of them are fatal.
 
-The trap path's fatal reports do not go through `panic!`. They print the
-architecture's saved registers after the marker, and a panic message has no way
-to carry a trap frame.
+The catalog is `kernel/src/panic/catalog.rs`. Each entry has a stable code, a
+title, what the failed check establishes, the likely causes, and where to read
+more, and the report prints it below the trace. `scripts/gen-panic-catalog.py`
+checks the catalog and renders it into `docs/generated/PANICS.md`, so an
+explanation can be read without the machine that stopped. `cargo xtask check`
+fails when that document is stale.
+
+The trap path's fatal reports open with their own lines, the saved registers
+after the marker. Then they end the way a panic does: the processor, the others
+stopped, the trace, the catalog entry, and the screen.
+
+When firmware left a framebuffer, the report is drawn on it last, from the
+console's own recent output, so the screen and the serial log cannot disagree.
+It is the kernel's second output device, and `docs/ARCHITECTURE.md` names it as
+an exception beside the serial port.
 
 ## Overflow checks are on in release
 
