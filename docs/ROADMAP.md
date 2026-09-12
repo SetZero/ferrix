@@ -839,12 +839,23 @@ identity; a failure after that ends it with `SIGSEGV`'s status, as on Linux.
 `vfork` copies rather than lends memory, and the parent still sleeps until the
 child execs or ends. A new thread is still `ENOSYS`.
 
+**`futex` and `clone3`.** `futex` waits, wakes and requeues, plain and with a
+bitset, keyed by address space and user address, with the word compared under
+the table's lock so no wake is lost; the priority-inheritance operations and
+`FUTEX_WAKE_OP` are `ENOSYS`. `clone3` reads its argument structure by size and
+takes the same path as `clone`, which is what glibc tries first and falls back
+from only on `ENOSYS`. A process that ends clears its `clear_child_tid` word and
+wakes whoever waits on it. The boot test catches a wake that rouses nobody:
+
+      futex    a changed word got EAGAIN and a timed wait ETIMEDOUT; a wake and a requeue roused 2 waiters, and a wake that roused nobody was caught
+
 **Left, and why it did not block the exit:**
 
 * **Signal delivery and `rt_sigreturn`**, and `SIGSEGV` from the fault path,
   which is what rustc's stack-overflow guard needs. Owed with the first thing
   that has to kill a program.
-* **`futex` and threads**, which nothing single-threaded calls.
+* **Threads**, which nothing single-threaded calls: `CLONE_VM` without
+  `CLONE_VFORK`, and `CLONE_THREAD`, are `ENOSYS`.
 * **Everything that opens a file**, `fcntl` included — stage 8.
 * **Three stand-ins, each written down where it lives.** The console's `read`
   does a line discipline's job until stage 15 brings ttys; the real-time clocks
