@@ -10,7 +10,7 @@
 //! among the valid ones is the current filesystem.
 
 use crate::chunk::SysChunkArray;
-use crate::tree::{MAX_NODE_SIZE, MIN_NODE_SIZE};
+use crate::tree::{MAX_LEVEL, MAX_NODE_SIZE, MIN_NODE_SIZE};
 use crate::{
     BtrfsError, array_at, is_valid_block_size, slice_at, truncated, u8_at, u16_at, u32_at, u64_at,
     verify_crc32c,
@@ -262,8 +262,8 @@ pub fn mirror_fits(offset: u64, device_size: u64) -> bool {
 /// A validated superblock borrowing the 4 KiB it was read from.
 ///
 /// [`Superblock::parse`] has already checked the magic, the checksum type, the
-/// checksum itself and the block sizes, so every accessor is a plain field
-/// read.
+/// checksum itself, the block sizes and how they relate, and the levels and
+/// alignment of the tree roots, so every accessor is a plain field read.
 #[derive(Debug, Clone, Copy)]
 pub struct Superblock<'a> {
     bytes: &'a [u8],
@@ -299,15 +299,49 @@ impl<'a> Superblock<'a> {
         if !is_valid_block_size(sector, MIN_SECTOR_SIZE, MAX_SECTOR_SIZE) {
             return Err(BtrfsError::BadSectorSize(sector));
         }
+        // As `btrfs_validate_super`: a node is at least a sector. Every read in
+        // this crate assumes a node is whole sectors, and a node smaller than a
+        // sector is a unit the allocator never hands out.
         let node = sb.nodesize();
-        if !is_valid_block_size(node, MIN_NODE_SIZE, MAX_NODE_SIZE) {
+        if !is_valid_block_size(node, MIN_NODE_SIZE, MAX_NODE_SIZE) || node < sector {
             return Err(BtrfsError::BadNodeSize(node));
         }
+        // The retired `leafsize` still has to equal `nodesize`; Linux refuses
+        // a superblock where it does not. A disagreement means one of the two
+        // size fields is damaged, and nothing says which.
+        let leaf = sb.leafsize_or_unused();
+        if leaf != node {
+            return Err(BtrfsError::BadNodeSize(leaf));
+        }
+        sb.check_roots()?;
         let array_size = sb.sys_chunk_array_size();
         if array_size as usize > SYS_CHUNK_ARRAY_SIZE {
             return Err(BtrfsError::SysChunkArrayTooLarge(array_size));
         }
         Ok(sb)
+    }
+
+    /// Refuse a tree root no node could be at.
+    ///
+    /// `btrfs_validate_super` refuses a root, chunk root or log root level of
+    /// eight or more — deeper than any tree — and an address for any of them
+    /// that is not on a sector boundary, where no node starts. The walker would
+    /// refuse both on the first read; refusing them here keeps a superblock
+    /// that could never mount from parsing as if it were one. Reported as
+    /// [`BtrfsError::BadTree`] at the address the superblock names.
+    fn check_roots(&self) -> Result<(), BtrfsError> {
+        let sector = u64::from(self.sectorsize());
+        let roots = [
+            (self.root(), self.root_level()),
+            (self.chunk_root(), self.chunk_root_level()),
+            (self.log_root(), self.log_root_level()),
+        ];
+        for (logical, level) in roots {
+            if level > MAX_LEVEL || logical.checked_rem(sector) != Some(0) {
+                return Err(BtrfsError::BadTree { logical });
+            }
+        }
+        Ok(())
     }
 
     /// Parse a superblock and confirm it records the offset it was read from.

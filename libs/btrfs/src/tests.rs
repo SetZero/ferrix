@@ -79,14 +79,17 @@ mod offset {
     pub(super) const GENERATION: usize = 72;
     pub(super) const ROOT: usize = 80;
     pub(super) const CHUNK_ROOT: usize = 88;
+    pub(super) const LOG_ROOT: usize = 96;
     pub(super) const TOTAL_BYTES: usize = 112;
     pub(super) const SECTORSIZE: usize = 144;
     pub(super) const NODESIZE: usize = 148;
+    pub(super) const LEAFSIZE: usize = 152;
     pub(super) const SYS_CHUNK_ARRAY_SIZE: usize = 160;
     pub(super) const INCOMPAT_FLAGS: usize = 188;
     pub(super) const CSUM_TYPE: usize = 196;
     pub(super) const ROOT_LEVEL: usize = 198;
     pub(super) const CHUNK_ROOT_LEVEL: usize = 199;
+    pub(super) const LOG_ROOT_LEVEL: usize = 200;
     pub(super) const LABEL: usize = 299;
     pub(super) const SYS_CHUNK_ARRAY: usize = 811;
 }
@@ -108,12 +111,21 @@ impl SuperblockBuilder {
         put_u64(&mut bytes, offset::TOTAL_BYTES, 1 << 30);
         put_u32(&mut bytes, offset::SECTORSIZE, 4096);
         put_u32(&mut bytes, offset::NODESIZE, 16384);
+        // mkfs writes the retired leafsize equal to nodesize, and Linux
+        // refuses a superblock where it is anything else.
+        put_u32(&mut bytes, offset::LEAFSIZE, 16384);
         put_u16(&mut bytes, offset::CSUM_TYPE, 0);
         bytes[offset::ROOT_LEVEL] = 1;
         bytes[offset::CHUNK_ROOT_LEVEL] = 0;
         let label = b"ferrix";
         bytes[offset::LABEL..offset::LABEL + label.len()].copy_from_slice(label);
         SuperblockBuilder { bytes }
+    }
+
+    /// Change the bytes at `at`, for a test that needs one field wrong.
+    fn field(mut self, at: usize, value: &[u8]) -> Self {
+        self.bytes[at..at + value.len()].copy_from_slice(value);
+        self
     }
 
     fn sys_chunk_array(mut self, array: &[u8]) -> Self {
@@ -222,6 +234,101 @@ fn a_truncated_superblock_is_refused() {
             "a {length}-byte superblock must not parse"
         );
     }
+}
+
+#[test]
+fn a_superblock_whose_sizes_disagree_is_refused() {
+    let sizes = |sector: u32, node: u32, leaf: u32| {
+        SuperblockBuilder::new()
+            .field(offset::SECTORSIZE, &sector.to_le_bytes())
+            .field(offset::NODESIZE, &node.to_le_bytes())
+            .field(offset::LEAFSIZE, &leaf.to_le_bytes())
+            .build()
+    };
+    for (bytes, expected, what) in [
+        (
+            sizes(65536, 4096, 8192),
+            BtrfsError::BadNodeSize(4096),
+            "nodes smaller than a sector, with a leafsize disagreeing too",
+        ),
+        (
+            sizes(16384, 8192, 8192),
+            BtrfsError::BadNodeSize(8192),
+            "nodes smaller than a sector",
+        ),
+        (
+            sizes(4096, 16384, 8192),
+            BtrfsError::BadNodeSize(8192),
+            "a leafsize other than the nodesize",
+        ),
+        (
+            sizes(4096, 16384, 0),
+            BtrfsError::BadNodeSize(0),
+            "a zero leafsize",
+        ),
+    ] {
+        assert_eq!(Superblock::parse(&bytes).unwrap_err(), expected, "{what}");
+    }
+    for (sector, node) in [(4096, 4096), (65536, 65536), (512, 4096)] {
+        assert!(
+            Superblock::parse(&sizes(sector, node, node)).is_ok(),
+            "sectorsize {sector} with nodesize {node} is a volume mkfs could make"
+        );
+    }
+}
+
+#[test]
+fn a_superblock_naming_an_impossible_root_is_refused() {
+    let with = |at: usize, value: &[u8]| SuperblockBuilder::new().field(at, value).build();
+    for (bytes, logical, what) in [
+        (
+            with(offset::ROOT_LEVEL, &[8]),
+            0x2000_0000,
+            "a root level of 8",
+        ),
+        (
+            with(offset::CHUNK_ROOT_LEVEL, &[8]),
+            0x1000_0000,
+            "a chunk root level of 8",
+        ),
+        (
+            with(offset::LOG_ROOT_LEVEL, &[0xFF]),
+            0,
+            "a log root level of 255",
+        ),
+        (
+            with(offset::ROOT, &0x2000_0200u64.to_le_bytes()),
+            0x2000_0200,
+            "a root between sectors",
+        ),
+        (
+            with(offset::CHUNK_ROOT, &0x1000_0001u64.to_le_bytes()),
+            0x1000_0001,
+            "a chunk root between sectors",
+        ),
+        (
+            with(offset::LOG_ROOT, &0x3000_0800u64.to_le_bytes()),
+            0x3000_0800,
+            "a log root between sectors",
+        ),
+    ] {
+        assert_eq!(
+            Superblock::parse(&bytes).unwrap_err(),
+            BtrfsError::BadTree { logical },
+            "{what}"
+        );
+    }
+
+    let deepest = SuperblockBuilder::new()
+        .field(offset::ROOT_LEVEL, &[7])
+        .field(offset::CHUNK_ROOT_LEVEL, &[7])
+        .field(offset::LOG_ROOT_LEVEL, &[7])
+        .field(offset::LOG_ROOT, &0x3000_1000u64.to_le_bytes())
+        .build();
+    assert!(
+        Superblock::parse(&deepest).is_ok(),
+        "level 7 roots on sector boundaries are the deepest btrfs builds"
+    );
 }
 
 #[test]
