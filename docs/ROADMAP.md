@@ -1360,12 +1360,35 @@ publishes no aperture. A driver for such a device waits on the item below.
 
 **Still to do, in the order it can be done:**
 
-* **Trusting a BAR firmware placed but did not enable.** Check a function's
-  BAR against its host bridge's memory windows — the device tree's `ranges` on
-  the Arm machines — and turn decoding on for one that fits, so a device no
-  firmware driver used can still be given to a ring-3 one. Under ACPI the
-  windows are in AML, which Ferrix will not interpret, so there it needs
-  another source or stays refused.
+* **Trusting a BAR firmware placed but did not enable**, so a device no
+  firmware driver used — virtio-rng on AArch64 today — can still be given to a
+  ring-3 driver. Worked out with the review that found the gap:
+  * *Where the windows are.* The device tree's `ranges` on the Arm machines.
+    Under ACPI they are in `_CRS`, which is AML — but before
+    `ExitBootServices` the loader can ask each root bridge's
+    `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL.Configuration()`, which returns the same
+    windows as ACPI address-space descriptors, and carry them in `BootInfo`
+    beside the MCFG. The descriptor layout is to be checked against the UEFI
+    specification and EDK2's `PciHostBridgeDxe`, not remembered.
+  * *Bus address, not CPU address.* A BAR holds a PCI bus address; match it
+    in bus space and build the aperture from the translated CPU address.
+    QEMU's `virt` translates by zero, which hides a missing translation.
+  * *The window's kind.* A 32-bit memory BAR only in a 32-bit memory window,
+    never a memory BAR in an I/O one; a prefetchable BAR may use a
+    non-prefetchable window, not the reverse.
+  * *The whole BAR*, `[base, base + size)`, inside one window, and inside the
+    forwarding window of every bridge upstream of it, each of them decoding.
+  * *Order.* Decoding-on BARs are admitted to the overlap set first, so a
+    stale decoding-off assignment cannot block a live device.
+  * *When decoding goes on:* at `IoMapping` creation, not at enumeration, so
+    a device nobody drives stays quiet. The boot check's entropy read turns it
+    on today, and until this lands it refuses a register block that overlaps
+    memory the kernel owns rather than vetting it against the windows.
+  * *Unassigned BARs* — zero, or a reset value — fall outside every window,
+    and are reported as unassigned rather than as outside one.
+  * Later, on the device tree machines: assign addresses to decoding-off
+    functions inside the windows, as Linux does unless `linux,pci-probe-only`
+    is set, rather than depend on firmware's choice.
 * **MSI-X vectors for PCI nodes.** A PCI node has apertures and no vectors.
   The messages and the table layout are written; what is missing is the
   allocator behind the architecture facade — local APIC vectors on x86-64, the

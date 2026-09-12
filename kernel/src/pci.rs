@@ -413,7 +413,7 @@ fn check_host(
     }
 
     for function in found {
-        let (regions, msix, decoding) = check_function(&mut space, function, report)?;
+        let (regions, msix, decoding) = check_function(&mut space, function, reserved, report)?;
         nodes.push(DeviceNode::pci(
             function.address,
             &regions,
@@ -431,6 +431,7 @@ fn check_host(
 fn check_function(
     space: &mut Space,
     function: Function,
+    reserved: &Reserved,
     report: &mut Report,
 ) -> Result<(Vec<Region>, Option<MsiX>, bool), Failure> {
     let Function { address, identity } = function;
@@ -483,7 +484,7 @@ fn check_function(
         transport.verify(&regions)?;
         report.virtio += 1;
         if kind == TYPE_ENTROPY {
-            match virtio::entropy(space, address, &transport, &regions)? {
+            match virtio::entropy(space, address, &transport, &regions, reserved)? {
                 virtio::Entropy::Read(written) => {
                     report.entropy_bytes = report.entropy_bytes.saturating_add(written);
                 }

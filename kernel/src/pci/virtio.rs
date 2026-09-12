@@ -41,6 +41,7 @@ use ferrix_virtio::pci::{
 use ferrix_virtio::{Buffer, Layout, QueueMemory, SplitQueue};
 
 use super::{Failure, Space};
+use crate::device::Reserved;
 use crate::mm;
 use crate::mmio::Mmio;
 use crate::timer;
@@ -85,14 +86,14 @@ struct Block {
 }
 
 impl Block {
-    /// Map the block `location` names, in the memory BAR `regions` holds for
-    /// it.
+    /// Where the block `location` names is, in the memory BAR `regions` holds
+    /// for it, as a physical address and a length.
     ///
     /// `Transport::verify` has already required the block to lie inside a
     /// memory BAR; the BAR kind is checked again here because the address of
     /// an I/O BAR is a port number, and mapping it as physical memory would
     /// write the device's registers into whatever RAM that number names.
-    fn map(location: Location, regions: &[Region]) -> Result<Self, &'static str> {
+    fn locate(location: Location, regions: &[Region]) -> Result<(u64, u64), &'static str> {
         let region = regions
             .iter()
             .find(|region| region.index == location.bar)
@@ -103,7 +104,11 @@ impl Block {
         let phys = address
             .checked_add(u64::from(location.offset))
             .ok_or("a virtio block's address overflows")?;
-        let len = u64::from(location.length);
+        Ok((phys, u64::from(location.length)))
+    }
+
+    /// Map `len` bytes of registers at `phys`.
+    fn map(phys: u64, len: u64) -> Result<Self, &'static str> {
         let virt = vmap::map_device(phys, len).map_err(|_| "a virtio block could not be mapped")?;
         Ok(Block {
             registers: Mmio::at(virt),
@@ -231,6 +236,14 @@ const fn refusal(error: TransportError) -> &'static str {
 /// before the pages are freed or the command register restored. A device
 /// that will not reset keeps both off and its pages are never given back.
 ///
+/// Decoding is not turned on at all if either register block overlaps memory
+/// `reserved` names. A BAR's address is whatever the register holds; on a
+/// function firmware left decoding off, nothing says firmware put it there,
+/// and enabling decoding over RAM or another controller's registers is
+/// exactly what the aperture screening exists to prevent. Checking a BAR
+/// against the host bridge's windows is the fuller answer, and the roadmap
+/// says what it needs.
+///
 /// # Errors
 ///
 /// Only a completion that cannot be right; see the module documentation.
@@ -239,6 +252,7 @@ pub(super) fn entropy(
     address: Address,
     transport: &Transport,
     regions: &[Region],
+    reserved: &Reserved,
 ) -> Result<Entropy, Failure> {
     if transport.common.length < COMMON_CONFIG_LEN {
         return Ok(Entropy::Skipped(
@@ -246,8 +260,23 @@ pub(super) fn entropy(
         ));
     }
     let (common, notify) = match (
-        Block::map(transport.common, regions),
-        Block::map(transport.notify, regions),
+        Block::locate(transport.common, regions),
+        Block::locate(transport.notify, regions),
+    ) {
+        (Ok(common), Ok(notify)) => (common, notify),
+        (Err(why), _) | (_, Err(why)) => return Ok(Entropy::Skipped(why)),
+    };
+    if [common, notify]
+        .iter()
+        .any(|&(phys, len)| reserved.overlaps(phys, len))
+    {
+        return Ok(Entropy::Skipped(
+            "a virtio block overlaps memory the kernel owns, so decoding stays off",
+        ));
+    }
+    let (common, notify) = match (
+        Block::map(common.0, common.1),
+        Block::map(notify.0, notify.1),
     ) {
         (Ok(common), Ok(notify)) => (common, notify),
         (Err(why), _) | (_, Err(why)) => return Ok(Entropy::Skipped(why)),

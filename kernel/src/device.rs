@@ -207,6 +207,14 @@ impl Reserved {
         }
     }
 
+    /// Whether `len` bytes at `start` overlap anything reserved.
+    pub(crate) fn overlaps(&self, start: u64, len: u64) -> bool {
+        let end = start.saturating_add(len);
+        self.ranges
+            .iter()
+            .any(|&(low, high)| start < high && low < end)
+    }
+
     /// Whether `aperture` overlaps anything reserved.
     fn covers(&self, aperture: Aperture) -> bool {
         self.ranges
