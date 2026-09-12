@@ -50,8 +50,9 @@ impl MemoryType {
     pub(crate) const FERRIX_BOOT_STACK: MemoryType = MemoryType(0x8000_0002);
     /// The boot info structure and the memory map array inside it.
     pub(crate) const FERRIX_BOOT_INFO: MemoryType = MemoryType(0x8000_0003);
+    /// The initial ramdisk, when the image carries one.
+    pub(crate) const FERRIX_INITRD: MemoryType = MemoryType(0x8000_0004);
     /// The loader's copy of the device tree, which the kernel keeps for good.
-    /// `0x8000_0004` is the initial ramdisk's, when there is one.
     pub(crate) const FERRIX_DEVICE_TREE: MemoryType = MemoryType(0x8000_0005);
 }
 

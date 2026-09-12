@@ -255,6 +255,40 @@ fn an_unlinked_file_stays_readable_through_an_open_description() {
 }
 
 #[test]
+fn an_unlinked_or_replaced_file_is_freed_once_nothing_holds_it() {
+    let (ns, ctx) = fresh();
+    write_file(&ns, &ctx, "/doomed", b"x");
+    write_file(&ns, &ctx, "/replaced", b"y");
+    write_file(&ns, &ctx, "/replacement", b"z");
+    let inode_of = |path: &str| {
+        let file = ns.open(&ctx, None, path.as_bytes(), &READ, 0).unwrap();
+        Arc::downgrade(file.inode())
+    };
+    let doomed = inode_of("/doomed");
+    let replaced = inode_of("/replaced");
+    for _ in 0..3 {
+        let _ = read_file(&ns, &ctx, "/doomed");
+        let _ = read_file(&ns, &ctx, "/replaced");
+    }
+    ns.unlink(&ctx, None, b"/doomed").unwrap();
+    ns.rename(
+        &ctx,
+        (None, b"/replacement"),
+        (None, b"/replaced"),
+        RenameMode::Replace,
+    )
+    .unwrap();
+    assert!(
+        doomed.upgrade().is_none(),
+        "the cache kept an unlinked file alive"
+    );
+    assert!(
+        replaced.upgrade().is_none(),
+        "the cache kept a replaced file alive"
+    );
+}
+
+#[test]
 fn reading_a_directory_is_eisdir_and_writing_one_cannot_be_opened() {
     let (ns, ctx) = fresh();
     ns.mkdir(&ctx, None, b"/d", 0o755).unwrap();

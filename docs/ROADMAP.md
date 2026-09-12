@@ -28,8 +28,9 @@ a binary the repository does not carry; its section lists what the Linux
 surface still owes. Stages 8 and 9 have both begun where the continuous rule
 says a stage should: their byte-level halves are in `libs/` — the VFS in
 `libs/vfs`, the handle table in `libs/objects`. Stage 9's first kernel objects
-— handle tables, channels carrying handles, VMOs — are in the boot test;
-stage 8's kernel code does not exist yet.
+— handle tables, channels carrying handles, VMOs — are in the boot test, and
+so is stage 8's root filesystem, unpacked at boot from an initramfs the loader
+hands over.
 Stage 10 has begun the same way, with PCI configuration space in `libs/pci`.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
@@ -852,14 +853,28 @@ the code that should meet a fuzzer before it meets ring 0.
   and device nodes included, and **the `getdents64` packer**, whose names start
   at byte 19 rather than at the structure's size of 24.
 
-36 host tests, the `vfs_ops` fuzz target — which asserts that every name a
+37 host tests, the `vfs_ops` fuzz target — which asserts that every name a
 listing reports resolves to the inode the listing gave, the property a stale
 cache entry breaks — and a Miri step.
 
-**Still to do — everything that needs the machine.** The loader handing the
-kernel an initramfs (`BootInfo.initrd_*` is written as zero today); the VMO
-page store; the kernel's namespace, and a descriptor table on `Process` in
-place of the three hardcoded console descriptors; the file system calls —
+**Done — the root, built at boot from what the loader hands over.** The
+loader reads `FERRIX/INITRD.IMG` into memory nothing reclaims; it is optional,
+so a card flashed without one boots as it did. xtask writes the archive itself,
+the same bytes on every build. The kernel unpacks it into a tmpfs root through
+the same VFS calls a program makes, and mounts a second tmpfs on `/tmp`. File
+contents are VMO pages, created at a tebibyte and paid for by the page, so the
+object `read` copies out of is the one `mmap` of the file will map. The boot
+check reads the archive's marker back through its hard link and its symbolic
+link, then writes a file across pages under `/tmp`, truncates into it, grows it
+and removes it:
+
+```
+  initrd   2 KiB unpacked: 6 directories, 2 files, 1 hard links, 1 symbolic links, 0 refused, verified true
+  tmpfs    4 pages written through a VMO and read back, 0 frames leaked
+```
+
+**Still to do.** A descriptor table on `Process` in place of the three
+hardcoded console descriptors; the file system calls —
 `openat`, `getdents64`, `newfstatat`, `lseek`, `dup3`, `chdir` and `getcwd`,
 `mkdirat`, `unlinkat`, `renameat2`, `readlinkat`, and `fcntl`, whose
 `F_GETFL` on the console busybox's `printf` needs before it will print; devfs
@@ -1124,7 +1139,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 52 |
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
-| `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 36 |
+| `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 37 |
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory. | 50 |
 | `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport. Has its fuzz target and its Miri step already. | 37 |
 | `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
@@ -1132,7 +1147,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **592 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **593 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

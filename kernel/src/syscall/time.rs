@@ -41,7 +41,7 @@ pub(crate) enum TimeWidth {
 /// x86-64 QEMU machine, so `counter * 10^9` overflows 64 bits after about three
 /// minutes of uptime -- and with overflow checks on, that is a kernel panic
 /// inside a system call three minutes into the first interactive session.
-fn now_nanos() -> u64 {
+pub(crate) fn now_nanos() -> u64 {
     let hz = arch::counter_hz();
     if hz == 0 {
         return 0;

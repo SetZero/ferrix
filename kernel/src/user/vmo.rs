@@ -303,6 +303,22 @@ impl Vmo {
         }
         given
     }
+
+    /// Give back every page from `first` to the end, and report how many held
+    /// a frame.
+    ///
+    /// What truncating a file does. Not [`Vmo::decommit_range`] over the rest
+    /// of the object, because a file's object is sized for the largest file
+    /// the filesystem allows -- hundreds of millions of pages -- and a loop
+    /// over indices would visit every one of them to find the handful that are
+    /// committed. Splitting the sparse list visits only those.
+    pub(crate) fn decommit_from(&self, first: u64) -> usize {
+        let released = self.pages.lock().split_off(&first);
+        for frame in released.values() {
+            let _ = mm::release_frame(*frame);
+        }
+        released.len()
+    }
 }
 
 impl Drop for Vmo {

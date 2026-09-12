@@ -18,5 +18,10 @@ publish.workspace = true
 # was a second ELF reader here that nothing fuzzes.
 ferrix-elf.workspace = true
 
+[dev-dependencies]
+# The kernel's own cpio reader, so the archive `initramfs.rs` writes is tested
+# against the code that will read it rather than against a second opinion.
+ferrix-cpio.workspace = true
+
 [lints]
 workspace = true

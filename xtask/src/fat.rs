@@ -473,6 +473,10 @@ pub(crate) fn write_image(arch: Arch, loader: &Path, kernel: &Path) -> Result<Pa
         &loader_bytes,
     )?;
     fs.add_file("FERRIX/KERNEL.ELF", &kernel_bytes)?;
+    // Beside the kernel, where the loader looks for it. Every image carries
+    // one, because stage 8's self-check reads its files back through the VFS.
+    let initramfs = crate::initramfs::build()?;
+    fs.add_file("FERRIX/INITRD.IMG", &initramfs)?;
 
     let directory = paths::build_dir(arch);
     std::fs::create_dir_all(&directory)?;
@@ -480,10 +484,11 @@ pub(crate) fn write_image(arch: Arch, loader: &Path, kernel: &Path) -> Result<Pa
     std::fs::write(&image, fs.finish())?;
 
     println!(
-        "  image {} ({} KiB loader, {} KiB kernel)",
+        "  image {} ({} KiB loader, {} KiB kernel, {} KiB initramfs)",
         image.display(),
         loader_bytes.len() / 1024,
-        kernel_bytes.len() / 1024
+        kernel_bytes.len() / 1024,
+        initramfs.len().div_ceil(1024)
     );
     Ok(image)
 }

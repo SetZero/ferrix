@@ -26,6 +26,9 @@ const BOOT_DIRECTORY: &str = "EFI/BOOT";
 /// Where the kernel goes, as the loader looks for it.
 const KERNEL_PATH: &str = "FERRIX/KERNEL.ELF";
 
+/// Where the initramfs goes, beside the kernel.
+const INITRD_PATH: &str = "FERRIX/INITRD.IMG";
+
 /// Copy a freshly built loader and kernel onto the card.
 pub(crate) fn run(arch: Arch, loader: &Path, kernel: &Path, args: &Args) -> Result<()> {
     let target = match args.to.as_deref() {
@@ -48,6 +51,11 @@ pub(crate) fn run(arch: Arch, loader: &Path, kernel: &Path, args: &Args) -> Resu
 
     copy(loader, &loader_target)?;
     copy(kernel, &kernel_target)?;
+    // The same archive an image carries, so a board unpacks what QEMU does.
+    let initramfs_target = target.join(INITRD_PATH);
+    std::fs::write(&initramfs_target, crate::initramfs::build()?)
+        .map_err(|error| Error::new(format!("writing {}: {error}", initramfs_target.display())))?;
+    println!("    {}", initramfs_target.display());
 
     // A card pulled from the slot with dirty pages still in the page cache is
     // a card with a truncated kernel on it, and the symptom is a loader that

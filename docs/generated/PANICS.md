@@ -40,6 +40,8 @@ Causes are listed most likely first.
 | [FX-0502](#fx-0502) | the scheduler failed its self-check |
 | [FX-0601](#fx-0601) | the memory a process is built from failed its self-check |
 | [FX-0701](#fx-0701) | the system call dispatch path failed its self-check |
+| [FX-0801](#fx-0801) | the root filesystem could not be built |
+| [FX-0802](#fx-0802) | the root filesystem failed its self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
@@ -559,6 +561,48 @@ would pass every host test and answer a program's `write` with a different call.
 
 See: kernel/src/syscall/check.rs run; kernel/src/syscall/mod.rs dispatch;
 libs/linux-abi; docs/ROADMAP.md stage 7.
+
+<a id="fx-0801"></a>
+
+## FX-0801 — the root filesystem could not be built
+
+`fs::init` unpacks the initramfs the loader handed over into a tmpfs root and
+mounts a second tmpfs on /tmp. Every program resolves its paths in that tree, so
+a kernel that could not build it has nowhere to find a program or put a file.
+The archive is read through the direct map from memory the loader reserved as
+`Initrd`.
+
+1. The archive is malformed or truncated: `xtask/src/initramfs.rs` wrote
+   something the newc reader in `libs/cpio` refuses, or the loader read less of
+   FERRIX/INITRD.IMG than it reported.
+2. The loader placed the archive outside the direct map, which it is meant to
+   refuse before the hand-off.
+3. An entry could not be created: tmpfs refused it, or memory for file contents
+   ran out.
+
+See: kernel/src/fs/mod.rs init; libs/vfs/src/initramfs.rs;
+xtask/src/initramfs.rs; boot/src/main.rs load_initrd; docs/ROADMAP.md stage 8.
+
+<a id="fx-0802"></a>
+
+## FX-0802 — the root filesystem failed its self-check
+
+`fs::check::run` requires the unpacked archive to hold what the build wrote, its
+hard link to be a second name for the marker rather than a copy, and its
+symbolic link to lead there. It requires /tmp to be a filesystem of its own, and
+a file there to read back across page boundaries, to read zeros past a
+truncation rather than the bytes it cut off, to survive a rename, and to give
+every frame back once it is gone.
+
+1. The marker in `kernel/src/fs/check.rs` and the one in
+   `xtask/src/initramfs.rs` have drifted apart.
+2. The VMO page store copies through the wrong frame or offset, or
+   `Vmo::decommit_from` does not release what a truncation discards.
+3. The dentry cache keeps an unlinked file's inode alive, so its pages outlive
+   it and show up as leaked frames.
+
+See: kernel/src/fs/check.rs run; kernel/src/fs/pages.rs; kernel/src/user/vmo.rs
+decommit_from; libs/vfs/src/namespace.rs; docs/ROADMAP.md stage 8.
 
 <a id="fx-0901"></a>
 

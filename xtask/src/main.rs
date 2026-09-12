@@ -31,6 +31,7 @@ mod cargo;
 mod check;
 mod fat;
 mod flash;
+mod initramfs;
 mod paths;
 mod pe;
 mod qemu;

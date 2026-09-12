@@ -593,6 +593,50 @@ pub(crate) static STAGE7_SYSCALLS: Explanation = Explanation {
           docs/ROADMAP.md stage 7",
 };
 
+/// For `check_filesystems` in `main.rs`, when `fs::init` fails.
+pub(crate) static STAGE8_ROOT: Explanation = Explanation {
+    code: "FX-0801",
+    title: "the root filesystem could not be built",
+    meaning: "`fs::init` unpacks the initramfs the loader handed over into a tmpfs root and \
+              mounts a second tmpfs on /tmp. Every program resolves its paths in that tree, \
+              so a kernel that could not build it has nowhere to find a program or put a \
+              file. The archive is read through the direct map from memory the loader \
+              reserved as `Initrd`.",
+    causes: &[
+        "The archive is malformed or truncated: `xtask/src/initramfs.rs` wrote something the \
+         newc reader in `libs/cpio` refuses, or the loader read less of FERRIX/INITRD.IMG \
+         than it reported.",
+        "The loader placed the archive outside the direct map, which it is meant to refuse \
+         before the hand-off.",
+        "An entry could not be created: tmpfs refused it, or memory for file contents ran \
+         out.",
+    ],
+    see: "kernel/src/fs/mod.rs init; libs/vfs/src/initramfs.rs; xtask/src/initramfs.rs; \
+          boot/src/main.rs load_initrd; docs/ROADMAP.md stage 8",
+};
+
+/// For `check_filesystems` in `main.rs`, when `fs::check::run` fails.
+pub(crate) static STAGE8_FILESYSTEM: Explanation = Explanation {
+    code: "FX-0802",
+    title: "the root filesystem failed its self-check",
+    meaning: "`fs::check::run` requires the unpacked archive to hold what the build wrote, its \
+              hard link to be a second name for the marker rather than a copy, and its \
+              symbolic link to lead there. It requires /tmp to be a filesystem of its own, \
+              and a file there to read back across page boundaries, to read zeros past a \
+              truncation rather than the bytes it cut off, to survive a rename, and to give \
+              every frame back once it is gone.",
+    causes: &[
+        "The marker in `kernel/src/fs/check.rs` and the one in `xtask/src/initramfs.rs` have \
+         drifted apart.",
+        "The VMO page store copies through the wrong frame or offset, or `Vmo::decommit_from` \
+         does not release what a truncation discards.",
+        "The dentry cache keeps an unlinked file's inode alive, so its pages outlive it and \
+         show up as leaked frames.",
+    ],
+    see: "kernel/src/fs/check.rs run; kernel/src/fs/pages.rs; kernel/src/user/vmo.rs \
+          decommit_from; libs/vfs/src/namespace.rs; docs/ROADMAP.md stage 8",
+};
+
 /// For `handle_page_fault` in `trap.rs`, the `unhandled page fault` report.
 pub(crate) static UNHANDLED_PAGE_FAULT: Explanation = Explanation {
     code: "FX-9001",
@@ -710,6 +754,8 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE5_SCHEDULER,
     &STAGE6_USER_MEMORY,
     &STAGE7_SYSCALLS,
+    &STAGE8_ROOT,
+    &STAGE8_FILESYSTEM,
     &STAGE9_OBJECTS,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,

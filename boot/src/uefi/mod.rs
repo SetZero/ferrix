@@ -39,6 +39,9 @@ impl Status {
     /// Expected, not exceptional: how `get_memory_map` reports the size it
     /// needs when asked with a zero-length buffer.
     pub(crate) const BUFFER_TOO_SMALL: Status = Status(Status::ERROR_BIT | 5);
+    /// Expected, not exceptional: how opening a file that is not on the volume
+    /// fails, which is how an image with no initramfs says so.
+    pub(crate) const NOT_FOUND: Status = Status(Status::ERROR_BIT | 14);
 
     /// True if the call succeeded.
     pub(crate) const fn is_success(self) -> bool {

@@ -288,7 +288,21 @@ impl Services {
     /// pages.
     pub(crate) fn read_file(&self, path: &str, kind: MemoryType) -> Result<(Allocation, u64)> {
         let root = self.open_volume()?;
-        let file = self.open_file(root, path)?;
+        let file = match self.open_file(root, path) {
+            Ok(file) => file,
+            Err(error) => {
+                // A missing file is an answer a caller may expect -- the
+                // initramfs is optional -- so the volume handle must not
+                // outlive it.
+                //
+                // SAFETY: firmware returned `root` from `open_volume`, so it is
+                // a live `FileProtocol`.
+                let volume = unsafe { &*root };
+                // SAFETY: `root` is open and is closed exactly once, here.
+                let _ = unsafe { (volume.close)(root) };
+                return Err(error);
+            }
+        };
 
         let size = self.file_size(file)?;
         let allocation = self.allocate("allocating for a file", size.max(1), kind)?;

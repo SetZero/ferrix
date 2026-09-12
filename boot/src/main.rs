@@ -40,6 +40,9 @@ use uefi::{Handle, Status};
 /// Where the kernel lives on the EFI system partition.
 const KERNEL_PATH: &str = "/FERRIX/KERNEL.ELF";
 
+/// Where the initramfs is, when the image carries one.
+const INITRD_PATH: &str = "/FERRIX/INITRD.IMG";
+
 /// Bytes set aside for the boot info structure and the memory map behind it.
 /// At 24 bytes a region this holds around 2700 of them; firmware typically
 /// reports fewer than a hundred.
@@ -108,6 +111,7 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
         MemoryType::FERRIX_BOOT_INFO,
     )?;
     let device_tree = copy_device_tree(&services)?;
+    let initrd = load_initrd(&services)?;
     let map_buffer = services.allocate(
         "allocating the memory map buffer",
         services.memory_map_size()?,
@@ -133,6 +137,7 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     if !handed_over
         .into_iter()
         .chain(copied)
+        .chain(initrd.map(|(file, _)| file))
         .all(|allocation| direct.covers(allocation))
     {
         return Err(BootError::plain(
@@ -162,7 +167,10 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
         stack,
         info_area,
         direct,
-        device_tree,
+        Carried {
+            device_tree,
+            initrd,
+        },
     );
 
     // Past this line firmware is gone: no allocation, no console, no protocols.
@@ -184,6 +192,9 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     if let Some((copy, _)) = device_tree {
         arch::clean_dcache(copy.address, copy.len);
     }
+    if let Some((file, _)) = initrd {
+        arch::clean_dcache(file.address, file.len);
+    }
 
     // SAFETY: boot services are gone, `prepare_cpu` ran above, and the tables
     // in `space` identity map the loader's own code, which is what makes the
@@ -198,6 +209,26 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
             stack_top: direct.address(stack.address + stack.len),
             boot_info: direct.address(info_area.address),
         })
+    }
+}
+
+/// Read the initramfs, if the image carries one.
+///
+/// Absent is not an error: a board card flashed before stage 8, or an image
+/// assembled by hand, boots as it always did and the kernel reports that it
+/// was handed nothing. Every other failure to read it is one, because a
+/// half-read archive would unpack as a filesystem quietly missing files.
+///
+/// In memory the map reports as `Initrd`, which nothing reclaims: the kernel
+/// reads the archive through the direct map after the loader is gone.
+fn load_initrd(services: &Services) -> Result<Option<(Allocation, u64)>> {
+    match services.read_file(INITRD_PATH, MemoryType::FERRIX_INITRD) {
+        Ok((file, len)) => {
+            println!("  initramfs {} KiB", len.div_ceil(1024));
+            Ok(Some((file, len)))
+        }
+        Err(error) if error.status == Some(Status::NOT_FOUND) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -289,6 +320,18 @@ fn stage_kernel(services: &Services) -> Result<StagedKernel> {
     Ok(StagedKernel { image, ..staged })
 }
 
+/// What the loader copied into memory the kernel keeps, besides the kernel.
+///
+/// Both optional, and both described to the kernel the same way: where the
+/// copy is, and how many of its bytes are real.
+#[derive(Clone, Copy, Debug)]
+struct Carried {
+    /// The device tree, on a machine that has one.
+    device_tree: Option<(Allocation, u64)>,
+    /// The initramfs, on an image that carries one.
+    initrd: Option<(Allocation, u64)>,
+}
+
 /// Fill in everything about the boot info that firmware can still be asked.
 fn write_boot_info(
     services: &Services,
@@ -297,8 +340,12 @@ fn write_boot_info(
     stack: Allocation,
     info_area: Allocation,
     direct: DirectMap,
-    device_tree: Option<(Allocation, u64)>,
+    carried: Carried,
 ) {
+    let Carried {
+        device_tree,
+        initrd,
+    } = carried;
     let info = BootInfo {
         magic: BOOTINFO_MAGIC,
         version: BOOTINFO_VERSION,
@@ -323,8 +370,8 @@ fn write_boot_info(
         boot_stack_top: direct.address(stack.address + stack.len),
         boot_stack_size: stack.len,
         framebuffer: services.framebuffer().unwrap_or(Framebuffer::NONE),
-        initrd_phys: 0,
-        initrd_len: 0,
+        initrd_phys: initrd.map_or(0, |(file, _)| file.address),
+        initrd_len: initrd.map_or(0, |(_, len)| len),
         rsdp: services
             .configuration_table(&ACPI_20_GUID)
             .or_else(|| services.configuration_table(&ACPI_10_GUID))

@@ -232,6 +232,20 @@ impl Namespace {
         drop(evicted);
     }
 
+    /// Drop the cache's references to a dentry that has left the tree.
+    ///
+    /// An unlinked file's dentry still names its inode, so a cache entry
+    /// keeping that dentry alive would keep the file's contents allocated until
+    /// it happened to be evicted: up to the cache's size in deleted files that
+    /// nobody can reach. A linear scan of a bounded queue, paid only by the
+    /// operations that remove a name. The caller still holds the dentry, so
+    /// nothing is freed under the lock.
+    fn forget(&self, dentry: &Arc<Dentry>) {
+        self.cache
+            .lock()
+            .retain(|cached| !Arc::ptr_eq(cached, dentry));
+    }
+
     pub(crate) fn mounted_on(&self, at: &Location) -> Option<Arc<Mount>> {
         self.mounts
             .lock()
@@ -515,6 +529,7 @@ impl Namespace {
         }
         walked.parent.inode()?.unlink(name)?;
         walked.parent.dentry.remove_name(name);
+        self.forget(&walked.found.dentry);
         Ok(())
     }
 
@@ -541,6 +556,7 @@ impl Namespace {
         }
         walked.parent.inode()?.rmdir(name)?;
         walked.parent.dentry.remove_name(name);
+        self.forget(&walked.found.dentry);
         Ok(())
     }
 
@@ -605,6 +621,9 @@ impl Namespace {
             &dest.parent.dentry,
             new_name,
         );
+        if dest.found.dentry.inode().is_some() {
+            self.forget(&dest.found.dentry);
+        }
         Ok(())
     }
 

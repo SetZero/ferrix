@@ -24,6 +24,7 @@ mod backtrace;
 mod console;
 mod early;
 mod fdt;
+mod fs;
 mod init;
 mod irq;
 mod mm;
@@ -197,6 +198,11 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // measurement the reclaim below would otherwise move under it.
     check_user_memory();
 
+    // Stage 8's root filesystem. Before stage 7's checks, which open files,
+    // and after stage 6's, because file contents are VMO pages and the
+    // frames they take have to come back.
+    check_filesystems(view);
+
     // Stage 7's dispatch path. After stage 5 because two of the calls it
     // answers ask the scheduler which task is running, and deliberately here
     // rather than waiting for a user program: the one thing this check
@@ -262,6 +268,46 @@ fn check_user_memory() {
     println!(
         "  spaces   {} reads of one address in two address spaces, each its own",
         report.swapped,
+    );
+}
+
+/// Stage 8: build the root from the initramfs, and require it to be what the
+/// build wrote and to store what it is given.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_filesystems(view: &BootView<'_>) {
+    let built = match fs::init(view) {
+        Ok(built) => built,
+        Err(problem) => fatal!(
+            catalog::STAGE8_ROOT,
+            "could not build the root filesystem: {problem}"
+        ),
+    };
+    let report = match fs::check::run(&built) {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE8_FILESYSTEM,
+            "stage 8 self-check failed: {problem}"
+        ),
+    };
+
+    match (built.initramfs_bytes, built.unpacked) {
+        (Some(bytes), Some(made)) => println!(
+            "  initrd   {} KiB unpacked: {} directories, {} files, {} hard links, \
+             {} symbolic links, {} refused, verified {}",
+            bytes.div_ceil(1024),
+            made.directories,
+            made.files,
+            made.hard_links,
+            made.symlinks,
+            made.skipped,
+            report.initramfs_verified,
+        ),
+        _ => println!("  initrd   none handed over; the root is an empty tmpfs"),
+    }
+    println!(
+        "  tmpfs    {} pages written through a VMO and read back, {} frames leaked",
+        report.pages, report.leaked,
     );
 }
 
