@@ -26,9 +26,12 @@ use ferrix_linux_abi::types::{
 
 use crate::arch;
 use crate::mm;
+use ferrix_elf::Class;
+
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{Outcome, SyscallArgs, dispatch, uaccess};
+use crate::syscall::{image, load};
 
 /// What the checks measured, for the boot log.
 #[derive(Debug)]
@@ -60,6 +63,22 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 
     // Everything the handler checks allocate must come back. Measured around
     // the whole group rather than per check, so a leak anywhere in it shows.
+    //
+    // **Run twice, and measured on the second run.** The first run is warm-up
+    // and its cost is not a leak: the kernel heap keeps the last page of each
+    // size class it has used, deliberately, so that a workload oscillating
+    // across a page boundary does not pay a buddy allocation per cycle. A
+    // check that allocates a size nothing else does will therefore take a page
+    // from the allocator and keep it, exactly once, and a single measured run
+    // cannot tell that apart from a leak. The second run allocates the same
+    // shapes into the pages the first left behind, so anything it fails to
+    // return is real.
+    //
+    // This was not a hypothesis. A one-frame discrepancy appeared when the
+    // loader checks landed and survived every attempt to find it in the
+    // address space -- map, commit and drop in isolation was clean, and so was
+    // building the image in isolation.
+    let _warm = check_handlers()?;
     let before = mm::free_frames();
     let pages = check_handlers()?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
@@ -272,6 +291,8 @@ fn check_handlers() -> Result<u64, &'static str> {
     check_mprotect_takes_write_away(&process)?;
     check_brk_grows_and_shrinks(&process)?;
     check_set_tid_address_answers_with_a_thread_id(&process)?;
+    check_an_image_loads_where_its_headers_say(&process)?;
+    check_the_loader_refuses_what_it_cannot_run(&process)?;
 
     // Counted rather than asserted. An earlier version of this reported a
     // constant, which says nothing about what actually ran -- a check that
@@ -612,4 +633,138 @@ fn map_rw(process: &Process, len: u64) -> Result<u64, &'static str> {
     )
     .map_err(|_| "a working mapping was refused")?;
     u64::try_from(at).map_err(|_| "mmap returned an impossible address")
+}
+
+// ---------------------------------------------------------------------------
+// The ELF loader
+//
+// `libs/elf` parses and is fuzzed; what it cannot check is the half that
+// touches memory. These build an image for whichever architecture is running,
+// load it into a real address space, and then read the result back out of the
+// page tables -- which is the only place the answer actually lives.
+// ---------------------------------------------------------------------------
+
+/// Load a synthetic image and check everything about where it landed.
+fn check_an_image_loads_where_its_headers_say(process: &Process) -> Result<(), &'static str> {
+    let class = class_of_this_build();
+    let file = image::build(class, arch::ARCH.elf_machine(), image::Shape::Good);
+
+    let loaded = load::load(process.space(), &file).map_err(|_| "a good image was refused")?;
+
+    if loaded.entry != image::ENTRY {
+        return Err("the loader reported the wrong entry point");
+    }
+    // AT_PHDR must land inside the text segment, at the header offset the
+    // image declares. musl reads its own PT_TLS through this, so a plausible
+    // but wrong answer is worse than none.
+    let expected_phdr = image::BASE + class.header_size() as u64;
+    if loaded.phdr != expected_phdr {
+        return Err("AT_PHDR does not point at the program headers");
+    }
+    if loaded.phnum != 2 {
+        return Err("the loader miscounted the program headers");
+    }
+
+    // The file contents of the writable segment are where the headers said.
+    let mut read = [0_u8; image::DATA_FILESZ];
+    uaccess::copy_from_user(process.space(), image::DATA_VADDR, &mut read)
+        .map_err(|_| "the loaded data segment was not readable")?;
+    if read != image::DATA_MARK {
+        return Err("the data segment's contents are not at its virtual address");
+    }
+
+    // And the `.bss` tail past `p_filesz` is zero, which it gets for free from
+    // a committed anonymous page -- the loader must not have copied anything
+    // over it, and must not have left it unmapped either.
+    let mut tail = [0xFF_u8; 32];
+    uaccess::copy_from_user(
+        process.space(),
+        image::DATA_VADDR + image::DATA_FILESZ as u64,
+        &mut tail,
+    )
+    .map_err(|_| "the bss tail was not mapped")?;
+    if tail.iter().any(|&b| b != 0) {
+        return Err("the bss tail is not zero");
+    }
+
+    check_the_segments_got_their_own_permissions(process)?;
+
+    let end = loaded.end;
+    let _ = process.space().unmap(image::BASE, end - image::BASE);
+    Ok(())
+}
+
+/// The text segment is executable and not writable; the data segment is the
+/// other way round.
+///
+/// Asked of the address space rather than of the loader, because the loader
+/// reporting what it meant to do proves nothing about what it did.
+fn check_the_segments_got_their_own_permissions(process: &Process) -> Result<(), &'static str> {
+    // Writing into the text segment must be refused: it is read-execute.
+    if uaccess::copy_to_user(process.space(), image::BASE, b"x").is_ok() {
+        return Err("the text segment was left writable");
+    }
+    // Reading it must work.
+    let mut magic = [0_u8; 4];
+    uaccess::copy_from_user(process.space(), image::BASE, &mut magic)
+        .map_err(|_| "the text segment was not readable")?;
+    if magic != [0x7F, b'E', b'L', b'F'] {
+        return Err("the text segment does not hold the image it was loaded from");
+    }
+    // The data segment is writable.
+    uaccess::copy_to_user(process.space(), image::DATA_VADDR, b"w")
+        .map_err(|_| "the data segment was not writable")?;
+    Ok(())
+}
+
+/// The four images the loader must refuse, and refuse by name.
+fn check_the_loader_refuses_what_it_cannot_run(process: &Process) -> Result<(), &'static str> {
+    let class = class_of_this_build();
+    let machine = arch::ARCH.elf_machine();
+
+    let cases = [
+        (
+            image::Shape::ForeignMachine,
+            "an image for another architecture",
+        ),
+        (
+            image::Shape::PositionIndependent,
+            "a position-independent image",
+        ),
+        (
+            image::Shape::WriteExecute,
+            "an image needing a write-execute page",
+        ),
+    ];
+    for (shape, _what) in cases {
+        let file = image::build(class, machine, shape);
+        // Each refusal gets a space of its own: a failed load may have mapped
+        // part of the image, and that is exactly why `execve` will load into a
+        // fresh space and swap it in only on success.
+        let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
+        if load::load(scratch.space(), &file).is_ok() {
+            return Err("the loader accepted an image it cannot run");
+        }
+    }
+
+    // And bytes that are not an ELF at all.
+    let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
+    if load::load(scratch.space(), b"not an ELF image").is_ok() {
+        return Err("the loader accepted something that is not an ELF image");
+    }
+    let _ = process;
+    Ok(())
+}
+
+/// The ELF class this kernel's own architecture uses.
+///
+/// From the pointer width rather than from a `cfg`, because generic kernel
+/// code naming an architecture is what the layering check forbids -- and
+/// because the question really is about width.
+fn class_of_this_build() -> Class {
+    if size_of::<usize>() == 8 {
+        Class::Elf64
+    } else {
+        Class::Elf32
+    }
 }

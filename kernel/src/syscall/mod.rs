@@ -40,6 +40,8 @@
 //! trace back here.
 
 pub(crate) mod check;
+pub(crate) mod image;
+pub(crate) mod load;
 pub(crate) mod memory;
 pub(crate) mod process;
 pub(crate) mod uaccess;

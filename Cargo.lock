@@ -49,6 +49,7 @@ version = "0.1.0"
 dependencies = [
  "ferrix-acpi",
  "ferrix-bootinfo",
+ "ferrix-elf",
  "ferrix-fdt",
  "ferrix-frame",
  "ferrix-heap",

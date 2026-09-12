@@ -16,6 +16,7 @@ ferrix-acpi.workspace = true
 ferrix-bootinfo.workspace = true
 ferrix-fdt.workspace = true
 ferrix-frame.workspace = true
+ferrix-elf.workspace = true
 ferrix-heap.workspace = true
 ferrix-linux-abi.workspace = true
 ferrix-paging.workspace = true

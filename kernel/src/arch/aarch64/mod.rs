@@ -10,7 +10,7 @@ mod trap;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use ferrix_bootinfo::BootView;
+use ferrix_bootinfo::{Arch, BootView};
 use ferrix_linux_abi::nr::{self, Syscall};
 
 use super::gicv2;
@@ -19,6 +19,14 @@ use crate::irq::Report;
 
 /// Name for log lines.
 pub(crate) const NAME: &str = "aarch64";
+
+/// This machine, as the hand-off structure names it.
+///
+/// The kernel needs it for the same reason the loader does: to refuse an ELF
+/// image built for a different architecture. `boot/src/arch/` has carried the
+/// same constant since stage 1; this is the kernel's copy, and the two are
+/// checked against each other by the image simply booting.
+pub(crate) const ARCH: Arch = Arch::AArch64;
 
 /// The page table descriptor layout this machine uses.
 pub(crate) type PageEncoding = ferrix_paging::aarch64::AArch64;
