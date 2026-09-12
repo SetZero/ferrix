@@ -1,0 +1,13 @@
+[package]
+name = "ferrix-procfs"
+description = "The text of /proc: maps, meminfo, status, stat and mounts, byte for byte as Linux prints them"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

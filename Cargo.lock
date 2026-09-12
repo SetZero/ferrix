@@ -111,6 +111,10 @@ name = "ferrix-pci"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-procfs"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-qr"
 version = "0.1.0"
 dependencies = [
