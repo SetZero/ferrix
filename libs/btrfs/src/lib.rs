@@ -48,6 +48,7 @@
 use core::fmt;
 
 pub mod chunk;
+pub mod compress;
 pub mod crc32c;
 pub mod items;
 pub mod superblock;
@@ -139,6 +140,16 @@ pub enum BtrfsError {
         /// The key type byte the payload was parsed as.
         item_type: u8,
     },
+    /// An extent names a compression algorithm outside `0..=3`.
+    UnsupportedCompression(u8),
+    /// A compressed stream is malformed: a bad header, a back-reference
+    /// before the start of the output, a table that does not describe a code,
+    /// or more output than the buffer holds. Carries the `compression` byte.
+    BadCompressedData {
+        /// The algorithm the stream was decoded as; see
+        /// [`items::COMPRESS_ZSTD`] and friends.
+        compression: u8,
+    },
 }
 
 impl fmt::Display for BtrfsError {
@@ -188,6 +199,12 @@ impl fmt::Display for BtrfsError {
             }
             BtrfsError::BadItem { item_type } => {
                 write!(f, "malformed payload for item type {item_type}")
+            }
+            BtrfsError::UnsupportedCompression(kind) => {
+                write!(f, "compression type {kind} is not implemented")
+            }
+            BtrfsError::BadCompressedData { compression } => {
+                write!(f, "corrupt stream for compression type {compression}")
             }
         }
     }

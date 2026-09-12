@@ -18,6 +18,13 @@ use super::superblock::{ChecksumType, MAGIC, SUPERBLOCK_SIZE, Superblock};
 use super::tree::{BtrfsKey, HEADER_SIZE, ITEM_SIZE, KEY_PTR_SIZE, Node};
 use super::*;
 
+// The oracle crates for `compress/`. Each line goes when that decoder's own
+// tests start using the crate; until then `unused_crate_dependencies` would
+// fail the build over a dependency that is declared ahead of its use.
+use lzokay_native as _;
+use miniz_oxide as _;
+use ruzstd as _;
+
 // ---------------------------------------------------------------------------
 // CRC-32C
 // ---------------------------------------------------------------------------

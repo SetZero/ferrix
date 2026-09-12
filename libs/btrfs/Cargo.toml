@@ -9,5 +9,15 @@ publish = false
 
 [dependencies]
 
+# Test-only, and never linked into the kernel (`check-crate-layering.sh`
+# resolves normal edges only). Each is an independent implementation of one of
+# the three formats the decoders in `src/compress/` read, used as an oracle:
+# it compresses inputs the decoder must reproduce byte for byte, and decodes
+# the same streams so a disagreement names which side is wrong.
+[dev-dependencies]
+miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
+lzokay-native = { version = "0.1.0", default-features = false }
+ruzstd = { version = "0.9.0", default-features = false }
+
 [lints]
 workspace = true
