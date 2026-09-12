@@ -185,13 +185,25 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
 /// The boot processor counts itself, having just adopted its own context; the
 /// rest arrive through [`enter_idle`]. Bounded, because a processor that never
 /// arrives should be a sentence in the boot log rather than a wait that never
-/// ends — and re-sending the interrupt each time round, because the first one
-/// may have been sent while a processor was still on its way into the halt
-/// that was meant to receive it.
+/// ends — and the interrupt is re-sent, because the first one may have been
+/// sent while a processor was still on its way into the halt that was meant
+/// to receive it.
+///
+/// **Re-sent on an interval, not every time round.** Broadcasting on every
+/// iteration of this spin is an interrupt storm, and it starves exactly the
+/// processors the wait is waiting for: one woken by a nudge is interrupted
+/// again before it can run the few instructions between `wait_for_work`
+/// returning and `enter_idle` recording its arrival, so it never gets to
+/// record it. On an STM32MP157D-DK1 that cost the entire five seconds and
+/// then blamed a processor that was awake the whole time, trying to join.
 fn wait_for_processors(online: usize) -> Result<(), &'static str> {
     /// How long to give them. Generous: an emulated processor may be a host
     /// thread that is not currently running.
     const PATIENCE_NANOS: u64 = 5_000_000_000;
+    /// How long to leave a processor alone between nudges. Long enough that a
+    /// woken processor reaches [`enter_idle`] undisturbed, short enough that a
+    /// nudge lost to the race above costs a millisecond rather than the wait.
+    const NUDGE_INTERVAL_NANOS: u64 = 1_000_000;
 
     let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
     let all = if online >= 64 {
@@ -200,11 +212,16 @@ fn wait_for_processors(online: usize) -> Result<(), &'static str> {
         (1u64 << online) - 1
     };
 
+    let mut next_nudge = 0_u64;
     while IN_SCHEDULER.load(Ordering::Acquire) != all {
-        if crate::timer::now_nanos() >= deadline {
+        let now = crate::timer::now_nanos();
+        if now >= deadline {
             return Err("a processor never joined the scheduler");
         }
-        let _ = arch::send_ipi_to_others();
+        if now >= next_nudge {
+            next_nudge = now.saturating_add(NUDGE_INTERVAL_NANOS);
+            let _ = arch::send_ipi_to_others();
+        }
         core::hint::spin_loop();
     }
     Ok(())
