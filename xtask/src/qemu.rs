@@ -307,9 +307,66 @@ fn accelerator(arch: Arch, binary: &Path, requested: Option<&str>) -> Result<Str
         return Ok("tcg".to_owned());
     }
     match host_accelerator() {
-        Some(name) if supported(name) => Ok(name.to_owned()),
+        Some(name) if supported(name) && usable(binary, name) => Ok(name.to_owned()),
         _ => Ok("tcg".to_owned()),
     }
+}
+
+/// Whether this QEMU can actually *initialise* `name` on this machine.
+///
+/// Being built with an accelerator and being allowed to use it are different
+/// questions, and only the first is answerable from a list. `/dev/kvm` is
+/// `root:kvm` on most distributions, so a developer who has never been added
+/// to that group has a QEMU that offers `kvm` and cannot open it; the
+/// Windows Hypervisor Platform is an optional feature that may be off. In
+/// both cases QEMU exits immediately with an error, which for `auto` — which
+/// promises to work on whatever machine it is run on — must mean "fall back to
+/// emulation", not "fail the boot test".
+///
+/// There is no way to ask the question without answering it: QEMU initialises
+/// an accelerator only when it starts a machine. So this starts the smallest
+/// one there is (`-M none`, no devices, CPU halted) and watches. Failure is
+/// prompt and is an exit; success is QEMU sitting there waiting, which is what
+/// the deadline is for. The asymmetry is the signal.
+fn usable(binary: &Path, name: &str) -> bool {
+    let Ok(mut child) = Command::new(binary)
+        .args(["-accel", name])
+        .args([
+            "-M",
+            "none",
+            "-display",
+            "none",
+            "-monitor",
+            "none",
+            "-serial",
+            "none",
+            "-nodefaults",
+            "-no-user-config",
+            // Halted, so a successful probe runs no guest instructions.
+            "-S",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            // Exited on its own inside the window: the accelerator did not
+            // come up. QEMU has no other reason to leave this quickly.
+            Ok(Some(_)) => return false,
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => break,
+        }
+    }
+
+    // Still running, so the accelerator initialised. Nothing to wait for.
+    let _ = child.kill();
+    let _ = child.wait();
+    true
 }
 
 /// The accelerators this QEMU binary was built with.
