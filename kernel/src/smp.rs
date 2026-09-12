@@ -205,6 +205,11 @@ impl Topology {
 /// The processors, once [`discover`] has run.
 static TOPOLOGY: Once<Topology> = Once::new();
 
+/// The processors, once [`discover`] has run.
+pub(crate) fn topology() -> Option<&'static Topology> {
+    TOPOLOGY.get()
+}
+
 /// Set once the boot processor's record is installed.
 ///
 /// Guards [`this_cpu`] against the one moment it would read garbage: before

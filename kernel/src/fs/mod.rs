@@ -28,6 +28,7 @@ pub(crate) mod check;
 pub(crate) mod console;
 pub(crate) mod devfs;
 mod pages;
+pub(crate) mod procfs;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -241,6 +242,7 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Report, InitError> {
         .map_err(InitError::Tmp)?;
 
     devfs::mount().map_err(|errno| InitError::Mount("/dev", errno))?;
+    procfs::mount().map_err(|errno| InitError::Mount("/proc", errno))?;
     Ok(report)
 }
 

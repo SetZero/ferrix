@@ -64,6 +64,10 @@ pub(crate) struct Process {
     /// state lock, because `umask` is a swap and nothing reads it together
     /// with anything else.
     umask: AtomicU32,
+    /// When it was made, in nanoseconds on the counter: `stat`'s start time.
+    started: u64,
+    /// What it was started as, which only `/proc` reads.
+    identity: SpinLock<Identity>,
     /// The handles it holds, for the native ABI.
     ///
     /// A lock of its own rather than a field of `state`: a channel write looks
@@ -130,6 +134,18 @@ struct State {
     signals: Signals,
 }
 
+/// What a process was started as.
+///
+/// A lock of its own, like the handle table: `/proc/<pid>/cmdline` read from
+/// another process has no business waiting on this one's `brk`.
+#[derive(Debug, Default)]
+struct Identity {
+    /// The path it was started from: `/proc/<pid>/exe`.
+    exe: Vec<u8>,
+    /// Its argument vector: `/proc/<pid>/cmdline`.
+    args: Vec<Vec<u8>>,
+}
+
 /// The classic `brk` heap: one region that grows upward.
 #[derive(Debug, Clone, Copy)]
 struct Heap {
@@ -148,6 +164,8 @@ impl Process {
             space,
             pid: registry::allocate().unwrap_or(0),
             umask: AtomicU32::new(DEFAULT_UMASK),
+            started: crate::syscall::time::now_nanos(),
+            identity: SpinLock::new(Identity::default()),
             handles: SpinLock::new(HandleTable::new(object::HANDLE_LIMIT)),
             files: Arc::new(SpinLock::new(fd::standard_streams())),
             fs: Arc::new(SpinLock::new(fs::namespace().context())),
@@ -185,6 +203,51 @@ impl Process {
     /// path with it.
     pub(crate) fn fs_context(&self) -> &Arc<SpinLock<Context>> {
         &self.fs
+    }
+
+    /// When it was made, in nanoseconds on the counter.
+    pub(crate) fn started(&self) -> u64 {
+        self.started
+    }
+
+    /// Record what it was started as: the path and the arguments.
+    pub(crate) fn record_exec(&self, exe: &[u8], args: &[&[u8]]) {
+        let exe = exe.to_vec();
+        let args = args.iter().map(|arg| arg.to_vec()).collect();
+        let mut identity = self.identity.lock();
+        identity.exe = exe;
+        identity.args = args;
+    }
+
+    /// The path it was started from, empty if nothing was.
+    pub(crate) fn exe(&self) -> Vec<u8> {
+        self.identity.lock().exe.clone()
+    }
+
+    /// Its argument vector.
+    pub(crate) fn args(&self) -> Vec<Vec<u8>> {
+        self.identity.lock().args.clone()
+    }
+
+    /// The command name: the last component of the path it was started from,
+    /// cut to the fifteen bytes Linux's `TASK_COMM_LEN` leaves room for.
+    pub(crate) fn comm(&self) -> Vec<u8> {
+        let identity = self.identity.lock();
+        let base = identity
+            .exe
+            .rsplit(|&byte| byte == b'/')
+            .next()
+            .unwrap_or_default();
+        base.iter().copied().take(15).collect()
+    }
+
+    /// The heap's start and the end of what is reserved for it, once
+    /// something has placed it.
+    pub(crate) fn heap_range(&self) -> Option<(u64, u64)> {
+        self.state
+            .lock()
+            .heap
+            .map(|heap| (heap.start, heap.mapped_to))
     }
 
     /// Do something with the handle table, under its lock.

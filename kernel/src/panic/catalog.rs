@@ -742,6 +742,32 @@ pub(crate) static CONSOLE_DESCRIPTORS: Explanation = Explanation {
           libs/vfs/src/fd.rs; docs/ROADMAP.md stage 8",
 };
 
+/// For `check_filesystems` in `main.rs`, when `/dev` or `/proc` fails its check.
+pub(crate) static STAGE8_PSEUDO_FILESYSTEMS: Explanation = Explanation {
+    code: "FX-0830",
+    title: "/dev or /proc failed its self-check",
+    meaning: "`fs::procfs::check::run` opens the memory devices through the namespace and \
+              requires each to do what it is for and to carry the number Linux gives it. It \
+              then runs a task in a process of its own and requires /proc/self to name that \
+              process, every name a recursive listing of /proc reports to lead back to what \
+              the listing said, /proc/self/fd to name a descriptor's path and say it was \
+              deleted once it is gone, and /proc/self/maps, read a few bytes at a time while \
+              the map changes, to be one line per region as it was at open, with the heap and \
+              stack named. Programs read these files by fixed columns, so a kernel that fails \
+              here hands them wrong numbers without an error.",
+    causes: &[
+        "A directory's lookup and its listing disagree about a name or an inode number, so a \
+         recursive listing cannot walk back to what it listed.",
+        "The VFS cached a procfs directory's names, so a process or descriptor that appeared \
+         after a miss stays invisible; `Inode::caches_lookups` must answer false there.",
+        "Reads of an open /proc file did not go to the snapshot taken at open, so a map that \
+         changed mid-read shows up with extra lines.",
+        "A /dev node carries the wrong major or minor number, or reaches the wrong device.",
+    ],
+    see: "kernel/src/fs/procfs/check.rs run; kernel/src/fs/procfs.rs; kernel/src/fs/devfs.rs; \
+          libs/procfs/src/maps.rs; docs/ROADMAP.md stage 8",
+};
+
 /// For `handle_page_fault` in `trap.rs`, the `unhandled page fault` report.
 pub(crate) static UNHANDLED_PAGE_FAULT: Explanation = Explanation {
     code: "FX-9001",
@@ -863,6 +889,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_FILESYSTEM,
     &CONSOLE_DESCRIPTORS,
     &STAGE8_PATH_CALLS,
+    &STAGE8_PSEUDO_FILESYSTEMS,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,

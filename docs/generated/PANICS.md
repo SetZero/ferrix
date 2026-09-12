@@ -44,6 +44,7 @@ Causes are listed most likely first.
 | [FX-0802](#fx-0802) | the root filesystem failed its self-check |
 | [FX-0810](#fx-0810) | a new process could not be given the console as descriptors 0, 1 and 2 |
 | [FX-0820](#fx-0820) | the system calls that take a path failed their self-check |
+| [FX-0830](#fx-0830) | /dev or /proc failed its self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -650,6 +651,33 @@ a name, or a working directory that is not where chdir put it.
 
 See: kernel/src/syscall/check.rs run_paths; kernel/src/syscall/path.rs;
 kernel/src/syscall/stat.rs; libs/vfs; docs/ROADMAP.md stage 8.
+
+<a id="fx-0830"></a>
+
+## FX-0830 — /dev or /proc failed its self-check
+
+`fs::procfs::check::run` opens the memory devices through the namespace and
+requires each to do what it is for and to carry the number Linux gives it. It
+then runs a task in a process of its own and requires /proc/self to name that
+process, every name a recursive listing of /proc reports to lead back to what
+the listing said, /proc/self/fd to name a descriptor's path and say it was
+deleted once it is gone, and /proc/self/maps, read a few bytes at a time while
+the map changes, to be one line per region as it was at open, with the heap and
+stack named. Programs read these files by fixed columns, so a kernel that fails
+here hands them wrong numbers without an error.
+
+1. A directory's lookup and its listing disagree about a name or an inode
+   number, so a recursive listing cannot walk back to what it listed.
+2. The VFS cached a procfs directory's names, so a process or descriptor that
+   appeared after a miss stays invisible; `Inode::caches_lookups` must answer
+   false there.
+3. Reads of an open /proc file did not go to the snapshot taken at open, so a
+   map that changed mid-read shows up with extra lines.
+4. A /dev node carries the wrong major or minor number, or reaches the wrong
+   device.
+
+See: kernel/src/fs/procfs/check.rs run; kernel/src/fs/procfs.rs;
+kernel/src/fs/devfs.rs; libs/procfs/src/maps.rs; docs/ROADMAP.md stage 8.
 
 <a id="fx-0901"></a>
 

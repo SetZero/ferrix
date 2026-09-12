@@ -333,6 +333,11 @@ pub(crate) fn free_frames() -> u64 {
     with_frames(|frames| frames.free_frames()).unwrap_or(0)
 }
 
+/// Frames the allocator was given to manage: what `MemTotal` reports.
+pub(crate) fn managed_frames() -> u64 {
+    with_frames(|frames| frames.managed_frames()).unwrap_or(0)
+}
+
 /// Bytes currently out on the kernel heap.
 pub(crate) fn heap_allocated() -> usize {
     with_heap(|heap| heap.allocated_bytes())

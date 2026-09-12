@@ -160,6 +160,7 @@ pub(crate) fn load(
     let startup = ferrix_ustack::build(&spec, top, &mut scratch).map_err(|_| ExecError::Startup)?;
     uaccess::copy_to_user(&space, base, &scratch).map_err(|_| ExecError::Startup)?;
 
+    process.record_exec(exec_fn, args);
     process.set_startup(Startup {
         entry: loaded.entry,
         stack: startup.sp,

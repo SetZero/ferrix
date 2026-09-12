@@ -329,6 +329,23 @@ fn check_filesystems(view: &BootView<'_>) {
         "  tmpfs    {} pages written through a VMO and read back, {} frames leaked",
         report.pages, report.leaked,
     );
+
+    let pseudo = match fs::procfs::check::run() {
+        Ok(pseudo) => pseudo,
+        Err(problem) => fatal!(
+            catalog::STAGE8_PSEUDO_FILESYSTEMS,
+            "stage 8 /dev and /proc self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  devfs    {} nodes numbered as Linux numbers them; zero, null, full and urandom \
+         do what they are for",
+        pseudo.devices,
+    );
+    println!(
+        "  procfs   {} names listed and walked back to, {} maps lines parsed, {} of them named",
+        pseudo.listed, pseudo.maps_lines, pseudo.named,
+    );
 }
 
 /// Stage 8: the system calls that take a path, against the real namespace.

@@ -75,6 +75,7 @@ dependencies = [
  "ferrix-objects",
  "ferrix-paging",
  "ferrix-pci",
+ "ferrix-procfs",
  "ferrix-qr",
  "ferrix-sched",
  "ferrix-sync",

@@ -769,3 +769,46 @@ impl Drop for AddressSpace {
         mm::deallocate_frames(self.root, 0);
     }
 }
+
+/// One region of an address space, as `/proc/<pid>/maps` reports it.
+///
+/// No name: the region map records none. `[heap]` and `[stack]` are things
+/// the process knows about its regions, not things the map knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Region {
+    /// First address.
+    pub(crate) start: u64,
+    /// First address past the end.
+    pub(crate) end: u64,
+    /// Permissions and mapping kind.
+    pub(crate) flags: VmaFlags,
+}
+
+impl AddressSpace {
+    /// Every region, lowest first, as it stands at the moment of the call.
+    pub(crate) fn regions(&self) -> Vec<Region> {
+        self.inner
+            .lock()
+            .map
+            .iter()
+            .map(|vma| Region {
+                start: vma.range.start(),
+                end: vma.range.end(),
+                flags: vma.flags,
+            })
+            .collect()
+    }
+
+    /// Pages the objects this space maps have committed: its resident set.
+    ///
+    /// A page shared with another space after `fork` is counted in both, as
+    /// Linux's `VmRSS` counts it.
+    pub(crate) fn resident_pages(&self) -> u64 {
+        self.inner
+            .lock()
+            .objects
+            .values()
+            .map(|vmo| vmo.committed() as u64)
+            .sum()
+    }
+}

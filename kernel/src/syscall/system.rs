@@ -36,10 +36,10 @@ const FIELD: usize = 65;
 /// glibc refuses to start under a kernel it reads as older than the one it was
 /// built for. So it is a plausible modern Linux version with Ferrix named in
 /// the suffix, which is exactly what a distribution kernel does.
-const RELEASE: &str = "6.1.0-ferrix";
+pub(crate) const RELEASE: &str = "6.1.0-ferrix";
 
 /// The version string, which by convention starts with a build number.
-const VERSION: &str = "#1 Ferrix 0.1.0";
+pub(crate) const VERSION: &str = "#1 Ferrix 0.1.0";
 
 /// `uname`.
 pub(crate) fn sys_uname(process: &Process, at: u64) -> Result<usize, Errno> {
