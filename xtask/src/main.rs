@@ -1,9 +1,9 @@
 //! Host-side driver for building, imaging and booting Ferrix.
 //!
 //! ```text
-//! cargo xtask build     --arch x86_64 [--release]
+//! cargo xtask build     --arch x86_64 [--release] [--init PATH/{arch}/busybox]
 //! cargo xtask run       --arch x86_64 [--release] [--gdb] [--smp N] [--memory M]
-//!                       [--accel auto|tcg|whpx|kvm|hvf]
+//!                       [--accel auto|tcg|whpx|kvm|hvf] [--init PATH/{arch}/busybox]
 //! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS]
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
@@ -17,6 +17,11 @@
 //! and writes a bootable FAT32 image. `test-boot` boots that image under QEMU,
 //! watches the serial port, and fails if the kernel does not report success —
 //! which is the only test in this repository that can tell us the thing runs.
+//!
+//! `build` and `run` given a static busybox — `--init`, or the `FERRIX_INIT`
+//! variable — build it into the kernel, which starts `sh -i` on the console,
+//! and put it in the initramfs at `/bin/busybox` with every applet linked
+//! beside it, so that the shell finds `ls` on its `PATH=/bin`.
 
 // AUDIT: this is a command-line build tool. Its output *is* stdout and stderr,
 // and routing it through a logging facade would make `cargo xtask build` read
@@ -107,7 +112,8 @@ OPTIONS:
     --fast                               check: skip the cross-target clippy passes
     --to <MOUNT>                         flash: the card's mounted boot partition
     --port <DEVICE>                      watch-serial: e.g. /dev/ttyACM0
-    --init <PATH>                        test-shell, test-vfs: the busybox; {arch} is replaced
+    --init <PATH>                        The busybox; {arch} is replaced. build, run: [or FERRIX_INIT]
+                                         start `sh -i`, with the applets linked in /bin
     -h, --help                           This message
 ";
 
@@ -162,13 +168,7 @@ fn run() -> Result<()> {
                 )
             })?;
             for arch in args.arches()? {
-                let program = PathBuf::from(init.replace("{arch}", arch.name()));
-                if !program.is_file() {
-                    return Err(Error::new(format!(
-                        "no program at {} for {arch}",
-                        program.display()
-                    )));
-                }
+                let program = program_for(init, arch)?;
                 let loader = cargo::build_loader(arch, args.release)?;
                 let kernel =
                     cargo::build_kernel_with_init(arch, args.release, &program, shell::SCRIPT)?;
@@ -216,13 +216,7 @@ fn test_vfs(args: &Args) -> Result<()> {
     let commands = vfs::encode(vfs::COMMANDS)?;
     let mut failed = Vec::new();
     for arch in args.arches()? {
-        let program = PathBuf::from(init.replace("{arch}", arch.name()));
-        if !program.is_file() {
-            return Err(Error::new(format!(
-                "no program at {} for {arch}",
-                program.display()
-            )));
-        }
+        let program = program_for(init, arch)?;
         let loader = cargo::build_loader(arch, args.release)?;
         let list = paths::build_dir(arch).join("init-commands");
         vfs::write_if_changed(&list, &commands)?;
@@ -249,10 +243,51 @@ fn test_vfs(args: &Args) -> Result<()> {
 /// The kernel ELF comes back beside the image, because it is what a panic
 /// report's backtrace is resolved against: the image holds the same kernel
 /// with nothing to look a symbol up in.
+///
+/// Given a program — `--init`, or `FERRIX_INIT` when that is absent — the
+/// kernel is built with it to start `sh -i`, and the initramfs carries it at
+/// `/bin/busybox` with a link beside it for every applet, so that the shell's
+/// `PATH=/bin` finds `ls` where a person types it. Without one the image is
+/// the one it always was.
 fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
-    let (loader, kernel) = build_halves(arch, args)?;
-    let image = fat::write_image(arch, &loader, &kernel)?;
+    let Some(program) = optional_program(arch, args)? else {
+        let (loader, kernel) = build_halves(arch, args)?;
+        let image = fat::write_image(arch, &loader, &kernel)?;
+        return Ok((image, kernel));
+    };
+    let loader = cargo::build_loader(arch, args.release)?;
+    let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
+    let initramfs = initramfs::build(Some(&program))?;
+    let image = fat::write_image_with(arch, &loader, &kernel, &initramfs)?;
     Ok((image, kernel))
+}
+
+/// The program `init` names for `arch`, with `{arch}` replaced by its name,
+/// refused unless it is a file.
+fn program_for(init: &str, arch: Arch) -> Result<PathBuf> {
+    let program = PathBuf::from(init.replace("{arch}", arch.name()));
+    if !program.is_file() {
+        return Err(Error::new(format!(
+            "no program at {} for {arch}",
+            program.display()
+        )));
+    }
+    Ok(program)
+}
+
+/// The program `build`, `run` and `test-boot` were given, if any: `--init`,
+/// or else a non-empty `FERRIX_INIT`, the variable that has always chosen the
+/// shell those commands embed.
+fn optional_program(arch: Arch, args: &Args) -> Result<Option<PathBuf>> {
+    let init = match (&args.init, std::env::var("FERRIX_INIT")) {
+        (Some(init), _) => init.clone(),
+        (None, Ok(init)) if !init.is_empty() => init,
+        (None, Ok(_) | Err(std::env::VarError::NotPresent)) => return Ok(None),
+        (None, Err(std::env::VarError::NotUnicode(_))) => {
+            return Err(Error::new("FERRIX_INIT is not valid UTF-8"));
+        }
+    };
+    program_for(&init, arch).map(Some)
 }
 
 /// Compile both halves for `arch`, without assembling an image.

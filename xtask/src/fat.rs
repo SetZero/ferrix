@@ -465,7 +465,8 @@ pub(crate) fn write_image(arch: Arch, loader: &Path, kernel: &Path) -> Result<Pa
 }
 
 /// [`write_image`], carrying `initramfs` instead: the same archive with a
-/// program added, for `test-vfs`.
+/// program and its applet links added, for `test-vfs` and for `build` or `run`
+/// given one.
 pub(crate) fn write_image_with(
     arch: Arch,
     loader: &Path,

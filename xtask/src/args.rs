@@ -37,8 +37,9 @@ pub(crate) struct Args {
     /// `--port`, the serial device `watch-serial` reads. `None` means "find
     /// the only one".
     pub(crate) port: Option<String>,
-    /// `--init`, the program `test-shell` and `test-vfs` build in. `{arch}` in it is
-    /// replaced by each architecture's name, so one path serves `--arch all`.
+    /// `--init`, the program `test-shell` and `test-vfs` build in, and that
+    /// `build` and `run` put in the kernel and at `/bin/busybox`. `{arch}` in it
+    /// is replaced by each architecture's name, so one path serves `--arch all`.
     pub(crate) init: Option<String>,
 }
 

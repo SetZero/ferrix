@@ -12,6 +12,11 @@
 //! through the VFS: a marker with known contents, a hard link to it and a
 //! symbolic link to it. Each is a shape the unpacker has to get right, placed
 //! where a check that the unpack happened can find it.
+//!
+//! Given a program — `test-vfs`, or `build` and `run` with `--init` or
+//! `FERRIX_INIT` — the archive also carries it at `/bin/busybox`, and a
+//! symbolic link to it in `/bin` for every name in [`APPLETS`]. Without one it
+//! is the same bytes it was before programs could be added.
 
 use std::path::Path;
 
@@ -135,11 +140,63 @@ impl Newc {
 /// Where a program given with `--init` goes, relative to the root.
 pub(crate) const PROGRAM_PATH: &str = "bin/busybox";
 
-/// The applets `cargo xtask test-vfs` starts, each a symbolic link beside the
-/// program. The kernel starts a program by `argv[0]` and needs none of them;
-/// they are there so that the tree looks like the one `PATH=/bin` promises,
-/// and so that the names resolve once a shell can look them up.
-pub(crate) const APPLETS: &[&str] = &["cat", "ln", "ls", "mkdir", "mv", "rm", "rmdir", "sh"];
+/// Every applet a busybox 1.37 may provide, each linked in `/bin` beside the
+/// program: the union of `busybox --list` from Ubuntu's build and from Alpine's
+/// `busybox-static`, less `busybox` itself, whose name the program already has.
+///
+/// Written out rather than asked of the program, because the program is built
+/// for the target and this runs on the host. A link to an applet a given
+/// binary lacks costs one directory entry, and running it prints `applet not
+/// found`. The kernel starts a program by `argv[0]` and needs none of them;
+/// they are there so that the shell's `PATH=/bin` finds a command where a
+/// person types it, and so that `cargo xtask test-vfs` can name its programs.
+/// Sorted, so that a name is added in one obvious place.
+#[rustfmt::skip]
+pub(crate) const APPLETS: &[&str] = &[
+    "[", "[[", "acpid", "add-shell", "addgroup", "adduser", "adjtimex", "ar", "arch",
+    "arp", "arping", "ascii", "ash", "awk", "base64", "basename", "bbconfig", "bc",
+    "beep", "blkdiscard", "blkid", "blockdev", "brctl", "bunzip2", "bzcat", "bzip2",
+    "cal", "cat", "chattr", "chgrp", "chmod", "chown", "chpasswd", "chroot", "chvt",
+    "cksum", "clear", "cmp", "comm", "cp", "cpio", "crc32", "crond", "crontab",
+    "cryptpw", "cttyhack", "cut", "date", "dc", "dd", "deallocvt", "delgroup",
+    "deluser", "depmod", "devmem", "df", "diff", "dirname", "dmesg", "dnsdomainname",
+    "dos2unix", "dpkg", "dpkg-deb", "du", "dumpkmap", "dumpleases", "echo", "ed",
+    "egrep", "eject", "env", "ether-wake", "expand", "expr", "factor", "fallocate",
+    "false", "fatattr", "fbset", "fbsplash", "fdflush", "fdisk", "fgrep", "find",
+    "findfs", "flock", "fold", "free", "freeramdisk", "fsck", "fsfreeze", "fstrim",
+    "fsync", "ftpget", "ftpput", "fuser", "getfattr", "getopt", "getty", "grep",
+    "groups", "gunzip", "gzip", "halt", "hd", "head", "hexdump", "hostid", "hostname",
+    "httpd", "hwclock", "i2cdetect", "i2cdump", "i2cget", "i2cset", "i2ctransfer", "id",
+    "ifconfig", "ifdown", "ifenslave", "ifup", "init", "inotifyd", "insmod", "install",
+    "ionice", "iostat", "ip", "ipaddr", "ipcalc", "ipcrm", "ipcs", "iplink", "ipneigh",
+    "iproute", "iprule", "iptunnel", "kbd_mode", "kill", "killall", "killall5", "klogd",
+    "last", "less", "link", "linux32", "linux64", "linuxrc", "ln", "loadfont",
+    "loadkmap", "logger", "login", "logname", "logread", "losetup", "ls", "lsattr",
+    "lsmod", "lsof", "lsscsi", "lsusb", "lzcat", "lzma", "lzop", "lzopcat", "makemime",
+    "md5sum", "mdev", "mesg", "microcom", "mim", "mkdir", "mkdosfs", "mke2fs", "mkfifo",
+    "mkfs.vfat", "mknod", "mkpasswd", "mkswap", "mktemp", "modinfo", "modprobe", "more",
+    "mount", "mountpoint", "mpstat", "mt", "mv", "nameif", "nanddump", "nandwrite",
+    "nbd-client", "nc", "netstat", "nice", "nl", "nmeter", "nohup", "nologin", "nproc",
+    "nsenter", "nslookup", "ntpd", "nuke", "od", "openvt", "partprobe", "passwd",
+    "paste", "patch", "pgrep", "pidof", "ping", "ping6", "pipe_progress", "pivot_root",
+    "pkill", "pmap", "poweroff", "printenv", "printf", "ps", "pscan", "pstree", "pwd",
+    "pwdx", "raidautorun", "rdate", "rdev", "readahead", "readlink", "realpath",
+    "reboot", "reformime", "remove-shell", "renice", "reset", "resize", "resume", "rev",
+    "rfkill", "rm", "rmdir", "rmmod", "route", "rpm", "rpm2cpio", "run-init",
+    "run-parts", "sed", "sendmail", "seq", "setconsole", "setfont", "setkeycodes",
+    "setlogcons", "setpriv", "setserial", "setsid", "sh", "sha1sum", "sha256sum",
+    "sha3sum", "sha512sum", "showkey", "shred", "shuf", "slattach", "sleep", "sort",
+    "split", "ssl_client", "start-stop-daemon", "stat", "static-sh", "strings", "stty",
+    "su", "sulogin", "sum", "svc", "svok", "swapoff", "swapon", "switch_root", "sync",
+    "sysctl", "syslogd", "tac", "tail", "tar", "taskset", "tc", "tee", "telnet",
+    "telnetd", "test", "tftp", "time", "timeout", "top", "touch", "tr", "traceroute",
+    "traceroute6", "tree", "true", "truncate", "ts", "tty", "ttysize", "tunctl",
+    "ubirename", "udhcpc", "udhcpc6", "udhcpd", "uevent", "umount", "uname",
+    "uncompress", "unexpand", "uniq", "unix2dos", "unlink", "unlzma", "unlzop",
+    "unshare", "unxz", "unzip", "uptime", "usleep", "uudecode", "uuencode", "vconfig",
+    "vi", "vlock", "volname", "w", "watch", "watchdog", "wc", "wget", "which", "who",
+    "whoami", "whois", "xargs", "xxd", "xz", "xzcat", "yes", "zcat", "zcip",
+];
 
 /// The archive every image carries, with `program` at `/bin/busybox` when one
 /// is given.
@@ -204,13 +261,59 @@ mod tests {
             let link = archive.find(&format!("bin/{applet}")).unwrap().unwrap();
             assert_eq!(link.symlink_target(), Some("busybox"), "bin/{applet}");
         }
-        assert!(
-            ferrix_cpio::Archive::new(&build(None).unwrap())
-                .find(PROGRAM_PATH)
-                .unwrap()
-                .is_none(),
-            "without --init there is no program to find"
+        let in_bin = archive
+            .entries()
+            .map(|entry| entry.unwrap().name)
+            .filter(|name| name.starts_with("bin/"))
+            .count();
+        assert_eq!(
+            in_bin,
+            APPLETS.len() + 1,
+            "the program and one link per applet"
         );
+        assert!(
+            archive
+                .entries()
+                .all(|entry| ferrix_cpio::is_safe_path(entry.unwrap().name)),
+            "every applet name joins to /bin without escaping it"
+        );
+    }
+
+    #[test]
+    fn without_a_program_bin_is_empty() {
+        let bytes = build(None).unwrap();
+        let archive = ferrix_cpio::Archive::new(&bytes);
+        assert!(archive.find(PROGRAM_PATH).unwrap().is_none());
+        assert!(
+            archive
+                .entries()
+                .all(|entry| !entry.unwrap().name.starts_with("bin/")),
+            "without --init there is nothing in /bin"
+        );
+    }
+
+    #[test]
+    fn the_applets_are_the_ones_a_shell_needs_and_collide_with_nothing() {
+        for needed in [
+            "sh", "ash", "ls", "cat", "mkdir", "uname", "echo", "[", "[[",
+        ] {
+            assert!(APPLETS.contains(&needed), "{needed} is missing");
+        }
+        assert!(
+            APPLETS.windows(2).all(|pair| pair[0] < pair[1]),
+            "APPLETS is sorted and has no name twice"
+        );
+        for applet in APPLETS {
+            assert!(
+                !applet.is_empty() && !applet.contains('/') && *applet != "." && *applet != "..",
+                "{applet:?} is not a name in /bin"
+            );
+            assert_ne!(
+                format!("bin/{applet}"),
+                PROGRAM_PATH,
+                "a link must not replace the program"
+            );
+        }
     }
 
     #[test]
