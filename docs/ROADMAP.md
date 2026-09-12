@@ -484,9 +484,74 @@ moves is only honest beside what it bounded.
 Two of the three needed more than one processor and work that outlives a
 timeslice, which is to say they needed this stage's own test to exist.
 
-**Deferred:** load balancing beyond work stealing on an idle processor; a task
-that is not a kernel thread, which is stage 6; and the other two domain modes,
-which are stage 14.
+**Deferred:** a task that is not a kernel thread, which is stage 6; and the
+other two domain modes, which are stage 14.
+
+### Closing the distance to Linux
+
+Stage 5 left the scheduler fair on each processor and naive across them, which
+is enough to pass its own exit criterion and not enough to be called a
+scheduler. Five things were added afterwards, all of them arithmetic in
+`libs/sched` with the kernel supplying the numbers, and each with a check in
+the boot test that fails without it.
+
+* **Load tracking.** A decaying average with a 33-millisecond half-life, in the
+  shape of Linux's PELT. It measures *weighted demand* rather than occupancy,
+  which is the distinction the balancer lives on: a processor is either running
+  something or not, so "busy" saturates at one task and says nothing after
+  that.
+* **Placement.** A new task goes where it should rather than where it was
+  created — the processor it prefers if that one is idle, any idle processor
+  otherwise, the least loaded if none is.
+* **Affinity.** `pinned: bool` became a `CpuSet` per task, which is the field
+  `sched_setaffinity` will want in stage 7 and is cheaper now than retrofitted.
+  Stealing and balancing both honour it.
+* **Periodic balancing**, for the case stealing structurally cannot reach:
+  every processor busy, one of them much busier.
+* **Slice scaling.** The slice is a share of a target latency rather than a
+  constant, floored at a minimum granularity. A fixed slice is also a latency
+  bound per task, and at a thousand runnable tasks that bound was seconds.
+
+**Four bugs, three of which only a running machine could show.**
+
+* The load average never reached its own fixed point. Two truncating integer
+  divisions per step settled a permanently busy processor at 978 of 1024, so
+  every processor was compared against a ceiling none could reach.
+* Pulling work is useless on a tickless kernel. `arm_timer` deliberately leaves
+  a processor alone when nothing is waiting, so an *under*-loaded processor is
+  never interrupted and never reaches the balancer to pull anything towards
+  itself. The overloaded one is interrupted constantly, precisely because it
+  has tasks to switch between — so it is the only one awake to notice, and it
+  has to push. Six thousand balance attempts moved nothing before this.
+* **A task queued behind a running one did not re-arm its processor's timer.**
+  A remote enqueue where `should_preempt` says no left a processor running one
+  task forever with others waiting. A hang, not a fairness problem, and the
+  cause of an intermittent failure that had been putting the `AArch64` boot
+  test down about one run in three.
+* Balancing thrashed: the load average is deliberately slow, so moving one task
+  does not change it for tens of milliseconds and the balancer kept moving
+  more. Eight movable tasks were observed moving 1,262 times. The queue length,
+  which updates instantly, is now a brake on the decision the average makes.
+
+Measured on the same boot test: worst-case fairness lag fell from 2,882 to
+about 1,000 microseconds, and balance thrash from 1,262 moves to 7.
+
+**Withdrawn, and worth saying why.** Choosing a processor for a task at the
+moment it *wakes* — which is what Linux does, and better than placing only at
+creation — was implemented and reverted, along with detaching a woken task from
+its processor's sleeper set. Each made an already-flaky machine reliably worse;
+the second wedged every run. The reason both are harder than they look is the
+same: a blocked task is not an unattached one, and "blocked" covers several
+states this code does not distinguish. A task can be on a wait queue, in a
+sleeper set, part-way into `block` and in neither yet, or in both. A waker that
+reasons about one of them moves a task something else still believes it owns.
+Naming those states and giving them an order is a change of its own, and the
+balancer covers the same ground less promptly in the meantime.
+
+**Still missing against Linux**, none of it on stage 6's path: group scheduling
+and bandwidth control, which are stage 13; the real-time classes, which are
+stage 14; and NUMA and capacity awareness, which need a topology this kernel
+does not yet parse.
 
 ---
 
