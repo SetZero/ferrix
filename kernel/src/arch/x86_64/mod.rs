@@ -114,6 +114,21 @@ pub(crate) const fn identity_root(_view: &BootView<'_>) -> Option<u64> {
 /// the kernel image at 511.
 const UPPER_HALF_SLOT: usize = 256;
 
+/// Top-level slots in a four-level root table.
+const ROOT_SLOTS: usize = 512;
+
+/// Make a freshly allocated user root usable.
+///
+/// x86-64 keeps both halves of the address space in one root, so a user root
+/// that did not name the kernel's tables would fault on the first instruction
+/// of the trap handler it entered — including the page fault handler, which is
+/// a triple fault and a silent reset. The kernel's top-level slots are shared
+/// rather than copied, so a later kernel mapping appears in every address
+/// space without any of them being walked.
+pub(crate) fn prepare_user_root(root: u64) {
+    crate::mm::share_kernel_slots(root, UPPER_HALF_SLOT..ROOT_SLOTS);
+}
+
 /// Drop the loader's identity map by clearing the lower half of the root
 /// table.
 ///

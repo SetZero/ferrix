@@ -85,6 +85,18 @@ pub(crate) fn flush_tlb() {
 /// needs interrupts for, this architecture does in hardware.
 pub(crate) const TLB_FLUSH_IS_BROADCAST: bool = true;
 
+/// Make a freshly allocated user root usable.
+///
+/// Nothing to do: the kernel's half is reached through `TTBR1_EL1` and a user root is
+/// only ever installed in `TTBR0`, so the two never share a tree and a user
+/// root has nothing of the kernel's to be given. x86-64, which keeps both
+/// halves in one root, is the architecture this exists for.
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "one architecture's version of this does real work"
+)]
+pub(crate) fn prepare_user_root(_root: u64) {}
+
 /// Root of the loader's identity map, while it still exists.
 ///
 /// `Some` on `AArch64` because the identity map is a second translation regime

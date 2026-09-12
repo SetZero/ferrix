@@ -28,7 +28,7 @@ use ferrix_acpi::MadtEntry;
 use ferrix_bootinfo::{BootView, PAGE_SIZE};
 use ferrix_paging::MapFlags;
 
-use super::{UPPER_HALF_SLOT, apic, cpu};
+use super::{ROOT_SLOTS, UPPER_HALF_SLOT, apic, cpu};
 use crate::console::println;
 use crate::smp::Described;
 
@@ -71,9 +71,6 @@ pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static s
 pub(crate) fn hardware_id() -> u64 {
     u64::from(apic::id())
 }
-
-/// Top-level slots in a four-level root table.
-const ROOT_SLOTS: usize = 512;
 
 /// Frames real mode can reach: one mebibyte of them.
 const REAL_MODE_FRAMES: u64 = 0x100;

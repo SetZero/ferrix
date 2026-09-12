@@ -524,6 +524,19 @@ pub(crate) fn translate(virt: u64) -> Option<u64> {
     })
 }
 
+/// Translate an address through the tree rooted at `root`, the way the
+/// hardware would if that root were installed.
+///
+/// The counterpart of [`map_in`], and it takes no lock for the same reason
+/// that one does not: the caller owns the tree. An address space that other
+/// processors may be faulting in holds its own lock across this.
+pub(crate) fn translate_in(root: u64, virt: u64) -> Option<u64> {
+    let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
+    mapper
+        .translate(&KernelPhysMem, VirtAddr(virt))
+        .map(|at| at.0)
+}
+
 /// Physical address of the kernel's root page table, for a processor about to
 /// install it.
 pub(crate) fn root_table() -> u64 {

@@ -7,9 +7,12 @@
 //! its anonymous memory on exit leaks it at a rate nothing reports, and the
 //! machine dies of it an hour into a `rustc` build.
 
-use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_bootinfo::{KERNEL_HALF_BASE, PAGE_SIZE};
+
+use ferrix_vma::VmaFlags;
 
 use crate::mm;
+use crate::user::space::{Access, AddressSpace, SpaceError};
 use crate::user::vmo::{Vmo, VmoError};
 
 /// What the checks measured, for the boot log.
@@ -22,6 +25,8 @@ pub(crate) struct Report {
     /// Frames the whole check cost, once everything was dropped. Zero, or the
     /// check failed.
     pub(crate) leaked: i64,
+    /// Pages faulted into an address space and read back.
+    pub(crate) faulted: u64,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -38,6 +43,12 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let reserved = 2048;
     let committed = check_only_what_is_touched_is_paid_for(reserved)?;
 
+    check_an_empty_space_maps_nothing()?;
+    check_a_region_outside_the_user_half_is_refused()?;
+    check_a_fault_outside_every_region_is_a_segfault()?;
+    check_a_write_to_a_read_only_region_is_refused()?;
+    let faulted = check_pages_arrive_on_demand_and_go_back()?;
+
     // Everything above dropped its objects before returning, so the allocator
     // must be exactly where it started. Signed, because a check that somehow
     // *gained* frames is as wrong as one that lost them and the number should
@@ -52,6 +63,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         reserved,
         committed,
         leaked,
+        faulted,
     })
 }
 
@@ -230,4 +242,155 @@ fn check_only_what_is_touched_is_paid_for(reserved: u64) -> Result<usize, &'stat
         return Err("dropping an object did not give back every page it held");
     }
     Ok(committed)
+}
+
+// ---------------------------------------------------------------------------
+// Address spaces
+// ---------------------------------------------------------------------------
+//
+// These build address spaces and fault pages into them without ever installing
+// one on a processor, which is deliberate: the mapper reaches any root through
+// the direct map, so the whole of demand paging can be exercised before there
+// is a thread at a lower privilege level to exercise it from. What cannot be
+// checked this way is the hardware actually walking the tables, and that is
+// the next piece of stage 6 rather than a gap in these.
+
+/// A fresh space has a root, no regions, and the kernel in reach.
+fn check_an_empty_space_maps_nothing() -> Result<(), &'static str> {
+    let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
+
+    if space.region_count() != 0 {
+        return Err("a fresh address space already had regions");
+    }
+    if space.root_table() == 0 || !space.root_table().is_multiple_of(PAGE_SIZE) {
+        return Err("an address space's root is not a page-aligned frame");
+    }
+    Ok(())
+}
+
+/// A mapping outside the user half is refused rather than made.
+///
+/// The check that stops a process asking for kernel addresses and being given
+/// them, which on x86-64 -- where both halves share a root -- would hand it the
+/// kernel's own tables.
+fn check_a_region_outside_the_user_half_is_refused() -> Result<(), &'static str> {
+    let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
+
+    match space.map_anonymous(KERNEL_HALF_BASE, PAGE_SIZE, VmaFlags::READ_WRITE) {
+        Err(SpaceError::NotUserRange(_)) => {}
+        _ => return Err("a mapping in the kernel half was not refused"),
+    }
+    if space.region_count() != 0 {
+        return Err("a refused mapping was inserted anyway");
+    }
+    Ok(())
+}
+
+/// A fault where nothing is mapped is the segmentation fault.
+fn check_a_fault_outside_every_region_is_a_segfault() -> Result<(), &'static str> {
+    let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
+    let _ = space
+        .map_anonymous(0x10_000, 2 * PAGE_SIZE, VmaFlags::READ_WRITE)
+        .map_err(|_| "mapping failed")?;
+
+    // Just past the region, which is the off-by-one a fault handler gets wrong.
+    match space.fault(0x10_000 + 2 * PAGE_SIZE, Access::READ) {
+        Err(SpaceError::NotMapped(_)) => Ok(()),
+        _ => Err("a fault outside every region was not a segmentation fault"),
+    }
+}
+
+/// A write to a region that does not permit writing is refused.
+fn check_a_write_to_a_read_only_region_is_refused() -> Result<(), &'static str> {
+    let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
+    let _ = space
+        .map_anonymous(0x20_000, PAGE_SIZE, VmaFlags::READ)
+        .map_err(|_| "mapping failed")?;
+
+    match space.fault(0x20_000, Access::WRITE) {
+        Err(SpaceError::Refused(_)) => {}
+        _ => return Err("a write to a read-only region was not refused"),
+    }
+    // And the read it does permit still works.
+    space
+        .fault(0x20_000, Access::READ)
+        .map_err(|_| "a read of a readable region was refused")?;
+    Ok(())
+}
+
+/// Pages arrive on the fault that needs them, hold what is written through the
+/// space's own tables, and every frame goes back when the space is dropped.
+fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
+    let before = mm::free_frames();
+    let base = 0x4000_0000;
+    let pages = 4;
+
+    let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
+    let _ = space
+        .map_anonymous(base, pages * PAGE_SIZE, VmaFlags::READ_WRITE)
+        .map_err(|_| "mapping failed")?;
+
+    // A whole region mapped and not one frame spent on it yet.
+    if mm::free_frames() != before - 1 {
+        return Err("mapping a region cost more than the root table");
+    }
+
+    // Fault them in out of order, so a handler that mapped a fixed address
+    // rather than the faulting one would fail here.
+    for index in [2, 0, 3, 1] {
+        space
+            .fault(base + index * PAGE_SIZE, Access::WRITE)
+            .map_err(|_| "a fault in a mapped region was not resolved")?;
+    }
+
+    // Each page must now translate through this space's root, be writable, and
+    // hold what is put in it -- read back through the direct map, since the
+    // kernel is not running in this address space and cannot use the address
+    // the process would.
+    for index in 0..pages {
+        let virt = base + index * PAGE_SIZE;
+        let phys = mm::translate_in(space.root_table(), virt)
+            .ok_or("a faulted page does not translate in its own address space")?;
+
+        let at = mm::direct_map(phys) as *mut u64;
+        let written = 0xFEED_0000 + index;
+        // SAFETY: `phys` is the frame the fault above committed for this page,
+        // it is mapped nowhere else, and the direct map covers all of RAM.
+        unsafe { at.write_volatile(written) };
+        // SAFETY: the same address, just written.
+        if unsafe { at.read_volatile() } != written {
+            return Err("a faulted page did not hold what was written to it");
+        }
+    }
+
+    // Re-faulting a page already present must not cost a second frame.
+    let settled = mm::free_frames();
+    space
+        .fault(base, Access::WRITE)
+        .map_err(|_| "re-faulting a present page failed")?;
+    if mm::free_frames() != settled {
+        return Err("re-faulting a present page allocated a second frame");
+    }
+
+    // Unmapping half the region gives back exactly those pages and leaves the
+    // rest mapped, which is what `munmap` of part of a mapping has to do.
+    let before_unmap = mm::free_frames();
+    space
+        .unmap(base, 2 * PAGE_SIZE)
+        .map_err(|_| "unmapping part of a region failed")?;
+    if mm::free_frames() < before_unmap + 2 {
+        return Err("unmapping two pages did not give back two frames");
+    }
+    if mm::translate_in(space.root_table(), base).is_some() {
+        return Err("an unmapped page still translates");
+    }
+    if mm::translate_in(space.root_table(), base + 2 * PAGE_SIZE).is_none() {
+        return Err("unmapping part of a region unmapped the rest of it");
+    }
+
+    drop(space);
+    if mm::free_frames() != before {
+        return Err("dropping an address space did not give back every frame");
+    }
+    Ok(pages)
 }

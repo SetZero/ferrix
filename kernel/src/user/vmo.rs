@@ -147,6 +147,29 @@ impl Vmo {
         }
         old
     }
+
+    /// Give back `pages` pages from `first`, and report how many held a frame.
+    ///
+    /// What `munmap` of part of a mapping does to the object behind it. The
+    /// pages are gone rather than merely unmapped: a process that unmaps half
+    /// its heap expects the memory back, and an object that kept them until
+    /// the rest of the mapping went would hold them for as long as the
+    /// process lived.
+    ///
+    /// Only the caller knows whether that is right — a page of a *shared*
+    /// object is not one unmapper's to take away — so this does as it is told
+    /// and [`crate::user::space::AddressSpace`] decides.
+    pub(crate) fn decommit_range(&self, first: u64, pages: u64) -> usize {
+        let mut held = self.pages.lock();
+        let mut given = 0;
+        for index in first..first.saturating_add(pages) {
+            if let Some(frame) = held.remove(&index) {
+                let _ = mm::release_frame(frame);
+                given += 1;
+            }
+        }
+        given
+    }
 }
 
 impl Drop for Vmo {

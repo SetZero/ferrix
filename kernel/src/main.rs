@@ -209,8 +209,8 @@ fn check_user_memory() {
     };
 
     println!(
-        "  objects  {} pages reserved, {} committed, {} frames leaked",
-        report.reserved, report.committed, report.leaked,
+        "  objects  {} pages reserved, {} committed, {} faulted in, {} frames leaked",
+        report.reserved, report.committed, report.faulted, report.leaked,
     );
 }
 
