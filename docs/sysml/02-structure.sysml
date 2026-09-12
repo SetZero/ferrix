@@ -745,7 +745,7 @@ package FerrixStructure {
         #implemented part vma : LibraryCrate {
             attribute :>> path = "libs/vma";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 60;
+            attribute :>> hostTests = 65;
             doc /* Written for stage 6; reached at stage 2 as the vmap arena's
                  * range map. */
         }

@@ -235,9 +235,18 @@ package FerrixMemory {
     enum def BackingKind { Anonymous; File; Device; }
 
     attribute def Backing {
+        doc /* Every Vma names the object it maps and where in it, anonymous
+             * memory included: Anonymous carries an id and an offset exactly
+             * as File does, so both sides of a fork point at one VMO and copy
+             * on write per page, and MAP_SHARED|MAP_ANONYMOUS needs nothing
+             * unpicked when it arrives. An id of zero denotes private
+             * anonymous memory with no shared object; by convention its
+             * offset is the mapping's own start address (what Linux's
+             * vm_pgoff holds for an anonymous VMA), so that adjacent private
+             * regions remain contiguous and mergeable. */
         attribute kind : BackingKind;
-        attribute id : Natural[0..1];
-        attribute offset : Natural[0..1];
+        attribute id : Natural;
+        attribute offset : Natural;
     }
 
     attribute def PageRange {
@@ -284,7 +293,10 @@ package FerrixMemory {
              * page-cache page fills the VMO the cache already holds, with no
              * copy, which is what makes userspace drivers affordable for a
              * compiler workload. */
-        attribute pages : Natural[0..*] ordered;
+        attribute pages : Natural[0..*] ordered {
+            doc /* Sparse: a map from page index to frame, absence meaning
+                 * uncommitted, with commit on demand. */
+        }
         attribute size : Natural;
         action commitPage;
         action lookupPage;
@@ -293,8 +305,9 @@ package FerrixMemory {
     #planned part def ProcessAddressSpace {
         @stage { number = 6; }
         doc /* Page tables plus the VMA map, each Vma naming a VMO, an offset,
-             * a protection and a share mode. The kernel half is shared into
-             * the root. */
+             * a protection and a share mode. VMOs are shared through Arc, so
+             * this references them and never owns them. The kernel half is
+             * shared into the root. */
         part tables : Mapper;
         part vmas : VmaMap;
         ref part vmos : Vmo[0..*];
