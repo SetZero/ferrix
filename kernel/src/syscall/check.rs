@@ -332,6 +332,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_brk_grows_and_shrinks(&process)?;
     check_set_tid_address_answers_with_a_thread_id(&process)?;
     check_uname_says_linux_to_a_script_and_ferrix_to_a_person(&process)?;
+    check_poll_reports_ready_invalid_and_skipped(&process)?;
     check_a_signal_disposition_reads_back_as_it_was_set(&process)?;
     check_the_blocked_mask_follows_how(&process)?;
     check_an_alternate_stack_is_recorded_and_refused_when_small(&process)?;
@@ -968,6 +969,92 @@ fn check_an_alternate_stack_is_recorded_and_refused_when_small(
         return Err("disabling did not report the stack it replaced");
     }
 
+    let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    Ok(())
+}
+
+/// `poll` answers each descriptor for what it is: the console is writable, a
+/// descriptor that names nothing is `POLLNVAL`, and a negative one is left
+/// alone -- and with nothing ready it waits out its timeout rather than
+/// returning at once.
+///
+/// Busybox's `while read` asks `poll` about its file before every read, and a
+/// refused `poll` makes it read nothing, which is how this call was found to be
+/// missing.
+fn check_poll_reports_ready_invalid_and_skipped(process: &Process) -> Result<(), &'static str> {
+    use crate::syscall::poll::{self, POLLIN, POLLNVAL, POLLOUT, POLLWRNORM};
+
+    let at = map_rw(process, PAGE_SIZE)?;
+    let entry = |fd: i32, events: u16| {
+        let mut bytes = [0_u8; 8];
+        let fields = fd.to_le_bytes().into_iter().chain(events.to_le_bytes());
+        for (slot, byte) in bytes.iter_mut().zip(fields) {
+            *slot = byte;
+        }
+        bytes
+    };
+    let mut array = [0_u8; 24];
+    let three = entry(1, POLLOUT | POLLIN)
+        .into_iter()
+        .chain(entry(4000, POLLIN))
+        .chain(entry(-1, POLLIN));
+    for (slot, byte) in array.iter_mut().zip(three) {
+        *slot = byte;
+    }
+    uaccess::copy_to_user(process.space(), at, &array)
+        .map_err(|_| "could not stage a pollfd array")?;
+
+    if poll::sys_poll(process, at, 3, 0) != Ok(2) {
+        return Err("poll did not count exactly the console and the closed descriptor");
+    }
+    let mut back = [0_u8; 24];
+    uaccess::copy_from_user(process.space(), at, &mut back)
+        .map_err(|_| "could not read revents")?;
+    let revents = |at: usize| {
+        u16::from_le_bytes([
+            back.get(at + 6).copied().unwrap_or(0xFF),
+            back.get(at + 7).copied().unwrap_or(0xFF),
+        ])
+    };
+    // Only what was asked for comes back, plus hang-ups and errors: the
+    // console was asked about `POLLIN|POLLOUT`, so `POLLWRNORM` must not appear
+    // even though the console is writable.
+    if revents(0) & POLLOUT == 0 {
+        return Err("poll did not report the console writable");
+    }
+    if revents(0) & POLLWRNORM != 0 {
+        return Err("poll reported an event that was not asked for");
+    }
+    if revents(8) != POLLNVAL {
+        return Err("poll did not answer POLLNVAL for a descriptor that names nothing");
+    }
+    if revents(16) != 0 {
+        return Err("poll touched a negative descriptor it should have skipped");
+    }
+
+    // Nothing ready: only the skipped slot. The call must take its timeout.
+    uaccess::copy_to_user(process.space(), at, &entry(-1, POLLIN))
+        .map_err(|_| "could not stage a pollfd")?;
+    let before = crate::timer::now_nanos();
+    if poll::sys_poll(process, at, 1, 10) != Ok(0) {
+        return Err("poll with nothing ready did not time out with zero");
+    }
+    if crate::timer::now_nanos().saturating_sub(before) < 10_000_000 {
+        return Err("poll with nothing ready returned before its timeout");
+    }
+
+    if poll::sys_ppoll(
+        process,
+        at,
+        1,
+        0,
+        at,
+        16,
+        crate::syscall::time::TimeWidth::Native,
+    ) != Err(Errno::EINVAL)
+    {
+        return Err("ppoll accepted a signal set of the wrong size");
+    }
     let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
     Ok(())
 }

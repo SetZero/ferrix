@@ -48,6 +48,7 @@ pub(crate) mod load;
 pub(crate) mod memory;
 pub(crate) mod native;
 pub(crate) mod path;
+pub(crate) mod poll;
 pub(crate) mod process;
 pub(crate) mod registry;
 pub(crate) mod signal;
@@ -257,6 +258,19 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Gettimeofday => time::sys_gettimeofday(process, a[0]),
         Syscall::Getrandom => time::sys_getrandom(process, a[0], a[1], a[2]),
         Syscall::Uname => system::sys_uname(process, a[0]),
+        Syscall::Poll => poll::sys_poll(process, a[0], a[1], a[2] as i32),
+        Syscall::Ppoll => poll::sys_ppoll(
+            process,
+            a[0],
+            a[1],
+            a[2],
+            a[3],
+            a[4],
+            time::TimeWidth::Native,
+        ),
+        Syscall::PpollTime64 => {
+            poll::sys_ppoll(process, a[0], a[1], a[2], a[3], a[4], time::TimeWidth::Wide)
+        }
         Syscall::RtSigaction => signal::sys_rt_sigaction(process, truncate(a[0]), a[1], a[2], a[3]),
         Syscall::RtSigprocmask => {
             signal::sys_rt_sigprocmask(process, truncate(a[0]), a[1], a[2], a[3])
