@@ -1207,13 +1207,39 @@ is given back — and restores the command register.
 The run recorded when it landed: 64 bytes read by DMA on x86-64, AArch64 and
 ARMv7-A, at four processors and, on ARMv7-A, at two.
 
+**Done — MSI-X tables kept out of a driver's reach.** An MSI-X interrupt is a
+write the device makes, to an address and of a value the kernel put in a table
+in one of the device's own BARs — so whoever can write the table chooses which
+interrupt the device raises, the kernel's included. A PCI device node now cuts
+the pages holding its MSI-X table and pending-bit array out of whichever BAR
+holds them, mints apertures only from what is left, and records the withheld
+ranges; the boot check requires every one of them, and its first and last
+byte, to be refused. virtio-rng keeps its table in a BAR of its own, which
+therefore stops being an aperture at all.
+
+* `libs/pci::msix` is the arithmetic — the withheld and mappable ranges of a
+  BAR, rounded out to pages, and the table entry layout — and the messages the
+  table will be programmed with: the local APIC's on x86-64, and a `GICv2m`
+  frame's on the Arm machines, read from QEMU's own `arm_gicv2m.c` rather than
+  remembered — `MSI_SETSPI_NS` takes the GIC identifier itself, and
+  `MSI_TYPER` reports the first identifier and the count. The `pci_walk` fuzz
+  target now also requires a BAR's mappable and withheld ranges to partition
+  it exactly, with every withheld range on page boundaries.
+* `libs/acpi` reads the MADT's GIC MSI frame entries, and `libs/fdt` the
+  `arm,gic-v2m-frame` nodes, which is where those frames are described.
+
+The run recorded when it landed: x86-64 publishes 3 apertures where it had 4,
+with one MSI-X range withheld; AArch64 and ARMv7-A publish one PCI aperture
+each where they had two.
+
 **Still to do, in the order it can be done:**
 
-* **MSI-X vectors for PCI nodes, which need nothing from stage 9.** A PCI node
-  has apertures and no vectors. A PCI function's vector is an MSI-X table
-  entry pointing at an interrupt the controller allocated — a local APIC
-  vector on x86-64, a GICv2m frame on the Arm machines — and neither
-  allocator exists yet.
+* **MSI-X vectors for PCI nodes.** A PCI node has apertures and no vectors.
+  The messages and the table layout are written; what is missing is the
+  allocator behind the architecture facade — local APIC vectors on x86-64, the
+  `GICv2m` frame's SPIs on the Arm machines — built on stage 9's
+  `arch::mask_interrupt`, and the boot check's completion arriving as an
+  interrupt rather than by polling.
 * **IOMMU domains, which need nothing from stage 9 either.** DMAR and IORT in
   `libs/acpi`, VT-d on `q35` with `intel-iommu`, SMMUv3 on `virt` with
   `iommu=smmuv3` — which this QEMU also offers on the 32-bit machine — and the
@@ -1330,8 +1356,8 @@ at three in the morning against a machine that reboots on a mistake.
 
 | Crate | Waiting for | Tests |
 |---|---|---|
-| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG. No AML, and there will be none. | 62 |
-| `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges and `virtio,mmio` devices; stage 10 is still the rest of it. | 69 |
+| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG, GIC MSI frames. No AML, and there will be none. | 64 |
+| `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. | 70 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
 | `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 59 |
@@ -1340,13 +1366,13 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 45 |
 | `libs/procfs` | Reached at 8 — the text of `/proc`: the `maps` line padded to its name column at both pointer widths, `meminfo`, `status`, `stat` and `mounts`, pinned byte for byte against lines a real Linux printed, and the `maps` parser the kernel's boot check reads its own output back with. No fuzz target: it arranges the kernel's own numbers rather than parsing a stranger's bytes. | 14 |
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory, and the PCI transport's status protocol, feature negotiation and queue activation. Reached at 10 by the boot check's virtio-rng driver. | 61 |
-| `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport. Has its fuzz target and its Miri step already. | 37 |
+| `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport, MSI-X messages and the pages of a BAR a driver must not be given. Has its fuzz target and its Miri step already. | 45 |
 | `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
 | `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one; and the reachability walk a send makes before it queues an endpoint. Has its fuzz target and its Miri step. | 22 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **651 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **662 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

@@ -1285,3 +1285,172 @@ fn every_error_prints_the_function_it_concerns() {
         assert!(text.starts_with("0000:00:03.0: "), "{text}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// MSI-X
+// ---------------------------------------------------------------------------
+
+use crate::msix;
+
+fn region(index: u8, size: u64) -> Region {
+    Region {
+        index,
+        bar: Bar::Memory {
+            address: 0x8000_0000,
+            wide: true,
+            prefetchable: false,
+        },
+        size,
+    }
+}
+
+fn msix_at(table: (u8, u32), pending: (u8, u32), vectors: u16) -> MsiX {
+    MsiX {
+        table_size: vectors,
+        enabled: false,
+        function_masked: false,
+        table: BarOffset {
+            bar: table.0,
+            offset: table.1,
+        },
+        pending: BarOffset {
+            bar: pending.0,
+            offset: pending.1,
+        },
+    }
+}
+
+#[test]
+fn a_bar_without_msix_is_mappable_whole() {
+    let r = region(4, 0x4000);
+    assert_eq!(
+        msix::mappable(&r, None, 0x1000).as_slice(),
+        &[(0, 0x4000)],
+        "whole"
+    );
+    assert!(
+        msix::withheld(&r, None, 0x1000).as_slice().is_empty(),
+        "nothing withheld"
+    );
+}
+
+#[test]
+fn qemus_virtio_msix_bar_is_withheld_entirely_and_its_register_bar_is_not() {
+    // virtio-rng-pci: two vectors' table at 0 and pending bits at 0x800, both
+    // in the 4 KiB BAR 1; the virtio registers in the 16 KiB BAR 4.
+    let table = msix_at((1, 0), (1, 0x800), 2);
+    assert!(
+        msix::mappable(&region(1, 0x1000), Some(&table), 0x1000)
+            .as_slice()
+            .is_empty(),
+        "BAR 1 is all table"
+    );
+    assert_eq!(
+        msix::mappable(&region(4, 0x4000), Some(&table), 0x1000).as_slice(),
+        &[(0, 0x4000)],
+        "BAR 4 untouched"
+    );
+}
+
+#[test]
+fn the_table_and_pending_pages_are_cut_out_of_a_shared_bar() {
+    // A table in page 1 and pending bits in page 3 of a 16 KiB BAR.
+    let table = msix_at((0, 0x1010), (0, 0x3008), 4);
+    let r = region(0, 0x4000);
+    assert_eq!(
+        msix::withheld(&r, Some(&table), 0x1000).as_slice(),
+        &[(0x1000, 0x1000), (0x3000, 0x1000)],
+        "rounded out to pages"
+    );
+    assert_eq!(
+        msix::mappable(&r, Some(&table), 0x1000).as_slice(),
+        &[(0, 0x1000), (0x2000, 0x1000)],
+        "the pages between"
+    );
+}
+
+#[test]
+fn a_table_spanning_pages_merges_with_its_pending_bits() {
+    // 300 vectors is 4800 bytes of table from 0x800, running into the page the
+    // pending bits start in.
+    let table = msix_at((2, 0x800), (2, 0x1800), 300);
+    let r = region(2, 0x3000);
+    assert_eq!(
+        msix::withheld(&r, Some(&table), 0x1000).as_slice(),
+        &[(0, 0x2000)],
+        "one merged span"
+    );
+    assert_eq!(
+        msix::mappable(&r, Some(&table), 0x1000).as_slice(),
+        &[(0x2000, 0x1000)],
+        "rest"
+    );
+}
+
+#[test]
+fn a_structure_past_the_bar_or_in_another_bar_withholds_nothing_here() {
+    let past = msix_at((0, 0xFFFF_F000), (0, 0xFFFF_FFF8), 2048);
+    let r = region(0, 0x2000);
+    assert_eq!(
+        msix::mappable(&r, Some(&past), 0x1000).as_slice(),
+        &[(0, 0x2000)],
+        "past the end"
+    );
+    let elsewhere = msix_at((3, 0), (3, 0x100), 1);
+    assert_eq!(
+        msix::mappable(&r, Some(&elsewhere), 0x1000).as_slice(),
+        &[(0, 0x2000)],
+        "BAR 3"
+    );
+}
+
+#[test]
+fn table_entries_are_bounded_by_the_table() {
+    let table = msix_at((1, 0x2000), (1, 0x3000), 3);
+    assert_eq!(msix::entry_offset(&table, 0), Some(0x2000), "first");
+    assert_eq!(msix::entry_offset(&table, 2), Some(0x2020), "last");
+    assert_eq!(msix::entry_offset(&table, 3), None, "past the end");
+}
+
+#[test]
+fn a_local_apic_message_carries_the_destination_and_the_vector() {
+    assert_eq!(
+        msix::local_apic_message(3, 0x41),
+        msix::Message {
+            address: 0xFEE0_3000,
+            data: 0x41
+        },
+        "APIC 3, vector 0x41"
+    );
+}
+
+#[test]
+fn a_gicv2m_frame_says_which_spis_it_raises() {
+    // QEMU's virt: SPIs 48 to 111, which are GIC identifiers 80 to 143.
+    let spis = msix::gicv2m_spis(80 << 16 | 64).unwrap();
+    assert_eq!(
+        spis,
+        msix::SpiRange {
+            first: 80,
+            count: 64
+        },
+        "QEMU's range"
+    );
+    assert!(spis.contains(80) && spis.contains(143), "both ends");
+    assert!(
+        !spis.contains(79) && !spis.contains(144),
+        "neither neighbour"
+    );
+    assert_eq!(msix::gicv2m_spis(80 << 16), None, "no SPIs");
+    assert_eq!(msix::gicv2m_spis(16 << 16 | 4), None, "a private interrupt");
+    assert_eq!(msix::gicv2m_spis(1000 << 16 | 64), None, "past 1019");
+    assert_eq!(
+        msix::gicv2m_message(0x0802_0000, 81),
+        Some(msix::Message {
+            address: 0x0802_0040,
+            data: 81
+        }),
+        "SETSPI with the identifier"
+    );
+    assert_eq!(msix::gicv2m_message(u64::MAX, 81), None, "overflow");
+}

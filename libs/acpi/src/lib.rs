@@ -992,6 +992,38 @@ pub struct Gicd {
     pub gic_version: u8,
 }
 
+/// A `GICv2m` frame (MADT entry type 13): the register a PCI device writes an
+/// SPI's identifier to, which is how MSI and MSI-X reach a GICv2.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GicMsiFrame {
+    /// Firmware's identifier for the frame.
+    pub id: u32,
+    /// Physical address of the frame's registers.
+    pub base_address: u64,
+    /// Flags; see [`GicMsiFrame::spis`].
+    pub flags: u32,
+    /// How many SPIs the frame raises, when the flags say this is valid.
+    pub spi_count: u16,
+    /// The first SPI's GIC identifier, when the flags say this is valid.
+    pub spi_base: u16,
+}
+
+/// GIC MSI frame flags: `spi_count` and `spi_base` override the frame's own
+/// `MSI_TYPER`.
+pub const GIC_MSI_FRAME_SPI_SELECT: u32 = 1 << 0;
+
+impl GicMsiFrame {
+    /// The first SPI and how many, if firmware states them here rather than
+    /// leaving them to the frame's `MSI_TYPER` register.
+    #[must_use]
+    pub const fn spis(&self) -> Option<(u16, u16)> {
+        if self.flags & GIC_MSI_FRAME_SPI_SELECT == 0 {
+            return None;
+        }
+        Some((self.spi_base, self.spi_count))
+    }
+}
+
 /// A GIC redistributor discovery range (MADT entry type 14).
 ///
 /// GICv3 describes redistributors as one contiguous region to walk rather than
@@ -1025,6 +1057,8 @@ pub enum MadtEntry {
     Gicc(Gicc),
     /// Type 12: a GIC distributor.
     Gicd(Gicd),
+    /// Type 13: a `GICv2m` frame, which turns message writes into SPIs.
+    GicMsiFrame(GicMsiFrame),
     /// Type 14: a GIC redistributor discovery range.
     Gicr(Gicr),
     /// A structure this parser does not decode, skipped by its own `length`.
@@ -1214,6 +1248,7 @@ fn decode_madt_entry(kind: u8, entry: &[u8]) -> MadtEntry {
         9 => decode_local_x2apic(entry),
         11 => decode_gicc(entry),
         12 => decode_gicd(entry),
+        13 => decode_gic_msi_frame(entry),
         14 => decode_gicr(entry),
         _ => return MadtEntry::Unknown { kind, length },
     };
@@ -1296,6 +1331,17 @@ fn decode_gicd(entry: &[u8]) -> Option<MadtEntry> {
         physical_base_address: u64_at(entry, 8)?,
         system_vector_base: u32_at(entry, 16)?,
         gic_version: u8_at(entry, 20)?,
+    }))
+}
+
+/// Type 13, twenty-four bytes.
+fn decode_gic_msi_frame(entry: &[u8]) -> Option<MadtEntry> {
+    Some(MadtEntry::GicMsiFrame(GicMsiFrame {
+        id: u32_at(entry, 4)?,
+        base_address: u64_at(entry, 8)?,
+        flags: u32_at(entry, 16)?,
+        spi_count: u16_at(entry, 20)?,
+        spi_base: u16_at(entry, 22)?,
     }))
 }
 

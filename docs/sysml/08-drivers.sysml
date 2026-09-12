@@ -67,8 +67,9 @@ package FerrixDrivers {
              * are Aperture and Vector tokens only this module mints, and
              * IoMapping and Interrupt take those rather than numbers, so a
              * driver cannot name memory or an interrupt its device does not
-             * have. Missing: the handle (Object::Device), PCI vectors
-             * (MSI-X). */
+             * have. The pages of a PCI function's MSI-X table and pending-bit
+             * array are withheld from its apertures. Missing: PCI vectors
+             * (programming MSI-X). */
         attribute compatible : String;
         attribute mmioWindows : Natural[0..*];
         attribute interrupts : Natural[0..*];

@@ -33,6 +33,8 @@ use ferrix_bootinfo::{BootView, PAGE_SIZE};
 use ferrix_fdt::{Trigger as TreeTrigger, VIRTIO_MMIO_COMPATIBLE};
 use ferrix_pci::Address;
 use ferrix_pci::bar::{Bar, Region};
+use ferrix_pci::capability::MsiX;
+use ferrix_pci::msix;
 use ferrix_sync::Once;
 
 use crate::{acpi, fdt};
@@ -182,6 +184,10 @@ pub(crate) struct DeviceNode {
     vectors: Vec<Vector>,
     /// Apertures not minted because the kernel uses that memory.
     withheld: usize,
+    /// The pages of the device's MSI-X table and pending-bit array, as
+    /// `(phys, len)`: memory the device has that no aperture may reach,
+    /// because whoever writes the table chooses which interrupt it raises.
+    interrupt_tables: Vec<(u64, u64)>,
 }
 
 impl DeviceNode {
@@ -189,23 +195,44 @@ impl DeviceNode {
     ///
     /// Memory BARs become apertures; I/O BARs do not, because an `IoMapping`
     /// is memory. A BAR firmware left unassigned, at address zero, is not an
-    /// aperture either. PCI vectors wait for MSI-X, which needs the interrupt
-    /// controllers to hand out vectors, so there are none yet.
-    pub(crate) fn pci(address: Address, regions: &[Region], reserved: Reserved) -> Self {
+    /// aperture either. The pages holding the MSI-X table and pending-bit
+    /// array are cut out of whichever BAR holds them and recorded instead, so
+    /// a BAR that is all table becomes no aperture at all. PCI vectors wait
+    /// for MSI-X to be programmed, so there are none yet.
+    pub(crate) fn pci(
+        address: Address,
+        regions: &[Region],
+        msix: Option<&MsiX>,
+        reserved: Reserved,
+    ) -> Self {
         let mut node = DeviceNode {
             location: Location::Pci(address),
             apertures: Vec::new(),
             vectors: Vec::new(),
             withheld: 0,
+            interrupt_tables: Vec::new(),
         };
         for region in regions {
-            if let Bar::Memory {
-                address,
+            let Bar::Memory {
+                address: base,
                 prefetchable,
                 ..
             } = region.bar
-            {
-                node.mint(address, region.size, prefetchable, reserved);
+            else {
+                continue;
+            };
+            if base == 0 {
+                continue;
+            }
+            for &(offset, len) in msix::withheld(region, msix, PAGE_SIZE).as_slice() {
+                if let Some(start) = base.checked_add(offset) {
+                    node.interrupt_tables.push((start, len));
+                }
+            }
+            for &(offset, len) in msix::mappable(region, msix, PAGE_SIZE).as_slice() {
+                if let Some(start) = base.checked_add(offset) {
+                    node.mint(start, len, prefetchable, reserved);
+                }
             }
         }
         node
@@ -294,6 +321,7 @@ fn tree_nodes(view: &BootView<'_>, reserved: Reserved) -> Vec<DeviceNode> {
             apertures: Vec::new(),
             vectors: Vec::new(),
             withheld: 0,
+            interrupt_tables: Vec::new(),
         };
         node.mint(region.address, region.size, false, reserved);
         if gic {
@@ -334,6 +362,8 @@ pub(crate) struct Report {
     pub(crate) partial_pages: usize,
     /// Apertures withheld because the kernel uses the memory.
     pub(crate) withheld: usize,
+    /// MSI-X table and pending-bit ranges withheld from apertures.
+    pub(crate) msix_withheld: usize,
     /// Vectors minted.
     pub(crate) vectors: usize,
     /// Of those, edge-triggered.
@@ -440,5 +470,19 @@ fn check_node(node: &DeviceNode, reserved: Reserved, report: &mut Report) -> Res
         return Err(fail("a vector past the end was handed out"));
     }
     report.refusals += 1;
+    for &(start, len) in &node.interrupt_tables {
+        report.msix_withheld += 1;
+        // The whole range, its first byte and its last: a driver that could
+        // reach any of them could rewrite which interrupt the device raises.
+        let refused = [
+            node.aperture(start, len),
+            node.aperture(start, 1),
+            node.aperture(start + (len - 1), 1),
+        ];
+        if refused.iter().any(Option::is_some) {
+            return Err(fail("an MSI-X table or pending-bit page was granted"));
+        }
+        report.refusals += refused.len();
+    }
     Ok(())
 }

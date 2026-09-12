@@ -488,12 +488,13 @@ fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>) {
     };
     println!(
         "  devices  {} nodes ({} from the device tree), {} apertures ({} not whole pages, \
-         {} withheld), {} vectors ({} edge), {} refusals as specified; {} published",
+         {} withheld, {} MSI-X ranges withheld), {} vectors ({} edge), {} refusals as specified; {} published",
         report.nodes,
         report.tree,
         report.apertures,
         report.partial_pages,
         report.withheld,
+        report.msix_withheld,
         report.vectors,
         report.edge,
         report.refusals,

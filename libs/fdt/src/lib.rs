@@ -1354,6 +1354,14 @@ impl<'a> Fdt<'a> {
         }
     }
 
+    /// Every `GICv2m` frame: where PCI devices write to raise an SPI.
+    #[must_use]
+    pub const fn gicv2m_frames(&self) -> MsiFrames<'a> {
+        MsiFrames {
+            nodes: self.compatible_nodes(GICV2M_FRAME_COMPATIBLE),
+        }
+    }
+
     /// Every PCI host bridge whose configuration space is an ECAM window,
     /// in tree order. [`EcamHosts`] says what is read and what is skipped.
     #[must_use]
@@ -1693,5 +1701,49 @@ impl Iterator for GicInterrupts<'_> {
             self.cells = None;
         }
         decoded
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GICv2m frames
+// ---------------------------------------------------------------------------
+
+/// The binding for a `GICv2m` frame.
+pub const GICV2M_FRAME_COMPATIBLE: &str = "arm,gic-v2m-frame";
+
+/// A `GICv2m` frame.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MsiFrame {
+    /// The frame's registers.
+    pub region: Region,
+    /// `arm,msi-base-spi`, if the tree overrides the frame's own register.
+    pub spi_base: Option<u32>,
+    /// `arm,msi-num-spis`, likewise.
+    pub spi_count: Option<u32>,
+}
+
+/// Every enabled `GICv2m` frame with a `reg`. See [`Fdt::gicv2m_frames`].
+#[derive(Clone, Copy, Debug)]
+pub struct MsiFrames<'a> {
+    /// The frames' nodes.
+    nodes: CompatibleNodes<'a, 'static>,
+}
+
+impl Iterator for MsiFrames<'_> {
+    type Item = MsiFrame;
+
+    fn next(&mut self) -> Option<MsiFrame> {
+        loop {
+            let node = self.nodes.next()?;
+            let Some(region) = node.reg().next() else {
+                continue;
+            };
+            let cell = |name| node.property(name).and_then(|property| property.as_u32());
+            return Some(MsiFrame {
+                region,
+                spi_base: cell("arm,msi-base-spi"),
+                spi_count: cell("arm,msi-num-spis"),
+            });
+        }
     }
 }

@@ -25,6 +25,10 @@
 //!    their masks — hardware cannot hold an address bit its aperture covers —
 //!    since restoring an impossible value is not a property anything can have.
 //! 4. **A size is a power of two, and its address a multiple of it.**
+//! 5. **A BAR's mappable and withheld ranges partition it**: in order,
+//!    disjoint, inside the BAR, together covering every byte exactly once,
+//!    and every withheld range starting on a page boundary and ending on one
+//!    or at the BAR's end — so nothing an MSI-X table touches is mappable.
 
 #![no_main]
 
@@ -33,6 +37,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ferrix_pci::bar::{self, Region};
 use ferrix_pci::capability::{Capabilities, ExtendedCapabilities, ID_MSIX, MsiX};
 use ferrix_pci::header::{COMMAND, HEADER_TYPE, HeaderKind};
+use ferrix_pci::msix;
 use ferrix_pci::virtio::Transport;
 use ferrix_pci::walk::Walk;
 use ferrix_pci::{Address, ConfigSpace};
@@ -209,10 +214,12 @@ fuzz_target!(|data: &[u8]| {
             ExtendedCapabilities::new(&bus, address).take(1025).count() <= 1024,
             "the extended list outran its space"
         );
-        if let Ok(Some(capability)) = ferrix_pci::capability::find(&bus, address, ID_MSIX) {
-            if let Ok(msix) = MsiX::read(&bus, capability) {
-                let _ = (msix.table_len(), msix.pending_len());
-            }
+        let table = match ferrix_pci::capability::find(&bus, address, ID_MSIX) {
+            Ok(Some(capability)) => MsiX::read(&bus, capability).ok(),
+            _ => None,
+        };
+        if let Some(table) = table {
+            let _ = (table.table_len(), table.pending_len());
         }
 
         let kind = function.identity.kind;
@@ -235,8 +242,47 @@ fuzz_target!(|data: &[u8]| {
             "{address}: not restored"
         );
 
+        for region in &regions {
+            partition(region, table.as_ref());
+        }
+
         if let Ok(Some(transport)) = Transport::find(&bus, address) {
             let _ = transport.verify(&regions);
         }
     }
 });
+
+/// Property 5, for one BAR.
+fn partition(region: &Region, table: Option<&MsiX>) {
+    const PAGE: u64 = 0x1000;
+    let mappable = msix::mappable(region, table, PAGE);
+    let withheld = msix::withheld(region, table, PAGE);
+    let mut all: Vec<(u64, u64, bool)> = mappable
+        .as_slice()
+        .iter()
+        .map(|&(offset, len)| (offset, len, false))
+        .chain(
+            withheld
+                .as_slice()
+                .iter()
+                .map(|&(offset, len)| (offset, len, true)),
+        )
+        .collect();
+    all.sort_unstable();
+    let mut cursor = 0_u64;
+    for (offset, len, is_withheld) in all {
+        assert!(len > 0, "an empty range");
+        assert_eq!(offset, cursor, "a gap or an overlap at {offset:#x}");
+        let end = offset.checked_add(len).expect("a range wraps");
+        assert!(end <= region.size, "a range past the BAR");
+        if is_withheld {
+            assert_eq!(offset % PAGE, 0, "withheld from mid-page");
+            assert!(
+                end % PAGE == 0 || end == region.size,
+                "withheld to mid-page"
+            );
+        }
+        cursor = end;
+    }
+    assert_eq!(cursor, region.size, "the ranges do not cover the BAR");
+}

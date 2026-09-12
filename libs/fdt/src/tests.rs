@@ -1997,3 +1997,56 @@ fn a_node_is_enabled_unless_its_status_says_otherwise() {
         .collect();
     assert_eq!(enabled, vec!["a@0", "b@0", "c@0"], "absent, okay and ok");
 }
+
+// ---------------------------------------------------------------------------
+// GICv2m frames
+// ---------------------------------------------------------------------------
+
+#[test]
+fn qemu_virt_describes_a_gicv2m_frame_inside_its_gic() {
+    let blob = tree(|b| {
+        b.begin("intc@8000000");
+        b.prop_strings("compatible", &["arm,cortex-a15-gic"]);
+        b.prop_u32("#address-cells", 2);
+        b.prop_u32("#size-cells", 2);
+        b.begin("v2m@8020000");
+        b.prop_str("compatible", GICV2M_FRAME_COMPATIBLE);
+        b.prop_cells("reg", &[0, 0x0802_0000, 0, 0x1000]);
+        b.end();
+        b.begin("v2m@8030000");
+        b.prop_str("compatible", GICV2M_FRAME_COMPATIBLE);
+        b.prop_cells("reg", &[0, 0x0803_0000, 0, 0x1000]);
+        b.prop_u32("arm,msi-base-spi", 160);
+        b.prop_u32("arm,msi-num-spis", 32);
+        b.end();
+        b.begin("v2m@8040000");
+        b.prop_str("compatible", GICV2M_FRAME_COMPATIBLE);
+        b.prop_str("status", "disabled");
+        b.prop_cells("reg", &[0, 0x0804_0000, 0, 0x1000]);
+        b.end();
+        b.end();
+    });
+    let frames: Vec<MsiFrame> = parse(&blob).gicv2m_frames().collect();
+    assert_eq!(
+        frames,
+        vec![
+            MsiFrame {
+                region: Region {
+                    address: 0x0802_0000,
+                    size: 0x1000
+                },
+                spi_base: None,
+                spi_count: None
+            },
+            MsiFrame {
+                region: Region {
+                    address: 0x0803_0000,
+                    size: 0x1000
+                },
+                spi_base: Some(160),
+                spi_count: Some(32)
+            },
+        ],
+        "QEMU's, one with overrides, and the disabled one skipped"
+    );
+}

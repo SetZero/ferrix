@@ -1881,3 +1881,59 @@ fn an_mcfg_that_ends_inside_its_reserved_bytes_is_refused() {
         "a MADT"
     );
 }
+
+// ---------------------------------------------------------------------------
+// GIC MSI frames
+// ---------------------------------------------------------------------------
+
+fn gic_msi_frame_entry(id: u32, base: u64, flags: u32, count: u16, spi_base: u16) -> Vec<u8> {
+    let mut payload = vec![0, 0];
+    payload.extend_from_slice(&id.to_le_bytes());
+    payload.extend_from_slice(&base.to_le_bytes());
+    payload.extend_from_slice(&flags.to_le_bytes());
+    payload.extend_from_slice(&count.to_le_bytes());
+    payload.extend_from_slice(&spi_base.to_le_bytes());
+    entry(13, &payload)
+}
+
+#[test]
+fn decodes_a_gic_msi_frame_with_and_without_its_spi_range() {
+    let table = madt(
+        0,
+        0,
+        &[
+            gic_msi_frame_entry(0, 0x0802_0000, 0, 0, 0),
+            gic_msi_frame_entry(1, 0x0803_0000, GIC_MSI_FRAME_SPI_SELECT, 64, 80),
+        ],
+    );
+    let madt = Madt::parse(Table::parse(&table).unwrap()).unwrap();
+    let frames: Vec<GicMsiFrame> = madt
+        .entries()
+        .filter_map(|entry| match entry {
+            MadtEntry::GicMsiFrame(frame) => Some(frame),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(frames.len(), 2, "both frames");
+    assert_eq!(frames[0].base_address, 0x0802_0000, "base");
+    assert_eq!(frames[0].spis(), None, "left to MSI_TYPER");
+    assert_eq!(frames[1].id, 1, "id");
+    assert_eq!(frames[1].spis(), Some((80, 64)), "stated here");
+}
+
+#[test]
+fn a_gic_msi_frame_too_short_for_its_fields_is_malformed() {
+    let mut short = gic_msi_frame_entry(0, 0x0802_0000, 0, 0, 0);
+    short.truncate(20);
+    short[1] = 20;
+    let table = madt(0, 0, &[short]);
+    let madt = Madt::parse(Table::parse(&table).unwrap()).unwrap();
+    assert_eq!(
+        madt.entries().next(),
+        Some(MadtEntry::Malformed {
+            kind: 13,
+            length: 20
+        }),
+        "four bytes short"
+    );
+}

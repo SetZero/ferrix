@@ -30,7 +30,9 @@ use core::fmt;
 
 use ferrix_bootinfo::BootView;
 use ferrix_pci::bar::{self, Region};
-use ferrix_pci::capability::{Capabilities, ExtendedCapabilities};
+use ferrix_pci::capability::{
+    self as pci_capability, Capabilities, ExtendedCapabilities, ID_MSIX, MsiX,
+};
 use ferrix_pci::ecam::{BYTES_PER_BUS, Window};
 use ferrix_pci::header::{CLASS_BRIDGE, Endpoint, HeaderKind, SUBCLASS_HOST_BRIDGE};
 use ferrix_pci::virtio::{self as virtio_pci, TYPE_ENTROPY, Transport};
@@ -345,19 +347,24 @@ fn check_host(
     }
 
     for function in found {
-        let regions = check_function(&mut space, function, report)?;
-        nodes.push(DeviceNode::pci(function.address, &regions, reserved));
+        let (regions, msix) = check_function(&mut space, function, report)?;
+        nodes.push(DeviceNode::pci(
+            function.address,
+            &regions,
+            msix.as_ref(),
+            reserved,
+        ));
     }
     Ok(())
 }
 
 /// Size every BAR of one function and walk both its capability lists,
-/// returning the BARs it decodes.
+/// returning the BARs it decodes and its MSI-X capability, if it has one.
 fn check_function(
     space: &mut Space,
     function: Function,
     report: &mut Report,
-) -> Result<Vec<Region>, Failure> {
+) -> Result<(Vec<Region>, Option<MsiX>), Failure> {
     let Function { address, identity } = function;
     report.functions += 1;
     if identity.class.base == CLASS_BRIDGE && identity.class.sub == SUBCLASS_HOST_BRIDGE {
@@ -372,6 +379,11 @@ fn check_function(
         let _ = capability?;
         report.capabilities += 1;
     }
+
+    let msix = match pci_capability::find(&*space, address, ID_MSIX)? {
+        Some(capability) => Some(MsiX::read(&*space, capability)?),
+        None => None,
+    };
 
     let mut regions = Vec::new();
     for index in 0..identity.kind.bar_slots() {
@@ -399,5 +411,5 @@ fn check_function(
             report.entropy_bytes = report.entropy_bytes.saturating_add(written);
         }
     }
-    Ok(regions)
+    Ok((regions, msix))
 }

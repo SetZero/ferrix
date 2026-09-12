@@ -249,7 +249,8 @@ package FerrixRoadmap {
              * tree, in the boot test on all three architectures against a
              * virtio-rng-pci device; device nodes whose apertures and vectors
              * are tokens only device.rs mints; a virtio-rng device driven by DMA
-             * from the boot check, 64 bytes on every architecture. Next, and
+             * from the boot check, 64 bytes on every architecture; MSI-X tables and pending bits withheld
+             * from apertures. Next, and
              * needing nothing from stage 9: MSI-X vectors, IOMMU domains.
              * Needing stage 9: everything that runs in ring 3. */
     }

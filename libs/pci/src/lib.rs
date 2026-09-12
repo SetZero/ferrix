@@ -31,6 +31,8 @@
 //!   invisible until a second device lands in the same aperture.
 //! * [`capability`] — the standard and extended capability lists, walked with
 //!   a bound and a visited set, and MSI-X decoded from its capability.
+//! * [`msix`] — MSI-X table entries, the messages the local APIC and a
+//!   `GICv2m` frame expect, and the pages of a BAR a driver must not be given.
 //! * [`walk`] — the bus walk: every function reachable from a root bus through
 //!   bridges firmware configured, without recursion and without allocation.
 //! * [`virtio`] — the virtio 1.x PCI transport's vendor capabilities, which
@@ -71,6 +73,7 @@ pub mod bar;
 pub mod capability;
 pub mod ecam;
 pub mod header;
+pub mod msix;
 pub mod virtio;
 pub mod walk;
 
