@@ -31,6 +31,8 @@ const EIGHT_N_ONE: u8 = 0x03;
 const FIFO_ENABLE: u8 = 0xC7;
 /// `MODEM_CONTROL`: data terminal ready, request to send, auxiliary output 2.
 const MODEM_READY: u8 = 0x0B;
+/// `LINE_STATUS`: a received byte is waiting in the data register.
+const DATA_READY: u8 = 1;
 /// `LINE_STATUS`: the transmit holding register is empty.
 const TRANSMIT_EMPTY: u8 = 1 << 5;
 
@@ -90,4 +92,18 @@ pub(crate) fn write_byte(byte: u8) {
     // If the wait above timed out the byte is dropped by the hardware, which is
     // the right outcome for a port nothing is listening to.
     write_register(DATA, byte);
+}
+
+/// One received byte, if the port has one.
+///
+/// Polled rather than interrupt-driven, for the same reason [`init`] leaves
+/// the port's interrupts off: the console has to work before there is an
+/// interrupt controller and during a panic, and a second path that only works
+/// afterwards is a second thing to get wrong. A program waiting on its
+/// keyboard costs a busy processor until the tty layer can put it to sleep.
+pub(crate) fn read_byte() -> Option<u8> {
+    if read_register(LINE_STATUS) & DATA_READY == 0 {
+        return None;
+    }
+    Some(read_register(DATA))
 }

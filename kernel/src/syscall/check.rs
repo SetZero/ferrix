@@ -925,6 +925,7 @@ fn check_a_program_runs_in_user_mode() -> Result<Option<i32>, &'static str> {
         arch::USER_TEST_PROGRAM,
     );
 
+    let faults_before = crate::trap::handled_fault_count();
     let status = exec::run(
         &file,
         &[b"/hello", b"--first"],
@@ -932,6 +933,21 @@ fn check_a_program_runs_in_user_mode() -> Result<Option<i32>, &'static str> {
         [0x5a; ferrix_ustack::RANDOM_BYTES],
     )
     .map_err(|_| "the program could not be started")?;
+
+    // Stage 6's exit criterion is a program that runs "with a page fault
+    // serviced along the way", so require one rather than assume it.
+    //
+    // Today the fault is incidental, and that is exactly why it is asserted.
+    // The loader maps the image writable, copies it in -- which faults every
+    // page in -- and then narrows the text to executable with `protect`, which
+    // takes those translations down. The program's first instruction fetch
+    // re-faults the page. A natural fix to `protect`, rewriting permissions in
+    // place instead of unmapping, would make that fault disappear with every
+    // other check still passing, and the criterion would quietly stop being
+    // exercised. This makes that visible instead.
+    if crate::trap::handled_fault_count().saturating_sub(faults_before) == 0 {
+        return Err("the program ran without a page fault being serviced");
+    }
 
     if status != arch::USER_TEST_STATUS {
         return Err("the program exited with the wrong status");

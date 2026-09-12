@@ -38,6 +38,15 @@ use crate::user::space::{AddressSpace, SpaceError};
 /// touched: the pages arrive on fault.
 const STACK_SIZE: u64 = 8 * 1024 * 1024;
 
+/// Address space kept inaccessible beneath the stack.
+///
+/// A mebibyte, which is Linux's `stack_guard_gap`. Reserved rather than
+/// merely left free, because `mmap` searches for free space from the top of
+/// the user half downwards and would otherwise place the next mapping flush
+/// against the bottom of the stack -- where an overflow writes into it rather
+/// than faulting.
+const STACK_GUARD: u64 = 1024 * 1024;
+
 /// The most the argument vector, environment and auxiliary vector may occupy.
 ///
 /// Built in kernel memory and copied in, so this bounds a kernel allocation
@@ -98,6 +107,7 @@ pub(crate) fn run(
     let process = Process::new(Arc::clone(&space));
 
     let loaded = load::load(&space, image).map_err(ExecError::Load)?;
+    process.set_heap_base(loaded.end);
 
     // The stack region. Reserved whole; paid for a page at a time.
     let top = stack_top();
@@ -105,6 +115,19 @@ pub(crate) fn run(
     let _ = space
         .map_anonymous(low, STACK_SIZE, VmaFlags::READ_WRITE)
         .map_err(ExecError::Space)?;
+
+    // Guard regions either side of the stack, with no access at all. Not
+    // decoration: the first busybox run's first `mmap` landed at
+    // 0x7FFFFFFFF000, the page this leaves unmapped above the stack, because
+    // the free-space search runs top-down and that page was the highest hole.
+    let _ = space
+        .map_anonymous(top, USER_VIRT_END - top, VmaFlags::NONE)
+        .map_err(ExecError::Space)?;
+    if let Some(guard_low) = low.checked_sub(STACK_GUARD) {
+        let _ = space
+            .map_anonymous(guard_low, STACK_GUARD, VmaFlags::NONE)
+            .map_err(ExecError::Space)?;
+    }
 
     // Build the startup image in kernel memory, then copy it in. It cannot be
     // built in place: `libs/ustack` needs a `&mut [u8]` and the only way to

@@ -46,6 +46,7 @@ pub(crate) mod image;
 pub(crate) mod load;
 pub(crate) mod memory;
 pub(crate) mod process;
+pub(crate) mod time;
 pub(crate) mod uaccess;
 
 use ferrix_linux_abi::errno::{self, Errno};
@@ -168,6 +169,15 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Mprotect => memory::sys_mprotect(process, a[0], a[1], truncate(a[2])),
         Syscall::Brk => memory::sys_brk(process, a[0]),
         Syscall::SetTidAddress => Ok(process.set_clear_child_tid(a[0], current_id())),
+        Syscall::Read => file::sys_read(process, a[0], a[1], a[2]),
+        Syscall::ClockGettime => {
+            time::sys_clock_gettime(process, a[0], a[1], time::TimeWidth::Native)
+        }
+        Syscall::ClockGettime64 => {
+            time::sys_clock_gettime(process, a[0], a[1], time::TimeWidth::Wide)
+        }
+        Syscall::Gettimeofday => time::sys_gettimeofday(process, a[0]),
+        Syscall::Getrandom => time::sys_getrandom(process, a[0], a[1], a[2]),
         Syscall::Write => file::sys_write(process, a[0], a[1], a[2]),
         Syscall::Writev => file::sys_writev(process, a[0], a[1], a[2]),
         _ => Err(Errno::ENOSYS),

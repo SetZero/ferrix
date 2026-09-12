@@ -16,12 +16,18 @@
 //! memory, still bound its chunks, and still report the count it managed. The
 //! two hardcoded numbers are one `match` that becomes a lookup.
 
-use ferrix_linux_abi::errno::Errno;
+use alloc::vec::Vec;
 
+use ferrix_linux_abi::errno::Errno;
+use ferrix_sync::SpinLock;
+
+use crate::arch;
 use crate::console;
 use crate::syscall::process::Process;
 use crate::syscall::uaccess::{self, UserError};
 
+/// Standard input.
+const STDIN: u64 = 0;
 /// Standard output.
 const STDOUT: u64 = 1;
 /// Standard error.
@@ -161,4 +167,99 @@ fn write_range(process: &Process, buf: u64, len: u64) -> Result<u64, Errno> {
         done += take as u64;
     }
     Ok(done)
+}
+
+// ---------------------------------------------------------------------------
+// Input
+// ---------------------------------------------------------------------------
+
+/// Bytes a finished line left behind because the reader asked for fewer.
+///
+/// One buffer for the machine, because there is one console. A program that
+/// reads a line in two calls must get the second half on the second call, not
+/// a fresh wait for the keyboard — which is the whole of canonical mode's
+/// contract, and the part a naive `read` gets wrong first.
+static PENDING: SpinLock<Vec<u8>> = SpinLock::new(Vec::new());
+
+/// Carriage return, which a terminal in raw mode sends for the Enter key.
+const CR: u8 = b'\r';
+/// Delete, which most terminals send for Backspace.
+const DEL: u8 = 0x7F;
+/// Backspace, which the rest send.
+const BS: u8 = 0x08;
+/// Ctrl-D: end of file, when it arrives on an empty line.
+const EOT: u8 = 0x04;
+
+/// `read`.
+///
+/// Descriptor 0 only, and canonical: nothing is returned until a whole line
+/// has been typed, the line is echoed as it is typed, Enter ends it, Backspace
+/// edits it, and Ctrl-D on an empty line is end of file.
+///
+/// # This is a line discipline, and it is standing in for one
+///
+/// QEMU puts the host terminal in raw mode for `-serial stdio`, so nothing
+/// echoes what is typed and Enter arrives as a carriage return. On Linux the
+/// tty layer's `ECHO` and `ICRNL` fix both, between the keyboard and the
+/// program. Ferrix has no tty layer yet, so the four rules above are here —
+/// and they move there when stage 15 brings ttys, at which point this becomes
+/// a read from a device like any other.
+pub(crate) fn sys_read(process: &Process, fd: u64, buf: u64, len: u64) -> Result<usize, Errno> {
+    if fd != STDIN {
+        return Err(Errno::EBADF);
+    }
+    if len == 0 {
+        return Ok(0);
+    }
+
+    if PENDING.lock().is_empty() {
+        let line = read_line();
+        if line.is_empty() {
+            // Ctrl-D on an empty line: end of file, which is a count of zero.
+            return Ok(0);
+        }
+        PENDING.lock().extend_from_slice(&line);
+    }
+
+    let mut pending = PENDING.lock();
+    let take = usize::try_from(len)
+        .unwrap_or(usize::MAX)
+        .min(pending.len());
+    let chunk = pending.get(..take).ok_or(Errno::EINVAL)?;
+    uaccess::copy_to_user(process.space(), buf, chunk).map_err(refused)?;
+    let _ = pending.drain(..take);
+    Ok(take)
+}
+
+/// Collect one line from the keyboard, echoing it, until Enter or Ctrl-D.
+///
+/// The lock on [`PENDING`] is not held here: the wait may last minutes, and a
+/// lock held across it would be a lock nothing else could take.
+fn read_line() -> Vec<u8> {
+    let mut line = Vec::new();
+    loop {
+        let Some(byte) = arch::read_console_byte() else {
+            core::hint::spin_loop();
+            continue;
+        };
+        match byte {
+            CR | b'\n' => {
+                console::write_bytes(b"\n");
+                line.push(b'\n');
+                return line;
+            }
+            DEL | BS => {
+                if line.pop().is_some() {
+                    // Back over the character, blank it, back again.
+                    console::write_bytes(b"\x08 \x08");
+                }
+            }
+            EOT if line.is_empty() => return line,
+            EOT => {}
+            other => {
+                console::write_bytes(&[other]);
+                line.push(other);
+            }
+        }
+    }
 }

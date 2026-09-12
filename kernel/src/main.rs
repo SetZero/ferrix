@@ -31,6 +31,7 @@ mod arch;
 mod console;
 mod early;
 mod fdt;
+mod init;
 mod irq;
 mod mm;
 mod mmio;
@@ -197,6 +198,10 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     }
 
     println!("{SUCCESS_MARKER} stages 1-5");
+
+    // After the marker, on purpose: see `init`. Returns at once when no program
+    // was built in.
+    init::run();
     arch::shutdown()
 }
 
@@ -250,7 +255,7 @@ fn check_syscalls() {
         report.pages, report.leaked,
     );
     match report.user_status {
-        Some(status) => println!("  usermode a program ran in ring 3 and exited with {status}"),
+        Some(status) => println!("  usermode a program ran in user mode and exited with {status}"),
         None => println!("  usermode not on {} yet", arch::NAME),
     }
 }

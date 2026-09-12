@@ -131,6 +131,19 @@ pub(crate) const USER_TEST_PROGRAM: &[u8] = &[];
 /// The status [`USER_TEST_PROGRAM`] exits with.
 pub(crate) const USER_TEST_STATUS: i32 = 42;
 
+/// One byte from the console, if one has arrived.
+///
+/// Always `None` here for now: this architecture's UART drivers are
+/// write-only, and nothing reads from the console until a program can run in
+/// user mode on it.
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "one architecture's version of this reads a register"
+)]
+pub(crate) fn read_console_byte() -> Option<u8> {
+    None
+}
+
 /// Run a program in ring 3, returning the status it exits with.
 ///
 /// Not built on this architecture yet. The x86-64 transition landed first

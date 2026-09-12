@@ -34,7 +34,7 @@ pub(crate) use aarch64::{
     counter_hz, counter_now, cpu_local, cpu_local_register, decode_syscall, describe_cpus,
     disable_interrupts, drop_identity_map, enable_interrupts, flush_tlb, halt, hardware_id,
     identity_root, init_console, init_interrupts, init_traps, install_user_root, ipi_irq,
-    prepare_stack, prepare_user_root, report_trap, run_user, send_ipi_to_others,
+    prepare_stack, prepare_user_root, read_console_byte, report_trap, run_user, send_ipi_to_others,
     service_interrupts, set_cpu_local, shutdown, switch_to, timer_arm, timer_disarm, timer_irq,
     uninstall_user_root, wait_for_interrupt, wait_for_work,
 };
@@ -45,7 +45,7 @@ pub(crate) use armv7a::{
     counter_hz, counter_now, cpu_local, cpu_local_register, decode_syscall, describe_cpus,
     disable_interrupts, drop_identity_map, enable_interrupts, flush_tlb, halt, hardware_id,
     identity_root, init_console, init_interrupts, init_traps, install_user_root, ipi_irq,
-    prepare_stack, prepare_user_root, report_trap, run_user, send_ipi_to_others,
+    prepare_stack, prepare_user_root, read_console_byte, report_trap, run_user, send_ipi_to_others,
     service_interrupts, set_cpu_local, shutdown, switch_to, timer_arm, timer_disarm, timer_irq,
     uninstall_user_root, wait_for_interrupt, wait_for_work,
 };
@@ -56,7 +56,7 @@ pub(crate) use x86_64::{
     counter_hz, counter_now, cpu_local, cpu_local_register, decode_syscall, describe_cpus,
     disable_interrupts, drop_identity_map, enable_interrupts, flush_tlb, halt, hardware_id,
     identity_root, init_console, init_interrupts, init_traps, install_user_root, ipi_irq,
-    prepare_stack, prepare_user_root, report_trap, run_user, send_ipi_to_others,
+    prepare_stack, prepare_user_root, read_console_byte, report_trap, run_user, send_ipi_to_others,
     service_interrupts, set_cpu_local, shutdown, switch_to, timer_arm, timer_disarm, timer_irq,
     uninstall_user_root, wait_for_interrupt, wait_for_work,
 };

@@ -42,7 +42,7 @@
 )]
 
 use std::error::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Where the kernel is linked, by word width.
 ///
@@ -84,5 +84,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     // and by default that is the script's own source.
     println!("cargo::rerun-if-changed={}", script.display());
     println!("cargo::rerun-if-changed=build.rs");
+
+    // The first program to run, if one was asked for.
+    //
+    // Opt-in through `FERRIX_INIT`, because the obvious binary is a host's own
+    // `busybox` and a build that picked it up silently would stop being
+    // reproducible — `xtask build` promises the same image byte for byte, and
+    // two machines do not have the same `/usr/bin`. With the variable unset the
+    // kernel embeds an empty file and boots exactly as it did before.
+    println!("cargo::rerun-if-env-changed=FERRIX_INIT");
+    let init = match std::env::var_os("FERRIX_INIT") {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            println!("cargo::rerun-if-changed={}", path.display());
+            path
+        }
+        None => {
+            let empty = PathBuf::from(std::env::var("OUT_DIR")?).join("no-init");
+            std::fs::write(&empty, b"")?;
+            empty
+        }
+    };
+    println!("cargo::rustc-env=FERRIX_INIT_IMAGE={}", init.display());
     Ok(())
 }

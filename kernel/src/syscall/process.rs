@@ -93,6 +93,31 @@ impl Process {
         self.state.lock().clear_child_tid
     }
 
+    /// Put the heap just past the loaded image, before anything asks for it.
+    ///
+    /// Without this, the first `brk` places the heap above the highest thing
+    /// mapped -- and the highest thing mapped is the stack, at the very top of
+    /// the user half, so the heap would begin at `USER_VIRT_END` and every
+    /// attempt to grow it would be refused. glibc survives that by falling back
+    /// to `mmap` for everything, which is how the first busybox run showed it:
+    /// `brk(0)` answering `0x800000000000`.
+    ///
+    /// A page of gap is left after the image, so that a heap overrun backwards
+    /// faults rather than writing over the last page of `.bss`.
+    pub(crate) fn set_heap_base(&self, image_end: u64) {
+        let Some(start) = round_up(image_end).and_then(|end| end.checked_add(PAGE_SIZE)) else {
+            return;
+        };
+        let mut state = self.state.lock();
+        if state.heap.is_none() {
+            state.heap = Some(Heap {
+                start,
+                brk: start,
+                mapped_to: start,
+            });
+        }
+    }
+
     /// Move the program break, and report where it now is.
     ///
     /// # The convention, which is not an error convention

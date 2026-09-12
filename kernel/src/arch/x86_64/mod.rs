@@ -183,6 +183,11 @@ pub(crate) const USER_TEST_PROGRAM: &[u8] = &[
 /// The status [`USER_TEST_PROGRAM`] exits with.
 pub(crate) const USER_TEST_STATUS: i32 = 42;
 
+/// One byte from the console, if one has arrived.
+pub(crate) fn read_console_byte() -> Option<u8> {
+    console::read_byte()
+}
+
 /// Run a program in ring 3, returning the status it exits with.
 ///
 /// # Safety

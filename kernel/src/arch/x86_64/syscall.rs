@@ -210,9 +210,14 @@ ferrix_run_user:
     // exactly the shape of a return from a system call that never happened.
     movq %rdi, %rcx
     movq %rsi, %rsp
-    // IF set, everything else clear: a program starts with interrupts on and
-    // no inherited direction flag, which is what its ABI promises it.
-    movq $0x202, %r11
+    // Interrupts masked in ring 3, for now, and deliberately. A timer tick in
+    // user mode could preempt this thread onto another processor, where
+    // `LSTAR` was never set up, `FS_BASE` holds somebody else's thread
+    // pointer and `RSP0` names somebody else's stack -- all of which are
+    // per-processor state this program has only on the one it started on.
+    // When a program is a scheduled task those move with the task, and this
+    // becomes 0x202. Bit 1 is reserved and always set.
+    movq $0x002, %r11
 
     // Nothing of the kernel's may survive into ring 3. A register left holding
     // a kernel pointer is an information leak that no test will ever notice.
@@ -339,7 +344,9 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
                 rax: 0,
                 // `SYSRET` takes the flags from R11 and the address from RCX,
                 // which is why an entry point can be delivered by returning.
-                r11: 0x202,
+                // Interrupts masked, for the reason given in
+                // `ferrix_run_user`.
+                r11: 0x002,
                 rcx: entry,
                 user_rsp: stack,
             };
