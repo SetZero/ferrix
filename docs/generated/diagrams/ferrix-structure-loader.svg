@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 250.3 316" width="250.3" height="316" role="img" aria-label="Block diagram: Loader and its parts. 5 nodes, 4 edges. Most connected: Loader (4), arch (1), load (1)."><title>Loader and its parts</title><style>
+svg{
+  --surface:#fff; --surface-2:#f6f7f8; --sunk:#e4e7ea;
+  --ink:#16191d; --ink-2:#3b434c; --muted:#6a737e;
+  --rule:#d2d7dc; --rule-strong:#b3bbc3;
+  --implemented:#2c6e4e; --implemented-bg:#dceae2;
+  --inProgress:#2a5f8f; --inProgress-bg:#dae5f0;
+  --writtenAhead:#6b4fa0; --writtenAhead-bg:#e5dff0;
+  --planned:#6a737e; --planned-bg:#e4e7ea;
+  --deferred:#87600b; --deferred-bg:#f3e8ce;
+}
+@media (prefers-color-scheme:dark){svg{
+  --surface:#1a1e22; --surface-2:#21262b; --sunk:#0e1113;
+  --ink:#e7eaed; --ink-2:#bfc6cd; --muted:#8d97a1;
+  --rule:#2c3238; --rule-strong:#5a646e;
+  --implemented:#6abf92; --implemented-bg:#16301f;
+  --inProgress:#74acdb; --inProgress-bg:#122639;
+  --writtenAhead:#a98fd8; --writtenAhead-bg:#241c38;
+  --planned:#8d97a1; --planned-bg:#262b31;
+  --deferred:#d9a83e; --deferred-bg:#2e2511;
+}}
+
+figure.diagram{margin:22px 0 26px; padding:0}
+figure.diagram svg{display:block; max-width:100%; height:auto;
+  background:var(--surface); border:1px solid var(--rule); border-radius:3px}
+figure.diagram figcaption{margin-top:9px; font-size:13px; color:var(--muted); max-width:74ch}
+figure.diagram figcaption .figname{color:var(--ink-2); font-weight:600}
+.dg-text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; fill:var(--ink)}
+.dg-sub{fill:var(--muted)}
+.dg-stereo{fill:var(--muted); letter-spacing:.02em}
+.dg-row{fill:var(--ink-2)}
+.dg-shape{fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.1}
+.dg-terminal{fill:var(--sunk); stroke:var(--rule-strong)}
+.dg-note{fill:var(--surface-2); stroke:var(--rule); stroke-dasharray:3 2}
+.dg-rule{stroke:var(--rule-strong); stroke-width:1}
+.dg-cluster{fill:none; stroke:var(--rule); stroke-width:1; stroke-dasharray:4 3}
+.dg-cluster-label{fill:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dg-edge{fill:none; stroke:var(--rule-strong); stroke-width:1.4}
+.dg-edge-trace{stroke-dasharray:5 4}
+.dg-edge-label{fill:var(--ink-2); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dg-edge-label-bg{fill:var(--surface); stroke:none}
+.dg-head{fill:var(--rule-strong); stroke:none}
+.dg-head-hollow{fill:var(--surface); stroke:var(--rule-strong); stroke-width:1.1}
+.dg-legend{fill:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dg-mat-implemented{fill:var(--implemented-bg); stroke:var(--implemented)}
+.dg-mat-inProgress{fill:var(--inProgress-bg); stroke:var(--inProgress)}
+.dg-mat-writtenAhead{fill:var(--writtenAhead-bg); stroke:var(--writtenAhead)}
+.dg-mat-planned{fill:var(--planned-bg); stroke:var(--planned)}
+.dg-mat-deferred{fill:var(--deferred-bg); stroke:var(--deferred)}
+a.dg-link{text-decoration:none}
+</style><rect width="250.3" height="316" fill="var(--surface)"/><defs><marker id="dg-ferrix-structure-loader-arrow" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-head" d="M0,0 L9,3.5 L0,7 L1.6,3.5 z"/></marker><marker id="dg-ferrix-structure-loader-open" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-edge" d="M0.5,0.5 L9,4 L0.5,7.5"/></marker><marker id="dg-ferrix-structure-loader-hollow" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-head-hollow" d="M0.5,0.5 L11,5 L0.5,9.5 z"/></marker><marker id="dg-ferrix-structure-loader-diamond" markerWidth="14" markerHeight="9" refX="0.5" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-head" d="M0.5,4.5 L7,0.5 L13.5,4.5 L7,8.5 z"/></marker></defs><path class="dg-edge" d="M80.1,143 L126.1,38" marker-start="url(#dg-ferrix-structure-loader-diamond)"/><path class="dg-edge" d="M80.1,143 L138.7,108" marker-start="url(#dg-ferrix-structure-loader-diamond)"/><path class="dg-edge" d="M80.1,143 L126.1,178" marker-start="url(#dg-ferrix-structure-loader-diamond)"/><path class="dg-edge" d="M80.1,143 L132.4,248" marker-start="url(#dg-ferrix-structure-loader-diamond)"/><g><rect class="dg-shape dg-mat-implemented" x="14" y="112" width="66.1" height="62" rx="4"/><text class="dg-text dg-stereo" x="47" y="131" text-anchor="middle" font-size="9.5">«def»</text><text class="dg-text" x="47" y="147" text-anchor="middle" font-size="12">Loader</text><text class="dg-text dg-sub" x="47" y="161" text-anchor="middle" font-size="10.5">stage 1</text><title>boot/: the UEFI loader.</title></g><g><rect class="dg-shape" x="126.1" y="14" width="110.2" height="48" rx="4"/><text class="dg-text" x="181.2" y="35" text-anchor="middle" font-size="12">uefi</text><text class="dg-text dg-sub" x="181.2" y="49" text-anchor="middle" font-size="10.5">: UefiBindings</text><title>boot/src/uefi: the handful of protocols and tables used — simple file system, loaded image, graphics output, and the ACPI and device-tree configuration tables.</title></g><g><rect class="dg-shape" x="138.7" y="84" width="85" height="48" rx="4"/><text class="dg-text" x="181.2" y="105" text-anchor="middle" font-size="12">services</text><text class="dg-text dg-sub" x="181.2" y="119" text-anchor="middle" font-size="10.5">: Services</text><title>boot/src/services.rs: allocation, memory map, and the one call after which firmware is gone: ExitBootServices.</title></g><g><rect class="dg-shape" x="126.1" y="154" width="110.2" height="48" rx="4"/><text class="dg-text" x="181.2" y="175" text-anchor="middle" font-size="12">load</text><text class="dg-text dg-sub" x="181.2" y="189" text-anchor="middle" font-size="10.5">: ImageLoading</text><title>boot/src/load.rs: ELF parse via libs/elf, placement, page tables via libs/paging, the identity plan for the switch.</title></g><g><rect class="dg-shape" x="132.4" y="224" width="97.6" height="48" rx="4"/><text class="dg-text" x="181.2" y="245" text-anchor="middle" font-size="12">arch</text><text class="dg-text dg-sub" x="181.2" y="259" text-anchor="middle" font-size="10.5">: LoaderArch</text></g><rect class="dg-shape dg-mat-implemented" x="14" y="294" width="11" height="11" rx="2"/><text class="dg-text dg-legend" x="30" y="303.5" font-size="10">implemented</text></svg>

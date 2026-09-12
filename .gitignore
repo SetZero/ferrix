@@ -3,3 +3,4 @@
 *.img
 *.fd
 /fuzz/target
+__pycache__/

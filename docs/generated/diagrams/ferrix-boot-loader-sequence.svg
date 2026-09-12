@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 186.8 942" width="186.8" height="942" role="img" aria-label="Flow diagram: Loader sequence. 12 nodes, 11 edges. Main path: start then initFirmwareConsole then prepareCpu then stageKernel then allocateBootAreas then buildAddressSpace then writeBootInfo then leaveFirmware then recordMemoryMap then cleanDcache then enterKernel then done."><title>Loader sequence</title><style>
+svg{
+  --surface:#fff; --surface-2:#f6f7f8; --sunk:#e4e7ea;
+  --ink:#16191d; --ink-2:#3b434c; --muted:#6a737e;
+  --rule:#d2d7dc; --rule-strong:#b3bbc3;
+  --implemented:#2c6e4e; --implemented-bg:#dceae2;
+  --inProgress:#2a5f8f; --inProgress-bg:#dae5f0;
+  --writtenAhead:#6b4fa0; --writtenAhead-bg:#e5dff0;
+  --planned:#6a737e; --planned-bg:#e4e7ea;
+  --deferred:#87600b; --deferred-bg:#f3e8ce;
+}
+@media (prefers-color-scheme:dark){svg{
+  --surface:#1a1e22; --surface-2:#21262b; --sunk:#0e1113;
+  --ink:#e7eaed; --ink-2:#bfc6cd; --muted:#8d97a1;
+  --rule:#2c3238; --rule-strong:#5a646e;
+  --implemented:#6abf92; --implemented-bg:#16301f;
+  --inProgress:#74acdb; --inProgress-bg:#122639;
+  --writtenAhead:#a98fd8; --writtenAhead-bg:#241c38;
+  --planned:#8d97a1; --planned-bg:#262b31;
+  --deferred:#d9a83e; --deferred-bg:#2e2511;
+}}
+
+figure.diagram{margin:22px 0 26px; padding:0}
+figure.diagram svg{display:block; max-width:100%; height:auto;
+  background:var(--surface); border:1px solid var(--rule); border-radius:3px}
+figure.diagram figcaption{margin-top:9px; font-size:13px; color:var(--muted); max-width:74ch}
+figure.diagram figcaption .figname{color:var(--ink-2); font-weight:600}
+.dg-text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; fill:var(--ink)}
+.dg-sub{fill:var(--muted)}
+.dg-stereo{fill:var(--muted); letter-spacing:.02em}
+.dg-row{fill:var(--ink-2)}
+.dg-shape{fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.1}
+.dg-terminal{fill:var(--sunk); stroke:var(--rule-strong)}
+.dg-note{fill:var(--surface-2); stroke:var(--rule); stroke-dasharray:3 2}
+.dg-rule{stroke:var(--rule-strong); stroke-width:1}
+.dg-cluster{fill:none; stroke:var(--rule); stroke-width:1; stroke-dasharray:4 3}
+.dg-cluster-label{fill:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dg-edge{fill:none; stroke:var(--rule-strong); stroke-width:1.4}
+.dg-edge-trace{stroke-dasharray:5 4}
+.dg-edge-label{fill:var(--ink-2); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dg-edge-label-bg{fill:var(--surface); stroke:none}
+.dg-head{fill:var(--rule-strong); stroke:none}
+.dg-head-hollow{fill:var(--surface); stroke:var(--rule-strong); stroke-width:1.1}
+.dg-legend{fill:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dg-mat-implemented{fill:var(--implemented-bg); stroke:var(--implemented)}
+.dg-mat-inProgress{fill:var(--inProgress-bg); stroke:var(--inProgress)}
+.dg-mat-writtenAhead{fill:var(--writtenAhead-bg); stroke:var(--writtenAhead)}
+.dg-mat-planned{fill:var(--planned-bg); stroke:var(--planned)}
+.dg-mat-deferred{fill:var(--deferred-bg); stroke:var(--deferred)}
+a.dg-link{text-decoration:none}
+</style><rect width="186.8" height="942" fill="var(--surface)"/><defs><marker id="dg-ferrix-boot-loader-sequence-arrow" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-head" d="M0,0 L9,3.5 L0,7 L1.6,3.5 z"/></marker><marker id="dg-ferrix-boot-loader-sequence-open" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-edge" d="M0.5,0.5 L9,4 L0.5,7.5"/></marker><marker id="dg-ferrix-boot-loader-sequence-hollow" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-head-hollow" d="M0.5,0.5 L11,5 L0.5,9.5 z"/></marker><marker id="dg-ferrix-boot-loader-sequence-diamond" markerWidth="14" markerHeight="9" refX="0.5" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-head" d="M0.5,4.5 L7,0.5 L13.5,4.5 L7,8.5 z"/></marker></defs><path class="dg-edge" d="M93.4,48 L93.4,94" marker-end="url(#dg-ferrix-boot-loader-sequence-arrow)"/><path class="dg-edge" d="M93.4,128 L92.6,174" marker-end="url(#dg-ferrix-boot-loader-sequence-arrow)"/><path class="dg-edge" d="M92.6,208 L91.5,254" marker-end="url(#dg-ferrix-boot-loader-sequence-arrow)"/><path class="dg-edge" d="M91.5,288 L90.4,334" marker-end="url(#dg-ferrix-boot-loader-sequence-arrow)"/><path class="dg-edge" d="M90.4,368 L89.1,414" marker-end="url(#dg-ferrix-boot-loader-sequence-arrow)"/><path class="dg-edge" d="M89.1,448 L87.7,494" marker-end="url(#dg-ferrix-boot-loader-sequence-arrow)"/><path class="dg-edge" d="M87.7,528 L86,574" marker-end="url(#dg-ferrix-boot-loader-sequence-arrow)"/><path class="dg-edge" d="M86,608 L84.3,654" marker-end="url(#dg-ferrix-boot-loader-sequence-arrow)"/><path class="dg-edge" d="M84.3,688 L82.6,734" marker-end="url(#dg-ferrix-boot-loader-sequence-arrow)"/><path class="dg-edge" d="M82.6,768 L81.3,814" marker-end="url(#dg-ferrix-boot-loader-sequence-arrow)"/><path class="dg-edge" d="M81.3,848 L80.6,894" marker-end="url(#dg-ferrix-boot-loader-sequence-arrow)"/><g><rect class="dg-shape dg-terminal" x="56.4" y="14" width="74" height="34" rx="17"/><text class="dg-text" x="93.4" y="35" text-anchor="middle" font-size="12">start</text></g><g><rect class="dg-shape" x="14" y="94" width="158.8" height="34" rx="4"/><text class="dg-text" x="93.4" y="115" text-anchor="middle" font-size="12">initFirmwareConsole</text><title>Firmware&#x27;s con_out, until console::shutdown just before ExitBootServices.</title></g><g><rect class="dg-shape" x="45.6" y="174" width="94" height="34" rx="4"/><text class="dg-text" x="92.6" y="195" text-anchor="middle" font-size="12">prepareCpu</text></g><g><rect class="dg-shape" x="40.9" y="254" width="101.2" height="34" rx="4"/><text class="dg-text" x="91.5" y="275" text-anchor="middle" font-size="12">stageKernel</text><title>Read /FERRIX/KERNEL.ELF from the volume the loader came from, parse it with libs/elf, copy the segments to their link address.</title></g><g><rect class="dg-shape" x="18.2" y="334" width="144.4" height="34" rx="4"/><text class="dg-text" x="90.4" y="355" text-anchor="middle" font-size="12">allocateBootAreas</text><title>Boot stack (64 KiB), boot info (64 KiB, around 2700 regions of room), memory map buffer.</title></g><g><rect class="dg-shape" x="16.9" y="414" width="144.4" height="34" rx="4"/><text class="dg-text" x="89.1" y="435" text-anchor="middle" font-size="12">buildAddressSpace</text><title>libs/paging Mapper: the image at its link address, the direct map from the lowest RAM address, and an identity plan for the loader&#x27;s own code so the instruction after the switch is fetchable.</title></g><g><rect class="dg-shape" x="29.9" y="494" width="115.6" height="34" rx="4"/><text class="dg-text" x="87.7" y="515" text-anchor="middle" font-size="12">writeBootInfo</text></g><g><rect class="dg-shape" x="28.2" y="574" width="115.6" height="34" rx="4"/><text class="dg-text" x="86" y="595" text-anchor="middle" font-size="12">leaveFirmware</text><title>Fetch the memory map one last time and call ExitBootServices.</title></g><g><rect class="dg-shape" x="19.3" y="654" width="130" height="34" rx="4"/><text class="dg-text" x="84.3" y="675" text-anchor="middle" font-size="12">recordMemoryMap</text><title>Translate UEFI descriptors into MemRegion[] behind the boot info, tagging the loader&#x27;s own allocations.</title></g><g><rect class="dg-shape" x="32" y="734" width="101.2" height="34" rx="4"/><text class="dg-text" x="82.6" y="755" text-anchor="middle" font-size="12">cleanDcache</text><title>The Arm architectures turn the MMU off in the middle of the switch, so anything dirty in a cache would vanish.</title></g><g><rect class="dg-shape" x="30.7" y="814" width="101.2" height="34" rx="4"/><text class="dg-text" x="81.3" y="835" text-anchor="middle" font-size="12">enterKernel</text><title>Install the new tables and jump to _start with the boot info pointer in the direct map.</title></g><g><rect class="dg-shape dg-terminal" x="43.6" y="894" width="74" height="34" rx="17"/><text class="dg-text" x="80.6" y="915" text-anchor="middle" font-size="12">done</text></g></svg>

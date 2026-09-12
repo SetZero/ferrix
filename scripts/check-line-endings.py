@@ -47,6 +47,8 @@ TEXT_SUFFIXES = {
     ".sh",
     ".py",
     ".json",
+    ".html",
+    ".svg",
     ".yml",
     ".yaml",
     ".ld",

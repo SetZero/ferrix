@@ -109,6 +109,43 @@ jobs:
         run: python3 scripts/check-panic-audit.py
 
   # ----------------------------------------------------------------
+  # docs/generated/ is written from docs/sysml/ and committed, so the
+  # document is readable on GitHub and its diff sits beside the model
+  # change that caused it. This job regenerates and compares: a model
+  # edited without regenerating fails here, and the fix is one command.
+  #
+  # It installs nothing. The reader in scripts/sysml/ is stdlib Python,
+  # because a gate that needs a pip install is a gate that does not run
+  # on a stock checkout.
+  # ----------------------------------------------------------------
+  model:
+    name: Architecture document
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # The reader is the one thing here that parses a language, and a reader
+      # that quietly misunderstands a construct produces a wrong document
+      # rather than a failed build.
+      - name: The model reader and the renderers behave
+        run: python3 scripts/sysml/tests.py
+
+      - name: The generated document matches the model
+        run: python3 scripts/gen-arch-doc.py --check
+
+      # Useful on a red run: the regenerated document, to diff by eye.
+      - name: Regenerate for inspection
+        if: failure()
+        run: python3 scripts/gen-arch-doc.py --out "$RUNNER_TEMP/model-doc"
+
+      - name: Upload the regenerated document
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: architecture-document
+          path: ${{ runner.temp }}/model-doc
+
+  # ----------------------------------------------------------------
   # The loader and the kernel are two programs that meet at one struct,
   # and the CPU is reached through one facade. A build failure enforces
   # what a design document could not.

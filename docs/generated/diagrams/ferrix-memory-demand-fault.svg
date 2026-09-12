@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 358.4 346" width="358.4" height="346" role="img" aria-label="Flow diagram: Demand fault. 5 nodes, 4 edges. Main path: start then findVma then decide then copyOnWrite."><title>Demand fault</title><style>
+svg{
+  --surface:#fff; --surface-2:#f6f7f8; --sunk:#e4e7ea;
+  --ink:#16191d; --ink-2:#3b434c; --muted:#6a737e;
+  --rule:#d2d7dc; --rule-strong:#b3bbc3;
+  --implemented:#2c6e4e; --implemented-bg:#dceae2;
+  --inProgress:#2a5f8f; --inProgress-bg:#dae5f0;
+  --writtenAhead:#6b4fa0; --writtenAhead-bg:#e5dff0;
+  --planned:#6a737e; --planned-bg:#e4e7ea;
+  --deferred:#87600b; --deferred-bg:#f3e8ce;
+}
+@media (prefers-color-scheme:dark){svg{
+  --surface:#1a1e22; --surface-2:#21262b; --sunk:#0e1113;
+  --ink:#e7eaed; --ink-2:#bfc6cd; --muted:#8d97a1;
+  --rule:#2c3238; --rule-strong:#5a646e;
+  --implemented:#6abf92; --implemented-bg:#16301f;
+  --inProgress:#74acdb; --inProgress-bg:#122639;
+  --writtenAhead:#a98fd8; --writtenAhead-bg:#241c38;
+  --planned:#8d97a1; --planned-bg:#262b31;
+  --deferred:#d9a83e; --deferred-bg:#2e2511;
+}}
+
+figure.diagram{margin:22px 0 26px; padding:0}
+figure.diagram svg{display:block; max-width:100%; height:auto;
+  background:var(--surface); border:1px solid var(--rule); border-radius:3px}
+figure.diagram figcaption{margin-top:9px; font-size:13px; color:var(--muted); max-width:74ch}
+figure.diagram figcaption .figname{color:var(--ink-2); font-weight:600}
+.dg-text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; fill:var(--ink)}
+.dg-sub{fill:var(--muted)}
+.dg-stereo{fill:var(--muted); letter-spacing:.02em}
+.dg-row{fill:var(--ink-2)}
+.dg-shape{fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.1}
+.dg-terminal{fill:var(--sunk); stroke:var(--rule-strong)}
+.dg-note{fill:var(--surface-2); stroke:var(--rule); stroke-dasharray:3 2}
+.dg-rule{stroke:var(--rule-strong); stroke-width:1}
+.dg-cluster{fill:none; stroke:var(--rule); stroke-width:1; stroke-dasharray:4 3}
+.dg-cluster-label{fill:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dg-edge{fill:none; stroke:var(--rule-strong); stroke-width:1.4}
+.dg-edge-trace{stroke-dasharray:5 4}
+.dg-edge-label{fill:var(--ink-2); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dg-edge-label-bg{fill:var(--surface); stroke:none}
+.dg-head{fill:var(--rule-strong); stroke:none}
+.dg-head-hollow{fill:var(--surface); stroke:var(--rule-strong); stroke-width:1.1}
+.dg-legend{fill:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dg-mat-implemented{fill:var(--implemented-bg); stroke:var(--implemented)}
+.dg-mat-inProgress{fill:var(--inProgress-bg); stroke:var(--inProgress)}
+.dg-mat-writtenAhead{fill:var(--writtenAhead-bg); stroke:var(--writtenAhead)}
+.dg-mat-planned{fill:var(--planned-bg); stroke:var(--planned)}
+.dg-mat-deferred{fill:var(--deferred-bg); stroke:var(--deferred)}
+a.dg-link{text-decoration:none}
+</style><rect width="358.4" height="346" fill="var(--surface)"/><defs><marker id="dg-ferrix-memory-demand-fault-arrow" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-head" d="M0,0 L9,3.5 L0,7 L1.6,3.5 z"/></marker><marker id="dg-ferrix-memory-demand-fault-open" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-edge" d="M0.5,0.5 L9,4 L0.5,7.5"/></marker><marker id="dg-ferrix-memory-demand-fault-hollow" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-head-hollow" d="M0.5,0.5 L11,5 L0.5,9.5 z"/></marker><marker id="dg-ferrix-memory-demand-fault-diamond" markerWidth="14" markerHeight="9" refX="0.5" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path class="dg-head" d="M0.5,4.5 L7,0.5 L13.5,4.5 L7,8.5 z"/></marker></defs><path class="dg-edge" d="M196,48 L196,94" marker-end="url(#dg-ferrix-memory-demand-fault-arrow)"/><path class="dg-edge" d="M196,128 L198.6,174" marker-end="url(#dg-ferrix-memory-demand-fault-arrow)"/><path class="dg-edge" d="M198.6,222 L127.4,284" marker-end="url(#dg-ferrix-memory-demand-fault-arrow)"/><path class="dg-edge" d="M198.6,222 L272.2,291" marker-end="url(#dg-ferrix-memory-demand-fault-arrow)"/><g><rect class="dg-shape dg-terminal" x="159" y="14" width="74" height="34" rx="17"/><text class="dg-text" x="196" y="35" text-anchor="middle" font-size="12">start</text></g><g><rect class="dg-shape" x="159.8" y="94" width="72.4" height="34" rx="4"/><text class="dg-text" x="196" y="115" text-anchor="middle" font-size="12">findVma</text></g><g><polygon class="dg-shape" points="198.6,174 242.6,198 198.6,222 154.6,198"/><text class="dg-text" x="198.6" y="195" text-anchor="middle" font-size="12">decide</text></g><g><rect class="dg-shape" x="76.8" y="284" width="101.2" height="48" rx="4"/><text class="dg-text" x="127.4" y="305" text-anchor="middle" font-size="12">copyOnWrite</text><text class="dg-text dg-sub" x="127.4" y="319" text-anchor="middle" font-size="10.5">stage 6</text><title>Copy the page, replace it in this space&#x27;s own object, and install it writable.</title></g><g><rect class="dg-shape" x="200" y="291" width="144.4" height="34" rx="4"/><text class="dg-text" x="272.2" y="312" text-anchor="middle" font-size="12">anonymousZeroPage</text></g><rect class="dg-edge-label-bg" x="14" y="246" width="146" height="14" rx="2"/><text class="dg-text dg-edge-label" x="156" y="256.4" text-anchor="end" font-size="10">fault.write and vma.cow</text><rect class="dg-edge-label-bg" x="238.4" y="249.5" width="32" height="14" rx="2"/><text class="dg-text dg-edge-label" x="242.4" y="259.9" text-anchor="start" font-size="10">else</text></svg>

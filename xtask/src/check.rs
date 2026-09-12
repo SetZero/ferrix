@@ -40,6 +40,15 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     step("unsafe audit", || python("scripts/check-unsafe-audit.py"))?;
     step("panic audit", || python("scripts/check-panic-audit.py"))?;
 
+    // The architecture document is generated from `docs/sysml/` and committed.
+    // A model edited without regenerating leaves the two disagreeing, and the
+    // document is exactly where nobody would notice; this is the cheapest
+    // possible place to say so.
+    step("architecture document", || {
+        python("scripts/sysml/tests.py")?;
+        python_with("scripts/gen-arch-doc.py", &["--check"])
+    })?;
+
     step("crate layering", || {
         let mut command = Command::new("bash");
         let _ = command
@@ -92,6 +101,11 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 
     println!("\nchecked");
     Ok(())
+}
+
+/// `cargo xtask model-doc` -- regenerate the document the gate above checks.
+pub(crate) fn model_doc() -> Result<()> {
+    python_with("scripts/gen-arch-doc.py", &[])
 }
 
 /// Announce a gate, run it, and report.

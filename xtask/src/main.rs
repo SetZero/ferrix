@@ -82,6 +82,7 @@ COMMANDS:
     run           Boot the image under QEMU, attached to the terminal
     test-boot     Boot the image under QEMU and assert the kernel came up
     check         Run every quality gate (fmt, clippy, layering, audits)
+    model-doc     Regenerate docs/generated/ from the SysML model
     flash         Copy the loader and kernel onto a board's boot partition
     watch-serial  Watch a real serial port for the kernel's boot report
     deploy        flash, then watch-serial: one command for a board
@@ -144,6 +145,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         "check" => check::run(&args),
+        "model-doc" => check::model_doc(),
         "flash" => {
             let arch = args.single_arch()?;
             let (loader, kernel) = build_halves(arch, &args)?;
