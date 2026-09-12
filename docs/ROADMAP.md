@@ -24,8 +24,9 @@ architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-7`.
 ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 7's exit is
 somebody else's static musl busybox running a script on every architecture,
 checked by `cargo xtask test-shell` rather than the boot test because it needs
-a binary the repository does not carry; its section lists what the Linux
-surface still owes. Stages 8 and 9 have both begun where the continuous rule
+a binary the repository does not carry. Since the exit, a program can
+`fork`, `execve` and `wait4`; its section lists what the Linux surface still
+owes. Stages 8 and 9 have both begun where the continuous rule
 says a stage should: their byte-level halves are in `libs/` — the VFS in
 `libs/vfs`, the handle table in `libs/objects`. Stage 9's first kernel objects
 — handle tables, channels carrying handles, VMOs — are in the boot test, and
@@ -730,8 +731,8 @@ Three decisions sit inside that, and each is a reading someone could dispute:
   behind a filesystem it does not otherwise need.
 * **The script is builtins only.** Variables, arithmetic, a loop, a function,
   `test`, `case`, positional parameters and the exit status. Nothing forks,
-  because `clone`, `execve` and `wait4` do not exist, and an external command
-  would measure their absence rather than the ABI.
+  because `clone`, `execve` and `wait4` did not exist at the exit, and an
+  external command would have measured their absence rather than the ABI.
 * **The binary is not in the repository.** Which static busybox to trust is a
   decision for whoever runs the test, and a kernel that embedded a host's
   binary silently would stop building byte for byte the same. `--init` names
@@ -821,16 +822,27 @@ next to the address space. And one thing that had been hiding: the `SYSCALL`
 MSRs were programmed only on a processor that had started a program, which is
 harmless when programs never move and a `#UD` when they do.
 
+**A program makes programs.** `fork`, `vfork` and `clone` without new threads,
+`execve` with one `#!` level, `wait4` and `waitid`, and the process-group and
+session calls work on all three architectures, with two programs of their own
+in the boot test:
+
+      fork     a program forked, waited for its child, and exited with 24
+      execve   a program became another and exited with 42; with the file gone it got errno 2
+
+A child resumes from a copy of its parent's saved registers (`arch::UserRegs`,
+entered by `arch::resume_user`) in a copy-on-write copy of its memory.
+`execve` refuses everything it can before its point of no return, then empties
+the process's own address space and loads into it, so the process keeps its
+identity; a failure after that ends it with `SIGSEGV`'s status, as on Linux.
+`vfork` copies rather than lends memory, and the parent still sleeps until the
+child execs or ends. A new thread is still `ENOSYS`.
+
 **Left, and why it did not block the exit:**
 
 * **Signal delivery and `rt_sigreturn`**, and `SIGSEGV` from the fault path,
   which is what rustc's stack-overflow guard needs. Owed with the first thing
   that has to kill a program.
-* **`clone`, `execve`, `wait4`.** A prompt that runs `uname` needs all three and
-  more: a path lookup to find `/bin/uname` and a file to load. Programs are
-  tasks, with a terminated condition a parent can wait on, and the
-  copy-on-write half of `fork` exists; what is missing is the call that makes a
-  child and the one that replaces its image.
 * **`futex` and threads**, which nothing single-threaded calls.
 * **Everything that opens a file**, `fcntl` included — stage 8.
 * **Three stand-ins, each written down where it lives.** The console's `read`

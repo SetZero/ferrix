@@ -196,10 +196,12 @@ package FerrixRoadmap {
              * FPU closed to user mode on both Arm kernels. Since the exit:
              * programs are scheduled tasks, preempted in user mode, with their
              * thread pointer and FPU state switched per task, load/start/kill
-             * on Process, and two programs taking turns in the boot test.
+             * on Process, and two programs taking turns in the boot test;
+             * then fork, vfork and clone without threads, execve, wait4 and
+             * waitid, and the process-group and session calls, with a forking
+             * and an exec'ing program in the boot test.
              *
-             * Left: signal delivery and rt_sigreturn, clone/execve/wait4
-             * (which need something to exec),
+             * Left: signal delivery and rt_sigreturn, threads and
              * futex, everything that opens a file including the fcntl
              * busybox's printf asks for, and the stand-ins for a tty, a clock
              * chip and an entropy source. */
