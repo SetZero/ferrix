@@ -553,3 +553,170 @@ fn zero_is_a_valid_state() {
     }
     assert_eq!(frames.free_frames(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Reference counts: the copy-on-write primitive
+// ---------------------------------------------------------------------------
+//
+// Stage 6 shares a frame between a parent and a child at `fork` and separates
+// them again at the first write fault. What matters here is not that a counter
+// counts, but that the two failure modes are impossible: a frame freed while
+// somebody still maps it, and a frame nobody frees because both sides thought
+// the other would.
+
+#[test]
+fn a_fresh_allocation_has_exactly_one_reference() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let frame = frames.allocate_frame().unwrap();
+    assert_eq!(frames.entry(frame).unwrap().refcount(), 1);
+}
+
+#[test]
+fn sharing_raises_the_count_and_releasing_lowers_it() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let frame = frames.allocate_frame().unwrap();
+    assert_eq!(frames.share(frame), Ok(2));
+    assert_eq!(frames.share(frame), Ok(3));
+    assert_eq!(frames.release(frame), Ok(Released::Shared(2)));
+    assert_eq!(frames.release(frame), Ok(Released::Shared(1)));
+    assert_eq!(frames.entry(frame).unwrap().refcount(), 1);
+}
+
+#[test]
+fn a_shared_frame_survives_a_release_and_stays_allocated() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let frame = frames.allocate_frame().unwrap();
+    let free_after_allocating = frames.free_frames();
+    assert_eq!(frames.share(frame), Ok(2));
+
+    // The child exits. The parent still has the page mapped, so the frame must
+    // not go back to the allocator -- and must not be counted free, or the next
+    // allocation hands out a frame the parent is reading.
+    assert_eq!(frames.release(frame), Ok(Released::Shared(1)));
+    assert_eq!(frames.state(frame), Some(State::Allocated));
+    assert_eq!(frames.free_frames(), free_after_allocating);
+}
+
+#[test]
+fn the_last_release_returns_the_frame() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let before = frames.free_frames();
+    let frame = frames.allocate_frame().unwrap();
+    assert_eq!(frames.share(frame), Ok(2));
+
+    assert_eq!(frames.release(frame), Ok(Released::Shared(1)));
+    assert_eq!(frames.release(frame), Ok(Released::Freed));
+    assert_eq!(frames.state(frame), Some(State::Free));
+    assert_eq!(
+        frames.free_frames(),
+        before,
+        "every frame is back once the last reference goes"
+    );
+}
+
+#[test]
+fn a_shared_frame_cannot_be_deallocated_directly() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let frame = frames.allocate_frame().unwrap();
+    assert_eq!(frames.share(frame), Ok(2));
+
+    // This is the bug the guard exists for: one side of a fork calling the
+    // allocator directly instead of `release`.
+    assert_eq!(
+        frames.deallocate(frame, 0),
+        Err(FrameError::StillShared(frame))
+    );
+    assert_eq!(frames.state(frame), Some(State::Allocated));
+    assert_eq!(frames.entry(frame).unwrap().refcount(), 2);
+}
+
+#[test]
+fn an_unshared_frame_deallocates_as_it_always_did() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    // The guard must not disturb the kernel's own allocations, which never
+    // share and are freed with `deallocate` throughout the tree.
+    let frame = frames.allocate(3).unwrap();
+    assert_eq!(frames.deallocate(frame, 3), Ok(()));
+    assert_eq!(frames.state(frame), Some(State::Free));
+}
+
+#[test]
+fn a_free_frame_can_be_neither_shared_nor_released() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let frame = frames.allocate_frame().unwrap();
+    frames.deallocate(frame, 0).unwrap();
+
+    assert_eq!(frames.share(frame), Err(FrameError::NotAllocated(frame)));
+    assert_eq!(frames.release(frame), Err(FrameError::NotAllocated(frame)));
+}
+
+#[test]
+fn a_frame_outside_the_arena_is_refused_by_both() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let outside = 0x400;
+    assert_eq!(frames.share(outside), Err(FrameError::OutOfRange(outside)));
+    assert_eq!(
+        frames.release(outside),
+        Err(FrameError::OutOfRange(outside))
+    );
+}
+
+#[test]
+fn a_saturated_count_is_refused_rather_than_wrapped() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    let frame = frames.allocate_frame().unwrap();
+    // Reaching u32::MAX a share at a time is not a test anybody can run, so the
+    // count is put there directly. In-crate access, which is why this lives
+    // beside the allocator rather than in `tests/`.
+    frames.entry_mut(frame).unwrap().refcount = u32::MAX;
+
+    assert_eq!(
+        frames.share(frame),
+        Err(FrameError::TooManyReferences(frame))
+    );
+    assert_eq!(
+        frames.entry(frame).unwrap().refcount(),
+        u32::MAX,
+        "a refused share leaves the count alone"
+    );
+}
+
+#[test]
+fn a_shared_frame_is_reallocatable_only_after_the_last_reference() {
+    let (mut entries, base, count) = arena(0x200, 4);
+    let mut frames = frames!(entries, base, count);
+
+    // Take everything, share one, then drain the allocator dry.
+    let shared = frames.allocate_frame().unwrap();
+    assert_eq!(frames.share(shared), Ok(2));
+    while frames.allocate_frame().is_some() {}
+    assert_eq!(frames.free_frames(), 0);
+
+    assert_eq!(frames.release(shared), Ok(Released::Shared(1)));
+    assert_eq!(
+        frames.allocate_frame(),
+        None,
+        "a frame with a reference left is not available"
+    );
+
+    assert_eq!(frames.release(shared), Ok(Released::Freed));
+    assert_eq!(frames.allocate_frame(), Some(shared));
+}

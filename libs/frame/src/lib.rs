@@ -165,6 +165,11 @@ pub enum FrameError {
     Misaligned(Frame),
     /// The block being freed was not allocated.
     NotAllocated(Frame),
+    /// The frame has references beyond the caller's, so freeing it would take
+    /// it out from under whoever else still holds it.
+    StillShared(Frame),
+    /// The reference count is saturated and cannot record another sharer.
+    TooManyReferences(Frame),
 }
 
 impl fmt::Display for FrameError {
@@ -176,8 +181,24 @@ impl fmt::Display for FrameError {
                 write!(f, "frame {frame:#x} is not aligned to its order")
             }
             FrameError::NotAllocated(frame) => write!(f, "frame {frame:#x} was not allocated"),
+            FrameError::StillShared(frame) => {
+                write!(f, "frame {frame:#x} is still shared")
+            }
+            FrameError::TooManyReferences(frame) => {
+                write!(f, "frame {frame:#x} has too many references")
+            }
         }
     }
+}
+
+/// What [`Frames::release`] did with the reference it dropped.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Released {
+    /// References remain, so the frame is still allocated and still mapped by
+    /// somebody. Carries the count that is left.
+    Shared(u32),
+    /// The last reference went, and the frame is back in the allocator.
+    Freed,
 }
 
 /// The allocator.
@@ -432,6 +453,15 @@ impl<'a> Frames<'a> {
         if self.state(frame) != Some(State::Allocated) {
             return Err(FrameError::NotAllocated(frame));
         }
+        // A frame two address spaces share is not one caller's to free. Without
+        // this the other sharer keeps a mapping to a frame the allocator has
+        // since handed to somebody else, which is the quietest memory
+        // corruption there is: nothing faults, the page simply starts changing
+        // under one of its owners. [`Frames::release`] is the way to drop a
+        // reference, and it reaches here only once the count is zero.
+        if self.entry(frame).is_some_and(|entry| entry.refcount > 1) {
+            return Err(FrameError::StillShared(frame));
+        }
 
         let frames = 1u64 << order;
         self.free += frames;
@@ -440,6 +470,90 @@ impl<'a> Frames<'a> {
         let (frame, order) = self.coalesce(frame, order);
         self.push(frame, order);
         Ok(())
+    }
+
+    /// Record another reference to an allocated frame, and report the new
+    /// count.
+    ///
+    /// This is the whole of what copy-on-write asks of an allocator. `fork`
+    /// marks both address spaces' regions read-only and calls this once per
+    /// frame the two now share; the write fault that follows copies the page
+    /// and calls [`Frames::release`] for the reference it stopped needing. The
+    /// allocator itself never reads the count — it is the kernel's
+    /// bookkeeping, kept here because this is the array with one slot per
+    /// frame, and because the alternative is a second array indexed the same
+    /// way.
+    ///
+    /// Shared frames are single frames: a higher-order block carries its count
+    /// on its head frame, and nothing shares one, because the unit a fault
+    /// copies is a page.
+    ///
+    /// # Errors
+    ///
+    /// [`FrameError::OutOfRange`] if the frame is not this allocator's;
+    /// [`FrameError::NotAllocated`] if it is free, since a free frame has no
+    /// contents to share; and [`FrameError::TooManyReferences`] if the count
+    /// would wrap. Wrapping is refused rather than allowed because a wrapped
+    /// count frees memory that somebody is still reading out of, and the
+    /// refusal is a mapping that fails where the alternative is corruption
+    /// that does not.
+    pub fn share(&mut self, frame: Frame) -> Result<u32, FrameError> {
+        if self.index(frame).is_none() {
+            return Err(FrameError::OutOfRange(frame));
+        }
+        if self.state(frame) != Some(State::Allocated) {
+            return Err(FrameError::NotAllocated(frame));
+        }
+
+        let Some(entry) = self.entry_mut(frame) else {
+            return Err(FrameError::OutOfRange(frame));
+        };
+        let Some(raised) = entry.refcount.checked_add(1) else {
+            return Err(FrameError::TooManyReferences(frame));
+        };
+        entry.refcount = raised;
+        Ok(raised)
+    }
+
+    /// Drop one reference to an allocated frame, freeing it if it was the last.
+    ///
+    /// The counterpart of [`Frames::share`], and the only correct way to undo
+    /// one: a caller that tracked sharing itself and then called
+    /// [`Frames::deallocate`] would be refused, which is the point of the
+    /// check there.
+    ///
+    /// Freeing goes through `deallocate` at order 0, so the frame coalesces
+    /// with its buddy exactly as any other single frame does — a process that
+    /// exits gives its memory back in whatever blocks it can re-form, not as a
+    /// heap of orphaned single frames.
+    ///
+    /// # Errors
+    ///
+    /// [`FrameError::OutOfRange`] if the frame is not this allocator's, and
+    /// [`FrameError::NotAllocated`] if it is already free.
+    pub fn release(&mut self, frame: Frame) -> Result<Released, FrameError> {
+        if self.index(frame).is_none() {
+            return Err(FrameError::OutOfRange(frame));
+        }
+        if self.state(frame) != Some(State::Allocated) {
+            return Err(FrameError::NotAllocated(frame));
+        }
+
+        let Some(entry) = self.entry_mut(frame) else {
+            return Err(FrameError::OutOfRange(frame));
+        };
+        // Saturating rather than checked: an allocated frame whose count is
+        // already zero is an inconsistency somewhere above, and the useful
+        // response is to free it once rather than to leak it forever.
+        let remaining = entry.refcount.saturating_sub(1);
+        entry.refcount = remaining;
+
+        if remaining > 0 {
+            return Ok(Released::Shared(remaining));
+        }
+
+        self.deallocate(frame, 0)?;
+        Ok(Released::Freed)
     }
 
     /// Merge upwards while the buddy is a free block of the same order.
