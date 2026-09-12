@@ -406,6 +406,15 @@ producing failures:
 104.4 s against a default timeout of 120 s. Nothing was ever hung; `xtask` was
 giving up on runs that were still making progress.
 
+One thing that is **not** covered by that and is still open: the stage 7 owner
+saw `stage 5 self-check failed: a task's stack was never given back` twice on
+x86_64, which is the check running and reporting rather than the harness giving
+up, and no timeout explains it. It may be the same defect one level down —
+`reap_to`'s patience is five seconds of *guest* time, which is as marginal
+against a stage that got 2.7× slower as the 120 s harness default is — but that
+is a hypothesis, and the assertion is evidence. Keep it separate until somebody
+raises that budget and watches.
+
 The real defect underneath is a **boot-time regression**: the armv7a boot test
 took 23.5 s before the scheduler merge and 64 s after it, plus run-to-run
 variance of another 40 s. The `sched` owner controlled it properly — `c008979`,
@@ -425,28 +434,62 @@ the first wrong conclusion of the day, from a six-run bisect; that was the
 second. Any default sitting that close to the typical time keeps making verdicts
 out of scheduling jitter until it moves.
 
-### The board is the part that is still open
+### The board was a hardware watchdog, and Ferrix does not service it
 
-Real STM32MP157D-DK1 hardware fails too, and there is no host contention and no
-emulation there, so "slow run killed by the harness" does not obviously apply.
-Two shapes, alternating **on identical bits** — same flashed kernel, no rebuild
-between runs:
+The STM32MP157D-DK1 failures were not the same bug at all, and the cause is a
+**kernel gap rather than a test artifact**, so it matters beyond this
+investigation. The board has a 32-second independent watchdog. U-Boot starts the
+`IWDG` and services it once a second at its prompt; the moment Ferrix takes over,
+**nothing services it**, and it fires. Measured from Ferrix's loader banner to
+the SoC restarting: **29.8 seconds**, with no panic and no output — the board
+simply resets.
 
-* **Inside `fairness()`.** Markers put it past `start_spinners` and past the
-  "a spinner never started" wait, then silence.
-* **In `many_tasks`.** Other runs get further and fail its reap: *arena holds 8
-  allocations, expected 4* — four kernel stacks not returned inside `reap_to`'s
-  five-second budget.
+That explains both board symptoms as one thing: the watchdog cutting stage 5
+short at whatever point it had reached. The silent stop inside `fairness()` is
+silent because nothing failed. The *arena holds 8, expected 4* is a run that got
+far enough for the five-second reap budget to expire before the reset landed.
 
-Both are in-guest patience budgets expiring, which is the same shape as the
-harness timeout one level up — so the likeliest reading is that those budgets
-are simply too tight for that machine, and the board is telling us what QEMU is.
-**The experiment that separates it**, and the one the `sched` owner wants run:
-raise `PATIENCE_NANOS` in `kernel/src/sched/check.rs` from 20 s to 120 s and
-`reap_to`'s budget with it. If the board then completes late, it is the same
-slowness and the fix is the `sched` owner's. If it still fails at 120 s of
-*guest* time, the board has found something real that no emulator has
-reproduced — and it is then the only instrument that can.
+And it **retracts** something that was recorded here as evidence. The two shapes
+alternating on identical bits was offered, and written down, as a constraint any
+explanation had to satisfy. It constrains nothing: what varies between runs is
+only where stage 5 happens to be when a fixed timer fires, which is precisely
+what a clock that knows nothing about the code would produce. The board owner
+retracted it themselves once they had measured the watchdog.
+
+Two consequences:
+
+* **The `PATIENCE_NANOS` experiment cannot pass on the board as it stands.**
+  Raising the guest budgets to 120 s is moot when a 32 s hardware reset lands
+  first. It is on hold until the watchdog is cleared, which needs a power-on
+  reset — the `IWDG` cannot be disabled in software once started and survives
+  warm resets, so every reset on that board today has kept the same watchdog
+  alive. An OP-TEE built without it is already on the card and takes effect when
+  the USB-C is unplugged.
+* **Ferrix should service or disable that watchdog**, which is board support
+  work rather than stage 6's. Until it does, any run on that board is capped at
+  32 seconds whatever else is true, and stage 5 alone now takes 64 s under
+  emulation.
+
+Once the watchdog is out of the way, whether the board completes stage 5 late or
+genuinely fails is the one remaining open question in this whole investigation.
+
+### The pattern worth more than any of the leads
+
+Four times in one day, across four sessions, a **budget expiring was mistaken
+for a hang** — and they were three different budgets at three different levels:
+
+* the harness's 120 s `--timeout`, killing runs that took up to 104 s;
+* the guest's own patience — `reap_to`'s five seconds, `PATIENCE_NANOS`'s
+  twenty;
+* the board's 32 s hardware watchdog, which no software in the picture knows
+  about.
+
+Every one produced a confident wrong conclusion from somebody, including two
+from me. The common shape: **a deadline expiring looks exactly like a hang, and
+silence tells you nothing about whether anything was progressing.** Before
+reasoning about a mechanism, find every deadline between you and the symptom and
+raise it. That is the transferable lesson here, and it is worth more than any of
+the individual leads below.
 
 ### Dead leads — do not re-run these
 
