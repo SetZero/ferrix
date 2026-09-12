@@ -1,0 +1,363 @@
+/*
+ * Ferrix — SysML v2 model, part 4: memory.
+ *
+ * docs/ARCHITECTURE.md §4. The physical allocator, the heap, the page-table
+ * arithmetic and the kernel arena run today; VMOs, process address spaces,
+ * copy-on-write and reclaim are stage 6 and after.
+ */
+package FerrixMemory {
+    private import ScalarValues::*;
+    private import FerrixLifecycle::*;
+
+    // -----------------------------------------------------------------------
+    // Physical frames (libs/frame, kernel/src/mm.rs)
+    // -----------------------------------------------------------------------
+
+    enum def FrameState { Reserved; Free; FreeTail; Allocated; }
+
+    attribute def PageEntry {
+        doc /* One per frame, in a side array, so the allocator is index
+             * arithmetic and forbid(unsafe_code). Not a concession to testing:
+             * the refcount is what copy-on-write needs, and the free-object
+             * count is what lets the heap return slab pages. Linux calls the
+             * same conclusion struct page. */
+        attribute next : Natural;
+        attribute previous : Natural;
+        attribute refcount : Natural;
+        attribute order : Natural;
+        attribute frameState : FrameState;
+        #planned attribute owner : Natural {
+            @stage { number = 6; }
+            doc /* The owning VMO, for reclaim and copy-on-write. */
+        }
+        #planned attribute flags : Natural {
+            @stage { number = 6; }
+        }
+    }
+
+    #implemented part def FrameAllocator {
+        @stage { number = 2; }
+        doc /* Buddy allocator over the memory map, orders 0 to 10 (up to
+             * 4 MiB blocks). Blocks split when a smaller one is needed and
+             * merge with their buddy when freed. allocate_below finds frames
+             * under a limit, which the x86-64 AP trampoline needs. */
+        attribute maxOrder : Natural = 10;
+        attribute freeFrames : Natural;
+        attribute managedFrames : Natural;
+        attribute entries : PageEntry[0..*] ordered;
+        action allocateBlock;
+        action allocateBelow;
+        action deallocate;
+        action insertFree;
+    }
+
+    #implemented part def PhysicalMemory {
+        @stage { number = 2; }
+        doc /* kernel/src/mm.rs: where the per-frame array goes, reaching
+             * physical memory through the direct map, and the kernel's own
+             * page tables. The per-frame array is carved from the front of the
+             * largest usable region before there is an allocator to make it.
+             * Three globals behind interrupt-masking locks in a fixed order:
+             * TABLES, then FRAMES, then HEAP. */
+        part frames : FrameAllocator;
+        part heap : KernelHeap;
+        part tables : KernelPageTables;
+        action allocateFrames;
+        action deallocateFrames;
+        action mapKernel;
+        action unmapKernel {
+            doc /* Unmap, invalidate everywhere, and only then free — holding
+                 * what was released inline so the stage 2 checks' exact frame
+                 * accounting still holds. */
+        }
+        action protectKernel;
+        action translate;
+        action checkWriteXorExecute;
+        action reclaim;
+        action mapDemandPage;
+
+        part perCpuCaches : PerCpuFrameCache {
+            @deferred { reason = "Each allocator is one lock, which is correct; the per-CPU magazines are a performance change waiting for a workload that can measure them."; }
+        }
+    }
+
+    part def PerCpuFrameCache;
+
+    // -----------------------------------------------------------------------
+    // The kernel heap (libs/heap)
+    // -----------------------------------------------------------------------
+
+    interface def HeapBacking {
+        doc /* The unsafe trait behind which a free-list allocator's loads and
+             * stores live, so the allocator body is pure and host-testable. A
+             * test implements it over a map; the kernel over the direct map
+             * and the buddy allocator. */
+        action allocatePages;
+        action deallocatePages;
+        action readLink;
+        action writeLink;
+    }
+
+    #implemented part def KernelHeap {
+        @stage { number = 2; }
+        doc /* Segregated free lists over a page supply: power-of-two size
+             * classes from 8 to 2048 bytes, refilled a page at a time; larger
+             * requests go to the backing as whole pages. Alignment up to the
+             * class size comes free from page-aligned slabs. Empty slab pages
+             * are returned to the buddy, with the free-object count in the
+             * per-frame record; the last page of a class stays so a workload
+             * oscillating across a page boundary does not pay a buddy call
+             * per cycle. Makes Box, Vec and BTreeMap work. */
+        attribute classSizes : Natural[9] = (8, 16, 32, 64, 128, 256, 512, 1024, 2048);
+        attribute allocatedBytes : Natural;
+        attribute pagesHeld : Natural;
+
+        #planned part objectSlabs : ObjectSlab[0..*] {
+            @stage { number = 5; }
+            doc /* Kernel object types get their own slabs, so a Task
+                 * allocation is a pop off a list. Per-CPU free lists for the
+                 * general path. */
+        }
+    }
+
+    part def ObjectSlab;
+
+    // -----------------------------------------------------------------------
+    // Page tables (libs/paging)
+    // -----------------------------------------------------------------------
+
+    attribute def MapFlags {
+        attribute read : Boolean;
+        attribute write : Boolean;
+        attribute execute : Boolean;
+        attribute user : Boolean;
+        attribute global : Boolean;
+        attribute device : Boolean;
+    }
+
+    attribute def TableGeometry {
+        doc /* Every architecture uses 512 eight-byte descriptors over a 4 KiB
+             * granule; what differs is the number of levels and the address
+             * width. Four over 48 bits on the 64-bit pair, three over 32 on
+             * ARMv7-A, whose LPAE format is AArch64's descriptor with a
+             * narrower physical address. */
+        attribute levels : Natural;
+        attribute virtualBits : Natural;
+    }
+
+    interface def Encoding {
+        doc /* The roughly forty lines of bit layout each architecture
+             * supplies: table and leaf descriptors, presence, leafness at a
+             * level, the address in an entry, block support per level. */
+        action tableDescriptor;
+        action leafDescriptor;
+        action isPresent;
+        action isLeaf;
+        action address;
+        action supportsBlock;
+        action leafFlags;
+    }
+
+    interface def PhysMem {
+        doc /* Reading and writing table entries at physical addresses, and
+             * allocating a table. The loader implements it over its pool,
+             * the kernel over the direct map and the buddy. */
+        action read;
+        action write;
+        action allocateTable;
+    }
+
+    #implemented part def Mapper {
+        @stage { number = 1; }
+        doc /* The walk, written once, generic over an Encoding and a
+             * geometry. PhysAddr and VirtAddr are distinct newtypes with no
+             * arithmetic between them: confusing the two is this project's
+             * characteristic bug and the one the compiler catches for free. */
+        attribute geometry : TableGeometry;
+        action mapRange;
+        action unmapRange {
+            doc /* Reports what it released — leaves and pruned tables — so
+                 * the caller can invalidate first and free afterwards. */
+        }
+        action protectRange;
+        action translate;
+        action forEachLeaf {
+            doc /* What the W^X sweep walks. */
+        }
+    }
+
+    #implemented part def KernelPageTables {
+        @stage { number = 2; }
+        doc /* The kernel's root, shared into every secondary's tree and, from
+             * stage 6, into every process's upper half through
+             * share_kernel_slots. */
+        part mapper : Mapper;
+    }
+
+    // -----------------------------------------------------------------------
+    // The kernel arena (kernel/src/vmap.rs)
+    // -----------------------------------------------------------------------
+
+    #implemented part def VmapArena {
+        @stage { number = 2; }
+        doc /* "Give me a range of addresses and let me decide later what goes
+             * behind it": device windows, non-contiguous buffers, guard-paged
+             * stacks. The arena is a libs/vma AddressSpace over the vmap area
+             * past the reserved windows, because a kernel arena and a process
+             * address space are the same problem. Allocation identity lives in
+             * a second map beside it, because the arena merges adjacent equal
+             * ranges, which is right for a process and wrong for an allocator. */
+        attribute stackPages : Natural = 4;
+        part ranges : VmaMap;
+        action allocateRange {
+            doc /* A page-aligned range with an unmapped guard page either side,
+                 * mapped with the flags asked for. */
+        }
+        action free {
+            doc /* Unmap first, then release the address; the unmapping cannot
+                 * happen under the arena lock because it waits for processors
+                 * that cannot answer while spinning for it, so the address is
+                 * reserved across the gap. Stage 5 found the other order. */
+        }
+        action mapDevice;
+        action unmapDevice;
+        action allocateStack {
+            doc /* Guard-paged kernel stacks: what every per-CPU record, every
+                 * secondary and, from stage 5, every task runs on. */
+        }
+        action checkInvariants;
+    }
+
+    // -----------------------------------------------------------------------
+    // Virtual memory areas (libs/vma)
+    // -----------------------------------------------------------------------
+
+    enum def BackingKind { Anonymous; File; Device; }
+
+    attribute def Backing {
+        attribute kind : BackingKind;
+        attribute id : Natural[0..1];
+        attribute offset : Natural[0..1];
+    }
+
+    attribute def PageRange {
+        doc /* Page-aligned, non-empty, does not wrap: validated once on the
+             * way in, so a value of this type is a standing promise. */
+        attribute start : Natural;
+        attribute limit : Natural;
+    }
+
+    attribute def Vma {
+        attribute range : PageRange;
+        attribute flags : MapFlags;
+        attribute backing : Backing;
+    }
+
+    #implemented part def VmaMap {
+        @stage { number = 6; }
+        doc /* A sorted, non-overlapping set of regions in a Vec searched by
+             * binary search — a span of adjacent regions is what every
+             * operation works on, which a contiguous index range expresses
+             * directly. Every operation is total: it succeeds or returns an
+             * error, never panics. Adjacent regions with equal flags and
+             * contiguous backing merge, without which an mprotect loop leaks
+             * regions until the next mmap fails. Reached at stage 2 as the
+             * vmap arena; stage 6 is its intended consumer. */
+        attribute regions : Vma[0..*] ordered;
+        action insert;
+        action mapFixed { doc /* mmap with MAP_FIXED. */ }
+        action remove { doc /* munmap: splits at both edges. */ }
+        action protect { doc /* mprotect: splits and re-permissions. */ }
+        action findFree { doc /* Top-down: the highest gap that fits. */ }
+        action find;
+    }
+
+    // -----------------------------------------------------------------------
+    // Stage 6 and after
+    // -----------------------------------------------------------------------
+
+    #planned part def Vmo {
+        @stage { number = 6; }
+        doc /* A pageable memory object: pages, not a mapping. Anonymous
+             * memory, page-cache pages, shared memory and DMA buffers are all
+             * VMOs. The load-bearing unification: a block driver filling a
+             * page-cache page fills the VMO the cache already holds, with no
+             * copy, which is what makes userspace drivers affordable for a
+             * compiler workload. */
+        attribute pages : Natural[0..*] ordered;
+        attribute size : Natural;
+        action commitPage;
+        action lookupPage;
+    }
+
+    #planned part def ProcessAddressSpace {
+        @stage { number = 6; }
+        doc /* Page tables plus the VMA map, each Vma naming a VMO, an offset,
+             * a protection and a share mode. The kernel half is shared into
+             * the root. */
+        part tables : Mapper;
+        part vmas : VmaMap;
+        ref part vmos : Vmo[0..*];
+        action fault : DemandFault;
+        action forkSpace {
+            doc /* Mark both sides read-only and copy on the first write
+                 * fault; the per-frame refcount is what makes it tractable. */
+        }
+        action mmap;
+        action munmap;
+        action mprotect;
+        action brk;
+    }
+
+    #planned action def DemandFault {
+        @stage { number = 6; }
+        doc /* The stage 3 handler generalised: find the Vma, then either
+             * allocate a zeroed page (anonymous, lazy), fault from the page
+             * cache VMO (file mapping, so a mapped file and a read file are
+             * the same pages), copy a shared page whose refcount is above one
+             * (copy-on-write), or deliver SIGSEGV. */
+        in fault : FerrixBoot::PageFault;
+        action findVma;
+        action anonymousZeroPage;
+        action pageCacheFill;
+        action copyOnWrite;
+        action deliverSigsegv;
+        first start;
+        then findVma;
+        then decide;
+            if fault.present and fault.write then copyOnWrite;
+            else anonymousZeroPage;
+    }
+
+    #planned part def VirtualMemory {
+        @stage { number = 6; }
+        doc /* The VM subsystem above stage 2's allocators: VMOs, process
+             * address spaces, and from stage 13's memory controller onward,
+             * reclaim scoped by cgroup. */
+        part vmos : Vmo[0..*];
+        part spaces : ProcessAddressSpace[0..*];
+        part reclaim : Reclaim;
+        part elfLoader : UserElfLoader;
+    }
+
+    #planned part def Reclaim {
+        @stage { number = 13; }
+        doc /* Two-list LRU (active/inactive) with a shrinker interface for the
+             * caches. rustc will exhaust memory on a small machine, so this is
+             * correctness: an OOM kill scoped by Job and cgroup, never a
+             * livelock. */
+        part activeList : LruList;
+        part inactiveList : LruList;
+        action shrink;
+        action oomKill;
+    }
+
+    part def LruList;
+
+    #planned part def UserElfLoader {
+        @stage { number = 6; }
+        doc /* libs/elf over a file, mapping segments as Vmas of a file VMO.
+             * The first user process is a hand-written static binary that
+             * makes one syscall. */
+    }
+}
