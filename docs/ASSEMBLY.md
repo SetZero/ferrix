@@ -60,6 +60,7 @@ Each entry names why Rust cannot express it. Entries are added to
 | Site | Why |
 |---|---|
 | `VBAR_EL1` vector table | The architecture defines a table of sixteen entries at fixed 128-byte offsets. The layout is the interface; a Rust `static` of function pointers is not what the CPU reads. |
+| EL0 entry and return | Dropping to EL0 is an `eret` into a program that has never run, so its state — `SP_EL0`, `ELR_EL1`, `SPSR_EL1`, and every general register zeroed so nothing of the kernel's leaks — has to be built first. And the stack pointer has to move to a dedicated entry stack *between* the last Rust frame and the `eret`: at EL1, `sp` is `SP_EL1`, the stack every exception from EL0 lands on, so leaving it where the kernel parked its own registers means the program's first fault pushes a frame over them. The return, `ferrix_leave_user`, restores that parked stack from inside a system call and abandons the call's frame. |
 | EL2 → EL1 drop | Firmware may hand off at EL2. Lowering to EL1 is an `eret` into a context that has to be constructed first, so the "return" goes somewhere the compiler cannot know about. |
 | Secondary core entry | PSCI `CPU_ON` starts a core at a physical address with its MMU and caches off and no stack. Installing the translation regime and turning the MMU on while executing at an address only an identity map makes meaningful is the loader's switch again, once per core. |
 

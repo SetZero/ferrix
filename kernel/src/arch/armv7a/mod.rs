@@ -160,6 +160,15 @@ pub(crate) unsafe fn run_user(_entry: u64, _stack: u64) -> Result<i32, &'static 
     Err("user mode is not built on this architecture yet")
 }
 
+/// Service a system call that arrived through the trap vector.
+///
+/// # Errors
+///
+/// Always, for now: system calls from USR mode are not built on this architecture yet.
+pub(crate) const fn system_call(_frame: &mut TrapFrame) -> Result<(), &'static str> {
+    Err("system calls from USR mode are not built on this architecture yet")
+}
+
 /// Make a freshly allocated user root usable.
 ///
 /// Nothing to do: the kernel's half is reached through `TTBR1` and a user root is

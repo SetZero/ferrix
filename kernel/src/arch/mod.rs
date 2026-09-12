@@ -35,8 +35,8 @@ pub(crate) use aarch64::{
     disable_interrupts, drop_identity_map, enable_interrupts, flush_tlb, halt, hardware_id,
     identity_root, init_console, init_interrupts, init_traps, install_user_root, ipi_irq,
     prepare_stack, prepare_user_root, read_console_byte, report_trap, run_user, send_ipi_to_others,
-    service_interrupts, set_cpu_local, shutdown, switch_to, timer_arm, timer_disarm, timer_irq,
-    uninstall_user_root, wait_for_interrupt, wait_for_work,
+    service_interrupts, set_cpu_local, shutdown, switch_to, system_call, timer_arm, timer_disarm,
+    timer_irq, uninstall_user_root, wait_for_interrupt, wait_for_work,
 };
 #[cfg(target_arch = "arm")]
 pub(crate) use armv7a::{
@@ -46,8 +46,8 @@ pub(crate) use armv7a::{
     disable_interrupts, drop_identity_map, enable_interrupts, flush_tlb, halt, hardware_id,
     identity_root, init_console, init_interrupts, init_traps, install_user_root, ipi_irq,
     prepare_stack, prepare_user_root, read_console_byte, report_trap, run_user, send_ipi_to_others,
-    service_interrupts, set_cpu_local, shutdown, switch_to, timer_arm, timer_disarm, timer_irq,
-    uninstall_user_root, wait_for_interrupt, wait_for_work,
+    service_interrupts, set_cpu_local, shutdown, switch_to, system_call, timer_arm, timer_disarm,
+    timer_irq, uninstall_user_root, wait_for_interrupt, wait_for_work,
 };
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{
@@ -57,6 +57,6 @@ pub(crate) use x86_64::{
     disable_interrupts, drop_identity_map, enable_interrupts, flush_tlb, halt, hardware_id,
     identity_root, init_console, init_interrupts, init_traps, install_user_root, ipi_irq,
     prepare_stack, prepare_user_root, read_console_byte, report_trap, run_user, send_ipi_to_others,
-    service_interrupts, set_cpu_local, shutdown, switch_to, timer_arm, timer_disarm, timer_irq,
-    uninstall_user_root, wait_for_interrupt, wait_for_work,
+    service_interrupts, set_cpu_local, shutdown, switch_to, system_call, timer_arm, timer_disarm,
+    timer_irq, uninstall_user_root, wait_for_interrupt, wait_for_work,
 };

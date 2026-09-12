@@ -199,6 +199,15 @@ pub(crate) unsafe fn run_user(entry: u64, stack: u64) -> Result<i32, &'static st
     unsafe { syscall::run_user(entry, stack) }
 }
 
+/// Service a system call that arrived through the trap vector.
+///
+/// # Errors
+///
+/// Always, for now: a system call through the trap vector, where x86-64 uses SYSCALL.
+pub(crate) const fn system_call(_frame: &mut TrapFrame) -> Result<(), &'static str> {
+    Err("a system call through the trap vector, where x86-64 uses SYSCALL")
+}
+
 /// Make a freshly allocated user root usable.
 ///
 /// x86-64 keeps both halves of the address space in one root, so a user root

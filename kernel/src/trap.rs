@@ -98,7 +98,15 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
             // nothing further.
             crate::sched::preempt_on_irq_exit();
         }
-        Trap::SystemCall => fatal(frame, "system call before stage 7"),
+        // On x86-64 a system call never arrives here: `SYSCALL` has an entry of
+        // its own. On both Arm architectures `svc` is an exception like any
+        // other and this is the only way in, so the architecture decides what
+        // the registers mean.
+        Trap::SystemCall => {
+            if let Err(why) = arch::system_call(frame) {
+                fatal(frame, why);
+            }
+        }
         Trap::IllegalInstruction => fatal(frame, "illegal instruction"),
         Trap::Fault { name, .. } => fatal(frame, name),
     }

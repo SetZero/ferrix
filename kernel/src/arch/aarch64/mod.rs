@@ -73,7 +73,9 @@ pub(crate) unsafe fn cpu_local() -> u64 {
 pub(crate) fn cpu_local_register() -> u64 {
     cpu::read_tpidr_el1()
 }
-pub(crate) use trap::{TrapFrame, advance_past_breakpoint, breakpoint, classify, report_trap};
+pub(crate) use trap::{
+    TrapFrame, advance_past_breakpoint, breakpoint, classify, report_trap, run_user, system_call,
+};
 
 /// Install the exception vector table.
 ///
@@ -114,12 +116,29 @@ pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
     nr::from_aarch64(number)
 }
 
-/// A whole program, in machine code, for the self-check to run in user mode.
+/// A whole program, in machine code, for the self-check to run at EL0.
 ///
-/// Empty on this architecture because there is nowhere yet to run it: see
-/// [`run_user`]. The self-check skips the program when this is empty rather
-/// than failing, so the boot test still reports what does exist here.
-pub(crate) const USER_TEST_PROGRAM: &[u8] = &[];
+/// `write(1, "hello from EL0\n", 15)` then `exit_group(42)`, using the generic
+/// table's numbers — `write` is 64 and `exit_group` 94 on this architecture, not
+/// x86-64's 1 and 231. Position-independent: the string is found with `adr`, so
+/// the page can be mapped anywhere.
+///
+/// Assembled by rustc's own LLVM from `global_asm!` and read back out of the
+/// object file, rather than encoded by hand, so the bytes cannot disagree with
+/// the assembler that builds the rest of the kernel.
+pub(crate) const USER_TEST_PROGRAM: &[u8] = &[
+    0x08, 0x08, 0x80, 0xd2, // mov  x8, #64      // write
+    0x20, 0x00, 0x80, 0xd2, // mov  x0, #1       // fd 1
+    0xe1, 0x00, 0x00, 0x10, // adr  x1, msg
+    0xe2, 0x01, 0x80, 0xd2, // mov  x2, #15      // length
+    0x01, 0x00, 0x00, 0xd4, // svc  #0
+    0xc8, 0x0b, 0x80, 0xd2, // mov  x8, #94      // exit_group
+    0x40, 0x05, 0x80, 0xd2, // mov  x0, #42      // status
+    0x01, 0x00, 0x00, 0xd4, // svc  #0
+    0x00, 0x00, 0x00, 0x14, // b    .            // never reached
+    // "hello from EL0\n"
+    0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x66, 0x72, 0x6f, 0x6d, 0x20, 0x45, 0x4c, 0x30, 0x0a,
+];
 
 /// The status [`USER_TEST_PROGRAM`] exits with.
 pub(crate) const USER_TEST_STATUS: i32 = 42;
@@ -135,22 +154,6 @@ pub(crate) const USER_TEST_STATUS: i32 = 42;
 )]
 pub(crate) fn read_console_byte() -> Option<u8> {
     None
-}
-
-/// Run a program in ring 3, returning the status it exits with.
-///
-/// Not built on this architecture yet. The x86-64 transition landed first
-/// because that is where a static binary could be produced to test it; the
-/// EL0 one is stage 6's remaining work, and this reports the absence
-/// rather than pretending or halting, so the boot test still says what does
-/// and does not exist here.
-///
-/// # Safety
-///
-/// The same contract the x86-64 body has: a user address space installed on
-/// this processor, and `entry` and `stack` inside it.
-pub(crate) unsafe fn run_user(_entry: u64, _stack: u64) -> Result<i32, &'static str> {
-    Err("user mode is not built on this architecture yet")
 }
 
 /// Make a freshly allocated user root usable.

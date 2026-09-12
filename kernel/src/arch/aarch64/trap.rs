@@ -172,6 +172,220 @@ ferrix_trap_save:
 "#
 );
 
+// Entering EL0, and coming back from it.
+//
+// The return half of the trap path above, in the other direction: that one
+// comes *in* from EL0 through a vector and goes back with `eret`; this goes
+// *out* with `eret` to a program that has never run, and returns only when that
+// program's `exit_group` calls `ferrix_leave_user`. It mirrors x86-64's
+// `ferrix_run_user` exactly, register for register, so the two can be read
+// against each other.
+core::arch::global_asm!(
+    r#"
+.section .text
+
+// x0 = entry, x1 = user stack. Returns the exit status in x0, via leave_user.
+.globl ferrix_run_user
+.align 4
+ferrix_run_user:
+    // Nothing may interrupt the next few instructions: between parking the
+    // stack pointer and the `eret`, this processor is on neither stack it will
+    // end up on. IRQs stay masked in EL0 too -- see `USER_SPSR`.
+    msr  daifset, #0xf
+
+    // The callee-saved registers, which leave_user restores.
+    stp  x19, x20, [sp, #-96]!
+    stp  x21, x22, [sp, #16]
+    stp  x23, x24, [sp, #32]
+    stp  x25, x26, [sp, #48]
+    stp  x27, x28, [sp, #64]
+    stp  x29, x30, [sp, #80]
+
+    // Park that stack pointer where leave_user will find it.
+    mrs  x9, tpidr_el1
+    mov  x10, sp
+    str  x10, [x9, #{user_return}]
+
+    // And move to the dedicated entry stack before dropping privilege. At EL1
+    // `sp` *is* SP_EL1, the stack every exception from EL0 lands on, so this is
+    // the separation x86-64 learned the hard way: had SP_EL1 stayed here, the
+    // program's first demand fault would push its frame onto the stack holding
+    // the registers parked above.
+    ldr  x10, [x9, #{kernel_stack}]
+    mov  sp, x10
+
+    // The program's state.
+    msr  sp_el0, x1
+    msr  elr_el1, x0
+    mov  x10, #{user_spsr}
+    msr  spsr_el1, x10
+
+    // Nothing of the kernel's survives into EL0.
+    mov  x0, xzr
+    mov  x1, xzr
+    mov  x2, xzr
+    mov  x3, xzr
+    mov  x4, xzr
+    mov  x5, xzr
+    mov  x6, xzr
+    mov  x7, xzr
+    mov  x8, xzr
+    mov  x9, xzr
+    mov  x10, xzr
+    mov  x11, xzr
+    mov  x12, xzr
+    mov  x13, xzr
+    mov  x14, xzr
+    mov  x15, xzr
+    mov  x16, xzr
+    mov  x17, xzr
+    mov  x18, xzr
+    mov  x19, xzr
+    mov  x20, xzr
+    mov  x21, xzr
+    mov  x22, xzr
+    mov  x23, xzr
+    mov  x24, xzr
+    mov  x25, xzr
+    mov  x26, xzr
+    mov  x27, xzr
+    mov  x28, xzr
+    mov  x29, xzr
+    mov  x30, xzr
+    eret
+
+// x0 = exit status. Called from inside a system call made by a program
+// ferrix_run_user started, on the same processor. Restoring the parked stack
+// pointer abandons the system call's own frame on the entry stack, which is
+// correct: the program it belonged to is gone.
+.globl ferrix_leave_user
+.align 4
+ferrix_leave_user:
+    mrs  x9, tpidr_el1
+    ldr  x10, [x9, #{user_return}]
+    mov  sp, x10
+    ldp  x21, x22, [sp, #16]
+    ldp  x23, x24, [sp, #32]
+    ldp  x25, x26, [sp, #48]
+    ldp  x27, x28, [sp, #64]
+    ldp  x29, x30, [sp, #80]
+    ldp  x19, x20, [sp], #96
+    ret
+"#,
+    user_return = const USER_RETURN_OFFSET,
+    kernel_stack = const KERNEL_STACK_OFFSET,
+    user_spsr = const USER_SPSR,
+);
+
+/// Where the parked stack pointer lives in this processor's record.
+const USER_RETURN_OFFSET: usize = core::mem::offset_of!(crate::smp::PerCpu, user_return);
+/// Where the entry stack for exceptions from EL0 lives in the same record.
+const KERNEL_STACK_OFFSET: usize = core::mem::offset_of!(crate::smp::PerCpu, kernel_stack);
+
+/// `SPSR_EL1` for a program: `EL0t`, with debug, asynchronous aborts, IRQs and
+/// FIQs all masked.
+///
+/// **IRQs masked on purpose, and not for long.** The program runs as a guest of
+/// the boot task, whose address space field is `None`. A timer tick taken in
+/// EL0 could switch to a task that has one, which installs that task's root
+/// over the program's; switching back to the boot task is then `(Some, None)`
+/// and *uninstalls* the root, and the handler returns into EL0 with nothing
+/// mapped. Masking closes that deterministically. It goes when a program is a
+/// scheduled task of its own rather than a guest of the boot task.
+const USER_SPSR: u64 = (1 << 9) | (1 << 8) | (1 << 7) | (1 << 6);
+
+unsafe extern "C" {
+    /// Enter EL0 at `entry` on `stack`; returns when the program exits.
+    fn ferrix_run_user(entry: u64, stack: u64) -> i32;
+    /// Return from [`ferrix_run_user`] with `status`.
+    fn ferrix_leave_user(status: i32) -> !;
+}
+
+/// Run a program at EL0 and return the status it exits with.
+///
+/// # Safety
+///
+/// A user address space must be installed on this processor, and `entry` and
+/// `stack` must be addresses within it.
+pub(crate) unsafe fn run_user(entry: u64, stack: u64) -> Result<i32, &'static str> {
+    let entry_stack = crate::vmap::allocate_stack().map_err(|_| "no kernel stack for user mode")?;
+    let Some(cpu) = crate::smp::this_cpu() else {
+        return Err("no per-CPU record, so an exception from EL0 could not find a stack");
+    };
+    let at = (core::ptr::from_ref(cpu) as usize + KERNEL_STACK_OFFSET) as *mut u64;
+    // SAFETY: this processor's own record, a `u64` field aligned by `repr(C)`.
+    unsafe { at.write(entry_stack.top) };
+
+    // SAFETY: the caller guarantees the address space and the stack.
+    let status = unsafe { ferrix_run_user(entry, stack) };
+
+    // SAFETY: the program is gone, so nothing is running on the entry stack.
+    let _ = unsafe { crate::vmap::free_stack(entry_stack) };
+    Ok(status)
+}
+
+/// Service a system call made from EL0 with `svc #0`.
+///
+/// The number is in `x8` and the arguments in `x0` to `x5`, and the result goes
+/// back in `x0`. `ELR_EL1` already points past the `svc`, so returning resumes
+/// the program at the next instruction with nothing to adjust — unlike a
+/// breakpoint, which reports its own address.
+///
+/// `exit` and `exit_group` never reach `dispatch`: they leave EL0 here, before
+/// anything else runs, the same as on x86-64. When a program is a scheduled task
+/// rather than a guest of the boot task, `exit_group` becomes a teardown and can
+/// move into `dispatch` with everything else.
+///
+/// # Errors
+///
+/// A system call from EL1, which is a kernel bug, or an `execve` this path does
+/// not yet know how to honour.
+pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
+    use crate::syscall::{Outcome, SyscallArgs, dispatch};
+    use ferrix_linux_abi::nr::Syscall;
+
+    if !frame.came_from_user() {
+        return Err("a system call from EL1");
+    }
+    let [x0, x1, x2, x3, x4, x5, _, _, x8, ..] = frame.x;
+    let args = SyscallArgs {
+        number: x8 as usize,
+        args: [x0, x1, x2, x3, x4, x5],
+    };
+
+    if matches!(
+        super::decode_syscall(args.number),
+        Some(Syscall::Exit | Syscall::ExitGroup)
+    ) {
+        // SAFETY: this is a system call made by a program `run_user` started —
+        // `came_from_user` above, and nothing else enters EL0 — so the parked
+        // stack pointer and registers are where `ferrix_run_user` left them.
+        unsafe { leave_user(x0 as i32) }
+    }
+
+    match dispatch(&args) {
+        Outcome::Return(value) => {
+            if let Some(result) = frame.x.first_mut() {
+                *result = value as u64;
+            }
+            Ok(())
+        }
+        Outcome::Enter { .. } => Err("execve through the EL0 trap path is not wired yet"),
+    }
+}
+
+/// Leave EL0, returning `status` from [`run_user`].
+///
+/// # Safety
+///
+/// Must be called from inside a system call made by a program [`run_user`]
+/// started, on the same processor.
+pub(crate) unsafe fn leave_user(status: i32) -> ! {
+    // SAFETY: the caller guarantees the parked stack pointer and callee-saved
+    // registers are still where `ferrix_run_user` put them.
+    unsafe { ferrix_leave_user(status) }
+}
+
 unsafe extern "C" {
     /// The vector table, aligned as `VBAR_EL1` requires.
     static ferrix_vectors: [u8; 16 * 128];

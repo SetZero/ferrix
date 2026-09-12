@@ -69,7 +69,7 @@
     {
       "file": "kernel/src/arch/aarch64/trap.rs",
       "max_lines": 90,
-      "reason": "The `VBAR_EL1` vector table and its save/restore path. The architecture defines a table of sixteen entries at fixed 128-byte offsets, and that layout *is* the interface -- a Rust array of function pointers is not what the CPU reads. Each entry is far too small for a register save, so it stashes two registers, records which entry it is, and branches to the common path. Also `brk`, for the boot test."
+      "reason": "The `VBAR_EL1` vector table and its save/restore path. The architecture defines a table of sixteen entries at fixed 128-byte offsets, and that layout *is* the interface -- a Rust array of function pointers is not what the CPU reads. Each entry is far too small for a register save, so it stashes two registers, records which entry it is, and branches to the common path. Also `brk`, for the boot test. And the way out to EL0 and back (`ferrix_run_user`, `ferrix_leave_user`): dropping privilege is an `eret` into a context that has to be constructed first -- `SP_EL0`, `ELR_EL1`, `SPSR_EL1` and every general register zeroed -- and the stack pointer has to move to a dedicated entry stack after the last Rust frame and before the `eret`, because at EL1 `sp` is `SP_EL1`, the stack every exception from EL0 lands on. No Rust function can do either."
     },
     {
       "file": "kernel/src/arch/armv7a/cpu.rs",
