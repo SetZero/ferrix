@@ -236,7 +236,7 @@ package FerrixStructure {
 
         port handoff : BootHandoffPort;
         port console : SerialConsolePort;
-        #planned port linuxAbi : LinuxSyscallPort;
+        #inProgress port linuxAbi : LinuxSyscallPort;
         #planned port nativeAbi : NativeSyscallPort;
 
         // -- Runs today, stages 1 to 4 --------------------------------------
@@ -265,10 +265,10 @@ package FerrixStructure {
 
         // -- Ahead: stages 6 to 14 -------------------------------------------
         #inProgress part vm : VirtualMemory;
-        #planned part syscalls : LinuxSyscallLayer;
+        #inProgress part syscalls : LinuxSyscallLayer;
         #planned part native : NativeAbi;
         #planned part futex : Futex;
-        #planned part signals : Signals;
+        #inProgress part signals : Signals;
         #planned part ipc : PosixIpc;
         #planned part vfs : Vfs;
         #planned part pageCache : PageCache;
@@ -331,8 +331,9 @@ package FerrixStructure {
 
         part init : UserProcess;
         part shell : UserProcess {
-            doc /* busybox sh, the first foreign binary to run on Ferrix at
-                 * stage 7. */
+            doc /* busybox sh, the first foreign binary to run on Ferrix:
+                 * Alpine's static musl build runs a script at stage 7, given
+                 * with sh -c and embedded in the kernel by FERRIX_INIT. */
         }
         part devmgr : UserProcess;
         part drivers : DriverProcess[0..*];

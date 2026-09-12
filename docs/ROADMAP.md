@@ -19,14 +19,15 @@ longer". This is a long program of work: stages 1–8 are a conventional kernel
 bring-up, 9–14 are the parts this design chose to do properly, and 15–17 are the
 goal. Nobody should read the table as a schedule.
 
-**Where it stands:** stages 0–6 are done and in the boot test on all three
-architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-6`.
-ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 7 is under
-way: a program now runs at user privilege on every architecture and reaches the
-system call dispatch path, and stage 7's section says how much of the Linux
-surface a real shell needs and how much of it exists. Stage 9 has begun where
-the continuous rule says a stage should: its byte-level half is in `libs/`,
-and none of its kernel code exists yet.
+**Where it stands:** stages 0–7 are done and in the boot test on all three
+architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-7`.
+ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 7's exit is
+somebody else's static musl busybox running a script on every architecture,
+checked by `cargo xtask test-shell` rather than the boot test because it needs
+a binary the repository does not carry; its section lists what the Linux
+surface still owes. Stage 9 has begun where the continuous rule says a stage
+should: its byte-level half is in `libs/`, and none of its kernel code exists
+yet.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -683,67 +684,132 @@ space and use the address.
 
 ---
 
-## Stage 7 — The Linux syscall ABI  ·  *month*
+## Stage 7 — The Linux syscall ABI ✅
 
 The syscall entry path on every architecture, the dispatch table, and the core
 of the surface: memory (`mmap`, `mprotect`, `brk`), files, process
 (`clone`, `execve`, `wait4`, `exit_group`), threads and `futex`, signals with
 `sigaltstack` and `rt_sigreturn`, time, and identity.
 
-**Done — the spine, and the two byte-level pieces under it.** Started in
-parallel with stage 6 rather than after it, because most of what stage 7 owes
-is a pure function of bytes and the continuous rule wants those written,
-fuzzed and argued about *before* the stage's kernel code, not alongside it.
-
-* `libs/linux-abi` now carries all three number tables. ARMv7-A's EABI table
-  was missing, and it is not the same calls renumbered: a 32-bit register
-  cannot carry a file offset, a file size or a post-2038 `time_t`, so sixteen
-  calls exist twice and the wide form is a *different call with a different
-  signature* — `mmap2` counts its offset in pages, `_llseek` returns through a
-  pointer, `fstat64` writes a structure `fstat` would not recognise. They are
-  separate `Syscall` variants for that reason. Two more, `set_tls` and
-  `cacheflush`, have no 64-bit counterpart at all and live at `__ARM_NR_BASE`,
-  which is why a valid number on that architecture is not bounded by the size
-  of the table.
-* `libs/ustack` builds the initial process stack — `argc`, `argv`, `envp` and
-  the auxiliary vector, at both pointer widths. It carries a reader as well as
-  a writer, because a test asserting the builder wrote what the builder
-  intended asserts nothing; the fuzz target asserts the same round trip over
-  inputs nobody chose, and found within a minute that a string containing a
-  NUL built a well-formed image which read back as a *different, shorter*
-  string.
-* `kernel/src/syscall/` — `SyscallArgs`, `Outcome`, and `dispatch`. One
-  function, agreed with the stage 6 owner: their trap vector fills the
-  arguments from the frame and applies the outcome, so every register
-  convention stays on their side and every ABI decision on this one.
-  `Outcome` distinguishes "return this value" from "enter user mode at this
-  address", because `execve` and a `clone` child both resume on a frame that
-  was constructed rather than returned into.
-* `arch::decode_syscall` — the one architecture-dependent fact in the whole
-  layer, behind the facade rather than behind a `cfg`.
-
-**In the boot test on all three architectures.** 612 numbers dispatched, 15
-answered, and — the point of the check — each architecture reports its *own*
-number for `getpid`: 39 on x86-64, 172 on AArch64, 20 on ARMv7-A. The host
-tests check the three tables against each other; what they cannot check is
-which one this kernel was built to use, and a build that reached for the wrong
-one would pass every host test and then answer a program's `write` with
-`unlink`. The sweep also requires the path to be total: every number in
-`0..=600` answered with poisoned argument registers, because a handler that
-read an argument it was not given should fault on a kernel stack with the
-scheduler running, not under the first user program.
-
-**Still to do — everything that needs a program to talk to.** The entry
-vectors and the ring-3/EL0/USR transition (stage 6's, and the trampoline that
-calls `dispatch`); `copy_from_user`/`copy_to_user`; the ELF loader into an
-`AddressSpace`; and then the surface itself — memory, files, process, threads
-and `futex`, signals, time. Fifteen calls answer today and they are the ones
-needing no process state: identity and `sched_yield`. Everything else returns
-`ENOSYS`, which is Linux's own answer for a call it does not implement and is
-therefore a real answer rather than a placeholder.
-
 **Exit:** a static musl `busybox sh` starts, runs a script, and exits — the
 first time somebody else's binary runs on Ferrix.
+
+**Exit criterion met on all three architectures, with the script given to
+`sh -c`.** `cargo xtask test-shell` builds the kernel with a static busybox
+and a script, boots it, and requires the script's lines in order and its exit
+status. Run against Alpine's `busybox-static` 1.37.0 — built by people who have
+never heard of Ferrix — for x86-64, AArch64 and ARMv7-A:
+
+    cargo xtask test-shell --arch all --init PATH/{arch}/busybox
+
+      init     857 KiB program built in, starting `sh -c` with a built-in script
+    script: started
+    script: the sum is 15
+    script: hello, ferrix
+    script: test agrees
+    script: case matched
+    script: 3 positional parameters
+      init     the shell exited with 7
+
+The status is 7 rather than 0 so that a shell which died and reported success
+cannot pass, and the lines are looked for after the boot marker so that the
+kernel's own output cannot satisfy them.
+
+Three decisions sit inside that, and each is a reading someone could dispute:
+
+* **"Runs a script" is read as `-c`.** The script travels in `argv`, which
+  needs no filesystem. A script *file* needs `openat`, and that is stage 8's —
+  making this stage's exit wait on it would have put the first foreign binary
+  behind a filesystem it does not otherwise need.
+* **The script is builtins only.** Variables, arithmetic, a loop, a function,
+  `test`, `case`, positional parameters and the exit status. Nothing forks,
+  because `clone`, `execve` and `wait4` do not exist, and an external command
+  would measure their absence rather than the ABI.
+* **The binary is not in the repository.** Which static busybox to trust is a
+  decision for whoever runs the test, and a kernel that embedded a host's
+  binary silently would stop building byte for byte the same. `--init` names
+  it; without a script the same kernel starts `sh -i` and hands a person a
+  prompt, which is how glibc busybox was first run by hand.
+
+`test-shell` is not part of `cargo xtask check` or the boot test, because it
+needs a binary the repository does not carry. The boot test covers every
+handler below directly.
+
+**Done:**
+
+* **The numbers.** `libs/linux-abi` carries all three tables. ARMv7-A's EABI
+  table is not the 64-bit calls renumbered: a 32-bit register cannot carry a
+  file offset, a file size or a post-2038 `time_t`, so sixteen calls exist twice
+  and the wide form is a *different call with a different signature* — `mmap2`
+  counts its offset in pages, `_llseek` returns through a pointer. Two more,
+  `set_tls` and `cacheflush`, live at `__ARM_NR_BASE` and have no 64-bit
+  counterpart. The boot test asserts which table this build uses by its content:
+  each architecture reports its own number for `getpid`, 39, 172 and 20, which
+  is the one fact a host test cannot establish.
+* **The startup stack.** `libs/ustack` writes `argc`, `argv`, `envp` and the
+  auxiliary vector at both pointer widths, and reads them back; its fuzz target
+  found that a string containing a NUL built a well-formed image which read back
+  as a different, shorter string.
+* **Dispatch.** `kernel/src/syscall/`: `SyscallArgs`, `Outcome` and `dispatch`,
+  reached through `arch::decode_syscall`, and total — every number in `0..=600`
+  answered with poisoned argument registers in the boot test.
+* **The copy layer and the loader.** `copy_from_user` and `copy_to_user` resolve
+  through the `AddressSpace` and its fault path rather than dereferencing, and
+  refuse a kernel address before any length arithmetic. The ELF loader maps
+  `PT_LOAD` segments with their own permissions and copies them in.
+* **The calls a static binary makes.** Memory: `mmap`, `mmap2`, `munmap`,
+  `mprotect`, `brk`. Threads: `set_tid_address`. Files: `read` on the console
+  and `write`/`writev` to it, with iovecs read as native words. Time:
+  `clock_gettime`, `clock_gettime64`, `gettimeofday`, `getrandom`. Identity:
+  the credential calls, `getpid`, `gettid`, `getppid`, `uname`, `sched_yield`.
+  Signals: `rt_sigaction`, `rt_sigprocmask`, `sigaltstack`. Answered in each
+  architecture's trap path, because they are facts about the processor:
+  `exit_group`, `arch_prctl(ARCH_SET_FS)` and `set_tls`.
+
+**What running foreign binaries found**, none of which a hand-written test
+program would have:
+
+* glibc spun forever on `clock_gettime(CLOCK_MONOTONIC)` returning `ENOSYS`,
+  with no output at all — there is no vDSO, so it makes the real call.
+* `brk(0)` answered the top of the user half, because the heap was placed above
+  the highest mapping and the highest mapping is the stack. The first `mmap`
+  then landed in the page deliberately left unmapped above the stack.
+* `uname` reports `sysname` as `Linux`, not `Ferrix`, because the programs that
+  ask are choosing a code path. The identity goes in `nodename` and `release`:
+  `Linux ferrix 6.1.0-ferrix`.
+* ARMv7-A entered a Thumb-2 program in ARM state. An odd entry point is Thumb
+  by the interworking convention, and Alpine's busybox enters at `0x1d1f9`.
+* Neither Arm kernel let user mode use the FPU. ARMv7-A's busybox is hard-float,
+  and AArch64's ran only because EDK2 happened to leave `CPACR_EL1.FPEN` open.
+* busybox's `printf` asks `fcntl(1, F_GETFL)` before writing and prints nothing
+  when it fails — confirmed by injecting `ENOSYS` into exactly that call on the
+  host. `fcntl` belongs to stage 8's descriptor table, so `printf` is not in the
+  test script yet.
+
+**Signals are recorded, not delivered.** The dispositions, the blocked mask and
+the alternate stack answer consistently — the old action a program reads back is
+the one it set, at its own architecture's layout, which is three native words
+and an 8-byte mask. Nothing in a clean run raises a signal. Delivery is the
+first item below.
+
+**Left, and why it did not block the exit:**
+
+* **Signal delivery and `rt_sigreturn`**, and `SIGSEGV` from the fault path,
+  which is what rustc's stack-overflow guard needs. Owed with the first thing
+  that has to kill a program.
+* **`clone`, `execve`, `wait4`.** A prompt that runs `uname` needs all three and
+  more: a path lookup to find `/bin/uname`, a file to load, and a program that
+  is a scheduled task rather than a guest of the boot task, so that a parent can
+  wait while its child runs. The copy-on-write half of `fork` exists already.
+* **`futex` and threads**, which nothing single-threaded calls.
+* **Everything that opens a file**, `fcntl` included — stage 8.
+* **Three stand-ins, each written down where it lives.** The console's `read`
+  does a line discipline's job until stage 15 brings ttys; the real-time clocks
+  read 1970 until something reads a clock chip; `getrandom` is xorshift seeded
+  from a counter and says so.
+* **Two restrictions of running a program as a guest of the boot task.**
+  Interrupts are masked in user mode, and FPU state is never saved. Both go when
+  programs are scheduled tasks.
 
 ---
 

@@ -150,14 +150,15 @@ package FerrixObjects {
              * numbers for x86-64, AArch64 and the ARM EABI table, the errnos,
              * and the repr(C) layouts (statx, dirent64, sigaction, ...).
              *
-             * The dispatch half exists: kernel/src/syscall, reached through
-             * arch::decode_syscall, which is the only place in the kernel that
-             * knows which of the three number tables this build uses. Fifteen
-             * calls answer -- identity and sched_yield. The entry path does
-             * not exist, so nothing has yet called it across a privilege
-             * boundary. */
+             * kernel/src/syscall, reached through arch::decode_syscall, which
+             * is the only place in the kernel that knows which of the three
+             * number tables this build uses. Answers the calls a static musl
+             * binary makes at startup -- memory, the console descriptors,
+             * clocks, identity, uname, and signal dispositions -- which is
+             * enough for busybox sh to run a script on all three
+             * architectures. Everything else is ENOSYS, Linux's own answer. */
         attribute groups : SyscallGroup[1..*];
-        #planned action syscallEntry {
+        #implemented action syscallEntry {
             doc /* The assembly trampoline; then Rust. Stage 6's, and it fills
                  * a SyscallArgs from the trap frame and applies the Outcome
                  * that comes back, so no register convention reaches the
@@ -176,11 +177,15 @@ package FerrixObjects {
         }
     }
 
-    #planned part def Signals {
+    #inProgress part def Signals {
         @stage { number = 7; }
-        doc /* Real delivery: a frame pushed on the user stack or the
-             * sigaltstack, rt_sigreturn to unwind it. SIGSEGV from the fault
-             * path is what rustc's stack-overflow guard needs. */
+        doc /* The table exists: kernel/src/syscall/signal.rs records each
+             * disposition, the blocked mask and the alternate stack, and
+             * answers rt_sigaction, rt_sigprocmask and sigaltstack from it in
+             * Linux's order. Delivery does not: a frame pushed on the user
+             * stack or the sigaltstack, rt_sigreturn to unwind it. SIGSEGV
+             * from the fault path is what rustc's stack-overflow guard
+             * needs. */
         action deliver;
         action sigreturn;
     }

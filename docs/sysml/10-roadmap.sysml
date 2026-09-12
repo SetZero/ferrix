@@ -36,7 +36,7 @@ package FerrixRoadmap {
              * invalidation is reachable. */
         subject os : Ferrix;
         attribute arch : IsaFamily;
-        attribute marker : String = "FERRIX-BOOT-OK stages 1-6";
+        attribute marker : String = "FERRIX-BOOT-OK stages 1-7";
     }
 
     // -----------------------------------------------------------------------
@@ -172,28 +172,35 @@ package FerrixRoadmap {
              * guests of the boot task. */
     }
 
-    #inProgress requirement <'S7'> stage7LinuxAbi : Stage {
+    #implemented requirement <'S7'> stage7LinuxAbi : Stage {
         attribute :>> number = 7;
-        attribute :>> status = StageStatus::InProgress;
+        attribute :>> status = StageStatus::Done;
         attribute :>> size = "month";
         doc /* Syscall entry on every architecture, the dispatch table, the
              * core surface: memory, files, process, threads and futex,
              * signals with sigaltstack and rt_sigreturn, time, identity.
-             * Exit: static musl busybox sh runs a script — the first time
-             * somebody else's binary runs on Ferrix.
+             * Exit, met on all three with the script given to sh -c: Alpine's
+             * static musl busybox runs a builtins-only script and exits with
+             * its status, required line by line by cargo xtask test-shell,
+             * which is outside the boot test because it needs a binary the
+             * repository does not carry.
              *
-             * Started alongside stage 6 rather than after it, because most of
-             * what it owes is a pure function of bytes and those are owed
-             * before the kernel code, not with it. Built: all three number
-             * tables in libs/linux-abi, the initial process stack image in
-             * libs/ustack, and kernel/src/syscall with SyscallArgs, Outcome
-             * and dispatch, self-checked on all three architectures in the
-             * boot test -- each reporting its own number for getpid, which is
-             * the one fact a host test cannot establish. Fifteen calls answer:
-             * identity and sched_yield, the ones needing no process state.
-             * Missing: the entry vectors and the privilege transition (stage
-             * 6's), copy_from_user/copy_to_user, the ELF loader into an
-             * AddressSpace, and the surface itself. */
+             * Built: the three number tables in libs/linux-abi, the startup
+             * stack in libs/ustack, dispatch in kernel/src/syscall, the copy
+             * layer, the ELF loader, and the calls a static binary makes --
+             * mmap, mmap2, munmap, mprotect, brk, set_tid_address, read and
+             * write/writev on the console, the clocks, getrandom, uname, the
+             * identity calls, and rt_sigaction, rt_sigprocmask and
+             * sigaltstack recorded without delivery; exit_group, arch_prctl
+             * and set_tls in each architecture's trap path. Running foreign
+             * binaries found a Thumb entry point entered in ARM state and the
+             * FPU closed to user mode on both Arm kernels.
+             *
+             * Left: signal delivery and rt_sigreturn, clone/execve/wait4
+             * (which need programs as scheduled tasks and something to exec),
+             * futex, everything that opens a file including the fcntl
+             * busybox's printf asks for, and the stand-ins for a tty, a clock
+             * chip and an entropy source. */
     }
 
     #planned requirement <'S8'> stage8Vfs : Stage {

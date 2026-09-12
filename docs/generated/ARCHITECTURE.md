@@ -93,14 +93,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1402 elements, 155 relations. Model digest `b7cc348a648d9ae0`.
+13 files, 16 packages, 1402 elements, 155 relations. Model digest `518e122e6b4ddfc9`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 109 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 4 | The owning stage has started; part of the element runs. |
+| `#implemented` | 111 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#inProgress` | 7 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 9 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 116 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#planned` | 111 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -135,7 +135,7 @@ flowchart LR
   n8_FerrixRequirements_hostsRustc_memoryPres["G.8  Memory pressure"]
   n9_FerrixRoadmap_stage5Scheduler["S5  Stage 5 scheduler<br>Done"]
   n10_FerrixRoadmap_stage6UserMode["S6  Stage 6 user mode<br>Done"]
-  n11_FerrixRoadmap_stage7LinuxAbi["S7  Stage 7 Linux ABI<br>InProgress"]
+  n11_FerrixRoadmap_stage7LinuxAbi["S7  Stage 7 Linux ABI<br>Done"]
   n12_FerrixRoadmap_stage8Vfs["S8  Stage 8 VFS<br>Planned"]
   n13_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>Planned"]
   n14_FerrixRoadmap_stage13Isolation["S13  Stage 13 isolation<br>Planned"]
@@ -156,10 +156,8 @@ flowchart LR
   n13_FerrixRoadmap_stage12BtrfsWrite -. "depends on" .-> n7_FerrixRequirements_hostsRustc_durableFil
   n14_FerrixRoadmap_stage13Isolation -. "depends on" .-> n8_FerrixRequirements_hostsRustc_memoryPres
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
-  classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n9_FerrixRoadmap_stage5Scheduler,n10_FerrixRoadmap_stage6UserMode implemented
-  class n11_FerrixRoadmap_stage7LinuxAbi inProgress
+  class n9_FerrixRoadmap_stage5Scheduler,n10_FerrixRoadmap_stage6UserMode,n11_FerrixRoadmap_stage7LinuxAbi implemented
   class n12_FerrixRoadmap_stage8Vfs,n13_FerrixRoadmap_stage12BtrfsWrite,n14_FerrixRoadmap_stage13Isolation planned
 ```
 
@@ -287,10 +285,10 @@ kernel : Kernel
       activeList : LruList
       inactiveList : LruList
     elfLoader : UserElfLoader
-  syscalls : LinuxSyscallLayer  [planned]
+  syscalls : LinuxSyscallLayer  [in progress]
   native : NativeAbi  [planned]
   futex : Futex  [planned]
-  signals : Signals  [planned]
+  signals : Signals  [in progress]
   ipc : PosixIpc  [planned]
   vfs : Vfs  [planned]
     inodes : Inode
@@ -431,7 +429,7 @@ kernel/: monolithic core, capability seams, userspace device drivers. Entered fr
 | --- | --- | --- | ---: | --- |
 | `handoff` | `BootHandoffPort` | — | — |  |
 | `console` | `SerialConsolePort` | — | — |  |
-| `linuxAbi` | `LinuxSyscallPort` | `#planned` | — |  |
+| `linuxAbi` | `LinuxSyscallPort` | `#inProgress` | — |  |
 | `nativeAbi` | `NativeSyscallPort` | `#planned` | — |  |
 | `arch` | `ArchLayer` | — | — |  |
 | `printer` | `Console` | `#implemented` | — | kernel/src/console.rs: println over the arch console, behind a lock that a panicking CPU waits a bounded time for, so a fault while printing still produces its FERRIX-PANIC line. |
@@ -448,10 +446,10 @@ kernel/: monolithic core, capability seams, userspace device drivers. Entered fr
 | `tasks` | `Tasks` | `#implemented` | — |  |
 | `sched` | `Scheduler` | `#implemented` | — |  |
 | `vm` | `VirtualMemory` | `#inProgress` | — |  |
-| `syscalls` | `LinuxSyscallLayer` | `#planned` | — |  |
+| `syscalls` | `LinuxSyscallLayer` | `#inProgress` | — |  |
 | `native` | `NativeAbi` | `#planned` | — |  |
 | `futex` | `Futex` | `#planned` | — |  |
-| `signals` | `Signals` | `#planned` | — |  |
+| `signals` | `Signals` | `#inProgress` | — |  |
 | `ipc` | `PosixIpc` | `#planned` | — |  |
 | `vfs` | `Vfs` | `#planned` | — |  |
 | `pageCache` | `PageCache` | `#planned` | — |  |
@@ -531,8 +529,8 @@ flowchart LR
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   class n2_FerrixStructure_Kernel_printer,n3_FerrixStructure_Kernel_early,n4_FerrixStructure_Kernel_trap,n5_FerrixStructure_Kernel_mm,n6_FerrixStructure_Kernel_vmap,n7_FerrixStructure_Kernel_mmio,n8_FerrixStructure_Kernel_irq,n9_FerrixStructure_Kernel_timer,n10_FerrixStructure_Kernel_smp,n11_FerrixStructure_Kernel_acpi,n12_FerrixStructure_Kernel_fdt,n13_FerrixStructure_Kernel_tasks,n14_FerrixStructure_Kernel_sched implemented
-  class n15_FerrixStructure_Kernel_vm inProgress
-  class n16_FerrixStructure_Kernel_syscalls,n17_FerrixStructure_Kernel_native,n18_FerrixStructure_Kernel_futex,n19_FerrixStructure_Kernel_signals,n20_FerrixStructure_Kernel_ipc,n21_FerrixStructure_Kernel_vfs,n22_FerrixStructure_Kernel_pageCache,n23_FerrixStructure_Kernel_filesystems,n24_FerrixStructure_Kernel_blockCore,n25_FerrixStructure_Kernel_netCore,n26_FerrixStructure_Kernel_namespaces,n27_FerrixStructure_Kernel_cgroups,n28_FerrixStructure_Kernel_seccomp,n29_FerrixStructure_Kernel_devices,n30_FerrixStructure_Kernel_iommu planned
+  class n15_FerrixStructure_Kernel_vm,n16_FerrixStructure_Kernel_syscalls,n19_FerrixStructure_Kernel_signals inProgress
+  class n17_FerrixStructure_Kernel_native,n18_FerrixStructure_Kernel_futex,n20_FerrixStructure_Kernel_ipc,n21_FerrixStructure_Kernel_vfs,n22_FerrixStructure_Kernel_pageCache,n23_FerrixStructure_Kernel_filesystems,n24_FerrixStructure_Kernel_blockCore,n25_FerrixStructure_Kernel_netCore,n26_FerrixStructure_Kernel_namespaces,n27_FerrixStructure_Kernel_cgroups,n28_FerrixStructure_Kernel_seccomp,n29_FerrixStructure_Kernel_devices,n30_FerrixStructure_Kernel_iommu planned
 ```
 
 **Figure 4 — Kernel and its parts.** The parts `Kernel` is made of, coloured by the lifecycle keyword each carries. [SVG](diagrams/ferrix-structure-kernel.svg) Source: `02-structure.sysml`.
@@ -779,7 +777,7 @@ flowchart TB
 
 ### The kernel's bring-up
 
-kmain. Every stage's exit criterion runs here on every boot, and each failure panics with its own message so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-6.
+kmain. Every stage's exit criterion runs here on every boot, and each failure panics with its own message so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-7.
 
 1. `validateHandoff` — Magic, version, arch and layout constants. No console yet, so a mismatch halts silently: there is no valid way to make one.
 2. `initConsole`
@@ -1873,20 +1871,20 @@ clone: each Shareable is shared or copied independently. CLONE_THREAD|CLONE_VM|C
 
 The entry path on every architecture, the dispatch table, and the ~150-call surface rustc needs. libs/linux-abi holds the numbers for x86-64, AArch64 and the ARM EABI table, the errnos, and the repr(C) layouts (statx, dirent64, sigaction, ...).
 
-The dispatch half exists: kernel/src/syscall, reached through arch::decode_syscall, which is the only place in the kernel that knows which of the three number tables this build uses. Fifteen calls answer -- identity and sched_yield. The entry path does not exist, so nothing has yet called it across a privilege boundary.
+kernel/src/syscall, reached through arch::decode_syscall, which is the only place in the kernel that knows which of the three number tables this build uses. Answers the calls a static musl binary makes at startup -- memory, the console descriptors, clocks, identity, uname, and signal dispositions -- which is enough for busybox sh to run a script on all three architectures. Everything else is ENOSYS, Linux's own answer.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
 | `groups` | attribute | `SyscallGroup` |  |  |
-| `syscallEntry` | action |  | `#planned` | The assembly trampoline; then Rust. |
+| `syscallEntry` | action |  | `#implemented` | The assembly trampoline; then Rust. |
 | `dispatch` | action |  | `#implemented` | One function. |
 | `seccompCheck` | action |  |  | The filter runs on entry, before dispatch. |
 
 #### Signals
 
-`#planned`  ·  stage 7
+`#inProgress`  ·  stage 7
 
-Real delivery: a frame pushed on the user stack or the sigaltstack, rt_sigreturn to unwind it. SIGSEGV from the fault path is what rustc's stack-overflow guard needs.
+The table exists: kernel/src/syscall/signal.rs records each disposition, the blocked mask and the alternate stack, and answers rt_sigaction, rt_sigprocmask and sigaltstack from it in Linux's order. Delivery does not: a frame pushed on the user stack or the sigaltstack, rt_sigreturn to unwind it. SIGSEGV from the fault path is what rustc's stack-overflow guard needs.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -2503,7 +2501,7 @@ flowchart TB
   n5_FerrixRoadmap_armv7aPort["SA  ARMv7-A port<br>Done · month"]
   n6_FerrixRoadmap_stage5Scheduler["S5  Stage 5 scheduler<br>Done · week"]
   n7_FerrixRoadmap_stage6UserMode["S6  Stage 6 user mode<br>Done · week"]
-  n8_FerrixRoadmap_stage7LinuxAbi["S7  Stage 7 Linux ABI<br>InProgress · month"]
+  n8_FerrixRoadmap_stage7LinuxAbi["S7  Stage 7 Linux ABI<br>Done · month"]
   n9_FerrixRoadmap_stage8Vfs["S8  Stage 8 VFS<br>Planned · month"]
   n10_FerrixRoadmap_stage9NativeAbi["S9  Stage 9 native ABI<br>InProgress · week"]
   n11_FerrixRoadmap_stage10UserspaceDrivers["S10  Stage 10 userspace drivers<br>Planned · month"]
@@ -2534,11 +2532,11 @@ flowchart TB
   n16_FerrixRoadmap_stage15Userland -. "depends on" .-> n17_FerrixRoadmap_stage16Rustc
   n17_FerrixRoadmap_stage16Rustc -. "depends on" .-> n18_FerrixRoadmap_stage17SelfHosting
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
-  classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode implemented
-  class n8_FerrixRoadmap_stage7LinuxAbi,n10_FerrixRoadmap_stage9NativeAbi inProgress
+  classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
+  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi implemented
   class n9_FerrixRoadmap_stage8Vfs,n11_FerrixRoadmap_stage10UserspaceDrivers,n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stage12BtrfsWrite,n14_FerrixRoadmap_stage13Isolation,n15_FerrixRoadmap_stage14RealTime,n16_FerrixRoadmap_stage15Userland,n17_FerrixRoadmap_stage16Rustc,n18_FerrixRoadmap_stage17SelfHosting planned
+  class n10_FerrixRoadmap_stage9NativeAbi inProgress
 ```
 
 **Figure 16 — The roadmap, stage by stage.** An arrow points from a stage to the stage it unblocks. The two stages with a second arrow into them are the ones that need more than their predecessor. [SVG](diagrams/roadmap-stages.svg) Source: `10-roadmap.sysml`.
@@ -2553,7 +2551,7 @@ flowchart TB
 | `SA` | 4 | ARMv7-A port | Done | month | `#implemented` |
 | `S5` | 5 | Stage 5 scheduler | Done | week | `#implemented` |
 | `S6` | 6 | Stage 6 user mode | Done | week | `#implemented` |
-| `S7` | 7 | Stage 7 Linux ABI | InProgress | month | `#inProgress` |
+| `S7` | 7 | Stage 7 Linux ABI | Done | month | `#implemented` |
 | `S8` | 8 | Stage 8 VFS | Planned | month | `#planned` |
 | `S9` | 9 | Stage 9 native ABI | InProgress | week | `#inProgress` |
 | `S10` | 10 | Stage 10 userspace drivers | Planned | month | `#planned` |
@@ -2659,11 +2657,13 @@ AddressSpace, VMOs, the VMA tree as a process map, demand paging, copy-on-write,
 
 ### S7 — Stage 7 Linux ABI
 
-**InProgress**  ·  size month  ·  `#inProgress`
+**Done**  ·  size month  ·  `#implemented`
 
-Syscall entry on every architecture, the dispatch table, the core surface: memory, files, process, threads and futex, signals with sigaltstack and rt_sigreturn, time, identity. Exit: static musl busybox sh runs a script — the first time somebody else's binary runs on Ferrix.
+Syscall entry on every architecture, the dispatch table, the core surface: memory, files, process, threads and futex, signals with sigaltstack and rt_sigreturn, time, identity. Exit, met on all three with the script given to sh -c: Alpine's static musl busybox runs a builtins-only script and exits with its status, required line by line by cargo xtask test-shell, which is outside the boot test because it needs a binary the repository does not carry.
 
-Started alongside stage 6 rather than after it, because most of what it owes is a pure function of bytes and those are owed before the kernel code, not with it. Built: all three number tables in libs/linux-abi, the initial process stack image in libs/ustack, and kernel/src/syscall with SyscallArgs, Outcome and dispatch, self-checked on all three architectures in the boot test -- each reporting its own number for getpid, which is the one fact a host test cannot establish. Fifteen calls answer: identity and sched_yield, the ones needing no process state. Missing: the entry vectors and the privilege transition (stage 6's), copy_from_user/copy_to_user, the ELF loader into an AddressSpace, and the surface itself.
+Built: the three number tables in libs/linux-abi, the startup stack in libs/ustack, dispatch in kernel/src/syscall, the copy layer, the ELF loader, and the calls a static binary makes -- mmap, mmap2, munmap, mprotect, brk, set_tid_address, read and write/writev on the console, the clocks, getrandom, uname, the identity calls, and rt_sigaction, rt_sigprocmask and sigaltstack recorded without delivery; exit_group, arch_prctl and set_tls in each architecture's trap path. Running foreign binaries found a Thumb entry point entered in ARM state and the FPU closed to user mode on both Arm kernels.
+
+Left: signal delivery and rt_sigreturn, clone/execve/wait4 (which need programs as scheduled tasks and something to exec), futex, everything that opens a file including the fcntl busybox's printf asks for, and the stand-ins for a tty, a clock chip and an entropy source.
 
 **Allocated to: **`ferrix.kernel.syscalls`, `ferrix.kernel.signals` and `ferrix.kernel.futex`
 
@@ -2957,9 +2957,9 @@ flowchart LR
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixStructure_Kernel_mm,n4_FerrixStructure_Kernel_vmap,n5_FerrixRoadmap_stage3TrapsInterruptsTime,n6_FerrixStructure_Kernel_trap,n7_FerrixStructure_Kernel_irq,n8_FerrixStructure_Kernel_timer,n9_FerrixRoadmap_stage4Smp,n10_FerrixStructure_Kernel_smp,n11_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_stage5Scheduler,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_tasks,n16_FerrixRoadmap_stage6UserMode implemented
-  class n17_FerrixStructure_Kernel_vm,n18_FerrixRoadmap_stage7LinuxAbi,n25_FerrixRoadmap_stage9NativeAbi inProgress
-  class n19_FerrixStructure_Kernel_syscalls,n20_FerrixStructure_Kernel_signals,n21_FerrixStructure_Kernel_futex,n22_FerrixRoadmap_stage8Vfs,n23_FerrixStructure_Kernel_vfs,n24_FerrixStructure_Kernel_filesystems,n26_FerrixStructure_Kernel_native,n27_FerrixRoadmap_stage10UserspaceDrivers,n30_FerrixRoadmap_stage11BtrfsRead,n31_FerrixStructure_Kernel_blockCore,n32_FerrixRoadmap_stage13Isolation,n33_FerrixStructure_Kernel_namespaces,n34_FerrixStructure_Kernel_cgroups,n35_FerrixStructure_Kernel_seccomp,n36_FerrixRoadmap_stage14RealTime,n37_FerrixRoadmap_stage15Userland,n38_FerrixStructure_Ferrix_userland,n39_FerrixRoadmap_stage16Rustc planned
+  class n0_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixStructure_Kernel_mm,n4_FerrixStructure_Kernel_vmap,n5_FerrixRoadmap_stage3TrapsInterruptsTime,n6_FerrixStructure_Kernel_trap,n7_FerrixStructure_Kernel_irq,n8_FerrixStructure_Kernel_timer,n9_FerrixRoadmap_stage4Smp,n10_FerrixStructure_Kernel_smp,n11_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_stage5Scheduler,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_tasks,n16_FerrixRoadmap_stage6UserMode,n18_FerrixRoadmap_stage7LinuxAbi implemented
+  class n17_FerrixStructure_Kernel_vm,n19_FerrixStructure_Kernel_syscalls,n20_FerrixStructure_Kernel_signals,n25_FerrixRoadmap_stage9NativeAbi inProgress
+  class n21_FerrixStructure_Kernel_futex,n22_FerrixRoadmap_stage8Vfs,n23_FerrixStructure_Kernel_vfs,n24_FerrixStructure_Kernel_filesystems,n26_FerrixStructure_Kernel_native,n27_FerrixRoadmap_stage10UserspaceDrivers,n30_FerrixRoadmap_stage11BtrfsRead,n31_FerrixStructure_Kernel_blockCore,n32_FerrixRoadmap_stage13Isolation,n33_FerrixStructure_Kernel_namespaces,n34_FerrixStructure_Kernel_cgroups,n35_FerrixStructure_Kernel_seccomp,n36_FerrixRoadmap_stage14RealTime,n37_FerrixRoadmap_stage15Userland,n38_FerrixStructure_Ferrix_userland,n39_FerrixRoadmap_stage16Rustc planned
 ```
 
 **Figure 18 — Stages and the parts that answer them.** Each line carries the word the model wrote: `satisfy` where the part exists, `allocate` where it is one the stage still owes. [SVG](diagrams/stages-and-parts.svg) Source: `10-roadmap.sysml`.
@@ -3121,7 +3121,7 @@ flowchart LR
 | `SA` | `armv7aPort` | `satisfy` | yes | `#implemented` |
 | `S5` | `stage5Scheduler` | `dependency` and `satisfy` | yes | `#implemented` |
 | `S6` | `stage6UserMode` | `allocate` and `dependency` | — | `#implemented` |
-| `S7` | `stage7LinuxAbi` | `allocate` and `dependency` | — | `#inProgress` |
+| `S7` | `stage7LinuxAbi` | `allocate` and `dependency` | — | `#implemented` |
 | `S8` | `stage8Vfs` | `allocate` and `dependency` | — | `#planned` |
 | `S9` | `stage9NativeAbi` | `allocate` and `dependency` | — | `#inProgress` |
 | `S10` | `stage10UserspaceDrivers` | `allocate` and `dependency` | — | `#planned` |
@@ -3250,7 +3250,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 7 | `FerrixScheduling::Futex` | part | `#planned` |
 | 7 | `FerrixObjects::Clone` | action | `#planned` |
 | 7 | `FerrixObjects::LinuxSyscallLayer` | part | `#inProgress` |
-| 7 | `FerrixObjects::Signals` | part | `#planned` |
+| 7 | `FerrixObjects::Signals` | part | `#inProgress` |
 | 7 | `FerrixAssurance::AssemblyBudget::syscallEntrySites` | attribute | `#planned` |
 | 8 | `FerrixStructure::Initramfs` | part | `#planned` |
 | 8 | `FerrixStructure::Workspace::cpio` | part | `#writtenAhead` |
