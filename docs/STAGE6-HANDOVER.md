@@ -407,6 +407,25 @@ against a 120 s timeout**. A sixteen-second margin on a run that *passed*. That
 is a boot-time regression large enough to explain a "hang" that is really
 `xtask` giving up, and it is a defect in its own right whatever else is true.
 
+**It reproduces on real hardware, and there is a specific suspect.** The board
+owner sees it on an STM32MP157D-DK1, which retires "it is a QEMU artifact" as a
+hypothesis. Two distinct shapes across runs of the same build:
+
+* **Inside `fairness()`.** Markers put it past `start_spinners` and past the
+  "a spinner never started" wait, then silence. That narrows it hard, because
+  every other wait in that function is `wait_for`, which has a deadline and
+  would *print* — the one wait with no deadline at all is
+  `super::sleep_for(WINDOW_NANOS)` (`kernel/src/sched/check.rs`, in
+  `fairness`, between `open_window` and `close_window`). A task that sleeps and
+  is never woken hangs exactly like this: forever, silently, with no verdict.
+  That is the classic lost wakeup for a tickless scheduler — a sleeper on the
+  queue's `sleepers` map whose timer was never armed, or armed and not
+  rearmed — and it fits every symptom recorded here. **Look there first.**
+* **In `many_tasks`.** Other runs get further and fail its reap: *arena holds 8
+  allocations, expected 4* — four kernel stacks not returned inside the five
+  second patience. Same family as the stage 7 owner's "a task's stack was never
+  given back".
+
 So: either this is that regression, or it is a genuine race and the timeout is a
 red herring. The experiment that separates them is running twelve boots with
 `--timeout 600`. A failure that completes at 150 s was never hung; one that
@@ -457,10 +476,20 @@ cross-processor wait to deadlock on); and the two classic Arm lost-wakeup shapes
 (the idle path is `wfi` then unmask, not the reverse, and `send_ipi_to_others`
 does `dsb ishst` before the distributor write).
 
+**Use `--timeout 600` whenever you are investigating this**, not the 120 s
+default, and do not conclude anything from a default-timeout failure. The board
+owner concluded a placement change "regresses aarch64" from exactly that, and
+had told their user so; re-run at 600 s it was 67.64 s with the change against
+67.78 s without — identical within noise, no regression, just flakiness against
+a marginal default. That is the second wrong conclusion the 120 s default has
+produced today.
+
 A fourth candidate was found, fixed, and then **withdrawn as the cause** — worth
 recording for both halves. `[CpuLoad; MAX_CPUS]` is 6 KiB of a 16 KiB kernel
 stack, and `balance()` was allocating it from interrupt context on the
-interrupted task's stack. That is a real defect and it is fixed, by folding one
+interrupted task's stack — at *two* call sites, not one: `choose_cpu` and
+`balance` both declare `[CpuLoad::idle(); MAX_CPUS]` on the stack, and `balance`
+is reached from `preempt_on_irq_exit`. That is a real defect and it is fixed, by folding one
 processor at a time. It is *not* established as this bug: the fixed build passed
 10 of 10 and the unfixed one reproduced once in 10, which cannot distinguish a
 fix from luck at a one-in-three rate. The `sched` owner withdrew the claim
