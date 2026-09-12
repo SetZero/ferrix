@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "e7da750fbf6125fec46de2311a3236b40a711435de3593858ccf630d40e76ec4",
+  "digest": "817143e8312c4e69a2f2a2763d5fec66ca7ba2f2ab2bb2a0d319e26e904377dc",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -2400,7 +2400,7 @@
               "kind": "action",
               "maturity": "implemented",
               "stage": 6,
-              "doc": "run_user: the ring-3 / EL0 / USR transition, and leave_user back from it. Callee-saved registers saved, the stack pointer parked in the per-CPU record, a dedicated entry stack for every exception from user mode -- at EL1 sp is SP_EL1, and on ARMv7-A exceptions are stored on the SVC stack, so leaving either where the parked registers are lets the first fault overwrite them -- every general register zeroed, then sysretq, eret or rfeia. Interrupts masked in user mode while a program is a guest of the boot task.",
+              "doc": "enter_user: the ring-3 / EL0 / USR transition, from the program's own task, never returning. Every general register zeroed, then sysretq, eret or rfeia with interrupts open. Exceptions from user mode land on the task's own kernel stack: gs:8 and RSP0 set on each switch on x86-64, and the stack pointer at the return on the Arm pair, where SP_EL1 and the SVC stack already are that. exit_group ends the task through the scheduler.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 453
@@ -2415,7 +2415,7 @@
               "doc": "The Arm half of system call entry: svc arrives through the trap vector as Trap::SystemCall, so the architecture reads the number and arguments from the saved registers, handles exit and exit_group with leave_user before dispatch, and writes the result back. x86-64's body refuses, because SYSCALL has an entry of its own.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 465
+                "line": 464
               }
             },
             {
@@ -2427,7 +2427,7 @@
               "doc": "x86-64: SYSCALL leaves the return address in rcx and does not switch the stack, so entry swaps to the kernel stack through swapgs before anything can be pushed.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 474
+                "line": 473
               }
             },
             {
@@ -2439,7 +2439,7 @@
               "stage": 10,
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 480
+                "line": 479
               }
             }
           ]
@@ -2451,7 +2451,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 485
+            "line": 484
           }
         },
         {
@@ -2462,7 +2462,7 @@
           "doc": "How a secondary processor is brought from \"off\" to running the kernel's secondary_main with the MMU on: INIT-SIPI-SIPI and a real-mode trampoline, or PSCI CPU_ON through an identity map of the entry sequence.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 486
+            "line": 485
           }
         },
         {
@@ -2472,7 +2472,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 492
+            "line": 491
           }
         },
         {
@@ -2485,7 +2485,7 @@
           "doc": "kernel/src/arch/x86_64. Target x86_64-unknown-none, kernel code model, no red zone, soft float. Machine description: ACPI.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 494
+            "line": 493
           },
           "children": [
             {
@@ -2496,7 +2496,7 @@
               "value": "\"x86_64\"",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 495
+                "line": 494
               }
             },
             {
@@ -2507,7 +2507,7 @@
               "value": "false",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 496
+                "line": 495
               }
             },
             {
@@ -2518,7 +2518,7 @@
               "doc": "Per processor, with its TSS: a TSS cannot be shared because loading one marks its descriptor busy.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 500
+                "line": 499
               }
             },
             {
@@ -2529,7 +2529,7 @@
               "doc": "256 gates, every one naming the kernel code selector; the double-fault gate on an IST stack of its own. Entry stubs are an assembler .rept, ten of which push an error code.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 504
+                "line": 503
               }
             },
             {
@@ -2540,7 +2540,7 @@
               "doc": "Mapped from the MADT, enabled, task priority dropped. Its timer is calibrated against the HPET. One per processor.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 509
+                "line": 508
               }
             },
             {
@@ -2552,7 +2552,7 @@
               "doc": "Every I/O APIC firmware described is mapped and every input masked: quiesced, not configured, until stage 10.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 513
+                "line": 512
               }
             },
             {
@@ -2563,7 +2563,7 @@
               "doc": "HPET main counter, whose period firmware states in femtoseconds. Falls back to the TSC calibrated against the PIT on a machine with no HPET table.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 517
+                "line": 516
               }
             },
             {
@@ -2574,7 +2574,7 @@
               "doc": "COM1 through port I/O. The one in-kernel device.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 522
+                "line": 521
               }
             },
             {
@@ -2585,7 +2585,7 @@
               "doc": "Real mode to long mode in one step, on a root table below 1 MiB sharing the kernel's upper half. The only 16-bit code in the project.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 525
+                "line": 524
               }
             },
             {
@@ -2595,7 +2595,7 @@
               "type": "TlbShootdown",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 530
+                "line": 529
               }
             },
             {
@@ -2606,7 +2606,7 @@
               "deferred": "Replaces the LAPIC countdown with a comparator against the TSC; the calibration exists. Waits for a tickless scheduler to want it.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 532
+                "line": 531
               }
             },
             {
@@ -2617,7 +2617,7 @@
               "deferred": "APIC IDs above 255 are refused with a message; QEMU's are 0 to 3.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 535
+                "line": 534
               }
             },
             {
@@ -2629,7 +2629,7 @@
               "stage": 10,
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 538
+                "line": 537
               }
             }
           ]
@@ -2641,7 +2641,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 543
+            "line": 542
           }
         },
         {
@@ -2651,7 +2651,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 543
+            "line": 542
           }
         },
         {
@@ -2661,7 +2661,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 543
+            "line": 542
           }
         },
         {
@@ -2671,7 +2671,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 543
+            "line": 542
           }
         },
         {
@@ -2681,7 +2681,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 544
+            "line": 543
           }
         },
         {
@@ -2691,7 +2691,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 544
+            "line": 543
           }
         },
         {
@@ -2701,7 +2701,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 544
+            "line": 543
           }
         },
         {
@@ -2711,7 +2711,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 545
+            "line": 544
           }
         },
         {
@@ -2721,7 +2721,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 545
+            "line": 544
           }
         },
         {
@@ -2731,7 +2731,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 545
+            "line": 544
           }
         },
         {
@@ -2744,7 +2744,7 @@
           "doc": "kernel/src/arch/aarch64. Target aarch64-unknown-none-softfloat. Machine description: ACPI (MADT, FADT for the PSCI conduit, GTDT for the timer interrupt).",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 547
+            "line": 546
           },
           "children": [
             {
@@ -2755,7 +2755,7 @@
               "value": "\"aarch64\"",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 548
+                "line": 547
               }
             },
             {
@@ -2766,7 +2766,7 @@
               "value": "true",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 549
+                "line": 548
               }
             },
             {
@@ -2777,7 +2777,7 @@
               "doc": "Sixteen entries at fixed 128-byte offsets; the layout is the interface. Each entry stashes two registers, records which entry it is and branches to the common save path.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 554
+                "line": 553
               }
             },
             {
@@ -2788,7 +2788,7 @@
               "doc": "aarch64/gic.rs: the MADT walk alone — distributor and CPU interface addresses, the check that every core's interface is the same banked address, the version check — then a call into the shared gicv2 driver.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 559
+                "line": 558
               }
             },
             {
@@ -2799,7 +2799,7 @@
               "doc": "The architected virtual timer, CNTV_CVAL_EL0, because a kernel at EL1 is below any hypervisor present. Compares against an absolute instant; there is no periodic mode.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 565
+                "line": 564
               }
             },
             {
@@ -2810,7 +2810,7 @@
               "doc": "Still aarch64's own copy with a hard-coded address; moving it onto the shared pl011 driver is the open half of docs/arm32.md decision 6.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 570
+                "line": 569
               }
             },
             {
@@ -2821,7 +2821,7 @@
               "doc": "Secondaries start with the MMU off at a physical address and enter through an identity map of the entry sequence alone, in a tree of their own, loading every parameter before the MMU goes on.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 575
+                "line": 574
               }
             },
             {
@@ -2832,7 +2832,7 @@
               "doc": "Firmware may hand off at EL2; lowering is an eret into a constructed context.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 581
+                "line": 580
               }
             },
             {
@@ -2843,7 +2843,7 @@
               "deferred": "gic::init refuses anything that is not a GICv2; QEMU virt gives GICv2 unless asked, so this needs a second boot-test configuration as much as code.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 586
+                "line": 585
               }
             },
             {
@@ -2854,7 +2854,7 @@
               "deferred": "For firmware without PSCI. Refused, not guessed at.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 589
+                "line": 588
               }
             },
             {
@@ -2866,7 +2866,7 @@
               "stage": 10,
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 592
+                "line": 591
               }
             }
           ]
@@ -2878,7 +2878,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 597
+            "line": 596
           }
         },
         {
@@ -2888,7 +2888,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 597
+            "line": 596
           }
         },
         {
@@ -2898,7 +2898,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 597
+            "line": 596
           }
         },
         {
@@ -2908,7 +2908,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 598
+            "line": 597
           }
         },
         {
@@ -2918,7 +2918,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 598
+            "line": 597
           }
         },
         {
@@ -2928,7 +2928,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 598
+            "line": 597
           }
         },
         {
@@ -2938,7 +2938,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 599
+            "line": 598
           }
         },
         {
@@ -2948,7 +2948,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 599
+            "line": 598
           }
         },
         {
@@ -2961,7 +2961,7 @@
           "doc": "kernel/src/arch/armv7a: the Cortex-A7 of the STM32MP157, run on QEMU virt under U-Boot. Target armv7a-none-eabi with LPAE. Machine description: device tree only. Joined after stage 3 without a second loader, a second facade or a line of bootstrap assembly; docs/arm32.md is the plan it followed.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 601
+            "line": 600
           },
           "children": [
             {
@@ -2972,7 +2972,7 @@
               "value": "\"armv7a\"",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 602
+                "line": 601
               }
             },
             {
@@ -2983,7 +2983,7 @@
               "value": "true",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 603
+                "line": 602
               }
             },
             {
@@ -2994,7 +2994,7 @@
               "doc": "Eight one-instruction entries at VBAR. Each corrects the banked lr, stores it and the status on the SVC stack with srsdb and switches to SVC with cps; return is rfeia. No processor mode but SVC is ever given a stack.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 610
+                "line": 609
               }
             },
             {
@@ -3005,7 +3005,7 @@
               "doc": "Distributor and CPU interface from the device tree, then the shared gicv2 driver.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 616
+                "line": 615
               }
             },
             {
@@ -3016,7 +3016,7 @@
               "doc": "The same counter as AArch64's, reached through cp15; the interrupt number comes from the device tree.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 620
+                "line": 619
               }
             },
             {
@@ -3027,7 +3027,7 @@
               "doc": "armv7a/console.rs chooses between the ports the device tree describes, in priority order: `console=pl011|stm32` from /chosen/bootargs (U-Boot sets it without reflashing, for a board whose tree is exactly what is in question), then stdout-path, then the first enabled port. A name matching no drivable node falls through rather than failing. The PL011 on QEMU virt, the STM32 USART on the board.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 624
+                "line": 623
               }
             },
             {
@@ -3038,7 +3038,7 @@
               "doc": "Every core reads ACTLR.SMP once it is in Rust and the boot log says how many had it set. An observation, never a failure: QEMU does not implement the register, so \"clear on all\" is ambiguous there. `noactlr` on the command line suppresses the read, for silicon that turns it into an undefined instruction.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 633
+                "line": 632
               }
             },
             {
@@ -3049,7 +3049,7 @@
               "doc": "Conduit from the device tree: hvc on QEMU, not the smc the plan first guessed. Secondaries found in /cpus. Entry above the 2 GiB TTBR0 covers is refused.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 641
+                "line": 640
               }
             },
             {
@@ -3060,7 +3060,7 @@
               "deferred": "The ED1 and EV1 have 1 GiB, whose identity range lands on the direct map; Layout::plan_identity_map refuses rather than guesses, so they need a trampoline page not yet written.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 647
+                "line": 646
               }
             },
             {
@@ -3071,7 +3071,7 @@
               "deferred": "The board has RAM above 2 GiB physical and beyond the 1.25 GiB direct map; QEMU cannot place it.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 650
+                "line": 649
               }
             },
             {
@@ -3082,7 +3082,7 @@
               "deferred": "ARM code generation only, as docs/arm32.md argues.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 653
+                "line": 652
               }
             },
             {
@@ -3093,7 +3093,7 @@
               "deferred": "Soft float; a UEFI application may not assume firmware enabled the VFP.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 656
+                "line": 655
               }
             }
           ]
@@ -3105,7 +3105,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 661
+            "line": 660
           }
         },
         {
@@ -3115,7 +3115,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 661
+            "line": 660
           }
         },
         {
@@ -3125,7 +3125,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 661
+            "line": 660
           }
         },
         {
@@ -3135,7 +3135,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 662
+            "line": 661
           }
         },
         {
@@ -3145,7 +3145,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 662
+            "line": 661
           }
         },
         {
@@ -3155,7 +3155,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 662
+            "line": 661
           }
         },
         {
@@ -3165,7 +3165,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 663
+            "line": 662
           }
         },
         {
@@ -3175,7 +3175,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 663
+            "line": 662
           }
         },
         {
@@ -3185,7 +3185,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 663
+            "line": 662
           }
         },
         {
@@ -3200,7 +3200,7 @@
           "doc": "Exactly one is compiled in, chosen by the build target.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 665
+            "line": 664
           },
           "children": [
             {
@@ -3213,7 +3213,7 @@
               "type": "X86_64Arch",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 667
+                "line": 666
               }
             },
             {
@@ -3226,7 +3226,7 @@
               "type": "AArch64Arch",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 668
+                "line": 667
               }
             },
             {
@@ -3239,7 +3239,7 @@
               "type": "Armv7aArch",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 669
+                "line": 668
               }
             }
           ]
@@ -3253,7 +3253,7 @@
           "doc": "Register-level drivers under arch/ shared by the two Arm architectures, gated by cfg(any(aarch64, arm)) inside the arch directory where the layering check permits it.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 672
+            "line": 671
           },
           "children": [
             {
@@ -3264,7 +3264,7 @@
               "doc": "kernel/src/arch/gicv2.rs: distributor (machine-wide) and CPU interface (per core). 0..16 software-generated, 16..32 private peripheral, 32.. shared. IPIs through GICD_SGIR. Private interrupts' enable bits are banked per core, so the driver records what the boot core enabled and init_this_cpu replays the whole set on every other core — the timer included, which is what stage 5 found missing.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 676
+                "line": 675
               }
             },
             {
@@ -3275,7 +3275,7 @@
               "doc": "kernel/src/arch/pl011.rs. Used by ARMv7-A today.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 685
+                "line": 684
               }
             },
             {
@@ -3286,7 +3286,7 @@
               "doc": "kernel/src/arch/stm32_usart.rs: the board's own UART.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 688
+                "line": 687
               }
             }
           ]
@@ -3298,7 +3298,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 692
+            "line": 691
           }
         },
         {
@@ -3308,7 +3308,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 692
+            "line": 691
           }
         },
         {
@@ -3318,7 +3318,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 692
+            "line": 691
           }
         },
         {
@@ -3328,7 +3328,7 @@
           "type": "Ferrix",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 695
+            "line": 694
           },
           "children": [
             {
@@ -3338,7 +3338,7 @@
               "redefines": "kernel",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 696
+                "line": 695
               },
               "children": [
                 {
@@ -3349,7 +3349,7 @@
                   "value": "ArchLayer::x86",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 696
+                    "line": 695
                   }
                 }
               ]
@@ -3363,7 +3363,7 @@
           "type": "Ferrix",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 698
+            "line": 697
           },
           "children": [
             {
@@ -3373,7 +3373,7 @@
               "redefines": "kernel",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 699
+                "line": 698
               },
               "children": [
                 {
@@ -3384,7 +3384,7 @@
                   "value": "ArchLayer::arm64",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 699
+                    "line": 698
                   }
                 }
               ]
@@ -3398,7 +3398,7 @@
           "type": "Ferrix",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 701
+            "line": 700
           },
           "children": [
             {
@@ -3408,7 +3408,7 @@
               "redefines": "kernel",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 702
+                "line": 701
               },
               "children": [
                 {
@@ -3419,7 +3419,7 @@
                   "value": "ArchLayer::arm32",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 702
+                    "line": 701
                   }
                 }
               ]
@@ -3433,7 +3433,7 @@
           "doc": "docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code cargo test, Miri and the fuzzers can reach; boot/ and kernel/ are reached by the QEMU boot test; xtask/ by cargo test. scripts/check-crate-layering.sh keeps the arrows below pointing the right way.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
-            "line": 709
+            "line": 708
           },
           "children": [
             {
@@ -3443,7 +3443,7 @@
               "definition": true,
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 716
+                "line": 715
               },
               "children": [
                 {
@@ -3452,7 +3452,7 @@
                   "kind": "enum-literal",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 717
+                    "line": 716
                   }
                 },
                 {
@@ -3461,7 +3461,7 @@
                   "kind": "enum-literal",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 718
+                    "line": 717
                   }
                 },
                 {
@@ -3470,7 +3470,7 @@
                   "kind": "enum-literal",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 719
+                    "line": 718
                   }
                 },
                 {
@@ -3479,7 +3479,7 @@
                   "kind": "enum-literal",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 720
+                    "line": 719
                   }
                 },
                 {
@@ -3488,7 +3488,7 @@
                   "kind": "enum-literal",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 721
+                    "line": 720
                   }
                 }
               ]
@@ -3500,7 +3500,7 @@
               "definition": true,
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 724
+                "line": 723
               },
               "children": [
                 {
@@ -3510,7 +3510,7 @@
                   "type": "String",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 725
+                    "line": 724
                   }
                 },
                 {
@@ -3520,7 +3520,7 @@
                   "type": "CrateKind",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 726
+                    "line": 725
                   }
                 },
                 {
@@ -3530,7 +3530,7 @@
                   "type": "Boolean",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 727
+                    "line": 726
                   }
                 },
                 {
@@ -3540,7 +3540,7 @@
                   "type": "Boolean",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 728
+                    "line": 727
                   }
                 },
                 {
@@ -3551,7 +3551,7 @@
                   "multiplicity": "0..1",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 729
+                    "line": 728
                   }
                 }
               ]
@@ -3564,7 +3564,7 @@
               "specializes": "Crate",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 732
+                "line": 731
               },
               "children": [
                 {
@@ -3575,7 +3575,7 @@
                   "value": "CrateKind::Library",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 733
+                    "line": 732
                   }
                 },
                 {
@@ -3586,7 +3586,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 734
+                    "line": 733
                   }
                 }
               ]
@@ -3600,7 +3600,7 @@
               "doc": "The hand-off ABI, both address layouts, checked at compile time on every build.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 738
+                "line": 737
               },
               "children": [
                 {
@@ -3611,7 +3611,7 @@
                   "value": "\"libs/bootinfo\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 739
+                    "line": 738
                   }
                 },
                 {
@@ -3622,7 +3622,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 740
+                    "line": 739
                   }
                 }
               ]
@@ -3636,7 +3636,7 @@
               "doc": "ELF64 and, since the ARMv7-A port, ELF32. Used by the loader, by xtask's PE converter, and fuzzed.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 744
+                "line": 743
               },
               "children": [
                 {
@@ -3647,7 +3647,7 @@
                   "value": "\"libs/elf\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 745
+                    "line": 744
                   }
                 },
                 {
@@ -3658,7 +3658,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 746
+                    "line": 745
                   }
                 }
               ]
@@ -3671,7 +3671,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 750
+                "line": 749
               },
               "children": [
                 {
@@ -3682,7 +3682,7 @@
                   "value": "\"libs/frame\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 751
+                    "line": 750
                   }
                 },
                 {
@@ -3693,7 +3693,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 752
+                    "line": 751
                   }
                 }
               ]
@@ -3707,7 +3707,7 @@
               "doc": "The body has no unsafe; the crate cannot forbid it because declaring Backing as an unsafe trait is the point.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 754
+                "line": 753
               },
               "children": [
                 {
@@ -3718,7 +3718,7 @@
                   "value": "\"libs/heap\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 755
+                    "line": 754
                   }
                 },
                 {
@@ -3729,7 +3729,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 756
+                    "line": 755
                   }
                 }
               ]
@@ -3742,7 +3742,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 760
+                "line": 759
               },
               "children": [
                 {
@@ -3753,7 +3753,7 @@
                   "value": "\"libs/paging\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 761
+                    "line": 760
                   }
                 },
                 {
@@ -3764,7 +3764,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 762
+                    "line": 761
                   }
                 }
               ]
@@ -3778,7 +3778,7 @@
               "doc": "Reached at stage 3: the MADT walk the interrupt controller needed. Stage 10 uses the rest.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 766
+                "line": 765
               },
               "children": [
                 {
@@ -3789,7 +3789,7 @@
                   "value": "\"libs/acpi\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 767
+                    "line": 766
                   }
                 },
                 {
@@ -3800,7 +3800,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 768
+                    "line": 767
                   }
                 },
                 {
@@ -3811,7 +3811,7 @@
                   "value": "58",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 769
+                    "line": 768
                   }
                 }
               ]
@@ -3825,7 +3825,7 @@
               "doc": "Reached at stage 1 on ARMv7-A: console, GIC, timer interrupt and PSCI conduit come from it there.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 773
+                "line": 772
               },
               "children": [
                 {
@@ -3836,7 +3836,7 @@
                   "value": "\"libs/fdt\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 774
+                    "line": 773
                   }
                 },
                 {
@@ -3847,7 +3847,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 775
+                    "line": 774
                   }
                 },
                 {
@@ -3858,7 +3858,7 @@
                   "value": "61",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 776
+                    "line": 775
                   }
                 }
               ]
@@ -3872,7 +3872,7 @@
               "doc": "Reached at stage 4: SpinLock and IrqSpinLock guard every shared kernel structure. RwSpinLock still waits.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 780
+                "line": 779
               },
               "children": [
                 {
@@ -3883,7 +3883,7 @@
                   "value": "\"libs/sync\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 781
+                    "line": 780
                   }
                 },
                 {
@@ -3894,7 +3894,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 782
+                    "line": 781
                   }
                 },
                 {
@@ -3905,7 +3905,7 @@
                   "value": "19",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 783
+                    "line": 782
                   }
                 }
               ]
@@ -3920,7 +3920,7 @@
               "doc": "The half of the scheduler that is arithmetic: the EEVDF tree, weights, lag, the domain partition. cargo test drives a run queue through hundreds of thousands of decisions.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 787
+                "line": 786
               },
               "children": [
                 {
@@ -3931,7 +3931,7 @@
                   "value": "\"libs/sched\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 788
+                    "line": 787
                   }
                 },
                 {
@@ -3942,7 +3942,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 789
+                    "line": 788
                   }
                 },
                 {
@@ -3953,7 +3953,7 @@
                   "value": "34",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 790
+                    "line": 789
                   }
                 }
               ]
@@ -3967,7 +3967,7 @@
               "doc": "Written for stage 6; reached at stage 2 as the vmap arena's range map.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 796
+                "line": 795
               },
               "children": [
                 {
@@ -3978,7 +3978,7 @@
                   "value": "\"libs/vma\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 797
+                    "line": 796
                   }
                 },
                 {
@@ -3989,7 +3989,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 798
+                    "line": 797
                   }
                 },
                 {
@@ -4000,7 +4000,7 @@
                   "value": "65",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 799
+                    "line": 798
                   }
                 }
               ]
@@ -4015,7 +4015,7 @@
               "doc": "Three system call number tables, not two: x86-64's own, AArch64's generic one, and ARMv7-A's EABI one. The 32-bit architecture needs its own Syscall variants as well as its own numbers -- mmap2 counts its offset in pages, _llseek returns through a pointer, fstat64 writes a different structure -- so they are separate calls rather than the same calls renumbered.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 805
+                "line": 804
               },
               "children": [
                 {
@@ -4026,7 +4026,7 @@
                   "value": "\"libs/linux-abi\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 806
+                    "line": 805
                   }
                 },
                 {
@@ -4037,7 +4037,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 807
+                    "line": 806
                   }
                 },
                 {
@@ -4048,7 +4048,7 @@
                   "value": "52",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 808
+                    "line": 807
                   }
                 }
               ]
@@ -4063,7 +4063,7 @@
               "doc": "The initial process stack image: argc, argv, envp and the auxiliary vector, laid out as a program's _start reads them, at both pointer widths. Carries a reader as well as a writer, because the writer is checked by walking the bytes back out with nothing but a stack pointer -- which is also what the fuzz target does.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 818
+                "line": 817
               },
               "children": [
                 {
@@ -4074,7 +4074,7 @@
                   "value": "\"libs/ustack\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 819
+                    "line": 818
                   }
                 },
                 {
@@ -4085,7 +4085,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 820
+                    "line": 819
                   }
                 },
                 {
@@ -4096,7 +4096,7 @@
                   "value": "22",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 821
+                    "line": 820
                   }
                 }
               ]
@@ -4110,7 +4110,7 @@
               "stage": 8,
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 830
+                "line": 829
               },
               "children": [
                 {
@@ -4121,7 +4121,7 @@
                   "value": "\"libs/cpio\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 831
+                    "line": 830
                   }
                 },
                 {
@@ -4132,7 +4132,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 832
+                    "line": 831
                   }
                 },
                 {
@@ -4143,7 +4143,7 @@
                   "value": "45",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 833
+                    "line": 832
                   }
                 }
               ]
@@ -4158,7 +4158,7 @@
               "doc": "Dentries with negative entries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store the kernel supplies, initramfs unpacking and the getdents64 packer. Not yet reached from the kernel.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 836
+                "line": 835
               },
               "children": [
                 {
@@ -4169,7 +4169,7 @@
                   "value": "\"libs/vfs\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 837
+                    "line": 836
                   }
                 },
                 {
@@ -4180,7 +4180,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 838
+                    "line": 837
                   }
                 },
                 {
@@ -4191,7 +4191,7 @@
                   "value": "37",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 839
+                    "line": 838
                   }
                 }
               ]
@@ -4205,7 +4205,7 @@
               "stage": 10,
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 846
+                "line": 845
               },
               "children": [
                 {
@@ -4216,7 +4216,7 @@
                   "value": "\"libs/virtio\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 847
+                    "line": 846
                   }
                 },
                 {
@@ -4227,7 +4227,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 848
+                    "line": 847
                   }
                 },
                 {
@@ -4238,7 +4238,7 @@
                   "value": "50",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 849
+                    "line": 848
                   }
                 }
               ]
@@ -4253,7 +4253,7 @@
               "doc": "PCI configuration space over a ConfigSpace the caller implements: ECAM geometry, headers, BAR decoding and sizing, both capability lists with a visited set, MSI-X, the bus walk without recursion or allocation, and virtio's PCI transport. The pci_walk fuzz target requires every walk to end and sizing to restore every register.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 852
+                "line": 851
               },
               "children": [
                 {
@@ -4264,7 +4264,7 @@
                   "value": "\"libs/pci\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 853
+                    "line": 852
                   }
                 },
                 {
@@ -4275,7 +4275,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 854
+                    "line": 853
                   }
                 },
                 {
@@ -4286,7 +4286,7 @@
                   "value": "37",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 855
+                    "line": 854
                   }
                 }
               ]
@@ -4301,7 +4301,7 @@
               "doc": "The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. One table on every architecture, in 0x1000..=0x1FFF, tested clear of all three Linux tables. No argument wider than a register.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 864
+                "line": 863
               },
               "children": [
                 {
@@ -4312,7 +4312,7 @@
                   "value": "\"libs/native-abi\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 865
+                    "line": 864
                   }
                 },
                 {
@@ -4323,7 +4323,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 866
+                    "line": 865
                   }
                 },
                 {
@@ -4334,7 +4334,7 @@
                   "value": "13",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 867
+                    "line": 866
                   }
                 }
               ]
@@ -4349,7 +4349,7 @@
               "doc": "The handle table and the channel message queue, generic over what a handle names. A handle is a slot and a generation, and a slot retires rather than wrap, so a closed handle never resolves again -- which the handle_table fuzz target checks against a model.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 874
+                "line": 873
               },
               "children": [
                 {
@@ -4360,7 +4360,7 @@
                   "value": "\"libs/objects\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 875
+                    "line": 874
                   }
                 },
                 {
@@ -4371,7 +4371,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 876
+                    "line": 875
                   }
                 },
                 {
@@ -4382,7 +4382,7 @@
                   "value": "22",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 877
+                    "line": 876
                   }
                 }
               ]
@@ -4396,7 +4396,7 @@
               "stage": 11,
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 885
+                "line": 884
               },
               "children": [
                 {
@@ -4407,7 +4407,7 @@
                   "value": "\"libs/btrfs\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 886
+                    "line": 885
                   }
                 },
                 {
@@ -4418,7 +4418,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 887
+                    "line": 886
                   }
                 },
                 {
@@ -4429,7 +4429,7 @@
                   "value": "38",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 888
+                    "line": 887
                   }
                 }
               ]
@@ -4444,7 +4444,7 @@
               "doc": "The classic-BPF interpreter as a pure function over bytes.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 893
+                "line": 892
               },
               "children": [
                 {
@@ -4455,7 +4455,7 @@
                   "value": "\"libs/seccomp\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 894
+                    "line": 893
                   }
                 },
                 {
@@ -4466,7 +4466,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 895
+                    "line": 894
                   }
                 }
               ]
@@ -4479,7 +4479,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 900
+                "line": 899
               },
               "children": [
                 {
@@ -4490,7 +4490,7 @@
                   "value": "\"boot\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 901
+                    "line": 900
                   }
                 },
                 {
@@ -4501,7 +4501,7 @@
                   "value": "CrateKind::Loader",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 902
+                    "line": 901
                   }
                 },
                 {
@@ -4512,7 +4512,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 903
+                    "line": 902
                   }
                 },
                 {
@@ -4523,7 +4523,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 904
+                    "line": 903
                   }
                 }
               ]
@@ -4536,7 +4536,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 906
+                "line": 905
               },
               "children": [
                 {
@@ -4547,7 +4547,7 @@
                   "value": "\"kernel\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 907
+                    "line": 906
                   }
                 },
                 {
@@ -4558,7 +4558,7 @@
                   "value": "CrateKind::Kernel",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 908
+                    "line": 907
                   }
                 },
                 {
@@ -4569,7 +4569,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 909
+                    "line": 908
                   }
                 },
                 {
@@ -4580,7 +4580,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 910
+                    "line": 909
                   }
                 }
               ]
@@ -4594,7 +4594,7 @@
               "doc": "Cross-compiles both halves, writes the FAT32 image with its own writer, converts the ARMv7-A loader ELF to PE32, drives QEMU. Nothing from crates.io.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 912
+                "line": 911
               },
               "children": [
                 {
@@ -4605,7 +4605,7 @@
                   "value": "\"xtask\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 913
+                    "line": 912
                   }
                 },
                 {
@@ -4616,7 +4616,7 @@
                   "value": "CrateKind::HostTool",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 914
+                    "line": 913
                   }
                 },
                 {
@@ -4627,7 +4627,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 915
+                    "line": 914
                   }
                 },
                 {
@@ -4638,7 +4638,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 916
+                    "line": 915
                   }
                 },
                 {
@@ -4649,7 +4649,7 @@
                   "value": "41",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 917
+                    "line": 916
                   }
                 },
                 {
@@ -4661,7 +4661,7 @@
                   "value": "(\"build\", \"run\", \"test-boot\", \"check\", \"flash\", \"watch-serial\", \"deploy\")",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 921
+                    "line": 920
                   }
                 }
               ]
@@ -4674,7 +4674,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 923
+                "line": 922
               },
               "children": [
                 {
@@ -4685,7 +4685,7 @@
                   "value": "\"fuzz\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 924
+                    "line": 923
                   }
                 },
                 {
@@ -4696,7 +4696,7 @@
                   "value": "CrateKind::FuzzTargets",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 925
+                    "line": 924
                   }
                 },
                 {
@@ -4707,7 +4707,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 926
+                    "line": 925
                   }
                 },
                 {
@@ -4718,7 +4718,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 927
+                    "line": 926
                   }
                 }
               ]
@@ -4732,7 +4732,7 @@
               "value": "(\"x86_64-unknown-none\", \"aarch64-unknown-none-softfloat\", \"armv7a-none-eabi\")",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 937
+                "line": 936
               }
             },
             {
@@ -4744,7 +4744,7 @@
               "value": "(\"x86_64-unknown-uefi\", \"aarch64-unknown-uefi\", \"armv7-unknown-linux-musleabi\")",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 938
+                "line": 937
               }
             },
             {
@@ -4755,7 +4755,7 @@
               "value": "\"1.97.1\"",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 939
+                "line": 938
               }
             }
           ]
@@ -14539,7 +14539,7 @@
           "shortName": "S6",
           "type": "Stage",
           "maturity": "implemented",
-          "doc": "AddressSpace, VMOs, the VMA tree as a process map, demand paging, copy-on-write, the ELF loader, the ring-3/EL0/USR transition. Exit, met on all three: a program at user privilege writes to fd 1 and exits with 42, with a page fault serviced along the way -- counted either side of the program and required to be non-zero. Down to user mode by sysretq on x86-64, eret to EL0 on AArch64 and rfeia to USR on ARMv7-A, each onto a dedicated entry stack. Also landed: fork with copy-on-write, TLB invalidation where a live mapping changes, tasks carrying an address space with the root swapped in choose_next, and a read of an inaccessible region refused. Left: scoping the user TLB shootdown, the missing invalidation in protect, reading the console on Arm, and programs as scheduled tasks rather than guests of the boot task.",
+          "doc": "AddressSpace, VMOs, the VMA tree as a process map, demand paging, copy-on-write, the ELF loader, the ring-3/EL0/USR transition. Exit, met on all three: a program at user privilege writes to fd 1 and exits with 42, with a page fault serviced along the way -- counted either side of the program and required to be non-zero. Down to user mode by sysretq on x86-64, eret to EL0 on AArch64 and rfeia to USR on ARMv7-A, each onto a dedicated entry stack. Also landed: fork with copy-on-write, TLB invalidation where a live mapping changes, tasks carrying an address space with the root swapped in choose_next, and a read of an inaccessible region refused. Left: scoping the user TLB shootdown, the missing invalidation in protect, and reading the console on Arm.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 155
@@ -14587,10 +14587,10 @@
           "shortName": "S7",
           "type": "Stage",
           "maturity": "implemented",
-          "doc": "Syscall entry on every architecture, the dispatch table, the core surface: memory, files, process, threads and futex, signals with sigaltstack and rt_sigreturn, time, identity. Exit, met on all three with the script given to sh -c: Alpine's static musl busybox runs a builtins-only script and exits with its status, required line by line by cargo xtask test-shell, which is outside the boot test because it needs a binary the repository does not carry.\n\nBuilt: the three number tables in libs/linux-abi, the startup stack in libs/ustack, dispatch in kernel/src/syscall, the copy layer, the ELF loader, and the calls a static binary makes -- mmap, mmap2, munmap, mprotect, brk, set_tid_address, read and write/writev on the console, the clocks, getrandom, uname, the identity calls, and rt_sigaction, rt_sigprocmask and sigaltstack recorded without delivery; exit_group, arch_prctl and set_tls in each architecture's trap path. Running foreign binaries found a Thumb entry point entered in ARM state and the FPU closed to user mode on both Arm kernels.\n\nLeft: signal delivery and rt_sigreturn, clone/execve/wait4 (which need programs as scheduled tasks and something to exec), futex, everything that opens a file including the fcntl busybox's printf asks for, and the stand-ins for a tty, a clock chip and an entropy source.",
+          "doc": "Syscall entry on every architecture, the dispatch table, the core surface: memory, files, process, threads and futex, signals with sigaltstack and rt_sigreturn, time, identity. Exit, met on all three with the script given to sh -c: Alpine's static musl busybox runs a builtins-only script and exits with its status, required line by line by cargo xtask test-shell, which is outside the boot test because it needs a binary the repository does not carry.\n\nBuilt: the three number tables in libs/linux-abi, the startup stack in libs/ustack, dispatch in kernel/src/syscall, the copy layer, the ELF loader, and the calls a static binary makes -- mmap, mmap2, munmap, mprotect, brk, set_tid_address, read and write/writev on the console, the clocks, getrandom, uname, the identity calls, and rt_sigaction, rt_sigprocmask and sigaltstack recorded without delivery; exit_group, arch_prctl and set_tls in each architecture's trap path. Running foreign binaries found a Thumb entry point entered in ARM state and the FPU closed to user mode on both Arm kernels. Since the exit: programs are scheduled tasks, preempted in user mode, with their thread pointer and FPU state switched per task, load/start/kill on Process, and two programs taking turns in the boot test.\n\nLeft: signal delivery and rt_sigreturn, clone/execve/wait4 (which need something to exec), futex, everything that opens a file including the fcntl busybox's printf asks for, and the stand-ins for a tty, a clock chip and an entropy source.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 175
+            "line": 174
           },
           "children": [
             {
@@ -14601,7 +14601,7 @@
               "value": "7",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 176
+                "line": 175
               }
             },
             {
@@ -14612,7 +14612,7 @@
               "value": "StageStatus::Done",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 177
+                "line": 176
               }
             },
             {
@@ -14623,7 +14623,7 @@
               "value": "\"month\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 178
+                "line": 177
               }
             }
           ]
@@ -14638,7 +14638,7 @@
           "doc": "Inode and dentry caches, the mount table, fd sharing rules, tmpfs, devfs, procfs, cpio initramfs. Exit: busybox ls -R /proc, cat /proc/self/maps, a script manipulating files under tmpfs.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 206
+            "line": 208
           },
           "children": [
             {
@@ -14649,7 +14649,7 @@
               "value": "8",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 207
+                "line": 209
               }
             },
             {
@@ -14660,7 +14660,7 @@
               "value": "StageStatus::InProgress",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 208
+                "line": 210
               }
             },
             {
@@ -14671,7 +14671,7 @@
               "value": "\"month\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 209
+                "line": 211
               }
             }
           ]
@@ -14683,10 +14683,10 @@
           "shortName": "S9",
           "type": "Stage",
           "maturity": "inProgress",
-          "doc": "Handle tables, Channel with handle passing, Port, Interrupt, IoMapping, Job; the 0x1000 syscalls. Exit: two processes exchange messages and a handle over a channel, and a Job kill takes down a process tree.\n\nBuilt: the byte-level half, in libs/native-abi and libs/objects, host-tested, fuzzed and under Miri; and in kernel/src/object and syscall/native, a handle table on every Process, the native dispatch, channels carrying handles and VMO create/read/write, self-checked between two processes in the boot test. Missing: ports and waits, Job, Interrupt, IoMapping, vmo_map, and processes that are scheduled tasks, which the exit criterion needs and which is being built as stage 7's follow-up.",
+          "doc": "Handle tables, Channel with handle passing, Port, Interrupt, IoMapping, Job; the 0x1000 syscalls. Exit: two processes exchange messages and a handle over a channel, and a Job kill takes down a process tree.\n\nBuilt: the byte-level half, in libs/native-abi and libs/objects, host-tested, fuzzed and under Miri; and in kernel/src/object and syscall/native, a handle table on every Process, the native dispatch, channels carrying handles and VMO create/read/write, self-checked between two processes in the boot test. Missing: ports and waits, Job, Interrupt, IoMapping, vmo_map, and the exit test itself, on processes that are now scheduled tasks.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 215
+            "line": 217
           },
           "children": [
             {
@@ -14697,7 +14697,7 @@
               "value": "9",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 216
+                "line": 218
               }
             },
             {
@@ -14708,7 +14708,7 @@
               "value": "StageStatus::InProgress",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 217
+                "line": 219
               }
             },
             {
@@ -14719,7 +14719,7 @@
               "value": "\"week\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 218
+                "line": 220
               }
             }
           ]
@@ -14734,7 +14734,7 @@
           "doc": "Enumeration, IOMMU domains, devmgr, the shared-ring block protocol, virtio-blk as a user process. Exit: a sector read through a ring-3 driver with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting.\n\nBuilt: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri. Next, and needing nothing from stage 9: kernel enumeration from MCFG and the device tree, then IOMMU domains. Needing stage 9: everything that runs in ring 3.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 234
+            "line": 235
           },
           "children": [
             {
@@ -14745,7 +14745,7 @@
               "value": "10",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 235
+                "line": 236
               }
             },
             {
@@ -14756,7 +14756,7 @@
               "value": "StageStatus::InProgress",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 236
+                "line": 237
               }
             },
             {
@@ -14767,7 +14767,7 @@
               "value": "\"month\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 237
+                "line": 238
               }
             }
           ]
@@ -14782,7 +14782,7 @@
           "doc": "Block core, then btrfs stage A. Exit: an image made by real mkfs.btrfs is mounted and a file tree read out byte-for-byte matching what the host wrote.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 249
+            "line": 250
           },
           "children": [
             {
@@ -14793,7 +14793,7 @@
               "value": "11",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 250
+                "line": 251
               }
             },
             {
@@ -14804,7 +14804,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 251
+                "line": 252
               }
             },
             {
@@ -14815,7 +14815,7 @@
               "value": "\"month\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 252
+                "line": 253
               }
             }
           ]
@@ -14830,7 +14830,7 @@
           "doc": "btrfs stage B. Exit, strict: Ferrix writes a tree and host btrfs check finds nothing; then the power-fail test — kill QEMU at a random point inside a transaction, remount, replay, check again — over hundreds of seeds.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 258
+            "line": 259
           },
           "children": [
             {
@@ -14841,7 +14841,7 @@
               "value": "12",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 259
+                "line": 260
               }
             },
             {
@@ -14852,7 +14852,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 260
+                "line": 261
               }
             },
             {
@@ -14863,7 +14863,7 @@
               "value": "\"longer\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 261
+                "line": 262
               }
             }
           ]
@@ -14878,7 +14878,7 @@
           "doc": "All eight namespaces, the unified cgroup hierarchy with cpu, memory, io and pids, cgroupfs, classic-BPF seccomp with the interpreter in libs/. Exit: an unprivileged user namespace runs pid 1 under a memory limit that triggers scoped reclaim and a scoped OOM kill, with a seccomp filter blocking a syscall.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 268
+            "line": 269
           },
           "children": [
             {
@@ -14889,7 +14889,7 @@
               "value": "13",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 269
+                "line": 270
               }
             },
             {
@@ -14900,7 +14900,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 270
+                "line": 271
               }
             },
             {
@@ -14911,7 +14911,7 @@
               "value": "\"month\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 271
+                "line": 272
               }
             }
           ]
@@ -14926,7 +14926,7 @@
           "doc": "SoftRt and HardRt: FIFO/RR, threaded interrupts, PI mutexes, EDF with CBS admission, the runtime mode switch with its quiescence protocol. Exit: a cyclictest-shaped boot test on a HardRt domain while a Throughput domain is saturated, maximum wake-up latency inside the stated bound; plus an admission test that refuses an unschedulable set.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 279
+            "line": 280
           },
           "children": [
             {
@@ -14937,7 +14937,7 @@
               "value": "14",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 280
+                "line": 281
               }
             },
             {
@@ -14948,7 +14948,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 281
+                "line": 282
               }
             },
             {
@@ -14959,7 +14959,7 @@
               "value": "\"month\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 282
+                "line": 283
               }
             }
           ]
@@ -14974,7 +14974,7 @@
           "doc": "Static musl busybox as /bin, a working init, job control, ttys, pipes. Exit: an interactive shell over serial a person can use.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 291
+            "line": 292
           },
           "children": [
             {
@@ -14985,7 +14985,7 @@
               "value": "15",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 292
+                "line": 293
               }
             },
             {
@@ -14996,7 +14996,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 293
+                "line": 294
               }
             },
             {
@@ -15007,7 +15007,7 @@
               "value": "\"week\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 294
+                "line": 295
               }
             }
           ]
@@ -15022,7 +15022,7 @@
           "doc": "The remaining syscall surface, the memory scale, the spawn path for rust-lld, a sysroot on btrfs. Exit: rustc hello.rs && ./hello on Ferrix, in CI.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 299
+            "line": 300
           },
           "children": [
             {
@@ -15033,7 +15033,7 @@
               "value": "16",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 300
+                "line": 301
               }
             },
             {
@@ -15044,7 +15044,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 301
+                "line": 302
               }
             },
             {
@@ -15055,7 +15055,7 @@
               "value": "\"the goal\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 302
+                "line": 303
               }
             }
           ]
@@ -15070,7 +15070,7 @@
           "doc": "Build Ferrix on Ferrix; the image the hosted compiler produces boots and passes every test above.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 308
+            "line": 309
           },
           "children": [
             {
@@ -15081,7 +15081,7 @@
               "value": "17",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 309
+                "line": 310
               }
             },
             {
@@ -15092,7 +15092,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 310
+                "line": 311
               }
             },
             {
@@ -15103,7 +15103,7 @@
               "value": "\"longer\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 311
+                "line": 312
               }
             }
           ]
@@ -15118,7 +15118,7 @@
           "doc": "fuzz/ has two targets, elf_parse and frame_alloc. Every written-ahead crate parses bytes from outside the system and is owed a target before its consuming stage starts.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 338
+            "line": 339
           }
         },
         {
@@ -15131,7 +15131,7 @@
           "doc": "CI runs Miri over libs/elf and libs/bootinfo only; frame, heap and paging run in the kernel today and are owed a step ahead of every crate in the written-ahead table.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 343
+            "line": 344
           }
         },
         {
@@ -15141,7 +15141,7 @@
           "type": "BootTest",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 393
+            "line": 394
           },
           "children": [
             {
@@ -15152,7 +15152,7 @@
               "value": "IsaFamily::X86_64",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 394
+                "line": 395
               }
             },
             {
@@ -15161,7 +15161,7 @@
               "kind": "objective",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 395
+                "line": 396
               }
             }
           ]
@@ -15173,7 +15173,7 @@
           "type": "BootTest",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 403
+            "line": 404
           },
           "children": [
             {
@@ -15184,7 +15184,7 @@
               "value": "IsaFamily::AArch64",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 404
+                "line": 405
               }
             },
             {
@@ -15193,7 +15193,7 @@
               "kind": "objective",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 405
+                "line": 406
               }
             }
           ]
@@ -15205,7 +15205,7 @@
           "type": "BootTest",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 413
+            "line": 414
           },
           "children": [
             {
@@ -15216,7 +15216,7 @@
               "value": "IsaFamily::Armv7a",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 414
+                "line": 415
               }
             },
             {
@@ -15225,7 +15225,7 @@
               "kind": "objective",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 415
+                "line": 416
               }
             }
           ]
@@ -15238,7 +15238,7 @@
           "doc": "cargo xtask deploy --arch armv7a: flash two files onto the card's bootfs, watch the ST-LINK serial port for the marker. Manual today; the automated form is deferred above.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 425
+            "line": 426
           },
           "children": [
             {
@@ -15248,7 +15248,7 @@
               "type": "Ferrix",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 429
+                "line": 430
               }
             },
             {
@@ -15257,7 +15257,7 @@
               "kind": "objective",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 430
+                "line": 431
               }
             }
           ]
@@ -15271,7 +15271,7 @@
           "doc": "The acceptance test itself: rustc hello.rs && ./hello inside the boot test.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 433
+            "line": 434
           },
           "children": [
             {
@@ -15281,7 +15281,7 @@
               "type": "Ferrix",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 436
+                "line": 437
               }
             },
             {
@@ -15290,7 +15290,7 @@
               "kind": "objective",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 437
+                "line": 438
               }
             }
           ]
@@ -16526,7 +16526,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 931
+      "line": 930
     },
     {
       "kind": "dependency",
@@ -16538,7 +16538,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 932
+      "line": 931
     },
     {
       "kind": "dependency",
@@ -16548,7 +16548,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 933
+      "line": 932
     },
     {
       "kind": "dependency",
@@ -16559,7 +16559,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 934
+      "line": 933
     },
     {
       "kind": "import",
@@ -16809,7 +16809,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 320
+      "line": 321
     },
     {
       "kind": "dependency",
@@ -16819,7 +16819,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 321
+      "line": 322
     },
     {
       "kind": "dependency",
@@ -16829,7 +16829,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 322
+      "line": 323
     },
     {
       "kind": "dependency",
@@ -16839,7 +16839,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 323
+      "line": 324
     },
     {
       "kind": "dependency",
@@ -16849,7 +16849,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 324
+      "line": 325
     },
     {
       "kind": "dependency",
@@ -16860,7 +16860,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 325
+      "line": 326
     },
     {
       "kind": "dependency",
@@ -16870,7 +16870,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 326
+      "line": 327
     },
     {
       "kind": "dependency",
@@ -16880,7 +16880,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 327
+      "line": 328
     },
     {
       "kind": "dependency",
@@ -16890,7 +16890,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 328
+      "line": 329
     },
     {
       "kind": "dependency",
@@ -16900,7 +16900,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 329
+      "line": 330
     },
     {
       "kind": "dependency",
@@ -16910,7 +16910,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 330
+      "line": 331
     },
     {
       "kind": "dependency",
@@ -16920,7 +16920,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 331
+      "line": 332
     },
     {
       "kind": "dependency",
@@ -16930,7 +16930,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 332
+      "line": 333
     },
     {
       "kind": "dependency",
@@ -16941,7 +16941,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 333
+      "line": 334
     },
     {
       "kind": "dependency",
@@ -16951,7 +16951,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 334
+      "line": 335
     },
     {
       "kind": "dependency",
@@ -16961,7 +16961,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 335
+      "line": 336
     },
     {
       "kind": "dependency",
@@ -16971,7 +16971,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 336
+      "line": 337
     },
     {
       "kind": "satisfy",
@@ -16981,7 +16981,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 353
+      "line": 354
     },
     {
       "kind": "satisfy",
@@ -16991,7 +16991,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 354
+      "line": 355
     },
     {
       "kind": "satisfy",
@@ -17001,7 +17001,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 355
+      "line": 356
     },
     {
       "kind": "satisfy",
@@ -17011,7 +17011,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 356
+      "line": 357
     },
     {
       "kind": "satisfy",
@@ -17021,7 +17021,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 357
+      "line": 358
     },
     {
       "kind": "satisfy",
@@ -17031,7 +17031,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 358
+      "line": 359
     },
     {
       "kind": "satisfy",
@@ -17041,7 +17041,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 359
+      "line": 360
     },
     {
       "kind": "satisfy",
@@ -17051,7 +17051,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 360
+      "line": 361
     },
     {
       "kind": "satisfy",
@@ -17061,7 +17061,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 361
+      "line": 362
     },
     {
       "kind": "satisfy",
@@ -17071,7 +17071,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 362
+      "line": 363
     },
     {
       "kind": "allocate",
@@ -17081,7 +17081,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 364
+      "line": 365
     },
     {
       "kind": "allocate",
@@ -17091,7 +17091,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 365
+      "line": 366
     },
     {
       "kind": "allocate",
@@ -17101,7 +17101,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 366
+      "line": 367
     },
     {
       "kind": "allocate",
@@ -17111,7 +17111,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 367
+      "line": 368
     },
     {
       "kind": "allocate",
@@ -17121,7 +17121,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 368
+      "line": 369
     },
     {
       "kind": "allocate",
@@ -17131,7 +17131,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 369
+      "line": 370
     },
     {
       "kind": "allocate",
@@ -17141,7 +17141,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 370
+      "line": 371
     },
     {
       "kind": "allocate",
@@ -17151,7 +17151,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 371
+      "line": 372
     },
     {
       "kind": "allocate",
@@ -17161,7 +17161,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 372
+      "line": 373
     },
     {
       "kind": "allocate",
@@ -17171,7 +17171,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 373
+      "line": 374
     },
     {
       "kind": "allocate",
@@ -17181,7 +17181,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 374
+      "line": 375
     },
     {
       "kind": "allocate",
@@ -17191,7 +17191,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 375
+      "line": 376
     },
     {
       "kind": "allocate",
@@ -17201,7 +17201,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 376
+      "line": 377
     },
     {
       "kind": "allocate",
@@ -17211,7 +17211,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 377
+      "line": 378
     },
     {
       "kind": "allocate",
@@ -17221,7 +17221,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 378
+      "line": 379
     },
     {
       "kind": "allocate",
@@ -17231,7 +17231,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 379
+      "line": 380
     },
     {
       "kind": "dependency",
@@ -17241,7 +17241,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 382
+      "line": 383
     },
     {
       "kind": "dependency",
@@ -17251,7 +17251,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 383
+      "line": 384
     },
     {
       "kind": "dependency",
@@ -17262,7 +17262,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 384
+      "line": 385
     },
     {
       "kind": "dependency",
@@ -17273,7 +17273,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 385
+      "line": 386
     },
     {
       "kind": "dependency",
@@ -17283,7 +17283,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 386
+      "line": 387
     },
     {
       "kind": "dependency",
@@ -17293,23 +17293,13 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 387
+      "line": 388
     },
     {
       "kind": "verify",
       "source": "FerrixRoadmap::bootX86",
       "targets": [
         "stage1Boot"
-      ],
-      "origin": "FerrixRoadmap::bootX86",
-      "file": "docs/sysml/10-roadmap.sysml",
-      "line": 396
-    },
-    {
-      "kind": "verify",
-      "source": "FerrixRoadmap::bootX86",
-      "targets": [
-        "stage2Memory"
       ],
       "origin": "FerrixRoadmap::bootX86",
       "file": "docs/sysml/10-roadmap.sysml",
@@ -17319,7 +17309,7 @@
       "kind": "verify",
       "source": "FerrixRoadmap::bootX86",
       "targets": [
-        "stage3TrapsInterruptsTime"
+        "stage2Memory"
       ],
       "origin": "FerrixRoadmap::bootX86",
       "file": "docs/sysml/10-roadmap.sysml",
@@ -17329,7 +17319,7 @@
       "kind": "verify",
       "source": "FerrixRoadmap::bootX86",
       "targets": [
-        "stage4Smp"
+        "stage3TrapsInterruptsTime"
       ],
       "origin": "FerrixRoadmap::bootX86",
       "file": "docs/sysml/10-roadmap.sysml",
@@ -17339,7 +17329,7 @@
       "kind": "verify",
       "source": "FerrixRoadmap::bootX86",
       "targets": [
-        "stage5Scheduler"
+        "stage4Smp"
       ],
       "origin": "FerrixRoadmap::bootX86",
       "file": "docs/sysml/10-roadmap.sysml",
@@ -17347,19 +17337,19 @@
     },
     {
       "kind": "verify",
-      "source": "FerrixRoadmap::bootAArch64",
+      "source": "FerrixRoadmap::bootX86",
       "targets": [
-        "stage1Boot"
+        "stage5Scheduler"
       ],
-      "origin": "FerrixRoadmap::bootAArch64",
+      "origin": "FerrixRoadmap::bootX86",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 406
+      "line": 401
     },
     {
       "kind": "verify",
       "source": "FerrixRoadmap::bootAArch64",
       "targets": [
-        "stage2Memory"
+        "stage1Boot"
       ],
       "origin": "FerrixRoadmap::bootAArch64",
       "file": "docs/sysml/10-roadmap.sysml",
@@ -17369,7 +17359,7 @@
       "kind": "verify",
       "source": "FerrixRoadmap::bootAArch64",
       "targets": [
-        "stage3TrapsInterruptsTime"
+        "stage2Memory"
       ],
       "origin": "FerrixRoadmap::bootAArch64",
       "file": "docs/sysml/10-roadmap.sysml",
@@ -17379,7 +17369,7 @@
       "kind": "verify",
       "source": "FerrixRoadmap::bootAArch64",
       "targets": [
-        "stage4Smp"
+        "stage3TrapsInterruptsTime"
       ],
       "origin": "FerrixRoadmap::bootAArch64",
       "file": "docs/sysml/10-roadmap.sysml",
@@ -17389,11 +17379,21 @@
       "kind": "verify",
       "source": "FerrixRoadmap::bootAArch64",
       "targets": [
-        "stage5Scheduler"
+        "stage4Smp"
       ],
       "origin": "FerrixRoadmap::bootAArch64",
       "file": "docs/sysml/10-roadmap.sysml",
       "line": 410
+    },
+    {
+      "kind": "verify",
+      "source": "FerrixRoadmap::bootAArch64",
+      "targets": [
+        "stage5Scheduler"
+      ],
+      "origin": "FerrixRoadmap::bootAArch64",
+      "file": "docs/sysml/10-roadmap.sysml",
+      "line": 411
     },
     {
       "kind": "verify",
@@ -17403,7 +17403,7 @@
       ],
       "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 416
+      "line": 417
     },
     {
       "kind": "verify",
@@ -17413,7 +17413,7 @@
       ],
       "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 417
+      "line": 418
     },
     {
       "kind": "verify",
@@ -17423,7 +17423,7 @@
       ],
       "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 418
+      "line": 419
     },
     {
       "kind": "verify",
@@ -17433,7 +17433,7 @@
       ],
       "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 419
+      "line": 420
     },
     {
       "kind": "verify",
@@ -17443,7 +17443,7 @@
       ],
       "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 420
+      "line": 421
     },
     {
       "kind": "verify",
@@ -17453,7 +17453,7 @@
       ],
       "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 421
+      "line": 422
     },
     {
       "kind": "verify",
@@ -17463,7 +17463,7 @@
       ],
       "origin": "FerrixRoadmap::BoardBoot",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 430
+      "line": 431
     },
     {
       "kind": "verify",
@@ -17473,7 +17473,7 @@
       ],
       "origin": "FerrixRoadmap::RustcTest",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 437
+      "line": 438
     },
     {
       "kind": "import",

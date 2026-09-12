@@ -167,9 +167,8 @@ package FerrixRoadmap {
              * invalidation where a live mapping changes, tasks carrying an
              * address space with the root swapped in choose_next, and a read of
              * an inaccessible region refused. Left: scoping the user TLB
-             * shootdown, the missing invalidation in protect, reading the
-             * console on Arm, and programs as scheduled tasks rather than
-             * guests of the boot task. */
+             * shootdown, the missing invalidation in protect, and reading the
+             * console on Arm. */
     }
 
     #implemented requirement <'S7'> stage7LinuxAbi : Stage {
@@ -194,10 +193,13 @@ package FerrixRoadmap {
              * sigaltstack recorded without delivery; exit_group, arch_prctl
              * and set_tls in each architecture's trap path. Running foreign
              * binaries found a Thumb entry point entered in ARM state and the
-             * FPU closed to user mode on both Arm kernels.
+             * FPU closed to user mode on both Arm kernels. Since the exit:
+             * programs are scheduled tasks, preempted in user mode, with their
+             * thread pointer and FPU state switched per task, load/start/kill
+             * on Process, and two programs taking turns in the boot test.
              *
              * Left: signal delivery and rt_sigreturn, clone/execve/wait4
-             * (which need programs as scheduled tasks and something to exec),
+             * (which need something to exec),
              * futex, everything that opens a file including the fcntl
              * busybox's printf asks for, and the stand-ins for a tty, a clock
              * chip and an entropy source. */
@@ -226,9 +228,8 @@ package FerrixRoadmap {
              * syscall/native, a handle table on every Process, the native
              * dispatch, channels carrying handles and VMO create/read/write,
              * self-checked between two processes in the boot test. Missing:
-             * ports and waits, Job, Interrupt, IoMapping, vmo_map, and
-             * processes that are scheduled tasks, which the exit criterion
-             * needs and which is being built as stage 7's follow-up. */
+             * ports and waits, Job, Interrupt, IoMapping, vmo_map, and the
+             * exit test itself, on processes that are now scheduled tasks. */
     }
 
     #inProgress requirement <'S10'> stage10UserspaceDrivers : Stage {

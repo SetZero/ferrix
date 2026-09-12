@@ -452,15 +452,14 @@ package FerrixStructure {
         // Owed by later stages, and the only things a stage may add.
         #implemented action enterUser {
             @stage { number = 6; }
-            doc /* run_user: the ring-3 / EL0 / USR transition, and leave_user
-                 * back from it. Callee-saved registers saved, the stack pointer
-                 * parked in the per-CPU record, a dedicated entry stack for
-                 * every exception from user mode -- at EL1 sp is SP_EL1, and on
-                 * ARMv7-A exceptions are stored on the SVC stack, so leaving
-                 * either where the parked registers are lets the first fault
-                 * overwrite them -- every general register zeroed, then
-                 * sysretq, eret or rfeia. Interrupts masked in user mode while a
-                 * program is a guest of the boot task. */
+            doc /* enter_user: the ring-3 / EL0 / USR transition, from the
+                 * program's own task, never returning. Every general register
+                 * zeroed, then sysretq, eret or rfeia with interrupts open.
+                 * Exceptions from user mode land on the task's own kernel
+                 * stack: gs:8 and RSP0 set on each switch on x86-64, and the
+                 * stack pointer at the return on the Arm pair, where SP_EL1
+                 * and the SVC stack already are that. exit_group ends the
+                 * task through the scheduler. */
         }
         #implemented action systemCall {
             @stage { number = 6; }

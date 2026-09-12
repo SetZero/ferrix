@@ -630,19 +630,19 @@ so anything that touches ring 3 wants a KVM boot before it is called done.
   and `sched::choose_next` swaps roots under the run queue lock, comparing by
   pointer so two threads of one process cost nothing. A kernel thread gets the
   user half switched off rather than left installed.
-* **Into user mode and back.** `arch::run_user` saves the callee-saved
-  registers, parks the stack pointer in the per-CPU record, moves to a dedicated
-  entry stack, zeroes every general register and drops privilege; `exit` and
-  `exit_group` come back through `leave_user` before `dispatch` runs. The entry
-  stack is the part that bites. At EL1 `sp` *is* `SP_EL1`, and on ARMv7-A every
-  exception from USR is stored on the SVC stack, so leaving either where the
-  kernel parked its registers means the program's first fault pushes a frame
-  over them — which x86-64 shipped first and then fixed. On the two Arm
+* **Into user mode.** `arch::enter_user` zeroes every general register and
+  drops privilege from the program's own task, and does not return: a program
+  leaves user mode through a trap or a system call, and for good through
+  `exit_group`, which ends its task. The entry stack is the part that bites, and
+  it is the task's own kernel stack on every architecture — `gs:8` and `RSP0` set
+  on each switch on x86-64, and on the Arm pair simply the stack pointer at the
+  return, since at EL1 `sp` *is* `SP_EL1` and ARMv7-A stores every exception from
+  USR on the SVC stack. The first version parked registers where the first
+  fault then pushed its frame, which x86-64 shipped and fixed. On the two Arm
   architectures `svc` arrives through the trap vector, so `Trap::SystemCall` asks
   the architecture through `arch::system_call`; x86-64's `SYSCALL` has an entry
-  of its own. Interrupts stay masked while a program runs, because it runs as a
-  guest of the boot task: a tick could switch to a task with an address space,
-  and switching back would uninstall the program's root.
+  of its own. Interrupts are open in user mode — see stage 7, *Programs are
+  scheduled tasks*.
 * **The permissions the map states are the ones enforced.** A read of a region
   that permits nothing is refused rather than served a fresh zero page — the
   guard-page case, which nothing notices when it is wrong, because the mapping
@@ -668,8 +668,6 @@ name. One lock per address space, never a global one.
 * `read_console_byte` returns `None` on both Arm architectures, whose UART
   drivers are write-only, so a program reading fd 0 there waits forever — and no
   check reads the console.
-* Programs as scheduled tasks rather than guests of the boot task, which is what
-  lets interrupts be unmasked in user mode and `exit_group` become a teardown.
 
 **What the boot test cannot see, written down rather than trusted.** A
 copy-on-write fault replaces a live read-only translation with a writable one,
@@ -796,24 +794,44 @@ the one it set, at its own architecture's layout, which is three native words
 and an 8-byte mask. Nothing in a clean run raises a signal. Delivery is the
 first item below.
 
+**Programs are scheduled tasks.** Each program runs as a task of its own that
+carries its process, rather than as a guest of the boot task with interrupts
+masked. The boot test shows two sharing one processor and a third ended from
+outside:
+
+      procs    two programs took turns on one processor, switched to 45 and 49 times
+      kill     a spinning program was ended from outside and reported 137
+
+The check program spins in user mode, so it is preempted there only if
+interrupts are open; masking them makes the first program run to the end the
+first time it is switched to, and the check fails naming that rather than
+merely running slower. `process::load` builds a process and `process::start`
+runs it, so a handle can be put between the two; `process::kill` ends one from
+outside; ending is a level (`Process::is_terminated`) and a wake-up, and
+whichever of `exit_group` and `kill` arrives first sets the status. Three
+things a program owns stopped being the processor's: its kernel entry stack,
+its thread pointer, and its floating-point and SIMD registers, which the
+scheduler now saves and loads on every switch between user tasks — eagerly,
+next to the address space. And one thing that had been hiding: the `SYSCALL`
+MSRs were programmed only on a processor that had started a program, which is
+harmless when programs never move and a `#UD` when they do.
+
 **Left, and why it did not block the exit:**
 
 * **Signal delivery and `rt_sigreturn`**, and `SIGSEGV` from the fault path,
   which is what rustc's stack-overflow guard needs. Owed with the first thing
   that has to kill a program.
 * **`clone`, `execve`, `wait4`.** A prompt that runs `uname` needs all three and
-  more: a path lookup to find `/bin/uname`, a file to load, and a program that
-  is a scheduled task rather than a guest of the boot task, so that a parent can
-  wait while its child runs. The copy-on-write half of `fork` exists already.
+  more: a path lookup to find `/bin/uname` and a file to load. Programs are
+  tasks, with a terminated condition a parent can wait on, and the
+  copy-on-write half of `fork` exists; what is missing is the call that makes a
+  child and the one that replaces its image.
 * **`futex` and threads**, which nothing single-threaded calls.
 * **Everything that opens a file**, `fcntl` included — stage 8.
 * **Three stand-ins, each written down where it lives.** The console's `read`
   does a line discipline's job until stage 15 brings ttys; the real-time clocks
   read 1970 until something reads a clock chip; `getrandom` is xorshift seeded
   from a counter and says so.
-* **Two restrictions of running a program as a guest of the boot task.**
-  Interrupts are masked in user mode, and FPU state is never saved. Both go when
-  programs are scheduled tasks.
 
 ---
 
@@ -949,12 +967,11 @@ architectures.**
 
 * Ports and signal waits (`object_wait_one`, `object_wait_async`, `port_*`),
   `Job`, `Interrupt`, `IoMapping`, and `vmo_map`.
-* **Processes that are tasks**, which the exit criterion needs: two user
-  programs running at once, where today a program is a guest of the boot task.
-  It is being built as stage 7's follow-up — `process::load` and
-  `process::start`, a terminated level plus a wake-up on `Process`,
-  `process::kill` from outside, and `process::current()` read from the running
-  task — and stage 9 builds its exit test on that seam.
+* **The exit test itself**, on processes that are now tasks: stage 7's
+  follow-up landed `process::load` and `process::start`, a terminated level plus
+  a wake-up on `Process`, `process::kill` from outside, and `process::current()`
+  read from the running task, with two programs taking turns on one processor in
+  the boot test.
 * Process creation in the native ABI. `0x1030..=0x1037` is held for it.
 
 **Exit:** two user processes exchange messages and a handle over a channel, and
