@@ -372,6 +372,24 @@ you add one there.
   were sitting modified *in the main checkout* belonging to a session that had
   not claimed them. That is the loaded version of this gun: uncommitted work in
   the one checkout whose index every worktree commit silently shares.
+
+  It went off, nearly. Later the same day the root checkout's index held ten
+  files staged at their *pre-fix* versions — all eight of `de02994`'s, which is
+  the stage 5 fix that took the day to find, plus a model commit's files — so
+  the next `git commit` there, by anyone, would have reverted it. Found by
+  checking `git diff --cached <commit>~1 -- <its files>`, which was empty.
+
+  **When you clean this up, the index and the working tree are two separate
+  decisions, made per file.** Resetting the *index* to `HEAD`
+  (`git restore --staged`) is cheap, lossless, and on its own removes the
+  revert risk, because a bare `git commit` commits the index. Restoring the
+  *working tree* (`--worktree`) is what makes `git status` look clean — and it
+  is the half that destroys work. Restore a file's working tree only after
+  proving nothing unstaged exists in it: its working tree byte-identical to its
+  index, and that index equal to the commit's parent. In that incident seven
+  files and the model passed and were restored in full; `kernel/src/main.rs`
+  and three generated docs held another session's live refactor, so they had
+  their index reset and nothing else.
 * **Never `git filter-branch` with a `main..HEAD` range.** It does not limit the
   rewrite: it rewrites every ancestor and repoints every ref naming one,
   including `main` and `origin/main`. This happened; trees were identical so
@@ -394,155 +412,84 @@ you add one there.
 Work is spread across sessions sharing one object store, each in a worktree
 under `.claude/worktrees/`. Coordinate before touching:
 
-**Stage 5 got slow, and under QEMU that reads as a hang.** Worth knowing before
-you spend an afternoon on it, and worth reading to the end, because four
-sessions chased this and almost every intermediate conclusion — including both
-of mine — was wrong. It is the `sched` owner's, they have it, and the workaround
-is `--timeout 600`.
+**Stage 5's "hang" is fixed, on `main` at `de02994`, by the `sched` owner.** It was
+never stage 6's. What is left is one run on the STM32MP157D-DK1 to confirm it
+there; under QEMU it is verified, with armv7a's stage 5 going from 64 s to 4.3 s,
+ten runs of ten. `de02994`'s commit message is the full account and the board
+owner's write-up is at `~/.local/share/ferrix/stage5-handoff.md`; this entry keeps
+only what matters to whoever reads a stage 6 handover.
 
-### Under QEMU it is settled: nothing hangs
+**What it was: a missing notify, not a deadlock and not a cost.** Three defects,
+each hidden by the one in front of it:
 
-`cargo xtask test-boot` sometimes stops after the `stage 4` line with no verdict
-at all, which looks exactly like a deadlock. It is not. Ten runs of the unfixed
-code at `--timeout 600`, on the same build and machine where the default had been
-producing failures:
+* **A wait with no waker.** `wake_all` was only called from `finish()`, when a
+  task *ends*. Seven waits watched `SPINNING`, which is incremented when a task
+  *starts* and signalled by nothing. Each slept its whole twenty-second
+  `PATIENCE_NANOS`, woke on the timer, found its condition true — and **reported
+  success**. A silent tax that looks exactly like a slow machine.
+* **The wait used its budget as its sleep**, so one missed notify cost the full
+  twenty seconds rather than a slice. It sleeps in five-millisecond slices now.
+* **An early wake left the task filed under an abandoned deadline** in its
+  processor's sleeper set, so `wake_sleepers` later woke it out of an unrelated
+  sleep.
 
-```
-63.95  63.91  63.92  64.20  83.92  64.24  63.92  104.44  84.28  64.24
-```
+Per-phase guest milliseconds went from `fair=19924 affin=20035 load=19987
+bal=19950 slice=19854` to `fair=167 affin=72 load=109 bal=149 slice=16`. The
+`cost ms per check` line in the boot log is what made that findable, and it stays.
 
-**Ten of ten passed.** A typical run is 64 s, three exceeded 83 s, and one took
-104.4 s against a default timeout of 120 s. Nothing was ever hung; `xtask` was
-giving up on runs that were still making progress.
+**Where this entry was wrong, corrected.** It said several things across the day
+that turned out false, and they are listed rather than silently removed because
+each was reasoned rather than guessed, and the reasoning is the thing to avoid:
 
-One thing that is **not** covered by that and is still open: the stage 7 owner
-saw `stage 5 self-check failed: a task's stack was never given back` twice on
-x86_64, which is the check running and reporting rather than the harness giving
-up, and no timeout explains it. It may be the same defect one level down —
-`reap_to`'s patience is five seconds of *guest* time, which is as marginal
-against a stage that got 2.7× slower as the 120 s harness default is — but that
-is a hypothesis, and the assertion is evidence. Keep it separate until somebody
-raises that budget and watches.
+* It called the failure a **deadlock**, from the missing verdict. A run killed by
+  a timeout short of the verdict prints the same nothing.
+* It then called it **slowness to be engineered away** — "make stage 5 cheap
+  again". Right in direction, wrong in kind: nothing was expensive, a wake-up
+  was missing.
+* It named a **lost wakeup at `sleep_for(WINDOW_NANOS)`** as the suspect. That
+  was mine and it was wrong; `arm_timer` arms for the earliest sleeper, which
+  the `sched` owner established by reading the function I had imagined.
+* It gave **`reap_to`'s budget as five seconds**. It is twenty — `PATIENCE_NANOS`,
+  in `kernel/src/sched/check.rs`. I had read that constant myself and used the
+  same value in stage 6's checks, and still wrote five from a relayed summary.
+* It said the **board's failures were a watchdog, fixed by an OP-TEE rebuild**.
+  The watchdog was real, but it was **U-Boot's**: `drivers/watchdog/stm32mp_wdt.c`
+  trusts the `SR_ONF` bit only when `IWDG_VERR >= 0x31`, this board reads `0x30`,
+  and the fallback heuristic false-positives and force-starts a 32-second
+  watchdog nothing services once Ferrix runs. Fixed with `CONFIG_WDT_STM32MP=n`;
+  the OP-TEE rebuild was harmless and not the cause. The board is **no longer
+  capped at 32 seconds**, and the firmware is in `~/.local/share/ferrix/dk1-firmware/`.
+* It folded the board's **`arena holds 8, expected 4`** into that watchdog. It
+  survives with the watchdog gone — 7 on one boot, 9 on the next. The `sched`
+  owner's reading is `reap_to` starved of turns by phases each burning the
+  shared budget, which `de02994` should fix; **not yet re-run on the board**.
+* It recorded two failure shapes **alternating on identical bits** as a
+  constraint any explanation had to meet. It constrained nothing: that is what
+  a fixed timer firing at a varying point produces.
 
-The real defect underneath is a **boot-time regression**: the armv7a boot test
-took 23.5 s before the scheduler merge and 64 s after it, plus run-to-run
-variance of another 40 s. The `sched` owner controlled it properly — `c008979`,
-the commit immediately before their work, passed 8 of 8, and it arrived with
-`9daec68`. The fix is to make stage 5 cheap again, not to find a deadlock.
+**The lesson worth more than the bug.** Five times in one day, across four
+sessions, **a deadline expiring was mistaken for a hang or a regression** — at
+three levels: `xtask`'s 120-second `--timeout`, the guest's own twenty-second
+patience, and a board watchdog no software in the picture knew about. Each
+produced a confident wrong conclusion, including two of mine. The costliest:
+the `sched` owner **reverted the correct sleeper-set fix** on five "hangs" that
+were 120-second timeouts, and only returned to it after finding the tax — a
+right change discarded on contaminated evidence. So:
 
-### The default timeout is the amplifier, and it manufactured two wrong verdicts
+* Investigate at `--timeout 600`, and conclude nothing from a 120-second
+  failure. A default that close to the typical run is a coin flip dressed as a
+  verdict.
+* Before reasoning about mechanism, find every deadline between you and the
+  symptom and raise it. Silence tells you nothing about whether anything was
+  progressing.
+* **Six runs cannot tell a one-in-three failure from a clean commit.** Get the
+  control — the commit before the suspect work — and run it enough times.
+* Read the function before believing the story about it.
 
-**Investigate at `--timeout 600` and conclude nothing from a 120 s failure.** The
-reason matters more than the rule, because the rule will be forgotten and the
-reason generalises: **a 120 s default against a 68 s typical run is a coin flip
-dressed as a verdict.** The board owner condemned a placement change as
-regressing aarch64 on the strength of one such failure, and had told their user
-so; at 600 s it measured 67.64 s against the baseline's 67.78 s — *faster* than
-the thing it supposedly regressed, by less than the run-to-run noise. Mine was
-the first wrong conclusion of the day, from a six-run bisect; that was the
-second. Any default sitting that close to the typical time keeps making verdicts
-out of scheduling jitter until it moves.
-
-### The board was a hardware watchdog, and Ferrix does not service it
-
-The STM32MP157D-DK1 failures were not the same bug at all, and the cause is a
-**kernel gap rather than a test artifact**, so it matters beyond this
-investigation. The board has a 32-second independent watchdog. U-Boot starts the
-`IWDG` and services it once a second at its prompt; the moment Ferrix takes over,
-**nothing services it**, and it fires. Measured from Ferrix's loader banner to
-the SoC restarting: **29.8 seconds**, with no panic and no output — the board
-simply resets.
-
-That explains both board symptoms as one thing: the watchdog cutting stage 5
-short at whatever point it had reached. The silent stop inside `fairness()` is
-silent because nothing failed. The *arena holds 8, expected 4* is a run that got
-far enough for the five-second reap budget to expire before the reset landed.
-
-And it **retracts** something that was recorded here as evidence. The two shapes
-alternating on identical bits was offered, and written down, as a constraint any
-explanation had to satisfy. It constrains nothing: what varies between runs is
-only where stage 5 happens to be when a fixed timer fires, which is precisely
-what a clock that knows nothing about the code would produce. The board owner
-retracted it themselves once they had measured the watchdog.
-
-Two consequences:
-
-* **The `PATIENCE_NANOS` experiment cannot pass on the board as it stands.**
-  Raising the guest budgets to 120 s is moot when a 32 s hardware reset lands
-  first. It is on hold until the watchdog is cleared, which needs a power-on
-  reset — the `IWDG` cannot be disabled in software once started and survives
-  warm resets, so every reset on that board today has kept the same watchdog
-  alive. An OP-TEE built without it is already on the card and takes effect when
-  the USB-C is unplugged.
-* **Ferrix should service or disable that watchdog**, which is board support
-  work rather than stage 6's. Until it does, any run on that board is capped at
-  32 seconds whatever else is true, and stage 5 alone now takes 64 s under
-  emulation.
-
-Once the watchdog is out of the way, whether the board completes stage 5 late or
-genuinely fails is the one remaining open question in this whole investigation.
-
-### The pattern worth more than any of the leads
-
-Four times in one day, across four sessions, a **budget expiring was mistaken
-for a hang** — and they were three different budgets at three different levels:
-
-* the harness's 120 s `--timeout`, killing runs that took up to 104 s;
-* the guest's own patience — `reap_to`'s five seconds, `PATIENCE_NANOS`'s
-  twenty;
-* the board's 32 s hardware watchdog, which no software in the picture knows
-  about.
-
-Every one produced a confident wrong conclusion from somebody, including two
-from me. The common shape: **a deadline expiring looks exactly like a hang, and
-silence tells you nothing about whether anything was progressing.** Before
-reasoning about a mechanism, find every deadline between you and the symptom and
-raise it. That is the transferable lesson here, and it is worth more than any of
-the individual leads below.
-
-### Dead leads — do not re-run these
-
-* **A lost wakeup at `sleep_for(WINDOW_NANOS)`.** This was my lead and it is
-  wrong. It is true that it is the only wait in `fairness` with no deadline of
-  its own, so its silence carries no information — but `arm_timer` takes the
-  *minimum* of the earliest sleeper and the slice end and only disarms when
-  there is neither, so a queue with nothing runnable and one sleeper does arm
-  for the sleeper. Read the function before believing the story.
-* **Lock ordering in `balance()`** — `steal_from` always locks the
-  lower-numbered queue first, and the snapshot loops hold one at a time.
-* **A TLB shootdown deadlock** — `flush_tlb_everywhere` returns immediately on
-  both Arm architectures, because `TLB_FLUSH_IS_BROADCAST` is true, so there is
-  no cross-processor wait to deadlock on.
-* **The two classic Arm lost-wakeup shapes** — the idle path is `wfi` then
-  unmask, not the reverse, and `send_ipi_to_others` does `dsb ishst` before the
-  distributor write.
-* **Kernel size or layout.** Same x86_64 binary hung and then passed back to
-  back; a kernel that does both is not failing because it grew.
-* **`[CpuLoad; MAX_CPUS]` on the stack** — 6 KiB of a 16 KiB kernel stack, at
-  *two* call sites (`choose_cpu` and `balance`, the latter reached from
-  `preempt_on_irq_exit`). A real defect, and fixed by folding one processor at a
-  time. Not this bug: the fixed build passed 10 of 10 against the unfixed
-  reproducing once in 10, which cannot tell a fix from luck. The `sched` owner
-  withdrew that themselves rather than let it stand.
-
-### One live fragility, not claimed as the cause
-
-`has_work()` is `!fair.is_empty()` and ignores sleepers entirely, so `idle_loop`
-decides whether to sleep on a question that does not mention them. That is safe
-only because `arm_timer` gets it right, which is a load-bearing coincidence
-rather than a design.
-
-### What this cost, and the two lessons worth keeping
-
-Both of my contributions to the account above were wrong before they were right.
-I concluded from a six-run bisect that the hang was a latent race later commits
-perturbed — **six runs cannot tell a one-in-three failure from a clean
-commit**, and the control is what settles it. And I reasoned from the silence
-that nothing could be progressing, so it had to be a deadlock — which assumed
-the run had *reached* the check rather than been killed short of it. Both
-corrections came from somebody else measuring rather than anyone thinking
-harder, and the measurements that mattered were ten runs with a generous
-timeout and reading `arm_timer` instead of imagining it.
+**Still open, not claimed as a cause.** `has_work()` is `!fair.is_empty()` and
+ignores sleepers, so `idle_loop` decides whether to sleep on a question that does
+not mention them. It is safe only because `arm_timer` gets it right — a
+load-bearing coincidence worth writing down before it stops being one.
 
 * `kernel/src/sched/`, `libs/sched` — **released to stage 6.** The stage 5 owner
   finished and merged as `9daec68`, and said both of §4's sched changes are
