@@ -27,7 +27,7 @@ use crate::irq::Report;
 
 pub(crate) use smp::{CpuStarter, describe_cpus, hardware_id};
 pub(crate) use trap::{
-    TrapFrame, advance_past_breakpoint, breakpoint, classify, report_trap, run_user, system_call,
+    TrapFrame, advance_past_breakpoint, breakpoint, classify, enter_user, report_trap, system_call,
 };
 
 /// Point this CPU's per-CPU register at `address`.
@@ -149,6 +149,36 @@ pub(crate) const USER_TEST_PROGRAM: &[u8] = &[
 
 /// The status [`USER_TEST_PROGRAM`] exits with.
 pub(crate) const USER_TEST_STATUS: i32 = 42;
+
+/// A program that spins, then writes a tagged line and exits with a status it
+/// reads out of its own image.
+///
+/// For the check that two programs run at once: it spins long enough to be
+/// preempted in USR mode, which a program run with interrupts masked never is.
+/// The last ten bytes are the layout every architecture's copy shares, so the
+/// check patches them without knowing the instruction set -- the tag character
+/// and the newline, then the loop count and the exit status as little-endian
+/// words, both loaded PC-relative with `ldr`. ARM state.
+///
+/// ```text
+///   ldr   r4, count
+/// 1: subs r4, r4, #1
+///   bne   1b
+///   mov   r7, #4 ; mov r0, #1 ; adr r1, msg ; mov r2, #16 ; svc #0
+///   mov   r7, #248 ; ldr r0, status ; svc #0
+///   b     .
+/// msg: "spinning task ?\n"   count: .word   status: .word
+/// ```
+///
+/// Assembled by rustc's LLVM and read back out of the object file, as
+/// [`USER_TEST_PROGRAM`] was.
+pub(crate) const USER_SPIN_PROGRAM: &[u8] = &[
+    0x38, 0x40, 0x9f, 0xe5, 0x01, 0x40, 0x54, 0xe2, 0xfd, 0xff, 0xff, 0x1a, 0x04, 0x70, 0xa0, 0xe3,
+    0x01, 0x00, 0xa0, 0xe3, 0x14, 0x10, 0x8f, 0xe2, 0x10, 0x20, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef,
+    0xf8, 0x70, 0xa0, 0xe3, 0x18, 0x00, 0x9f, 0xe5, 0x00, 0x00, 0x00, 0xef, 0xfe, 0xff, 0xff, 0xea,
+    b's', b'p', b'i', b'n', b'n', b'i', b'n', b'g', b' ', b't', b'a', b's', b'k', b' ', b'?',
+    b'\n', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
 
 /// One byte from the console, if one has arrived.
 ///
@@ -435,4 +465,4 @@ pub(crate) fn service_interrupts(_frame: &mut TrapFrame, handle: fn(u32)) {
 }
 
 /// The context switch, and the stack layout a new task starts on.
-pub(crate) use switch::{prepare_stack, switch_to};
+pub(crate) use switch::{UserState, prepare_stack, restore_user_state, save_user_state, switch_to};

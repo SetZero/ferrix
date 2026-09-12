@@ -176,9 +176,6 @@ pub(crate) fn write_tpidruro(value: u32) {
 /// FPU's.
 const CPACR_CP10_CP11_FULL: u32 = 0xF << 20;
 
-/// `FPEXC.EN`: the FPU is enabled.
-const FPEXC_EN: u32 = 1 << 30;
-
 /// Let USR mode use the FPU, on this core.
 ///
 /// A hard-float program -- which is what an ARMv7-A Linux distribution builds
@@ -187,19 +184,14 @@ const FPEXC_EN: u32 = 1 << 30;
 /// two: `CPACR` grants access to the coprocessors, and `FPEXC.EN` turns the
 /// FPU on.
 ///
-/// `FPEXC` is written as a coprocessor 10 transfer rather than as `vmsr`,
-/// which is the same instruction without asking the assembler for an FPU the
-/// soft-float kernel target does not declare. It is only written if `CPACR`
-/// kept the access bits: on a core without an FPU they read back as zero, and
-/// touching `FPEXC` there would be an undefined instruction in the kernel
-/// rather than in the program.
+/// `FPEXC` is written from the one assembly block that tells the assembler
+/// there is an FPU, which the soft-float kernel target does not declare. It is
+/// only written if `CPACR` kept the access bits: on a core without an FPU they
+/// read back as zero, and touching `FPEXC` there would be an undefined
+/// instruction in the kernel rather than in the program.
 ///
-/// # What this does not do
-///
-/// Save or restore the FPU's registers. The kernel is built soft-float and
-/// never touches them, and one program runs at a time as a guest of the boot
-/// task, so nothing else can disturb its state. A second concurrent program
-/// needs lazy switching, and that arrives with programs as scheduled tasks.
+/// Saving and loading a program's registers is the scheduler's, on every
+/// switch between tasks that run user code; see `switch::UserState`.
 pub(crate) fn enable_user_fpu() {
     let mut granted: u32 = 0;
     // SAFETY: `CPACR` only gates coprocessor access; the kernel does not rely
@@ -222,13 +214,42 @@ pub(crate) fn enable_user_fpu() {
     }
     // SAFETY: access to coprocessor 10 was just granted and read back, so the
     // FPU exists and `FPEXC` is accessible.
+    unsafe { super::switch::fpu_enable() };
+
+    // How many double registers a program's state has, which is what a switch
+    // between programs has to save. `MVFR0`'s low four bits say: one for
+    // sixteen, two for thirty-two.
+    // SAFETY: as above; a read of an identification register.
+    let features = unsafe { super::switch::fpu_features() };
+    let doubles = match features & 0xF {
+        1 => 16,
+        2 => 32,
+        _ => 0,
+    };
+    USER_FPU_DOUBLES.store(doubles, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Double registers in a program's floating-point state: 0 with no FPU, else 16
+/// or 32. Set by [`enable_user_fpu`], and the same on every core of a machine.
+static USER_FPU_DOUBLES: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// How many double registers a program's floating-point state has.
+pub(crate) fn user_fpu_doubles() -> u8 {
+    USER_FPU_DOUBLES.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Read `TPIDRURO`, a program's thread pointer.
+pub(crate) fn read_tpidruro() -> u32 {
+    let value: u32;
+    // SAFETY: reading a software register has no side effects.
     unsafe {
         asm!(
-            "mcr p10, 7, {}, c8, c0, 0",
-            in(reg) FPEXC_EN,
+            "mrc p15, 0, {}, c13, c0, 3",
+            out(reg) value,
             options(nomem, nostack, preserves_flags)
         );
     }
+    value
 }
 
 /// Install the exception vector table.

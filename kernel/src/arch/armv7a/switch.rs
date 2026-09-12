@@ -112,3 +112,156 @@ pub(crate) unsafe fn prepare_stack(
     };
     u64::from(stack_pointer)
 }
+
+/// What a program owns on this processor that no trap saves: its thread
+/// pointer, and its floating-point registers.
+///
+/// The kernel is soft-float and never touches either, so a trap from USR mode
+/// leaves them as the program had them. Two programs taking turns need them
+/// saved and loaded by the scheduler whenever it switches between tasks that
+/// run user code.
+#[repr(C)]
+#[derive(Debug)]
+pub(crate) struct UserState {
+    /// `TPIDRURO`, which `set_tls` asks the kernel to write.
+    thread_pointer: u32,
+    /// `FPSCR`.
+    fpscr: u32,
+    /// `d0` to `d31`; only the first sixteen are used on a core that has
+    /// sixteen.
+    doubles: [u64; 32],
+}
+
+const _: () = assert!(
+    core::mem::offset_of!(UserState, fpscr) == 4,
+    "the save sequence stores FPSCR at offset 4"
+);
+const _: () = assert!(
+    core::mem::offset_of!(UserState, doubles) == 8,
+    "the save sequence stores d0 at offset 8"
+);
+
+impl UserState {
+    /// A program's state before it has run: no thread pointer, the default
+    /// floating-point mode, every register zero.
+    pub(crate) const fn new() -> UserState {
+        UserState {
+            thread_pointer: 0,
+            fpscr: 0,
+            doubles: [0; 32],
+        }
+    }
+}
+
+global_asm!(
+    r#"
+.arm
+.fpu vfpv3
+.section .text
+
+// void ferrix_fpu_enable(void): FPEXC.EN
+.globl ferrix_fpu_enable
+ferrix_fpu_enable:
+    mov    r0, #0x40000000
+    vmsr   fpexc, r0
+    bx     lr
+
+// u32 ferrix_fpu_features(void): MVFR0
+.globl ferrix_fpu_features
+ferrix_fpu_features:
+    vmrs   r0, mvfr0
+    bx     lr
+
+// void ferrix_user_fpu_save(UserState *state, u32 all_32)
+.globl ferrix_user_fpu_save
+ferrix_user_fpu_save:
+    vmrs   r2, fpscr
+    str    r2, [r0, #4]
+    add    r3, r0, #8
+    vstmia r3!, {{d0-d15}}
+    cmp    r1, #0
+    beq    1f
+    vstmia r3!, {{d16-d31}}
+1:  bx     lr
+
+// void ferrix_user_fpu_restore(const UserState *state, u32 all_32)
+.globl ferrix_user_fpu_restore
+ferrix_user_fpu_restore:
+    ldr    r2, [r0, #4]
+    vmsr   fpscr, r2
+    add    r3, r0, #8
+    vldmia r3!, {{d0-d15}}
+    cmp    r1, #0
+    beq    1f
+    vldmia r3!, {{d16-d31}}
+1:  bx     lr
+"#
+);
+
+unsafe extern "C" {
+    /// Set `FPEXC.EN`.
+    fn ferrix_fpu_enable();
+    /// Read `MVFR0`.
+    fn ferrix_fpu_features() -> u32;
+    /// Store this processor's floating-point registers into `state`.
+    fn ferrix_user_fpu_save(state: *mut UserState, all_32: u32);
+    /// Load `state`'s floating-point registers onto this processor.
+    fn ferrix_user_fpu_restore(state: *const UserState, all_32: u32);
+}
+
+/// Turn the FPU on, on this core.
+///
+/// # Safety
+///
+/// `CPACR` must grant access to coprocessors 10 and 11 on this core, which is
+/// what `cpu::enable_user_fpu` checks before calling this.
+pub(super) unsafe fn fpu_enable() {
+    // SAFETY: the caller guarantees access; setting `EN` changes nothing the
+    // soft-float kernel uses.
+    unsafe { ferrix_fpu_enable() };
+}
+
+/// `MVFR0`, the FPU's feature register.
+///
+/// # Safety
+///
+/// As [`fpu_enable`].
+pub(super) unsafe fn fpu_features() -> u32 {
+    // SAFETY: the caller guarantees access; the read has no side effects.
+    unsafe { ferrix_fpu_features() }
+}
+
+/// Store the program state this processor holds into `state`.
+///
+/// # Safety
+///
+/// The registers must belong to the task `state` is for: it was the last task
+/// with user state to run on this processor.
+pub(crate) unsafe fn save_user_state(state: &mut UserState) {
+    state.thread_pointer = super::cpu::read_tpidruro();
+    let doubles = super::cpu::user_fpu_doubles();
+    if doubles != 0 {
+        // SAFETY: the FPU exists and is enabled, and `state` is a live,
+        // exclusively borrowed `UserState` whose layout is asserted above.
+        unsafe { ferrix_user_fpu_save(core::ptr::from_mut(state), u32::from(doubles == 32)) };
+    }
+}
+
+/// Load `state` onto this processor for the task about to run.
+///
+/// `entry_stack` is for x86-64. Here an exception from USR mode lands on the
+/// SVC stack, which each task's own stack already is when it returns to USR.
+///
+/// # Safety
+///
+/// The task `state` belongs to must be the one this processor is switching to.
+pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
+    let _ = entry_stack;
+    super::cpu::write_tpidruro(state.thread_pointer);
+    let doubles = super::cpu::user_fpu_doubles();
+    if doubles != 0 {
+        // SAFETY: as above; loading user registers cannot affect the kernel,
+        // which uses none of them.
+        unsafe { ferrix_user_fpu_restore(core::ptr::from_ref(state), u32::from(doubles == 32)) };
+    }
+}

@@ -116,3 +116,140 @@ pub(crate) unsafe fn prepare_stack(
     };
     stack_pointer
 }
+
+/// What a program owns on this processor that no trap saves: its thread
+/// pointer, and its floating-point and SIMD registers.
+///
+/// The kernel is built soft-float and never touches either, so a trap from EL0
+/// leaves them exactly as the program had them, and one program running at a
+/// time needed nothing more. Two programs taking turns do: the scheduler saves
+/// the outgoing program's copy and loads the incoming one's whenever it
+/// switches between tasks that run user code.
+#[repr(C)]
+#[derive(Debug)]
+pub(crate) struct UserState {
+    /// `TPIDR_EL0`, which EL0 writes for itself.
+    thread_pointer: u64,
+    /// `FPCR`.
+    fpcr: u64,
+    /// `FPSR`.
+    fpsr: u64,
+    /// Keeps the vectors at a sixteen-byte offset.
+    reserved: u64,
+    /// `q0` to `q31`, sixteen bytes each.
+    vectors: [u8; 512],
+}
+
+const _: () = assert!(
+    core::mem::offset_of!(UserState, vectors) == 32,
+    "the save sequence stores q0 at offset 32"
+);
+
+impl UserState {
+    /// A program's state before it has run: no thread pointer, rounding to
+    /// nearest, no floating-point exceptions trapped, every register zero.
+    pub(crate) const fn new() -> UserState {
+        UserState {
+            thread_pointer: 0,
+            fpcr: 0,
+            fpsr: 0,
+            reserved: 0,
+            vectors: [0; 512],
+        }
+    }
+}
+
+global_asm!(
+    r#"
+.arch_extension fp
+.arch_extension simd
+.section .text
+
+// void ferrix_user_save(UserState *state)
+.globl ferrix_user_save
+ferrix_user_save:
+    mrs  x1, tpidr_el0
+    mrs  x2, fpcr
+    mrs  x3, fpsr
+    stp  x1, x2, [x0, #0]
+    str  x3, [x0, #16]
+    stp  q0, q1, [x0, #32]
+    stp  q2, q3, [x0, #64]
+    stp  q4, q5, [x0, #96]
+    stp  q6, q7, [x0, #128]
+    stp  q8, q9, [x0, #160]
+    stp  q10, q11, [x0, #192]
+    stp  q12, q13, [x0, #224]
+    stp  q14, q15, [x0, #256]
+    stp  q16, q17, [x0, #288]
+    stp  q18, q19, [x0, #320]
+    stp  q20, q21, [x0, #352]
+    stp  q22, q23, [x0, #384]
+    stp  q24, q25, [x0, #416]
+    stp  q26, q27, [x0, #448]
+    stp  q28, q29, [x0, #480]
+    stp  q30, q31, [x0, #512]
+    ret
+
+// void ferrix_user_restore(const UserState *state)
+.globl ferrix_user_restore
+ferrix_user_restore:
+    ldp  x1, x2, [x0, #0]
+    ldr  x3, [x0, #16]
+    msr  tpidr_el0, x1
+    msr  fpcr, x2
+    msr  fpsr, x3
+    ldp  q0, q1, [x0, #32]
+    ldp  q2, q3, [x0, #64]
+    ldp  q4, q5, [x0, #96]
+    ldp  q6, q7, [x0, #128]
+    ldp  q8, q9, [x0, #160]
+    ldp  q10, q11, [x0, #192]
+    ldp  q12, q13, [x0, #224]
+    ldp  q14, q15, [x0, #256]
+    ldp  q16, q17, [x0, #288]
+    ldp  q18, q19, [x0, #320]
+    ldp  q20, q21, [x0, #352]
+    ldp  q22, q23, [x0, #384]
+    ldp  q24, q25, [x0, #416]
+    ldp  q26, q27, [x0, #448]
+    ldp  q28, q29, [x0, #480]
+    ldp  q30, q31, [x0, #512]
+    ret
+"#
+);
+
+unsafe extern "C" {
+    /// Store this processor's user state into `state`.
+    fn ferrix_user_save(state: *mut UserState);
+    /// Load `state` into this processor's user registers.
+    fn ferrix_user_restore(state: *const UserState);
+}
+
+/// Store the program state this processor holds into `state`.
+///
+/// # Safety
+///
+/// The registers must belong to the task `state` is for: it was the last task
+/// with user state to run on this processor.
+pub(crate) unsafe fn save_user_state(state: &mut UserState) {
+    // SAFETY: `state` is a live, exclusively borrowed `UserState`, whose layout
+    // the assembly's offsets are asserted against.
+    unsafe { ferrix_user_save(core::ptr::from_mut(state)) };
+}
+
+/// Load `state` onto this processor for the task about to run.
+///
+/// `entry_stack` is for x86-64, which has to be told where an exception from
+/// user mode lands. Here that is `SP_EL1`, which each task's own stack already
+/// is when it returns to EL0.
+///
+/// # Safety
+///
+/// The task `state` belongs to must be the one this processor is switching to.
+pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
+    let _ = entry_stack;
+    // SAFETY: as above, and loading user registers cannot affect the kernel,
+    // which uses none of them.
+    unsafe { ferrix_user_restore(core::ptr::from_ref(state)) };
+}

@@ -25,9 +25,8 @@ use ferrix_linux_abi::types::{
 use ferrix_ustack::{Spec, Width};
 use ferrix_vma::VmaFlags;
 
-use crate::arch;
 use crate::syscall::load::{self, LoadError};
-use crate::syscall::process::Process;
+use crate::syscall::process::{self, Process, Startup};
 use crate::syscall::uaccess;
 use crate::user::space::{AddressSpace, SpaceError};
 
@@ -64,8 +63,8 @@ pub(crate) enum ExecError {
     Space(SpaceError),
     /// The startup image did not fit, or could not be written.
     Startup,
-    /// This architecture cannot enter user mode yet.
-    NoUserMode(&'static str),
+    /// The program was loaded, but its task could not be started.
+    Start(&'static str),
 }
 
 /// Where the stack goes: as high in the user half as a page allows.
@@ -90,19 +89,17 @@ fn width() -> Width {
     }
 }
 
-/// Load `image` into a fresh address space and run it.
-///
-/// Returns the status the program exited with.
+/// Load `image` into a new process, ready to run and not yet running.
 ///
 /// # Errors
 ///
-/// [`ExecError`]. Nothing is left installed on this processor either way.
-pub(crate) fn run(
+/// [`ExecError`].
+pub(crate) fn load(
     image: &[u8],
     args: &[&[u8]],
     env: &[&[u8]],
     random: [u8; ferrix_ustack::RANDOM_BYTES],
-) -> Result<i32, ExecError> {
+) -> Result<Arc<Process>, ExecError> {
     let space = AddressSpace::new().map_err(ExecError::Space)?;
     let process = Process::new(Arc::clone(&space));
 
@@ -162,38 +159,31 @@ pub(crate) fn run(
     let startup = ferrix_ustack::build(&spec, top, &mut scratch).map_err(|_| ExecError::Startup)?;
     uaccess::copy_to_user(&space, base, &scratch).map_err(|_| ExecError::Startup)?;
 
-    // From here the program is the one running, which is what a system call
-    // and a page fault from ring 3 both look up.
-    let previous = crate::syscall::process::set_current(Some(Arc::new(process)));
-    let outcome = enter(&space, loaded.entry, startup.sp);
-    let _ = crate::syscall::process::set_current(previous);
-    outcome
+    process.set_startup(Startup {
+        entry: loaded.entry,
+        stack: startup.sp,
+    });
+    Ok(Arc::new(process))
 }
 
-/// Install the space, run the program, and take the space down again.
+/// Load `image`, run it as a task of its own, and wait for it to end.
 ///
-/// Interrupts are masked across the window for the reason
-/// [`AddressSpace::install`] gives: until the scheduler knows about address
-/// spaces, being preempted here would leave another task running with this
-/// program's translations installed.
-fn enter(space: &Arc<AddressSpace>, entry: u64, stack: u64) -> Result<i32, ExecError> {
-    use ferrix_sync::IrqControl;
-
-    let state = <arch::Irq as IrqControl>::disable();
-
-    // SAFETY: `space` is held by the caller for the whole of this function,
-    // and interrupts are masked so nothing else runs on this processor.
-    unsafe { space.install() };
-
-    // SAFETY: the space is installed, and `entry` and `stack` came from the
-    // loader and `libs/ustack` respectively, both of which produced addresses
-    // inside it.
-    let outcome = unsafe { arch::run_user(entry, stack) };
-
-    // SAFETY: the program is gone; nothing on this processor needs a user
-    // address any more.
-    unsafe { crate::user::space::uninstall() };
-    <arch::Irq as IrqControl>::restore(state);
-
-    outcome.map_err(ExecError::NoUserMode)
+/// Returns the status the program exited with. The caller blocks for as long
+/// as the program runs, which is the point for the first program and for the
+/// checks; everything else wants [`load`] and [`process::start`] separately.
+///
+/// # Errors
+///
+/// [`ExecError`].
+pub(crate) fn run(
+    image: &[u8],
+    args: &[&[u8]],
+    env: &[&[u8]],
+    random: [u8; ferrix_ustack::RANDOM_BYTES],
+) -> Result<i32, ExecError> {
+    let process = load(image, args, env, random)?;
+    let _task = process::start(&process).map_err(ExecError::Start)?;
+    process
+        .wait_for_exit(u64::MAX)
+        .ok_or(ExecError::Start("the program never reported how it ended"))
 }

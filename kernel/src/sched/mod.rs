@@ -53,12 +53,13 @@ use ferrix_sync::{IrqControl, IrqSpinLock, Once, SpinLock};
 
 use crate::arch;
 use crate::smp::Topology;
+use crate::syscall::process::Process;
 use queue::CpuQueue;
-use task::{DEAD, RUNNABLE, Task};
+use task::{DEAD, RUNNABLE};
 
 pub(crate) use check::run as run_checks;
 pub(crate) use queue::{MIN_SLICE_NS, SLICE_NS};
-pub(crate) use task::TaskId;
+pub(crate) use task::{Task, TaskId};
 pub(crate) use wait::WaitQueue;
 
 /// One run queue per logical processor.
@@ -273,6 +274,7 @@ fn new_idle_task(cpu: usize) -> Result<Arc<Task>, &'static str> {
         affinity: CpuSet::of(cpu),
         // A processor's idle task is the kernel's own and has no user half.
         address_space: None,
+        process: None,
     })))
 }
 
@@ -431,6 +433,67 @@ pub(crate) fn spawn_on_in(
     affinity: CpuSet,
     address_space: Option<Arc<crate::user::space::AddressSpace>>,
 ) -> Result<Arc<Task>, &'static str> {
+    spawn_task(
+        name,
+        entry,
+        argument,
+        weight,
+        cpu,
+        affinity,
+        address_space,
+        None,
+    )
+}
+
+/// Start the task that runs `process`'s code: a thread in its address space,
+/// whose entry point `entry` drops to user mode.
+///
+/// Placed like any other task unless `cpu` pins it, which is for the checks
+/// that need two programs to share a processor.
+///
+/// # Errors
+///
+/// If there is no stack for it, or the scheduler is not up.
+pub(crate) fn spawn_user(
+    name: &'static str,
+    entry: fn(usize),
+    process: Arc<Process>,
+    cpu: Option<usize>,
+) -> Result<Arc<Task>, &'static str> {
+    let here = this_cpu().ok_or("no processor to start a program on")?;
+    let anywhere = *domain_cpus().ok_or("the scheduler has no domain")?;
+    let (cpu, affinity) = match cpu {
+        Some(cpu) => (cpu, CpuSet::of(cpu)),
+        None => (choose_cpu(&anywhere, here).unwrap_or(here), anywhere),
+    };
+    let space = Arc::clone(process.space());
+    spawn_task(
+        name,
+        entry,
+        0,
+        NICE_0_WEIGHT,
+        cpu,
+        affinity,
+        Some(space),
+        Some(process),
+    )
+}
+
+/// Make a task and put it on `cpu`'s queue: the one path every kind takes.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "private, with two callers that name every argument; a struct would be `NewTask` again"
+)]
+fn spawn_task(
+    name: &'static str,
+    entry: fn(usize),
+    argument: usize,
+    weight: u32,
+    cpu: usize,
+    affinity: CpuSet,
+    address_space: Option<Arc<crate::user::space::AddressSpace>>,
+    process: Option<Arc<Process>>,
+) -> Result<Arc<Task>, &'static str> {
     let stack = crate::vmap::allocate_stack().map_err(|problem| {
         // The arena's own reason, because "no stack" has four of them and they
         // want four different fixes: no address space, no frames, the page
@@ -452,6 +515,7 @@ pub(crate) fn spawn_on_in(
         cpu,
         affinity,
         address_space,
+        process,
     }));
 
     let lock = queue_of(cpu).ok_or("no such processor")?;
@@ -763,6 +827,7 @@ fn choose_next(lock: &'static SpinLock<CpuQueue>, cpu: usize) -> Option<(*mut u6
     // after the switch either, because the incoming context resumes on its own
     // stack and would have to be told to do this before touching anything.
     swap_address_space(previous.address_space(), next.address_space());
+    switch_user_state(&previous, &next);
 
     // SAFETY: both tasks belong to this queue and this processor holds its
     // lock, so nothing else may read or write either saved stack pointer.
@@ -821,6 +886,44 @@ fn swap_address_space(
         // SAFETY: the incoming task is a kernel thread and wants no user
         // address; the kernel is reachable without one on every architecture.
         (Some(_), None) => unsafe { crate::user::space::uninstall() },
+    }
+}
+
+/// Move the user registers no trap saves from the outgoing task to the
+/// incoming one.
+///
+/// Called from [`choose_next`] with the run queue lock held, like the address
+/// space swap beside it, and for the same reason: the incoming context resumes
+/// on its own stack, possibly deep inside a trap it is about to return from to
+/// user mode, and it must find its own thread pointer and floating-point state
+/// already loaded.
+///
+/// Eager rather than lazy. A kernel thread switched in between two programs
+/// costs a save it did not need, because the kernel never touches these
+/// registers; lazy switching would skip that and needs a trap on first use to
+/// know when to catch up, which is a mechanism of its own for later.
+///
+/// A dead task's state is not saved: nothing will ever load it.
+fn switch_user_state(previous: &Arc<Task>, next: &Arc<Task>) {
+    if !previous.is_dead() {
+        // SAFETY: this processor holds the run queue lock that owns `previous`.
+        if let Some(state) = unsafe { previous.user_state() } {
+            // SAFETY: the pointer is to `previous`'s own boxed state, which
+            // nothing else touches while the lock is held.
+            let state = unsafe { &mut *state };
+            // SAFETY: `previous` is the task this processor was running, so the
+            // registers are its.
+            unsafe { arch::save_user_state(state) };
+        }
+    }
+    // SAFETY: as above, for `next`.
+    if let Some(state) = unsafe { next.user_state() } {
+        let entry_stack = next.stack_top().unwrap_or(0);
+        // SAFETY: as above, `next`'s own boxed state under the queue lock.
+        let state = unsafe { &*state };
+        // SAFETY: `next` is the task this processor is switching to, and its
+        // stack is its own and mapped for as long as the queue holds it.
+        unsafe { arch::restore_user_state(state, entry_stack) };
     }
 }
 

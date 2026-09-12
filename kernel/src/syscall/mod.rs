@@ -122,6 +122,17 @@ pub(crate) fn dispatch(args: &SyscallArgs) -> Outcome {
     // handlers take `&Process` so that the boot self-check can call them
     // against a process it built itself, months before a program can.
     let process = process::current();
+
+    // `exit` and `exit_group` end the task here and never come back. One thread
+    // per process today, so the two are the same call; they part when `clone`
+    // makes a second thread. The reference is dropped first, because nothing
+    // after this line runs to drop it. A kernel thread has no process to end,
+    // and gets `ESRCH` from the table like every other call that needs one.
+    if matches!(call, Syscall::Exit | Syscall::ExitGroup) && process.is_some() {
+        drop(process);
+        process::exit_current(truncate(args.args[0]) as i32 & 0xFF);
+    }
+
     Outcome::Return(errno::encode(handle(call, args, process.as_deref())))
 }
 

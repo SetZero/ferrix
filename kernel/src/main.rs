@@ -340,6 +340,15 @@ fn check_syscalls() {
         Some(status) => println!("  usermode a program ran in user mode and exited with {status}"),
         None => println!("  usermode not on {} yet", arch::NAME),
     }
+    if let Some((first, second)) = report.concurrent {
+        println!(
+            "  procs    two programs took turns on one processor, switched to {first} and \
+             {second} times"
+        );
+    }
+    if let Some(status) = report.killed {
+        println!("  kill     a spinning program was ended from outside and reported {status}");
+    }
 }
 
 /// Stage 9: the native ABI's objects, driven through their handlers by two

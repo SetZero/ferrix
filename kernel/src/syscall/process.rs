@@ -18,16 +18,30 @@
 //!
 //! The one place that *does* need an ambient answer is [`super::dispatch`],
 //! which has to find the caller's process from the running task. That is
-//! [`current`], one function, and it is the only thing here that changes when
-//! stage 6 gives `Task` its address space field.
+//! [`current`], one function, which asks the scheduler for the running task and
+//! the task for its process.
+//!
+//! # A process is a task's, not the other way round
+//!
+//! A program runs as a scheduled task of its own ([`start`]), and the task
+//! holds the [`Arc`] that keeps its process alive. The process keeps only weak
+//! references back, which is enough to find its tasks when something outside
+//! ends it ([`kill`]). Ending is a condition with two sides: [`Process::is_terminated`]
+//! for anything that polls, and a wait queue woken once for anything that
+//! blocks ([`Process::wait_for_exit`]). `exit_group` from inside and `kill` from
+//! outside both reach the same `terminate`, and the first one to get there
+//! decides the status.
 
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_sync::SpinLock;
 use ferrix_vma::VmaFlags;
 
 use crate::object::{self, HandleTable};
+use crate::sched::{self, Task, WaitQueue};
 use crate::syscall::signal::Signals;
 use crate::user::space::{AddressSpace, SpaceError};
 
@@ -46,6 +60,30 @@ pub(crate) struct Process {
     /// global one, for the same reason the address space has its own: two
     /// processes calling `brk` at once should contend for nothing.
     state: SpinLock<State>,
+    /// Where its first task enters user mode. Set once, by `exec::load`.
+    startup: SpinLock<Option<Startup>>,
+    /// Set by whichever of `exit_group` and `kill` gets there first.
+    ending: AtomicBool,
+    /// Its exit status, valid once `terminated` is.
+    status: AtomicI32,
+    /// The terminated condition. Set after `status`, so a reader who sees it
+    /// always reads the status that goes with it.
+    terminated: AtomicBool,
+    /// Woken once, when it terminates.
+    exited: WaitQueue,
+    /// The tasks running its code. Weak, because a task keeps its process
+    /// alive and not the other way round.
+    tasks: SpinLock<Vec<Weak<Task>>>,
+}
+
+/// Where a program starts: the two numbers `exec::load` computes and the task
+/// that runs it needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Startup {
+    /// Its first instruction.
+    pub(crate) entry: u64,
+    /// Its initial stack pointer, with the startup image above it.
+    pub(crate) stack: u64,
 }
 
 /// The parts of a process the lock protects.
@@ -79,6 +117,12 @@ impl Process {
             space,
             handles: SpinLock::new(HandleTable::new(object::HANDLE_LIMIT)),
             state: SpinLock::new(State::default()),
+            startup: SpinLock::new(None),
+            ending: AtomicBool::new(false),
+            status: AtomicI32::new(0),
+            terminated: AtomicBool::new(false),
+            exited: WaitQueue::new(),
+            tasks: SpinLock::new(Vec::new()),
         }
     }
 
@@ -227,39 +271,168 @@ fn round_up(at: u64) -> Option<u64> {
         .map(|at| at & !(PAGE_SIZE - 1))
 }
 
-/// The process running on this processor, if any.
-///
-/// One slot, guarded, rather than a field on `Task` — which is where it
-/// belongs and where stage 6 is putting it. Until then this is what a system
-/// call and a page fault from user mode both need to find, and it is deliberately
-/// the *only* thing they use to find it: when `Task` gains its field, this
-/// function's body changes and nothing else does.
-///
-/// # Why a lock and not a per-CPU word
-///
-/// Because an `Arc` has to be kept alive for as long as the program runs, and
-/// a raw per-CPU pointer would not do that. Only one program runs at a time
-/// today, so contention is not a question; when the scheduler owns this, the
-/// reference will live in the task and the lock will go with the slot.
-static CURRENT: SpinLock<Option<Arc<Process>>> = SpinLock::new(None);
+impl Process {
+    /// Record where its first task enters user mode.
+    pub(crate) fn set_startup(&self, startup: Startup) {
+        *self.startup.lock() = Some(startup);
+    }
 
-/// The process the running thread belongs to.
-///
-/// `None` for a kernel thread, which is every thread that is not inside
-/// [`set_current`]'s window.
-pub(crate) fn current() -> Option<Arc<Process>> {
-    CURRENT.lock().clone()
+    /// Where its first task enters user mode, once a program is loaded.
+    pub(crate) fn startup(&self) -> Option<Startup> {
+        *self.startup.lock()
+    }
+
+    /// Whether it has terminated, by exiting or by being killed.
+    pub(crate) fn is_terminated(&self) -> bool {
+        self.terminated.load(Ordering::Acquire)
+    }
+
+    /// How it ended, once it has.
+    pub(crate) fn exit_status(&self) -> Option<i32> {
+        self.is_terminated()
+            .then(|| self.status.load(Ordering::Acquire))
+    }
+
+    /// The queue woken, once, when it terminates -- for a waiter that has its
+    /// own condition to check alongside [`Process::is_terminated`].
+    pub(crate) fn exited(&self) -> &WaitQueue {
+        &self.exited
+    }
+
+    /// Block until it terminates or `deadline` passes, and report how it ended
+    /// if it has.
+    pub(crate) fn wait_for_exit(&self, deadline: u64) -> Option<i32> {
+        let _ = self
+            .exited()
+            .wait_until_deadline(|| self.is_terminated(), deadline);
+        self.exit_status()
+    }
+
+    /// End it with `status`, unless something already has. Answers whether
+    /// this call was the one that did.
+    ///
+    /// Everything the process held beyond its address space is released here,
+    /// at the moment it ends, rather than when its last reference goes: a
+    /// killed process whose task has not yet noticed must not keep its
+    /// resources until it does. The address space goes when the last task
+    /// holding it is reaped, because a processor may still be translating
+    /// through it until then. The waiters are woken last, when there is nothing
+    /// left to observe half done.
+    fn terminate(&self, status: i32) -> bool {
+        if self.ending.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        self.status.store(status, Ordering::Release);
+        self.terminated.store(true, Ordering::Release);
+        *self.state.lock() = State::default();
+        // The handles too, and outside every lock: an object's drop can free
+        // memory and drain other objects, which is `object::dispose`'s job,
+        // and must not run under this process's table lock or state lock.
+        object::dispose(self.with_handles(HandleTable::clear));
+        self.exited.wake_all();
+        true
+    }
 }
 
-/// Make `process` the one this processor is running, and give back whatever
-/// was there.
+/// The process the running task belongs to.
 ///
-/// The caller must put the old value back: this is a save/restore pair rather
-/// than a setter, so that a program started from inside another one cannot
-/// lose the outer one.
-pub(crate) fn set_current(process: Option<Arc<Process>>) -> Option<Arc<Process>> {
-    let mut slot = CURRENT.lock();
-    core::mem::replace(&mut slot, process)
+/// `None` for a kernel thread.
+pub(crate) fn current() -> Option<Arc<Process>> {
+    sched::current().and_then(|task| task.process().cloned())
+}
+
+/// Load a program into a new process, without running it.
+pub(crate) use super::exec::load;
+
+/// Run `process`'s program as a task of its own.
+///
+/// Separate from [`load`] so that something can be put into the process
+/// between the two -- a handle, say -- before its first instruction runs.
+///
+/// # Errors
+///
+/// If no program was loaded into it, or the scheduler has no stack for its
+/// task.
+pub(crate) fn start(process: &Arc<Process>) -> Result<Arc<Task>, &'static str> {
+    start_on(process, None)
+}
+
+/// [`start`], pinned to processor `cpu` when that is `Some`.
+///
+/// # Errors
+///
+/// As [`start`].
+pub(crate) fn start_on(
+    process: &Arc<Process>,
+    cpu: Option<usize>,
+) -> Result<Arc<Task>, &'static str> {
+    if process.startup().is_none() {
+        return Err("the process has no program loaded");
+    }
+    let task = sched::spawn_user("user", run_program, Arc::clone(process), cpu)?;
+    process.tasks.lock().push(Arc::downgrade(&task));
+    Ok(task)
+}
+
+/// End `process` from outside, with `status`.
+///
+/// Its tasks find out on their way back to user mode: one running there does
+/// on its next tick, one blocked in a call is woken to, and one that has not
+/// yet entered user mode never does. Nothing here waits for that; a caller
+/// that needs the tasks gone waits for them.
+pub(crate) fn kill(process: &Process, status: i32) {
+    if !process.terminate(status) {
+        return;
+    }
+    let tasks: Vec<Arc<Task>> = process
+        .tasks
+        .lock()
+        .iter()
+        .filter_map(Weak::upgrade)
+        .collect();
+    for task in &tasks {
+        sched::wake(task);
+    }
+}
+
+/// End the running task's process with `status`, and the task with it.
+///
+/// What `exit_group` does. The process reference is dropped before the task
+/// ends, because nothing after `sched::exit` runs to drop it.
+pub(crate) fn exit_current(status: i32) -> ! {
+    if let Some(process) = current() {
+        let _ = process.terminate(status);
+    }
+    sched::exit()
+}
+
+/// End the running task if its process has been ended from outside.
+///
+/// Called on every way back to user mode, with interrupts masked.
+pub(crate) fn before_return_to_user() {
+    let terminated = current().is_some_and(|process| process.is_terminated());
+    if terminated {
+        sched::exit();
+    }
+}
+
+/// Where a program's task begins: enter user mode where `exec::load` said.
+///
+/// Returning ends the task, which is what happens if the process was killed
+/// before it ever ran.
+fn run_program(_argument: usize) {
+    let startup = current()
+        .filter(|process| !process.is_terminated())
+        .and_then(|process| process.startup());
+    let Some(Startup { entry, stack }) = startup else {
+        return;
+    };
+    // SAFETY: this task was spawned in the process's address space, which the
+    // scheduler installed when it switched here, along with the task's user
+    // state and entry stack; `entry` and `stack` came from the loader and the
+    // stack builder, both inside that space. Nothing owned is left on this
+    // frame to leak: the process reference was dropped above.
+    unsafe { crate::arch::enter_user(entry, stack) }
 }
 
 /// Make a process over a fresh address space, for the self-checks.

@@ -65,13 +65,14 @@ pub(crate) struct PerCpu {
     /// Read by x86-64's `SYSCALL` trampoline *from assembly*, at a fixed
     /// offset from `GS`, because `SYSCALL` does not switch stacks: the first
     /// thing the kernel does on entry is still standing on the user's stack,
-    /// and the only thing it can reach without one is this record. Maintained
-    /// by `arch::set_kernel_stack`, which the scheduler calls on every switch.
+    /// and the only thing it can reach without one is this record. Set by
+    /// `arch::restore_user_state` whenever the scheduler switches to a task
+    /// that runs user code, to the top of that task's own kernel stack.
     ///
     /// The two Arm architectures need neither this nor the field below --
     /// `SP_EL1` and the banked SVC stack pointer are the same idea in
     /// hardware -- but the record is shared, so they simply leave them zero.
-    pub(crate) kernel_stack: u64,
+    pub(crate) kernel_stack: AtomicU64,
     /// Where the trampoline parks the user stack pointer while it switches.
     ///
     /// One word of scratch, also reached from assembly. It cannot be a
@@ -79,15 +80,6 @@ pub(crate) struct PerCpu {
     /// argument or is `rcx`/`r11`, which `SYSCALL` has already overwritten
     /// with the return address and flags.
     pub(crate) user_stack: u64,
-    /// Where to put the stack pointer back to when a program leaves ring 3.
-    ///
-    /// Not the same as [`PerCpu::kernel_stack`], and the difference is a bug
-    /// that was shipped and found: the stack a trap from ring 3 lands on must
-    /// be *below* everything the kernel wants to survive that trap. The first
-    /// version used one word for both, so the program's very first
-    /// demand-paging fault pushed its trap frame over the registers saved for
-    /// the return.
-    pub(crate) user_return: u64,
     /// Logical number: this record's index in [`Topology`].
     pub(crate) logical: usize,
     /// What the machine calls this processor.
@@ -163,9 +155,8 @@ impl Topology {
             .enumerate()
             .map(|(logical, hardware_id)| PerCpu {
                 this: 0,
-                kernel_stack: 0,
+                kernel_stack: AtomicU64::new(0),
                 user_stack: 0,
-                user_return: 0,
                 logical,
                 hardware_id,
                 online: AtomicBool::new(logical == 0),

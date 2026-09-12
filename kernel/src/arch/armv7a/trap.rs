@@ -212,35 +212,28 @@ ferrix_trap_common:
 "#
 );
 
-// Entering USR mode, and coming back from it.
+// Entering USR mode.
 //
-// AArch64's `ferrix_run_user` in coprocessor 15's spelling, and the return half
-// of the vector path above run backwards: that one stores a return address and
-// status with `srsdb` and leaves with `rfeia`; this builds a return address and
-// status for a program that has never run and leaves with the same `rfeia`.
+// The return half of the vector path above, for a program that has never run:
+// that one stores a return address and status with `srsdb` and leaves with
+// `rfeia`; this builds a return address and status and leaves with the same
+// `rfeia`. It does not return, and nothing is parked for a way back -- a program
+// leaves USR mode for good through `exit_group`, which ends its task.
+//
+// The SVC stack pointer is left where it is. Every exception from USR is stored
+// onto it with `srsdb`, and here it is the task's own kernel stack a few frames
+// below its top, beside frames that are never returned to.
 core::arch::global_asm!(
     r#"
 .section .text
 .arm
 
-// r0 = entry, r1 = user stack, r2 = the program's CPSR. Returns the exit
-// status in r0, via leave_user.
-.globl ferrix_run_user
+// r0 = entry, r1 = user stack, r2 = the program's CPSR. Never returns.
+.globl ferrix_enter_user
 .balign 4
-ferrix_run_user:
-    // Nothing may interrupt this: between parking the stack pointer and the
-    // `rfeia`, this processor is on neither stack it will end up on. IRQs and
-    // FIQs stay masked in USR mode too -- see `USER_CPSR`.
+ferrix_enter_user:
+    // Masked until the `rfeia`, which opens them from the CPSR it loads.
     cpsid if
-
-    // The callee-saved registers, which leave_user restores. Ten words keeps
-    // the stack eight-byte aligned, as the EABI requires at a call.
-    push  {{r4-r12, lr}}
-
-    // Park that stack pointer where leave_user will find it.
-    mrc   p15, 0, r9, c13, c0, 4
-    mov   r10, sp
-    str   r10, [r9, #{user_return}]
 
     // The program's stack pointer is banked, and System mode shares USR's, so
     // it is set from there without ever running in USR with a wrong one.
@@ -248,13 +241,6 @@ ferrix_run_user:
     mov   sp, r1
     mov   lr, #0
     cps   #0x13
-
-    // The dedicated entry stack. Every exception from USR is stored with
-    // `srsdb` onto the SVC stack, so this is the separation AArch64 needs for
-    // SP_EL1: had SVC's sp stayed here, the program's first fault would push
-    // its frame over the registers parked above.
-    ldr   r10, [r9, #{kernel_stack}]
-    mov   sp, r10
 
     // What `rfeia` takes: the program's first instruction, then its status.
     sub   sp, sp, #8
@@ -276,37 +262,18 @@ ferrix_run_user:
     mov   r11, #0
     mov   r12, #0
     rfeia sp!
-
-// r0 = exit status. Called from inside a system call made by a program
-// ferrix_run_user started, on the same processor.
-.globl ferrix_leave_user
-.balign 4
-ferrix_leave_user:
-    mrc   p15, 0, r9, c13, c0, 4
-    ldr   r10, [r9, #{user_return}]
-    mov   sp, r10
-    pop   {{r4-r12, pc}}
-"#,
-    user_return = const USER_RETURN_OFFSET,
-    kernel_stack = const KERNEL_STACK_OFFSET,
+"#
 );
 
-/// Where the parked stack pointer lives in this processor's record. The field
-/// is a `u64` and an address here is 32 bits, so the assembly reads and writes
-/// its low word, which on a little-endian machine is the one at this offset.
-const USER_RETURN_OFFSET: usize = core::mem::offset_of!(crate::smp::PerCpu, user_return);
-/// Where the entry stack for exceptions from USR mode lives in the same record.
-const KERNEL_STACK_OFFSET: usize = core::mem::offset_of!(crate::smp::PerCpu, kernel_stack);
-
-/// `CPSR` for a program: USR mode, little-endian, with asynchronous aborts,
-/// IRQs and FIQs masked. ARM state, unless the entry point says Thumb -- see
-/// [`CPSR_THUMB`].
+/// `CPSR` for a program: USR mode, little-endian, with asynchronous aborts and
+/// FIQs masked and IRQs open. ARM state, unless the entry point says Thumb --
+/// see [`CPSR_THUMB`].
 ///
-/// IRQs masked for AArch64's reason, and just as temporarily: a program is a
-/// guest of the boot task, whose address space is `None`, so a tick taken in
-/// USR mode could switch to a task with a space and back again, and the switch
-/// back uninstalls the program's root.
-const USER_CPSR: u32 = MODE_USR | (1 << 8) | (1 << 7) | (1 << 6);
+/// IRQs were masked while a program ran as a guest of the boot task, for
+/// AArch64's reason: a tick in USR mode could switch to a task with an address
+/// space and back, and the switch back uninstalled the program's root. A
+/// program is a task of its own now, so a tick is an ordinary preemption.
+const USER_CPSR: u32 = MODE_USR | (1 << 8) | (1 << 6);
 
 /// `CPSR.T`: execute Thumb instructions.
 ///
@@ -318,54 +285,35 @@ const USER_CPSR: u32 = MODE_USR | (1 << 8) | (1 << 7) | (1 << 6);
 const CPSR_THUMB: u32 = 1 << 5;
 
 unsafe extern "C" {
-    /// Enter USR mode at `entry` on `stack` with `cpsr`; returns when the
-    /// program exits.
-    fn ferrix_run_user(entry: u32, stack: u32, cpsr: u32) -> i32;
-    /// Return from [`ferrix_run_user`] with `status`.
-    fn ferrix_leave_user(status: i32) -> !;
+    /// Enter USR mode at `entry` on `stack` with `cpsr`.
+    fn ferrix_enter_user(entry: u32, stack: u32, cpsr: u32) -> !;
 }
 
-/// Run a program in USR mode and return the status it exits with.
+/// Enter USR mode for the first time, at `entry` on `stack`. Does not return.
 ///
 /// # Safety
 ///
-/// A user address space must be installed on this processor, and `entry` and
-/// `stack` must be addresses within it.
-pub(crate) unsafe fn run_user(entry: u64, stack: u64) -> Result<i32, &'static str> {
-    let entry = u32::try_from(entry).map_err(|_| "a program entry point above 4 GiB")?;
+/// Must be called by a user task, on its own kernel stack, with its address
+/// space installed; `entry` and `stack` must be addresses inside that space.
+pub(crate) unsafe fn enter_user(entry: u64, stack: u64) -> ! {
+    // A user address on this processor is below 4 GiB by construction: the
+    // loader and the stack builder produced these inside a 32-bit user half.
+    let entry = entry as u32;
     let (entry, cpsr) = if entry & 1 == 0 {
         (entry, USER_CPSR)
     } else {
         (entry & !1, USER_CPSR | CPSR_THUMB)
     };
-    let stack = u32::try_from(stack).map_err(|_| "a program stack above 4 GiB")?;
-    let entry_stack = crate::vmap::allocate_stack().map_err(|_| "no kernel stack for user mode")?;
-    let Some(cpu) = crate::smp::this_cpu() else {
-        return Err("no per-CPU record, so an exception from USR mode could not find a stack");
-    };
-    let at = (core::ptr::from_ref(cpu) as usize + KERNEL_STACK_OFFSET) as *mut u64;
-    // SAFETY: this processor's own record, a `u64` field aligned by `repr(C)`.
-    unsafe { at.write(entry_stack.top) };
-
-    // A program starts with no thread pointer, not the last one's. musl sets
-    // its own with `set_tls` before it reads it, but a program that read first
-    // would otherwise be handed an address in somebody else's memory.
-    cpu::write_tpidruro(0);
-
-    // SAFETY: the caller guarantees the address space and the stack.
-    let status = unsafe { ferrix_run_user(entry, stack, cpsr) };
-
-    // SAFETY: the program is gone, so nothing is running on the entry stack.
-    let _ = unsafe { crate::vmap::free_stack(entry_stack) };
-    Ok(status)
+    // SAFETY: the caller's guarantee is the assembly's contract.
+    unsafe { ferrix_enter_user(entry, stack as u32, cpsr) }
 }
 
 /// Service a system call made from USR mode with `svc #0`.
 ///
 /// The EABI puts the number in `r7`, the arguments in `r0` to `r5`, and the
 /// result back in `r0`. The saved `pc` already points past the `svc`, so the
-/// program resumes at the next instruction. `exit` and `exit_group` leave USR
-/// mode here, before `dispatch`, exactly as on the other two architectures.
+/// program resumes at the next instruction. Interrupts are open while the call
+/// is served, because a call may block.
 ///
 /// # Errors
 ///
@@ -391,29 +339,24 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         ],
     };
 
-    match super::decode_syscall(args.number) {
-        Some(Syscall::Exit | Syscall::ExitGroup) => {
-            // SAFETY: `came_from_user` above, and only `run_user` enters USR
-            // mode, so the parked stack pointer and registers are where it
-            // left them.
-            unsafe { leave_user(args.args[0] as i32) }
+    // `set_tls` writes a coprocessor register, which is a fact about this
+    // processor rather than about the process, so it is answered here for
+    // the same reason x86-64 answers `arch_prctl` in its own trap path.
+    // It cannot fail: any value is a valid thread pointer to hold, and
+    // Linux returns zero without looking at it.
+    if let Some(Syscall::ArmSetTls) = super::decode_syscall(args.number) {
+        cpu::write_tpidruro(r0);
+        if let Some(result) = frame.r.first_mut() {
+            *result = 0;
         }
-        // `set_tls` writes a coprocessor register, which is a fact about this
-        // processor rather than about the process, so it is answered here for
-        // the same reason x86-64 answers `arch_prctl` in its own trap path.
-        // It cannot fail: any value is a valid thread pointer to hold, and
-        // Linux returns zero without looking at it.
-        Some(Syscall::ArmSetTls) => {
-            cpu::write_tpidruro(r0);
-            if let Some(result) = frame.r.first_mut() {
-                *result = 0;
-            }
-            return Ok(());
-        }
-        _ => {}
+        return Ok(());
     }
 
-    match dispatch(&args) {
+    super::enable_interrupts();
+    let outcome = dispatch(&args);
+    super::disable_interrupts();
+
+    match outcome {
         Outcome::Return(value) => {
             if let Some(result) = frame.r.first_mut() {
                 *result = value as u32;
@@ -422,18 +365,6 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         }
         Outcome::Enter { .. } => Err("execve through the USR trap path is not wired yet"),
     }
-}
-
-/// Leave USR mode, returning `status` from [`run_user`].
-///
-/// # Safety
-///
-/// Must be called from inside a system call made by a program [`run_user`]
-/// started, on the same processor.
-unsafe fn leave_user(status: i32) -> ! {
-    // SAFETY: the caller guarantees the parked stack pointer and callee-saved
-    // registers are still where `ferrix_run_user` put them.
-    unsafe { ferrix_leave_user(status) }
 }
 
 unsafe extern "C" {

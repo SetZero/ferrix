@@ -74,7 +74,6 @@ const FMASK: u64 = (1 << 9) | (1 << 10) | (1 << 18);
 // the kernel to a stack made of somebody's `logical` number.
 const KERNEL_STACK_OFFSET: usize = offset_of!(PerCpu, kernel_stack);
 const USER_STACK_OFFSET: usize = offset_of!(PerCpu, user_stack);
-const USER_RETURN_OFFSET: usize = offset_of!(PerCpu, user_return);
 const _: () = assert!(
     KERNEL_STACK_OFFSET == 8,
     "the syscall trampoline loads the kernel stack from gs:8"
@@ -82,10 +81,6 @@ const _: () = assert!(
 const _: () = assert!(
     USER_STACK_OFFSET == 16,
     "the syscall trampoline parks the user stack at gs:16"
-);
-const _: () = assert!(
-    USER_RETURN_OFFSET == 24,
-    "leaving ring 3 restores the stack pointer from gs:24"
 );
 
 /// A user program's registers, as the trampoline saves them.
@@ -186,38 +181,26 @@ ferrix_syscall_stub:
     swapgs
     sysretq
 
-// Run a program in ring 3, and come back when it exits.
+// Enter ring 3 for the first time.
 //   rdi = entry point, rsi = user stack pointer
-//   returns the exit status
-//
-// The callee-saved registers and the stack pointer are parked so that
-// `ferrix_leave_user` can restore them from inside a system call, which is a
-// return across a privilege boundary rather than a normal one. The saved stack
-// pointer lives in the same per-CPU word the trampoline reads, because that is
-// exactly what it is: the place a system call from this program lands.
-.globl ferrix_run_user
+// Never returns: a program leaves ring 3 through a system call or a trap, and
+// for good through `exit_group`, which ends its task in the scheduler.
+.globl ferrix_enter_user
 .align 16
-ferrix_run_user:
-    pushq %rbp
-    pushq %rbx
-    pushq %r12
-    pushq %r13
-    pushq %r14
-    pushq %r15
-    movq %rsp, %gs:24
+ferrix_enter_user:
+    // Masked from here to the `sysretq`, which opens them from R11. Between
+    // loading the user stack pointer and dropping privilege this is ring 0 on a
+    // user stack, and an interrupt taken there would be pushed onto it.
+    cli
 
     // `SYSRET` takes the address from RCX and the flags from R11, which is
     // exactly the shape of a return from a system call that never happened.
     movq %rdi, %rcx
     movq %rsi, %rsp
-    // Interrupts masked in ring 3, for now, and deliberately. A timer tick in
-    // user mode could preempt this thread onto another processor, where
-    // `LSTAR` was never set up, `FS_BASE` holds somebody else's thread
-    // pointer and `RSP0` names somebody else's stack -- all of which are
-    // per-processor state this program has only on the one it started on.
-    // When a program is a scheduled task those move with the task, and this
-    // becomes 0x202. Bit 1 is reserved and always set.
-    movq $0x002, %r11
+    // Interrupts open in ring 3: a program is a scheduled task, carrying its
+    // own address space, thread pointer and entry stack, so a tick there is an
+    // ordinary preemption. Bit 1 is reserved and always set.
+    movq $0x202, %r11
 
     // Nothing of the kernel's may survive into ring 3. A register left holding
     // a kernel pointer is an information leak that no test will ever notice.
@@ -237,26 +220,6 @@ ferrix_run_user:
 
     swapgs
     sysretq
-
-// Return from ring 3 to whoever called `ferrix_run_user`.
-//   rdi = exit status
-//
-// Called from inside the system call handler, so GS is already the kernel's
-// and the stack is the one the trampoline switched to. Restoring the parked
-// stack pointer abandons the system call's own frame, which is correct: the
-// program it belonged to is gone.
-.globl ferrix_leave_user
-.align 16
-ferrix_leave_user:
-    movq %gs:24, %rsp
-    movq %rdi, %rax
-    popq %r15
-    popq %r14
-    popq %r13
-    popq %r12
-    popq %rbx
-    popq %rbp
-    retq
 "#,
     options(att_syntax)
 );
@@ -264,10 +227,8 @@ ferrix_leave_user:
 unsafe extern "C" {
     /// The `LSTAR` entry point, defined in the block above.
     fn ferrix_syscall_stub();
-    /// Run a program in ring 3 and return its exit status.
-    fn ferrix_run_user(entry: u64, stack: u64) -> i32;
-    /// Return from ring 3 to whoever called [`ferrix_run_user`].
-    fn ferrix_leave_user(status: i32) -> !;
+    /// Enter ring 3 at `entry` on `stack`.
+    fn ferrix_enter_user(entry: u64, stack: u64) -> !;
 }
 
 /// Where the assembly hands a system call to the rest of the kernel.
@@ -291,34 +252,27 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
         ],
     };
 
-    // Two calls are answered before dispatch, and both because they are
-    // facts about this processor rather than about the process.
-    //
-    // `arch_prctl(ARCH_SET_FS)` writes an MSR. It exists on no other
-    // architecture -- AArch64 writes `TPIDR_EL0` itself and ARMv7-A has
-    // `set_tls` -- so there is nothing for an architecture-neutral dispatch
-    // table to say about it.
-    //
-    // `exit_group` leaves ring 3 by restoring a stack pointer this file
-    // parked, which is the temporary shape described on `run_user`. When
-    // stage 6's task teardown lands it moves into the dispatch table with
-    // the rest.
-    if let Some(call) = super::decode_syscall(args.number) {
-        match call {
-            ferrix_linux_abi::nr::Syscall::ArchPrctl => {
-                frame.rax = arch_prctl(args.args[0], args.args[1]) as u64;
-                return;
-            }
-            ferrix_linux_abi::nr::Syscall::Exit | ferrix_linux_abi::nr::Syscall::ExitGroup => {
-                // SAFETY: reached only from a system call made by a program
-                // `run_user` started on this processor.
-                unsafe { leave_user(args.args[0] as i32) }
-            }
-            _ => {}
-        }
+    // One call is answered before dispatch, because it is a fact about this
+    // processor rather than about the process: `arch_prctl(ARCH_SET_FS)` writes
+    // an MSR. It exists on no other architecture -- AArch64 writes `TPIDR_EL0`
+    // itself and ARMv7-A has `set_tls` -- so there is nothing for an
+    // architecture-neutral dispatch table to say about it. The value survives a
+    // switch to another task because the scheduler saves `FS_BASE` with the
+    // rest of the program's user state.
+    if let Some(ferrix_linux_abi::nr::Syscall::ArchPrctl) = super::decode_syscall(args.number) {
+        frame.rax = arch_prctl(args.args[0], args.args[1]) as u64;
+        return;
     }
 
-    match crate::syscall::dispatch(&args) {
+    // Open while the call is served: a call may block, and one that spins
+    // waiting for input must not keep the processor from switching away.
+    // `SFMASK` closed them on entry, and they are closed again before the
+    // frame is restored, because the way out swaps `GS` on a live stack.
+    super::enable_interrupts();
+    let outcome = crate::syscall::dispatch(&args);
+    super::disable_interrupts();
+
+    match outcome {
         crate::syscall::Outcome::Return(value) => {
             frame.rax = value as u64;
         }
@@ -344,14 +298,15 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
                 rax: 0,
                 // `SYSRET` takes the flags from R11 and the address from RCX,
                 // which is why an entry point can be delivered by returning.
-                // Interrupts masked, for the reason given in
-                // `ferrix_run_user`.
-                r11: 0x002,
+                // Interrupts open, as `ferrix_enter_user` leaves them.
+                r11: 0x202,
                 rcx: entry,
                 user_rsp: stack,
             };
         }
     }
+
+    crate::syscall::process::before_return_to_user();
 }
 
 /// `ARCH_SET_FS`, and the three requests that are not it.
@@ -451,68 +406,45 @@ pub(crate) unsafe fn set_thread_pointer(base: u64) {
     unsafe { cpu::write_msr(IA32_FS_BASE, base) };
 }
 
-/// Run a program in ring 3, returning the status it exits with.
-///
-/// # Why this returns at all
-///
-/// A real process does not return anywhere: it dies, and the scheduler picks
-/// something else. That needs a task that carries an address space, which is
-/// stage 6's and not built yet. Until it is, this is the honest restricted
-/// form — a kernel thread runs a program to completion and carries on — and
-/// it is enough to boot a program, which is the thing worth having now.
-///
-/// It is not a shape the later version has to unpick. `exit_group` will stop
-/// calling [`leave_user`] and start tearing down a task; this function's
-/// callers are the boot self-check and nothing else.
+/// This processor's `FS_BASE`: the running program's thread pointer.
 ///
 /// # Safety
 ///
-/// A user address space must be installed on this processor, and `entry` and
-/// `stack` must be addresses within it.
-pub(crate) unsafe fn run_user(entry: u64, stack: u64) -> Result<i32, &'static str> {
-    // SAFETY: this processor's own MSRs, and its own `GS` is installed by
-    // the time any program can run. Idempotent, so repeating it is harmless.
-    unsafe { init() };
-
-    // A stack of its own for everything that arrives from ring 3.
-    //
-    // **Not the stack this function is running on**, which is the bug this
-    // exists to have fixed. A trap from ring 3 switches to `RSP0` and pushes
-    // there before any kernel code runs, so if `RSP0` pointed into the
-    // current frame the program's first demand-paging fault would land on
-    // top of whatever the kernel had already put on it -- which it did, and
-    // the symptom was a return value written through a restored register that
-    // had become a user address.
-    let entry_stack = crate::vmap::allocate_stack().map_err(|_| "no kernel stack for user mode")?;
-
-    let Some(cpu) = crate::smp::this_cpu() else {
-        return Err("no per-CPU record, so a system call could not find a stack");
-    };
-    let at = (core::ptr::from_ref(cpu) as usize + KERNEL_STACK_OFFSET) as *mut u64;
-    // SAFETY: this processor's own record, a `u64` field aligned by `repr(C)`.
-    unsafe { at.write(entry_stack.top) };
-    // SAFETY: this processor's own TSS, and a stack nothing else uses.
-    unsafe { gdt::set_privilege_stack(entry_stack.top) };
-
-    // SAFETY: the caller guarantees the address space and the stack.
-    let status = unsafe { ferrix_run_user(entry, stack) };
-
-    // SAFETY: the program is gone, so nothing is running on the entry stack.
-    // A failure to give it back leaks a stack rather than breaking anything,
-    // and the status is the caller's answer either way.
-    let _ = unsafe { crate::vmap::free_stack(entry_stack) };
-    Ok(status)
+/// Reads an MSR; the caller wants the value for the task whose state it is.
+pub(crate) unsafe fn thread_pointer() -> u64 {
+    // SAFETY: `IA32_FS_BASE` exists on every 64-bit x86 and reading it has no
+    // side effects.
+    unsafe { cpu::read_msr(IA32_FS_BASE) }
 }
 
-/// Leave ring 3, returning `status` from [`run_user`].
+/// Point both of this processor's ways in from ring 3 at `top`.
+///
+/// There are two because `SYSCALL` switches no stack and an interrupt gate
+/// does: the trampoline loads `gs:8`, and an exception or interrupt from ring 3
+/// loads the TSS's `RSP0`. Both must name the running task's own kernel stack,
+/// or two programs' traps land on one stack.
 ///
 /// # Safety
 ///
-/// Must be called from inside a system call made by a program that
-/// [`run_user`] started, on the same processor.
-pub(crate) unsafe fn leave_user(status: i32) -> ! {
-    // SAFETY: the caller guarantees we are inside such a system call, so the
-    // parked stack pointer and callee-saved registers are still where
-    // `ferrix_run_user` put them.
-    unsafe { ferrix_leave_user(status) }
+/// `top` must be the top of the kernel stack of the task this processor is
+/// switching to, and a TSS must be loaded.
+pub(crate) unsafe fn set_entry_stack(top: u64) {
+    if let Some(cpu) = crate::smp::this_cpu() {
+        cpu.kernel_stack
+            .store(top, core::sync::atomic::Ordering::Relaxed);
+    }
+    // SAFETY: the caller guarantees the stack and the TSS.
+    unsafe { gdt::set_privilege_stack(top) };
+}
+
+/// Enter ring 3 for the first time, at `entry` on `stack`. Does not return.
+///
+/// # Safety
+///
+/// Must be called by a user task, on its own kernel stack, with its address
+/// space installed and its entry stack set; `entry` and `stack` must be
+/// addresses inside that space.
+pub(crate) unsafe fn enter_user(entry: u64, stack: u64) -> ! {
+    // SAFETY: the caller's guarantee is the assembly's contract.
+    unsafe { ferrix_enter_user(entry, stack) }
 }

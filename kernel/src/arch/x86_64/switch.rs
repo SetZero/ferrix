@@ -113,3 +113,104 @@ pub(crate) unsafe fn prepare_stack(
     };
     stack_pointer
 }
+
+/// What a program owns on this processor that no trap saves: its thread
+/// pointer, and its x87 and SSE state.
+///
+/// The kernel is built for a target with no SSE and never touches either, so
+/// a trap from ring 3 leaves them as the program had them. Two programs taking
+/// turns need them saved and loaded by the scheduler whenever it switches
+/// between tasks that run user code.
+#[repr(C, align(16))]
+#[derive(Debug)]
+pub(crate) struct UserState {
+    /// `FS_BASE`, which `arch_prctl(ARCH_SET_FS)` writes.
+    thread_pointer: u64,
+    /// Keeps the save area at a sixteen-byte offset.
+    reserved: u64,
+    /// The 512-byte `FXSAVE` area.
+    fxsave: [u8; 512],
+}
+
+impl UserState {
+    /// A program's state before it has run: no thread pointer, and the x87 and
+    /// SSE control words a processor has at reset.
+    ///
+    /// Not all zeros, and the difference is a crash: an all-zero `MXCSR`
+    /// unmasks every SSE exception, so a program's first inexact division
+    /// would take `#XM` instead of rounding. `0x1F80` masks them all, and
+    /// `0x037F` does the same for the x87.
+    pub(crate) const fn new() -> UserState {
+        let mut fxsave = [0_u8; 512];
+        let control = 0x037F_u16.to_le_bytes();
+        fxsave[0] = control[0];
+        fxsave[1] = control[1];
+        let mxcsr = 0x1F80_u32.to_le_bytes();
+        fxsave[24] = mxcsr[0];
+        fxsave[25] = mxcsr[1];
+        fxsave[26] = mxcsr[2];
+        fxsave[27] = mxcsr[3];
+        UserState {
+            thread_pointer: 0,
+            reserved: 0,
+            fxsave,
+        }
+    }
+}
+
+global_asm!(
+    r#"
+.section .text
+
+// void ferrix_fpu_save(u8 *area), area: 512 bytes
+.globl ferrix_fpu_save
+ferrix_fpu_save:
+    fxsave64 (%rdi)
+    retq
+
+// void ferrix_fpu_restore(const u8 *area)
+.globl ferrix_fpu_restore
+ferrix_fpu_restore:
+    fxrstor64 (%rdi)
+    retq
+"#,
+    options(att_syntax)
+);
+
+unsafe extern "C" {
+    /// `FXSAVE64` into `area`.
+    fn ferrix_fpu_save(area: *mut u8);
+    /// `FXRSTOR64` from `area`.
+    fn ferrix_fpu_restore(area: *const u8);
+}
+
+/// Store the program state this processor holds into `state`.
+///
+/// # Safety
+///
+/// The registers must belong to the task `state` is for: it was the last task
+/// with user state to run on this processor.
+pub(crate) unsafe fn save_user_state(state: &mut UserState) {
+    // SAFETY: reading `FS_BASE` has no side effects.
+    state.thread_pointer = unsafe { super::syscall::thread_pointer() };
+    // SAFETY: a 512-byte area inside a sixteen-byte-aligned structure, which
+    // is what `FXSAVE64` writes.
+    unsafe { ferrix_fpu_save(state.fxsave.as_mut_ptr()) };
+}
+
+/// Load `state` onto this processor for the task about to run, and point the
+/// ways in from ring 3 at `entry_stack`.
+///
+/// # Safety
+///
+/// The task `state` belongs to must be the one this processor is switching to,
+/// and `entry_stack` the top of its kernel stack.
+pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
+    // SAFETY: a user address the program set, or zero; nothing follows it here.
+    unsafe { super::syscall::set_thread_pointer(state.thread_pointer) };
+    // SAFETY: an area this module initialised or `FXSAVE64` wrote, so every
+    // reserved bit `FXRSTOR64` checks is clear.
+    unsafe { ferrix_fpu_restore(state.fxsave.as_ptr()) };
+    // SAFETY: the caller guarantees the stack.
+    unsafe { super::syscall::set_entry_stack(entry_stack) };
+}

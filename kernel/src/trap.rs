@@ -63,6 +63,14 @@ static BREAKPOINTS: AtomicU64 = AtomicU64::new(0);
 /// Page faults the kernel resolved by mapping a page.
 static FAULTS_HANDLED: AtomicU64 = AtomicU64::new(0);
 
+/// Interrupts that arrived while a program was running in user mode.
+///
+/// Counted so a check can tell a program preempted in user mode from one that
+/// was only ever switched away from inside a system call: both show up as a
+/// task switched to more than once, and only the first needs interrupts open
+/// in user mode.
+static USER_INTERRUPTS: AtomicU64 = AtomicU64::new(0);
+
 /// How many breakpoints have been taken.
 pub(crate) fn breakpoint_count() -> u64 {
     BREAKPOINTS.load(Ordering::Relaxed)
@@ -71,6 +79,11 @@ pub(crate) fn breakpoint_count() -> u64 {
 /// How many page faults have been resolved.
 pub(crate) fn handled_fault_count() -> u64 {
     FAULTS_HANDLED.load(Ordering::Relaxed)
+}
+
+/// How many interrupts have arrived while a program was in user mode.
+pub(crate) fn user_interrupt_count() -> u64 {
+    USER_INTERRUPTS.load(Ordering::Relaxed)
 }
 
 /// Where every trap arrives, from any architecture's entry stub.
@@ -90,6 +103,9 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
         // So the architecture claims, dispatches and retires; what crosses
         // back into generic code is a number.
         Trap::Interrupt(_) => {
+            if frame.came_from_user() {
+                let _ = USER_INTERRUPTS.fetch_add(1, Ordering::Relaxed);
+            }
             arch::service_interrupts(frame, crate::irq::dispatch);
             // And only now, with the controller told this interrupt is done,
             // may the processor go and run something else. Switching inside
@@ -115,6 +131,13 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
         Trap::Fault { name, .. } => {
             fatal(frame, name, &crate::panic::catalog::UNEXPECTED_EXCEPTION)
         }
+    }
+
+    // On the way back to a program, which is where a program killed from
+    // outside finds out: a task spinning in user mode reaches here on its next
+    // tick, and one that was preempted reaches here when it is resumed.
+    if frame.came_from_user() {
+        crate::syscall::process::before_return_to_user();
     }
 }
 

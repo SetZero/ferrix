@@ -13,12 +13,15 @@
 //! stack pointer is only ever touched by the one CPU that owns its queue at
 //! that moment. That hand-over is what `SpinLock::lock_manually` exists for.
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use ferrix_sched::{CpuSet, EntityState};
 
+use crate::arch;
+use crate::syscall::process::Process;
 use crate::user::space::AddressSpace;
 use crate::vmap::Stack;
 
@@ -56,6 +59,14 @@ pub(crate) struct Task {
     /// dies keeps it until it is reaped, which is after the last switch away
     /// from it.
     address_space: Option<Arc<AddressSpace>>,
+    /// The process whose code this task runs in user mode, or `None` for a
+    /// kernel thread. Holding it is what keeps the process alive while its
+    /// task is: a process does not own its tasks, its tasks own it.
+    process: Option<Arc<Process>>,
+    /// The user registers no trap saves -- thread pointer, floating point --
+    /// kept here while the task is not running. `Some` exactly when `process`
+    /// is. Boxed because it is half a kilobyte and most tasks have none.
+    user: Option<Box<UnsafeCell<arch::UserState>>>,
     /// [`RUNNABLE`], [`BLOCKED`] or [`DEAD`].
     state: AtomicU8,
     /// The logical CPU whose queue owns it.
@@ -88,11 +99,11 @@ pub(crate) struct Task {
     cpus_run_on: AtomicU64,
 }
 
-// SAFETY: every field but `stack_pointer` is an atomic or immutable. The cell
-// is written by the CPU that switches away from this task and read by the one
-// that switches to it, and both hold the lock of the run queue that owns the
-// task at that moment — so the accesses are ordered by that lock and never
-// overlap.
+// SAFETY: every field but `stack_pointer` and `user` is an atomic or
+// immutable. Both cells are written by the CPU that switches away from this
+// task and read by the one that switches to it, and both hold the lock of the
+// run queue that owns the task at that moment — so the accesses are ordered by
+// that lock and never overlap.
 unsafe impl Sync for Task {}
 
 /// Everything a new task needs, which is more than a function should take as
@@ -130,6 +141,8 @@ pub(crate) struct NewTask {
     pub(crate) affinity: CpuSet,
     /// The address space it runs in, or `None` for a kernel thread.
     pub(crate) address_space: Option<Arc<AddressSpace>>,
+    /// The process it runs user code for, or `None` for a kernel thread.
+    pub(crate) process: Option<Arc<Process>>,
 }
 
 impl Task {
@@ -146,7 +159,11 @@ impl Task {
             cpu,
             affinity,
             address_space,
+            process,
         } = new;
+        let user = process
+            .as_ref()
+            .map(|_| Box::new(UnsafeCell::new(arch::UserState::new())));
         Task {
             id,
             name,
@@ -158,6 +175,8 @@ impl Task {
             queued: AtomicBool::new(false),
             affinity,
             address_space,
+            process,
+            user,
             weight: AtomicU32::new(weight),
             vlag: AtomicI64::new(0),
             sum_exec: AtomicU64::new(0),
@@ -190,6 +209,8 @@ impl Task {
             // The boot task and the idle tasks are the kernel's own and have
             // no user half to translate.
             address_space: None,
+            process: None,
+            user: None,
             weight: AtomicU32::new(weight),
             vlag: AtomicI64::new(0),
             sum_exec: AtomicU64::new(0),
@@ -363,5 +384,32 @@ impl Task {
     /// be a contended atomic on the hottest path in the kernel.
     pub(crate) fn address_space(&self) -> Option<&Arc<AddressSpace>> {
         self.address_space.as_ref()
+    }
+
+    /// The process this task runs user code for, or `None` for a kernel
+    /// thread.
+    pub(crate) fn process(&self) -> Option<&Arc<Process>> {
+        self.process.as_ref()
+    }
+
+    /// Where this task's user registers are kept while it is not running, or
+    /// `None` for a kernel thread.
+    ///
+    /// # Safety
+    ///
+    /// As [`Task::stack_pointer_slot`]: the caller must hold the lock of the
+    /// run queue that owns this task, which is what orders every access.
+    pub(crate) unsafe fn user_state(&self) -> Option<*mut arch::UserState> {
+        self.user.as_ref().map(|cell| cell.get())
+    }
+
+    /// The top of this task's own kernel stack, if it has one.
+    pub(crate) fn stack_top(&self) -> Option<u64> {
+        self.stack.map(|stack| stack.top)
+    }
+
+    /// Whether it has exited.
+    pub(crate) fn is_dead(&self) -> bool {
+        self.state() == DEAD
     }
 }

@@ -63,6 +63,18 @@ pub(crate) unsafe fn set_cpu_local(address: u64) {
     // SAFETY: `IA32_GS_BASE` exists on every 64-bit x86 and accepts any
     // canonical address, which a kernel pointer is.
     unsafe { cpu::write_msr(IA32_GS_BASE, address) };
+
+    // `SYSCALL` on this processor, now that `GS` names its record -- which
+    // `syscall::init` parks for the first `swapgs`, and which the trampoline
+    // reaches its stack through. Here because this runs once on every
+    // processor, after its GDT: a program is a task that may be resumed on any
+    // of them, and the first system call it made on one that skipped this
+    // would take `#UD`. It used to run lazily before each program, when a
+    // program never left the processor it started on.
+    // SAFETY: this processor's GDT is loaded (by `init_traps` on the boot
+    // processor and `init_secondary` on the others, both before this) and its
+    // per-CPU record is installed in `GS` above.
+    unsafe { syscall::init() };
 }
 
 /// The address [`set_cpu_local`] installed on this CPU.
@@ -183,20 +195,49 @@ pub(crate) const USER_TEST_PROGRAM: &[u8] = &[
 /// The status [`USER_TEST_PROGRAM`] exits with.
 pub(crate) const USER_TEST_STATUS: i32 = 42;
 
+/// A program that spins, then writes a tagged line and exits with a status it
+/// reads out of its own image.
+///
+/// For the check that two programs run at once: it spins long enough to be
+/// preempted in ring 3, which a program run with interrupts masked never is.
+/// The last ten bytes are the layout every architecture's copy shares, so the
+/// check patches them without knowing the instruction set -- the tag character
+/// and the newline, then the loop count and the exit status as little-endian
+/// words, both loaded RIP-relative.
+///
+/// ```text
+///   movl  count(%rip), %ecx
+/// 1: decq %rcx
+///   jnz   1b
+///   movl $1, %eax ; movl $1, %edi ; leaq msg(%rip), %rsi ; movl $16, %edx ; syscall
+///   movl $231, %eax ; movl status(%rip), %edi ; syscall
+///   ud2
+/// msg: "spinning task ?\n"   count: .long   status: .long
+/// ```
+///
+/// Assembled by rustc's LLVM and read back out of the object file.
+pub(crate) const USER_SPIN_PROGRAM: &[u8] = &[
+    0x8b, 0x0d, 0x3c, 0x00, 0x00, 0x00, 0x48, 0xff, 0xc9, 0x75, 0xfb, 0xb8, 0x01, 0x00, 0x00, 0x00,
+    0xbf, 0x01, 0x00, 0x00, 0x00, 0x48, 0x8d, 0x35, 0x16, 0x00, 0x00, 0x00, 0xba, 0x10, 0x00, 0x00,
+    0x00, 0x0f, 0x05, 0xb8, 0xe7, 0x00, 0x00, 0x00, 0x8b, 0x3d, 0x18, 0x00, 0x00, 0x00, 0x0f, 0x05,
+    0x0f, 0x0b, b's', b'p', b'i', b'n', b'n', b'i', b'n', b'g', b' ', b't', b'a', b's', b'k', b' ',
+    b'?', b'\n', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+
 /// One byte from the console, if one has arrived.
 pub(crate) fn read_console_byte() -> Option<u8> {
     console::read_byte()
 }
 
-/// Run a program in ring 3, returning the status it exits with.
+/// Enter ring 3 for the first time, at `entry` on `stack`. Does not return.
 ///
 /// # Safety
 ///
-/// A user address space must be installed on this processor, and `entry` and
-/// `stack` must be addresses within it.
-pub(crate) unsafe fn run_user(entry: u64, stack: u64) -> Result<i32, &'static str> {
+/// Must be called by a user task, on its own kernel stack, with its address
+/// space installed; `entry` and `stack` must be addresses within it.
+pub(crate) unsafe fn enter_user(entry: u64, stack: u64) -> ! {
     // SAFETY: the caller's guarantee, passed straight through.
-    unsafe { syscall::run_user(entry, stack) }
+    unsafe { syscall::enter_user(entry, stack) }
 }
 
 /// Service a system call that arrived through the trap vector.
@@ -420,4 +461,4 @@ pub(crate) fn service_interrupts(frame: &mut TrapFrame, handle: fn(u32)) {
 }
 
 /// The context switch, and the stack layout a new task starts on.
-pub(crate) use switch::{prepare_stack, switch_to};
+pub(crate) use switch::{UserState, prepare_stack, restore_user_state, save_user_state, switch_to};

@@ -16,6 +16,7 @@
 //! of it — so `dispatch` has to end in a value for every input, including the
 //! numbers no table has.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::{KERNEL_HALF_BASE, PAGE_SIZE};
@@ -51,6 +52,11 @@ pub(crate) struct Report {
     /// The status a program run in user mode exited with, if this
     /// architecture can run one yet.
     pub(crate) user_status: Option<i32>,
+    /// How many times each of two programs sharing one processor was switched
+    /// to. Both at least twice, or they ran one after the other.
+    pub(crate) concurrent: Option<(u64, u64)>,
+    /// The status a spinning program reported after being killed from outside.
+    pub(crate) killed: Option<i32>,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -88,6 +94,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
 
     let user_status = check_a_program_runs_in_user_mode()?;
+    let concurrent = check_two_programs_take_turns_on_one_processor()?;
+    let killed = check_a_program_is_killed_from_outside()?;
 
     Ok(Report {
         dispatched: counter.dispatched,
@@ -96,6 +104,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         pages,
         leaked,
         user_status,
+        concurrent,
+        killed,
     })
 }
 
@@ -1263,4 +1273,149 @@ fn check_a_program_runs_in_user_mode() -> Result<Option<i32>, &'static str> {
         return Err("the program exited with the wrong status");
     }
     Ok(Some(status))
+}
+
+// ---------------------------------------------------------------------------
+// Programs as tasks
+//
+// Two programs at once, and one ended from outside. What the single-program
+// check above cannot show: that a program is preempted in user mode, which
+// needs interrupts open there; that two programs keep their own registers,
+// address spaces and exit statuses while taking turns; and that a program
+// which never calls `exit_group` can still be ended.
+// ---------------------------------------------------------------------------
+
+/// Loop iterations each spinning program runs before it writes and exits.
+///
+/// Enough to cover several scheduling slices under KVM, where the loop is
+/// fastest, and a second or so under `tcg`, where it is slowest.
+const SPIN_ROUNDS: u32 = 30_000_000;
+
+/// How long the checks wait for a program before calling it lost.
+const PROGRAM_PATIENCE_NANOS: u64 = 120_000_000_000;
+
+/// How long the killed program is left spinning first.
+const KILL_AFTER_NANOS: u64 = 20_000_000;
+
+/// The status a program is killed with: 128 plus `SIGKILL`, which is what a
+/// shell reports for one.
+const KILL_STATUS: i32 = 137;
+
+/// Build a spinning program tagged `tag` that loops `rounds` times and exits
+/// with `status`, and load it into a process of its own.
+fn spinner(tag: u8, rounds: u32, status: u32) -> Result<Arc<Process>, &'static str> {
+    let mut program = arch::USER_SPIN_PROGRAM.to_vec();
+    let at = program
+        .len()
+        .checked_sub(10)
+        .ok_or("the spinning program is shorter than its own layout")?;
+
+    let mut tail = [0_u8; 10];
+    tail[0] = tag;
+    tail[1] = b'\n';
+    let words = rounds.to_le_bytes().into_iter().chain(status.to_le_bytes());
+    for (slot, byte) in tail.iter_mut().skip(2).zip(words) {
+        *slot = byte;
+    }
+    let slot = program
+        .get_mut(at..)
+        .ok_or("the spinning program is shorter than its own layout")?;
+    if slot.first() != Some(&b'?') || slot.get(1) != Some(&b'\n') {
+        return Err("the spinning program's tail is not the layout it documents");
+    }
+    slot.copy_from_slice(&tail);
+
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        &program,
+    );
+    process::load(&file, &[b"/spin"], &[], [0x5a; ferrix_ustack::RANDOM_BYTES])
+        .map_err(|_| "a spinning program could not be loaded")
+}
+
+/// Two programs pinned to one processor both finish, each with its own
+/// status, and each is switched to more than once.
+///
+/// Two properties, because the obvious one is not enough. Each program must be
+/// switched to more than once, or they ran one after the other. But that alone
+/// passes with interrupts masked in user mode: each program's `write` opens
+/// them inside the kernel, a tick that was pending all along is taken there,
+/// and the program is switched away from and back to without ever having been
+/// preempted in user mode. So interrupts must also have arrived *in user mode*
+/// while the two ran. Masking them there fails this with its own message; that
+/// was tried, and the switch count alone did not notice.
+fn check_two_programs_take_turns_on_one_processor() -> Result<Option<(u64, u64)>, &'static str> {
+    if arch::USER_SPIN_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let here = crate::smp::this_cpu()
+        .ok_or("no processor to run two programs on")?
+        .logical;
+
+    let user_interrupts = crate::trap::user_interrupt_count();
+    let first = spinner(b'1', SPIN_ROUNDS, 41)?;
+    let second = spinner(b'2', SPIN_ROUNDS, 43)?;
+    let first_task = process::start_on(&first, Some(here))
+        .map_err(|_| "the first of two programs could not be started")?;
+    let second_task = process::start_on(&second, Some(here))
+        .map_err(|_| "the second of two programs could not be started")?;
+
+    let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+    if first.wait_for_exit(deadline) != Some(41) {
+        return Err("the first of two programs did not exit with its own status");
+    }
+    if second.wait_for_exit(deadline) != Some(43) {
+        return Err("the second of two programs did not exit with its own status");
+    }
+
+    let switched = (first_task.switches(), second_task.switches());
+    if switched.0 < 2 || switched.1 < 2 {
+        return Err(
+            "two programs on one processor ran one after the other rather than taking turns",
+        );
+    }
+    if crate::trap::user_interrupt_count() == user_interrupts {
+        return Err("no interrupt arrived while two spinning programs were in user mode");
+    }
+    Ok(Some(switched))
+}
+
+/// A program that would spin for minutes is ended from outside: it reports
+/// the status it was killed with, not its own, and its task actually stops.
+fn check_a_program_is_killed_from_outside() -> Result<Option<i32>, &'static str> {
+    if arch::USER_SPIN_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let here = crate::smp::this_cpu()
+        .ok_or("no processor to run a program on")?
+        .logical;
+
+    let victim = spinner(b'k', u32::MAX, 5)?;
+    let task = process::start_on(&victim, Some(here))
+        .map_err(|_| "a program to kill could not be started")?;
+    crate::sched::sleep_for(KILL_AFTER_NANOS);
+    if victim.is_terminated() {
+        return Err(
+            "a program that should still have been spinning had already ended, so nothing \
+             preempted it in user mode",
+        );
+    }
+
+    process::kill(&victim, KILL_STATUS);
+    let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+    if victim.wait_for_exit(deadline) != Some(KILL_STATUS) {
+        return Err("a killed program did not report the status it was killed with");
+    }
+
+    // The status alone would pass with a task still spinning in user mode
+    // under a process that says it has ended.
+    while !task.is_dead() {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("a killed program's task kept running");
+        }
+        crate::sched::sleep_for(1_000_000);
+    }
+    Ok(Some(KILL_STATUS))
 }

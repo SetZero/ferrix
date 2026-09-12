@@ -231,6 +231,12 @@ pub(crate) fn sys_read(process: &Process, fd: u64, buf: u64, len: u64) -> Result
     Ok(take)
 }
 
+/// How long a console read sleeps between looks for a keystroke.
+///
+/// Two milliseconds is shorter than anyone types, and long enough that a shell
+/// waiting at its prompt costs a processor nothing measurable.
+const CONSOLE_POLL_NANOS: u64 = 2_000_000;
+
 /// Collect one line from the keyboard, echoing it, until Enter or Ctrl-D.
 ///
 /// The lock on [`PENDING`] is not held here: the wait may last minutes, and a
@@ -239,7 +245,16 @@ fn read_line() -> Vec<u8> {
     let mut line = Vec::new();
     loop {
         let Some(byte) = arch::read_console_byte() else {
-            core::hint::spin_loop();
+            // Nothing typed yet. A program reading the console is a task like
+            // any other, so it sleeps between looks rather than spinning a
+            // processor away from everything else -- and a program killed while
+            // it waits stops waiting, and reads end of file.
+            let killed =
+                crate::syscall::process::current().is_some_and(|process| process.is_terminated());
+            if killed {
+                return Vec::new();
+            }
+            crate::sched::sleep_for(CONSOLE_POLL_NANOS);
             continue;
         };
         match byte {
