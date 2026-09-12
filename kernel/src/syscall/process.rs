@@ -37,6 +37,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_linux_abi::errno::Errno;
 use ferrix_sync::SpinLock;
 use ferrix_vfs::fd::FdTable;
 use ferrix_vfs::{Context, OpenFile};
@@ -109,6 +110,32 @@ pub(crate) struct Process {
     /// The tasks running its code. Weak, because a task keeps its process
     /// alive and not the other way round.
     tasks: SpinLock<Vec<Weak<Task>>>,
+    /// Registers its first task resumes from instead of entering at the
+    /// program's start: set for a fork child, taken once.
+    resume: SpinLock<Option<crate::arch::UserRegs>>,
+    /// The process that created it, if that process still exists. Weak,
+    /// because a parent keeps its children (until it waits for them) and not
+    /// the other way round.
+    parent: SpinLock<Weak<Process>>,
+    /// Its process group, which job control and `kill(0, …)` address.
+    pgid: AtomicU32,
+    /// Its session.
+    sid: AtomicU32,
+    /// The children it has not yet waited for, ended or not. Strong, so an
+    /// ended child stays findable -- a zombie -- until `wait4` takes it.
+    children: SpinLock<Vec<Arc<Process>>>,
+    /// Woken whenever one of its children ends.
+    child_exited: WaitQueue,
+    /// The signal its parent is told with when it ends; `SIGCHLD` for an
+    /// ordinary fork, whatever `clone` asked for otherwise.
+    exit_signal: AtomicU32,
+    /// The signal that ended it, or zero if it exited.
+    ended_by: AtomicU32,
+    /// Set by a successful `execve`: what a `vfork` parent waits for, besides
+    /// the child ending.
+    execed: AtomicBool,
+    /// Woken when `execed` is set or it ends.
+    vfork_done: WaitQueue,
 }
 
 /// Where a program starts: the two numbers `exec::load` computes and the task
@@ -122,7 +149,7 @@ pub(crate) struct Startup {
 }
 
 /// The parts of a process the lock protects.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct State {
     /// The heap, once something has asked for one.
     heap: Option<Heap>,
@@ -160,9 +187,10 @@ struct Heap {
 impl Process {
     /// A process over an address space, with no heap yet.
     pub(crate) fn new(space: Arc<AddressSpace>) -> Process {
+        let pid = registry::allocate().unwrap_or(0);
         Process {
             space,
-            pid: registry::allocate().unwrap_or(0),
+            pid,
             umask: AtomicU32::new(DEFAULT_UMASK),
             started: crate::syscall::time::now_nanos(),
             identity: SpinLock::new(Identity::default()),
@@ -176,7 +204,57 @@ impl Process {
             terminated: AtomicBool::new(false),
             exited: WaitQueue::new(),
             tasks: SpinLock::new(Vec::new()),
+            resume: SpinLock::new(None),
+            parent: SpinLock::new(Weak::new()),
+            // A process the kernel starts leads its own group and session.
+            // A fork child inherits its parent's instead, below.
+            pgid: AtomicU32::new(pid),
+            sid: AtomicU32::new(pid),
+            children: SpinLock::new(Vec::new()),
+            child_exited: WaitQueue::new(),
+            exit_signal: AtomicU32::new(ferrix_linux_abi::types::SIGCHLD),
+            ended_by: AtomicU32::new(0),
+            execed: AtomicBool::new(false),
+            vfork_done: WaitQueue::new(),
         }
+    }
+
+    /// A copy of `parent` over `space`, which is already a copy of its
+    /// address space: what `fork` makes.
+    ///
+    /// What is copied is what Linux copies: the file descriptor table and the
+    /// working directory and root (or the same ones, shared, when `clone` asks
+    /// for `CLONE_FILES` or `CLONE_FS`), the heap and the signal dispositions,
+    /// the process group and session, the umask, and the program's start. What is not is
+    /// what belongs to the parent alone: its pid, its children, the address its
+    /// thread asked to have cleared, and its handles, which the native ABI
+    /// passes on only explicitly.
+    pub(crate) fn forked(
+        parent: &Arc<Process>,
+        space: Arc<AddressSpace>,
+        share_files: bool,
+        share_fs: bool,
+    ) -> Process {
+        let mut child = Process::new(space);
+        child.files = if share_files {
+            Arc::clone(&parent.files)
+        } else {
+            Arc::new(SpinLock::new(parent.files.lock().clone()))
+        };
+        child.fs = if share_fs {
+            Arc::clone(&parent.fs)
+        } else {
+            Arc::new(SpinLock::new(parent.fs.lock().clone()))
+        };
+        let mut state = parent.state.lock().clone();
+        state.clear_child_tid = 0;
+        child.state = SpinLock::new(state);
+        child.startup = SpinLock::new(parent.startup());
+        child.parent = SpinLock::new(Arc::downgrade(parent));
+        child.pgid = AtomicU32::new(parent.pgid());
+        child.sid = AtomicU32::new(parent.sid());
+        child.umask = AtomicU32::new(parent.umask());
+        child
     }
 
     /// What it can see.
@@ -284,6 +362,16 @@ impl Process {
     /// program is outside it.
     pub(crate) fn with_signals<R>(&self, change: impl FnOnce(&mut Signals) -> R) -> R {
         change(&mut self.state.lock().signals)
+    }
+
+    /// Forget what the old program set up, as `execve` does before loading the
+    /// new one: its heap, the address its thread asked to have cleared, and
+    /// its signal handlers. The address space is emptied by the caller.
+    pub(crate) fn reset_for_exec(&self) {
+        let mut state = self.state.lock();
+        state.heap = None;
+        state.clear_child_tid = 0;
+        state.signals.reset_for_exec();
     }
 
     /// Put the heap just past the loaded image, before anything asks for it.
@@ -421,6 +509,17 @@ impl Process {
         *self.startup.lock()
     }
 
+    /// Have its first task resume from `regs` rather than enter the program:
+    /// a fork child, which carries on from its parent's system call.
+    pub(crate) fn set_resume(&self, regs: crate::arch::UserRegs) {
+        *self.resume.lock() = Some(regs);
+    }
+
+    /// The registers to resume from, once.
+    fn take_resume(&self) -> Option<crate::arch::UserRegs> {
+        self.resume.lock().take()
+    }
+
     /// Whether it has terminated, by exiting or by being killed.
     pub(crate) fn is_terminated(&self) -> bool {
         self.terminated.load(Ordering::Acquire)
@@ -458,9 +557,16 @@ impl Process {
     /// through it until then. The waiters are woken last, when there is nothing
     /// left to observe half done.
     fn terminate(&self, status: i32) -> bool {
+        self.end(status, 0)
+    }
+
+    /// End it with `status`, recording `signal` as what ended it when that is
+    /// not zero. The one path both `exit_group` and `kill` take.
+    fn end(&self, status: i32, signal: u32) -> bool {
         if self.ending.swap(true, Ordering::AcqRel) {
             return false;
         }
+        self.ended_by.store(signal, Ordering::Release);
         self.status.store(status, Ordering::Release);
         self.terminated.store(true, Ordering::Release);
         *self.state.lock() = State::default();
@@ -469,7 +575,169 @@ impl Process {
         // and must not run under this process's table lock or state lock.
         object::dispose(self.with_handles(HandleTable::clear));
         self.exited.wake_all();
+        self.vfork_done.wake_all();
+
+        // Its parent is told, and lets it go at once if it asked never to wait:
+        // otherwise it stays in the parent's list, ended, until `wait4` takes
+        // it.
+        let parent = self.parent.lock().upgrade();
+        if let Some(parent) = parent {
+            if parent.with_signals(|signals| signals.reaps_children_automatically()) {
+                parent.disown(self);
+            }
+            parent.child_exited.wake_all();
+        }
+
+        // Its own children are orphaned: an ended one is released here, and a
+        // running one is released when it ends, since no parent is left to wait
+        // for it. Linux hands orphans to init; there is no init process to hand
+        // them to yet.
+        let orphans = core::mem::take(&mut *self.children.lock());
+        for orphan in &orphans {
+            *orphan.parent.lock() = Weak::new();
+        }
+        drop(orphans);
         true
+    }
+}
+
+impl Process {
+    /// Its parent's pid, or zero when it has none: a process the kernel
+    /// started, or one whose parent has ended.
+    pub(crate) fn parent_pid(&self) -> u32 {
+        self.parent
+            .lock()
+            .upgrade()
+            .map_or(0, |parent| parent.pid())
+    }
+
+    /// Its process group.
+    pub(crate) fn pgid(&self) -> u32 {
+        self.pgid.load(Ordering::Acquire)
+    }
+
+    /// Move it into process group `pgid`.
+    pub(crate) fn set_pgid(&self, pgid: u32) {
+        self.pgid.store(pgid, Ordering::Release);
+    }
+
+    /// Its session.
+    pub(crate) fn sid(&self) -> u32 {
+        self.sid.load(Ordering::Acquire)
+    }
+
+    /// Make it the leader of a new session and of a new process group, both
+    /// numbered by its pid: what `setsid` does.
+    pub(crate) fn lead_new_session(&self) {
+        self.sid.store(self.pid, Ordering::Release);
+        self.pgid.store(self.pid, Ordering::Release);
+    }
+
+    /// The signal its parent is told with when it ends.
+    pub(crate) fn set_exit_signal(&self, signal: u32) {
+        self.exit_signal.store(signal, Ordering::Release);
+    }
+
+    /// Take `child` into its list of children.
+    pub(crate) fn adopt(&self, child: Arc<Process>) {
+        self.children.lock().push(child);
+    }
+
+    /// Let `child` go from its list of children, if it is there.
+    pub(crate) fn disown(&self, child: &Process) {
+        self.children
+            .lock()
+            .retain(|held| !core::ptr::eq(Arc::as_ptr(held), child));
+    }
+
+    /// Whether `pid` is one of its children, ended or not.
+    pub(crate) fn has_child(&self, pid: u32) -> bool {
+        self.children.lock().iter().any(|child| child.pid() == pid)
+    }
+
+    /// A child `select` accepts that has ended, taken out of the list when
+    /// `remove` is set.
+    ///
+    /// # Errors
+    ///
+    /// `ECHILD` if no child at all is one `select` accepts, ended or not: the
+    /// difference between "wait longer" and "there is nothing to wait for".
+    pub(crate) fn reap_child(
+        &self,
+        select: &dyn Fn(&Process) -> bool,
+        remove: bool,
+    ) -> Result<Option<Arc<Process>>, Errno> {
+        let mut children = self.children.lock();
+        let mut any = false;
+        let mut ended = None;
+        for (at, child) in children.iter().enumerate() {
+            if !select(child) {
+                continue;
+            }
+            any = true;
+            if child.is_terminated() {
+                ended = Some(at);
+                break;
+            }
+        }
+        match ended {
+            Some(at) if remove => Ok(Some(children.remove(at))),
+            Some(at) => Ok(children.get(at).map(Arc::clone)),
+            None if any => Ok(None),
+            None => Err(Errno::ECHILD),
+        }
+    }
+
+    /// Whether a child `select` accepts has ended: a `wait4` sleeper's
+    /// condition.
+    pub(crate) fn has_ended_child(&self, select: &dyn Fn(&Process) -> bool) -> bool {
+        self.children
+            .lock()
+            .iter()
+            .any(|child| select(child) && child.is_terminated())
+    }
+
+    /// The queue woken whenever one of its children ends.
+    pub(crate) fn child_exited(&self) -> &WaitQueue {
+        &self.child_exited
+    }
+
+    /// The status word `wait4` reports for it once it has ended: the exit
+    /// code in the second byte, or the signal that ended it in the low seven
+    /// bits.
+    pub(crate) fn wait_status(&self) -> Option<i32> {
+        let status = self.exit_status()?;
+        let signal = self.ended_by.load(Ordering::Acquire);
+        Some(if signal == 0 {
+            (status & 0xFF) << 8
+        } else {
+            (signal & 0x7F) as i32
+        })
+    }
+
+    /// The signal that ended it, if a signal did.
+    pub(crate) fn ended_by_signal(&self) -> Option<u32> {
+        let signal = self.ended_by.load(Ordering::Acquire);
+        (self.is_terminated() && signal != 0).then_some(signal)
+    }
+
+    /// Record a successful `execve`, releasing a `vfork` parent.
+    pub(crate) fn mark_execed(&self) {
+        self.execed.store(true, Ordering::Release);
+        self.vfork_done.wake_all();
+    }
+
+    /// Block `caller` until this `vfork` child has called `execve` or ended,
+    /// which is what `vfork` promises its parent.
+    pub(crate) fn wait_vfork_release(&self, caller: &Process) {
+        let _ = self.vfork_done.wait_until_deadline(
+            || {
+                self.execed.load(Ordering::Acquire)
+                    || self.is_terminated()
+                    || caller.is_terminated()
+            },
+            u64::MAX,
+        );
     }
 }
 
@@ -518,8 +786,24 @@ pub(crate) fn start_on(
     if process.startup().is_none() {
         return Err("the process has no program loaded");
     }
-    let task = sched::spawn_user("user", run_program, Arc::clone(process), cpu)?;
+    let task = sched::spawn_user("user", run_program, Arc::clone(process), cpu, None)?;
     process.tasks.lock().push(Arc::downgrade(&task));
+    Ok(task)
+}
+
+/// Run a fork child: `child` resumes from the registers [`Process::set_resume`]
+/// gave it, with `state` -- its parent's thread pointer and floating-point
+/// registers, as they were -- loaded when it is first switched to.
+///
+/// # Errors
+///
+/// As [`start`].
+pub(crate) fn start_forked(
+    child: &Arc<Process>,
+    state: crate::arch::UserState,
+) -> Result<Arc<Task>, &'static str> {
+    let task = sched::spawn_user("user", run_program, Arc::clone(child), None, Some(state))?;
+    child.tasks.lock().push(Arc::downgrade(&task));
     Ok(task)
 }
 
@@ -530,7 +814,14 @@ pub(crate) fn start_on(
 /// entered user mode never does. Nothing here waits for that; a caller
 /// that needs the tasks gone waits for them.
 pub(crate) fn kill(process: &Process, status: i32) {
-    if !process.terminate(status) {
+    // A status of 128 plus a signal number is how a shell spells death by that
+    // signal, and it is how a waiting parent is told: as the signal.
+    let signal = if (129..=192).contains(&status) {
+        (status - 128) as u32
+    } else {
+        0
+    };
+    if !process.end(status, signal) {
         return;
     }
     let tasks: Vec<Arc<Task>> = process
@@ -577,9 +868,23 @@ pub(crate) fn before_return_to_user() {
 /// Returning ends the task, which is what happens if the process was killed
 /// before it ever ran.
 fn run_program(_argument: usize) {
-    let startup = current()
-        .filter(|process| !process.is_terminated())
-        .and_then(|process| process.startup());
+    let Some(process) = current() else {
+        return;
+    };
+    if process.is_terminated() {
+        return;
+    }
+    if let Some(regs) = process.take_resume() {
+        drop(process);
+        // SAFETY: this task was spawned in the child's address space with its
+        // parent's user state, both installed by the switch that got here, and
+        // `regs` is a copy of the frame the parent's system call saved in that
+        // same (forked) space. It lives on this task's own kernel stack, which
+        // the resume path requires, and nothing owned is left on this frame.
+        unsafe { crate::arch::resume_user(&regs) }
+    }
+    let startup = process.startup();
+    drop(process);
     let Some(Startup { entry, stack }) = startup else {
         return;
     };

@@ -59,6 +59,11 @@ pub(crate) struct Report {
     pub(crate) concurrent: Option<(u64, u64)>,
     /// The status a spinning program reported after being killed from outside.
     pub(crate) killed: Option<i32>,
+    /// What a program that forks and waits exited with: 24 when right.
+    pub(crate) forked: Option<i32>,
+    /// What a program exited with that `execve`d a program which exists, then
+    /// one that does not: 42 and 2 when right.
+    pub(crate) execed: Option<(i32, i32)>,
     /// Processes the pid registry numbered, found, listed and let go.
     pub(crate) pids: u32,
 }
@@ -101,6 +106,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let user_status = check_a_program_runs_in_user_mode()?;
     let concurrent = check_two_programs_take_turns_on_one_processor()?;
     let killed = check_a_program_is_killed_from_outside()?;
+    let forked = check_a_forked_child_is_waited_for()?;
+    let execed = check_execve_replaces_the_program()?;
 
     Ok(Report {
         dispatched: counter.dispatched,
@@ -111,6 +118,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         user_status,
         concurrent,
         killed,
+        forked,
+        execed,
         pids,
     })
 }
@@ -147,7 +156,7 @@ impl Counter {
 
     /// Dispatch one number with arguments, and count it.
     fn call_with(&mut self, number: usize, args: [u64; 6]) -> Outcome {
-        let outcome = dispatch(&SyscallArgs { number, args });
+        let outcome = dispatch(&SyscallArgs { number, args }, None);
         self.dispatched = self.dispatched.saturating_add(1);
         if let Outcome::Return(value) = outcome
             && value >= 0
@@ -2677,4 +2686,101 @@ mod paths {
         }
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Processes making processes
+// ---------------------------------------------------------------------------
+
+/// What [`arch::USER_FORK_PROGRAM`] exits with when everything is right.
+const FORK_STATUS: i32 = 24;
+
+/// A program forks, its child exits 23, the parent waits for it and exits with
+/// the child's code plus one.
+///
+/// One number covers the whole path: the child resumed from a copy of its
+/// parent's registers with the call returning zero, it ran in a copy of the
+/// parent's memory and exited, the parent's `wait4` found that child and not
+/// another, and the status word put the exit code in its second byte.
+fn check_a_forked_child_is_waited_for() -> Result<Option<i32>, &'static str> {
+    if arch::USER_FORK_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_FORK_PROGRAM,
+    );
+    let status = exec::run(&file, &[b"/fork"], &[], [0x5a; ferrix_ustack::RANDOM_BYTES])
+        .map_err(|_| "a program that forks could not be started")?;
+    match status {
+        FORK_STATUS => Ok(Some(status)),
+        99 => Err("wait4 reported a child other than the one fork made"),
+        _ => Err("a program that forks and waits did not see its child exit with 23"),
+    }
+}
+
+/// Where [`arch::USER_EXEC_PROGRAM`] looks for its target.
+const EXEC_TARGET: &[u8] = b"/exec-target";
+
+/// A program `execve`s another by path and takes on its status; with the file
+/// gone, the same program gets `ENOENT` back and exits with it.
+fn check_execve_replaces_the_program() -> Result<Option<(i32, i32)>, &'static str> {
+    use ferrix_vfs::OpenFlags;
+
+    if arch::USER_EXEC_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let class = class_of_this_build();
+    let machine = arch::ARCH.elf_machine();
+    let target = image::build_with(class, machine, image::Shape::Good, arch::USER_TEST_PROGRAM);
+    let caller = image::build_with(class, machine, image::Shape::Good, arch::USER_EXEC_PROGRAM);
+
+    let ns = crate::fs::namespace();
+    let ctx = ns.context();
+    let create = OpenFlags {
+        read: false,
+        write: true,
+        create: true,
+        exclusive: false,
+        truncate: true,
+        append: false,
+        directory: false,
+        nofollow: false,
+        path: false,
+        nonblock: false,
+    };
+    let file = ns
+        .open(&ctx, None, EXEC_TARGET, &create, 0o755)
+        .map_err(|_| "could not create the program execve is to run")?;
+    if file.write(&target) != Ok(target.len()) {
+        return Err("could not write the program execve is to run");
+    }
+    drop(file);
+
+    let found = exec::run(
+        &caller,
+        &[b"/exec-caller"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that calls execve could not be started")?;
+    ns.unlink(&ctx, None, EXEC_TARGET)
+        .map_err(|_| "could not remove the program execve ran")?;
+    let missing = exec::run(
+        &caller,
+        &[b"/exec-caller"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that calls execve could not be started a second time")?;
+
+    if found != arch::USER_TEST_STATUS {
+        return Err("a program that called execve did not end with the new program's status");
+    }
+    if missing != Errno::ENOENT.0 as i32 {
+        return Err("execve of a path that does not exist did not return ENOENT");
+    }
+    Ok(Some((found, missing)))
 }

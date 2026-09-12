@@ -126,7 +126,7 @@ pub(crate) unsafe fn prepare_stack(
 /// the outgoing program's copy and loads the incoming one's whenever it
 /// switches between tasks that run user code.
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct UserState {
     /// `TPIDR_EL0`, which EL0 writes for itself.
     thread_pointer: u64,
@@ -146,6 +146,25 @@ const _: () = assert!(
 );
 
 impl UserState {
+    /// A copy of the user state this processor holds right now: what a fork
+    /// child inherits.
+    ///
+    /// # Safety
+    ///
+    /// The registers must be the calling task's own.
+    pub(crate) unsafe fn capture() -> UserState {
+        let mut state = UserState::new();
+        // SAFETY: the caller's guarantee.
+        unsafe { save_user_state(&mut state) };
+        state
+    }
+
+    /// Give the program `pointer` as its thread pointer, as `CLONE_SETTLS`
+    /// asks.
+    pub(crate) const fn set_thread_pointer(&mut self, pointer: u64) {
+        self.thread_pointer = pointer;
+    }
+
     /// A program's state before it has run: no thread pointer, rounding to
     /// nearest, no floating-point exceptions trapped, every register zero.
     pub(crate) const fn new() -> UserState {
@@ -252,4 +271,16 @@ pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
     // SAFETY: as above, and loading user registers cannot affect the kernel,
     // which uses none of them.
     unsafe { ferrix_user_restore(core::ptr::from_ref(state)) };
+}
+
+/// Put this processor's user state back to a program's starting state, as
+/// `execve` does.
+///
+/// # Safety
+///
+/// Must be called by the user task whose registers these are.
+pub(crate) unsafe fn reset_user_state() {
+    let fresh = UserState::new();
+    // SAFETY: loading zeroed user registers cannot affect the kernel.
+    unsafe { ferrix_user_restore(core::ptr::from_ref(&fresh)) };
 }

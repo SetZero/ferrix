@@ -121,7 +121,7 @@ pub(crate) unsafe fn prepare_stack(
 /// saved and loaded by the scheduler whenever it switches between tasks that
 /// run user code.
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct UserState {
     /// `TPIDRURO`, which `set_tls` asks the kernel to write.
     thread_pointer: u32,
@@ -168,6 +168,30 @@ impl UserState {
             user_sp: 0,
             user_lr: 0,
         }
+    }
+
+    /// A copy of the user state this processor holds right now: what a fork
+    /// child inherits.
+    ///
+    /// # Safety
+    ///
+    /// The registers must be the calling task's own.
+    pub(crate) unsafe fn capture() -> UserState {
+        let mut state = UserState::new();
+        // SAFETY: the caller's guarantee.
+        unsafe { save_user_state(&mut state) };
+        state
+    }
+
+    /// Give the program `pointer` as its thread pointer, as `CLONE_SETTLS`
+    /// asks.
+    pub(crate) const fn set_thread_pointer(&mut self, pointer: u64) {
+        self.thread_pointer = pointer as u32;
+    }
+
+    /// Give the program `stack` as its USR stack pointer.
+    pub(crate) const fn set_user_stack(&mut self, stack: u32) {
+        self.user_sp = stack;
     }
 }
 
@@ -312,5 +336,29 @@ pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
         // SAFETY: as above; loading user registers cannot affect the kernel,
         // which uses none of them.
         unsafe { ferrix_user_fpu_restore(core::ptr::from_ref(state), u32::from(doubles == 32)) };
+    }
+}
+
+/// Set USR mode's banked stack pointer, as `execve` does for the new program.
+pub(crate) fn set_user_stack(stack: u32) {
+    let words = [stack, 0];
+    // SAFETY: two readable words; loading USR's banked registers cannot affect
+    // the kernel, which runs in SVC mode.
+    unsafe { ferrix_user_banked_restore(words.as_ptr()) };
+}
+
+/// Put this processor's user state back to a program's starting state, as
+/// `execve` does. The banked stack pointer is `set_user_stack`'s.
+///
+/// # Safety
+///
+/// Must be called by the user task whose registers these are.
+pub(crate) unsafe fn reset_user_state() {
+    super::cpu::write_tpidruro(0);
+    let doubles = super::cpu::user_fpu_doubles();
+    if doubles != 0 {
+        let fresh = UserState::new();
+        // SAFETY: the FPU exists and is enabled; the state is all zeros.
+        unsafe { ferrix_user_fpu_restore(core::ptr::from_ref(&fresh), u32::from(doubles == 32)) };
     }
 }

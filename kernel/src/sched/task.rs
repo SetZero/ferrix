@@ -143,6 +143,10 @@ pub(crate) struct NewTask {
     pub(crate) address_space: Option<Arc<AddressSpace>>,
     /// The process it runs user code for, or `None` for a kernel thread.
     pub(crate) process: Option<Arc<Process>>,
+    /// The user registers it starts with, for a task with a process: `None`
+    /// is a program's starting state, and a fork child passes a copy of its
+    /// parent's.
+    pub(crate) user_state: Option<arch::UserState>,
 }
 
 impl Task {
@@ -160,10 +164,13 @@ impl Task {
             affinity,
             address_space,
             process,
+            user_state,
         } = new;
-        let user = process
-            .as_ref()
-            .map(|_| Box::new(UnsafeCell::new(arch::UserState::new())));
+        let user = process.as_ref().map(|_| {
+            Box::new(UnsafeCell::new(
+                user_state.unwrap_or_else(arch::UserState::new),
+            ))
+        });
         Task {
             id,
             name,

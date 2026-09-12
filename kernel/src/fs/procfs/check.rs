@@ -102,8 +102,14 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     *LAYOUT.lock() = Some(lay_out(&process)?);
     *OUTCOME.lock() = None;
 
-    let task = sched::spawn_user("procfs-check", in_the_process, Arc::clone(&process), None)
-        .map_err(|_| "no task for the /proc check")?;
+    let task = sched::spawn_user(
+        "procfs-check",
+        in_the_process,
+        Arc::clone(&process),
+        None,
+        None,
+    )
+    .map_err(|_| "no task for the /proc check")?;
     let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
     if process.wait_for_exit(deadline) != Some(REPORTED) {
         return Err("the /proc check's task never reported");

@@ -146,6 +146,8 @@ ferrix_trap_save:
     str  xzr, [sp, #296]
     mov  x0, sp
     bl   ferrix_trap_entry
+.globl ferrix_trap_restore
+ferrix_trap_restore:
     ldp  x9, x10, [sp, #248]
     ldr  x11, [sp, #264]
     msr  sp_el0, x9
@@ -188,6 +190,15 @@ ferrix_trap_save:
 core::arch::global_asm!(
     r#"
 .section .text
+
+// x0 = a `TrapFrame`, sixteen-byte aligned. Never returns: the frame is
+// restored by the same instructions every exception from EL0 returns through.
+.globl ferrix_resume_user
+.align 4
+ferrix_resume_user:
+    msr  daifset, #0xf
+    mov  sp, x0
+    b    ferrix_trap_restore
 
 // x0 = entry, x1 = user stack. Never returns.
 .globl ferrix_enter_user
@@ -252,6 +263,47 @@ const USER_SPSR: u64 = (1 << 9) | (1 << 8) | (1 << 6);
 unsafe extern "C" {
     /// Enter EL0 at `entry` on `stack`.
     fn ferrix_enter_user(entry: u64, stack: u64) -> !;
+    /// Resume EL0 from a saved frame.
+    fn ferrix_resume_user(frame: *const TrapFrame) -> !;
+}
+
+/// A program's registers as its system call saved them: the whole trap frame,
+/// which on this architecture includes `SP_EL0`, the return address and the
+/// saved status.
+///
+/// Aligned to sixteen because the resume path makes its address the stack
+/// pointer, and `AArch64` faults on a misaligned one.
+#[derive(Debug, Clone, Copy)]
+#[repr(C, align(16))]
+pub(crate) struct UserRegs(TrapFrame);
+
+impl UserRegs {
+    /// The same registers, as a child sees them: the call returned zero.
+    pub(crate) const fn for_child(&self) -> UserRegs {
+        let mut frame = self.0;
+        frame.x[0] = 0;
+        UserRegs(frame)
+    }
+
+    /// Start on `stack` instead, as `clone` with a stack argument asks.
+    pub(crate) const fn set_stack(&mut self, state: &mut super::UserState, stack: u64) {
+        let _ = state;
+        self.0.sp = stack;
+    }
+}
+
+/// Resume EL0 from `regs`. Does not return.
+///
+/// # Safety
+///
+/// Must be called by a user task with its address space installed and its user
+/// state loaded, and `regs` must be a frame a system call from that address
+/// space saved. `regs` must live on the running task's kernel stack: its
+/// address becomes `SP_EL1`, and the stack an exception from EL0 lands on is
+/// just above it.
+pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
+    // SAFETY: the caller's guarantee is the assembly's contract.
+    unsafe { ferrix_resume_user(core::ptr::from_ref(&regs.0)) }
 }
 
 /// Enter EL0 for the first time, at `entry` on `stack`. Does not return.
@@ -292,8 +344,9 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         args: [x0, x1, x2, x3, x4, x5],
     };
 
+    let regs = UserRegs(*frame);
     super::enable_interrupts();
-    let outcome = dispatch(&args);
+    let outcome = dispatch(&args, Some(&regs));
     super::disable_interrupts();
 
     match outcome {
@@ -303,7 +356,15 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
             }
             Ok(())
         }
-        Outcome::Enter { .. } => Err("execve through the EL0 trap path is not wired yet"),
+        // `execve`: the registers belong to a program that no longer exists, so
+        // they are replaced rather than returned into.
+        Outcome::Enter { entry, stack } => {
+            frame.x = [0; 31];
+            frame.sp = stack;
+            frame.elr = entry;
+            frame.spsr = USER_SPSR;
+            Ok(())
+        }
     }
 }
 

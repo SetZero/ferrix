@@ -414,6 +414,15 @@ fn check_syscalls() {
     if let Some(status) = report.killed {
         println!("  kill     a spinning program was ended from outside and reported {status}");
     }
+    if let Some(status) = report.forked {
+        println!("  fork     a program forked, waited for its child, and exited with {status}");
+    }
+    if let Some((found, missing)) = report.execed {
+        println!(
+            "  execve   a program became another and exited with {found}; with the file gone \
+             it got errno {missing}"
+        );
+    }
 }
 
 /// Stage 9: the native ABI's objects, driven through their handlers by two

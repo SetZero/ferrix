@@ -16,8 +16,10 @@
 
 use alloc::sync::Arc;
 use alloc::vec;
+use alloc::vec::Vec;
 
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
+use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     AT_CLKTCK, AT_EGID, AT_ENTRY, AT_EUID, AT_GID, AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM,
     AT_SECURE, AT_UID,
@@ -25,6 +27,7 @@ use ferrix_linux_abi::types::{
 use ferrix_ustack::{Spec, Width};
 use ferrix_vma::VmaFlags;
 
+use crate::arch;
 use crate::syscall::load::{self, LoadError};
 use crate::syscall::process::{self, Process, Startup};
 use crate::syscall::registry;
@@ -51,9 +54,21 @@ const STACK_GUARD: u64 = 1024 * 1024;
 ///
 /// Built in kernel memory and copied in, so this bounds a kernel allocation
 /// rather than a user one. Linux's own limit is a quarter of the stack rlimit,
-/// which would be two megabytes here; this is smaller because nothing yet
-/// needs more and a page of kernel heap per `execve` is cheap.
-const STARTUP_BYTES: usize = 16 * 1024;
+/// which would be two megabytes here. This is a quarter megabyte: enough for
+/// `xargs` and `find -exec` building long command lines, which the first limit
+/// of sixteen kilobytes was not, and still one allocation per `execve`.
+const STARTUP_BYTES: usize = 256 * 1024;
+
+/// The longest path `execve` accepts, Linux's `PATH_MAX`.
+const PATH_MAX: usize = 4096;
+
+/// The longest `#!` line read, Linux's `BINPRM_BUF_SIZE`.
+const INTERPRETER_LINE: usize = 256;
+
+/// The status a process ends with when `execve` fails after it has already
+/// taken the old program's memory away: 128 plus `SIGSEGV`, which is what
+/// Linux kills it with.
+const LOST_STATUS: i32 = 128 + 11;
 
 /// Why a program could not be started.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,8 +118,26 @@ pub(crate) fn load(
 ) -> Result<Arc<Process>, ExecError> {
     let space = AddressSpace::new().map_err(ExecError::Space)?;
     let process = Process::new(Arc::clone(&space));
+    let startup = populate(&space, &process, image, args, env, random)?;
+    process.set_startup(startup);
+    Ok(registry::register(process))
+}
 
-    let loaded = load::load(&space, image).map_err(ExecError::Load)?;
+/// Load `image` into `space`, which must be empty, and build its startup stack:
+/// what a new process and `execve` share.
+///
+/// # Errors
+///
+/// [`ExecError`].
+fn populate(
+    space: &AddressSpace,
+    process: &Process,
+    image: &[u8],
+    args: &[&[u8]],
+    env: &[&[u8]],
+    random: [u8; ferrix_ustack::RANDOM_BYTES],
+) -> Result<Startup, ExecError> {
+    let loaded = load::load(space, image).map_err(ExecError::Load)?;
     process.set_heap_base(loaded.end);
 
     // The stack region. Reserved whole; paid for a page at a time.
@@ -158,14 +191,13 @@ pub(crate) fn load(
         width: width(),
     };
     let startup = ferrix_ustack::build(&spec, top, &mut scratch).map_err(|_| ExecError::Startup)?;
-    uaccess::copy_to_user(&space, base, &scratch).map_err(|_| ExecError::Startup)?;
+    uaccess::copy_to_user(space, base, &scratch).map_err(|_| ExecError::Startup)?;
 
     process.record_exec(exec_fn, args);
-    process.set_startup(Startup {
+    Ok(Startup {
         entry: loaded.entry,
         stack: startup.sp,
-    });
-    Ok(registry::register(process))
+    })
 }
 
 /// Load `image`, run it as a task of its own, and wait for it to end.
@@ -188,4 +220,197 @@ pub(crate) fn run(
     process
         .wait_for_exit(u64::MAX)
         .ok_or(ExecError::Start("the program never reported how it ended"))
+}
+
+/// How `execve` failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExecveError {
+    /// Refused before anything changed; the caller returns this error.
+    Refused(Errno),
+    /// Failed after the old program's memory was already gone, so there is
+    /// nothing to return to: the caller ends the process.
+    Lost,
+}
+
+impl From<Errno> for ExecveError {
+    fn from(error: Errno) -> Self {
+        ExecveError::Refused(error)
+    }
+}
+
+/// `execve`: replace the running program with the one at `path`.
+///
+/// Answers the new program's entry point and stack pointer, for the trap path
+/// to enter.
+///
+/// # The point of no return
+///
+/// Everything that can be refused is refused first -- the path, the argument
+/// and environment strings, the file, a `#!` interpreter, and the ELF headers
+/// -- because until then a failure is an error the old program can handle.
+/// Then the old program's memory goes, and a failure from there on ends the
+/// process, as it does on Linux: loading into the emptied space rather than
+/// building a new one keeps the process's identity -- its address space,
+/// its task, everything that holds a reference to either -- exactly as it was.
+///
+/// # Errors
+///
+/// [`ExecveError`].
+pub(crate) fn sys_execve(
+    process: &Process,
+    path: u64,
+    argv: u64,
+    envp: u64,
+) -> Result<(u64, u64), ExecveError> {
+    let space = process.space();
+    let mut path_bytes = Vec::new();
+    uaccess::copy_cstr_from_user(space, path, PATH_MAX, &mut path_bytes)
+        .map_err(|_| Errno::EFAULT)?;
+    if path_bytes.is_empty() {
+        return Err(Errno::ENOENT.into());
+    }
+
+    let mut budget = STARTUP_BYTES;
+    let mut args = read_strings(space, argv, &mut budget)?;
+    let env = read_strings(space, envp, &mut budget)?;
+
+    let context = crate::fs::namespace().context();
+    let mut image = crate::fs::read_file(&context, None, &path_bytes)?;
+
+    // A script names its interpreter on its first line, which runs with the
+    // script's path in place of its own first argument -- what Linux's
+    // `binfmt_script` does. One level: an interpreter that is itself a script
+    // is refused rather than followed.
+    if image.starts_with(b"#!") {
+        let (interpreter, argument) = interpreter_line(&image)?;
+        let mut replaced = Vec::with_capacity(args.len().saturating_add(2));
+        replaced.push(interpreter.clone());
+        if let Some(argument) = argument {
+            replaced.push(argument);
+        }
+        replaced.push(path_bytes);
+        replaced.extend(args.into_iter().skip(1));
+        args = replaced;
+        image = crate::fs::read_file(&context, None, &interpreter)?;
+        if image.starts_with(b"#!") {
+            return Err(Errno::ENOEXEC.into());
+        }
+    }
+    load::check(&image).map_err(|_| Errno::ENOEXEC)?;
+
+    let arg_slices: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
+    let env_slices: Vec<&[u8]> = env.iter().map(Vec::as_slice).collect();
+
+    // The point of no return.
+    empty_user_half(space).map_err(|_| ExecveError::Lost)?;
+    process.reset_for_exec();
+    let startup = populate(
+        space,
+        process,
+        &image,
+        &arg_slices,
+        &env_slices,
+        random_bytes(),
+    )
+    .map_err(|_| ExecveError::Lost)?;
+    process.set_startup(startup);
+
+    // Descriptors marked close-on-exec go, dropped after the table's lock is
+    // let go, since closing one can wake whatever waits on it. And a `vfork`
+    // parent, asleep since the fork, may run again.
+    let closed = process.files().lock().take_cloexec();
+    drop(closed);
+    process.mark_execed();
+
+    // The old program's thread pointer and floating-point state are its own
+    // and must not reach the new one. The registers are still live on this
+    // processor, inside this task's own system call.
+    // SAFETY: called by the user task whose registers these are.
+    unsafe { arch::reset_user_state() };
+
+    Ok((startup.entry, startup.stack))
+}
+
+/// What a failed `execve` past its point of no return ends the process with.
+pub(crate) const fn lost_status() -> i32 {
+    LOST_STATUS
+}
+
+/// Take every mapping out of the user half.
+fn empty_user_half(space: &AddressSpace) -> Result<(), SpaceError> {
+    space
+        .unmap(0, USER_VIRT_END)
+        .or_else(|_| space.unmap(PAGE_SIZE, USER_VIRT_END - PAGE_SIZE))
+}
+
+/// Read a `NULL`-terminated array of string pointers from the program, as
+/// `argv` and `envp` are passed, charging each string to `budget`.
+///
+/// A null array is an empty one, which Linux accepts for both.
+fn read_strings(space: &AddressSpace, at: u64, budget: &mut usize) -> Result<Vec<Vec<u8>>, Errno> {
+    let mut strings = Vec::new();
+    if at == 0 {
+        return Ok(strings);
+    }
+    let word = size_of::<usize>();
+    let stride = word as u64;
+    let mut slot = at;
+    loop {
+        let mut bytes = [0_u8; 8];
+        let target = bytes.get_mut(..word).ok_or(Errno::EINVAL)?;
+        uaccess::copy_from_user(space, slot, target).map_err(|_| Errno::EFAULT)?;
+        let pointer = u64::from_le_bytes(bytes);
+        if pointer == 0 {
+            return Ok(strings);
+        }
+        let mut string = Vec::new();
+        uaccess::copy_cstr_from_user(space, pointer, ferrix_ustack::MAX_ARG_STRLEN, &mut string)
+            .map_err(|_| Errno::EFAULT)?;
+        // The string, its terminator and its pointer, which is what it costs
+        // on the new program's stack.
+        let cost = string.len().saturating_add(1).saturating_add(word);
+        *budget = budget.checked_sub(cost).ok_or(Errno::E2BIG)?;
+        strings.push(string);
+        slot = slot.checked_add(stride).ok_or(Errno::EFAULT)?;
+    }
+}
+
+/// The interpreter and its one optional argument from a `#!` line.
+fn interpreter_line(image: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>), Errno> {
+    let line = image.get(2..).ok_or(Errno::ENOEXEC)?;
+    let end = line
+        .iter()
+        .take(INTERPRETER_LINE)
+        .position(|&byte| byte == b'\n')
+        .unwrap_or_else(|| line.len().min(INTERPRETER_LINE));
+    let line = line.get(..end).ok_or(Errno::ENOEXEC)?;
+    let line = line.trim_ascii();
+    let split = line
+        .iter()
+        .position(u8::is_ascii_whitespace)
+        .unwrap_or(line.len());
+    let (interpreter, rest) = line.split_at(split);
+    if interpreter.is_empty() {
+        return Err(Errno::ENOEXEC);
+    }
+    let rest = rest.trim_ascii();
+    let argument = (!rest.is_empty()).then(|| rest.to_vec());
+    Ok((interpreter.to_vec(), argument))
+}
+
+/// Sixteen bytes for `AT_RANDOM`.
+///
+/// **Not random.** Two readings of the high-resolution counter, which differ
+/// from boot to boot and from program to program, and are good enough that a
+/// libc's stack-protector canary is not the same constant everywhere. They are
+/// not good enough for anything an attacker is involved in, and nothing here
+/// pretends otherwise: the entropy pool is a later stage's.
+pub(crate) fn random_bytes() -> [u8; ferrix_ustack::RANDOM_BYTES] {
+    let first = arch::counter_now().to_le_bytes();
+    let second = arch::counter_now().rotate_left(29).to_le_bytes();
+    let mut bytes = [0_u8; ferrix_ustack::RANDOM_BYTES];
+    for (slot, value) in bytes.iter_mut().zip(first.iter().chain(second.iter())) {
+        *slot = *value;
+    }
+    bytes
 }

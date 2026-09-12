@@ -41,6 +41,7 @@
 
 pub(crate) mod check;
 pub(crate) mod exec;
+pub(crate) mod family;
 pub(crate) mod fd;
 pub(crate) mod file;
 pub(crate) mod image;
@@ -98,11 +99,6 @@ pub(crate) enum Outcome {
     ///
     /// `execve`, and the child side of `clone`. Data rather than "the frame has
     /// been replaced", so that this module never names a `TrapFrame`.
-    #[expect(
-        dead_code,
-        reason = "execve is the next handler; the variant is the agreed seam, \
-                  and adding it later would change every handler's signature"
-    )]
     Enter {
         /// Where the program's first instruction is.
         entry: u64,
@@ -113,11 +109,14 @@ pub(crate) enum Outcome {
 
 /// Answer one system call.
 ///
+/// `regs` is the caller's saved user registers, which a fork child resumes
+/// from; `None` from a kernel caller, which cannot fork.
+///
 /// Never returns an error and never panics: an unknown number is `ENOSYS`, the
 /// same as Linux. There is nothing above this to catch a failure — the caller
 /// is a trap vector with a program waiting on it — so every path here has to
 /// end in a value.
-pub(crate) fn dispatch(args: &SyscallArgs) -> Outcome {
+pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome {
     // The native ABI first, by range, before any Linux table is asked: the
     // two ABIs never have to agree about a number, and `arch::decode_syscall`
     // never sees one of Ferrix's own. See `native`.
@@ -142,6 +141,35 @@ pub(crate) fn dispatch(args: &SyscallArgs) -> Outcome {
     if matches!(call, Syscall::Exit | Syscall::ExitGroup) && process.is_some() {
         drop(process);
         process::exit_current(truncate(args.args[0]) as i32 & 0xFF);
+    }
+
+    // `clone`, `fork` and `vfork` need the caller's saved registers, which a
+    // kernel caller has none of, and a reference to the parent to keep.
+    if matches!(call, Syscall::Clone | Syscall::Fork | Syscall::Vfork) {
+        let (Some(parent), Some(regs)) = (process.as_ref(), regs) else {
+            return Outcome::Return(Errno::ESRCH.as_return_value());
+        };
+        return Outcome::Return(errno::encode(family::sys_clone(
+            parent, call, &args.args, regs,
+        )));
+    }
+
+    // `execve` resumes on a frame it built rather than returning, and a failure
+    // past its point of no return ends the process -- after the reference is
+    // dropped, for the reason above.
+    if matches!(call, Syscall::Execve) {
+        let Some(caller) = process.as_deref() else {
+            return Outcome::Return(Errno::ESRCH.as_return_value());
+        };
+        let a = args.args;
+        return match exec::sys_execve(caller, a[0], a[1], a[2]) {
+            Ok((entry, stack)) => Outcome::Enter { entry, stack },
+            Err(exec::ExecveError::Refused(error)) => Outcome::Return(error.as_return_value()),
+            Err(exec::ExecveError::Lost) => {
+                drop(process);
+                process::exit_current(exec::lost_status())
+            }
+        };
     }
 
     let answer = handle(call, args, process.as_deref());
@@ -193,9 +221,15 @@ fn handle(call: Syscall, args: &SyscallArgs, process: Option<&Process>) -> Resul
     // The process's own number when there is a process, and the running
     // task's when there is not -- the boot self-checks call this with none.
     // `gettid` stays the task's number either way, which is what it is.
-    if matches!(call, Syscall::Getpid) {
+    if matches!(call, Syscall::Getpid | Syscall::Gettid) {
+        // One thread per process, so a program's thread id is its pid, which
+        // is what glibc's `raise` and a fork child's `CLONE_CHILD_SETTID`
+        // expect to agree.
         let pid = process.map(Process::pid).filter(|&pid| pid != 0);
         return Ok(pid.map_or_else(current_id, |pid| pid as usize));
+    }
+    if let (Syscall::Getppid, Some(process)) = (call, process) {
+        return Ok(process.parent_pid() as usize);
     }
     if let Some(answer) = stateless(call, args) {
         return answer;
@@ -271,6 +305,20 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::PpollTime64 => {
             poll::sys_ppoll(process, a[0], a[1], a[2], a[3], a[4], time::TimeWidth::Wide)
         }
+        Syscall::Wait4 => family::sys_wait4(process, a[0] as i32, a[1], truncate(a[2]), a[3]),
+        Syscall::Waitid => family::sys_waitid(
+            process,
+            truncate(a[0]),
+            truncate(a[1]),
+            a[2],
+            truncate(a[3]),
+            a[4],
+        ),
+        Syscall::Setpgid => family::sys_setpgid(process, a[0] as i32, a[1] as i32),
+        Syscall::Getpgid => family::sys_getpgid(process, a[0] as i32),
+        Syscall::Getpgrp => family::sys_getpgid(process, 0),
+        Syscall::Getsid => family::sys_getsid(process, a[0] as i32),
+        Syscall::Setsid => family::sys_setsid(process),
         Syscall::RtSigaction => signal::sys_rt_sigaction(process, truncate(a[0]), a[1], a[2], a[3]),
         Syscall::RtSigprocmask => {
             signal::sys_rt_sigprocmask(process, truncate(a[0]), a[1], a[2], a[3])

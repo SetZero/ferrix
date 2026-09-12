@@ -206,6 +206,51 @@ pub(crate) const USER_TEST_PROGRAM: &[u8] = &[
 /// The status [`USER_TEST_PROGRAM`] exits with.
 pub(crate) const USER_TEST_STATUS: i32 = 42;
 
+/// A program that forks, has its child exit with 23, waits for it, and exits
+/// with the child's exit code plus one: 24 when `fork`, the child's copy of
+/// its parent's registers and `wait4`'s status word are all right, 99 when
+/// `wait4` reports the wrong child.
+///
+/// ```text
+///   movl $57, %eax ; syscall                  ; fork
+///   testq %rax, %rax ; jnz 1f
+///   movl $231, %eax ; movl $23, %edi ; syscall ; the child exits 23
+/// 1: subq $16, %rsp ; movq %rax, %rdi ; movq %rsp, %rsi
+///   xorl %edx, %edx ; xorl %r10d, %r10d ; movl $61, %eax ; syscall ; wait4
+///   cmpq %rdi, %rax ; jne 2f
+///   movl (%rsp), %edi ; shrl $8, %edi ; addl $1, %edi
+///   movl $231, %eax ; syscall                 ; exit with the child's code + 1
+/// 2: movl $231, %eax ; movl $99, %edi ; syscall
+/// ```
+///
+/// Assembled by rustc's LLVM and read back out of the object file.
+pub(crate) const USER_FORK_PROGRAM: &[u8] = &[
+    0xb8, 0x39, 0x00, 0x00, 0x00, 0x0f, 0x05, 0x48, 0x85, 0xc0, 0x75, 0x0c, 0xb8, 0xe7, 0x00, 0x00,
+    0x00, 0xbf, 0x17, 0x00, 0x00, 0x00, 0x0f, 0x05, 0x48, 0x83, 0xec, 0x10, 0x48, 0x89, 0xc7, 0x48,
+    0x89, 0xe6, 0x31, 0xd2, 0x45, 0x31, 0xd2, 0xb8, 0x3d, 0x00, 0x00, 0x00, 0x0f, 0x05, 0x48, 0x39,
+    0xf8, 0x75, 0x10, 0x8b, 0x3c, 0x24, 0xc1, 0xef, 0x08, 0x83, 0xc7, 0x01, 0xb8, 0xe7, 0x00, 0x00,
+    0x00, 0x0f, 0x05, 0xb8, 0xe7, 0x00, 0x00, 0x00, 0xbf, 0x63, 0x00, 0x00, 0x00, 0x0f, 0x05, 0x0f,
+    0x0b,
+];
+
+/// A program that `execve`s `/exec-target` and, if that returns, exits with
+/// the error number: the target's own status when it exists, 2 (`ENOENT`) when
+/// it does not.
+///
+/// ```text
+///   leaq path(%rip), %rdi ; pushq $0 ; pushq %rdi ; movq %rsp, %rsi
+///   xorl %edx, %edx ; movl $59, %eax ; syscall ; execve(path, [path], NULL)
+///   negl %eax ; movl %eax, %edi ; movl $231, %eax ; syscall ; exit with errno
+/// path: "/exec-target\0"
+/// ```
+///
+/// Assembled by rustc's LLVM and read back out of the object file.
+pub(crate) const USER_EXEC_PROGRAM: &[u8] = &[
+    0x48, 0x8d, 0x3d, 0x1c, 0x00, 0x00, 0x00, 0x6a, 0x00, 0x57, 0x48, 0x89, 0xe6, 0x31, 0xd2, 0xb8,
+    0x3b, 0x00, 0x00, 0x00, 0x0f, 0x05, 0xf7, 0xd8, 0x89, 0xc7, 0xb8, 0xe7, 0x00, 0x00, 0x00, 0x0f,
+    0x05, 0x0f, 0x0b, 0x2f, 0x65, 0x78, 0x65, 0x63, 0x2d, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74, 0x00,
+];
+
 /// A program that spins, then writes a tagged line and exits with a status it
 /// reads out of its own image.
 ///
@@ -583,4 +628,7 @@ pub(crate) fn service_interrupts(frame: &mut TrapFrame, handle: fn(u32)) {
 }
 
 /// The context switch, and the stack layout a new task starts on.
-pub(crate) use switch::{UserState, prepare_stack, restore_user_state, save_user_state, switch_to};
+pub(crate) use switch::{
+    UserState, prepare_stack, reset_user_state, restore_user_state, save_user_state, switch_to,
+};
+pub(crate) use syscall::{UserRegs, resume_user};

@@ -165,7 +165,7 @@ fn check_the_native_range_is_not_a_linux_one() -> Result<(), &'static str> {
         number: nr::CHANNEL_CREATE,
         args: [0; 6],
     };
-    if linux::dispatch(&args) != Outcome::Return(Errno::ESRCH.as_return_value()) {
+    if linux::dispatch(&args, None) != Outcome::Return(Errno::ESRCH.as_return_value()) {
         return Err("a native call with no process was not refused with ESRCH");
     }
     Ok(())

@@ -228,6 +228,18 @@ core::arch::global_asm!(
 .section .text
 .arm
 
+// r0 = a `TrapFrame`. Never returns: the frame is restored by the same
+// instructions the vector path above returns through. The user stack pointer is
+// banked, not in the frame, and is the task's user state's to load.
+.globl ferrix_resume_user
+.balign 4
+ferrix_resume_user:
+    cpsid if
+    mov   sp, r0
+    add   sp, sp, #16
+    pop   {{r0-r12, lr}}
+    rfeia sp!
+
 // r0 = entry, r1 = user stack, r2 = the program's CPSR. Never returns.
 .globl ferrix_enter_user
 .balign 4
@@ -287,6 +299,45 @@ const CPSR_THUMB: u32 = 1 << 5;
 unsafe extern "C" {
     /// Enter USR mode at `entry` on `stack` with `cpsr`.
     fn ferrix_enter_user(entry: u32, stack: u32, cpsr: u32) -> !;
+    /// Resume USR mode from a saved frame.
+    fn ferrix_resume_user(frame: *const TrapFrame) -> !;
+}
+
+/// A program's registers as its system call saved them.
+///
+/// Not the whole story on this architecture: the user stack pointer and link
+/// register are banked and never in a trap frame, so they travel in the task's
+/// user state instead, which is why [`UserRegs::set_stack`] writes there.
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub(crate) struct UserRegs(TrapFrame);
+
+impl UserRegs {
+    /// The same registers, as a child sees them: the call returned zero.
+    pub(crate) const fn for_child(&self) -> UserRegs {
+        let mut frame = self.0;
+        frame.r[0] = 0;
+        UserRegs(frame)
+    }
+
+    /// Start on `stack` instead, as `clone` with a stack argument asks. The
+    /// user stack pointer is banked, so it goes in `state`.
+    pub(crate) fn set_stack(&mut self, state: &mut super::UserState, stack: u64) {
+        state.set_user_stack(stack as u32);
+    }
+}
+
+/// Resume USR mode from `regs`. Does not return.
+///
+/// # Safety
+///
+/// Must be called by a user task with its address space installed and its user
+/// state -- banked stack pointer included -- loaded, and `regs` must be a frame
+/// a system call from that address space saved, living on the task's kernel
+/// stack.
+pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
+    // SAFETY: the caller's guarantee is the assembly's contract.
+    unsafe { ferrix_resume_user(core::ptr::from_ref(&regs.0)) }
 }
 
 /// Enter USR mode for the first time, at `entry` on `stack`. Does not return.
@@ -352,8 +403,9 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         return Ok(());
     }
 
+    let regs = UserRegs(*frame);
     super::enable_interrupts();
-    let outcome = dispatch(&args);
+    let outcome = dispatch(&args, Some(&regs));
     super::disable_interrupts();
 
     match outcome {
@@ -363,7 +415,22 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
             }
             Ok(())
         }
-        Outcome::Enter { .. } => Err("execve through the USR trap path is not wired yet"),
+        // `execve`: the registers belong to a program that no longer exists, so
+        // they are replaced rather than returned into. The stack pointer is
+        // banked and set directly; Thumb follows the entry point's bit 0.
+        Outcome::Enter { entry, stack } => {
+            let entry = entry as u32;
+            frame.r = [0; 13];
+            frame.lr = 0;
+            frame.pc = entry & !1;
+            frame.cpsr = if entry & 1 == 0 {
+                USER_CPSR
+            } else {
+                USER_CPSR | CPSR_THUMB
+            };
+            super::switch::set_user_stack(stack as u32);
+            Ok(())
+        }
     }
 }
 

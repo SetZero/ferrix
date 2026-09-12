@@ -28,7 +28,8 @@ use crate::irq::Report;
 
 pub(crate) use smp::{CpuStarter, describe_cpus, hardware_id};
 pub(crate) use trap::{
-    TrapFrame, advance_past_breakpoint, breakpoint, classify, enter_user, report_trap, system_call,
+    TrapFrame, UserRegs, advance_past_breakpoint, breakpoint, classify, enter_user, report_trap,
+    resume_user, system_call,
 };
 
 /// Point this CPU's per-CPU register at `address`.
@@ -161,6 +162,52 @@ pub(crate) const USER_TEST_PROGRAM: &[u8] = &[
 
 /// The status [`USER_TEST_PROGRAM`] exits with.
 pub(crate) const USER_TEST_STATUS: i32 = 42;
+
+/// A program that forks, has its child exit with 23, waits for it, and exits
+/// with the child's exit code plus one: 24 when `fork`, the child's copy of
+/// its parent's registers and `wait4`'s status word are all right, 99 when
+/// `wait4` reports the wrong child.
+///
+/// ```text
+///   mov r7, #2 ; svc #0                            ; fork
+///   cmp r0, #0 ; bne 1f
+///   mov r7, #248 ; mov r0, #23 ; svc #0            ; the child exits 23
+/// 1: mov r4, r0 ; sub sp, sp, #8 ; mov r1, sp ; mov r2, #0 ; mov r3, #0
+///   mov r7, #114 ; svc #0                          ; wait4
+///   cmp r0, r4 ; bne 2f
+///   ldr r0, [sp] ; lsr r0, r0, #8 ; add r0, r0, #1 ; mov r7, #248 ; svc #0
+/// 2: mov r7, #248 ; mov r0, #99 ; svc #0
+/// ```
+///
+/// Assembled by rustc's LLVM and read back out of the object file.
+pub(crate) const USER_FORK_PROGRAM: &[u8] = &[
+    0x02, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef, 0x00, 0x00, 0x50, 0xe3, 0x02, 0x00, 0x00, 0x1a,
+    0xf8, 0x70, 0xa0, 0xe3, 0x17, 0x00, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef, 0x00, 0x40, 0xa0, 0xe1,
+    0x08, 0xd0, 0x4d, 0xe2, 0x0d, 0x10, 0xa0, 0xe1, 0x00, 0x20, 0xa0, 0xe3, 0x00, 0x30, 0xa0, 0xe3,
+    0x72, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef, 0x04, 0x00, 0x50, 0xe1, 0x04, 0x00, 0x00, 0x1a,
+    0x00, 0x00, 0x9d, 0xe5, 0x20, 0x04, 0xa0, 0xe1, 0x01, 0x00, 0x80, 0xe2, 0xf8, 0x70, 0xa0, 0xe3,
+    0x00, 0x00, 0x00, 0xef, 0xf8, 0x70, 0xa0, 0xe3, 0x63, 0x00, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef,
+    0xfe, 0xff, 0xff, 0xea,
+];
+
+/// A program that `execve`s `/exec-target` and, if that returns, exits with
+/// the error number: the target's own status when it exists, 2 (`ENOENT`) when
+/// it does not.
+///
+/// ```text
+///   adr r0, path ; mov r1, #0 ; push {r0, r1} ; mov r1, sp ; mov r2, #0
+///   mov r7, #11 ; svc #0                           ; execve(path, [path], NULL)
+///   rsb r0, r0, #0 ; mov r7, #248 ; svc #0         ; exit with errno
+/// path: "/exec-target\0"
+/// ```
+///
+/// Assembled by rustc's LLVM and read back out of the object file.
+pub(crate) const USER_EXEC_PROGRAM: &[u8] = &[
+    0x24, 0x00, 0x8f, 0xe2, 0x00, 0x10, 0xa0, 0xe3, 0x03, 0x00, 0x2d, 0xe9, 0x0d, 0x10, 0xa0, 0xe1,
+    0x00, 0x20, 0xa0, 0xe3, 0x0b, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef, 0x00, 0x00, 0x60, 0xe2,
+    0xf8, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef, 0xfe, 0xff, 0xff, 0xea, 0x2f, 0x65, 0x78, 0x65,
+    0x63, 0x2d, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74, 0x00,
+];
 
 /// A program that spins, then writes a tagged line and exits with a status it
 /// reads out of its own image.
@@ -590,4 +637,6 @@ pub(crate) fn service_interrupts(_frame: &mut TrapFrame, handle: fn(u32)) {
 }
 
 /// The context switch, and the stack layout a new task starts on.
-pub(crate) use switch::{UserState, prepare_stack, restore_user_state, save_user_state, switch_to};
+pub(crate) use switch::{
+    UserState, prepare_stack, reset_user_state, restore_user_state, save_user_state, switch_to,
+};

@@ -95,17 +95,39 @@ impl From<UserError> for LoadError {
     }
 }
 
-/// Load `image` into `space`.
+/// Refuse what [`load`] would refuse about the image itself, without touching
+/// any memory.
 ///
-/// The space should be empty. Nothing here checks that, because `execve` will
-/// want to load into a *fresh* space and swap it in only once the load has
-/// succeeded — replacing a running program's memory and then failing leaves
-/// nothing to return to.
+/// For `execve`, which has to decide whether the call can still fail before it
+/// takes the running program's memory away. Everything checked here is a
+/// property of the bytes; what is left for [`load`] to find -- a page that
+/// would be writable and executable, a mapping the space refuses -- is found
+/// after the point of no return, and kills the process as it does on Linux.
 ///
 /// # Errors
 ///
-/// [`LoadError`]. On failure the space may hold part of the image, which is
-/// why the caller builds a new one rather than loading over the live one.
+/// The [`LoadError`] [`load`] would return for the same image.
+pub(crate) fn check(image: &[u8]) -> Result<(), LoadError> {
+    let elf = Elf::parse(image).map_err(LoadError::Malformed)?;
+    elf.check_machine(arch::ARCH.elf_machine())
+        .map_err(|_| LoadError::WrongMachine(elf.machine()))?;
+    if elf.is_pie() {
+        return Err(LoadError::NeedsRelocation);
+    }
+    elf.validate_segments().map_err(LoadError::Malformed)?;
+    let _ = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
+    Ok(())
+}
+
+/// Load `image` into `space`.
+///
+/// The space should be empty. Nothing here checks that: a new process's space
+/// is fresh, and `execve` empties the running program's space first, after
+/// [`check`] has said the image will not be refused for what it is.
+///
+/// # Errors
+///
+/// [`LoadError`]. On failure the space may hold part of the image.
 pub(crate) fn load(space: &AddressSpace, image: &[u8]) -> Result<Loaded, LoadError> {
     let elf = Elf::parse(image).map_err(LoadError::Malformed)?;
     elf.check_machine(arch::ARCH.elf_machine())

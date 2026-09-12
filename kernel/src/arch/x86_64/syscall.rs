@@ -220,6 +220,34 @@ ferrix_enter_user:
 
     swapgs
     sysretq
+
+// Resume a program from a saved system call frame.
+//   rdi = a `SyscallFrame`, in the order the stub above pushed it
+// Never returns. The frame is popped exactly as the stub pops its own, so a
+// fork child leaves the kernel by the same instructions its parent will.
+.globl ferrix_resume_user
+.align 16
+ferrix_resume_user:
+    cli
+    movq %rdi, %rsp
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %rbp
+    popq %rbx
+    popq %r9
+    popq %r8
+    popq %r10
+    popq %rdx
+    popq %rsi
+    popq %rdi
+    popq %rax
+    popq %r11
+    popq %rcx
+    popq %rsp
+    swapgs
+    sysretq
 "#,
     options(att_syntax)
 );
@@ -229,6 +257,49 @@ unsafe extern "C" {
     fn ferrix_syscall_stub();
     /// Enter ring 3 at `entry` on `stack`.
     fn ferrix_enter_user(entry: u64, stack: u64) -> !;
+    /// Resume ring 3 from a saved system call frame.
+    fn ferrix_resume_user(frame: *const SyscallFrame) -> !;
+}
+
+/// A program's registers as its system call saved them.
+///
+/// What a fork child starts from: the same registers as the parent at the
+/// moment it asked, with the return register changed. Opaque outside this
+/// architecture, because every architecture keeps a different set and the
+/// system call layer only ever copies one and asks for two changes to it.
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub(crate) struct UserRegs(SyscallFrame);
+
+impl UserRegs {
+    /// The same registers, as a child sees them: the call returned zero.
+    pub(crate) const fn for_child(&self) -> UserRegs {
+        let mut frame = self.0;
+        frame.rax = 0;
+        UserRegs(frame)
+    }
+
+    /// Start on `stack` instead, as `clone` with a stack argument asks. The
+    /// stack pointer is in the frame on this architecture, so `state` is
+    /// untouched.
+    pub(crate) const fn set_stack(&mut self, state: &mut super::UserState, stack: u64) {
+        let _ = state;
+        self.0.user_rsp = stack;
+    }
+}
+
+/// Resume user mode from `regs`, on the running task's kernel stack. Does not
+/// return.
+///
+/// # Safety
+///
+/// Must be called by a user task with its address space installed and its user
+/// state loaded, and `regs` must be a frame a system call from that address
+/// space saved.
+pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
+    // SAFETY: the caller's guarantee is the assembly's contract; the frame is
+    // read before anything is pushed below it.
+    unsafe { ferrix_resume_user(core::ptr::from_ref(&regs.0)) }
 }
 
 /// Where the assembly hands a system call to the rest of the kernel.
@@ -269,7 +340,8 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
     // `SFMASK` closed them on entry, and they are closed again before the
     // frame is restored, because the way out swaps `GS` on a live stack.
     super::enable_interrupts();
-    let outcome = crate::syscall::dispatch(&args);
+    let regs = UserRegs(*frame);
+    let outcome = crate::syscall::dispatch(&args, Some(&regs));
     super::disable_interrupts();
 
     match outcome {

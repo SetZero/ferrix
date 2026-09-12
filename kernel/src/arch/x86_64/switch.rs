@@ -122,7 +122,7 @@ pub(crate) unsafe fn prepare_stack(
 /// turns need them saved and loaded by the scheduler whenever it switches
 /// between tasks that run user code.
 #[repr(C, align(16))]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct UserState {
     /// `FS_BASE`, which `arch_prctl(ARCH_SET_FS)` writes.
     thread_pointer: u64,
@@ -133,6 +133,26 @@ pub(crate) struct UserState {
 }
 
 impl UserState {
+    /// A copy of the user state this processor holds right now: what a fork
+    /// child inherits.
+    ///
+    /// # Safety
+    ///
+    /// The registers must be the calling task's own, which they are inside its
+    /// own system call.
+    pub(crate) unsafe fn capture() -> UserState {
+        let mut state = UserState::new();
+        // SAFETY: the caller's guarantee.
+        unsafe { save_user_state(&mut state) };
+        state
+    }
+
+    /// Give the program `pointer` as its thread pointer, as `CLONE_SETTLS`
+    /// asks.
+    pub(crate) const fn set_thread_pointer(&mut self, pointer: u64) {
+        self.thread_pointer = pointer;
+    }
+
     /// A program's state before it has run: no thread pointer, and the x87 and
     /// SSE control words a processor has at reset.
     ///
@@ -213,4 +233,20 @@ pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
     unsafe { ferrix_fpu_restore(state.fxsave.as_ptr()) };
     // SAFETY: the caller guarantees the stack.
     unsafe { super::syscall::set_entry_stack(entry_stack) };
+}
+
+/// Put this processor's user state back to a program's starting state: no
+/// thread pointer, reset floating-point control. What `execve` does to the
+/// registers the old program left.
+///
+/// # Safety
+///
+/// Must be called by the user task whose registers these are, from inside its
+/// own system call.
+pub(crate) unsafe fn reset_user_state() {
+    let fresh = UserState::new();
+    // SAFETY: a zero thread pointer is always valid to hold.
+    unsafe { super::syscall::set_thread_pointer(0) };
+    // SAFETY: an area built by `UserState::new`, whose reserved bits are clear.
+    unsafe { ferrix_fpu_restore(fresh.fxsave.as_ptr()) };
 }

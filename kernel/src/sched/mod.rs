@@ -275,6 +275,7 @@ fn new_idle_task(cpu: usize) -> Result<Arc<Task>, &'static str> {
         // A processor's idle task is the kernel's own and has no user half.
         address_space: None,
         process: None,
+        user_state: None,
     })))
 }
 
@@ -442,6 +443,7 @@ pub(crate) fn spawn_on_in(
         affinity,
         address_space,
         None,
+        None,
     )
 }
 
@@ -459,6 +461,7 @@ pub(crate) fn spawn_user(
     entry: fn(usize),
     process: Arc<Process>,
     cpu: Option<usize>,
+    state: Option<arch::UserState>,
 ) -> Result<Arc<Task>, &'static str> {
     let here = this_cpu().ok_or("no processor to start a program on")?;
     let anywhere = *domain_cpus().ok_or("the scheduler has no domain")?;
@@ -476,6 +479,7 @@ pub(crate) fn spawn_user(
         affinity,
         Some(space),
         Some(process),
+        state,
     )
 }
 
@@ -493,6 +497,7 @@ fn spawn_task(
     affinity: CpuSet,
     address_space: Option<Arc<crate::user::space::AddressSpace>>,
     process: Option<Arc<Process>>,
+    user_state: Option<arch::UserState>,
 ) -> Result<Arc<Task>, &'static str> {
     let stack = crate::vmap::allocate_stack().map_err(|problem| {
         // The arena's own reason, because "no stack" has four of them and they
@@ -516,6 +521,7 @@ fn spawn_task(
         affinity,
         address_space,
         process,
+        user_state,
     }));
 
     let lock = queue_of(cpu).ok_or("no such processor")?;

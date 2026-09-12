@@ -33,7 +33,8 @@
 use ferrix_bootinfo::Arch;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
-    NSIG, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK, SIGKILL, SIGSTOP, SS_DISABLE, SS_ONSTACK,
+    NSIG, SA_NOCLDWAIT, SIG_BLOCK, SIG_IGN, SIG_SETMASK, SIG_UNBLOCK, SIGCHLD, SIGKILL, SIGSTOP,
+    SS_DISABLE, SS_ONSTACK,
 };
 
 use crate::arch;
@@ -90,7 +91,7 @@ struct AltStack {
 }
 
 /// Everything about signals a process has told the kernel.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Signals {
     /// Signal `n` is at index `n - 1`.
     actions: [Disposition; NSIG as usize],
@@ -98,6 +99,33 @@ pub(crate) struct Signals {
     blocked: u64,
     /// The alternate stack, if one is installed.
     alt: AltStack,
+}
+
+impl Signals {
+    /// Whether a child that ends is released without being waited for:
+    /// `SIGCHLD` ignored, or its handler installed with `SA_NOCLDWAIT`. What a
+    /// daemon that never calls `wait` relies on to leave no zombies.
+    pub(crate) fn reaps_children_automatically(&self) -> bool {
+        self.actions
+            .get(SIGCHLD as usize - 1)
+            .is_some_and(|action| action.handler == SIG_IGN || action.flags & SA_NOCLDWAIT != 0)
+    }
+
+    /// What `execve` does to them: every handler goes back to the default,
+    /// because the new program has none of the old one's code to run; a signal
+    /// that was ignored stays ignored, which is how `nohup` works; the blocked
+    /// mask is kept; and the alternate stack goes, since it was the old
+    /// program's memory.
+    pub(crate) fn reset_for_exec(&mut self) {
+        for action in &mut self.actions {
+            let ignored = action.handler == SIG_IGN;
+            *action = Disposition::default();
+            if ignored {
+                action.handler = SIG_IGN;
+            }
+        }
+        self.alt = AltStack::default();
+    }
 }
 
 impl Default for Signals {
