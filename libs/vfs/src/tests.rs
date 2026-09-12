@@ -1751,3 +1751,55 @@ fn open_create_without_excl_opens_a_file_created_under_it() {
         Errno::EEXIST
     );
 }
+
+// -- `..` in a listing -------------------------------------------------------
+
+/// The inode number a listing of `path` gives `..`.
+fn listed_dotdot(ns: &Namespace, ctx: &Context, path: &str) -> u64 {
+    let dir = ns.open(ctx, None, path.as_bytes(), &DIRECTORY, 0).unwrap();
+    let mut dotdot = None;
+    dir.read_dir(&mut |entry| {
+        if entry.name == b".." {
+            dotdot = Some(entry.ino);
+        }
+        true
+    })
+    .unwrap();
+    dotdot.expect("a listing has ..")
+}
+
+fn ino(ns: &Namespace, ctx: &Context, path: &str) -> u64 {
+    let at = ns.resolve(ctx, None, path.as_bytes(), true).unwrap();
+    ns.stat(&at).unwrap().metadata.ino
+}
+
+#[test]
+fn dotdot_in_a_listing_is_the_parent_even_across_a_mount() {
+    let (ns, ctx) = fresh();
+    ns.mkdir(&ctx, None, b"/d", 0o755).unwrap();
+    ns.mkdir(&ctx, None, b"/d/e", 0o755).unwrap();
+    assert_eq!(listed_dotdot(&ns, &ctx, "/d/e"), ino(&ns, &ctx, "/d"));
+    assert_eq!(listed_dotdot(&ns, &ctx, "/d"), ino(&ns, &ctx, "/"));
+    assert_eq!(
+        listed_dotdot(&ns, &ctx, "/"),
+        ino(&ns, &ctx, "/"),
+        "the root is its own parent"
+    );
+
+    // `..` of a mount's root is the parent of the directory it covers, in
+    // the filesystem underneath, as a walk of `/d/mnt/..` finds.
+    ns.mkdir(&ctx, None, b"/d/mnt", 0o755).unwrap();
+    let covered = ns.resolve(&ctx, None, b"/d/mnt", true).unwrap();
+    let _ = ns.mount(tmpfs(2), &covered).unwrap();
+    ns.mkdir(&ctx, None, b"/d/mnt/sub", 0o755).unwrap();
+    assert_eq!(listed_dotdot(&ns, &ctx, "/d/mnt"), ino(&ns, &ctx, "/d"));
+    assert_eq!(
+        listed_dotdot(&ns, &ctx, "/d/mnt"),
+        ino(&ns, &ctx, "/d/mnt/.."),
+        "a listing and a walk disagree about .."
+    );
+    assert_eq!(
+        listed_dotdot(&ns, &ctx, "/d/mnt/sub"),
+        ino(&ns, &ctx, "/d/mnt")
+    );
+}
