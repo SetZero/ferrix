@@ -31,7 +31,7 @@ use ferrix_elf::Class;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{Outcome, SyscallArgs, dispatch, uaccess};
-use crate::syscall::{image, load};
+use crate::syscall::{file, image, load};
 
 /// What the checks measured, for the boot log.
 #[derive(Debug)]
@@ -78,9 +78,9 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // loader checks landed and survived every attempt to find it in the
     // address space -- map, commit and drop in isolation was clean, and so was
     // building the image in isolation.
-    let _warm = check_handlers()?;
+    let _warm = check_handlers(Output::Quiet)?;
     let before = mm::free_frames();
-    let pages = check_handlers()?;
+    let pages = check_handlers(Output::Show)?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
 
@@ -278,7 +278,25 @@ fn number_for(call: ferrix_linux_abi::nr::Syscall) -> Option<usize> {
 const TEST_BASE: u64 = 0x2000_0000;
 
 /// Run the handler checks, reporting how many pages ended up faulted in.
-fn check_handlers() -> Result<u64, &'static str> {
+/// Whether this pass should run the checks that print.
+///
+/// The group runs twice and only the second is measured. Without this the boot
+/// log would carry every `write` check's output twice, which reads as a bug in
+/// `write` rather than as a deliberate warm-up.
+///
+/// Skipping them on the warm-up costs the measurement nothing: they allocate
+/// exactly what the other checks do -- one mapping through `map_rw` -- and
+/// `console::write_bytes` touches no heap at all, so there is no size class
+/// reachable only through them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Output {
+    /// The warm-up run.
+    Quiet,
+    /// The measured run.
+    Show,
+}
+
+fn check_handlers(output: Output) -> Result<u64, &'static str> {
     let process = process::new_for_check().map_err(|_| "could not make a process")?;
 
     check_mmap_returns_usable_memory(&process)?;
@@ -293,6 +311,10 @@ fn check_handlers() -> Result<u64, &'static str> {
     check_set_tid_address_answers_with_a_thread_id(&process)?;
     check_an_image_loads_where_its_headers_say(&process)?;
     check_the_loader_refuses_what_it_cannot_run(&process)?;
+    if output == Output::Show {
+        check_write_reaches_the_console(&process)?;
+        check_writev_gathers_in_order(&process)?;
+    }
 
     // Counted rather than asserted. An earlier version of this reported a
     // constant, which says nothing about what actually ran -- a check that
@@ -767,4 +789,101 @@ fn class_of_this_build() -> Class {
     } else {
         Class::Elf32
     }
+}
+
+// ---------------------------------------------------------------------------
+// `write` and `writev`
+//
+// The bytes really do reach the console, which is checked the only way it can
+// be from in here: by writing a marker the boot test's own log will carry. If
+// the line below this check's report is missing from the serial log, `write`
+// did not work, whatever this file claims.
+// ---------------------------------------------------------------------------
+
+/// `write` copies from the program's memory and reports what it wrote.
+fn check_write_reaches_the_console(process: &Process) -> Result<(), &'static str> {
+    let at = map_rw(process, PAGE_SIZE)?;
+    let message = b"  hello   from a user buffer, by way of write(2)\n";
+    uaccess::copy_to_user(process.space(), at, message)
+        .map_err(|_| "could not stage the message")?;
+
+    let written = file::sys_write(process, 1, at, message.len() as u64)
+        .map_err(|_| "write to fd 1 was refused")?;
+    if written != message.len() {
+        return Err("write reported the wrong count");
+    }
+
+    // A zero-length write is not a no-op: it still validates the descriptor.
+    if file::sys_write(process, 1, at, 0) != Ok(0) {
+        return Err("a zero-length write to a good descriptor was refused");
+    }
+    if file::sys_write(process, 7, at, 1) != Err(Errno::EBADF) {
+        return Err("a descriptor that names nothing was not EBADF");
+    }
+    // And EBADF is decided before the buffer is looked at, so a bad descriptor
+    // with a wild pointer is EBADF and not EFAULT.
+    if file::sys_write(process, 7, KERNEL_HALF_BASE, 1) != Err(Errno::EBADF) {
+        return Err("a bad descriptor with a kernel pointer did not report EBADF");
+    }
+    // A good descriptor with a pointer into the kernel is EFAULT.
+    if file::sys_write(process, 1, KERNEL_HALF_BASE, 1) != Err(Errno::EFAULT) {
+        return Err("writing from a kernel address was not EFAULT");
+    }
+
+    let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    Ok(())
+}
+
+/// `writev` gathers the segments in order, and checks the whole array first.
+fn check_writev_gathers_in_order(process: &Process) -> Result<(), &'static str> {
+    let at = map_rw(process, PAGE_SIZE * 2)?;
+    // The three pieces, laid out end to end; then an iovec array pointing at
+    // them in an order that is *not* their order in memory, which is what
+    // proves the gather follows the array rather than the addresses.
+    let pieces: [&[u8]; 3] = [b"write(2)\n", b"  gathered by ", b"  three pieces, "];
+    let mut offsets = [0_u64; 3];
+    let mut cursor = at;
+    for (slot, piece) in offsets.iter_mut().zip(pieces) {
+        uaccess::copy_to_user(process.space(), cursor, piece)
+            .map_err(|_| "could not stage a segment")?;
+        *slot = cursor;
+        cursor += piece.len() as u64;
+    }
+
+    // The array goes in the middle of the second page, well clear of the data.
+    let array = at + PAGE_SIZE;
+    let word = size_of::<usize>() as u64;
+    let order = [2_usize, 1, 0];
+    for (index, &which) in order.iter().enumerate() {
+        let entry = array + (index as u64) * word * 2;
+        let at = *offsets.get(which).ok_or("bad segment index")?;
+        let piece = *pieces.get(which).ok_or("bad segment index")?;
+        write_word(process, entry, at)?;
+        write_word(process, entry + word, piece.len() as u64)?;
+    }
+
+    let total: usize = pieces.iter().map(|p| p.len()).sum();
+    let written = file::sys_writev(process, 1, array, 3).map_err(|_| "writev was refused")?;
+    if written != total {
+        return Err("writev reported the wrong count");
+    }
+
+    // An impossible segment count is refused rather than walked.
+    if file::sys_writev(process, 1, array, 100_000) != Err(Errno::EINVAL) {
+        return Err("writev accepted more segments than IOV_MAX");
+    }
+    if file::sys_writev(process, 1, array, 0) != Ok(0) {
+        return Err("writev with no segments was not zero");
+    }
+
+    let _ = memory::sys_munmap(process, at, PAGE_SIZE * 2).map_err(|_| "munmap was refused")?;
+    Ok(())
+}
+
+/// Write one pointer-sized word into the program's memory.
+fn write_word(process: &Process, at: u64, value: u64) -> Result<(), &'static str> {
+    let bytes = value.to_le_bytes();
+    let width = size_of::<usize>();
+    let slot = bytes.get(..width).ok_or("impossible pointer width")?;
+    uaccess::copy_to_user(process.space(), at, slot).map_err(|_| "could not stage a word")
 }

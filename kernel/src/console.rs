@@ -105,6 +105,33 @@ pub(crate) fn write(arguments: fmt::Arguments<'_>) {
     let _ = Port.write_fmt(arguments);
 }
 
+/// Write raw bytes to the console.
+///
+/// What `write(2)` to file descriptor 1 or 2 ends up calling. Separate from
+/// [`write`] because a program's output is bytes, not `format_args!`: it need
+/// not be valid UTF-8, and a `\0` or a stray `\xFF` in the middle of it is
+/// the program's business rather than something to refuse.
+///
+/// The newline translation is kept, and it is standing in for something: a
+/// terminal line discipline's `ONLCR`, which is what turns a bare `\n` into
+/// CRLF on a real Linux tty. Ferrix has no tty layer yet, and without the
+/// translation every program's output would climb the screen in a staircase.
+/// When stage 15 brings ttys, this moves there and this function stops
+/// translating.
+pub(crate) fn write_bytes(bytes: &[u8]) {
+    if !READY.load(Ordering::Acquire) {
+        return;
+    }
+    let mut port = PORT.lock();
+    let _ = port.write_str("");
+    for &byte in bytes {
+        if byte == b'\n' {
+            crate::arch::console::write_byte(b'\r');
+        }
+        crate::arch::console::write_byte(byte);
+    }
+}
+
 /// Print to the kernel console, with a newline.
 macro_rules! println {
     () => { $crate::console::write(format_args!("\n")) };
