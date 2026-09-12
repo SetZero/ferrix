@@ -123,7 +123,9 @@ expect_used = "deny"
 # matters more than in a server, not less: there is no supervisor to restart
 # us, so a reachable `unwrap` is an unrecoverable machine. `.clippy.toml`
 # exempts test bodies, and `scripts/check-panic-audit.py` asserts that what is
-# left is argued.
+# left is argued. The kernel crate exempts `panic!` itself, once, at its root:
+# a fatal condition there has nowhere to return to, and `kernel/src/panic.rs`
+# is where it is reported.
 panic = "deny"
 unreachable = "deny"
 indexing_slicing = "deny"

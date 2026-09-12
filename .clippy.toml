@@ -2,7 +2,8 @@ excessive-nesting-threshold = 5
 
 # `unwrap()` is denied in kernel and loader code and `expect()` too (see the
 # [workspace.lints.clippy] table in Cargo.toml); `panic!()` is denied alongside
-# them, and `scripts/check-panic-audit.py` asserts that the exemptions left
+# them everywhere but the kernel crate, which argues its one exemption at its
+# root, and `scripts/check-panic-audit.py` asserts that the exemptions left
 # behind are argued ones. All three are idiomatic in tests, where a failed
 # assertion SHOULD panic with a clear message, so these settings exempt test
 # bodies rather than production code.

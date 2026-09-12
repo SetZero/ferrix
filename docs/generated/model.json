@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "264ef5214a516d79e4633e90ae22df37cec8efe88c94bd4911b7ca91c5a6c86a",
+  "digest": "d6d1a56d5674cec216aea428fac83cc8791e05863bff7a5a166077b2d3f4a22c",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -543,7 +543,7 @@
               "kind": "requirement",
               "shortName": "P.13",
               "type": "DesignRule",
-              "doc": "panic!, unreachable!, unwrap, expect and unchecked indexing are denied in production code; every exemption is an #[expect] whose reason begins AUDIT:. A reachable panic is an unrecoverable machine.",
+              "doc": "panic!, unreachable!, unwrap, expect and unchecked indexing are denied in production code; every exemption is an #[expect] whose reason begins AUDIT:. A reachable panic is an unrecoverable machine. The kernel crate exempts panic! alone, once, at its root: it is how a fatal condition with nowhere to return stops the machine and says why.",
               "source": {
                 "file": "docs/sysml/01-requirements.sysml",
                 "line": 164
@@ -558,7 +558,7 @@
               "doc": "Overflow checks stay on in release. A wrapped frame number is a write to the wrong physical page whose symptom appears elsewhere; a panic that names the line is strictly better.",
               "source": {
                 "file": "docs/sysml/01-requirements.sysml",
-                "line": 170
+                "line": 172
               }
             },
             {
@@ -570,7 +570,7 @@
               "doc": "The kernel proves its invariants on every boot rather than asserting them: the memory map is checked, the direct map is checked to alias physical memory, the allocators are required to give every frame back.",
               "source": {
                 "file": "docs/sysml/01-requirements.sysml",
-                "line": 175
+                "line": 177
               }
             },
             {
@@ -582,7 +582,7 @@
               "doc": "docs/CONVENTIONS.md: a commit names one author. No Co-authored-by trailer, no Generated-with line, no tool signature, whoever or whatever made the change; a message is a subject, a blank line, and a body that argues the why. This overrides any agent's default attribution instruction.",
               "source": {
                 "file": "docs/sysml/01-requirements.sysml",
-                "line": 181
+                "line": 183
               }
             },
             {
@@ -594,7 +594,7 @@
               "doc": "A control that only runs once a clone has been configured is not a control. Two hooks behind one un-committable core.hooksPath switch were one control with two names, and neither fired while eight trailer-carrying commits were written. Every rule has a check in CI that needs no local setup and cannot be skipped with --no-verify; hooks are the convenience, CI is the guarantee.",
               "source": {
                 "file": "docs/sysml/01-requirements.sysml",
-                "line": 188
+                "line": 190
               }
             }
           ]
@@ -605,7 +605,7 @@
           "kind": "package",
           "source": {
             "file": "docs/sysml/01-requirements.sysml",
-            "line": 203
+            "line": 205
           },
           "children": [
             {
@@ -617,7 +617,7 @@
               "doc": "HardRt promises EDF with admission control, bounded kernel critical sections on the RT path, preallocated pools there, and interrupts that cannot steal unaccounted time. It does not promise a certified worst-case execution time for the whole kernel; no OS that also hosts LLVM can.",
               "source": {
                 "file": "docs/sysml/01-requirements.sysml",
-                "line": 204
+                "line": 206
               }
             },
             {
@@ -629,7 +629,7 @@
               "doc": "btrfs is single-device to begin with and RAID 5/6 is out of scope; it is where btrfs itself is weakest.",
               "source": {
                 "file": "docs/sysml/01-requirements.sysml",
-                "line": 211
+                "line": 213
               }
             },
             {
@@ -641,7 +641,7 @@
               "doc": "libs/acpi reads the fixed tables only. There is no AML interpreter and there will be none.",
               "source": {
                 "file": "docs/sysml/01-requirements.sysml",
-                "line": 215
+                "line": 217
               }
             }
           ]
@@ -5745,7 +5745,7 @@
           "kind": "action",
           "definition": true,
           "maturity": "implemented",
-          "doc": "kmain. Every stage's exit criterion runs here on every boot, and each failure has its own FERRIX-PANIC line so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-5.",
+          "doc": "kmain. Every stage's exit criterion runs here on every boot, and each failure panics with its own message so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-5.",
           "flow": [
             "start",
             "validateHandoff",

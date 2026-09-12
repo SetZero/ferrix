@@ -29,7 +29,6 @@ use ferrix_bootinfo::{BootView, PAGE_SIZE};
 use ferrix_paging::MapFlags;
 
 use super::{ROOT_SLOTS, UPPER_HALF_SLOT, apic, cpu};
-use crate::console::println;
 use crate::smp::Described;
 
 /// Every processor firmware says can be started, and which one this is.
@@ -385,9 +384,7 @@ extern "C" fn secondary_start(record: u64) -> ! {
     unsafe { super::trap::load_on_this_cpu() };
     // SAFETY: once, on this processor, with interrupts masked.
     if let Err(problem) = unsafe { super::gdt::init_secondary() } {
-        crate::console::begin_panic();
-        println!("FERRIX-PANIC a secondary processor could not build its GDT: {problem}");
-        super::halt()
+        panic!("a secondary processor could not build its GDT: {problem}");
     }
     apic::init_this_cpu();
     crate::smp::secondary_main(record)

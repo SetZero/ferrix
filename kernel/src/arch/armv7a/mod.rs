@@ -50,6 +50,15 @@ pub(crate) unsafe fn cpu_local() -> u64 {
     u64::from(cpu::read_tpidrprw())
 }
 
+/// This CPU's per-CPU register, read from the register rather than through it.
+///
+/// Safe where [`cpu_local`] is not: before [`set_cpu_local`] has run the value
+/// is whatever firmware left there, but reading it cannot fault. For a failure
+/// report, which has to name the processor without trusting it.
+pub(crate) fn cpu_local_register() -> u64 {
+    u64::from(cpu::read_tpidrprw())
+}
+
 /// Name for log lines.
 pub(crate) const NAME: &str = "armv7a";
 

@@ -32,7 +32,6 @@ use ferrix_bootinfo::BootView;
 use ferrix_sync::{IrqControl, Once, SpinLock};
 
 use crate::arch;
-use crate::console::println;
 
 /// The processors firmware described, as the architecture found them.
 ///
@@ -291,9 +290,7 @@ pub(crate) fn secondary_main(record: u64) -> ! {
         .get()
         .and_then(|topology| topology.cpus.iter().find(|cpu| cpu.this == record));
     let Some(expected) = expected else {
-        crate::console::begin_panic();
-        println!("FERRIX-PANIC a secondary processor arrived with no record of its own");
-        arch::halt()
+        panic!("a secondary processor arrived with no record of its own");
     };
 
     // SAFETY: `expected` is a record in the leaked slice, and it is this
@@ -301,12 +298,7 @@ pub(crate) fn secondary_main(record: u64) -> ! {
     // exactly this processor and no other.
     unsafe { arch::set_cpu_local(expected.this) };
     if let Err(problem) = check_this_cpu(expected) {
-        crate::console::begin_panic();
-        println!(
-            "FERRIX-PANIC secondary processor {}: {problem}",
-            expected.logical
-        );
-        arch::halt()
+        panic!("secondary processor {}: {problem}", expected.logical);
     }
     // Work handed out before this processor existed is not its to do.
     expected
@@ -554,9 +546,7 @@ fn wait_for_everyone(
             service_tlb(me);
             let now = crate::timer::now_nanos();
             if now.saturating_sub(started) > timeout {
-                crate::console::begin_panic();
-                println!("FERRIX-PANIC processor {} never {what}", cpu.logical);
-                arch::halt()
+                panic!("processor {} never {what}", cpu.logical);
             }
             if now.saturating_sub(kicked) > KICK_NANOS {
                 let _ = arch::send_ipi_to_others();
@@ -681,6 +671,25 @@ pub(crate) fn this_cpu() -> Option<&'static PerCpu> {
     // in the slice `Topology::from_described` leaked, which lives forever and
     // is only ever reached through shared references.
     Some(unsafe { &*(at as *const PerCpu) })
+}
+
+/// Which processor this is, for a failure report.
+///
+/// [`this_cpu`] follows the per-CPU register, which on a processor that has
+/// not installed its record yet points wherever firmware left it — exactly the
+/// processor most likely to be reporting a failure. This compares the
+/// register's value against the address of every record instead, and believes
+/// it only if it is one of them. The error says what can be said instead.
+pub(crate) fn this_cpu_for_report() -> Result<&'static PerCpu, &'static str> {
+    let Some(topology) = TOPOLOGY.get() else {
+        return Err("the boot processor, before any other was started");
+    };
+    let register = arch::cpu_local_register();
+    topology
+        .cpus
+        .iter()
+        .find(|cpu| cpu.this == register)
+        .ok_or("a processor that has not installed its per-CPU record")
 }
 
 /// Require that this processor's register leads back to `expected`, and that

@@ -9,6 +9,14 @@
 
 #![no_std]
 #![no_main]
+// `panic!` is how the kernel stops on purpose: a fatal condition says what it
+// is, and `panic.rs` turns that into the report. The other panic lints —
+// `unwrap`, `expect`, `unreachable!`, indexing — stay denied here, and all of
+// them stay denied in `libs/`, which return their errors rather than raise them.
+#![expect(
+    clippy::panic,
+    reason = "AUDIT: panic! is the kernel's one way to stop on a fatal condition; see panic.rs"
+)]
 
 extern crate alloc;
 
@@ -26,6 +34,7 @@ mod fdt;
 mod irq;
 mod mm;
 mod mmio;
+mod panic;
 mod sched;
 mod smp;
 mod syscall;
@@ -37,7 +46,6 @@ mod vmap;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use core::panic::PanicInfo;
 
 use ferrix_bootinfo::{BootInfo, BootView, MemKind, PAGE_SIZE};
 use ferrix_paging::MapFlags;
@@ -89,8 +97,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     report(view);
 
     if let Err(problem) = self_check(view, memory) {
-        println!("FERRIX-PANIC stage 1 self-check failed: {problem}");
-        arch::halt()
+        panic!("stage 1 self-check failed: {problem}");
     }
     println!("  stage 1  loader hand-off verified");
 
@@ -105,27 +112,21 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
 
     let stats = match mm::init(view) {
         Ok(stats) => stats,
-        Err(problem) => {
-            println!("FERRIX-PANIC could not bring up memory: {problem}");
-            arch::halt()
-        }
+        Err(problem) => panic!("could not bring up memory: {problem}"),
     };
     report_memory(&stats);
 
     if let Err(problem) = vmap::init() {
-        println!("FERRIX-PANIC could not bring up the kernel address arena: {problem}");
-        arch::halt()
+        panic!("could not bring up the kernel address arena: {problem}");
     }
 
     if let Err(problem) = memory_check(&stats, view.raw().kernel_phys) {
-        println!("FERRIX-PANIC stage 2 self-check failed: {problem}");
-        arch::halt()
+        panic!("stage 2 self-check failed: {problem}");
     }
     println!("  stage 2  frame allocator, heap and vmap arena verified");
 
     if let Err(problem) = trap_check() {
-        println!("FERRIX-PANIC stage 3 self-check failed: {problem}");
-        arch::halt()
+        panic!("stage 3 self-check failed: {problem}");
     }
 
     // Everything above is synchronous: traps the kernel caused deliberately.
@@ -137,25 +138,18 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // vector table and while interrupts are still masked.
     let clocks = match unsafe { arch::init_interrupts(view) } {
         Ok(report) => report,
-        Err(problem) => {
-            println!("FERRIX-PANIC could not bring up interrupts: {problem}");
-            arch::halt()
-        }
+        Err(problem) => panic!("could not bring up interrupts: {problem}"),
     };
     report_clocks(&clocks);
 
     if let Err(problem) = timer::init() {
-        println!("FERRIX-PANIC could not register the timer interrupt: {problem}");
-        arch::halt()
+        panic!("could not register the timer interrupt: {problem}");
     }
     arch::enable_interrupts();
 
     let measured = match timer_check() {
         Ok(hertz) => hertz,
-        Err(problem) => {
-            println!("FERRIX-PANIC stage 3 self-check failed: {problem}");
-            arch::halt()
-        }
+        Err(problem) => panic!("stage 3 self-check failed: {problem}"),
     };
     println!(
         "  stage 3  {} breakpoints, {} page faults, {} ticks at {} Hz",
@@ -199,8 +193,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // ACPI memory needs the tables to have been read, which happened in
     // `init_interrupts` above.
     if let Err(problem) = finish_memory(view) {
-        println!("FERRIX-PANIC stage 2 self-check failed: {problem}");
-        arch::halt()
+        panic!("stage 2 self-check failed: {problem}");
     }
 
     println!("{SUCCESS_MARKER} stages 1-5");
@@ -215,10 +208,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
 fn check_user_memory() {
     let report = match user::check::run() {
         Ok(report) => report,
-        Err(problem) => {
-            println!("FERRIX-PANIC stage 6 self-check failed: {problem}");
-            arch::halt()
-        }
+        Err(problem) => panic!("stage 6 self-check failed: {problem}"),
     };
 
     println!(
@@ -244,10 +234,7 @@ fn check_user_memory() {
 fn check_syscalls() {
     let report = match syscall::check::run() {
         Ok(report) => report,
-        Err(problem) => {
-            println!("FERRIX-PANIC stage 7 self-check failed: {problem}");
-            arch::halt()
-        }
+        Err(problem) => panic!("stage 7 self-check failed: {problem}"),
     };
 
     println!(
@@ -262,29 +249,24 @@ fn check_syscalls() {
 /// Stage 4: find every processor, start them, and require them to work
 /// together.
 ///
-/// Halts rather than returning an error, like the rest of `kmain`: each step
-/// here has its own `FERRIX-PANIC` line, because "stage 4 failed" says
+/// Panics rather than returning an error, like the rest of `kmain`: each step
+/// here has its own message, because "stage 4 failed" says
 /// nothing about which of a dozen processors, or which of the checks, did.
 fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
     // Counting first, starting nothing.
     let cpus = match smp::discover(view) {
         Ok(topology) => topology,
-        Err(problem) => {
-            println!("FERRIX-PANIC could not enumerate the processors: {problem}");
-            arch::halt()
-        }
+        Err(problem) => panic!("could not enumerate the processors: {problem}"),
     };
 
     // Then the rest of them. Each is started, waited for, and required to
     // find its own record through its own register before the next one is
     // started.
     if let Err(problem) = smp::start_secondaries(view) {
-        println!("FERRIX-PANIC could not start the secondary processors: {problem}");
-        arch::halt()
+        panic!("could not start the secondary processors: {problem}");
     }
     if cpus.online() != cpus.count() {
-        println!("FERRIX-PANIC not every processor firmware described came online");
-        arch::halt()
+        panic!("not every processor firmware described came online");
     }
     println!(
         "  cpus     {} described by firmware, {} online, booted on {} {:#x}",
@@ -296,10 +278,7 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
 
     let smp = match smp::check::run(cpus) {
         Ok(report) => report,
-        Err(problem) => {
-            println!("FERRIX-PANIC stage 4 self-check failed: {problem}");
-            arch::halt()
-        }
+        Err(problem) => panic!("stage 4 self-check failed: {problem}"),
     };
     println!(
         "  smp      {} rounds of work on every processor, {} IPIs taken",
@@ -344,16 +323,12 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
 /// a thousand threads, did.
 fn start_scheduler(cpus: &'static smp::Topology) {
     if let Err(problem) = sched::init(cpus) {
-        println!("FERRIX-PANIC could not start the scheduler: {problem}");
-        arch::halt()
+        panic!("could not start the scheduler: {problem}");
     }
 
     let report = match sched::run_checks(cpus) {
         Ok(report) => report,
-        Err(problem) => {
-            println!("FERRIX-PANIC stage 5 self-check failed: {problem}");
-            arch::halt()
-        }
+        Err(problem) => panic!("stage 5 self-check failed: {problem}"),
     };
 
     println!(
@@ -1294,17 +1269,4 @@ fn check_early_mapper(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(
     }
 
     Ok(())
-}
-
-/// Where a kernel panic ends up.
-///
-/// There is no supervisor above us and no unwinder, so this says what happened
-/// and stops the machine. The marker is what turns a panic into a failed boot
-/// test rather than a two-minute timeout with no explanation.
-#[panic_handler]
-fn panic(info: &PanicInfo<'_>) -> ! {
-    console::begin_panic();
-    println!();
-    println!("FERRIX-PANIC {info}");
-    arch::halt()
 }

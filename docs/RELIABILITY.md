@@ -49,8 +49,35 @@ Two rules, enforced by `scripts/check-panic-audit.py`:
 `.clippy.toml` exempts test bodies, where a failed assertion *should* panic with
 a clear message.
 
-The kernel's own `#[panic_handler]` is the one place a panic is the intended
-behaviour, and it is exempted with that reason.
+### `panic!` in the kernel
+
+The kernel crate is the one exemption from the `panic` lint, and it takes it
+once, at the crate root. A self-check that fails in `kmain`, or a processor
+that never answers an interrupt, has nowhere to return an error to: the only
+thing left to do is say what happened and stop. Before this exemption every such
+site printed its own `FERRIX-PANIC` line and called `arch::halt()` by hand; now
+it is a `panic!` with a sentence, and `kernel/src/panic.rs` writes the report:
+
+```text
+FERRIX-PANIC stage 3 self-check failed: the timer never fired
+  at        kernel/src/main.rs:153:23
+  on        processor 0 (hardware id 0x0)
+  stopped   this processor halts here; nothing will recover it
+```
+
+The marker and the message share the first line, because that is the line the
+boot test judges on. What follows is context, which `xtask` keeps reading for a
+moment so that the log holds the whole report.
+
+The exemption is deliberately narrow. `unwrap`, `expect`, `unreachable!` and
+indexing are still denied in the kernel, because each of those panics without
+saying why; `panic!` is only allowed because it has to. And nothing in `libs/`
+gets it: code that can be a pure function of its input returns its errors, and
+the kernel decides which of them are fatal.
+
+The trap path's fatal reports do not go through `panic!`. They print the
+architecture's saved registers after the marker, and a panic message has no way
+to carry a trap frame.
 
 ## Overflow checks are on in release
 

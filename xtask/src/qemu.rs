@@ -21,6 +21,10 @@ pub(crate) const SUCCESS_MARKER: &str = "FERRIX-BOOT-OK";
 /// What the panic handler prints. Seeing this ends the test immediately: the
 /// kernel will not recover, and waiting out the timeout only hides the reason.
 pub(crate) const PANIC_MARKER: &str = "FERRIX-PANIC";
+/// How long to keep reading after the panic marker. The marker line names the
+/// failure; the lines after it say where and on which processor, and a log
+/// that stops at the marker loses them.
+const PANIC_REPORT_GRACE: Duration = Duration::from_secs(2);
 
 /// The exit status QEMU reports when the x86-64 kernel writes 0x10 to the
 /// `isa-debug-exit` port: `(value << 1) | 1`.
@@ -94,6 +98,9 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, args: &Args) -> Result<()> {
         }
     }
 
+    if matches!(outcome, Some(Err(_))) {
+        take_panic_report(&receiver, &mut log)?;
+    }
     let status = finish(&mut child, outcome.is_some())?;
     drop(receiver);
     let _ = reader.join();
@@ -118,6 +125,29 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, args: &Args) -> Result<()> {
             log_path.display()
         ))),
     }
+}
+
+/// Copy the rest of a panic report to the terminal and the log.
+///
+/// Stops when the guest goes quiet for [`PANIC_REPORT_GRACE`] or closes the
+/// port. The verdict is already decided; this is only so that it arrives with
+/// its reasons.
+pub(crate) fn take_panic_report(
+    receiver: &mpsc::Receiver<String>,
+    log: &mut impl Write,
+) -> Result<()> {
+    while let Ok(line) = receiver.recv_timeout(PANIC_REPORT_GRACE) {
+        println!("    | {line}");
+        writeln!(log, "{line}")?;
+        if line.contains(SUCCESS_MARKER) || line.contains(PANIC_MARKER) {
+            // Another processor's report, or something worse; either way the
+            // first one is what failed the boot, and waiting for more of them
+            // could go on for as long as the guest keeps printing.
+            break;
+        }
+    }
+    log.flush()?;
+    Ok(())
 }
 
 /// Wait for QEMU to exit, killing it if the boot already reached a verdict.

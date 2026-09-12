@@ -56,6 +56,15 @@ pub(crate) unsafe fn set_cpu_local(address: u64) {
 pub(crate) unsafe fn cpu_local() -> u64 {
     cpu::read_tpidr_el1()
 }
+
+/// This CPU's per-CPU register, read from the register rather than through it.
+///
+/// Safe where [`cpu_local`] is not: before [`set_cpu_local`] has run the value
+/// is whatever reset left there, but reading it cannot fault. For a failure
+/// report, which has to name the processor without trusting it.
+pub(crate) fn cpu_local_register() -> u64 {
+    cpu::read_tpidr_el1()
+}
 pub(crate) use trap::{TrapFrame, advance_past_breakpoint, breakpoint, classify, report_trap};
 
 /// Install the exception vector table.

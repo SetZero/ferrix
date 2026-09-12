@@ -237,7 +237,7 @@ package FerrixBoot {
 
     #implemented action def KernelBringUp {
         doc /* kmain. Every stage's exit criterion runs here on every boot, and
-             * each failure has its own FERRIX-PANIC line so the boot test
+             * each failure panics with its own message so the boot test
              * fails with a reason rather than a timeout. The marker at the end
              * reads FERRIX-BOOT-OK stages 1-5. */
         in info : BootInfo;

@@ -89,6 +89,7 @@ pub(crate) fn watch(args: &Args) -> Result<()> {
                     return Ok(());
                 }
                 if line.contains(PANIC_MARKER) {
+                    crate::qemu::take_panic_report(&receiver, &mut log)?;
                     return Err(Error::new(format!(
                         "the kernel panicked on the board; see {}",
                         log_path.display()

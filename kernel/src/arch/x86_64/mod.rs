@@ -67,6 +67,16 @@ pub(crate) unsafe fn cpu_local() -> u64 {
     // first word is its own address.
     unsafe { cpu::read_gs_word() }
 }
+
+/// This CPU's per-CPU register, read from the register rather than through it.
+///
+/// Safe where [`cpu_local`] is not: before [`set_cpu_local`] has run the value
+/// is whatever firmware left there, but reading it cannot fault. For a failure
+/// report, which has to name the processor without trusting it.
+pub(crate) fn cpu_local_register() -> u64 {
+    // SAFETY: `IA32_GS_BASE` exists on every 64-bit x86.
+    unsafe { cpu::read_msr(IA32_GS_BASE) }
+}
 pub(crate) use trap::{TrapFrame, advance_past_breakpoint, breakpoint, classify, report_trap};
 
 /// Install the descriptor tables and the trap handlers.
