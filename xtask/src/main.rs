@@ -6,6 +6,9 @@
 //!                       [--accel auto|tcg|whpx|kvm|hvf]
 //! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS]
 //! cargo xtask check     [--fast]
+//! cargo xtask flash     [--arch armv7a] [--to MOUNT]
+//! cargo xtask watch-serial            [--port DEVICE] [--timeout SECONDS]
+//! cargo xtask deploy    [--arch armv7a] [--to MOUNT] [--port DEVICE]
 //! ```
 //!
 //! `build` compiles the loader and the kernel for their two different targets
@@ -26,9 +29,11 @@ mod args;
 mod cargo;
 mod check;
 mod fat;
+mod flash;
 mod paths;
 mod pe;
 mod qemu;
+mod serial;
 
 use std::process::ExitCode;
 
@@ -77,6 +82,9 @@ COMMANDS:
     run           Boot the image under QEMU, attached to the terminal
     test-boot     Boot the image under QEMU and assert the kernel came up
     check         Run every quality gate (fmt, clippy, layering, audits)
+    flash         Copy the loader and kernel onto a board's boot partition
+    watch-serial  Watch a real serial port for the kernel's boot report
+    deploy        flash, then watch-serial: one command for a board
 
 OPTIONS:
     --arch <x86_64|aarch64|armv7a|all>   Target architecture   [default: host]
@@ -87,6 +95,8 @@ OPTIONS:
     --accel <auto|tcg|whpx|kvm|hvf>      QEMU accelerator      [default: tcg]
     --gdb                                Wait for a debugger on :1234
     --fast                               check: skip the cross-target clippy passes
+    --to <MOUNT>                         flash: the card's mounted boot partition
+    --port <DEVICE>                      watch-serial: e.g. /dev/ttyACM0
     -h, --help                           This message
 ";
 
@@ -134,13 +144,39 @@ fn run() -> Result<()> {
             Ok(())
         }
         "check" => check::run(&args),
+        "flash" => {
+            let arch = args.single_arch()?;
+            let (loader, kernel) = build_halves(arch, &args)?;
+            flash::run(arch, &loader, &kernel, &args)
+        }
+        "watch-serial" => serial::watch(&args),
+        // The whole of a board round-trip. Separate commands exist because
+        // each half is useful alone — reflashing without watching, watching a
+        // board someone else reset — but the common case is both, and a
+        // command per step is a command per step to forget.
+        "deploy" => {
+            let arch = args.single_arch()?;
+            let (loader, kernel) = build_halves(arch, &args)?;
+            flash::run(arch, &loader, &kernel, &args)?;
+            serial::watch(&args)
+        }
         other => Err(Error::new(format!("unknown command `{other}`\n\n{USAGE}"))),
     }
 }
 
 /// Compile both halves for `arch` and assemble the bootable image.
 fn build_image(arch: Arch, args: &Args) -> Result<std::path::PathBuf> {
+    let (loader, kernel) = build_halves(arch, args)?;
+    fat::write_image(arch, &loader, &kernel)
+}
+
+/// Compile both halves for `arch`, without assembling an image.
+///
+/// A board has its own filesystem already, put there by the vendor's firmware,
+/// so what it wants is the two files rather than something to write over the
+/// card with.
+fn build_halves(arch: Arch, args: &Args) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel(arch, args.release)?;
-    fat::write_image(arch, &loader, &kernel)
+    Ok((loader, kernel))
 }

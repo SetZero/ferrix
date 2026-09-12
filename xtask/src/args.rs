@@ -31,6 +31,12 @@ pub(crate) struct Args {
     pub(crate) timeout: u64,
     /// `--accel`, which QEMU accelerator to boot under. `None` means `tcg`.
     pub(crate) accel: Option<String>,
+    /// `--to`, the mounted boot partition `flash` writes to. `None` means
+    /// "find the only one".
+    pub(crate) to: Option<String>,
+    /// `--port`, the serial device `watch-serial` reads. `None` means "find
+    /// the only one".
+    pub(crate) port: Option<String>,
 }
 
 impl Args {
@@ -56,6 +62,8 @@ impl Args {
                 "--memory" => args.memory = number(&mut items, "--memory")?,
                 "--timeout" => args.timeout = number(&mut items, "--timeout")?,
                 "--accel" => args.accel = Some(value(&mut items, "--accel")?),
+                "--to" => args.to = Some(value(&mut items, "--to")?),
+                "--port" => args.port = Some(value(&mut items, "--port")?),
                 other if other.starts_with('-') => {
                     return Err(Error::new(format!("unknown option `{other}`")));
                 }
@@ -166,6 +174,27 @@ mod tests {
             parse(&["run", "--accel", "whpx"]).unwrap().accel.as_deref(),
             Some("whpx")
         );
+    }
+
+    #[test]
+    fn takes_the_board_options() {
+        let args = parse(&[
+            "deploy",
+            "--to",
+            "/media/sebastian/bootfs",
+            "--port",
+            "/dev/ttyACM0",
+        ])
+        .unwrap();
+        assert_eq!(args.to.as_deref(), Some("/media/sebastian/bootfs"));
+        assert_eq!(args.port.as_deref(), Some("/dev/ttyACM0"));
+    }
+
+    #[test]
+    fn the_board_options_default_to_discovery() {
+        let args = parse(&["flash"]).unwrap();
+        assert_eq!(args.to, None, "no --to means find the only card");
+        assert_eq!(args.port, None, "no --port means find the only port");
     }
 
     #[test]
