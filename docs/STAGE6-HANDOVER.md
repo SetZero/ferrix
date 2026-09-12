@@ -379,6 +379,14 @@ one-in-three failure from a clean commit.** If you find yourself bisecting an
 intermittent hang, get the control — the commit before the suspect work — and
 run it enough times to matter, before reasoning about mechanism at all.
 
+**It is a race and not a size or layout effect**, which is worth stating because
+it is the obvious next hypothesis and it is dead. The stage 7 session had the
+cleanest demonstration: on x86_64, the first boot after a rebase hung at stage 5
+with no verdict and the second passed — *same binary, back to back, nothing else
+changed*. A kernel that both hangs and passes cannot be hanging because it grew.
+Their running tally at roughly today's kernel size is 6 passes and 3 real
+failures on x86_64, and nothing systematic about which of the two faces shows.
+
 The `sched` owner has also ruled three mechanisms out, recorded here so nobody
 re-runs them: lock ordering in `balance()` (`steal_from` always locks the
 lower-numbered queue first, and the snapshot loops hold one at a time); a TLB
@@ -389,6 +397,13 @@ cross-processor wait to deadlock on); and the two classic Arm lost-wakeup shapes
 does `dsb ishst` before the distributor write). It is a heisenbug — one print
 per check phase makes it pass 6 of 6, because the console lock serialises the
 processors and closes the window.
+
+And one symptom nobody had connected until the stage 7 session saw both from one
+build: the assertion *a task's stack was never given back* and the no-verdict
+hang came out of the same binary on the same architecture minutes apart. That
+reads as one bug rather than two — reaping not completing, with the assertion
+being the run where the check got to execute and the hang the run where it did
+not — so the reap path and `ZOMBIES` are worth as much attention as `balance()`.
 
 * `kernel/src/sched/`, `libs/sched` — **released to stage 6.** The stage 5 owner
   finished and merged as `9daec68`, and said both of §4's sched changes are
@@ -430,6 +445,16 @@ processors and closes the window.
   `TrapFrame`. The `isize` is already the Linux return-register value, `-errno`
   encoded, so your side writes one register and returns. Register shuffling is
   yours, the ABI is theirs.
+
+  One thing of theirs marked for deletion, since it will not be obvious to
+  whoever removes it: `read_iovec` in `kernel/src/syscall/file.rs` hand-rolls a
+  32-bit `struct iovec` as two native words, because `linux-abi::types` is
+  documented 64-bit-only and reading a 32-bit array through the 64-bit `Iovec`
+  would walk it at double stride and build pointers out of halves of two
+  different entries — which does not fault, it reads the wrong memory. When
+  somebody adds a 32-bit layout set (`Stat64`, `Timespec32`, `Iovec32` and the
+  rest), `read_iovec` is the first thing to delete in favour of it. Anything of
+  yours that reads a user structure wants the same question asked of it.
 
   Two things from them that bear on your vectors. On ARMv7-A a valid syscall
   number is **not** bounded by the table's length: `__ARM_NR_BASE` is
