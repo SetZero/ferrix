@@ -552,6 +552,33 @@ pub(crate) fn timer_irq() -> u32 {
     timer::irq()
 }
 
+/// Stop interrupt `number` being delivered until [`unmask_interrupt`] lets
+/// it through again.
+///
+/// # Errors
+///
+/// If `number` is not a line the interrupt controller has.
+pub(crate) fn mask_interrupt(number: u32) -> Result<(), &'static str> {
+    if number >= gicv2::FIRST_SPECIAL_ID {
+        return Err("not a line the interrupt controller has");
+    }
+    gicv2::disable(number);
+    Ok(())
+}
+
+/// Let interrupt `number` be delivered again after [`mask_interrupt`].
+///
+/// # Errors
+///
+/// If `number` is not a line the interrupt controller has.
+pub(crate) fn unmask_interrupt(number: u32) -> Result<(), &'static str> {
+    if number >= gicv2::FIRST_SPECIAL_ID {
+        return Err("not a line the interrupt controller has");
+    }
+    gicv2::enable(number);
+    Ok(())
+}
+
 /// Claim every pending interrupt, dispatch it, and retire it — a loop, for
 /// the reason AArch64's is one: the exception is taken once however many are
 /// pending.

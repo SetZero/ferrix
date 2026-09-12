@@ -56,7 +56,7 @@ const DEFAULT_PRIORITY: u8 = 0xA0;
 /// Interrupt identifiers from here up are not real interrupts: 1023 is
 /// "spurious", and the rest are reserved. Reading one means the controller had
 /// nothing to give, and it must not be acknowledged.
-const FIRST_SPECIAL_ID: u32 = 1020;
+pub(crate) const FIRST_SPECIAL_ID: u32 = 1020;
 
 /// The identifier field of `GICC_IAR`.
 const IAR_ID_MASK: u32 = 0x3FF;
@@ -148,6 +148,25 @@ pub(crate) fn enable(id: u32) {
     // `init_this_cpu`.
     if id < PRIVATE_LINES as u32 {
         let _ = PRIVATE_ENABLED.fetch_or(bit, Ordering::Relaxed);
+    }
+}
+
+/// Stop delivering `id` until [`enable`] turns it back on.
+///
+/// What an `Interrupt` object does between a line firing and its driver
+/// acknowledging it, so a device that keeps asserting its line cannot keep a
+/// processor in the handler. A clear-enable write stops new deliveries only:
+/// one already signalled to a CPU interface still arrives, and the handler
+/// has to tolerate that.
+pub(crate) fn disable(id: u32) {
+    let gicd = window(&DISTRIBUTOR);
+    let word = u64::from(id / 32) * 4;
+    let bit = 1u32 << (id % 32);
+    gicd.write32(GICD_ICENABLER + word, bit);
+
+    // The private copy `enable` keeps for cores that come up later.
+    if id < PRIVATE_LINES as u32 {
+        let _ = PRIVATE_ENABLED.fetch_and(!bit, Ordering::Relaxed);
     }
 }
 

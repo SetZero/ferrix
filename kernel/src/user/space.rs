@@ -272,6 +272,10 @@ impl AddressSpace {
     /// stale writable entry, which is the one thing between this and a working
     /// `fork(2)`.
     ///
+    /// Device regions are shared, not copied: they own no frames, and
+    /// `ferrix_vma`'s `needs_cow` never marks them copy-on-write, so a child
+    /// that touches one faults in the same registers its parent reaches.
+    ///
     /// # Errors
     ///
     /// [`SpaceError::OutOfMemory`] if there is no frame for the child's root,
@@ -390,10 +394,14 @@ impl AddressSpace {
 
         let (id, offset) = match region.backing {
             Backing::Anonymous { id, offset } => (id, offset.saturating_add(into_region)),
-            // Everything else wants a page cache or a device, which are later
-            // stages. Reported rather than panicked: an unhandled backing is a
-            // kernel bug, but killing the process beats stopping the machine.
-            _ => return Err(SpaceError::NotMapped(address)),
+            // A device region has no object: its page is the device's own.
+            Backing::Device { physical } => {
+                return self.fault_device(page, physical.saturating_add(into_region), region.flags);
+            }
+            // A file wants a page cache, which is a later stage. Reported rather
+            // than panicked: an unhandled backing is a kernel bug, but killing
+            // the process beats stopping the machine.
+            Backing::File { .. } => return Err(SpaceError::NotMapped(address)),
         };
 
         let vmo = Arc::clone(
@@ -649,6 +657,94 @@ impl AddressSpace {
     ///
     /// [`SpaceError::BadRange`] if the length is malformed, and
     /// [`SpaceError::OutOfMemory`] if there is no hole big enough.
+    /// Place `len` bytes of device memory, starting at physical address
+    /// `physical`, in this space: at `at` if one is given, otherwise wherever
+    /// it fits. Returns where it went.
+    ///
+    /// What `io_mapping_map` does with an aperture. The region is backed by
+    /// the device itself, [`Backing::Device`], so nothing is committed or
+    /// copied: its pages are translated on first touch, by
+    /// [`AddressSpace::fault`], to the device's own frames, uncached. It is
+    /// shared, so a `fork` child reaches the same registers rather than a copy
+    /// of them, and never executable, because nobody runs code out of a
+    /// register window.
+    ///
+    /// Whether `physical..physical + len` is memory this space may have at
+    /// all is not decided here: the caller holds an `Aperture` that says so.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::Refused`] if `flags` asks for execute;
+    /// [`SpaceError::BadRange`] for a length or physical address that is not
+    /// whole pages, or a range overlapping a mapping;
+    /// [`SpaceError::NotUserRange`] outside the user half; and
+    /// [`SpaceError::OutOfMemory`] if no gap that large is free.
+    pub(crate) fn map_device(
+        &self,
+        at: Option<u64>,
+        len: u64,
+        physical: u64,
+        flags: VmaFlags,
+    ) -> Result<u64, SpaceError> {
+        if flags.execute {
+            return Err(SpaceError::Refused(at.unwrap_or(0)));
+        }
+        if len == 0 || !len.is_multiple_of(PAGE_SIZE) || !physical.is_multiple_of(PAGE_SIZE) {
+            return Err(SpaceError::BadRange);
+        }
+        let mut inner = self.inner.lock();
+        let at = match at {
+            Some(at) => at,
+            None => inner
+                .map
+                .find_free(len, PAGE_SIZE, None)
+                .ok_or(SpaceError::OutOfMemory)?,
+        };
+        if !is_user_address(at) || at.checked_add(len).is_none_or(|end| end > USER_VIRT_END) {
+            return Err(SpaceError::NotUserRange(at));
+        }
+        let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
+        let flags = VmaFlags {
+            execute: false,
+            shared: true,
+            grows_down: false,
+            ..flags
+        };
+        inner
+            .map
+            .insert(range, flags, Backing::Device { physical })
+            .map_err(|_| SpaceError::BadRange)?;
+        Ok(at)
+    }
+
+    /// Translate one page of a device region to the device's own page.
+    ///
+    /// Called with the address space's lock held, as the anonymous path maps,
+    /// so two processors faulting the same page cannot both install it. A page
+    /// already present was resolved by another processor first, and the
+    /// faulting instruction retries and succeeds, for the reason the anonymous
+    /// path gives.
+    fn fault_device(&self, page: u64, physical: u64, flags: VmaFlags) -> Result<(), SpaceError> {
+        if mm::translate_in(self.root * PAGE_SIZE, page).is_some() {
+            return Ok(());
+        }
+        mm::map_in(
+            self.root * PAGE_SIZE,
+            page,
+            physical,
+            PAGE_SIZE,
+            MapFlags {
+                read: flags.read,
+                write: flags.write,
+                execute: false,
+                user: true,
+                global: false,
+                device: true,
+            },
+        )
+        .map_err(|_| SpaceError::OutOfMemory)
+    }
+
     pub(crate) fn map_anywhere(
         &self,
         hint: Option<u64>,

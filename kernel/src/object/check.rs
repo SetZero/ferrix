@@ -29,8 +29,10 @@ use ferrix_sync::SpinLock;
 use ferrix_vma::VmaFlags;
 
 use crate::arch;
+use crate::device::{self, DeviceNode};
 use crate::mm;
 use crate::object::channel::Endpoint;
+use crate::object::interrupt;
 use crate::object::job::{Job, KILLED_STATUS};
 use crate::object::{self, Object};
 use crate::sched::Task;
@@ -38,6 +40,7 @@ use crate::syscall::check::spinner;
 use crate::syscall::image;
 use crate::syscall::process::{self, Process};
 use crate::syscall::{self as linux, Outcome, SyscallArgs, native, uaccess};
+use crate::user::space::Access;
 use ferrix_elf::Class;
 
 /// Where each check process keeps its buffers.
@@ -62,6 +65,8 @@ const SIZE: u64 = SCRATCH + 0x318;
 const DEADLINE: u64 = SCRATCH + 0x320;
 /// The signals a wait observed.
 const OBSERVED: u64 = SCRATCH + 0x328;
+/// An `IoMappingSpec`.
+const SPEC: u64 = SCRATCH + 0x330;
 
 /// How long the waker sleeps before it writes.
 const WAKE_AFTER_NANOS: u64 = 20_000_000;
@@ -105,6 +110,10 @@ struct Counter {
     woken: u32,
     /// See [`Report::killed`].
     killed: u32,
+    /// See [`Report::mapped`].
+    mapped: u32,
+    /// See [`Report::interrupts`].
+    interrupts: u32,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -934,4 +943,263 @@ fn native_program(role: u8) -> Result<Arc<Process>, &'static str> {
         [0x39; ferrix_ustack::RANDOM_BYTES],
     )
     .map_err(|_| "the native program could not be loaded")
+}
+
+/// What the device checks measured, for the boot log.
+#[derive(Debug)]
+pub(crate) struct DeviceReport {
+    /// Apertures mapped into a process, and reached from a forked child.
+    pub(crate) mapped: u32,
+    /// Interrupts delivered to an object, waited on and acknowledged.
+    pub(crate) interrupts: u32,
+    /// Calls refused with exactly the status they had to be refused with.
+    pub(crate) refusals: u32,
+}
+
+/// The device objects: I/O mappings and interrupts, minted from the device
+/// nodes stage 10 publishes.
+///
+/// A separate entry point from [`run`], and called later, because it needs
+/// those nodes. It first ran inside [`run`], before they were published,
+/// found none, and passed on every machine having checked nothing -- which
+/// the boot log's `0 aperture mapped` said and nothing else did. So the
+/// counts are printed, and on a machine with a whole-page aperture a count of
+/// zero is a failure rather than a skip.
+pub(crate) fn run_devices() -> Result<DeviceReport, &'static str> {
+    let mut counter = Counter::default();
+    check_a_device_gives_exactly_its_own_memory(&mut counter)?;
+    check_an_interrupt_is_held_until_acknowledged(&mut counter)?;
+    let has_whole_page = device::devices().iter().any(|node| {
+        node.apertures()
+            .iter()
+            .any(|aperture| aperture.whole_pages())
+    });
+    if has_whole_page && counter.mapped == 0 {
+        return Err("a machine with a whole-page device aperture mapped none");
+    }
+    let has_vector = device::devices()
+        .iter()
+        .any(|node| node.vector(0).is_some());
+    if has_vector && counter.interrupts == 0 {
+        return Err("a machine with a device vector held no interrupt");
+    }
+    Ok(DeviceReport {
+        mapped: counter.mapped,
+        interrupts: counter.interrupts,
+        refusals: counter.refusals,
+    })
+}
+
+/// Give `side` a handle to `node`, as `devmgr` will give one to a driver.
+fn device_handle(side: &Side, node: &Arc<DeviceNode>) -> Result<Handle, &'static str> {
+    side.process
+        .with_handles(|table| table.insert(Object::Device(Arc::clone(node)), Rights::DEVICE))
+        .map_err(|_| "no room for a device handle")
+}
+
+/// Stage a spec for `len` bytes at `phys` at [`SPEC`].
+fn stage_spec(side: &Side, phys: u64, len: u64) -> Result<(), &'static str> {
+    side.put(SPEC, &phys.to_ne_bytes())?;
+    side.put(SPEC + 8, &len.to_ne_bytes())
+}
+
+/// Whether `space` translates `at` to `phys`, after faulting it in.
+///
+/// The page is faulted in and its translation read back, and nothing reads
+/// the device memory itself: the direct map covers RAM, not registers, and a
+/// read of a real device register can have side effects.
+fn reaches(
+    space: &crate::user::space::AddressSpace,
+    at: u64,
+    phys: u64,
+) -> Result<bool, &'static str> {
+    space
+        .fault(at, Access::READ)
+        .map_err(|_| "a device page could not be faulted in")?;
+    Ok(mm::translate_in(space.root_table(), at) == Some(phys))
+}
+
+/// A device handle yields a mapping of its own aperture and of nothing beyond
+/// it, the mapping lands on the device's physical pages, and a forked child
+/// reaches the same pages rather than a copy of them.
+///
+/// Every machine has a whole-page aperture except where firmware found none,
+/// in which case the mapping half reports nothing mapped. The refusal of a
+/// sub-page aperture runs wherever one exists: the virtio-mmio transports on
+/// ARMv7-A.
+fn check_a_device_gives_exactly_its_own_memory(counter: &mut Counter) -> Result<(), &'static str> {
+    let side = Side::new()?;
+
+    let sub_page = device::devices().iter().find_map(|node| {
+        node.apertures()
+            .iter()
+            .find(|aperture| !aperture.whole_pages())
+            .map(|aperture| (Arc::clone(node), *aperture))
+    });
+    if let Some((node, aperture)) = sub_page {
+        let handle = device_handle(&side, &node)?;
+        stage_spec(&side, aperture.phys(), aperture.len())?;
+        refused(
+            side.call(nr::IO_MAPPING_CREATE, &[reg(handle), SPEC]),
+            status::INVALID_ARGS,
+            "an aperture smaller than a page was mapped, taking its neighbours with it",
+            counter,
+        )?;
+    }
+
+    let Some((node, aperture)) = device::devices().iter().find_map(|node| {
+        node.apertures()
+            .iter()
+            .find(|aperture| aperture.whole_pages())
+            .map(|aperture| (Arc::clone(node), *aperture))
+    }) else {
+        side.close_everything();
+        return Ok(());
+    };
+    let handle = device_handle(&side, &node)?;
+
+    stage_spec(&side, aperture.phys(), aperture.len() + 1)?;
+    refused(
+        side.call(nr::IO_MAPPING_CREATE, &[reg(handle), SPEC]),
+        status::ACCESS_DENIED,
+        "a range one byte past a device's aperture was granted",
+        counter,
+    )?;
+
+    stage_spec(&side, aperture.phys(), aperture.len())?;
+    let mapping = side.handle(
+        nr::IO_MAPPING_CREATE,
+        &[reg(handle), SPEC],
+        "io_mapping_create of a device's own aperture failed",
+    )?;
+    let at = side
+        .call(nr::IO_MAPPING_MAP, &[reg(mapping), 0])
+        .map_err(|_| "io_mapping_map failed")? as u64;
+    if !reaches(side.process.space(), at, aperture.phys())? {
+        return Err("a mapped aperture does not translate to the device's own memory");
+    }
+    let child = side
+        .process
+        .space()
+        .fork()
+        .map_err(|_| "could not fork an address space holding a device mapping")?;
+    if !reaches(&child, at, aperture.phys())? {
+        return Err("a forked child does not reach the same device memory as its parent");
+    }
+    drop(child);
+
+    // One driver per device: a mapping handle carries no DUPLICATE, so it
+    // cannot be copied, only moved or narrowed.
+    refused(
+        side.call(
+            nr::HANDLE_DUPLICATE,
+            &[reg(mapping), u64::from(Rights::TRANSFER.0)],
+        ),
+        status::ACCESS_DENIED,
+        "a mapping handle was duplicated",
+        counter,
+    )?;
+    let narrow = side.handle(
+        nr::HANDLE_REPLACE,
+        &[reg(mapping), u64::from(Rights::TRANSFER.0)],
+        "narrowing a mapping handle to TRANSFER failed",
+    )?;
+    refused(
+        side.call(nr::IO_MAPPING_MAP, &[reg(narrow), 0]),
+        status::ACCESS_DENIED,
+        "a mapping handle without MAP was mapped",
+        counter,
+    )?;
+    counter.mapped += 1;
+    side.close_everything();
+    Ok(())
+}
+
+/// An interrupt is claimed once, held pending from delivery until the driver
+/// acknowledges it, and can be claimed again once its holder lets go.
+///
+/// Nothing drives a device yet, so nothing makes one interrupt. The delivery
+/// here is the kernel's own handler, [`interrupt::on_interrupt`], called as the
+/// controller would call it: everything after the hardware — masking, the
+/// pending level a wait sees, acknowledgement unmasking — is what is being
+/// checked. Only a machine whose devices have vectors runs it; today that is
+/// ARMv7-A's virtio-mmio transports.
+fn check_an_interrupt_is_held_until_acknowledged(
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let Some((node, vector)) = device::devices()
+        .iter()
+        .find_map(|node| node.vector(0).map(|vector| (Arc::clone(node), vector)))
+    else {
+        return Ok(());
+    };
+    let side = Side::new()?;
+    let handle = device_handle(&side, &node)?;
+    let readable = u64::from(Signals::READABLE.0);
+
+    let first = side.handle(
+        nr::INTERRUPT_CREATE,
+        &[reg(handle), 0],
+        "interrupt_create of a device's own vector failed",
+    )?;
+    refused(
+        side.call(nr::INTERRUPT_CREATE, &[reg(handle), 0]),
+        status::ALREADY_BOUND,
+        "one interrupt line was claimed twice",
+        counter,
+    )?;
+    refused(
+        side.call(nr::INTERRUPT_CREATE, &[reg(handle), 99]),
+        status::INVALID_ARGS,
+        "a vector the device does not have was claimed",
+        counter,
+    )?;
+
+    stage_deadline(&side, 0)?;
+    refused(
+        side.call(
+            nr::OBJECT_WAIT_ONE,
+            &[reg(first), readable, DEADLINE, OBSERVED],
+        ),
+        status::TIMED_OUT,
+        "an interrupt that has not fired said it was pending",
+        counter,
+    )?;
+
+    interrupt::on_interrupt(vector.number());
+    stage_deadline(&side, PATIENCE_NANOS)?;
+    let _ = side
+        .call(
+            nr::OBJECT_WAIT_ONE,
+            &[reg(first), readable, DEADLINE, OBSERVED],
+        )
+        .map_err(|_| "a wait did not see an interrupt that had fired")?;
+    let _ = side
+        .call(nr::INTERRUPT_ACK, &[reg(first)])
+        .map_err(|_| "interrupt_ack failed")?;
+    stage_deadline(&side, 0)?;
+    refused(
+        side.call(
+            nr::OBJECT_WAIT_ONE,
+            &[reg(first), readable, DEADLINE, OBSERVED],
+        ),
+        status::TIMED_OUT,
+        "an acknowledged interrupt was still pending",
+        counter,
+    )?;
+
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(first)])
+        .map_err(|_| "closing an interrupt failed")?;
+    let again = side.handle(
+        nr::INTERRUPT_CREATE,
+        &[reg(handle), 0],
+        "a line its holder had let go of could not be claimed again",
+    )?;
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(again)])
+        .map_err(|_| "closing a reclaimed interrupt failed")?;
+    counter.interrupts += 1;
+    side.close_everything();
+    Ok(())
 }

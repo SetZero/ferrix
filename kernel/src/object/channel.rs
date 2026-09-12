@@ -286,7 +286,11 @@ fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Vec<Arc<Endpoint>> {
         .flat_map(|message| message.handles.iter())
         .filter_map(|(object, _)| match object {
             Object::Channel(queued) => Some(Arc::clone(queued)),
-            Object::Vmo(_) | Object::Job(_) => None,
+            Object::Vmo(_)
+            | Object::Job(_)
+            | Object::Device(_)
+            | Object::Interrupt(_)
+            | Object::IoMapping(_) => None,
         })
         .collect()
 }

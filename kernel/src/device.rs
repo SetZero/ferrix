@@ -114,7 +114,6 @@ pub(crate) struct Vector {
 
 impl Vector {
     /// The number `irq::register` takes.
-    #[expect(dead_code, reason = "read by stage 9's Interrupt::new")]
     pub(crate) const fn number(self) -> u32 {
         self.number
     }

@@ -146,6 +146,7 @@ fn default_rights_are_defined_rights() {
         Rights::JOB,
         Rights::INTERRUPT,
         Rights::IO_MAPPING,
+        Rights::DEVICE,
     ] {
         assert!(rights.is_known(), "{rights:?} has an undefined bit");
     }

@@ -692,8 +692,12 @@ rights must only shrink; a closed handle must be refused; a refused send must
 leave every handle with its sender; a send closing a cycle of channels must be
 refused; and closing a channel must free what was queued in it. A wait must be
 woken by what it waits for rather than by its deadline, and a job kill must end
-every process in and beneath the job and none above it. A kernel failing any of
-these would give userspace drivers a capability system that confines nothing.
+every process in and beneath the job and none above it.
+`object::check::run_devices`, once the device nodes are published, requires an
+I/O mapping of a device's own aperture to translate to its physical pages, in a
+forked child too, and nothing past it to be granted, and an interrupt to be held
+pending from delivery to acknowledgement. A kernel failing any of these would
+give userspace drivers a capability system that confines nothing.
 
 1. The handle table in `libs/objects` or the rights rule in `libs/native-abi`
    changed, so a closed handle resolves again or a duplicate gains a right.
@@ -705,9 +709,13 @@ these would give userspace drivers a capability system that confines nothing.
 4. A channel end, or a job, was not woken when its signals changed, so a wait
    slept until its deadline; or `Job::kill` missed a process added to a job
    beneath the one killed.
-5. A copy to or from user memory in `syscall::native` used the wrong length or
+5. `AddressSpace::map_device` or the device branch of `fault` translated a
+   device region to the wrong physical page, or `fork` copied one; or
+   `gicv2::disable` cleared the wrong enable bit, so an interrupt stayed masked
+   after its acknowledgement.
+6. A copy to or from user memory in `syscall::native` used the wrong length or
    width.
-6. `object::dispose` stopped draining, or an object was dropped under a lock its
+7. `object::dispose` stopped draining, or an object was dropped under a lock its
    drop needs, so the frames behind a VMO queued in a closed channel were never
    freed.
 

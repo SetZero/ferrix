@@ -229,10 +229,12 @@ package FerrixRoadmap {
              * dispatch, channels carrying handles and VMO create/read/write,
              * self-checked between two processes in the boot test; signals on
              * every object and object_wait_one; Job with job_create and a
-             * job_kill that takes down a tree of running programs. Missing:
-             * ports and asynchronous waits, Interrupt, IoMapping, vmo_map, and
-             * the exit test itself, on processes that are now scheduled
-             * tasks. */
+             * job_kill that takes down a tree of running programs; device
+             * handles, IoMapping and Interrupt minted from stage 10's device
+             * nodes, with AddressSpace::map_device. Missing: ports and
+             * asynchronous waits, binding an interrupt to a port, an interrupt
+             * wake from interrupt context, vmo_map, and the exit test itself,
+             * on processes that are now scheduled tasks. */
     }
 
     #inProgress requirement <'S10'> stage10UserspaceDrivers : Stage {

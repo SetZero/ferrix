@@ -543,6 +543,29 @@ pub(crate) fn timer_irq() -> u32 {
     apic::timer_irq()
 }
 
+/// Stop interrupt `number` being delivered until [`unmask_interrupt`] lets
+/// it through again.
+///
+/// # Errors
+///
+/// Always, for now. A device's interrupts reach x86-64 as MSI-X, and an MSI-X
+/// vector is masked in the device's own table entry, which the interrupt
+/// controller does not reach; stage 10's `Vector::mask` will route there.
+pub(crate) fn mask_interrupt(number: u32) -> Result<(), &'static str> {
+    let _ = number;
+    Err("x86-64 has no controller line to mask: its device interrupts are MSI-X")
+}
+
+/// Let interrupt `number` be delivered again after [`mask_interrupt`].
+///
+/// # Errors
+///
+/// Always, for now, for the reason [`mask_interrupt`] gives.
+pub(crate) fn unmask_interrupt(number: u32) -> Result<(), &'static str> {
+    let _ = number;
+    Err("x86-64 has no controller line to mask: its device interrupts are MSI-X")
+}
+
 /// Dispatch the interrupt that arrived and retire it at the controller.
 ///
 /// x86-64 puts the vector in the frame, so there is nothing to claim: the

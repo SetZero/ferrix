@@ -22,6 +22,8 @@
 
 pub(crate) mod channel;
 pub(crate) mod check;
+pub(crate) mod interrupt;
+pub(crate) mod io_mapping;
 pub(crate) mod job;
 
 use alloc::sync::Arc;
@@ -32,6 +34,7 @@ use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_sync::SpinLock;
 
+use crate::device::DeviceNode;
 use crate::sched::WaitQueue;
 use crate::user::vmo::Vmo;
 
@@ -52,6 +55,12 @@ pub(crate) enum Object {
     Vmo(Arc<Vmo>),
     /// A container of processes.
     Job(Arc<job::Job>),
+    /// A device node, from which its interrupts and I/O mappings are minted.
+    Device(Arc<DeviceNode>),
+    /// A device interrupt.
+    Interrupt(Arc<interrupt::Interrupt>),
+    /// A device aperture a driver may map.
+    IoMapping(Arc<io_mapping::IoMapping>),
 }
 
 /// A queue nothing is woken on, for objects whose signals never change.
@@ -67,7 +76,10 @@ impl Object {
             Object::Channel(endpoint) => endpoint.signals(),
             Object::Vmo(_) => Signals::NONE,
             Object::Job(job) if job.is_killed() => Signals::TERMINATED,
-            Object::Job(_) => Signals::NONE,
+            Object::Interrupt(interrupt) if interrupt.is_pending() => Signals::READABLE,
+            Object::Job(_) | Object::Device(_) | Object::Interrupt(_) | Object::IoMapping(_) => {
+                Signals::NONE
+            }
         }
     }
 
@@ -79,8 +91,13 @@ impl Object {
     pub(crate) fn waiters(&self) -> &WaitQueue {
         match self {
             Object::Channel(endpoint) => endpoint.waiters(),
-            Object::Vmo(_) => &QUIET,
             Object::Job(job) => job.waiters(),
+            // An interrupt is quiet too, but not because its signals never
+            // change: they change in an interrupt handler, which may not take
+            // a wait queue's lock. A waiter notices through its recheck.
+            Object::Vmo(_) | Object::Device(_) | Object::Interrupt(_) | Object::IoMapping(_) => {
+                &QUIET
+            }
         }
     }
 }

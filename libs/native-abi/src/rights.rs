@@ -65,6 +65,13 @@ impl Rights {
     /// or doubled interrupt. It can still be *moved*, which is how `devmgr`
     /// hands it to a driver.
     pub const INTERRUPT: Rights = Rights(Rights::TRANSFER.0 | Rights::WAIT.0 | Rights::MANAGE.0);
+    /// What a handle to a device node carries.
+    ///
+    /// [`Rights::MANAGE`] to mint the device's interrupts and I/O mappings,
+    /// and [`Rights::TRANSFER`] so `devmgr` can hand it to a driver. No
+    /// [`Rights::DUPLICATE`], for the reason [`Rights::INTERRUPT`] has none: a
+    /// device has one driver.
+    pub const DEVICE: Rights = Rights(Rights::TRANSFER.0 | Rights::MANAGE.0);
     /// What a new I/O mapping carries.
     ///
     /// No [`Rights::DUPLICATE`], for the reason [`Rights::INTERRUPT`] has

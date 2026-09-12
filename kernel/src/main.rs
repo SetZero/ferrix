@@ -241,6 +241,12 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // Straight after enumeration, which builds the PCI half.
     check_devices(view, pci);
 
+    // Stage 9's device objects, on the nodes just published: an I/O mapping of
+    // a device's own aperture and nothing past it, reached from a forked
+    // child, and an interrupt held from delivery to acknowledgement. After
+    // `check_devices`, because before it there are no nodes to mint from.
+    check_device_objects();
+
     // The rest of stage 2, deliberately last. Each of these needs something a
     // later part of boot brought up — the arena needs the heap, the sweep
     // needs every mapping the kernel is ever going to make, and reclaiming
@@ -432,6 +438,24 @@ fn check_native_objects() {
         "  jobs     {} processes in a tree of three jobs ended by two kills, \
          {} wait woken by a message rather than its deadline",
         report.killed, report.woken,
+    );
+}
+
+/// Stage 9: interrupts and I/O mappings, minted from stage 10's device nodes.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_device_objects() {
+    let report = match object::check::run_devices() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE9_OBJECTS,
+            "stage 9 device object self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  handles  {} device aperture mapped into a process and reached from a forked \
+         child, {} interrupt held from delivery to acknowledgement, {} refusals as specified",
+        report.mapped, report.interrupts, report.refusals,
     );
 }
 

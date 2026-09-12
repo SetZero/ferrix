@@ -24,7 +24,8 @@
 //!
 //! # What is not here yet
 //!
-//! Ports and asynchronous waits, interrupts, I/O mappings, and mapping a VMO.
+//! Ports and asynchronous waits, binding an interrupt to a port, and mapping a
+//! VMO.
 //! Their numbers decode, and answer `ENOSYS` until they exist.
 
 use alloc::sync::Arc;
@@ -43,12 +44,16 @@ use ferrix_objects::message::Message;
 use ferrix_objects::reach::Reach;
 use ferrix_objects::table::TableError;
 
+use crate::device::DeviceNode;
 use crate::object::channel::{self, ChannelMessage, Endpoint, ReadError, WriteFailure};
+use crate::object::interrupt::{Interrupt, InterruptError};
+use crate::object::io_mapping::{IoMapping, IoMappingError};
 use crate::object::job::{self, Job};
 use crate::object::{self, HandleTable, Object};
 use crate::syscall::SyscallArgs;
 use crate::syscall::process::Process;
 use crate::syscall::uaccess::{self, UserError};
+use crate::user::space::SpaceError;
 use crate::user::vmo::{Vmo, VmoError};
 
 /// The largest VMO a program may create, in pages: four gibibytes.
@@ -133,6 +138,10 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::ObjectWaitOne => object_wait_one(process, handle(a[0]), a[1], a[2], a[3]),
         NativeCall::JobCreate => job_create(process, handle(a[0])),
         NativeCall::JobKill => job_kill(process, handle(a[0])),
+        NativeCall::InterruptCreate => interrupt_create(process, handle(a[0]), a[1]),
+        NativeCall::InterruptAck => interrupt_ack(process, handle(a[0])),
+        NativeCall::IoMappingCreate => io_mapping_create(process, handle(a[0]), a[1]),
+        NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1]),
         _ => Err(Errno::ENOSYS),
     }
 }
@@ -677,4 +686,94 @@ fn job_kill(process: &Process, job: Handle) -> Result<usize, Errno> {
     let job = job_in(process, job, Rights::MANAGE)?;
     let _ended = job.kill(job::KILLED_STATUS);
     Ok(0)
+}
+
+/// The device node a handle names, if it carries `needed`.
+fn device_in(process: &Process, device: Handle, needed: Rights) -> Result<Arc<DeviceNode>, Errno> {
+    process.with_handles(|table| {
+        let (object, rights) = table.get(device).map_err(table_error)?;
+        let Object::Device(node) = object else {
+            return Err(status::WRONG_TYPE);
+        };
+        if !rights.contains(needed) {
+            return Err(status::ACCESS_DENIED);
+        }
+        Ok(Arc::clone(node))
+    })
+}
+
+/// `interrupt_create`.
+///
+/// The vector is the device's own by index, so a driver names "my second
+/// interrupt" and cannot name a line its device does not have.
+fn interrupt_create(process: &Process, device: Handle, index: u64) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::MANAGE)?;
+    let vector = usize::try_from(index)
+        .ok()
+        .and_then(|index| node.vector(index))
+        .ok_or(status::INVALID_ARGS)?;
+    let interrupt = Interrupt::new(vector).map_err(|why| match why {
+        InterruptError::Taken => status::ALREADY_BOUND,
+        InterruptError::NotMaskable => status::INVALID_ARGS,
+    })?;
+    insert_new(process, Object::Interrupt(interrupt), Rights::INTERRUPT)
+}
+
+/// `interrupt_ack`.
+fn interrupt_ack(process: &Process, interrupt: Handle) -> Result<usize, Errno> {
+    let interrupt = process.with_handles(|table| {
+        let (object, rights) = table.get(interrupt).map_err(table_error)?;
+        let Object::Interrupt(interrupt) = object else {
+            return Err(status::WRONG_TYPE);
+        };
+        if !rights.contains(Rights::MANAGE) {
+            return Err(status::ACCESS_DENIED);
+        }
+        Ok(Arc::clone(interrupt))
+    })?;
+    interrupt.acknowledge().map_err(|_| status::INVALID_ARGS)?;
+    object::dispose([Object::Interrupt(interrupt)]);
+    Ok(0)
+}
+
+/// `io_mapping_create`.
+///
+/// `ACCESS_DENIED` for a range that is not inside one of the device's
+/// apertures: that is memory this device does not have, and saying so is the
+/// whole purpose of the call.
+fn io_mapping_create(process: &Process, device: Handle, spec: u64) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::MANAGE)?;
+    let phys = read_u64(process, spec)?;
+    let len = read_u64(process, spec.checked_add(8).ok_or(status::FAULT)?)?;
+    let aperture = node.aperture(phys, len).ok_or(status::ACCESS_DENIED)?;
+    let mapping = IoMapping::new(aperture).map_err(|why| match why {
+        IoMappingError::NotWholePages => status::INVALID_ARGS,
+    })?;
+    insert_new(process, Object::IoMapping(mapping), Rights::IO_MAPPING)
+}
+
+/// `io_mapping_map`. A zero address means wherever it fits.
+fn io_mapping_map(process: &Process, mapping: Handle, address: u64) -> Result<usize, Errno> {
+    let mapping = process.with_handles(|table| {
+        let (object, rights) = table.get(mapping).map_err(table_error)?;
+        let Object::IoMapping(mapping) = object else {
+            return Err(status::WRONG_TYPE);
+        };
+        if !rights.contains(Rights::MAP) {
+            return Err(status::ACCESS_DENIED);
+        }
+        Ok(Arc::clone(mapping))
+    })?;
+    let at = (address != 0).then_some(address);
+    let mapped = mapping
+        .map_into(process.space(), at)
+        .map_err(|why| match why {
+            SpaceError::OutOfMemory => status::NO_MEMORY,
+            SpaceError::Refused(_) => status::ACCESS_DENIED,
+            SpaceError::NotUserRange(_)
+            | SpaceError::BadRange
+            | SpaceError::NotMapped(_)
+            | SpaceError::Backing(_) => status::INVALID_ARGS,
+        })?;
+    usize::try_from(mapped).map_err(|_| status::INVALID_ARGS)
 }

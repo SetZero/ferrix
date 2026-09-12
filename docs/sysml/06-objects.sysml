@@ -41,7 +41,7 @@ package FerrixObjects {
         action queue;
     }
 
-    #planned part def Interrupt :> KernelObject {
+    #implemented part def Interrupt :> KernelObject {
         doc /* A bindable hardware interrupt. A userspace driver waits on it
              * through a Port. */
         attribute irq : Natural;
@@ -50,7 +50,7 @@ package FerrixObjects {
         action ack;
     }
 
-    #planned part def IoMapping :> KernelObject {
+    #implemented part def IoMapping :> KernelObject {
         doc /* An MMIO aperture, mappable into a driver's address space, with
              * its IOMMU domain. Nothing outside the aperture. */
         attribute phys : Natural;

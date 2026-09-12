@@ -1057,12 +1057,38 @@ architectures.**
   rounds finished before the kill it was meant to survive — so the check
   failed three boots in four on `main` until they became programs only a kill
   can end.
+* **Device handles, `IoMapping` and `Interrupt`**, minted from stage 10's
+  device nodes through `Aperture` and `Vector`, types only enumeration can
+  construct, so a driver cannot name memory or a line its device does not
+  have. `io_mapping_create` refuses a range outside one of the device's
+  apertures with `ACCESS_DENIED`, and an aperture that is not whole pages with
+  `INVALID_ARGS` rather than rounding it out: QEMU's ARM machines pack
+  virtio-mmio transports several to a page, and rounding would hand a driver
+  its neighbours' registers. `AddressSpace::map_device` inserts a
+  `Backing::Device` region that commits nothing, is shared rather than copied
+  across `fork`, and is never executable; its pages arrive on first fault,
+  uncached. An `Interrupt` masks its line when it fires and holds `READABLE`
+  until `interrupt_ack` unmasks it, through `arch::mask_interrupt`, backed by
+  GICv2 on both Arm architectures. The check maps a whole-page aperture and
+  requires its first fault to translate to the device's own physical page,
+  from a forked child too, refuses one byte past it and a sub-page aperture,
+  and on ARMv7-A claims a virtio-mmio vector once, runs the kernel's delivery
+  path, waits, acknowledges, and claims the line again after closing. It
+  first ran before the device nodes were published, found none, and passed on
+  every machine having checked nothing; it now runs after them and fails if a
+  machine with an aperture or a vector mapped or held none.
 
 **Still to do.**
 
-* Ports and asynchronous waits (`object_wait_async`, `port_*`), `Interrupt`
-  and `IoMapping` (minted from stage 10's device nodes through types only
-  enumeration can construct), and `vmo_map`.
+* Ports and asynchronous waits (`object_wait_async`, `port_*`), binding an
+  `Interrupt` to a port, and `vmo_map`.
+* **An interrupt wakes its waiter within five milliseconds, not at once.** A
+  wait queue takes a plain lock, which an interrupt handler may not, so the
+  handler only masks and marks and the waiter notices through its wait's
+  recheck. Waking from interrupt context needs an interrupt-safe wake.
+* An `Interrupt` on x86-64, where device interrupts are MSI-X and are masked
+  in the device's own table, which stage 10's `Vector::mask` will route to;
+  and sub-page apertures, which need each access trapped.
 * **The exit test itself**, on processes that are now tasks: stage 7's
   follow-up landed `process::load` and `process::start`, a terminated level plus
   a wake-up on `Process`, `process::kill` from outside, and `process::current()`
