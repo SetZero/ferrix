@@ -95,6 +95,8 @@ forbid ferrix-frame    "frame allocator" "ferrix-kernel|ferrix-boot"
 forbid ferrix-paging   "page tables"  "ferrix-kernel|ferrix-boot"
 forbid ferrix-sched    "scheduler logic" "ferrix-kernel|ferrix-boot"
 forbid ferrix-pci      "PCI configuration space" "ferrix-kernel|ferrix-boot"
+forbid ferrix-btrfs    "btrfs read path" "ferrix-kernel|ferrix-boot"
+forbid ferrix-btrfs-vfs "btrfs mount" "ferrix-kernel|ferrix-boot"
 
 # ---------------------------------------------------------------------------
 # 3. Generic kernel code reaches architecture code through the facade.

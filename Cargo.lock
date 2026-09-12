@@ -53,6 +53,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-btrfs-vfs"
+version = "0.1.0"
+dependencies = [
+ "ferrix-btrfs",
+ "ferrix-sync",
+ "ferrix-vfs",
+]
+
+[[package]]
 name = "ferrix-cpio"
 version = "0.1.0"
 

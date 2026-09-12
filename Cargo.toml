@@ -14,6 +14,7 @@ members = [
     "libs/frame",
     "libs/heap",
     "libs/btrfs",
+    "libs/btrfs-vfs",
     "libs/cpio",
     "libs/linux-abi",
     "libs/native-abi",
@@ -60,6 +61,7 @@ ferrix-fdt = { path = "libs/fdt" }
 ferrix-frame = { path = "libs/frame" }
 ferrix-heap = { path = "libs/heap" }
 ferrix-btrfs = { path = "libs/btrfs" }
+ferrix-btrfs-vfs = { path = "libs/btrfs-vfs" }
 ferrix-cpio = { path = "libs/cpio" }
 ferrix-linux-abi = { path = "libs/linux-abi" }
 ferrix-native-abi = { path = "libs/native-abi" }

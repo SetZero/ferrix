@@ -1,0 +1,16 @@
+[package]
+name = "ferrix-btrfs-vfs"
+description = "btrfs mounted into the VFS: FileSystem and Inode over the btrfs read path"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrix-btrfs.workspace = true
+ferrix-sync.workspace = true
+ferrix-vfs.workspace = true
+
+[lints]
+workspace = true
