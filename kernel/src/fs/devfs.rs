@@ -56,8 +56,12 @@ enum Behaviour {
     /// Reads give the generator's bytes; writes are accepted and discarded,
     /// where Linux would mix them into a pool this kernel does not have.
     Random,
-    /// The console, whichever name reached it.
+    /// A node that opens the console: `/dev/tty`, which has a number of its
+    /// own and so cannot be the console's inode.
     Console,
+    /// The console's own inode: `/dev/console`. Never a devfs node — the name
+    /// resolves to [`console_inode`] itself.
+    ConsoleItself,
 }
 
 /// One node.
@@ -124,7 +128,7 @@ static DEVICES: [Device; 7] = [
         major: 5,
         minor: 1,
         permissions: 0o600,
-        behaviour: Behaviour::Console,
+        behaviour: Behaviour::ConsoleItself,
     },
 ];
 
@@ -259,7 +263,7 @@ impl Inode for Node {
                 time::fill_random(buf);
                 Ok(buf.len())
             }
-            Behaviour::Console => console_inode().read_at(offset, buf),
+            Behaviour::Console | Behaviour::ConsoleItself => console_inode().read_at(offset, buf),
         }
     }
 
@@ -268,7 +272,9 @@ impl Inode for Node {
         match device.behaviour {
             Behaviour::Null | Behaviour::Zero | Behaviour::Random => Ok((data.len(), offset)),
             Behaviour::Full => Err(Errno::ENOSPC),
-            Behaviour::Console => console_inode().write_at(offset, data, append),
+            Behaviour::Console | Behaviour::ConsoleItself => {
+                console_inode().write_at(offset, data, append)
+            }
         }
     }
 
@@ -280,6 +286,16 @@ impl Inode for Node {
             .iter()
             .position(|device| device.name == name)
             .ok_or(Errno::ENOENT)?;
+        // `/dev/console` is the console itself rather than a node standing for
+        // it. `fs::console::open_console` names a process's descriptors
+        // `/dev/console` only when that name reaches this very inode, and
+        // `stat` then reports the console's own number and identity.
+        if DEVICES
+            .get(index)
+            .is_some_and(|device| device.behaviour == Behaviour::ConsoleItself)
+        {
+            return Ok(console_inode());
+        }
         Ok(Arc::new(Node {
             place: Place::Device(index),
             made: self.made,
@@ -292,8 +308,13 @@ impl Inode for Node {
         }
         let first = usize::try_from(cursor.saturating_sub(FIRST_CURSOR)).unwrap_or(usize::MAX);
         for (index, device) in DEVICES.iter().enumerate().skip(first) {
+            let ino = if device.behaviour == Behaviour::ConsoleItself {
+                console_inode().metadata().ino
+            } else {
+                ino_of(index)
+            };
             let entry = DirEntry {
-                ino: ino_of(index),
+                ino,
                 kind: FileType::CharDevice,
                 name: device.name,
                 next: FIRST_CURSOR.saturating_add(index as u64 + 1),
