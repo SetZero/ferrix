@@ -320,10 +320,51 @@ pub trait Inode: Send + Sync + fmt::Debug {
         Err(Errno::EINVAL)
     }
 
+    /// Read from an object with no position, one whose [`Inode::is_stream`]
+    /// is true.
+    ///
+    /// Separate from [`Inode::read_at`] because a stream is the kind of object
+    /// that can make a reader wait, and whether it may is the open file's
+    /// `O_NONBLOCK` -- which lives on the description, not the inode, and can
+    /// change under `fcntl` between two reads. `nonblock` is that flag as it
+    /// stands for this call. An object that would wait answers `EAGAIN`
+    /// instead when it is set.
+    ///
+    /// The default reads at offset zero and ignores the flag, which is right
+    /// for a stream that never asks a caller to wait on another program.
+    fn read_stream(&self, buf: &mut [u8], nonblock: bool) -> Result<usize> {
+        let _ = nonblock;
+        self.read_at(0, buf)
+    }
+
+    /// Write to an object with no position; see [`Inode::read_stream`].
+    ///
+    /// A write that would wait with `nonblock` set answers the count it
+    /// managed, or `EAGAIN` if that was nothing.
+    fn write_stream(&self, data: &[u8], nonblock: bool) -> Result<usize> {
+        let _ = nonblock;
+        self.write_at(0, data, false).map(|(count, _)| count)
+    }
+
     /// Change a regular file's length.
     fn set_len(&self, len: u64) -> Result<()> {
         let _ = len;
         Err(Errno::EINVAL)
+    }
+
+    /// Lengthen a regular file to `len` if it is shorter, and leave it alone
+    /// if it is not: what `fallocate` asks.
+    ///
+    /// Its own operation rather than a look at the size and a [`Inode::set_len`],
+    /// because between the two another writer can extend the file, and the
+    /// `set_len` would then cut off what it wrote. The default does exactly
+    /// that look and is only as good as a filesystem nobody writes to
+    /// concurrently; a filesystem with a lock over its length decides under it.
+    fn grow_to(&self, len: u64) -> Result<()> {
+        if self.metadata().size >= len {
+            return Ok(());
+        }
+        self.set_len(len)
     }
 
     /// What the object is ready for.

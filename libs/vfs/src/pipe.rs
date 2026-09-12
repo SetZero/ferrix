@@ -24,6 +24,10 @@ pub const PIPE_CAPACITY: usize = 65536;
 /// The largest write POSIX promises is never split: one page.
 pub const PIPE_BUF: usize = 4096;
 
+/// `PIPEFS_MAGIC`, from `include/uapi/linux/magic.h`: what `fstatfs` on a pipe
+/// reports as the filesystem it is on.
+pub const PIPEFS_MAGIC: u64 = 0x5049_5045;
+
 /// What a read did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadOutcome {
@@ -115,6 +119,31 @@ impl PipeBuffer {
 
     fn free(&self) -> usize {
         self.capacity.saturating_sub(self.data.len())
+    }
+
+    /// Whether [`PipeBuffer::read`] into a non-empty buffer would not answer
+    /// [`ReadOutcome::WouldBlock`]: the condition a blocked reader waits for.
+    #[must_use]
+    pub fn can_read(&self) -> bool {
+        !self.data.is_empty() || self.writers == 0
+    }
+
+    /// Whether [`PipeBuffer::write`] of `len` bytes would not answer
+    /// [`WriteOutcome::WouldBlock`]: the condition a blocked writer waits for.
+    ///
+    /// The same rule as the write itself -- a write of at most [`PIPE_BUF`]
+    /// needs room for all of it, a larger one room for anything -- so a writer
+    /// woken by this is never woken to find it still cannot write.
+    #[must_use]
+    pub fn can_write(&self, len: usize) -> bool {
+        if self.readers == 0 || len == 0 {
+            return true;
+        }
+        if len <= PIPE_BUF {
+            self.free() >= len
+        } else {
+            self.free() > 0
+        }
     }
 
     /// Take up to `buf.len()` bytes.

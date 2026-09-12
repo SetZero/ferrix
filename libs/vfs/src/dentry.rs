@@ -83,6 +83,12 @@ impl Dentry {
         Dentry::new(Box::from(&b"/"[..]), None, Some(inode))
     }
 
+    /// A root with a name of its own, for an object in no tree: see
+    /// `Location::detached`.
+    pub(crate) fn named_root(name: Box<[u8]>, inode: Arc<dyn Inode>) -> Arc<Dentry> {
+        Dentry::new(name, None, Some(inode))
+    }
+
     fn new(
         name: Box<[u8]>,
         parent: Option<Arc<Dentry>>,

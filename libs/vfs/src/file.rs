@@ -141,6 +141,31 @@ impl OpenFile {
         }))
     }
 
+    /// The same open, with reads and writes going to `io` instead.
+    ///
+    /// For an object whose I/O depends on how it was opened, which
+    /// [`Inode::open`] is not told: a named pipe is a read end, a write end or
+    /// both according to the access mode, and only the kernel's table of pipes
+    /// knows which pipe a node on disk stands for. The opener looks at the
+    /// open file [`crate::Namespace::open`] made and swaps in the end.
+    /// Everything else -- the location, what `stat` reports, the access mode
+    /// and the status flags -- is this open's, and the offset starts at zero
+    /// as a new open's does.
+    #[must_use]
+    pub fn with_io(&self, io: Arc<dyn Inode>) -> Arc<OpenFile> {
+        Arc::new(OpenFile {
+            location: self.location.clone(),
+            inode: Arc::clone(&self.inode),
+            io,
+            kind: self.kind,
+            read: self.read,
+            write: self.write,
+            path_only: self.path_only,
+            status: SpinLock::new(self.status()),
+            offset: SpinLock::new(0),
+        })
+    }
+
     /// Where it was opened.
     #[must_use]
     pub fn location(&self) -> &Location {
@@ -177,6 +202,28 @@ impl OpenFile {
         self.path_only
     }
 
+    /// Whether what it reads and writes has no position: a pipe, a terminal.
+    #[must_use]
+    pub fn is_stream(&self) -> bool {
+        self.io.is_stream()
+    }
+
+    /// `fallocate` without `FALLOC_FL_KEEP_SIZE`: make the file at least `len`
+    /// bytes long, and never shorter.
+    ///
+    /// # Errors
+    ///
+    /// As [`OpenFile::set_len`].
+    pub fn grow_to(&self, len: u64) -> Result<()> {
+        if self.path_only {
+            return Err(Errno::EBADF);
+        }
+        if !self.write || self.kind != FileType::Regular {
+            return Err(Errno::EINVAL);
+        }
+        self.inode.grow_to(len)
+    }
+
     /// The flags `fcntl(F_GETFL)` reports beyond the access mode.
     #[must_use]
     pub fn status(&self) -> Status {
@@ -208,11 +255,15 @@ impl OpenFile {
     ///
     /// # Errors
     ///
-    /// `EBADF` if not opened for reading, `EISDIR` for a directory.
+    /// `EBADF` if not opened for reading, `EISDIR` for a directory, and
+    /// `EAGAIN` from a stream that would wait under `O_NONBLOCK`.
     pub fn read(&self, buf: &mut [u8]) -> Result<usize> {
         self.check_io(self.read)?;
         if self.io.is_stream() {
-            return self.io.read_at(0, buf);
+            // No offset lock for a stream: a read may wait for another
+            // program, and a second reader of the same description must not
+            // wait behind it for a lock that guards nothing.
+            return self.io.read_stream(buf, self.status().nonblock);
         }
         let mut offset = self.offset.lock();
         let count = self.io.read_at(*offset, buf)?;
@@ -241,7 +292,7 @@ impl OpenFile {
     pub fn write(&self, data: &[u8]) -> Result<usize> {
         self.check_io(self.write)?;
         if self.io.is_stream() {
-            return self.io.write_at(0, data, false).map(|(count, _)| count);
+            return self.io.write_stream(data, self.status().nonblock);
         }
         let append = self.status.lock().append;
         let mut offset = self.offset.lock();

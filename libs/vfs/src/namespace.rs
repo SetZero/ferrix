@@ -101,7 +101,39 @@ impl Location {
     pub fn parent(&self) -> Location {
         up(self, self)
     }
+
+    /// A place for an object no directory holds: a pipe.
+    ///
+    /// An open file needs a location -- `fstat` takes the device from its
+    /// mount, `fstatfs` the filesystem, `/proc/self/fd` the name -- and `pipe`
+    /// makes two open files for an inode that has none. This is one: a mount
+    /// of `fs` on nothing, whose root dentry is `inode`, called `name`. It is
+    /// in no namespace's table, so no walk can reach it, `..` from it stays
+    /// where it is, and nothing can be mounted on it.
+    /// [`Namespace::path_of`] reports it as `name` alone, which is how Linux
+    /// reports `pipe:[1234]`.
+    #[must_use]
+    pub fn detached(fs: Arc<dyn FileSystem>, inode: Arc<dyn Inode>, name: &[u8]) -> Location {
+        let dentry = Dentry::named_root(Box::from(name), inode);
+        let mount = Arc::new(Mount {
+            id: DETACHED_MOUNT,
+            fs,
+            root: Arc::clone(&dentry),
+            parent: None,
+        });
+        Location { mount, dentry }
+    }
+
+    /// Whether this is a [`Location::detached`] one.
+    #[must_use]
+    pub fn is_detached(&self) -> bool {
+        self.mount.id == DETACHED_MOUNT
+    }
 }
+
+/// The mount identifier every [`Location::detached`] mount carries. A
+/// namespace numbers its own from one, so no mount in a tree is ever this.
+const DETACHED_MOUNT: u64 = 0;
 
 /// The two places a relative and an absolute path start from.
 ///
@@ -351,6 +383,12 @@ impl Namespace {
     /// short of prefixing it with `(unreachable)`.
     #[must_use]
     pub fn path_of(&self, at: &Location, root: &Location) -> Vec<u8> {
+        if at.is_detached() {
+            // Not in any tree, so there is no path to build: the name it was
+            // given is the whole answer, and a `/` in front would claim a
+            // place it does not have.
+            return at.dentry.name().into_vec();
+        }
         let mut parts: Vec<Box<[u8]>> = Vec::new();
         let mut here = at.clone();
         loop {

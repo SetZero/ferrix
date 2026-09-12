@@ -1139,3 +1139,310 @@ fn a_directory_that_does_not_cache_lookups_is_asked_every_time() {
         "a name that went away is gone at once"
     );
 }
+
+// -- Streams, detached locations and statfs layouts ------------------------
+
+use core::sync::atomic::AtomicBool;
+
+use crate::file::Status;
+use crate::pipe::PIPEFS_MAGIC;
+use crate::statfs::StatfsLayout;
+use crate::{Location, StatFs};
+
+fn stream_metadata() -> crate::Metadata {
+    crate::Metadata {
+        ino: 7,
+        kind: FileType::Fifo,
+        permissions: 0o600,
+        nlink: 1,
+        uid: 0,
+        gid: 0,
+        size: 0,
+        rdev: 0,
+        blocks: 0,
+        block_size: 4096,
+        atime: Timespec::default(),
+        mtime: Timespec::default(),
+        ctime: Timespec::default(),
+    }
+}
+
+/// A stream that remembers whether its last call was told not to wait, and
+/// refuses a read that was, as a pipe with nothing in it does.
+#[derive(Debug, Default)]
+struct Recorder {
+    nonblock: AtomicBool,
+}
+
+impl crate::Inode for Recorder {
+    fn metadata(&self) -> crate::Metadata {
+        stream_metadata()
+    }
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+    fn is_stream(&self) -> bool {
+        true
+    }
+    fn read_stream(&self, buf: &mut [u8], nonblock: bool) -> Result<usize, Errno> {
+        self.nonblock.store(nonblock, Ordering::Relaxed);
+        if nonblock {
+            return Err(Errno::EAGAIN);
+        }
+        buf.fill(b'r');
+        Ok(buf.len())
+    }
+    fn write_stream(&self, data: &[u8], nonblock: bool) -> Result<usize, Errno> {
+        self.nonblock.store(nonblock, Ordering::Relaxed);
+        Ok(data.len())
+    }
+}
+
+/// A stream that implements only the positioned calls, as the console does.
+#[derive(Debug)]
+struct Positioned;
+
+impl crate::Inode for Positioned {
+    fn metadata(&self) -> crate::Metadata {
+        stream_metadata()
+    }
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+    fn is_stream(&self) -> bool {
+        true
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Errno> {
+        if offset != 0 {
+            return Err(Errno::EINVAL);
+        }
+        buf.fill(b'p');
+        Ok(buf.len())
+    }
+    fn write_at(&self, _offset: u64, data: &[u8], _append: bool) -> Result<(usize, u64), Errno> {
+        Ok((data.len(), 0))
+    }
+}
+
+#[derive(Debug)]
+struct Pipes;
+
+impl FileSystem for Pipes {
+    fn root(&self) -> Arc<dyn crate::Inode> {
+        Arc::new(Positioned)
+    }
+    fn name(&self) -> &'static str {
+        "pipefs"
+    }
+    fn device(&self) -> u64 {
+        99
+    }
+    fn statfs(&self) -> StatFs {
+        StatFs {
+            magic: PIPEFS_MAGIC,
+            ..StatFs::default()
+        }
+    }
+}
+
+const READ_WRITE: OpenFlags = OpenFlags {
+    write: true,
+    ..READ
+};
+
+#[test]
+fn a_stream_is_told_whether_its_open_file_may_wait() {
+    let recorder = Arc::new(Recorder::default());
+    let at = Location::detached(Arc::new(Pipes), recorder.clone(), b"pipe:[7]");
+    let file = OpenFile::new(at, &READ_WRITE).unwrap();
+    let mut buf = [0_u8; 4];
+    assert_eq!(file.read(&mut buf), Ok(4));
+    assert!(!recorder.nonblock.load(Ordering::Relaxed));
+
+    file.set_status(Status {
+        append: false,
+        nonblock: true,
+    });
+    assert_eq!(
+        file.read(&mut buf),
+        Err(Errno::EAGAIN),
+        "F_SETFL's O_NONBLOCK reaches the next read"
+    );
+    assert_eq!(file.write(b"xy"), Ok(2));
+    assert!(recorder.nonblock.load(Ordering::Relaxed));
+    assert_eq!(file.read_at(0, &mut buf), Err(Errno::ESPIPE));
+    assert_eq!(file.seek(0, Whence::Current), Err(Errno::ESPIPE));
+
+    // A stream that knows nothing of the flag keeps working through the
+    // defaults, which is what leaves the console unchanged.
+    let at = Location::detached(Arc::new(Pipes), Arc::new(Positioned), b"console");
+    let console = OpenFile::new(at, &READ_WRITE).unwrap();
+    console.set_status(Status {
+        append: false,
+        nonblock: true,
+    });
+    assert_eq!(console.read(&mut buf), Ok(4));
+    assert_eq!(&buf, b"pppp");
+    assert_eq!(console.write(b"out"), Ok(3));
+}
+
+#[test]
+fn a_detached_location_opens_and_names_itself_without_a_tree() {
+    let (ns, ctx) = fresh();
+    let at = Location::detached(Arc::new(Pipes), Arc::new(Recorder::default()), b"pipe:[7]");
+    assert!(at.is_detached() && !ctx.root.is_detached());
+    assert_eq!(ns.path_of(&at, &ctx.root), b"pipe:[7]");
+    assert_eq!(
+        ns.stat(&at).unwrap().dev,
+        99,
+        "the device is its filesystem's"
+    );
+    assert_eq!(ns.statfs(&at).magic, PIPEFS_MAGIC);
+    assert!(at.parent().same(&at), "`..` from nowhere stays there");
+    assert_eq!(ns.unmount(&at), Err(Errno::EINVAL), "it is not mounted");
+    let file = OpenFile::new(at, &READ).unwrap();
+    assert_eq!(file.kind(), FileType::Fifo);
+    assert_eq!(ns.path_of(file.location(), &ctx.root), b"pipe:[7]");
+}
+
+#[test]
+fn with_io_sends_reads_elsewhere_and_keeps_what_stat_reports() {
+    let (ns, ctx) = fresh();
+    write_file(&ns, &ctx, "/f", b"abc");
+    let file = ns.open(&ctx, None, b"/f", &READ, 0).unwrap();
+    let mut buf = [0_u8; 3];
+    assert_eq!(file.read(&mut buf), Ok(3));
+
+    let recorder = Arc::new(Recorder::default());
+    let swapped = file.with_io(recorder);
+    assert!(Arc::ptr_eq(swapped.inode(), file.inode()));
+    assert!(swapped.location().same(file.location()));
+    assert!(swapped.readable() && !swapped.writable());
+    assert_eq!(swapped.offset(), 0, "a new open starts at the beginning");
+    assert_eq!(swapped.read(&mut buf), Ok(3));
+    assert_eq!(&buf, b"rrr", "the read went to the new object");
+    assert_eq!(
+        swapped.write(b"no"),
+        Err(Errno::EBADF),
+        "the access mode came too"
+    );
+}
+
+#[test]
+fn a_blocked_pipe_end_waits_for_exactly_what_lets_it_proceed() {
+    let mut pipe = open_pipe(2 * PIPE_BUF);
+    assert!(!pipe.can_read());
+    assert_eq!(
+        pipe.write(&vec![0_u8; 2 * PIPE_BUF]),
+        WriteOutcome::Wrote(2 * PIPE_BUF)
+    );
+    assert!(pipe.can_read());
+    assert!(!pipe.can_write(1) && !pipe.can_write(PIPE_BUF + 1));
+    assert!(pipe.can_write(0), "an empty write never waits");
+
+    let mut one = [0_u8; 1];
+    assert_eq!(pipe.read(&mut one), ReadOutcome::Read(1));
+    assert!(pipe.can_write(1) && !pipe.can_write(2));
+    assert_eq!(
+        pipe.write(&[1, 2]),
+        WriteOutcome::WouldBlock,
+        "can_write agrees with write for a small write"
+    );
+    assert!(pipe.can_write(PIPE_BUF + 1), "a large write takes any room");
+    pipe.close_reader();
+    assert!(
+        pipe.can_write(PIPE_BUF),
+        "and wakes to find the pipe broken"
+    );
+
+    let mut empty = open_pipe(PIPE_CAPACITY);
+    empty.close_writer();
+    assert!(empty.can_read(), "and a reader wakes to end of file");
+}
+
+fn le32(bytes: &[u8], at: usize) -> u64 {
+    u64::from(u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()))
+}
+
+fn le64(bytes: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
+}
+
+#[test]
+fn statfs_packs_each_layout_at_the_headers_offsets() {
+    let stat = StatFs {
+        magic: crate::tmpfs::TMPFS_MAGIC,
+        block_size: 4096,
+        blocks: 1000,
+        blocks_free: 600,
+        blocks_available: 500,
+        files: 12,
+        files_free: 3,
+        name_max: 255,
+    };
+    let wide = StatfsLayout::Wide.encode(&stat).unwrap();
+    assert_eq!(wide.len(), StatfsLayout::Wide.size());
+    let fields = [0, 8, 16, 24, 32, 40, 48, 64, 72, 80].map(|at| le64(&wide, at));
+    assert_eq!(
+        fields,
+        [0x0102_1994, 4096, 1000, 600, 500, 12, 3, 255, 4096, 0x20]
+    );
+    assert!(wide[56..64].iter().chain(&wide[88..]).all(|&b| b == 0));
+
+    let narrow = StatfsLayout::Narrow.encode(&stat).unwrap();
+    assert_eq!(narrow.len(), 64);
+    let fields = [0, 4, 8, 12, 16, 20, 24, 36, 40, 44].map(|at| le32(&narrow, at));
+    assert_eq!(
+        fields,
+        [0x0102_1994, 4096, 1000, 600, 500, 12, 3, 255, 4096, 0x20]
+    );
+
+    let packed = StatfsLayout::Packed64.encode(&stat).unwrap();
+    assert_eq!(packed.len(), 84);
+    assert_eq!([le32(&packed, 0), le32(&packed, 4)], [0x0102_1994, 4096]);
+    let counts = [8, 16, 24, 32, 40].map(|at| le64(&packed, at));
+    assert_eq!(counts, [1000, 600, 500, 12, 3]);
+    let tail = [56, 60, 64].map(|at| le32(&packed, at));
+    assert_eq!(tail, [255, 4096, 0x20]);
+    assert!(packed[48..56].iter().chain(&packed[68..]).all(|&b| b == 0));
+
+    let big = StatFs {
+        blocks: 1 << 32,
+        files: u64::MAX,
+        ..stat
+    };
+    assert_eq!(StatfsLayout::Narrow.encode(&big), Err(Errno::EOVERFLOW));
+    assert_eq!(
+        le64(&StatfsLayout::Packed64.encode(&big).unwrap(), 8),
+        1 << 32
+    );
+    let unlimited = StatFs {
+        files: u64::MAX,
+        ..stat
+    };
+    let narrow = StatfsLayout::Narrow.encode(&unlimited).unwrap();
+    assert_eq!(le32(&narrow, 20), 0xFFFF_FFFF, "-1 passes at either width");
+    assert_eq!(StatfsLayout::native(8), StatfsLayout::Wide);
+    assert_eq!(StatfsLayout::native(4), StatfsLayout::Narrow);
+}
+
+#[test]
+fn growing_a_file_never_shrinks_it_and_needs_it_open_for_writing() {
+    let (ns, ctx) = fresh();
+    write_file(&ns, &ctx, "/f", b"0123456789");
+    let file = ns.open(&ctx, None, b"/f", &RW_CREATE, 0o644).unwrap();
+    file.grow_to(4).unwrap();
+    assert_eq!(
+        file.inode().metadata().size,
+        10,
+        "growing to less is no change"
+    );
+    file.grow_to(5000).unwrap();
+    let grown = read_file(&ns, &ctx, "/f").unwrap();
+    assert_eq!(grown.len(), 5000);
+    assert_eq!(&grown[..12], b"0123456789\0\0", "what it uncovers is zeros");
+    let reader = ns.open(&ctx, None, b"/f", &READ, 0).unwrap();
+    assert_eq!(reader.grow_to(9000), Err(Errno::EINVAL));
+    let dir = ns.open(&ctx, None, b"/", &READ, 0).unwrap();
+    assert_eq!(dir.grow_to(1), Err(Errno::EINVAL));
+}

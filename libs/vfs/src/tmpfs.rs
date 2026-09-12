@@ -773,6 +773,26 @@ impl Inode for Node {
         Ok(())
     }
 
+    fn grow_to(&self, new_len: u64) -> Result<()> {
+        let now = self.now();
+        if new_len > self.shared.storage.max_file_size() {
+            return Err(Errno::EFBIG);
+        }
+        let mut state = self.state.lock();
+        match &mut state.body {
+            // Decided under the lock every write takes, so a writer that
+            // extends the file in the meantime is never cut back.
+            Body::File { len, .. } if *len >= new_len => return Ok(()),
+            // Nothing to clear: a shrink zeroes what it cuts off, so the bytes
+            // this uncovers already read as zeros.
+            Body::File { len, .. } => *len = new_len,
+            Body::Dir(_) => return Err(Errno::EISDIR),
+            _ => return Err(Errno::EINVAL),
+        }
+        state.touch(now);
+        Ok(())
+    }
+
     fn lookup(&self, name: &[u8]) -> Result<Arc<dyn Inode>> {
         let mut state = self.state.lock();
         let dir = state.dir()?;
