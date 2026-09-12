@@ -866,6 +866,12 @@ fn both_open_flag_tables_are_four_distinct_bits_clear_of_the_shared_flags() {
 }
 
 #[test]
+fn terminal_ioctls_match_the_generic_header() {
+    assert_eq!(types::TCGETS, 0x5401, "TCGETS is 'T' 0x01");
+    assert_eq!(types::TIOCGWINSZ, 0x5413, "TIOCGWINSZ is 'T' 0x13");
+}
+
+#[test]
 fn open_flags_match_the_generic_header() {
     assert_eq!(types::O_CREAT, 64, "O_CREAT is octal 100");
     assert_eq!(types::O_TRUNC, 512, "O_TRUNC is octal 1000");

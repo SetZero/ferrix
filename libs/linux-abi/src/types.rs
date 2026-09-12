@@ -1003,6 +1003,19 @@ pub const F_DUPFD_CLOEXEC: u32 = 1030;
 pub const FD_CLOEXEC: u32 = 1;
 
 // ---------------------------------------------------------------------------
+// Terminal ioctls
+// ---------------------------------------------------------------------------
+
+/// Read a terminal's settings, `struct termios`. What `isatty` asks.
+///
+/// From `include/uapi/asm-generic/ioctls.h`, which all three architectures
+/// use: x86-64 and AArch64 include it unchanged, and ARMv7-A's own header adds
+/// only `FIOQSIZE` before including it.
+pub const TCGETS: u32 = 0x5401;
+/// Read a terminal's size in rows and columns, `struct winsize`.
+pub const TIOCGWINSZ: u32 = 0x5413;
+
+// ---------------------------------------------------------------------------
 // Miscellaneous flags
 // ---------------------------------------------------------------------------
 
