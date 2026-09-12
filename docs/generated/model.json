@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "5a62cf012b406fbf9b55f8e8a3f3d6be8718e2d0a7f20920463f7bda1c1b4ba8",
+  "digest": "29a57837c102b91eb8612b92b94d345ed304d50a0eb8815390896b6f0b1c86d9",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -3808,7 +3808,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::acpi",
                   "kind": "attribute",
                   "redefines": "hostTests",
-                  "value": "64",
+                  "value": "72",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 768
@@ -12958,6 +12958,7 @@
           "definition": true,
           "maturity": "planned",
           "stage": 10,
+          "doc": "Where the hardware is is read today: libs/acpi's dmar module (VT-d units and their device scopes) and iort module (root complex to SMMUv3 stream IDs), tested against QEMU's own table builders. The domains themselves are not built yet.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 106
@@ -12970,7 +12971,7 @@
               "type": "IommuMode",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 108
+                "line": 112
               }
             },
             {
@@ -12981,7 +12982,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 109
+                "line": 113
               }
             }
           ]
@@ -12996,7 +12997,7 @@
           "doc": "An ordinary user process in its own Job, holding exactly the capabilities devmgr gave it. A driver fault is a process fault; a wedged driver is a Job kill.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 112
+            "line": 116
           },
           "children": [
             {
@@ -13009,7 +13010,7 @@
               "type": "Job",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 117
+                "line": 121
               }
             },
             {
@@ -13021,7 +13022,7 @@
               "doc": "One per BAR or MMIO window, and nothing outside it.",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 118
+                "line": 122
               }
             },
             {
@@ -13033,7 +13034,7 @@
               "doc": "One per vector, bound to a Port.",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 121
+                "line": 125
               }
             },
             {
@@ -13043,7 +13044,7 @@
               "type": "Port",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 124
+                "line": 128
               }
             },
             {
@@ -13058,7 +13059,7 @@
               "doc": "Device addresses from the device's IOMMU domain.",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 125
+                "line": 129
               }
             },
             {
@@ -13069,7 +13070,7 @@
               "doc": "To the kernel subsystem it serves: block, net, input.",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 128
+                "line": 132
               }
             },
             {
@@ -13079,7 +13080,7 @@
               "type": "SharedRing",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 131
+                "line": 135
               }
             }
           ]
@@ -13094,7 +13095,7 @@
           "doc": "The data path is not per-request IPC: driver and kernel share a descriptor ring in a VMO and ring a doorbell; requests batch. The same shape virtio and NVMe already use. libs/virtio's split virtqueue (driver and device halves, over abstract shared memory) is the first of these.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 134
+            "line": 138
           },
           "children": [
             {
@@ -13107,7 +13108,7 @@
               "type": "Vmo",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 141
+                "line": 145
               }
             },
             {
@@ -13116,7 +13117,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 142
+                "line": 146
               }
             },
             {
@@ -13125,7 +13126,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 143
+                "line": 147
               }
             },
             {
@@ -13134,7 +13135,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 144
+                "line": 148
               }
             }
           ]
@@ -13149,7 +13150,7 @@
           "doc": "A normal musl binary that also speaks the native ABI. Receives a handle per device node, matches a driver, spawns it in its own Job with the four resources above.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 147
+            "line": 151
           },
           "children": [
             {
@@ -13158,7 +13159,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 152
+                "line": 156
               }
             },
             {
@@ -13167,7 +13168,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 153
+                "line": 157
               }
             }
           ]
@@ -13183,7 +13184,7 @@
           "doc": "The first driver: virtio-blk as a user process. Exit test: a sector read through ring 3 with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 156
+            "line": 160
           }
         },
         {
@@ -13195,7 +13196,7 @@
           "maturity": "planned",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 163
+            "line": 167
           }
         },
         {
@@ -13255,7 +13256,7 @@
           ],
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 165
+            "line": 169
           },
           "children": [
             {
@@ -13267,7 +13268,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 172
+                "line": 176
               }
             },
             {
@@ -13279,7 +13280,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 173
+                "line": 177
               }
             },
             {
@@ -13291,7 +13292,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 174
+                "line": 178
               }
             },
             {
@@ -13303,7 +13304,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 175
+                "line": 179
               }
             },
             {
@@ -13315,7 +13316,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 176
+                "line": 180
               }
             },
             {
@@ -13327,7 +13328,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 177
+                "line": 181
               }
             }
           ]
@@ -14779,7 +14780,7 @@
           "shortName": "S10",
           "type": "Stage",
           "maturity": "inProgress",
-          "doc": "Enumeration, IOMMU domains, devmgr, the shared-ring block protocol, virtio-blk as a user process. Exit: a sector read through a ring-3 driver with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting.\n\nBuilt: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri; kernel enumeration from the MCFG and the device tree, in the boot test on all three architectures against a virtio-rng-pci device; device nodes whose apertures and vectors are tokens only device.rs mints; a virtio-rng device driven by DMA from the boot check, 64 bytes on every architecture; MSI-X tables and pending bits withheld from apertures. Next, and needing nothing from stage 9: MSI-X vectors, IOMMU domains. Needing stage 9: everything that runs in ring 3.",
+          "doc": "Enumeration, IOMMU domains, devmgr, the shared-ring block protocol, virtio-blk as a user process. Exit: a sector read through a ring-3 driver with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting.\n\nBuilt: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri; kernel enumeration from the MCFG and the device tree, in the boot test on all three architectures against a virtio-rng-pci device; device nodes whose apertures and vectors are tokens only device.rs mints; a virtio-rng device driven by DMA from the boot check, 64 bytes on every architecture; MSI-X tables and pending bits withheld from apertures; the DMAR and IORT parsed. Next, and needing nothing from stage 9: MSI-X vectors, IOMMU domains. Needing stage 9: everything that runs in ring 3.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 242

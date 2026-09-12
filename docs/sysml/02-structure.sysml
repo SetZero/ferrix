@@ -765,7 +765,7 @@ package FerrixStructure {
         #implemented part acpi : LibraryCrate {
             attribute :>> path = "libs/acpi";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 64;
+            attribute :>> hostTests = 72;
             doc /* Reached at stage 3: the MADT walk the interrupt controller
                  * needed. Stage 10 uses the rest. */
         }

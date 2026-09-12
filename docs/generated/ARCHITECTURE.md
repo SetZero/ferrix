@@ -93,7 +93,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1414 elements, 155 relations. Model digest `5a62cf012b406fbf`.
+13 files, 16 packages, 1414 elements, 155 relations. Model digest `29a57837c102b91e`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -2121,6 +2121,8 @@ Scoped to one device: the device addresses a DMA VMO gets come from here, so a d
 
 `#planned`  ·  stage 10
 
+Where the hardware is is read today: libs/acpi's dmar module (VT-d units and their device scopes) and iort module (root complex to SMMUv3 stream IDs), tested against QEMU's own table builders. The domains themselves are not built yet.
+
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
 | `mode` | attribute | `IommuMode` |  |  |
@@ -2411,7 +2413,7 @@ docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code 
 | `libs/frame` | `#implemented` | — | `forbid` | — |  |
 | `libs/heap` | `#implemented` | — | allowed | — | The body has no unsafe; the crate cannot forbid it because declaring Backing as an unsafe trait is the point. |
 | `libs/paging` | `#implemented` | — | allowed | — |  |
-| `libs/acpi` | `#implemented` | — | `forbid` | 64 | Reached at stage 3: the MADT walk the interrupt controller needed. |
+| `libs/acpi` | `#implemented` | — | `forbid` | 72 | Reached at stage 3: the MADT walk the interrupt controller needed. |
 | `libs/fdt` | `#implemented` | — | `forbid` | 70 | Reached at stage 1 on ARMv7-A: console, GIC, timer interrupt and PSCI conduit come from it there. |
 | `libs/sync` | `#implemented` | — | allowed | 19 | Reached at stage 4: SpinLock and IrqSpinLock guard every shared kernel structure. |
 | `libs/sched` | `#implemented` | 5 | `forbid` | 34 | The half of the scheduler that is arithmetic: the EEVDF tree, weights, lag, the domain partition. cargo test drives a run queue through hundreds of thousands of decisions. |
@@ -2701,7 +2703,7 @@ Built: the byte-level half, in libs/native-abi and libs/objects, host-tested, fu
 
 Enumeration, IOMMU domains, devmgr, the shared-ring block protocol, virtio-blk as a user process. Exit: a sector read through a ring-3 driver with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting.
 
-Built: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri; kernel enumeration from the MCFG and the device tree, in the boot test on all three architectures against a virtio-rng-pci device; device nodes whose apertures and vectors are tokens only device.rs mints; a virtio-rng device driven by DMA from the boot check, 64 bytes on every architecture; MSI-X tables and pending bits withheld from apertures. Next, and needing nothing from stage 9: MSI-X vectors, IOMMU domains. Needing stage 9: everything that runs in ring 3.
+Built: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri; kernel enumeration from the MCFG and the device tree, in the boot test on all three architectures against a virtio-rng-pci device; device nodes whose apertures and vectors are tokens only device.rs mints; a virtio-rng device driven by DMA from the boot check, 64 bytes on every architecture; MSI-X tables and pending bits withheld from apertures; the DMAR and IORT parsed. Next, and needing nothing from stage 9: MSI-X vectors, IOMMU domains. Needing stage 9: everything that runs in ring 3.
 
 **Allocated to: **`ferrix.kernel.devices` and `ferrix.kernel.iommu`
 

@@ -1504,6 +1504,33 @@ fn exercise(memory: &Memory) {
             let _ = (allocation.window_base(), allocation.window_len());
         }
     }
+    if let Ok(table) = acpi.dmar() {
+        let _ = (table.table(), table.host_address_width(), table.flags());
+        for structure in table.structures() {
+            let scopes = match structure {
+                dmar::Structure::Drhd(unit) => unit.device_scopes(),
+                dmar::Structure::Rmrr(region) => {
+                    let _ = region.size();
+                    region.device_scopes()
+                }
+                dmar::Structure::Unknown { .. } | dmar::Structure::Malformed { .. } => continue,
+            };
+            for scope in scopes {
+                let _ = (scope.endpoint(), scope.path().count());
+            }
+        }
+    }
+    if let Ok(table) = acpi.iort() {
+        let _ = (table.table(), table.node_count());
+        for node in table.nodes() {
+            let _ = (node.smmu_v3(), node.root_complex(), node.translate(0x18));
+            for mapping in node.id_mappings() {
+                let _ = mapping.translate(0x18);
+                let _ = table.node_at(mapping.output_reference);
+            }
+            let _ = table.node_at(node.offset);
+        }
+    }
 }
 
 /// Corrupt one byte of one table at a time and read the whole set again.
@@ -1935,5 +1962,392 @@ fn a_gic_msi_frame_too_short_for_its_fields_is_malformed() {
             length: 20
         }),
         "four bytes short"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// DMAR
+// ---------------------------------------------------------------------------
+
+fn le16(value: u16) -> [u8; 2] {
+    value.to_le_bytes()
+}
+
+/// A device scope: type, enumeration ID, start bus and path.
+fn scope(kind: u8, enumeration_id: u8, bus: u8, path: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![kind, (6 + path.len()) as u8, 0, 0, enumeration_id, bus];
+    bytes.extend_from_slice(path);
+    bytes
+}
+
+/// A remapping structure of `kind`: its type, length, then `body`.
+fn structure(kind: u16, body: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&le16(kind));
+    bytes.extend_from_slice(&le16((4 + body.len()) as u16));
+    bytes.extend_from_slice(body);
+    bytes
+}
+
+/// The DMAR QEMU builds for `q35` with an `intel-iommu`: one unit at
+/// 0xFED90000, the I/O APIC's scope, two endpoints, and an ATSR.
+fn dmar_q35() -> Vec<u8> {
+    let mut unit = vec![0, 0];
+    unit.extend_from_slice(&le16(0));
+    unit.extend_from_slice(&0xFED9_0000_u64.to_le_bytes());
+    unit.extend(scope(dmar::SCOPE_IOAPIC, 0, 0xFF, &[0, 0]));
+    unit.extend(scope(dmar::SCOPE_PCI_ENDPOINT, 0, 0, &[0x1F, 2]));
+    unit.extend(scope(dmar::SCOPE_PCI_ENDPOINT, 0, 0, &[3, 0]));
+    let mut atsr = vec![1, 0];
+    atsr.extend_from_slice(&le16(0));
+
+    TableBuilder::new(dmar::DMAR_SIGNATURE)
+        .raw(&[38, dmar::FLAG_INTR_REMAP])
+        .raw(&[0; 10])
+        .raw(&structure(dmar::STRUCTURE_DRHD, &unit))
+        .raw(&structure(dmar::STRUCTURE_ATSR, &atsr))
+        .build()
+}
+
+fn parse_dmar(bytes: &[u8]) -> dmar::Dmar<'_> {
+    dmar::Dmar::parse(Table::parse(bytes).unwrap()).unwrap()
+}
+
+#[test]
+fn q35s_dmar_names_one_unit_and_the_devices_behind_it() {
+    let bytes = dmar_q35();
+    let table = parse_dmar(&bytes);
+    assert_eq!(table.host_address_width(), 39, "stored less one");
+    assert_eq!(table.flags(), dmar::FLAG_INTR_REMAP, "flags");
+
+    let structures: Vec<_> = table.structures().collect();
+    assert_eq!(structures.len(), 2, "a unit and an ATSR");
+    let dmar::Structure::Drhd(unit) = structures[0] else {
+        panic!("first is a DRHD: {:?}", structures[0]);
+    };
+    assert_eq!((unit.segment, unit.register_base), (0, 0xFED9_0000), "unit");
+    let scopes: Vec<_> = unit.device_scopes().collect();
+    assert_eq!(scopes.len(), 3, "three scopes");
+    assert_eq!(
+        (
+            scopes[0].kind,
+            scopes[0].start_bus,
+            scopes[0].path().collect::<Vec<_>>()
+        ),
+        (dmar::SCOPE_IOAPIC, 0xFF, vec![(0, 0)]),
+        "the I/O APIC on the pseudo-bus"
+    );
+    assert_eq!(scopes[1].endpoint(), Some((0, 0x1F, 2)), "SATA");
+    assert_eq!(scopes[2].endpoint(), Some((0, 3, 0)), "the virtio device");
+    assert_eq!(
+        structures[1],
+        dmar::Structure::Unknown { kind: 2, length: 8 },
+        "the ATSR is stepped over"
+    );
+}
+
+#[test]
+fn an_rmrr_carries_its_range_and_devices() {
+    let mut body = vec![0, 0];
+    body.extend_from_slice(&le16(0));
+    body.extend_from_slice(&0xBF80_0000_u64.to_le_bytes());
+    body.extend_from_slice(&0xBF8F_FFFF_u64.to_le_bytes());
+    body.extend(scope(dmar::SCOPE_PCI_ENDPOINT, 0, 0, &[0x14, 0]));
+    let bytes = TableBuilder::new(dmar::DMAR_SIGNATURE)
+        .raw(&[38, 0])
+        .raw(&[0; 10])
+        .raw(&structure(dmar::STRUCTURE_RMRR, &body))
+        .build();
+    let table = parse_dmar(&bytes);
+    let Some(dmar::Structure::Rmrr(region)) = table.structures().next() else {
+        panic!("an RMRR");
+    };
+    assert_eq!(region.size(), Some(0x10_0000), "one mebibyte");
+    assert_eq!(
+        region.device_scopes().next().and_then(|s| s.endpoint()),
+        Some((0, 0x14, 0)),
+        "the USB controller"
+    );
+    for (base, limit, what) in [
+        (0xBF80_0000_u64, 0_u64, "limit below base"),
+        (0, u64::MAX, "the whole address space"),
+    ] {
+        let bytes = rmrr_table(base, limit);
+        let table = parse_dmar(&bytes);
+        let Some(dmar::Structure::Rmrr(region)) = table.structures().next() else {
+            panic!("an RMRR");
+        };
+        assert_eq!(region.size(), None, "{what}");
+    }
+}
+
+/// A DMAR holding one RMRR from `base` to `limit` with no devices.
+fn rmrr_table(base: u64, limit: u64) -> Vec<u8> {
+    let mut body = vec![0, 0];
+    body.extend_from_slice(&le16(0));
+    body.extend_from_slice(&base.to_le_bytes());
+    body.extend_from_slice(&limit.to_le_bytes());
+    TableBuilder::new(dmar::DMAR_SIGNATURE)
+        .raw(&[38, 0])
+        .raw(&[0; 10])
+        .raw(&structure(dmar::STRUCTURE_RMRR, &body))
+        .build()
+}
+
+#[test]
+fn a_bad_structure_or_scope_length_ends_its_walk() {
+    let mut short_unit = vec![0, 0];
+    short_unit.extend_from_slice(&le16(0));
+    short_unit.extend_from_slice(&[0; 4]);
+    let zero = [0_u8, 0, 0, 0];
+    let bytes = TableBuilder::new(dmar::DMAR_SIGNATURE)
+        .raw(&[38, 0])
+        .raw(&[0; 10])
+        .raw(&structure(dmar::STRUCTURE_DRHD, &short_unit))
+        .raw(&zero)
+        .raw(&structure(dmar::STRUCTURE_ATSR, &[0; 4]))
+        .build();
+    let found: Vec<_> = parse_dmar(&bytes).structures().collect();
+    assert_eq!(
+        found,
+        vec![dmar::Structure::Malformed {
+            kind: 0,
+            length: 12
+        }],
+        "a short DRHD, then a zero length ends it before the ATSR"
+    );
+
+    let mut unit = vec![0, 0];
+    unit.extend_from_slice(&le16(0));
+    unit.extend_from_slice(&0xFED9_0000_u64.to_le_bytes());
+    unit.extend(scope(dmar::SCOPE_PCI_ENDPOINT, 0, 0, &[1, 0, 2]));
+    unit.extend(scope(dmar::SCOPE_PCI_BRIDGE, 0, 0, &[0x1C, 0, 0, 0]));
+    unit.extend_from_slice(&[dmar::SCOPE_PCI_ENDPOINT, 3, 0, 0]);
+    let bytes = TableBuilder::new(dmar::DMAR_SIGNATURE)
+        .raw(&[38, 0])
+        .raw(&[0; 10])
+        .raw(&structure(dmar::STRUCTURE_DRHD, &unit))
+        .build();
+    let table = parse_dmar(&bytes);
+    let Some(dmar::Structure::Drhd(unit)) = table.structures().next() else {
+        panic!("a DRHD");
+    };
+    let scopes: Vec<_> = unit.device_scopes().collect();
+    assert_eq!(scopes.len(), 2, "the length-3 scope ends the walk");
+    assert_eq!(
+        scopes[0].path().collect::<Vec<_>>(),
+        vec![(1, 0)],
+        "an odd byte is not a hop"
+    );
+    assert_eq!(scopes[0].endpoint(), None, "and not a single hop either");
+    assert_eq!(
+        scopes[1].endpoint(),
+        None,
+        "two hops need configuration space"
+    );
+}
+
+#[test]
+fn a_dmar_shorter_than_its_header_is_refused() {
+    let bytes = TableBuilder::new(dmar::DMAR_SIGNATURE)
+        .raw(&[38, 0])
+        .build();
+    assert_eq!(
+        dmar::Dmar::parse(Table::parse(&bytes).unwrap()),
+        Err(AcpiError::TooShort { got: 38, need: 48 }),
+        "38 bytes"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// IORT
+// ---------------------------------------------------------------------------
+
+/// An IORT node: type, length, revision, identifier, mapping count and
+/// offset, then `body`, then `mappings`.
+fn iort_node(
+    kind: u8,
+    revision: u8,
+    identifier: u32,
+    body: &[u8],
+    mappings: &[[u32; 5]],
+) -> Vec<u8> {
+    let fixed = 16 + body.len();
+    let length = fixed + mappings.len() * 20;
+    let mut bytes = vec![kind];
+    bytes.extend_from_slice(&le16(length as u16));
+    bytes.push(revision);
+    bytes.extend_from_slice(&identifier.to_le_bytes());
+    bytes.extend_from_slice(&(mappings.len() as u32).to_le_bytes());
+    let offset = if mappings.is_empty() { 0 } else { fixed as u32 };
+    bytes.extend_from_slice(&offset.to_le_bytes());
+    bytes.extend_from_slice(body);
+    for mapping in mappings {
+        for field in mapping {
+            bytes.extend_from_slice(&field.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+/// The IORT QEMU builds for `virt,iommu=smmuv3`: an ITS group at 48, the
+/// `SMMUv3` at 72 and the root complex at 160.
+fn iort_virt() -> Vec<u8> {
+    let its = iort_node(iort::NODE_ITS_GROUP, 1, 0, &[1, 0, 0, 0, 0, 0, 0, 0], &[]);
+    let mut smmu = Vec::new();
+    smmu.extend_from_slice(&0x0905_0000_u64.to_le_bytes());
+    for field in [1_u32, 0] {
+        smmu.extend_from_slice(&field.to_le_bytes());
+    }
+    smmu.extend_from_slice(&0_u64.to_le_bytes());
+    for field in [0_u32, 106, 107, 109, 108, 0, 0] {
+        smmu.extend_from_slice(&field.to_le_bytes());
+    }
+    let smmu = iort_node(iort::NODE_SMMU_V3, 4, 1, &smmu, &[[0, 0xFFFF, 0, 48, 0]]);
+    let mut rc = Vec::new();
+    rc.extend_from_slice(&1_u32.to_le_bytes());
+    rc.extend_from_slice(&[0, 0, 0, 3]);
+    rc.extend_from_slice(&0_u32.to_le_bytes());
+    rc.extend_from_slice(&0_u32.to_le_bytes());
+    rc.extend_from_slice(&[64, 0, 0, 0]);
+    let rc = iort_node(iort::NODE_ROOT_COMPLEX, 3, 2, &rc, &[[0, 0xFFFF, 0, 72, 0]]);
+    assert_eq!(
+        (its.len(), smmu.len(), rc.len()),
+        (24, 88, 56),
+        "QEMU's sizes"
+    );
+
+    TableBuilder::new(iort::IORT_SIGNATURE)
+        .u32(3)
+        .u32(48)
+        .u32(0)
+        .raw(&its)
+        .raw(&smmu)
+        .raw(&rc)
+        .build()
+}
+
+fn parse_iort(bytes: &[u8]) -> iort::Iort<'_> {
+    iort::Iort::parse(Table::parse(bytes).unwrap()).unwrap()
+}
+
+#[test]
+fn virts_iort_routes_a_requester_id_through_the_smmu_to_the_its() {
+    let bytes = iort_virt();
+    let table = parse_iort(&bytes);
+    let nodes: Vec<_> = table.nodes().map(|node| (node.kind, node.offset)).collect();
+    assert_eq!(
+        nodes,
+        vec![
+            (iort::NODE_ITS_GROUP, 48),
+            (iort::NODE_SMMU_V3, 72),
+            (iort::NODE_ROOT_COMPLEX, 160)
+        ],
+        "three nodes"
+    );
+
+    let rc = table.node_at(160).unwrap();
+    assert_eq!(rc.root_complex().map(|r| r.segment), Some(0), "segment 0");
+    // 00:03.0 is requester ID 0x18.
+    let (stream, next) = rc.translate(0x18).unwrap();
+    assert_eq!((stream, next), (0x18, 72), "to the SMMU, as stream 0x18");
+
+    let smmu = table.node_at(next).unwrap().smmu_v3().unwrap();
+    assert_eq!(
+        smmu,
+        iort::SmmuV3 {
+            base_address: 0x0905_0000,
+            flags: 1,
+            model: 0,
+            event_gsiv: 106,
+            pri_gsiv: 107,
+            gerr_gsiv: 109,
+            sync_gsiv: 108
+        },
+        "QEMU's SMMUv3"
+    );
+    assert_eq!(
+        table.node_at(72).unwrap().translate(0x18),
+        Some((0x18, 48)),
+        "then to the ITS"
+    );
+    assert_eq!(
+        table.node_at(48).unwrap().translate(0x18),
+        None,
+        "which maps nothing further"
+    );
+    assert_eq!(rc.smmu_v3(), None, "a root complex is no SMMU");
+}
+
+#[test]
+fn an_id_mapping_covers_exactly_its_range() {
+    let mapping = iort::IdMapping {
+        input_base: 0x100,
+        count: 0x10,
+        output_base: 0x2000,
+        output_reference: 72,
+        flags: 0,
+    };
+    assert_eq!(mapping.translate(0x100), Some(0x2000), "first");
+    assert_eq!(mapping.translate(0x10F), Some(0x200F), "last");
+    assert_eq!(mapping.translate(0x110), None, "one past");
+    assert_eq!(mapping.translate(0xFF), None, "one below");
+    let single = iort::IdMapping {
+        flags: iort::ID_MAPPING_SINGLE,
+        ..mapping
+    };
+    assert_eq!(
+        single.translate(0x100),
+        None,
+        "a single mapping translates no input"
+    );
+    let high = iort::IdMapping {
+        output_base: u32::MAX,
+        ..mapping
+    };
+    assert_eq!(high.translate(0x101), None, "an output that overflows");
+}
+
+#[test]
+fn an_iort_that_overstates_its_nodes_or_mappings_ends_where_its_bytes_do() {
+    let mut bytes = iort_virt();
+    // Claim nine nodes, and give the SMMU a thousand mappings.
+    bytes[36..40].copy_from_slice(&9_u32.to_le_bytes());
+    bytes[48 + 24 + 8..48 + 24 + 12].copy_from_slice(&1000_u32.to_le_bytes());
+    bytes[9] = 0;
+    let sum = bytes.iter().copied().fold(0_u8, u8::wrapping_add);
+    bytes[9] = 0_u8.wrapping_sub(sum);
+    let table = parse_iort(&bytes);
+    assert_eq!(table.nodes().count(), 3, "three nodes are present");
+    assert_eq!(
+        table.node_at(72).unwrap().id_mappings().count(),
+        1,
+        "one mapping is present"
+    );
+
+    assert_eq!(table.node_at(4096), None, "past the table");
+    assert_eq!(
+        table.node_at(50),
+        None,
+        "inside a node, where the length is garbage"
+    );
+
+    let mut short = iort_virt();
+    short[48 + 1..48 + 3].copy_from_slice(&le16(8));
+    let table = parse_iort(&short);
+    assert_eq!(
+        table.nodes().count(),
+        0,
+        "a node shorter than its header stops the walk"
+    );
+}
+
+#[test]
+fn an_iort_shorter_than_its_header_is_refused() {
+    let bytes = TableBuilder::new(iort::IORT_SIGNATURE).u32(0).build();
+    assert_eq!(
+        iort::Iort::parse(Table::parse(&bytes).unwrap()),
+        Err(AcpiError::TooShort { got: 40, need: 48 }),
+        "40 bytes"
     );
 }

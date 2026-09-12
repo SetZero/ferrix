@@ -51,6 +51,9 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod dmar;
+pub mod iort;
+
 use core::fmt;
 
 // ---------------------------------------------------------------------------
@@ -773,6 +776,16 @@ impl<'t, T: Tables> Acpi<'t, T> {
     /// The MCFG, decoded: where PCI Express configuration space is.
     pub fn mcfg(&self) -> Result<Mcfg<'t>, AcpiError> {
         Mcfg::parse(self.find(MCFG_SIGNATURE)?)
+    }
+
+    /// The DMAR, decoded: where x86-64's VT-d remapping hardware is.
+    pub fn dmar(&self) -> Result<dmar::Dmar<'t>, AcpiError> {
+        dmar::Dmar::parse(self.find(dmar::DMAR_SIGNATURE)?)
+    }
+
+    /// The IORT, decoded: which SMMU an Arm machine's devices sit behind.
+    pub fn iort(&self) -> Result<iort::Iort<'t>, AcpiError> {
+        iort::Iort::parse(self.find(iort::IORT_SIGNATURE)?)
     }
 }
 

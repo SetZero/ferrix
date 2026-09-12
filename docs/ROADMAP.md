@@ -1279,10 +1279,15 @@ each where they had two.
   `GICv2m` frame's SPIs on the Arm machines — built on stage 9's
   `arch::mask_interrupt`, and the boot check's completion arriving as an
   interrupt rather than by polling.
-* **IOMMU domains, which need nothing from stage 9 either.** DMAR and IORT in
-  `libs/acpi`, VT-d on `q35` with `intel-iommu`, SMMUv3 on `virt` with
-  `iommu=smmuv3` — which this QEMU also offers on the 32-bit machine — and the
-  deliberate out-of-domain DMA fault, driven from the kernel first.
+* **IOMMU domains, which need nothing from stage 9 either.** Where the
+  hardware is can already be read: `libs/acpi` decodes the DMAR — each VT-d
+  unit's register block and the devices behind it — and the IORT, following a
+  requester ID from the root complex to the `SMMUv3` that translates it and
+  the stream ID it arrives as. Both are tested against the exact layouts
+  QEMU's own `build_dmar_q35` and `build_iort` produce. Still missing: VT-d on
+  `q35` with `intel-iommu`, `SMMUv3` on `virt` with `iommu=smmuv3` — which
+  this QEMU also offers on the 32-bit machine — and the deliberate
+  out-of-domain DMA fault, driven from the boot check's virtio-rng harness.
 * **Everything that runs in ring 3, which does.** Device-node handles
   (`Object::Device`); `Interrupt` and `IoMapping`, which stage 9 writes against
   `device.rs`'s tokens; `devmgr`, the ring protocol, and virtio-blk as a
@@ -1395,7 +1400,7 @@ at three in the morning against a machine that reboots on a mistake.
 
 | Crate | Waiting for | Tests |
 |---|---|---|
-| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG, GIC MSI frames. No AML, and there will be none. | 64 |
+| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG, GIC MSI frames, DMAR, IORT. No AML, and there will be none. | 72 |
 | `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. | 70 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
@@ -1411,7 +1416,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **662 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **670 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

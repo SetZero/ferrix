@@ -105,6 +105,10 @@ package FerrixDrivers {
 
     #planned part def IommuDomains {
         @stage { number = 10; }
+        doc /* Where the hardware is is read today: libs/acpi's dmar module
+             * (VT-d units and their device scopes) and iort module (root
+             * complex to SMMUv3 stream IDs), tested against QEMU's own table
+             * builders. The domains themselves are not built yet. */
         attribute mode : IommuMode;
         part domains : IommuDomain[0..*];
     }
