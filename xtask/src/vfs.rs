@@ -101,7 +101,12 @@ exit 6
 "#;
 
 /// Checks that `rm` and `rmdir` left nothing behind.
-const GONE_SCRIPT: &str = r#"[ -e /tmp/vfs ] || echo "tmpfs: removed"
+///
+/// `/tmp` is tested first, because a `stat` the kernel refuses makes `-e`
+/// false too: without that line, a kernel answering no file calls at all
+/// passed this script.
+const GONE_SCRIPT: &str = r#"[ -d /tmp ] || exit 1
+[ -e /tmp/vfs ] || echo "tmpfs: removed"
 exit 7
 "#;
 
