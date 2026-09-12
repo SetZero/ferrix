@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::vec::Vec;
 
 use crate::errno::{Errno, encode};
-use crate::nr::{Syscall, aarch64, from_aarch64, from_x86_64, x86_64};
+use crate::nr::{Syscall, aarch64, arm, from_aarch64, from_arm, from_x86_64, x86_64};
 use crate::types;
 
 /// Calls whose number this crate knows on x86-64 but which the generic table
@@ -121,6 +121,21 @@ const SHARED: &[(usize, usize, Syscall)] = &[
 /// Every call either table maps, found by sweeping the number space.
 fn mapped(translate: fn(usize) -> Option<Syscall>) -> HashSet<Syscall> {
     (0..=600).filter_map(translate).collect()
+}
+
+/// The numbers an ARMv7-A program can arrive with.
+///
+/// Not a single range: the EABI table runs from zero, and the six ARM-private
+/// calls sit at `0x0f0000`. A sweep that stopped at the shared table's top
+/// would silently exclude `set_tls`, which is the one call a threaded program
+/// cannot start without.
+fn arm_number_space() -> impl Iterator<Item = usize> {
+    (0..=600).chain(arm::ARM_PRIVATE_BASE..=arm::ARM_PRIVATE_BASE + 16)
+}
+
+/// Every call the ARMv7-A table maps, private range included.
+fn mapped_arm() -> HashSet<Syscall> {
+    arm_number_space().filter_map(from_arm).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,7 +1050,8 @@ fn unknown_numbers_map_to_none_without_panicking() {
 fn the_whole_number_space_is_total() {
     for nr in 0..=1200 {
         let _x86 = from_x86_64(nr);
-        let _arm = from_aarch64(nr);
+        let _aarch64 = from_aarch64(nr);
+        let _arm = from_arm(nr);
     }
     assert_eq!(
         from_x86_64(usize::MAX),
@@ -1044,6 +1060,11 @@ fn the_whole_number_space_is_total() {
     );
     assert_eq!(
         from_aarch64(usize::MAX),
+        None,
+        "the largest number is answered, not trapped"
+    );
+    assert_eq!(
+        from_arm(usize::MAX),
         None,
         "the largest number is answered, not trapped"
     );
@@ -1088,4 +1109,380 @@ fn table_sizes_are_stable() {
         116,
         "the AArch64 table maps 116 calls"
     );
+}
+/// Calls only ARMv7-A has, because it is the only 32-bit target.
+///
+/// Every one of them exists because a 32-bit register cannot carry what the
+/// call has to pass, or because ARM userspace cannot reach a register the
+/// other two write for themselves. None is a synonym: each takes arguments
+/// its 64-bit namesake does not.
+const ARM_ONLY: &[Syscall] = &[
+    Syscall::Stat64,
+    Syscall::Lstat64,
+    Syscall::Fstat64,
+    Syscall::Fstatat64,
+    Syscall::Statfs64,
+    Syscall::Fstatfs64,
+    Syscall::Truncate64,
+    Syscall::Ftruncate64,
+    Syscall::Sendfile64,
+    Syscall::Fcntl64,
+    Syscall::Llseek,
+    Syscall::Mmap2,
+    Syscall::ClockGettime64,
+    Syscall::ClockNanosleepTime64,
+    Syscall::PpollTime64,
+    Syscall::FutexTime64,
+    Syscall::ArmSetTls,
+    Syscall::ArmCacheflush,
+];
+
+/// Every ARMv7-A number this crate knows, paired with the call it means.
+///
+/// The same role `SHARED` plays for the other two tables, but stronger: these
+/// are literal numbers rather than references to `nr::arm`, so a mistyped
+/// constant fails this test rather than silently dispatching a program's
+/// `write` into, say, `unlink`.
+const ARM_NUMBERS: &[(usize, Syscall)] = &[
+    // Generated against `arch/arm/include/uapi/asm/unistd-common.h`; the
+    // number is written out rather than taken from `nr::arm` so that a
+    // wrong constant fails here instead of dispatching a call to the
+    // wrong handler.
+    (1, Syscall::Exit),                   // exit
+    (2, Syscall::Fork),                   // fork
+    (3, Syscall::Read),                   // read
+    (4, Syscall::Write),                  // write
+    (5, Syscall::Open),                   // open
+    (6, Syscall::Close),                  // close
+    (9, Syscall::Link),                   // link
+    (10, Syscall::Unlink),                // unlink
+    (11, Syscall::Execve),                // execve
+    (12, Syscall::Chdir),                 // chdir
+    (15, Syscall::Chmod),                 // chmod
+    (19, Syscall::Lseek),                 // lseek
+    (20, Syscall::Getpid),                // getpid
+    (21, Syscall::Mount),                 // mount
+    (33, Syscall::Access),                // access
+    (36, Syscall::Sync),                  // sync
+    (37, Syscall::Kill),                  // kill
+    (38, Syscall::Rename),                // rename
+    (39, Syscall::Mkdir),                 // mkdir
+    (40, Syscall::Rmdir),                 // rmdir
+    (41, Syscall::Dup),                   // dup
+    (42, Syscall::Pipe),                  // pipe
+    (45, Syscall::Brk),                   // brk
+    (52, Syscall::Umount2),               // umount2
+    (54, Syscall::Ioctl),                 // ioctl
+    (55, Syscall::Fcntl),                 // fcntl
+    (57, Syscall::Setpgid),               // setpgid
+    (60, Syscall::Umask),                 // umask
+    (63, Syscall::Dup2),                  // dup2
+    (64, Syscall::Getppid),               // getppid
+    (75, Syscall::Setrlimit),             // setrlimit
+    (77, Syscall::Getrusage),             // getrusage
+    (78, Syscall::Gettimeofday),          // gettimeofday
+    (83, Syscall::Symlink),               // symlink
+    (85, Syscall::Readlink),              // readlink
+    (91, Syscall::Munmap),                // munmap
+    (92, Syscall::Truncate),              // truncate
+    (93, Syscall::Ftruncate),             // ftruncate
+    (94, Syscall::Fchmod),                // fchmod
+    (114, Syscall::Wait4),                // wait4
+    (116, Syscall::Sysinfo),              // sysinfo
+    (118, Syscall::Fsync),                // fsync
+    (120, Syscall::Clone),                // clone
+    (122, Syscall::Uname),                // uname
+    (125, Syscall::Mprotect),             // mprotect
+    (132, Syscall::Getpgid),              // getpgid
+    (133, Syscall::Fchdir),               // fchdir
+    (140, Syscall::Llseek),               // _llseek
+    (144, Syscall::Msync),                // msync
+    (145, Syscall::Readv),                // readv
+    (146, Syscall::Writev),               // writev
+    (148, Syscall::Fdatasync),            // fdatasync
+    (155, Syscall::SchedGetparam),        // sched_getparam
+    (156, Syscall::SchedSetscheduler),    // sched_setscheduler
+    (157, Syscall::SchedGetscheduler),    // sched_getscheduler
+    (158, Syscall::SchedYield),           // sched_yield
+    (162, Syscall::Nanosleep),            // nanosleep
+    (163, Syscall::Mremap),               // mremap
+    (168, Syscall::Poll),                 // poll
+    (172, Syscall::Prctl),                // prctl
+    (173, Syscall::RtSigreturn),          // rt_sigreturn
+    (174, Syscall::RtSigaction),          // rt_sigaction
+    (175, Syscall::RtSigprocmask),        // rt_sigprocmask
+    (179, Syscall::RtSigsuspend),         // rt_sigsuspend
+    (180, Syscall::Pread64),              // pread64
+    (181, Syscall::Pwrite64),             // pwrite64
+    (183, Syscall::Getcwd),               // getcwd
+    (186, Syscall::Sigaltstack),          // sigaltstack
+    (190, Syscall::Vfork),                // vfork
+    (191, Syscall::Getrlimit),            // ugetrlimit
+    (192, Syscall::Mmap2),                // mmap2
+    (193, Syscall::Truncate64),           // truncate64
+    (194, Syscall::Ftruncate64),          // ftruncate64
+    (195, Syscall::Stat64),               // stat64
+    (196, Syscall::Lstat64),              // lstat64
+    (197, Syscall::Fstat64),              // fstat64
+    (199, Syscall::Getuid),               // getuid32
+    (200, Syscall::Getgid),               // getgid32
+    (201, Syscall::Geteuid),              // geteuid32
+    (202, Syscall::Getegid),              // getegid32
+    (205, Syscall::Getgroups),            // getgroups32
+    (207, Syscall::Fchown),               // fchown32
+    (209, Syscall::Getresuid),            // getresuid32
+    (211, Syscall::Getresgid),            // getresgid32
+    (212, Syscall::Chown),                // chown32
+    (213, Syscall::Setuid),               // setuid32
+    (214, Syscall::Setgid),               // setgid32
+    (217, Syscall::Getdents64),           // getdents64
+    (220, Syscall::Madvise),              // madvise
+    (221, Syscall::Fcntl64),              // fcntl64
+    (224, Syscall::Gettid),               // gettid
+    (238, Syscall::Tkill),                // tkill
+    (239, Syscall::Sendfile64),           // sendfile64
+    (240, Syscall::Futex),                // futex
+    (241, Syscall::SchedSetaffinity),     // sched_setaffinity
+    (242, Syscall::SchedGetaffinity),     // sched_getaffinity
+    (248, Syscall::ExitGroup),            // exit_group
+    (251, Syscall::EpollCtl),             // epoll_ctl
+    (252, Syscall::EpollWait),            // epoll_wait
+    (256, Syscall::SetTidAddress),        // set_tid_address
+    (263, Syscall::ClockGettime),         // clock_gettime
+    (265, Syscall::ClockNanosleep),       // clock_nanosleep
+    (266, Syscall::Statfs64),             // statfs64
+    (267, Syscall::Fstatfs64),            // fstatfs64
+    (268, Syscall::Tgkill),               // tgkill
+    (280, Syscall::Waitid),               // waitid
+    (281, Syscall::Socket),               // socket
+    (283, Syscall::Connect),              // connect
+    (322, Syscall::Openat),               // openat
+    (323, Syscall::Mkdirat),              // mkdirat
+    (325, Syscall::Fchownat),             // fchownat
+    (327, Syscall::Fstatat64),            // fstatat64
+    (328, Syscall::Unlinkat),             // unlinkat
+    (329, Syscall::Renameat),             // renameat
+    (330, Syscall::Linkat),               // linkat
+    (331, Syscall::Symlinkat),            // symlinkat
+    (332, Syscall::Readlinkat),           // readlinkat
+    (333, Syscall::Fchmodat),             // fchmodat
+    (334, Syscall::Faccessat),            // faccessat
+    (336, Syscall::Ppoll),                // ppoll
+    (337, Syscall::Unshare),              // unshare
+    (338, Syscall::SetRobustList),        // set_robust_list
+    (339, Syscall::GetRobustList),        // get_robust_list
+    (346, Syscall::EpollPwait),           // epoll_pwait
+    (356, Syscall::Eventfd2),             // eventfd2
+    (357, Syscall::EpollCreate1),         // epoll_create1
+    (358, Syscall::Dup3),                 // dup3
+    (359, Syscall::Pipe2),                // pipe2
+    (369, Syscall::Prlimit64),            // prlimit64
+    (382, Syscall::Renameat2),            // renameat2
+    (384, Syscall::Getrandom),            // getrandom
+    (385, Syscall::MemfdCreate),          // memfd_create
+    (387, Syscall::Execveat),             // execveat
+    (389, Syscall::Membarrier),           // membarrier
+    (397, Syscall::Statx),                // statx
+    (398, Syscall::Rseq),                 // rseq
+    (403, Syscall::ClockGettime64),       // clock_gettime64
+    (407, Syscall::ClockNanosleepTime64), // clock_nanosleep_time64
+    (414, Syscall::PpollTime64),          // ppoll_time64
+    (422, Syscall::FutexTime64),          // futex_time64
+    (435, Syscall::Clone3),               // clone3
+    (437, Syscall::Openat2),              // openat2
+    (439, Syscall::Faccessat2),           // faccessat2
+];
+
+// ---------------------------------------------------------------------------
+// The ARMv7-A (EABI) table
+// ---------------------------------------------------------------------------
+
+#[test]
+fn arm_numbers_all_resolve_to_the_call_they_name() {
+    for &(nr, call) in ARM_NUMBERS {
+        assert_eq!(
+            from_arm(nr),
+            Some(call),
+            "ARMv7-A number {nr} must dispatch {call:?}"
+        );
+    }
+}
+
+#[test]
+fn arm_round_trips() {
+    assert_eq!(
+        from_arm(arm::READ),
+        Some(Syscall::Read),
+        "read is 3 on EABI"
+    );
+    assert_eq!(
+        from_arm(arm::WRITE),
+        Some(Syscall::Write),
+        "write is 4 on EABI"
+    );
+    assert_eq!(
+        from_arm(arm::EXIT_GROUP),
+        Some(Syscall::ExitGroup),
+        "exit_group is 248 on EABI"
+    );
+    assert_eq!(
+        from_arm(arm::CLONE3),
+        Some(Syscall::Clone3),
+        "numbers assigned after the generic table froze match everywhere"
+    );
+}
+
+#[test]
+fn arm_numbers_are_the_eabi_ones_not_the_oabi_ones() {
+    // OABI based every number at 0x900000. If a constant had been taken from
+    // that table the whole file would be shifted, and `read` is the cheapest
+    // place to notice.
+    assert_eq!(arm::READ, 3, "EABI's __NR_SYSCALL_BASE is zero");
+    assert_eq!(
+        from_arm(0x0090_0003),
+        None,
+        "an OABI-based number is not a number this kernel answers"
+    );
+}
+
+#[test]
+fn arm_uses_the_wide_forms_a_32_bit_musl_actually_calls() {
+    // Each of these is the pair that a naive "ARM is x86-64 with different
+    // numbers" table would get wrong, and each would be wrong silently.
+    assert_eq!(
+        from_arm(arm::MMAP2),
+        Some(Syscall::Mmap2),
+        "mmap2 is a different call from mmap: its offset counts pages"
+    );
+    assert_eq!(
+        from_arm(arm::FSTAT64),
+        Some(Syscall::Fstat64),
+        "fstat64 writes struct stat64, which is not struct stat"
+    );
+    assert_eq!(
+        from_arm(arm::LLSEEK),
+        Some(Syscall::Llseek),
+        "_llseek returns its offset through a pointer"
+    );
+    assert_eq!(
+        from_arm(arm::CLOCK_GETTIME64),
+        Some(Syscall::ClockGettime64),
+        "musl has been time64 since 1.2"
+    );
+    assert_eq!(
+        from_arm(arm::FUTEX_TIME64),
+        Some(Syscall::FutexTime64),
+        "a time64 musl's locks wait on futex_time64"
+    );
+}
+
+#[test]
+fn arm_16_bit_credential_calls_are_absent() {
+    // Deliberate: musl issues only the `32` forms, so an arrival on one of the
+    // pre-2.4 numbers is more likely a mistake than a request.
+    for (nr, name) in [
+        (24, "getuid"),
+        (47, "getgid"),
+        (49, "geteuid"),
+        (23, "setuid"),
+    ] {
+        assert_eq!(
+            from_arm(nr),
+            None,
+            "the 16-bit {name} is not carried, and answers ENOSYS"
+        );
+    }
+    assert_eq!(
+        from_arm(arm::GETUID32),
+        Some(Syscall::Getuid),
+        "the 32-bit form is the one that dispatches"
+    );
+}
+
+#[test]
+fn arm_private_calls_sit_far_above_the_shared_table() {
+    assert_eq!(
+        arm::ARM_PRIVATE_BASE,
+        0x000f_0000,
+        "__ARM_NR_BASE, with EABI's zero syscall base"
+    );
+    assert_eq!(from_arm(arm::ARM_SET_TLS), Some(Syscall::ArmSetTls));
+    assert_eq!(from_arm(arm::ARM_CACHEFLUSH), Some(Syscall::ArmCacheflush));
+    // The gap is the whole point: no number the shared table will ever grow
+    // into can collide with one of these.
+    let highest_shared = ARM_NUMBERS
+        .iter()
+        .map(|&(nr, _)| nr)
+        .max()
+        .expect("the table is not empty");
+    assert!(
+        highest_shared < arm::ARM_PRIVATE_BASE,
+        "the private range must stay above every shared number"
+    );
+}
+
+#[test]
+fn arm_only_calls_are_the_expected_ones() {
+    let sixty_four_bit: HashSet<Syscall> = mapped(from_x86_64)
+        .union(&mapped(from_aarch64))
+        .copied()
+        .collect();
+    let only_on_arm: HashSet<Syscall> = mapped_arm().difference(&sixty_four_bit).copied().collect();
+    let expected: HashSet<Syscall> = ARM_ONLY.iter().copied().collect();
+    let mut missing: Vec<&Syscall> = expected.difference(&only_on_arm).collect();
+    missing.sort_unstable();
+    let mut extra: Vec<&Syscall> = only_on_arm.difference(&expected).collect();
+    extra.sort_unstable();
+    assert!(
+        missing.is_empty(),
+        "expected to be ARMv7-A only, but a 64-bit table maps them: {missing:?}"
+    );
+    assert!(
+        extra.is_empty(),
+        "ARMv7-A only, but not listed as such: {extra:?}"
+    );
+}
+
+#[test]
+fn arm_no_two_numbers_map_to_the_same_call() {
+    let mut seen = HashSet::new();
+    for nr in arm_number_space() {
+        if let Some(call) = from_arm(nr) {
+            assert!(
+                seen.insert(call),
+                "two ARMv7-A numbers both map to {call:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn arm_covers_the_calls_musl_startup_makes() {
+    // The 32-bit spellings of `both_tables_cover_the_calls_musl_startup_makes`.
+    // Three entries differ from the 64-bit list, and those three are exactly
+    // the reason this test is written out separately rather than folded in.
+    let arm_calls = mapped_arm();
+    for call in [
+        Syscall::Brk,
+        Syscall::Mmap2,
+        Syscall::Mprotect,
+        Syscall::SetTidAddress,
+        Syscall::SetRobustList,
+        Syscall::RtSigprocmask,
+        Syscall::Readlinkat,
+        Syscall::Writev,
+        Syscall::ExitGroup,
+        Syscall::FutexTime64,
+        Syscall::ClockGettime64,
+        Syscall::Getrandom,
+        Syscall::ArmSetTls,
+    ] {
+        assert!(arm_calls.contains(&call), "ARMv7-A must dispatch {call:?}");
+    }
+}
+
+#[test]
+fn arm_table_size_is_stable() {
+    // A canary, as for the other two tables.
+    assert_eq!(mapped_arm().len(), 145, "the ARMv7-A table maps 145 calls");
 }
