@@ -69,6 +69,11 @@ still exit 0. Injecting it into `poll` makes `while read` read nothing and the
 script carry on to its chosen status. A test that only compared statuses would
 pass on both.
 
+**A negative test is only as good as a positive one beside it.** A refused
+`stat` makes `[ -e name ]` false exactly as a missing file does. The first
+version of command 10, `[ -e /tmp/vfs ] || echo "tmpfs: removed"`, passed on
+a kernel that answered no file call at all. It now checks `[ -d /tmp ]` first.
+
 ## System calls, per command and architecture
 
 Every command also makes the startup calls stage 7 already answers:
@@ -149,13 +154,27 @@ as always ready.
 
 ## Not measured
 
-* ARMv7-A's musl calls `statx` first and falls back to `fstatat64` only when
-  `statx` returns `ENOSYS`. That is musl's source, not a trace: `qemu-arm` does
-  not inject faults.
+* Whether each call does what Linux does. What is known from Ferrix itself is
+  below, under "What Ferrix answers today".
 * What the calls do against Ferrix's own procfs layout: the host's `/proc` has
   thousands of entries, so `ls -R` was traced over a small fixture with the
   same shape (`self` a link to `1`, `1/maps` a file). The calls per entry do not
   depend on how many entries there are.
+
+## What Ferrix answers today
+
+From `cargo xtask test-vfs --arch all` on this branch, before the descriptor
+table, path calls and procfs land. The kernel prints each call it answered
+`ENOSYS` while a command ran, which is how these were read:
+
+* **ARMv7-A's musl falls back from `statx` (397) to `stat64` (195) and
+  `lstat64` (196)** when `statx` is refused, not to `fstatat64`. Answering
+  either pair is enough for `ls`, `mv`, `ln`, `rm` and `test`.
+* **`mkdir -p` calls `umask` (x86-64 95, AArch64 166, ARMv7-A 60) before and
+  after**, on every architecture. It does not care about the answer.
+* The shell's `getcwd` at startup is not load-bearing; its `chdir` is.
+* `ioctl(TIOCGWINSZ)` on descriptors 0 and 1 is the first call `ls` makes that
+  Ferrix refuses, and `ls` carries on.
 
 ## Repeating it
 
