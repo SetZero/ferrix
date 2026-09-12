@@ -48,7 +48,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use ferrix_sched::{CpuSet, Domain, Mode, NICE_0_WEIGHT, check_partition};
+use ferrix_sched::{
+    CpuLoad, CpuSet, Domain, Mode, NICE_0_WEIGHT, busiest, check_partition, place, quietest,
+};
 use ferrix_sync::{IrqControl, IrqSpinLock, Once, SpinLock};
 
 use crate::arch;
@@ -57,7 +59,7 @@ use queue::CpuQueue;
 use task::{DEAD, RUNNABLE, Task};
 
 pub(crate) use check::run as run_checks;
-pub(crate) use queue::SLICE_NS;
+pub(crate) use queue::{MIN_SLICE_NS, SLICE_NS};
 pub(crate) use task::TaskId;
 pub(crate) use wait::WaitQueue;
 
@@ -166,6 +168,7 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
     }
     let _ = QUEUES.call_once(|| queues);
     let _ = NEED_RESCHED.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
+    let _ = NEXT_BALANCE.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
 
     adopt_boot_task()?;
     joined(0);
@@ -252,7 +255,7 @@ fn new_idle_task(cpu: usize) -> Result<Arc<Task>, &'static str> {
         stack_pointer,
         weight: NICE_0_WEIGHT,
         cpu,
-        pinned: true,
+        affinity: CpuSet::of(cpu),
     })))
 }
 
@@ -319,11 +322,49 @@ pub(crate) fn spawn(
     argument: usize,
     weight: u32,
 ) -> Result<Arc<Task>, &'static str> {
-    let cpu = this_cpu().ok_or("no processor to start a task on")?;
-    spawn_on(name, entry, argument, weight, cpu, false)
+    let here = this_cpu().ok_or("no processor to start a task on")?;
+    let anywhere = *domain_cpus().ok_or("the scheduler has no domain")?;
+    // Where it *should* go, not where it happens to be created. A burst of
+    // tasks created on one processor used to queue behind each other there
+    // until some other processor went idle and came looking; now each one is
+    // placed when it is made.
+    let cpu = choose_cpu(&anywhere, here).unwrap_or(here);
+    spawn_on(name, entry, argument, weight, cpu, anywhere)
 }
 
-/// Start a task on `cpu`, optionally pinned there.
+/// The processors the machine's one domain covers.
+fn domain_cpus() -> Option<&'static CpuSet> {
+    DOMAIN.get().map(Domain::cpus)
+}
+
+/// Ask `ferrix_sched` where a task should go, given what every processor is
+/// carrying right now.
+///
+/// Takes every run queue's lock in turn, which is why it is never called with
+/// one already held. The snapshot is stale the moment it is taken — another
+/// processor may enqueue something before this one acts on the answer — and
+/// that is fine: a placement decision is a hint, and the balancer below
+/// corrects a bad one. What it must not do is deadlock, hence the ordering
+/// rule.
+fn choose_cpu(allowed: &CpuSet, prefer: usize) -> Option<usize> {
+    let queues = QUEUES.get()?;
+    let mut loads = [CpuLoad::idle(); ferrix_sched::MAX_CPUS];
+
+    let saved = <arch::Irq as IrqControl>::disable();
+    for (cpu, lock) in queues.iter().enumerate() {
+        let Some(slot) = loads.get_mut(cpu) else {
+            break;
+        };
+        let queue = lock.lock();
+        *slot = queue.snapshot();
+    }
+    <arch::Irq as IrqControl>::restore(saved);
+
+    let count = queues.len().min(loads.len());
+    place(loads.get(..count)?, allowed, prefer)
+}
+
+/// Start a task on `cpu`, able to run on `affinity`.
 ///
 /// # Errors
 ///
@@ -334,7 +375,7 @@ pub(crate) fn spawn_on(
     argument: usize,
     weight: u32,
     cpu: usize,
-    pinned: bool,
+    affinity: CpuSet,
 ) -> Result<Arc<Task>, &'static str> {
     let stack = crate::vmap::allocate_stack().map_err(|problem| {
         // The arena's own reason, because "no stack" has four of them and they
@@ -355,7 +396,7 @@ pub(crate) fn spawn_on(
         stack_pointer,
         weight,
         cpu,
-        pinned,
+        affinity,
     }));
 
     let lock = queue_of(cpu).ok_or("no such processor")?;
@@ -363,12 +404,24 @@ pub(crate) fn spawn_on(
     let (preempt, stealable) = {
         let mut queue = lock.lock();
         queue.insert(&task);
-        // Two reasons to make the target reschedule, and the second is the one
-        // that is easy to miss: either something better than what it is
-        // running has arrived, or it is not running anything at all and has
-        // to be woken to notice. A processor asleep in `wait_for_work` finds
-        // out only when interrupted.
-        let wake = queue.should_preempt() || queue.is_running_idle();
+        // Three reasons to make the target reschedule, and the third is the
+        // one that cost a day. Either something better than what it is
+        // running has arrived; or it is not running anything at all and has
+        // to be woken to notice; or **this is the first task to be made to
+        // wait behind the one it is running**, which means its timer is
+        // currently switched off.
+        //
+        // That last case is not an optimisation, it is a hang. `arm_timer`
+        // deliberately leaves a processor alone when nothing is waiting —
+        // that is where tickless comes from — so a processor running one task
+        // has stopped its timer. Adding a second task from *another*
+        // processor does not re-arm it, because only its owner can, and if
+        // `should_preempt` says the newcomer should not go first then nothing
+        // else would have told it. The result is a processor that runs its
+        // one task forever with others queued behind it, which is exactly
+        // what the fairness check saw: one spinner with a switch count in the
+        // thousands and two with none.
+        let wake = queue.should_preempt() || queue.is_running_idle() || queue.waiting() == 1;
         // More than the one task running means there is something here for an
         // idle processor to take. Measured after the insert, so the first task
         // to make the queue worth stealing from is the one that says so.
@@ -486,6 +539,23 @@ fn block() {
 
 /// Make `task` runnable, wherever it is.
 pub(crate) fn wake(task: &Arc<Task>) {
+    // **Not re-placed here, and not detached from its sleeper set here
+    // either.** Both were tried and both were withdrawn.
+    //
+    // Choosing a new processor at wake-up is what Linux does and is the
+    // better policy. Taking a woken task out of its processor's sleeper set
+    // looks like plain hygiene. Each was reverted after making an
+    // already-flaky machine reliably worse — the second one wedged every one
+    // of five runs, where the first had wedged three.
+    //
+    // The reason both are harder than they look is the same: a blocked task
+    // is not an unattached one, and "blocked" covers several states this code
+    // does not currently distinguish. A task can be on a wait queue, in a
+    // sleeper set, part-way into `block` and in neither yet, or on both. A
+    // waker that reasons about only one of them moves or unfiles a task that
+    // something else still believes it owns, and the task is lost rather than
+    // run. Getting it right means giving those states names and an order,
+    // which is a change of its own and not a corollary of five others.
     let saved = <arch::Irq as IrqControl>::disable();
     let mut kick_cpu = None;
     loop {
@@ -506,10 +576,11 @@ pub(crate) fn wake(task: &Arc<Task>) {
         if !task.is_queued() {
             queue.insert(task);
         }
-        // As `spawn_on`: an idle processor has to be told, because
-        // `should_preempt` compares against a fair queue the idle task is not
-        // in and so answers false however urgent the arrival.
-        if queue.should_preempt() || queue.is_running_idle() {
+        // As `spawn_on`, and for the same three reasons: something better has
+        // arrived, or the processor is idle, or this is the first task to
+        // wait behind the running one and so the first that needs its timer
+        // to exist.
+        if queue.should_preempt() || queue.is_running_idle() || queue.waiting() == 1 {
             kick_cpu = Some(cpu);
         }
         break;
@@ -543,6 +614,13 @@ pub(crate) fn preempt_on_irq_exit() {
         .get()
         .and_then(|flags| flags.get(cpu))
         .is_some_and(|flag| flag.swap(false, Ordering::AcqRel));
+
+    // Before the switch, not after: `schedule` may not come back to this
+    // context for a while, and a balance that runs on the way out of every
+    // timer interrupt should not be skipped whenever there is also a
+    // reschedule to do.
+    balance();
+
     if asked {
         schedule();
     }
@@ -670,6 +748,108 @@ fn steal_work() -> bool {
         .any(|victim| steal_from(me, victim))
 }
 
+/// How often a processor looks for an imbalance worth correcting.
+///
+/// Work stealing already covers the case that matters most — a processor with
+/// nothing to do — and it costs nothing, because a processor about to idle is
+/// not busy. This is the other case: every processor has work, and one has
+/// much more of it. Nothing about that is urgent, and looking often would mean
+/// taking every run queue's lock often, so it is deliberately slow.
+const BALANCE_INTERVAL_NS: u64 = 16_000_000;
+
+/// When each processor may next look for an imbalance.
+static NEXT_BALANCE: Once<Vec<AtomicU64>> = Once::new();
+
+/// Look for work worth pulling from a busier processor, and pull one task.
+///
+/// Called on the way out of a timer interrupt, from a processor that is
+/// *running something* — the idle case is `steal_work`. Rate-limited per
+/// processor, and it takes no lock at all in the common case where the
+/// interval has not elapsed.
+fn balance() {
+    let Some(me) = this_cpu() else {
+        return;
+    };
+    let now = crate::timer::now_nanos();
+    let Some(next) = NEXT_BALANCE.get().and_then(|times| times.get(me)) else {
+        return;
+    };
+    let due = next.load(Ordering::Relaxed);
+    if now < due {
+        return;
+    }
+    // Claimed with a compare-exchange rather than a store, so that two
+    // interrupts racing here do not both go on to lock every queue.
+    if next
+        .compare_exchange(
+            due,
+            now.saturating_add(BALANCE_INTERVAL_NS),
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        )
+        .is_err()
+    {
+        return;
+    }
+
+    let Some(allowed) = domain_cpus() else {
+        return;
+    };
+    let Some(queues) = QUEUES.get() else {
+        return;
+    };
+    let mut loads = [CpuLoad::idle(); ferrix_sched::MAX_CPUS];
+    let saved = <arch::Irq as IrqControl>::disable();
+    for (cpu, lock) in queues.iter().enumerate() {
+        let Some(slot) = loads.get_mut(cpu) else {
+            break;
+        };
+        let mut queue = lock.lock();
+        queue.account_load(now);
+        *slot = queue.snapshot();
+    }
+    <arch::Irq as IrqControl>::restore(saved);
+
+    let count = queues.len().min(loads.len());
+    let Some(view) = loads.get(..count) else {
+        return;
+    };
+    // Pull first: if somebody is busier than this processor, take from them.
+    if let Some(victim) = busiest(view, allowed, me) {
+        if steal_from(me, victim) {
+            let _ = BALANCED.fetch_add(1, Ordering::Relaxed);
+        }
+        return;
+    }
+
+    // Otherwise push. **This is the one that matters on a tickless kernel.**
+    // A processor alone with one task is never interrupted — `arm_timer`
+    // deliberately leaves it alone, because there is nothing to switch to —
+    // so it never reaches this function to pull anything towards itself. The
+    // overloaded processor is interrupted constantly, precisely because it
+    // has tasks to switch between, so it is the only one awake to notice and
+    // it has to do the moving.
+    //
+    // Found by the check below failing with six thousand balance attempts and
+    // nothing moved: every one of them was made by the overloaded processor,
+    // looking for somebody busier than itself.
+    if let Some(target) = quietest(view, allowed, me)
+        && steal_from(target, me)
+    {
+        let _ = BALANCED.fetch_add(1, Ordering::Relaxed);
+        // The receiver may have been asleep with nothing to run; tell it.
+        kick(target);
+    }
+}
+
+/// Tasks moved by [`balance`], as opposed to by an idle processor stealing.
+static BALANCED: AtomicU64 = AtomicU64::new(0);
+
+/// How many tasks periodic balancing has moved.
+pub(crate) fn balanced_count() -> u64 {
+    BALANCED.load(Ordering::Relaxed)
+}
+
 /// Move one task from `victim`'s queue to `me`'s.
 fn steal_from(me: usize, victim: usize) -> bool {
     let (Some(mine), Some(theirs)) = (queue_of(me), queue_of(victim)) else {
@@ -692,7 +872,7 @@ fn steal_from(me: usize, victim: usize) -> bool {
         (&mut *second_queue, &mut *first_queue)
     };
 
-    let moved = match theirs_queue.steal_candidate() {
+    let moved = match theirs_queue.steal_candidate(me) {
         Some(id) => match theirs_queue.release(id) {
             Some((task, state)) => {
                 task.store_entity_state(state);
@@ -840,4 +1020,32 @@ pub(crate) fn report_queues() {
         );
     }
     <arch::Irq as IrqControl>::restore(saved);
+}
+
+/// One processor's run queue, for a check or the boot log.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CpuReport {
+    /// Its decaying load average, out of `ferrix_sched::LOAD_SCALE`.
+    pub(crate) load: u64,
+    /// The slice it is currently handing out.
+    pub(crate) slice_ns: u64,
+    /// Tasks on it, the running one included.
+    pub(crate) queued: usize,
+}
+
+/// Read `cpu`'s queue, bringing its load average up to date first.
+pub(crate) fn cpu_report(cpu: usize) -> Option<CpuReport> {
+    let lock = queue_of(cpu)?;
+    let saved = <arch::Irq as IrqControl>::disable();
+    let report = {
+        let mut queue = lock.lock();
+        queue.account_load(crate::timer::now_nanos());
+        CpuReport {
+            load: queue.load_average(),
+            slice_ns: queue.slice_ns(),
+            queued: queue.len(),
+        }
+    };
+    <arch::Irq as IrqControl>::restore(saved);
+    Some(report)
 }

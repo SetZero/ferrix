@@ -337,6 +337,26 @@ fn start_scheduler(cpus: &'static smp::Topology) {
         report.bound / 1000,
     );
     println!(
+        "  place    new tasks spread over {} processors before any ran, affinity held",
+        report.placed_on,
+    );
+    println!(
+        "  load     busy processor {} of {}, idle {} of {}",
+        report.load_high,
+        ferrix_sched::LOAD_SCALE,
+        report.load_low,
+        ferrix_sched::LOAD_SCALE,
+    );
+    println!(
+        "  balance  {} tasks moved between processors that never went idle",
+        report.balanced,
+    );
+    println!(
+        "  slice    {} us before crowding, {} us with sixteen more runnable",
+        report.slice_one / 1000,
+        report.slice_many / 1000,
+    );
+    println!(
         "  stage 5  {} threads scheduled fairly across {} processors",
         report.threads, report.processors,
     );

@@ -28,10 +28,10 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use ferrix_sched::{NICE_0_WEIGHT, weight_of_nice};
+use ferrix_sched::{CpuSet, LOAD_SCALE, NICE_0_WEIGHT, weight_of_nice};
 
 use super::task::Task;
-use super::{SLICE_NS, WaitQueue};
+use super::{MIN_SLICE_NS, SLICE_NS, WaitQueue};
 use crate::smp::Topology;
 
 /// Threads the many-task check runs.
@@ -50,6 +50,18 @@ const WINDOW_NANOS: u64 = 150_000_000;
 
 /// How long the sleep check sleeps.
 const SLEEP_NANOS: u64 = 20_000_000;
+
+/// How long to let a load average settle before reading it.
+///
+/// Several of `ferrix_sched`'s 33-millisecond half-lives, so what is read is
+/// near the steady state rather than still on its way there.
+const LOAD_SETTLE_NANOS: u64 = 200_000_000;
+
+/// How long to give periodic balancing to notice an imbalance.
+///
+/// Balancing runs at most once every 16 milliseconds per processor and moves
+/// one task each time, so this is many chances rather than one.
+const BALANCE_SETTLE_NANOS: u64 = 300_000_000;
 
 /// How long a wait loop gives the machine before calling it wedged.
 ///
@@ -86,6 +98,20 @@ pub(crate) struct Report {
     pub(crate) bound: u64,
     /// How long the sleep check actually slept.
     pub(crate) slept: u64,
+    /// How many distinct processors new tasks were *placed* on, before any
+    /// stealing or balancing could move them.
+    pub(crate) placed_on: u32,
+    /// The busiest and least busy load averages seen while every processor
+    /// was running a spinner.
+    pub(crate) load_high: u64,
+    /// The load average of an idle processor, after it has decayed.
+    pub(crate) load_low: u64,
+    /// Tasks periodic balancing moved between processors that were all busy.
+    pub(crate) balanced: u64,
+    /// The slice handed out with one runnable task, and with many.
+    pub(crate) slice_one: u64,
+    /// As above, with the queue full.
+    pub(crate) slice_many: u64,
 }
 
 /// Tasks that have finished a phase.
@@ -115,11 +141,337 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     many_tasks(topology, &mut report)?;
     fairness(topology, &mut report)?;
 
+    placement(topology, &mut report)?;
+    affinity_is_obeyed(topology)?;
+    load_tracking(topology, &mut report)?;
+    balancing(topology, &mut report)?;
+    slice_scaling(&mut report)?;
+
     let summary = super::summary();
     report.switches = summary.switches;
     report.steals = summary.steals;
     super::check_invariants()?;
     Ok(report)
+}
+
+/// A new task is *placed*, not merely created where its parent happened to be.
+///
+/// The check is deliberately made before anything can run: it reads where each
+/// task was put, not where it ended up. Stealing and balancing would spread
+/// these out eventually, and that is exactly what this must not be allowed to
+/// pass on — the question is whether the decision was made at all.
+fn placement(topology: &Topology, report: &mut Report) -> Result<(), &'static str> {
+    let allocations = crate::vmap::usage().allocations;
+    let online = topology.online();
+    STOP.store(false, Ordering::Release);
+    SPINNING.store(0, Ordering::Release);
+    DONE.store(0, Ordering::Release);
+
+    // One per processor, and every processor is idle, so a scheduler that
+    // places at all must use all of them.
+    let mut tasks = Vec::with_capacity(online);
+    let mut landed = 0u64;
+    for _ in 0..online {
+        let task = super::spawn("placed", spinner, 0, NICE_0_WEIGHT)?;
+        let cpu = task.cpu();
+        if cpu < 64 {
+            landed |= 1u64 << cpu;
+        }
+        tasks.push(task);
+    }
+    report.placed_on = landed.count_ones();
+
+    STOP.store(true, Ordering::Release);
+    wait_for(
+        || DONE.load(Ordering::Acquire) >= online as u64,
+        "a placed task never finished",
+    )?;
+
+    if online > 1 && report.placed_on < 2 {
+        crate::console::println!(
+            "  place    {} tasks all placed on one processor of {online}",
+            tasks.len(),
+        );
+        return Err("new tasks were all placed on the processor that created them");
+    }
+
+    reap_to(allocations, "placement")?;
+    drop(tasks);
+    Ok(())
+}
+
+/// A task with an affinity runs only inside it.
+///
+/// The one property that has to hold even when it costs throughput: a task
+/// allowed on two processors of four must never be seen on the other two,
+/// however idle they are and however loaded its own are.
+fn affinity_is_obeyed(topology: &Topology) -> Result<(), &'static str> {
+    let online = topology.online();
+    if online < 2 {
+        return Ok(());
+    }
+    let allocations = crate::vmap::usage().allocations;
+    STOP.store(false, Ordering::Release);
+    SPINNING.store(0, Ordering::Release);
+    DONE.store(0, Ordering::Release);
+
+    // Processors 0 and 1 only, and more tasks than that can comfortably hold,
+    // so an unconstrained balancer would have every reason to spill them.
+    let mut allowed = CpuSet::empty();
+    allowed.insert(0).map_err(|_| "no processor 0")?;
+    allowed.insert(1).map_err(|_| "no processor 1")?;
+
+    let count = online * 2;
+    let mut tasks = Vec::with_capacity(count);
+    for index in 0..count {
+        tasks.push(super::spawn_on(
+            "confined",
+            spinner,
+            index,
+            NICE_0_WEIGHT,
+            index % 2,
+            allowed,
+        )?);
+    }
+
+    wait_for(
+        || SPINNING.load(Ordering::Acquire) >= count as u64,
+        "a confined task never started",
+    )?;
+    // Long enough for a balancer to have moved them if it were going to.
+    super::sleep_for(WINDOW_NANOS);
+    STOP.store(true, Ordering::Release);
+    wait_for(
+        || DONE.load(Ordering::Acquire) >= count as u64,
+        "a confined task never stopped",
+    )?;
+
+    for task in &tasks {
+        let ran_on = task.cpus_run_on();
+        if ran_on & !0b11 != 0 {
+            crate::console::println!("  affinity a task allowed on 0b11 ran on {ran_on:#b}",);
+            return Err("a task ran on a processor its affinity excluded");
+        }
+    }
+
+    reap_to(allocations, "affinity")?;
+    drop(tasks);
+    Ok(())
+}
+
+/// A processor running something reads as loaded; one running nothing decays.
+fn load_tracking(topology: &Topology, report: &mut Report) -> Result<(), &'static str> {
+    let allocations = crate::vmap::usage().allocations;
+    let online = topology.online();
+    STOP.store(false, Ordering::Release);
+    SPINNING.store(0, Ordering::Release);
+    DONE.store(0, Ordering::Release);
+
+    // One spinner pinned to every processor but the last, so the last is the
+    // control: the same machine, the same moment, nothing to run.
+    let busy_cpus = online.saturating_sub(1).max(1);
+    let mut tasks = Vec::with_capacity(busy_cpus);
+    for cpu in 0..busy_cpus {
+        tasks.push(super::spawn_on(
+            "loaded",
+            spinner,
+            cpu,
+            NICE_0_WEIGHT,
+            cpu,
+            CpuSet::of(cpu),
+        )?);
+    }
+    wait_for(
+        || SPINNING.load(Ordering::Acquire) >= busy_cpus as u64,
+        "a load-test task never started",
+    )?;
+
+    // Several half-lives, so the average is near its steady state rather than
+    // still climbing.
+    super::sleep_for(LOAD_SETTLE_NANOS);
+
+    let mut lowest_busy = u64::MAX;
+    for cpu in 0..busy_cpus {
+        let load = super::cpu_report(cpu)
+            .ok_or("a processor has no queue")?
+            .load;
+        lowest_busy = lowest_busy.min(load);
+    }
+    report.load_high = lowest_busy;
+    if online > 1 {
+        let idle = super::cpu_report(online - 1).ok_or("a processor has no queue")?;
+        report.load_low = idle.load;
+    }
+
+    STOP.store(true, Ordering::Release);
+    wait_for(
+        || DONE.load(Ordering::Acquire) >= busy_cpus as u64,
+        "a load-test task never stopped",
+    )?;
+
+    // Half full is a generous floor for a processor that has had a task
+    // spinning on it for several half-lives; the point is to catch an average
+    // that never moves, not to pin down its exact value.
+    if report.load_high < LOAD_SCALE / 2 {
+        return Err("a processor running a spinner did not read as loaded");
+    }
+    if online > 1 && report.load_low >= report.load_high {
+        return Err("an idle processor read as loaded as a busy one");
+    }
+
+    reap_to(allocations, "load tracking")?;
+    drop(tasks);
+    Ok(())
+}
+
+/// Work moves between processors that are all busy.
+///
+/// The case work stealing cannot reach, and the reason periodic balancing
+/// exists: stealing happens when a processor runs out of work, so a machine
+/// where no processor ever does is a machine stealing never touches. Every
+/// processor here has a spinner pinned to it, so none of them ever idles, and
+/// the movable tasks all start on one.
+fn balancing(topology: &Topology, report: &mut Report) -> Result<(), &'static str> {
+    let online = topology.online();
+    if online < 2 {
+        return Ok(());
+    }
+    let allocations = crate::vmap::usage().allocations;
+    let before = super::balanced_count();
+    STOP.store(false, Ordering::Release);
+    SPINNING.store(0, Ordering::Release);
+    DONE.store(0, Ordering::Release);
+
+    let everywhere = CpuSet::first(online).map_err(|_| "too many processors for a set")?;
+    let movable = online * 2;
+    let total = online + movable;
+
+    let mut tasks = Vec::with_capacity(total);
+    // The floor: one per processor, pinned, so nothing ever goes idle.
+    for cpu in 0..online {
+        tasks.push(super::spawn_on(
+            "anchor",
+            spinner,
+            cpu,
+            NICE_0_WEIGHT,
+            cpu,
+            CpuSet::of(cpu),
+        )?);
+    }
+
+    // **Every anchor must be *running* before the imbalance is created.**
+    // Until then the other processors are still idle, and an idle processor
+    // steals — so the movable tasks would be spread by the mechanism this
+    // check is meant to exclude, and it would pass without periodic balancing
+    // existing at all. That is how this check first failed: not because
+    // balancing was broken, but because stealing beat it to the work.
+    wait_for(
+        || SPINNING.load(Ordering::Acquire) >= online as u64,
+        "an anchor task never started",
+    )?;
+
+    // The imbalance: all of them on processor 0, free to move. No processor
+    // will go idle from here until STOP, so nothing but `balance` can move
+    // them.
+    for index in 0..movable {
+        tasks.push(super::spawn_on(
+            "movable",
+            spinner,
+            index,
+            NICE_0_WEIGHT,
+            0,
+            everywhere,
+        )?);
+    }
+
+    wait_for(
+        || SPINNING.load(Ordering::Acquire) >= total as u64,
+        "a balancing task never started",
+    )?;
+    super::sleep_for(BALANCE_SETTLE_NANOS);
+
+    let moved = super::balanced_count().saturating_sub(before);
+    report.balanced = moved;
+
+    // Sampled while the tasks are still running: after STOP every queue is
+    // empty and every load average is on its way to zero, which says nothing
+    // about the state the balancer was looking at.
+    let mut spread = Vec::with_capacity(online);
+    for cpu in 0..online {
+        spread.push(super::cpu_report(cpu).map(|report| (report.load, report.queued)));
+    }
+
+    STOP.store(true, Ordering::Release);
+    wait_for(
+        || DONE.load(Ordering::Acquire) >= total as u64,
+        "a balancing task never stopped",
+    )?;
+
+    if moved == 0 {
+        for (cpu, sample) in spread.iter().enumerate() {
+            if let Some((load, queued)) = sample {
+                crate::console::println!("  balance  cpu {cpu} load {load} queued {queued}");
+            }
+        }
+        crate::console::println!(
+            "  balance  {movable} movable tasks stayed on one processor of {online}",
+        );
+        return Err("no task was balanced away from an overloaded processor");
+    }
+
+    reap_to(allocations, "balancing")?;
+    drop(tasks);
+    Ok(())
+}
+
+/// The slice shrinks as more becomes runnable, and stops at the floor.
+fn slice_scaling(report: &mut Report) -> Result<(), &'static str> {
+    let allocations = crate::vmap::usage().allocations;
+    let here = super::current()
+        .ok_or("the checking task is not running")?
+        .cpu();
+
+    report.slice_one = super::cpu_report(here).ok_or("no queue here")?.slice_ns;
+
+    STOP.store(false, Ordering::Release);
+    SPINNING.store(0, Ordering::Release);
+    DONE.store(0, Ordering::Release);
+
+    // Enough on this one processor to take the slice to its floor.
+    let crowd = 16;
+    let mut tasks = Vec::with_capacity(crowd);
+    for index in 0..crowd {
+        tasks.push(super::spawn_on(
+            "crowd",
+            spinner,
+            index,
+            NICE_0_WEIGHT,
+            here,
+            CpuSet::of(here),
+        )?);
+    }
+    wait_for(
+        || SPINNING.load(Ordering::Acquire) >= crowd as u64,
+        "a crowding task never started",
+    )?;
+    report.slice_many = super::cpu_report(here).ok_or("no queue here")?.slice_ns;
+
+    STOP.store(true, Ordering::Release);
+    wait_for(
+        || DONE.load(Ordering::Acquire) >= crowd as u64,
+        "a crowding task never stopped",
+    )?;
+
+    if report.slice_many >= report.slice_one {
+        return Err("the slice did not shrink as the run queue filled");
+    }
+    if report.slice_many < MIN_SLICE_NS {
+        return Err("the slice fell below the floor");
+    }
+
+    reap_to(allocations, "slice scaling")?;
+    drop(tasks);
+    Ok(())
 }
 
 /// Count this task as finished, and wake whoever is waiting for the phase.
@@ -162,7 +514,7 @@ fn wait_for(ready: impl FnMut() -> bool, what: &'static str) -> Result<(), &'sta
 
 /// Free every exited task's stack, and require the arena to come back to
 /// where it started.
-fn reap_to(allocations: usize) -> Result<(), &'static str> {
+fn reap_to(allocations: usize, what: &str) -> Result<(), &'static str> {
     // Still a yielding loop, and deliberately: reaping is work *this* task
     // does, so it has to keep being given the processor to do it. Blocking
     // here would wait for something nobody is going to do.
@@ -173,6 +525,11 @@ fn reap_to(allocations: usize) -> Result<(), &'static str> {
             return Ok(());
         }
         if crate::timer::now_nanos() >= deadline {
+            let usage = crate::vmap::usage();
+            crate::console::println!(
+                "  tasks    after {what}: arena holds {} allocations, expected {allocations}",
+                usage.allocations,
+            );
             return Err("a task's stack was never given back");
         }
         super::yield_now();
@@ -197,7 +554,7 @@ fn one_task() -> Result<(), &'static str> {
         return Err("a task finished without ever being switched to");
     }
 
-    reap_to(allocations)?;
+    reap_to(allocations, "one task")?;
     drop(task);
     Ok(())
 }
@@ -257,7 +614,7 @@ fn many_tasks(topology: &Topology, report: &mut Report) -> Result<(), &'static s
         return Err("every thread ran on one processor: work stealing moved nothing");
     }
 
-    reap_to(allocations)?;
+    reap_to(allocations, "a thousand tasks")?;
     drop(tasks);
     Ok(())
 }
@@ -318,7 +675,7 @@ fn fairness(topology: &Topology, report: &mut Report) -> Result<(), &'static str
     }
     shares_are_proportional(topology, &spinners, report.bound)?;
 
-    reap_to(allocations)?;
+    reap_to(allocations, "fairness")?;
     drop(spinners);
     Ok(())
 }
@@ -344,7 +701,7 @@ fn start_spinners(topology: &Topology) -> Result<Vec<Arc<Task>>, &'static str> {
                 cpu,
                 spinner_weight(index),
                 cpu,
-                true,
+                CpuSet::of(cpu),
             )?);
         }
     }
