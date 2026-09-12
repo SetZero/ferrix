@@ -26,6 +26,7 @@
 
 pub(crate) mod check;
 pub(crate) mod console;
+pub(crate) mod devfs;
 mod pages;
 
 use alloc::sync::Arc;
@@ -179,6 +180,8 @@ pub(crate) enum InitError {
     Unpack(UnpackError),
     /// `/tmp` could not be made or mounted.
     Tmp(Errno),
+    /// A kernel filesystem could not be mounted on the directory named.
+    Mount(&'static str, Errno),
 }
 
 impl fmt::Display for InitError {
@@ -187,11 +190,15 @@ impl fmt::Display for InitError {
             InitError::OutsideDirectMap => f.write_str("the initramfs is outside the direct map"),
             InitError::Unpack(why) => write!(f, "the initramfs did not unpack: {why}"),
             InitError::Tmp(errno) => write!(f, "/tmp could not be mounted: errno {}", errno.0),
+            InitError::Mount(at, errno) => {
+                write!(f, "{at} could not be mounted: errno {}", errno.0)
+            }
         }
     }
 }
 
-/// Build the root: unpack the initramfs, if there is one, and mount `/tmp`.
+/// Build the root: unpack the initramfs, if there is one, and mount `/tmp`
+/// and the kernel's own filesystems.
 ///
 /// Called once, from `kmain`, after the frame allocator and before anything
 /// that opens a file.
@@ -232,6 +239,8 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Report, InitError> {
     };
     ns.set_attributes(&mounted, &sticky)
         .map_err(InitError::Tmp)?;
+
+    devfs::mount().map_err(|errno| InitError::Mount("/dev", errno))?;
     Ok(report)
 }
 

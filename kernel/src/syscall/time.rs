@@ -142,16 +142,9 @@ const CHUNK: usize = 256;
 
 /// `getrandom`.
 ///
-/// # This is not random
-///
-/// It is xorshift64*, seeded from the high-resolution counter, and it is here
-/// because a libc that is refused `getrandom` at startup goes looking for
-/// `/dev/urandom` and there is no `/dev` yet. What it produces differs from
-/// boot to boot and is good enough for a hash table's seed or a stack
-/// protector's canary on a machine nobody is attacking. It is **not** good
-/// enough for a key, and no flag makes it so: `GRND_RANDOM` is accepted and
-/// means nothing different. The entropy pool is a later stage's, and when it
-/// lands this function's body changes and its callers do not.
+/// The bytes are [`fill_random`]'s, which are **not random**; its
+/// documentation says what they are good for. No flag changes that:
+/// `GRND_RANDOM` is accepted and means nothing different.
 pub(crate) fn sys_getrandom(
     process: &Process,
     buf: u64,
@@ -170,12 +163,38 @@ pub(crate) fn sys_getrandom(
     }
 
     let mut bytes = [0_u8; CHUNK];
-    {
+    let chunk = bytes.get_mut(..count).ok_or(Errno::EINVAL)?;
+    fill_random(chunk);
+    uaccess::copy_to_user(process.space(), buf, chunk).map_err(|_| Errno::EFAULT)?;
+    Ok(count)
+}
+
+/// Fill `bytes` from the kernel's one generator, which `getrandom`,
+/// `/dev/random` and `/dev/urandom` all read.
+///
+/// # This is not random
+///
+/// It is xorshift64*, seeded from the high-resolution counter, and it is here
+/// because a libc that is refused `getrandom` at startup goes looking for
+/// `/dev/urandom`, and a program that finds neither gives up. What it produces
+/// differs from boot to boot and is good enough for a hash table's seed or a
+/// stack protector's canary on a machine nobody is attacking. It is **not**
+/// good enough for a key, whichever of the three names it was read through:
+/// `/dev/random` is the same stream as `/dev/urandom`, as it has been on Linux
+/// since 5.6, but here neither is backed by entropy. The pool is a later
+/// stage's, and when it lands this function's body changes and its callers do
+/// not.
+///
+/// The lock is taken a [`CHUNK`] at a time, so a program reading a megabyte
+/// from `/dev/urandom` does not hold every other reader off for the length of
+/// it.
+pub(crate) fn fill_random(bytes: &mut [u8]) {
+    for piece in bytes.chunks_mut(CHUNK) {
         let mut state = STATE.lock();
         if *state == 0 {
             *state = arch::counter_now() | 1;
         }
-        for slot in bytes.iter_mut().take(count) {
+        for slot in piece {
             let mut x = *state;
             x ^= x >> 12;
             x ^= x << 25;
@@ -184,7 +203,4 @@ pub(crate) fn sys_getrandom(
             *slot = (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
         }
     }
-    let chunk = bytes.get(..count).ok_or(Errno::EINVAL)?;
-    uaccess::copy_to_user(process.space(), buf, chunk).map_err(|_| Errno::EFAULT)?;
-    Ok(count)
 }
