@@ -11,6 +11,48 @@ guessing, so those boards need a trampoline page that is not written yet.
 model, so the board is the first execution of the paths described here. What
 *has* been checked is listed under [What is actually verified](#what-is-actually-verified).
 
+## TL;DR
+
+Card in the reader, board off:
+
+```sh
+lsblk -o NAME,SIZE,TYPE,TRAN                     # find the card. CHECK THIS.
+sudo dd if=FlashLayout_sdcard_stm32mp157x-dk-optee.raw of=/dev/sdX bs=8M conv=fsync status=progress
+```
+
+Re-insert the card so the desktop mounts it, then:
+
+```sh
+cargo xtask deploy --arch armv7a
+```
+
+Card into the board, micro-USB into the **ST-LINK** port, power on, stop
+autoboot with any key:
+
+```
+=> load mmc 0:4 0xc2000000 EFI/BOOT/BOOTARM.EFI
+=> bootefi 0xc2000000 ${fdt_addr_r}
+```
+
+Success is `FERRIX-BOOT-OK stages 1-5`, and `deploy` exits 0 on it.
+
+If it goes wrong, three arguments in order of usefulness:
+
+```
+=> setenv bootargs 'console=stm32'   # loader talks, then silence
+=> setenv bootargs 'nosmp'           # stops partway through stage 4
+=> setenv bootargs 'noactlr'         # panics reading ACTLR
+```
+
+Each is explained under [When it goes wrong](#when-it-goes-wrong). The rest of
+this document is why, and what to do when the short version does not work.
+
+> **`deploy` must run in a shell that has the `dialout` group.** Adding
+> yourself does not affect shells that are already open, and the symptom is a
+> permission error opening the port rather than anything about the board. Either
+> log out and back in, or prefix the command once:
+> `sg dialout -c 'cargo xtask deploy --arch armv7a'`.
+
 ## What you need
 
 * An STM32MP157A-DK1 or STM32MP157C-DK2.
@@ -108,7 +150,13 @@ Ferrix 0.1.0 on armv7a
   coherency ACTLR.SMP set on all 2 processors
   cpus     2 described by firmware, 2 online, booted on MPIDR 0x0
   stage 4  2 processors online, a contended counter came to 100000 of 100000
-FERRIX-BOOT-OK stages 1-4
+  tasks    1000 threads run to completion on 2 processors, ... switches, ... steals
+  sleep    one task slept ... us and came back
+  fair     ... spinners on every processor, worst lag ... within a bound of ...
+  stage 5  1000 threads scheduled fairly across 2 processors
+  w^x      ... mappings swept, ... executable, none writable
+  reclaim  ... MiB from the loader and ACPI, ... free
+FERRIX-BOOT-OK stages 1-5
 ```
 
 `watch-serial` exits 0 on that last line and non-zero on `FERRIX-PANIC`, so it
