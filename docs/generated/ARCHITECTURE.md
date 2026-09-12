@@ -93,7 +93,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1414 elements, 155 relations. Model digest `dbd5ebcf4b9e26db`.
+13 files, 16 packages, 1414 elements, 155 relations. Model digest `4d888c5a00d011f5`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -2418,10 +2418,10 @@ docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code 
 | `libs/sync` | `#implemented` | — | allowed | 19 | Reached at stage 4: SpinLock and IrqSpinLock guard every shared kernel structure. |
 | `libs/sched` | `#implemented` | 5 | `forbid` | 34 | The half of the scheduler that is arithmetic: the EEVDF tree, weights, lag, the domain partition. cargo test drives a run queue through hundreds of thousands of decisions. |
 | `libs/vma` | `#implemented` | — | `forbid` | 65 | Written for stage 6; reached at stage 2 as the vmap arena's range map. |
-| `libs/linux-abi` | `#writtenAhead` | 7 | `forbid` | 59 | Three system call number tables, not two: x86-64's own, AArch64's generic one, and ARMv7-A's EABI one. |
+| `libs/linux-abi` | `#writtenAhead` | 7 | `forbid` | 62 | Three system call number tables, not two: x86-64's own, AArch64's generic one, and ARMv7-A's EABI one. |
 | `libs/ustack` | `#writtenAhead` | 7 | `forbid` | 22 | The initial process stack image: argc, argv, envp and the auxiliary vector, laid out as a program's \_start reads them, at both pointer widths. |
 | `libs/cpio` | `#writtenAhead` | 8 | `forbid` | 45 |  |
-| `libs/vfs` | `#writtenAhead` | 8 | `forbid` | 45 | Dentries with negative entries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store the kernel supplies, initramfs unpacking and the getdents64 packer. |
+| `libs/vfs` | `#writtenAhead` | 8 | `forbid` | 51 | Dentries with negative entries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store the kernel supplies, initramfs unpacking and the getdents64 packer. |
 | `libs/procfs` | `#implemented` | 8 | `forbid` | 14 | The text of /proc as pure functions: maps lines padded to their name column at both pointer widths, meminfo, status, stat and mounts, pinned byte for byte against lines a real Linux printed, and the maps parser the kernel's boot check reads its own output… |
 | `libs/virtio` | `#implemented` | 10 | allowed | 61 |  |
 | `libs/pci` | `#writtenAhead` | 10 | `forbid` | 45 | PCI configuration space over a ConfigSpace the caller implements: ECAM geometry, headers, BAR decoding and sizing, both capability lists with a visited set, MSI-X, the bus walk without recursion or allocation, and virtio's PCI transport. |

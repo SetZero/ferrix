@@ -960,6 +960,25 @@ process now has a pid from a registry that finds a live process by it.
   procfs   20 names listed and walked back to, 4 maps lines parsed, 2 of them named
 ```
 
+**Done — pipes, FIFOs, and the calls about filesystems.** `pipe` and `pipe2`
+over `libs/vfs`'s pipe buffer, with a wait queue for each direction and each
+end counted by its inode, so that a reader sees end of file and a writer
+`EPIPE` exactly when the last descriptor that could feed or drain the pipe
+closes. `O_NONBLOCK` reaches a stream with every read and write, because
+`fcntl` can change it between them. A FIFO opens as an end of the one pipe its
+node stands for, from a table keyed by device and inode number that `openat`
+consults for a FIFO node. `statfs` and `fstatfs` answer in the word size's
+layout, and ARMv7-A's packed `statfs64` takes musl's 88 as well as the kernel's
+84. Then `sync`, `syncfs`, `fsync` and `fdatasync`; `truncate`, `truncate64`
+and `fallocate`; `chroot`; `mount -t tmpfs` and `umount2`; the
+extended-attribute calls, which report none; and `sendfile`, which busybox's
+`cat` tries before it falls back to `read`. The boot check drives the handlers
+from a process of its own, twice:
+
+```
+  pipes    18020 bytes through a pipe, a FIFO and sendfile; statfs, truncate and fallocate answered; 0 frames leaked
+```
+
 **The exit test, and how far it gets.** `cargo xtask test-vfs --init PATH`
 puts a static musl busybox into the initramfs and has init run the exit
 criterion's commands from it, checking their output after the boot marker. It
@@ -996,9 +1015,9 @@ that fails first, are in progress.
 **Still to do.**
 
 * The five VFS bugs above.
-* Pipes and FIFOs over `libs/vfs`'s pipe buffer, `statfs`, `sync` and its
-  kin, `truncate`, `fallocate`, `chroot`, `mount` and `umount2`, `sendfile`,
-  and extended attributes: in progress.
+* `SIGPIPE` on a write to a pipe with no reader, which is `EPIPE` alone until a
+  signal can be delivered; and `proc` and `devtmpfs` as `mount` types, which
+  are `ENODEV` until they are registered in `syscall/fsctl.rs`.
 
 **Exit:** `busybox ls -R /proc`, `cat /proc/self/maps` and a shell script that
 manipulates files under tmpfs, all under the boot test.
@@ -1432,19 +1451,19 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. | 70 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
-| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 59 |
+| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 62 |
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
-| `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 45 |
+| `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 51 |
 | `libs/procfs` | Reached at 8 — the text of `/proc`: the `maps` line padded to its name column at both pointer widths, `meminfo`, `status`, `stat` and `mounts`, pinned byte for byte against lines a real Linux printed, and the `maps` parser the kernel's boot check reads its own output back with. No fuzz target: it arranges the kernel's own numbers rather than parsing a stranger's bytes. | 14 |
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory, and the PCI transport's status protocol, feature negotiation and queue activation. Reached at 10 by the boot check's virtio-rng driver. | 61 |
-| `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport, MSI-X messages and the pages of a BAR a driver must not be given. Has its fuzz target and its Miri step already. | 45 |
+| `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport, MSI-X messages and the pages of a BAR a driver must not be given. Has its fuzz target and its Miri step already. | 51 |
 | `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
 | `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one; and the reachability walk a send makes before it queues an endpoint. Has its fuzz target and its Miri step. | 22 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **670 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **679 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

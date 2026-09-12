@@ -804,7 +804,7 @@ package FerrixStructure {
         #writtenAhead part linuxAbi : LibraryCrate {
             attribute :>> path = "libs/linux-abi";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 59;
+            attribute :>> hostTests = 62;
             @stage { number = 7; }
             doc /* Three system call number tables, not two: x86-64's own,
                  * AArch64's generic one, and ARMv7-A's EABI one. The 32-bit
@@ -835,7 +835,7 @@ package FerrixStructure {
         #writtenAhead part vfs : LibraryCrate {
             attribute :>> path = "libs/vfs";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 45;
+            attribute :>> hostTests = 51;
             @stage { number = 8; }
             doc /* Dentries with negative entries, mounts, the path walk, open
                  * file descriptions, descriptor tables, tmpfs over a page
