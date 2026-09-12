@@ -81,8 +81,8 @@ In dependency order. Nothing below exists, not even stubbed.
    one page that changed, and tell only the processors with this space
    installed, which wants a `CpuSet` on the `AddressSpace` maintained by
    `install` and `uninstall`. Worth doing with item 2, since item 2 is what
-   first makes the difference measurable. **Read §5.7 before touching any of
-   it.**
+   first makes the difference measurable. **Read §5.6 and §5.7 before touching
+   any of it** — the boot test cannot see this class of mistake.
 4. **The ELF loader for user binaries.** `libs/elf` parses; nothing maps a
    `PT_LOAD` into an `AddressSpace`. **Handed to the stage 7 owner** — §7.
 5. **The ring-3 / EL0 / USR transition**, and the syscall vectors. The seam
@@ -291,7 +291,25 @@ install the space and go through the address. The fork and copy-on-write checks
 do the former throughout and the latter once; `check_the_processor_walks_an_installed_space`
 is the pattern.
 
-### 5.8 GICv2 private interrupt enables are banked per core
+### 5.8 An exact frame count can report a leak that is not one
+
+The stage 6 checks bracket their work with `mm::free_frames()` and require the
+count to come back exactly. That catches a real leak, and it has a blind spot in
+the other direction: `libs/heap` keeps the last page of a size class it has not
+used before, on purpose, so the *first* code path to allocate a novel size
+appears to lose a frame and never give it back. A single before-and-after
+measurement cannot tell that apart from a leak.
+
+The stage 7 owner lost several builds to exactly this before working out it was
+warm-up. Their fix is the one to copy: run the whole group twice and measure the
+second run, so the warm-up is excluded and a real leak still shows.
+
+Nothing in stage 6 trips it today — the checks pass — but that is luck about
+which size classes the rest of boot has already touched. If you add a check that
+allocates something new and it reports *the checks did not give back every frame
+they took*, suspect this before you go looking for the leak.
+
+### 5.9 GICv2 private interrupt enables are banked per core
 
 If stage 6 adds a per-core interrupt source on Arm, go through the driver's
 recorded bitmask (`kernel/src/arch/gicv2.rs`) rather than writing the
@@ -336,6 +354,17 @@ progressing at all, which says deadlock rather than slowness. The stage 7 owner
 separately saw stage 5 fail the *assertion* "a task's stack was never given
 back" under load, which is probably the same race seen from the other side.
 It is the `sched` owner's, they have it, and re-running is the workaround.
+
+**It is not architecture-specific and the trigger is host CPU starvation.**
+That is the single most useful thing to know about reproducing it, and it took
+three of us to find out. It has been seen on armv7a and on aarch64, on plain
+`main` with nothing uncommitted, and the stage 7 owner pinned the condition:
+their aarch64 failures came with the host at load ~4.6 and two other sessions'
+QEMUs taking 297% and 243% of a core, and it passed on the next attempt once
+those quietened. So **do not reproduce it by re-running the boot test — load the
+host and then run it**. A race that needs one vCPU descheduled at the wrong
+moment will not show up on an idle machine at any useful rate, which is why the
+early numbers looked like they tracked unrelated commits.
 
 **It arrived with `9daec68`**, the scheduler merge. The `sched` owner ran the
 control: `c008979`, the commit immediately before their work, passed 8 of 8 on
