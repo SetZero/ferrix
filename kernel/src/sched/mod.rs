@@ -273,6 +273,8 @@ fn new_idle_task(cpu: usize) -> Result<Arc<Task>, &'static str> {
         weight: NICE_0_WEIGHT,
         cpu,
         affinity: CpuSet::of(cpu),
+        // A processor's idle task is the kernel's own and has no user half.
+        address_space: None,
     })))
 }
 
@@ -381,7 +383,7 @@ fn choose_cpu(allowed: &CpuSet, prefer: usize) -> Option<usize> {
     place(loads.get(..count)?, allowed, prefer)
 }
 
-/// Start a task on `cpu`, able to run on `affinity`.
+/// Start a kernel thread on `cpu`, able to run on `affinity`.
 ///
 /// # Errors
 ///
@@ -393,6 +395,30 @@ pub(crate) fn spawn_on(
     weight: u32,
     cpu: usize,
     affinity: CpuSet,
+) -> Result<Arc<Task>, &'static str> {
+    spawn_on_in(name, entry, argument, weight, cpu, affinity, None)
+}
+
+/// Start a task on `cpu` in `address_space`, or as a kernel thread when that
+/// is `None`.
+///
+/// The entry point is a kernel function either way: this makes a thread that
+/// *has* an address space, not one running in it at a lower privilege level.
+/// The two are separate steps and a processor must be able to do the first
+/// without the second, because kernel code servicing a fault runs in the
+/// address space that faulted.
+///
+/// # Errors
+///
+/// If there is no stack for it, or `cpu` has no run queue.
+pub(crate) fn spawn_on_in(
+    name: &'static str,
+    entry: fn(usize),
+    argument: usize,
+    weight: u32,
+    cpu: usize,
+    affinity: CpuSet,
+    address_space: Option<Arc<crate::user::space::AddressSpace>>,
 ) -> Result<Arc<Task>, &'static str> {
     let stack = crate::vmap::allocate_stack().map_err(|problem| {
         // The arena's own reason, because "no stack" has four of them and they
@@ -414,6 +440,7 @@ pub(crate) fn spawn_on(
         weight,
         cpu,
         affinity,
+        address_space,
     }));
 
     let lock = queue_of(cpu).ok_or("no such processor")?;
@@ -715,12 +742,71 @@ fn choose_next(lock: &'static SpinLock<CpuQueue>, cpu: usize) -> Option<(*mut u6
     queue.arm_timer(now);
     next.note_switch(cpu);
 
+    // The address space goes on the processor here, under the run queue lock
+    // and before the registers move. Not inside `arch::switch_to`, which takes
+    // two stack pointers and whose whole job is register operations -- and not
+    // after the switch either, because the incoming context resumes on its own
+    // stack and would have to be told to do this before touching anything.
+    swap_address_space(previous.address_space(), next.address_space());
+
     // SAFETY: both tasks belong to this queue and this processor holds its
     // lock, so nothing else may read or write either saved stack pointer.
     let save = unsafe { previous.stack_pointer_slot() };
     // SAFETY: as above.
     let resume = unsafe { next.saved_stack_pointer() };
     Some((save, resume))
+}
+
+/// Put the incoming task's address space on this processor.
+///
+/// Called from [`choose_next`] with the run queue lock held, between deciding
+/// to switch and the switch itself.
+///
+/// # Why the comparison is by pointer
+///
+/// Because two threads of one process share a root, and an address space
+/// switch is the expensive operation this whole stage declined to optimise:
+/// stage 6 allocates no `ASID`s or `PCID`s, so installing a root invalidates
+/// every user translation this processor had. Switching between two threads of
+/// one process must therefore cost nothing, and `Arc::ptr_eq` is what says they
+/// are the same space rather than two equal ones.
+///
+/// # What `None` means, and why it is not lazy
+///
+/// A kernel thread has no user half, and gets the user half switched *off*
+/// rather than left as it was. Leaving the outgoing process's root installed is
+/// Linux's lazy TLB and it is faster, and it obliges somebody to keep an
+/// address space alive underneath a thread that holds no reference to it. Stage
+/// 6 takes the plain version; the reference this relies on is the `Arc` the
+/// task itself holds.
+///
+/// # What this trusts
+///
+/// That `previous` is what is actually installed on this processor. That holds
+/// because `previous` is the queue's `current`, which is the task this
+/// processor was running, and the only thing that installs a root is this
+/// function. A task may change processor while it is *blocked* -- `balance`
+/// moves queued tasks from a third processor -- but a blocked task is not
+/// anybody's `current`, so it cannot be the `previous` of a switch it is not
+/// part of.
+fn swap_address_space(
+    previous: Option<&Arc<crate::user::space::AddressSpace>>,
+    next: Option<&Arc<crate::user::space::AddressSpace>>,
+) {
+    match (previous, next) {
+        // Two threads of one process, or two kernel threads: nothing to do,
+        // and doing it anyway would throw away every user translation.
+        (Some(before), Some(after)) if Arc::ptr_eq(before, after) => {}
+        (None, None) => {}
+        // SAFETY: `next` is the task this processor is about to run, and the
+        // queue holds an `Arc` to it for as long as it is `current`, so the
+        // tables outlive the installation. Interrupts are off and the run
+        // queue lock is held, so nothing else can install a root here first.
+        (_, Some(after)) => unsafe { after.install() },
+        // SAFETY: the incoming task is a kernel thread and wants no user
+        // address; the kernel is reachable without one on every architecture.
+        (Some(_), None) => unsafe { crate::user::space::uninstall() },
+    }
 }
 
 /// Release the lock the switch handed over, and dispose of what ran before.

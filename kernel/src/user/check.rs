@@ -15,6 +15,11 @@
 
 use ferrix_bootinfo::{KERNEL_HALF_BASE, PAGE_SIZE};
 
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
+
+use ferrix_sched::{CpuSet, NICE_0_WEIGHT};
 use ferrix_sync::IrqControl;
 use ferrix_vma::VmaFlags;
 
@@ -40,6 +45,9 @@ pub(crate) struct Report {
     pub(crate) walked: u64,
     /// Pages a write actually copied, out of those a fork shared.
     pub(crate) copied: u64,
+    /// Reads two tasks made of one virtual address in two different address
+    /// spaces, each seeing its own.
+    pub(crate) swapped: u64,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -65,6 +73,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 
     check_a_shared_region_survives_fork_as_one_object()?;
     let copied = check_fork_shares_pages_and_a_write_copies_one()?;
+    let swapped = check_two_tasks_keep_their_own_address_spaces()?;
 
     // Everything above dropped its objects before returning, so the allocator
     // must be exactly where it started. Signed, because a check that somehow
@@ -83,6 +92,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         faulted,
         walked,
         copied,
+        swapped,
     })
 }
 
@@ -857,3 +867,174 @@ fn check_fork_shares_pages_and_a_write_copies_one() -> Result<u64, &'static str>
     }
     Ok(1)
 }
+
+// ---------------------------------------------------------------------------
+// Address spaces and the scheduler
+// ---------------------------------------------------------------------------
+
+/// The one virtual address both tasks use, and disagree about.
+const SWAP_AT: u64 = 0x3000_0000;
+
+/// How many times each task reads it.
+const SWAP_ROUNDS: u64 = 64;
+
+/// What each task's page holds: this plus the task's index.
+const SWAP_MARK: usize = 0xA5A5_0000;
+
+/// Tasks that have finished reading.
+static SWAP_DONE: AtomicU64 = AtomicU64::new(0);
+/// Reads that saw the reader's own address space.
+static SWAP_RIGHT: AtomicU64 = AtomicU64::new(0);
+/// Reads that saw somebody else's.
+static SWAP_WRONG: AtomicU64 = AtomicU64::new(0);
+
+/// Read this task's own virtual address, over and over, yielding between.
+///
+/// `expected` is what this task's page holds and no other task's does.
+fn read_own_space(expected: usize) {
+    for _ in 0..SWAP_ROUNDS {
+        let at = SWAP_AT as *const u64;
+        // SAFETY: this task owns an address space in which `SWAP_AT` is mapped
+        // and was faulted in before the task existed, and the scheduler
+        // installs that space on whichever processor runs the task, before the
+        // first instruction of it. That installation is the thing under test:
+        // if it does not happen this faults rather than reading rubbish, which
+        // is the failure this check wants.
+        let seen = unsafe { at.read_volatile() };
+        if seen == expected as u64 {
+            let _ = SWAP_RIGHT.fetch_add(1, Ordering::Relaxed);
+        } else {
+            let _ = SWAP_WRONG.fetch_add(1, Ordering::Relaxed);
+        }
+        // Give the processor up so the other task runs and the root is
+        // swapped. Without this each task would read its own page sixty-four
+        // times in one slice and the check would pass without a single switch.
+        crate::sched::yield_now();
+    }
+    let _ = SWAP_DONE.fetch_add(1, Ordering::Release);
+}
+
+/// Two tasks, two address spaces, one virtual address: each must see its own.
+///
+/// Everything above this builds address spaces and walks them from the task
+/// that made them. This is the first thing that hands one to *another* task and
+/// lets the scheduler decide when it is live — which is the whole of what
+/// `choose_next`'s root swap has to get right.
+///
+/// # Why both tasks are pinned to one processor
+///
+/// Because otherwise the check would pass without testing anything. Two tasks
+/// on two processors each get their own root installed once and never switched;
+/// the interesting case is one processor alternating between two address spaces,
+/// which is what a real machine does and what an incorrect comparison or a
+/// missing invalidation would break. Pinned and yielding, the two tasks force
+/// roughly `SWAP_ROUNDS` swaps each way.
+///
+/// A reader that sees the *other* task's marker is a root that did not change
+/// when it should have. A reader that faults is no root at all. Both are
+/// failures and they look different, which is why the marker carries the task's
+/// index rather than being a single sentinel.
+fn check_two_tasks_keep_their_own_address_spaces() -> Result<u64, &'static str> {
+    let frames_before = mm::free_frames();
+    let arena_before = crate::vmap::usage().allocations;
+
+    SWAP_DONE.store(0, Ordering::Release);
+    SWAP_RIGHT.store(0, Ordering::Release);
+    SWAP_WRONG.store(0, Ordering::Release);
+
+    let here = crate::smp::this_cpu()
+        .ok_or("no processor to run the address space check on")?
+        .logical;
+
+    // Two spaces, the same address in each, different contents.
+    let mut spaces = Vec::new();
+    for index in 0..2_usize {
+        let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
+        let _ = space
+            .map_anonymous(SWAP_AT, PAGE_SIZE, VmaFlags::READ_WRITE)
+            .map_err(|_| "mapping failed")?;
+        space
+            .fault(SWAP_AT, Access::WRITE)
+            .map_err(|_| "a fault in a mapped region was not resolved")?;
+        let phys = mm::translate_in(space.root_table(), SWAP_AT)
+            .ok_or("a faulted page does not translate in its own address space")?;
+        poke(phys, (SWAP_MARK + index) as u64);
+        spaces.push(space);
+    }
+
+    let mut tasks = Vec::new();
+    for (index, space) in spaces.iter().enumerate() {
+        tasks.push(
+            crate::sched::spawn_on_in(
+                "space-reader",
+                read_own_space,
+                SWAP_MARK + index,
+                NICE_0_WEIGHT,
+                here,
+                CpuSet::of(here),
+                Some(Arc::clone(space)),
+            )
+            .map_err(|_| "could not start a task in an address space")?,
+        );
+    }
+
+    wait_until(
+        || SWAP_DONE.load(Ordering::Acquire) >= 2,
+        "a task reading its own address space never finished",
+    )?;
+
+    let right = SWAP_RIGHT.load(Ordering::Acquire);
+    let wrong = SWAP_WRONG.load(Ordering::Acquire);
+    if wrong != 0 {
+        return Err("a task read another task's address space at its own address");
+    }
+    if right != SWAP_ROUNDS * 2 {
+        return Err("a task did not read its own address space as many times as it should");
+    }
+
+    // The tasks die holding the only other references to these spaces, so the
+    // stacks have to come back before the tables can.
+    reap_until(arena_before)?;
+    drop(tasks);
+    drop(spaces);
+
+    if mm::free_frames() != frames_before {
+        return Err("running tasks in address spaces leaked frames");
+    }
+    Ok(right)
+}
+
+/// Wait for `ready`, yielding, until it is true or the patience runs out.
+fn wait_until(mut ready: impl FnMut() -> bool, what: &'static str) -> Result<(), &'static str> {
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    while !ready() {
+        if crate::timer::now_nanos() >= deadline {
+            return Err(what);
+        }
+        crate::sched::yield_now();
+    }
+    Ok(())
+}
+
+/// Free every exited task's stack, until the arena is back where it started.
+///
+/// A yielding loop rather than a blocking wait, for the reason stage 5's
+/// version gives: reaping is work *this* task does, so it has to keep being
+/// given the processor in order to do it.
+fn reap_until(allocations: usize) -> Result<(), &'static str> {
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    loop {
+        let _ = crate::sched::reap();
+        if crate::vmap::usage().allocations <= allocations {
+            return Ok(());
+        }
+        if crate::timer::now_nanos() >= deadline {
+            return Err("a task in an address space never gave its stack back");
+        }
+        crate::sched::yield_now();
+    }
+}
+
+/// How long any of the waits above will wait. Generous: this runs after stage
+/// 5, which has already shown that a thousand threads take real time.
+const PATIENCE_NANOS: u64 = 20_000_000_000;

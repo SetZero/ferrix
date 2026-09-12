@@ -13,11 +13,13 @@
 //! stack pointer is only ever touched by the one CPU that owns its queue at
 //! that moment. That hand-over is what `SpinLock::lock_manually` exists for.
 
+use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use ferrix_sched::{CpuSet, EntityState};
 
+use crate::user::space::AddressSpace;
 use crate::vmap::Stack;
 
 /// A task's name, unique for the life of the machine.
@@ -44,6 +46,16 @@ pub(crate) struct Task {
     stack: Option<Stack>,
     /// Where its stack pointer is kept while it is not running.
     stack_pointer: UnsafeCell<u64>,
+    /// The address space its user half is translated through, or `None` for a
+    /// kernel thread.
+    ///
+    /// Holding an [`Arc`] here is what keeps the tables alive while a
+    /// processor is walking them: the root register is installed by
+    /// `sched::choose_next` on the way in, and the only thing standing between
+    /// those tables and the frame allocator is this reference. A task that
+    /// dies keeps it until it is reaped, which is after the last switch away
+    /// from it.
+    address_space: Option<Arc<AddressSpace>>,
     /// [`RUNNABLE`], [`BLOCKED`] or [`DEAD`].
     state: AtomicU8,
     /// The logical CPU whose queue owns it.
@@ -87,10 +99,15 @@ unsafe impl Sync for Task {}
 /// loose arguments: nine of them, four of which are integers, is a call whose
 /// meaning depends on getting the order right.
 ///
-/// `Copy`, like the [`Stack`] it carries: nothing here owns a resource whose
-/// release the type system tracks, and a stack is freed by `vmap::free_stack`
-/// against the address in it rather than by dropping anything.
-#[derive(Clone, Copy, Debug)]
+/// **No longer `Copy`**, and the reason is the point rather than an
+/// inconvenience. It used to be, on the grounds that nothing here owned a
+/// resource whose release the type system tracks — a [`Stack`] is freed by
+/// `vmap::free_stack` against the address in it rather than by dropping
+/// anything. An [`Arc<AddressSpace>`] is exactly such a resource: copying the
+/// descriptor would duplicate a reference without raising the count, and the
+/// page tables would be freed while a processor still had their root in its
+/// register. `Clone` stays, because cloning does raise it.
+#[derive(Clone, Debug)]
 pub(crate) struct NewTask {
     /// Its identifier, never reused.
     pub(crate) id: TaskId,
@@ -111,6 +128,8 @@ pub(crate) struct NewTask {
     /// The processors it may run on. A task pinned to one is an affinity of
     /// one, which is the same thing said once rather than twice.
     pub(crate) affinity: CpuSet,
+    /// The address space it runs in, or `None` for a kernel thread.
+    pub(crate) address_space: Option<Arc<AddressSpace>>,
 }
 
 impl Task {
@@ -126,6 +145,7 @@ impl Task {
             weight,
             cpu,
             affinity,
+            address_space,
         } = new;
         Task {
             id,
@@ -137,6 +157,7 @@ impl Task {
             cpu: AtomicU64::new(cpu as u64),
             queued: AtomicBool::new(false),
             affinity,
+            address_space,
             weight: AtomicU32::new(weight),
             vlag: AtomicI64::new(0),
             sum_exec: AtomicU64::new(0),
@@ -166,6 +187,9 @@ impl Task {
             // processor's context. An affinity of exactly its own processor
             // says so in the same terms as everything else.
             affinity: CpuSet::of(cpu),
+            // The boot task and the idle tasks are the kernel's own and have
+            // no user half to translate.
+            address_space: None,
             weight: AtomicU32::new(weight),
             vlag: AtomicI64::new(0),
             sum_exec: AtomicU64::new(0),
@@ -328,5 +352,16 @@ impl Task {
     /// Which CPUs it has run on, one bit each.
     pub(crate) fn cpus_run_on(&self) -> u64 {
         self.cpus_run_on.load(Ordering::Relaxed)
+    }
+
+    /// The address space it runs in, or `None` if it is a kernel thread.
+    ///
+    /// Borrowed rather than cloned, because the caller that matters is the
+    /// switch path: it compares this against the outgoing task's by pointer
+    /// and installs a root, all under the run queue lock, and raising a
+    /// reference count on every switch to say what a borrow already says would
+    /// be a contended atomic on the hottest path in the kernel.
+    pub(crate) fn address_space(&self) -> Option<&Arc<AddressSpace>> {
+        self.address_space.as_ref()
     }
 }

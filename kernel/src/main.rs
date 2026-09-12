@@ -231,6 +231,10 @@ fn check_user_memory() {
         report.copied,
         report.leaked,
     );
+    println!(
+        "  spaces   {} reads of one address in two address spaces, each its own",
+        report.swapped,
+    );
 }
 
 /// Stage 7: the system call dispatch path, before there is anything to call

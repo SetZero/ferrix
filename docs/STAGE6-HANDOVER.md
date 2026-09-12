@@ -21,7 +21,9 @@ it three fifths. Six commits:
 | `987fe1d` | `Backing::Anonymous` gains an `id` and `offset` |
 | `2fe57dc` | `AddressSpace` — region map, page tables, demand paging |
 | `f6da17b` | `arch::install_user_root` / `uninstall_user_root`, and the `MMU` walking a user space in the boot test |
-| *this one* | `AddressSpace::fork`, `Vmo::fork`, `mm::copy_frame`, and the copy-on-write fault |
+| `44bf30e` | `AddressSpace::fork`, `Vmo::fork`, `mm::copy_frame`, and the copy-on-write fault |
+| `5215eee` | TLB invalidation where a live mapping changes; `unmap` reordered to free after |
+| *this one* | `Task` carries an address space, and `choose_next` swaps roots |
 
 New code lives in `kernel/src/user/`:
 
@@ -34,7 +36,8 @@ New code lives in `kernel/src/user/`:
   `ferrix_vma::AddressSpace`, a `BTreeMap<u64, Arc<Vmo>>`, and a `SpinLock`.
 * `check.rs` — the boot self-checks. Reports `objects 2048 pages reserved,
   7 committed, 4 faulted in, 2 walked by the MMU, 1 copied on write, 0 frames
-  leaked`.
+  leaked` and `spaces 128 reads of one address in two address spaces, each its
+  own`.
 
 Supporting changes elsewhere:
 
@@ -70,9 +73,11 @@ In dependency order. Nothing below exists, not even stubbed.
 1. **`arch::set_kernel_stack(top)`** — the stack a syscall from user mode lands
    on: `TSS.rsp0` on x86-64, `SP_EL1` on AArch64, the SVC stack on ARMv7-A.
    Agreed with the stage 5 owner as one facade entry, not three shapes.
-2. **`Task` carrying an address space.** `Option<Arc<AddressSpace>>`, `None`
-   meaning a kernel thread. See §4. The two calls the swap needs now exist, so
-   this is the next thing to do and it is a small change.
+2. ~~**`Task` carrying an address space.**~~ **Done.** `Task` and `NewTask`
+   carry `Option<Arc<AddressSpace>>`, `sched::spawn_on_in` starts a task in one,
+   and `choose_next` swaps roots under the run queue lock via
+   `swap_address_space`. `NewTask` lost `Copy` to get there — an `Arc` is
+   exactly the resource its `Copy` doc said it carried none of.
 3. **Scoping the user TLB shootdown.** The invalidation itself now exists —
    `space.rs::invalidate` on the three paths that take a translation down or
    make one less permissive (`unmap`, `fork`, and the copy-on-write branch of
@@ -138,6 +143,9 @@ Do not silently reverse these; they were argued with the other sessions.
 
 They deliberately left these unbuilt rather than guess at `AddressSpace`'s
 shape. All three are yours.
+
+All three are now built; what follows is what was agreed, kept because the
+reasoning still constrains anything that changes them.
 
 1. **`Task` gains `Option<Arc<AddressSpace>>`.** `NewTask`
    (`kernel/src/sched/task.rs:93`) is a descriptor precisely so adding a field
