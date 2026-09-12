@@ -13,6 +13,8 @@
 //! symbolic link to it. Each is a shape the unpacker has to get right, placed
 //! where a check that the unpack happened can find it.
 
+use std::path::Path;
+
 use crate::{Error, Result};
 
 /// Every timestamp in the archive: 2026-01-01 00:00:00 UTC, the same instant
@@ -130,8 +132,29 @@ impl Newc {
     }
 }
 
-/// The archive every image carries.
-pub(crate) fn build() -> Result<Vec<u8>> {
+/// Where a program given with `--init` goes, relative to the root.
+pub(crate) const PROGRAM_PATH: &str = "bin/busybox";
+
+/// The applets `cargo xtask test-vfs` starts, each a symbolic link beside the
+/// program. The kernel starts a program by `argv[0]` and needs none of them;
+/// they are there so that the tree looks like the one `PATH=/bin` promises,
+/// and so that the names resolve once a shell can look them up.
+pub(crate) const APPLETS: &[&str] = &["cat", "ln", "ls", "mkdir", "mv", "rm", "rmdir", "sh"];
+
+/// The archive every image carries, with `program` at `/bin/busybox` when one
+/// is given.
+pub(crate) fn build(program: Option<&Path>) -> Result<Vec<u8>> {
+    let program = program
+        .map(|path| {
+            std::fs::read(path)
+                .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
+        })
+        .transpose()?;
+    build_with(program.as_deref())
+}
+
+/// [`build`], with the program's bytes rather than its path.
+fn build_with(program: Option<&[u8]>) -> Result<Vec<u8>> {
     let mut archive = Newc::new();
     archive.directory(".", 0o755)?;
     for (name, permissions) in [
@@ -148,6 +171,12 @@ pub(crate) fn build() -> Result<Vec<u8>> {
     let link = format!("{MARKER_PATH}.link");
     archive.hard_linked(&[MARKER_PATH, &link], 0o644, MARKER)?;
     archive.symlink(&format!("{MARKER_PATH}.symlink"), "initramfs")?;
+    if let Some(program) = program {
+        archive.file(PROGRAM_PATH, 0o755, program)?;
+        for applet in APPLETS {
+            archive.symlink(&format!("bin/{applet}"), "busybox")?;
+        }
+    }
     archive.finish()
 }
 
@@ -157,12 +186,36 @@ mod tests {
 
     #[test]
     fn the_archive_is_the_same_bytes_every_time() {
-        assert_eq!(build().unwrap(), build().unwrap());
+        assert_eq!(build(None).unwrap(), build(None).unwrap());
+        let program: &[u8] = b"\x7fELF not really";
+        assert_eq!(
+            build_with(Some(program)).unwrap(),
+            build_with(Some(program)).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_program_goes_in_bin_with_its_applets_beside_it() {
+        let program: &[u8] = b"\x7fELF not really";
+        let bytes = build_with(Some(program)).unwrap();
+        let archive = ferrix_cpio::Archive::new(&bytes);
+        assert_eq!(archive.find(PROGRAM_PATH).unwrap().unwrap().data, program);
+        for applet in APPLETS {
+            let link = archive.find(&format!("bin/{applet}")).unwrap().unwrap();
+            assert_eq!(link.symlink_target(), Some("busybox"), "bin/{applet}");
+        }
+        assert!(
+            ferrix_cpio::Archive::new(&build(None).unwrap())
+                .find(PROGRAM_PATH)
+                .unwrap()
+                .is_none(),
+            "without --init there is no program to find"
+        );
     }
 
     #[test]
     fn the_archive_reads_back_with_the_kernels_own_reader() {
-        let bytes = build().unwrap();
+        let bytes = build(None).unwrap();
         let archive = ferrix_cpio::Archive::new(&bytes);
         let names: Vec<&str> = archive.entries().map(|entry| entry.unwrap().name).collect();
         assert_eq!(names.first(), Some(&"."));

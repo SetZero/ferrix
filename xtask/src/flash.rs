@@ -53,7 +53,7 @@ pub(crate) fn run(arch: Arch, loader: &Path, kernel: &Path, args: &Args) -> Resu
     copy(kernel, &kernel_target)?;
     // The same archive an image carries, so a board unpacks what QEMU does.
     let initramfs_target = target.join(INITRD_PATH);
-    std::fs::write(&initramfs_target, crate::initramfs::build()?)
+    std::fs::write(&initramfs_target, crate::initramfs::build(None)?)
         .map_err(|error| Error::new(format!("writing {}: {error}", initramfs_target.display())))?;
     println!("    {}", initramfs_target.display());
 

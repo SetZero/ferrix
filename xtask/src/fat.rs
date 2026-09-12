@@ -458,8 +458,20 @@ fn directory_entry(name: &[u8; 11], attr: u8, first_cluster: u32, size: u32) -> 
     entry
 }
 
-/// Assemble the bootable image for `arch` from a built loader and kernel.
+/// Assemble the bootable image for `arch` from a built loader and kernel, with
+/// the initramfs every image carries.
 pub(crate) fn write_image(arch: Arch, loader: &Path, kernel: &Path) -> Result<PathBuf> {
+    write_image_with(arch, loader, kernel, &crate::initramfs::build(None)?)
+}
+
+/// [`write_image`], carrying `initramfs` instead: the same archive with a
+/// program added, for `test-vfs`.
+pub(crate) fn write_image_with(
+    arch: Arch,
+    loader: &Path,
+    kernel: &Path,
+    initramfs: &[u8],
+) -> Result<PathBuf> {
     let mut fs = Fat32::new(IMAGE_BYTES)?;
 
     let loader_bytes = std::fs::read(loader)
@@ -475,8 +487,7 @@ pub(crate) fn write_image(arch: Arch, loader: &Path, kernel: &Path) -> Result<Pa
     fs.add_file("FERRIX/KERNEL.ELF", &kernel_bytes)?;
     // Beside the kernel, where the loader looks for it. Every image carries
     // one, because stage 8's self-check reads its files back through the VFS.
-    let initramfs = crate::initramfs::build()?;
-    fs.add_file("FERRIX/INITRD.IMG", &initramfs)?;
+    fs.add_file("FERRIX/INITRD.IMG", initramfs)?;
 
     let directory = paths::build_dir(arch);
     std::fs::create_dir_all(&directory)?;
