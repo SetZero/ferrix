@@ -507,6 +507,239 @@ fn adjacent_and_repeated_chunks_are_accepted() {
     assert_eq!(map.logical_to_physical(0x0FF_FFFF), Some((1, 0x60F_FFFF)));
 }
 
+/// Chunk item field offsets, written out independently of the parser's.
+mod chunk_offset {
+    pub(super) const LENGTH: usize = 0;
+    pub(super) const STRIPE_LEN: usize = 16;
+    pub(super) const TYPE: usize = 24;
+    pub(super) const SECTOR_SIZE: usize = 40;
+    pub(super) const SUB_STRIPES: usize = 46;
+}
+
+/// More chunk type bits, for the profiles the fixtures above do not use.
+const CHUNK_METADATA: u64 = 4;
+const CHUNK_RAID10: u64 = 64;
+const CHUNK_RAID5: u64 = 128;
+const CHUNK_RAID6: u64 = 256;
+const CHUNK_RAID1C3: u64 = 512;
+const CHUNK_RAID1C4: u64 = 1024;
+
+/// `count` stripes on distinct devices.
+fn stripes(count: u64) -> Vec<(u64, u64)> {
+    (1..=count).map(|devid| (devid, devid << 24)).collect()
+}
+
+#[test]
+fn a_chunk_item_btrfs_would_not_write_is_refused() {
+    let single = chunk_item(1 << 20, CHUNK_DATA, &stripes(1));
+    let patched = |at: usize, value: &[u8]| {
+        let mut bytes = single.clone();
+        bytes[at..at + value.len()].copy_from_slice(value);
+        bytes
+    };
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        (
+            patched(chunk_offset::STRIPE_LEN, &32768u64.to_le_bytes()),
+            "a stripe length other than 64 KiB",
+        ),
+        (
+            patched(chunk_offset::LENGTH, &0x10_0001u64.to_le_bytes()),
+            "a length that is not whole sectors",
+        ),
+        (
+            patched(
+                chunk_offset::LENGTH,
+                &(u64::from(u32::MAX) << 16).to_le_bytes(),
+            ),
+            "a length the stripe arithmetic cannot hold",
+        ),
+        (
+            patched(chunk_offset::SECTOR_SIZE, &0u32.to_le_bytes()),
+            "a zero sector size",
+        ),
+        (
+            patched(chunk_offset::SECTOR_SIZE, &1000u32.to_le_bytes()),
+            "a sector size that is not a power of two",
+        ),
+        (
+            patched(chunk_offset::TYPE, &(CHUNK_DATA | 1 << 11).to_le_bytes()),
+            "a type bit btrfs does not define",
+        ),
+        (
+            patched(chunk_offset::TYPE, &0u64.to_le_bytes()),
+            "no type bit at all",
+        ),
+        (
+            patched(
+                chunk_offset::TYPE,
+                &(CHUNK_SYSTEM | CHUNK_DATA).to_le_bytes(),
+            ),
+            "a system chunk that also holds data",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_DUP | CHUNK_RAID1, &stripes(2)),
+            "two profile bits",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA, &stripes(2)),
+            "SINGLE with two stripes",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_METADATA | CHUNK_DUP, &stripes(1)),
+            "DUP with one stripe",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID1, &stripes(3)),
+            "RAID1 with three stripes",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID1C3, &stripes(2)),
+            "RAID1C3 with two stripes",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID1C4, &stripes(3)),
+            "RAID1C4 with three stripes",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID10, &stripes(4)),
+            "RAID10 without sub_stripes of two",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID5, &stripes(1)),
+            "RAID5 with only its parity stripe",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID6, &stripes(2)),
+            "RAID6 with only its parity stripes",
+        ),
+    ];
+    for (bytes, what) in cases {
+        assert_eq!(
+            ChunkItem::parse(&bytes).map(|_| ()),
+            Err(BtrfsError::BadChunk),
+            "{what} is refused"
+        );
+    }
+}
+
+#[test]
+fn every_layout_btrfs_writes_still_parses() {
+    // The boundary of each rule above: the exact stripe counts, the longest
+    // length the arithmetic holds, and a length of one sector.
+    let mut raid10 = chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID10, &stripes(4));
+    put_u16(&mut raid10, chunk_offset::SUB_STRIPES, 2);
+    let longest = (u64::from(u32::MAX) << 16) - 4096;
+    let cases = [
+        (chunk_item(4096, CHUNK_DATA, &stripes(1)), "one sector"),
+        (
+            chunk_item(longest, CHUNK_DATA, &stripes(1)),
+            "the longest chunk",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_METADATA | CHUNK_DUP, &stripes(2)),
+            "DUP metadata",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_SYSTEM | CHUNK_DUP, &stripes(2)),
+            "DUP system",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_METADATA, &stripes(1)),
+            "mixed data and metadata",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID1C3, &stripes(3)),
+            "RAID1C3",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID1C4, &stripes(4)),
+            "RAID1C4",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID0, &stripes(1)),
+            "RAID0 on one device",
+        ),
+        (raid10, "RAID10"),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID5, &stripes(2)),
+            "RAID5",
+        ),
+        (
+            chunk_item(1 << 20, CHUNK_DATA | CHUNK_RAID6, &stripes(3)),
+            "RAID6",
+        ),
+    ];
+    for (bytes, what) in cases {
+        assert!(ChunkItem::parse(&bytes).is_ok(), "{what} parses");
+    }
+}
+
+#[test]
+fn a_chunk_must_agree_with_the_volume_sector_size() {
+    let bytes = chunk_item(1 << 20, CHUNK_DATA, &stripes(1));
+    let item = ChunkItem::parse(&bytes).unwrap();
+    assert_eq!(
+        item.check_sectorsize(0x100_0000, 4096),
+        Ok(()),
+        "a chunk on the sector grid, recording the volume's sector size"
+    );
+    assert_eq!(
+        item.check_sectorsize(0x100_0200, 4096),
+        Err(BtrfsError::BadChunk),
+        "a chunk starting between sectors"
+    );
+    assert_eq!(
+        item.check_sectorsize(0x100_0000, 8192),
+        Err(BtrfsError::BadChunk),
+        "a chunk recording a sector size the volume does not use"
+    );
+}
+
+/// One system chunk array entry: a key and a chunk item.
+fn sys_array_entry(key: BtrfsKey, item: &[u8]) -> Vec<u8> {
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&key.objectid.to_le_bytes());
+    entry.push(key.item_type);
+    entry.extend_from_slice(&key.offset.to_le_bytes());
+    entry.extend_from_slice(item);
+    entry
+}
+
+#[test]
+fn the_system_chunk_array_holds_only_system_chunk_items() {
+    let system = chunk_item(1 << 20, CHUNK_SYSTEM, &stripes(1));
+    let data = chunk_item(1 << 20, CHUNK_DATA, &stripes(1));
+    let chunk_key = BtrfsKey::new(256, 228, 0x100_0000);
+    for (array, what) in [
+        (
+            sys_array_entry(BtrfsKey::new(0, 0, 0), &system),
+            "an entry keyed (0, 0, 0)",
+        ),
+        (
+            sys_array_entry(BtrfsKey::new(256, 1, 0x100_0000), &system),
+            "an entry keyed as some other item",
+        ),
+        (sys_array_entry(chunk_key, &data), "a data chunk"),
+    ] {
+        let mut storage = [ChunkMapEntry::default(); 4];
+        let mut map = ChunkMap::new(&mut storage);
+        assert_eq!(
+            map.load_sys_chunk_array(&array),
+            Err(BtrfsError::BadChunk),
+            "{what} is refused"
+        );
+        assert!(map.is_empty(), "{what} maps nothing");
+    }
+
+    let mut storage = [ChunkMapEntry::default(); 4];
+    let mut map = ChunkMap::new(&mut storage);
+    assert_eq!(
+        map.load_sys_chunk_array(&sys_array_entry(chunk_key, &system)),
+        Ok(1),
+        "a system chunk keyed as a chunk item loads"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Keys
 // ---------------------------------------------------------------------------

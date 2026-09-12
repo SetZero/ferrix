@@ -140,7 +140,13 @@ impl<S: ChunkStorage> Volume<S> {
         check_mountable(&sb)?;
 
         let mut map = ChunkMap::new(chunks);
-        if map.load_sys_chunk_array(sb.sys_chunk_array_bytes())? == 0 {
+        let mut system = 0usize;
+        for entry in sb.sys_chunk_array() {
+            let (key, item) = entry?;
+            add_chunk(&mut map, key.offset, &item, sb.sectorsize())?;
+            system = system.saturating_add(1);
+        }
+        if system == 0 {
             // Without a system chunk nothing maps the chunk tree, so say which
             // address was unreachable rather than failing on it a step later.
             return Err(BtrfsError::NotMapped(sb.chunk_root()));
@@ -395,12 +401,13 @@ impl<S: ChunkStorage> Volume<S> {
         node: &mut [u8],
     ) -> Result<(), BtrfsError> {
         let mut key = BtrfsKey::new(FIRST_CHUNK_TREE_OBJECTID, CHUNK_ITEM_KEY, 0);
+        let sectorsize = self.sectorsize;
         loop {
             let leaf = self.seek(device, self.chunk_tree, &key, node)?;
             for item in leaf.items() {
                 if item.key.item_type == CHUNK_ITEM_KEY {
-                    self.chunks
-                        .insert(item.key.offset, &ChunkItem::parse(item.data)?)?;
+                    let chunk = ChunkItem::parse(item.data)?;
+                    add_chunk(&mut self.chunks, item.key.offset, &chunk, sectorsize)?;
                 }
             }
             match leaf.next {
@@ -426,6 +433,21 @@ impl<S: ChunkStorage> Volume<S> {
         })?;
         found.flatten().ok_or(BtrfsError::MissingRoot(objectid))
     }
+}
+
+/// Check a chunk against the volume's sector size, then map it.
+///
+/// Both the system chunk array and the chunk tree come through here, so
+/// neither can put a chunk into the map that [`ChunkItem::check_sectorsize`]
+/// would refuse.
+fn add_chunk<S: ChunkStorage>(
+    map: &mut ChunkMap<S>,
+    logical: u64,
+    item: &ChunkItem<'_>,
+    sectorsize: u32,
+) -> Result<(), BtrfsError> {
+    item.check_sectorsize(logical, sectorsize)?;
+    map.insert(logical, item)
 }
 
 /// Refuse a volume this reader would read wrongly rather than not at all.

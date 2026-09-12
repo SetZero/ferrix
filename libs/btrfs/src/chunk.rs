@@ -29,8 +29,10 @@
 //! one that passes its own checksum, since the block it lands on is a real
 //! block belonging to something else.
 
+use crate::items::CHUNK_ITEM_KEY;
+use crate::superblock::{MAX_SECTOR_SIZE, MIN_SECTOR_SIZE};
 use crate::tree::{BtrfsKey, KEY_SIZE};
-use crate::{BtrfsError, array_at, u16_at, u32_at, u64_at};
+use crate::{BtrfsError, array_at, is_valid_block_size, u16_at, u32_at, u64_at};
 
 /// Chunk holds file data.
 pub const BLOCK_GROUP_DATA: u64 = 1 << 0;
@@ -73,6 +75,16 @@ pub const CHUNK_HEADER_SIZE: usize = 48;
 
 /// Bytes in one stripe record: a device id, a device offset and a device UUID.
 pub const STRIPE_SIZE: usize = 32;
+
+/// What a chunk holds, as opposed to how it is replicated.
+pub const BLOCK_GROUP_TYPE_MASK: u64 = BLOCK_GROUP_DATA | BLOCK_GROUP_SYSTEM | BLOCK_GROUP_METADATA;
+
+/// The only `stripe_len` btrfs writes: Linux's `BTRFS_STRIPE_LEN`, 64 KiB.
+pub const STRIPE_LEN: u64 = 64 * 1024;
+
+/// The longest chunk Linux accepts: one whose stripe count still fits the
+/// `u32` its striping arithmetic keeps it in.
+pub const MAX_CHUNK_LENGTH: u64 = (u32::MAX as u64) * STRIPE_LEN;
 
 /// Object id every chunk item's key carries. Not a real object; btrfs reuses
 /// the "first free" number as a constant marker so chunk items sort together.
@@ -178,6 +190,11 @@ impl<'a> ChunkItem<'a> {
     /// `num_stripes` that its own bytes cannot back — each of which would
     /// otherwise turn into a division by zero or a read of adjacent memory
     /// interpreted as a device offset.
+    ///
+    /// Beyond that it applies every part of Linux's `btrfs_check_chunk_valid`
+    /// that the item can answer on its own: see `check_type` and
+    /// `check_geometry` below. The parts that need the volume's
+    /// `sectorsize` are [`ChunkItem::check_sectorsize`], which a mount calls.
     pub fn parse(bytes: &'a [u8]) -> Result<Self, BtrfsError> {
         let item = ChunkItem { bytes };
         let num_stripes = u16_at(bytes, 44).ok_or(BtrfsError::BadChunk)?;
@@ -197,7 +214,87 @@ impl<'a> ChunkItem<'a> {
         if item.length() == 0 || item.stripe_len() == 0 {
             return Err(BtrfsError::BadChunk);
         }
+        item.check_type()?;
+        item.check_geometry()?;
         Ok(item)
+    }
+
+    /// Refuse type bits btrfs does not write.
+    ///
+    /// As `btrfs_check_chunk_valid` does: no bit outside the type and profile
+    /// masks, at most one profile bit, at least one type bit, and a SYSTEM
+    /// chunk holding nothing else. An unknown bit may be a feature that changes
+    /// how the chunk is laid out, and two profile bits describe two layouts at
+    /// once; reading through either would be a guess.
+    fn check_type(&self) -> Result<(), BtrfsError> {
+        let bits = self.type_bits();
+        let kinds = bits & BLOCK_GROUP_TYPE_MASK;
+        let usable = bits & !(BLOCK_GROUP_TYPE_MASK | BLOCK_GROUP_PROFILE_MASK) == 0
+            && (bits & BLOCK_GROUP_PROFILE_MASK).count_ones() <= 1
+            && kinds != 0
+            && (kinds & BLOCK_GROUP_SYSTEM == 0 || kinds == BLOCK_GROUP_SYSTEM);
+        if usable {
+            Ok(())
+        } else {
+            Err(BtrfsError::BadChunk)
+        }
+    }
+
+    /// Refuse a stripe layout the profile could not have produced.
+    ///
+    /// The stripe counts are Linux's `valid_stripe_count` and the
+    /// `ncopies`/`nparity` checks before it: SINGLE is one stripe, DUP and
+    /// RAID1 two, RAID1C3 and RAID1C4 three and four, RAID10 pairs of
+    /// mirrors, RAID5 and RAID6 at least one and two stripes beyond their
+    /// parity. The rest is `stripe_len` being the fixed 64 KiB, a length that
+    /// the striping arithmetic can hold, and a length in whole sectors. This
+    /// matters even for the profiles read through stripe 0: a SINGLE chunk
+    /// claiming three stripes, or a DUP chunk one, is not the chunk mkfs wrote,
+    /// and its stripe 0 is not to be trusted either.
+    fn check_geometry(&self) -> Result<(), BtrfsError> {
+        let stripes = self.num_stripes();
+        let count_fits = match self.profile() {
+            ChunkProfile::Single => stripes == 1,
+            ChunkProfile::Dup | ChunkProfile::Raid1 => stripes == 2,
+            ChunkProfile::Raid1c3 => stripes == 3,
+            ChunkProfile::Raid1c4 => stripes == 4,
+            ChunkProfile::Raid0 => stripes >= 1,
+            ChunkProfile::Raid10 => stripes >= 2 && self.sub_stripes() == 2,
+            ChunkProfile::Raid5 => stripes >= 2,
+            ChunkProfile::Raid6 => stripes >= 3,
+            ChunkProfile::Unknown(_) => false,
+        };
+        // The item's own sector size, which a mount then requires to be the
+        // volume's; in whole sectors of it, the length is in whole sectors.
+        let sector = self.sector_size();
+        let whole_sectors = is_valid_block_size(sector, MIN_SECTOR_SIZE, MAX_SECTOR_SIZE)
+            && self.length().checked_rem(u64::from(sector)) == Some(0);
+        if count_fits
+            && whole_sectors
+            && self.stripe_len() == STRIPE_LEN
+            && self.length() < MAX_CHUNK_LENGTH
+        {
+            Ok(())
+        } else {
+            Err(BtrfsError::BadChunk)
+        }
+    }
+
+    /// Check the chunk against the volume it was found in.
+    ///
+    /// The rest of `btrfs_check_chunk_valid`, which needs the superblock's
+    /// `sectorsize`: the chunk records the same sector size, and starts on a
+    /// sector boundary. [`ChunkItem::parse`] cannot know either, so a mount
+    /// calls this for every chunk before inserting it. A chunk off the sector
+    /// grid maps every block in it to a physical offset off the grid too —
+    /// into the middle of whatever block really lives there.
+    pub fn check_sectorsize(&self, logical: u64, sectorsize: u32) -> Result<(), BtrfsError> {
+        let aligned = logical.checked_rem(u64::from(sectorsize)) == Some(0);
+        if aligned && self.sector_size() == sectorsize {
+            Ok(())
+        } else {
+            Err(BtrfsError::BadChunk)
+        }
     }
 
     /// Bytes of the logical address space this chunk covers.
@@ -342,11 +439,24 @@ impl<'a> SysChunkArray<'a> {
     }
 
     /// Parse the entry at the cursor without advancing it.
+    ///
+    /// Linux's `btrfs_read_sys_array` refuses an entry whose key is not a
+    /// `CHUNK_ITEM` and a chunk without the SYSTEM bit, and so does this. The
+    /// array has nothing else in it by construction: a key of another type
+    /// means the cursor is not where an entry starts, and a non-system chunk
+    /// here claims a place in the bootstrap map that the chunk tree, not the
+    /// superblock, is meant to fill.
     fn entry(&self) -> Result<(BtrfsKey, ChunkItem<'a>, usize), BtrfsError> {
         let key = BtrfsKey::parse(self.bytes, self.at).ok_or(BtrfsError::BadChunk)?;
+        if key.item_type != CHUNK_ITEM_KEY {
+            return Err(BtrfsError::BadChunk);
+        }
         let body_at = self.at.checked_add(KEY_SIZE).ok_or(BtrfsError::BadChunk)?;
         let body = self.bytes.get(body_at..).ok_or(BtrfsError::BadChunk)?;
         let item = ChunkItem::parse(body)?;
+        if item.type_bits() & BLOCK_GROUP_SYSTEM == 0 {
+            return Err(BtrfsError::BadChunk);
+        }
         let next = body_at
             .checked_add(item.total_size())
             .ok_or(BtrfsError::BadChunk)?;
