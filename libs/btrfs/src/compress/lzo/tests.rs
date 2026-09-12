@@ -21,6 +21,7 @@ use crate::crc32c::crc32c;
 use crate::items::COMPRESS_LZO;
 
 mod encoder;
+mod oracle;
 
 use encoder::Stats;
 

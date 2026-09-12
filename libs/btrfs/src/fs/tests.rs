@@ -226,7 +226,6 @@ fn the_zlib_image_reads_back_exactly() {
 }
 
 #[test]
-#[ignore = "the lzo decoder is still a stub; un-ignore when it lands"]
 fn the_lzo_image_reads_back_exactly() {
     check_image("lzo");
 }

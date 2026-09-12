@@ -16,7 +16,9 @@ publish = false
 # the same streams so a disagreement names which side is wrong.
 [dev-dependencies]
 miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
-lzokay-native = { version = "0.1.0", default-features = false }
+# Its default features are its compressor and decompressor, which are the
+# whole reason it is here.
+lzokay-native = "0.1.0"
 ruzstd = { version = "0.9.0", default-features = false }
 
 [lints]
