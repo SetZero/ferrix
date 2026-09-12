@@ -12,7 +12,7 @@ work should be done in. This file records what a real shell actually asks for,
 measured rather than recalled, so that nobody builds `futex` before `write`.
 
 **Delete this file when stage 7 meets its exit criterion.** `docs/ROADMAP.md`
-is the durable record; this is scaffolding, like `docs/STAGE6-HANDOVER.md`.
+is the durable record; this is scaffolding.
 
 ---
 

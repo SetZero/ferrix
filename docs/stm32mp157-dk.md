@@ -34,7 +34,8 @@ autoboot with any key:
 => bootefi 0xc2000000 ${fdt_addr_r}
 ```
 
-Success is `FERRIX-BOOT-OK stages 1-5`, and `deploy` exits 0 on it.
+Success is a line beginning `FERRIX-BOOT-OK` — the stages after it say how far
+the boot got — and `deploy` exits 0 on it.
 
 If it goes wrong, three arguments in order of usefulness:
 

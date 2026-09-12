@@ -19,14 +19,12 @@ longer". This is a long program of work: stages 1–8 are a conventional kernel
 bring-up, 9–14 are the parts this design chose to do properly, and 15–17 are the
 goal. Nobody should read the table as a schedule.
 
-**Where it stands:** stages 0–5 are done and in the boot test on all three
-architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-5`.
-ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stages 6 and 7 are
-both under way: there are address spaces, `fork` with copy-on-write, tasks that
-carry a space and a scheduler that swaps roots between them, and there is a
-system call dispatch path. What there is not is user mode, so nothing has yet
-called it from the far side of a privilege boundary, and the privilege drop is
-very nearly all that stands between here and stage 6's exit.
+**Where it stands:** stages 0–6 are done and in the boot test on all three
+architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-6`.
+ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 7 is under
+way: a program now runs at user privilege on every architecture and reaches the
+system call dispatch path, and stage 7's section says how much of the Linux
+surface a real shell needs and how much of it exists.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -559,16 +557,42 @@ does not yet parse.
 
 ---
 
-## Stage 6 — User mode  ·  *week*
+## Stage 6 — User mode ✅
 
 `AddressSpace`, VMOs, the VMA interval tree, demand paging, copy-on-write, the
 ELF loader, and the ring-3/EL0 transition. The first user process is a
 hand-written static binary that makes one syscall.
 
-**Done — the memory a process is made of, and a processor translating through
-it.** Everything below is self-checked at boot on all three architectures and
-reports in the boot log; `docs/STAGE6-HANDOVER.md` is the working detail while
-the stage is open.
+**Exit:** a boot test that runs a user binary which writes to fd 1 and exits,
+with a page fault serviced along the way.
+
+**Exit criterion met, and in the boot test on all three architectures.** Each
+architecture boots a program at user privilege — through the ELF loader, a
+startup stack built by `libs/ustack`, and its own way down: `sysretq` to ring 3
+on x86-64, `eret` to EL0 on AArch64, `rfeia` to USR on ARMv7-A. The program is a
+few dozen bytes of that architecture's machine code calling `write(1, …)` and
+`exit_group(42)`, and the boot log carries both:
+
+    hello from EL0
+    usermode a program ran in user mode and exited with 42
+
+The page fault is asserted rather than assumed: the check counts resolved faults
+either side of the program and fails if none was serviced. Each architecture
+services exactly one today — the text page, faulted back in after the loader
+narrows its permissions — which is incidental rather than designed, and the
+check says so, because a later change that narrows permissions in place would
+remove that fault and the criterion's evidence with it. A program that stores
+well below its stack pointer, into a page nothing has touched, is the sturdier
+version.
+
+x86-64 is also booted under KVM (`--accel kvm`), where the host processor checks
+what `tcg` lets through, and that is how a missing RPL in `STAR` was found.
+`SYSRET` forces RPL 3 into the CS it computes but loads SS as written, so a
+program ran on an RPL-0 SS until its first exception, and the `iretq` back to
+ring 3 refused it with `#GP(0x20)`. The default boot test cannot see that class,
+so anything that touches ring 3 wants a KVM boot before it is called done.
+
+**Done:**
 
 * **The objects.** `Vmo` is a sparse page list, committed on first touch, so a
   reservation costs nothing until it is written — which is what makes a large
@@ -599,41 +623,61 @@ the stage is open.
   and `sched::choose_next` swaps roots under the run queue lock, comparing by
   pointer so two threads of one process cost nothing. A kernel thread gets the
   user half switched off rather than left installed.
+* **Into user mode and back.** `arch::run_user` saves the callee-saved
+  registers, parks the stack pointer in the per-CPU record, moves to a dedicated
+  entry stack, zeroes every general register and drops privilege; `exit` and
+  `exit_group` come back through `leave_user` before `dispatch` runs. The entry
+  stack is the part that bites. At EL1 `sp` *is* `SP_EL1`, and on ARMv7-A every
+  exception from USR is stored on the SVC stack, so leaving either where the
+  kernel parked its registers means the program's first fault pushes a frame
+  over them — which x86-64 shipped first and then fixed. On the two Arm
+  architectures `svc` arrives through the trap vector, so `Trap::SystemCall` asks
+  the architecture through `arch::system_call`; x86-64's `SYSCALL` has an entry
+  of its own. Interrupts stay masked while a program runs, because it runs as a
+  guest of the boot task: a tick could switch to a task with an address space,
+  and switching back would uninstall the program's root.
+* **The permissions the map states are the ones enforced.** A read of a region
+  that permits nothing is refused rather than served a fresh zero page — the
+  guard-page case, which nothing notices when it is wrong, because the mapping
+  is more permissive than the map rather than less.
 
-**Still to do — the privilege drop, and almost nothing else.** Tracing a real
-static `musl` binary showed the surface is far smaller than this entry used to
-imply: `busybox sh -c 'echo hello'` makes 33 system calls, 22 distinct, and
-never forks. The first thing that runs needs `write` and `exit_group` and no
-more.
+**Decisions worth not reversing silently.** No `ASID`s or `PCID`s: a full
+invalidation of user entries on switch is the correct baseline, and eliding it
+later makes the switch faster rather than unpicking anything. On the Arm pair it
+is still an invalidation *by* `ASID` — every space is `ASID` zero — because that
+is the only form that drops user entries and keeps the kernel's global ones. The
+global broadcast flush is right for a mapping change, which has to reach other
+processors, and wrong in the switch path. Anonymous memory names a VMO, so
+shared anonymous mappings, futex keys and `/proc/self/maps` have an object to
+name. One lock per address space, never a global one.
 
-* The ring-3 / EL0 / USR transition and the entry vectors. Split with stage 7:
-  x86-64 with its `SYSCALL` trampoline there, AArch64 and ARMv7-A here.
-  `Trap::SystemCall` is still fatal on the two Arm architectures, where `svc`
-  arrives through the trap vector rather than its own entry.
-* `arch::set_kernel_stack` — `TSS.rsp0` on x86-64, and nothing at all on either
-  Arm architecture, where the kernel already runs on the stack the trap will
-  use.
-* `exit_group`, which needs a task to tear down and so waits on the transition.
-* Scoping the user TLB shootdown. The invalidation exists on every path that
-  takes a translation down or makes one less permissive; it is the global
-  broadcast flush and could be one page, told only to the processors running
-  that space.
+**Left for later, none of it on stage 6's path:**
 
-The ELF loader and the `copy_from_user` layer were handed to stage 7, which
-needed both first.
+* Scoping the user TLB shootdown: one page rather than all of them, told only to
+  the processors running that space.
+* `AddressSpace::protect` takes translations down without invalidating them, so
+  after `mprotect` a stale entry can stay more permissive than the map. glibc's
+  RELRO is the first real program to walk into it.
+* `read_console_byte` returns `None` on both Arm architectures, whose UART
+  drivers are write-only, so a program reading fd 0 there waits forever — and no
+  check reads the console.
+* Programs as scheduled tasks rather than guests of the boot task, which is what
+  lets interrupts be unmasked in user mode and `exit_group` become a teardown.
 
-**One thing this stage cannot prove, and it is written down rather than
-trusted.** A copy-on-write fault replaces a live read-only translation with a
-writable one, and failing to invalidate the stale entry makes the retrying
-instruction fault forever — a hang with no message. Deleting that invalidation
-fails no boot test on any of the three architectures, because `tcg` does not
-keep a stale entry to trip over; the check was strengthened twice, to the point
-of resolving the fault with the space installed and writing through the faulting
-address, and it still passes. Stage 4 has the converse writeup. The board is the
-only arbiter for this class.
-
-**Exit:** a boot test that runs a user binary which writes to fd 1 and exits,
-with a page fault serviced along the way.
+**What the boot test cannot see, written down rather than trusted.** A
+copy-on-write fault replaces a live read-only translation with a writable one,
+and leaving the stale entry makes the retrying instruction fault forever — a
+hang with no message. Deleting that invalidation fails no boot test on any architecture — not under
+`tcg`, and not under KVM on x86-64 either, where the host's own TLB is in play.
+The check resolves the fault with the space installed and writes through the
+faulting address, and it still passes; but it writes from the kernel, and a
+stale read-only entry is only certain to fault a write made from user mode. A
+program that writes to a copy-on-write page after its fault is the test that
+would see this, and nothing runs one yet. The same holds for `protect` above,
+and stage 4 has the converse writeup.
+Relatedly: a check that reads or writes user memory through the direct map tests
+no permission bit at all. To test the tables, ask `translate_in`, or install the
+space and use the address.
 
 ---
 

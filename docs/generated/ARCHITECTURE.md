@@ -93,14 +93,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1393 elements, 155 relations. Model digest `d6d1a56d5674cec2`.
+13 files, 16 packages, 1394 elements, 155 relations. Model digest `a2d378d39f7bee51`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 101 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 8 | The owning stage has started; part of the element runs. |
+| `#implemented` | 109 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#inProgress` | 3 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 7 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 120 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#planned` | 117 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -134,7 +134,7 @@ flowchart LR
   n7_FerrixRequirements_hostsRustc_durableFil["G.7  Durable filesystem"]
   n8_FerrixRequirements_hostsRustc_memoryPres["G.8  Memory pressure"]
   n9_FerrixRoadmap_stage5Scheduler["S5  Stage 5 scheduler<br>Done"]
-  n10_FerrixRoadmap_stage6UserMode["S6  Stage 6 user mode<br>InProgress"]
+  n10_FerrixRoadmap_stage6UserMode["S6  Stage 6 user mode<br>Done"]
   n11_FerrixRoadmap_stage7LinuxAbi["S7  Stage 7 Linux ABI<br>InProgress"]
   n12_FerrixRoadmap_stage8Vfs["S8  Stage 8 VFS<br>Planned"]
   n13_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>Planned"]
@@ -158,8 +158,8 @@ flowchart LR
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n9_FerrixRoadmap_stage5Scheduler implemented
-  class n10_FerrixRoadmap_stage6UserMode,n11_FerrixRoadmap_stage7LinuxAbi inProgress
+  class n9_FerrixRoadmap_stage5Scheduler,n10_FerrixRoadmap_stage6UserMode implemented
+  class n11_FerrixRoadmap_stage7LinuxAbi inProgress
   class n12_FerrixRoadmap_stage8Vfs,n13_FerrixRoadmap_stage12BtrfsWrite,n14_FerrixRoadmap_stage13Isolation planned
 ```
 
@@ -286,7 +286,7 @@ kernel : Kernel
     reclaim : Reclaim  [planned]
       activeList : LruList
       inactiveList : LruList
-    elfLoader : UserElfLoader  [planned]
+    elfLoader : UserElfLoader
   syscalls : LinuxSyscallLayer  [planned]
   native : NativeAbi  [planned]
   futex : Futex  [planned]
@@ -656,7 +656,8 @@ Every architecture supplies each of these; generic kernel code reaches the CPU t
 | `shutdown` | — | — |  |
 | `prepareStack` | — | — | Lay out a fresh task's stack so that the first switch into it "returns" into its entry function. |
 | `switchTo` | — | — | The context switch, arch/\<machine>/switch.rs: saves the callee-saved set and the stack pointer, and returns onto a stack that belongs to another task, which Rust cannot say. |
-| `enterUser` | `#planned` | 6 | The ring-3 / EL0 / USR transition. |
+| `enterUser` | `#implemented` | 6 | run_user: the ring-3 / EL0 / USR transition, and leave_user back from it. |
+| `systemCall` | `#implemented` | 6 | The Arm half of system call entry: svc arrives through the trap vector as Trap::SystemCall, so the architecture reads the number and arguments from the saved registers, handles exit and exit_group with leave_user before dispatch, and writes the result back.… |
 | `syscallEntry` | `#planned` | 7 | x86-64: SYSCALL leaves the return address in rcx and does not switch the stack, so entry swaps to the kernel stack through swapgs before anything can be pushed. |
 
 ### Drivers shared by the Arm pair
@@ -778,7 +779,7 @@ flowchart TB
 
 ### The kernel's bring-up
 
-kmain. Every stage's exit criterion runs here on every boot, and each failure panics with its own message so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-5.
+kmain. Every stage's exit criterion runs here on every boot, and each failure panics with its own message so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-6.
 
 1. `validateHandoff` — Magic, version, arch and layout constants. No console yet, so a mismatch halts silently: there is no valid way to make one.
 2. `initConsole`
@@ -1221,7 +1222,7 @@ A sorted, non-overlapping set of regions in a Vec searched by binary search — 
 
 #### Vmo
 
-`#inProgress`  ·  stage 6
+`#implemented`  ·  stage 6
 
 kernel/src/user/vmo.rs. A pageable memory object: pages, not a mapping. Anonymous memory, page-cache pages, shared memory and DMA buffers are all VMOs. The load-bearing unification: a block driver filling a page-cache page fills the VMO the cache already holds, with no copy, which is what makes userspace drivers affordable for a compiler workload. Only the anonymous kind exists today; file VMOs want the page cache (stage 8) and DMA VMOs an IOMMU domain (stage 10), and the shape is the one they extend rather than unpick. Frames go back through the per-frame refcount.
 
@@ -1237,7 +1238,7 @@ kernel/src/user/vmo.rs. A pageable memory object: pages, not a mapping. Anonymou
 
 #### ProcessAddressSpace
 
-`#inProgress`  ·  stage 6
+`#implemented`  ·  stage 6
 
 kernel/src/user/space.rs: a root frame, a libs/vma AddressSpace, and a map from id to VMO. Each Vma names a VMO, an offset, a protection and a share mode. VMOs are shared through Arc, so this references them and never owns them. The kernel half is shared into the root by prepare_user_root.
 
@@ -1258,9 +1259,9 @@ kernel/src/user/space.rs: a root frame, a libs/vma AddressSpace, and a map from 
 
 #### DemandFault
 
-`#inProgress`  ·  stage 6
+`#implemented`  ·  stage 6
 
-The stage 3 handler generalised: find the Vma, then either allocate a zeroed page (anonymous, lazy), fault from the page cache VMO (file mapping, so a mapped file and a read file are the same pages), copy a shared page whose refcount is above one (copy-on-write), or deliver SIGSEGV. Built today: find the Vma, commit the page in its VMO, install it, read-only when the Vma is marked cow.
+The stage 3 handler generalised: find the Vma, then either allocate a zeroed page (anonymous, lazy), fault from the page cache VMO (file mapping, so a mapped file and a read file are the same pages), copy a shared page whose refcount is above one (copy-on-write), or deliver SIGSEGV. Built: find the Vma; refuse an access its permissions deny, a plain read of an inaccessible region included; commit the page in its VMO and install it; copy on a write to a copy-on-write region whose page has another holder. A fault from user mode arrives with the running process's address space.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -1275,16 +1276,16 @@ The stage 3 handler generalised: find the Vma, then either allocate a zeroed pag
 
 #### VirtualMemory
 
-`#inProgress`  ·  stage 6
+`#implemented`  ·  stage 6
 
-kernel/src/user: the VM subsystem above stage 2's allocators. VMOs and address spaces exist and are self-checked at boot, a space installed on a processor is walked by its MMU, and fork shares a process's memory copy-on-write; still owed by stage 6 are a Task carrying an address space with the root swap in choose_next, a TLB shootdown for user spaces (which cannot bite until that lands, and is the first thing that will), the ELF loader, set_kernel_stack, the ring-3/EL0/USR transition and the syscall vectors. Reclaim scoped by cgroup is stage 13's.
+kernel/src/user: the VM subsystem above stage 2's allocators. VMOs and address spaces, demand paging, fork with copy-on-write, TLB invalidation where a live mapping changes, and the root swap on a task switch, all self-checked at boot on all three architectures. Reclaim scoped by cgroup is stage 13's.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
 | `vmos` | part | `Vmo` |  |  |
 | `spaces` | part | `ProcessAddressSpace` |  |  |
 | `reclaim` | part | `Reclaim` | `#planned` |  |
-| `elfLoader` | part | `UserElfLoader` | `#planned` |  |
+| `elfLoader` | part | `UserElfLoader` |  |  |
 
 #### Reclaim
 
@@ -1305,9 +1306,9 @@ Two-list LRU (active/inactive) with a shrinker interface for the caches. rustc w
 
 #### UserElfLoader
 
-`#planned`  ·  stage 6
+`#implemented`  ·  stage 6
 
-libs/elf over a file, mapping segments as Vmas of a file VMO. The first user process is a hand-written static binary that makes one syscall.
+kernel/src/syscall/load.rs over libs/elf. Each PT_LOAD is mapped as anonymous memory and its bytes copied in through the user copy layer, with permissions computed per page so two segments sharing a page get their union, and a union that is writable and executable refused. Static ET_EXEC only. Not yet a file VMO: that waits for the page cache, stage 8.
 
 ### Processors, time and scheduling
 
@@ -2497,7 +2498,7 @@ flowchart TB
   n4_FerrixRoadmap_stage4Smp["S4  Stage 4 SMP<br>Done · week"]
   n5_FerrixRoadmap_armv7aPort["SA  ARMv7-A port<br>Done · month"]
   n6_FerrixRoadmap_stage5Scheduler["S5  Stage 5 scheduler<br>Done · week"]
-  n7_FerrixRoadmap_stage6UserMode["S6  Stage 6 user mode<br>InProgress · week"]
+  n7_FerrixRoadmap_stage6UserMode["S6  Stage 6 user mode<br>Done · week"]
   n8_FerrixRoadmap_stage7LinuxAbi["S7  Stage 7 Linux ABI<br>InProgress · month"]
   n9_FerrixRoadmap_stage8Vfs["S8  Stage 8 VFS<br>Planned · month"]
   n10_FerrixRoadmap_stage9NativeAbi["S9  Stage 9 native ABI<br>Planned · week"]
@@ -2531,8 +2532,8 @@ flowchart TB
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler implemented
-  class n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi inProgress
+  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode implemented
+  class n8_FerrixRoadmap_stage7LinuxAbi inProgress
   class n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers,n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stage12BtrfsWrite,n14_FerrixRoadmap_stage13Isolation,n15_FerrixRoadmap_stage14RealTime,n16_FerrixRoadmap_stage15Userland,n17_FerrixRoadmap_stage16Rustc,n18_FerrixRoadmap_stage17SelfHosting planned
 ```
 
@@ -2547,7 +2548,7 @@ flowchart TB
 | `S4` | 4 | Stage 4 SMP | Done | week | `#implemented` |
 | `SA` | 4 | ARMv7-A port | Done | month | `#implemented` |
 | `S5` | 5 | Stage 5 scheduler | Done | week | `#implemented` |
-| `S6` | 6 | Stage 6 user mode | InProgress | week | `#inProgress` |
+| `S6` | 6 | Stage 6 user mode | Done | week | `#implemented` |
 | `S7` | 7 | Stage 7 Linux ABI | InProgress | month | `#inProgress` |
 | `S8` | 8 | Stage 8 VFS | Planned | month | `#planned` |
 | `S9` | 9 | Stage 9 native ABI | Planned | week | `#planned` |
@@ -2646,9 +2647,9 @@ Task, kernel stacks, context switch, per-CPU runqueues, the class stack, EEVDF i
 
 ### S6 — Stage 6 user mode
 
-**InProgress**  ·  size week  ·  `#inProgress`
+**Done**  ·  size week  ·  `#implemented`
 
-AddressSpace, VMOs, the VMA tree as a process map, demand paging inherited from stage 3, copy-on-write, the ELF loader, the ring-3/EL0/USR transition. Exit: a user binary writes to fd 1 and exits, with a page fault serviced along the way. Landed: the frame refcount, the sparse VMO, anonymous memory with an identity, the address space with its own lock, the zero-fill fault path, and a space installed on a processor and walked by its MMU — self-checked at boot on all three. Owed: a Task carrying an address space with the root swap in choose_next, set_kernel_stack, fork and copy-on-write, the ELF loader, the privilege transition, the syscall vectors.
+AddressSpace, VMOs, the VMA tree as a process map, demand paging, copy-on-write, the ELF loader, the ring-3/EL0/USR transition. Exit, met on all three: a program at user privilege writes to fd 1 and exits with 42, with a page fault serviced along the way -- counted either side of the program and required to be non-zero. Down to user mode by sysretq on x86-64, eret to EL0 on AArch64 and rfeia to USR on ARMv7-A, each onto a dedicated entry stack. Also landed: fork with copy-on-write, TLB invalidation where a live mapping changes, tasks carrying an address space with the root swapped in choose_next, and a read of an inaccessible region refused. Left: scoping the user TLB shootdown, the missing invalidation in protect, reading the console on Arm, and programs as scheduled tasks rather than guests of the boot task.
 
 **Allocated to: **`ferrix.kernel.vm`
 
@@ -2950,8 +2951,8 @@ flowchart LR
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixStructure_Kernel_mm,n4_FerrixStructure_Kernel_vmap,n5_FerrixRoadmap_stage3TrapsInterruptsTime,n6_FerrixStructure_Kernel_trap,n7_FerrixStructure_Kernel_irq,n8_FerrixStructure_Kernel_timer,n9_FerrixRoadmap_stage4Smp,n10_FerrixStructure_Kernel_smp,n11_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_stage5Scheduler,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_tasks implemented
-  class n16_FerrixRoadmap_stage6UserMode,n17_FerrixStructure_Kernel_vm,n18_FerrixRoadmap_stage7LinuxAbi inProgress
+  class n0_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixStructure_Kernel_mm,n4_FerrixStructure_Kernel_vmap,n5_FerrixRoadmap_stage3TrapsInterruptsTime,n6_FerrixStructure_Kernel_trap,n7_FerrixStructure_Kernel_irq,n8_FerrixStructure_Kernel_timer,n9_FerrixRoadmap_stage4Smp,n10_FerrixStructure_Kernel_smp,n11_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_stage5Scheduler,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_tasks,n16_FerrixRoadmap_stage6UserMode implemented
+  class n17_FerrixStructure_Kernel_vm,n18_FerrixRoadmap_stage7LinuxAbi inProgress
   class n19_FerrixStructure_Kernel_syscalls,n20_FerrixStructure_Kernel_signals,n21_FerrixStructure_Kernel_futex,n22_FerrixRoadmap_stage8Vfs,n23_FerrixStructure_Kernel_vfs,n24_FerrixStructure_Kernel_filesystems,n25_FerrixRoadmap_stage9NativeAbi,n26_FerrixStructure_Kernel_native,n27_FerrixRoadmap_stage10UserspaceDrivers,n30_FerrixRoadmap_stage11BtrfsRead,n31_FerrixStructure_Kernel_blockCore,n32_FerrixRoadmap_stage13Isolation,n33_FerrixStructure_Kernel_namespaces,n34_FerrixStructure_Kernel_cgroups,n35_FerrixStructure_Kernel_seccomp,n36_FerrixRoadmap_stage14RealTime,n37_FerrixRoadmap_stage15Userland,n38_FerrixStructure_Ferrix_userland,n39_FerrixRoadmap_stage16Rustc planned
 ```
 
@@ -3113,7 +3114,7 @@ flowchart LR
 | `S4` | `stage4Smp` | `dependency` and `satisfy` | yes | `#implemented` |
 | `SA` | `armv7aPort` | `satisfy` | yes | `#implemented` |
 | `S5` | `stage5Scheduler` | `dependency` and `satisfy` | yes | `#implemented` |
-| `S6` | `stage6UserMode` | `allocate` and `dependency` | — | `#inProgress` |
+| `S6` | `stage6UserMode` | `allocate` and `dependency` | — | `#implemented` |
 | `S7` | `stage7LinuxAbi` | `allocate` and `dependency` | — | `#inProgress` |
 | `S8` | `stage8Vfs` | `allocate` and `dependency` | — | `#planned` |
 | `S9` | `stage9NativeAbi` | `allocate` and `dependency` | — | `#planned` |
@@ -3211,20 +3212,21 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 6 | `FerrixStructure::ArchFacade::prepareUserRoot` | action | — |
 | 6 | `FerrixStructure::ArchFacade::installUserRoot` | action | — |
 | 6 | `FerrixStructure::ArchFacade::uninstallUserRoot` | action | — |
-| 6 | `FerrixStructure::ArchFacade::enterUser` | action | `#planned` |
+| 6 | `FerrixStructure::ArchFacade::enterUser` | action | `#implemented` |
+| 6 | `FerrixStructure::ArchFacade::systemCall` | action | `#implemented` |
 | 6 | `FerrixBoot::KernelBringUp::stage6MemoryObjects` | action | — |
 | 6 | `FerrixMemory::PageEntry::owner` | attribute | `#planned` |
 | 6 | `FerrixMemory::PageEntry::flags` | attribute | `#planned` |
 | 6 | `FerrixMemory::VmaMap` | part | `#implemented` |
-| 6 | `FerrixMemory::Vmo` | part | `#inProgress` |
-| 6 | `FerrixMemory::ProcessAddressSpace` | part | `#inProgress` |
+| 6 | `FerrixMemory::Vmo` | part | `#implemented` |
+| 6 | `FerrixMemory::ProcessAddressSpace` | part | `#implemented` |
 | 6 | `FerrixMemory::ProcessAddressSpace::invalidate` | action | — |
 | 6 | `FerrixMemory::ProcessAddressSpace::install` | action | — |
 | 6 | `FerrixMemory::ProcessAddressSpace::forkSpace` | action | — |
-| 6 | `FerrixMemory::DemandFault` | action | `#inProgress` |
+| 6 | `FerrixMemory::DemandFault` | action | `#implemented` |
 | 6 | `FerrixMemory::DemandFault::copyOnWrite` | action | — |
-| 6 | `FerrixMemory::VirtualMemory` | part | `#inProgress` |
-| 6 | `FerrixMemory::UserElfLoader` | part | `#planned` |
+| 6 | `FerrixMemory::VirtualMemory` | part | `#implemented` |
+| 6 | `FerrixMemory::UserElfLoader` | part | `#implemented` |
 | 6 | `FerrixScheduling::Task::addressSpace` | part | — |
 | 6 | `FerrixScheduling::Tasks::spawnInAddressSpace` | action | — |
 | 6 | `FerrixScheduling::Tasks::swapAddressSpace` | action | — |
@@ -3302,7 +3304,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 14 | `FerrixAssurance::CyclicTest` | verification | `#planned` |
 | 15 | `FerrixObjects::PosixIpc` | part | `#planned` |
 
-134 elements across 15 stages.
+135 elements across 15 stages.
 
 ## Figures
 

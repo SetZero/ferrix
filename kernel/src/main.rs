@@ -197,7 +197,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
         panic!("stage 2 self-check failed: {problem}");
     }
 
-    println!("{SUCCESS_MARKER} stages 1-5");
+    println!("{SUCCESS_MARKER} stages 1-6");
 
     // After the marker, on purpose: see `init`. Returns at once when no program
     // was built in.

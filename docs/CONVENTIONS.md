@@ -43,6 +43,29 @@ git config core.hooksPath .githooks
 **Never use `git commit --no-verify` or `git push --no-verify` here.** If a hook
 refuses a message, fix the message.
 
+## Working beside other sessions
+
+Several sessions change this repository at once, most of them from worktrees
+under `.claude/worktrees/`. Three rules, each learned by losing work:
+
+1. **Commit from a worktree of your own, not from the root checkout.** The root
+   checkout has `main` checked out. When anyone commits to `main` from elsewhere
+   the branch moves and that checkout's index does not, so its next commit
+   silently reverts theirs. `git status` says a file *differs* from `HEAD`, never
+   in which direction.
+2. **Read `git diff --cached --stat` before every commit.** `git add <paths>`
+   does not scope a commit; it adds to an index that already holds everything
+   else. The file count is the tell.
+3. **Never move uncommitted work with `git stash`.** The stash list is shared by
+   every worktree. Save `git diff HEAD` as a patch, apply it in the new tree, and
+   check the result matches before restoring anything.
+
+Cleaning up a stale index is two decisions, not one. Resetting the index
+(`git restore --staged`) is lossless and on its own removes the revert risk;
+restoring the working tree destroys work unless nothing unstaged is provably
+there. And judge a gate by its exit status and its output — never through
+`gate | tail && next`, whose status is `tail`'s.
+
 ## Before calling a change done
 
 ```

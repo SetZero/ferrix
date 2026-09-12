@@ -445,9 +445,26 @@ package FerrixStructure {
         }
 
         // Owed by later stages, and the only things a stage may add.
-        #planned action enterUser {
+        #implemented action enterUser {
             @stage { number = 6; }
-            doc /* The ring-3 / EL0 / USR transition. */
+            doc /* run_user: the ring-3 / EL0 / USR transition, and leave_user
+                 * back from it. Callee-saved registers saved, the stack pointer
+                 * parked in the per-CPU record, a dedicated entry stack for
+                 * every exception from user mode -- at EL1 sp is SP_EL1, and on
+                 * ARMv7-A exceptions are stored on the SVC stack, so leaving
+                 * either where the parked registers are lets the first fault
+                 * overwrite them -- every general register zeroed, then
+                 * sysretq, eret or rfeia. Interrupts masked in user mode while a
+                 * program is a guest of the boot task. */
+        }
+        #implemented action systemCall {
+            @stage { number = 6; }
+            doc /* The Arm half of system call entry: svc arrives through the
+                 * trap vector as Trap::SystemCall, so the architecture reads the
+                 * number and arguments from the saved registers, handles exit
+                 * and exit_group with leave_user before dispatch, and writes the
+                 * result back. x86-64's body refuses, because SYSCALL has an
+                 * entry of its own. */
         }
         #planned action syscallEntry {
             @stage { number = 7; }

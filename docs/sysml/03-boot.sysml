@@ -239,7 +239,7 @@ package FerrixBoot {
         doc /* kmain. Every stage's exit criterion runs here on every boot, and
              * each failure panics with its own message so the boot test
              * fails with a reason rather than a timeout. The marker at the end
-             * reads FERRIX-BOOT-OK stages 1-5. */
+             * reads FERRIX-BOOT-OK stages 1-6. */
         in info : BootInfo;
 
         first start;

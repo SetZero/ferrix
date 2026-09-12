@@ -290,7 +290,7 @@ package FerrixMemory {
     // Stage 6 and after
     // -----------------------------------------------------------------------
 
-    #inProgress part def Vmo {
+    #implemented part def Vmo {
         @stage { number = 6; }
         doc /* kernel/src/user/vmo.rs. A pageable memory object: pages, not a
              * mapping. Anonymous memory, page-cache pages, shared memory and
@@ -323,7 +323,7 @@ package FerrixMemory {
         #planned action fileFill { @stage { number = 8; } }
     }
 
-    #inProgress part def ProcessAddressSpace {
+    #implemented part def ProcessAddressSpace {
         @stage { number = 6; }
         doc /* kernel/src/user/space.rs: a root frame, a libs/vma AddressSpace,
              * and a map from id to VMO. Each Vma names a VMO, an offset, a
@@ -410,15 +410,18 @@ package FerrixMemory {
         }
     }
 
-    #inProgress action def DemandFault {
+    #implemented action def DemandFault {
         @stage { number = 6; }
         doc /* The stage 3 handler generalised: find the Vma, then either
              * allocate a zeroed page (anonymous, lazy), fault from the page
              * cache VMO (file mapping, so a mapped file and a read file are
              * the same pages), copy a shared page whose refcount is above one
-             * (copy-on-write), or deliver SIGSEGV. Built today: find the Vma,
-             * commit the page in its VMO, install it, read-only when the Vma
-             * is marked cow. */
+             * (copy-on-write), or deliver SIGSEGV. Built: find the Vma; refuse
+             * an access its permissions deny, a plain read of an inaccessible
+             * region included; commit the page in its VMO and install it; copy
+             * on a write to a copy-on-write region whose page has another
+             * holder. A fault from user mode arrives with the running
+             * process's address space. */
         in fault : FerrixBoot::PageFault;
         doc /* The guard below is the region's cow mark and *not* whether the
              * page is present, which is the obvious guess and is wrong in both
@@ -458,21 +461,17 @@ package FerrixMemory {
             else anonymousZeroPage;
     }
 
-    #inProgress part def VirtualMemory {
+    #implemented part def VirtualMemory {
         @stage { number = 6; }
         doc /* kernel/src/user: the VM subsystem above stage 2's allocators.
-             * VMOs and address spaces exist and are self-checked at boot, a
-             * space installed on a processor is walked by its MMU, and fork
-             * shares a process's memory copy-on-write; still owed by stage 6
-             * are a Task carrying an address space with the root swap in
-             * choose_next, a TLB shootdown for user spaces (which cannot bite
-             * until that lands, and is the first thing that will), the ELF
-             * loader, set_kernel_stack, the ring-3/EL0/USR transition and the
-             * syscall vectors. Reclaim scoped by cgroup is stage 13's. */
+             * VMOs and address spaces, demand paging, fork with copy-on-write,
+             * TLB invalidation where a live mapping changes, and the root swap
+             * on a task switch, all self-checked at boot on all three
+             * architectures. Reclaim scoped by cgroup is stage 13's. */
         part vmos : Vmo[0..*];
         part spaces : ProcessAddressSpace[0..*];
         #planned part reclaim : Reclaim;
-        #planned part elfLoader : UserElfLoader;
+        part elfLoader : UserElfLoader;
     }
 
     #planned part def Reclaim {
@@ -489,10 +488,13 @@ package FerrixMemory {
 
     part def LruList;
 
-    #planned part def UserElfLoader {
+    #implemented part def UserElfLoader {
         @stage { number = 6; }
-        doc /* libs/elf over a file, mapping segments as Vmas of a file VMO.
-             * The first user process is a hand-written static binary that
-             * makes one syscall. */
+        doc /* kernel/src/syscall/load.rs over libs/elf. Each PT_LOAD is mapped
+             * as anonymous memory and its bytes copied in through the user copy
+             * layer, with permissions computed per page so two segments sharing
+             * a page get their union, and a union that is writable and
+             * executable refused. Static ET_EXEC only. Not yet a file VMO:
+             * that waits for the page cache, stage 8. */
     }
 }

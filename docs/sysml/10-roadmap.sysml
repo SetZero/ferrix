@@ -36,7 +36,7 @@ package FerrixRoadmap {
              * invalidation is reachable. */
         subject os : Ferrix;
         attribute arch : IsaFamily;
-        attribute marker : String = "FERRIX-BOOT-OK stages 1-5";
+        attribute marker : String = "FERRIX-BOOT-OK stages 1-6";
     }
 
     // -----------------------------------------------------------------------
@@ -152,21 +152,24 @@ package FerrixRoadmap {
         requirement loadBalancing { @deferred { reason = "Nothing beyond work stealing on an idle processor."; } }
     }
 
-    #inProgress requirement <'S6'> stage6UserMode : Stage {
+    #implemented requirement <'S6'> stage6UserMode : Stage {
         attribute :>> number = 6;
-        attribute :>> status = StageStatus::InProgress;
+        attribute :>> status = StageStatus::Done;
         attribute :>> size = "week";
         doc /* AddressSpace, VMOs, the VMA tree as a process map, demand
-             * paging inherited from stage 3, copy-on-write, the ELF loader,
-             * the ring-3/EL0/USR transition. Exit: a user binary writes to
-             * fd 1 and exits, with a page fault serviced along the way.
-             * Landed: the frame refcount, the sparse VMO, anonymous memory
-             * with an identity, the address space with its own lock, the
-             * zero-fill fault path, and a space installed on a processor and
-             * walked by its MMU — self-checked at boot on all three. Owed:
-             * a Task carrying an address space with the root swap in
-             * choose_next, set_kernel_stack, fork and copy-on-write, the ELF
-             * loader, the privilege transition, the syscall vectors. */
+             * paging, copy-on-write, the ELF loader, the ring-3/EL0/USR
+             * transition. Exit, met on all three: a program at user privilege
+             * writes to fd 1 and exits with 42, with a page fault serviced
+             * along the way -- counted either side of the program and required
+             * to be non-zero. Down to user mode by sysretq on x86-64, eret to
+             * EL0 on AArch64 and rfeia to USR on ARMv7-A, each onto a dedicated
+             * entry stack. Also landed: fork with copy-on-write, TLB
+             * invalidation where a live mapping changes, tasks carrying an
+             * address space with the root swapped in choose_next, and a read of
+             * an inaccessible region refused. Left: scoping the user TLB
+             * shootdown, the missing invalidation in protect, reading the
+             * console on Arm, and programs as scheduled tasks rather than
+             * guests of the boot task. */
     }
 
     #inProgress requirement <'S7'> stage7LinuxAbi : Stage {
