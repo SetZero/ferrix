@@ -1807,3 +1807,28 @@ fn dotdot_in_a_listing_is_the_parent_even_across_a_mount() {
         ino(&ns, &ctx, "/d/mnt")
     );
 }
+
+#[test]
+fn a_directory_replaced_by_rename_is_freed_even_after_misses_inside_it() {
+    let (ns, ctx) = fresh();
+    ns.mkdir(&ctx, None, b"/new", 0o755).unwrap();
+    ns.mkdir(&ctx, None, b"/old", 0o755).unwrap();
+    let replaced = {
+        let at = ns.resolve(&ctx, None, b"/old", true).unwrap();
+        Arc::downgrade(&at.inode().unwrap())
+    };
+    for name in ["/old/missing", "/old/also-missing"] {
+        let _ = ns.resolve(&ctx, None, name.as_bytes(), true);
+    }
+    ns.rename(
+        &ctx,
+        (None, b"/new"),
+        (None, b"/old"),
+        RenameMode::Replace,
+    )
+    .unwrap();
+    assert!(
+        replaced.upgrade().is_none(),
+        "cached misses inside a replaced directory kept it alive"
+    );
+}

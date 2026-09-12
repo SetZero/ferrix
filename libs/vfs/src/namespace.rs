@@ -691,17 +691,20 @@ impl Namespace {
         if (source.must_be_dir || dest.must_be_dir) && !moving_dir {
             return Err(Errno::ENOTDIR);
         }
+        let mut replacing_dir = false;
         if let Some(target) = dest.found.dentry.inode() {
             if mode == RenameMode::NoReplace {
                 return Err(Errno::EEXIST);
             }
-            if target.metadata().ino == moving_meta.ino {
+            let target_meta = target.metadata();
+            if target_meta.ino == moving_meta.ino {
                 // Two names for one file: rename(2) says do nothing.
                 return Ok(());
             }
             if dest.found.dentry.is_ancestor_of(&source.parent.dentry) {
                 return Err(Errno::ENOTEMPTY);
             }
+            replacing_dir = target_meta.kind == FileType::Directory;
         }
         if moving_dir && source.found.dentry.is_ancestor_of(&dest.parent.dentry) {
             return Err(Errno::EINVAL);
@@ -720,8 +723,14 @@ impl Namespace {
         );
         // Whatever stood at the destination has left the tree: a replaced
         // file, whose pages it would keep, or -- for a rename to a new name --
-        // the miss the walk cached, which holds the destination directory.
-        self.forget(&dest.found.dentry);
+        // the miss the walk cached, which holds the destination directory. A
+        // replaced directory was empty, and goes as `rmdir` sends one: with
+        // the misses cached inside it, each of which holds it.
+        if replacing_dir {
+            self.forget_with_children(&dest.found.dentry);
+        } else {
+            self.forget(&dest.found.dentry);
+        }
         Ok(())
     }
 
