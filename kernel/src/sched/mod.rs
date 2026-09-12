@@ -69,6 +69,12 @@ static QUEUES: Once<Vec<SpinLock<CpuQueue>>> = Once::new();
 /// the way out of it.
 static NEED_RESCHED: Once<Vec<AtomicBool>> = Once::new();
 
+/// One flag per processor, set while its idle task holds an exited task's
+/// stack it is about to free. While it is set, [`preempt_on_irq_exit`] leaves
+/// the decision above unmade rather than switching the idle task out with the
+/// stack still on its hands. See [`reap_one`].
+static REAPING: Once<Vec<AtomicBool>> = Once::new();
+
 /// The machine's one scheduling domain, until stage 14 makes more.
 static DOMAIN: Once<Domain> = Once::new();
 
@@ -167,6 +173,7 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
     }
     let _ = QUEUES.call_once(|| queues);
     let _ = NEED_RESCHED.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
+    let _ = REAPING.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
     let _ = NEXT_BALANCE.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
 
     adopt_boot_task()?;
@@ -302,9 +309,26 @@ pub(crate) fn enter_idle() -> ! {
 /// What a processor does with nothing to run: look for work to take from a
 /// busier processor, tidy up after tasks that have exited, and otherwise
 /// sleep until an interrupt says something has changed.
+///
+/// One exited task's stack per turn, and a look at the queue between stacks:
+/// the idle task runs only while nothing else can, so anything it holds while
+/// it is switched out is held for as long as the processor stays busy. See
+/// [`reap_one`] for the boot that showed why.
 fn idle_loop() -> ! {
+    let cpu = this_cpu();
     loop {
-        let _ = reap();
+        let reaped = reap_one();
+        // An interrupt that arrived while the stack was held was not allowed
+        // to switch this task out. Make the decision it asked for now, through
+        // `schedule` and not through the look at the queue below: a sleeper
+        // whose timer fired meanwhile is in the sleeper set, not the fair
+        // class, and only `choose_next` moves it across and re-arms the timer.
+        // Halting here instead left it asleep until some other interrupt
+        // happened to arrive.
+        if reaped && cpu.is_some_and(take_resched) {
+            schedule();
+            continue;
+        }
         if steal_work() {
             schedule();
             continue;
@@ -316,6 +340,10 @@ fn idle_loop() -> ! {
         if has_work() {
             arch::enable_interrupts();
             schedule();
+        } else if reaped {
+            // More may be waiting: look again rather than halt with stacks
+            // still to free.
+            arch::enable_interrupts();
         } else {
             arch::wait_for_work();
         }
@@ -754,10 +782,6 @@ pub(crate) fn preempt_on_irq_exit() {
     let Some(cpu) = this_cpu() else {
         return;
     };
-    let asked = NEED_RESCHED
-        .get()
-        .and_then(|flags| flags.get(cpu))
-        .is_some_and(|flag| flag.swap(false, Ordering::AcqRel));
 
     // Before the switch, not after: `schedule` may not come back to this
     // context for a while, and a balance that runs on the way out of every
@@ -765,8 +789,39 @@ pub(crate) fn preempt_on_irq_exit() {
     // reschedule to do.
     balance();
 
-    if asked {
+    // **Not while the idle task holds a stack it is freeing.** The flag is
+    // left set, so the decision is made at the next interrupt exit — and the
+    // idle loop looks at its queue itself before it takes another stack, so
+    // whatever was woken onto this processor runs as soon as this one is
+    // free. See `reap_one`.
+    if is_reaping(cpu) {
+        return;
+    }
+    if take_resched(cpu) {
         schedule();
+    }
+}
+
+/// Whether an interrupt asked `cpu` to reschedule, clearing the request.
+fn take_resched(cpu: usize) -> bool {
+    NEED_RESCHED
+        .get()
+        .and_then(|flags| flags.get(cpu))
+        .is_some_and(|flag| flag.swap(false, Ordering::AcqRel))
+}
+
+/// Whether `cpu`'s idle task is in the middle of freeing a stack.
+fn is_reaping(cpu: usize) -> bool {
+    REAPING
+        .get()
+        .and_then(|flags| flags.get(cpu))
+        .is_some_and(|flag| flag.load(Ordering::Acquire))
+}
+
+/// Say whether this processor's idle task holds a stack it is freeing.
+fn set_reaping(cpu: usize, reaping: bool) {
+    if let Some(flag) = REAPING.get().and_then(|flags| flags.get(cpu)) {
+        flag.store(reaping, Ordering::Release);
     }
 }
 
@@ -1155,7 +1210,69 @@ fn steal_from(me: usize, victim: usize) -> bool {
     moved
 }
 
+/// Free one exited task's stack, if one is waiting, and say whether one was.
+///
+/// The idle loop's reaper, and its shape is the point. [`reap`] takes the
+/// whole list and frees it in a loop with interrupts on, which is right for a
+/// task that will be scheduled again and wrong for the idle task, which runs
+/// only while its processor has nothing else to do. An interrupt in the
+/// middle of that loop — a wake-up's kick, a shootdown, the timer — switched
+/// the idle task out with the rest of the list still on its stack, and if the
+/// task it was switched out for never blocked, the idle task never ran again
+/// and the stacks it held were never freed.
+///
+/// Stage 5's checker is such a task. It blocks until the last of a phase's
+/// tasks has finished, and that task's last act wakes it — onto the processor
+/// it blocked on, whose idle task may by then have taken every stack freed so
+/// far and be part-way through giving them back. The checker then yields in a
+/// loop waiting for exactly those stacks, the yield never picks the idle task
+/// while the checker is runnable, and twenty seconds later the boot ended
+/// with "a task's stack was never given back", short by the size of the
+/// batch: one, seven, and once three hundred and ninety-nine. One boot in
+/// three to six on a loaded host, on every architecture.
+///
+/// So: one stack at a time, with [`REAPING`] set while it is held, so that the
+/// switch an interrupt asks for waits until the stack is free — and the idle
+/// loop looks at its queue between stacks. Interrupts stay on throughout,
+/// and must: freeing a stack invalidates other processors' translations and
+/// waits for them to say so, and they may be waiting for this one the same
+/// way.
+fn reap_one() -> bool {
+    let Some(cpu) = this_cpu() else {
+        return false;
+    };
+    // Set before the stack is taken, not after: between the two is an
+    // interrupt exit like any other.
+    set_reaping(cpu, true);
+    // A statement of its own, so the list's lock — which masks interrupts —
+    // is released here and not at the end of the `match`, where a scrutinee's
+    // temporaries live. Freeing the stack below waits for other processors to
+    // answer an interrupt, and they may be waiting for this lock to file a
+    // zombie of their own, with interrupts masked in turn.
+    let task = ZOMBIES.lock().pop();
+    let reaped = match task {
+        Some(task) => {
+            if let Some(stack) = task.stack() {
+                // SAFETY: as in `reap`: dead, on no queue, and switched away
+                // from, so nothing is running on this stack.
+                let _ = unsafe { crate::vmap::free_stack(stack) };
+            }
+            // Inside the window as well: dropping the last reference to a
+            // task gives back its address space and its process, and those
+            // are no better held across a switch than the stack was.
+            drop(task);
+            true
+        }
+        None => false,
+    };
+    set_reaping(cpu, false);
+    reaped
+}
+
 /// Free the stacks of tasks that have exited, and return how many.
+///
+/// For a task that can afford to be switched out part-way, which the idle
+/// task cannot: it uses [`reap_one`].
 pub(crate) fn reap() -> usize {
     let dead = core::mem::take(&mut *ZOMBIES.lock());
     let count = dead.len();
