@@ -16,6 +16,8 @@ use ferrix_btrfs::crc32c;
 
 use super::*;
 
+mod namespace;
+
 const BLOCK: usize = 4096;
 const IMAGE_SIZE: u64 = 128 * 1024 * 1024;
 
