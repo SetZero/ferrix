@@ -28,6 +28,7 @@ mod mm;
 mod mmio;
 mod sched;
 mod smp;
+mod syscall;
 mod timer;
 mod trap;
 mod user;
@@ -182,6 +183,16 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // measurement the reclaim below would otherwise move under it.
     check_user_memory();
 
+    // Stage 7's dispatch path. After stage 5 because two of the calls it
+    // answers ask the scheduler which task is running, and deliberately here
+    // rather than waiting for a user program: the one thing this check
+    // establishes -- that the kernel was built against its *own*
+    // architecture's system call table -- is a fact about the build, and a
+    // build that got it wrong would answer a program's `write` with `unlink`.
+    // Finding that under the first user process, in the same commit as the
+    // ring-3 transition, is a debugging session nobody wants.
+    check_syscalls();
+
     // The rest of stage 2, deliberately last. Each of these needs something a
     // later part of boot brought up — the arena needs the heap, the sweep
     // needs every mapping the kernel is ever going to make, and reclaiming
@@ -219,6 +230,28 @@ fn check_user_memory() {
         report.walked,
         report.copied,
         report.leaked,
+    );
+}
+
+/// Stage 7: the system call dispatch path, before there is anything to call
+/// it.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_syscalls() {
+    let report = match syscall::check::run() {
+        Ok(report) => report,
+        Err(problem) => {
+            println!("FERRIX-PANIC stage 7 self-check failed: {problem}");
+            arch::halt()
+        }
+    };
+
+    println!(
+        "  syscall  {} numbers dispatched, {} answered, getpid is {} on {}",
+        report.dispatched,
+        report.answered,
+        report.getpid_number,
+        arch::NAME,
     );
 }
 

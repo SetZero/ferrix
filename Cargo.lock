@@ -52,6 +52,7 @@ dependencies = [
  "ferrix-fdt",
  "ferrix-frame",
  "ferrix-heap",
+ "ferrix-linux-abi",
  "ferrix-paging",
  "ferrix-sched",
  "ferrix-sync",

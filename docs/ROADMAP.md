@@ -21,10 +21,12 @@ goal. Nobody should read the table as a schedule.
 
 **Where it stands:** stages 0–5 are done and in the boot test on all three
 architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-5`.
-ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 6 is next.
-Nothing of stages 6 onwards exists in `kernel/` yet — no address space, no
-user mode — though several of their byte-level crates do (see *Written ahead
-of their stage*).
+ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stages 6 and 7 are
+both under way and neither is close: there are address spaces and a processor
+walking one, and there is a system call dispatch path, but there is no user
+mode, so nothing has yet called it from the far side of a privilege boundary.
+Each stage's section below says what exists. The marker will not move until a
+stage meets its exit criterion.
 
 ---
 
@@ -572,6 +574,58 @@ The syscall entry path on every architecture, the dispatch table, and the core
 of the surface: memory (`mmap`, `mprotect`, `brk`), files, process
 (`clone`, `execve`, `wait4`, `exit_group`), threads and `futex`, signals with
 `sigaltstack` and `rt_sigreturn`, time, and identity.
+
+**Done — the spine, and the two byte-level pieces under it.** Started in
+parallel with stage 6 rather than after it, because most of what stage 7 owes
+is a pure function of bytes and the continuous rule wants those written,
+fuzzed and argued about *before* the stage's kernel code, not alongside it.
+
+* `libs/linux-abi` now carries all three number tables. ARMv7-A's EABI table
+  was missing, and it is not the same calls renumbered: a 32-bit register
+  cannot carry a file offset, a file size or a post-2038 `time_t`, so sixteen
+  calls exist twice and the wide form is a *different call with a different
+  signature* — `mmap2` counts its offset in pages, `_llseek` returns through a
+  pointer, `fstat64` writes a structure `fstat` would not recognise. They are
+  separate `Syscall` variants for that reason. Two more, `set_tls` and
+  `cacheflush`, have no 64-bit counterpart at all and live at `__ARM_NR_BASE`,
+  which is why a valid number on that architecture is not bounded by the size
+  of the table.
+* `libs/ustack` builds the initial process stack — `argc`, `argv`, `envp` and
+  the auxiliary vector, at both pointer widths. It carries a reader as well as
+  a writer, because a test asserting the builder wrote what the builder
+  intended asserts nothing; the fuzz target asserts the same round trip over
+  inputs nobody chose, and found within a minute that a string containing a
+  NUL built a well-formed image which read back as a *different, shorter*
+  string.
+* `kernel/src/syscall/` — `SyscallArgs`, `Outcome`, and `dispatch`. One
+  function, agreed with the stage 6 owner: their trap vector fills the
+  arguments from the frame and applies the outcome, so every register
+  convention stays on their side and every ABI decision on this one.
+  `Outcome` distinguishes "return this value" from "enter user mode at this
+  address", because `execve` and a `clone` child both resume on a frame that
+  was constructed rather than returned into.
+* `arch::decode_syscall` — the one architecture-dependent fact in the whole
+  layer, behind the facade rather than behind a `cfg`.
+
+**In the boot test on all three architectures.** 612 numbers dispatched, 15
+answered, and — the point of the check — each architecture reports its *own*
+number for `getpid`: 39 on x86-64, 172 on AArch64, 20 on ARMv7-A. The host
+tests check the three tables against each other; what they cannot check is
+which one this kernel was built to use, and a build that reached for the wrong
+one would pass every host test and then answer a program's `write` with
+`unlink`. The sweep also requires the path to be total: every number in
+`0..=600` answered with poisoned argument registers, because a handler that
+read an argument it was not given should fault on a kernel stack with the
+scheduler running, not under the first user program.
+
+**Still to do — everything that needs a program to talk to.** The entry
+vectors and the ring-3/EL0/USR transition (stage 6's, and the trampoline that
+calls `dispatch`); `copy_from_user`/`copy_to_user`; the ELF loader into an
+`AddressSpace`; and then the surface itself — memory, files, process, threads
+and `futex`, signals, time. Fifteen calls answer today and they are the ones
+needing no process state: identity and `sched_yield`. Everything else returns
+`ENOSYS`, which is Linux's own answer for a call it does not implement and is
+therefore a real answer rather than a placeholder.
 
 **Exit:** a static musl `busybox sh` starts, runs a script, and exits — the
 first time somebody else's binary runs on Ferrix.

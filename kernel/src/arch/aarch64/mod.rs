@@ -11,6 +11,7 @@ mod trap;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::BootView;
+use ferrix_linux_abi::nr::{self, Syscall};
 
 use super::gicv2;
 use crate::early::{EarlyError, EarlyMemory};
@@ -84,6 +85,17 @@ pub(crate) fn flush_tlb() {
 /// complete until every one of them has done it. The TLB shootdown x86-64
 /// needs interrupts for, this architecture does in hardware.
 pub(crate) const TLB_FLUSH_IS_BROADCAST: bool = true;
+
+/// Fold an AArch64 system call number onto the call it means.
+///
+/// AArch64 uses the generic table from `include/uapi/asm-generic/unistd.h`,
+/// which has no `open`, no `fork` and no `dup2` -- musl reaches all three
+/// through the `*at` or flag-taking forms. This is the only place in the
+/// kernel that knows which of the three tables applies; `crate::syscall`
+/// dispatches on the answer.
+pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
+    nr::from_aarch64(number)
+}
 
 /// Make a freshly allocated user root usable.
 ///

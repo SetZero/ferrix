@@ -19,6 +19,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use ferrix_bootinfo::BootView;
 use ferrix_fdt::{GicVersion, PsciConduit};
+use ferrix_linux_abi::nr::{self, Syscall};
 
 use super::gicv2;
 use crate::early::{EarlyError, EarlyMemory};
@@ -89,6 +90,19 @@ pub(crate) fn flush_tlb() {
 /// Yes, as on AArch64: `TLBIALLIS` is broadcast to the inner shareable
 /// domain, and the `dsb ish` after it waits for every core to finish.
 pub(crate) const TLB_FLUSH_IS_BROADCAST: bool = true;
+
+/// Fold an ARMv7-A (EABI) system call number onto the call it means.
+///
+/// The EABI table predates the generic one and kept much of what the generic
+/// one dropped, so this architecture has `open` and `fork` where AArch64 does
+/// not. It also has calls neither 64-bit architecture has: the `64` forms that
+/// carry an offset a 32-bit register cannot, and the ARM-private range at
+/// `0x0f0000`, which is why a valid number here is *not* bounded by the size
+/// of the shared table. This is the only place in the kernel that knows which
+/// of the three tables applies; `crate::syscall` dispatches on the answer.
+pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
+    nr::from_arm(number)
+}
 
 /// Make a freshly allocated user root usable.
 ///

@@ -169,15 +169,28 @@ package FerrixRoadmap {
              * loader, the privilege transition, the syscall vectors. */
     }
 
-    #planned requirement <'S7'> stage7LinuxAbi : Stage {
+    #inProgress requirement <'S7'> stage7LinuxAbi : Stage {
         attribute :>> number = 7;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::InProgress;
         attribute :>> size = "month";
         doc /* Syscall entry on every architecture, the dispatch table, the
              * core surface: memory, files, process, threads and futex,
              * signals with sigaltstack and rt_sigreturn, time, identity.
              * Exit: static musl busybox sh runs a script — the first time
-             * somebody else's binary runs on Ferrix. */
+             * somebody else's binary runs on Ferrix.
+             *
+             * Started alongside stage 6 rather than after it, because most of
+             * what it owes is a pure function of bytes and those are owed
+             * before the kernel code, not with it. Built: all three number
+             * tables in libs/linux-abi, the initial process stack image in
+             * libs/ustack, and kernel/src/syscall with SyscallArgs, Outcome
+             * and dispatch, self-checked on all three architectures in the
+             * boot test -- each reporting its own number for getpid, which is
+             * the one fact a host test cannot establish. Fifteen calls answer:
+             * identity and sched_yield, the ones needing no process state.
+             * Missing: the entry vectors and the privilege transition (stage
+             * 6's), copy_from_user/copy_to_user, the ELF loader into an
+             * AddressSpace, and the surface itself. */
     }
 
     #planned requirement <'S8'> stage8Vfs : Stage {

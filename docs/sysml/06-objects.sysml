@@ -143,15 +143,33 @@ package FerrixObjects {
         Native;      // 0x1000 and up
     }
 
-    #planned part def LinuxSyscallLayer {
+    #inProgress part def LinuxSyscallLayer {
         @stage { number = 7; }
         doc /* The entry path on every architecture, the dispatch table, and
              * the ~150-call surface rustc needs. libs/linux-abi holds the
              * numbers for x86-64, AArch64 and the ARM EABI table, the errnos,
-             * and the repr(C) layouts (statx, dirent64, sigaction, ...). */
+             * and the repr(C) layouts (statx, dirent64, sigaction, ...).
+             *
+             * The dispatch half exists: kernel/src/syscall, reached through
+             * arch::decode_syscall, which is the only place in the kernel that
+             * knows which of the three number tables this build uses. Fifteen
+             * calls answer -- identity and sched_yield. The entry path does
+             * not exist, so nothing has yet called it across a privilege
+             * boundary. */
         attribute groups : SyscallGroup[1..*];
-        action syscallEntry { doc /* The assembly trampoline; then Rust. */ }
-        action dispatch;
+        #planned action syscallEntry {
+            doc /* The assembly trampoline; then Rust. Stage 6's, and it fills
+                 * a SyscallArgs from the trap frame and applies the Outcome
+                 * that comes back, so no register convention reaches the
+                 * dispatch layer and no ABI knowledge reaches the vector. */
+        }
+        #implemented action dispatch {
+            doc /* One function. Returns Outcome::Return for a value, or
+                 * Outcome::Enter for the calls that resume on a frame which
+                 * was constructed rather than returned into -- execve, and a
+                 * clone child. Self-checked in the boot test on all three
+                 * architectures. */
+        }
         action seccompCheck {
             @stage { number = 13; }
             doc /* The filter runs on entry, before dispatch. */

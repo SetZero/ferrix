@@ -10,6 +10,7 @@ mod switch;
 mod trap;
 
 use ferrix_bootinfo::BootView;
+use ferrix_linux_abi::nr::{self, Syscall};
 
 use crate::early::{EarlyError, EarlyMemory};
 use crate::irq::Report;
@@ -116,6 +117,16 @@ const UPPER_HALF_SLOT: usize = 256;
 
 /// Top-level slots in a four-level root table.
 const ROOT_SLOTS: usize = 512;
+
+/// Fold an x86-64 system call number onto the call it means.
+///
+/// x86-64 kept the table it grew rather than adopting the generic one every
+/// architecture added after 2011 uses, so `read` is 0 here and 63 on AArch64.
+/// This is the only place in the kernel that knows which of the three tables
+/// applies; `crate::syscall` dispatches on the answer.
+pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
+    nr::from_x86_64(number)
+}
 
 /// Make a freshly allocated user root usable.
 ///
