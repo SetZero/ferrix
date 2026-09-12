@@ -345,6 +345,188 @@ pub struct Statx {
 }
 
 // ---------------------------------------------------------------------------
+// statfs
+// ---------------------------------------------------------------------------
+
+/// A filesystem identifier, `__kernel_fsid_t` from
+/// `include/uapi/asm-generic/posix_types.h`: two `int`s on every architecture.
+pub type Fsid = [i32; 2];
+
+/// What `statfs` and `fstatfs` fill in on both 64-bit architectures, `struct
+/// statfs` from `include/uapi/asm-generic/statfs.h`.
+///
+/// 120 bytes. Neither x86-64 nor AArch64 overrides the generic header's
+/// `struct statfs` -- their own `asm/statfs.h` only packs the 32-bit compat
+/// structure -- and on a 64-bit build `__statfs_word` is `__kernel_long_t`, so
+/// every count is a signed 64-bit word.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Statfs {
+    /// The filesystem's magic number: `TMPFS_MAGIC` and the like.
+    pub f_type: i64,
+    /// The block size the counts are in.
+    pub f_bsize: i64,
+    /// Blocks in total.
+    pub f_blocks: i64,
+    /// Blocks free.
+    pub f_bfree: i64,
+    /// Blocks free to an unprivileged user.
+    pub f_bavail: i64,
+    /// Inodes in total.
+    pub f_files: i64,
+    /// Inodes free.
+    pub f_ffree: i64,
+    /// Filesystem identifier.
+    pub f_fsid: Fsid,
+    /// The longest name a directory entry may have.
+    pub f_namelen: i64,
+    /// Fragment size, which Linux reports as the block size when a filesystem
+    /// gives none.
+    pub f_frsize: i64,
+    /// Mount flags, `ST_*`.
+    pub f_flags: i64,
+    /// Reserved, written as zero.
+    pub f_spare: [i64; 4],
+}
+
+/// ARMv7-A's `struct statfs`: the same generic header's, with `__statfs_word`
+/// a `__u32`. 64 bytes.
+///
+/// No count wider than 32 bits fits, which is why musl on this architecture
+/// never asks for it and calls `statfs64` instead. It is written down so that
+/// a 32-bit `statfs` has a layout to be answered in rather than a guess.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct ArmStatfs {
+    /// The filesystem's magic number.
+    pub f_type: u32,
+    /// The block size the counts are in.
+    pub f_bsize: u32,
+    /// Blocks in total.
+    pub f_blocks: u32,
+    /// Blocks free.
+    pub f_bfree: u32,
+    /// Blocks free to an unprivileged user.
+    pub f_bavail: u32,
+    /// Inodes in total.
+    pub f_files: u32,
+    /// Inodes free.
+    pub f_ffree: u32,
+    /// Filesystem identifier.
+    pub f_fsid: Fsid,
+    /// The longest name a directory entry may have.
+    pub f_namelen: u32,
+    /// Fragment size.
+    pub f_frsize: u32,
+    /// Mount flags, `ST_*`.
+    pub f_flags: u32,
+    /// Reserved, written as zero.
+    pub f_spare: [u32; 4],
+}
+
+/// ARMv7-A's `struct statfs64`: the counts widened to 64 bits and the rest
+/// left at 32. 84 bytes.
+///
+/// **Packed to four.** `arch/arm/include/uapi/asm/statfs.h` defines
+/// `ARCH_PACK_STATFS64` as `__attribute__((packed,aligned(4)))`, because the
+/// EABI would otherwise pad the structure to 88 so that its 64-bit fields
+/// align, and the kernel wanted one size for both ARM ABIs. User space does
+/// not pack it: musl's structure is 88 bytes, and 88 is the size it passes --
+/// see [`ARM_STATFS64_UNPACKED_SIZE`]. `repr(C, packed(4))` says the same
+/// thing in Rust on whatever host the tests run on: no field is placed
+/// further apart than four bytes, and the structure aligns to four.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C, packed(4))]
+pub struct ArmStatfs64 {
+    /// The filesystem's magic number.
+    pub f_type: u32,
+    /// The block size the counts are in.
+    pub f_bsize: u32,
+    /// Blocks in total.
+    pub f_blocks: u64,
+    /// Blocks free.
+    pub f_bfree: u64,
+    /// Blocks free to an unprivileged user.
+    pub f_bavail: u64,
+    /// Inodes in total.
+    pub f_files: u64,
+    /// Inodes free.
+    pub f_ffree: u64,
+    /// Filesystem identifier.
+    pub f_fsid: Fsid,
+    /// The longest name a directory entry may have.
+    pub f_namelen: u32,
+    /// Fragment size.
+    pub f_frsize: u32,
+    /// Mount flags, `ST_*`.
+    pub f_flags: u32,
+    /// Reserved, written as zero.
+    pub f_spare: [u32; 4],
+}
+
+/// The size musl passes to ARMv7-A's `statfs64` and `fstatfs64`: its own
+/// unpacked `struct statfs64`, four bytes longer than the kernel's.
+///
+/// Linux's ARM entry code (`sys_statfs64_wrapper` in
+/// `arch/arm/kernel/entry-common.S`) turns 88 into 84 before the size is
+/// checked, for exactly this reason. Measured rather than remembered: Alpine's
+/// static busybox 1.37 for armv7 loads `#88` into `r1` before both of its
+/// `svc` calls with 266 in `r7`.
+pub const ARM_STATFS64_UNPACKED_SIZE: usize = 88;
+
+/// `f_flags`: the flags field means something, which Linux sets on every
+/// answer. From `include/linux/statfs.h` -- not a UAPI header, but its values
+/// are the ABI `statvfs` decodes.
+pub const ST_VALID: u64 = 0x0020;
+
+// ---------------------------------------------------------------------------
+// mount, umount2 and fallocate
+// ---------------------------------------------------------------------------
+
+/// `mount`: mount read-only. Every `MS_*` here is from
+/// `include/uapi/linux/mount.h`.
+pub const MS_RDONLY: u32 = 1;
+/// `mount`: change the flags of an existing mount rather than make one.
+pub const MS_REMOUNT: u32 = 32;
+/// `mount`: make a directory visible at a second place.
+pub const MS_BIND: u32 = 4096;
+/// `mount`: move an existing mount to another place.
+pub const MS_MOVE: u32 = 8192;
+/// `mount`: make a mount unbindable.
+pub const MS_UNBINDABLE: u32 = 1 << 17;
+/// `mount`: make a mount private, receiving no mount events from its peers.
+pub const MS_PRIVATE: u32 = 1 << 18;
+/// `mount`: make a mount a slave of its peer group.
+pub const MS_SLAVE: u32 = 1 << 19;
+/// `mount`: make a mount shared with its peer group.
+pub const MS_SHARED: u32 = 1 << 20;
+/// The magic number programs from before Linux 2.4 put in `mount`'s flags,
+/// which Linux still strips.
+pub const MS_MGC_VAL: u32 = 0xC0ED_0000;
+/// The bits [`MS_MGC_VAL`] occupies.
+pub const MS_MGC_MSK: u32 = 0xFFFF_0000;
+
+/// `umount2`: unmount even if busy.
+///
+/// The `MNT_*` and `UMOUNT_*` values are in `include/linux/fs.h` rather than a
+/// UAPI header. They are the ABI all the same: every C library carries its own
+/// copy in `<sys/mount.h>`.
+pub const MNT_FORCE: u32 = 1;
+/// `umount2`: detach from the tree now, and go when no longer busy.
+pub const MNT_DETACH: u32 = 2;
+/// `umount2`: mark for expiry, to be unmounted by a later call if unused.
+pub const MNT_EXPIRE: u32 = 4;
+/// `umount2`: do not follow a final symbolic link.
+pub const UMOUNT_NOFOLLOW: u32 = 8;
+
+/// `fallocate`: allocate without changing the file's size. From
+/// `include/uapi/linux/falloc.h`.
+pub const FALLOC_FL_KEEP_SIZE: u32 = 0x01;
+/// `fallocate`: deallocate a range, leaving a hole. Only with
+/// [`FALLOC_FL_KEEP_SIZE`].
+pub const FALLOC_FL_PUNCH_HOLE: u32 = 0x02;
+
+// ---------------------------------------------------------------------------
 // Directories
 // ---------------------------------------------------------------------------
 

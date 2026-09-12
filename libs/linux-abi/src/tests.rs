@@ -455,6 +455,72 @@ fn aarch64_stat_is_128_bytes() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// statfs, per word size
+//
+// Every offset below is read off `include/uapi/asm-generic/statfs.h` with
+// `__statfs_word` substituted, and for `statfs64` with
+// `arch/arm/include/uapi/asm/statfs.h`'s `packed,aligned(4)` applied.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn statfs_on_64_bit_is_120_bytes_with_every_count_a_word() {
+    type S = types::Statfs;
+    assert_eq!(size_of::<S>(), 120, "the 64-bit struct statfs is 120 bytes");
+    assert_eq!(offset_of!(S, f_type), 0, "f_type comes first");
+    assert_eq!(offset_of!(S, f_bsize), 8, "f_bsize is the second word");
+    assert_eq!(offset_of!(S, f_blocks), 16, "f_blocks follows f_bsize");
+    assert_eq!(offset_of!(S, f_bfree), 24, "f_bfree follows f_blocks");
+    assert_eq!(offset_of!(S, f_bavail), 32, "f_bavail follows f_bfree");
+    assert_eq!(offset_of!(S, f_files), 40, "f_files follows f_bavail");
+    assert_eq!(offset_of!(S, f_ffree), 48, "f_ffree follows f_files");
+    assert_eq!(offset_of!(S, f_fsid), 56, "the fsid is two ints at 56");
+    assert_eq!(offset_of!(S, f_namelen), 64, "f_namelen follows the fsid");
+    assert_eq!(offset_of!(S, f_frsize), 72, "f_frsize follows f_namelen");
+    assert_eq!(offset_of!(S, f_flags), 80, "f_flags follows f_frsize");
+    assert_eq!(offset_of!(S, f_spare), 88, "four spare words close it");
+}
+
+#[test]
+fn statfs_on_armv7a_is_64_bytes_of_32_bit_words() {
+    type S = types::ArmStatfs;
+    assert_eq!(size_of::<S>(), 64, "ARMv7-A's struct statfs is 64 bytes");
+    assert_eq!(offset_of!(S, f_bsize), 4, "f_bsize is the second word");
+    assert_eq!(offset_of!(S, f_ffree), 24, "f_ffree is the seventh word");
+    assert_eq!(offset_of!(S, f_fsid), 28, "the fsid follows f_ffree");
+    assert_eq!(offset_of!(S, f_namelen), 36, "f_namelen follows the fsid");
+    assert_eq!(offset_of!(S, f_frsize), 40, "f_frsize follows f_namelen");
+    assert_eq!(offset_of!(S, f_flags), 44, "f_flags follows f_frsize");
+    assert_eq!(offset_of!(S, f_spare), 48, "four spare words close it");
+}
+
+#[test]
+fn statfs64_on_armv7a_is_packed_to_84_bytes() {
+    type S = types::ArmStatfs64;
+    assert_eq!(
+        size_of::<S>(),
+        84,
+        "packed,aligned(4) removes the four bytes the EABI would add at the end"
+    );
+    assert_eq!(align_of::<S>(), 4, "aligned(4)");
+    assert_eq!(offset_of!(S, f_bsize), 4, "f_bsize is 32 bits");
+    assert_eq!(offset_of!(S, f_blocks), 8, "the 64-bit counts start at 8");
+    assert_eq!(offset_of!(S, f_bfree), 16, "f_bfree follows f_blocks");
+    assert_eq!(offset_of!(S, f_bavail), 24, "f_bavail follows f_bfree");
+    assert_eq!(offset_of!(S, f_files), 32, "f_files follows f_bavail");
+    assert_eq!(offset_of!(S, f_ffree), 40, "f_ffree follows f_files");
+    assert_eq!(offset_of!(S, f_fsid), 48, "the fsid follows the counts");
+    assert_eq!(offset_of!(S, f_namelen), 56, "f_namelen follows the fsid");
+    assert_eq!(offset_of!(S, f_frsize), 60, "f_frsize follows f_namelen");
+    assert_eq!(offset_of!(S, f_flags), 64, "f_flags follows f_frsize");
+    assert_eq!(offset_of!(S, f_spare), 68, "four spare words close it");
+    assert_eq!(
+        types::ARM_STATFS64_UNPACKED_SIZE,
+        size_of::<S>() + 4,
+        "musl's unpacked structure is the packed one plus the EABI's tail padding"
+    );
+}
+
 #[test]
 fn aarch64_stat_field_offsets() {
     type S = types::aarch64::Stat;
@@ -1072,6 +1138,7 @@ fn errno_values_are_the_generic_ones() {
         38,
         "ENOSYS is what an unknown call number returns"
     );
+    assert_eq!(Errno::ENODATA.0, 61, "ENODATA is what a missing xattr is");
     assert_eq!(Errno::EOVERFLOW.0, 75, "EOVERFLOW is 75");
     assert_eq!(Errno::ECONNREFUSED.0, 111, "ECONNREFUSED is 111");
 }

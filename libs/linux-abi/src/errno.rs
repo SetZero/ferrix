@@ -106,6 +106,9 @@ impl Errno {
     pub const ENOMSG: Self = Self(42);
     /// Identifier removed.
     pub const EIDRM: Self = Self(43);
+    /// No data available: what asking for an extended attribute a file does
+    /// not have is told.
+    pub const ENODATA: Self = Self(61);
     /// Value too large for defined data type.
     pub const EOVERFLOW: Self = Self(75);
     /// Socket operation on non-socket.
