@@ -375,6 +375,15 @@ impl AddressSpace {
         if access.execute && !region.flags.execute {
             return Err(SpaceError::Refused(address));
         }
+        // A plain read needs a readable region. Without this, a read of a
+        // `PROT_NONE` region -- every guard page, and every `mprotect` to
+        // nothing -- commits a zero page and maps it, handing the program
+        // memory where it should get `SIGSEGV`. Silent in the way a mapping
+        // more permissive than the map always is: nothing that worked stops
+        // working, so nothing notices.
+        if !access.write && !access.execute && !region.flags.read {
+            return Err(SpaceError::Refused(address));
+        }
 
         let page = address & !(PAGE_SIZE - 1);
         let into_region = page.saturating_sub(region.range.start());

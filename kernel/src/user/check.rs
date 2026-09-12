@@ -68,6 +68,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_a_region_outside_the_user_half_is_refused()?;
     check_a_fault_outside_every_region_is_a_segfault()?;
     check_a_write_to_a_read_only_region_is_refused()?;
+    check_a_read_of_an_inaccessible_region_is_refused()?;
     let faulted = check_pages_arrive_on_demand_and_go_back()?;
     let walked = check_the_processor_walks_an_installed_space()?;
 
@@ -345,6 +346,31 @@ fn check_a_write_to_a_read_only_region_is_refused() -> Result<(), &'static str> 
     space
         .fault(0x20_000, Access::READ)
         .map_err(|_| "a read of a readable region was refused")?;
+    Ok(())
+}
+
+/// A read of a region that permits nothing is refused, and installs nothing.
+///
+/// The guard page's check. A region with no permissions exists to make an
+/// access fail, and the failure that matters is the quiet one: a *read* of it
+/// being serviced with a fresh zero page, which a program sees as memory rather
+/// than as `SIGSEGV`. What is asserted is that no translation appears, which is
+/// the property; a frame count would be a weaker proxy and one that heap
+/// warm-up can move for reasons of its own.
+fn check_a_read_of_an_inaccessible_region_is_refused() -> Result<(), &'static str> {
+    let at = 0x2800_0000;
+    let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
+    let _ = space
+        .map_anonymous(at, PAGE_SIZE, VmaFlags::NONE)
+        .map_err(|_| "mapping an inaccessible region failed")?;
+
+    match space.fault(at, Access::READ) {
+        Err(SpaceError::Refused(_)) => {}
+        _ => return Err("a read of a region that permits nothing was let through"),
+    }
+    if mm::translate_in(space.root_table(), at).is_some() {
+        return Err("a refused read of an inaccessible region still installed a translation");
+    }
     Ok(())
 }
 
