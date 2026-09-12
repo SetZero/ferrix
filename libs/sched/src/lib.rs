@@ -82,8 +82,8 @@ use alloc::collections::BTreeMap;
 use core::fmt;
 
 pub use balance::{
-    BALANCE_THRESHOLD, CpuLoad, LOAD_PERIOD_NS, LOAD_SCALE, Load, busiest, imbalance, place,
-    quietest, slice_for,
+    BALANCE_THRESHOLD, Balance, CpuLoad, LOAD_PERIOD_NS, LOAD_SCALE, Load, Placement, busiest,
+    imbalance, place, quietest, slice_for,
 };
 pub use domain::{Class, CpuSet, Domain, MAX_CPUS, Mode, check_partition};
 use tree::{Key, Tree, before};

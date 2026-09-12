@@ -23,6 +23,11 @@ use ferrix_sync::SpinLock;
 
 use super::task::{BLOCKED, RUNNABLE, Task};
 
+/// How long a bounded wait sleeps before looking again of its own accord.
+///
+/// Belt and braces against a missing notify: see `wait_until_deadline`.
+const RECHECK_NANOS: u64 = 5_000_000;
+
 /// Tasks waiting for one thing.
 #[derive(Debug)]
 pub(crate) struct WaitQueue {
@@ -81,20 +86,49 @@ impl WaitQueue {
                 continue;
             };
 
+            // **Sleep in slices, not in one span to the deadline.** A wait
+            // queue only ends a wait early if somebody notifies it, and a
+            // caller that forgets is not detectable from here — the wait
+            // simply costs its whole budget and then succeeds. Waking
+            // periodically turns that mistake from a twenty-second silent tax
+            // into a few milliseconds, which is the difference between a bug
+            // that hides for a day and one that never matters.
+            //
+            // Polling a condition is the wrong shape for a kernel and the
+            // right one for a checking harness, which is all this serves.
+            let slice = crate::timer::now_nanos().saturating_add(RECHECK_NANOS);
+            let wake_at = if slice < deadline { slice } else { deadline };
+
             task.set_state(BLOCKED);
-            task.set_sleep_deadline(deadline);
+            task.set_sleep_deadline(wake_at);
             self.waiters.lock().push(Arc::clone(&task));
 
             // The last look, now that both a waker and the timer could find
             // us. Cancelling the sleep as well as the block, so a deadline
             // this task never used cannot wake it out of some later wait.
             if ready() {
+                self.unqueue(task.id);
                 let _ = task.take_sleep_deadline();
                 task.set_state(RUNNABLE);
                 return true;
             }
             super::block();
+
+            // **Off the queue on the way out, however we left.** A waiter that
+            // returns while still listed is woken by the *next* `wake_all`,
+            // out of whatever it happens to be doing then — which showed up as
+            // the sleep check failing with "a sleep came back before its
+            // deadline", a task cut short of a sleep it had nothing to do with
+            // this queue for. `wake_all` drains the list, so this only matters
+            // for the paths that leave without being drained: the recheck
+            // timer, and the condition coming true.
+            self.unqueue(task.id);
         }
+    }
+
+    /// Take `id` off the waiter list, if it is on it.
+    fn unqueue(&self, id: super::TaskId) {
+        self.waiters.lock().retain(|waiter| waiter.id != id);
     }
 
     /// Wake everything waiting.

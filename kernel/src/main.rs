@@ -394,6 +394,18 @@ fn start_scheduler(cpus: &'static smp::Topology) {
         report.slice_many / 1000,
     );
     println!(
+        "  cost     ms per check: one={} sleep={} many={} fair={} place={} affin={} load={} bal={} slice={}",
+        report.spent_ms[0],
+        report.spent_ms[1],
+        report.spent_ms[2],
+        report.spent_ms[3],
+        report.spent_ms[4],
+        report.spent_ms[5],
+        report.spent_ms[6],
+        report.spent_ms[7],
+        report.spent_ms[8],
+    );
+    println!(
         "  stage 5  {} threads scheduled fairly across {} processors",
         report.threads, report.processors,
     );

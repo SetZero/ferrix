@@ -48,9 +48,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use ferrix_sched::{
-    CpuLoad, CpuSet, Domain, Mode, NICE_0_WEIGHT, busiest, check_partition, place, quietest,
-};
+use ferrix_sched::{Balance, CpuSet, Domain, Mode, NICE_0_WEIGHT, Placement, check_partition};
 use ferrix_sync::{IrqControl, IrqSpinLock, Once, SpinLock};
 
 use crate::arch;
@@ -367,20 +365,24 @@ fn domain_cpus() -> Option<&'static CpuSet> {
 /// rule.
 fn choose_cpu(allowed: &CpuSet, prefer: usize) -> Option<usize> {
     let queues = QUEUES.get()?;
-    let mut loads = [CpuLoad::idle(); ferrix_sched::MAX_CPUS];
+    // Folded one processor at a time rather than snapshotted into an array.
+    // The array was `[CpuLoad; MAX_CPUS]`, six kilobytes of a sixteen-kilobyte
+    // kernel stack, and it is the reason this scheduler wedged one boot in
+    // three: `balance` below asks the same question from inside an interrupt,
+    // on top of whatever it interrupted, and the guard page caught it.
+    let mut choice = Placement::new(prefer);
 
     let saved = <arch::Irq as IrqControl>::disable();
     for (cpu, lock) in queues.iter().enumerate() {
-        let Some(slot) = loads.get_mut(cpu) else {
-            break;
-        };
-        let queue = lock.lock();
-        *slot = queue.snapshot();
+        if !allowed.contains(cpu) {
+            continue;
+        }
+        let snapshot = lock.lock().snapshot();
+        choice.consider(cpu, snapshot);
     }
     <arch::Irq as IrqControl>::restore(saved);
 
-    let count = queues.len().min(loads.len());
-    place(loads.get(..count)?, allowed, prefer)
+    choice.choice()
 }
 
 /// Start a kernel thread on `cpu`, able to run on `affinity`.
@@ -616,6 +618,10 @@ pub(crate) fn wake(task: &Arc<Task>) {
         if task.state() != task::BLOCKED {
             break;
         }
+        // Off the sleeper set as well as onto the run queue: waking a task
+        // early does not cancel the deadline it was filed under, and a stale
+        // entry wakes it again out of its next sleep. See `remove_sleeper`.
+        let _ = queue.remove_sleeper(task.id);
         task.set_state(RUNNABLE);
         if !task.is_queued() {
             queue.insert(task);
@@ -901,24 +907,36 @@ fn balance() {
     let Some(queues) = QUEUES.get() else {
         return;
     };
-    let mut loads = [CpuLoad::idle(); ferrix_sched::MAX_CPUS];
+    let Some(mine) = queue_of(me) else {
+        return;
+    };
+
+    // **One processor at a time, and never into an array.** This runs on the
+    // way out of an interrupt, on the stack of whatever it interrupted, and
+    // `[CpuLoad; MAX_CPUS]` is six kilobytes of the sixteen a kernel stack
+    // has. The guard page below it turned that into a fault the fault handler
+    // had no stack to report, which is a silent wedge rather than a panic.
     let saved = <arch::Irq as IrqControl>::disable();
-    for (cpu, lock) in queues.iter().enumerate() {
-        let Some(slot) = loads.get_mut(cpu) else {
-            break;
-        };
-        let mut queue = lock.lock();
+    let mut folded = {
+        let mut queue = mine.lock();
         queue.account_load(now);
-        *slot = queue.snapshot();
+        Balance::new(queue.snapshot())
+    };
+    for (cpu, lock) in queues.iter().enumerate() {
+        if cpu == me || !allowed.contains(cpu) {
+            continue;
+        }
+        let snapshot = {
+            let mut queue = lock.lock();
+            queue.account_load(now);
+            queue.snapshot()
+        };
+        folded.consider(cpu, snapshot);
     }
     <arch::Irq as IrqControl>::restore(saved);
 
-    let count = queues.len().min(loads.len());
-    let Some(view) = loads.get(..count) else {
-        return;
-    };
     // Pull first: if somebody is busier than this processor, take from them.
-    if let Some(victim) = busiest(view, allowed, me) {
+    if let Some(victim) = folded.pull_from() {
         if steal_from(me, victim) {
             let _ = BALANCED.fetch_add(1, Ordering::Relaxed);
         }
@@ -936,7 +954,7 @@ fn balance() {
     // Found by the check below failing with six thousand balance attempts and
     // nothing moved: every one of them was made by the overloaded processor,
     // looking for somebody busier than itself.
-    if let Some(target) = quietest(view, allowed, me)
+    if let Some(target) = folded.push_to()
         && steal_from(target, me)
     {
         let _ = BALANCED.fetch_add(1, Ordering::Relaxed);

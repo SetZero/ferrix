@@ -1092,3 +1092,35 @@ fn balancing_settles_rather_than_oscillating_on_counts() {
         to.queued
     );
 }
+
+#[test]
+fn a_burst_of_placements_does_not_all_land_on_one_processor() {
+    // The load average has a 33-millisecond half-life and a burst of spawns
+    // takes microseconds, so within one burst every average is stale. Ranking
+    // on it first sends the whole burst to whichever processor has been idle
+    // longest. Only the queue count moves fast enough to see the last
+    // decision, so it has to be ranked on first.
+    //
+    // Four processors, all equally and long idle by the average's reckoning,
+    // and four tasks placed one after another with only the counts updating.
+    let mut loads = [busy(0, 0), busy(0, 0), busy(0, 0), busy(0, 0)];
+    let mut landed = [0usize; 4];
+    for _ in 0..4 {
+        let cpu = place(&loads, &all_cpus(4), 0).expect("somewhere to put it");
+        landed[cpu] += 1;
+        loads[cpu].queued += 1;
+    }
+    assert_eq!(
+        landed,
+        [1, 1, 1, 1],
+        "a burst of four went {landed:?} across four processors"
+    );
+}
+
+#[test]
+fn placement_still_prefers_a_lighter_processor_when_counts_are_equal() {
+    // The count is the first key, not the only one: with the same number of
+    // tasks each, the less loaded processor still wins.
+    let loads = [busy(LOAD_SCALE * 4, 2), busy(LOAD_SCALE, 2)];
+    assert_eq!(place(&loads, &all_cpus(2), 0), Some(1));
+}

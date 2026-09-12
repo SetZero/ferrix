@@ -51,17 +51,30 @@ const WINDOW_NANOS: u64 = 150_000_000;
 /// How long the sleep check sleeps.
 const SLEEP_NANOS: u64 = 20_000_000;
 
+/// How long to watch confined tasks for a processor they should never reach.
+const AFFINITY_WATCH_NANOS: u64 = 60_000_000;
+
 /// How long to let a load average settle before reading it.
 ///
-/// Several of `ferrix_sched`'s 33-millisecond half-lives, so what is read is
-/// near the steady state rather than still on its way there.
-const LOAD_SETTLE_NANOS: u64 = 200_000_000;
+/// Three of `ferrix_sched`'s 33-millisecond half-lives, which takes a
+/// permanently busy processor to about seven eighths of full — comfortably
+/// past the half the check asks for, and not the near-perfect convergence it
+/// used to wait for.
+///
+/// **Guest milliseconds are expensive.** Every one of them is emulated, and
+/// this file's sleeps are what took the armv7a boot test from 23 seconds to
+/// 64 against a 120-second timeout. A check that is three times more precise
+/// than its own threshold needs is not three times better, it is three times
+/// closer to a boot test that fails on a busy machine.
+const LOAD_SETTLE_NANOS: u64 = 100_000_000;
 
 /// How long to give periodic balancing to notice an imbalance.
 ///
 /// Balancing runs at most once every 16 milliseconds per processor and moves
-/// one task each time, so this is many chances rather than one.
-const BALANCE_SETTLE_NANOS: u64 = 300_000_000;
+/// one task each time, so this is still several chances per processor rather
+/// than one — enough to level a queue that is a few tasks too long, which is
+/// what the check builds.
+const BALANCE_SETTLE_NANOS: u64 = 120_000_000;
 
 /// How long a wait loop gives the machine before calling it wedged.
 ///
@@ -98,6 +111,8 @@ pub(crate) struct Report {
     pub(crate) bound: u64,
     /// How long the sleep check actually slept.
     pub(crate) slept: u64,
+    /// Guest milliseconds each of the nine checks took, in order.
+    pub(crate) spent_ms: [u64; 9],
     /// How many distinct processors new tasks were *placed* on, before any
     /// stealing or balancing could move them.
     pub(crate) placed_on: u32,
@@ -136,16 +151,47 @@ static FINISHED: WaitQueue = WaitQueue::new();
 /// The first check that fails, as a sentence.
 pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     let mut report = Report::default();
-    one_task()?;
-    sleeping(&mut report)?;
-    many_tasks(topology, &mut report)?;
-    fairness(topology, &mut report)?;
+    // Guest milliseconds per phase, collected and printed once at the end
+    // rather than as each finishes: these checks cost the armv7a boot test
+    // more than every other stage put together, and an attribution nobody can
+    // see is one nobody will act on.
+    let mut spent = [0u64; 9];
+    let mut at = crate::timer::now_nanos();
+    // A macro rather than a closure: a closure would borrow `spent` for the
+    // whole of the phases below, and releasing that borrow to read it again
+    // means either a scope around everything or a `drop` that lints.
+    macro_rules! mark {
+        ($index:expr) => {{
+            let now = crate::timer::now_nanos();
+            if let Some(slot) = spent.get_mut($index) {
+                *slot = now.saturating_sub(at) / 1_000_000;
+            }
+            at = now;
+        }};
+    }
 
+    one_task()?;
+    mark!(0);
+    sleeping(&mut report)?;
+    mark!(1);
+    many_tasks(topology, &mut report)?;
+    mark!(2);
+    fairness(topology, &mut report)?;
+    mark!(3);
     placement(topology, &mut report)?;
+    mark!(4);
     affinity_is_obeyed(topology)?;
+    mark!(5);
     load_tracking(topology, &mut report)?;
+    mark!(6);
     balancing(topology, &mut report)?;
+    mark!(7);
     slice_scaling(&mut report)?;
+    mark!(8);
+    // The last `mark!` advances `at` for a phase that never comes; reading it
+    // here is what says so, rather than an allow.
+    let _ = at;
+    report.spent_ms = spent;
 
     let summary = super::summary();
     report.switches = summary.switches;
@@ -238,8 +284,9 @@ fn affinity_is_obeyed(topology: &Topology) -> Result<(), &'static str> {
         || SPINNING.load(Ordering::Acquire) >= count as u64,
         "a confined task never started",
     )?;
-    // Long enough for a balancer to have moved them if it were going to.
-    super::sleep_for(WINDOW_NANOS);
+    // Long enough for a balancer to have moved them if it were going to:
+    // it looks every 16 milliseconds per processor, so this is several looks.
+    super::sleep_for(AFFINITY_WATCH_NANOS);
     STOP.store(true, Ordering::Release);
     wait_for(
         || DONE.load(Ordering::Acquire) >= count as u64,
@@ -437,8 +484,10 @@ fn slice_scaling(report: &mut Report) -> Result<(), &'static str> {
     SPINNING.store(0, Ordering::Release);
     DONE.store(0, Ordering::Release);
 
-    // Enough on this one processor to take the slice to its floor.
-    let crowd = 16;
+    // Enough on this one processor to take the slice to its floor, which the
+    // target latency reaches at eight runnable. More would only cost guest
+    // milliseconds to demonstrate the same floor.
+    let crowd = 8;
     let mut tasks = Vec::with_capacity(crowd);
     for index in 0..crowd {
         tasks.push(super::spawn_on(
@@ -474,10 +523,27 @@ fn slice_scaling(report: &mut Report) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Tell anything waiting that a counter it might be watching has moved.
+///
+/// **Every store to a counter a `wait_for` predicate reads must be followed by
+/// one of these.** The wait queue is the only thing that can end a wait early;
+/// without a notify the waiter sleeps its entire deadline and *then* finds the
+/// condition true, so the check passes and costs exactly `PATIENCE_NANOS`.
+///
+/// That is not hypothetical, and it is why this file needed a comment rather
+/// than a convention. `SPINNING` was incremented without one, and all seven
+/// waits for "a spinner never started" paid twenty seconds each — around forty
+/// seconds of the armv7a boot test, on a run that reported success. It took
+/// per-phase timings to see it at all, because a silent tax looks exactly like
+/// a slow machine.
+fn notify() {
+    FINISHED.wake_all();
+}
+
 /// Count this task as finished, and wake whoever is waiting for the phase.
 fn finish() {
     let _ = DONE.fetch_add(1, Ordering::AcqRel);
-    FINISHED.wake_all();
+    notify();
 }
 
 /// Bounded work, and a number at the end that nothing can fold away.
@@ -495,6 +561,9 @@ fn worker(argument: usize) {
 /// about.
 fn spinner(_argument: usize) {
     let _ = SPINNING.fetch_add(1, Ordering::AcqRel);
+    // The counter every "a spinner never started" wait watches. Without this
+    // the waiter has nothing to wake it and sleeps its whole budget.
+    notify();
     while !STOP.load(Ordering::Acquire) {
         core::hint::spin_loop();
     }

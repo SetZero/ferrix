@@ -242,33 +242,113 @@ impl CpuLoad {
 ///    depend on iteration order.
 #[must_use]
 pub fn place(loads: &[CpuLoad], allowed: &CpuSet, prefer: usize) -> Option<usize> {
-    let permitted = |cpu: usize| allowed.contains(cpu) && cpu < loads.len();
+    let mut choice = Placement::new(prefer);
+    for (cpu, load) in loads.iter().enumerate() {
+        if allowed.contains(cpu) {
+            choice.consider(cpu, *load);
+        }
+    }
+    choice.choice()
+}
 
-    if permitted(prefer) && loads.get(prefer).is_some_and(|load| load.idle) {
-        return Some(prefer);
+/// [`place`], one processor at a time.
+///
+/// # Why the caller may not want the slice
+///
+/// A kernel asking this question holds a different lock for each processor it
+/// reads, so the obvious shape is to snapshot them all into an array and call
+/// [`place`]. The array is the problem: sized for [`MAX_CPUS`](crate::MAX_CPUS)
+/// it is six kilobytes, and the caller is a kernel with a sixteen-kilobyte
+/// stack that may be several frames deep inside an interrupt when it asks.
+/// That is how this module first broke the machine — not through any decision
+/// it made, but by needing 38% of a stack to make one.
+///
+/// So the fold is exposed: read one processor, offer it here, drop the lock,
+/// move on. The accumulator is three words and the answer is the same, which
+/// is what [`place`] being written in terms of it is there to demonstrate.
+#[derive(Clone, Copy, Debug)]
+pub struct Placement {
+    /// Where the task would rather be.
+    prefer: usize,
+    /// The best non-idle candidate so far, as the pair it is ranked on: how
+    /// many are queued there, then how loaded it has been.
+    best: Option<(usize, (usize, u64))>,
+    /// An idle processor, once one has been offered.
+    idle: Option<usize>,
+}
+
+impl Placement {
+    /// A fold that has seen nothing yet.
+    #[must_use]
+    pub const fn new(prefer: usize) -> Placement {
+        Placement {
+            prefer,
+            best: None,
+            idle: None,
+        }
     }
 
-    let mut best: Option<(usize, u64)> = None;
-    for (cpu, load) in loads.iter().enumerate() {
-        if !permitted(cpu) {
-            continue;
-        }
+    /// Offer one processor. The caller has already checked it is permitted.
+    pub const fn consider(&mut self, cpu: usize, load: CpuLoad) {
         if load.idle {
-            return Some(cpu);
+            // `prefer` idle beats any other idle, and the first idle beats a
+            // later one, so an existing answer is only replaced by `prefer`.
+            match self.idle {
+                Some(_) if cpu != self.prefer => {}
+                _ => self.idle = Some(cpu),
+            }
+            return;
         }
-        let score = load.average;
-        let better = match best {
+        // **Fewest queued first, and only then the load average.** The order
+        // matters and having it the other way round was a bug.
+        //
+        // `queued` moves the instant a task is placed, so it is the only
+        // thing here that shows a placer the effect of its own last decision.
+        // `average` is a decaying history with a 33-millisecond half-life,
+        // which cannot move at all inside a burst of spawns. Ranking on the
+        // average first therefore sends *every* task in a burst to whichever
+        // processor has been idle longest: its average is near zero and stays
+        // there however much work it has just been handed.
+        //
+        // Found on an STM32MP157D-DK1, where a two-task burst on a quiet
+        // machine put both tasks on one core. It is also why this kernel's
+        // own boot log said "new tasks spread over 2 processors" on a
+        // four-processor machine, which nobody chased.
+        let score = (load.queued, load.average);
+        let better = match self.best {
             None => true,
-            // Strictly better, or an equal score on the processor the task
-            // would rather have. Never merely equal, so the lowest-numbered
-            // processor wins a tie and the choice is deterministic.
-            Some((_, best_score)) => score < best_score || (score == best_score && cpu == prefer),
+            // Written out rather than as a tuple comparison because this is a
+            // `const fn` and `PartialOrd` is not const yet — and because
+            // spelling the order out is what the comment above is about.
+            Some((_, (best_queued, best_average))) => {
+                if load.queued != best_queued {
+                    load.queued < best_queued
+                } else if load.average != best_average {
+                    load.average < best_average
+                } else {
+                    // Equal on both counts: only the processor the task would
+                    // rather have displaces the incumbent, so a tie is broken
+                    // by the lowest number and the choice is deterministic.
+                    cpu == self.prefer
+                }
+            }
         };
         if better {
-            best = Some((cpu, score));
+            self.best = Some((cpu, score));
         }
     }
-    best.map(|(cpu, _)| cpu)
+
+    /// The processor chosen, or `None` if nothing permitted was offered.
+    #[must_use]
+    pub const fn choice(&self) -> Option<usize> {
+        if let Some(idle) = self.idle {
+            return Some(idle);
+        }
+        match self.best {
+            Some((cpu, _)) => Some(cpu),
+            None => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -336,21 +416,84 @@ pub const fn imbalance(from: &CpuLoad, to: &CpuLoad) -> Option<u64> {
 /// others.
 #[must_use]
 pub fn busiest(loads: &[CpuLoad], allowed: &CpuSet, me: usize) -> Option<usize> {
-    let mine = loads.get(me)?;
-    let mut best: Option<(usize, u64)> = None;
+    fold(loads, allowed, me).and_then(|fold| fold.pull_from())
+}
 
+/// Run [`Balance`] over a slice, for the host tests and for callers that
+/// already have one.
+fn fold(loads: &[CpuLoad], allowed: &CpuSet, me: usize) -> Option<Balance> {
+    let mut balance = Balance::new(*loads.get(me)?);
     for (cpu, load) in loads.iter().enumerate() {
-        if cpu == me || !allowed.contains(cpu) {
-            continue;
-        }
-        let Some(moving) = imbalance(load, mine) else {
-            continue;
-        };
-        if best.is_none_or(|(_, most)| moving > most) {
-            best = Some((cpu, moving));
+        if cpu != me && allowed.contains(cpu) {
+            balance.consider(cpu, *load);
         }
     }
-    best.map(|(cpu, _)| cpu)
+    Some(balance)
+}
+
+/// [`busiest`] and [`quietest`] in one pass, one processor at a time.
+///
+/// Exists for the same reason [`Placement`] does: the caller reads each
+/// processor under a different lock, and materialising them into an array
+/// sized for [`MAX_CPUS`](crate::MAX_CPUS) costs six kilobytes of a
+/// sixteen-kilobyte kernel stack — which this caller is spending from inside
+/// an interrupt, on top of whatever it interrupted. The accumulator is five
+/// words.
+#[derive(Clone, Copy, Debug)]
+pub struct Balance {
+    /// This processor, which every candidate is compared against.
+    mine: CpuLoad,
+    /// The busiest processor worth pulling from, and how much would move.
+    pull: Option<(usize, u64)>,
+    /// The quietest processor worth pushing to, and its load.
+    push: Option<(usize, u64)>,
+}
+
+impl Balance {
+    /// A fold that has seen nothing but the processor asking.
+    #[must_use]
+    pub const fn new(mine: CpuLoad) -> Balance {
+        Balance {
+            mine,
+            pull: None,
+            push: None,
+        }
+    }
+
+    /// Offer one other processor. The caller has already excluded itself and
+    /// anything outside the domain.
+    pub const fn consider(&mut self, cpu: usize, load: CpuLoad) {
+        if let Some(moving) = imbalance(&load, &self.mine) {
+            match self.pull {
+                Some((_, most)) if moving <= most => {}
+                _ => self.pull = Some((cpu, moving)),
+            }
+        }
+        if imbalance(&self.mine, &load).is_some() {
+            match self.push {
+                Some((_, quietest)) if load.average >= quietest => {}
+                _ => self.push = Some((cpu, load.average)),
+            }
+        }
+    }
+
+    /// The processor to take work from, if any is worth taking.
+    #[must_use]
+    pub const fn pull_from(&self) -> Option<usize> {
+        match self.pull {
+            Some((cpu, _)) => Some(cpu),
+            None => None,
+        }
+    }
+
+    /// The processor to give work to, if this one has too much.
+    #[must_use]
+    pub const fn push_to(&self) -> Option<usize> {
+        match self.push {
+            Some((cpu, _)) => Some(cpu),
+            None => None,
+        }
+    }
 }
 
 /// The processor `me` should give work to, if it has too much.
@@ -367,23 +510,7 @@ pub fn busiest(loads: &[CpuLoad], allowed: &CpuSet, me: usize) -> Option<usize> 
 /// direction, so the work goes where it helps most.
 #[must_use]
 pub fn quietest(loads: &[CpuLoad], allowed: &CpuSet, me: usize) -> Option<usize> {
-    let mine = loads.get(me)?;
-    let mut best: Option<(usize, u64)> = None;
-
-    for (cpu, load) in loads.iter().enumerate() {
-        if cpu == me || !allowed.contains(cpu) {
-            continue;
-        }
-        // The same test as a pull, with the ends swapped: would moving work
-        // from me to them level the two out by enough to be worth it?
-        if imbalance(mine, load).is_none() {
-            continue;
-        }
-        if best.is_none_or(|(_, quietest)| load.average < quietest) {
-            best = Some((cpu, load.average));
-        }
-    }
-    best.map(|(cpu, _)| cpu)
+    fold(loads, allowed, me).and_then(|fold| fold.push_to())
 }
 
 // ---------------------------------------------------------------------------

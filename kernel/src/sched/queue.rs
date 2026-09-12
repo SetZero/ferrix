@@ -358,6 +358,25 @@ impl CpuQueue {
         self.fair.should_preempt()
     }
 
+    /// Take `id` out of this processor's sleeper set, if it is in it.
+    ///
+    /// **A task woken early is still filed under the deadline it no longer
+    /// intends to keep.** Leave the entry behind and `wake_sleepers` finds it
+    /// later, sees a time already past, and makes the task runnable — out of
+    /// whatever it is doing by then. What that looked like was the sleep check
+    /// failing with "a sleep came back before its deadline": a twenty
+    /// millisecond sleep cut short by a five millisecond deadline the task had
+    /// abandoned two checks earlier.
+    ///
+    /// Scanned rather than keyed, because the map is keyed by wake-up time and
+    /// the task's own copy of that was consumed when it was filed. Sleeper sets
+    /// are short.
+    pub(crate) fn remove_sleeper(&mut self, id: TaskId) -> bool {
+        let before = self.sleepers.len();
+        self.sleepers.retain(|(_, sleeping), _| *sleeping != id);
+        self.sleepers.len() != before
+    }
+
     /// Tasks waiting to run: everything on the queue but the running one.
     ///
     /// The number `arm_timer` decides on, so it is also the number that says
