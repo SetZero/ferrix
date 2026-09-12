@@ -22,9 +22,11 @@ goal. Nobody should read the table as a schedule.
 **Where it stands:** stages 0–5 are done and in the boot test on all three
 architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-5`.
 ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stages 6 and 7 are
-both under way and neither is close: there are address spaces and a processor
-walking one, and there is a system call dispatch path, but there is no user
-mode, so nothing has yet called it from the far side of a privilege boundary.
+both under way: there are address spaces, `fork` with copy-on-write, tasks that
+carry a space and a scheduler that swaps roots between them, and there is a
+system call dispatch path. What there is not is user mode, so nothing has yet
+called it from the far side of a privilege boundary, and the privilege drop is
+very nearly all that stands between here and stage 6's exit.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -562,6 +564,73 @@ does not yet parse.
 `AddressSpace`, VMOs, the VMA interval tree, demand paging, copy-on-write, the
 ELF loader, and the ring-3/EL0 transition. The first user process is a
 hand-written static binary that makes one syscall.
+
+**Done — the memory a process is made of, and a processor translating through
+it.** Everything below is self-checked at boot on all three architectures and
+reports in the boot log; `docs/STAGE6-HANDOVER.md` is the working detail while
+the stage is open.
+
+* **The objects.** `Vmo` is a sparse page list, committed on first touch, so a
+  reservation costs nothing until it is written — which is what makes a large
+  `mmap` cheap and is measured rather than asserted: 2048 pages reserved, seven
+  committed. `AddressSpace` is the `libs/vma` interval tree used for the first
+  time as what it was written for, with a lock of its own rather than a global
+  one, so two processes faulting at once contend for nothing. Anonymous memory
+  carries an identity, because `MAP_SHARED|MAP_ANONYMOUS`, futexes resolving to
+  one wait queue and `/proc/self/maps` all need to name the object behind a
+  mapping.
+* **Demand paging**, generalised from stage 3's fixed window: the fault handler
+  finds the region, asks its object for the page, and installs it with that
+  region's permissions.
+* **The processor walks it.** `arch::install_user_root` puts a root the kernel
+  built into `CR3` or `TTBR0`. The three architectures disagree about what a
+  switch even is — one `CR3` write, whose own side effect drops the non-global
+  entries, against writing `TTBR0`, clearing `EPD0` to re-enable a translation
+  regime, and invalidating by `ASID`. No `ASID`s or `PCID`s are allocated: a
+  full invalidation of user entries on switch is the correct baseline, and
+  eliding it later makes the switch faster rather than unpicking anything.
+* **fork and copy-on-write**, copying no memory at all. Each private object is
+  cloned page list and all, with a reference taken on every committed frame, so
+  a write on either side copies that page into its own object. A page with one
+  holder left is let through uncopied — the refcount is what makes that
+  decision, which is also why a second write to an already-copied page
+  terminates.
+* **Tasks carry address spaces.** `Task` holds an `Option<Arc<AddressSpace>>`
+  and `sched::choose_next` swaps roots under the run queue lock, comparing by
+  pointer so two threads of one process cost nothing. A kernel thread gets the
+  user half switched off rather than left installed.
+
+**Still to do — the privilege drop, and almost nothing else.** Tracing a real
+static `musl` binary showed the surface is far smaller than this entry used to
+imply: `busybox sh -c 'echo hello'` makes 33 system calls, 22 distinct, and
+never forks. The first thing that runs needs `write` and `exit_group` and no
+more.
+
+* The ring-3 / EL0 / USR transition and the entry vectors. Split with stage 7:
+  x86-64 with its `SYSCALL` trampoline there, AArch64 and ARMv7-A here.
+  `Trap::SystemCall` is still fatal on the two Arm architectures, where `svc`
+  arrives through the trap vector rather than its own entry.
+* `arch::set_kernel_stack` — `TSS.rsp0` on x86-64, and nothing at all on either
+  Arm architecture, where the kernel already runs on the stack the trap will
+  use.
+* `exit_group`, which needs a task to tear down and so waits on the transition.
+* Scoping the user TLB shootdown. The invalidation exists on every path that
+  takes a translation down or makes one less permissive; it is the global
+  broadcast flush and could be one page, told only to the processors running
+  that space.
+
+The ELF loader and the `copy_from_user` layer were handed to stage 7, which
+needed both first.
+
+**One thing this stage cannot prove, and it is written down rather than
+trusted.** A copy-on-write fault replaces a live read-only translation with a
+writable one, and failing to invalidate the stale entry makes the retrying
+instruction fault forever — a hang with no message. Deleting that invalidation
+fails no boot test on any of the three architectures, because `tcg` does not
+keep a stale entry to trip over; the check was strengthened twice, to the point
+of resolving the fault with the space installed and writing through the faulting
+address, and it still passes. Stage 4 has the converse writeup. The board is the
+only arbiter for this class.
 
 **Exit:** a boot test that runs a user binary which writes to fd 1 and exits,
 with a page fault serviced along the way.

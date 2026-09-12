@@ -98,9 +98,10 @@ In dependency order. Nothing below exists, not even stubbed.
    present yet; and it must reject anything `is_user_address` refuses, before
    any length arithmetic, because no `SMAP`/`SMEP`/`PAN` is enabled anywhere in
    this tree and nothing in the hardware will catch a kernel-half pointer.
-7. **`docs/ROADMAP.md` is not updated.** It still reads "Stage 6 is next" and
-   stages 0–5 done. Someone should correct it — probably whoever finishes the
-   stage, in the style stages 2–4 use ("Done — ...", "Still to do — ...").
+7. ~~**`docs/ROADMAP.md` is not updated.**~~ **Done.** Stage 6's entry now has
+   its "Done —" and "Still to do —" sections in the style stages 2–4 use, and
+   "Where it stands" says what actually exists. Keep it current as the rest
+   lands; it is the durable record and this file is the scaffolding.
 
 ---
 
