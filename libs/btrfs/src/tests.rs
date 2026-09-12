@@ -443,6 +443,70 @@ fn a_full_chunk_map_reports_rather_than_overruns() {
     assert_eq!(map.len(), 2);
 }
 
+#[test]
+fn a_chunk_overlapping_one_already_mapped_is_refused() {
+    // A covers 16 MiB from 0x100_0000. Before this check, B inside it was
+    // inserted beside it and shadowed it: 0x180_0000, past B's end but well
+    // inside A, stopped mapping at all.
+    let a = chunk_item(16 << 20, CHUNK_DATA, &[(1, 0x400_0000)]);
+    let inside = chunk_item(1 << 20, CHUNK_DATA, &[(1, 0x900_0000)]);
+    let straddling = chunk_item(0x90_0000, CHUNK_DATA, &[(1, 0xA00_0000)]);
+    let same_start = chunk_item(1 << 20, CHUNK_DATA, &[(1, 0x400_0000)]);
+
+    let mut storage = [ChunkMapEntry::default(); 8];
+    let mut map = ChunkMap::new(&mut storage);
+    map.insert(0x100_0000, &ChunkItem::parse(&a).unwrap())
+        .unwrap();
+
+    for (logical, bytes, what) in [
+        (0x140_0000, &inside, "a chunk inside another"),
+        (0x80_0000, &straddling, "a chunk running into the next one"),
+        (
+            0x100_0000,
+            &same_start,
+            "a different chunk at the same start",
+        ),
+    ] {
+        assert_eq!(
+            map.insert(logical, &ChunkItem::parse(bytes).unwrap()),
+            Err(BtrfsError::BadChunk),
+            "{what} is refused"
+        );
+    }
+    assert_eq!(map.len(), 1, "nothing refused was kept");
+    assert_eq!(
+        map.logical_to_physical(0x180_0000),
+        Some((1, 0x480_0000)),
+        "the first chunk still maps all of its range"
+    );
+}
+
+#[test]
+fn adjacent_and_repeated_chunks_are_accepted() {
+    // The boundary cases the overlap check must not catch: a chunk starting
+    // exactly where the previous one ends, one ending exactly where the next
+    // begins, and the system chunk array repeating a chunk-tree item.
+    let item = chunk_item(1 << 20, CHUNK_DATA, &[(1, 0x400_0000)]);
+    let other = chunk_item(1 << 20, CHUNK_DATA, &[(1, 0x500_0000)]);
+    let below = chunk_item(1 << 20, CHUNK_DATA, &[(1, 0x600_0000)]);
+    let item = ChunkItem::parse(&item).unwrap();
+
+    let mut storage = [ChunkMapEntry::default(); 8];
+    let mut map = ChunkMap::new(&mut storage);
+    map.insert(0x100_0000, &item).unwrap();
+    map.insert(0x110_0000, &ChunkItem::parse(&other).unwrap())
+        .unwrap();
+    map.insert(0x0F0_0000, &ChunkItem::parse(&below).unwrap())
+        .unwrap();
+    map.insert(0x100_0000, &item)
+        .expect("an identical chunk may arrive twice");
+
+    assert_eq!(map.len(), 3, "the repeat is not a second entry");
+    assert_eq!(map.logical_to_physical(0x10F_FFFF), Some((1, 0x40F_FFFF)));
+    assert_eq!(map.logical_to_physical(0x110_0000), Some((1, 0x500_0000)));
+    assert_eq!(map.logical_to_physical(0x0FF_FFFF), Some((1, 0x60F_FFFF)));
+}
+
 // ---------------------------------------------------------------------------
 // Keys
 // ---------------------------------------------------------------------------

@@ -124,8 +124,9 @@ pub enum BtrfsError {
     },
     /// `sys_chunk_array_size` exceeds the 2048-byte array it describes.
     SysChunkArrayTooLarge(u32),
-    /// A `CHUNK_ITEM` is internally inconsistent: no stripes, a zero length or
-    /// stripe length, or fewer stripe records than `num_stripes` promises.
+    /// A `CHUNK_ITEM` is internally inconsistent — no stripes, a zero length or
+    /// stripe length, or fewer stripe records than `num_stripes` promises — or
+    /// it overlaps a different chunk already in the map.
     BadChunk,
     /// A chunk uses a RAID profile whose logical-to-physical mapping this crate
     /// deliberately does not compute. Carries the chunk's raw type bits.

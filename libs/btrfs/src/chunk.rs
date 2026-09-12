@@ -438,10 +438,11 @@ impl<T: AsRef<[ChunkMapEntry]> + AsMut<[ChunkMapEntry]> + ?Sized> ChunkStorage f
 /// assert!(map.is_empty(), "a fresh map holds no chunks");
 /// ```
 ///
-/// Entries are kept sorted by logical address so lookup is a binary search;
-/// inserting a chunk that is already present replaces it, which is what makes
-/// it safe to load the system chunk array and then the chunk tree, whose
-/// contents overlap.
+/// Entries are kept sorted by logical address so lookup is a binary search.
+/// Inserting a chunk identical to one already present changes nothing, which
+/// is what makes it safe to load the system chunk array and then the chunk
+/// tree, whose contents repeat; a chunk that overlaps a different one is
+/// refused.
 #[derive(Debug)]
 pub struct ChunkMap<S> {
     entries: S,
@@ -502,17 +503,45 @@ impl<S: ChunkStorage> ChunkMap<S> {
             physical: stripe.offset,
         };
         match self.position(logical) {
-            Ok(at) => {
-                let slot = self
-                    .entries
-                    .as_mut()
-                    .get_mut(at)
-                    .ok_or(BtrfsError::ChunkMapFull)?;
-                *slot = entry;
-                Ok(())
+            // The system chunk array is a copy of chunk tree items, so the
+            // same chunk legitimately arrives twice. The same *start* with a
+            // different length or placement is two descriptions of one range,
+            // and neither can be believed over the other.
+            Ok(at) if self.entries().get(at) == Some(&entry) => Ok(()),
+            Ok(_) => Err(BtrfsError::BadChunk),
+            Err(at) => {
+                self.check_neighbours(at, &entry)?;
+                self.insert_at(at, entry)
             }
-            Err(at) => self.insert_at(at, entry),
         }
+    }
+
+    /// Refuse `entry` if it overlaps either chunk it would be inserted
+    /// between.
+    ///
+    /// Logical ranges are disjoint by construction in btrfs: a chunk is
+    /// allocated from free logical space. One that overlaps another would let
+    /// [`ChunkMap::lookup`] answer with whichever sorts nearer, so part of the
+    /// earlier chunk would silently map through the later one's stripe — or,
+    /// past the later one's end, not map at all. The entries are kept sorted
+    /// and disjoint, so the neighbours on either side are the only candidates.
+    fn check_neighbours(&self, at: usize, entry: &ChunkMapEntry) -> Result<(), BtrfsError> {
+        let end = entry
+            .logical
+            .checked_add(entry.length)
+            .ok_or(BtrfsError::BadChunk)?;
+        let before = at.checked_sub(1).and_then(|i| self.entries().get(i));
+        if before.is_some_and(|prev| prev.logical.saturating_add(prev.length) > entry.logical) {
+            return Err(BtrfsError::BadChunk);
+        }
+        if self
+            .entries()
+            .get(at)
+            .is_some_and(|next| next.logical < end)
+        {
+            return Err(BtrfsError::BadChunk);
+        }
+        Ok(())
     }
 
     /// Shift the tail up by one and drop `entry` into the hole.
