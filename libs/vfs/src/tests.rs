@@ -1027,3 +1027,115 @@ fn tmpfs_says_what_it_is_and_an_open_file_polls_for_its_access_mode() {
         "masked by the access mode"
     );
 }
+
+/// A directory whose names change without the VFS being told, as `/proc`'s
+/// do when a process starts or exits.
+#[derive(Debug, Default)]
+struct Volatile {
+    names: ferrix_sync::SpinLock<Vec<Vec<u8>>>,
+}
+
+impl Volatile {
+    fn meta(ino: u64, kind: FileType) -> crate::Metadata {
+        crate::Metadata {
+            ino,
+            kind,
+            permissions: 0o555,
+            nlink: 1,
+            uid: 0,
+            gid: 0,
+            size: 0,
+            rdev: 0,
+            blocks: 0,
+            block_size: 4096,
+            atime: Timespec::default(),
+            mtime: Timespec::default(),
+            ctime: Timespec::default(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct VolatileFile;
+
+impl crate::Inode for VolatileFile {
+    fn metadata(&self) -> crate::Metadata {
+        Volatile::meta(2, FileType::Regular)
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+}
+
+impl crate::Inode for Volatile {
+    fn metadata(&self) -> crate::Metadata {
+        Volatile::meta(1, FileType::Directory)
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+
+    fn caches_lookups(&self) -> bool {
+        false
+    }
+
+    fn lookup(&self, name: &[u8]) -> Result<Arc<dyn crate::Inode>, Errno> {
+        if self.names.lock().iter().any(|held| held == name) {
+            Ok(Arc::new(VolatileFile))
+        } else {
+            Err(Errno::ENOENT)
+        }
+    }
+}
+
+#[derive(Debug)]
+struct VolatileFs(Arc<Volatile>);
+
+impl FileSystem for VolatileFs {
+    fn root(&self) -> Arc<dyn crate::Inode> {
+        Arc::clone(&self.0) as Arc<dyn crate::Inode>
+    }
+
+    fn name(&self) -> &'static str {
+        "volatile"
+    }
+
+    fn device(&self) -> u64 {
+        9
+    }
+}
+
+#[test]
+fn a_directory_that_does_not_cache_lookups_is_asked_every_time() {
+    let (ns, ctx) = fresh();
+    ns.mkdir(&ctx, None, b"/proc", 0o755).unwrap();
+    let dir = Arc::new(Volatile::default());
+    let at = ns.resolve(&ctx, None, b"/proc", true).unwrap();
+    let _ = ns
+        .mount(Arc::new(VolatileFs(Arc::clone(&dir))), &at)
+        .unwrap();
+
+    // A miss first, which a caching directory would remember.
+    assert_eq!(
+        ns.resolve(&ctx, None, b"/proc/42", true).err(),
+        Some(Errno::ENOENT),
+        "nothing is called 42 yet"
+    );
+    dir.names.lock().push(b"42".to_vec());
+    let found = ns.resolve(&ctx, None, b"/proc/42", true).unwrap();
+    assert_eq!(
+        ns.path_of(&found, &ctx.root),
+        b"/proc/42".to_vec(),
+        "an uncached dentry still knows where it is"
+    );
+
+    // Then a hit, which must not outlive the name either.
+    dir.names.lock().clear();
+    assert_eq!(
+        ns.resolve(&ctx, None, b"/proc/42", true).err(),
+        Some(Errno::ENOENT),
+        "a name that went away is gone at once"
+    );
+}

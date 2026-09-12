@@ -178,6 +178,19 @@ impl Dentry {
         (child, true)
     }
 
+    /// A child for what a lookup found, known to this walk alone.
+    ///
+    /// For a directory that does not cache lookups: the dentry holds its
+    /// parent, so `..` and `path_of` work from it, but no later walk will find
+    /// it and it goes away with whoever holds it.
+    pub(crate) fn uncached_child(
+        self: &Arc<Self>,
+        name: &[u8],
+        inode: Option<Arc<dyn Inode>>,
+    ) -> Arc<Dentry> {
+        Dentry::new(Box::from(name), Some(Arc::clone(self)), inode)
+    }
+
     /// A name was created in this directory: make its dentry positive.
     ///
     /// `walked` is the (negative) dentry the caller's walk found. If a cached

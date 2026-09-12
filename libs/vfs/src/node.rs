@@ -352,6 +352,24 @@ pub trait Inode: Send + Sync + fmt::Debug {
         Ok(None)
     }
 
+    /// Whether the VFS may remember what [`Inode::lookup`] answers in this
+    /// directory.
+    ///
+    /// True for every filesystem whose names change only through the VFS,
+    /// which is what lets a cached hit or miss stand until the VFS itself
+    /// changes the name. A directory whose names come and go behind its back
+    /// answers false — `/proc`, where a process exiting removes a name and a
+    /// process starting adds one, and `/proc/<pid>/fd`, where every `open`
+    /// does — and every walk through it asks the filesystem afresh. Linux
+    /// answers the same question per dentry with `d_revalidate`; one answer
+    /// per directory is enough for the directories that exist.
+    ///
+    /// The cost is that nothing can be mounted inside such a directory: a
+    /// mount point is a remembered dentry, and none is remembered here.
+    fn caches_lookups(&self) -> bool {
+        true
+    }
+
     /// The object called `name` in this directory, or `ENOENT`.
     fn lookup(&self, name: &[u8]) -> Result<Arc<dyn Inode>> {
         let _ = name;

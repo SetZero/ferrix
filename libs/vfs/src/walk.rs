@@ -286,16 +286,16 @@ impl Namespace {
 
     /// The child dentry called `name`, from the cache or the filesystem.
     fn child(&self, dir: &Arc<Dentry>, name: &[u8]) -> Result<Arc<Dentry>> {
+        let inode = dir.inode().ok_or(Errno::ENOENT)?;
+        if !inode.caches_lookups() {
+            let found = look_up(inode.as_ref(), name)?;
+            return Ok(dir.uncached_child(name, found));
+        }
         if let Some(child) = dir.cached_child(name) {
             return Ok(child);
         }
-        let inode = dir.inode().ok_or(Errno::ENOENT)?;
         let generation = dir.generation();
-        let found = match inode.lookup(name) {
-            Ok(found) => Some(found),
-            Err(Errno::ENOENT) => None,
-            Err(other) => return Err(other),
-        };
+        let found = look_up(inode.as_ref(), name)?;
         let (child, cached) = dir.insert_looked_up(name, found, generation);
         if cached {
             self.remember(&child);
@@ -315,6 +315,18 @@ impl Namespace {
             };
         }
         at
+    }
+}
+
+/// Ask a directory for `name`: the inode, `None` for a miss, or the error.
+fn look_up(
+    dir: &dyn crate::node::Inode,
+    name: &[u8],
+) -> Result<Option<Arc<dyn crate::node::Inode>>> {
+    match dir.lookup(name) {
+        Ok(found) => Ok(Some(found)),
+        Err(Errno::ENOENT) => Ok(None),
+        Err(other) => Err(other),
     }
 }
 
