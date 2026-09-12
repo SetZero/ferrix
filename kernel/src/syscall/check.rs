@@ -22,7 +22,9 @@ use alloc::vec::Vec;
 use ferrix_bootinfo::{KERNEL_HALF_BASE, PAGE_SIZE};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
-    MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_SHARED, PROT_READ, PROT_WRITE,
+    AT_FDCWD, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
+    MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_SHARED, O_APPEND, O_CLOEXEC, O_CREAT, O_RDONLY,
+    O_RDWR, O_TRUNC, PROT_READ, PROT_WRITE, SEEK_CUR, SEEK_END, SEEK_SET, TCGETS,
 };
 
 use crate::arch;
@@ -32,7 +34,7 @@ use ferrix_elf::Class;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{Outcome, SyscallArgs, dispatch, uaccess};
-use crate::syscall::{exec, file, image, load, signal, system};
+use crate::syscall::{exec, fd, file, image, load, signal, system};
 
 /// What the checks measured, for the boot log.
 #[derive(Debug)]
@@ -335,6 +337,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_an_alternate_stack_is_recorded_and_refused_when_small(&process)?;
     check_an_image_loads_where_its_headers_say(&process)?;
     check_the_loader_refuses_what_it_cannot_run(&process)?;
+    check_descriptors(&process)?;
     if output == Output::Show {
         check_write_reaches_the_console(&process)?;
         check_writev_gathers_in_order(&process)?;
@@ -1216,6 +1219,379 @@ fn write_word(process: &Process, at: u64, value: u64) -> Result<(), &'static str
     let width = size_of::<usize>();
     let slot = bytes.get(..width).ok_or("impossible pointer width")?;
     uaccess::copy_to_user(process.space(), at, slot).map_err(|_| "could not stage a word")
+}
+
+// ---------------------------------------------------------------------------
+// Descriptors
+//
+// A file under `/tmp`, through the handlers: created, written, sought, read
+// back through a second descriptor that shares its offset, changed with
+// `fcntl`, truncated and closed. `libs/vfs` tests the same rules on the host;
+// what only this can test is the layer between -- arguments narrowed as the
+// ABI narrows them, this architecture's `open` flag bits, the table lock let
+// go before the file is touched, and every description closed and every page
+// of the file given back, which the frame count around `check_handlers` sees.
+//
+// Called directly rather than through `dispatch`, like the handler checks
+// above: `dispatch` finds its process through the running task, and the boot
+// task has none.
+// ---------------------------------------------------------------------------
+
+/// The file the descriptor checks make, NUL-terminated as a program passes it.
+const CHECK_PATH: &[u8] = b"/tmp/descriptor-check\0";
+
+/// Its name within `/tmp`, for the check that opens it relative to a
+/// directory descriptor.
+const CHECK_NAME: &[u8] = b"descriptor-check\0";
+
+/// `/tmp` itself.
+const TMP_PATH: &[u8] = b"/tmp\0";
+
+/// What the checks write into it.
+const CHECK_DATA: &[u8] = b"descriptors, stage 8";
+
+/// Where on the scratch page each piece goes.
+const AT_PATH: u64 = 0;
+/// See [`AT_PATH`].
+const AT_NAME: u64 = 64;
+/// See [`AT_PATH`].
+const AT_TMP: u64 = 128;
+/// See [`AT_PATH`].
+const AT_DATA: u64 = 256;
+/// See [`AT_PATH`].
+const AT_BACK: u64 = 512;
+/// See [`AT_PATH`].
+const AT_RESULT: u64 = 1024;
+
+/// Run the descriptor checks on a page of their own, and leave nothing behind:
+/// every descriptor they opened closed, the file unlinked, the page unmapped.
+fn check_descriptors(process: &Process) -> Result<(), &'static str> {
+    let page = map_rw(process, PAGE_SIZE)?;
+    for (offset, bytes) in [
+        (AT_PATH, CHECK_PATH),
+        (AT_NAME, CHECK_NAME),
+        (AT_TMP, TMP_PATH),
+        (AT_DATA, CHECK_DATA),
+    ] {
+        uaccess::copy_to_user(process.space(), page + offset, bytes)
+            .map_err(|_| "could not stage the descriptor checks")?;
+    }
+
+    let outcome = check_a_new_process_has_the_console(process)
+        .and_then(|()| check_a_file_opens_on_the_lowest_free_descriptor(process, page))
+        .and_then(|()| check_a_dup_shares_the_offset(process, page))
+        .and_then(|()| check_fcntl_and_dup3_follow_linux(process, page))
+        .and_then(|()| check_descriptors_are_refused_by_kind(process, page));
+
+    // Cleaned up whatever happened, so that a failure is reported as itself
+    // and not also as leaked frames.
+    for fd in 3..32 {
+        let _ = fd::sys_close(process, fd);
+    }
+    let path = CHECK_PATH.strip_suffix(b"\0").unwrap_or(CHECK_PATH);
+    let namespace = crate::fs::namespace();
+    let _ = namespace.unlink(&namespace.context(), None, path);
+    let _ = memory::sys_munmap(process, page, PAGE_SIZE);
+    outcome
+}
+
+/// Require a handler to have answered `want`.
+fn answers(got: Result<usize, Errno>, want: usize, what: &'static str) -> Result<(), &'static str> {
+    if got == Ok(want) { Ok(()) } else { Err(what) }
+}
+
+/// Require a handler to have refused with `errno`.
+fn refuses(
+    got: Result<usize, Errno>,
+    errno: Errno,
+    what: &'static str,
+) -> Result<(), &'static str> {
+    if got == Err(errno) { Ok(()) } else { Err(what) }
+}
+
+/// Descriptors 0, 1 and 2 are the console, open for reading and writing --
+/// which is what busybox's `printf` asks of descriptor 1 before it prints.
+fn check_a_new_process_has_the_console(process: &Process) -> Result<(), &'static str> {
+    for fd in 0..3 {
+        answers(
+            fd::sys_fcntl(process, fd, F_GETFL, 0),
+            O_RDWR as usize,
+            "a new process's standard descriptor did not report O_RDWR from F_GETFL",
+        )?;
+    }
+    refuses(
+        fd::sys_lseek(process, 1, 0, SEEK_CUR),
+        Errno::ESPIPE,
+        "the console could be sought, as if it were a file",
+    )?;
+    refuses(
+        fd::sys_ioctl(process, 1, TCGETS, 0),
+        Errno::ENOTTY,
+        "an ioctl on the console was not ENOTTY",
+    )?;
+    refuses(
+        fd::sys_ioctl(process, 99, TCGETS, 0),
+        Errno::EBADF,
+        "an ioctl on a closed descriptor was not EBADF",
+    )
+}
+
+/// `openat` with `O_CREAT` lands on descriptor 3, close-on-exec as asked, and
+/// `F_SETFD` takes the flag away again.
+fn check_a_file_opens_on_the_lowest_free_descriptor(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    let flags = O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC;
+    answers(
+        fd::sys_openat(process, AT_FDCWD, page + AT_PATH, flags, 0o644),
+        3,
+        "a file created under /tmp did not open on descriptor 3",
+    )?;
+    answers(
+        fd::sys_fcntl(process, 3, F_GETFD, 0),
+        FD_CLOEXEC as usize,
+        "O_CLOEXEC did not reach the descriptor",
+    )?;
+    answers(
+        fd::sys_fcntl(process, 3, F_SETFD, 0),
+        0,
+        "F_SETFD was refused",
+    )?;
+    answers(
+        fd::sys_fcntl(process, 3, F_GETFD, 0),
+        0,
+        "F_SETFD did not clear close-on-exec",
+    )?;
+    answers(
+        fd::sys_fcntl(process, 3, F_GETFL, 0),
+        O_RDWR as usize,
+        "a file opened O_RDWR did not report it from F_GETFL",
+    )
+}
+
+/// A write, then a read back through `dup`'s descriptor, which shares the
+/// offset -- and `pread64` and `pwrite64`, which leave it alone.
+fn check_a_dup_shares_the_offset(process: &Process, page: u64) -> Result<(), &'static str> {
+    let len = CHECK_DATA.len();
+    let back = page + AT_BACK;
+    answers(
+        file::sys_write(process, 3, page + AT_DATA, len as u64),
+        len,
+        "a write to a file under /tmp was short",
+    )?;
+    answers(fd::sys_dup(process, 3), 4, "dup did not take descriptor 4")?;
+    answers(
+        fd::sys_lseek(process, 4, 0, SEEK_CUR),
+        len,
+        "a duplicated descriptor does not share the offset the write moved",
+    )?;
+    answers(
+        fd::sys_lseek(process, 3, 0, SEEK_SET),
+        0,
+        "SEEK_SET was refused",
+    )?;
+    answers(
+        file::sys_read(process, 4, back, 64),
+        len,
+        "reading back through the duplicate did not start where the seek put the shared offset",
+    )?;
+    let mut read = [0_u8; 64];
+    let read = read.get_mut(..len).ok_or("impossible check data length")?;
+    uaccess::copy_from_user(process.space(), back, read).map_err(|_| "could not read back")?;
+    if read != CHECK_DATA {
+        return Err("what was read back is not what was written");
+    }
+    answers(
+        file::sys_read(process, 4, back, 64),
+        0,
+        "a read at the end was not end of file",
+    )?;
+
+    answers(
+        file::sys_pwrite64(process, 3, page + AT_DATA, 3, 0),
+        3,
+        "pwrite64 was short",
+    )?;
+    answers(
+        file::sys_pread64(process, 4, back, 5, 3),
+        5,
+        "pread64 did not read five bytes from the middle",
+    )?;
+    answers(
+        fd::sys_lseek(process, 3, 0, SEEK_CUR),
+        len,
+        "pread64 or pwrite64 moved the offset",
+    )?;
+    refuses(
+        file::sys_pread64(process, 3, back, 1, -1),
+        Errno::EINVAL,
+        "pread64 accepted a negative offset",
+    )
+}
+
+/// `F_DUPFD`, `F_SETFL`, `dup3`, `ftruncate` and `_llseek`, and what each of
+/// them refuses.
+fn check_fcntl_and_dup3_follow_linux(process: &Process, page: u64) -> Result<(), &'static str> {
+    let len = CHECK_DATA.len();
+    answers(
+        fd::sys_fcntl(process, 3, F_DUPFD, 10),
+        10,
+        "F_DUPFD did not start at 10",
+    )?;
+    answers(
+        fd::sys_fcntl(process, 3, F_DUPFD_CLOEXEC, 10),
+        11,
+        "F_DUPFD_CLOEXEC did not take the next free descriptor",
+    )?;
+    answers(
+        fd::sys_fcntl(process, 11, F_GETFD, 0),
+        FD_CLOEXEC as usize,
+        "F_DUPFD_CLOEXEC did not set close-on-exec",
+    )?;
+    refuses(
+        fd::sys_fcntl(process, 3, 999, 0),
+        Errno::EINVAL,
+        "an unknown fcntl was not EINVAL",
+    )?;
+    refuses(
+        fd::sys_fcntl(process, 99, 999, 0),
+        Errno::EBADF,
+        "an unknown fcntl on a closed descriptor was not EBADF",
+    )?;
+    refuses(
+        fd::sys_dup3(process, 3, 3, 0),
+        Errno::EINVAL,
+        "dup3 onto itself was not EINVAL",
+    )?;
+    refuses(
+        fd::sys_dup3(process, 3, 20, 1),
+        Errno::EINVAL,
+        "dup3 accepted an unknown flag",
+    )?;
+    answers(
+        fd::sys_dup3(process, 3, 20, O_CLOEXEC),
+        20,
+        "dup3 did not install at 20",
+    )?;
+    answers(
+        fd::sys_fcntl(process, 20, F_GETFD, 0),
+        FD_CLOEXEC as usize,
+        "dup3's O_CLOEXEC did not reach the descriptor",
+    )?;
+    answers(
+        fd::sys_dup2(process, 3, 3),
+        3,
+        "dup2 onto itself was not a no-op",
+    )?;
+
+    // O_APPEND through F_SETFL: a write after seeking to the start still
+    // lands at the end.
+    answers(
+        fd::sys_fcntl(process, 3, F_SETFL, u64::from(O_APPEND)),
+        0,
+        "F_SETFL was refused",
+    )?;
+    answers(
+        fd::sys_fcntl(process, 4, F_GETFL, 0),
+        (O_RDWR | O_APPEND) as usize,
+        "O_APPEND set on one descriptor did not show on its duplicate",
+    )?;
+    answers(
+        fd::sys_lseek(process, 3, 0, SEEK_SET),
+        0,
+        "SEEK_SET was refused",
+    )?;
+    answers(
+        file::sys_write(process, 3, page + AT_DATA, 1),
+        1,
+        "an append was short",
+    )?;
+    answers(
+        fd::sys_lseek(process, 3, 0, SEEK_CUR),
+        len + 1,
+        "a write under O_APPEND did not land at the end",
+    )?;
+
+    answers(fd::sys_ftruncate(process, 3, 4), 0, "ftruncate was refused")?;
+    answers(
+        fd::sys_lseek(process, 4, 0, SEEK_END),
+        4,
+        "the file was not four bytes long after ftruncate",
+    )?;
+    refuses(
+        fd::sys_ftruncate(process, 3, -1),
+        Errno::EINVAL,
+        "ftruncate accepted a negative length",
+    )?;
+
+    let result = page + AT_RESULT;
+    answers(
+        fd::sys_llseek(process, 3, 0, 2, result, SEEK_SET),
+        0,
+        "_llseek was refused",
+    )?;
+    let mut offset = [0_u8; 8];
+    uaccess::copy_from_user(process.space(), result, &mut offset)
+        .map_err(|_| "could not read _llseek's result")?;
+    if u64::from_le_bytes(offset) != 2 {
+        return Err("_llseek did not write the new offset through its pointer");
+    }
+    Ok(())
+}
+
+/// A directory descriptor as a starting point, `O_DIRECTORY` with this
+/// architecture's bit, and the refusals that depend on what a descriptor names.
+fn check_descriptors_are_refused_by_kind(process: &Process, page: u64) -> Result<(), &'static str> {
+    let directory = arch::OPEN_FLAGS.directory;
+    refuses(
+        fd::sys_openat(process, AT_FDCWD, page + AT_PATH, O_RDONLY | directory, 0),
+        Errno::ENOTDIR,
+        "O_DIRECTORY, in this architecture's bits, opened a regular file",
+    )?;
+    let tmp = fd::sys_openat(process, AT_FDCWD, page + AT_TMP, O_RDONLY | directory, 0)
+        .map_err(|_| "/tmp did not open as a directory")?;
+    let tmp = i32::try_from(tmp).map_err(|_| "an impossible descriptor")?;
+
+    match fd::start_location(process, AT_FDCWD) {
+        Ok(None) => {}
+        _ => return Err("AT_FDCWD did not mean the working directory"),
+    }
+    if !matches!(fd::start_location(process, tmp), Ok(Some(_))) {
+        return Err("a directory descriptor was not a starting point");
+    }
+    if !matches!(fd::start_location(process, 3), Err(Errno::ENOTDIR)) {
+        return Err("a file descriptor was accepted as a starting point");
+    }
+    if !matches!(fd::start_location(process, 99), Err(Errno::EBADF)) {
+        return Err("a closed descriptor was accepted as a starting point");
+    }
+
+    let relative = fd::sys_openat(process, tmp, page + AT_NAME, O_RDONLY, 0)
+        .map_err(|_| "a name relative to a directory descriptor did not open")?;
+    let relative = i32::try_from(relative).map_err(|_| "an impossible descriptor")?;
+    refuses(
+        file::sys_write(process, relative, page + AT_DATA, 1),
+        Errno::EBADF,
+        "a descriptor opened O_RDONLY was written",
+    )?;
+    refuses(
+        file::sys_read(process, tmp, page + AT_BACK, 1),
+        Errno::EISDIR,
+        "a directory was read as a file",
+    )?;
+
+    answers(fd::sys_close(process, relative), 0, "close was refused")?;
+    refuses(
+        fd::sys_close(process, relative),
+        Errno::EBADF,
+        "a second close was not EBADF",
+    )?;
+    refuses(
+        file::sys_read(process, relative, page + AT_BACK, 1),
+        Errno::EBADF,
+        "a closed descriptor was read",
+    )
 }
 
 // ---------------------------------------------------------------------------
