@@ -204,7 +204,13 @@ fn reserve(len: u64, flags: VmaFlags, kind: Kind) -> Result<Mapping, VmapError> 
     let span = PageRange::from_len(at, span_bytes).map_err(|_| VmapError::BadLength(span_bytes))?;
     arena
         .space
-        .insert(span, flags, Backing::Anonymous)
+        // Private, and offset by its own address: the convention `Backing`
+        // documents, which keeps two adjacent spans contiguous so the arena
+        // merges them exactly as it did before anonymous memory named an
+        // object. Allocation identity does not depend on that -- it lives in
+        // `arena.live` beside the arena, for the reason this module's header
+        // gives -- but the region count does.
+        .insert(span, flags, Backing::Anonymous { id: 0, offset: at })
         .map_err(|_| VmapError::NoAddressSpace(span_bytes))?;
 
     let base = at + GUARD_BYTES;

@@ -59,10 +59,23 @@ fn reported(report: &[Unmapping]) -> Vec<(u64, u64)> {
 }
 
 /// Maps an anonymous region, asserting that it took.
+/// Private anonymous backing for a mapping starting at `start`.
+///
+/// The offset is the start address, which is the convention `Backing` documents
+/// for memory with no named object: it is what makes two adjacent private
+/// regions contiguous, and therefore mergeable, exactly as they were when the
+/// variant carried nothing at all.
+fn anon(start: u64) -> Backing {
+    Backing::Anonymous {
+        id: 0,
+        offset: start,
+    }
+}
+
 #[track_caller]
 fn map(space: &mut AddressSpace, start: u64, end: u64, flags: VmaFlags) {
     assert_eq!(
-        space.insert(range(start, end), flags, Backing::Anonymous),
+        space.insert(range(start, end), flags, anon(start)),
         Ok(()),
         "the fixture mapping should have been accepted"
     );
@@ -168,7 +181,7 @@ fn insert_then_find() {
     );
     assert_eq!(
         found.backing,
-        Backing::Anonymous,
+        anon(0x10_000),
         "the backing survives the insertion"
     );
     assert!(!found.cow, "a freshly mapped region is not copy-on-write");
@@ -211,7 +224,7 @@ fn insert_rejects_overlap() {
     ] {
         assert_eq!(
             space
-                .insert(range(start, end), VmaFlags::READ, Backing::Anonymous)
+                .insert(range(start, end), VmaFlags::READ, anon(start))
                 .err(),
             Some(VmaError::Overlap),
             "an insert touching a mapped page must be refused, not silently merged"
@@ -231,7 +244,7 @@ fn insert_rejects_ranges_outside_the_window() {
 
     assert_eq!(
         space
-            .insert(range(0, 0x2000), VmaFlags::READ, Backing::Anonymous)
+            .insert(range(0, 0x2000), VmaFlags::READ, anon(0))
             .err(),
         Some(VmaError::OutOfRange),
         "the guard page below the window must stay unmapped so a null dereference faults"
@@ -241,7 +254,7 @@ fn insert_rejects_ranges_outside_the_window() {
             .insert(
                 range(HIGH - 0x1000, HIGH + 0x1000),
                 VmaFlags::READ,
-                Backing::Anonymous
+                anon(HIGH - 0x1000)
             )
             .err(),
         Some(VmaError::OutOfRange),
@@ -322,7 +335,7 @@ fn map_fixed_over_nothing() {
     let report = space.map_fixed(
         range(0x10_000, 0x12_000),
         VmaFlags::READ_WRITE,
-        Backing::Anonymous,
+        anon(0x10_000),
     );
     let report = report.expect("mapping into empty space succeeds");
     check(&space);
@@ -347,7 +360,7 @@ fn map_fixed_over_the_exact_extent_of_a_region() {
         .map_fixed(
             range(0x10_000, 0x12_000),
             VmaFlags::READ_WRITE,
-            Backing::Anonymous,
+            anon(0x10_000),
         )
         .expect("replacing a whole region is allowed");
     check(&space);
@@ -374,7 +387,7 @@ fn map_fixed_into_the_middle_splits_a_region_in_three() {
         .map_fixed(
             range(0x14_000, 0x15_000),
             VmaFlags::READ_WRITE,
-            Backing::Anonymous,
+            anon(0x14_000),
         )
         .expect("mapping inside a region is allowed");
     check(&space);
@@ -419,7 +432,7 @@ fn map_fixed_over_the_front_of_a_region() {
         .map_fixed(
             range(0x10_000, 0x12_000),
             VmaFlags::READ_WRITE,
-            Backing::Anonymous,
+            anon(0x10_000),
         )
         .expect("replacing the front of a region is allowed");
     check(&space);
@@ -445,7 +458,7 @@ fn map_fixed_over_the_back_of_a_region() {
         .map_fixed(
             range(0x1E_000, 0x20_000),
             VmaFlags::READ_WRITE,
-            Backing::Anonymous,
+            anon(0x1E_000),
         )
         .expect("replacing the back of a region is allowed");
     check(&space);
@@ -473,7 +486,7 @@ fn map_fixed_across_whole_and_partial_regions() {
         .map_fixed(
             range(0x11_000, 0x18_000),
             VmaFlags::READ_WRITE,
-            Backing::Anonymous,
+            anon(0x11_000),
         )
         .expect("a span over several regions and two holes is allowed");
     check(&space);
@@ -510,7 +523,7 @@ fn map_fixed_moves_the_file_offset_of_a_truncated_front() {
         .map_fixed(
             range(0x10_000, 0x12_000),
             VmaFlags::READ_WRITE,
-            Backing::Anonymous,
+            anon(0x10_000),
         )
         .expect("replacing the front of a file mapping is allowed");
     check(&space);
@@ -534,7 +547,7 @@ fn map_fixed_rejects_ranges_outside_the_window() {
 
     assert_eq!(
         space
-            .map_fixed(range(0, 0x2000), VmaFlags::READ, Backing::Anonymous)
+            .map_fixed(range(0, 0x2000), VmaFlags::READ, anon(0))
             .err(),
         Some(VmaError::OutOfRange),
         "MAP_FIXED below the window is refused rather than clamped"
@@ -1474,7 +1487,7 @@ fn random_operations_keep_the_invariants_and_match_a_shadow_model() {
         match rng.below(4) {
             0 => {
                 let report = space
-                    .map_fixed(target, flags_for(code), Backing::Anonymous)
+                    .map_fixed(target, flags_for(code), anon(target.start()))
                     .expect("the range is aligned and inside the window");
                 assert_eq!(
                     reported_bytes(&report, target),
@@ -1509,7 +1522,7 @@ fn random_operations_keep_the_invariants_and_match_a_shadow_model() {
                 }
             }
             _ => {
-                let outcome = space.insert(target, flags_for(code), Backing::Anonymous);
+                let outcome = space.insert(target, flags_for(code), anon(target.start()));
                 if mapped_before == 0 {
                     assert_eq!(outcome, Ok(()), "an insert into free space succeeds");
                     pages.fill(code);
@@ -1560,5 +1573,154 @@ fn random_operations_keep_the_invariants_and_match_a_shadow_model() {
         space.region_count(),
         runs,
         "one region per run of equal flags: more would mean a merge was missed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Named anonymous objects
+// ---------------------------------------------------------------------------
+//
+// Anonymous memory grew an identity so that `MAP_SHARED | MAP_ANONYMOUS`, a
+// futex in such memory, and reclaim asking what a page belongs to all have an
+// object to name. These pin the consequences: an identity that is ignored
+// would let two unrelated shared objects merge into one region, and the pages
+// of the second would silently answer to the first.
+
+#[test]
+fn two_different_anonymous_objects_do_not_merge() {
+    let mut space = space();
+    let flags = VmaFlags::READ_WRITE;
+
+    space
+        .insert(
+            range(0x10_000, 0x11_000),
+            flags,
+            Backing::Anonymous { id: 7, offset: 0 },
+        )
+        .expect("the first range is free");
+    space
+        .insert(
+            range(0x11_000, 0x12_000),
+            flags,
+            Backing::Anonymous { id: 9, offset: 0 },
+        )
+        .expect("the second range is free");
+
+    assert_eq!(
+        space.region_count(),
+        2,
+        "adjacent regions naming different objects are not one mapping"
+    );
+}
+
+#[test]
+fn one_anonymous_object_merges_where_its_offsets_line_up() {
+    let mut space = space();
+    let flags = VmaFlags::READ_WRITE;
+
+    space
+        .insert(
+            range(0x10_000, 0x11_000),
+            flags,
+            Backing::Anonymous { id: 7, offset: 0 },
+        )
+        .expect("the first range is free");
+    space
+        .insert(
+            range(0x11_000, 0x12_000),
+            flags,
+            Backing::Anonymous {
+                id: 7,
+                offset: 0x1000,
+            },
+        )
+        .expect("the second range is free");
+
+    assert_eq!(
+        space.region_count(),
+        1,
+        "one object mapped continuously is one region"
+    );
+}
+
+#[test]
+fn one_anonymous_object_mapped_out_of_order_does_not_merge() {
+    let mut space = space();
+    let flags = VmaFlags::READ_WRITE;
+
+    // The same object, adjacent in address space, but the second region is
+    // *earlier* in the object. Merging these would make the second page read
+    // from the wrong part of it -- the file case's bug, reached by anonymous
+    // memory now that it has parts to get wrong.
+    space
+        .insert(
+            range(0x10_000, 0x11_000),
+            flags,
+            Backing::Anonymous {
+                id: 7,
+                offset: 0x4000,
+            },
+        )
+        .expect("the first range is free");
+    space
+        .insert(
+            range(0x11_000, 0x12_000),
+            flags,
+            Backing::Anonymous { id: 7, offset: 0 },
+        )
+        .expect("the second range is free");
+
+    assert_eq!(
+        space.region_count(),
+        2,
+        "discontinuous offsets are two regions"
+    );
+}
+
+#[test]
+fn splitting_a_named_anonymous_region_advances_its_offset() {
+    let mut space = space();
+    space
+        .insert(
+            range(0x10_000, 0x14_000),
+            VmaFlags::READ_WRITE,
+            Backing::Anonymous { id: 7, offset: 0 },
+        )
+        .expect("the range is free");
+
+    // Take the first page away; the tail must now start one page into the
+    // object, or everything mapped after it answers from the wrong offset.
+    let _ = space
+        .remove(range(0x10_000, 0x11_000))
+        .expect("the range is mapped");
+
+    let tail = space.find(0x11_000).expect("the tail is still mapped");
+    assert_eq!(
+        tail.backing,
+        Backing::Anonymous {
+            id: 7,
+            offset: 0x1000
+        },
+        "truncating the front of a region moves its offset with it"
+    );
+}
+
+#[test]
+fn an_anonymous_offset_that_would_overflow_is_refused() {
+    let mut space = space();
+    // The same rule the file case has: a split advances the offset, so
+    // `offset + len` has to fit before any split can be the thing that wraps.
+    assert!(
+        space
+            .insert(
+                range(0x10_000, 0x12_000),
+                VmaFlags::READ,
+                Backing::Anonymous {
+                    id: 7,
+                    offset: u64::MAX - 0x1000 + 1,
+                },
+            )
+            .is_err(),
+        "an offset whose end leaves the object's 64-bit space is refused"
     );
 }

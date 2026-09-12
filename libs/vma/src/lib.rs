@@ -265,8 +265,39 @@ impl VmaFlags {
 /// What the pages of a region are backed by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Backing {
-    /// Zero-filled memory with no file behind it.
-    Anonymous,
+    /// Zero-filled memory with no file behind it, from `offset` bytes into the
+    /// object holding it.
+    ///
+    /// # Why anonymous memory names an object at all
+    ///
+    /// It did not, until stage 6 needed it to, and the argument for the unit
+    /// variant was good: zero-filled memory has no identity to disagree about,
+    /// so any two anonymous regions are interchangeable. That holds right up
+    /// until anonymous memory can be *shared*, and three things need it to be:
+    ///
+    /// * `MAP_SHARED | MAP_ANONYMOUS` between the children of a `fork`, which
+    ///   musl uses, and a futex in such memory has to resolve to one wait
+    ///   queue rather than to one per process;
+    /// * `/proc/self/maps` and reclaim, which both want to say what a page
+    ///   belongs to — `PageEntry`'s owning-object field is there for it;
+    /// * `fork` itself, which is easier to reason about as "both regions name
+    ///   the same object, copied per page on write" than as a page-table trick
+    ///   that has to be unpicked when shared anonymous memory arrives.
+    ///
+    /// # The convention for private memory
+    ///
+    /// An `id` of zero means no named object: ordinary private anonymous
+    /// memory. Its `offset` is by convention the mapping's own start address,
+    /// which is what Linux's `vm_pgoff` holds for an anonymous VMA and for the
+    /// same reason — it makes two adjacent private regions contiguous by
+    /// construction, so they still merge, and an `mprotect` loop still does
+    /// not leak regions.
+    Anonymous {
+        /// The object these pages belong to, or zero for private memory.
+        id: u64,
+        /// Byte offset into that object of the region's first page.
+        offset: u64,
+    },
     /// A file, from `offset` bytes in.
     File {
         /// Opaque to this crate: the kernel's inode number or VMO handle.
@@ -289,7 +320,10 @@ impl Backing {
     /// the rest of the file by one page.
     const fn advanced_by(self, bytes: u64) -> Backing {
         match self {
-            Backing::Anonymous => Backing::Anonymous,
+            Backing::Anonymous { id, offset } => Backing::Anonymous {
+                id,
+                offset: offset.saturating_add(bytes),
+            },
             // `saturating_add` cannot saturate here: `validate_backing`
             // refused any region whose end offset would leave the object's own
             // 64-bit space, and `bytes` never exceeds the region's length.
@@ -354,13 +388,24 @@ fn mergeable(left: &Vma, right: &Vma) -> bool {
 /// Whether `right` continues `left`'s backing object exactly where `left`'s
 /// `left_len` bytes end.
 ///
-/// Two anonymous regions are always continuous, because zero-filled memory has
-/// no identity to disagree about. Anything with an offset has to line up, or
-/// merging would make the second half of the region read from the wrong part
-/// of the file.
+/// Every kind has to line up, or merging would make the second half of the
+/// region read from the wrong part of the object. Anonymous memory included,
+/// since it grew an identity -- and the convention that private memory's
+/// offset is its own start address is what keeps two adjacent private regions
+/// contiguous, so they merge exactly as they did when the variant carried
+/// nothing.
 fn contiguous_backing(left: Backing, right: Backing, left_len: u64) -> bool {
     match (left, right) {
-        (Backing::Anonymous, Backing::Anonymous) => true,
+        (
+            Backing::Anonymous {
+                id: left_id,
+                offset: left_offset,
+            },
+            Backing::Anonymous {
+                id: right_id,
+                offset: right_offset,
+            },
+        ) => left_id == right_id && left_offset.checked_add(left_len) == Some(right_offset),
         (
             Backing::File {
                 id: left_id,
@@ -386,7 +431,7 @@ fn contiguous_backing(left: Backing, right: Backing, left_len: u64) -> bool {
 /// Checks a backing object against the length of the region it will cover.
 fn validate_backing(backing: Backing, len: u64) -> Result<(), VmaError> {
     match backing {
-        Backing::Anonymous => Ok(()),
+        Backing::Anonymous { offset, .. } => validate_backing_base(offset, len),
         Backing::File { offset, .. } => validate_backing_base(offset, len),
         Backing::Device { physical } => validate_backing_base(physical, len),
     }
