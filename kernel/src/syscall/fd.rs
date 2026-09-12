@@ -199,19 +199,35 @@ pub(crate) fn sys_openat(
     let path = user_path(process, path)?;
     let (flags, cloexec) = decode_open_flags(raw_flags);
     let start = start_for(process, dirfd, &path)?;
+    // The descriptor before the path, as Linux takes it. An open refused for
+    // `EMFILE` only after it had created its file would leave the file
+    // behind, and the program's retry with `O_EXCL` would be `EEXIST`.
+    let reserved = process.files().lock().reserve(cloexec)?;
     // A copy of the context rather than the lock: the walk calls into
     // filesystems, and `chdir` on another thread must not wait for it.
     let context = process.fs_context().lock().clone();
-    let file = fs::namespace().open(
-        &context,
-        start.as_ref(),
-        &path,
-        &flags,
-        mode & 0o7777 & !process.umask(),
-    )?;
-    // A named pipe opens as a pipe end; everything else is returned as it is.
-    let file = fs::pipe::attach_fifo(file)?;
-    number(process.files().lock().insert(file, cloexec)?)
+    let opened = fs::namespace()
+        .open(
+            &context,
+            start.as_ref(),
+            &path,
+            &flags,
+            mode & 0o7777 & !process.umask(),
+        )
+        // A named pipe opens as a pipe end; everything else is returned as it
+        // is.
+        .and_then(fs::pipe::attach_fifo);
+    let file = match opened {
+        Ok(file) => file,
+        Err(errno) => {
+            process.files().lock().release(reserved);
+            return Err(errno);
+        }
+    };
+    // The guard is a temporary of this statement: a file handed back by a
+    // failed fill is dropped with the lock released, as the module requires.
+    let filled = process.files().lock().fill(reserved, file);
+    number(filled.map_err(|_unfilled| Errno::EBADF)?)
 }
 
 /// `close`.
@@ -272,11 +288,14 @@ pub(crate) fn sys_fcntl(process: &Process, fd: i32, cmd: u32, arg: u64) -> Resul
     match cmd {
         F_DUPFD | F_DUPFD_CLOEXEC => {
             // At or above the table's limit is `EINVAL`, which the table says.
+            // A copy goes in, so that the one a refused insert drops under the
+            // lock is never the last: `fd` may have been closed meanwhile.
             let min = i32::try_from(arg).map_err(|_| Errno::EINVAL)?;
-            let new = process
-                .files()
-                .lock()
-                .insert_from(min, file, cmd == F_DUPFD_CLOEXEC)?;
+            let new = process.files().lock().insert_from(
+                min,
+                Arc::clone(&file),
+                cmd == F_DUPFD_CLOEXEC,
+            )?;
             number(new)
         }
         F_GETFD => {

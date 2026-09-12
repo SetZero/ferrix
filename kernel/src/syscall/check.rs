@@ -23,7 +23,7 @@ use ferrix_bootinfo::{KERNEL_HALF_BASE, PAGE_SIZE};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     AT_FDCWD, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
-    MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_SHARED, O_APPEND, O_CLOEXEC, O_CREAT, O_RDONLY,
+    MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_SHARED, O_APPEND, O_CLOEXEC, O_CREAT, O_EXCL, O_RDONLY,
     O_RDWR, O_TRUNC, PROT_READ, PROT_WRITE, SEEK_CUR, SEEK_END, SEEK_SET, TCGETS,
 };
 
@@ -1358,6 +1358,12 @@ const AT_DATA: u64 = 256;
 const AT_BACK: u64 = 512;
 /// See [`AT_PATH`].
 const AT_RESULT: u64 = 1024;
+/// See [`AT_PATH`].
+const AT_FULL: u64 = 1536;
+
+/// The file an `openat` at the descriptor limit is refused, and must not
+/// leave behind.
+const FULL_PATH: &[u8] = b"/tmp/descriptor-full\0";
 
 /// Run the descriptor checks on a page of their own, and leave nothing behind:
 /// every descriptor they opened closed, the file unlinked, the page unmapped.
@@ -1368,12 +1374,14 @@ fn check_descriptors(process: &Process) -> Result<(), &'static str> {
         (AT_NAME, CHECK_NAME),
         (AT_TMP, TMP_PATH),
         (AT_DATA, CHECK_DATA),
+        (AT_FULL, FULL_PATH),
     ] {
         uaccess::copy_to_user(process.space(), page + offset, bytes)
             .map_err(|_| "could not stage the descriptor checks")?;
     }
 
     let outcome = check_a_new_process_has_the_console(process)
+        .and_then(|()| check_a_full_table_creates_nothing(process, page))
         .and_then(|()| check_a_file_opens_on_the_lowest_free_descriptor(process, page))
         .and_then(|()| check_a_dup_shares_the_offset(process, page))
         .and_then(|()| check_fcntl_and_dup3_follow_linux(process, page))
@@ -1384,9 +1392,11 @@ fn check_descriptors(process: &Process) -> Result<(), &'static str> {
     for fd in 3..32 {
         let _ = fd::sys_close(process, fd);
     }
-    let path = CHECK_PATH.strip_suffix(b"\0").unwrap_or(CHECK_PATH);
     let namespace = crate::fs::namespace();
-    let _ = namespace.unlink(&namespace.context(), None, path);
+    for staged in [CHECK_PATH, FULL_PATH] {
+        let path = staged.strip_suffix(b"\0").unwrap_or(staged);
+        let _ = namespace.unlink(&namespace.context(), None, path);
+    }
     let _ = memory::sys_munmap(process, page, PAGE_SIZE);
     outcome
 }
@@ -1429,6 +1439,42 @@ fn check_a_new_process_has_the_console(process: &Process) -> Result<(), &'static
         fd::sys_ioctl(process, 99, TCGETS, 0),
         Errno::EBADF,
         "an ioctl on a closed descriptor was not EBADF",
+    )
+}
+
+/// `openat` with every descriptor taken is `EMFILE` and creates nothing: the
+/// same `O_CREAT|O_EXCL` succeeds once a descriptor is free again, where a
+/// file left behind by the refused call would make it `EEXIST`. Linux takes
+/// the descriptor number before it touches the path, for this reason.
+fn check_a_full_table_creates_nothing(process: &Process, page: u64) -> Result<(), &'static str> {
+    let flags = O_RDWR | O_CREAT | O_EXCL;
+    let limit = process.files().lock().limit();
+    // Descriptors 0, 1 and 2 are the console, so a limit of three leaves
+    // none free.
+    process
+        .files()
+        .lock()
+        .set_limit(3)
+        .map_err(|_| "could not lower the descriptor limit")?;
+    let refused = fd::sys_openat(process, AT_FDCWD, page + AT_FULL, flags, 0o644);
+    let restored = process.files().lock().set_limit(limit);
+    restored.map_err(|_| "could not restore the descriptor limit")?;
+    refuses(
+        refused,
+        Errno::EMFILE,
+        "openat with every descriptor taken was not EMFILE",
+    )?;
+    let opened = fd::sys_openat(process, AT_FDCWD, page + AT_FULL, flags, 0o644);
+    if let Ok(fd) = opened {
+        let _ = fd::sys_close(process, i32::try_from(fd).unwrap_or(-1));
+    }
+    let path = FULL_PATH.strip_suffix(b"\0").unwrap_or(FULL_PATH);
+    let namespace = crate::fs::namespace();
+    let _ = namespace.unlink(&namespace.context(), None, path);
+    answers(
+        opened,
+        3,
+        "openat refused for EMFILE had created its file anyway",
     )
 }
 

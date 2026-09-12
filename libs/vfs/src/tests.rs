@@ -807,6 +807,50 @@ fn a_full_table_is_emfile_and_exec_closes_cloexec() {
     assert_eq!(table.set_limit(2_000_000), Err(Errno::EPERM));
 }
 
+#[test]
+fn a_reserved_descriptor_is_taken_names_nothing_and_is_filled_once() {
+    let mut table = FdTable::new();
+    let _ = table.insert('a', false).unwrap();
+    let reserved = table.reserve(true).unwrap();
+    assert_eq!(reserved.fd(), 1);
+    // Taken: the next number handed out is past it...
+    assert_eq!(table.insert('b', false), Ok(2));
+    // ...but it names nothing yet, as on Linux.
+    assert_eq!(table.get(1), Err(Errno::EBADF));
+    assert_eq!(table.remove(1), Err(Errno::EBADF));
+    assert_eq!(table.install(1, 'x', false), Err(Errno::EBUSY));
+    assert_eq!(table.iter().map(|(fd, _)| fd).collect::<Vec<_>>(), [0, 2]);
+
+    // A fork now copies the descriptors and not the reservation, which
+    // nothing would ever fill in the child.
+    let child = table.clone();
+    assert_eq!(child.len(), 2);
+
+    assert_eq!(table.fill(reserved, 'c'), Ok(1));
+    assert_eq!(table.get(1), Ok(&'c'));
+    assert_eq!(table.cloexec(1), Ok(true), "the reservation's close-on-exec");
+    assert_eq!(table.len(), 3);
+
+    // And a reservation spent on a table it did not come from hands the item
+    // back rather than dropping it.
+    let mut other: FdTable<char> = FdTable::new();
+    let stray = table.reserve(false).unwrap();
+    assert_eq!(other.fill(stray, 'z'), Err('z'));
+}
+
+#[test]
+fn a_released_reservation_frees_its_number_and_a_full_table_reserves_nothing() {
+    let mut table = FdTable::new();
+    table.set_limit(2).unwrap();
+    let _ = table.insert(0, false).unwrap();
+    let reserved = table.reserve(false).unwrap();
+    assert_eq!(table.reserve(false), Err(Errno::EMFILE));
+    assert_eq!(table.insert(9, false), Err(Errno::EMFILE));
+    table.release(reserved);
+    assert_eq!(table.len(), 1);
+    assert_eq!(table.insert(1, false), Ok(1));
+}
+
 // -- initramfs ---------------------------------------------------------------
 
 /// Build a newc archive.
