@@ -699,6 +699,26 @@ fn items_out_of_order_are_refused() {
 }
 
 #[test]
+fn a_node_deeper_than_any_tree_is_refused() {
+    // Level 7 is the root of the deepest tree btrfs builds; 8 is no node at
+    // all, and a standalone parse must say so without a walker's help.
+    let pointers = [(BtrfsKey::new(256, 1, 0), 0x8000)];
+    let deepest = internal(&pointers, 0x4000, 7);
+    assert!(
+        Node::parse(&deepest, 0x4000).is_ok(),
+        "level 7 is the deepest a tree goes"
+    );
+    for level in [8, 0xFF] {
+        let bytes = internal(&pointers, 0x4000, level);
+        assert_eq!(
+            Node::parse_unchecked_address(&bytes).unwrap_err(),
+            BtrfsError::BadTree { logical: 0x4000 },
+            "level {level} is deeper than btrfs allows"
+        );
+    }
+}
+
+#[test]
 fn a_truncated_node_is_refused() {
     let bytes = sample_leaf();
     for length in [0, 50, HEADER_SIZE - 1, HEADER_SIZE + 10] {

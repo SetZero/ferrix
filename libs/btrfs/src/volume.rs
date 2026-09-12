@@ -48,9 +48,10 @@ use crate::superblock::{IncompatFlags, PRIMARY_OFFSET, SUPERBLOCK_SIZE, Superblo
 use crate::tree::{BtrfsKey, Item, Node, NodeHeader};
 use crate::{BtrfsError, truncated};
 
-/// The highest level a tree node may have. btrfs trees have at most eight
-/// levels, numbered from zero at the leaves.
-pub const MAX_LEVEL: u8 = 7;
+/// The highest level a tree node may have, re-exported where the walker that
+/// enforces it lives. One constant, so the parser and the walker cannot drift
+/// apart on how deep a tree is.
+pub use crate::tree::MAX_LEVEL;
 
 /// Byte-addressed access to the one device a volume lives on.
 ///

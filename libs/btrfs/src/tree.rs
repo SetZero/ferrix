@@ -60,6 +60,11 @@ pub const MIN_NODE_SIZE: u32 = 4096;
 /// superblock rather than a future format.
 pub const MAX_NODE_SIZE: u32 = 65536;
 
+/// The highest level a tree node may have. btrfs trees have at most eight
+/// levels, numbered from zero at the leaves — Linux's `BTRFS_MAX_LEVEL` is the
+/// count, eight, and every level it accepts is below it.
+pub const MAX_LEVEL: u8 = 7;
+
 // ---------------------------------------------------------------------------
 // Keys
 // ---------------------------------------------------------------------------
@@ -284,6 +289,15 @@ impl<'a> Node<'a> {
         }
         verify_crc32c(bytes)?;
         let header = NodeHeader::parse(bytes)?;
+        // A level above the deepest tree btrfs builds is not a node of any
+        // tree, whoever points at it. Linux's `btrfs_check_node` refuses it
+        // before looking at a key; checking here means a standalone parse
+        // refuses it too, not only a walk that knows which level to expect.
+        if header.level > MAX_LEVEL {
+            return Err(BtrfsError::BadTree {
+                logical: header.bytenr,
+            });
+        }
         let node = Node { bytes, header };
         node.check_capacity()?;
         if header.is_leaf() {
