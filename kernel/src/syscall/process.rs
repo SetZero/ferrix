@@ -42,6 +42,7 @@ use ferrix_vma::VmaFlags;
 
 use crate::object::{self, HandleTable};
 use crate::sched::{self, Task, WaitQueue};
+use crate::syscall::registry;
 use crate::syscall::signal::Signals;
 use crate::user::space::{AddressSpace, SpaceError};
 
@@ -50,6 +51,10 @@ use crate::user::space::{AddressSpace, SpaceError};
 pub(crate) struct Process {
     /// What it can see.
     space: Arc<AddressSpace>,
+    /// Its process id, from [`registry::allocate`]: what `getpid` answers,
+    /// and what `/proc`, `kill` and `wait4` find it by. Zero only if every
+    /// pid was in use when it was made, in which case nothing can find it.
+    pid: u32,
     /// The handles it holds, for the native ABI.
     ///
     /// A lock of its own rather than a field of `state`: a channel write looks
@@ -115,6 +120,7 @@ impl Process {
     pub(crate) fn new(space: Arc<AddressSpace>) -> Process {
         Process {
             space,
+            pid: registry::allocate().unwrap_or(0),
             handles: SpinLock::new(HandleTable::new(object::HANDLE_LIMIT)),
             state: SpinLock::new(State::default()),
             startup: SpinLock::new(None),
@@ -129,6 +135,11 @@ impl Process {
     /// What it can see.
     pub(crate) fn space(&self) -> &Arc<AddressSpace> {
         &self.space
+    }
+
+    /// Its process id; zero if it was made with every pid in use.
+    pub(crate) fn pid(&self) -> u32 {
+        self.pid
     }
 
     /// Do something with the handle table, under its lock.
@@ -334,6 +345,16 @@ impl Process {
     }
 }
 
+impl Drop for Process {
+    /// Give the pid back. The number is not used again until allocation comes
+    /// round to it; see [`registry`].
+    fn drop(&mut self) {
+        if self.pid != 0 {
+            registry::release(self.pid);
+        }
+    }
+}
+
 /// The process the running task belongs to.
 ///
 /// `None` for a kernel thread.
@@ -441,5 +462,5 @@ fn run_program(_argument: usize) {
 ///
 /// Whatever [`AddressSpace::new`] refuses.
 pub(crate) fn new_for_check() -> Result<Arc<Process>, SpaceError> {
-    Ok(Arc::new(Process::new(AddressSpace::new()?)))
+    Ok(registry::register(Process::new(AddressSpace::new()?)))
 }

@@ -57,6 +57,8 @@ pub(crate) struct Report {
     pub(crate) concurrent: Option<(u64, u64)>,
     /// The status a spinning program reported after being killed from outside.
     pub(crate) killed: Option<i32>,
+    /// Processes the pid registry numbered, found, listed and let go.
+    pub(crate) pids: u32,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -65,6 +67,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 
     let getpid_number = check_the_right_table_was_compiled_in(&mut counter)?;
     check_identity_answers(&mut counter)?;
+    let pids = crate::syscall::registry::check()?;
     check_an_unknown_number_is_enosys(&mut counter)?;
     check_the_whole_number_space_is_total(&mut counter)?;
     check_errors_encode_as_negative(&mut counter)?;
@@ -106,6 +109,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         user_status,
         concurrent,
         killed,
+        pids,
     })
 }
 

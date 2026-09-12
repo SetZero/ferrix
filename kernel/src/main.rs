@@ -340,6 +340,10 @@ fn check_syscalls() {
         arch::NAME,
     );
     println!(
+        "  pids     {} processes numbered, found by pid, listed in order and let go",
+        report.pids,
+    );
+    println!(
         "  uaccess  {} pages mapped, written and read back through a user space, \
          {} frames leaked",
         report.pages, report.leaked,

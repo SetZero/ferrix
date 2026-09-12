@@ -27,6 +27,7 @@ use ferrix_vma::VmaFlags;
 
 use crate::syscall::load::{self, LoadError};
 use crate::syscall::process::{self, Process, Startup};
+use crate::syscall::registry;
 use crate::syscall::uaccess;
 use crate::user::space::{AddressSpace, SpaceError};
 
@@ -163,7 +164,7 @@ pub(crate) fn load(
         entry: loaded.entry,
         stack: startup.sp,
     });
-    Ok(Arc::new(process))
+    Ok(registry::register(process))
 }
 
 /// Load `image`, run it as a task of its own, and wait for it to end.

@@ -47,6 +47,7 @@ pub(crate) mod load;
 pub(crate) mod memory;
 pub(crate) mod native;
 pub(crate) mod process;
+pub(crate) mod registry;
 pub(crate) mod signal;
 pub(crate) mod system;
 pub(crate) mod time;
@@ -144,6 +145,13 @@ pub(crate) fn dispatch(args: &SyscallArgs) -> Outcome {
 /// because the honest failure is "there is no process here", which is true of
 /// every call today and will be true of none once stage 6's transition lands.
 fn handle(call: Syscall, args: &SyscallArgs, process: Option<&Process>) -> Result<usize, Errno> {
+    // The process's own number when there is a process, and the running
+    // task's when there is not -- the boot self-checks call this with none.
+    // `gettid` stays the task's number either way, which is what it is.
+    if matches!(call, Syscall::Getpid) {
+        let pid = process.map(Process::pid).filter(|&pid| pid != 0);
+        return Ok(pid.map_or_else(current_id, |pid| pid as usize));
+    }
     if let Some(answer) = stateless(call, args) {
         return answer;
     }
@@ -159,7 +167,7 @@ fn handle(call: Syscall, args: &SyscallArgs, process: Option<&Process>) -> Resul
 fn stateless(call: Syscall, args: &SyscallArgs) -> Option<Result<usize, Errno>> {
     let _ = args;
     let answer = match call {
-        Syscall::Getpid | Syscall::Gettid => Ok(current_id()),
+        Syscall::Gettid => Ok(current_id()),
         // Ferrix has one process tree and no init yet, so the boot task's
         // parent is itself. A program that walks up from here terminates.
         Syscall::Getppid => Ok(1),
