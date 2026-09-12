@@ -125,5 +125,45 @@ fn main() -> Result<(), Box<dyn Error>> {
         "cargo::rustc-env=FERRIX_INIT_SCRIPT_FILE={}",
         script_file.display()
     );
+    init_commands()
+}
+
+/// A list of programs for init to run in turn, in place of the shell.
+///
+/// How `cargo xtask test-vfs` makes stage 8's exit criterion a check: three
+/// programs rather than one, which this busybox's shell cannot start by
+/// itself. `FERRIX_INIT_COMMANDS` names a file rather than holding the list,
+/// because each argument ends in a NUL and each command in an empty argument --
+/// a second NUL -- so that an argument can be a script with any byte in it but
+/// that one, and an environment variable cannot hold a NUL at all. Unset, the
+/// kernel embeds an empty list and init does what it did before.
+fn init_commands() -> Result<(), Box<dyn Error>> {
+    println!("cargo::rerun-if-env-changed=FERRIX_INIT_COMMANDS");
+    let commands = match std::env::var_os("FERRIX_INIT_COMMANDS") {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            println!("cargo::rerun-if-changed={}", path.display());
+            let list = std::fs::read(&path)?;
+            // Checked here so that a list cut short fails the build rather
+            // than losing its last command silently at boot.
+            if !list.is_empty() && !list.ends_with(b"\0\0") {
+                return Err(format!(
+                    "{} does not end its last command with an empty argument",
+                    path.display()
+                )
+                .into());
+            }
+            path
+        }
+        None => {
+            let empty = PathBuf::from(std::env::var("OUT_DIR")?).join("no-init-commands");
+            std::fs::write(&empty, b"")?;
+            empty
+        }
+    };
+    println!(
+        "cargo::rustc-env=FERRIX_INIT_COMMANDS_FILE={}",
+        commands.display()
+    );
     Ok(())
 }

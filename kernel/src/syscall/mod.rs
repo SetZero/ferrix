@@ -55,11 +55,14 @@ pub(crate) mod time;
 pub(crate) mod tty;
 pub(crate) mod uaccess;
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use ferrix_linux_abi::errno::{self, Errno};
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::AT_FDCWD;
 
 use crate::arch;
+use crate::console::println;
 use crate::sched;
 use crate::syscall::memory::{MmapRequest, OffsetUnit};
 use crate::syscall::process::Process;
@@ -120,6 +123,7 @@ pub(crate) fn dispatch(args: &SyscallArgs) -> Outcome {
         return Outcome::Return(errno::encode(native::dispatch(args, process.as_deref())));
     }
     let Some(call) = arch::decode_syscall(args.number) else {
+        unanswered(None, args.number);
         return Outcome::Return(Errno::ENOSYS.as_return_value());
     };
     // Resolved once, here, rather than reached for inside each handler: the
@@ -137,7 +141,42 @@ pub(crate) fn dispatch(args: &SyscallArgs) -> Outcome {
         process::exit_current(truncate(args.args[0]) as i32 & 0xFF);
     }
 
-    Outcome::Return(errno::encode(handle(call, args, process.as_deref())))
+    let answer = handle(call, args, process.as_deref());
+    if answer == Err(Errno::ENOSYS) {
+        unanswered(Some(call), args.number);
+    }
+    Outcome::Return(errno::encode(answer))
+}
+
+/// How many more calls answered `ENOSYS` may be reported. See
+/// [`report_unanswered`].
+static UNANSWERED_LINES: AtomicU32 = AtomicU32::new(0);
+
+/// Report the next `lines` calls answered `ENOSYS` on the console, a line each.
+///
+/// What turns a foreign program's failure into the name of the call it was
+/// missing: busybox refused a call often carries on and fails later, or prints
+/// nothing, and the serial log is all a boot test has. Off unless init turns
+/// it on around a program, because the boot self-check answers every number up
+/// to 600 with `ENOSYS` on purpose. A bound rather than a switch, because a
+/// program that retries a refused call forever needs reporting once, not a
+/// log of it.
+pub(crate) fn report_unanswered(lines: u32) {
+    UNANSWERED_LINES.store(lines, Ordering::Relaxed);
+}
+
+/// One `ENOSYS`, reported if [`report_unanswered`] left room for it.
+fn unanswered(call: Option<Syscall>, number: usize) {
+    let room = UNANSWERED_LINES.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+        left.checked_sub(1)
+    });
+    if room.is_err() {
+        return;
+    }
+    match call {
+        Some(call) => println!("  syscall  {call:?} (number {number}) answered ENOSYS"),
+        None => println!("  syscall  number {number}, in no table, answered ENOSYS"),
+    }
 }
 
 /// The dispatch table proper.
