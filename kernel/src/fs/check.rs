@@ -11,7 +11,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::PAGE_SIZE;
-use ferrix_vfs::{FileType, Namespace, OpenFlags, RenameMode};
+use ferrix_vfs::{Errno, FileType, Namespace, OpenFlags, RenameMode};
 
 use crate::fs::{self, Report as Built};
 use crate::mm;
@@ -113,6 +113,16 @@ fn check_the_archive_unpacked_intact() -> Result<(), &'static str> {
         .kind;
     if kind != FileType::Symlink || read_all(ns, symlink)? != MARKER {
         return Err("the initramfs symbolic link does not lead to the marker");
+    }
+
+    // The whole-file read that loading a program goes through: through the
+    // link, as `execve` of `/bin/sh` will be, and refusing what is not a file.
+    let whole = fs::read_file(&ctx, None, symlink);
+    if whole.as_deref() != Ok(MARKER) {
+        return Err("reading a whole file through a symbolic link did not give the marker");
+    }
+    if fs::read_file(&ctx, None, b"/etc/ferrix") != Err(Errno::EISDIR) {
+        return Err("reading a directory as a whole file was not refused");
     }
     Ok(())
 }

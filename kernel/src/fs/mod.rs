@@ -28,6 +28,7 @@ pub(crate) mod check;
 mod pages;
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -35,7 +36,10 @@ use ferrix_bootinfo::BootView;
 use ferrix_sync::Once;
 use ferrix_vfs::initramfs::{self, UnpackError, Unpacked, makedev};
 use ferrix_vfs::tmpfs::Tmpfs;
-use ferrix_vfs::{Clock, Errno, Namespace, SetAttributes, Timespec};
+use ferrix_vfs::{
+    Clock, Context, Errno, FileType, Location, Namespace, OpenFile, OpenFlags, SetAttributes,
+    Timespec,
+};
 
 use crate::mm;
 use crate::syscall::time;
@@ -78,6 +82,68 @@ pub(crate) fn new_tmpfs() -> Arc<Tmpfs> {
         Arc::new(pages::VmoStorage),
         0o755,
     )
+}
+
+/// The most [`read_file`] will read: 64 MiB.
+///
+/// The whole file is built in kernel heap, which is what loading a program
+/// needs today, and a program naming a file large enough to exhaust the heap
+/// in one call should get `EFBIG` rather than take the kernel's memory with it.
+/// A static busybox is two megabytes; a static `rustc` is well under this.
+const READ_FILE_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// Read a whole regular file, resolving `path` from `start` -- or from the
+/// context's working directory -- and following symbolic links.
+///
+/// What loading a program from a path needs: `execve`, and init starting its
+/// first program. One function rather than a loop in each, so the two cannot
+/// disagree about what a path names or which files may be read whole.
+///
+/// A file that shrinks while it is read comes back as the bytes that were
+/// there; one that grows comes back at the size it had when it was opened.
+///
+/// # Errors
+///
+/// What the path walk refuses; `EISDIR` for a directory and `EACCES` for any
+/// other file that is not a regular one, which is what `execve` reports;
+/// `EFBIG` past [`READ_FILE_LIMIT`]; `ENOMEM` if the heap cannot hold it.
+pub(crate) fn read_file(
+    ctx: &Context,
+    start: Option<&Location>,
+    path: &[u8],
+) -> Result<Vec<u8>, Errno> {
+    let ns = namespace();
+    let at = ns.resolve(ctx, start, path, true)?;
+    let metadata = ns.stat(&at)?.metadata;
+    match metadata.kind {
+        FileType::Regular => {}
+        FileType::Directory => return Err(Errno::EISDIR),
+        _ => return Err(Errno::EACCES),
+    }
+    if metadata.size > READ_FILE_LIMIT {
+        return Err(Errno::EFBIG);
+    }
+    let len = usize::try_from(metadata.size).map_err(|_| Errno::EFBIG)?;
+
+    let flags = OpenFlags {
+        read: true,
+        ..OpenFlags::default()
+    };
+    let file = OpenFile::new(at, &flags)?;
+    let mut contents = Vec::new();
+    contents.try_reserve_exact(len).map_err(|_| Errno::ENOMEM)?;
+    contents.resize(len, 0);
+    let mut done = 0;
+    while done < len {
+        let slot = contents.get_mut(done..).ok_or(Errno::EIO)?;
+        let count = file.read(slot)?;
+        if count == 0 {
+            break;
+        }
+        done += count;
+    }
+    contents.truncate(done);
+    Ok(contents)
 }
 
 /// See [`clock`].
