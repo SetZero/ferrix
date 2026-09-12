@@ -21,6 +21,7 @@ members = [
     "libs/virtio",
     "libs/vma",
     "libs/paging",
+    "libs/qr",
     "libs/sched",
 
     # The UEFI loader. Firmware calls into it with a stack and the MMU on, so
@@ -60,6 +61,7 @@ ferrix-sync = { path = "libs/sync" }
 ferrix-ustack = { path = "libs/ustack" }
 ferrix-virtio = { path = "libs/virtio" }
 ferrix-vma = { path = "libs/vma" }
+ferrix-qr = { path = "libs/qr" }
 ferrix-paging = { path = "libs/paging" }
 ferrix-sched = { path = "libs/sched" }
 
