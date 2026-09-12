@@ -323,6 +323,46 @@ you add one there.
 
 * **The commit-msg hook refuses `Co-authored-by` trailers.** Ferrix commits name
   one author. Do not work around it.
+* **The main checkout goes stale under you, silently, and `git add <paths>` does
+  not scope a commit.** The most expensive mistake of the day this file was
+  written, and the two halves compound.
+
+  Sessions work in worktrees under `.claude/worktrees/` and commit to `main`.
+  The main checkout at the repo root *also* has `main` checked out. When a
+  worktree session commits, the branch ref moves but this checkout's **index
+  and working tree stay exactly where they were** — so a tree that was current
+  a moment ago becomes one that reverts somebody's commit, and nothing says so.
+  `git status` reports that a file *differs* from `HEAD` without reporting in
+  which direction, so a stale checkout is indistinguishable from your own
+  uncommitted work.
+
+  Then: `git add <paths>` followed by `git commit` does **not** commit only
+  those paths. It stages them into an index that already holds everything else
+  and commits the whole index. Together these produced `44bf30e`, which carried
+  a correct change and also reverted 1600 lines of the `sched` owner's merged
+  work, `libs/sched/src/balance.rs` deleted. The tell was in the commit's own
+  output — `15 files changed` against six added paths.
+
+  So: **read `git diff --cached --stat` before every commit** and check
+  `git log --oneline -3` to see whether `main` moved under you. Treat
+  `git status` as "these differ", never "I changed these". If you do land a bad
+  commit, fix it **forward** with a restoring commit rather than rewriting —
+  by the time it was noticed another session had already rebased onto it, and a
+  rewrite would have destroyed their work to tidy the history.
+
+  The same shape has bitten twice more. `core.hooksPath` was set to an absolute
+  path in `.git/config`, which every worktree shares and which
+  `scripts/check-commit-authors.py` compares literally, so `cargo xtask check`
+  failed its first gate for everyone until it was set back to the relative
+  `.githooks`. And `build/<arch>/ferrix.img` is shared, so another session's
+  QEMU makes `cargo xtask test-boot` fail with `Failed to get "write" lock` and
+  then time out — which during a hang investigation impersonates the bug being
+  hunted. **Run boot tests from a worktree outside the repo.**
+
+  As this was written, four files under `kernel/src/sched/` and `libs/sched/`
+  were sitting modified *in the main checkout* belonging to a session that had
+  not claimed them. That is the loaded version of this gun: uncommitted work in
+  the one checkout whose index every worktree commit silently shares.
 * **Never `git filter-branch` with a `main..HEAD` range.** It does not limit the
   rewrite: it rewrites every ancestor and repoints every ref naming one,
   including `main` and `origin/main`. This happened; trees were identical so
