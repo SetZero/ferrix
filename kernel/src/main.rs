@@ -441,7 +441,8 @@ fn check_pci(view: &BootView<'_>) -> Vec<device::DeviceNode> {
     }
     println!(
         "  pci      {} functions from {} {} hosts, {} host bridges, {} unfollowed bridges; \
-         {} BARs sized ({} KiB), {} capabilities, {} virtio transports",
+         {} BARs sized ({} KiB), {} capabilities, {} virtio transports, \
+         {} entropy bytes read by DMA",
         report.functions,
         report.hosts,
         report.source,
@@ -451,6 +452,7 @@ fn check_pci(view: &BootView<'_>) -> Vec<device::DeviceNode> {
         report.aperture_bytes / 1024,
         report.capabilities,
         report.virtio,
+        report.entropy_bytes,
     );
     nodes
 }

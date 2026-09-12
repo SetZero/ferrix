@@ -248,9 +248,10 @@ package FerrixRoadmap {
              * and under Miri; kernel enumeration from the MCFG and the device
              * tree, in the boot test on all three architectures against a
              * virtio-rng-pci device; device nodes whose apertures and vectors
-             * are tokens only device.rs mints. Next, and needing nothing from
-             * stage 9: MSI-X vectors, IOMMU domains. Needing stage 9: everything that runs in
-             * ring 3. */
+             * are tokens only device.rs mints; a virtio-rng device driven by DMA
+             * from the boot check, 64 bytes on every architecture. Next, and
+             * needing nothing from stage 9: MSI-X vectors, IOMMU domains.
+             * Needing stage 9: everything that runs in ring 3. */
     }
 
     #planned requirement <'S11'> stage11BtrfsRead : Stage {

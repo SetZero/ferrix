@@ -32,8 +32,8 @@ says a stage should: their byte-level halves are in `libs/` — the VFS in
 so is stage 8's root filesystem, unpacked at boot from an initramfs the loader
 hands over.
 Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
-and its first kernel code — PCI enumeration and device nodes — is in the boot
-test.
+and its first kernel code — PCI enumeration, device nodes, and a device driven
+by DMA from the boot check — is in the boot test.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -1128,6 +1128,30 @@ ARMv7-A 34 nodes — its 32 virtio-mmio transports among them — with 34
 apertures, 32 of them not whole pages, 32 edge-triggered vectors and 170
 refusals, at four processors and at two.
 
+**Done — a device driven by DMA, from the boot check.** The kernel does not
+drive devices, but it owns everything a driver stands on — the BAR mappings,
+the capability locations, and the physical memory a device reads and writes —
+and enumeration proves none of that, because it only reads configuration
+space. So once at boot `kernel/src/pci/virtio.rs` plays driver for the
+simplest device there is, virtio-rng: it maps the common and notification
+blocks the capabilities name, turns on bus mastering, gives the device a queue
+in a page of its own, asks for 64 bytes, and requires the device to write them
+into the page whose physical address it was given. Then it resets the device
+— before the pages are freed, so the device holds no address into memory that
+is given back — and restores the command register.
+
+* `libs/virtio` gains the PCI transport's common configuration: the status
+  protocol, feature negotiation and queue activation, host-tested against a
+  device that behaves as virtio 1.2 §4.1.4.3 says. A reset that never finishes
+  times out rather than hanging, a device that drops `FEATURES_OK` has refused,
+  and `FAILED` is set before either error is returned.
+* This is also the harness the next two items need. MSI-X is proven when this
+  completion arrives as an interrupt rather than by polling, and an IOMMU
+  domain when a descriptor pointing outside it faults.
+
+The run recorded when it landed: 64 bytes read by DMA on x86-64, AArch64 and
+ARMv7-A, at four processors and, on ARMv7-A, at two.
+
 **Still to do, in the order it can be done:**
 
 * **MSI-X vectors for PCI nodes, which need nothing from stage 9.** A PCI node
@@ -1259,14 +1283,14 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 44 |
-| `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory. | 50 |
+| `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory, and the PCI transport's status protocol, feature negotiation and queue activation. Reached at 10 by the boot check's virtio-rng driver. | 61 |
 | `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport. Has its fuzz target and its Miri step already. | 37 |
 | `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
 | `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one; and the reachability walk a send makes before it queues an endpoint. Has its fuzz target and its Miri step. | 22 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **625 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **636 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

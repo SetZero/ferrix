@@ -76,6 +76,8 @@
 
 use core::fmt;
 
+pub mod pci;
+
 /// Largest queue size a split virtqueue may have, from virtio 1.2 §2.7.
 ///
 /// The bound is not arbitrary. Both rings index their entries with a

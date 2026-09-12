@@ -32,10 +32,12 @@ use ferrix_bootinfo::BootView;
 use ferrix_pci::bar::{self, Region};
 use ferrix_pci::capability::{Capabilities, ExtendedCapabilities};
 use ferrix_pci::ecam::{BYTES_PER_BUS, Window};
-use ferrix_pci::header::{CLASS_BRIDGE, SUBCLASS_HOST_BRIDGE};
-use ferrix_pci::virtio::Transport;
+use ferrix_pci::header::{CLASS_BRIDGE, Endpoint, HeaderKind, SUBCLASS_HOST_BRIDGE};
+use ferrix_pci::virtio::{self as virtio_pci, TYPE_ENTROPY, Transport};
 use ferrix_pci::walk::{Function, Walk};
 use ferrix_pci::{Address, ConfigSpace, PciError};
+
+mod virtio;
 
 use crate::device::{DeviceNode, Reserved};
 use crate::mmio::Mmio;
@@ -222,6 +224,9 @@ pub(crate) struct Report {
     pub(crate) capabilities: usize,
     /// Functions with a complete virtio PCI transport.
     pub(crate) virtio: usize,
+    /// Bytes of entropy virtio-rng devices wrote into memory the kernel gave
+    /// them.
+    pub(crate) entropy_bytes: u32,
 }
 
 /// Why enumeration failed.
@@ -241,6 +246,12 @@ pub(crate) enum Failure {
     },
     /// `libs/pci` refused what a function presented.
     Refused(PciError),
+    /// A virtio device could not be brought up.
+    Transport(ferrix_virtio::pci::TransportError),
+    /// A virtio queue said something impossible.
+    Queue(ferrix_virtio::QueueError),
+    /// The entropy self-check failed.
+    Entropy(&'static str),
 }
 
 impl fmt::Display for Failure {
@@ -256,6 +267,9 @@ impl fmt::Display for Failure {
                 )
             }
             Failure::Refused(error) => write!(f, "{error}"),
+            Failure::Transport(error) => write!(f, "virtio: {error}"),
+            Failure::Queue(error) => write!(f, "virtio queue: {error:?}"),
+            Failure::Entropy(what) => write!(f, "virtio-rng: {what}"),
         }
     }
 }
@@ -263,6 +277,18 @@ impl fmt::Display for Failure {
 impl From<PciError> for Failure {
     fn from(error: PciError) -> Self {
         Failure::Refused(error)
+    }
+}
+
+impl From<ferrix_virtio::pci::TransportError> for Failure {
+    fn from(error: ferrix_virtio::pci::TransportError) -> Self {
+        Failure::Transport(error)
+    }
+}
+
+impl From<ferrix_virtio::QueueError> for Failure {
+    fn from(error: ferrix_virtio::QueueError) -> Self {
+        Failure::Queue(error)
     }
 }
 
@@ -282,6 +308,7 @@ pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>), Fa
         aperture_bytes: 0,
         capabilities: 0,
         virtio: 0,
+        entropy_bytes: 0,
     };
     let mut nodes = Vec::new();
     for host in hosts {
@@ -360,8 +387,17 @@ fn check_function(
         }
     }
 
-    if Transport::find(&*space, address)?.is_some() {
+    if let Some(transport) = Transport::find(&*space, address)? {
         report.virtio += 1;
+        let subsystem = if identity.kind == HeaderKind::Endpoint {
+            Endpoint::read(&*space, address)?.subsystem
+        } else {
+            0
+        };
+        if virtio_pci::device_type(&identity, subsystem) == Some(TYPE_ENTROPY) {
+            let written = virtio::entropy(space, address, &transport, &regions)?;
+            report.entropy_bytes = report.entropy_bytes.saturating_add(written);
+        }
     }
     Ok(regions)
 }

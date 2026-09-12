@@ -46,6 +46,15 @@ impl Mmio {
         unsafe { core::ptr::read_volatile(at as *const u8) }
     }
 
+    /// Write an 8-bit register.
+    pub(crate) fn write8(self, offset: u64, value: u8) {
+        let Some(at) = self.address(offset) else {
+            return;
+        };
+        // SAFETY: as `read8`.
+        unsafe { core::ptr::write_volatile(at as *mut u8, value) };
+    }
+
     /// Read a 16-bit register. The caller keeps `offset` even.
     pub(crate) fn read16(self, offset: u64) -> u16 {
         let Some(at) = self.address(offset) else {

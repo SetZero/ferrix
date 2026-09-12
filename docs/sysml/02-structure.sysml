@@ -842,10 +842,10 @@ package FerrixStructure {
                  * store the kernel supplies, initramfs unpacking and the
                  * getdents64 packer. Not yet reached from the kernel. */
         }
-        #writtenAhead part virtio : LibraryCrate {
+        #implemented part virtio : LibraryCrate {
             attribute :>> path = "libs/virtio";
             attribute :>> forbidsUnsafe = false;
-            attribute :>> hostTests = 50;
+            attribute :>> hostTests = 61;
             @stage { number = 10; }
         }
         #writtenAhead part pci : LibraryCrate {

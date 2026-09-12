@@ -706,6 +706,10 @@ none.
    express.
 3. `libs/pci` refused a BAR or a capability list. On QEMU that means the
    accessor read the wrong width or offset, not that the device is malformed.
+4. The virtio-rng self-check in `pci/virtio.rs` failed: the device refused the
+   features or the queue, or never wrote into the page whose physical address it
+   was given — which is what a wrong DMA address, bus mastering left off, or a
+   doorbell rung at the wrong offset all look like.
 
 See: kernel/src/pci.rs check; libs/pci; libs/acpi Mcfg; libs/fdt ecam_hosts;
 docs/ROADMAP.md stage 10.

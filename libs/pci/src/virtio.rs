@@ -36,6 +36,8 @@ pub const TRANSITIONAL_DEVICE_LAST: u16 = 0x103F;
 pub const TYPE_NET: u16 = 1;
 /// Virtio device type: block device.
 pub const TYPE_BLOCK: u16 = 2;
+/// Virtio device type: entropy source.
+pub const TYPE_ENTROPY: u16 = 4;
 
 /// Configuration type: common configuration.
 pub const CFG_COMMON: u8 = 1;

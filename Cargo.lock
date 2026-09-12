@@ -80,6 +80,7 @@ dependencies = [
  "ferrix-sync",
  "ferrix-ustack",
  "ferrix-vfs",
+ "ferrix-virtio",
  "ferrix-vma",
 ]
 
