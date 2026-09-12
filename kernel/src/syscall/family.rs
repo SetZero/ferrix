@@ -23,7 +23,9 @@
 
 use alloc::sync::Arc;
 
-use ferrix_bootinfo::Arch;
+use alloc::vec;
+
+use ferrix_bootinfo::{Arch, PAGE_SIZE, is_user_address};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::SIGCHLD;
@@ -34,6 +36,28 @@ use crate::syscall::{registry, uaccess};
 
 /// The low byte of `clone`'s flags: the signal the parent is told with.
 const CSIGNAL: u64 = 0xFF;
+/// Every flag the legacy `clone` has room for; `clone3` alone has more.
+const CLONE_LEGACY_FLAGS: u64 = 0xFFFF_FFFF;
+/// Put a pidfd for the child in the parent.
+const CLONE_PIDFD: u64 = 0x0000_1000;
+/// Make the child its parent's sibling.
+const CLONE_PARENT: u64 = 0x0000_8000;
+/// Ignored by `clone` since Linux 2.6.2, and refused by `clone3`.
+const CLONE_DETACHED: u64 = 0x0040_0000;
+/// `clone3` only: reset the child's signal handlers to the default.
+const CLONE_CLEAR_SIGHAND: u64 = 0x1_0000_0000;
+/// `clone3` only: start the child in the cgroup `cgroup` names.
+const CLONE_INTO_CGROUP: u64 = 0x2_0000_0000;
+/// The size of the first published `struct clone_args`, and the least
+/// `clone3` accepts.
+const CLONE_ARGS_SIZE_VER0: u64 = 64;
+/// The size of the latest `struct clone_args` this kernel knows the fields of
+/// (`CLONE_ARGS_SIZE_VER2`).
+const CLONE_ARGS_KNOWN: usize = 88;
+/// The most levels of pid namespace `set_tid` may name (`MAX_PID_NS_LEVEL`).
+const MAX_PID_NS_LEVEL: u64 = 32;
+/// The highest signal number.
+const NSIG: u64 = 64;
 /// Share the address space.
 const CLONE_VM: u64 = 0x0000_0100;
 /// Share the working directory and root.
@@ -84,34 +108,198 @@ const CLD_KILLED: i32 = 2;
 /// Bytes in `siginfo_t` on every architecture.
 const SIGINFO_BYTES: usize = 128;
 
-/// `clone`, `fork` and `vfork`. Answers the child's pid to the parent; the
-/// child answers zero, from a copy of the parent's registers.
+/// What a new process is asked for, however the call spelled it.
+#[derive(Debug, Clone, Copy, Default)]
+struct CloneRequest {
+    /// The `CLONE_*` flags, with the exit signal in the low byte.
+    flags: u64,
+    /// The child's stack pointer, or zero to keep the parent's.
+    stack: u64,
+    /// Where `CLONE_PARENT_SETTID` writes the child's id.
+    parent_tid: u64,
+    /// Where `CLONE_CHILD_SETTID` writes it and `CLONE_CHILD_CLEARTID` clears it.
+    child_tid: u64,
+    /// The thread pointer `CLONE_SETTLS` gives the child.
+    tls: u64,
+}
+
+/// `clone`, `clone3`, `fork` and `vfork`. Answers the child's pid to the
+/// parent; the child answers zero, from a copy of the parent's registers.
 ///
 /// # Errors
 ///
-/// `ENOSYS` for a thread; `ENOMEM` if the address space cannot be copied;
-/// `EAGAIN` with every pid in use or no task for the child; `EFAULT` for a bad
-/// id pointer.
+/// `ENOSYS` for a thread or a pidfd; `ENOMEM` if the address space cannot be
+/// copied; `EAGAIN` with every pid in use or no task for the child; `EFAULT`
+/// for a bad id pointer; and what [`clone3_request`] refuses.
 pub(crate) fn sys_clone(
     parent: &Arc<Process>,
     call: Syscall,
     a: &[u64; 6],
     regs: &arch::UserRegs,
 ) -> Result<usize, Errno> {
-    let (flags, stack, parent_tid, child_tid, tls) = match call {
-        Syscall::Fork => (u64::from(SIGCHLD), 0, 0, 0, 0),
-        Syscall::Vfork => (CLONE_VM | CLONE_VFORK | u64::from(SIGCHLD), 0, 0, 0, 0),
+    let request = match call {
+        Syscall::Fork => CloneRequest {
+            flags: u64::from(SIGCHLD),
+            ..CloneRequest::default()
+        },
+        Syscall::Vfork => CloneRequest {
+            flags: CLONE_VM | CLONE_VFORK | u64::from(SIGCHLD),
+            ..CloneRequest::default()
+        },
+        Syscall::Clone3 => clone3_request(parent, a[0], a[1])?,
         // `CONFIG_CLONE_BACKWARDS` on both Arm architectures puts the thread
         // pointer before the child's id pointer; x86-64 has them the other way.
+        // The flags are an `unsigned long` Linux narrows to 32 bits, so a
+        // 64-bit caller cannot reach `clone3`'s flags through here.
         _ => match arch::ARCH {
-            Arch::X86_64 => (a[0], a[1], a[2], a[3], a[4]),
-            Arch::AArch64 | Arch::Armv7a => (a[0], a[1], a[2], a[4], a[3]),
+            Arch::X86_64 => CloneRequest {
+                flags: a[0] & CLONE_LEGACY_FLAGS,
+                stack: a[1],
+                parent_tid: a[2],
+                child_tid: a[3],
+                tls: a[4],
+            },
+            Arch::AArch64 | Arch::Armv7a => CloneRequest {
+                flags: a[0] & CLONE_LEGACY_FLAGS,
+                stack: a[1],
+                parent_tid: a[2],
+                tls: a[3],
+                child_tid: a[4],
+            },
         },
     };
+    clone_with(parent, &request, regs)
+}
+
+/// Read and check `clone3`'s `struct clone_args`, `size` bytes of it at `at`.
+///
+/// # The size is a version
+///
+/// The structure grows at its end, and `size` says which version the caller
+/// was built against. Less than the first version is `EINVAL`. More than this
+/// kernel knows is fine as long as every byte it does not know is zero -- a
+/// newer program asking for nothing new -- and `E2BIG` otherwise, which is
+/// how a program learns the kernel is older than the feature it wanted. More
+/// than a page is `E2BIG` without looking.
+///
+/// # Errors
+///
+/// Those above; `EFAULT` for a structure that cannot be read; `EINVAL` for
+/// what Linux's `clone3_args_valid` refuses -- unknown flags, an exit signal
+/// both in the flags and in its field, `CLONE_SIGHAND` with
+/// `CLONE_CLEAR_SIGHAND`, a stack without a size or a size without a stack;
+/// `ENOSYS` for `set_tid` and `CLONE_INTO_CGROUP`, which need pid namespaces
+/// and cgroups this kernel does not have.
+fn clone3_request(parent: &Process, at: u64, size: u64) -> Result<CloneRequest, Errno> {
+    if size > PAGE_SIZE {
+        return Err(Errno::E2BIG);
+    }
+    if size < CLONE_ARGS_SIZE_VER0 {
+        return Err(Errno::EINVAL);
+    }
+    let size = usize::try_from(size).map_err(|_| Errno::EINVAL)?;
+    let mut bytes = [0_u8; CLONE_ARGS_KNOWN];
+    let known = bytes
+        .get_mut(..size.min(CLONE_ARGS_KNOWN))
+        .ok_or(Errno::EINVAL)?;
+    uaccess::copy_from_user(parent.space(), at, known).map_err(|_| Errno::EFAULT)?;
+    if let Some(extra) = size
+        .checked_sub(CLONE_ARGS_KNOWN)
+        .filter(|&extra| extra > 0)
+    {
+        let mut rest = vec![0_u8; extra];
+        let from = at
+            .checked_add(CLONE_ARGS_KNOWN as u64)
+            .ok_or(Errno::EFAULT)?;
+        uaccess::copy_from_user(parent.space(), from, &mut rest).map_err(|_| Errno::EFAULT)?;
+        if rest.iter().any(|&byte| byte != 0) {
+            return Err(Errno::E2BIG);
+        }
+    }
+    let [
+        flags,
+        _pidfd,
+        child_tid,
+        parent_tid,
+        exit_signal,
+        stack,
+        stack_size,
+        tls,
+        set_tid,
+        set_tid_size,
+        _cgroup,
+    ]: [u64; 11] = core::array::from_fn(|index| {
+        bytes
+            .get(index * 8..index * 8 + 8)
+            .and_then(|field| field.try_into().ok())
+            .map_or(0, u64::from_le_bytes)
+    });
+
+    if set_tid_size > MAX_PID_NS_LEVEL
+        || (set_tid == 0 && set_tid_size > 0)
+        || (set_tid != 0 && set_tid_size == 0)
+    {
+        return Err(Errno::EINVAL);
+    }
+    if exit_signal > NSIG {
+        return Err(Errno::EINVAL);
+    }
+    if flags & !(CLONE_LEGACY_FLAGS | CLONE_CLEAR_SIGHAND | CLONE_INTO_CGROUP) != 0
+        || flags & (CLONE_DETACHED | CSIGNAL) != 0
+        || flags & (CLONE_SIGHAND | CLONE_CLEAR_SIGHAND) == CLONE_SIGHAND | CLONE_CLEAR_SIGHAND
+        || (flags & (CLONE_THREAD | CLONE_PARENT) != 0 && exit_signal != 0)
+    {
+        return Err(Errno::EINVAL);
+    }
+    // A stack is its lowest address and a size, where `clone` took its top.
+    let stack_top = match (stack, stack_size) {
+        (0, 0) => 0,
+        (0, _) | (_, 0) => return Err(Errno::EINVAL),
+        (base, size) => {
+            let top = base.checked_add(size).ok_or(Errno::EINVAL)?;
+            if !is_user_address(base) || !is_user_address(top - 1) {
+                return Err(Errno::EINVAL);
+            }
+            top
+        }
+    };
+    if set_tid != 0 || flags & CLONE_INTO_CGROUP != 0 {
+        return Err(Errno::ENOSYS);
+    }
+    Ok(CloneRequest {
+        // The exit signal has a field of its own here and the low byte of the
+        // flags in `clone`; checked above to be a signal and the byte to be
+        // clear.
+        flags: flags | exit_signal,
+        stack: stack_top,
+        parent_tid,
+        child_tid,
+        tls,
+    })
+}
+
+/// Make the process `request` asks for. See [`sys_clone`].
+fn clone_with(
+    parent: &Arc<Process>,
+    request: &CloneRequest,
+    regs: &arch::UserRegs,
+) -> Result<usize, Errno> {
+    let CloneRequest {
+        flags,
+        stack,
+        parent_tid,
+        child_tid,
+        tls,
+    } = *request;
     if flags & (CLONE_THREAD | CLONE_SIGHAND) != 0 {
         return Err(Errno::ENOSYS);
     }
     if flags & CLONE_VM != 0 && flags & CLONE_VFORK == 0 {
+        return Err(Errno::ENOSYS);
+    }
+    // No pidfds yet. Refused rather than ignored: the caller would read a
+    // descriptor number out of memory nothing wrote.
+    if flags & CLONE_PIDFD != 0 {
         return Err(Errno::ENOSYS);
     }
 
@@ -127,6 +315,13 @@ pub(crate) fn sys_clone(
         return Err(Errno::EAGAIN);
     }
     child.set_exit_signal((flags & CSIGNAL) as u32);
+    // What glibc's `posix_spawn` asks for, so that its child need not reset
+    // every handler itself before `execve`. Linux leaves the alternate stack
+    // alone here and the exec reset takes it; the child is about to `execve`,
+    // where it goes anyway.
+    if flags & CLONE_CLEAR_SIGHAND != 0 {
+        child.with_signals(crate::syscall::signal::Signals::reset_for_exec);
+    }
 
     let id = pid.to_le_bytes();
     if flags & CLONE_PARENT_SETTID != 0 {

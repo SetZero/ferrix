@@ -436,6 +436,11 @@ fn check_syscalls() {
              it got errno {missing}"
         );
     }
+    println!(
+        "  futex    a changed word got EAGAIN and a timed wait ETIMEDOUT; a wake and a requeue \
+         roused {} waiters, and a wake that roused nobody was caught",
+        report.futex_woken,
+    );
 }
 
 /// Stage 9: the native ABI's objects, driven through their handlers by two

@@ -49,6 +49,7 @@ use crate::sched::{self, Task, WaitQueue};
 use crate::syscall::fd;
 use crate::syscall::registry;
 use crate::syscall::signal::Signals;
+use crate::syscall::{futex, uaccess};
 use crate::user::space::{AddressSpace, SpaceError};
 
 /// A program, as far as the system call layer is concerned.
@@ -569,7 +570,17 @@ impl Process {
         self.ended_by.store(signal, Ordering::Release);
         self.status.store(status, Ordering::Release);
         self.terminated.store(true, Ordering::Release);
-        *self.state.lock() = State::default();
+        let clear_child_tid = core::mem::take(&mut *self.state.lock()).clear_child_tid;
+        // The address `CLONE_CHILD_CLEARTID` or `set_tid_address` registered
+        // is zeroed and its futex woken, which is how a `pthread_join` or a
+        // `vfork`ing libc learns the thread is gone. Linux does it only when
+        // someone else can see the memory; nobody else can here yet, and a
+        // write into a space about to go is harmless. A failure is ignored, as
+        // Linux ignores it: the address was the program's to get right.
+        if clear_child_tid != 0 {
+            let _ = uaccess::copy_to_user(&self.space, clear_child_tid, &0_u32.to_le_bytes());
+            let _ = futex::wake_address(&self.space, clear_child_tid, 1);
+        }
         // The handles too, and outside every lock: an object's drop can free
         // memory and drain other objects, which is `object::dispose`'s job,
         // and must not run under this process's table lock or state lock.

@@ -66,6 +66,8 @@ pub(crate) struct Report {
     pub(crate) execed: Option<(i32, i32)>,
     /// Processes the pid registry numbered, found, listed and let go.
     pub(crate) pids: u32,
+    /// Futex waiters a wake or a requeue roused: 2 when right.
+    pub(crate) futex_woken: usize,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -108,6 +110,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let killed = check_a_program_is_killed_from_outside()?;
     let forked = check_a_forked_child_is_waited_for()?;
     let execed = check_execve_replaces_the_program()?;
+    let futex_woken = check_futexes()?;
 
     Ok(Report {
         dispatched: counter.dispatched,
@@ -121,6 +124,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         forked,
         execed,
         pids,
+        futex_woken,
     })
 }
 
@@ -2783,4 +2787,238 @@ fn check_execve_replaces_the_program() -> Result<Option<(i32, i32)>, &'static st
         return Err("execve of a path that does not exist did not return ENOENT");
     }
     Ok(Some((found, missing)))
+}
+
+// ---------------------------------------------------------------------------
+// Futexes
+//
+// Through the handler, on a word in a process the check builds, with a kernel
+// task as the sleeper: a kernel task can sleep in `futex` as well as a
+// program can, and needs no program assembled for three architectures to do
+// it. The wake is the part worth a second task, and it is checked twice: once
+// working, and once with a wake that takes its waiter off the table and
+// reports it woken without rousing it. That second run must fail, and fail
+// for that reason -- a check that only compared the count a wake returns
+// would pass it.
+// ---------------------------------------------------------------------------
+
+use ferrix_linux_abi::types::{
+    FUTEX_CLOCK_REALTIME, FUTEX_CMP_REQUEUE, FUTEX_PRIVATE_FLAG, FUTEX_WAIT, FUTEX_WAIT_BITSET,
+    FUTEX_WAKE, FUTEX_WAKE_OP,
+};
+
+use crate::sched::WaitQueue;
+use crate::syscall::futex;
+
+/// What the check's futex word holds.
+const FUTEX_WORD: u32 = 0x0F07_E100;
+
+/// The timeout of a wait that should time out.
+const FUTEX_SHORT_NANOS: u64 = 20_000_000;
+
+/// How long the waiter a wake is meant for will sleep, in seconds. Far longer
+/// than a working wake takes to arrive; the whole of what the negative
+/// control, which never rouses it, costs a boot.
+const FUTEX_LONG_SECONDS: u64 = 2;
+
+/// How long the check waits for its waiter to start waiting, or to return.
+const FUTEX_PATIENCE_NANOS: u64 = 30_000_000_000;
+
+/// The failure a wake that never rouses its waiter produces, which the
+/// negative control requires by name.
+const SLEPT_THROUGH_WAKE: &str = "a futex waiter the wake counted slept on to its timeout";
+
+/// What the waiting task waits on -- the process, the word, the timeout --
+/// taken by the task when it starts.
+static FUTEX_SUBJECT: ferrix_sync::SpinLock<Option<(Arc<Process>, u64, u64)>> =
+    ferrix_sync::SpinLock::new(None);
+
+/// What the waiting task's `FUTEX_WAIT` answered.
+static FUTEX_ANSWER: ferrix_sync::SpinLock<Option<Result<usize, Errno>>> =
+    ferrix_sync::SpinLock::new(None);
+
+/// Woken when it has answered.
+static FUTEX_ANSWERED: WaitQueue = WaitQueue::new();
+
+/// One wake, as the check applies it to the word its waiter sleeps on.
+type FutexWake = fn(&Process, u64) -> Result<usize, Errno>;
+
+/// `futex` with six arguments and a native timespec.
+fn futex_call(process: &Process, a: [u64; 6]) -> Result<usize, Errno> {
+    futex::sys_futex(process, &a, crate::syscall::time::TimeWidth::Native)
+}
+
+/// Write a native `struct timespec` at `at`.
+fn write_timespec(
+    process: &Process,
+    at: u64,
+    seconds: u64,
+    nanos: u64,
+) -> Result<(), &'static str> {
+    write_word(process, at, seconds)?;
+    write_word(process, at + size_of::<usize>() as u64, nanos)
+}
+
+/// A wait on a changed word is `EAGAIN`, a timed wait nobody wakes is
+/// `ETIMEDOUT` and not early, what is not implemented says so, and a waiter
+/// is roused by a wake and by a requeue followed by a wake -- but not by a
+/// wake that only pretends. Answers how many waiters were roused.
+fn check_futexes() -> Result<usize, &'static str> {
+    let process =
+        process::new_for_check().map_err(|_| "could not make a process for the futex check")?;
+    let page = map_rw(&process, PAGE_SIZE)?;
+    let word = page;
+    let timeout = page + 16;
+    uaccess::copy_to_user(process.space(), word, &FUTEX_WORD.to_le_bytes())
+        .map_err(|_| "could not stage the futex word")?;
+    let wait = u64::from(FUTEX_WAIT | FUTEX_PRIVATE_FLAG);
+    let expected = u64::from(FUTEX_WORD);
+
+    if futex_call(&process, [word, wait, expected + 1, 0, 0, 0]) != Err(Errno::EAGAIN) {
+        return Err("FUTEX_WAIT on a word that had changed did not answer EAGAIN");
+    }
+    if futex_call(&process, [word + 1, wait, expected, 0, 0, 0]) != Err(Errno::EINVAL) {
+        return Err("FUTEX_WAIT on a misaligned word was not EINVAL");
+    }
+
+    write_timespec(&process, timeout, 0, FUTEX_SHORT_NANOS)?;
+    let started = crate::timer::now_nanos();
+    if futex_call(&process, [word, wait, expected, timeout, 0, 0]) != Err(Errno::ETIMEDOUT) {
+        return Err("a timed FUTEX_WAIT nobody woke did not answer ETIMEDOUT");
+    }
+    if crate::timer::now_nanos().saturating_sub(started) < FUTEX_SHORT_NANOS {
+        return Err("a timed FUTEX_WAIT came back before its timeout");
+    }
+
+    // Absolute, one nanosecond after the counter started: long past.
+    write_timespec(&process, timeout, 0, 1)?;
+    let bitset_wait = u64::from(FUTEX_WAIT_BITSET | FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
+    if futex_call(&process, [word, bitset_wait, expected, timeout, 0, 1]) != Err(Errno::ETIMEDOUT) {
+        return Err("FUTEX_WAIT_BITSET with a deadline already past did not answer ETIMEDOUT");
+    }
+    if futex_call(&process, [word, bitset_wait, expected, timeout, 0, 0]) != Err(Errno::EINVAL) {
+        return Err("FUTEX_WAIT_BITSET with an empty bitset was not EINVAL");
+    }
+    let realtime_wake = u64::from(FUTEX_WAKE | FUTEX_CLOCK_REALTIME);
+    if futex_call(&process, [word, realtime_wake, 1, 0, 0, 0]) != Err(Errno::ENOSYS) {
+        return Err("FUTEX_WAKE accepted FUTEX_CLOCK_REALTIME");
+    }
+    if futex_call(
+        &process,
+        [word, u64::from(FUTEX_WAKE_OP), 1, 1, word + 4, 0],
+    ) != Err(Errno::ENOSYS)
+    {
+        return Err("FUTEX_WAKE_OP, which is not implemented, did not answer ENOSYS");
+    }
+    if futex_call(&process, [word, u64::from(FUTEX_WAKE), 1, 0, 0, 0]) != Ok(0) {
+        return Err("FUTEX_WAKE with nobody waiting did not answer zero");
+    }
+    let cmp_requeue = u64::from(FUTEX_CMP_REQUEUE);
+    if futex_call(&process, [word, cmp_requeue, 1, 1, word + 4, expected + 1]) != Err(Errno::EAGAIN)
+    {
+        return Err("FUTEX_CMP_REQUEUE on a word that had changed did not answer EAGAIN");
+    }
+
+    let mut woken = wait_then_wake(&process, word, timeout, |process, word| {
+        futex_call(
+            process,
+            [word, u64::from(FUTEX_WAKE | FUTEX_PRIVATE_FLAG), 1, 0, 0, 0],
+        )
+    })?;
+    // Moved to the next word, then woken there: the requeue must have taken
+    // it, since nothing else wakes the second word.
+    woken += wait_then_wake(&process, word, timeout, |process, word| {
+        let requeue = u64::from(FUTEX_CMP_REQUEUE | FUTEX_PRIVATE_FLAG);
+        let moved = futex_call(
+            process,
+            [word, requeue, 0, 1, word + 4, u64::from(FUTEX_WORD)],
+        )?;
+        if moved != 1 || futex::waiters_on(process, word) != 0 {
+            return Ok(0);
+        }
+        futex_call(
+            process,
+            [
+                word + 4,
+                u64::from(FUTEX_WAKE | FUTEX_PRIVATE_FLAG),
+                1,
+                0,
+                0,
+                0,
+            ],
+        )
+    })?;
+
+    match wait_then_wake(&process, word, timeout, |process, word| {
+        Ok(futex::forget_waiters(process, word, 1))
+    }) {
+        Err(problem) if problem == SLEPT_THROUGH_WAKE => {}
+        Err(_) => {
+            return Err("the futex check failed a wake that roused nobody, for another reason");
+        }
+        Ok(_) => return Err("the futex check passed a wake that never roused its waiter"),
+    }
+
+    let _ = memory::sys_munmap(&process, page, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    Ok(woken)
+}
+
+/// Start a task sleeping in `FUTEX_WAIT` on `word`, wait until it is on the
+/// table, `wake` it, and require it back with zero and the wake to have
+/// counted it. Answers one.
+fn wait_then_wake(
+    process: &Arc<Process>,
+    word: u64,
+    timeout: u64,
+    wake: FutexWake,
+) -> Result<usize, &'static str> {
+    write_timespec(process, timeout, FUTEX_LONG_SECONDS, 0)?;
+    *FUTEX_ANSWER.lock() = None;
+    *FUTEX_SUBJECT.lock() = Some((Arc::clone(process), word, timeout));
+    let waiter = crate::sched::spawn("futex-waiter", futex_waiter, 0, ferrix_sched::NICE_0_WEIGHT)?;
+
+    let deadline = crate::timer::now_nanos().saturating_add(FUTEX_PATIENCE_NANOS);
+    while futex::waiters_on(process, word) == 0 {
+        if FUTEX_ANSWER.lock().is_some() {
+            return Err("a futex waiter returned without ever waiting");
+        }
+        if crate::timer::now_nanos() >= deadline {
+            return Err("a futex waiter never started waiting");
+        }
+        crate::sched::sleep_for(1_000_000);
+    }
+    let count = wake(process, word);
+
+    let deadline = crate::timer::now_nanos().saturating_add(FUTEX_PATIENCE_NANOS);
+    let _ = FUTEX_ANSWERED.wait_until_deadline(|| FUTEX_ANSWER.lock().is_some(), deadline);
+    let answer = FUTEX_ANSWER.lock().take();
+    drop(waiter);
+    match (count, answer) {
+        (_, None) => Err("a futex waiter never came back"),
+        (Ok(1), Some(Ok(0))) => Ok(1),
+        (Ok(1), Some(Err(error))) if error == Errno::ETIMEDOUT => Err(SLEPT_THROUGH_WAKE),
+        (Ok(1), Some(_)) => Err("a woken futex waiter did not answer zero"),
+        (_, Some(_)) => Err("a futex wake did not report the one waiter it had"),
+    }
+}
+
+/// The waiting task: one `FUTEX_WAIT` on what [`FUTEX_SUBJECT`] names.
+fn futex_waiter(_argument: usize) {
+    let subject = FUTEX_SUBJECT.lock().take();
+    let answer = match subject {
+        Some((process, word, timeout)) => futex_call(
+            &process,
+            [
+                word,
+                u64::from(FUTEX_WAIT | FUTEX_PRIVATE_FLAG),
+                u64::from(FUTEX_WORD),
+                timeout,
+                0,
+                0,
+            ],
+        ),
+        None => Err(Errno::ESRCH),
+    };
+    *FUTEX_ANSWER.lock() = Some(answer);
+    FUTEX_ANSWERED.wake_all();
 }

@@ -45,6 +45,7 @@ pub(crate) mod family;
 pub(crate) mod fd;
 pub(crate) mod file;
 pub(crate) mod fsctl;
+pub(crate) mod futex;
 pub(crate) mod image;
 pub(crate) mod load;
 pub(crate) mod memory;
@@ -145,9 +146,12 @@ pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Out
         process::exit_current(truncate(args.args[0]) as i32 & 0xFF);
     }
 
-    // `clone`, `fork` and `vfork` need the caller's saved registers, which a
-    // kernel caller has none of, and a reference to the parent to keep.
-    if matches!(call, Syscall::Clone | Syscall::Fork | Syscall::Vfork) {
+    // `clone`, `clone3`, `fork` and `vfork` need the caller's saved registers,
+    // which a kernel caller has none of, and a reference to the parent to keep.
+    if matches!(
+        call,
+        Syscall::Clone | Syscall::Clone3 | Syscall::Fork | Syscall::Vfork
+    ) {
         let (Some(parent), Some(regs)) = (process.as_ref(), regs) else {
             return Outcome::Return(Errno::ESRCH.as_return_value());
         };
@@ -287,7 +291,15 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Munmap => memory::sys_munmap(process, a[0], a[1]),
         Syscall::Mprotect => memory::sys_mprotect(process, a[0], a[1], truncate(a[2])),
         Syscall::Brk => memory::sys_brk(process, a[0]),
-        Syscall::SetTidAddress => Ok(process.set_clear_child_tid(a[0], current_id())),
+        // The number `gettid` answers, which a libc keeps as the thread's id
+        // and later hands to `tgkill`; the task's own number would disagree.
+        Syscall::SetTidAddress => {
+            let tid = match process.pid() {
+                0 => current_id(),
+                pid => pid as usize,
+            };
+            Ok(process.set_clear_child_tid(a[0], tid))
+        }
         Syscall::ClockGettime => {
             time::sys_clock_gettime(process, a[0], a[1], time::TimeWidth::Native)
         }
@@ -324,6 +336,8 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Getpgrp => family::sys_getpgid(process, 0),
         Syscall::Getsid => family::sys_getsid(process, a[0] as i32),
         Syscall::Setsid => family::sys_setsid(process),
+        Syscall::Futex => futex::sys_futex(process, &a, time::TimeWidth::Native),
+        Syscall::FutexTime64 => futex::sys_futex(process, &a, time::TimeWidth::Wide),
         Syscall::RtSigaction => signal::sys_rt_sigaction(process, truncate(a[0]), a[1], a[2], a[3]),
         Syscall::RtSigprocmask => {
             signal::sys_rt_sigprocmask(process, truncate(a[0]), a[1], a[2], a[3])
