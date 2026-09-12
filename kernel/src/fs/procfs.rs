@@ -402,9 +402,7 @@ impl Inode for Node {
             }
             _ => {
                 let pid = self.descriptors_of().ok_or(Errno::ENOTDIR)?;
-                let fd = number(name)
-                    .and_then(|fd| i32::try_from(fd).ok())
-                    .ok_or(Errno::ENOENT)?;
+                let fd = descriptor_number(name).ok_or(Errno::ENOENT)?;
                 let open = alive(pid)?.files().lock().get(fd).is_ok();
                 if !open {
                     return Err(Errno::ENOENT);
@@ -533,6 +531,17 @@ fn number(name: &[u8]) -> Option<u32> {
         return None;
     }
     text.parse().ok()
+}
+
+/// A descriptor's name: as [`number`], except that `0` is one. Every process
+/// has a descriptor 0, and a listing of `/proc/<pid>/fd` says so; a name the
+/// listing reports that a walk then refuses is what `ls -R` prints an error
+/// for.
+fn descriptor_number(name: &[u8]) -> Option<i32> {
+    if name == b"0" {
+        return Some(0);
+    }
+    number(name).and_then(|fd| i32::try_from(fd).ok())
 }
 
 /// `value` in decimal, in `digits`.
