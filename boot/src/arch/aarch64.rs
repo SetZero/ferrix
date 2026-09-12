@@ -57,6 +57,12 @@ const SCTLR_MMU: u64 = 1 << 0;
 const SCTLR_DCACHE: u64 = 1 << 2;
 /// `SCTLR_EL1.I`, the instruction cache enable.
 const SCTLR_ICACHE: u64 = 1 << 12;
+/// `SCTLR_EL1.WXN`: every writable page execute-never. Cleared, because the
+/// identity map is both, and the instruction after the MMU comes back on is
+/// fetched through it. Firmware may leave it set, and then that instruction
+/// faults with no vectors installed, which is a silent hang. The kernel's own
+/// W^X sweep is what enforces the rule after.
+const SCTLR_WXN: u64 = 1 << 19;
 
 /// Check the loader is somewhere it can install a translation regime.
 ///
@@ -192,6 +198,7 @@ pub(crate) unsafe fn enter_kernel(handoff: Handoff) -> ! {
             "orr x7, x7, #{mmu}",
             "orr x7, x7, #{dcache}",
             "orr x7, x7, #{icache}",
+            "bic x7, x7, #{wxn}",
             "msr sctlr_el1, x7",
             "isb",
 
@@ -205,6 +212,7 @@ pub(crate) unsafe fn enter_kernel(handoff: Handoff) -> ! {
             mmu = const SCTLR_MMU,
             dcache = const SCTLR_DCACHE,
             icache = const SCTLR_ICACHE,
+            wxn = const SCTLR_WXN,
 
             // The AAPCS64 argument register: the kernel entry takes the boot
             // info pointer as its only argument.
