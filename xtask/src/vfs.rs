@@ -3,17 +3,16 @@
 //! "`busybox ls -R /proc`, `cat /proc/self/maps` and a shell script that
 //! manipulates files under tmpfs, all under the boot test."
 //!
-//! # Why a list of programs and not one script
+//! # Three programs, as the criterion names them
 //!
-//! Because this busybox's shell starts every applet with `fork`, `execve` and
-//! `wait4`, and none of its builtins makes, renames or removes a file -- all
-//! measured, in `docs/STAGE8-WHAT-THE-EXIT-NEEDS.md`. Until `clone` exists, a
-//! script that runs `mkdir` measures the absence of `clone`. So the kernel
-//! starts each program itself (`kernel/src/init.rs`), in order, over one tmpfs:
-//! the two `/proc` commands, three scripts of builtins that create, append,
-//! read back, test and truncate files, and between them the applets a script
-//! would have forked. When a shell can fork, the scripts and the applets
-//! become one script and this list becomes one command.
+//! The kernel starts each one itself (`kernel/src/init.rs`), in order, over
+//! one tmpfs. The third is a shell script, and this busybox's shell starts
+//! every applet that touches a file -- `mkdir`, `mv`, `ln`, `cat`, `rm`,
+//! `rmdir` -- with `fork`, `execve` and `wait4`, none of its builtins making,
+//! renaming or removing one (measured, in `docs/STAGE8-WHAT-THE-EXIT-NEEDS.md`).
+//! So the script passes only on a kernel that forks. Until one did, this test
+//! ran eleven programs in its place, the kernel starting each applet the
+//! script would have forked.
 //!
 //! # Why output as well as statuses
 //!
@@ -56,8 +55,6 @@ type Check = std::result::Result<(), String>;
 /// What a command's output must show, beyond its status.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Expect {
-    /// Nothing: the status is the whole answer.
-    Status,
     /// These lines, in this order, among others.
     Lines(&'static [&'static str]),
     /// An `ls -R /proc` listing that reaches the program's own directory.
@@ -77,9 +74,19 @@ pub(crate) struct Command {
     pub(crate) expect: Expect,
 }
 
-/// Creates, appends to, reads back, tests and truncates files in `/tmp`,
-/// with builtins alone.
-const WRITE_SCRIPT: &str = r#"cd /tmp/vfs || exit 1
+/// Manipulates files under tmpfs: the script the criterion names.
+///
+/// Builtins create, append to, read back, test and truncate files; `mkdir`,
+/// `mv`, `ln`, `cat`, `rm` and `rmdir` are applets the shell forks and execs,
+/// so this one script also exercises `fork`, `execve` and `wait4` against the
+/// VFS. Each applet that fails exits with a status of its own, so the report
+/// says which one it was.
+///
+/// `/tmp` is tested before the last `-e`, because a `stat` the kernel refuses
+/// makes `-e` false too: without that line, a kernel answering no file calls
+/// at all would pass the last check.
+const TMPFS_SCRIPT: &str = r#"mkdir -p /tmp/vfs/deep || exit 1
+cd /tmp/vfs || exit 1
 echo "tmpfs: in $PWD"
 echo "tmpfs: one" > file
 echo "tmpfs: two" >> file
@@ -88,29 +95,22 @@ while read -r line; do echo "read back: $line"; done < file
 [ -d deep ] && echo "tmpfs: deep is a directory"
 : > empty
 [ -s empty ] || echo "tmpfs: empty is empty"
-exit 5
-"#;
-
-/// Checks what `mv` and `ln -s` did, and reads through the link.
-const CHECK_SCRIPT: &str = r#"cd /tmp/vfs || exit 1
+mv file deep/moved || exit 2
+ln -s deep/moved link || exit 3
 [ -e file ] || echo "tmpfs: the old name is gone"
 [ -f deep/moved ] && echo "tmpfs: the new name is a file"
 [ -L link ] && echo "tmpfs: link is a symbolic link"
+cat link || exit 4
 while read -r line; do echo "through the link: $line"; done < link
-exit 6
-"#;
-
-/// Checks that `rm` and `rmdir` left nothing behind.
-///
-/// `/tmp` is tested first, because a `stat` the kernel refuses makes `-e`
-/// false too: without that line, a kernel answering no file calls at all
-/// passed this script.
-const GONE_SCRIPT: &str = r#"[ -d /tmp ] || exit 1
+cd / || exit 1
+rm /tmp/vfs/link /tmp/vfs/deep/moved /tmp/vfs/empty || exit 5
+rmdir /tmp/vfs/deep /tmp/vfs || exit 6
+[ -d /tmp ] || exit 7
 [ -e /tmp/vfs ] || echo "tmpfs: removed"
-exit 7
+exit 8
 "#;
 
-/// The programs, in the order the kernel runs them.
+/// The programs, in the order the kernel runs them: the criterion's three.
 pub(crate) const COMMANDS: &[Command] = &[
     Command {
         argv: &["ls", "-R", "/proc"],
@@ -123,13 +123,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         expect: Expect::Maps,
     },
     Command {
-        argv: &["mkdir", "-p", "/tmp/vfs/deep"],
-        status: 0,
-        expect: Expect::Status,
-    },
-    Command {
-        argv: &["sh", "-c", WRITE_SCRIPT],
-        status: 5,
+        argv: &["sh", "-c", TMPFS_SCRIPT],
+        status: 8,
         expect: Expect::Lines(&[
             "tmpfs: in /tmp/vfs",
             "read back: tmpfs: one",
@@ -137,53 +132,15 @@ pub(crate) const COMMANDS: &[Command] = &[
             "tmpfs: file is a regular file",
             "tmpfs: deep is a directory",
             "tmpfs: empty is empty",
-        ]),
-    },
-    Command {
-        argv: &["mv", "/tmp/vfs/file", "/tmp/vfs/deep/moved"],
-        status: 0,
-        expect: Expect::Status,
-    },
-    Command {
-        argv: &["ln", "-s", "deep/moved", "/tmp/vfs/link"],
-        status: 0,
-        expect: Expect::Status,
-    },
-    Command {
-        argv: &["cat", "/tmp/vfs/link"],
-        status: 0,
-        expect: Expect::Lines(&["tmpfs: one", "tmpfs: two"]),
-    },
-    Command {
-        argv: &["sh", "-c", CHECK_SCRIPT],
-        status: 6,
-        expect: Expect::Lines(&[
             "tmpfs: the old name is gone",
             "tmpfs: the new name is a file",
             "tmpfs: link is a symbolic link",
+            "tmpfs: one",
+            "tmpfs: two",
             "through the link: tmpfs: one",
             "through the link: tmpfs: two",
+            "tmpfs: removed",
         ]),
-    },
-    Command {
-        argv: &[
-            "rm",
-            "/tmp/vfs/link",
-            "/tmp/vfs/deep/moved",
-            "/tmp/vfs/empty",
-        ],
-        status: 0,
-        expect: Expect::Status,
-    },
-    Command {
-        argv: &["rmdir", "/tmp/vfs/deep", "/tmp/vfs"],
-        status: 0,
-        expect: Expect::Status,
-    },
-    Command {
-        argv: &["sh", "-c", GONE_SCRIPT],
-        status: 7,
-        expect: Expect::Lines(&["tmpfs: removed"]),
     },
 ];
 
@@ -518,7 +475,6 @@ fn verdict(command: &Command, ran: Option<&Ran>) -> Check {
         Some(Ending::Exited(_)) => {}
     }
     let checked = match command.expect {
-        Expect::Status => Ok(()),
         Expect::Lines(want) => in_order(&ran.output, want),
         Expect::ProcListing => proc_listing(&ran.output),
         Expect::Maps => maps(&ran.output),

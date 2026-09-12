@@ -10,7 +10,6 @@ fn passing_log() -> Vec<String> {
     for (index, command) in COMMANDS.iter().enumerate() {
         log.push(format!("  init     command {index}: {}", command.argv[0]));
         match command.expect {
-            Expect::Status => {}
             Expect::Lines(lines) => log.extend(owned(lines)),
             Expect::ProcListing => {
                 log.extend(owned(&[
@@ -37,12 +36,12 @@ fn the_list_encodes_as_nul_terminated_arguments_and_empty_ones_between_commands(
         Command {
             argv: &["ls", "-R"],
             status: 0,
-            expect: Expect::Status,
+            expect: Expect::Lines(&[]),
         },
         Command {
             argv: &["sh", "-c", "echo a\necho b"],
             status: 0,
-            expect: Expect::Status,
+            expect: Expect::Lines(&[]),
         },
     ];
     assert_eq!(
@@ -58,7 +57,7 @@ fn the_list_refuses_what_its_encoding_cannot_carry() {
         let command = Command {
             argv,
             status: 0,
-            expect: Expect::Status,
+            expect: Expect::Lines(&[]),
         };
         assert!(encode(&[command]).is_err(), "{argv:?} must be refused");
     }
@@ -249,15 +248,15 @@ fn a_passing_log_passes() {
 #[test]
 fn every_failure_is_reported_with_the_calls_that_went_unanswered() {
     let mut log = passing_log();
-    // Command 1's maps line, garbled; command 3's status, wrong, with a
+    // Command 1's maps line, garbled; command 2's status, wrong, with a
     // refused call reported while it ran.
     let maps = log.iter().position(|l| l.starts_with("00400000-")).unwrap();
     log[maps] = "not a maps line".to_owned();
     let exit = log
         .iter()
-        .position(|l| l == "  init     command 3 exited with 5")
+        .position(|l| l == "  init     command 2 exited with 8")
         .unwrap();
-    log[exit] = "  init     command 3 exited with 1".to_owned();
+    log[exit] = "  init     command 2 exited with 1".to_owned();
     log.insert(
         exit,
         "  syscall  Dup2 (number 33) answered ENOSYS".to_owned(),
@@ -266,8 +265,8 @@ fn every_failure_is_reported_with_the_calls_that_went_unanswered() {
     let failed = judge(COMMANDS, &log).unwrap_err();
     assert_eq!(failed.len(), 2, "{failed:#?}");
     assert!(failed[0].starts_with("command 1 (cat /proc/self/maps)"));
-    assert!(failed[1].starts_with("command 3 (sh -c)"));
-    assert!(failed[1].contains("exited with 1, not 5"));
+    assert!(failed[1].starts_with("command 2 (sh -c)"));
+    assert!(failed[1].contains("exited with 1, not 8"));
     assert!(failed[1].contains("Dup2 (number 33)"));
 }
 
