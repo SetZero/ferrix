@@ -117,6 +117,18 @@ console's own recent output, so the screen and the serial log cannot disagree.
 It is the kernel's second output device, and `docs/ARCHITECTURE.md` names it as
 an exception beside the serial port.
 
+Beside the text the screen draws a QR code of the report as plain text,
+because a photo of a screen is how a report leaves a machine with no cable, and
+a photo of a code keeps every character where a photo of text loses some. The
+text keeps 80 columns, as wide as the report's lines run, and the code gets
+the width left beside it. The code holds as much of the report as fits at two
+pixels or more a module, cut at the end of a line, from the marker line down.
+When the report is taller than the screen, the text starts at the marker line
+and is cut at the bottom. On a small screen both lose the end of the
+explanation first, never the headline. The encoder is `libs/qr`, a port of Linux's `drm_panic_qr.rs` under
+its MIT licence. It allocates nothing, and its tests read every symbol back
+through an independent decoder.
+
 ## Overflow checks are on in release
 
 This inverts Starling's choice, deliberately and for the opposite reason.

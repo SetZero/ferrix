@@ -61,8 +61,9 @@ static REPORTING: AtomicBool = AtomicBool::new(false);
 static EXPLANATION: AtomicPtr<Explanation> = AtomicPtr::new(ptr::null_mut());
 
 /// How wide an explanation's text runs after its label, so that label and text
-/// together stay inside a hundred columns.
-const TEXT_COLUMNS: usize = 88;
+/// together stay inside eighty columns: a serial terminal's width, and the
+/// width the panic screen keeps for text before it draws the QR code.
+const TEXT_COLUMNS: usize = 66;
 
 /// Stop the kernel on a fatal condition the catalog explains.
 ///

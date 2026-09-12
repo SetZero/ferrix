@@ -11,6 +11,14 @@
 //! report to keep in step. The report is picked out from the boot log above it
 //! by colour, from its `FERRIX-PANIC` line on.
 //!
+//! Beside the text is a QR code of the report itself, as plain text: a photo
+//! of a screen is how a report leaves a machine with no cable, and a photo of
+//! a code carries every character where a photo of text loses some. It holds
+//! as much of the report as a code with modules of at least
+//! [`MIN_MODULE_PIXELS`] can on this screen, cut at a line, from the marker
+//! line down, so what is lost to a small screen is the end of the explanation
+//! and never the headline.
+//!
 //! This is the kernel's second output device after the serial port, and it is
 //! the same kind of exception `docs/ARCHITECTURE.md` makes for that one: used
 //! for panic output only, written once, never read.
@@ -20,7 +28,10 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use ferrix_bootinfo::{Framebuffer, PixelFormat};
-use ferrix_fbtext::{BYTES_PER_PIXEL, GLYPH_HEIGHT, PixelOrder, Rect, Rgb, Surface, TextArea};
+use ferrix_fbtext::{
+    BYTES_PER_PIXEL, GLYPH_HEIGHT, GLYPH_WIDTH, PixelOrder, Rect, Rgb, Surface, TextArea,
+};
+use ferrix_qr::{MAX_VERSION, MIN_MODULES_LEN, MIN_TMP_LEN, Symbol};
 
 use crate::{console, mm};
 
@@ -54,20 +65,47 @@ const MARGIN: usize = 16;
 /// What begins the report, as `panic.rs` prints it.
 const MARKER: &[u8] = b"FERRIX-PANIC";
 
+/// Columns the text keeps before the QR code gets any width: as wide as the
+/// report's lines run, so none of them wraps.
+const TEXT_COLUMNS: usize = 80;
+
+/// Light modules a reader needs around a QR code, by the specification.
+const QUIET_ZONE: usize = 4;
+/// The smallest module worth drawing, in pixels. One pixel does not survive
+/// being photographed off a screen; two usually does.
+const MIN_MODULE_PIXELS: usize = 2;
+/// What the code is, under it. Short, because it is only as wide as the code,
+/// and on a small screen that is about sixteen columns.
+const CAPTION: &str = "report as text";
+
 /// How much recent console output is copied out to draw.
 const TEXT_BYTES: usize = 4096;
 
-/// Where the recent output is copied: static rather than on the stack, because
-/// a panic may be reporting that the stack is nearly gone.
-struct Scratch(UnsafeCell<[u8; TEXT_BYTES]>);
+/// Everything drawing needs to write to: the recent output copied out, and the
+/// QR encoder's symbol and working space.
+///
+/// Static rather than on the stack, because a panic may be reporting that the
+/// stack is nearly gone, and together these are over 11 KiB.
+struct Scratch {
+    text: [u8; TEXT_BYTES],
+    modules: [u8; MIN_MODULES_LEN],
+    work: [u8; MIN_TMP_LEN],
+}
+
+/// The cell [`SCRATCH`] lives in.
+struct ScratchCell(UnsafeCell<Scratch>);
 
 // SAFETY: only `draw` touches it, and only the first panic reaches `draw`:
 // `panic.rs` lets exactly one caller past its `REPORTING` swap, and every
-// later panic halts before drawing. There is never a second accessor.
-unsafe impl Sync for Scratch {}
+// later report halts before drawing. There is never a second accessor.
+unsafe impl Sync for ScratchCell {}
 
-/// The one scratch buffer.
-static SCRATCH: Scratch = Scratch(UnsafeCell::new([0; TEXT_BYTES]));
+/// The one set of scratch buffers.
+static SCRATCH: ScratchCell = ScratchCell(UnsafeCell::new(Scratch {
+    text: [0; TEXT_BYTES],
+    modules: [0; MIN_MODULES_LEN],
+    work: [0; MIN_TMP_LEN],
+}));
 
 /// Record the framebuffer boot mapped, for a panic to draw on.
 ///
@@ -131,14 +169,16 @@ pub(crate) fn draw() {
     let Some(mut surface) = Surface::new(pixels, width, height, stride, order) else {
         return;
     };
-    // SAFETY: the one accessor, as the `Sync` impl for `Scratch` argues.
-    let text = unsafe { &mut *SCRATCH.0.get() };
-    let count = console::recent(text);
-    paint(&mut surface, text.get(..count).unwrap_or_default());
+    // SAFETY: the one accessor, as the `Sync` impl for `ScratchCell` argues.
+    let scratch = unsafe { &mut *SCRATCH.0.get() };
+    let count = console::recent(&mut scratch.text);
+    let text = scratch.text.get(..count).unwrap_or_default();
+    paint(&mut surface, text, &mut scratch.modules, &mut scratch.work);
 }
 
-/// Paint the banner and as much of `text` as fits below it, newest last.
-fn paint(surface: &mut Surface<'_>, text: &[u8]) {
+/// Paint the banner, the QR code of the report at the right, and as much of
+/// `text` as fits beside it, newest last.
+fn paint(surface: &mut Surface<'_>, text: &[u8], modules: &mut [u8], work: &mut [u8]) {
     surface.fill(BACKGROUND);
     let width = surface.width();
     let height = surface.height();
@@ -155,14 +195,31 @@ fn paint(surface: &mut Surface<'_>, text: &[u8]) {
     let _ = TextArea::new(surface, title, 2, Rgb::WHITE, None)
         .write_str("Ferrix kernel panic - this processor has stopped");
 
+    let top = banner.saturating_add(MARGIN);
+    let tall = height.saturating_sub(banner.saturating_add(MARGIN.saturating_mul(2)));
+
+    // The code gets what is left once the text has its columns, and never more
+    // than half the width: a small screen gets a small code rather than a
+    // report whose every line wraps.
+    let text_wanted = TEXT_COLUMNS
+        .saturating_mul(GLYPH_WIDTH)
+        .saturating_add(MARGIN);
+    let side = tall.min(inner.saturating_sub(text_wanted)).min(inner / 2);
+    let report = report_start(text).and_then(|start| text.get(start..));
+    let code = report.and_then(|report| {
+        let right = MARGIN.saturating_add(inner);
+        draw_code(surface, right, top, side, report, modules, work)
+    });
+    let beside = code.map_or(0, |drawn| drawn.saturating_add(MARGIN));
+
     let body = Rect {
         x: MARGIN,
-        y: banner.saturating_add(MARGIN),
-        width: inner,
-        height: height.saturating_sub(banner.saturating_add(MARGIN.saturating_mul(2))),
+        y: top,
+        width: inner.saturating_sub(beside),
+        height: tall,
     };
     let mut area = TextArea::new(surface, body, 1, LOG_TEXT, None);
-    let shown = tail(text, area.rows(), area.columns());
+    let shown = visible(text, area.rows(), area.columns());
     let report = report_start(shown);
     for (offset, &byte) in shown.iter().enumerate() {
         if Some(offset) == report {
@@ -174,6 +231,94 @@ fn paint(surface: &mut Surface<'_>, text: &[u8]) {
             0x20..=0x7E => area.put_char(char::from(byte)),
             _ => area.put_char(char::REPLACEMENT_CHARACTER),
         }
+    }
+}
+
+/// Draw a QR code of as much of `report` as fits in a square of `side` pixels
+/// whose top right corner is at `right`, `top`, with its caption below, and
+/// return the side of the square drawn: `None` if no code worth scanning fits.
+fn draw_code(
+    surface: &mut Surface<'_>,
+    right: usize,
+    top: usize,
+    side: usize,
+    report: &[u8],
+    modules: &mut [u8],
+    work: &mut [u8],
+) -> Option<usize> {
+    let symbol = encode(report, side, modules, work)?;
+    let span = symbol.width().saturating_add(QUIET_ZONE.saturating_mul(2));
+    let scale = side.checked_div(span)?;
+    if scale < MIN_MODULE_PIXELS {
+        return None;
+    }
+    let drawn = span.saturating_mul(scale);
+    let left = right.checked_sub(drawn)?;
+
+    surface.fill_rect(left, top, drawn, drawn, Rgb::WHITE);
+    let origin = |module: usize| module.saturating_add(QUIET_ZONE).saturating_mul(scale);
+    for y in 0..symbol.width() {
+        for x in 0..symbol.width() {
+            if symbol.is_dark(x, y) {
+                let at_x = left.saturating_add(origin(x));
+                let at_y = top.saturating_add(origin(y));
+                surface.fill_rect(at_x, at_y, scale, scale, Rgb::BLACK);
+            }
+        }
+    }
+
+    let caption = Rect {
+        x: left,
+        y: top.saturating_add(drawn).saturating_add(GLYPH_HEIGHT / 2),
+        width: drawn,
+        height: GLYPH_HEIGHT,
+    };
+    let _ = TextArea::new(surface, caption, 1, LOG_TEXT, None).write_str(CAPTION);
+    Some(drawn)
+}
+
+/// Encode as much of `report` as a code no wider than `side` pixels can carry
+/// with modules of [`MIN_MODULE_PIXELS`], cut at the end of a line.
+fn encode<'m>(
+    report: &[u8],
+    side: usize,
+    modules: &'m mut [u8],
+    work: &mut [u8],
+) -> Option<Symbol<'m>> {
+    let across = (side / MIN_MODULE_PIXELS).checked_sub(QUIET_ZONE.saturating_mul(2))?;
+    // A symbol is 17 + 4 * version modules across.
+    let version = u8::try_from(across.checked_sub(17)? / 4)
+        .unwrap_or(MAX_VERSION)
+        .min(MAX_VERSION);
+    if version == 0 {
+        return None;
+    }
+    let room = ferrix_qr::max_data_size(version, 0);
+    let payload = if report.len() <= room {
+        report
+    } else {
+        let fits = report.get(..room)?;
+        let line = fits
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(room, |end| end + 1);
+        fits.get(..line)?
+    };
+    ferrix_qr::generate(None, payload, modules, work).ok()
+}
+
+/// What of `text` to show in `rows` rows of `columns` columns.
+///
+/// The end of it, so the report sits under as much of the boot log as fits,
+/// unless the report alone does not fit. Then it is the report from its first
+/// line, cut at the bottom: the headline, the location and the trace matter more
+/// than the last lines of the explanation, which the serial log and the QR code
+/// still carry.
+fn visible(text: &[u8], rows: usize, columns: usize) -> &[u8] {
+    let shown = tail(text, rows, columns);
+    match report_start(text) {
+        Some(start) if report_start(shown).is_none() => text.get(start..).unwrap_or(shown),
+        _ => shown,
     }
 }
 

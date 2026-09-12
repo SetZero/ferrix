@@ -72,6 +72,7 @@ dependencies = [
  "ferrix-heap",
  "ferrix-linux-abi",
  "ferrix-paging",
+ "ferrix-qr",
  "ferrix-sched",
  "ferrix-sync",
  "ferrix-ustack",
