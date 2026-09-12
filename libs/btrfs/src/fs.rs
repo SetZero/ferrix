@@ -281,7 +281,7 @@ impl<S: ChunkStorage> Subvolume<'_, S> {
             if item.key != key {
                 return Ok(ControlFlow::Break(None));
             }
-            Ok(ControlFlow::Break(entry_named(item.data, name)?))
+            Ok(ControlFlow::Break(entry_named(item.data, &key, name)?))
         })?;
         Ok(found.flatten())
     }
@@ -314,6 +314,7 @@ impl<S: ChunkStorage> Subvolume<'_, S> {
                         item_type: DIR_INDEX_KEY,
                     });
                 };
+                check_name(entry.name, DIR_INDEX_KEY)?;
                 Ok(emit(DirEntry {
                     index: item.key.offset,
                     name: entry.name,
@@ -479,18 +480,53 @@ fn expanded_len(ram_bytes: u64) -> Result<usize, BtrfsError> {
         })
 }
 
-/// The entry in a `DIR_ITEM` payload whose name is `name`, if any.
-fn entry_named(payload: &[u8], name: &[u8]) -> Result<Option<Entry>, BtrfsError> {
+/// The entry in the `DIR_ITEM` payload filed under `key` whose name is
+/// `name`, if any.
+///
+/// Every entry in the item is checked, not only the one asked for, and each
+/// must hash to the key it is filed under — Linux's `check_dir_item` makes the
+/// same comparison. An entry whose name does not hash to its key is one no
+/// lookup of its own name can reach, so it was not put there by btrfs; it is
+/// reported as damage rather than skipped as a miss.
+fn entry_named(payload: &[u8], key: &BtrfsKey, name: &[u8]) -> Result<Option<Entry>, BtrfsError> {
+    let mut found = None;
     for entry in DirItemIter::new(payload, DIR_ITEM_KEY) {
         let entry = entry?;
-        if entry.name == name {
-            return Ok(Some(Entry {
+        if name_hash(entry.name) != key.offset {
+            return Err(BtrfsError::BadItem {
+                item_type: DIR_ITEM_KEY,
+            });
+        }
+        check_name(entry.name, DIR_ITEM_KEY)?;
+        if found.is_none() && entry.name == name {
+            found = Some(Entry {
                 target: target_of(&entry)?,
                 kind: entry.kind,
-            }));
+            });
         }
     }
-    Ok(None)
+    Ok(found)
+}
+
+/// Refuse a directory entry name that no directory can hold.
+///
+/// An empty name, `.` or `..`, or one containing `/` or NUL. Linux's
+/// tree-checker bounds a name's length and leaves its bytes alone, because on
+/// Linux the bytes are checked on the way out: `verify_dirent_name` in
+/// `fs/readdir.c` fails `getdents` with `EIO` for an empty name or one with a
+/// `/` in it. This reader's names go to a VFS instead, which hands them to
+/// `getdents64` and matches them in path walks as they are, and which emits
+/// `.` and `..` itself. A `/` there is a name that cannot be looked up, a NUL
+/// cuts it short for every C caller, and an on-disk `..` would list a second
+/// parent. So the check this reader cannot leave to anyone else is made here,
+/// for listings and lookups alike, and reported as damage.
+fn check_name(name: &[u8], item_type: u8) -> Result<(), BtrfsError> {
+    let special = name.is_empty() || name == b"." || name == b"..";
+    if special || name.iter().any(|&byte| byte == b'/' || byte == 0) {
+        Err(BtrfsError::BadItem { item_type })
+    } else {
+        Ok(())
+    }
 }
 
 /// Decode what a directory entry's location key points at.

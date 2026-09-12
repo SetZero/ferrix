@@ -121,6 +121,13 @@ pub const INODE_ITEM_SIZE: usize = 160;
 /// Bytes in a `DIR_ITEM` header, before the name and data.
 pub const DIR_ITEM_HEADER_SIZE: usize = 30;
 
+/// The longest name a directory entry or inode back-reference may carry:
+/// Linux's `BTRFS_NAME_LEN`, and the 255 every Unix filesystem agrees on.
+pub const NAME_LEN: usize = 255;
+
+/// The longest extended attribute name: Linux's `XATTR_NAME_MAX`.
+pub const XATTR_NAME_MAX: usize = 255;
+
 /// Bytes in an `EXTENT_DATA` header, before the inline data or the extent
 /// reference.
 pub const EXTENT_DATA_HEADER_SIZE: usize = 21;
@@ -311,9 +318,17 @@ impl<'a> InodeRefIter<'a> {
     }
 
     /// Parse the record at the cursor, returning it and the next cursor.
+    ///
+    /// As Linux's `check_inode_ref`: a back-reference repeats the name of a
+    /// directory entry, so its name is between one and [`NAME_LEN`] bytes. A
+    /// longer one is not a name any directory could hold, and an empty one
+    /// would let a payload of bare ten-byte headers pass as a list of links.
     fn record(&self) -> Option<(InodeRef<'a>, usize)> {
         let index = u64_at(self.bytes, self.at)?;
         let name_len = usize::from(u16_at(self.bytes, self.at.checked_add(8)?)?);
+        if name_len == 0 || name_len > NAME_LEN {
+            return None;
+        }
         let name_at = self.at.checked_add(10)?;
         let name = slice_at(self.bytes, name_at, name_len)?;
         Some((InodeRef { index, name }, name_at.checked_add(name_len)?))
@@ -380,7 +395,9 @@ pub struct DirItemIter<'a> {
 
 impl<'a> DirItemIter<'a> {
     /// Iterate the entries in a `DIR_ITEM`, `DIR_INDEX` or `XATTR_ITEM`
-    /// payload. `item_type` is carried only so an error names the right type.
+    /// payload. `item_type` is the key type the payload was filed under: it
+    /// decides whether the entries must be extended attributes or must not
+    /// be, and names the type in an error.
     #[must_use]
     pub const fn new(bytes: &'a [u8], item_type: u8) -> Self {
         DirItemIter {
@@ -391,6 +408,25 @@ impl<'a> DirItemIter<'a> {
         }
     }
 
+    /// Whether an entry's type and lengths are ones btrfs writes.
+    ///
+    /// The per-entry checks of Linux's `check_dir_item`: a type in
+    /// `FT_REG_FILE..=FT_XATTR`, and `FT_XATTR` exactly when the key is an
+    /// `XATTR_ITEM`; a name of at most [`NAME_LEN`] bytes, or
+    /// [`XATTR_NAME_MAX`] for an attribute; and no data behind anything but
+    /// an attribute. Linux's other bound, that name and data together fit
+    /// `BTRFS_MAX_XATTR_SIZE`, needs no check here: an entry is inside its
+    /// payload, the payload is inside one node after at least one item
+    /// descriptor, and that is exactly the room `BTRFS_MAX_XATTR_SIZE` measures.
+    fn plausible(&self, kind: u8, name_len: usize, data_len: usize) -> bool {
+        let xattr = kind == FT_XATTR;
+        let longest = if xattr { XATTR_NAME_MAX } else { NAME_LEN };
+        (FT_REG_FILE..=FT_XATTR).contains(&kind)
+            && xattr == (self.item_type == XATTR_ITEM_KEY)
+            && name_len <= longest
+            && (xattr || data_len == 0)
+    }
+
     /// Parse the entry at the cursor, returning it and the next cursor.
     fn record(&self) -> Option<(DirItem<'a>, usize)> {
         let location = BtrfsKey::parse(self.bytes, self.at)?;
@@ -398,6 +434,9 @@ impl<'a> DirItemIter<'a> {
         let data_len = usize::from(u16_at(self.bytes, self.at.checked_add(25)?)?);
         let name_len = usize::from(u16_at(self.bytes, self.at.checked_add(27)?)?);
         let kind = u8_at(self.bytes, self.at.checked_add(29)?)?;
+        if !self.plausible(kind, name_len, data_len) {
+            return None;
+        }
         let name_at = self.at.checked_add(DIR_ITEM_HEADER_SIZE)?;
         let name = slice_at(self.bytes, name_at, name_len)?;
         let data_at = name_at.checked_add(name_len)?;

@@ -54,6 +54,27 @@ impl PackedDevice {
         let block = self.blocks.entry(base).or_insert([0; BLOCK]);
         block[(physical - base) as usize] ^= 0x10;
     }
+
+    /// Overwrite the image at `physical` with `bytes`.
+    pub(crate) fn write(&mut self, physical: u64, bytes: &[u8]) {
+        for (i, &byte) in bytes.iter().enumerate() {
+            let at = physical + i as u64;
+            let base = at - at % BLOCK as u64;
+            let block = self.blocks.entry(base).or_insert([0; BLOCK]);
+            block[(at - base) as usize] = byte;
+        }
+    }
+
+    /// Checksum the 4 KiB node at `physical` again after an edit, the way a
+    /// hostile image arrives: damaged, and consistent with its checksum.
+    pub(crate) fn reseal(&mut self, physical: u64) {
+        let block = self
+            .blocks
+            .get_mut(&physical)
+            .expect("a node starts a block");
+        let sum = crate::crc32c::crc32c(&block[32..]);
+        block[..4].copy_from_slice(&sum.to_le_bytes());
+    }
 }
 
 impl Device for PackedDevice {

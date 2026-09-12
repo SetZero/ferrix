@@ -17,6 +17,7 @@ use super::*;
 use crate::chunk::ChunkMapEntry;
 use crate::crc32c::crc32c;
 use crate::items::{FT_DIR, FT_REG_FILE, FT_SYMLINK};
+use crate::tree::HEADER_SIZE;
 use crate::volume::tests::{IMAGES, PackedDevice};
 
 /// One manifest line.
@@ -316,6 +317,162 @@ fn a_hole_reads_as_zeroes() {
         .unwrap();
     assert_eq!(n, middle.len(), "the hole is inside the file");
     assert!(middle.iter().all(|&b| b == 0), "and reads as zeroes");
+}
+
+/// One directory entry payload naming inode 257.
+fn dir_entry(name: &[u8], kind: u8) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&257u64.to_le_bytes()); // location objectid
+    bytes.push(INODE_ITEM_KEY);
+    bytes.extend_from_slice(&0u64.to_le_bytes()); // location offset
+    bytes.extend_from_slice(&7u64.to_le_bytes()); // transid
+    bytes.extend_from_slice(&0u16.to_le_bytes()); // data_len
+    bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    bytes.push(kind);
+    bytes.extend_from_slice(name);
+    bytes
+}
+
+#[test]
+fn a_lookup_refuses_an_entry_filed_under_another_names_hash() {
+    let key_for = |name: &[u8]| BtrfsKey::new(256, DIR_ITEM_KEY, name_hash(name));
+    let one = dir_entry(b"one", FT_REG_FILE);
+    assert_eq!(
+        entry_named(&one, &key_for(b"one"), b"one"),
+        Ok(Some(Entry {
+            target: Target::Inode(257),
+            kind: FT_REG_FILE
+        })),
+        "an entry under its own name's hash is found"
+    );
+    assert_eq!(
+        entry_named(&one, &key_for(b"two"), b"one"),
+        Err(BtrfsError::BadItem {
+            item_type: DIR_ITEM_KEY
+        }),
+        "an entry under another name's hash is damage, not a miss"
+    );
+
+    // Names that collide share an item, and every entry in it must hash to
+    // the key — including one after the entry the lookup was for.
+    let mut shared = dir_entry(b"one", FT_REG_FILE);
+    shared.extend_from_slice(&dir_entry(b"stray", FT_REG_FILE));
+    assert_eq!(
+        entry_named(&shared, &key_for(b"one"), b"one"),
+        Err(BtrfsError::BadItem {
+            item_type: DIR_ITEM_KEY
+        }),
+        "the whole item is checked, not only up to the match"
+    );
+}
+
+#[test]
+fn names_no_directory_can_hold_are_refused() {
+    let longest = [b'x'; 255];
+    for good in [
+        &b"a"[..],
+        b"...",
+        b".hidden",
+        b"trailing.",
+        &longest,
+        &[0x80, 0xFE, 0xFF],
+    ] {
+        assert_eq!(
+            check_name(good, DIR_INDEX_KEY),
+            Ok(()),
+            "{good:?} is a name"
+        );
+    }
+    for bad in [&b""[..], b".", b"..", b"/", b"a/b", b"nul\0byte"] {
+        assert_eq!(
+            check_name(bad, DIR_INDEX_KEY),
+            Err(BtrfsError::BadItem {
+                item_type: DIR_INDEX_KEY
+            }),
+            "{bad:?} is not a name"
+        );
+        // A lookup refuses it too, even filed under its own hash.
+        let key = BtrfsKey::new(256, DIR_ITEM_KEY, name_hash(bad));
+        assert_eq!(
+            entry_named(&dir_entry(bad, FT_REG_FILE), &key, b"other"),
+            Err(BtrfsError::BadItem {
+                item_type: DIR_ITEM_KEY
+            }),
+            "{bad:?} is refused by lookup"
+        );
+    }
+}
+
+/// The first item of `key`'s type at or after `key` in the fs tree: its key,
+/// the physical offset of its node, and that of its payload.
+fn find_item(
+    volume: &Volume<&mut [ChunkMapEntry; 16]>,
+    device: &mut PackedDevice,
+    key: BtrfsKey,
+    node: &mut [u8],
+) -> (BtrfsKey, u64, u64) {
+    let mut seek = key;
+    loop {
+        let leaf = volume.seek(device, volume.fs_tree(), &seek, node).unwrap();
+        if let Some(item) = leaf.items().next() {
+            assert_eq!(item.key.item_type, key.item_type, "the fixture has one");
+            let (_, physical) = volume.chunks().map(leaf.node.header().bytenr).unwrap();
+            let payload = physical + HEADER_SIZE as u64 + u64::from(item.offset);
+            return (item.key, physical, payload);
+        }
+        seek = leaf.next.expect("the fixture has one");
+    }
+}
+
+#[test]
+fn a_listing_refuses_a_name_with_a_slash_in_it() {
+    // A hostile image, checksummed: the first entry of the root directory's
+    // index now has a '/' for its first byte. Before, `read_dir` handed that
+    // name on, and the VFS would have listed it to `getdents64`.
+    let f = &mut Fixture::new(IMAGES[0].1);
+    let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
+    let root = volume.root_dir();
+    let start = BtrfsKey::new(root, DIR_INDEX_KEY, 0);
+    let (_, node_at, payload) = find_item(&volume, &mut f.device, start, &mut f.node);
+    f.device.write(payload + 30, b"/");
+    f.device.reseal(node_at);
+
+    let sub = volume.default_subvolume();
+    let result = sub.read_dir(&mut f.device, root, 2, &mut f.node, |_| {
+        ControlFlow::Continue(())
+    });
+    assert_eq!(
+        result,
+        Err(BtrfsError::BadItem {
+            item_type: DIR_INDEX_KEY
+        })
+    );
+}
+
+#[test]
+fn a_lookup_refuses_a_name_that_no_longer_matches_its_hash() {
+    let f = &mut Fixture::new(IMAGES[0].1);
+    let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
+    let root = volume.root_dir();
+    let start = BtrfsKey::new(root, DIR_ITEM_KEY, 0);
+    let (key, node_at, payload) = find_item(&volume, &mut f.device, start, &mut f.node);
+
+    // Read the name back out of the image, then change its first byte.
+    let mut header = [0u8; 30];
+    f.device.read_at(payload, &mut header).unwrap();
+    let mut name = vec![0u8; usize::from(u16::from_le_bytes([header[27], header[28]]))];
+    f.device.read_at(payload + 30, &mut name).unwrap();
+    assert_eq!(name_hash(&name), key.offset, "the image is well formed");
+    f.device.write(payload + 30, &[name[0] ^ 0x01]);
+    f.device.reseal(node_at);
+
+    let sub = volume.default_subvolume();
+    assert_eq!(
+        sub.lookup(&mut f.device, root, &name, &mut f.node),
+        Err(BtrfsError::BadItem {
+            item_type: DIR_ITEM_KEY
+        })
+    );
 }
 
 #[test]

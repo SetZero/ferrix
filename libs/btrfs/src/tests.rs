@@ -13,7 +13,7 @@ use std::vec::Vec;
 
 use super::chunk::{ChunkItem, ChunkMap, ChunkMapEntry, ChunkProfile};
 use super::crc32c::{POLYNOMIAL, TABLE, crc32c};
-use super::items::{DirItemIter, ExtentData, ExtentDataBody, InodeItem, name_hash};
+use super::items::{DirItemIter, ExtentData, ExtentDataBody, InodeItem, InodeRefIter, name_hash};
 use super::superblock::{ChecksumType, MAGIC, SUPERBLOCK_SIZE, Superblock};
 use super::tree::{BtrfsKey, HEADER_SIZE, ITEM_SIZE, KEY_PTR_SIZE, Node};
 use super::*;
@@ -1207,6 +1207,122 @@ fn a_directory_item_with_a_name_past_the_end_stops_cleanly() {
         entries.iter().all(Result::is_err) || entries.is_empty(),
         "an entry whose name runs past the item must be refused, not read past"
     );
+}
+
+/// Directory item key types, written out independently of the parser's.
+const XATTR_ITEM: u8 = 24;
+const DIR_ITEM: u8 = 84;
+const DIR_INDEX: u8 = 96;
+/// Directory entry types.
+const FT_REG_FILE: u8 = 1;
+const FT_XATTR: u8 = 8;
+
+/// One directory entry or attribute record, naming inode 257.
+fn dir_record(name: &[u8], data: &[u8], kind: u8) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&257u64.to_le_bytes()); // location objectid
+    bytes.push(1); // location type: INODE_ITEM
+    bytes.extend_from_slice(&0u64.to_le_bytes()); // location offset
+    bytes.extend_from_slice(&1u64.to_le_bytes()); // transid
+    bytes.extend_from_slice(&(data.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    bytes.push(kind);
+    bytes.extend_from_slice(name);
+    bytes.extend_from_slice(data);
+    bytes
+}
+
+/// Whether every record in `payload` parses as `item_type`.
+fn dir_records_parse(payload: &[u8], item_type: u8) -> bool {
+    DirItemIter::new(payload, item_type).all(|entry| entry.is_ok())
+}
+
+#[test]
+fn a_directory_entry_btrfs_would_not_write_is_refused() {
+    let longest = [b'n'; 255];
+    let too_long = [b'n'; 256];
+    for (payload, item_type, what) in [
+        (
+            dir_record(&too_long, b"", FT_REG_FILE),
+            DIR_ITEM,
+            "a 256-byte name",
+        ),
+        (
+            dir_record(&too_long, b"", FT_REG_FILE),
+            DIR_INDEX,
+            "a 256-byte name in the index",
+        ),
+        (
+            dir_record(b"file", b"data", FT_REG_FILE),
+            DIR_ITEM,
+            "a directory entry carrying data",
+        ),
+        (
+            dir_record(b"file", b"data", FT_REG_FILE),
+            DIR_INDEX,
+            "an index entry carrying data",
+        ),
+        (
+            dir_record(b"user.a", b"v", FT_REG_FILE),
+            XATTR_ITEM,
+            "an attribute key holding a file entry",
+        ),
+        (
+            dir_record(b"file", b"", FT_XATTR),
+            DIR_ITEM,
+            "a directory key holding an attribute",
+        ),
+        (dir_record(b"file", b"", 0), DIR_ITEM, "entry type 0"),
+        (dir_record(b"file", b"", 9), DIR_ITEM, "entry type 9"),
+        (
+            dir_record(&too_long, b"v", FT_XATTR),
+            XATTR_ITEM,
+            "a 256-byte attribute name",
+        ),
+    ] {
+        assert!(!dir_records_parse(&payload, item_type), "{what} is refused");
+    }
+
+    for (payload, item_type, what) in [
+        (
+            dir_record(&longest, b"", FT_REG_FILE),
+            DIR_ITEM,
+            "a 255-byte name",
+        ),
+        (
+            dir_record(&longest, b"", 7),
+            DIR_INDEX,
+            "a 255-byte symlink name in the index",
+        ),
+        (
+            dir_record(&longest, &[0xAA; 300], FT_XATTR),
+            XATTR_ITEM,
+            "a 255-byte attribute name with a value",
+        ),
+    ] {
+        assert!(dir_records_parse(&payload, item_type), "{what} parses");
+    }
+}
+
+/// One `INODE_REF` record.
+fn inode_ref(name: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&2u64.to_le_bytes()); // index
+    bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(name);
+    bytes
+}
+
+#[test]
+fn an_inode_ref_name_is_between_one_and_255_bytes() {
+    let parses = |payload: &[u8]| InodeRefIter::new(payload).all(|entry| entry.is_ok());
+    assert!(parses(&inode_ref(&[b'r'; 255])), "a 255-byte name parses");
+    assert!(parses(&inode_ref(b"r")), "a one-byte name parses");
+    assert!(
+        !parses(&inode_ref(&[b'r'; 256])),
+        "a 256-byte name is refused"
+    );
+    assert!(!parses(&inode_ref(b"")), "an empty name is refused");
 }
 
 #[test]
