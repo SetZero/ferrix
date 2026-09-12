@@ -93,11 +93,11 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1371 elements, 155 relations. Model digest `ebc98c10151e648b`.
+13 files, 16 packages, 1393 elements, 155 relations. Model digest `264ef5214a516d79`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 98 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#implemented` | 101 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
 | `#inProgress` | 8 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 7 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
 | `#planned` | 120 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
@@ -1468,6 +1468,7 @@ kernel/src/sched/mod.rs: spawn, spawn_on, exit, yield, sleep, wake, reap. Preemp
 | `spawnInAddressSpace` | action |  |  | Start a task that has an address space. |
 | `switchTo` | action |  |  | Deciding and switching are one operation under the queue lock. |
 | `swapAddressSpace` | action |  |  | Install the incoming task's root, inside choose_next, under the run queue lock and before the registers move -- not in the architecture's switch, which takes two stack pointers and does register operations, and not after, where the incoming context has… |
+| `placeTask` | action |  |  | Chosen on spawn rather than inherited from the creator. |
 | `exitTask` | action |  |  |  |
 | `yieldNow` | action |  |  |  |
 | `sleepUntil` | action |  |  |  |
@@ -1480,11 +1481,16 @@ kernel/src/sched/mod.rs: spawn, spawn_on, exit, yield, sleep, wake, reap. Preemp
 
 `#implemented`  ·  stage 5
 
-kernel/src/sched/wait.rs. The lost wake-up is closed by order: a waiter marks itself blocked and joins the queue before its last look at the condition; a waker takes the same lock, so it either sees the waiter or made the condition true before that look.
+kernel/src/sched/wait.rs. The lost wake-up between a waiter and a waker is closed by order: a waiter marks itself blocked and joins the queue before its last look at the condition; a waker takes the same lock, so it either sees the waiter or made the condition true before that look.
+
+That argument is necessary and was not sufficient, and the gap is worth recording because it cost a day. It assumes a waker exists. Seven waits watched a counter that was incremented when a task \*started\* and signalled by nothing, because the only wake came from a task \*finishing\* — so they slept their entire deadline, woke on the timer, found the condition true and reported success. Twenty seconds each, silently, indistinguishable from a slow machine.
+
+Two rules follow. Every store to a counter a predicate reads is followed by a notify. And a wait sleeps in slices rather than in one span to its deadline, so the next missing notify costs milliseconds instead of the whole budget.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
-| `waitUntilDeadline` | action |  |  |  |
+| `waitUntilDeadline` | action |  |  | Bounded, and off the queue however it leaves: a waiter that returns while still listed is woken by the next wakeAll, out of whatever it is doing by then. |
+| `notify` | action |  |  | Called wherever a watched counter is stored. |
 | `wakeAll` | action |  |  |  |
 
 #### Runqueue
@@ -1495,7 +1501,9 @@ kernel/src/sched/queue.rs: one per CPU, one plain SpinLock taken with interrupts
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
-| `sliceNanos` | attribute | `Natural` |  |  |
+| `targetLatencyNanos` | attribute | `Natural` |  | Shared among whatever is runnable rather than handed to each in full. |
+| `minSliceNanos` | attribute | `Natural` |  | The floor. |
+| `load` | part | `LoadAverage` |  |  |
 | `fair` | part | `EevdfRunQueue` |  |  |
 | `current` | part | `Task` |  |  |
 | `idle` | part | `Task` |  |  |
@@ -1520,6 +1528,66 @@ libs/sched: entities with weight and virtual runtime; the queue's virtual time i
 | `remove` | action |  |  |  |
 | `pick` | action |  |  |  |
 | `release` | action |  |  | For a steal: hand the entity's state to another queue. |
+
+#### CpuLoad
+
+—
+
+One processor as a placement or balancing decision sees it.
+
+| Feature | Kind | Type | Maturity | Note |
+| --- | --- | --- | --- | --- |
+| `queued` | attribute | `Natural` |  | Entities on its queue, running one included. |
+| `average` | attribute | `Natural` |  | Its decaying load, in units of a nice-0 task. |
+| `idle` | attribute | `Boolean` |  | Nothing runnable, rather than "running the idle task": a processor just given a task still has idle current until it next schedules, and a burst would otherwise all pile on behind the first. |
+
+#### LoadAverage
+
+`#implemented`  ·  stage 5
+
+libs/sched/balance.rs. A geometric decay with a 33-millisecond half-life, in the shape of Linux's PELT, measuring \*weighted demand\* rather than occupancy — a processor is either running something or it is not, so "busy" saturates at one task and says nothing after that, which leaves a balancer nothing to compare. Four runnable nice-0 tasks read four times one.
+
+Carried with ten bits of extra precision, which is not a detail: each step truncates twice, and without them the loss balances the gain at about 978 of 1024, so a permanently busy processor would report 95% forever and every comparison would be against a ceiling nothing could reach.
+
+| Feature | Kind | Type | Maturity | Note |
+| --- | --- | --- | --- | --- |
+| `scale` | attribute | `Natural` |  |  |
+| `periodNanos` | attribute | `Natural` |  |  |
+| `halfLifePeriods` | attribute | `Natural` |  |  |
+| `accumulate` | action |  |  | A level held for an interval, so a caller sampling on ticks and one sampling on switches describe the same history. |
+| `decay` | action |  |  |  |
+
+#### Placement
+
+`#implemented`  ·  stage 5
+
+Where a task should run, asked on spawn and folded one processor at a time rather than snapshotted into an array — the array was sized for 256 processors, six kilobytes of a sixteen-kilobyte kernel stack, and the balancing caller asks from inside an interrupt on the stack of whatever it interrupted.
+
+The order: the preferred processor if it is idle, since nothing beats staying where the caches are; then any idle processor, because idle capacity is waste and this is the case a burst of spawns otherwise queues behind itself; then fewest queued, and only then least loaded.
+
+Fewest-queued before least-loaded is not a refinement, it is the fix to a real defect. The count moves the instant a task is placed and is the only thing here that shows a placer the effect of its own last decision; the average is a decaying history that cannot move inside a burst. Ranking on the average first sends every task in a burst to whichever processor has been idle longest. Found on an STM32MP157D-DK1, where a two-task burst on a quiet machine put both on one core.
+
+| Feature | Kind | Type | Maturity | Note |
+| --- | --- | --- | --- | --- |
+| `consider` | action |  |  |  |
+| `choice` | action |  |  |  |
+
+#### Balancing
+
+`#implemented`  ·  stage 5
+
+Moving work that is already placed. Stealing by an idle processor covers the case that matters most and costs nothing, because a processor about to idle is not busy. This covers the other: every processor busy, one much busier.
+
+It pushes as well as pulls, and on a tickless kernel the push is the one that works. A processor alone with one task is never interrupted — arming a timer would buy nothing, which is where tickless comes from — so an under-loaded processor never reaches the balancer to pull anything towards itself. The overloaded one is interrupted constantly, precisely because it has tasks to switch between, so it is the only one awake to notice.
+
+Two tests, not one, and the second is a brake. The load average is deliberately slow, so moving a task does not change it for tens of milliseconds and a balancer consulting only the average keeps moving more: eight movable tasks were observed moving over a thousand times. The queue count updates instantly, so a difference of at least two is required as well.
+
+| Feature | Kind | Type | Maturity | Note |
+| --- | --- | --- | --- | --- |
+| `thresholdFraction` | attribute | `Natural` |  | Half a nice-0 task, because the imbalance moved is half the difference. |
+| `intervalNanos` | attribute | `Natural` |  |  |
+| `pullFrom` | action |  |  |  |
+| `pushTo` | action |  |  |  |
 
 **DomainMode** — `Throughput`, `SoftRt` and `HardRt`. 
 
@@ -3133,6 +3201,9 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 5 | `FerrixScheduling::WaitQueue` | part | `#implemented` |
 | 5 | `FerrixScheduling::Runqueue` | part | `#implemented` |
 | 5 | `FerrixScheduling::EevdfRunQueue` | part | `#implemented` |
+| 5 | `FerrixScheduling::LoadAverage` | part | `#implemented` |
+| 5 | `FerrixScheduling::Placement` | part | `#implemented` |
+| 5 | `FerrixScheduling::Balancing` | part | `#implemented` |
 | 5 | `FerrixScheduling::SchedulingDomain` | part | `#implemented` |
 | 5 | `FerrixScheduling::Scheduler` | part | `#implemented` |
 | 5 | `FerrixObjects::TaskObject` | part | `#planned` |
@@ -3231,7 +3302,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 14 | `FerrixAssurance::CyclicTest` | verification | `#planned` |
 | 15 | `FerrixObjects::PosixIpc` | part | `#planned` |
 
-131 elements across 15 stages.
+134 elements across 15 stages.
 
 ## Figures
 

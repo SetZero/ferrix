@@ -228,6 +228,16 @@ package FerrixScheduling {
                  * lazy TLB and does not oblige anyone to keep a space alive
                  * under a thread holding no reference to it. */
         }
+        action placeTask {
+            doc /* Chosen on spawn rather than inherited from the creator. Not
+                 * chosen again on wake: that is what Linux does and is better,
+                 * but a blocked task is not an unattached one — it may be on a
+                 * wait queue, in a sleeper set, part-way into blocking and in
+                 * neither, or in both — and moving it from under one of those
+                 * wedged the machine. Naming those states and giving them an
+                 * order is its own change; the balancer covers the same ground
+                 * less promptly meanwhile. */
+        }
         action exitTask;
         action yieldNow;
         action sleepUntil;
@@ -239,12 +249,31 @@ package FerrixScheduling {
 
     #implemented part def WaitQueue {
         @stage { number = 5; }
-        doc /* kernel/src/sched/wait.rs. The lost wake-up is closed by order:
-             * a waiter marks itself blocked and joins the queue before its
-             * last look at the condition; a waker takes the same lock, so it
-             * either sees the waiter or made the condition true before that
-             * look. */
-        action waitUntilDeadline;
+        doc /* kernel/src/sched/wait.rs. The lost wake-up between a waiter and
+             * a waker is closed by order: a waiter marks itself blocked and
+             * joins the queue before its last look at the condition; a waker
+             * takes the same lock, so it either sees the waiter or made the
+             * condition true before that look.
+             *
+             * That argument is necessary and was not sufficient, and the gap
+             * is worth recording because it cost a day. It assumes a waker
+             * exists. Seven waits watched a counter that was incremented when
+             * a task *started* and signalled by nothing, because the only
+             * wake came from a task *finishing* — so they slept their entire
+             * deadline, woke on the timer, found the condition true and
+             * reported success. Twenty seconds each, silently, indistinguishable
+             * from a slow machine.
+             *
+             * Two rules follow. Every store to a counter a predicate reads is
+             * followed by a notify. And a wait sleeps in slices rather than in
+             * one span to its deadline, so the next missing notify costs
+             * milliseconds instead of the whole budget. */
+        action waitUntilDeadline {
+            doc /* Bounded, and off the queue however it leaves: a waiter that
+                 * returns while still listed is woken by the next wakeAll, out
+                 * of whatever it is doing by then. */
+        }
+        action notify { doc /* Called wherever a watched counter is stored. */ }
         action wakeAll;
     }
 
@@ -257,7 +286,21 @@ package FerrixScheduling {
              * for one task with nothing behind it. Work stealing by an idle
              * processor in Throughput; none in HardRt, because partitioned
              * scheduling is what makes the admission test valid. */
-        attribute sliceNanos : Natural = 3000000;
+        attribute targetLatencyNanos : Natural = 3000000 {
+            doc /* Shared among whatever is runnable rather than handed to each
+                 * in full. A fixed slice is also a per-task latency bound: the
+                 * last of n runnable tasks waits n slices, which at a thousand
+                 * threads and three milliseconds each is three seconds before
+                 * the last one is looked at. */
+        }
+        attribute minSliceNanos : Natural = 375000 {
+            doc /* The floor. Taken to its conclusion the arithmetic asks for
+                 * slices of nanoseconds and the machine does nothing but
+                 * switch; below this the period stretches instead. The ratio
+                 * to the target decides how many runnable tasks it takes
+                 * before latency has to give, which here is eight. */
+        }
+        part load : LoadAverage;
         part fair : EevdfRunQueue;
         ref part current : Task[0..1];
         ref part idle : Task;
@@ -284,6 +327,87 @@ package FerrixScheduling {
         action remove;
         action pick;
         action release { doc /* For a steal: hand the entity's state to another queue. */ }
+    }
+
+    attribute def CpuLoad {
+        doc /* One processor as a placement or balancing decision sees it. */
+        attribute queued : Natural { doc /* Entities on its queue, running one included. */ }
+        attribute average : Natural { doc /* Its decaying load, in units of a nice-0 task. */ }
+        attribute idle : Boolean { doc /* Nothing runnable, rather than "running the idle task": a processor just given a task still has idle current until it next schedules, and a burst would otherwise all pile on behind the first. */ }
+    }
+
+    #implemented part def LoadAverage {
+        @stage { number = 5; }
+        doc /* libs/sched/balance.rs. A geometric decay with a 33-millisecond
+             * half-life, in the shape of Linux's PELT, measuring *weighted
+             * demand* rather than occupancy — a processor is either running
+             * something or it is not, so "busy" saturates at one task and says
+             * nothing after that, which leaves a balancer nothing to compare.
+             * Four runnable nice-0 tasks read four times one.
+             *
+             * Carried with ten bits of extra precision, which is not a detail:
+             * each step truncates twice, and without them the loss balances the
+             * gain at about 978 of 1024, so a permanently busy processor would
+             * report 95% forever and every comparison would be against a
+             * ceiling nothing could reach. */
+        attribute scale : Natural = 1024;
+        attribute periodNanos : Natural = 1048576;
+        attribute halfLifePeriods : Natural = 32;
+        action accumulate { doc /* A level held for an interval, so a caller sampling on ticks and one sampling on switches describe the same history. */ }
+        action decay;
+    }
+
+    #implemented part def Placement {
+        @stage { number = 5; }
+        doc /* Where a task should run, asked on spawn and folded one processor
+             * at a time rather than snapshotted into an array — the array was
+             * sized for 256 processors, six kilobytes of a sixteen-kilobyte
+             * kernel stack, and the balancing caller asks from inside an
+             * interrupt on the stack of whatever it interrupted.
+             *
+             * The order: the preferred processor if it is idle, since nothing
+             * beats staying where the caches are; then any idle processor,
+             * because idle capacity is waste and this is the case a burst of
+             * spawns otherwise queues behind itself; then fewest queued, and
+             * only then least loaded.
+             *
+             * Fewest-queued before least-loaded is not a refinement, it is the
+             * fix to a real defect. The count moves the instant a task is
+             * placed and is the only thing here that shows a placer the effect
+             * of its own last decision; the average is a decaying history that
+             * cannot move inside a burst. Ranking on the average first sends
+             * every task in a burst to whichever processor has been idle
+             * longest. Found on an STM32MP157D-DK1, where a two-task burst on
+             * a quiet machine put both on one core. */
+        action consider;
+        action choice;
+    }
+
+    #implemented part def Balancing {
+        @stage { number = 5; }
+        doc /* Moving work that is already placed. Stealing by an idle
+             * processor covers the case that matters most and costs nothing,
+             * because a processor about to idle is not busy. This covers the
+             * other: every processor busy, one much busier.
+             *
+             * It pushes as well as pulls, and on a tickless kernel the push is
+             * the one that works. A processor alone with one task is never
+             * interrupted — arming a timer would buy nothing, which is where
+             * tickless comes from — so an under-loaded processor never reaches
+             * the balancer to pull anything towards itself. The overloaded one
+             * is interrupted constantly, precisely because it has tasks to
+             * switch between, so it is the only one awake to notice.
+             *
+             * Two tests, not one, and the second is a brake. The load average
+             * is deliberately slow, so moving a task does not change it for
+             * tens of milliseconds and a balancer consulting only the average
+             * keeps moving more: eight movable tasks were observed moving over
+             * a thousand times. The queue count updates instantly, so a
+             * difference of at least two is required as well. */
+        attribute thresholdFraction : Natural = 2 { doc /* Half a nice-0 task, because the imbalance moved is half the difference. */ }
+        attribute intervalNanos : Natural = 16000000;
+        action pullFrom;
+        action pushTo;
     }
 
     enum def DomainMode {
