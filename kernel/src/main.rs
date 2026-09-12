@@ -349,8 +349,8 @@ fn start_scheduler(cpus: &'static smp::Topology) {
         report.bound / 1000,
     );
     println!(
-        "  place    new tasks spread over {} processors before any ran, affinity held",
-        report.placed_on,
+        "  place    {} spawns sent elsewhere by the placer, landing on {} processors, affinity held",
+        report.placed_elsewhere, report.placed_on,
     );
     println!(
         "  load     busy processor {} of {}, idle {} of {}",

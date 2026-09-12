@@ -113,6 +113,8 @@ pub(crate) struct Report {
     pub(crate) slept: u64,
     /// Guest milliseconds each of the nine checks took, in order.
     pub(crate) spent_ms: [u64; 9],
+    /// Spawns the placer sent to a processor other than the caller's.
+    pub(crate) placed_elsewhere: u64,
     /// How many distinct processors new tasks were *placed* on, before any
     /// stealing or balancing could move them.
     pub(crate) placed_on: u32,
@@ -213,10 +215,10 @@ fn placement(topology: &Topology, report: &mut Report) -> Result<(), &'static st
     SPINNING.store(0, Ordering::Release);
     DONE.store(0, Ordering::Release);
 
-    // One per processor, and every processor is idle, so a scheduler that
-    // places at all must use all of them.
+    let placed_before = super::placed_elsewhere();
     let mut tasks = Vec::with_capacity(online);
     let mut landed = 0u64;
+
     for _ in 0..online {
         let task = super::spawn("placed", spinner, 0, NICE_0_WEIGHT)?;
         let cpu = task.cpu();
@@ -233,12 +235,28 @@ fn placement(topology: &Topology, report: &mut Report) -> Result<(), &'static st
         "a placed task never finished",
     )?;
 
-    if online > 1 && report.placed_on < 2 {
+    // **The decision, not the outcome.** Placement can only be observed where
+    // it happens: an idle processor steals a new task within microseconds, so
+    // a check that reads `task.cpu()` afterwards is measuring stealing. Tested
+    // by removing placement entirely — a check on where the tasks ended up
+    // passed regardless, on two processors and on four.
+    //
+    // This check used to require the tasks to spread over two processors or
+    // more, on the premise that every processor was idle. On two processors
+    // that premise is false: the task doing the spawning is running on one of
+    // them. The first spawn goes to the idle processor, the second finds one
+    // task on each and a tie the load average settles in favour of the
+    // processor idle longer — both land together, the placer having done
+    // exactly the right thing, and the check failed. Deterministically, on
+    // hardware, where it was found.
+    let placed = super::placed_elsewhere().saturating_sub(placed_before);
+    report.placed_elsewhere = placed;
+    if online > 1 && placed == 0 {
         crate::console::println!(
-            "  place    {} tasks all placed on one processor of {online}",
+            "  place    none of {} spawns chose a processor other than the caller's",
             tasks.len(),
         );
-        return Err("new tasks were all placed on the processor that created them");
+        return Err("placement never sent a new task off the processor that created it");
     }
 
     reap_to(allocations, "placement")?;

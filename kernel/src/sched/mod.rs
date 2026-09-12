@@ -346,6 +346,15 @@ pub(crate) fn spawn(
     // until some other processor went idle and came looking; now each one is
     // placed when it is made.
     let cpu = choose_cpu(&anywhere, here).unwrap_or(here);
+    // Counted at the moment of the decision, which is the only place the
+    // decision can be seen. Where a task *ends up* says nothing about
+    // placement: an idle processor steals within microseconds of the spawn,
+    // so a check reading `task.cpu()` afterwards passes just as well with
+    // placement removed entirely — which is exactly what a negative control
+    // showed when this was tested that way.
+    if cpu != here {
+        let _ = PLACED_ELSEWHERE.fetch_add(1, Ordering::Relaxed);
+    }
     spawn_on(name, entry, argument, weight, cpu, anywhere)
 }
 
@@ -965,6 +974,14 @@ fn balance() {
 
 /// Tasks moved by [`balance`], as opposed to by an idle processor stealing.
 static BALANCED: AtomicU64 = AtomicU64::new(0);
+
+/// Spawns that `choose_cpu` sent to a processor other than the caller's.
+static PLACED_ELSEWHERE: AtomicU64 = AtomicU64::new(0);
+
+/// How many new tasks placement has sent off their creator's processor.
+pub(crate) fn placed_elsewhere() -> u64 {
+    PLACED_ELSEWHERE.load(Ordering::Relaxed)
+}
 
 /// How many tasks periodic balancing has moved.
 pub(crate) fn balanced_count() -> u64 {
