@@ -373,19 +373,7 @@ impl AddressSpace {
             .find(address)
             .ok_or(SpaceError::NotMapped(address))?;
 
-        if access.write && !region.flags.write {
-            return Err(SpaceError::Refused(address));
-        }
-        if access.execute && !region.flags.execute {
-            return Err(SpaceError::Refused(address));
-        }
-        // A plain read needs a readable region. Without this, a read of a
-        // `PROT_NONE` region -- every guard page, and every `mprotect` to
-        // nothing -- commits a zero page and maps it, handing the program
-        // memory where it should get `SIGSEGV`. Silent in the way a mapping
-        // more permissive than the map always is: nothing that worked stops
-        // working, so nothing notices.
-        if !access.write && !access.execute && !region.flags.read {
+        if !permits(region.flags, access) {
             return Err(SpaceError::Refused(address));
         }
 
@@ -513,6 +501,62 @@ impl AddressSpace {
 
         drop(inner);
         Ok(())
+    }
+
+    /// Run `touch` on the direct-map address of the byte at `address`, with the
+    /// page held where it is for as long as `touch` runs.
+    ///
+    /// What a copy to or from user memory goes through. Faulting the page in
+    /// and then translating it is not enough on its own, because the lock goes
+    /// between the two and again before the copy: a thread sharing this space
+    /// can `munmap` the page in either gap, and the copy then reads or writes
+    /// a frame that has been given back and handed to somebody else. So the
+    /// translation is taken again under the lock, and `touch` runs before the
+    /// lock goes. Every way a frame this space names is given back -- `unmap`,
+    /// a copy-on-write replacement, `fork` re-sharing a page -- first takes its
+    /// translation down under this same lock, so a translation found under it
+    /// names a live frame until it is released.
+    ///
+    /// The page is faulted in again if what the lock finds does not do: gone
+    /// since the fault, or, for a write, a copy-on-write page some other space
+    /// still holds, which a `fork` in between would have left. The fault
+    /// always makes progress on its own, so the retry ends unless another
+    /// thread keeps undoing it.
+    ///
+    /// `touch` runs under a spin lock: it must not sleep, fault, or take this
+    /// space's lock. A copy between the direct map and a kernel buffer does
+    /// none of those.
+    ///
+    /// # Errors
+    ///
+    /// As [`AddressSpace::fault`].
+    pub(crate) fn with_page<R>(
+        &self,
+        address: u64,
+        access: Access,
+        touch: impl FnOnce(u64) -> R,
+    ) -> Result<R, SpaceError> {
+        loop {
+            self.fault(address, access)?;
+
+            let inner = self.inner.lock();
+            let region = *inner
+                .map
+                .find(address)
+                .ok_or(SpaceError::NotMapped(address))?;
+            if !permits(region.flags, access) {
+                return Err(SpaceError::Refused(address));
+            }
+            let Some(physical) = mm::translate_in(self.root * PAGE_SIZE, address) else {
+                continue;
+            };
+            if access.write && region.cow && mm::frame_references(physical / PAGE_SIZE) > 1 {
+                continue;
+            }
+            let answer = touch(mm::direct_map(physical));
+            drop(inner);
+            return Ok(answer);
+        }
     }
 
     /// Unmap `len` bytes at `at`, giving back the pages and the tables.
@@ -855,6 +899,23 @@ fn named_elsewhere(map: &ferrix_vma::AddressSpace, id: u64, start: u64, end: u64
 /// [`crate::smp::flush_tlb_everywhere`] gives about locks in general.
 fn invalidate() {
     crate::smp::flush_tlb_everywhere();
+}
+
+/// Whether a region with `flags` permits `access`.
+fn permits(flags: VmaFlags, access: Access) -> bool {
+    if access.write && !flags.write {
+        return false;
+    }
+    if access.execute && !flags.execute {
+        return false;
+    }
+    // A plain read needs a readable region. Without this, a read of a
+    // `PROT_NONE` region -- every guard page, and every `mprotect` to nothing
+    // -- commits a zero page and maps it, handing the program memory where it
+    // should get `SIGSEGV`. Silent in the way a mapping more permissive than
+    // the map always is: nothing that worked stops working, so nothing
+    // notices.
+    access.write || access.execute || flags.read
 }
 
 /// Whether object `id` is named by a region that shares it.

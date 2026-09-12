@@ -43,11 +43,20 @@
 //! the loop *and* each page is checked as it is reached, because the first
 //! check proves the caller asked for something sensible and the second proves
 //! the walk stayed inside it.
+//!
+//! # Each page is copied under the space's lock
+//!
+//! Resolving a page and then copying through it with no lock held leaves a gap
+//! in which another thread of the same process can unmap the page, and the
+//! copy then lands in a frame that belongs to somebody else by now. So each
+//! page's copy runs inside [`AddressSpace::with_page`], which holds the page's
+//! translation still until the copy is done. Nothing reaches that gap today --
+//! a process has one thread, and `vfork` copies the space rather than sharing
+//! it -- but `clone(CLONE_VM)` will, and nothing about the copy would say so.
 
 use ferrix_bootinfo::{PAGE_SIZE, is_user_address};
 use ferrix_linux_abi::errno::Errno;
 
-use crate::mm;
 use crate::user::space::{Access, AddressSpace, SpaceError};
 
 /// Why a copy to or from user memory failed.
@@ -100,21 +109,23 @@ fn to_page_end(at: u64) -> u64 {
     PAGE_SIZE - (at % PAGE_SIZE)
 }
 
-/// Resolve one user address to somewhere the kernel can touch it.
+/// Run `touch` on the direct-map address of one user byte, with its page held.
 ///
-/// Faults the page in first, then translates through the space's own tables
-/// and returns the direct-map address of the byte. `access` decides both what
-/// the fault is allowed to do and, through it, whether a copy-on-write page is
-/// copied before the kernel writes to it — which is why a write must not be
-/// resolved with [`Access::READ`].
-fn resolve(space: &AddressSpace, at: u64, access: Access) -> Result<u64, UserError> {
+/// Faults the page in first, then translates through the space's own tables,
+/// and runs `touch` before the space lets the page go. `access` decides both
+/// what the fault is allowed to do and, through it, whether a copy-on-write
+/// page is copied before the kernel writes to it — which is why a write must
+/// not be resolved with [`Access::READ`].
+fn resolve<R>(
+    space: &AddressSpace,
+    at: u64,
+    access: Access,
+    touch: impl FnOnce(u64) -> R,
+) -> Result<R, UserError> {
     if !is_user_address(at) {
         return Err(UserError::NotUserRange);
     }
-    space.fault(at, access)?;
-    let root = space.root_table();
-    let phys = mm::translate_in(root, at).ok_or(UserError::Fault)?;
-    Ok(mm::direct_map(phys))
+    Ok(space.with_page(at, access, touch)?)
 }
 
 /// Copy `out.len()` bytes out of the program's memory at `from`.
@@ -137,15 +148,16 @@ pub(crate) fn copy_from_user(
             .checked_add(u64::try_from(done).map_err(|_| UserError::Overflow)?)
             .ok_or(UserError::Overflow)?;
         let chunk = chunk_len(at, out.len() - done)?;
-        let source = resolve(space, at, Access::READ)?;
-
         let target = out.get_mut(done..done + chunk).ok_or(UserError::Overflow)?;
-        // SAFETY: `resolve` faulted the page in and translated it through the
-        // space's own tables, so `source` is the direct-map address of a live
-        // frame; `chunk` was clamped to the remainder of that page, so the
-        // whole read is inside it. The direct map is readable for all of RAM.
-        let bytes = unsafe { core::slice::from_raw_parts(source as *const u8, chunk) };
-        target.copy_from_slice(bytes);
+        resolve(space, at, Access::READ, |source| {
+            // SAFETY: `resolve` translated the page through the space's own
+            // tables and runs this with the page held, so `source` is the
+            // direct-map address of a frame that stays live for the read;
+            // `chunk` was clamped to the remainder of that page, so the whole
+            // read is inside it. The direct map is readable for all of RAM.
+            let bytes = unsafe { core::slice::from_raw_parts(source as *const u8, chunk) };
+            target.copy_from_slice(bytes);
+        })?;
         done += chunk;
     }
     Ok(())
@@ -171,15 +183,16 @@ pub(crate) fn copy_to_user(space: &AddressSpace, to: u64, data: &[u8]) -> Result
         // `Access::WRITE`, which is what copies a copy-on-write page before
         // the kernel writes into it. Resolving with `READ` here would have the
         // kernel writing into a page the parent can still see.
-        let target = resolve(space, at, Access::WRITE)?;
-
         let source = data.get(done..done + chunk).ok_or(UserError::Overflow)?;
-        // SAFETY: `resolve` faulted the page in for writing and translated it
-        // through the space's own tables, so `target` is the direct-map
-        // address of a live frame this space may write; `chunk` was clamped to
-        // the remainder of that page. The direct map is writable for RAM.
-        let bytes = unsafe { core::slice::from_raw_parts_mut(target as *mut u8, chunk) };
-        bytes.copy_from_slice(source);
+        resolve(space, at, Access::WRITE, |target| {
+            // SAFETY: `resolve` faulted the page in for writing, translated it
+            // through the space's own tables and runs this with the page held,
+            // so `target` is the direct-map address of a frame this space may
+            // write and that stays live for the write; `chunk` was clamped to
+            // the remainder of that page. The direct map is writable for RAM.
+            let bytes = unsafe { core::slice::from_raw_parts_mut(target as *mut u8, chunk) };
+            bytes.copy_from_slice(source);
+        })?;
         done += chunk;
     }
     Ok(())
@@ -217,17 +230,20 @@ pub(crate) fn copy_cstr_from_user(
     while out.len() < limit {
         // One page at a time, so that a string near the top of a mapping does
         // not require the *next* page to be mapped at all.
-        let source = resolve(space, at, Access::READ)?;
         let span = usize::try_from(to_page_end(at)).map_err(|_| UserError::Overflow)?;
         let span = span.min(limit - out.len());
-        // SAFETY: as `copy_from_user`. `span` stays inside the resolved page.
-        let bytes = unsafe { core::slice::from_raw_parts(source as *const u8, span) };
-        match bytes.iter().position(|&b| b == 0) {
-            Some(end) => {
-                out.extend_from_slice(bytes.get(..end).ok_or(UserError::Overflow)?);
-                return Ok(());
-            }
-            None => out.extend_from_slice(bytes),
+        // Reserved before the page is held, so that extending `out` under the
+        // space's lock never has to allocate.
+        out.reserve(span);
+        let terminated = resolve(space, at, Access::READ, |source| {
+            // SAFETY: as `copy_from_user`. `span` stays inside the held page.
+            let bytes = unsafe { core::slice::from_raw_parts(source as *const u8, span) };
+            let end = bytes.iter().position(|&b| b == 0);
+            out.extend_from_slice(bytes.get(..end.unwrap_or(span)).unwrap_or_default());
+            end.is_some()
+        })?;
+        if terminated {
+            return Ok(());
         }
         at = at
             .checked_add(u64::try_from(span).map_err(|_| UserError::Overflow)?)
