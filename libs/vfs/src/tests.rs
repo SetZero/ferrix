@@ -1446,3 +1446,273 @@ fn growing_a_file_never_shrinks_it_and_needs_it_open_for_writing() {
     let dir = ns.open(&ctx, None, b"/", &READ, 0).unwrap();
     assert_eq!(dir.grow_to(1), Err(Errno::EINVAL));
 }
+
+// -- Races, made to happen on one thread -------------------------------------
+
+/// When a [`Meddling`] directory runs its hook.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Moment {
+    /// After the filesystem has answered a lookup, before the VFS records it.
+    Lookup,
+    /// After the VFS decided a name is missing, before the filesystem creates it.
+    Create,
+}
+
+/// Something another thread could have done, run at a chosen moment.
+type Hook = alloc::boxed::Box<dyn FnOnce() + Send>;
+
+/// At most one armed hook, shared by every inode of a meddling filesystem.
+#[derive(Default)]
+struct Hooks {
+    armed: ferrix_sync::SpinLock<Option<(Moment, Vec<u8>, Hook)>>,
+}
+
+impl core::fmt::Debug for Hooks {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Hooks").finish_non_exhaustive()
+    }
+}
+
+impl Hooks {
+    fn arm(&self, moment: Moment, name: &[u8], hook: impl FnOnce() + Send + 'static) {
+        *self.armed.lock() = Some((moment, name.to_vec(), alloc::boxed::Box::new(hook)));
+    }
+
+    /// Run the hook if it is armed for this moment and name, once, with the
+    /// lock released so that the hook may use the filesystem.
+    fn fire(&self, moment: Moment, name: &[u8]) {
+        let hook = {
+            let mut armed = self.armed.lock();
+            match armed.take() {
+                Some((at, armed_name, hook)) if at == moment && armed_name == name => Some(hook),
+                other => {
+                    *armed = other;
+                    None
+                }
+            }
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
+
+/// A tmpfs inode that lets a test interleave another operation with a lookup
+/// or a create, which is how a second thread gets in on a real machine.
+#[derive(Debug)]
+struct Meddling {
+    inner: Arc<dyn crate::Inode>,
+    hooks: Arc<Hooks>,
+}
+
+impl Meddling {
+    fn wrap(&self, inner: Arc<dyn crate::Inode>) -> Arc<dyn crate::Inode> {
+        Arc::new(Meddling {
+            inner,
+            hooks: Arc::clone(&self.hooks),
+        })
+    }
+}
+
+impl crate::Inode for Meddling {
+    fn metadata(&self) -> crate::Metadata {
+        self.inner.metadata()
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Errno> {
+        self.inner.read_at(offset, buf)
+    }
+
+    fn write_at(&self, offset: u64, data: &[u8], append: bool) -> Result<(usize, u64), Errno> {
+        self.inner.write_at(offset, data, append)
+    }
+
+    fn lookup(&self, name: &[u8]) -> Result<Arc<dyn crate::Inode>, Errno> {
+        let found = self.inner.lookup(name);
+        self.hooks.fire(Moment::Lookup, name);
+        found.map(|inner| self.wrap(inner))
+    }
+
+    fn create(
+        &self,
+        name: &[u8],
+        node: crate::NewNode<'_>,
+        permissions: u32,
+    ) -> Result<Arc<dyn crate::Inode>, Errno> {
+        self.hooks.fire(Moment::Create, name);
+        self.inner
+            .create(name, node, permissions)
+            .map(|inner| self.wrap(inner))
+    }
+
+    fn unlink(&self, name: &[u8]) -> Result<(), Errno> {
+        self.inner.unlink(name)
+    }
+
+    fn rmdir(&self, name: &[u8]) -> Result<(), Errno> {
+        self.inner.rmdir(name)
+    }
+
+    fn rename(
+        &self,
+        old: &[u8],
+        new_parent: &Arc<dyn crate::Inode>,
+        new: &[u8],
+        replace: bool,
+    ) -> Result<(), Errno> {
+        let new_parent = Arc::clone(new_parent)
+            .into_any()
+            .downcast::<Meddling>()
+            .map_err(|_| Errno::EXDEV)?;
+        self.inner.rename(old, &new_parent.inner, new, replace)
+    }
+
+    fn read_dir(
+        &self,
+        cursor: u64,
+        emit: &mut dyn FnMut(crate::DirEntry<'_>) -> bool,
+    ) -> Result<(), Errno> {
+        self.inner.read_dir(cursor, emit)
+    }
+}
+
+#[derive(Debug)]
+struct MeddlingFs(Arc<Meddling>);
+
+impl FileSystem for MeddlingFs {
+    fn root(&self) -> Arc<dyn crate::Inode> {
+        Arc::clone(&self.0) as Arc<dyn crate::Inode>
+    }
+
+    fn name(&self) -> &'static str {
+        "meddling"
+    }
+
+    fn device(&self) -> u64 {
+        1
+    }
+}
+
+/// A namespace over a meddling tmpfs keeping `cache` unused dentries, and the
+/// hooks that meddle with it.
+fn meddling(cache: usize) -> (Arc<Namespace>, Arc<Hooks>) {
+    let hooks = Arc::new(Hooks::default());
+    let root = Arc::new(Meddling {
+        inner: tmpfs(1).root(),
+        hooks: Arc::clone(&hooks),
+    });
+    let ns = Namespace::with_cache(Arc::new(MeddlingFs(root)), cache);
+    (Arc::new(ns), hooks)
+}
+
+const DIRECTORY: OpenFlags = OpenFlags {
+    directory: true,
+    ..READ
+};
+
+#[test]
+fn a_lookup_that_loses_a_race_does_not_let_a_directory_move_inside_itself() {
+    // No cache, so that every walk to /A/X asks the filesystem again.
+    let (ns, hooks) = meddling(0);
+    let ctx = ns.context();
+    ns.mkdir(&ctx, None, b"/A", 0o755).unwrap();
+    ns.mkdir(&ctx, None, b"/A/X", 0o755).unwrap();
+    ns.mkdir(&ctx, None, b"/B", 0o755).unwrap();
+
+    // While /A/X is being looked up, a name in /A changes, as it would if
+    // another thread created a file there.
+    let other = Arc::clone(&ns);
+    hooks.arm(Moment::Lookup, b"X", move || {
+        let ctx = other.context();
+        other
+            .mknod(&ctx, None, b"/A/junk", crate::NewNode::Fifo, 0o644)
+            .unwrap();
+    });
+    let x = ns.open(&ctx, None, b"/A/X", &DIRECTORY, 0).unwrap();
+    let again = ns.resolve(&ctx, None, b"/A/X", true).unwrap();
+    assert!(
+        Arc::ptr_eq(&x.location().dentry, &again.dentry),
+        "one directory has two dentries"
+    );
+    drop(again);
+
+    ns.rename(
+        &ctx,
+        (None, b"/A/X"),
+        (None, b"/B/X"),
+        RenameMode::Replace,
+    )
+    .unwrap();
+    assert_eq!(ns.path_of(x.location(), &ctx.root), b"/B/X");
+    assert_eq!(
+        ns.rename(
+            &ctx,
+            (None, b"/B"),
+            (Some(x.location()), b"sub"),
+            RenameMode::Replace
+        ),
+        Err(Errno::EINVAL),
+        "/B was moved into its own child"
+    );
+    assert_eq!(kind(&ns, &ctx, "/B/X", true), Ok(FileType::Directory));
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "threads under Miri take minutes, and the test above is deterministic"
+)]
+fn a_directory_has_one_dentry_while_its_parent_churns() {
+    extern crate std;
+
+    let ns = Arc::new(Namespace::with_cache(tmpfs(1), 0));
+    let ctx = ns.context();
+    ns.mkdir(&ctx, None, b"/A", 0o755).unwrap();
+    ns.mkdir(&ctx, None, b"/A/X", 0o755).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let churn = {
+        let ns = Arc::clone(&ns);
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let ctx = ns.context();
+            while !stop.load(Ordering::Relaxed) {
+                let _ = ns.mknod(&ctx, None, b"/A/junk", crate::NewNode::Fifo, 0o644);
+                let _ = ns.unlink(&ctx, None, b"/A/junk");
+            }
+        })
+    };
+    let started = std::time::Instant::now();
+    let mut split = 0_u32;
+    while started.elapsed() < core::time::Duration::from_millis(300) {
+        let x = ns.open(&ctx, None, b"/A/X", &DIRECTORY, 0).unwrap();
+        let again = ns.resolve(&ctx, None, b"/A/X", true).unwrap();
+        if !Arc::ptr_eq(&x.location().dentry, &again.dentry) {
+            split += 1;
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    churn.join().unwrap();
+    assert_eq!(split, 0, "a walk handed out a second dentry for /A/X");
+}
+
+#[test]
+fn tmpfs_refuses_to_move_a_directory_into_itself_whatever_the_vfs_checked() {
+    let fs = tmpfs(1);
+    let root = fs.root();
+    let a = root.create(b"a", crate::NewNode::Directory, 0o755).unwrap();
+    let b = a.create(b"b", crate::NewNode::Directory, 0o755).unwrap();
+    assert_eq!(root.rename(b"a", &b, b"inside", true), Err(Errno::EINVAL));
+    assert_eq!(root.rename(b"a", &a, b"itself", true), Err(Errno::EINVAL));
+    assert!(root.lookup(b"a").is_ok(), "a refused move moved nothing");
+
+    // A move that is not into itself still works, and afterwards the moved
+    // directory's new ancestors are the ones checked.
+    let c = root.create(b"c", crate::NewNode::Directory, 0o755).unwrap();
+    root.rename(b"c", &b, b"c", true).unwrap();
+    assert_eq!(b.rename(b"c", &c, b"x", true), Err(Errno::EINVAL));
+    assert_eq!(root.rename(b"a", &c, b"a", true), Err(Errno::EINVAL));
+}

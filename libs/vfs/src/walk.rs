@@ -291,16 +291,22 @@ impl Namespace {
             let found = look_up(inode.as_ref(), name)?;
             return Ok(dir.uncached_child(name, found));
         }
-        if let Some(child) = dir.cached_child(name) {
-            return Ok(child);
+        // Until an answer is recorded under a generation nothing changed
+        // during: a name has one live dentry or none, which is what lets a
+        // rename move the only one. `Dentry::insert_looked_up` says why.
+        loop {
+            if let Some(child) = dir.cached_child(name) {
+                return Ok(child);
+            }
+            let generation = dir.generation();
+            let found = look_up(inode.as_ref(), name)?;
+            if let Some((child, cached)) = dir.insert_looked_up(name, found.clone(), generation) {
+                if cached {
+                    self.remember(&child);
+                }
+                return Ok(child);
+            }
         }
-        let generation = dir.generation();
-        let found = look_up(inode.as_ref(), name)?;
-        let (child, cached) = dir.insert_looked_up(name, found, generation);
-        if cached {
-            self.remember(&child);
-        }
-        Ok(child)
     }
 
     /// Step onto whatever is mounted on `at`, repeatedly.
