@@ -387,13 +387,32 @@ under `.claude/worktrees/`. Coordinate before touching:
 
 **Stage 5 hangs intermittently, and it is not stage 6's.** Worth knowing before
 you spend an afternoon on it. `cargo xtask test-boot` sometimes stops after the
-`stage 4` line with no verdict at all — not a self-check failure, a hard hang in
-stage 5's thousand-thread run. The absence of a verdict is the informative part:
-`wait_for` would have reported "not every thread finished", so nothing is
-progressing at all, which says deadlock rather than slowness. The stage 7 owner
-separately saw stage 5 fail the *assertion* "a task's stack was never given
-back" under load, which is probably the same race seen from the other side.
-It is the `sched` owner's, they have it, and re-running is the workaround.
+`stage 4` line with no verdict at all. The stage 7 owner separately saw stage 5
+fail the *assertion* "a task's stack was never given back", and the two came out
+of one binary on one architecture minutes apart. It is the `sched` owner's, they
+have it, and re-running is the workaround.
+
+**Two explanations are live and they are not the same problem.** Read this
+before you reason from the silence, because I did and I was wrong.
+
+I wrote here that the missing verdict was the informative part — that `wait_for`
+would have reported "not every thread finished", so nothing could be
+progressing, so it must be a deadlock rather than slowness. That inference does
+not hold. It assumes the run reached the check and stalled there; a run that is
+merely *slow* and gets killed by `xtask` at its 120-second timeout before
+reaching the verdict prints exactly the same nothing. The `sched` owner then
+measured the thing I should have: the armv7a boot test took **23.5 s before
+their scheduler work and 64 s typical after it, with one passing run at 104 s,
+against a 120 s timeout**. A sixteen-second margin on a run that *passed*. That
+is a boot-time regression large enough to explain a "hang" that is really
+`xtask` giving up, and it is a defect in its own right whatever else is true.
+
+So: either this is that regression, or it is a genuine race and the timeout is a
+red herring. The experiment that separates them is running twelve boots with
+`--timeout 600`. A failure that completes at 150 s was never hung; one that
+produces nothing in 600 seconds is a real hang. That also settles, without gdb,
+the question neither the `sched` owner nor I could answer — whether anything is
+progressing at all.
 
 **It is not architecture-specific and the trigger is host CPU starvation.**
 That is the single most useful thing to know about reproducing it, and it took
@@ -401,10 +420,12 @@ three of us to find out. It has been seen on armv7a and on aarch64, on plain
 `main` with nothing uncommitted, and the stage 7 owner pinned the condition:
 their aarch64 failures came with the host at load ~4.6 and two other sessions'
 QEMUs taking 297% and 243% of a core, and it passed on the next attempt once
-those quietened. So **do not reproduce it by re-running the boot test — load the
-host and then run it**. A race that needs one vCPU descheduled at the wrong
-moment will not show up on an idle machine at any useful rate, which is why the
-early numbers looked like they tracked unrelated commits.
+those quietened. **But plain host load is not the lever**: the `sched` owner ran
+three boots under twelve spinners at load 4.7 and all passed, at a steady 63.9 s.
+The correlation was with other *QEMUs* taking 297% and 243% of a core, which is
+contention for the vCPU threads specifically rather than load average. If you
+want to reproduce this deliberately, run competing emulators, not busy loops —
+and do not conclude much from an idle-machine pass rate either way.
 
 **It arrived with `9daec68`**, the scheduler merge. The `sched` owner ran the
 control: `c008979`, the commit immediately before their work, passed 8 of 8 on
@@ -434,7 +455,17 @@ shootdown deadlock (`flush_tlb_everywhere` returns immediately on both Arm
 architectures, because `TLB_FLUSH_IS_BROADCAST` is true, so there is no
 cross-processor wait to deadlock on); and the two classic Arm lost-wakeup shapes
 (the idle path is `wfi` then unmask, not the reverse, and `send_ipi_to_others`
-does `dsb ishst` before the distributor write). It is a heisenbug — one print
+does `dsb ishst` before the distributor write).
+
+A fourth candidate was found, fixed, and then **withdrawn as the cause** — worth
+recording for both halves. `[CpuLoad; MAX_CPUS]` is 6 KiB of a 16 KiB kernel
+stack, and `balance()` was allocating it from interrupt context on the
+interrupted task's stack. That is a real defect and it is fixed, by folding one
+processor at a time. It is *not* established as this bug: the fixed build passed
+10 of 10 and the unfixed one reproduced once in 10, which cannot distinguish a
+fix from luck at a one-in-three rate. The `sched` owner withdrew the claim
+themselves rather than let it stand, which is the right call and the same
+arithmetic that caught my own bad bisect above. It is a heisenbug — one print
 per check phase makes it pass 6 of 6, because the console lock serialises the
 processors and closes the window.
 
