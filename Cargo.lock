@@ -32,6 +32,10 @@ name = "ferrix-elf"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-fbtext"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-fdt"
 version = "0.1.0"
 

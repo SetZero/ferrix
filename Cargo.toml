@@ -9,6 +9,7 @@ members = [
     "libs/acpi",
     "libs/bootinfo",
     "libs/elf",
+    "libs/fbtext",
     "libs/fdt",
     "libs/frame",
     "libs/heap",
@@ -48,6 +49,7 @@ publish = false
 ferrix-acpi = { path = "libs/acpi" }
 ferrix-bootinfo = { path = "libs/bootinfo" }
 ferrix-elf = { path = "libs/elf" }
+ferrix-fbtext = { path = "libs/fbtext" }
 ferrix-fdt = { path = "libs/fdt" }
 ferrix-frame = { path = "libs/frame" }
 ferrix-heap = { path = "libs/heap" }
