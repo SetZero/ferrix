@@ -1711,3 +1711,43 @@ fn tmpfs_refuses_to_move_a_directory_into_itself_whatever_the_vfs_checked() {
     assert_eq!(b.rename(b"c", &c, b"x", true), Err(Errno::EINVAL));
     assert_eq!(root.rename(b"a", &c, b"a", true), Err(Errno::EINVAL));
 }
+
+#[test]
+fn open_create_without_excl_opens_a_file_created_under_it() {
+    let (ns, hooks) = meddling(crate::DEFAULT_CACHE);
+    let ctx = ns.context();
+    let append = OpenFlags {
+        append: true,
+        ..RW_CREATE
+    };
+
+    // Two `echo >> log` on a new file: the other one creates it between this
+    // one's walk finding nothing and its create.
+    let other = Arc::clone(&ns);
+    hooks.arm(Moment::Create, b"log", move || {
+        let ctx = other.context();
+        let file = other.open(&ctx, None, b"/log", &append, 0o644).unwrap();
+        assert_eq!(file.write(b"first\n"), Ok(6));
+    });
+    let file = ns
+        .open(&ctx, None, b"/log", &append, 0o644)
+        .expect("O_CREAT without O_EXCL is not EEXIST");
+    assert_eq!(file.write(b"second\n"), Ok(7));
+    assert_eq!(read_file(&ns, &ctx, "/log").unwrap(), b"first\nsecond\n");
+
+    // With O_EXCL the loser is told, as it must be.
+    let other = Arc::clone(&ns);
+    hooks.arm(Moment::Create, b"lock", move || {
+        let ctx = other.context();
+        let _ = other.open(&ctx, None, b"/lock", &RW_CREATE, 0o644).unwrap();
+    });
+    let exclusive = OpenFlags {
+        exclusive: true,
+        ..RW_CREATE
+    };
+    assert_eq!(
+        ns.open(&ctx, None, b"/lock", &exclusive, 0o644)
+            .unwrap_err(),
+        Errno::EEXIST
+    );
+}
