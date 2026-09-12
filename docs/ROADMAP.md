@@ -207,14 +207,30 @@ between a program and an operating system.
   all — it compares against an absolute instant — and stage 5's tickless
   scheduler wants one-shot anyway. Periodic is a re-arm inside the handler.
 
-**Exit criterion met, and in the boot test on both architectures.** A
+**Exit criterion met, and in the boot test on all three architectures.** A
 thousand timer interrupts are counted, and the time they took is measured
 with the *counter* rather than by multiplying the tick count by the rate they
 were programmed at — which would be arithmetic that cannot fail rather than a
-measurement. Against a requested 1000 Hz, x86-64 has reported between 970 and
-990 and AArch64 between 969 and 992, the shortfall being one interrupt entry
-and exit per period under an emulator, and the spread being how busy the host
-was. It is a measurement, so it moves.
+measurement. Against a requested 1000 Hz, all three now report 998 to 999. It
+is a measurement, so it moves.
+
+It used to report 969 to 992, and the shortfall was written up here as one
+interrupt entry and exit per period under an emulator. That was the wrong
+diagnosis of a real defect. The handler re-armed the timer for one interval
+*from the moment it ran*, so every period was one interval plus however long
+that interrupt had taken to arrive — an error that never averaged out, because
+it was added afresh each time. On a fast host it hid inside the tolerance. On
+QEMU's Windows build, whose timer resolution is about a millisecond, it
+doubled the period outright and the self-check failed: 500 Hz against 1000
+requested, which is what a kernel that measures its own latency and calls it a
+frequency looks like.
+
+A periodic timer is now a *schedule*: tick `n` is due at `start + n * interval`
+and the instant tick `n - 1` happened to arrive has no say in it, so a late
+tick is absorbed rather than propagated. Unbounded catch-up is its own hazard —
+a kernel held off for a second owes a thousand interrupts — so past sixteen
+intervals behind, the debt is written off and the schedule restarts. This is
+also the shape stage 5 wants: a deadline, not a delay.
 
 Before that, a one-shot is armed and the count required not to move for ten
 further intervals. That check is there for one specific bug: AArch64's timer
@@ -254,6 +270,23 @@ areas, IPIs, TLB shootdown, and the RCU-like grace period the scheduler mode
 switch later depends on.
 
 **Done.**
+
+**One correction, found later and worth recording.** On x86-64 `flush_tlb`
+reloaded `CR3`, which does not invalidate global entries — and kernel text,
+the direct map and every device window are mapped global, so the flush spared
+very nearly everything it was asked to drop. The shootdown machinery above was
+correct; what it invoked at the end was not. It now clears and restores
+`CR4.PGE`, which is the architecturally defined way to invalidate global
+entries.
+
+This passed every boot test for as long as every boot test ran under `tcg`,
+because an emulated `MMU` has no `TLB` to hold a stale entry. Under a hardware
+accelerator it failed immediately, and in three different places: the stage 4
+shootdown check caught it directly, and stage 3 twice read a fresh device
+window through a dead translation left by a stage 2 check that had used the
+same `vmap` address — reporting an `HPET` period no `HPET` can have, and a
+local `APIC` frequency of 4.29 GHz. `cargo xtask test-boot --accel auto` is
+how that class of bug is reachable at all.
 
 * **Counting first.** Processors come from the MADT — local APIC and x2APIC
   entries on x86-64, GIC CPU interface entries on AArch64 — checked for

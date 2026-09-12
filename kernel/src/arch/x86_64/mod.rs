@@ -83,9 +83,9 @@ pub(crate) unsafe fn init_traps() {
     unsafe { trap::init() };
 }
 
-/// Invalidate the whole TLB — this processor's.
+/// Invalidate the whole TLB — this processor's, global entries included.
 pub(crate) fn flush_tlb() {
-    cpu::reload_cr3();
+    cpu::flush_tlb_including_global();
 }
 
 /// Whether [`flush_tlb`] reaches every processor's TLB.
@@ -194,9 +194,6 @@ pub(crate) fn wait_for_work() {
 
 pub(crate) use apic::{ipi_irq, send_ipi_to_others};
 
-/// `RFLAGS.IF` — interrupts are unmasked.
-const RFLAGS_INTERRUPT: u64 = 1 << 9;
-
 /// How `ferrix_sync`'s interrupt-masking lock masks interrupts here.
 #[derive(Debug)]
 pub(crate) struct Irq;
@@ -207,7 +204,7 @@ pub(crate) struct Irq;
 // halfway out of the outer one. Neither touches any other state.
 unsafe impl ferrix_sync::IrqControl for Irq {
     fn disable() -> usize {
-        let was_enabled = cpu::read_rflags() & RFLAGS_INTERRUPT != 0;
+        let was_enabled = cpu::read_rflags() & cpu::RFLAGS_INTERRUPT != 0;
         cpu::disable_interrupts();
         usize::from(was_enabled)
     }

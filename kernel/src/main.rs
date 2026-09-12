@@ -527,11 +527,17 @@ fn timer_check() -> Result<u64, &'static str> {
     const INTERVAL_NANOS: u64 = 1_000_000;
     /// How far the measured rate may sit from the requested one.
     ///
-    /// Generous, and it has to be: the handler re-arms the timer, so every
-    /// period carries one interrupt entry and exit, and under an emulator
-    /// that is not a rounding error. What this is testing is that the clock
-    /// and the timer agree about how long a second is -- not the interrupt
-    /// latency, which is stage 14's subject and needs a different test.
+    /// Generous, and still generous now that it need not be: the periods are
+    /// a schedule measured from the deadlines themselves, so a tick that
+    /// arrives late no longer pushes its successor late, and all three
+    /// architectures report within two parts in a thousand. What is left for
+    /// the tolerance to absorb is a host too loaded to deliver a thousand
+    /// interrupts in a second at all, which is a fact about the host.
+    ///
+    /// What this is testing is that the clock and the timer agree about how
+    /// long a second is -- not the interrupt latency, which is stage 14's
+    /// subject and needs a different test. Until the re-arm was fixed it was
+    /// quietly testing both, and the latency term was the larger one.
     const TOLERANCE_PERCENT: u64 = 25;
 
     if timer::counter_hz() == 0 {

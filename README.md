@@ -108,8 +108,16 @@ grow with the system, so the percentage rises as the OS is written.
 cargo xtask build     --arch all --release    # bootable images in build/
 cargo xtask run       --arch x86_64           # boot it, serial on your terminal
 cargo xtask test-boot --arch all              # boot it and assert it came up
+cargo xtask test-boot --accel auto            # ...on the real MMU, where it can
 cargo xtask check                             # every gate CI runs
 ```
+
+`--accel auto` boots on the host processor instead of QEMU's interpreter —
+`whpx` on Windows, `kvm` on Linux, `hvf` on macOS, and `tcg` when there is
+none or when the guest is not the host's architecture. Worth running before
+believing a change to page tables or invalidation, for the reason
+[Reliability](docs/RELIABILITY.md) gives: an interpreted `MMU` has no `TLB`, so
+a stale translation is a bug the default gate structurally cannot see.
 
 You need QEMU and UEFI firmware. Debian and Ubuntu: `qemu-system-x86`,
 `qemu-system-arm`, `ovmf`, `qemu-efi-aarch64` and `u-boot-qemu`. Windows:

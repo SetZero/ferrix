@@ -148,10 +148,12 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
     })?;
 
     let firmware = paths::find_firmware(arch)?;
+    let accelerator = accelerator(arch, &binary, args.accel.as_deref())?;
 
     let mut command = Command::new(binary);
     let _ = command.current_dir(paths::workspace_root());
 
+    let _ = command.args(["-accel", &accelerator]);
     let _ = command.args([
         "-m",
         &args.memory.to_string(),
@@ -236,6 +238,98 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
     }
 
     Ok(command)
+}
+
+/// The hardware accelerator this host's QEMU would use, if it has one.
+///
+/// Named per platform rather than probed, because the name is the only thing
+/// that varies: each of these is the one interface its operating system
+/// exposes for running guest instructions on the processor directly.
+const fn host_accelerator() -> Option<&'static str> {
+    if cfg!(target_os = "windows") {
+        // The Windows Hypervisor Platform. Present on Windows 10 and 11, but
+        // only once the optional feature is turned on, which is why `auto`
+        // asks QEMU rather than assuming.
+        Some("whpx")
+    } else if cfg!(target_os = "linux") {
+        Some("kvm")
+    } else if cfg!(target_os = "macos") {
+        Some("hvf")
+    } else {
+        None
+    }
+}
+
+/// Decide which accelerator to boot under.
+///
+/// # Why this is a choice and not a default
+///
+/// `tcg` emulates the processor, including its `MMU`, and an emulated `MMU`
+/// has no `TLB` to speak of: it resolves every access through the page tables
+/// as it finds them. That makes it wonderfully reproducible and it makes it
+/// blind to an entire class of bug, because a stale translation cannot be
+/// stale in a cache that does not exist. A hardware accelerator runs on the
+/// real `MMU`, with the real `TLB`, and sees them.
+///
+/// **This is not an abstract preference.** `arch::flush_tlb` on x86-64 spared
+/// global entries — which is nearly every mapping the kernel makes — and every
+/// boot test passed anyway for as long as every boot test ran under `tcg`. The
+/// first run under `whpx` failed three different self-checks. So the default
+/// stays `tcg`, because reproducibility is what a boot test is for and `CI`
+/// has no hypervisor to offer; `auto` is for the machine in front of you,
+/// which usually does.
+fn accelerator(arch: Arch, binary: &Path, requested: Option<&str>) -> Result<String> {
+    let requested = requested.unwrap_or("tcg");
+    if requested == "tcg" {
+        return Ok("tcg".to_owned());
+    }
+
+    let available = available_accelerators(binary);
+    let supported = |name: &str| available.iter().any(|found| found == name);
+
+    if requested != "auto" {
+        // Asked for by name: refuse rather than quietly emulating. Somebody
+        // who typed `--accel kvm` wants to know it did not happen.
+        if !supported(requested) {
+            return Err(Error::new(format!(
+                "this QEMU has no `{requested}` accelerator; it offers {}",
+                available.join(", ")
+            )));
+        }
+        return Ok(requested.to_owned());
+    }
+
+    // `auto`, which never fails: it falls back to emulation, since the whole
+    // point is that it works on whatever machine it is run on. A guest of a
+    // different architecture than the host has nothing to accelerate — there
+    // are no Arm instructions for an x86 processor to run directly.
+    if arch != Arch::host() {
+        return Ok("tcg".to_owned());
+    }
+    match host_accelerator() {
+        Some(name) if supported(name) => Ok(name.to_owned()),
+        _ => Ok("tcg".to_owned()),
+    }
+}
+
+/// The accelerators this QEMU binary was built with.
+///
+/// Asked of the binary rather than assumed, because whether one is *usable* is
+/// a property of the machine — Hyper-V switched on, `/dev/kvm` readable — and
+/// a list QEMU itself prints is the closest thing to an answer that does not
+/// involve starting a guest. An empty list on error, which sends `auto` to
+/// `tcg` and gives a named request the error it deserves.
+fn available_accelerators(binary: &Path) -> Vec<String> {
+    let Ok(output) = Command::new(binary).args(["-accel", "help"]).output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        // The first line is a heading, and every other line is one name.
+        .filter(|line| !line.is_empty() && !line.contains(' '))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// A path as QEMU wants it: forward slashes, even on Windows, because a

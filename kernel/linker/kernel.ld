@@ -3,10 +3,15 @@
  * One script for all three architectures. The layout within the image is the
  * same on each; where the image goes is not -- the 64-bit pair link it in the
  * top 2 GiB, ARMv7-A at 0xf0000000 -- so KERNEL_VIRT_BASE is not defined here.
- * `.cargo/config.toml` defines it per target with `--defsym`, from the same
+ * `kernel/build.rs` defines it per word width with `--defsym`, from the same
  * number as KERNEL_VIRT_BASE in libs/bootinfo, and the loader refuses to start
  * a kernel linked anywhere else. A build that forgets the definition fails to
  * link rather than producing an image at address zero.
+ *
+ * The build script is also what passes this file to the linker, and the
+ * comment there says why that cannot go back into `.cargo/config.toml`: a
+ * merged configuration passes it twice, and a script evaluated twice produces
+ * an image whose data segment has wrapped.
  *
  * The loader reads the program headers this produces and maps each segment
  * with the permissions declared here, so the PHDRS block below is not

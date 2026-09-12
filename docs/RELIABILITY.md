@@ -100,3 +100,24 @@ The gate that answers the question the others cannot. Everything else checks the
 source; this one boots it — firmware to loader to kernel — on every
 architecture, and fails the build if the machine does not come up. An OS that
 compiles and does not boot is not a passing build.
+
+### What booting under an emulator cannot tell you
+
+It runs under `tcg`, QEMU's interpreter, because that is what `CI` has and
+because an interpreter is reproducible. The cost is a blind spot with a sharp
+edge: `tcg` resolves every access through the page tables as it finds them, so
+it has no `TLB` worth the name, and a stale translation cannot be stale in a
+cache that does not exist. No amount of booting under it will find a missing
+invalidation.
+
+That is not a hypothetical. `arch::flush_tlb` on x86-64 spared global entries —
+which is nearly every mapping the kernel makes — for four stages, through a
+boot test that passed every time. The first boot under a hardware accelerator
+failed three self-checks.
+
+So `--accel auto` exists: it boots on the real processor, with the real `MMU`
+and the real `TLB`, using whatever the host offers (`whpx` on Windows, `kvm` on
+Linux, `hvf` on macOS) and falling back to `tcg` when there is nothing. It is
+not the default, because reproducibility is what a gate is for and because the
+guest must match the host's architecture to be accelerated at all. It is what
+to run before believing a change to page tables, invalidation or `SMP`.

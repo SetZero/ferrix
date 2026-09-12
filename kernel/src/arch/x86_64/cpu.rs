@@ -65,12 +65,66 @@ pub(crate) fn disable_interrupts() {
     }
 }
 
-/// Reload `CR3` with its current value, which invalidates every non-global TLB
-/// entry.
+/// `CR4.PGE` — the bit that makes the global bit in a page table entry mean
+/// anything. The loader sets it; see `boot/src/arch/x86_64.rs`.
+const CR4_PGE: u64 = 1 << 7;
+
+/// Invalidate the whole `TLB`, **including global entries**.
 ///
-/// A blunt instrument, and the right one during early boot: `invlpg` per page
-/// would be faster and the kernel has made about three mappings.
-pub(crate) fn reload_cr3() {
+/// # Why this is not just a `CR3` reload
+///
+/// Reloading `CR3` is the obvious way to flush a `TLB` and it is the wrong one
+/// here, because it leaves global entries exactly where they were — the
+/// architecture says so, and that is what the global bit is *for*: a
+/// translation that survives an address space switch.
+///
+/// Nearly every mapping this kernel makes is global. Kernel text, the direct
+/// map and every device window carry `MapFlags::global`, because they are the
+/// same in every address space and marking them so is what stops a process
+/// switch from throwing away the kernel's own translations. So a flush that
+/// spared global entries spared essentially everything, and `flush_tlb` was a
+/// no-op wearing a descriptive name.
+///
+/// **This was not theoretical.** Under emulation it never showed, because a
+/// `TLB` that does not really exist cannot hold a stale entry; under hardware
+/// virtualisation it produced three different failures with one cause. The
+/// `vmap` arena reuses address space, so a device window unmapped in stage 2
+/// handed its address to the `HPET` in stage 3 — which then read the kernel
+/// image through the old translation and reported a period no `HPET` can
+/// have. The local `APIC` read its calibration the same way. And stage 4's
+/// shootdown check, which exists precisely to catch a processor holding a
+/// translation it was told to drop, caught this one.
+///
+/// Clearing and restoring `CR4.PGE` is the architecturally defined way to
+/// invalidate global entries: a write to `CR4` that changes `PGE` flushes the
+/// whole `TLB`, global entries included. `invlpg` per page would also do it
+/// and is what a grown kernel uses for a small range; this is the blunt
+/// instrument, and the right one while the kernel still counts its mappings in
+/// the hundreds.
+pub(crate) fn flush_tlb_including_global() {
+    // **Masked throughout, and not for atomicity of the flush.** The hazard is
+    // re-entry: an interrupt taken between the two writes would run with `PGE`
+    // clear, and a handler that flushed the `TLB` itself would read that
+    // `CR4`, clear an already-clear bit — changing nothing, so flushing
+    // nothing — and restore a `CR4` with `PGE` still clear. Global pages would
+    // then be off for the rest of the boot, silently.
+    let flags = read_rflags();
+    disable_interrupts();
+
+    let cr4 = read_cr4();
+    // SAFETY: `cr4` was just read, so this is that value with one bit cleared.
+    // Clearing `PGE` alters no mapping; its only effect is to invalidate the
+    // whole `TLB`, global entries included, which is what this exists for. The
+    // bit is restored immediately below, with interrupts masked in between.
+    unsafe { write_cr4(cr4 & !CR4_PGE) };
+    // SAFETY: the value read a moment ago, put back unchanged, before anything
+    // could observe `PGE` clear.
+    unsafe { write_cr4(cr4) };
+
+    // And `CR3`, for the non-global entries: toggling `PGE` covers them too,
+    // but this is the operation the rest of the kernel means by "flush" and
+    // leaving it out would make the correctness of this function depend on a
+    // footnote rather than on two instructions that plainly do it.
     let cr3: u64;
     // SAFETY: reading CR3 has no side effects.
     unsafe {
@@ -81,7 +135,14 @@ pub(crate) fn reload_cr3() {
     unsafe {
         asm!("mov cr3, {}", in(reg) cr3, options(nostack, preserves_flags));
     }
+
+    if flags & RFLAGS_INTERRUPT != 0 {
+        enable_interrupts();
+    }
 }
+
+/// `RFLAGS.IF` — interrupts are unmasked.
+pub(crate) const RFLAGS_INTERRUPT: u64 = 1 << 9;
 
 /// The flags register.
 ///

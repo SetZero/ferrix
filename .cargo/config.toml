@@ -5,18 +5,17 @@ xtask = "run --quiet --package xtask --"
 # variable so that `cargo build`, `cargo clippy` and `cargo xtask` all agree,
 # and so CI needs no wrapper.
 #
-# Paths are relative to the workspace root, which is where cargo runs the
-# compiler from.
+# **The link script is not here, and must not be moved back.** Cargo merges
+# every `.cargo/config.toml` between the invocation directory and the
+# filesystem root, joining `rustflags` arrays rather than letting the nearest
+# win -- so a checkout inside another checkout gets `-T` twice, the script is
+# evaluated twice, and the kernel links with a wrapped segment the loader
+# rejects. `kernel/build.rs` emits it instead, once, and argues it at length.
 #
-# The kernels share one link script, and each tells it where it is linked with
-# `--defsym`: the number is `KERNEL_VIRT_BASE` in libs/bootinfo for that word
-# width, and the loader refuses a kernel linked anywhere else. The `--defsym`
-# comes before the `-T` so the symbol exists before the script names it.
+# What is left below is codegen flags, where being passed twice means nothing.
 
 [target.x86_64-unknown-none]
 rustflags = [
-    "-C", "link-arg=--defsym=KERNEL_VIRT_BASE=0xffffffff80000000",
-    "-C", "link-arg=-Tkernel/linker/kernel.ld",
     # lld defaults to a 4 KiB maximum page size here, but say so anyway: the
     # AArch64 side below genuinely needs it and the two should not silently
     # disagree about segment alignment.
@@ -26,8 +25,6 @@ rustflags = [
 
 [target.aarch64-unknown-none-softfloat]
 rustflags = [
-    "-C", "link-arg=--defsym=KERNEL_VIRT_BASE=0xffffffff80000000",
-    "-C", "link-arg=-Tkernel/linker/kernel.ld",
     # **Required, not cosmetic.** lld defaults `max-page-size` to 64 KiB on
     # AArch64, which pads every segment to a 64 KiB boundary and produces a
     # kernel image several times larger with segments the 4 KiB granule cannot
@@ -38,8 +35,6 @@ rustflags = [
 
 [target.armv7a-none-eabi]
 rustflags = [
-    "-C", "link-arg=--defsym=KERNEL_VIRT_BASE=0xf0000000",
-    "-C", "link-arg=-Tkernel/linker/kernel.ld",
     "-C", "link-arg=-zmax-page-size=4096",
     "-C", "relocation-model=static",
 ]

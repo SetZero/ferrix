@@ -3,6 +3,7 @@
 //! ```text
 //! cargo xtask build     --arch x86_64 [--release]
 //! cargo xtask run       --arch x86_64 [--release] [--gdb] [--smp N] [--memory M]
+//!                       [--accel auto|tcg|whpx|kvm|hvf]
 //! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS]
 //! cargo xtask check     [--fast]
 //! ```
@@ -83,6 +84,7 @@ OPTIONS:
     --smp <N>                            Virtual CPUs          [default: 4]
     --memory <MiB>                       Guest memory          [default: 512]
     --timeout <SECONDS>                  test-boot patience    [default: 120]
+    --accel <auto|tcg|whpx|kvm|hvf>      QEMU accelerator      [default: tcg]
     --gdb                                Wait for a debugger on :1234
     --fast                               check: skip the cross-target clippy passes
     -h, --help                           This message

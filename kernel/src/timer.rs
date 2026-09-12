@@ -25,6 +25,26 @@ static TICKS: AtomicU64 = AtomicU64::new(0);
 /// The period to re-arm with on each tick, or zero for a one-shot.
 static INTERVAL: AtomicU64 = AtomicU64::new(0);
 
+/// When the next periodic tick is due, on [`now_nanos`]'s timescale.
+///
+/// A periodic timer is a *schedule*, not a delay repeated: tick `n` is due at
+/// `start + n * interval`, and the instant it actually arrived has no say in
+/// when tick `n + 1` is due. Keeping the deadline here rather than re-deriving
+/// it from the clock inside the handler is what makes that true.
+static DEADLINE: AtomicU64 = AtomicU64::new(0);
+
+/// How far behind the schedule may fall before it is abandoned rather than
+/// caught up.
+///
+/// Catching up matters: a tick delivered late must not push the next one late
+/// as well, or a periodic timer on a busy machine drifts without bound. But
+/// catching up without a limit is its own failure — a kernel held off for a
+/// second with a millisecond period owes a thousand interrupts, and delivering
+/// them back to back is a storm that arrives exactly when the machine is least
+/// able to absorb it. Past this many intervals the debt is written off and the
+/// schedule restarts from now.
+const MAX_CATCH_UP: u64 = 16;
+
 /// Register the tick handler on whichever interrupt this machine's timer uses.
 ///
 /// # Errors
@@ -46,7 +66,15 @@ fn on_tick(_irq: u32) {
     let _ = TICKS.fetch_add(1, Ordering::Relaxed);
     let interval = INTERVAL.load(Ordering::Relaxed);
     if interval != 0 {
-        arch::timer_arm(interval);
+        // **From the deadline that just passed, not from now.** Arming for
+        // `interval` here would make the period `interval` plus however long
+        // this interrupt took to arrive and be handled, every single time —
+        // so the error would not average out, it would accumulate, and a
+        // timer asked for a thousand ticks a second would deliver however
+        // many the machine's interrupt latency allowed. Under an emulator
+        // that is a factor of two.
+        let next = DEADLINE.load(Ordering::Relaxed).saturating_add(interval);
+        arm_periodic(next, interval);
     } else {
         // **Not optional, and not symmetry for its own sake.** AArch64's timer
         // interrupt is level triggered: the line stays asserted for as long as
@@ -64,9 +92,44 @@ pub(crate) fn after(nanos: u64) {
 }
 
 /// Fire the timer interrupt every `nanos` until [`stop`].
+///
+/// Every `nanos` from *now*, and thereafter on that schedule: the periods are
+/// measured from the deadlines they were due at rather than from the instants
+/// the interrupts arrived, so a late tick does not make its successors late.
 pub(crate) fn every(nanos: u64) {
+    let next = now_nanos().saturating_add(nanos);
     INTERVAL.store(nanos, Ordering::Relaxed);
-    arch::timer_arm(nanos);
+    arm_periodic(next, nanos);
+}
+
+/// Record `next` as the deadline and arm for it, resynchronising if the
+/// schedule has fallen too far behind to be worth catching up.
+fn arm_periodic(next: u64, interval: u64) {
+    let now = now_nanos();
+    let behind = now.saturating_sub(next);
+    let next = if behind > interval.saturating_mul(MAX_CATCH_UP) {
+        now.saturating_add(interval)
+    } else {
+        next
+    };
+    DEADLINE.store(next, Ordering::Relaxed);
+    arm_at(next);
+}
+
+/// Arm the hardware for an absolute deadline.
+///
+/// The architecture layer takes a delay because that is what a countdown timer
+/// like the local APIC's can be given, so the subtraction happens here — once,
+/// against the same counter every deadline is expressed in.
+///
+/// A one-shot at an absolute deadline is what a sleeping task wants, since it
+/// knows when it should wake rather than how long it has left; stage 5 can
+/// make this public the moment it has a caller for it.
+fn arm_at(deadline: u64) {
+    // A deadline in the past becomes a delay of zero, which the architecture
+    // layer arms as its smallest possible interval: late, but arriving, which
+    // is the only useful reading of "wake me at a time that has passed".
+    arch::timer_arm(deadline.saturating_sub(now_nanos()));
 }
 
 /// Stop the timer. The counter keeps running; it always does.

@@ -29,6 +29,8 @@ pub(crate) struct Args {
     pub(crate) memory: u32,
     /// `--timeout`, seconds `test-boot` waits for the kernel to report.
     pub(crate) timeout: u64,
+    /// `--accel`, which QEMU accelerator to boot under. `None` means `tcg`.
+    pub(crate) accel: Option<String>,
 }
 
 impl Args {
@@ -53,6 +55,7 @@ impl Args {
                 "--smp" => args.smp = number(&mut items, "--smp")?,
                 "--memory" => args.memory = number(&mut items, "--memory")?,
                 "--timeout" => args.timeout = number(&mut items, "--timeout")?,
+                "--accel" => args.accel = Some(value(&mut items, "--accel")?),
                 other if other.starts_with('-') => {
                     return Err(Error::new(format!("unknown option `{other}`")));
                 }
@@ -154,6 +157,15 @@ mod tests {
                 "a command needing one architecture must refuse several"
             );
         }
+    }
+
+    #[test]
+    fn accel_defaults_to_none_and_is_taken_verbatim() {
+        assert_eq!(parse(&["run"]).unwrap().accel, None);
+        assert_eq!(
+            parse(&["run", "--accel", "whpx"]).unwrap().accel.as_deref(),
+            Some("whpx")
+        );
     }
 
     #[test]
