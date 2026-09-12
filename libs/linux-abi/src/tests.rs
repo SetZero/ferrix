@@ -805,6 +805,67 @@ fn epoll_event_is_packed_on_x86_64_only() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn the_architecture_dependent_open_flags_match_their_headers() {
+    // A second transcription, from `asm-generic/fcntl.h` and from the arm and
+    // arm64 `asm/fcntl.h`, in the headers' own octal.
+    let generic = types::OPEN_FLAGS_GENERIC;
+    assert_eq!(generic.direct, 0o40000, "generic O_DIRECT");
+    assert_eq!(generic.largefile, 0o100000, "generic O_LARGEFILE");
+    assert_eq!(generic.directory, 0o200000, "generic O_DIRECTORY");
+    assert_eq!(generic.nofollow, 0o400000, "generic O_NOFOLLOW");
+    let arm = types::OPEN_FLAGS_ARM;
+    assert_eq!(arm.directory, 0o40000, "arm O_DIRECTORY");
+    assert_eq!(arm.nofollow, 0o100000, "arm O_NOFOLLOW");
+    assert_eq!(arm.direct, 0o200000, "arm O_DIRECT");
+    assert_eq!(arm.largefile, 0o400000, "arm O_LARGEFILE");
+    assert_eq!(
+        generic.directory,
+        types::O_DIRECTORY,
+        "the shared constant is generic"
+    );
+    assert_eq!(
+        generic.nofollow,
+        types::O_NOFOLLOW,
+        "the shared constant is generic"
+    );
+}
+
+#[test]
+fn both_open_flag_tables_are_four_distinct_bits_clear_of_the_shared_flags() {
+    let shared = types::O_ACCMODE
+        | types::O_CREAT
+        | types::O_EXCL
+        | types::O_NOCTTY
+        | types::O_TRUNC
+        | types::O_APPEND
+        | types::O_NONBLOCK
+        | types::O_CLOEXEC
+        | types::O_PATH;
+    let bits = |t: types::OpenFlagBits| [t.direct, t.largefile, t.directory, t.nofollow];
+    for table in [types::OPEN_FLAGS_GENERIC, types::OPEN_FLAGS_ARM] {
+        let all = bits(table);
+        assert!(
+            all.iter().all(|bit| bit.count_ones() == 1),
+            "each flag is a single bit"
+        );
+        let union = all.iter().fold(0, |acc, bit| acc | bit);
+        assert_eq!(union.count_ones(), 4, "the four flags are distinct");
+        assert_eq!(union & shared, 0, "no flag collides with a shared one");
+    }
+    let union = |t| bits(t).iter().fold(0, |acc, bit| acc | bit);
+    assert_eq!(
+        union(types::OPEN_FLAGS_GENERIC),
+        union(types::OPEN_FLAGS_ARM),
+        "Arm permutes the generic bits rather than using new ones"
+    );
+    assert_ne!(
+        types::OPEN_FLAGS_GENERIC,
+        types::OPEN_FLAGS_ARM,
+        "and the permutation is not the identity"
+    );
+}
+
+#[test]
 fn open_flags_match_the_generic_header() {
     assert_eq!(types::O_CREAT, 64, "O_CREAT is octal 100");
     assert_eq!(types::O_TRUNC, 512, "O_TRUNC is octal 1000");

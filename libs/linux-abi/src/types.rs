@@ -590,13 +590,65 @@ pub const O_APPEND: u32 = 0o2000;
 /// Fail rather than block on operations that would wait.
 pub const O_NONBLOCK: u32 = 0o4000;
 /// Fail unless the path names a directory.
+///
+/// The generic header's value, which x86-64 uses. Both Arm architectures
+/// override it: see [`OPEN_FLAGS_ARM`].
 pub const O_DIRECTORY: u32 = 0o200000;
 /// Fail if the final component is a symbolic link.
+///
+/// The generic header's value, which x86-64 uses. Both Arm architectures
+/// override it: see [`OPEN_FLAGS_ARM`].
 pub const O_NOFOLLOW: u32 = 0o400000;
 /// Close the descriptor automatically on `execve`.
 pub const O_CLOEXEC: u32 = 0o2000000;
 /// Open only to name the file: no reading, writing or access check.
 pub const O_PATH: u32 = 0o10000000;
+/// The bits of an `open` flag word that carry the access mode.
+///
+/// Not a bit set: `O_RDONLY` is zero, so the mode is the masked value.
+pub const O_ACCMODE: u32 = 3;
+
+/// The four `open` flags whose bits are not the same on every architecture.
+///
+/// `include/uapi/asm-generic/fcntl.h` defines all of them under `#ifndef`, and
+/// `arch/arm/include/uapi/asm/fcntl.h` and `arch/arm64/include/uapi/asm/fcntl.h`
+/// define all four first with the same set of bits in a different order. So
+/// `0o200000` asks for a directory from an x86-64 program and for direct I/O
+/// from an Arm one, and `0o400000` -- `O_LARGEFILE`, which a 32-bit musl sets
+/// on every open -- is `O_NOFOLLOW` on x86-64. A kernel that decoded an Arm
+/// program's flags with the generic table would refuse every symbolic link a
+/// 32-bit program opens.
+///
+/// A table rather than per-architecture constants because the kernel chooses
+/// one at one place, its architecture facade, and everything after that is
+/// written once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenFlagBits {
+    /// `O_DIRECT`: bypass the page cache.
+    pub direct: u32,
+    /// `O_LARGEFILE`: offsets past 2 GiB are allowed.
+    pub largefile: u32,
+    /// `O_DIRECTORY`: fail unless the path names a directory.
+    pub directory: u32,
+    /// `O_NOFOLLOW`: fail if the final component is a symbolic link.
+    pub nofollow: u32,
+}
+
+/// The generic header's bits, which x86-64 uses unchanged.
+pub const OPEN_FLAGS_GENERIC: OpenFlagBits = OpenFlagBits {
+    direct: 0o40000,
+    largefile: 0o100000,
+    directory: 0o200000,
+    nofollow: 0o400000,
+};
+
+/// The bits AArch64 and ARMv7-A use, which their two headers agree on.
+pub const OPEN_FLAGS_ARM: OpenFlagBits = OpenFlagBits {
+    directory: 0o40000,
+    nofollow: 0o100000,
+    direct: 0o200000,
+    largefile: 0o400000,
+};
 
 // ---------------------------------------------------------------------------
 // Memory mapping
