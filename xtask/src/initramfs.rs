@@ -229,6 +229,11 @@ fn build_with(program: Option<&[u8]>) -> Result<Vec<u8>> {
     archive.hard_linked(&[MARKER_PATH, &link], 0o644, MARKER)?;
     archive.symlink(&format!("{MARKER_PATH}.symlink"), "initramfs")?;
     if let Some(program) = program {
+        // Who uid 0 is, for the applets that ask by name -- `whoami`, `id`,
+        // `ls -l`. Only beside a program, so the archive without one stays
+        // the bytes the kernel's boot check reads.
+        archive.file("etc/passwd", 0o644, b"root:x:0:0:root:/:/bin/sh\n")?;
+        archive.file("etc/group", 0o644, b"root:x:0:\n")?;
         archive.file(PROGRAM_PATH, 0o755, program)?;
         for applet in APPLETS {
             archive.symlink(&format!("bin/{applet}"), "busybox")?;
