@@ -32,9 +32,10 @@ says a stage should: their byte-level halves are in `libs/` — the VFS in
 — handle tables, channels carrying handles, VMOs — are in the boot test, and
 so is most of stage 8: the root filesystem unpacked from an initramfs, every
 process's descriptor table, the calls that take a path, `/dev` and `/proc`.
-Stage 8's exit test, `cargo xtask test-vfs`, passes all eleven of its programs
-on all three architectures; the section says what still stands between that and
-the stage being done.
+Stage 8's exit test, `cargo xtask test-vfs`, passes as the criterion is written
+— `ls -R /proc`, `cat /proc/self/maps` and one shell script, on all three
+architectures — and the stage waits only on fixes for five bugs a review found
+in its VFS.
 Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
 and its first kernel code — PCI enumeration, device nodes, and a device driven
 by DMA from the boot check — is in the boot test.
@@ -966,10 +967,13 @@ is a test of its own rather than part of `test-boot` for the reason stage 7's
 is: the binary is not the repository's. Measured before a line of it was
 written (`docs/STAGE8-WHAT-THE-EXIT-NEEDS.md`), this busybox runs every applet
 that touches a file — `mkdir`, `mv`, `ln`, `rm`, `cat` — through `fork`,
-`execve` and `wait4`, none of which exists yet. So the test runs eleven
-programs in turn over one tmpfs where the criterion says one script. With
-stage 7's `poll` on top, all eleven pass on all three architectures, each
-judged on its output rather than only its exit status:
+`execve` and `wait4`. Until those existed the test ran eleven programs in the
+script's place. With stage 7's `fork`, `execve`, `wait4` and `poll` on top, it
+is the criterion's three commands: `ls -R /proc`, `cat /proc/self/maps`, and one
+`sh -c` script whose file applets are real forked programs. Every command is
+judged on its output as well as its status, and the script ends with a status
+of its own, so a shell that died and reported success cannot pass. It passes on
+all three architectures:
 
 ```
   x86_64: stage 8's exit programs all passed
@@ -977,11 +981,21 @@ judged on its output rather than only its exit status:
   armv7a: stage 8's exit programs all passed
 ```
 
+**Why the stage is not marked done anyway.** A review of the VFS by another
+session found five bugs, three reproduced on the host, and a stage whose exit
+test passes over them is not finished. The worst lets a racing rename move a
+directory inside itself: a lookup that loses a race with a create hands back a
+second, uncached dentry for a directory, whose parent a later rename does not
+update, so the ancestry check reads a stale chain. The others: a racing
+`open(O_CREAT)` without `O_EXCL` can fail with `EEXIST`; `..` in a directory
+listing reports the directory's own inode number; `openat` at the descriptor
+limit creates the file before failing with `EMFILE`, leaving it behind; and a
+rename over an empty directory keeps it alive. Fixes, each with a host test
+that fails first, are in progress.
+
 **Still to do.**
 
-* `fork`, `execve` and `wait4` — stage 7's too — so that the tmpfs part of the
-  criterion can be the one shell script it describes rather than eleven
-  programs.
+* The five VFS bugs above.
 * Pipes and FIFOs over `libs/vfs`'s pipe buffer, `statfs`, `sync` and its
   kin, `truncate`, `fallocate`, `chroot`, `mount` and `umount2`, `sendfile`,
   and extended attributes: in progress.
