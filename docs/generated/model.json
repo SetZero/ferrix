@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "db97cf8727b82e7f7a894d4ee16ad8d86ac13f9ec28a38b662b0ba0740bd8d3a",
+  "digest": "ebc98c10151e648b8c2364bfaf8cefc86fe8ccb4ba03f64bfef638cea5d0aa78",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -57,7 +57,7 @@
   ],
   "summary": {
     "packages": 16,
-    "elements": 1367,
+    "elements": 1371,
     "maturity": {
       "implemented": 98,
       "inProgress": 8,
@@ -8634,6 +8634,17 @@
               }
             },
             {
+              "name": "invalidate",
+              "qualifiedName": "FerrixMemory::ProcessAddressSpace::invalidate",
+              "kind": "action",
+              "stage": 6,
+              "doc": "Drop every processor's cached translations after a change that takes one down or makes it less permissive: unmap, fork, and the copy-on-write fault. Adding a translation where there was none needs nothing, because no architecture here caches the absence of one, which is what keeps the ordinary demand fault cheap.\n\nThis is the global broadcast flush, which the address space switch must never use -- there the kernel's global entries are exactly what has to survive. Here the requirement is the opposite: the change has to reach processors that are not this one. Coarser than needed in two ways, neither a correctness question: every page rather than the one that changed, and every processor rather than those with this space installed.",
+              "source": {
+                "file": "docs/sysml/04-memory.sysml",
+                "line": 338
+              }
+            },
+            {
               "name": "install",
               "qualifiedName": "FerrixMemory::ProcessAddressSpace::install",
               "kind": "action",
@@ -8641,7 +8652,7 @@
               "doc": "Put this space's root in the processor's root register, so that the MMU walks in hardware what the mapper has until now only walked in software through the direct map. It does not change privilege level: a processor translates through a user space while still running kernel code, and has to — a fault taken in user mode is handled in the space that faulted. Something must hold a reference for as long as the root is installed, or the tables are freed underneath a processor still walking them.",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 338
+                "line": 356
               }
             },
             {
@@ -8651,7 +8662,7 @@
               "doc": "Reshape the map, change the tables to match, and decommit the object's pages only if this space is its sole holder.",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 350
+                "line": 368
               }
             },
             {
@@ -8662,7 +8673,7 @@
               "doc": "Mark both sides read-only and copy on the first write fault; the per-frame refcount is what makes it tractable. No memory is copied: each private object is cloned page list and all, with a reference taken on every committed frame, so a write on either side copies that page into its own object. The object is cloned rather than shared through one Arc because two spaces holding one Arc cannot diverge -- replacing a page would replace it for both, and a child's first write would be visible to its parent. A MAP_SHARED object is the case where sharing the Arc is right.\n\nMarking the map is not enough: the parent's tables still hold writable translations to the pages it has agreed to share, and a write through one never reaches the fault handler. So every region newly marked is unmapped in the parent and re-faults read-only. Unmapping rather than write-protecting in place is what the mapper offers -- map_in refuses to overwrite a live mapping by design and there is no protect_in -- and costs the parent one extra fault per page.",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 354
+                "line": 372
               }
             },
             {
@@ -8673,7 +8684,7 @@
               "stage": 7,
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 377
+                "line": 395
               }
             },
             {
@@ -8684,7 +8695,7 @@
               "stage": 7,
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 378
+                "line": 396
               }
             },
             {
@@ -8695,7 +8706,7 @@
               "stage": 7,
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 379
+                "line": 397
               }
             },
             {
@@ -8708,7 +8719,7 @@
               "doc": "One lock per address space, never a global one. The kernel's own map_in takes no lock because the tree it was written for is one nobody has installed; a user space is installed on the processors running its threads, whose MMUs walk it in hardware while another processor maps into it. The lock is held across the pair that must not be split — reshaping the map and changing the tables — so a fault between them cannot find a region the tables lack or a mapping the map does not know. Per space, so two processes faulting at once contend for nothing, which a compiler workload needs.",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 381
+                "line": 399
               }
             }
           ]
@@ -8750,7 +8761,7 @@
           ],
           "source": {
             "file": "docs/sysml/04-memory.sysml",
-            "line": 395
+            "line": 413
           },
           "children": [
             {
@@ -8763,7 +8774,7 @@
               "type": "FerrixBoot::PageFault",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 404
+                "line": 422
               }
             },
             {
@@ -8772,7 +8783,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 414
+                "line": 432
               }
             },
             {
@@ -8781,7 +8792,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 415
+                "line": 433
               }
             },
             {
@@ -8792,7 +8803,7 @@
               "stage": 8,
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 416
+                "line": 434
               }
             },
             {
@@ -8803,7 +8814,7 @@
               "doc": "Copy the page, replace it in this space's own object, and install it writable. A page with one holder left is let through uncopied: the other side has copied, unmapped or exited, so duplicating it would allocate a frame to hold a second copy of data nobody else can see. That refcount test is also why a second write to an already-copied page terminates, because a region keeps its cow mark forever -- it is a property of the region and there is no per-page flag.\n\nThis branch is above the handler's present-page early return, not below it. A write to a page that is present but deliberately read-only is exactly the fault that must copy, so returning early because the page translates sends the instruction back to fault forever. The boot check fails when the order is wrong rather than trusting the comment.",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 417
+                "line": 435
               }
             },
             {
@@ -8814,7 +8825,7 @@
               "stage": 7,
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 435
+                "line": 453
               }
             },
             {
@@ -8823,7 +8834,7 @@
               "kind": "clause",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 439
+                "line": 457
               }
             },
             {
@@ -8832,7 +8843,7 @@
               "kind": "clause",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 440
+                "line": 458
               }
             }
           ]
@@ -8847,7 +8858,7 @@
           "doc": "kernel/src/user: the VM subsystem above stage 2's allocators. VMOs and address spaces exist and are self-checked at boot, a space installed on a processor is walked by its MMU, and fork shares a process's memory copy-on-write; still owed by stage 6 are a Task carrying an address space with the root swap in choose_next, a TLB shootdown for user spaces (which cannot bite until that lands, and is the first thing that will), the ELF loader, set_kernel_stack, the ring-3/EL0/USR transition and the syscall vectors. Reclaim scoped by cgroup is stage 13's.",
           "source": {
             "file": "docs/sysml/04-memory.sysml",
-            "line": 443
+            "line": 461
           },
           "children": [
             {
@@ -8858,7 +8869,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 454
+                "line": 472
               }
             },
             {
@@ -8869,7 +8880,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 455
+                "line": 473
               }
             },
             {
@@ -8880,7 +8891,7 @@
               "maturity": "planned",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 456
+                "line": 474
               }
             },
             {
@@ -8891,7 +8902,7 @@
               "maturity": "planned",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 457
+                "line": 475
               }
             }
           ]
@@ -8906,7 +8917,7 @@
           "doc": "Two-list LRU (active/inactive) with a shrinker interface for the caches. rustc will exhaust memory on a small machine, so this is correctness: an OOM kill scoped by Job and cgroup, never a livelock.",
           "source": {
             "file": "docs/sysml/04-memory.sysml",
-            "line": 460
+            "line": 478
           },
           "children": [
             {
@@ -8916,7 +8927,7 @@
               "type": "LruList",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 466
+                "line": 484
               }
             },
             {
@@ -8926,7 +8937,7 @@
               "type": "LruList",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 467
+                "line": 485
               }
             },
             {
@@ -8935,7 +8946,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 468
+                "line": 486
               }
             },
             {
@@ -8944,7 +8955,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
-                "line": 469
+                "line": 487
               }
             }
           ]
@@ -8956,7 +8967,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/04-memory.sysml",
-            "line": 472
+            "line": 490
           }
         },
         {
@@ -8969,7 +8980,7 @@
           "doc": "libs/elf over a file, mapping segments as Vmas of a file VMO. The first user process is a hand-written static binary that makes one syscall.",
           "source": {
             "file": "docs/sysml/04-memory.sysml",
-            "line": 474
+            "line": 492
           }
         }
       ]
@@ -9630,10 +9641,11 @@
               }
             },
             {
-              "name": "pinned",
-              "qualifiedName": "FerrixScheduling::Task::pinned",
+              "name": "affinity",
+              "qualifiedName": "FerrixScheduling::Task::affinity",
               "kind": "attribute",
-              "type": "Boolean",
+              "type": "Natural",
+              "doc": "The processors it may run on, one bit each. Replaced a `pinned` boolean: a task pinned to one processor is an affinity of one, which is the same thing said once rather than twice.",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
                 "line": 169
@@ -9646,7 +9658,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 170
+                "line": 175
               }
             },
             {
@@ -9656,7 +9668,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 171
+                "line": 176
               }
             },
             {
@@ -9667,7 +9679,7 @@
               "multiplicity": "0..1",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 172
+                "line": 177
               }
             },
             {
@@ -9677,7 +9689,7 @@
               "type": "KernelStack",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 173
+                "line": 178
               }
             },
             {
@@ -9690,7 +9702,23 @@
               "type": "PerCpu",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 174
+                "line": 179
+              }
+            },
+            {
+              "name": "addressSpace",
+              "qualifiedName": "FerrixScheduling::Task::addressSpace",
+              "kind": "part",
+              "modifiers": [
+                "ref"
+              ],
+              "type": "FerrixMemory::ProcessAddressSpace",
+              "multiplicity": "0..1",
+              "stage": 6,
+              "doc": "The address space its user half is translated through, absent for a kernel thread. A reference and not a part: the space outlives no task in particular and two threads of one process share it. Holding it is what keeps the tables alive while a processor walks them -- the root register is installed on the way into the task, and this reference is the only thing between those tables and the frame allocator.",
+              "source": {
+                "file": "docs/sysml/05-scheduling.sysml",
+                "line": 180
               }
             },
             {
@@ -9702,7 +9730,7 @@
               "stage": 14,
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 175
+                "line": 190
               }
             },
             {
@@ -9714,7 +9742,7 @@
               "stage": 7,
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 176
+                "line": 191
               }
             },
             {
@@ -9727,7 +9755,7 @@
               "doc": "1 to 99 for FIFO/RR.",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 177
+                "line": 192
               }
             },
             {
@@ -9740,7 +9768,7 @@
               "doc": "CBS reservation for EDF.",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 178
+                "line": 193
               }
             }
           ]
@@ -9755,7 +9783,7 @@
           "doc": "kernel/src/sched/mod.rs: spawn, spawn_on, exit, yield, sleep, wake, reap. Preemption happens only on the way out of an interrupt: the timer sets need_resched and returns, and the trap path decides once the controller has been told the interrupt is done, because switching inside the handler would leave it in service for as long as the next task ran.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 181
+            "line": 196
           },
           "children": [
             {
@@ -9766,7 +9794,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 189
+                "line": 204
               }
             },
             {
@@ -9775,7 +9803,18 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 190
+                "line": 205
+              }
+            },
+            {
+              "name": "spawnInAddressSpace",
+              "qualifiedName": "FerrixScheduling::Tasks::spawnInAddressSpace",
+              "kind": "action",
+              "stage": 6,
+              "doc": "Start a task that has an address space. The entry point is still a kernel function: having a space and running in it at a lower privilege level are separate steps, and a processor must be able to do the first without the second, because kernel code servicing a fault runs in the space that faulted.",
+              "source": {
+                "file": "docs/sysml/05-scheduling.sysml",
+                "line": 206
               }
             },
             {
@@ -9785,7 +9824,18 @@
               "doc": "Deciding and switching are one operation under the queue lock.",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 191
+                "line": 215
+              }
+            },
+            {
+              "name": "swapAddressSpace",
+              "qualifiedName": "FerrixScheduling::Tasks::swapAddressSpace",
+              "kind": "action",
+              "stage": 6,
+              "doc": "Install the incoming task's root, inside choose_next, under the run queue lock and before the registers move -- not in the architecture's switch, which takes two stack pointers and does register operations, and not after, where the incoming context has already resumed. Compared by pointer because two threads of one process share a root and stage 6 allocates no ASIDs, so installing one invalidates every user translation the processor had: switching within a process must cost nothing. A kernel thread has the user half switched off rather than left installed, which is the plain alternative to lazy TLB and does not oblige anyone to keep a space alive under a thread holding no reference to it.",
+              "source": {
+                "file": "docs/sysml/05-scheduling.sysml",
+                "line": 216
               }
             },
             {
@@ -9794,7 +9844,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 192
+                "line": 231
               }
             },
             {
@@ -9803,7 +9853,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 193
+                "line": 232
               }
             },
             {
@@ -9812,7 +9862,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 194
+                "line": 233
               }
             },
             {
@@ -9822,7 +9872,7 @@
               "doc": "Places the task and wakes an idle processor, which is otherwise never told.",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 195
+                "line": 234
               }
             },
             {
@@ -9831,7 +9881,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 196
+                "line": 235
               }
             },
             {
@@ -9840,7 +9890,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 197
+                "line": 236
               }
             },
             {
@@ -9851,7 +9901,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 198
+                "line": 237
               }
             }
           ]
@@ -9866,7 +9916,7 @@
           "doc": "kernel/src/sched/wait.rs. The lost wake-up is closed by order: a waiter marks itself blocked and joins the queue before its last look at the condition; a waker takes the same lock, so it either sees the waiter or made the condition true before that look.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 201
+            "line": 240
           },
           "children": [
             {
@@ -9875,7 +9925,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 208
+                "line": 247
               }
             },
             {
@@ -9884,7 +9934,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 209
+                "line": 248
               }
             }
           ]
@@ -9899,7 +9949,7 @@
           "doc": "kernel/src/sched/queue.rs: one per CPU, one plain SpinLock taken with interrupts masked and handed across the switch. Tickless: the timer is armed for the end of the running task's slice or the first sleeper's wake-up, whichever is first, and not at all for one task with nothing behind it. Work stealing by an idle processor in Throughput; none in HardRt, because partitioned scheduling is what makes the admission test valid.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 212
+            "line": 251
           },
           "children": [
             {
@@ -9910,7 +9960,7 @@
               "value": "3000000",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 221
+                "line": 260
               }
             },
             {
@@ -9920,7 +9970,7 @@
               "type": "EevdfRunQueue",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 222
+                "line": 261
               }
             },
             {
@@ -9934,7 +9984,7 @@
               "multiplicity": "0..1",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 223
+                "line": 262
               }
             },
             {
@@ -9947,7 +9997,7 @@
               "type": "Task",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 224
+                "line": 263
               }
             },
             {
@@ -9961,7 +10011,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 225
+                "line": 264
               }
             },
             {
@@ -9970,7 +10020,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 226
+                "line": 265
               }
             },
             {
@@ -9979,7 +10029,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 227
+                "line": 266
               }
             },
             {
@@ -9988,7 +10038,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 228
+                "line": 267
               }
             },
             {
@@ -9997,7 +10047,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 229
+                "line": 268
               }
             },
             {
@@ -10006,7 +10056,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 230
+                "line": 269
               }
             },
             {
@@ -10015,7 +10065,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 231
+                "line": 270
               }
             }
           ]
@@ -10030,7 +10080,7 @@
           "doc": "libs/sched: entities with weight and virtual runtime; the queue's virtual time is the weight-average; an entity is eligible when its virtual runtime is at or behind it; the pick is the eligible entity with the earliest virtual deadline. The tree is an AVL ordered by deadline, each subtree remembering its minimum virtual runtime, so the pick is one O(log n) walk. Lag stays within one request, which is what the boot test measures.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 234
+            "line": 273
           },
           "children": [
             {
@@ -10041,7 +10091,7 @@
               "value": "1024",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 243
+                "line": 282
               }
             },
             {
@@ -10050,7 +10100,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 244
+                "line": 283
               }
             },
             {
@@ -10059,7 +10109,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 245
+                "line": 284
               }
             },
             {
@@ -10068,7 +10118,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 246
+                "line": 285
               }
             },
             {
@@ -10078,7 +10128,7 @@
               "doc": "For a steal: hand the entity's state to another queue.",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 247
+                "line": 286
               }
             }
           ]
@@ -10090,7 +10140,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 250
+            "line": 289
           },
           "children": [
             {
@@ -10099,7 +10149,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 251
+                "line": 290
               }
             },
             {
@@ -10108,7 +10158,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 252
+                "line": 291
               }
             },
             {
@@ -10117,7 +10167,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 253
+                "line": 292
               }
             }
           ]
@@ -10129,7 +10179,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 256
+            "line": 295
           },
           "children": [
             {
@@ -10139,7 +10189,7 @@
               "type": "DomainMode",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 257
+                "line": 296
               }
             },
             {
@@ -10150,7 +10200,7 @@
               "multiplicity": "1..*",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 258
+                "line": 297
               }
             },
             {
@@ -10160,7 +10210,7 @@
               "type": "String",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 259
+                "line": 298
               }
             },
             {
@@ -10170,7 +10220,7 @@
               "type": "String",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 260
+                "line": 299
               }
             }
           ]
@@ -10185,7 +10235,7 @@
           "doc": "libs/sched/domain.rs. CPUs are partitioned into domains, each in one of three modes, changeable at runtime. Per domain, not global: a four-core machine runs a HardRt partition on one core and Throughput on the other three, with rustc on the latter. Stage 5 builds one domain holding every CPU (up to 256) in Throughput; the mode is a property of the domain from the first line, the class stack is looked up from the mode, and SoftRt and HardRt are named and refused until stage 14. check_partition requires the domains to cover the online CPUs exactly once.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 263
+            "line": 302
           },
           "children": [
             {
@@ -10199,7 +10249,7 @@
               "multiplicity": "1..*",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 274
+                "line": 313
               }
             },
             {
@@ -10210,7 +10260,7 @@
               "value": "DomainMode::Throughput",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 275
+                "line": 314
               }
             },
             {
@@ -10221,7 +10271,7 @@
               "multiplicity": "1..*",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 276
+                "line": 315
               }
             },
             {
@@ -10234,7 +10284,7 @@
               "type": "DomainLifecycle",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 277
+                "line": 316
               }
             },
             {
@@ -10245,7 +10295,7 @@
               "value": "ModeSpec(mode = DomainMode::Throughput, classes = (SchedClass::Eevdf, SchedClass::Idle), preemption = \"preemption points, deferred for cache locality\", interrupts = \"in context\")",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 279
+                "line": 318
               }
             },
             {
@@ -10256,7 +10306,7 @@
               "value": "ModeSpec(mode = DomainMode::SoftRt, classes = (SchedClass::Fifo, SchedClass::RoundRobin, SchedClass::Eevdf, SchedClass::Idle), preemption = \"fully preemptible kernel, PI mutexes\", interrupts = \"threaded\")",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 280
+                "line": 319
               }
             },
             {
@@ -10267,7 +10317,7 @@
               "value": "ModeSpec(mode = DomainMode::HardRt, classes = (SchedClass::Edf), preemption = \"fully preemptible, bounded sections\", interrupts = \"threaded, bandwidth-reserved\")",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 281
+                "line": 320
               }
             }
           ]
@@ -10279,7 +10329,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 284
+            "line": 323
           },
           "children": [
             {
@@ -10289,7 +10339,7 @@
               "type": "DomainMode",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 285
+                "line": 324
               }
             }
           ]
@@ -10301,7 +10351,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 287
+            "line": 326
           }
         },
         {
@@ -10317,7 +10367,7 @@
           ],
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 289
+            "line": 328
           },
           "children": [
             {
@@ -10326,7 +10376,7 @@
               "kind": "clause",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 294
+                "line": 333
               }
             },
             {
@@ -10335,7 +10385,7 @@
               "kind": "state",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 295
+                "line": 334
               }
             },
             {
@@ -10349,7 +10399,7 @@
               ],
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 299
+                "line": 338
               }
             },
             {
@@ -10359,7 +10409,7 @@
               "doc": "Stop admitting.",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 300
+                "line": 339
               }
             },
             {
@@ -10373,7 +10423,7 @@
               ],
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 306
+                "line": 345
               }
             },
             {
@@ -10382,7 +10432,7 @@
               "kind": "state",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 307
+                "line": 346
               },
               "children": [
                 {
@@ -10395,7 +10445,7 @@
                   "doc": "Move tasks whose policy the new mode does not offer; demote with errno what cannot move.",
                   "source": {
                     "file": "docs/sysml/05-scheduling.sysml",
-                    "line": 308
+                    "line": 347
                   }
                 }
               ]
@@ -10410,7 +10460,7 @@
               ],
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 313
+                "line": 352
               }
             },
             {
@@ -10419,7 +10469,7 @@
               "kind": "state",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 314
+                "line": 353
               },
               "children": [
                 {
@@ -10431,7 +10481,7 @@
                   ],
                   "source": {
                     "file": "docs/sysml/05-scheduling.sysml",
-                    "line": 315
+                    "line": 354
                   }
                 }
               ]
@@ -10446,7 +10496,7 @@
               ],
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 317
+                "line": 356
               }
             }
           ]
@@ -10461,7 +10511,7 @@
           "doc": "Not one policy: a class stack per domain. EEVDF rather than CFS for the fair class, because each task gets an actual eligible time and a deadline, so latency has a bound and not only fairness. Tickless: the timer is armed for the next decision.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 320
+            "line": 359
           },
           "children": [
             {
@@ -10472,7 +10522,7 @@
               "multiplicity": "1..*",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 326
+                "line": 365
               }
             },
             {
@@ -10482,7 +10532,7 @@
               "type": "EevdfClass",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 327
+                "line": 366
               }
             },
             {
@@ -10492,7 +10542,7 @@
               "type": "IdleClass",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 328
+                "line": 367
               }
             },
             {
@@ -10503,7 +10553,7 @@
               "deferred": "Nothing beyond work stealing by an idle processor; stage 5 left the rest.",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 329
+                "line": 368
               }
             },
             {
@@ -10515,7 +10565,7 @@
               "stage": 14,
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 332
+                "line": 371
               }
             },
             {
@@ -10527,7 +10577,7 @@
               "stage": 14,
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 333
+                "line": 372
               }
             },
             {
@@ -10536,7 +10586,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 334
+                "line": 373
               }
             },
             {
@@ -10545,7 +10595,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 335
+                "line": 374
               }
             },
             {
@@ -10557,7 +10607,7 @@
               "doc": "Linux sched_setscheduler: SCHED_FIFO/RR to the soft-RT classes, SCHED_DEADLINE to EDF, SCHED_OTHER/BATCH/IDLE to fair.",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 336
+                "line": 375
               }
             },
             {
@@ -10568,7 +10618,7 @@
               "stage": 14,
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 342
+                "line": 381
               }
             }
           ]
@@ -10580,7 +10630,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 345
+            "line": 384
           }
         },
         {
@@ -10591,7 +10641,7 @@
           "doc": "Eligible virtual deadline first. Weight and bandwidth arrive from the cpu cgroup controller at stage 13.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 347
+            "line": 386
           }
         },
         {
@@ -10601,7 +10651,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 351
+            "line": 390
           }
         },
         {
@@ -10612,7 +10662,7 @@
           "doc": "Priorities 1 to 99, with priority-inheritance mutexes and threaded interrupts in SoftRt.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 352
+            "line": 391
           }
         },
         {
@@ -10623,7 +10673,7 @@
           "doc": "Earliest deadline first with constant-bandwidth-server admission control that refuses an unschedulable set instead of missing deadlines. Preallocated pools on the RT path; no dynamic allocation there.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 356
+            "line": 395
           },
           "children": [
             {
@@ -10632,7 +10682,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
-                "line": 361
+                "line": 400
               }
             }
           ]
@@ -10647,7 +10697,7 @@
           "doc": "The futex family over a hash of wait queues keyed by physical page and offset, so a shared mapping's futex is one futex. Robust lists and PI futexes with it.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
-            "line": 364
+            "line": 403
           }
         }
       ]

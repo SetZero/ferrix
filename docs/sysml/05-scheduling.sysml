@@ -166,12 +166,27 @@ package FerrixScheduling {
              * objects. */
         attribute taskState : TaskState;
         attribute weight : Natural { doc /* From nice: nice 0 is 1024. */ }
-        attribute pinned : Boolean;
+        attribute affinity : Natural {
+            doc /* The processors it may run on, one bit each. Replaced a
+                 * `pinned` boolean: a task pinned to one processor is an
+                 * affinity of one, which is the same thing said once rather
+                 * than twice. */
+        }
         attribute runtimeNanos : Natural;
         attribute switches : Natural;
         attribute sleepDeadline : Natural[0..1];
         part stack : KernelStack;
         ref part cpu : PerCpu;
+        ref part addressSpace : FerrixMemory::ProcessAddressSpace[0..1] {
+            @stage { number = 6; }
+            doc /* The address space its user half is translated through, absent
+                 * for a kernel thread. A reference and not a part: the space
+                 * outlives no task in particular and two threads of one process
+                 * share it. Holding it is what keeps the tables alive while a
+                 * processor walks them -- the root register is installed on the
+                 * way into the task, and this reference is the only thing
+                 * between those tables and the frame allocator. */
+        }
         #planned attribute schedClass : SchedClass { @stage { number = 14; } }
         #planned attribute policy : LinuxPolicy { @stage { number = 7; } }
         #planned attribute priority : Natural { @stage { number = 14; } doc /* 1 to 99 for FIFO/RR. */ }
@@ -188,7 +203,31 @@ package FerrixScheduling {
              * service for as long as the next task ran. */
         part tasks : Task[0..*];
         action spawnKernelThread;
+        action spawnInAddressSpace {
+            @stage { number = 6; }
+            doc /* Start a task that has an address space. The entry point is
+                 * still a kernel function: having a space and running in it at
+                 * a lower privilege level are separate steps, and a processor
+                 * must be able to do the first without the second, because
+                 * kernel code servicing a fault runs in the space that
+                 * faulted. */
+        }
         action switchTo { doc /* Deciding and switching are one operation under the queue lock. */ }
+        action swapAddressSpace {
+            @stage { number = 6; }
+            doc /* Install the incoming task's root, inside choose_next, under
+                 * the run queue lock and before the registers move -- not in
+                 * the architecture's switch, which takes two stack pointers and
+                 * does register operations, and not after, where the incoming
+                 * context has already resumed. Compared by pointer because two
+                 * threads of one process share a root and stage 6 allocates no
+                 * ASIDs, so installing one invalidates every user translation
+                 * the processor had: switching within a process must cost
+                 * nothing. A kernel thread has the user half switched off
+                 * rather than left installed, which is the plain alternative to
+                 * lazy TLB and does not oblige anyone to keep a space alive
+                 * under a thread holding no reference to it. */
+        }
         action exitTask;
         action yieldNow;
         action sleepUntil;

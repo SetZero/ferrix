@@ -93,7 +93,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1367 elements, 155 relations. Model digest `db97cf8727b82e7f`.
+13 files, 16 packages, 1371 elements, 155 relations. Model digest `ebc98c10151e648b`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -267,6 +267,7 @@ kernel : Kernel
     tasks : Task
       stack : KernelStack
       cpu : PerCpu
+      addressSpace : FerrixMemory::ProcessAddressSpace
     waitQueues : WaitQueue
   sched : Scheduler  [implemented]
     domains : SchedulingDomain
@@ -1247,6 +1248,7 @@ kernel/src/user/space.rs: a root frame, a libs/vma AddressSpace, and a map from 
 | `vmos` | part | `Vmo` |  |  |
 | `mapAnonymous` | action |  |  |  |
 | `fault` | action | `DemandFault` |  |  |
+| `invalidate` | action |  |  | Drop every processor's cached translations after a change that takes one down or makes it less permissive: unmap, fork, and the copy-on-write fault. |
 | `install` | action |  |  | Put this space's root in the processor's root register, so that the MMU walks in hardware what the mapper has until now only walked in software through the direct map. |
 | `unmap` | action |  |  | Reshape the map, change the tables to match, and decommit the object's pages only if this space is its sole holder. |
 | `forkSpace` | action |  |  | Mark both sides read-only and copy on the first write fault; the per-frame refcount is what makes it tractable. |
@@ -1441,12 +1443,13 @@ kernel/src/sched/task.rs: a kernel thread — a guard-paged stack, a saved stack
 | --- | --- | --- | --- | --- |
 | `taskState` | attribute | `TaskState` |  |  |
 | `weight` | attribute | `Natural` |  | From nice: nice 0 is 1024. |
-| `pinned` | attribute | `Boolean` |  |  |
+| `affinity` | attribute | `Natural` |  | The processors it may run on, one bit each. |
 | `runtimeNanos` | attribute | `Natural` |  |  |
 | `switches` | attribute | `Natural` |  |  |
 | `sleepDeadline` | attribute | `Natural` |  |  |
 | `stack` | part | `KernelStack` |  |  |
 | `cpu` | part | `PerCpu` |  |  |
+| `addressSpace` | part | `FerrixMemory::ProcessAddressSpace` |  | The address space its user half is translated through, absent for a kernel thread. |
 | `schedClass` | attribute | `SchedClass` | `#planned` |  |
 | `policy` | attribute | `LinuxPolicy` | `#planned` |  |
 | `priority` | attribute | `Natural` | `#planned` | 1 to 99 for FIFO/RR. |
@@ -1462,7 +1465,9 @@ kernel/src/sched/mod.rs: spawn, spawn_on, exit, yield, sleep, wake, reap. Preemp
 | --- | --- | --- | --- | --- |
 | `tasks` | part | `Task` |  |  |
 | `spawnKernelThread` | action |  |  |  |
+| `spawnInAddressSpace` | action |  |  | Start a task that has an address space. |
 | `switchTo` | action |  |  | Deciding and switching are one operation under the queue lock. |
+| `swapAddressSpace` | action |  |  | Install the incoming task's root, inside choose_next, under the run queue lock and before the registers move -- not in the architecture's switch, which takes two stack pointers and does register operations, and not after, where the incoming context has… |
 | `exitTask` | action |  |  |  |
 | `yieldNow` | action |  |  |  |
 | `sleepUntil` | action |  |  |  |
@@ -3142,12 +3147,16 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 6 | `FerrixMemory::VmaMap` | part | `#implemented` |
 | 6 | `FerrixMemory::Vmo` | part | `#inProgress` |
 | 6 | `FerrixMemory::ProcessAddressSpace` | part | `#inProgress` |
+| 6 | `FerrixMemory::ProcessAddressSpace::invalidate` | action | — |
 | 6 | `FerrixMemory::ProcessAddressSpace::install` | action | — |
 | 6 | `FerrixMemory::ProcessAddressSpace::forkSpace` | action | — |
 | 6 | `FerrixMemory::DemandFault` | action | `#inProgress` |
 | 6 | `FerrixMemory::DemandFault::copyOnWrite` | action | — |
 | 6 | `FerrixMemory::VirtualMemory` | part | `#inProgress` |
 | 6 | `FerrixMemory::UserElfLoader` | part | `#planned` |
+| 6 | `FerrixScheduling::Task::addressSpace` | part | — |
+| 6 | `FerrixScheduling::Tasks::spawnInAddressSpace` | action | — |
+| 6 | `FerrixScheduling::Tasks::swapAddressSpace` | action | — |
 | 6 | `FerrixObjects::Process` | part | `#planned` |
 | 7 | `FerrixStructure::ArchFacade::syscallEntry` | action | `#planned` |
 | 7 | `FerrixStructure::Workspace::linuxAbi` | part | `#writtenAhead` |
@@ -3222,7 +3231,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 14 | `FerrixAssurance::CyclicTest` | verification | `#planned` |
 | 15 | `FerrixObjects::PosixIpc` | part | `#planned` |
 
-127 elements across 15 stages.
+131 elements across 15 stages.
 
 ## Figures
 

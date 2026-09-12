@@ -335,6 +335,24 @@ package FerrixMemory {
         ref part vmos : Vmo[0..*];
         action mapAnonymous;
         action fault : DemandFault;
+        action invalidate {
+            @stage { number = 6; }
+            doc /* Drop every processor's cached translations after a change
+                 * that takes one down or makes it less permissive: unmap, fork,
+                 * and the copy-on-write fault. Adding a translation where there
+                 * was none needs nothing, because no architecture here caches
+                 * the absence of one, which is what keeps the ordinary demand
+                 * fault cheap.
+                 *
+                 * This is the global broadcast flush, which the address space
+                 * switch must never use -- there the kernel's global entries
+                 * are exactly what has to survive. Here the requirement is the
+                 * opposite: the change has to reach processors that are not
+                 * this one. Coarser than needed in two ways, neither a
+                 * correctness question: every page rather than the one that
+                 * changed, and every processor rather than those with this
+                 * space installed. */
+        }
         action install {
             @stage { number = 6; }
             doc /* Put this space's root in the processor's root register, so
