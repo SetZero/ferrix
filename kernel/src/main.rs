@@ -1160,6 +1160,7 @@ fn check_vmap(kernel_phys: u64) -> Result<(), &'static str> {
     check_vmap_guards(first)?;
     check_vmap_protection(first)?;
     check_device_windows(kernel_phys)?;
+    vmap::check_failed_device_map(kernel_phys)?;
     vmap::check_invariants()?;
 
     vmap::free(first.base).map_err(|_| "vmap refused to free its own allocation")?;

@@ -150,7 +150,10 @@ stage 2's allocator hammering: a vmap allocation is written through and read
 back, two allocations are required to be separated by their guard pages, the
 pages either side of a range are required to translate to nothing, a kernel
 stack is required to be 16-byte aligned and writable at both ends with guards
-beyond each, and freeing it is required to return every frame it held. Then the
+beyond each, and freeing it is required to return every frame it held. A
+device window whose mapping fails part way is required to leave nothing of
+itself mapped, and to remove nothing it did not map, before its address goes
+back. Then the
 identity map is dropped and its absence checked, the sweep reports 318 mappings
 on x86-64 and 822 on AArch64 with none writable-and-executable, and the reclaim
 reports the frames it recovered. (Those were the counts when this landed.

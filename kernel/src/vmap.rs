@@ -355,12 +355,88 @@ pub(crate) fn map_device(phys: u64, len: u64) -> Result<u64, VmapError> {
     let span = (len + offset).next_multiple_of(PAGE_SIZE);
 
     let mapping = reserve(span, VmaFlags::READ_WRITE, Kind::Device { phys: base })?;
-    mm::map_kernel(mapping.base, base, span, MapFlags::KERNEL_DEVICE).map_err(|error| {
+    if let Err(error) = map_reserved(mapping, base, span) {
+        // Only now that nothing is mapped in it: see `claim` for why an
+        // address may not become available while something still is.
         let _ = release(mapping.base);
-        VmapError::MapFailed(error)
-    })?;
+        return Err(error);
+    }
 
     Ok(mapping.base + offset)
+}
+
+/// Map a device aperture over a reservation, or leave nothing of it mapped.
+///
+/// `map_range` has no rollback. A window of several pages that fails part way
+/// — a page table it could not allocate, or a mapping already in the way —
+/// has its first pages installed and the rest not, and giving the span back
+/// in that state hands the next caller an address that is still mapped onto
+/// somebody's registers.
+fn map_reserved(mapping: Mapping, phys: u64, span: u64) -> Result<(), VmapError> {
+    mm::map_kernel(mapping.base, phys, span, MapFlags::KERNEL_DEVICE).map_err(|error| {
+        unmap_installed(mapping.base, phys, span);
+        VmapError::MapFailed(error)
+    })
+}
+
+/// Unmap what a failed mapping of `span` bytes at `virt` onto `phys` did
+/// install, and nothing else.
+///
+/// The mapper installs pages in address order, so what it installed is the
+/// run from the start that translates to the addresses it was asked for. The
+/// page that stopped it is not part of that run, and must not be unmapped: if
+/// it stopped because something was already mapped there, that mapping is not
+/// this call's to remove.
+fn unmap_installed(virt: u64, phys: u64, span: u64) {
+    let mut installed = 0;
+    while installed < span && mm::translate(virt + installed) == Some(phys + installed) {
+        installed += PAGE_SIZE;
+    }
+    if installed > 0 {
+        // A device aperture: nothing behind it goes back to the allocator.
+        let _ = mm::unmap_kernel(virt, installed, |_, _| {});
+    }
+}
+
+/// A device mapping that fails part way leaves nothing of itself mapped, and
+/// removes nothing it did not map.
+///
+/// The failure is made on purpose: a two-page window whose second page is
+/// already mapped, so the mapper installs the first page and then stops. The
+/// obstacle maps `phys`'s own page, not the page the window wants there, which
+/// is how it stays distinguishable from a page the failed call installed.
+///
+/// Nothing is read or written through either mapping; `phys` is RAM the caller
+/// knows, for the reason `check_device_windows` in `main.rs` gives.
+pub(crate) fn check_failed_device_map(phys: u64) -> Result<(), &'static str> {
+    let aperture = phys & !(PAGE_SIZE - 1);
+    let span = 2 * PAGE_SIZE;
+    let mapping = reserve(span, VmaFlags::READ_WRITE, Kind::Device { phys: aperture })
+        .map_err(|_| "no address space for the failed-mapping check")?;
+    let second = mapping.base + PAGE_SIZE;
+    if mm::map_kernel(second, aperture, PAGE_SIZE, MapFlags::KERNEL_DEVICE).is_err() {
+        let _ = release(mapping.base);
+        return Err("the failed-mapping check could not place its obstacle");
+    }
+
+    let outcome = map_reserved(mapping, aperture, span);
+    let first_left = mm::translate(mapping.base).is_some();
+    let obstacle_kept = mm::translate(second) == Some(aperture);
+
+    // Clean up before judging, so a failure does not also leak the span.
+    let _ = mm::unmap_kernel(second, PAGE_SIZE, |_, _| {});
+    let _ = release(mapping.base);
+
+    if outcome.is_ok() {
+        return Err("a device mapping over an existing mapping succeeded");
+    }
+    if first_left {
+        return Err("a failed device mapping left the pages it had mapped behind");
+    }
+    if !obstacle_kept {
+        return Err("a failed device mapping removed a mapping it had not made");
+    }
+    Ok(())
 }
 
 /// Unmap a device window taken with [`map_device`].
