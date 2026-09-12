@@ -24,10 +24,20 @@
 //! lock alone and then re-checking them once everything is held. That order
 //! is the only rule, and it is what keeps `rename` of a directory over a
 //! sibling from deadlocking against `rmdir` inside it.
+//!
+//! Outside all of them is one rename lock per instance, Linux's
+//! `s_vfs_rename_mutex`. Only a rename moves a directory, so while it is held
+//! every directory's parent stays put, and a rename can climb from its
+//! destination to the root — one inode lock at a time, before it takes the
+//! ones it needs — to refuse moving a directory into its own subtree. The VFS
+//! checks that too, on dentries. This check is on the filesystem's own
+//! structure, so a stale dentry or a second namespace cannot get a directory
+//! loop past it, and a loop is not an error that can be undone: the
+//! directories in it are unreachable and never freed.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
@@ -205,6 +215,8 @@ struct Shared {
     clock: Arc<dyn Clock>,
     storage: Arc<dyn Storage>,
     next_ino: AtomicU64,
+    /// Held across every rename; see the module documentation.
+    renames: SpinLock<()>,
 }
 
 /// One tmpfs instance.
@@ -228,9 +240,10 @@ impl Tmpfs {
             clock,
             storage,
             next_ino: AtomicU64::new(1),
+            renames: SpinLock::new(()),
         });
         let now = shared.clock.now();
-        let root = Node::new(&shared, Body::Dir(Dir::new()), permissions, now);
+        let root = Node::new(&shared, Body::Dir(Dir::new(Weak::new())), permissions, now);
         Arc::new(Tmpfs { shared, root })
     }
 }
@@ -271,6 +284,8 @@ impl FileSystem for Tmpfs {
 /// One tmpfs inode.
 pub struct Node {
     ino: u64,
+    /// Itself, for a directory created in it to name as its parent.
+    me: Weak<Node>,
     shared: Arc<Shared>,
     state: SpinLock<State>,
 }
@@ -311,6 +326,15 @@ impl State {
     fn is_dir(&self) -> bool {
         matches!(self.body, Body::Dir(_))
     }
+
+    /// The directory holding this one; `None` for the root, for a removed
+    /// directory, and for anything that is not a directory.
+    fn parent(&self) -> Option<Arc<Node>> {
+        match &self.body {
+            Body::Dir(dir) => dir.parent.upgrade(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -335,6 +359,9 @@ struct Dir {
     next_cursor: u64,
     /// Removed: nothing may be created in it again.
     dead: bool,
+    /// The directory holding it. Weak, because the parent holds this one
+    /// through its entry; changed only by a rename, under the rename lock.
+    parent: Weak<Node>,
 }
 
 #[derive(Debug)]
@@ -346,12 +373,13 @@ struct Entry {
 }
 
 impl Dir {
-    fn new() -> Dir {
+    fn new(parent: Weak<Node>) -> Dir {
         Dir {
             by_name: BTreeMap::new(),
             by_cursor: BTreeMap::new(),
             next_cursor: FIRST_CURSOR,
             dead: false,
+            parent,
         }
     }
 
@@ -419,8 +447,9 @@ impl<'a> Locked<'a> {
 impl Node {
     fn new(shared: &Arc<Shared>, body: Body, permissions: u32, now: Timespec) -> Arc<Node> {
         let nlink = if matches!(body, Body::Dir(_)) { 2 } else { 1 };
-        Arc::new(Node {
+        Arc::new_cyclic(|me| Node {
             ino: shared.next_ino.fetch_add(1, Ordering::Relaxed),
+            me: Weak::clone(me),
             shared: Arc::clone(shared),
             state: SpinLock::new(State {
                 permissions: permissions & 0o7777,
@@ -478,7 +507,7 @@ impl Node {
                 pages: self.shared.storage.allocate()?,
                 len: 0,
             },
-            NewNode::Directory => Body::Dir(Dir::new()),
+            NewNode::Directory => Body::Dir(Dir::new(Weak::clone(&self.me))),
             NewNode::Symlink(target) => {
                 if target.len() >= PATH_MAX {
                     return Err(Errno::ENAMETOOLONG);
@@ -574,6 +603,11 @@ impl Node {
         if victim.is_some() && !replace {
             return Err(Errno::EEXIST);
         }
+        // Before any inode lock is taken, because the climb takes each one in
+        // turn; valid until the move because the caller holds the rename lock.
+        if Node::lies_within(new_parent, &source) {
+            return Err(Errno::EINVAL);
+        }
 
         let mut nodes: Vec<&Node> = alloc::vec![self, new_parent, &source];
         if let Some(victim) = &victim {
@@ -645,8 +679,27 @@ impl Node {
             }
             state.ctime = now;
         }
-        locked.state(source.ino)?.ctime = now;
+        let moved = locked.state(source.ino)?;
+        moved.ctime = now;
+        if let Body::Dir(dir) = &mut moved.body {
+            dir.parent = Arc::downgrade(new_parent);
+        }
         Ok(true)
+    }
+
+    /// Whether `node` is `ancestor` or inside it.
+    ///
+    /// Takes each directory's lock alone on the way up, so the caller must
+    /// hold none, and must hold the rename lock for the answer to last.
+    fn lies_within(node: &Arc<Node>, ancestor: &Node) -> bool {
+        let mut at = Some(Arc::clone(node));
+        while let Some(here) = at {
+            if here.ino == ancestor.ino {
+                return true;
+            }
+            at = here.state.lock().parent();
+        }
+        false
     }
 }
 
@@ -884,6 +937,7 @@ impl Inode for Node {
         replace: bool,
     ) -> Result<()> {
         let new_parent = self.ours(new_parent)?;
+        let _serialised = self.shared.renames.lock();
         while !self.rename_once(old, &new_parent, new, replace)? {}
         Ok(())
     }

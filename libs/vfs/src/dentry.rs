@@ -33,9 +33,18 @@
 //! result overwritten by a stale negative entry, and the file would be
 //! invisible until the entry was evicted. So every change to a directory's
 //! names bumps its generation under the children lock, and a lookup inserts
-//! only if the generation it read before asking is still current. A lookup
-//! that loses the race still returns a correct answer for itself; it just
-//! does not cache it.
+//! only if the generation it read before asking is still current.
+//!
+//! A lookup that loses the race asks again. It must not keep its answer as a
+//! dentry of its own, even one it only uses once: a name then has two live
+//! dentries, and every rule kept by moving a dentry goes wrong for the one
+//! nobody moves. A rename leaves its parent where it was, so `..` and
+//! `getcwd` answer from the old place, an `rmdir` leaves it looking hashed,
+//! and — the reason this is not merely cosmetic — the rename check that a
+//! directory is not being moved into its own subtree climbs stale parents and
+//! lets it through. Each retry means another operation changed a name in the
+//! directory meanwhile, so the system as a whole makes progress; Linux's
+//! `d_alloc_parallel` retries on its directory sequence count the same way.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -162,26 +171,31 @@ impl Dentry {
 
     /// Record what a filesystem lookup found, if nothing changed meanwhile.
     ///
-    /// Returns the dentry the caller should use: one that raced in ahead of it
-    /// if there is one, otherwise a new one — cached if `generation` is still
-    /// current and private to this walk if not.
+    /// Returns the dentry the caller should use, and whether it is new: one
+    /// that raced in ahead of it if there is one, otherwise a new one, cached.
+    /// `None` if `generation` is no longer current, when the answer may be
+    /// stale and the caller must look again; see the module documentation for
+    /// why it gets no dentry at all.
+    ///
+    /// The caller keeps its own reference to `inode`, so that what is dropped
+    /// here under the children lock is never the last one.
     pub(crate) fn insert_looked_up(
         self: &Arc<Self>,
         name: &[u8],
         inode: Option<Arc<dyn Inode>>,
         generation: u64,
-    ) -> (Arc<Dentry>, bool) {
+    ) -> Option<(Arc<Dentry>, bool)> {
         let mut children = self.children.lock();
         if let Some(existing) = children.get(name).and_then(Weak::upgrade) {
-            return (existing, false);
+            return Some((existing, false));
+        }
+        if self.generation() != generation {
+            return None;
         }
         let child = Dentry::new(Box::from(name), Some(Arc::clone(self)), inode);
-        if self.generation() != generation {
-            return (child, false);
-        }
         children.retain(|_, weak| weak.strong_count() > 0);
         let _ = children.insert(Box::from(name), Arc::downgrade(&child));
-        (child, true)
+        Some((child, true))
     }
 
     /// A child for what a lookup found, known to this walk alone.
@@ -201,8 +215,15 @@ impl Dentry {
     ///
     /// `walked` is the (negative) dentry the caller's walk found. If a cached
     /// one exists under the name it is updated instead, so every holder sees
-    /// the new inode.
-    pub(crate) fn fill(self: &Arc<Self>, name: &[u8], walked: &Arc<Dentry>, inode: Arc<dyn Inode>) {
+    /// the new inode, and that is the one returned: a caller keeping a dentry
+    /// for the new name — `open(O_CREAT)` — must keep the one later walks
+    /// find, and not `walked`, which a rename may have unhashed meanwhile.
+    pub(crate) fn fill(
+        self: &Arc<Self>,
+        name: &[u8],
+        walked: &Arc<Dentry>,
+        inode: Arc<dyn Inode>,
+    ) -> Arc<Dentry> {
         let mut children = self.children.lock();
         let target = children
             .get(name)
@@ -218,6 +239,7 @@ impl Dentry {
         }
         let _ = children.insert(Box::from(name), Arc::downgrade(&target));
         let _ = self.generation.fetch_add(1, Ordering::Relaxed);
+        target
     }
 
     /// A name was removed from this directory: unhash whatever held it.

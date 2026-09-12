@@ -453,8 +453,12 @@ impl Namespace {
             if walked.must_be_dir {
                 return Err(Errno::EISDIR);
             }
-            let _ = self.create_at(&walked, NewNode::Regular, permissions)?;
-            return OpenFile::new(walked.found, flags);
+            let dentry = self.create_at(&walked, NewNode::Regular, permissions)?;
+            let created = Location {
+                mount: walked.found.mount,
+                dentry,
+            };
+            return OpenFile::new(created, flags);
         };
 
         if exclusive_create {
@@ -478,24 +482,21 @@ impl Namespace {
 
     // -- Changing the tree --------------------------------------------------
 
-    /// Create `node` at the negative name a walk found.
+    /// Create `node` at the negative name a walk found, returning the dentry
+    /// that now names it.
     fn create_at(
         &self,
         walked: &Walked,
         node: NewNode<'_>,
         permissions: u32,
-    ) -> Result<Arc<dyn Inode>> {
+    ) -> Result<Arc<Dentry>> {
         let name = walked.name_or(Errno::EEXIST)?;
         if walked.found.dentry.inode().is_some() {
             return Err(Errno::EEXIST);
         }
         let dir = walked.parent.inode()?;
         let inode = dir.create(name, node, permissions)?;
-        walked
-            .parent
-            .dentry
-            .fill(name, &walked.found.dentry, Arc::clone(&inode));
-        Ok(inode)
+        Ok(walked.parent.dentry.fill(name, &walked.found.dentry, inode))
     }
 
     /// `mkdirat`.
@@ -580,7 +581,7 @@ impl Namespace {
             return Err(Errno::EXDEV);
         }
         dest.parent.inode()?.link(name, &inode)?;
-        dest.parent.dentry.fill(name, &dest.found.dentry, inode);
+        let _ = dest.parent.dentry.fill(name, &dest.found.dentry, inode);
         Ok(())
     }
 
