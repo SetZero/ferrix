@@ -44,11 +44,13 @@ pub(crate) mod exec;
 pub(crate) mod family;
 pub(crate) mod fd;
 pub(crate) mod file;
+pub(crate) mod fsctl;
 pub(crate) mod image;
 pub(crate) mod load;
 pub(crate) mod memory;
 pub(crate) mod native;
 pub(crate) mod path;
+pub(crate) mod pipe;
 pub(crate) mod poll;
 pub(crate) mod process;
 pub(crate) mod registry;
@@ -271,6 +273,9 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         return answer;
     }
     if let Some(answer) = path::dispatch(call, args, process) {
+        return answer;
+    }
+    if let Some(answer) = fsctl::dispatch(call, &a, process) {
         return answer;
     }
     match call {

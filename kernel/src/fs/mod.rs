@@ -28,6 +28,7 @@ pub(crate) mod check;
 pub(crate) mod console;
 pub(crate) mod devfs;
 mod pages;
+pub(crate) mod pipe;
 pub(crate) mod procfs;
 
 use alloc::sync::Arc;

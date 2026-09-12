@@ -209,6 +209,8 @@ pub(crate) fn sys_openat(
         &flags,
         mode & 0o7777 & !process.umask(),
     )?;
+    // A named pipe opens as a pipe end; everything else is returned as it is.
+    let file = fs::pipe::attach_fifo(file)?;
     number(process.files().lock().insert(file, cloexec)?)
 }
 

@@ -52,6 +52,20 @@ impl Storage for VmoStorage {
     fn max_file_size(&self) -> u64 {
         MAX_FILE_SIZE
     }
+
+    /// Half of memory in total, which is Linux's default `size=` for a tmpfs
+    /// mounted without one, and whatever the allocator has free up to that.
+    ///
+    /// Free is the machine's rather than this filesystem's own remainder,
+    /// because every tmpfs draws on the one allocator and nothing charges a
+    /// page to the instance that committed it: `df` sees what a write could
+    /// actually get. Nothing enforces the half yet -- a write fails when
+    /// frames run out, not at the size reported -- which is the part Linux's
+    /// `size=` adds and this does not.
+    fn capacity(&self) -> (u64, u64) {
+        let total = mm::managed_frames() / 2;
+        (total, mm::free_frames().min(total))
+    }
 }
 
 /// One file's contents.
