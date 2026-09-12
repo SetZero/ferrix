@@ -129,6 +129,50 @@ pub(crate) fn prepare_user_root(root: u64) {
     crate::mm::share_kernel_slots(root, UPPER_HALF_SLOT..ROOT_SLOTS);
 }
 
+/// Translate this processor's user half through the tables at `root`.
+///
+/// One write to `CR3`, and nothing else. The flush is the architecture's: a
+/// write to `CR3` drops every cached translation that is not marked global,
+/// which is precisely the set that belongs to the address space being left.
+/// The kernel's own translations are global — `CR4.PGE` is set by the loader
+/// and the kernel keeps it — so kernel text, the direct map and the device
+/// windows survive the switch and are not re-walked.
+///
+/// It is therefore emphatically *not* [`flush_tlb`], which is the global
+/// flush: using it here would throw away exactly the entries that must be
+/// kept, on every switch, for nothing.
+///
+/// # Safety
+///
+/// `root` must be a root table [`prepare_user_root`] has made, so that it
+/// still names the kernel's upper half — the instruction after this one is a
+/// kernel instruction, and the trap taken if it did not translate would be a
+/// triple fault. The tables it roots must also stay alive until another root
+/// replaces this one on this processor.
+pub(crate) unsafe fn install_user_root(root: u64) {
+    // SAFETY: the caller guarantees the root carries the kernel's half, which
+    // is what maps the code and stack this returns onto.
+    unsafe { cpu::write_cr3(root) };
+}
+
+/// Go back to translating nothing but the kernel's own tables.
+///
+/// What a processor picking up a kernel thread does, so that no user address
+/// translates while one runs. The alternative — leaving the outgoing process's
+/// root installed, because a kernel thread has no user addresses to get wrong
+/// — is Linux's lazy TLB, and it is an optimisation that has to keep the
+/// address space alive underneath a thread that does not reference it. Stage 6
+/// takes the plain version.
+///
+/// # Safety
+///
+/// Nothing may still need a user address on this processor.
+pub(crate) unsafe fn uninstall_user_root() {
+    // SAFETY: the kernel's own root maps everything the kernel runs on, and
+    // the caller guarantees no user address is wanted.
+    unsafe { cpu::write_cr3(crate::mm::root_table()) };
+}
+
 /// Drop the loader's identity map by clearing the lower half of the root
 /// table.
 ///

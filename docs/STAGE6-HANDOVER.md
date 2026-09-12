@@ -4,14 +4,15 @@ Written for whoever picks stage 6 up next. **Delete this file when stage 6
 meets its exit criterion**; `docs/ROADMAP.md` is the durable record and this is
 scaffolding.
 
-State at the time of writing: `main` = `fa9ca46`, all three architectures boot
+State at the time of writing: `main` = `80a0083`, all three architectures boot
 to `FERRIX-BOOT-OK stages 1-5`.
 
 ---
 
 ## 1. What is built
 
-Roughly the memory substrate of stage 6 — a third of it. Four commits:
+Roughly the memory substrate of stage 6, and now the processor walking it —
+call it two fifths. Five commits:
 
 | Commit | What |
 |---|---|
@@ -19,6 +20,7 @@ Roughly the memory substrate of stage 6 — a third of it. Four commits:
 | `f89135b` | `Vmo` — sparse anonymous page list, commit on demand |
 | `987fe1d` | `Backing::Anonymous` gains an `id` and `offset` |
 | `2fe57dc` | `AddressSpace` — region map, page tables, demand paging |
+| *this one* | `arch::install_user_root` / `uninstall_user_root`, and the `MMU` walking a user space in the boot test |
 
 New code lives in `kernel/src/user/`:
 
@@ -29,17 +31,22 @@ New code lives in `kernel/src/user/`:
 * `space.rs` — `AddressSpace::new`, `root_table`, `map_anonymous`, `fault`,
   `unmap`, plus `SpaceError` and `Access`. A root frame, a
   `ferrix_vma::AddressSpace`, a `BTreeMap<u64, Arc<Vmo>>`, and a `SpinLock`.
-* `check.rs` — the boot self-checks. Reports
-  `objects 2048 pages reserved, 7 committed, 4 faulted in, 0 frames leaked`.
+* `check.rs` — the boot self-checks. Reports `objects 2048 pages reserved,
+  7 committed, 4 faulted in, 2 walked by the MMU, 0 frames leaked`.
 
 Supporting changes elsewhere:
 
 * `kernel/src/mm.rs` — `share_frame`, `release_frame`, `frame_references`,
   `translate_in(root, virt)`.
-* `arch::prepare_user_root(root)` — one new facade entry. x86-64 shares the
+* `arch::prepare_user_root(root)` — one facade entry. x86-64 shares the
   kernel's top-level slots into the new root; AArch64 and ARMv7-A do nothing,
   because the kernel is reached through `TTBR1` and a user root only ever goes
   in `TTBR0`.
+* `arch::install_user_root(root)` and `arch::uninstall_user_root()` — two more,
+  with `AddressSpace::install()` and `user::space::uninstall()` over them.
+  x86-64 is one `CR3` write each way, because that write drops the non-global
+  entries by itself. The Arm pair write `TTBR0`, clear `EPD0` and then
+  invalidate by `ASID`, for the reasons under §5.1, §5.3 and §5.4.
 
 ### Verify it still works
 
@@ -56,19 +63,24 @@ Both must pass before and after anything you do. The boot test is the contract.
 
 In dependency order. Nothing below exists, not even stubbed.
 
-1. **Installing a user root on a processor.** `AddressSpace::root_table()`
-   returns the value; nothing writes it to `CR3`/`TTBR0`. See landmine 5.3.
-2. **`arch::set_kernel_stack(top)`** — the stack a syscall from user mode lands
+1. **`arch::set_kernel_stack(top)`** — the stack a syscall from user mode lands
    on: `TSS.rsp0` on x86-64, `SP_EL1` on AArch64, the SVC stack on ARMv7-A.
    Agreed with the stage 5 owner as one facade entry, not three shapes.
-3. **`Task` carrying an address space.** `Option<Arc<AddressSpace>>`, `None`
-   meaning a kernel thread. See §4.
-4. **fork and copy-on-write.** `libs/vma::AddressSpace::clone_for_fork` already
+2. **`Task` carrying an address space.** `Option<Arc<AddressSpace>>`, `None`
+   meaning a kernel thread. See §4. The two calls the swap needs now exist, so
+   this is the next thing to do and it is a small change.
+3. **fork and copy-on-write.** `libs/vma::AddressSpace::clone_for_fork` already
    marks both sides; `Vma.cow` is *read* by `space.rs::fault` and set by
    nothing. The frame refcount primitives exist for exactly this.
-5. **The ELF loader for user binaries.** `libs/elf` parses; nothing maps a
-   `PT_LOAD` into an `AddressSpace`.
-6. **The ring-3 / EL0 / USR transition**, and the syscall vectors.
+4. **The ELF loader for user binaries.** `libs/elf` parses; nothing maps a
+   `PT_LOAD` into an `AddressSpace`. **Handed to the stage 7 owner** — §7.
+5. **The ring-3 / EL0 / USR transition**, and the syscall vectors.
+6. **`copy_from_user` / `copy_to_user`.** Also **handed to the stage 7 owner**,
+   who needs it for `write(2)`. It must resolve through the `AddressSpace` and
+   call `fault` rather than dereference, because a mapped page need not be
+   present yet; and it must reject anything `is_user_address` refuses, before
+   any length arithmetic, because no `SMAP`/`SMEP`/`PAN` is enabled anywhere in
+   this tree and nothing in the hardware will catch a kernel-half pointer.
 7. **`docs/ROADMAP.md` is not updated.** It still reads "Stage 6 is next" and
    stages 0–5 done. Someone should correct it — probably whoever finishes the
    stage, in the style stages 2–4 use ("Done — ...", "Still to do — ...").
@@ -85,6 +97,20 @@ Do not silently reverse these; they were argued with the other sessions.
   how stage 4 deferred per-CPU frame caches. The stage 5 owner confirmed this
   does not disturb EEVDF: it charges real elapsed time, so a costlier switch
   widens the printed fairness bound rather than breaking the check.
+
+  How that came out in the Arm code is worth knowing, because "no ASIDs" does
+  not mean "no ASID field". Every address space is `ASID` zero, and the switch
+  invalidates by `ASID` — `TLBI ASIDE1` on AArch64, `TLBIASID` on ARMv7-A. That
+  is not an optimisation sneaking in: it is the only invalidation that throws
+  away the user entries *and keeps the kernel's global ones*, which §5.1 says is
+  the whole requirement. `TLBIALL`/`vmalle1` would also be correct and would
+  discard kernel translations on every switch for nothing. When ASIDs do land,
+  the change is allocating the identifier and putting it in the root register;
+  these two call sites already say by `ASID`.
+
+  Both are the *local*, non-broadcast form, with a `dsb nsh` — deliberately. A
+  processor running another thread of the same process must keep its entries,
+  and one about to run this address space invalidates as it installs the root.
 * **Anonymous memory names a VMO.** `Backing::Anonymous { id, offset }`, with
   `id == 0` meaning private memory whose `offset` is by convention the
   mapping's own start address — Linux's `vm_pgoff` trick, which keeps two
@@ -135,25 +161,52 @@ to a deliberately read-only COW page is precisely the fault that must copy, and
 an early return would send the instruction back to fault forever. There is an
 imperative comment at the site.
 
-### 5.3 ARMv7-A: setting `TTBR0` is not enough
+### 5.3 Arm: setting `TTBR0` is not enough — HANDLED, but read this
 
-`drop_identity_map` sets `TTBCR.EPD0` and zeroes `TTBR0`
-(`kernel/src/arch/armv7a/cpu.rs`, `disable_ttbr0` at :198, `TTBCR_EPD0` at
-:25). `EPD0` means translations through `TTBR0` **fault instead of walking**.
-So installing a user root requires clearing `EPD0` as well, in the same
-sequence, then invalidating — otherwise every user access faults and it looks
-like the page tables are wrong when they are fine.
+Both Arm architectures disable the lower half rather than dismantling it:
+`TTBCR.EPD0` on ARMv7-A, `TCR_EL1.EPD0` on AArch64, and `EPD0` means
+translations through `TTBR0` **fault instead of walking**. Installing a user
+root therefore has to clear `EPD0` as well and then invalidate, or every user
+access faults and it looks exactly like page tables that are wrong when they
+are fine.
 
-The zeroing is deliberate: its comment says it is so that "a later change that
-clears EPD0 cannot resurrect the loader's tables". That later change is yours.
-Set `TTBR0` and clear `EPD0` together, then invalidate, or you may briefly have
-`EPD0` clear with the old root still live.
+`install_user_root` does this now, in the order that matters: root first,
+`EPD0` second, invalidate third. The other order leaves a window with the
+regime live and the register still holding the *previous* process's tables.
+
+What made this nearly ship broken is in §5.4. Read that one.
 
 Related: `kernel/src/arch/armv7a/smp.rs` installs its own identity map for
 secondary entry and takes it down in `CpuStarter::finish` — different mapping,
 same register. Worth a glance before you touch `TTBR0` handling.
 
-### 5.4 `mm::map_in` takes no lock, by contract
+### 5.4 A self-check that runs before `drop_identity_map` proves less than it looks
+
+The stage 6 checks run from `check_user_memory`, which `kmain` calls *before*
+`finish_memory` — and `finish_memory` is where `arch::drop_identity_map` runs.
+So at check time the loader's identity map is still live in `TTBR0` and `EPD0`
+is still **clear**. A first `install_user_root` on Arm therefore walks whether
+or not it thought about `EPD0` at all: the regime it needed to enable was
+already on.
+
+This was caught by deleting the `EPD0` clear and watching the boot test pass
+anyway. The check now installs the space, uninstalls it — which switches the
+regime off — and installs it a second time, and it is that second round that
+is the real one, because it is the state every switch after the first happens
+in. Deleting the `EPD0` clear now panics on both Arm architectures, which is
+the point.
+
+Two things follow. If you add a check that exercises a processor feature the
+boot sequence has not yet put in its steady state, say so and drive it to that
+state yourself. And note the reordering this causes: on Arm the lower half ends
+up switched off earlier than `drop_identity_map` would have done it. That is
+safe — nothing has read through the lower half since the secondaries finished
+starting, and the W^X sweep reaches the identity map's tables through the direct
+map rather than through `TTBR0` — but it is deliberate, not accidental, and
+`finish_memory` still begins by requiring the sweep to *fail*, which it does
+because that check reads `view.raw().ttbr0_phys` and not the register.
+
+### 5.5 `mm::map_in` takes no lock, by contract
 
 Its doc says so, because the tree it was written for — a processor's identity
 map during bring-up — is one nobody has installed and therefore nobody can
@@ -161,7 +214,7 @@ walk. A user address space is the opposite. `AddressSpace` holds its own lock
 across map-and-reshape for this reason; anything new that maps into a live root
 must do the same.
 
-### 5.5 GICv2 private interrupt enables are banked per core
+### 5.6 GICv2 private interrupt enables are banked per core
 
 If stage 6 adds a per-core interrupt source on Arm, go through the driver's
 recorded bitmask (`kernel/src/arch/gicv2.rs`) rather than writing the
@@ -205,6 +258,29 @@ under `.claude/worktrees/`. Coordinate before touching:
   to stage 6, and `cpu.rs` is free. `cargo xtask deploy --arch armv7a` flashes a
   real board and watches for the boot marker; `docs/stm32mp157-dk.md` has the
   procedure.
+* `libs/linux-abi`, `kernel/src/syscall/` (new), the `copy_from_user` layer and
+  the ELF loader — the stage 7 owner, in `.claude/worktrees/stage7-syscall-abi`.
+  The seam agreed with them is one call your syscall trampoline makes once it
+  has saved registers:
+
+  ```rust
+  // kernel/src/syscall/mod.rs — theirs
+  pub fn dispatch(args: &SyscallArgs) -> isize;
+  ```
+
+  `SyscallArgs` is a plain struct with public fields and no fallible
+  constructor, carrying the raw syscall number plus six arguments in the
+  architecture's own order, so the trampoline fills it straight from a
+  `TrapFrame`. The `isize` is already the Linux return-register value, `-errno`
+  encoded, so your side writes one register and returns. Register shuffling is
+  yours, the ABI is theirs.
+
+  Two things from them that bear on your vectors. On ARMv7-A a valid syscall
+  number is **not** bounded by the table's length: `__ARM_NR_BASE` is
+  `0x0f0000` and `ARM_set_tls` / `ARM_cacheflush` live there, so do not range
+  check against the table size. And `rt_sigreturn` and `execve` cannot return a
+  value into a register at all — they replace the register state — so they do
+  not go through `dispatch`; that path is yours.
 * `docs/sysml/` — a SysML v2 model of the design, kept current with the code.
   `04-memory.sysml` and `06-objects.sysml` cover stage 6. Report divergence in
   both directions; the model is ahead of the code for everything in §2.

@@ -145,6 +145,52 @@ impl AddressSpace {
         self.root * PAGE_SIZE
     }
 
+    /// Install this address space on the processor that is running.
+    ///
+    /// Every page faulted in so far has been reachable only through the direct
+    /// map, because the kernel was walking these tables in software. After
+    /// this the *hardware* walks them, and a user virtual address means
+    /// something on this processor.
+    ///
+    /// What this does not do is change privilege level. That is the other half
+    /// of stage 6 and a separate thing entirely: a processor can translate
+    /// through a user address space while still running the kernel's own code,
+    /// and it has to be able to — a fault taken in user mode is handled by
+    /// kernel code running in the address space that faulted.
+    ///
+    /// # Safety
+    ///
+    /// Something must hold a reference to this address space for as long as it
+    /// stays installed. The tables are freed when the last [`Arc`] goes, and a
+    /// processor whose root register still names freed frames is walking
+    /// memory the allocator has handed to somebody else.
+    ///
+    /// The caller must also not be preempted into a context expecting a
+    /// different address space, which until the scheduler knows about address
+    /// spaces means masking interrupts across the window.
+    pub(crate) unsafe fn install(&self) {
+        // SAFETY: the root was made by `new`, so `prepare_user_root` has run
+        // on it and the kernel is reachable through it on the architecture
+        // that needs that; the caller guarantees it outlives the installation.
+        unsafe { arch::install_user_root(self.root * PAGE_SIZE) };
+    }
+}
+
+/// Leave whatever address space this processor was translating through.
+///
+/// After this no user address translates here, which is the state a kernel
+/// thread runs in.
+///
+/// # Safety
+///
+/// Nothing on this processor may still need a user address.
+pub(crate) unsafe fn uninstall() {
+    // SAFETY: the caller guarantees no user address is wanted, and the kernel
+    // is reachable without one on every architecture.
+    unsafe { arch::uninstall_user_root() };
+}
+
+impl AddressSpace {
     /// How many regions the map holds.
     pub(crate) fn region_count(&self) -> usize {
         self.inner.lock().map.region_count()

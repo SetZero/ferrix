@@ -32,25 +32,28 @@ pub(crate) use aarch64::{
     CpuStarter, Irq, NAME, PageEncoding, TLB_FLUSH_IS_BROADCAST, TrapFrame,
     advance_past_breakpoint, breakpoint, classify, console, counter_hz, counter_now, cpu_local,
     describe_cpus, disable_interrupts, drop_identity_map, enable_interrupts, flush_tlb, halt,
-    hardware_id, identity_root, init_console, init_interrupts, init_traps, ipi_irq, prepare_stack,
-    prepare_user_root, report_trap, send_ipi_to_others, service_interrupts, set_cpu_local,
-    shutdown, switch_to, timer_arm, timer_disarm, timer_irq, wait_for_interrupt, wait_for_work,
+    hardware_id, identity_root, init_console, init_interrupts, init_traps, install_user_root,
+    ipi_irq, prepare_stack, prepare_user_root, report_trap, send_ipi_to_others, service_interrupts,
+    set_cpu_local, shutdown, switch_to, timer_arm, timer_disarm, timer_irq, uninstall_user_root,
+    wait_for_interrupt, wait_for_work,
 };
 #[cfg(target_arch = "arm")]
 pub(crate) use armv7a::{
     CpuStarter, Irq, NAME, PageEncoding, TLB_FLUSH_IS_BROADCAST, TrapFrame,
     advance_past_breakpoint, breakpoint, classify, console, counter_hz, counter_now, cpu_local,
     describe_cpus, disable_interrupts, drop_identity_map, enable_interrupts, flush_tlb, halt,
-    hardware_id, identity_root, init_console, init_interrupts, init_traps, ipi_irq, prepare_stack,
-    prepare_user_root, report_trap, send_ipi_to_others, service_interrupts, set_cpu_local,
-    shutdown, switch_to, timer_arm, timer_disarm, timer_irq, wait_for_interrupt, wait_for_work,
+    hardware_id, identity_root, init_console, init_interrupts, init_traps, install_user_root,
+    ipi_irq, prepare_stack, prepare_user_root, report_trap, send_ipi_to_others, service_interrupts,
+    set_cpu_local, shutdown, switch_to, timer_arm, timer_disarm, timer_irq, uninstall_user_root,
+    wait_for_interrupt, wait_for_work,
 };
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{
     CpuStarter, Irq, NAME, PageEncoding, TLB_FLUSH_IS_BROADCAST, TrapFrame,
     advance_past_breakpoint, breakpoint, classify, console, counter_hz, counter_now, cpu_local,
     describe_cpus, disable_interrupts, drop_identity_map, enable_interrupts, flush_tlb, halt,
-    hardware_id, identity_root, init_console, init_interrupts, init_traps, ipi_irq, prepare_stack,
-    prepare_user_root, report_trap, send_ipi_to_others, service_interrupts, set_cpu_local,
-    shutdown, switch_to, timer_arm, timer_disarm, timer_irq, wait_for_interrupt, wait_for_work,
+    hardware_id, identity_root, init_console, init_interrupts, init_traps, install_user_root,
+    ipi_irq, prepare_stack, prepare_user_root, report_trap, send_ipi_to_others, service_interrupts,
+    set_cpu_local, shutdown, switch_to, timer_arm, timer_disarm, timer_irq, uninstall_user_root,
+    wait_for_interrupt, wait_for_work,
 };

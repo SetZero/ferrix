@@ -97,6 +97,47 @@ pub(crate) const TLB_FLUSH_IS_BROADCAST: bool = true;
 )]
 pub(crate) fn prepare_user_root(_root: u64) {}
 
+/// Translate this processor's lower half through the tables at `root`.
+///
+/// A user root goes in `TTBR0_EL1` and the kernel stays in `TTBR1_EL1`, so
+/// unlike x86-64 there is no moment at which the kernel's own translations are
+/// in question: the register being written is not the one the code doing the
+/// writing is translated through.
+///
+/// What Arm does not do for free is the invalidation. A write to `CR3` drops
+/// the non-global entries as a side effect; a write to `TTBR0_EL1` drops
+/// nothing at all, and without [`cpu::flush_user_tlb`] the next user access
+/// would be answered out of the *previous* address space's entries. That is
+/// the bug this pairing exists to make impossible.
+///
+/// # Safety
+///
+/// `root` must root a live set of tables for the lower half, and they must
+/// stay live until another root replaces them on this processor.
+pub(crate) unsafe fn install_user_root(root: u64) {
+    // SAFETY: the caller guarantees the tables are live.
+    unsafe { cpu::write_ttbr0(root) };
+    cpu::flush_user_tlb();
+}
+
+/// Stop translating the lower half at all.
+///
+/// What a processor picking up a kernel thread does. `EPD0` makes a walk
+/// through `TTBR0_EL1` fault rather than merely find nothing, so a stray user
+/// address in the kernel is a fault at the instruction that made it — but
+/// `EPD0` governs walks and not the `TLB`, so the cached entries have to go as
+/// well, which is the second call.
+///
+/// # Safety
+///
+/// Nothing may still need a user address on this processor.
+pub(crate) unsafe fn uninstall_user_root() {
+    // SAFETY: the caller guarantees no user address is wanted; the kernel is
+    // reached entirely through `TTBR1_EL1`.
+    unsafe { cpu::disable_ttbr0() };
+    cpu::flush_user_tlb();
+}
+
 /// Root of the loader's identity map, while it still exists.
 ///
 /// `Some` on `AArch64` because the identity map is a second translation regime

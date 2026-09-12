@@ -102,6 +102,42 @@ pub(crate) const TLB_FLUSH_IS_BROADCAST: bool = true;
 )]
 pub(crate) fn prepare_user_root(_root: u64) {}
 
+/// Translate this processor's lower half through the tables at `root`.
+///
+/// AArch64's version of this, in coprocessor 15's spelling and with one extra
+/// thing to get right: `TTBCR.EPD0` is *set* on this architecture from the
+/// moment the loader's identity map is dropped, so installing a user root is
+/// not only a register write but the re-enabling of a translation regime. A
+/// change that wrote `TTBR0` and left `EPD0` alone would fault on every user
+/// access and look exactly like page tables that are wrong — which they would
+/// not be. See [`cpu::write_ttbr0`].
+///
+/// # Safety
+///
+/// `root` must root a live set of tables for the lower half, and they must
+/// stay live until another root replaces them on this processor.
+pub(crate) unsafe fn install_user_root(root: u64) {
+    // SAFETY: the caller guarantees the tables are live.
+    unsafe { cpu::write_ttbr0(root) };
+    cpu::flush_user_tlb();
+}
+
+/// Stop translating the lower half at all.
+///
+/// What a processor picking up a kernel thread does; see AArch64's, whose
+/// argument is the same one. `EPD0` governs walks and not the `TLB`, so the
+/// cached user entries have to be invalidated as well.
+///
+/// # Safety
+///
+/// Nothing may still need a user address on this processor.
+pub(crate) unsafe fn uninstall_user_root() {
+    // SAFETY: the caller guarantees no user address is wanted; the kernel is
+    // reached entirely through `TTBR1`.
+    unsafe { cpu::disable_ttbr0() };
+    cpu::flush_user_tlb();
+}
+
 /// Root of the loader's identity map, while it still exists.
 ///
 /// `Some` for AArch64's reason: the identity map is a second translation

@@ -175,7 +175,8 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // takes and gives back are mappings the sweep below has to see settled.
     start_scheduler(cpus);
 
-    // Stage 6, so far only the memory objects a process is built from. Here
+    // Stage 6, so far the memory objects a process is built from and the
+    // processor translating through one of them. Here
     // rather than after `finish_memory` because it allocates and frees frames
     // and requires the count to return to where it started, which is a
     // measurement the reclaim below would otherwise move under it.
@@ -195,7 +196,8 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     arch::shutdown()
 }
 
-/// Stage 6: the memory objects, and the frames they must give back.
+/// Stage 6: the memory objects, the frames they must give back, and the
+/// processor walking an address space it has been given.
 ///
 /// Halts rather than returning, as every other stage's check does: the useful
 /// report is which property failed, not that stage 6 did.
@@ -209,8 +211,9 @@ fn check_user_memory() {
     };
 
     println!(
-        "  objects  {} pages reserved, {} committed, {} faulted in, {} frames leaked",
-        report.reserved, report.committed, report.faulted, report.leaked,
+        "  objects  {} pages reserved, {} committed, {} faulted in, {} walked by the MMU, \
+         {} frames leaked",
+        report.reserved, report.committed, report.faulted, report.walked, report.leaked,
     );
 }
 

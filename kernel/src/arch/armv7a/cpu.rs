@@ -215,6 +215,72 @@ pub(crate) unsafe fn disable_ttbr0() {
     }
 }
 
+/// Translate the lower half through the tables at `root`, with `ASID` zero.
+///
+/// The inverse of [`disable_ttbr0`], and the two writes are in the order that
+/// order matters in: `TTBR0` first, `TTBCR.EPD0` second. `disable_ttbr0`
+/// zeroed the register precisely so that clearing `EPD0` on its own could not
+/// resurrect the loader's tables — this is the change it was guarding against,
+/// and the guard holds only if the root is in place before the regime is
+/// switched back on.
+///
+/// `TTBR0` is a 64-bit register in the long-descriptor format and takes a
+/// `mcrr` pair. Its `ASID` field is bits 55 to 48 of the high word, left zero
+/// because stage 6 allocates no address space identifiers; see
+/// [`flush_user_tlb`].
+///
+/// # Safety
+///
+/// `root` must be the physical address of a live translation table for the
+/// lower half, and it must stay live until another root replaces it here.
+pub(crate) unsafe fn write_ttbr0(root: u64) {
+    let low = root as u32;
+    let high = (root >> 32) as u32;
+    // SAFETY: the caller guarantees the tables. The `isb` makes both writes
+    // take effect before the next instruction is fetched.
+    unsafe {
+        asm!(
+            "mcrr p15, 0, {low}, {high}, c2",
+            "mrc p15, 0, {scratch}, c2, c0, 2",
+            "bic {scratch}, {scratch}, #{epd0}",
+            "mcr p15, 0, {scratch}, c2, c0, 2",
+            "isb",
+            low = in(reg) low,
+            high = in(reg) high,
+            scratch = out(reg) _,
+            epd0 = const TTBCR_EPD0,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// Drop this processor's cached user translations, and keep the kernel's.
+///
+/// `TLBIASID` invalidates the entries matching an `ASID`, which by definition
+/// are the ones not marked global — so the kernel's, all mapped global through
+/// `TTBR1`, survive. That is why this is not [`flush_tlb`]: that one is
+/// `TLBIALLIS`, which throws the global entries away too *and* broadcasts to
+/// every core, and an address space switch neither needs nor can afford
+/// either.
+///
+/// `nsh` on the barrier for AArch64's reason: the invalidation is this
+/// processor's business, and a processor about to run this address space
+/// invalidates as it installs the root.
+pub(crate) fn flush_user_tlb() {
+    // SAFETY: invalidating translations can only cost a re-walk. The `dsb`
+    // waits for it and the `isb` keeps the next instruction from being fetched
+    // through an entry it removed.
+    unsafe {
+        asm!(
+            "mcr p15, 0, {asid}, c8, c7, 2",
+            "dsb nsh",
+            "isb",
+            asid = in(reg) 0_u32,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
 /// The frequency of the architected counter, in hertz.
 pub(crate) fn read_cntfrq() -> u32 {
     let frequency: u32;

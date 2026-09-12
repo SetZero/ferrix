@@ -313,6 +313,70 @@ pub(crate) unsafe fn disable_ttbr0() {
     }
 }
 
+/// Translate the lower half through the tables at `root`, with `ASID` zero.
+///
+/// The inverse of [`disable_ttbr0`], and the two writes are in the order that
+/// order matters in: the root first and `EPD0` second. Between them the
+/// processor is walking the new tables through a regime that is still
+/// disabled, which faults; the other order leaves a window in which the regime
+/// is live and the register still holds whatever was there before — which for
+/// the first user process is the zero [`disable_ttbr0`] wrote, and for every
+/// switch after it is *another process's tables*.
+///
+/// The `ASID` field of `TTBR0_EL1` is left zero, because stage 6 does not
+/// allocate address space identifiers: every address space is `ASID` zero and
+/// the switch invalidates all of them. See [`flush_user_tlb`].
+///
+/// # Safety
+///
+/// `root` must be the physical address of a live translation table for the
+/// lower half, and it must stay live until another root replaces it here.
+pub(crate) unsafe fn write_ttbr0(root: u64) {
+    // SAFETY: the caller guarantees the tables. The `isb` makes both writes
+    // take effect before the next instruction is fetched.
+    unsafe {
+        asm!(
+            "msr ttbr0_el1, {root}",
+            "mrs {scratch}, tcr_el1",
+            "bic {scratch}, {scratch}, {epd0}",
+            "msr tcr_el1, {scratch}",
+            "isb",
+            root = in(reg) root,
+            scratch = out(reg) _,
+            epd0 = in(reg) TCR_EPD0,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// Drop this processor's cached user translations, and keep the kernel's.
+///
+/// `TLBI ASIDE1` invalidates the entries matching an `ASID` and by definition
+/// not the global ones, so the kernel's — its text, the direct map, the device
+/// windows, all mapped global — survive. That is the whole reason this is not
+/// [`flush_tlb`]: that one is `vmalle1is`, which throws away the global
+/// entries too *and* broadcasts, and an address space switch neither needs nor
+/// can afford either.
+///
+/// `nsh` rather than `ish` on the barrier: the invalidation is this
+/// processor's business. Another processor running another thread of the same
+/// process must keep its translations, and one that is about to run this
+/// address space will invalidate as it installs the root.
+pub(crate) fn flush_user_tlb() {
+    // SAFETY: invalidating translations can only cost a re-walk. The `dsb`
+    // waits for the invalidation and the `isb` keeps the next instruction from
+    // being fetched through an entry it removed.
+    unsafe {
+        asm!(
+            "tlbi aside1, {asid}",
+            "dsb nsh",
+            "isb",
+            asid = in(reg) 0_u64,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
 /// This processor's multiprocessor affinity register.
 ///
 /// Read-only and fixed at reset: it is how the processor is named to PSCI and
