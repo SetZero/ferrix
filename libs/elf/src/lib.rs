@@ -222,6 +222,9 @@ pub enum ElfError {
     BadMachine(u16),
     /// Neither an executable nor a shared object. Carries the `e_type` found.
     BadType(u16),
+    /// Not an `ET_EXEC`, for a caller that cannot relocate. Carries the
+    /// `e_type` found.
+    NotFixedAddress(u16),
     /// The program header table runs past the end of the image, or its entries
     /// are too small to be program headers.
     HeaderOutOfBounds,
@@ -245,6 +248,12 @@ impl fmt::Display for ElfError {
             ElfError::NotLittleEndian => f.write_str("not a little-endian ELF image"),
             ElfError::BadMachine(found) => write!(f, "built for e_machine {found}"),
             ElfError::BadType(found) => write!(f, "e_type {found} is neither EXEC nor DYN"),
+            ElfError::NotFixedAddress(found) => {
+                write!(
+                    f,
+                    "e_type {found} is not EXEC, and this image is not relocated"
+                )
+            }
             ElfError::HeaderOutOfBounds => f.write_str("program header table is out of bounds"),
             ElfError::SegmentOutOfBounds => f.write_str("segment contents are out of bounds"),
             ElfError::SegmentMalformed => f.write_str("segment has an impossible size or address"),
@@ -522,6 +531,20 @@ impl<'a> Elf<'a> {
         }
         if self.header.elf_type != ET_EXEC && self.header.elf_type != ET_DYN {
             return Err(ElfError::BadType(self.header.elf_type));
+        }
+        Ok(())
+    }
+
+    /// Reject an image that only runs once it has been relocated, for a caller
+    /// that places images at their link-time address and applies nothing.
+    ///
+    /// [`Elf::check_machine`] accepts `ET_DYN`, and rightly for a program
+    /// loader that biases and relocates one. A loader that does neither would
+    /// run a position-independent image with every absolute address it holds
+    /// still pointing at wherever the linker left it.
+    pub const fn check_fixed_address(&self) -> Result<(), ElfError> {
+        if self.header.elf_type != ET_EXEC {
+            return Err(ElfError::NotFixedAddress(self.header.elf_type));
         }
         Ok(())
     }

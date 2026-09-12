@@ -371,6 +371,34 @@ fn rejects_an_object_that_is_neither_exec_nor_dyn() {
 }
 
 #[test]
+fn a_loader_that_does_not_relocate_refuses_a_position_independent_image() {
+    let exec = kernel_image();
+    Elf::parse(&exec).unwrap().check_fixed_address().unwrap();
+
+    let pie = static_pie(Builder::new(), Vec::new(), &[]);
+    let elf = Elf::parse(&pie).unwrap();
+    elf.check_machine(EM_X86_64)
+        .expect("a program loader, which relocates, still takes ET_DYN");
+    assert_eq!(
+        elf.check_fixed_address().unwrap_err(),
+        ElfError::NotFixedAddress(ET_DYN),
+        "the boot loader applies no relocations, so a PIE kernel would run unrelocated"
+    );
+
+    let object = Builder::new()
+        .elf_type(1) // ET_REL
+        .segment(PT_LOAD, PF_R, 0x1000, vec![0; 16], 0)
+        .build();
+    assert_eq!(
+        Elf::parse(&object)
+            .unwrap()
+            .check_fixed_address()
+            .unwrap_err(),
+        ElfError::NotFixedAddress(1)
+    );
+}
+
+#[test]
 fn rejects_a_program_header_table_past_the_end() {
     let mut image = kernel_image();
     // Claim 4096 program headers; the table cannot be there.

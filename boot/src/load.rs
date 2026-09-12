@@ -98,6 +98,14 @@ pub(crate) fn parse_kernel(bytes: &[u8]) -> Result<Elf<'_>> {
     }
     elf.check_machine(arch::ELF_MACHINE)
         .map_err(|_| BootError::plain("the kernel was built for another architecture"))?;
+    // `place_kernel` copies segments to their link-time addresses and applies
+    // no relocations, so a position-independent kernel would start with every
+    // absolute address in it wrong.
+    elf.check_fixed_address().map_err(|_| {
+        BootError::plain(
+            "the kernel is not a fixed-address executable, and the loader does not relocate",
+        )
+    })?;
     elf.validate_segments()
         .map_err(|_| BootError::plain("the kernel has a malformed segment"))?;
     Ok(elf)
