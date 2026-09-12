@@ -835,7 +835,7 @@ package FerrixStructure {
         #writtenAhead part vfs : LibraryCrate {
             attribute :>> path = "libs/vfs";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 37;
+            attribute :>> hostTests = 42;
             @stage { number = 8; }
             doc /* Dentries with negative entries, mounts, the path walk, open
                  * file descriptions, descriptor tables, tmpfs over a page

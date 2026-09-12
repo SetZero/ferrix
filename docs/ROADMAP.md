@@ -872,7 +872,7 @@ the code that should meet a fuzzer before it meets ring 0.
   and device nodes included, and **the `getdents64` packer**, whose names start
   at byte 19 rather than at the structure's size of 24.
 
-37 host tests, the `vfs_ops` fuzz target — which asserts that every name a
+42 host tests, the `vfs_ops` fuzz target — which asserts that every name a
 listing reports resolves to the inode the listing gave, the property a stale
 cache entry breaks — and a Miri step.
 
@@ -1204,7 +1204,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 53 |
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
-| `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 37 |
+| `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 42 |
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory. | 50 |
 | `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport. Has its fuzz target and its Miri step already. | 37 |
 | `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
@@ -1212,7 +1212,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **608 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **613 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
