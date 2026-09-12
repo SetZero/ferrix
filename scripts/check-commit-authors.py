@@ -39,6 +39,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import pathlib
 import re
 import subprocess
 import sys
@@ -53,6 +54,9 @@ TRAILER = re.compile(r"^[ \t]*co-authored-by[ \t]*:", re.IGNORECASE | re.MULTILI
 EMPTY = "0" * 40
 
 HOOKS_PATH = ".githooks"
+
+#: The hooks this gate exists to see armed.
+REQUIRED_HOOKS = ("commit-msg", "pre-push")
 
 
 def git(*arguments: str) -> str:
@@ -69,13 +73,35 @@ def git(*arguments: str) -> str:
 
 
 def hooks_are_armed() -> bool:
-    """Whether this clone has been pointed at the version-controlled hooks."""
+    """Whether this clone has been pointed at the version-controlled hooks.
+
+    Tested by asking whether the configured directory *holds the hooks*, not by
+    matching the string it was written as. `git config core.hooksPath` accepts
+    a relative path and an absolute one alike and both arm the hooks equally;
+    and in a linked worktree the natural absolute setting points at the main
+    checkout's copy, which is the same tracked files at a different path. A
+    gate that compared spellings called a correctly armed clone unarmed, and a
+    gate that cries wolf is one people learn to pass with `--no-verify`.
+    """
     try:
-        return git("config", "--get", "core.hooksPath") == HOOKS_PATH
+        configured = git("config", "--get", "core.hooksPath")
     except RuntimeError:
         # `--get` exits 1 when the key is unset, which is exactly the state this
         # gate exists to report.
         return False
+    if not configured:
+        return False
+
+    # A relative path is resolved against the working tree's root, which is the
+    # directory every hook git runs starts in.
+    directory = pathlib.Path(configured)
+    if not directory.is_absolute():
+        try:
+            directory = pathlib.Path(git("rev-parse", "--show-toplevel")) / directory
+        except RuntimeError:
+            return False
+
+    return all((directory / hook).is_file() for hook in REQUIRED_HOOKS)
 
 
 def commits_in(base: str | None, head: str) -> list[str]:
