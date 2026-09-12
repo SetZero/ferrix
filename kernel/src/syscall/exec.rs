@@ -274,7 +274,9 @@ pub(crate) fn sys_execve(
     let mut args = read_strings(space, argv, &mut budget)?;
     let env = read_strings(space, envp, &mut budget)?;
 
-    let context = crate::fs::namespace().context();
+    // The caller's own root and working directory, so a relative path after
+    // `cd` resolves from there. Cloned out: never walk with the lock held.
+    let context = process.fs_context().lock().clone();
     let mut image = crate::fs::read_file(&context, None, &path_bytes)?;
 
     // A script names its interpreter on its first line, which runs with the

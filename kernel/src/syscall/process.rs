@@ -871,7 +871,17 @@ fn run_program(_argument: usize) {
     let Some(process) = current() else {
         return;
     };
+    // Masked from the test to the entry into user mode. The task starts with
+    // interrupts open, and the return-to-user check runs only for traps taken
+    // from user mode, so a kill whose interrupt landed between an open test
+    // and the entry would be taken here, in kernel mode, and forgotten: the
+    // program would enter user mode anyway and, alone on its processor, run
+    // until its first system call. Masked, a kill after the test leaves its
+    // interrupt pending, and it is taken from user mode on the first
+    // instruction, where the check sees it. Entering user mode opens them.
+    crate::arch::disable_interrupts();
     if process.is_terminated() {
+        crate::arch::enable_interrupts();
         return;
     }
     if let Some(regs) = process.take_resume() {
