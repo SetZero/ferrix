@@ -14,7 +14,7 @@
 //! software-generated, 16..32 are *private* peripherals — each core has its
 //! own, and the architected timer is one — and 32 upwards are shared.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::mmio::Mmio;
 
@@ -142,6 +142,13 @@ pub(crate) fn enable(id: u32) {
     gicd.write32(register, u32::from_ne_bytes(priorities));
 
     gicd.write32(GICD_ISENABLER + word, bit);
+
+    // A private interrupt's enable bit is this core's copy, so remember it:
+    // every other core has to be told the same thing when it comes up. See
+    // `init_this_cpu`.
+    if id < PRIVATE_LINES as u32 {
+        let _ = PRIVATE_ENABLED.fetch_or(bit, Ordering::Relaxed);
+    }
 }
 
 /// Claim the interrupt that arrived, or `None` if there was none.
@@ -179,15 +186,32 @@ const SGIR_ALL_BUT_SELF: u32 = 0b01 << 24;
 /// The software-generated interrupt inter-processor interrupts arrive on.
 pub(crate) const IPI_SGI: u32 = 1;
 
+/// Every private interrupt [`enable`] has been asked for, as a bit per line.
+///
+/// The boot core enables the timer and the inter-processor interrupt before
+/// any other core exists, and those enables land in *its* copy of the banked
+/// registers. Recording them is what lets a core coming up later be given the
+/// same set rather than a hard-coded guess at what it should be.
+static PRIVATE_ENABLED: AtomicU32 = AtomicU32::new(0);
+
 /// Bring up this core's side of the controller, on a core other than the one
 /// that ran [`init`].
 ///
-/// Two things are per core. The CPU interface, whose priority mask resets to
+/// Three things are per core. The CPU interface, whose priority mask resets to
 /// blocking everything — it is banked, one address reaching whichever core
-/// reads it, so the window `init` mapped serves this one too. And the
+/// reads it, so the window `init` mapped serves this one too. The
 /// distributor's registers for interrupts 0..32, which are banked as well:
 /// `init` set priorities for the boot core's copy, and this core's copy is
-/// still at its reset value.
+/// still at its reset value. And the enable bits for those same lines.
+///
+/// **That last one is not a detail.** Every private interrupt the boot core
+/// turned on is off on this one until it is turned on here, and the timer is
+/// a private interrupt. A core whose timer is masked in the controller runs,
+/// takes inter-processor interrupts, and is never preempted — so whatever it
+/// picks first it runs forever. Stage 5 found this the way it deserved to be
+/// found: three of four cores each ran one spinner and never the other two,
+/// with the run queue holding three tasks and the core reporting itself
+/// busy.
 pub(crate) fn init_this_cpu() {
     let gicd = window(&DISTRIBUTOR);
     for line in (0..PRIVATE_LINES).step_by(4) {
@@ -201,8 +225,13 @@ pub(crate) fn init_this_cpu() {
     gicc.write32(GICC_PMR, PMR_ALL);
     gicc.write32(GICC_CTLR, CTLR_ENABLE);
 
-    // Its enable bit is banked too, so every core turns on its own.
-    enable(IPI_SGI);
+    // Every private line the boot core enabled, enabled here too. `enable`
+    // itself would do, but it would also write the shared priority byte again
+    // and re-record what is already recorded; this is the banked half alone.
+    let enabled = PRIVATE_ENABLED.load(Ordering::Relaxed);
+    if enabled != 0 {
+        gicd.write32(GICD_ISENABLER, enabled);
+    }
 }
 
 /// Interrupt every core but this one on [`IPI_SGI`].

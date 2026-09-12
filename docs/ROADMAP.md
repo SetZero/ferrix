@@ -19,11 +19,12 @@ longer". This is a long program of work: stages 1–8 are a conventional kernel
 bring-up, 9–14 are the parts this design chose to do properly, and 15–17 are the
 goal. Nobody should read the table as a schedule.
 
-**Where it stands:** stages 0–4 are done and in the boot test on all three
-architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-4`.
-ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 5 is next. Nothing of stages 5 onwards exists in `kernel/` yet — no task, no
-scheduler, no user mode — though several of their byte-level crates do (see
-*Written ahead of their stage*).
+**Where it stands:** stages 0–5 are done and in the boot test on all three
+architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-5`.
+ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 6 is next.
+Nothing of stages 6 onwards exists in `kernel/` yet — no address space, no
+user mode — though several of their byte-level crates do (see *Written ahead
+of their stage*).
 
 ---
 
@@ -349,7 +350,7 @@ been waited for reads the poison. Two of those were tested by breaking what
 they test: with the shootdown disabled, x86-64 fails on a stale read; with
 the grace period skipped, both architectures fail on a poisoned one.
 
-The boot marker reads `FERRIX-BOOT-OK stages 1-4`.
+The boot marker reads `FERRIX-BOOT-OK stages 1-5`.
 
 **Deferred, none of it on stage 5's path:**
 
@@ -420,15 +421,72 @@ board's own UART; Thumb-2; VFP.
 
 ---
 
-## Stage 5 — Tasks and the scheduler  ·  *week*
+## Stage 5 — Tasks and the scheduler ✅
 
 `Task`, kernel stacks, context switch, per-CPU runqueues, the class stack, and
 the EEVDF fair class. Scheduling domains exist from the start with one mode
 (`Throughput`) implemented; the other two are stage 14, but the domain
 abstraction is not retrofitted.
 
-**Exit:** a boot test that runs a thousand kernel threads doing bounded work,
-verifies fair distribution against EEVDF's own guarantee, and shuts down clean.
+**Done.**
+
+* **The deciding is `libs/sched`**, host-tested, because a scheduler that is
+  wrong is wrong in a way nothing on the machine can print. The EEVDF tree,
+  the weights, the lag arithmetic and the domain partition are all reachable
+  from `cargo test`; what is in `kernel/` is the part that needs a machine.
+* **Deciding and switching are one operation.** The run queue's lock is taken
+  before the decision and released *after* the switch, by whichever context
+  ends up running. That is not an optimisation: it is what stops another
+  processor picking up the outgoing task in the window between it going back
+  on the queue and its registers being saved. `SpinLock::lock_manually` exists
+  to say so where the type system cannot.
+* **Preemption happens only on the way out of an interrupt.** The timer sets a
+  flag and returns; the decision is made once the controller has been told the
+  interrupt is done. Switching inside the handler would leave an interrupt in
+  service for as long as the next task ran, and a controller still servicing
+  one delivers nothing further.
+* **The context switch** is the fourth and last entry on the assembly
+  allow-list's "both architectures" half: a function that returns onto a
+  different stack from the one it was called on, which Rust cannot express.
+
+**Exit criterion met, and in the boot test on all three architectures.** A
+thousand kernel threads, all spawned on one processor so that the only way the
+others get any is by taking them, run bounded work to completion and give every
+stack back — about 28,000 context switches and 1,000 steals in the runs
+recorded when this landed. Then twelve spinners, three on each processor and
+one of each three at a different weight, run inside a measured window, and each
+task's service is required to stay within EEVDF's own bound of its weighted
+share. The bound is not a constant: it is a slice plus the worst overrun the
+scheduler actually served, and both numbers are printed, because a bound that
+moves is only honest beside what it bounded.
+
+**Three bugs it found, each invisible to the check before it:**
+
+* **An idle processor is never told.** Work appearing on another processor's
+  queue after an idle one has halted is invisible to it forever, so a thousand
+  tasks ran on one processor with three asleep. Placing a task now wakes the
+  idle, and `should_preempt` is not the only reason to: it compares an arrival
+  against the fair queue, which the idle task is deliberately not in, so it
+  answers false however urgent the arrival.
+* **`vmap::free` freed the address before it unmapped the pages**, so another
+  processor could be handed an address that was still mapped and have a
+  perfectly ordinary allocation refused. The unmapping cannot happen under the
+  arena lock — it waits for processors that cannot answer while spinning for
+  that lock — so the two steps are separate now, with the address reserved
+  across the gap.
+* **Every private interrupt the boot core enables is off on every other core**,
+  the timer included, because those enable bits are banked. A core whose timer
+  is masked in the controller runs, takes inter-processor interrupts, and is
+  never preempted: whatever it picks first, it runs forever. The GICv2 driver
+  records what was enabled and gives each core the same set, which fixes the
+  class rather than the instance.
+
+Two of the three needed more than one processor and work that outlives a
+timeslice, which is to say they needed this stage's own test to exist.
+
+**Deferred:** load balancing beyond work stealing on an idle processor; a task
+that is not a kernel thread, which is stage 6; and the other two domain modes,
+which are stage 14.
 
 ---
 

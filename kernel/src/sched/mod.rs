@@ -74,6 +74,16 @@ static DOMAIN: Once<Domain> = Once::new();
 /// Whether [`init`] has run.
 static STARTED: AtomicBool = AtomicBool::new(false);
 
+/// How many processors have taken up their idle task.
+///
+/// Waited for by [`init`], because a check that measures work stealing is
+/// measuring nothing until there is a second processor in the scheduler to
+/// steal. Secondaries arrive under their own steam — they are woken by an
+/// IPI and have to get from stage 4's job loop to `enter_idle` — so "the
+/// scheduler is up" is not the same instant on every processor, and the
+/// difference is milliseconds an emulated machine can easily stretch.
+static IN_SCHEDULER: AtomicU64 = AtomicU64::new(0);
+
 /// The next task identifier. Never reused.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -158,12 +168,50 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
     let _ = NEED_RESCHED.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
 
     adopt_boot_task()?;
+    joined(0);
     STARTED.store(true, Ordering::Release);
 
     // The secondaries are asleep in `smp::secondary_main`. Wake them, so each
     // takes up the idle loop that is its half of the scheduler.
     let _ = arch::send_ipi_to_others();
+    wait_for_processors(online)
+}
+
+/// Wait until every processor is in the scheduler, or say which never came.
+///
+/// The boot processor counts itself, having just adopted its own context; the
+/// rest arrive through [`enter_idle`]. Bounded, because a processor that never
+/// arrives should be a sentence in the boot log rather than a wait that never
+/// ends — and re-sending the interrupt each time round, because the first one
+/// may have been sent while a processor was still on its way into the halt
+/// that was meant to receive it.
+fn wait_for_processors(online: usize) -> Result<(), &'static str> {
+    /// How long to give them. Generous: an emulated processor may be a host
+    /// thread that is not currently running.
+    const PATIENCE_NANOS: u64 = 5_000_000_000;
+
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    let all = if online >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << online) - 1
+    };
+
+    while IN_SCHEDULER.load(Ordering::Acquire) != all {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("a processor never joined the scheduler");
+        }
+        let _ = arch::send_ipi_to_others();
+        core::hint::spin_loop();
+    }
     Ok(())
+}
+
+/// Record that `cpu` is now running tasks.
+fn joined(cpu: usize) {
+    if cpu < 64 {
+        let _ = IN_SCHEDULER.fetch_or(1u64 << cpu, Ordering::AcqRel);
+    }
 }
 
 /// Make the context that called [`init`] the boot processor's first task, and
@@ -224,6 +272,7 @@ pub(crate) fn enter_idle() -> ! {
         }
         <arch::Irq as IrqControl>::restore(saved);
     }
+    joined(cpu);
     idle_loop()
 }
 
@@ -287,7 +336,13 @@ pub(crate) fn spawn_on(
     cpu: usize,
     pinned: bool,
 ) -> Result<Arc<Task>, &'static str> {
-    let stack = crate::vmap::allocate_stack().map_err(|_| "no kernel stack for a new task")?;
+    let stack = crate::vmap::allocate_stack().map_err(|problem| {
+        // The arena's own reason, because "no stack" has four of them and they
+        // want four different fixes: no address space, no frames, the page
+        // tables refusing, or the arena not being up at all.
+        crate::console::println!("  tasks    no stack for {name}: {problem}");
+        "no kernel stack for a new task"
+    })?;
     // SAFETY: the stack was allocated a moment ago, is mapped and writable,
     // and nothing else refers to it.
     let stack_pointer = unsafe { arch::prepare_stack(stack.top, task_start, 0) };
@@ -305,10 +360,19 @@ pub(crate) fn spawn_on(
 
     let lock = queue_of(cpu).ok_or("no such processor")?;
     let saved = <arch::Irq as IrqControl>::disable();
-    let preempt = {
+    let (preempt, stealable) = {
         let mut queue = lock.lock();
         queue.insert(&task);
-        queue.should_preempt()
+        // Two reasons to make the target reschedule, and the second is the one
+        // that is easy to miss: either something better than what it is
+        // running has arrived, or it is not running anything at all and has
+        // to be woken to notice. A processor asleep in `wait_for_work` finds
+        // out only when interrupted.
+        let wake = queue.should_preempt() || queue.is_running_idle();
+        // More than the one task running means there is something here for an
+        // idle processor to take. Measured after the insert, so the first task
+        // to make the queue worth stealing from is the one that says so.
+        (wake, queue.len() > 1)
     };
     let here = this_cpu();
     <arch::Irq as IrqControl>::restore(saved);
@@ -320,7 +384,32 @@ pub(crate) fn spawn_on(
             kick(cpu);
         }
     }
+
+    // **Tell the idle processors, or they will sleep through this.** An idle
+    // processor looks for work to steal and then halts, and nothing wakes it
+    // but an interrupt: a queue that fills up on another processor after it
+    // halted is invisible to it forever. The first stage-5 run found exactly
+    // that — a thousand tasks spawned on one processor, three processors
+    // asleep, and stealing that moved nothing.
+    //
+    // Broadcast and unconditional rather than aimed at the processors that
+    // are actually idle: an idle processor is only idle until it looks, so
+    // any answer to "which ones" is stale before it is used. One woken
+    // processor that finds nothing costs a halt and a wake; the alternative
+    // costs the whole machine minus one.
+    if stealable {
+        wake_idle_processors();
+    }
     Ok(task)
+}
+
+/// Wake every other processor so that anything idle looks for work to steal.
+///
+/// Separate from [`kick`], which is about a specific processor needing to
+/// reschedule. This one carries no request at all: the interrupt exists only
+/// to return an idle processor to the top of its loop, where it looks.
+fn wake_idle_processors() {
+    let _ = arch::send_ipi_to_others();
 }
 
 /// Where every task begins.
@@ -417,7 +506,10 @@ pub(crate) fn wake(task: &Arc<Task>) {
         if !task.is_queued() {
             queue.insert(task);
         }
-        if queue.should_preempt() {
+        // As `spawn_on`: an idle processor has to be told, because
+        // `should_preempt` compares against a fair queue the idle task is not
+        // in and so answers false however urgent the arrival.
+        if queue.should_preempt() || queue.is_running_idle() {
             kick_cpu = Some(cpu);
         }
         break;
@@ -726,4 +818,26 @@ pub(crate) fn check_invariants() -> Result<(), &'static str> {
     }
     <arch::Irq as IrqControl>::restore(saved);
     outcome
+}
+
+/// Print what each processor's run queue holds, for a check that has failed.
+pub(crate) fn report_queues() {
+    let Some(queues) = QUEUES.get() else {
+        return;
+    };
+    let saved = <arch::Irq as IrqControl>::disable();
+    for (cpu, lock) in queues.iter().enumerate() {
+        let queue = lock.lock();
+        crate::console::println!(
+            "  fair     cpu {} holds {} tasks, idle={}, resched={}",
+            cpu,
+            queue.len(),
+            queue.is_running_idle(),
+            NEED_RESCHED
+                .get()
+                .and_then(|flags| flags.get(cpu))
+                .is_some_and(|flag| flag.load(Ordering::Relaxed)),
+        );
+    }
+    <arch::Irq as IrqControl>::restore(saved);
 }

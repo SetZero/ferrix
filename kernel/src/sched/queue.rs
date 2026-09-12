@@ -212,6 +212,23 @@ impl CpuQueue {
         !self.fair.is_empty()
     }
 
+    /// Whether this processor is running its idle task, or nothing at all.
+    ///
+    /// The idle task is deliberately not in the fair queue — it is what runs
+    /// when that queue is empty, not the lowest-weight thing in it — so
+    /// `should_preempt` has nothing to compare a new arrival against and
+    /// answers false. That makes "should the target switch?" the wrong
+    /// question to ask on its own when placing a task on another processor:
+    /// an idle processor is asleep, and a sleeping processor that is never
+    /// told has no way to find out.
+    pub(crate) fn is_running_idle(&self) -> bool {
+        match (self.current.as_ref(), self.idle.as_ref()) {
+            (Some(current), Some(idle)) => Arc::ptr_eq(current, idle),
+            (None, _) => true,
+            (Some(_), None) => false,
+        }
+    }
+
     /// Arm the timer for the next decision this CPU has to make.
     pub(crate) fn arm_timer(&self, now: u64) {
         let sleeper = self.sleepers.keys().next().map(|(at, _)| *at);

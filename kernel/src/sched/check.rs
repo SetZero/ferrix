@@ -72,6 +72,12 @@ pub(crate) struct Report {
     pub(crate) steals: u64,
     /// How many processors ran some of the thousand.
     pub(crate) processors: u32,
+    /// Which ones, as a bit per processor. Printed beside the count because
+    /// the count on its own invites being read as a capability: stealing is
+    /// opportunistic, and a processor that lost every race for a task is not
+    /// a processor that could not have run one. The fairness check below is
+    /// the one that requires *every* processor to run something.
+    pub(crate) processor_mask: u64,
     /// Spinners the fairness check ran.
     pub(crate) spinners: usize,
     /// The worst any task's service strayed from its share.
@@ -245,6 +251,7 @@ fn many_tasks(topology: &Topology, report: &mut Report) -> Result<(), &'static s
     }
     report.threads = DONE.load(Ordering::Acquire);
     report.processors = processors.count_ones();
+    report.processor_mask = processors;
 
     if topology.online() > 1 && report.processors < 2 {
         return Err("every thread ran on one processor: work stealing moved nothing");
@@ -265,10 +272,28 @@ fn fairness(topology: &Topology, report: &mut Report) -> Result<(), &'static str
 
     let spinners = start_spinners(topology)?;
     let total = spinners.len() as u64;
-    wait_for(
+    if let Err(problem) = wait_for(
         || SPINNING.load(Ordering::Acquire) >= total,
         "a spinner never started",
-    )?;
+    ) {
+        crate::console::println!(
+            "  fair     {} of {} spinners started",
+            SPINNING.load(Ordering::Acquire),
+            total,
+        );
+        for (index, task) in spinners.iter().enumerate() {
+            crate::console::println!(
+                "  fair     spinner {} wanted cpu {}, is on cpu {}, ran on {:#b}, {} switches",
+                index,
+                index / SPINNERS_PER_CPU,
+                task.cpu(),
+                task.cpus_run_on(),
+                task.switches(),
+            );
+        }
+        super::report_queues();
+        return Err(problem);
+    }
 
     // The window opens once every spinner is running, and this task sleeps
     // through it: a processor whose queue holds only the spinners is what

@@ -34,7 +34,7 @@ $ cargo xtask test-boot --arch all
     |   stage 4  4 processors online, a contended counter came to 100000 of 100000
     |   w^x      354 mappings swept, 30 executable, none writable
     |   reclaim  4 MiB from the loader and ACPI, 501 free; arena 9 live, 180 KiB
-    | FERRIX-BOOT-OK stages 1-4
+    | FERRIX-BOOT-OK stages 1-5
   x86_64: boot ok
   aarch64: boot ok
   armv7a: boot ok
@@ -42,12 +42,13 @@ $ cargo xtask test-boot --arch all
 
 ## What exists today
 
-Stages 1 to 4 of `docs/ROADMAP.md`, on all three architectures. Each boots from
+Stages 1 to 5 of `docs/ROADMAP.md`, on all three architectures. Each boots from
 firmware to a Rust kernel which verifies the hand-off, brings up a buddy
 allocator over every usable frame, starts a kernel heap — so `Box`, `Vec` and
 `BTreeMap` work — installs its own trap vectors, services a page fault by
 mapping the faulting address and letting the instruction retry, brings up an
-interrupt controller, runs a clock, and brings every other processor online.
+interrupt controller, runs a clock, brings every other processor online, and
+schedules a thousand kernel threads across them under an EEVDF fair class.
 
 ARMv7-A is the Cortex-A7 of the STM32MP157, run on QEMU's `virt` machine under
 U-Boot. It joined after stage 3 without a second loader, a second facade or a

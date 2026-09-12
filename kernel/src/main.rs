@@ -286,8 +286,8 @@ fn start_scheduler(cpus: &'static smp::Topology) {
     };
 
     println!(
-        "  tasks    {} threads run to completion on {} processors, {} switches, {} steals",
-        report.threads, report.processors, report.switches, report.steals,
+        "  tasks    {} threads run to completion on {} processors ({:#b}), {} switches, {} steals",
+        report.threads, report.processors, report.processor_mask, report.switches, report.steals,
     );
     println!(
         "  sleep    one task slept {} us and came back",
@@ -297,7 +297,7 @@ fn start_scheduler(cpus: &'static smp::Topology) {
     // overrun the scheduler actually served, and a bound that moves is only
     // honest if it is printed beside what it bounded.
     println!(
-        "  fair     {} spinners, worst lag {} us within a bound of {} us",
+        "  fair     {} spinners on every processor, worst lag {} us within a bound of {} us",
         report.spinners,
         report.worst_lag / 1000,
         report.bound / 1000,

@@ -213,21 +213,60 @@ fn reserve(len: u64, flags: VmaFlags, kind: Kind) -> Result<Mapping, VmapError> 
 }
 
 /// Give a reservation back, and say what was behind it.
+///
+/// For a reservation nothing was ever mapped into. A live mapping goes through
+/// [`claim`] and [`release_span`] instead, which are the same two steps with
+/// the unmapping in between.
 fn release(base: u64) -> Result<Allocation, VmapError> {
+    let allocation = claim(base)?;
+    release_span(allocation.span)?;
+    Ok(allocation)
+}
+
+/// Take an allocation out of the live set, leaving its address *still
+/// reserved*.
+///
+/// # Why this is not just `release`
+///
+/// The address must not become available again until nothing is mapped at it.
+/// Freeing the range first and unmapping afterwards leaves a window in which
+/// another processor can be handed the same address and try to map it, and
+/// the symptom is the mapper refusing a perfectly ordinary allocation:
+///
+/// ```text
+/// no stack for worker: the mapping was refused: VirtAddr(...) is already mapped
+/// ```
+///
+/// which is what stage 5 hit the moment work stealing started — a thousand
+/// tasks spawning on one processor while three others ran them to completion
+/// and reaped their stacks.
+///
+/// The unmapping cannot happen under the arena lock either: it invalidates
+/// other processors' translations and waits for them to answer, and a
+/// processor spinning for this lock with interrupts masked cannot answer. So
+/// the two steps are separate, with the lock dropped in between and the
+/// address reserved throughout.
+fn claim(base: u64) -> Result<Allocation, VmapError> {
     let mut locked = ARENA.lock();
     let arena = locked.as_mut().ok_or(VmapError::NotReady)?;
 
     // Keyed by the address the caller holds, so freeing a pointer somebody did
     // arithmetic on is reported rather than half-executed.
-    let allocation = arena
+    arena
         .live
         .remove(&base)
-        .ok_or(VmapError::NotAllocated(base))?;
+        .ok_or(VmapError::NotAllocated(base))
+}
+
+/// Make a claimed span available again, once nothing is mapped in it.
+fn release_span(span: PageRange) -> Result<(), VmapError> {
+    let mut locked = ARENA.lock();
+    let arena = locked.as_mut().ok_or(VmapError::NotReady)?;
     let _ = arena
         .space
-        .remove(allocation.span)
-        .map_err(|_| VmapError::NotAllocated(base))?;
-    Ok(allocation)
+        .remove(span)
+        .map_err(|_| VmapError::NotAllocated(span.start()))?;
+    Ok(())
 }
 
 /// Map `pages` of fresh anonymous memory into the arena.
@@ -277,13 +316,19 @@ fn unwind(mapping: Mapping, pages: u64) {
 ///
 /// [`VmapError::NotAllocated`] for an address the arena did not hand out.
 pub(crate) fn free(base: u64) -> Result<(), VmapError> {
-    let allocation = release(base)?;
+    // Out of the live set, but still reserved: see `claim` for why the address
+    // may not be handed out again until the unmapping below has finished.
+    let allocation = claim(base)?;
     let removed = match allocation.kind {
         Kind::Anonymous => mm::unmap_kernel(base, allocation.len, mm::deallocate_frames),
         Kind::Device => mm::unmap_kernel(base, allocation.len, |_, _| {}),
     };
+    // The span goes back whether or not the unmapping succeeded: an address
+    // nobody can reuse is a leak, and the mapper's error is reported either
+    // way.
+    let released = release_span(allocation.span);
     let _ = removed.map_err(VmapError::MapFailed)?;
-    Ok(())
+    released
 }
 
 /// Map `len` bytes of device registers at `phys` and return where they landed.
