@@ -963,11 +963,27 @@ architectures.**
   such sends take from the walk to the push, so two sends cannot build the
   loop between them. A walk past 1024 endpoints is refused as too big rather
   than allowed to hold that lock.
+* **Signals and waiting.** Every object reports its signals as a level —
+  a channel end `READABLE`, `WRITABLE`, `PEER_CLOSED`; a killed job
+  `TERMINATED` — and names the queue woken when they may have changed.
+  `object_wait_one` looks at the level before it sleeps, so a message that
+  arrived before the wait is not lost, and also ends when the waiting process
+  is killed rather than sleeping out its deadline. The check wakes a
+  two-minute wait with a message written twenty milliseconds later.
+* **`Job`.** `job_create` and `job_kill`, with a tree of jobs holding
+  processes. A kill walks the tree without recursion, ends every process in
+  the job and beneath it through `process::kill`, and marks each job under the
+  lock that adding to it takes, so nothing can join a job being killed and
+  survive it. The check kills the middle of a three-job tree of spinning
+  programs and requires the two beneath to end with 137 and their tasks to
+  stop, the one above to keep running, and a program outside every job to
+  finish with its own status; then it kills the root.
 
 **Still to do.**
 
-* Ports and signal waits (`object_wait_one`, `object_wait_async`, `port_*`),
-  `Job`, `Interrupt`, `IoMapping`, and `vmo_map`.
+* Ports and asynchronous waits (`object_wait_async`, `port_*`), `Interrupt`
+  and `IoMapping` (minted from stage 10's device nodes through types only
+  enumeration can construct), and `vmo_map`.
 * **The exit test itself**, on processes that are now tasks: stage 7's
   follow-up landed `process::load` and `process::start`, a terminated level plus
   a wake-up on `Process`, `process::kill` from outside, and `process::current()`

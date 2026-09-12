@@ -22,14 +22,17 @@
 
 pub(crate) mod channel;
 pub(crate) mod check;
+pub(crate) mod job;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_native_abi::rights::Rights;
+use ferrix_native_abi::signals::Signals;
 use ferrix_sync::SpinLock;
 
+use crate::sched::WaitQueue;
 use crate::user::vmo::Vmo;
 
 /// The most handles one process may hold at once.
@@ -47,6 +50,39 @@ pub(crate) enum Object {
     Channel(Arc<channel::Endpoint>),
     /// A memory object.
     Vmo(Arc<Vmo>),
+    /// A container of processes.
+    Job(Arc<job::Job>),
+}
+
+/// A queue nothing is woken on, for objects whose signals never change.
+///
+/// A wait on one of them still ends: at its deadline, or when the waiting
+/// process is killed, which the wait's own periodic recheck notices.
+static QUIET: WaitQueue = WaitQueue::new();
+
+impl Object {
+    /// What a waiter on this object would see now.
+    pub(crate) fn signals(&self) -> Signals {
+        match self {
+            Object::Channel(endpoint) => endpoint.signals(),
+            Object::Vmo(_) => Signals::NONE,
+            Object::Job(job) if job.is_killed() => Signals::TERMINATED,
+            Object::Job(_) => Signals::NONE,
+        }
+    }
+
+    /// The queue woken whenever this object's signals may have changed.
+    ///
+    /// "May have": a waiter is woken for any change and looks at the level
+    /// again, so a queue woken too often costs a recheck and one woken too
+    /// rarely is a wait that sleeps out its deadline.
+    pub(crate) fn waiters(&self) -> &WaitQueue {
+        match self {
+            Object::Channel(endpoint) => endpoint.waiters(),
+            Object::Vmo(_) => &QUIET,
+            Object::Job(job) => job.waiters(),
+        }
+    }
 }
 
 /// A process's handle table.

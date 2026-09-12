@@ -50,8 +50,12 @@ pub const FAULT: Errno = Errno::EFAULT;
 /// interrupt already bound to a port.
 pub const ALREADY_BOUND: Errno = Errno::EBUSY;
 
+/// The object is in a state the call cannot act on: a job that has been
+/// killed takes no new processes or children.
+pub const BAD_STATE: Errno = Errno::EIDRM;
+
 /// Every name above, for the tests that hold them distinct.
-pub const ALL: [Errno; 13] = [
+pub const ALL: [Errno; 14] = [
     BAD_HANDLE,
     WRONG_TYPE,
     ACCESS_DENIED,
@@ -65,4 +69,5 @@ pub const ALL: [Errno; 13] = [
     INVALID_ARGS,
     FAULT,
     ALREADY_BOUND,
+    BAD_STATE,
 ];

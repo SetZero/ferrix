@@ -22,13 +22,18 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::Rights;
+use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::CHANNEL_MAX_BYTES;
+use ferrix_sync::SpinLock;
 use ferrix_vma::VmaFlags;
 
 use crate::arch;
 use crate::mm;
-use crate::object;
+use crate::object::job::{Job, KILLED_STATUS};
+use crate::object::{self, Object};
+use crate::sched::Task;
+use crate::syscall::check::spinner;
 use crate::syscall::process::{self, Process};
 use crate::syscall::{self as linux, Outcome, SyscallArgs, native, uaccess};
 
@@ -50,6 +55,19 @@ const ACTUAL: u64 = SCRATCH + 0x308;
 const OFFSET: u64 = SCRATCH + 0x310;
 /// A VMO size.
 const SIZE: u64 = SCRATCH + 0x318;
+/// A wait's deadline.
+const DEADLINE: u64 = SCRATCH + 0x320;
+/// The signals a wait observed.
+const OBSERVED: u64 = SCRATCH + 0x328;
+
+/// How long the waker sleeps before it writes.
+const WAKE_AFTER_NANOS: u64 = 20_000_000;
+/// How long a check waits for anything before calling it lost.
+const PATIENCE_NANOS: u64 = 120_000_000_000;
+/// How long the spinning programs run before a job is killed under them.
+const KILL_AFTER_NANOS: u64 = 20_000_000;
+/// A spin longer than any check waits, so only a kill ends it.
+const FOREVER_ROUNDS: u32 = u32::MAX;
 
 /// What travels in the VMO, to show the handle that arrives names it.
 const SECRET: &[u8] = b"carried by a handle";
@@ -67,6 +85,10 @@ pub(crate) struct Report {
     pub(crate) refusals: u32,
     /// Frames the second run did not give back. Zero, or something leaks.
     pub(crate) leaked: i64,
+    /// Waits woken by the thing they waited for, rather than their deadline.
+    pub(crate) woken: u32,
+    /// Processes ended by killing a job they were in.
+    pub(crate) killed: u32,
 }
 
 /// Counts what happened, so the report is a measurement and not a claim.
@@ -78,6 +100,10 @@ struct Counter {
     moved: u32,
     /// See [`Report::refusals`].
     refusals: u32,
+    /// See [`Report::woken`].
+    woken: u32,
+    /// See [`Report::killed`].
+    killed: u32,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -92,11 +118,20 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
 
+    // Outside the measured window, both: a woken waker and a killed program
+    // leave kernel stacks for the scheduler to reap later, and the frame count
+    // would read a stack not yet reaped as a leak.
+    let mut after = Counter::default();
+    check_a_wait_is_woken_by_what_it_waits_for(&mut after)?;
+    check_a_job_kill_takes_down_a_process_tree(&mut after)?;
+
     Ok(Report {
         messages: counter.messages,
         moved: counter.moved,
-        refusals: counter.refusals,
+        refusals: counter.refusals + after.refusals,
         leaked,
+        woken: after.woken,
+        killed: after.killed,
     })
 }
 
@@ -612,5 +647,222 @@ fn check_a_cycle_of_channels_is_refused(
             .call(nr::HANDLE_CLOSE, &[reg(end)])
             .map_err(|_| "closing a channel end after the cycle check failed")?;
     }
+    Ok(())
+}
+
+/// The process and channel end the waker writes into.
+static WAKER: SpinLock<Option<(Arc<Process>, Handle)>> = SpinLock::new(None);
+
+/// A kernel thread that writes one empty message after a delay, so a wait
+/// has something other than its deadline to end it.
+fn write_after_a_delay(_: usize) {
+    crate::sched::sleep_for(WAKE_AFTER_NANOS);
+    let taken = WAKER.lock().take();
+    if let Some((process, end)) = taken {
+        let args = SyscallArgs {
+            number: nr::CHANNEL_WRITE,
+            args: [reg(end), 0, 0, 0, 0, 0],
+        };
+        let _ = native::dispatch(&args, Some(&process));
+    }
+}
+
+/// A deadline `nanos` from now, staged at [`DEADLINE`].
+fn stage_deadline(side: &Side, nanos: u64) -> Result<(), &'static str> {
+    let deadline = crate::timer::now_nanos().saturating_add(nanos);
+    side.put(DEADLINE, &deadline.to_ne_bytes())
+}
+
+/// A wait ends when its signal is asserted, at once if it already is, and at
+/// its deadline if it never is.
+///
+/// The woken case is the one that matters, and the one easiest to fake: a
+/// wait that only ever polled until its deadline would pass every other part
+/// of this. So the deadline is two minutes, the message arrives after twenty
+/// milliseconds, and the wait has to come back in between.
+fn check_a_wait_is_woken_by_what_it_waits_for(counter: &mut Counter) -> Result<(), &'static str> {
+    let side = Side::new()?;
+    let (near, far) = side.channel()?;
+    let readable = u64::from((Signals::READABLE | Signals::PEER_CLOSED).0);
+    let wait = |signals: u64| {
+        side.call(
+            nr::OBJECT_WAIT_ONE,
+            &[reg(far), signals, DEADLINE, OBSERVED],
+        )
+    };
+
+    stage_deadline(&side, 0)?;
+    refused(
+        wait(readable),
+        status::TIMED_OUT,
+        "a wait on an empty channel said it was ready",
+        counter,
+    )?;
+
+    *WAKER.lock() = Some((Arc::clone(&side.process), near));
+    let _waker = crate::sched::spawn(
+        "native waker",
+        write_after_a_delay,
+        0,
+        ferrix_sched::NICE_0_WEIGHT,
+    )
+    .map_err(|_| "could not start the waker")?;
+    let start = crate::timer::now_nanos();
+    stage_deadline(&side, PATIENCE_NANOS)?;
+    let woke = wait(readable);
+    let waited = crate::timer::now_nanos().saturating_sub(start);
+    *WAKER.lock() = None;
+    if woke != Ok(0) {
+        return Err("a wait was not woken by the message it waited for");
+    }
+    if waited < WAKE_AFTER_NANOS / 2 {
+        return Err("a wait returned before anything had been written");
+    }
+    if !Signals(side.get_u32(OBSERVED)?).intersects(Signals::READABLE) {
+        return Err("a woken wait did not report the channel readable");
+    }
+    counter.woken += 1;
+
+    let _ = side
+        .call(nr::CHANNEL_READ, &[reg(far), INBOX, 0, HANDLES, 0, ACTUAL])
+        .map_err(|_| "reading the message that woke a wait failed")?;
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(near)])
+        .map_err(|_| "closing a channel end failed")?;
+    stage_deadline(&side, PATIENCE_NANOS)?;
+    let _ = wait(u64::from(Signals::PEER_CLOSED.0))
+        .map_err(|_| "a wait for a peer that had already closed did not return")?;
+
+    let vmo = side.handle(nr::VMO_CREATE, &[PAGE_SIZE], "vmo_create failed")?;
+    refused(
+        side.call(
+            nr::OBJECT_WAIT_ONE,
+            &[reg(vmo), readable, DEADLINE, OBSERVED],
+        ),
+        status::ACCESS_DENIED,
+        "a handle without WAIT was waited on",
+        counter,
+    )?;
+    refused(
+        wait(1 << 4),
+        status::INVALID_ARGS,
+        "a wait for a signal that does not exist was accepted",
+        counter,
+    )?;
+    side.close_everything();
+    Ok(())
+}
+
+/// The job a handle in `side` names.
+fn job_of(side: &Side, handle: Handle) -> Result<Arc<Job>, &'static str> {
+    side.process.with_handles(|table| match table.get(handle) {
+        Ok((Object::Job(job), _)) => Ok(Arc::clone(job)),
+        _ => Err("a handle that should name a job does not"),
+    })
+}
+
+/// Load a spinning program into the job `handle` names, and start it.
+fn run_in(side: &Side, handle: Handle, process: &Arc<Process>) -> Result<Arc<Task>, &'static str> {
+    job_of(side, handle)?
+        .adopt(process)
+        .map_err(|_| "a live job refused a process")?;
+    process::start(process).map_err(|_| "a program in a job could not be started")
+}
+
+/// A process ended by a job kill: it reports the kill's status, and its task
+/// actually stops, for the reason `syscall::check`'s own kill check gives.
+fn ended_by_the_kill(process: &Process, task: &Task) -> Result<(), &'static str> {
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    if process.wait_for_exit(deadline) != Some(KILLED_STATUS) {
+        return Err("a process in a killed job did not report the kill's status");
+    }
+    while !task.is_dead() {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("a process in a killed job kept running");
+        }
+        crate::sched::sleep_for(1_000_000);
+    }
+    Ok(())
+}
+
+/// Killing a job ends every process in it and beneath it, and nothing above
+/// or beside it; a killed job stays killed.
+///
+/// A tree of three jobs, root, middle and leaf, with a program that would
+/// spin for minutes in each, and a fourth program in no job at all. Killing
+/// the middle job must end the middle and leaf programs and leave the root's
+/// running; killing the root must end that one; the bystander must finish
+/// with its own status.
+fn check_a_job_kill_takes_down_a_process_tree(counter: &mut Counter) -> Result<(), &'static str> {
+    if arch::USER_SPIN_PROGRAM.is_empty() {
+        return Ok(());
+    }
+    let side = Side::new()?;
+    let root = side
+        .process
+        .with_handles(|table| table.insert(Object::Job(Job::new_root()), Rights::JOB))
+        .map_err(|_| "no room for a job handle")?;
+    let middle = side.handle(
+        nr::JOB_CREATE,
+        &[reg(root)],
+        "job_create under a root failed",
+    )?;
+    let leaf = side.handle(
+        nr::JOB_CREATE,
+        &[reg(middle)],
+        "job_create under a child failed",
+    )?;
+
+    let top = spinner(b'r', FOREVER_ROUNDS, 1)?;
+    let inner = spinner(b'm', FOREVER_ROUNDS, 2)?;
+    let deepest = spinner(b'l', FOREVER_ROUNDS, 3)?;
+    let bystander = spinner(b'b', 1_000_000, 44)?;
+    let top_task = run_in(&side, root, &top)?;
+    let inner_task = run_in(&side, middle, &inner)?;
+    let deepest_task = run_in(&side, leaf, &deepest)?;
+    let _bystander_task =
+        process::start(&bystander).map_err(|_| "the bystander could not be started")?;
+    crate::sched::sleep_for(KILL_AFTER_NANOS);
+
+    let _ = side
+        .call(nr::JOB_KILL, &[reg(middle)])
+        .map_err(|_| "job_kill failed")?;
+    ended_by_the_kill(&inner, &inner_task)?;
+    ended_by_the_kill(&deepest, &deepest_task)?;
+    if top.is_terminated() {
+        return Err("killing a child job ended a process in its parent");
+    }
+    counter.killed += 2;
+
+    refused(
+        side.call(nr::JOB_CREATE, &[reg(middle)]),
+        status::BAD_STATE,
+        "a killed job made a child",
+        counter,
+    )?;
+    let late = spinner(b'x', FOREVER_ROUNDS, 5)?;
+    if job_of(&side, leaf)?.adopt(&late).is_ok() {
+        return Err("a job beneath a killed one took a new process");
+    }
+    stage_deadline(&side, PATIENCE_NANOS)?;
+    let terminated = u64::from(Signals::TERMINATED.0);
+    let _ = side
+        .call(
+            nr::OBJECT_WAIT_ONE,
+            &[reg(middle), terminated, DEADLINE, OBSERVED],
+        )
+        .map_err(|_| "a killed job did not say it was terminated")?;
+
+    let _ = side
+        .call(nr::JOB_KILL, &[reg(root)])
+        .map_err(|_| "job_kill of the root failed")?;
+    ended_by_the_kill(&top, &top_task)?;
+    counter.killed += 1;
+
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    if bystander.wait_for_exit(deadline) != Some(44) {
+        return Err("a process in no job did not finish with its own status");
+    }
+    side.close_everything();
     Ok(())
 }

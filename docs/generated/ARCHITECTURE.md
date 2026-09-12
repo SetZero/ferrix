@@ -93,14 +93,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1410 elements, 155 relations. Model digest `305b7d03cd82035a`.
+13 files, 16 packages, 1410 elements, 155 relations. Model digest `2b95922caf026caf`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 115 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#implemented` | 116 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
 | `#inProgress` | 11 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 9 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 105 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#planned` | 104 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -1720,8 +1720,8 @@ flowchart TB
   n9_FerrixObjects_Job -- "specializes" --> n0_FerrixObjects_KernelObject
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
-  class n0_FerrixObjects_KernelObject,n1_FerrixObjects_VmoObject,n2_FerrixObjects_AddressSpaceObject,n4_FerrixObjects_Port,n5_FerrixObjects_Interrupt,n6_FerrixObjects_IoMapping,n7_FerrixObjects_TaskObject,n8_FerrixObjects_Process,n9_FerrixObjects_Job planned
-  class n3_FerrixObjects_Channel implemented
+  class n0_FerrixObjects_KernelObject,n1_FerrixObjects_VmoObject,n2_FerrixObjects_AddressSpaceObject,n4_FerrixObjects_Port,n5_FerrixObjects_Interrupt,n6_FerrixObjects_IoMapping,n7_FerrixObjects_TaskObject,n8_FerrixObjects_Process planned
+  class n3_FerrixObjects_Channel,n9_FerrixObjects_Job implemented
 ```
 
 **Figure 12 — Kernel object and its subtypes.** 9 definitions specialize `KernelObject`; the hollow arrow points at what they have in common. [SVG](diagrams/ferrix-objects-kernel-object.svg) Source: `06-objects.sysml`.
@@ -1816,7 +1816,7 @@ A group of tasks sharing an address space, fd table, fs context and signal dispo
 
 #### Job
 
-`#planned`  ·  specialises `KernelObject`
+`#implemented`  ·  specialises `KernelObject`
 
 A container of processes, where resource limits and kill authority live. A wedged userspace driver has to be killable as a unit together with anything it spawned.
 
@@ -2689,7 +2689,7 @@ Inode and dentry caches, the mount table, fd sharing rules, tmpfs, devfs, procfs
 
 Handle tables, Channel with handle passing, Port, Interrupt, IoMapping, Job; the 0x1000 syscalls. Exit: two processes exchange messages and a handle over a channel, and a Job kill takes down a process tree.
 
-Built: the byte-level half, in libs/native-abi and libs/objects, host-tested, fuzzed and under Miri; and in kernel/src/object and syscall/native, a handle table on every Process, the native dispatch, channels carrying handles and VMO create/read/write, self-checked between two processes in the boot test. Missing: ports and waits, Job, Interrupt, IoMapping, vmo_map, and the exit test itself, on processes that are now scheduled tasks.
+Built: the byte-level half, in libs/native-abi and libs/objects, host-tested, fuzzed and under Miri; and in kernel/src/object and syscall/native, a handle table on every Process, the native dispatch, channels carrying handles and VMO create/read/write, self-checked between two processes in the boot test; signals on every object and object_wait_one; Job with job_create and a job_kill that takes down a tree of running programs. Missing: ports and asynchronous waits, Interrupt, IoMapping, vmo_map, and the exit test itself, on processes that are now scheduled tasks.
 
 **Allocated to: **`ferrix.kernel.native`
 

@@ -1303,7 +1303,7 @@ const KILL_STATUS: i32 = 137;
 
 /// Build a spinning program tagged `tag` that loops `rounds` times and exits
 /// with `status`, and load it into a process of its own.
-fn spinner(tag: u8, rounds: u32, status: u32) -> Result<Arc<Process>, &'static str> {
+pub(crate) fn spinner(tag: u8, rounds: u32, status: u32) -> Result<Arc<Process>, &'static str> {
     let mut program = arch::USER_SPIN_PROGRAM.to_vec();
     let at = program
         .len()

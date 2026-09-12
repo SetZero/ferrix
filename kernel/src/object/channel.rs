@@ -36,6 +36,7 @@ use ferrix_objects::reach::{Reach, reaches};
 use ferrix_sync::SpinLock;
 
 use super::{Object, Transfer, dispose};
+use crate::sched::WaitQueue;
 
 /// The most messages an endpoint holds unread.
 ///
@@ -99,6 +100,9 @@ pub(crate) struct Endpoint {
     peer: Weak<Endpoint>,
     /// Messages written by the peer, waiting for this end to read them.
     inbox: SpinLock<MessageQueue<Transfer>>,
+    /// Woken when this end's signals may have changed: a message arrived, the
+    /// peer's queue gained room, or the peer closed.
+    waiters: WaitQueue,
 }
 
 impl Endpoint {
@@ -113,10 +117,12 @@ impl Endpoint {
             let other = Arc::new(Endpoint {
                 peer: Weak::clone(first),
                 inbox: SpinLock::new(MessageQueue::new(LIMITS)),
+                waiters: WaitQueue::new(),
             });
             let this = Endpoint {
                 peer: Arc::downgrade(&other),
                 inbox: SpinLock::new(MessageQueue::new(LIMITS)),
+                waiters: WaitQueue::new(),
             };
             second = Some(other);
             this
@@ -157,7 +163,12 @@ impl Endpoint {
         // ever were reached, the handles are already out of the sender's
         // table and the only safe thing left is to free them, after the lock.
         match refused {
-            None => Ok(()),
+            None => {
+                // After the queue lock is gone: a woken reader goes straight
+                // for it.
+                peer.waiters.wake_all();
+                Ok(())
+            }
             Some((why, message)) => {
                 dispose(message.handles.into_iter().map(|(object, _)| object));
                 Err(match why {
@@ -178,10 +189,19 @@ impl Endpoint {
         byte_capacity: usize,
         handle_capacity: usize,
     ) -> Result<ChannelMessage, ReadError> {
-        let taken = self
-            .inbox
-            .lock()
-            .pop_fitting(byte_capacity, handle_capacity);
+        let (taken, was_full) = {
+            let mut inbox = self.inbox.lock();
+            let was_full = inbox.is_full();
+            (inbox.pop_fitting(byte_capacity, handle_capacity), was_full)
+        };
+        // A reader that makes room in a full queue is what a blocked writer
+        // is waiting for.
+        if was_full
+            && taken.is_ok()
+            && let Some(peer) = self.peer.upgrade()
+        {
+            peer.waiters.wake_all();
+        }
         match taken {
             Ok(message) => Ok(message),
             Err(ReceiveError::TooSmall { bytes, handles }) => {
@@ -205,12 +225,12 @@ impl Endpoint {
         self.peer.strong_count() == 0
     }
 
+    /// The queue woken when this end's signals may have changed.
+    pub(crate) fn waiters(&self) -> &WaitQueue {
+        &self.waiters
+    }
+
     /// What a waiter on this end would see now.
-    #[expect(
-        dead_code,
-        reason = "ports and object waits are the next handlers, and they read signals; \
-                  defining the level here keeps it next to the state it describes"
-    )]
     pub(crate) fn signals(&self) -> Signals {
         let mut signals = Signals::NONE;
         if !self.inbox.lock().is_empty() {
@@ -266,14 +286,18 @@ fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Vec<Arc<Endpoint>> {
         .flat_map(|message| message.handles.iter())
         .filter_map(|(object, _)| match object {
             Object::Channel(queued) => Some(Arc::clone(queued)),
-            Object::Vmo(_) => None,
+            Object::Vmo(_) | Object::Job(_) => None,
         })
         .collect()
 }
 
 impl Drop for Endpoint {
-    /// Free what was queued and never read, one level at a time.
+    /// Tell the peer it is alone, and free what was queued and never read,
+    /// one level at a time.
     fn drop(&mut self) {
+        if let Some(peer) = self.peer.upgrade() {
+            peer.waiters.wake_all();
+        }
         let unread = self.inbox.get_mut().drain();
         dispose(
             unread

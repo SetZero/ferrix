@@ -24,7 +24,7 @@
 //!
 //! # What is not here yet
 //!
-//! Ports and signal waits, jobs, interrupts, I/O mappings, and mapping a VMO.
+//! Ports and asynchronous waits, interrupts, I/O mappings, and mapping a VMO.
 //! Their numbers decode, and answer `ENOSYS` until they exist.
 
 use alloc::sync::Arc;
@@ -36,6 +36,7 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::nr::{self, NativeCall};
 use ferrix_native_abi::rights::{Requested, Rights};
+use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, ReadActual};
 use ferrix_objects::message::Message;
@@ -43,6 +44,7 @@ use ferrix_objects::reach::Reach;
 use ferrix_objects::table::TableError;
 
 use crate::object::channel::{self, ChannelMessage, Endpoint, ReadError, WriteFailure};
+use crate::object::job::{self, Job};
 use crate::object::{self, HandleTable, Object};
 use crate::syscall::SyscallArgs;
 use crate::syscall::process::Process;
@@ -128,6 +130,9 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
             a[3],
         ),
         NativeCall::VmoGetSize => vmo_get_size(process, handle(a[0]), a[1]),
+        NativeCall::ObjectWaitOne => object_wait_one(process, handle(a[0]), a[1], a[2], a[3]),
+        NativeCall::JobCreate => job_create(process, handle(a[0])),
+        NativeCall::JobKill => job_kill(process, handle(a[0])),
         _ => Err(Errno::ENOSYS),
     }
 }
@@ -491,14 +496,7 @@ fn vmo_create(process: &Process, bytes: u64) -> Result<usize, Errno> {
     if pages > MAX_VMO_PAGES {
         return Err(status::NO_MEMORY);
     }
-    let vmo = Object::Vmo(Vmo::new_anonymous(pages));
-    match process.with_handles(|table| table.insert(vmo, Rights::VMO)) {
-        Ok(handle) => Ok(returned(handle)),
-        Err(vmo) => {
-            object::dispose([vmo]);
-            Err(status::NO_HANDLES)
-        }
-    }
+    insert_new(process, Object::Vmo(Vmo::new_anonymous(pages)), Rights::VMO)
 }
 
 /// Which way a VMO copy goes.
@@ -582,5 +580,101 @@ fn vmo_error(error: VmoError) -> Errno {
 fn vmo_get_size(process: &Process, vmo: Handle, out: u64) -> Result<usize, Errno> {
     let vmo = process.with_handles(|table| vmo_in(table, vmo, Rights::NONE))?;
     uaccess::copy_to_user(process.space(), out, &vmo.len_bytes().to_ne_bytes()).map_err(fault)?;
+    Ok(0)
+}
+
+/// Open a handle to a new object, or free the object if there is no room.
+fn insert_new(process: &Process, object: Object, rights: Rights) -> Result<usize, Errno> {
+    match process.with_handles(|table| table.insert(object, rights)) {
+        Ok(handle) => Ok(returned(handle)),
+        Err(object) => {
+            object::dispose([object]);
+            Err(status::NO_HANDLES)
+        }
+    }
+}
+
+/// `object_wait_one`.
+///
+/// Levels, not events: a signal already asserted ends the wait at once, which
+/// is what lets a program look, find nothing, and wait, without losing a
+/// message that arrived in between.
+///
+/// The wait also ends if the calling process is killed. `process::kill` wakes
+/// the task, but a wait with a condition of its own would go back to sleep and
+/// sleep out its deadline first; so the condition includes it, and the call
+/// then answers `EINTR`, which no program sees — its task ends on the way back
+/// to user mode.
+fn object_wait_one(
+    process: &Process,
+    handle: Handle,
+    signals: u64,
+    deadline_at: u64,
+    observed_at: u64,
+) -> Result<usize, Errno> {
+    let wanted = Signals::from_register(signals).ok_or(status::INVALID_ARGS)?;
+    let object = process.with_handles(|table| {
+        let (object, rights) = table.get(handle).map_err(table_error)?;
+        if !rights.contains(Rights::WAIT) {
+            return Err(status::ACCESS_DENIED);
+        }
+        Ok(object.clone())
+    })?;
+    let deadline = if deadline_at == 0 {
+        u64::MAX
+    } else {
+        read_u64(process, deadline_at)?
+    };
+
+    let satisfied = object.waiters().wait_until_deadline(
+        || object.signals().intersects(wanted) || process.is_terminated(),
+        deadline,
+    );
+    let observed = object.signals();
+    object::dispose([object]);
+
+    if observed_at != 0 {
+        uaccess::copy_to_user(process.space(), observed_at, &observed.0.to_ne_bytes())
+            .map_err(fault)?;
+    }
+    if process.is_terminated() {
+        return Err(Errno::EINTR);
+    }
+    if satisfied {
+        Ok(0)
+    } else {
+        Err(status::TIMED_OUT)
+    }
+}
+
+/// The job a handle names, if it carries `needed`.
+fn job_in(process: &Process, job: Handle, needed: Rights) -> Result<Arc<Job>, Errno> {
+    process.with_handles(|table| {
+        let (object, rights) = table.get(job).map_err(table_error)?;
+        let Object::Job(job) = object else {
+            return Err(status::WRONG_TYPE);
+        };
+        if !rights.contains(needed) {
+            return Err(status::ACCESS_DENIED);
+        }
+        Ok(Arc::clone(job))
+    })
+}
+
+/// `job_create`.
+fn job_create(process: &Process, parent: Handle) -> Result<usize, Errno> {
+    let parent = job_in(process, parent, Rights::MANAGE)?;
+    let child = parent.new_child().map_err(|_| status::BAD_STATE)?;
+    insert_new(process, Object::Job(child), Rights::JOB)
+}
+
+/// `job_kill`.
+///
+/// Answers even when the caller is inside the job it kills: the kill ends the
+/// caller's own process too, and its task stops on the way back to user mode
+/// rather than here, with nothing held.
+fn job_kill(process: &Process, job: Handle) -> Result<usize, Errno> {
+    let job = job_in(process, job, Rights::MANAGE)?;
+    let _ended = job.kill(job::KILLED_STATUS);
     Ok(0)
 }

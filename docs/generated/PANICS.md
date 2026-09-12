@@ -616,9 +616,10 @@ it from the sender, and the handle that arrives must name the same object. A
 read that does not fit must report the sizes and leave the message queued;
 rights must only shrink; a closed handle must be refused; a refused send must
 leave every handle with its sender; a send closing a cycle of channels must be
-refused; and closing a channel must free what was queued in it. A kernel failing
-any of these would give userspace drivers a capability system that confines
-nothing.
+refused; and closing a channel must free what was queued in it. A wait must be
+woken by what it waits for rather than by its deadline, and a job kill must end
+every process in and beneath the job and none above it. A kernel failing any of
+these would give userspace drivers a capability system that confines nothing.
 
 1. The handle table in `libs/objects` or the rights rule in `libs/native-abi`
    changed, so a closed handle resolves again or a duplicate gains a right.
@@ -627,9 +628,12 @@ nothing.
 3. `channel::check_carry` missed an edge, or a send carrying an endpoint skipped
    the topology lock, so two channels were queued in each other and the VMO
    riding in one was never freed.
-4. A copy to or from user memory in `syscall::native` used the wrong length or
+4. A channel end, or a job, was not woken when its signals changed, so a wait
+   slept until its deadline; or `Job::kill` missed a process added to a job
+   beneath the one killed.
+5. A copy to or from user memory in `syscall::native` used the wrong length or
    width.
-5. `object::dispose` stopped draining, or an object was dropped under a lock its
+6. `object::dispose` stopped draining, or an object was dropped under a lock its
    drop needs, so the frames behind a VMO queued in a closed channel were never
    freed.
 

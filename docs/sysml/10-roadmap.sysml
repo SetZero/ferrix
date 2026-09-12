@@ -227,9 +227,12 @@ package FerrixRoadmap {
              * host-tested, fuzzed and under Miri; and in kernel/src/object and
              * syscall/native, a handle table on every Process, the native
              * dispatch, channels carrying handles and VMO create/read/write,
-             * self-checked between two processes in the boot test. Missing:
-             * ports and waits, Job, Interrupt, IoMapping, vmo_map, and the
-             * exit test itself, on processes that are now scheduled tasks. */
+             * self-checked between two processes in the boot test; signals on
+             * every object and object_wait_one; Job with job_create and a
+             * job_kill that takes down a tree of running programs. Missing:
+             * ports and asynchronous waits, Interrupt, IoMapping, vmo_map, and
+             * the exit test itself, on processes that are now scheduled
+             * tasks. */
     }
 
     #inProgress requirement <'S10'> stage10UserspaceDrivers : Stage {

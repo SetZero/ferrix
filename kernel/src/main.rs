@@ -377,6 +377,11 @@ fn check_native_objects() {
          {} refusals as specified, {} frames leaked",
         report.messages, report.moved, report.refusals, report.leaked,
     );
+    println!(
+        "  jobs     {} processes in a tree of three jobs ended by two kills, \
+         {} wait woken by a message rather than its deadline",
+        report.killed, report.woken,
+    );
 }
 
 /// Stage 10: find every PCI function, size its BARs and walk its

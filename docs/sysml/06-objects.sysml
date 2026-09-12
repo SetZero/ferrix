@@ -82,7 +82,7 @@ package FerrixObjects {
         }
     }
 
-    #planned part def Job :> KernelObject {
+    #implemented part def Job :> KernelObject {
         doc /* A container of processes, where resource limits and kill
              * authority live. A wedged userspace driver has to be killable as
              * a unit together with anything it spawned. */

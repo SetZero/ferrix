@@ -83,8 +83,10 @@ pub enum NativeCall {
     /// only give something up.
     HandleReplace,
     /// `(handle, signals, deadline: *u64, observed: *u32)`. Block until any of
-    /// `signals` is asserted or the deadline passes. A null deadline waits
-    /// forever. Needs `WAIT`.
+    /// `signals` is asserted or the deadline passes, then write the signals
+    /// asserted at that moment. The deadline is absolute, in `CLOCK_MONOTONIC`
+    /// nanoseconds; a null pointer waits forever, and a null `observed` is
+    /// not written. Needs `WAIT`.
     ObjectWaitOne,
     /// `(handle, port, signals, key: *u64)`. Queue one packet on `port`, with
     /// `key`, the next time any of `signals` is asserted — at once, if one
