@@ -89,7 +89,7 @@
     {
       "file": "kernel/src/arch/armv7a/trap.rs",
       "max_lines": 90,
-      "reason": "The eight-entry vector table and its save/restore path. The CPU branches to a fixed offset in one of five banked processor modes, with the interrupted registers live and a return address off by a per-exception amount. Each stub corrects the address, stores it and the saved status on the SVC stack with srsdb, and switches to SVC mode with cps, so no other mode ever needs a stack; one common path saves the rest, calls Rust and returns with rfeia. Also bkpt, for the boot test."
+      "reason": "The eight-entry vector table and its save/restore path. The CPU branches to a fixed offset in one of five banked processor modes, with the interrupted registers live and a return address off by a per-exception amount. Each stub corrects the address, stores it and the saved status on the SVC stack with srsdb, and switches to SVC mode with cps, so no other mode ever needs a stack; one common path saves the rest, calls Rust and returns with rfeia. Also bkpt, for the boot test. And the way out to USR mode and back (`ferrix_run_user`, `ferrix_leave_user`): the program's banked stack pointer can only be set from a mode that shares it, the SVC stack pointer has to move to a dedicated entry stack after the last Rust frame and before the privilege drop, and the drop is an `rfeia` of a return address and status built for a program that has never run. No Rust function can do any of it."
     },
     {
       "file": "kernel/src/arch/x86_64/cpu.rs",

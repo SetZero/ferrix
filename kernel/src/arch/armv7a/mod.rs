@@ -26,7 +26,9 @@ use crate::early::{EarlyError, EarlyMemory};
 use crate::irq::Report;
 
 pub(crate) use smp::{CpuStarter, describe_cpus, hardware_id};
-pub(crate) use trap::{TrapFrame, advance_past_breakpoint, breakpoint, classify, report_trap};
+pub(crate) use trap::{
+    TrapFrame, advance_past_breakpoint, breakpoint, classify, report_trap, run_user, system_call,
+};
 
 /// Point this CPU's per-CPU register at `address`.
 ///
@@ -121,12 +123,29 @@ pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
     nr::from_arm(number)
 }
 
-/// A whole program, in machine code, for the self-check to run in user mode.
+/// A whole program, in machine code, for the self-check to run in USR mode.
 ///
-/// Empty on this architecture because there is nowhere yet to run it: see
-/// [`run_user`]. The self-check skips the program when this is empty rather
-/// than failing, so the boot test still reports what does exist here.
-pub(crate) const USER_TEST_PROGRAM: &[u8] = &[];
+/// `write(1, "hello from USR\n", 15)` then `exit_group(42)`, with the EABI's
+/// numbers — `write` is 4 and `exit_group` 248, in `r7` — and the string found
+/// with `adr`, so the page can be mapped anywhere. ARM state, not Thumb.
+///
+/// Assembled by rustc's own LLVM from `global_asm!` and read back out of the
+/// object file rather than encoded by hand. The length is a literal because
+/// that assembler will not take a label difference as a `mov` immediate in ARM
+/// state; the extraction asserts it against the string.
+pub(crate) const USER_TEST_PROGRAM: &[u8] = &[
+    0x04, 0x70, 0xa0, 0xe3, // mov  r7, #4       // write
+    0x01, 0x00, 0xa0, 0xe3, // mov  r0, #1       // fd 1
+    0x14, 0x10, 0x8f, 0xe2, // adr  r1, msg
+    0x0f, 0x20, 0xa0, 0xe3, // mov  r2, #15      // length
+    0x00, 0x00, 0x00, 0xef, // svc  #0
+    0xf8, 0x70, 0xa0, 0xe3, // mov  r7, #248     // exit_group
+    0x2a, 0x00, 0xa0, 0xe3, // mov  r0, #42      // status
+    0x00, 0x00, 0x00, 0xef, // svc  #0
+    0xfe, 0xff, 0xff, 0xea, // b    .            // never reached
+    // "hello from USR\n"
+    0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x66, 0x72, 0x6f, 0x6d, 0x20, 0x55, 0x53, 0x52, 0x0a,
+];
 
 /// The status [`USER_TEST_PROGRAM`] exits with.
 pub(crate) const USER_TEST_STATUS: i32 = 42;
@@ -142,31 +161,6 @@ pub(crate) const USER_TEST_STATUS: i32 = 42;
 )]
 pub(crate) fn read_console_byte() -> Option<u8> {
     None
-}
-
-/// Run a program in ring 3, returning the status it exits with.
-///
-/// Not built on this architecture yet. The x86-64 transition landed first
-/// because that is where a static binary could be produced to test it; the
-/// USR one is stage 6's remaining work, and this reports the absence
-/// rather than pretending or halting, so the boot test still says what does
-/// and does not exist here.
-///
-/// # Safety
-///
-/// The same contract the x86-64 body has: a user address space installed on
-/// this processor, and `entry` and `stack` inside it.
-pub(crate) unsafe fn run_user(_entry: u64, _stack: u64) -> Result<i32, &'static str> {
-    Err("user mode is not built on this architecture yet")
-}
-
-/// Service a system call that arrived through the trap vector.
-///
-/// # Errors
-///
-/// Always, for now: system calls from USR mode are not built on this architecture yet.
-pub(crate) const fn system_call(_frame: &mut TrapFrame) -> Result<(), &'static str> {
-    Err("system calls from USR mode are not built on this architecture yet")
 }
 
 /// Make a freshly allocated user root usable.
