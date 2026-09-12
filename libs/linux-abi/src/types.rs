@@ -196,6 +196,79 @@ pub mod aarch64 {
     }
 }
 
+/// Layouts that are specific to ARMv7-A.
+pub mod arm {
+    /// File metadata as ARMv7-A lays it out for the `64` calls, `struct stat64`
+    /// from `arch/arm/include/uapi/asm/stat.h`.
+    ///
+    /// 104 bytes. What `stat64`, `lstat64`, `fstat64` and `fstatat64` fill in;
+    /// ARMv7-A has no `newfstatat`, because its plain `struct stat` cannot
+    /// carry a 64-bit size. Three things about it are surprising, and each is
+    /// a way to misread it:
+    ///
+    /// * **The inode number is there twice.** `__st_ino` near the top is the
+    ///   32-bit number glibc 2.1 read, and the real one is `st_ino`, the last
+    ///   field. A reader that takes the first gets a truncated inode, and
+    ///   `find` and `du` then take distinct files for hard links.
+    /// * **The header's padding is not all of it.** The EABI aligns a 64-bit
+    ///   field to eight bytes, so after `__pad3` and after `st_blksize` the C
+    ///   compiler inserts four bytes the header never names. They are named
+    ///   here — `__pad4` and `__pad5` — so that the layout does not depend on
+    ///   the host's alignment rules and so the kernel writes them as zero.
+    ///   QEMU's `target_eabi_stat64`, which is packed, spells them the same
+    ///   way.
+    /// * **The times are 32 bits.** `unsigned long` is 32 bits here, so a
+    ///   timestamp past 2106 cannot be reported through this structure;
+    ///   `statx` is the call that can.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    #[repr(C)]
+    pub struct Stat64 {
+        /// Identifier of the device holding the file.
+        pub st_dev: u64,
+        /// Padding the kernel writes as zero.
+        pub __pad0: [u8; 4],
+        /// The low 32 bits of the inode number, for readers that predate
+        /// [`Stat64::st_ino`].
+        pub __st_ino: u32,
+        /// File type and permission bits; see the `S_IF*` constants.
+        pub st_mode: u32,
+        /// Number of hard links.
+        pub st_nlink: u32,
+        /// Owning user identifier.
+        pub st_uid: u32,
+        /// Owning group identifier.
+        pub st_gid: u32,
+        /// Device this file represents, for block and character devices.
+        pub st_rdev: u64,
+        /// Padding the kernel writes as zero.
+        pub __pad3: [u8; 4],
+        /// The alignment padding the EABI inserts before `st_size`.
+        pub __pad4: u32,
+        /// Size in bytes, or the link target length for a symbolic link.
+        pub st_size: i64,
+        /// Preferred block size for input and output.
+        pub st_blksize: u32,
+        /// The alignment padding the EABI inserts before `st_blocks`.
+        pub __pad5: u32,
+        /// Number of 512-byte blocks allocated.
+        pub st_blocks: u64,
+        /// Seconds of the last access time.
+        pub st_atime: u32,
+        /// Nanoseconds of the last access time.
+        pub st_atime_nsec: u32,
+        /// Seconds of the last modification time.
+        pub st_mtime: u32,
+        /// Nanoseconds of the last modification time.
+        pub st_mtime_nsec: u32,
+        /// Seconds of the last status change time.
+        pub st_ctime: u32,
+        /// Nanoseconds of the last status change time.
+        pub st_ctime_nsec: u32,
+        /// The inode number, all 64 bits of it.
+        pub st_ino: u64,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // statx
 // ---------------------------------------------------------------------------
@@ -764,8 +837,36 @@ pub const AT_SYMLINK_NOFOLLOW: u32 = 0x100;
 pub const AT_REMOVEDIR: u32 = 0x200;
 /// Follow a final symbolic link, for the calls that default to not.
 pub const AT_SYMLINK_FOLLOW: u32 = 0x400;
+/// Do not trigger an automount on the last component.
+pub const AT_NO_AUTOMOUNT: u32 = 0x800;
 /// Operate on the directory file descriptor itself when the path is empty.
 pub const AT_EMPTY_PATH: u32 = 0x1000;
+/// `statx`'s two-bit synchronisation request. Both bits at once is `EINVAL`.
+pub const AT_STATX_SYNC_TYPE: u32 = 0x6000;
+/// Check access with the effective rather than the real identity, for
+/// `faccessat2`. The same bit as [`AT_REMOVEDIR`], which only `unlinkat` reads.
+pub const AT_EACCESS: u32 = 0x200;
+
+/// `renameat2`: refuse with `EEXIST` rather than replace the target.
+pub const RENAME_NOREPLACE: u32 = 1 << 0;
+/// `renameat2`: swap the two names atomically.
+pub const RENAME_EXCHANGE: u32 = 1 << 1;
+/// `renameat2`: leave a whiteout behind at the source, for overlay filesystems.
+pub const RENAME_WHITEOUT: u32 = 1 << 2;
+
+/// `utimensat`: a `tv_nsec` meaning "set this time to now".
+pub const UTIME_NOW: i64 = (1 << 30) - 1;
+/// `utimensat`: a `tv_nsec` meaning "leave this time alone".
+pub const UTIME_OMIT: i64 = (1 << 30) - 2;
+
+/// `access`: the file exists.
+pub const F_OK: u32 = 0;
+/// `access`: execute or search permission.
+pub const X_OK: u32 = 1;
+/// `access`: write permission.
+pub const W_OK: u32 = 2;
+/// `access`: read permission.
+pub const R_OK: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // File modes
@@ -1066,3 +1167,8 @@ pub const STATX_BLOCKS: u32 = 0x0000_0400;
 pub const STATX_BASIC_STATS: u32 = 0x0000_07ff;
 /// Want `stx_btime`.
 pub const STATX_BTIME: u32 = 0x0000_0800;
+/// Got `stx_mnt_id`.
+pub const STATX_MNT_ID: u32 = 0x0000_1000;
+/// Reserved for a future extension of the structure; a request carrying it is
+/// `EINVAL`.
+pub const STATX_RESERVED: u32 = 0x8000_0000;

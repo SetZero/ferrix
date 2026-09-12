@@ -214,6 +214,8 @@ pub mod x86_64 {
     pub const CHOWN: usize = 92;
     /// Change an open file's owner.
     pub const FCHOWN: usize = 93;
+    /// Change a file's owner by path, without following a final symlink.
+    pub const LCHOWN: usize = 94;
     /// Set the file mode creation mask.
     pub const UMASK: usize = 95;
     /// Read the wall clock, the obsolete predecessor of `clock_gettime`.
@@ -286,6 +288,8 @@ pub mod x86_64 {
     pub const RT_SIGSUSPEND: usize = 130;
     /// Install or query the alternate signal stack.
     pub const SIGALTSTACK: usize = 131;
+    /// Create a file, device node, pipe or socket name by path.
+    pub const MKNOD: usize = 133;
     /// Read or set the process's execution domain.
     pub const PERSONALITY: usize = 135;
     /// Report file system statistics by path.
@@ -386,6 +390,9 @@ pub mod x86_64 {
     pub const OPENAT: usize = 257;
     /// Create a directory relative to a directory file descriptor.
     pub const MKDIRAT: usize = 258;
+    /// Create a file, device node, pipe or socket name relative to a
+    /// directory file descriptor.
+    pub const MKNODAT: usize = 259;
     /// Change a file's owner relative to a directory file descriptor.
     pub const FCHOWNAT: usize = 260;
     /// Stat a file relative to a directory file descriptor.
@@ -414,6 +421,8 @@ pub mod x86_64 {
     pub const SET_ROBUST_LIST: usize = 273;
     /// Read a thread's robust futex list.
     pub const GET_ROBUST_LIST: usize = 274;
+    /// Set a file's access and modification times, to the nanosecond.
+    pub const UTIMENSAT: usize = 280;
     /// Wait on an epoll set with a signal mask.
     pub const EPOLL_PWAIT: usize = 281;
     /// Accept a connection, with flags for the new descriptor.
@@ -528,6 +537,9 @@ pub mod aarch64 {
     pub const IOPRIO_SET: usize = 30;
     /// Read a process's I/O scheduling class and priority.
     pub const IOPRIO_GET: usize = 31;
+    /// Create a file, device node, pipe or socket name relative to a
+    /// directory file descriptor.
+    pub const MKNODAT: usize = 33;
     /// Create a directory relative to a directory file descriptor.
     pub const MKDIRAT: usize = 34;
     /// Remove a directory entry relative to a directory file descriptor.
@@ -608,6 +620,8 @@ pub mod aarch64 {
     pub const FSYNC: usize = 82;
     /// Flush a file's data, and only the metadata needed to read it back.
     pub const FDATASYNC: usize = 83;
+    /// Set a file's access and modification times, to the nanosecond.
+    pub const UTIMENSAT: usize = 88;
     /// Turn process accounting on or off.
     pub const ACCT: usize = 89;
     /// Read a thread's capability sets.
@@ -937,6 +951,8 @@ pub mod arm {
     pub const EXECVE: usize = 11;
     /// Change the working directory by path.
     pub const CHDIR: usize = 12;
+    /// Create a file, device node, pipe or socket name by path.
+    pub const MKNOD: usize = 14;
     /// Change a file's mode by path.
     pub const CHMOD: usize = 15;
     /// Reposition a file descriptor's offset.
@@ -1145,6 +1161,9 @@ pub mod arm {
     pub const LSTAT64: usize = 196;
     /// Stat an open file descriptor into `struct stat64`. ARMv7-A only.
     pub const FSTAT64: usize = 197;
+    /// Change a file's owner by path without following a final symlink, with
+    /// 32-bit identifiers. The 16-bit `lchown` at 16 is not carried.
+    pub const LCHOWN32: usize = 198;
     /// Return the real user identifier.
     pub const GETUID32: usize = 199;
     /// Return the real group identifier.
@@ -1274,6 +1293,9 @@ pub mod arm {
     pub const OPENAT: usize = 322;
     /// Create a directory relative to a directory file descriptor.
     pub const MKDIRAT: usize = 323;
+    /// Create a file, device node, pipe or socket name relative to a
+    /// directory file descriptor.
+    pub const MKNODAT: usize = 324;
     /// Change a file's owner relative to a directory file descriptor.
     pub const FCHOWNAT: usize = 325;
     /// Stat a file relative to a directory file descriptor, into `struct
@@ -1309,6 +1331,9 @@ pub mod arm {
     pub const GETCPU: usize = 345;
     /// Wait on an epoll set with a signal mask.
     pub const EPOLL_PWAIT: usize = 346;
+    /// Set a file's times from two `timespec`s of two `long`s -- 32 bits each
+    /// here. [`UTIMENSAT_TIME64`] is the form a time64 musl calls.
+    pub const UTIMENSAT: usize = 348;
     /// Create an eventfd with flags.
     pub const EVENTFD2: usize = 356;
     /// Create an epoll set with flags.
@@ -1353,6 +1378,8 @@ pub mod arm {
     /// Sleep against a chosen clock, with 64-bit `timespec` arguments.
     /// ARMv7-A only.
     pub const CLOCK_NANOSLEEP_TIME64: usize = 407;
+    /// Set a file's times from two 64-bit `timespec`s. ARMv7-A only.
+    pub const UTIMENSAT_TIME64: usize = 412;
     /// Wait for readiness on descriptor sets, with a signal mask and a 64-bit
     /// `timespec`. ARMv7-A only.
     pub const PSELECT6_TIME64: usize = 413;
@@ -1740,6 +1767,12 @@ pub enum Syscall {
     Mkdir,
     /// Create a directory relative to a directory file descriptor.
     Mkdirat,
+    /// Create a file, device node, pipe or socket name. x86-64 and ARMv7-A
+    /// only.
+    Mknod,
+    /// Create a file, device node, pipe or socket name relative to a
+    /// directory file descriptor.
+    Mknodat,
     /// Remove an empty directory. x86-64 and ARMv7-A only.
     Rmdir,
     /// Remove a directory entry. x86-64 and ARMv7-A only.
@@ -1770,6 +1803,15 @@ pub enum Syscall {
     Fchown,
     /// Change a file's owner relative to a directory file descriptor.
     Fchownat,
+    /// Change a file's owner by path without following a final symlink.
+    /// x86-64 and ARMv7-A only.
+    Lchown,
+    /// Set a file's access and modification times from two `timespec`s of
+    /// this architecture's `long` width.
+    Utimensat,
+    /// Set a file's access and modification times from two 64-bit
+    /// `timespec`s. ARMv7-A only.
+    UtimensatTime64,
     /// Set the file mode creation mask.
     Umask,
     /// Read a resource limit; superseded by `prlimit64`.
@@ -2049,6 +2091,7 @@ fn x86_64_metadata_and_ids(nr: usize) -> Option<Syscall> {
         x86_64::FCHMOD => Syscall::Fchmod,
         x86_64::CHOWN => Syscall::Chown,
         x86_64::FCHOWN => Syscall::Fchown,
+        x86_64::LCHOWN => Syscall::Lchown,
         x86_64::UMASK => Syscall::Umask,
         x86_64::GETTIMEOFDAY => Syscall::Gettimeofday,
         x86_64::GETRLIMIT => Syscall::Getrlimit,
@@ -2068,6 +2111,7 @@ fn x86_64_metadata_and_ids(nr: usize) -> Option<Syscall> {
         x86_64::GETPGID => Syscall::Getpgid,
         x86_64::RT_SIGSUSPEND => Syscall::RtSigsuspend,
         x86_64::SIGALTSTACK => Syscall::Sigaltstack,
+        x86_64::MKNOD => Syscall::Mknod,
         x86_64::STATFS => Syscall::Statfs,
         x86_64::FSTATFS => Syscall::Fstatfs,
         x86_64::SCHED_GETPARAM => Syscall::SchedGetparam,
@@ -2111,6 +2155,7 @@ fn x86_64_at_family(nr: usize) -> Option<Syscall> {
     let call = match nr {
         x86_64::OPENAT => Syscall::Openat,
         x86_64::MKDIRAT => Syscall::Mkdirat,
+        x86_64::MKNODAT => Syscall::Mknodat,
         x86_64::FCHOWNAT => Syscall::Fchownat,
         x86_64::NEWFSTATAT => Syscall::Newfstatat,
         x86_64::UNLINKAT => Syscall::Unlinkat,
@@ -2124,6 +2169,7 @@ fn x86_64_at_family(nr: usize) -> Option<Syscall> {
         x86_64::UNSHARE => Syscall::Unshare,
         x86_64::SET_ROBUST_LIST => Syscall::SetRobustList,
         x86_64::GET_ROBUST_LIST => Syscall::GetRobustList,
+        x86_64::UTIMENSAT => Syscall::Utimensat,
         x86_64::EPOLL_PWAIT => Syscall::EpollPwait,
         x86_64::EVENTFD2 => Syscall::Eventfd2,
         x86_64::EPOLL_CREATE1 => Syscall::EpollCreate1,
@@ -2311,6 +2357,7 @@ fn aarch64_files(nr: usize) -> Option<Syscall> {
         aarch64::DUP3 => Syscall::Dup3,
         aarch64::FCNTL => Syscall::Fcntl,
         aarch64::IOCTL => Syscall::Ioctl,
+        aarch64::MKNODAT => Syscall::Mknodat,
         aarch64::MKDIRAT => Syscall::Mkdirat,
         aarch64::UNLINKAT => Syscall::Unlinkat,
         aarch64::SYMLINKAT => Syscall::Symlinkat,
@@ -2349,6 +2396,7 @@ fn aarch64_files(nr: usize) -> Option<Syscall> {
         aarch64::SYNC => Syscall::Sync,
         aarch64::FSYNC => Syscall::Fsync,
         aarch64::FDATASYNC => Syscall::Fdatasync,
+        aarch64::UTIMENSAT => Syscall::Utimensat,
         aarch64::EXIT => Syscall::Exit,
         aarch64::EXIT_GROUP => Syscall::ExitGroup,
         aarch64::WAITID => Syscall::Waitid,
@@ -2597,6 +2645,7 @@ fn arm_early(nr: usize) -> Option<Syscall> {
         arm::UNLINK => Syscall::Unlink,
         arm::EXECVE => Syscall::Execve,
         arm::CHDIR => Syscall::Chdir,
+        arm::MKNOD => Syscall::Mknod,
         arm::CHMOD => Syscall::Chmod,
         arm::LSEEK => Syscall::Lseek,
         arm::GETPID => Syscall::Getpid,
@@ -2672,6 +2721,7 @@ fn arm_signals_and_mm(nr: usize) -> Option<Syscall> {
         arm::STAT64 => Syscall::Stat64,
         arm::LSTAT64 => Syscall::Lstat64,
         arm::FSTAT64 => Syscall::Fstat64,
+        arm::LCHOWN32 => Syscall::Lchown,
         arm::GETUID32 => Syscall::Getuid,
         _ => return None,
     };
@@ -2713,6 +2763,7 @@ fn arm_ids_and_at_family(nr: usize) -> Option<Syscall> {
         arm::WAITID => Syscall::Waitid,
         arm::OPENAT => Syscall::Openat,
         arm::MKDIRAT => Syscall::Mkdirat,
+        arm::MKNODAT => Syscall::Mknodat,
         arm::FCHOWNAT => Syscall::Fchownat,
         arm::FSTATAT64 => Syscall::Fstatat64,
         arm::UNLINKAT => Syscall::Unlinkat,
@@ -2737,6 +2788,7 @@ fn arm_recent(nr: usize) -> Option<Syscall> {
         arm::SET_ROBUST_LIST => Syscall::SetRobustList,
         arm::GET_ROBUST_LIST => Syscall::GetRobustList,
         arm::EPOLL_PWAIT => Syscall::EpollPwait,
+        arm::UTIMENSAT => Syscall::Utimensat,
         arm::EVENTFD2 => Syscall::Eventfd2,
         arm::EPOLL_CREATE1 => Syscall::EpollCreate1,
         arm::DUP3 => Syscall::Dup3,
@@ -2751,6 +2803,7 @@ fn arm_recent(nr: usize) -> Option<Syscall> {
         arm::RSEQ => Syscall::Rseq,
         arm::CLOCK_GETTIME64 => Syscall::ClockGettime64,
         arm::CLOCK_NANOSLEEP_TIME64 => Syscall::ClockNanosleepTime64,
+        arm::UTIMENSAT_TIME64 => Syscall::UtimensatTime64,
         arm::PPOLL_TIME64 => Syscall::PpollTime64,
         arm::FUTEX_TIME64 => Syscall::FutexTime64,
         arm::CLONE3 => Syscall::Clone3,

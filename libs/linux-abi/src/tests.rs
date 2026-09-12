@@ -41,6 +41,8 @@ const X86_64_ONLY: &[Syscall] = &[
     Syscall::Readlink,
     Syscall::Chmod,
     Syscall::Chown,
+    Syscall::Lchown,
+    Syscall::Mknod,
     Syscall::ArchPrctl,
     Syscall::EpollWait,
     Syscall::Getpgrp,
@@ -109,6 +111,8 @@ const SHARED: &[(usize, usize, Syscall)] = &[
         Syscall::ClockGettime,
     ),
     (x86_64::GETDENTS64, aarch64::GETDENTS64, Syscall::Getdents64),
+    (x86_64::MKNODAT, aarch64::MKNODAT, Syscall::Mknodat),
+    (x86_64::UTIMENSAT, aarch64::UTIMENSAT, Syscall::Utimensat),
     (x86_64::GETRANDOM, aarch64::GETRANDOM, Syscall::Getrandom),
     (x86_64::PRLIMIT64, aarch64::PRLIMIT64, Syscall::Prlimit64),
     (x86_64::UNAME, aarch64::UNAME, Syscall::Uname),
@@ -518,6 +522,86 @@ fn the_two_stat_layouts_really_do_differ() {
 // ---------------------------------------------------------------------------
 // statx
 // ---------------------------------------------------------------------------
+
+#[test]
+fn arm_stat64_is_104_bytes() {
+    assert_eq!(
+        size_of::<types::arm::Stat64>(),
+        104,
+        "ARM EABI struct stat64 is 104 bytes"
+    );
+    assert_eq!(
+        align_of::<types::arm::Stat64>(),
+        8,
+        "the EABI aligns a 64-bit field to eight bytes"
+    );
+}
+
+#[test]
+fn arm_stat64_field_offsets() {
+    // Against `arch/arm/include/uapi/asm/stat.h` with the EABI's alignment,
+    // and against QEMU's packed `target_eabi_stat64`, which spells out the
+    // same padding.
+    type S = types::arm::Stat64;
+    assert_eq!(offset_of!(S, st_dev), 0, "st_dev comes first");
+    assert_eq!(offset_of!(S, __st_ino), 12, "the truncated inode at 12");
+    assert_eq!(offset_of!(S, st_mode), 16, "st_mode follows __st_ino");
+    assert_eq!(offset_of!(S, st_nlink), 20, "st_nlink follows st_mode");
+    assert_eq!(offset_of!(S, st_uid), 24, "st_uid is a 32-bit long");
+    assert_eq!(offset_of!(S, st_gid), 28, "st_gid follows st_uid");
+    assert_eq!(offset_of!(S, st_rdev), 32, "st_rdev is aligned to 32");
+    assert_eq!(
+        offset_of!(S, st_size),
+        48,
+        "st_size after eight bytes of padding, four of them implicit in C"
+    );
+    assert_eq!(offset_of!(S, st_blksize), 56, "st_blksize is 32-bit");
+    assert_eq!(
+        offset_of!(S, st_blocks),
+        64,
+        "st_blocks is aligned past the implicit pad"
+    );
+    assert_eq!(offset_of!(S, st_atime), 72, "32-bit times begin at 72");
+    assert_eq!(offset_of!(S, st_mtime), 80, "st_mtime follows atime");
+    assert_eq!(offset_of!(S, st_ctime), 88, "st_ctime follows mtime");
+    assert_eq!(offset_of!(S, st_ctime_nsec), 92, "the last time field");
+    assert_eq!(offset_of!(S, st_ino), 96, "the real inode number is last");
+}
+
+#[test]
+fn path_call_flags_match_the_uapi_headers() {
+    // `include/uapi/linux/fcntl.h`, `include/uapi/linux/fs.h`,
+    // `include/linux/stat.h` and `include/uapi/linux/stat.h`.
+    assert_eq!(types::AT_NO_AUTOMOUNT, 0x800, "AT_NO_AUTOMOUNT");
+    assert_eq!(types::AT_STATX_SYNC_TYPE, 0x6000, "AT_STATX_SYNC_TYPE");
+    assert_eq!(
+        types::AT_EACCESS,
+        types::AT_REMOVEDIR,
+        "AT_EACCESS shares AT_REMOVEDIR's bit"
+    );
+    assert_eq!(
+        (
+            types::RENAME_NOREPLACE,
+            types::RENAME_EXCHANGE,
+            types::RENAME_WHITEOUT
+        ),
+        (1, 2, 4),
+        "RENAME_* flags"
+    );
+    assert_eq!(types::UTIME_NOW, 0x3fff_ffff, "UTIME_NOW is (1 << 30) - 1");
+    assert_eq!(
+        types::UTIME_OMIT,
+        0x3fff_fffe,
+        "UTIME_OMIT is (1 << 30) - 2"
+    );
+    assert_eq!(
+        (types::F_OK, types::X_OK, types::W_OK, types::R_OK),
+        (0, 1, 2, 4),
+        "access modes"
+    );
+    assert_eq!(types::STATX_MNT_ID, 0x1000, "STATX_MNT_ID");
+    assert_eq!(types::STATX_RESERVED, 0x8000_0000, "STATX__RESERVED");
+}
 
 #[test]
 fn statx_timestamp_is_16_bytes() {
@@ -1196,10 +1280,8 @@ fn unknown_numbers_map_to_none_without_panicking() {
         73,
         78,
         85,
-        94,
         101,
         132,
-        133,
         134,
         136,
         139,
@@ -1315,13 +1397,13 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        218,
-        "the x86-64 table maps 218 calls"
+        222,
+        "the x86-64 table maps 222 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        194,
-        "the AArch64 table maps 194 calls"
+        196,
+        "the AArch64 table maps 196 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -1345,6 +1427,7 @@ const ARM_ONLY: &[Syscall] = &[
     Syscall::Mmap2,
     Syscall::ClockGettime64,
     Syscall::ClockNanosleepTime64,
+    Syscall::UtimensatTime64,
     Syscall::PpollTime64,
     Syscall::FutexTime64,
     Syscall::ArmSetTls,
@@ -1377,6 +1460,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (10, Syscall::Unlink),                    // unlink
     (11, Syscall::Execve),                    // execve
     (12, Syscall::Chdir),                     // chdir
+    (14, Syscall::Mknod),                     // mknod
     (15, Syscall::Chmod),                     // chmod
     (19, Syscall::Lseek),                     // lseek
     (20, Syscall::Getpid),                    // getpid
@@ -1475,6 +1559,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (195, Syscall::Stat64),                   // stat64
     (196, Syscall::Lstat64),                  // lstat64
     (197, Syscall::Fstat64),                  // fstat64
+    (198, Syscall::Lchown),                   // lchown32
     (199, Syscall::Getuid),                   // getuid32
     (200, Syscall::Getgid),                   // getgid32
     (201, Syscall::Geteuid),                  // geteuid32
@@ -1536,6 +1621,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (315, Syscall::IoprioGet),                // ioprio_get
     (322, Syscall::Openat),                   // openat
     (323, Syscall::Mkdirat),                  // mkdirat
+    (324, Syscall::Mknodat),                  // mknodat
     (325, Syscall::Fchownat),                 // fchownat
     (327, Syscall::Fstatat64),                // fstatat64
     (328, Syscall::Unlinkat),                 // unlinkat
@@ -1552,6 +1638,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (339, Syscall::GetRobustList),            // get_robust_list
     (345, Syscall::Getcpu),                   // getcpu
     (346, Syscall::EpollPwait),               // epoll_pwait
+    (348, Syscall::Utimensat),                // utimensat
     (356, Syscall::Eventfd2),                 // eventfd2
     (357, Syscall::EpollCreate1),             // epoll_create1
     (358, Syscall::Dup3),                     // dup3
@@ -1572,6 +1659,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (404, Syscall::ClockSettime64),           // clock_settime64
     (405, Syscall::ClockAdjtime64),           // clock_adjtime64
     (407, Syscall::ClockNanosleepTime64),     // clock_nanosleep_time64
+    (412, Syscall::UtimensatTime64),          // utimensat_time64
     (413, Syscall::Pselect6Time64),           // pselect6_time64
     (414, Syscall::PpollTime64),              // ppoll_time64
     (421, Syscall::RtSigtimedwaitTime64),     // rt_sigtimedwait_time64
@@ -1783,7 +1871,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 231, "the ARMv7-A table maps 231 calls");
+    assert_eq!(mapped_arm().len(), 236, "the ARMv7-A table maps 236 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in
