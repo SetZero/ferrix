@@ -442,23 +442,43 @@ impl Namespace {
         flags: &OpenFlags,
         permissions: u32,
     ) -> Result<Arc<OpenFile>> {
+        // How many times a create may lose to another one before `EEXIST` is
+        // passed on after all. Linux never loses: it looks the name up and
+        // creates it under the directory's lock. Here the walk and the create
+        // are separate steps, so two `echo x >> log` on a new file can both
+        // find nothing and both create, and the loser must open what the
+        // winner made rather than say "File exists" -- which without
+        // `O_EXCL` it never may. Each lost race means another create
+        // completed, and losing again means the name was removed and made
+        // again in the gap. The bound is there so that a name the cache and
+        // the filesystem disagree about fails rather than spins.
+        const CREATE_RACES: u32 = 8;
+
         let exclusive_create = flags.create && flags.exclusive;
         let follow = !(flags.nofollow || exclusive_create);
-        let walked = self.walk(ctx, Self::start(ctx, start), path, follow)?;
-
-        let Some(inode) = walked.found.dentry.inode() else {
+        let mut lost = 0;
+        let (walked, inode) = loop {
+            let walked = self.walk(ctx, Self::start(ctx, start), path, follow)?;
+            if let Some(inode) = walked.found.dentry.inode() {
+                break (walked, inode);
+            }
             if !flags.create {
                 return Err(Errno::ENOENT);
             }
             if walked.must_be_dir {
                 return Err(Errno::EISDIR);
             }
-            let dentry = self.create_at(&walked, NewNode::Regular, permissions)?;
-            let created = Location {
-                mount: walked.found.mount,
-                dentry,
-            };
-            return OpenFile::new(created, flags);
+            match self.create_at(&walked, NewNode::Regular, permissions) {
+                Ok(dentry) => {
+                    let created = Location {
+                        mount: walked.found.mount,
+                        dentry,
+                    };
+                    return OpenFile::new(created, flags);
+                }
+                Err(Errno::EEXIST) if !exclusive_create && lost < CREATE_RACES => lost += 1,
+                Err(other) => return Err(other),
+            }
         };
 
         if exclusive_create {
