@@ -220,7 +220,6 @@ fn the_uncompressed_image_reads_back_exactly() {
 }
 
 #[test]
-#[ignore = "the zlib decoder is still a stub; un-ignore when it lands"]
 fn the_zlib_image_reads_back_exactly() {
     check_image("zlib");
 }
