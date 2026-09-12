@@ -46,6 +46,7 @@ pub(crate) mod image;
 pub(crate) mod load;
 pub(crate) mod memory;
 pub(crate) mod process;
+pub(crate) mod system;
 pub(crate) mod time;
 pub(crate) mod uaccess;
 
@@ -178,6 +179,7 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         }
         Syscall::Gettimeofday => time::sys_gettimeofday(process, a[0]),
         Syscall::Getrandom => time::sys_getrandom(process, a[0], a[1], a[2]),
+        Syscall::Uname => system::sys_uname(process, a[0]),
         Syscall::Write => file::sys_write(process, a[0], a[1], a[2]),
         Syscall::Writev => file::sys_writev(process, a[0], a[1], a[2]),
         _ => Err(Errno::ENOSYS),

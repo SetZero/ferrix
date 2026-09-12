@@ -31,7 +31,7 @@ use ferrix_elf::Class;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{Outcome, SyscallArgs, dispatch, uaccess};
-use crate::syscall::{exec, file, image, load};
+use crate::syscall::{exec, file, image, load, system};
 
 /// What the checks measured, for the boot log.
 #[derive(Debug)]
@@ -315,6 +315,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_mprotect_takes_write_away(&process)?;
     check_brk_grows_and_shrinks(&process)?;
     check_set_tid_address_answers_with_a_thread_id(&process)?;
+    check_uname_says_linux_to_a_script_and_ferrix_to_a_person(&process)?;
     check_an_image_loads_where_its_headers_say(&process)?;
     check_the_loader_refuses_what_it_cannot_run(&process)?;
     if output == Output::Show {
@@ -641,6 +642,80 @@ fn check_set_tid_address_answers_with_a_thread_id(process: &Process) -> Result<(
     if process.clear_child_tid() != at {
         return Err("set_tid_address did not record the address");
     }
+    let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    Ok(())
+}
+
+/// `uname` fills all six fields, NUL-terminates each within its 65 bytes, and
+/// says `Linux` where a script looks and `ferrix` where a person does.
+///
+/// The buffer is poisoned first. The structure is fixed-width and a reader
+/// stops at the first NUL, so a handler that wrote the strings and left the
+/// padding alone would pass a check on an all-zero page and hand a real
+/// program whatever the page held before -- which is usually zero and
+/// occasionally not.
+fn check_uname_says_linux_to_a_script_and_ferrix_to_a_person(
+    process: &Process,
+) -> Result<(), &'static str> {
+    const FIELD: usize = 65;
+    const SIZE: usize = FIELD * 6;
+
+    let at = map_rw(process, PAGE_SIZE)?;
+    uaccess::copy_to_user(process.space(), at, &[0xAA_u8; SIZE])
+        .map_err(|_| "could not poison the utsname buffer")?;
+    if system::sys_uname(process, at) != Ok(0) {
+        return Err("uname was refused");
+    }
+    let mut out = [0_u8; SIZE];
+    uaccess::copy_from_user(process.space(), at, &mut out)
+        .map_err(|_| "could not read utsname back")?;
+
+    // Every field is a string, and everything after its NUL is NUL too.
+    let mut fields: [&[u8]; 6] = [&[]; 6];
+    for (slot, field) in out.chunks(FIELD).zip(fields.iter_mut()) {
+        let end = slot
+            .iter()
+            .position(|&byte| byte == 0)
+            .ok_or("a utsname field is not NUL-terminated")?;
+        let (text, padding) = slot
+            .split_at_checked(end)
+            .ok_or("a utsname field is not NUL-terminated")?;
+        if text.is_empty() {
+            return Err("a utsname field is empty");
+        }
+        if padding.iter().any(|&byte| byte != 0) {
+            return Err("a utsname field is not NUL-padded to its full width");
+        }
+        *field = text;
+    }
+    let [sysname, nodename, release, _version, machine, _domainname] = fields;
+
+    if sysname != b"Linux" {
+        return Err("uname did not say Linux, which is what a configure script asks");
+    }
+    if nodename != b"ferrix" {
+        return Err("uname did not say ferrix where a person looks");
+    }
+    if !release.ends_with(b"-ferrix") {
+        return Err("the release does not carry the Ferrix suffix");
+    }
+    // The machine name is decided by the build, and a 32-bit one must not
+    // claim to be a 64-bit machine: glibc's loader and every `configure`
+    // script size the world by this field.
+    let class = match machine {
+        b"x86_64" | b"aarch64" => Class::Elf64,
+        b"armv7l" => Class::Elf32,
+        _ => return Err("the machine name is not one Linux uses"),
+    };
+    if class != class_of_this_build() {
+        return Err("the machine name does not match the build's word size");
+    }
+
+    // A pointer into the kernel is EFAULT, not a write.
+    if system::sys_uname(process, KERNEL_HALF_BASE) != Err(Errno::EFAULT) {
+        return Err("uname into a kernel address was not EFAULT");
+    }
+
     let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
     Ok(())
 }
