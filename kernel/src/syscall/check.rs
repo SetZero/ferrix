@@ -23,8 +23,9 @@ use ferrix_bootinfo::{KERNEL_HALF_BASE, PAGE_SIZE};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     AT_FDCWD, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
-    MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_SHARED, O_APPEND, O_CLOEXEC, O_CREAT, O_RDONLY,
-    O_RDWR, O_TRUNC, PROT_READ, PROT_WRITE, SEEK_CUR, SEEK_END, SEEK_SET, TCGETS,
+    MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED, MREMAP_MAYMOVE, O_APPEND,
+    O_CLOEXEC, O_CREAT, O_RDONLY, O_RDWR, O_TRUNC, PROT_READ, PROT_WRITE, SEEK_CUR, SEEK_END,
+    SEEK_SET, TCGETS,
 };
 
 use crate::arch;
@@ -343,6 +344,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_an_unmapped_address_is_efault_not_a_kernel_fault(&process)?;
     check_a_c_string_stops_at_its_nul(&process)?;
     check_mprotect_takes_write_away(&process)?;
+    check_mremap_moves_the_contents_and_shrinks_in_place(&process)?;
     check_brk_grows_and_shrinks(&process)?;
     check_set_tid_address_answers_with_a_thread_id(&process)?;
     check_uname_says_linux_to_a_script_and_ferrix_to_a_person(&process)?;
@@ -629,6 +631,117 @@ fn check_mprotect_takes_write_away(process: &Process) -> Result<(), &'static str
     }
 
     let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    Ok(())
+}
+
+/// `mremap` grows a mapping that has a neighbour in the way by moving it, and
+/// the contents go with it; shrinks one where it is; moves one to a fixed
+/// address; and refuses what it should.
+///
+/// The contents are the point. glibc's `realloc` hands a large block to
+/// `mremap` and carries on using it, so a move that arrived with the right
+/// length and the wrong bytes -- zeros, or the pages of another object -- is
+/// a corrupted heap that no call ever reports. The string written across the
+/// page boundary is there so a move that got one page right and the other
+/// wrong, or both in the wrong order, is caught too.
+fn check_mremap_moves_the_contents_and_shrinks_in_place(
+    process: &Process,
+) -> Result<(), &'static str> {
+    const FIRST: &[u8] = b"the first page";
+    const ACROSS: &[u8] = b"across the page boundary";
+    let space = process.space();
+
+    // Two writable pages, and a third made read-only so it is a separate
+    // region in the way: growing the two cannot happen where they are.
+    let at = map_rw(process, PAGE_SIZE * 3)?;
+    uaccess::copy_to_user(space, at, FIRST).map_err(|_| "could not write before mremap")?;
+    let across = at + PAGE_SIZE - 8;
+    uaccess::copy_to_user(space, across, ACROSS).map_err(|_| "could not write before mremap")?;
+    let _ = memory::sys_mprotect(process, at + PAGE_SIZE * 2, PAGE_SIZE, PROT_READ)
+        .map_err(|_| "mprotect of the page in the way was refused")?;
+
+    refuses(
+        memory::sys_mremap(process, at, PAGE_SIZE * 2, PAGE_SIZE * 4, 0, 0),
+        Errno::ENOMEM,
+        "mremap without MREMAP_MAYMOVE grew over the mapping in its way",
+    )?;
+    refuses(
+        memory::sys_mremap(
+            process,
+            at,
+            PAGE_SIZE * 2,
+            PAGE_SIZE * 4,
+            MREMAP_FIXED,
+            at + PAGE_SIZE * 8,
+        ),
+        Errno::EINVAL,
+        "mremap accepted MREMAP_FIXED without MREMAP_MAYMOVE",
+    )?;
+    refuses(
+        memory::sys_mremap(process, at + 1, PAGE_SIZE, PAGE_SIZE * 2, MREMAP_MAYMOVE, 0),
+        Errno::EINVAL,
+        "mremap accepted an unaligned old address",
+    )?;
+
+    let moved = memory::sys_mremap(process, at, PAGE_SIZE * 2, PAGE_SIZE * 4, MREMAP_MAYMOVE, 0)
+        .map_err(|_| "mremap with MREMAP_MAYMOVE refused to grow a mapping")?;
+    let moved = u64::try_from(moved).map_err(|_| "mremap returned an impossible address")?;
+    if moved == at {
+        return Err("mremap grew a mapping over its neighbour rather than moving it");
+    }
+    let mut first = [0_u8; FIRST.len()];
+    let mut straddle = [0_u8; ACROSS.len()];
+    uaccess::copy_from_user(space, moved, &mut first)
+        .map_err(|_| "the moved mapping was not readable")?;
+    uaccess::copy_from_user(space, moved + PAGE_SIZE - 8, &mut straddle)
+        .map_err(|_| "the moved mapping was not readable across its first page")?;
+    if first != FIRST || straddle != ACROSS {
+        return Err("the contents of a mapping did not survive mremap moving it");
+    }
+    let mut byte = [0xFF_u8; 1];
+    uaccess::copy_from_user(space, at, &mut byte).map_or(Ok(()), |()| {
+        Err("the old address still read after mremap moved it")
+    })?;
+    uaccess::copy_from_user(space, moved + PAGE_SIZE * 3, &mut byte)
+        .map_err(|_| "the grown part of a moved mapping was not readable")?;
+    if byte != [0] {
+        return Err("the grown part of a moved mapping was not zero");
+    }
+
+    answers(
+        memory::sys_mremap(process, moved, PAGE_SIZE * 4, PAGE_SIZE, 0, 0),
+        usize::try_from(moved).unwrap_or(0),
+        "mremap did not shrink a mapping where it was",
+    )?;
+    uaccess::copy_from_user(space, moved, &mut first)
+        .map_err(|_| "a shrunk mapping lost the page it kept")?;
+    if first != FIRST {
+        return Err("a shrunk mapping lost the contents of the page it kept");
+    }
+    uaccess::copy_from_user(space, moved + PAGE_SIZE, &mut byte).map_or(Ok(()), |()| {
+        Err("the tail mremap shrank away was still readable")
+    })?;
+
+    // And to a fixed address: the old one, which the move left free.
+    answers(
+        memory::sys_mremap(
+            process,
+            moved,
+            PAGE_SIZE,
+            PAGE_SIZE,
+            MREMAP_MAYMOVE | MREMAP_FIXED,
+            at,
+        ),
+        usize::try_from(at).unwrap_or(0),
+        "mremap with MREMAP_FIXED did not land where it was told",
+    )?;
+    uaccess::copy_from_user(space, at, &mut first)
+        .map_err(|_| "a mapping moved to a fixed address was not readable")?;
+    if first != FIRST {
+        return Err("the contents did not survive mremap moving to a fixed address");
+    }
+
+    let _ = memory::sys_munmap(process, at, PAGE_SIZE * 3).map_err(|_| "munmap was refused")?;
     Ok(())
 }
 

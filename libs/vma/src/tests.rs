@@ -1724,3 +1724,35 @@ fn an_anonymous_offset_that_would_overflow_is_refused() {
         "an offset whose end leaves the object's 64-bit space is refused"
     );
 }
+
+#[test]
+fn a_region_put_back_down_keeps_its_copy_on_write_marking() {
+    let mut space = space();
+    let moved = Vma {
+        range: range(0x10_000, 0x12_000),
+        flags: VmaFlags::READ_WRITE,
+        backing: Backing::Anonymous { id: 7, offset: 0 },
+        cow: true,
+    };
+    space.insert_region(moved).expect("the range is free");
+    check(&space);
+
+    // `mremap` of a region a fork child still shares: losing the marking here
+    // would let the next write land in a page the child can read.
+    assert_eq!(
+        space.find(0x11_000).copied(),
+        Some(moved),
+        "the region went down exactly as described, copy-on-write included"
+    );
+
+    let overlapping = Vma {
+        range: range(0x11_000, 0x13_000),
+        ..moved
+    };
+    assert!(
+        matches!(space.insert_region(overlapping), Err(VmaError::Overlap)),
+        "a region put down over another is refused, as insert refuses it"
+    );
+    check(&space);
+    assert_eq!(space.region_count(), 1, "the refusal changed nothing");
+}

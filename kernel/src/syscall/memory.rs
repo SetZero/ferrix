@@ -1,4 +1,4 @@
-//! `mmap`, `munmap`, `mprotect` and `brk`.
+//! `mmap`, `munmap`, `mprotect`, `mremap` and `brk`.
 //!
 //! The four calls a program reshapes its own address space with, and the first
 //! four a static musl binary makes: it allocates with `mmap` before it does
@@ -19,13 +19,13 @@
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
-    MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, MAP_SHARED, PROT_EXEC, PROT_READ,
-    PROT_WRITE,
+    MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED,
+    MREMAP_MAYMOVE, PROT_EXEC, PROT_READ, PROT_WRITE,
 };
 use ferrix_vma::VmaFlags;
 
 use crate::syscall::process::Process;
-use crate::user::space::SpaceError;
+use crate::user::space::{Destination, SpaceError};
 
 /// What `mmap`'s sixth argument is counted in.
 ///
@@ -208,6 +208,63 @@ pub(crate) fn sys_mprotect(
     let len = pages_for(len)?;
     process.space().protect(addr, len, vma).map_err(refused)?;
     Ok(0)
+}
+
+/// `mremap`.
+///
+/// What glibc's `realloc` does with a block too large for its heap, so what
+/// matters most is that the contents arrive: a block that moved and came
+/// back zeroed is a program corrupted far from here. The address space moves
+/// the pages rather than copying them; see [`crate::user::space::AddressSpace::remap`].
+///
+/// # What is refused, and in what order
+///
+/// Linux's order, from `mm/mremap.c`: unknown flags, then `MREMAP_FIXED`
+/// without `MREMAP_MAYMOVE`, then an unaligned old address, then a new length
+/// of zero -- all `EINVAL`. `MREMAP_DONTUNMAP` is among the unknown flags,
+/// which is what a kernel older than 5.7 answers and what a program must
+/// already handle.
+///
+/// An old length of zero is `EINVAL` too. On Linux it asks for a second
+/// mapping of the same pages of a *shared* mapping, which nothing here can
+/// make yet; refusing is what Linux does for a private one.
+pub(crate) fn sys_mremap(
+    process: &Process,
+    old_addr: u64,
+    old_size: u64,
+    new_size: u64,
+    flags: u32,
+    new_addr: u64,
+) -> Result<usize, Errno> {
+    if flags & !(MREMAP_MAYMOVE | MREMAP_FIXED) != 0 {
+        return Err(Errno::EINVAL);
+    }
+    if flags & MREMAP_FIXED != 0 && flags & MREMAP_MAYMOVE == 0 {
+        return Err(Errno::EINVAL);
+    }
+    if !old_addr.is_multiple_of(PAGE_SIZE) {
+        return Err(Errno::EINVAL);
+    }
+    // A length that wraps when rounded is as unusable as zero, and Linux's
+    // `PAGE_ALIGN` makes it zero.
+    let old_len = pages_for(old_size).map_err(|_| Errno::EINVAL)?;
+    let new_len = pages_for(new_size).map_err(|_| Errno::EINVAL)?;
+
+    let destination = if flags & MREMAP_FIXED != 0 {
+        if !new_addr.is_multiple_of(PAGE_SIZE) {
+            return Err(Errno::EINVAL);
+        }
+        Destination::Fixed(new_addr)
+    } else if flags & MREMAP_MAYMOVE != 0 {
+        Destination::Anywhere
+    } else {
+        Destination::InPlace
+    };
+    process
+        .space()
+        .remap(old_addr, old_len, new_len, destination)
+        .map(usize_of)
+        .map_err(refused)
 }
 
 /// `brk`.

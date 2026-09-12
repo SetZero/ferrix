@@ -24,6 +24,7 @@
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::fmt;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_frame::Frame;
@@ -65,8 +66,9 @@ impl fmt::Display for VmoError {
 pub(crate) struct Vmo {
     /// Page index to the frame holding it. Absent means not yet committed.
     pages: SpinLock<BTreeMap<u64, Frame>>,
-    /// The object's size in pages, fixed at creation.
-    len: u64,
+    /// The object's size in pages. Set at creation and only ever raised, by
+    /// [`Vmo::grow_to`]: an index that was inside the object stays inside it.
+    len: AtomicU64,
 }
 
 impl Vmo {
@@ -74,18 +76,18 @@ impl Vmo {
     pub(crate) fn new_anonymous(pages: u64) -> Arc<Vmo> {
         Arc::new(Vmo {
             pages: SpinLock::new(BTreeMap::new()),
-            len: pages,
+            len: AtomicU64::new(pages),
         })
     }
 
     /// The object's size in pages.
     pub(crate) fn len_pages(&self) -> u64 {
-        self.len
+        self.len.load(Ordering::Relaxed)
     }
 
     /// The object's size in bytes.
     pub(crate) fn len_bytes(&self) -> u64 {
-        self.len * PAGE_SIZE
+        self.len_pages() * PAGE_SIZE
     }
 
     /// How many pages currently hold a frame.
@@ -141,7 +143,7 @@ impl Vmo {
 
         Ok(Arc::new(Vmo {
             pages: SpinLock::new(pages.clone()),
-            len: self.len,
+            len: AtomicU64::new(self.len_pages()),
         }))
     }
 
@@ -158,11 +160,9 @@ impl Vmo {
     /// [`VmoError::OutOfRange`] past the end of the object, and
     /// [`VmoError::OutOfMemory`] when the allocator has nothing left.
     pub(crate) fn commit(&self, index: u64) -> Result<Frame, VmoError> {
-        if index >= self.len {
-            return Err(VmoError::OutOfRange {
-                index,
-                pages: self.len,
-            });
+        let len = self.len_pages();
+        if index >= len {
+            return Err(VmoError::OutOfRange { index, pages: len });
         }
 
         let mut pages = self.pages.lock();
@@ -257,11 +257,9 @@ impl Vmo {
     /// Refuse a byte range that leaves page `index` or the object.
     fn check_span(&self, index: u64, offset: usize, len: usize) -> Result<(), VmoError> {
         let end = offset.checked_add(len);
-        if index >= self.len || end.is_none_or(|end| end as u64 > PAGE_SIZE) {
-            return Err(VmoError::OutOfRange {
-                index,
-                pages: self.len,
-            });
+        let pages = self.len_pages();
+        if index >= pages || end.is_none_or(|end| end as u64 > PAGE_SIZE) {
+            return Err(VmoError::OutOfRange { index, pages });
         }
         Ok(())
     }
@@ -318,6 +316,47 @@ impl Vmo {
             let _ = mm::release_frame(*frame);
         }
         released.len()
+    }
+}
+
+impl Vmo {
+    /// Make the object at least `pages` pages long.
+    ///
+    /// What `mremap` growing a shared mapping does to the object behind it,
+    /// as Linux grows the shmem file behind `MAP_SHARED | MAP_ANONYMOUS`. The
+    /// new pages are uncommitted, so they read as zeros and cost nothing until
+    /// touched. Never shrinks: another mapping of the object may still reach
+    /// the pages a shorter length would put out of range.
+    pub(crate) fn grow_to(&self, pages: u64) {
+        let _ = self.len.fetch_max(pages, Ordering::Relaxed);
+    }
+
+    /// Move `count` pages of `from`, starting at page `first`, into this
+    /// object at pages `0..count`.
+    ///
+    /// Moved, not copied or shared: each frame leaves `from`'s list and joins
+    /// this one with the reference it already had, so no page is allocated,
+    /// copied or released. What `mremap` does with a private mapping it
+    /// resizes, so that the region can be given an object of its own length
+    /// without the cost of its contents. A frame a `fork` child still shares
+    /// keeps its count above one, and the moved region keeps its
+    /// copy-on-write marking, so the next write copies it as it would have.
+    ///
+    /// Pages past this object's end stay in `from`. `from` must not be this
+    /// object: the two locks are taken one after the other, never together.
+    pub(crate) fn adopt_pages(&self, from: &Vmo, first: u64, count: u64) {
+        let count = count.min(self.len_pages());
+        let moved = {
+            let mut source = from.pages.lock();
+            let mut moved = source.split_off(&first);
+            let mut beyond = moved.split_off(&first.saturating_add(count));
+            source.append(&mut beyond);
+            moved
+        };
+        let mut pages = self.pages.lock();
+        for (index, frame) in moved {
+            let _ = pages.insert(index - first, frame);
+        }
     }
 }
 

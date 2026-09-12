@@ -21,13 +21,15 @@ use alloc::vec::Vec;
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
-    AT_CLKTCK, AT_EGID, AT_ENTRY, AT_EUID, AT_GID, AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM,
-    AT_SECURE, AT_UID,
+    AT_CLKTCK, AT_EGID, AT_EMPTY_PATH, AT_ENTRY, AT_EUID, AT_FDCWD, AT_GID, AT_PAGESZ, AT_PHDR,
+    AT_PHENT, AT_PHNUM, AT_SECURE, AT_SYMLINK_NOFOLLOW, AT_UID,
 };
 use ferrix_ustack::{Spec, Width};
+use ferrix_vfs::{FileType, OpenFile, OpenFlags};
 use ferrix_vma::VmaFlags;
 
 use crate::arch;
+use crate::syscall::fd;
 use crate::syscall::load::{self, LoadError};
 use crate::syscall::process::{self, Process, Startup};
 use crate::syscall::registry;
@@ -262,11 +264,47 @@ pub(crate) fn sys_execve(
     argv: u64,
     envp: u64,
 ) -> Result<(u64, u64), ExecveError> {
+    execve_at(process, AT_FDCWD, path, argv, envp, 0)
+}
+
+/// `execveat`: [`sys_execve`], with a relative path resolved from the
+/// directory `dirfd` names.
+///
+/// `AT_EMPTY_PATH` with an empty path runs the file `dirfd` itself names,
+/// which is how `fexecve` is built. `AT_SYMLINK_NOFOLLOW` refuses a path whose
+/// last component is a symbolic link with `ELOOP`. Any other flag is `EINVAL`.
+///
+/// # Errors
+///
+/// [`ExecveError`].
+pub(crate) fn sys_execveat(
+    process: &Process,
+    dirfd: i32,
+    path: u64,
+    argv: u64,
+    envp: u64,
+    flags: u32,
+) -> Result<(u64, u64), ExecveError> {
+    execve_at(process, dirfd, path, argv, envp, flags)
+}
+
+/// The one body of `execve` and `execveat`. See [`sys_execve`].
+fn execve_at(
+    process: &Process,
+    dirfd: i32,
+    path: u64,
+    argv: u64,
+    envp: u64,
+    flags: u32,
+) -> Result<(u64, u64), ExecveError> {
+    if flags & !(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) != 0 {
+        return Err(Errno::EINVAL.into());
+    }
     let space = process.space();
     let mut path_bytes = Vec::new();
     uaccess::copy_cstr_from_user(space, path, PATH_MAX, &mut path_bytes)
         .map_err(|_| Errno::EFAULT)?;
-    if path_bytes.is_empty() {
+    if path_bytes.is_empty() && flags & AT_EMPTY_PATH == 0 {
         return Err(Errno::ENOENT.into());
     }
 
@@ -277,7 +315,29 @@ pub(crate) fn sys_execve(
     // The caller's own root and working directory, so a relative path after
     // `cd` resolves from there. Cloned out: never walk with the lock held.
     let context = process.fs_context().lock().clone();
-    let mut image = crate::fs::read_file(&context, None, &path_bytes)?;
+    let mut image = if path_bytes.is_empty() {
+        let image = read_descriptor(&fd::file(process, dirfd)?)?;
+        path_bytes = descriptor_path(dirfd, &[]);
+        image
+    } else {
+        let start = fd::start_for(process, dirfd, &path_bytes)?;
+        if flags & AT_SYMLINK_NOFOLLOW != 0 {
+            let ns = crate::fs::namespace();
+            let at = ns.resolve(&context, start.as_ref(), &path_bytes, false)?;
+            if ns.stat(&at)?.metadata.kind == FileType::Symlink {
+                return Err(Errno::ELOOP.into());
+            }
+        }
+        let image = crate::fs::read_file(&context, start.as_ref(), &path_bytes)?;
+        // What a script's interpreter is handed as the script's name: the
+        // path itself when it means the same thing from anywhere, and a name
+        // through the directory descriptor when it does not, as Linux's
+        // `do_execveat_common` builds it.
+        if start.is_some() {
+            path_bytes = descriptor_path(dirfd, &path_bytes);
+        }
+        image
+    };
 
     // A script names its interpreter on its first line, which runs with the
     // script's path in place of its own first argument -- what Linux's
@@ -336,6 +396,74 @@ pub(crate) fn sys_execve(
 /// What a failed `execve` past its point of no return ends the process with.
 pub(crate) const fn lost_status() -> i32 {
     LOST_STATUS
+}
+
+/// The largest file `execveat` reads whole through a descriptor: the limit
+/// `crate::fs::read_file` sets for reading one through a path.
+const DESCRIPTOR_READ_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// The whole of the regular file `file` names, for `execveat` with
+/// `AT_EMPTY_PATH`.
+///
+/// Read through the description itself when it was opened for reading, at
+/// explicit offsets so the caller's file position is left alone, which also
+/// works for a file unlinked since it was opened. A description that cannot
+/// read -- `O_PATH`, which is what `fexecve` is usually given, or write-only
+/// -- is opened afresh from where it points, since running a file needs no
+/// read access through the descriptor on Linux either.
+///
+/// # Errors
+///
+/// `EACCES` for anything but a regular file, as Linux answers; `EFBIG` past
+/// [`DESCRIPTOR_READ_LIMIT`]; `ENOMEM` if the heap cannot hold it; and
+/// whatever reopening or reading refuses.
+fn read_descriptor(file: &Arc<OpenFile>) -> Result<Vec<u8>, Errno> {
+    if file.kind() != FileType::Regular {
+        return Err(Errno::EACCES);
+    }
+    let reader = if file.readable() {
+        Arc::clone(file)
+    } else {
+        let flags = OpenFlags {
+            read: true,
+            ..OpenFlags::default()
+        };
+        OpenFile::new(file.location().clone(), &flags)?
+    };
+    let size = reader.inode().metadata().size;
+    if size > DESCRIPTOR_READ_LIMIT {
+        return Err(Errno::EFBIG);
+    }
+    let len = usize::try_from(size).map_err(|_| Errno::EFBIG)?;
+    let mut contents = Vec::new();
+    contents.try_reserve_exact(len).map_err(|_| Errno::ENOMEM)?;
+    contents.resize(len, 0);
+    let mut done = 0;
+    while done < len {
+        let slot = contents.get_mut(done..).ok_or(Errno::EIO)?;
+        let count = reader.read_at(done as u64, slot)?;
+        if count == 0 {
+            break;
+        }
+        done += count;
+    }
+    contents.truncate(done);
+    Ok(contents)
+}
+
+/// The name a script run through `execveat` is handed to its interpreter
+/// under: `/dev/fd/<dirfd>`, followed by the relative path if there is one.
+///
+/// Linux's convention, and the only name that means the right file from
+/// wherever the interpreter runs. Whether it can then be opened depends on
+/// `/dev/fd`, which is the same condition Linux sets.
+fn descriptor_path(dirfd: i32, path: &[u8]) -> Vec<u8> {
+    let mut name = alloc::format!("/dev/fd/{dirfd}").into_bytes();
+    if !path.is_empty() {
+        name.push(b'/');
+        name.extend_from_slice(path);
+    }
+    name
 }
 
 /// Take every mapping out of the user half.

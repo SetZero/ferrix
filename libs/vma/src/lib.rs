@@ -596,17 +596,34 @@ impl AddressSpace {
         flags: VmaFlags,
         backing: Backing,
     ) -> Result<(), VmaError> {
-        self.check_range(range)?;
-        validate_backing(backing, range.bytes())?;
-        if self.overlaps(range) {
-            return Err(VmaError::Overlap);
-        }
-        self.place(Vma {
+        self.insert_region(Vma {
             range,
             flags,
             backing,
             cow: false,
-        });
+        })
+    }
+
+    /// Maps a region exactly as described, its copy-on-write marking
+    /// included, into a range that must be free. This is `mremap` putting a
+    /// region back down somewhere else.
+    ///
+    /// [`AddressSpace::insert`] cannot do it, because a fresh mapping is never
+    /// copy-on-write and it says so. A region that *moves* can be: the pages
+    /// it names may still be shared with a `fork` child, and a moved region
+    /// that lost the marking would let the next write land in a page the child
+    /// can read.
+    ///
+    /// # Errors
+    ///
+    /// As [`AddressSpace::insert`]. On any of them the map is unchanged.
+    pub fn insert_region(&mut self, region: Vma) -> Result<(), VmaError> {
+        self.check_range(region.range)?;
+        validate_backing(region.backing, region.range.bytes())?;
+        if self.overlaps(region.range) {
+            return Err(VmaError::Overlap);
+        }
+        self.place(region);
         Ok(())
     }
 

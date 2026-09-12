@@ -31,7 +31,7 @@ use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END, is_user_address};
 use ferrix_frame::Frame;
 use ferrix_paging::MapFlags;
 use ferrix_sync::SpinLock;
-use ferrix_vma::{Backing, PageRange, VmaFlags};
+use ferrix_vma::{Backing, PageRange, Unmapping, Vma, VmaFlags};
 
 use crate::arch;
 use crate::mm;
@@ -535,35 +535,57 @@ impl AddressSpace {
         // its translations out of the tables. What was removed is remembered
         // rather than acted on, because the acting has to happen after the
         // invalidation and the invalidation may not hold a lock.
-        let mut freeing: Vec<(u64, u64, u64)> = Vec::new();
+        let mut freeing: Vec<Freeing> = Vec::new();
         {
             let mut inner = self.inner.lock();
             let removed = inner.map.remove(range).map_err(|_| SpaceError::BadRange)?;
-            for unmapping in removed {
-                let _ = mm::unmap_in(
-                    self.root * PAGE_SIZE,
-                    unmapping.range.start(),
-                    unmapping.range.bytes(),
-                );
-                if let Backing::Anonymous { id, offset } = unmapping.backing {
-                    freeing.push((id, offset / PAGE_SIZE, unmapping.range.bytes() / PAGE_SIZE));
-                }
-            }
+            self.take_down(&removed, &mut freeing);
         }
 
         // Phase two. Nothing can reach these pages through this address space
         // any more, on any processor.
         invalidate();
 
-        // Phase three: give the pages back, not just the mapping. A process
-        // that unmaps half its heap expects the memory returned now, not when
-        // the other half goes.
-        //
-        // Only if nothing else holds the object: a page of memory shared with
-        // another address space is not this unmapper's to take away, and a
-        // strong count of one means this map is the only holder.
+        // Phase three: give the pages back, not just the mapping.
+        self.give_back(freeing);
+        Ok(())
+    }
+
+    /// Take the translations for `removed` out of the tables, and note the
+    /// pages behind them in `freeing` for [`AddressSpace::give_back`].
+    ///
+    /// Phase one of an unmap, called with the lock held. Nothing is freed
+    /// here, because nothing may be until every processor has been told.
+    fn take_down(&self, removed: &[Unmapping], freeing: &mut Vec<Freeing>) {
+        for unmapping in removed {
+            let _ = mm::unmap_in(
+                self.root * PAGE_SIZE,
+                unmapping.range.start(),
+                unmapping.range.bytes(),
+            );
+            if let Backing::Anonymous { id, offset } = unmapping.backing {
+                freeing.push(Freeing {
+                    id,
+                    first: offset / PAGE_SIZE,
+                    pages: unmapping.range.bytes() / PAGE_SIZE,
+                });
+            }
+        }
+    }
+
+    /// Give back the pages `freeing` names, and drop every object no region
+    /// names any more.
+    ///
+    /// Phase three of an unmap: after [`invalidate`], and taking the lock
+    /// itself. A process that unmaps half its heap expects the memory returned
+    /// now, not when the other half goes.
+    ///
+    /// Only if nothing else holds the object: a page of memory shared with
+    /// another address space is not this unmapper's to take away, and a
+    /// strong count of one means this map is the only holder.
+    fn give_back(&self, freeing: Vec<Freeing>) {
         let mut inner = self.inner.lock();
-        for (id, first, pages) in freeing {
+        for Freeing { id, first, pages } in freeing {
             if let Some(vmo) = inner.objects.get(&id)
                 && Arc::strong_count(vmo) == 1
             {
@@ -576,8 +598,230 @@ impl AddressSpace {
         // while the objects are being written.
         let Inner { map, objects, .. } = &mut *inner;
         objects.retain(|id, _| still_named(map, *id));
-        Ok(())
     }
+}
+
+/// Pages of one object whose translations an unmap has taken down, and which
+/// go back once every processor has been told.
+#[derive(Clone, Copy, Debug)]
+struct Freeing {
+    /// The object.
+    id: u64,
+    /// Its first page.
+    first: u64,
+    /// How many.
+    pages: u64,
+}
+
+/// Where `mremap` may put the region it resizes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Destination {
+    /// Where it is, or nowhere: no `MREMAP_MAYMOVE`.
+    InPlace,
+    /// Where it is if it fits there, wherever it fits otherwise:
+    /// `MREMAP_MAYMOVE`.
+    Anywhere,
+    /// Exactly here, replacing whatever is mapped there: `MREMAP_FIXED`.
+    Fixed(u64),
+}
+
+impl AddressSpace {
+    /// Resize the mapping of `old_len` bytes at `old` to `new_len` bytes,
+    /// moving it if `destination` allows, and say where it now is.
+    ///
+    /// `mremap`. Both lengths are whole pages, and `old..old + old_len` must
+    /// lie inside one region: one object, one set of flags, one marking.
+    ///
+    /// # Nothing is copied
+    ///
+    /// A private region is given an object of its own, of the new length, and
+    /// the pages it had are *moved* into it -- frame numbers out of one list
+    /// and into the other, references and all. That is what makes glibc's
+    /// `realloc` of a large block cheap, and it is also what keeps a moved
+    /// region honest: an object nothing else names cannot be aliased by
+    /// another region of the old one, which a region that kept naming the old
+    /// object at its old offsets could be once that object's other pieces had
+    /// grown or moved too. The region keeps its copy-on-write marking, so a
+    /// page it still shares with a `fork` child is copied on the next write
+    /// exactly as it would have been.
+    ///
+    /// A shared region cannot do that -- its pages are the same pages for
+    /// whoever else maps the object -- so it keeps its object and its offset,
+    /// and the object is grown to cover it, as Linux grows the shmem file
+    /// behind shared anonymous memory. Growing it over offsets another region
+    /// of this space already names is refused with
+    /// [`SpaceError::OutOfMemory`]: those pages would be mapped twice, and an
+    /// unmap of either would give back pages the other still shows.
+    ///
+    /// Either way the old translations come down and the new ones arrive on
+    /// fault, with the protection the region always had.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::NotMapped`] if the old range is not wholly inside one
+    /// region; [`SpaceError::Refused`] if that region is not anonymous memory;
+    /// [`SpaceError::NotUserRange`] for a fixed destination outside the user
+    /// half or off a page boundary; [`SpaceError::BadRange`] for one that
+    /// overlaps the old range, or a malformed length; and
+    /// [`SpaceError::OutOfMemory`] when the region cannot grow where it is and
+    /// may not move, or there is no gap it fits.
+    pub(crate) fn remap(
+        &self,
+        old: u64,
+        old_len: u64,
+        new_len: u64,
+        destination: Destination,
+    ) -> Result<u64, SpaceError> {
+        let old_range = user_range(old, old_len).ok_or(SpaceError::NotMapped(old))?;
+        if new_len == 0 || !new_len.is_multiple_of(PAGE_SIZE) {
+            return Err(SpaceError::BadRange);
+        }
+
+        let mut freeing: Vec<Freeing> = Vec::new();
+        let placed = {
+            let mut inner = self.inner.lock();
+
+            let region = *inner.map.find(old).ok_or(SpaceError::NotMapped(old))?;
+            if region.range.end() < old_range.end() {
+                return Err(SpaceError::NotMapped(old));
+            }
+            let Backing::Anonymous { id, offset } = region.backing else {
+                return Err(SpaceError::Refused(old));
+            };
+            // Where in the object the old range starts, in bytes.
+            let first = offset
+                .checked_add(old - region.range.start())
+                .ok_or(SpaceError::BadRange)?;
+            let shared = region.flags.shared || shared_object(&inner.map, id);
+
+            let at = match destination {
+                Destination::Fixed(target) => {
+                    let target_range = user_range(target, new_len)
+                        .filter(|_| target.is_multiple_of(PAGE_SIZE))
+                        .ok_or(SpaceError::NotUserRange(target))?;
+                    if target_range.start() < old_range.end()
+                        && old_range.start() < target_range.end()
+                    {
+                        return Err(SpaceError::BadRange);
+                    }
+                    target
+                }
+                _ if new_len == old_len => return Ok(old),
+                _ if new_len < old_len => old,
+                _ if grows_in_place(&inner.map, old, old_len, new_len) => old,
+                Destination::Anywhere => inner
+                    .map
+                    .find_free(new_len, PAGE_SIZE, None)
+                    .filter(|&at| user_range(at, new_len).is_some())
+                    .ok_or(SpaceError::OutOfMemory)?,
+                Destination::InPlace => return Err(SpaceError::OutOfMemory),
+            };
+            let new_range = PageRange::from_len(at, new_len).map_err(|_| SpaceError::BadRange)?;
+
+            if shared && new_len > old_len {
+                let end = first.checked_add(new_len).ok_or(SpaceError::BadRange)?;
+                if named_elsewhere(&inner.map, id, first + old_len, end) {
+                    return Err(SpaceError::OutOfMemory);
+                }
+            }
+            let vmo = Arc::clone(inner.objects.get(&id).ok_or(SpaceError::NotMapped(old))?);
+
+            // Everything that can be refused has been. Whatever a fixed
+            // destination covers goes, as `MAP_FIXED` would take it; then the
+            // old range leaves the map and the tables, but not its pages.
+            if let Destination::Fixed(_) = destination {
+                let removed = inner
+                    .map
+                    .remove(new_range)
+                    .map_err(|_| SpaceError::BadRange)?;
+                self.take_down(&removed, &mut freeing);
+            }
+            let _ = inner
+                .map
+                .remove(old_range)
+                .map_err(|_| SpaceError::BadRange)?;
+            let _ = mm::unmap_in(self.root * PAGE_SIZE, old, old_len);
+
+            let backing = if shared {
+                vmo.grow_to((first + new_len) / PAGE_SIZE);
+                if new_len < old_len {
+                    freeing.push(Freeing {
+                        id,
+                        first: (first + new_len) / PAGE_SIZE,
+                        pages: (old_len - new_len) / PAGE_SIZE,
+                    });
+                }
+                Backing::Anonymous { id, offset: first }
+            } else {
+                let fresh_id = inner.next_id;
+                inner.next_id = inner.next_id.saturating_add(1);
+                let fresh = Vmo::new_anonymous(new_len / PAGE_SIZE);
+                fresh.adopt_pages(&vmo, first / PAGE_SIZE, old_len.min(new_len) / PAGE_SIZE);
+                // Whatever did not move -- the tail a shrink cut off -- is
+                // still the old object's, and goes back with the rest.
+                freeing.push(Freeing {
+                    id,
+                    first: first / PAGE_SIZE,
+                    pages: old_len / PAGE_SIZE,
+                });
+                let _ = inner.objects.insert(fresh_id, fresh);
+                Backing::Anonymous {
+                    id: fresh_id,
+                    offset: 0,
+                }
+            };
+            // Back to the count the map alone holds, which `give_back` reads.
+            drop(vmo);
+
+            inner
+                .map
+                .insert_region(Vma {
+                    range: new_range,
+                    backing,
+                    ..region
+                })
+                .map(|()| at)
+                .map_err(|_| SpaceError::BadRange)
+        };
+
+        // The old translations are out of the tables but may still be in a
+        // processor's TLB, and so may whatever a fixed destination replaced.
+        invalidate();
+        self.give_back(freeing);
+        placed
+    }
+}
+
+/// `at..at + len` as a range, if it is a well-formed one inside the user half.
+fn user_range(at: u64, len: u64) -> Option<PageRange> {
+    if !is_user_address(at) || at.checked_add(len).is_none_or(|end| end > USER_VIRT_END) {
+        return None;
+    }
+    PageRange::from_len(at, len).ok()
+}
+
+/// Whether the mapping of `old_len` bytes at `old` can grow to `new_len`
+/// bytes where it is: the pages after it are in the user half and unmapped.
+///
+/// Asked of `find_free` with the extension as its hint, which answers with
+/// the hint exactly when that much fits there, and somewhere else otherwise.
+fn grows_in_place(map: &ferrix_vma::AddressSpace, old: u64, old_len: u64, new_len: u64) -> bool {
+    let Some(extension) = old.checked_add(old_len) else {
+        return false;
+    };
+    let more = new_len.saturating_sub(old_len);
+    user_range(extension, more).is_some()
+        && map.find_free(more, PAGE_SIZE, Some(extension)) == Some(extension)
+}
+
+/// Whether any region names object `id` at a byte offset in `start..end`.
+fn named_elsewhere(map: &ferrix_vma::AddressSpace, id: u64, start: u64, end: u64) -> bool {
+    map.iter().any(|region| match region.backing {
+        Backing::Anonymous { id: named, offset } if named == id => {
+            offset < end && start < offset.saturating_add(region.range.bytes())
+        }
+        _ => false,
+    })
 }
 
 /// Drop every processor's cached translations for this address space.

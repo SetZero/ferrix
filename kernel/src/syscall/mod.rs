@@ -52,6 +52,7 @@ pub(crate) mod image;
 pub(crate) mod limits;
 pub(crate) mod load;
 pub(crate) mod memory;
+pub(crate) mod namespace;
 pub(crate) mod native;
 pub(crate) mod path;
 pub(crate) mod pipe;
@@ -167,12 +168,17 @@ pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Out
     // `execve` resumes on a frame it built rather than returning, and a failure
     // past its point of no return ends the process -- after the reference is
     // dropped, for the reason above.
-    if matches!(call, Syscall::Execve) {
+    if matches!(call, Syscall::Execve | Syscall::Execveat) {
         let Some(caller) = process.as_deref() else {
             return Outcome::Return(Errno::ESRCH.as_return_value());
         };
         let a = args.args;
-        return match exec::sys_execve(caller, a[0], a[1], a[2]) {
+        let entered = if matches!(call, Syscall::Execveat) {
+            exec::sys_execveat(caller, fd::arg(a[0]), a[1], a[2], a[3], truncate(a[4]))
+        } else {
+            exec::sys_execve(caller, a[0], a[1], a[2])
+        };
+        return match entered {
             Ok((entry, stack)) => Outcome::Enter { entry, stack },
             Err(exec::ExecveError::Refused(error)) => Outcome::Return(error.as_return_value()),
             Err(exec::ExecveError::Lost) => {
@@ -300,8 +306,6 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Swapon | Syscall::Swapoff => Err(Errno::ENOSYS),
         // There are no loadable modules: the kernel is one image.
         Syscall::InitModule | Syscall::FinitModule | Syscall::DeleteModule => Err(Errno::ENOSYS),
-        // No namespaces to join until stage 13.
-        Syscall::Setns => Err(Errno::ENOSYS),
         // No System V shared memory; `mmap(MAP_SHARED)` is what there is.
         Syscall::Shmget | Syscall::Shmat | Syscall::Shmdt | Syscall::Shmctl => Err(Errno::ENOSYS),
         // No process accounting to switch on.
@@ -317,6 +321,9 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Munmap => memory::sys_munmap(process, a[0], a[1]),
         Syscall::Mprotect => memory::sys_mprotect(process, a[0], a[1], truncate(a[2])),
         Syscall::Brk => memory::sys_brk(process, a[0]),
+        Syscall::Mremap => memory::sys_mremap(process, a[0], a[1], a[2], truncate(a[3]), a[4]),
+        Syscall::Unshare => namespace::sys_unshare(process, a[0]),
+        Syscall::Setns => namespace::sys_setns(process, fd::arg(a[0]), truncate(a[1])),
         // The number `gettid` answers, which a libc keeps as the thread's id
         // and later hands to `tgkill`; the task's own number would disagree.
         Syscall::SetTidAddress => {
