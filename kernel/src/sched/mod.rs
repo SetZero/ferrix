@@ -718,6 +718,21 @@ pub(crate) fn wake(task: &Arc<Task>) {
     }
 }
 
+/// Make the processor `task` is on take an interrupt, so that if it is running
+/// in user mode there it comes back through the kernel.
+///
+/// For ending a program from outside. A task running in user mode only enters
+/// the kernel when it makes a call or an interrupt arrives, and a task alone on
+/// its processor gets no timer tick, because [`queue::CpuQueue::arm_timer`]
+/// leaves a lone task to run. Nothing is needed when the task is on this
+/// processor: then it is not the one running.
+pub(crate) fn interrupt(task: &Arc<Task>) {
+    let cpu = task.cpu();
+    if this_cpu() != Some(cpu) {
+        kick(cpu);
+    }
+}
+
 /// What a timer interrupt does: ask for a decision on the way out.
 pub(crate) fn timer_expired() {
     if let Some(cpu) = this_cpu() {

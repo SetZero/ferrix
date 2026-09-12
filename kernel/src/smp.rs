@@ -701,6 +701,11 @@ pub(crate) fn grace_periods() -> u64 {
 
 /// The record of the processor this is running on, or `None` before the
 /// boot processor has installed its own.
+/// How many processors the machine has, or one before they have been counted.
+pub(crate) fn count() -> usize {
+    TOPOLOGY.get().map_or(1, Topology::count)
+}
+
 pub(crate) fn this_cpu() -> Option<&'static PerCpu> {
     if !LOCAL_READY.load(Ordering::Acquire) {
         return None;

@@ -462,9 +462,9 @@ pub(crate) fn start_on(
 
 /// End `process` from outside, with `status`.
 ///
-/// Its tasks find out on their way back to user mode: one running there does
-/// on its next tick, one blocked in a call is woken to, and one that has not
-/// yet entered user mode never does. Nothing here waits for that; a caller
+/// Its tasks find out on their way back to user mode: one running there is
+/// interrupted to, one blocked in a call is woken to, and one that has not yet
+/// entered user mode never does. Nothing here waits for that; a caller
 /// that needs the tasks gone waits for them.
 pub(crate) fn kill(process: &Process, status: i32) {
     if !process.terminate(status) {
@@ -477,7 +477,14 @@ pub(crate) fn kill(process: &Process, status: i32) {
         .filter_map(Weak::upgrade)
         .collect();
     for task in &tasks {
+        // Blocked in a call: woken, it leaves on its way back to user mode.
         sched::wake(task);
+        // Running in user mode: its processor is made to take an interrupt,
+        // which comes back through the check that ends it. Waiting for a tick
+        // is not enough, because a task alone on its processor gets none --
+        // the scheduler leaves a lone task to run -- and a program spinning
+        // there would outlive its own kill until it chose to make a call.
+        sched::interrupt(task);
     }
 }
 

@@ -1681,6 +1681,12 @@ const PROGRAM_PATIENCE_NANOS: u64 = 120_000_000_000;
 /// How long the killed program is left spinning first.
 const KILL_AFTER_NANOS: u64 = 20_000_000;
 
+/// How soon after its kill a spinning program's task must be gone.
+///
+/// Far shorter than the program would take to finish its loop on its own, so a
+/// kill that did not reach it fails here rather than passing late.
+const KILL_REACH_NANOS: u64 = 1_000_000_000;
+
 /// The status a program is killed with: 128 plus `SIGKILL`, which is what a
 /// shell reports for one.
 const KILL_STATUS: i32 = 137;
@@ -1794,9 +1800,16 @@ fn check_a_program_is_killed_from_outside() -> Result<Option<i32>, &'static str>
     let here = crate::smp::this_cpu()
         .ok_or("no processor to run a program on")?
         .logical;
+    // On another processor from this one, when there is one, so the victim
+    // spins there alone. A task alone on its processor gets no timer tick, so
+    // only the interrupt `kill` sends can bring it back through the kernel;
+    // a victim sharing this processor would be reached by this checker's own
+    // wake-ups and prove nothing about that.
+    let count = crate::smp::count();
+    let elsewhere = if count > 1 { (here + 1) % count } else { here };
 
     let victim = spinner(b'k', u32::MAX, 5)?;
-    let task = process::start_on(&victim, Some(here))
+    let task = process::start_on(&victim, Some(elsewhere))
         .map_err(|_| "a program to kill could not be started")?;
     crate::sched::sleep_for(KILL_AFTER_NANOS);
     if victim.is_terminated() {
@@ -1813,10 +1826,13 @@ fn check_a_program_is_killed_from_outside() -> Result<Option<i32>, &'static str>
     }
 
     // The status alone would pass with a task still spinning in user mode
-    // under a process that says it has ended.
+    // under a process that says it has ended -- and so would a generous
+    // deadline, because the loop does end eventually. So the task must be gone
+    // soon, not merely at some point.
+    let reach = crate::timer::now_nanos().saturating_add(KILL_REACH_NANOS);
     while !task.is_dead() {
-        if crate::timer::now_nanos() >= deadline {
-            return Err("a killed program's task kept running");
+        if crate::timer::now_nanos() >= reach {
+            return Err("a killed program kept running on its processor after its kill");
         }
         crate::sched::sleep_for(1_000_000);
     }
