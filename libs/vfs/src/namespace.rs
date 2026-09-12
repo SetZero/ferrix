@@ -246,6 +246,37 @@ impl Namespace {
             .retain(|cached| !Arc::ptr_eq(cached, dentry));
     }
 
+    /// As [`Namespace::forget`], for a directory that has just been removed,
+    /// and every cached child of it too.
+    ///
+    /// A removed directory was empty, so its only cached children are misses
+    /// -- names somebody looked for inside it. Each holds its parent strongly,
+    /// which is what makes `..` work, and so each would keep the removed
+    /// directory's dentry, and through it the directory's inode, alive until
+    /// the cache got round to evicting it. Linux prunes them on `rmdir` for
+    /// the same reason.
+    ///
+    /// Nothing is freed under the lock: the caller holds the directory, and
+    /// the children taken out are dropped after the lock is released.
+    fn forget_with_children(&self, directory: &Arc<Dentry>) {
+        let released: Vec<Arc<Dentry>> = {
+            let mut cache = self.cache.lock();
+            let mut released = Vec::new();
+            cache.retain(|cached| {
+                let gone = Arc::ptr_eq(cached, directory)
+                    || cached
+                        .parent()
+                        .is_some_and(|parent| Arc::ptr_eq(&parent, directory));
+                if gone {
+                    released.push(Arc::clone(cached));
+                }
+                !gone
+            });
+            released
+        };
+        drop(released);
+    }
+
     pub(crate) fn mounted_on(&self, at: &Location) -> Option<Arc<Mount>> {
         self.mounts
             .lock()
@@ -562,7 +593,7 @@ impl Namespace {
         }
         walked.parent.inode()?.rmdir(name)?;
         walked.parent.dentry.remove_name(name);
-        self.forget(&walked.found.dentry);
+        self.forget_with_children(&walked.found.dentry);
         Ok(())
     }
 
@@ -627,9 +658,10 @@ impl Namespace {
             &dest.parent.dentry,
             new_name,
         );
-        if dest.found.dentry.inode().is_some() {
-            self.forget(&dest.found.dentry);
-        }
+        // Whatever stood at the destination has left the tree: a replaced
+        // file, whose pages it would keep, or -- for a rename to a new name --
+        // the miss the walk cached, which holds the destination directory.
+        self.forget(&dest.found.dentry);
         Ok(())
     }
 

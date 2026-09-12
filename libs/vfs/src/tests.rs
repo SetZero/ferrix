@@ -289,6 +289,48 @@ fn an_unlinked_or_replaced_file_is_freed_once_nothing_holds_it() {
 }
 
 #[test]
+fn a_removed_directory_is_freed_even_after_misses_inside_it() {
+    let (ns, ctx) = fresh();
+    ns.mkdir(&ctx, None, b"/d", 0o755).unwrap();
+    let directory = {
+        let at = ns.resolve(&ctx, None, b"/d", true).unwrap();
+        Arc::downgrade(&at.inode().unwrap())
+    };
+    for name in ["/d/missing", "/d/also-missing", "/d/missing/deeper"] {
+        let _ = ns.resolve(&ctx, None, name.as_bytes(), true);
+    }
+    ns.rmdir(&ctx, None, b"/d").unwrap();
+    assert!(
+        directory.upgrade().is_none(),
+        "cached misses inside a removed directory kept it alive"
+    );
+}
+
+#[test]
+fn a_rename_to_a_new_name_does_not_leave_its_miss_holding_the_directory() {
+    let (ns, ctx) = fresh();
+    ns.mkdir(&ctx, None, b"/d", 0o755).unwrap();
+    write_file(&ns, &ctx, "/d/a", b"x");
+    let directory = {
+        let at = ns.resolve(&ctx, None, b"/d", true).unwrap();
+        Arc::downgrade(&at.inode().unwrap())
+    };
+    ns.rename(
+        &ctx,
+        (None, b"/d/a"),
+        (None, b"/d/b"),
+        RenameMode::NoReplace,
+    )
+    .unwrap();
+    ns.unlink(&ctx, None, b"/d/b").unwrap();
+    ns.rmdir(&ctx, None, b"/d").unwrap();
+    assert!(
+        directory.upgrade().is_none(),
+        "the rename's destination miss kept the directory alive"
+    );
+}
+
+#[test]
 fn reading_a_directory_is_eisdir_and_writing_one_cannot_be_opened() {
     let (ns, ctx) = fresh();
     ns.mkdir(&ctx, None, b"/d", 0o755).unwrap();
