@@ -36,8 +36,9 @@
 //! call silently dispatched to the wrong handler, while a missing one is an
 //! `ENOSYS` that names itself.
 //!
-//! The pre-2.4 16-bit credential calls (`getuid`, `setuid` and their kin at
-//! ARMv7-A numbers 23 to 50) are deliberately absent for the same reason: musl
+//! The pre-2.4 16-bit credential calls (`getuid`, `setuid`, `setresuid` and
+//! their kin, scattered between ARMv7-A numbers 23 and 171) are deliberately
+//! absent for the same reason: musl
 //! issues only the `32` forms, so a call arriving on one of the old numbers is
 //! more likely a mistake than a request, and `ENOSYS` says so.
 
@@ -93,6 +94,8 @@ pub mod x86_64 {
     pub const ACCESS: usize = 21;
     /// Create a pipe, returning two file descriptors.
     pub const PIPE: usize = 22;
+    /// Wait for readiness on sets of file descriptors, with a `timeval` timeout.
+    pub const SELECT: usize = 23;
     /// Yield the processor to another runnable thread.
     pub const SCHED_YIELD: usize = 24;
     /// Resize, and possibly move, an existing mapping.
@@ -101,12 +104,26 @@ pub mod x86_64 {
     pub const MSYNC: usize = 26;
     /// Advise the kernel about future use of a memory range.
     pub const MADVISE: usize = 28;
+    /// Create or look up a System V shared memory segment.
+    pub const SHMGET: usize = 29;
+    /// Attach a System V shared memory segment.
+    pub const SHMAT: usize = 30;
+    /// Query or control a System V shared memory segment.
+    pub const SHMCTL: usize = 31;
     /// Duplicate a file descriptor onto the lowest free number.
     pub const DUP: usize = 32;
     /// Duplicate a file descriptor onto a chosen number.
     pub const DUP2: usize = 33;
+    /// Sleep until a signal arrives.
+    pub const PAUSE: usize = 34;
     /// Sleep for a duration, resumable after a signal.
     pub const NANOSLEEP: usize = 35;
+    /// Read an interval timer.
+    pub const GETITIMER: usize = 36;
+    /// Arrange for `SIGALRM` after a number of seconds.
+    pub const ALARM: usize = 37;
+    /// Arm or disarm an interval timer.
+    pub const SETITIMER: usize = 38;
     /// Return the calling process's identifier.
     pub const GETPID: usize = 39;
     /// Copy data between two file descriptors inside the kernel.
@@ -115,6 +132,32 @@ pub mod x86_64 {
     pub const SOCKET: usize = 41;
     /// Connect a socket to an address.
     pub const CONNECT: usize = 42;
+    /// Accept a connection on a listening socket.
+    pub const ACCEPT: usize = 43;
+    /// Send a message on a socket, optionally to an address.
+    pub const SENDTO: usize = 44;
+    /// Receive a message from a socket, with its source address.
+    pub const RECVFROM: usize = 45;
+    /// Send a message with ancillary data on a socket.
+    pub const SENDMSG: usize = 46;
+    /// Receive a message with ancillary data from a socket.
+    pub const RECVMSG: usize = 47;
+    /// Shut down part or all of a full-duplex connection.
+    pub const SHUTDOWN: usize = 48;
+    /// Bind a socket to a local address.
+    pub const BIND: usize = 49;
+    /// Mark a socket as accepting connections.
+    pub const LISTEN: usize = 50;
+    /// Read a socket's local address.
+    pub const GETSOCKNAME: usize = 51;
+    /// Read the address of a socket's peer.
+    pub const GETPEERNAME: usize = 52;
+    /// Create a pair of connected sockets.
+    pub const SOCKETPAIR: usize = 53;
+    /// Set a socket option.
+    pub const SETSOCKOPT: usize = 54;
+    /// Read a socket option.
+    pub const GETSOCKOPT: usize = 55;
     /// Create a process or thread; the primitive behind `fork` and `pthread`.
     pub const CLONE: usize = 56;
     /// Create a child process sharing nothing.
@@ -131,6 +174,8 @@ pub mod x86_64 {
     pub const KILL: usize = 62;
     /// Report kernel name and version.
     pub const UNAME: usize = 63;
+    /// Detach a System V shared memory segment.
+    pub const SHMDT: usize = 67;
     /// Manipulate a file descriptor's flags and locks.
     pub const FCNTL: usize = 72;
     /// Flush a file's data and metadata to storage.
@@ -179,8 +224,12 @@ pub mod x86_64 {
     pub const GETRUSAGE: usize = 98;
     /// Report system-wide memory and load statistics.
     pub const SYSINFO: usize = 99;
+    /// Report the CPU time used by the process and its children.
+    pub const TIMES: usize = 100;
     /// Return the real user identifier.
     pub const GETUID: usize = 102;
+    /// Read or control the kernel log buffer.
+    pub const SYSLOG: usize = 103;
     /// Return the real group identifier.
     pub const GETGID: usize = 104;
     /// Set the user identifier.
@@ -195,28 +244,74 @@ pub mod x86_64 {
     pub const SETPGID: usize = 109;
     /// Return the parent process's identifier.
     pub const GETPPID: usize = 110;
+    /// Return the calling process's process-group identifier.
+    pub const GETPGRP: usize = 111;
+    /// Start a new session, with the caller as its leader.
+    pub const SETSID: usize = 112;
+    /// Set the real and effective user identifiers.
+    pub const SETREUID: usize = 113;
+    /// Set the real and effective group identifiers.
+    pub const SETREGID: usize = 114;
     /// Read the supplementary group list.
     pub const GETGROUPS: usize = 115;
+    /// Replace the supplementary group list.
+    pub const SETGROUPS: usize = 116;
+    /// Set the real, effective and saved user identifiers.
+    pub const SETRESUID: usize = 117;
     /// Read the real, effective and saved user identifiers.
     pub const GETRESUID: usize = 118;
+    /// Set the real, effective and saved group identifiers.
+    pub const SETRESGID: usize = 119;
     /// Read the real, effective and saved group identifiers.
     pub const GETRESGID: usize = 120;
     /// Return a process's process-group identifier.
     pub const GETPGID: usize = 121;
+    /// Set the user identifier used for file access checks.
+    pub const SETFSUID: usize = 122;
+    /// Set the group identifier used for file access checks.
+    pub const SETFSGID: usize = 123;
+    /// Return a process's session identifier.
+    pub const GETSID: usize = 124;
+    /// Read a thread's capability sets.
+    pub const CAPGET: usize = 125;
+    /// Set a thread's capability sets.
+    pub const CAPSET: usize = 126;
+    /// Report the blocked signals that are pending.
+    pub const RT_SIGPENDING: usize = 127;
+    /// Wait for one of a set of signals, with a timeout.
+    pub const RT_SIGTIMEDWAIT: usize = 128;
+    /// Send a signal with caller-supplied `siginfo` to a process.
+    pub const RT_SIGQUEUEINFO: usize = 129;
     /// Replace the signal mask and wait for a signal.
     pub const RT_SIGSUSPEND: usize = 130;
     /// Install or query the alternate signal stack.
     pub const SIGALTSTACK: usize = 131;
+    /// Read or set the process's execution domain.
+    pub const PERSONALITY: usize = 135;
     /// Report file system statistics by path.
     pub const STATFS: usize = 137;
     /// Report file system statistics for an open file.
     pub const FSTATFS: usize = 138;
+    /// Read the nice value of a process, process group or user.
+    pub const GETPRIORITY: usize = 140;
+    /// Set the nice value of a process, process group or user.
+    pub const SETPRIORITY: usize = 141;
+    /// Set a thread's scheduling parameters.
+    pub const SCHED_SETPARAM: usize = 142;
     /// Read a thread's scheduling parameters.
     pub const SCHED_GETPARAM: usize = 143;
     /// Set a thread's scheduling policy and parameters.
     pub const SCHED_SETSCHEDULER: usize = 144;
     /// Read a thread's scheduling policy.
     pub const SCHED_GETSCHEDULER: usize = 145;
+    /// Report the highest priority a scheduling policy allows.
+    pub const SCHED_GET_PRIORITY_MAX: usize = 146;
+    /// Report the lowest priority a scheduling policy allows.
+    pub const SCHED_GET_PRIORITY_MIN: usize = 147;
+    /// Report a thread's round-robin time slice.
+    pub const SCHED_RR_GET_INTERVAL: usize = 148;
+    /// Simulate a hangup on the calling process's terminal.
+    pub const VHANGUP: usize = 153;
     /// Operate on per-process control settings, such as the thread name.
     pub const PRCTL: usize = 157;
     /// Read or set an architecture register, notably `FS_BASE` for TLS.
@@ -225,14 +320,34 @@ pub mod x86_64 {
     /// so the generic table never needed the call; ARMv7-A cannot write its
     /// own either, and asks through [`super::arm::ARM_SET_TLS`] instead.
     pub const ARCH_PRCTL: usize = 158;
+    /// Read or tune the system clock's discipline.
+    pub const ADJTIMEX: usize = 159;
     /// Set a resource limit; superseded by `prlimit64`.
     pub const SETRLIMIT: usize = 160;
     /// Flush all file systems.
     pub const SYNC: usize = 162;
+    /// Turn process accounting on or off.
+    pub const ACCT: usize = 163;
+    /// Set the wall clock, the obsolete predecessor of `clock_settime`.
+    pub const SETTIMEOFDAY: usize = 164;
     /// Attach a file system.
     pub const MOUNT: usize = 165;
     /// Detach a file system.
     pub const UMOUNT2: usize = 166;
+    /// Start swapping to a file or device.
+    pub const SWAPON: usize = 167;
+    /// Stop swapping to a file or device.
+    pub const SWAPOFF: usize = 168;
+    /// Reboot, halt or power off the machine.
+    pub const REBOOT: usize = 169;
+    /// Set the host name `uname` reports.
+    pub const SETHOSTNAME: usize = 170;
+    /// Set the NIS domain name `uname` reports.
+    pub const SETDOMAINNAME: usize = 171;
+    /// Load a kernel module from a buffer.
+    pub const INIT_MODULE: usize = 175;
+    /// Unload a kernel module.
+    pub const DELETE_MODULE: usize = 176;
     /// Return the calling thread's identifier.
     pub const GETTID: usize = 186;
     /// Send a signal to a thread by thread identifier.
@@ -247,6 +362,8 @@ pub mod x86_64 {
     pub const GETDENTS64: usize = 217;
     /// Register the address cleared and woken on thread exit.
     pub const SET_TID_ADDRESS: usize = 218;
+    /// Set a clock.
+    pub const CLOCK_SETTIME: usize = 227;
     /// Read a clock.
     pub const CLOCK_GETTIME: usize = 228;
     /// Sleep against a chosen clock, optionally until an absolute time.
@@ -261,6 +378,10 @@ pub mod x86_64 {
     pub const TGKILL: usize = 234;
     /// Wait for a child to change state, without necessarily reaping it.
     pub const WAITID: usize = 247;
+    /// Set a process's I/O scheduling class and priority.
+    pub const IOPRIO_SET: usize = 251;
+    /// Read a process's I/O scheduling class and priority.
+    pub const IOPRIO_GET: usize = 252;
     /// Open a file relative to a directory file descriptor.
     pub const OPENAT: usize = 257;
     /// Create a directory relative to a directory file descriptor.
@@ -283,6 +404,8 @@ pub mod x86_64 {
     pub const FCHMODAT: usize = 268;
     /// Check accessibility relative to a directory file descriptor.
     pub const FACCESSAT: usize = 269;
+    /// Wait for readiness on descriptor sets, with a signal mask and a `timespec`.
+    pub const PSELECT6: usize = 270;
     /// Poll with a signal mask and a `timespec` timeout.
     pub const PPOLL: usize = 271;
     /// Detach parts of the calling process's shared execution context.
@@ -293,6 +416,8 @@ pub mod x86_64 {
     pub const GET_ROBUST_LIST: usize = 274;
     /// Wait on an epoll set with a signal mask.
     pub const EPOLL_PWAIT: usize = 281;
+    /// Accept a connection, with flags for the new descriptor.
+    pub const ACCEPT4: usize = 288;
     /// Create an eventfd with flags.
     pub const EVENTFD2: usize = 290;
     /// Create an epoll set with flags.
@@ -303,6 +428,14 @@ pub mod x86_64 {
     pub const PIPE2: usize = 293;
     /// Read and set a resource limit of any process in one call.
     pub const PRLIMIT64: usize = 302;
+    /// Read or tune a chosen clock's discipline.
+    pub const CLOCK_ADJTIME: usize = 305;
+    /// Move the calling thread into an existing namespace.
+    pub const SETNS: usize = 308;
+    /// Report the processor and NUMA node the caller is running on.
+    pub const GETCPU: usize = 309;
+    /// Load a kernel module from a file descriptor.
+    pub const FINIT_MODULE: usize = 313;
     /// Rename with flags, such as `RENAME_NOREPLACE`.
     pub const RENAMEAT2: usize = 316;
     /// Fill a buffer with random bytes.
@@ -367,7 +500,9 @@ pub mod x86_64 {
 /// equivalent, so there is no `open`, `stat`, `lstat`, `poll`, `pipe`, `dup2`,
 /// `fork`, `vfork`, `access`, `rename`, `mkdir`, `rmdir`, `unlink`, `symlink`,
 /// `readlink`, `chmod` or `chown` here — musl calls the `*at` forms. There is
-/// no `arch_prctl` either, since the thread pointer is a writable register.
+/// no `arch_prctl` either, since the thread pointer is a writable register, and
+/// no `alarm`, `pause`, `select` or `getpgrp`: musl reaches those through
+/// `setitimer`, `ppoll`, `pselect6` and `getpgid(0)`.
 pub mod aarch64 {
     /// Read the current working directory into a buffer.
     pub const GETCWD: usize = 17;
@@ -389,6 +524,10 @@ pub mod aarch64 {
     pub const FCNTL: usize = 25;
     /// Device-specific control operation on a file descriptor.
     pub const IOCTL: usize = 29;
+    /// Set a process's I/O scheduling class and priority.
+    pub const IOPRIO_SET: usize = 30;
+    /// Read a process's I/O scheduling class and priority.
+    pub const IOPRIO_GET: usize = 31;
     /// Create a directory relative to a directory file descriptor.
     pub const MKDIRAT: usize = 34;
     /// Remove a directory entry relative to a directory file descriptor.
@@ -431,6 +570,8 @@ pub mod aarch64 {
     pub const OPENAT: usize = 56;
     /// Close a file descriptor.
     pub const CLOSE: usize = 57;
+    /// Simulate a hangup on the calling process's terminal.
+    pub const VHANGUP: usize = 58;
     /// Create a pipe with flags.
     pub const PIPE2: usize = 59;
     /// Read directory entries in the 64-bit layout.
@@ -451,6 +592,8 @@ pub mod aarch64 {
     pub const PWRITE64: usize = 68;
     /// Copy data between two file descriptors inside the kernel.
     pub const SENDFILE: usize = 71;
+    /// Wait for readiness on descriptor sets, with a signal mask and a `timespec`.
+    pub const PSELECT6: usize = 72;
     /// Poll with a signal mask and a `timespec` timeout.
     pub const PPOLL: usize = 73;
     /// Read a symbolic link relative to a directory file descriptor.
@@ -465,6 +608,14 @@ pub mod aarch64 {
     pub const FSYNC: usize = 82;
     /// Flush a file's data, and only the metadata needed to read it back.
     pub const FDATASYNC: usize = 83;
+    /// Turn process accounting on or off.
+    pub const ACCT: usize = 89;
+    /// Read a thread's capability sets.
+    pub const CAPGET: usize = 90;
+    /// Set a thread's capability sets.
+    pub const CAPSET: usize = 91;
+    /// Read or set the process's execution domain.
+    pub const PERSONALITY: usize = 92;
     /// Terminate the calling thread.
     pub const EXIT: usize = 93;
     /// Terminate every thread in the process.
@@ -483,10 +634,24 @@ pub mod aarch64 {
     pub const GET_ROBUST_LIST: usize = 100;
     /// Sleep for a duration, resumable after a signal.
     pub const NANOSLEEP: usize = 101;
+    /// Read an interval timer.
+    pub const GETITIMER: usize = 102;
+    /// Arm or disarm an interval timer.
+    pub const SETITIMER: usize = 103;
+    /// Load a kernel module from a buffer.
+    pub const INIT_MODULE: usize = 105;
+    /// Unload a kernel module.
+    pub const DELETE_MODULE: usize = 106;
+    /// Set a clock.
+    pub const CLOCK_SETTIME: usize = 112;
     /// Read a clock.
     pub const CLOCK_GETTIME: usize = 113;
     /// Sleep against a chosen clock, optionally until an absolute time.
     pub const CLOCK_NANOSLEEP: usize = 115;
+    /// Read or control the kernel log buffer.
+    pub const SYSLOG: usize = 116;
+    /// Set a thread's scheduling parameters.
+    pub const SCHED_SETPARAM: usize = 118;
     /// Set a thread's scheduling policy and parameters.
     pub const SCHED_SETSCHEDULER: usize = 119;
     /// Read a thread's scheduling policy.
@@ -499,6 +664,12 @@ pub mod aarch64 {
     pub const SCHED_GETAFFINITY: usize = 123;
     /// Yield the processor to another runnable thread.
     pub const SCHED_YIELD: usize = 124;
+    /// Report the highest priority a scheduling policy allows.
+    pub const SCHED_GET_PRIORITY_MAX: usize = 125;
+    /// Report the lowest priority a scheduling policy allows.
+    pub const SCHED_GET_PRIORITY_MIN: usize = 126;
+    /// Report a thread's round-robin time slice.
+    pub const SCHED_RR_GET_INTERVAL: usize = 127;
     /// Send a signal to a process or process group.
     pub const KILL: usize = 129;
     /// Send a signal to a thread by thread identifier.
@@ -513,24 +684,60 @@ pub mod aarch64 {
     pub const RT_SIGACTION: usize = 134;
     /// Change the blocked signal mask.
     pub const RT_SIGPROCMASK: usize = 135;
+    /// Report the blocked signals that are pending.
+    pub const RT_SIGPENDING: usize = 136;
+    /// Wait for one of a set of signals, with a timeout.
+    pub const RT_SIGTIMEDWAIT: usize = 137;
+    /// Send a signal with caller-supplied `siginfo` to a process.
+    pub const RT_SIGQUEUEINFO: usize = 138;
     /// Return from a signal handler, restoring the interrupted context.
     pub const RT_SIGRETURN: usize = 139;
+    /// Set the nice value of a process, process group or user.
+    pub const SETPRIORITY: usize = 140;
+    /// Read the nice value of a process, process group or user.
+    pub const GETPRIORITY: usize = 141;
+    /// Reboot, halt or power off the machine.
+    pub const REBOOT: usize = 142;
+    /// Set the real and effective group identifiers.
+    pub const SETREGID: usize = 143;
     /// Set the group identifier.
     pub const SETGID: usize = 144;
+    /// Set the real and effective user identifiers.
+    pub const SETREUID: usize = 145;
     /// Set the user identifier.
     pub const SETUID: usize = 146;
+    /// Set the real, effective and saved user identifiers.
+    pub const SETRESUID: usize = 147;
     /// Read the real, effective and saved user identifiers.
     pub const GETRESUID: usize = 148;
+    /// Set the real, effective and saved group identifiers.
+    pub const SETRESGID: usize = 149;
     /// Read the real, effective and saved group identifiers.
     pub const GETRESGID: usize = 150;
+    /// Set the user identifier used for file access checks.
+    pub const SETFSUID: usize = 151;
+    /// Set the group identifier used for file access checks.
+    pub const SETFSGID: usize = 152;
+    /// Report the CPU time used by the process and its children.
+    pub const TIMES: usize = 153;
     /// Set a process's process-group identifier.
     pub const SETPGID: usize = 154;
     /// Return a process's process-group identifier.
     pub const GETPGID: usize = 155;
+    /// Return a process's session identifier.
+    pub const GETSID: usize = 156;
+    /// Start a new session, with the caller as its leader.
+    pub const SETSID: usize = 157;
     /// Read the supplementary group list.
     pub const GETGROUPS: usize = 158;
+    /// Replace the supplementary group list.
+    pub const SETGROUPS: usize = 159;
     /// Report kernel name and version.
     pub const UNAME: usize = 160;
+    /// Set the host name `uname` reports.
+    pub const SETHOSTNAME: usize = 161;
+    /// Set the NIS domain name `uname` reports.
+    pub const SETDOMAINNAME: usize = 162;
     /// Read a resource limit; superseded by `prlimit64`.
     pub const GETRLIMIT: usize = 163;
     /// Set a resource limit; superseded by `prlimit64`.
@@ -541,8 +748,14 @@ pub mod aarch64 {
     pub const UMASK: usize = 166;
     /// Operate on per-process control settings, such as the thread name.
     pub const PRCTL: usize = 167;
+    /// Report the processor and NUMA node the caller is running on.
+    pub const GETCPU: usize = 168;
     /// Read the wall clock, the obsolete predecessor of `clock_gettime`.
     pub const GETTIMEOFDAY: usize = 169;
+    /// Set the wall clock, the obsolete predecessor of `clock_settime`.
+    pub const SETTIMEOFDAY: usize = 170;
+    /// Read or tune the system clock's discipline.
+    pub const ADJTIMEX: usize = 171;
     /// Return the calling process's identifier.
     pub const GETPID: usize = 172;
     /// Return the parent process's identifier.
@@ -559,10 +772,44 @@ pub mod aarch64 {
     pub const GETTID: usize = 178;
     /// Report system-wide memory and load statistics.
     pub const SYSINFO: usize = 179;
+    /// Create or look up a System V shared memory segment.
+    pub const SHMGET: usize = 194;
+    /// Query or control a System V shared memory segment.
+    pub const SHMCTL: usize = 195;
+    /// Attach a System V shared memory segment.
+    pub const SHMAT: usize = 196;
+    /// Detach a System V shared memory segment.
+    pub const SHMDT: usize = 197;
     /// Create a socket.
     pub const SOCKET: usize = 198;
+    /// Create a pair of connected sockets.
+    pub const SOCKETPAIR: usize = 199;
+    /// Bind a socket to a local address.
+    pub const BIND: usize = 200;
+    /// Mark a socket as accepting connections.
+    pub const LISTEN: usize = 201;
+    /// Accept a connection on a listening socket.
+    pub const ACCEPT: usize = 202;
     /// Connect a socket to an address.
     pub const CONNECT: usize = 203;
+    /// Read a socket's local address.
+    pub const GETSOCKNAME: usize = 204;
+    /// Read the address of a socket's peer.
+    pub const GETPEERNAME: usize = 205;
+    /// Send a message on a socket, optionally to an address.
+    pub const SENDTO: usize = 206;
+    /// Receive a message from a socket, with its source address.
+    pub const RECVFROM: usize = 207;
+    /// Set a socket option.
+    pub const SETSOCKOPT: usize = 208;
+    /// Read a socket option.
+    pub const GETSOCKOPT: usize = 209;
+    /// Shut down part or all of a full-duplex connection.
+    pub const SHUTDOWN: usize = 210;
+    /// Send a message with ancillary data on a socket.
+    pub const SENDMSG: usize = 211;
+    /// Receive a message with ancillary data from a socket.
+    pub const RECVMSG: usize = 212;
     /// Move the program break, the classic heap boundary.
     pub const BRK: usize = 214;
     /// Remove a mapping.
@@ -575,16 +822,28 @@ pub mod aarch64 {
     pub const EXECVE: usize = 221;
     /// Map files or anonymous memory into the address space.
     pub const MMAP: usize = 222;
+    /// Start swapping to a file or device.
+    pub const SWAPON: usize = 224;
+    /// Stop swapping to a file or device.
+    pub const SWAPOFF: usize = 225;
     /// Change the protection of a mapping.
     pub const MPROTECT: usize = 226;
     /// Flush a file-backed mapping to its file.
     pub const MSYNC: usize = 227;
     /// Advise the kernel about future use of a memory range.
     pub const MADVISE: usize = 233;
+    /// Accept a connection, with flags for the new descriptor.
+    pub const ACCEPT4: usize = 242;
     /// Wait for a child to change state, reporting resource usage.
     pub const WAIT4: usize = 260;
     /// Read and set a resource limit of any process in one call.
     pub const PRLIMIT64: usize = 261;
+    /// Read or tune a chosen clock's discipline.
+    pub const CLOCK_ADJTIME: usize = 266;
+    /// Move the calling thread into an existing namespace.
+    pub const SETNS: usize = 268;
+    /// Load a kernel module from a file descriptor.
+    pub const FINIT_MODULE: usize = 273;
     /// Fill a buffer with random bytes.
     pub const GETRANDOM: usize = 278;
     /// Create an anonymous file living in memory.
@@ -686,6 +945,8 @@ pub mod arm {
     pub const GETPID: usize = 20;
     /// Attach a file system.
     pub const MOUNT: usize = 21;
+    /// Sleep until a signal arrives.
+    pub const PAUSE: usize = 29;
     /// Check a path's accessibility for the real user.
     pub const ACCESS: usize = 33;
     /// Flush all file systems.
@@ -702,8 +963,12 @@ pub mod arm {
     pub const DUP: usize = 41;
     /// Create a pipe, returning two file descriptors.
     pub const PIPE: usize = 42;
+    /// Report the CPU time used by the process and its children.
+    pub const TIMES: usize = 43;
     /// Move the program break, the classic heap boundary.
     pub const BRK: usize = 45;
+    /// Turn process accounting on or off.
+    pub const ACCT: usize = 51;
     /// Detach a file system.
     pub const UMOUNT2: usize = 52;
     /// Device-specific control operation on a file descriptor.
@@ -718,16 +983,28 @@ pub mod arm {
     pub const DUP2: usize = 63;
     /// Return the parent process's identifier.
     pub const GETPPID: usize = 64;
+    /// Return the calling process's process-group identifier.
+    pub const GETPGRP: usize = 65;
+    /// Start a new session, with the caller as its leader.
+    pub const SETSID: usize = 66;
+    /// Set the host name `uname` reports.
+    pub const SETHOSTNAME: usize = 74;
     /// Set a resource limit; superseded by `prlimit64`.
     pub const SETRLIMIT: usize = 75;
     /// Report accumulated resource usage.
     pub const GETRUSAGE: usize = 77;
     /// Read the wall clock, the obsolete predecessor of `clock_gettime`.
     pub const GETTIMEOFDAY: usize = 78;
+    /// Set the wall clock, the obsolete predecessor of `clock_settime`.
+    pub const SETTIMEOFDAY: usize = 79;
     /// Create a symbolic link.
     pub const SYMLINK: usize = 83;
     /// Read a symbolic link's target.
     pub const READLINK: usize = 85;
+    /// Start swapping to a file or device.
+    pub const SWAPON: usize = 87;
+    /// Reboot, halt or power off the machine.
+    pub const REBOOT: usize = 88;
     /// Remove a mapping.
     pub const MUNMAP: usize = 91;
     /// Set a file's length by path.
@@ -736,35 +1013,65 @@ pub mod arm {
     pub const FTRUNCATE: usize = 93;
     /// Change an open file's mode.
     pub const FCHMOD: usize = 94;
+    /// Read the nice value of a process, process group or user.
+    pub const GETPRIORITY: usize = 96;
+    /// Set the nice value of a process, process group or user.
+    pub const SETPRIORITY: usize = 97;
+    /// Read or control the kernel log buffer.
+    pub const SYSLOG: usize = 103;
+    /// Arm or disarm an interval timer.
+    pub const SETITIMER: usize = 104;
+    /// Read an interval timer.
+    pub const GETITIMER: usize = 105;
+    /// Simulate a hangup on the calling process's terminal.
+    pub const VHANGUP: usize = 111;
     /// Wait for a child to change state, reporting resource usage.
     pub const WAIT4: usize = 114;
+    /// Stop swapping to a file or device.
+    pub const SWAPOFF: usize = 115;
     /// Report system-wide memory and load statistics.
     pub const SYSINFO: usize = 116;
     /// Flush a file's data and metadata to storage.
     pub const FSYNC: usize = 118;
     /// Create a process or thread; the primitive behind `fork` and `pthread`.
     pub const CLONE: usize = 120;
+    /// Set the NIS domain name `uname` reports.
+    pub const SETDOMAINNAME: usize = 121;
     /// Report kernel name and version.
     pub const UNAME: usize = 122;
+    /// Read or tune the system clock's discipline.
+    pub const ADJTIMEX: usize = 124;
     /// Change the protection of a mapping.
     pub const MPROTECT: usize = 125;
+    /// Load a kernel module from a buffer.
+    pub const INIT_MODULE: usize = 128;
+    /// Unload a kernel module.
+    pub const DELETE_MODULE: usize = 129;
     /// Return a process's process-group identifier.
     pub const GETPGID: usize = 132;
     /// Change the working directory to an open directory.
     pub const FCHDIR: usize = 133;
+    /// Read or set the process's execution domain.
+    pub const PERSONALITY: usize = 136;
     /// Reposition a file descriptor's offset, with the offset split across
     /// two registers and the result written through a pointer. ARMv7-A only,
     /// because a 32-bit register cannot carry a 64-bit offset and the return
     /// register cannot carry one back.
     pub const LLSEEK: usize = 140;
+    /// Wait for readiness on sets of file descriptors, with a `timeval` timeout.
+    pub const NEWSELECT: usize = 142;
     /// Flush a file-backed mapping to its file.
     pub const MSYNC: usize = 144;
     /// Read into several buffers in one call.
     pub const READV: usize = 145;
     /// Write from several buffers in one call.
     pub const WRITEV: usize = 146;
+    /// Return a process's session identifier.
+    pub const GETSID: usize = 147;
     /// Flush a file's data, and only the metadata needed to read it back.
     pub const FDATASYNC: usize = 148;
+    /// Set a thread's scheduling parameters.
+    pub const SCHED_SETPARAM: usize = 154;
     /// Read a thread's scheduling parameters.
     pub const SCHED_GETPARAM: usize = 155;
     /// Set a thread's scheduling policy and parameters.
@@ -773,6 +1080,12 @@ pub mod arm {
     pub const SCHED_GETSCHEDULER: usize = 157;
     /// Yield the processor to another runnable thread.
     pub const SCHED_YIELD: usize = 158;
+    /// Report the highest priority a scheduling policy allows.
+    pub const SCHED_GET_PRIORITY_MAX: usize = 159;
+    /// Report the lowest priority a scheduling policy allows.
+    pub const SCHED_GET_PRIORITY_MIN: usize = 160;
+    /// Report a thread's round-robin time slice.
+    pub const SCHED_RR_GET_INTERVAL: usize = 161;
     /// Sleep for a duration, resumable after a signal.
     pub const NANOSLEEP: usize = 162;
     /// Resize, and possibly move, an existing mapping.
@@ -787,6 +1100,12 @@ pub mod arm {
     pub const RT_SIGACTION: usize = 174;
     /// Change the blocked signal mask.
     pub const RT_SIGPROCMASK: usize = 175;
+    /// Report the blocked signals that are pending.
+    pub const RT_SIGPENDING: usize = 176;
+    /// Wait for one of a set of signals, with a timeout.
+    pub const RT_SIGTIMEDWAIT: usize = 177;
+    /// Send a signal with caller-supplied `siginfo` to a process.
+    pub const RT_SIGQUEUEINFO: usize = 178;
     /// Replace the signal mask and wait for a signal.
     pub const RT_SIGSUSPEND: usize = 179;
     /// Read at an explicit offset, leaving the file position alone.
@@ -795,6 +1114,10 @@ pub mod arm {
     pub const PWRITE64: usize = 181;
     /// Read the current working directory into a buffer.
     pub const GETCWD: usize = 183;
+    /// Read a thread's capability sets.
+    pub const CAPGET: usize = 184;
+    /// Set a thread's capability sets.
+    pub const CAPSET: usize = 185;
     /// Install or query the alternate signal stack.
     pub const SIGALTSTACK: usize = 186;
     /// Create a child sharing the address space, suspending the parent.
@@ -830,12 +1153,22 @@ pub mod arm {
     pub const GETEUID32: usize = 201;
     /// Return the effective group identifier.
     pub const GETEGID32: usize = 202;
+    /// Set the real and effective user identifiers.
+    pub const SETREUID32: usize = 203;
+    /// Set the real and effective group identifiers.
+    pub const SETREGID32: usize = 204;
     /// Read the supplementary group list.
     pub const GETGROUPS32: usize = 205;
+    /// Replace the supplementary group list.
+    pub const SETGROUPS32: usize = 206;
     /// Change an open file's owner.
     pub const FCHOWN32: usize = 207;
+    /// Set the real, effective and saved user identifiers.
+    pub const SETRESUID32: usize = 208;
     /// Read the real, effective and saved user identifiers.
     pub const GETRESUID32: usize = 209;
+    /// Set the real, effective and saved group identifiers.
+    pub const SETRESGID32: usize = 210;
     /// Read the real, effective and saved group identifiers.
     pub const GETRESGID32: usize = 211;
     /// Change a file's owner by path.
@@ -844,6 +1177,10 @@ pub mod arm {
     pub const SETUID32: usize = 213;
     /// Set the group identifier.
     pub const SETGID32: usize = 214;
+    /// Set the user identifier used for file access checks.
+    pub const SETFSUID32: usize = 215;
+    /// Set the group identifier used for file access checks.
+    pub const SETFSGID32: usize = 216;
     /// Read directory entries in the 64-bit layout.
     pub const GETDENTS64: usize = 217;
     /// Advise the kernel about future use of a memory range.
@@ -873,6 +1210,8 @@ pub mod arm {
     pub const EPOLL_WAIT: usize = 252;
     /// Register the address cleared and woken on thread exit.
     pub const SET_TID_ADDRESS: usize = 256;
+    /// Set a clock.
+    pub const CLOCK_SETTIME: usize = 262;
     /// Read a clock.
     pub const CLOCK_GETTIME: usize = 263;
     /// Sleep against a chosen clock, optionally until an absolute time.
@@ -891,8 +1230,46 @@ pub mod arm {
     pub const WAITID: usize = 280;
     /// Create a socket.
     pub const SOCKET: usize = 281;
+    /// Bind a socket to a local address.
+    pub const BIND: usize = 282;
     /// Connect a socket to an address.
     pub const CONNECT: usize = 283;
+    /// Mark a socket as accepting connections.
+    pub const LISTEN: usize = 284;
+    /// Accept a connection on a listening socket.
+    pub const ACCEPT: usize = 285;
+    /// Read a socket's local address.
+    pub const GETSOCKNAME: usize = 286;
+    /// Read the address of a socket's peer.
+    pub const GETPEERNAME: usize = 287;
+    /// Create a pair of connected sockets.
+    pub const SOCKETPAIR: usize = 288;
+    /// Send a message on a socket, optionally to an address.
+    pub const SENDTO: usize = 290;
+    /// Receive a message from a socket, with its source address.
+    pub const RECVFROM: usize = 292;
+    /// Shut down part or all of a full-duplex connection.
+    pub const SHUTDOWN: usize = 293;
+    /// Set a socket option.
+    pub const SETSOCKOPT: usize = 294;
+    /// Read a socket option.
+    pub const GETSOCKOPT: usize = 295;
+    /// Send a message with ancillary data on a socket.
+    pub const SENDMSG: usize = 296;
+    /// Receive a message with ancillary data from a socket.
+    pub const RECVMSG: usize = 297;
+    /// Attach a System V shared memory segment.
+    pub const SHMAT: usize = 305;
+    /// Detach a System V shared memory segment.
+    pub const SHMDT: usize = 306;
+    /// Create or look up a System V shared memory segment.
+    pub const SHMGET: usize = 307;
+    /// Query or control a System V shared memory segment.
+    pub const SHMCTL: usize = 308;
+    /// Set a process's I/O scheduling class and priority.
+    pub const IOPRIO_SET: usize = 314;
+    /// Read a process's I/O scheduling class and priority.
+    pub const IOPRIO_GET: usize = 315;
     /// Open a file relative to a directory file descriptor.
     pub const OPENAT: usize = 322;
     /// Create a directory relative to a directory file descriptor.
@@ -917,6 +1294,8 @@ pub mod arm {
     pub const FCHMODAT: usize = 333;
     /// Check accessibility relative to a directory file descriptor.
     pub const FACCESSAT: usize = 334;
+    /// Wait for readiness on descriptor sets, with a signal mask and a `timespec`.
+    pub const PSELECT6: usize = 335;
     /// Poll with a signal mask and a `timespec` timeout.
     pub const PPOLL: usize = 336;
     /// Detach parts of the calling process's shared execution context.
@@ -926,6 +1305,8 @@ pub mod arm {
     pub const SET_ROBUST_LIST: usize = 338;
     /// Read a thread's robust futex list.
     pub const GET_ROBUST_LIST: usize = 339;
+    /// Report the processor and NUMA node the caller is running on.
+    pub const GETCPU: usize = 345;
     /// Wait on an epoll set with a signal mask.
     pub const EPOLL_PWAIT: usize = 346;
     /// Create an eventfd with flags.
@@ -936,8 +1317,16 @@ pub mod arm {
     pub const DUP3: usize = 358;
     /// Create a pipe with flags.
     pub const PIPE2: usize = 359;
+    /// Accept a connection, with flags for the new descriptor.
+    pub const ACCEPT4: usize = 366;
     /// Read and set a resource limit of any process in one call.
     pub const PRLIMIT64: usize = 369;
+    /// Read or tune a chosen clock's discipline.
+    pub const CLOCK_ADJTIME: usize = 372;
+    /// Move the calling thread into an existing namespace.
+    pub const SETNS: usize = 375;
+    /// Load a kernel module from a file descriptor.
+    pub const FINIT_MODULE: usize = 379;
     /// Rename with flags, such as `RENAME_NOREPLACE`.
     pub const RENAMEAT2: usize = 382;
     /// Fill a buffer with random bytes.
@@ -956,15 +1345,29 @@ pub mod arm {
     /// time64 since 1.2, so this, not [`super::Syscall::ClockGettime`], is what a
     /// current 32-bit binary calls.
     pub const CLOCK_GETTIME64: usize = 403;
+    /// Set a clock from a 64-bit `timespec`. ARMv7-A only.
+    pub const CLOCK_SETTIME64: usize = 404;
+    /// Read or tune a chosen clock's discipline, with 64-bit time fields.
+    /// ARMv7-A only.
+    pub const CLOCK_ADJTIME64: usize = 405;
     /// Sleep against a chosen clock, with 64-bit `timespec` arguments.
     /// ARMv7-A only.
     pub const CLOCK_NANOSLEEP_TIME64: usize = 407;
+    /// Wait for readiness on descriptor sets, with a signal mask and a 64-bit
+    /// `timespec`. ARMv7-A only.
+    pub const PSELECT6_TIME64: usize = 413;
     /// Poll with a signal mask and a 64-bit `timespec`. The timeout is a pair
     /// of 64-bit fields rather than the 32-bit pair [`PPOLL`] takes.
     pub const PPOLL_TIME64: usize = 414;
+    /// Wait for one of a set of signals, with a 64-bit `timespec` timeout.
+    /// ARMv7-A only.
+    pub const RT_SIGTIMEDWAIT_TIME64: usize = 421;
     /// Wait on, or wake, a futex, with a 64-bit `timespec` timeout. ARMv7-A
     /// only, and the one a time64 musl's locks actually reach.
     pub const FUTEX_TIME64: usize = 422;
+    /// Report a thread's round-robin time slice into a 64-bit `timespec`.
+    /// ARMv7-A only.
+    pub const SCHED_RR_GET_INTERVAL_TIME64: usize = 423;
     /// Create a process or thread from a versioned argument structure.
     pub const CLONE3: usize = 435;
     /// Open a file from a versioned argument structure.
@@ -1073,6 +1476,14 @@ pub enum Syscall {
     /// is a pair of 64-bit fields rather than the 32-bit pair [`Syscall::Ppoll`]
     /// takes on that architecture.
     PpollTime64,
+    /// Wait for readiness on sets of file descriptors, with a `timeval` timeout.
+    /// x86-64 and ARMv7-A only; ARMv7-A calls it `_newselect`.
+    Select,
+    /// Wait for readiness on descriptor sets, with a signal mask and a `timespec`.
+    Pselect6,
+    /// Wait for readiness on descriptor sets, with a signal mask and a 64-bit
+    /// `timespec`. ARMv7-A only.
+    Pselect6Time64,
     /// Reposition a file descriptor's offset.
     Lseek,
     /// Reposition a file descriptor's offset, with the offset split across two
@@ -1107,6 +1518,17 @@ pub enum Syscall {
     RtSigreturn,
     /// Replace the signal mask and wait for a signal.
     RtSigsuspend,
+    /// Sleep until a signal arrives. x86-64 and ARMv7-A only.
+    Pause,
+    /// Report the blocked signals that are pending.
+    RtSigpending,
+    /// Wait for one of a set of signals, with a timeout.
+    RtSigtimedwait,
+    /// Wait for one of a set of signals, with a 64-bit `timespec` timeout.
+    /// ARMv7-A only.
+    RtSigtimedwaitTime64,
+    /// Send a signal with caller-supplied `siginfo` to a process.
+    RtSigqueueinfo,
     /// Install or query the alternate signal stack.
     Sigaltstack,
     /// Device-specific control operation on a file descriptor.
@@ -1150,6 +1572,28 @@ pub enum Syscall {
     /// Sleep against a chosen clock, with 64-bit `timespec` arguments. ARMv7-A
     /// only.
     ClockNanosleepTime64,
+    /// Set the wall clock, the obsolete predecessor of `clock_settime`.
+    Settimeofday,
+    /// Set a clock.
+    ClockSettime,
+    /// Set a clock from a 64-bit `timespec`. ARMv7-A only.
+    ClockSettime64,
+    /// Read or tune the system clock's discipline.
+    Adjtimex,
+    /// Read or tune a chosen clock's discipline.
+    ClockAdjtime,
+    /// Read or tune a chosen clock's discipline, with 64-bit time fields.
+    /// ARMv7-A only.
+    ClockAdjtime64,
+    /// Report the CPU time used by the process and its children.
+    Times,
+    /// Read an interval timer.
+    Getitimer,
+    /// Arm or disarm an interval timer.
+    Setitimer,
+    /// Arrange for `SIGALRM` after a number of seconds. x86-64 only; musl uses
+    /// `setitimer` where the table lacks it.
+    Alarm,
     /// Read the wall clock, the obsolete predecessor of `clock_gettime`.
     Gettimeofday,
     /// Return the calling process's identifier.
@@ -1167,6 +1611,42 @@ pub enum Syscall {
     Socket,
     /// Connect a socket to an address.
     Connect,
+    /// Create a pair of connected sockets.
+    Socketpair,
+    /// Bind a socket to a local address.
+    Bind,
+    /// Mark a socket as accepting connections.
+    Listen,
+    /// Accept a connection on a listening socket.
+    Accept,
+    /// Accept a connection, with flags for the new descriptor.
+    Accept4,
+    /// Read a socket's local address.
+    Getsockname,
+    /// Read the address of a socket's peer.
+    Getpeername,
+    /// Send a message on a socket, optionally to an address.
+    Sendto,
+    /// Receive a message from a socket, with its source address.
+    Recvfrom,
+    /// Send a message with ancillary data on a socket.
+    Sendmsg,
+    /// Receive a message with ancillary data from a socket.
+    Recvmsg,
+    /// Shut down part or all of a full-duplex connection.
+    Shutdown,
+    /// Set a socket option.
+    Setsockopt,
+    /// Read a socket option.
+    Getsockopt,
+    /// Create or look up a System V shared memory segment.
+    Shmget,
+    /// Attach a System V shared memory segment.
+    Shmat,
+    /// Detach a System V shared memory segment.
+    Shmdt,
+    /// Query or control a System V shared memory segment.
+    Shmctl,
     /// Create a process or thread; the primitive behind `fork` and `pthread`.
     Clone,
     /// Create a process or thread from a versioned argument structure.
@@ -1196,6 +1676,32 @@ pub enum Syscall {
     Tgkill,
     /// Report kernel name and version.
     Uname,
+    /// Set the host name `uname` reports.
+    Sethostname,
+    /// Set the NIS domain name `uname` reports.
+    Setdomainname,
+    /// Read or control the kernel log buffer.
+    Syslog,
+    /// Reboot, halt or power off the machine.
+    Reboot,
+    /// Read or set the process's execution domain.
+    Personality,
+    /// Load a kernel module from a buffer.
+    InitModule,
+    /// Load a kernel module from a file descriptor.
+    FinitModule,
+    /// Unload a kernel module.
+    DeleteModule,
+    /// Start swapping to a file or device.
+    Swapon,
+    /// Stop swapping to a file or device.
+    Swapoff,
+    /// Move the calling thread into an existing namespace.
+    Setns,
+    /// Simulate a hangup on the calling process's terminal.
+    Vhangup,
+    /// Turn process accounting on or off.
+    Acct,
     /// Manipulate a file descriptor's flags and locks.
     Fcntl,
     /// Manipulate a file descriptor's flags and locks, with 64-bit `flock64`
@@ -1298,6 +1804,30 @@ pub enum Syscall {
     Getpgid,
     /// Read the supplementary group list.
     Getgroups,
+    /// Replace the supplementary group list.
+    Setgroups,
+    /// Set the real and effective user identifiers.
+    Setreuid,
+    /// Set the real and effective group identifiers.
+    Setregid,
+    /// Set the real, effective and saved user identifiers.
+    Setresuid,
+    /// Set the real, effective and saved group identifiers.
+    Setresgid,
+    /// Set the user identifier used for file access checks.
+    Setfsuid,
+    /// Set the group identifier used for file access checks.
+    Setfsgid,
+    /// Read a thread's capability sets.
+    Capget,
+    /// Set a thread's capability sets.
+    Capset,
+    /// Return the calling process's process-group identifier. x86-64 and ARMv7-A only.
+    Getpgrp,
+    /// Start a new session, with the caller as its leader.
+    Setsid,
+    /// Return a process's session identifier.
+    Getsid,
     /// Read directory entries in the 64-bit layout.
     Getdents64,
     /// Wait on, or wake, a futex; the primitive under every musl lock.
@@ -1321,6 +1851,27 @@ pub enum Syscall {
     SchedSetscheduler,
     /// Read a thread's scheduling policy.
     SchedGetscheduler,
+    /// Set a thread's scheduling parameters.
+    SchedSetparam,
+    /// Report the highest priority a scheduling policy allows.
+    SchedGetPriorityMax,
+    /// Report the lowest priority a scheduling policy allows.
+    SchedGetPriorityMin,
+    /// Report a thread's round-robin time slice.
+    SchedRrGetInterval,
+    /// Report a thread's round-robin time slice into a 64-bit `timespec`.
+    /// ARMv7-A only.
+    SchedRrGetIntervalTime64,
+    /// Read the nice value of a process, process group or user.
+    Getpriority,
+    /// Set the nice value of a process, process group or user.
+    Setpriority,
+    /// Read a process's I/O scheduling class and priority.
+    IoprioGet,
+    /// Set a process's I/O scheduling class and priority.
+    IoprioSet,
+    /// Report the processor and NUMA node the caller is running on.
+    Getcpu,
     /// Read or set an architecture register, notably `FS_BASE`. x86-64 only;
     /// ARMv7-A reaches the same effect through [`Syscall::ArmSetTls`].
     ArchPrctl,
@@ -1410,8 +1961,9 @@ pub enum Syscall {
 /// Translate an x86-64 system call number.
 ///
 /// Returns [`None`] for a number this crate does not know, which the caller
-/// reports as `ENOSYS`. Split by range into helpers because one match over the
-/// whole table would be both unreadably long and a `too_many_lines` failure.
+/// reports as `ENOSYS`. Split into helpers -- the older calls by number range,
+/// the rest by subject -- because one match over the whole table would be both
+/// unreadably long and a `too_many_lines` failure.
 #[must_use]
 pub fn from_x86_64(nr: usize) -> Option<Syscall> {
     // Asked in turn, for the reason given on `from_aarch64`.
@@ -1420,6 +1972,11 @@ pub fn from_x86_64(nr: usize) -> Option<Syscall> {
         .or_else(|| x86_64_threads_and_time(nr))
         .or_else(|| x86_64_at_family(nr))
         .or_else(|| x86_64_recent(nr))
+        .or_else(|| x86_64_sockets_and_shm(nr))
+        .or_else(|| x86_64_credentials_and_sessions(nr))
+        .or_else(|| x86_64_administration(nr))
+        .or_else(|| x86_64_clocks_and_timers(nr))
+        .or_else(|| x86_64_signals_and_scheduling(nr))
 }
 
 /// x86-64 numbers 0 to 63: the original UNIX core.
@@ -1457,8 +2014,6 @@ fn x86_64_file_and_process(nr: usize) -> Option<Syscall> {
         x86_64::NANOSLEEP => Syscall::Nanosleep,
         x86_64::GETPID => Syscall::Getpid,
         x86_64::SENDFILE => Syscall::Sendfile,
-        x86_64::SOCKET => Syscall::Socket,
-        x86_64::CONNECT => Syscall::Connect,
         x86_64::CLONE => Syscall::Clone,
         x86_64::FORK => Syscall::Fork,
         x86_64::VFORK => Syscall::Vfork,
@@ -1614,6 +2169,114 @@ fn x86_64_recent(nr: usize) -> Option<Syscall> {
     Some(call)
 }
 
+/// x86-64 sockets and System V shared memory, wherever they sit in the table.
+fn x86_64_sockets_and_shm(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        x86_64::SHMGET => Syscall::Shmget,
+        x86_64::SHMAT => Syscall::Shmat,
+        x86_64::SHMCTL => Syscall::Shmctl,
+        x86_64::SOCKET => Syscall::Socket,
+        x86_64::CONNECT => Syscall::Connect,
+        x86_64::ACCEPT => Syscall::Accept,
+        x86_64::SENDTO => Syscall::Sendto,
+        x86_64::RECVFROM => Syscall::Recvfrom,
+        x86_64::SENDMSG => Syscall::Sendmsg,
+        x86_64::RECVMSG => Syscall::Recvmsg,
+        x86_64::SHUTDOWN => Syscall::Shutdown,
+        x86_64::BIND => Syscall::Bind,
+        x86_64::LISTEN => Syscall::Listen,
+        x86_64::GETSOCKNAME => Syscall::Getsockname,
+        x86_64::GETPEERNAME => Syscall::Getpeername,
+        x86_64::SOCKETPAIR => Syscall::Socketpair,
+        x86_64::SETSOCKOPT => Syscall::Setsockopt,
+        x86_64::GETSOCKOPT => Syscall::Getsockopt,
+        x86_64::SHMDT => Syscall::Shmdt,
+        x86_64::ACCEPT4 => Syscall::Accept4,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// x86-64 credential changes, capabilities, process groups and sessions.
+fn x86_64_credentials_and_sessions(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        x86_64::GETPGRP => Syscall::Getpgrp,
+        x86_64::SETSID => Syscall::Setsid,
+        x86_64::SETREUID => Syscall::Setreuid,
+        x86_64::SETREGID => Syscall::Setregid,
+        x86_64::SETGROUPS => Syscall::Setgroups,
+        x86_64::SETRESUID => Syscall::Setresuid,
+        x86_64::SETRESGID => Syscall::Setresgid,
+        x86_64::SETFSUID => Syscall::Setfsuid,
+        x86_64::SETFSGID => Syscall::Setfsgid,
+        x86_64::GETSID => Syscall::Getsid,
+        x86_64::CAPGET => Syscall::Capget,
+        x86_64::CAPSET => Syscall::Capset,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// x86-64 host names, kernel modules, swap, namespaces and accounting.
+fn x86_64_administration(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        x86_64::SYSLOG => Syscall::Syslog,
+        x86_64::PERSONALITY => Syscall::Personality,
+        x86_64::VHANGUP => Syscall::Vhangup,
+        x86_64::ACCT => Syscall::Acct,
+        x86_64::SWAPON => Syscall::Swapon,
+        x86_64::SWAPOFF => Syscall::Swapoff,
+        x86_64::REBOOT => Syscall::Reboot,
+        x86_64::SETHOSTNAME => Syscall::Sethostname,
+        x86_64::SETDOMAINNAME => Syscall::Setdomainname,
+        x86_64::INIT_MODULE => Syscall::InitModule,
+        x86_64::DELETE_MODULE => Syscall::DeleteModule,
+        x86_64::SETNS => Syscall::Setns,
+        x86_64::FINIT_MODULE => Syscall::FinitModule,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// x86-64 clock setting and tuning, and interval timers.
+fn x86_64_clocks_and_timers(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        x86_64::GETITIMER => Syscall::Getitimer,
+        x86_64::ALARM => Syscall::Alarm,
+        x86_64::SETITIMER => Syscall::Setitimer,
+        x86_64::TIMES => Syscall::Times,
+        x86_64::ADJTIMEX => Syscall::Adjtimex,
+        x86_64::SETTIMEOFDAY => Syscall::Settimeofday,
+        x86_64::CLOCK_SETTIME => Syscall::ClockSettime,
+        x86_64::CLOCK_ADJTIME => Syscall::ClockAdjtime,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// x86-64 descriptor and signal waits, and scheduling priorities.
+fn x86_64_signals_and_scheduling(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        x86_64::SELECT => Syscall::Select,
+        x86_64::PAUSE => Syscall::Pause,
+        x86_64::RT_SIGPENDING => Syscall::RtSigpending,
+        x86_64::RT_SIGTIMEDWAIT => Syscall::RtSigtimedwait,
+        x86_64::RT_SIGQUEUEINFO => Syscall::RtSigqueueinfo,
+        x86_64::GETPRIORITY => Syscall::Getpriority,
+        x86_64::SETPRIORITY => Syscall::Setpriority,
+        x86_64::SCHED_SETPARAM => Syscall::SchedSetparam,
+        x86_64::SCHED_GET_PRIORITY_MAX => Syscall::SchedGetPriorityMax,
+        x86_64::SCHED_GET_PRIORITY_MIN => Syscall::SchedGetPriorityMin,
+        x86_64::SCHED_RR_GET_INTERVAL => Syscall::SchedRrGetInterval,
+        x86_64::IOPRIO_SET => Syscall::IoprioSet,
+        x86_64::IOPRIO_GET => Syscall::IoprioGet,
+        x86_64::PSELECT6 => Syscall::Pselect6,
+        x86_64::GETCPU => Syscall::Getcpu,
+        _ => return None,
+    };
+    Some(call)
+}
+
 /// Translate an AArch64 system call number.
 ///
 /// Returns [`None`] both for a number this crate does not know and for one the
@@ -1629,6 +2292,11 @@ pub fn from_aarch64(nr: usize) -> Option<Syscall> {
         .or_else(|| aarch64_signals_and_ids(nr))
         .or_else(|| aarch64_memory_and_process(nr))
         .or_else(|| aarch64_recent(nr))
+        .or_else(|| aarch64_sockets_and_shm(nr))
+        .or_else(|| aarch64_credentials_and_sessions(nr))
+        .or_else(|| aarch64_administration(nr))
+        .or_else(|| aarch64_clocks_and_timers(nr))
+        .or_else(|| aarch64_signals_and_scheduling(nr))
 }
 
 /// AArch64 numbers 0 to 99: descriptors, paths and process exit.
@@ -1744,8 +2412,6 @@ fn aarch64_signals_and_ids(nr: usize) -> Option<Syscall> {
 /// AArch64 numbers 200 to 299: sockets, memory and process creation.
 fn aarch64_memory_and_process(nr: usize) -> Option<Syscall> {
     let call = match nr {
-        aarch64::SOCKET => Syscall::Socket,
-        aarch64::CONNECT => Syscall::Connect,
         aarch64::BRK => Syscall::Brk,
         aarch64::MUNMAP => Syscall::Munmap,
         aarch64::MREMAP => Syscall::Mremap,
@@ -1795,6 +2461,110 @@ fn aarch64_recent(nr: usize) -> Option<Syscall> {
     Some(call)
 }
 
+/// AArch64 sockets and System V shared memory, wherever they sit in the table.
+fn aarch64_sockets_and_shm(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        aarch64::SHMGET => Syscall::Shmget,
+        aarch64::SHMCTL => Syscall::Shmctl,
+        aarch64::SHMAT => Syscall::Shmat,
+        aarch64::SHMDT => Syscall::Shmdt,
+        aarch64::SOCKET => Syscall::Socket,
+        aarch64::SOCKETPAIR => Syscall::Socketpair,
+        aarch64::BIND => Syscall::Bind,
+        aarch64::LISTEN => Syscall::Listen,
+        aarch64::ACCEPT => Syscall::Accept,
+        aarch64::CONNECT => Syscall::Connect,
+        aarch64::GETSOCKNAME => Syscall::Getsockname,
+        aarch64::GETPEERNAME => Syscall::Getpeername,
+        aarch64::SENDTO => Syscall::Sendto,
+        aarch64::RECVFROM => Syscall::Recvfrom,
+        aarch64::SETSOCKOPT => Syscall::Setsockopt,
+        aarch64::GETSOCKOPT => Syscall::Getsockopt,
+        aarch64::SHUTDOWN => Syscall::Shutdown,
+        aarch64::SENDMSG => Syscall::Sendmsg,
+        aarch64::RECVMSG => Syscall::Recvmsg,
+        aarch64::ACCEPT4 => Syscall::Accept4,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// AArch64 credential changes, capabilities, process groups and sessions.
+fn aarch64_credentials_and_sessions(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        aarch64::CAPGET => Syscall::Capget,
+        aarch64::CAPSET => Syscall::Capset,
+        aarch64::SETREGID => Syscall::Setregid,
+        aarch64::SETREUID => Syscall::Setreuid,
+        aarch64::SETRESUID => Syscall::Setresuid,
+        aarch64::SETRESGID => Syscall::Setresgid,
+        aarch64::SETFSUID => Syscall::Setfsuid,
+        aarch64::SETFSGID => Syscall::Setfsgid,
+        aarch64::GETSID => Syscall::Getsid,
+        aarch64::SETSID => Syscall::Setsid,
+        aarch64::SETGROUPS => Syscall::Setgroups,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// AArch64 host names, kernel modules, swap, namespaces and accounting.
+fn aarch64_administration(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        aarch64::VHANGUP => Syscall::Vhangup,
+        aarch64::ACCT => Syscall::Acct,
+        aarch64::PERSONALITY => Syscall::Personality,
+        aarch64::INIT_MODULE => Syscall::InitModule,
+        aarch64::DELETE_MODULE => Syscall::DeleteModule,
+        aarch64::SYSLOG => Syscall::Syslog,
+        aarch64::REBOOT => Syscall::Reboot,
+        aarch64::SETHOSTNAME => Syscall::Sethostname,
+        aarch64::SETDOMAINNAME => Syscall::Setdomainname,
+        aarch64::SWAPON => Syscall::Swapon,
+        aarch64::SWAPOFF => Syscall::Swapoff,
+        aarch64::SETNS => Syscall::Setns,
+        aarch64::FINIT_MODULE => Syscall::FinitModule,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// AArch64 clock setting and tuning, and interval timers.
+fn aarch64_clocks_and_timers(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        aarch64::GETITIMER => Syscall::Getitimer,
+        aarch64::SETITIMER => Syscall::Setitimer,
+        aarch64::CLOCK_SETTIME => Syscall::ClockSettime,
+        aarch64::TIMES => Syscall::Times,
+        aarch64::SETTIMEOFDAY => Syscall::Settimeofday,
+        aarch64::ADJTIMEX => Syscall::Adjtimex,
+        aarch64::CLOCK_ADJTIME => Syscall::ClockAdjtime,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// AArch64 descriptor and signal waits, and scheduling priorities.
+fn aarch64_signals_and_scheduling(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        aarch64::IOPRIO_SET => Syscall::IoprioSet,
+        aarch64::IOPRIO_GET => Syscall::IoprioGet,
+        aarch64::PSELECT6 => Syscall::Pselect6,
+        aarch64::SCHED_SETPARAM => Syscall::SchedSetparam,
+        aarch64::SCHED_GET_PRIORITY_MAX => Syscall::SchedGetPriorityMax,
+        aarch64::SCHED_GET_PRIORITY_MIN => Syscall::SchedGetPriorityMin,
+        aarch64::SCHED_RR_GET_INTERVAL => Syscall::SchedRrGetInterval,
+        aarch64::RT_SIGPENDING => Syscall::RtSigpending,
+        aarch64::RT_SIGTIMEDWAIT => Syscall::RtSigtimedwait,
+        aarch64::RT_SIGQUEUEINFO => Syscall::RtSigqueueinfo,
+        aarch64::SETPRIORITY => Syscall::Setpriority,
+        aarch64::GETPRIORITY => Syscall::Getpriority,
+        aarch64::GETCPU => Syscall::Getcpu,
+        _ => return None,
+    };
+    Some(call)
+}
+
 /// Translate a 32-bit ARMv7-A (EABI) system call number.
 ///
 /// Returns [`None`] for a number this crate does not know, which the caller
@@ -1806,6 +2576,11 @@ pub fn from_arm(nr: usize) -> Option<Syscall> {
         .or_else(|| arm_signals_and_mm(nr))
         .or_else(|| arm_ids_and_at_family(nr))
         .or_else(|| arm_recent(nr))
+        .or_else(|| arm_sockets_and_shm(nr))
+        .or_else(|| arm_credentials_and_sessions(nr))
+        .or_else(|| arm_administration(nr))
+        .or_else(|| arm_clocks_and_timers(nr))
+        .or_else(|| arm_signals_and_scheduling(nr))
 }
 
 /// ARMv7-A numbers 0 to 99: the calls inherited from the very first Linux/ARM
@@ -1936,8 +2711,6 @@ fn arm_ids_and_at_family(nr: usize) -> Option<Syscall> {
         arm::FSTATFS64 => Syscall::Fstatfs64,
         arm::TGKILL => Syscall::Tgkill,
         arm::WAITID => Syscall::Waitid,
-        arm::SOCKET => Syscall::Socket,
-        arm::CONNECT => Syscall::Connect,
         arm::OPENAT => Syscall::Openat,
         arm::MKDIRAT => Syscall::Mkdirat,
         arm::FCHOWNAT => Syscall::Fchownat,
@@ -2001,6 +2774,118 @@ fn arm_recent(nr: usize) -> Option<Syscall> {
         arm::SYNCFS => Syscall::Syncfs,
         arm::ARM_CACHEFLUSH => Syscall::ArmCacheflush,
         arm::ARM_SET_TLS => Syscall::ArmSetTls,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// ARMv7-A sockets and System V shared memory, wherever they sit in the table.
+fn arm_sockets_and_shm(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        arm::SOCKET => Syscall::Socket,
+        arm::BIND => Syscall::Bind,
+        arm::CONNECT => Syscall::Connect,
+        arm::LISTEN => Syscall::Listen,
+        arm::ACCEPT => Syscall::Accept,
+        arm::GETSOCKNAME => Syscall::Getsockname,
+        arm::GETPEERNAME => Syscall::Getpeername,
+        arm::SOCKETPAIR => Syscall::Socketpair,
+        arm::SENDTO => Syscall::Sendto,
+        arm::RECVFROM => Syscall::Recvfrom,
+        arm::SHUTDOWN => Syscall::Shutdown,
+        arm::SETSOCKOPT => Syscall::Setsockopt,
+        arm::GETSOCKOPT => Syscall::Getsockopt,
+        arm::SENDMSG => Syscall::Sendmsg,
+        arm::RECVMSG => Syscall::Recvmsg,
+        arm::SHMAT => Syscall::Shmat,
+        arm::SHMDT => Syscall::Shmdt,
+        arm::SHMGET => Syscall::Shmget,
+        arm::SHMCTL => Syscall::Shmctl,
+        arm::ACCEPT4 => Syscall::Accept4,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// ARMv7-A credential changes, capabilities, process groups and sessions.
+fn arm_credentials_and_sessions(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        arm::GETPGRP => Syscall::Getpgrp,
+        arm::SETSID => Syscall::Setsid,
+        arm::GETSID => Syscall::Getsid,
+        arm::CAPGET => Syscall::Capget,
+        arm::CAPSET => Syscall::Capset,
+        arm::SETREUID32 => Syscall::Setreuid,
+        arm::SETREGID32 => Syscall::Setregid,
+        arm::SETGROUPS32 => Syscall::Setgroups,
+        arm::SETRESUID32 => Syscall::Setresuid,
+        arm::SETRESGID32 => Syscall::Setresgid,
+        arm::SETFSUID32 => Syscall::Setfsuid,
+        arm::SETFSGID32 => Syscall::Setfsgid,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// ARMv7-A host names, kernel modules, swap, namespaces and accounting.
+fn arm_administration(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        arm::ACCT => Syscall::Acct,
+        arm::SETHOSTNAME => Syscall::Sethostname,
+        arm::SWAPON => Syscall::Swapon,
+        arm::REBOOT => Syscall::Reboot,
+        arm::SYSLOG => Syscall::Syslog,
+        arm::VHANGUP => Syscall::Vhangup,
+        arm::SWAPOFF => Syscall::Swapoff,
+        arm::SETDOMAINNAME => Syscall::Setdomainname,
+        arm::INIT_MODULE => Syscall::InitModule,
+        arm::DELETE_MODULE => Syscall::DeleteModule,
+        arm::PERSONALITY => Syscall::Personality,
+        arm::SETNS => Syscall::Setns,
+        arm::FINIT_MODULE => Syscall::FinitModule,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// ARMv7-A clock setting and tuning, and interval timers, time64 forms included.
+fn arm_clocks_and_timers(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        arm::TIMES => Syscall::Times,
+        arm::SETTIMEOFDAY => Syscall::Settimeofday,
+        arm::SETITIMER => Syscall::Setitimer,
+        arm::GETITIMER => Syscall::Getitimer,
+        arm::ADJTIMEX => Syscall::Adjtimex,
+        arm::CLOCK_SETTIME => Syscall::ClockSettime,
+        arm::CLOCK_ADJTIME => Syscall::ClockAdjtime,
+        arm::CLOCK_SETTIME64 => Syscall::ClockSettime64,
+        arm::CLOCK_ADJTIME64 => Syscall::ClockAdjtime64,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// ARMv7-A descriptor and signal waits, and scheduling priorities, time64 forms included.
+fn arm_signals_and_scheduling(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        arm::PAUSE => Syscall::Pause,
+        arm::GETPRIORITY => Syscall::Getpriority,
+        arm::SETPRIORITY => Syscall::Setpriority,
+        arm::NEWSELECT => Syscall::Select,
+        arm::SCHED_SETPARAM => Syscall::SchedSetparam,
+        arm::SCHED_GET_PRIORITY_MAX => Syscall::SchedGetPriorityMax,
+        arm::SCHED_GET_PRIORITY_MIN => Syscall::SchedGetPriorityMin,
+        arm::SCHED_RR_GET_INTERVAL => Syscall::SchedRrGetInterval,
+        arm::RT_SIGPENDING => Syscall::RtSigpending,
+        arm::RT_SIGTIMEDWAIT => Syscall::RtSigtimedwait,
+        arm::RT_SIGQUEUEINFO => Syscall::RtSigqueueinfo,
+        arm::IOPRIO_SET => Syscall::IoprioSet,
+        arm::IOPRIO_GET => Syscall::IoprioGet,
+        arm::PSELECT6 => Syscall::Pselect6,
+        arm::GETCPU => Syscall::Getcpu,
+        arm::PSELECT6_TIME64 => Syscall::Pselect6Time64,
+        arm::RT_SIGTIMEDWAIT_TIME64 => Syscall::RtSigtimedwaitTime64,
+        arm::SCHED_RR_GET_INTERVAL_TIME64 => Syscall::SchedRrGetIntervalTime64,
         _ => return None,
     };
     Some(call)

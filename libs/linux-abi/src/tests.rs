@@ -43,6 +43,10 @@ const X86_64_ONLY: &[Syscall] = &[
     Syscall::Chown,
     Syscall::ArchPrctl,
     Syscall::EpollWait,
+    Syscall::Getpgrp,
+    Syscall::Alarm,
+    Syscall::Select,
+    Syscall::Pause,
 ];
 
 /// Calls both tables have, with the number each architecture gives them.
@@ -116,6 +120,148 @@ const SHARED: &[(usize, usize, Syscall)] = &[
     ),
     (x86_64::RSEQ, aarch64::RSEQ, Syscall::Rseq),
     (x86_64::MEMBARRIER, aarch64::MEMBARRIER, Syscall::Membarrier),
+    (x86_64::SOCKETPAIR, aarch64::SOCKETPAIR, Syscall::Socketpair),
+    (x86_64::BIND, aarch64::BIND, Syscall::Bind),
+    (x86_64::LISTEN, aarch64::LISTEN, Syscall::Listen),
+    (x86_64::ACCEPT, aarch64::ACCEPT, Syscall::Accept),
+    (x86_64::ACCEPT4, aarch64::ACCEPT4, Syscall::Accept4),
+    (
+        x86_64::GETSOCKNAME,
+        aarch64::GETSOCKNAME,
+        Syscall::Getsockname,
+    ),
+    (
+        x86_64::GETPEERNAME,
+        aarch64::GETPEERNAME,
+        Syscall::Getpeername,
+    ),
+    (x86_64::SENDTO, aarch64::SENDTO, Syscall::Sendto),
+    (x86_64::RECVFROM, aarch64::RECVFROM, Syscall::Recvfrom),
+    (x86_64::SENDMSG, aarch64::SENDMSG, Syscall::Sendmsg),
+    (x86_64::RECVMSG, aarch64::RECVMSG, Syscall::Recvmsg),
+    (x86_64::SHUTDOWN, aarch64::SHUTDOWN, Syscall::Shutdown),
+    (x86_64::SETSOCKOPT, aarch64::SETSOCKOPT, Syscall::Setsockopt),
+    (x86_64::GETSOCKOPT, aarch64::GETSOCKOPT, Syscall::Getsockopt),
+    (x86_64::SHMGET, aarch64::SHMGET, Syscall::Shmget),
+    (x86_64::SHMAT, aarch64::SHMAT, Syscall::Shmat),
+    (x86_64::SHMDT, aarch64::SHMDT, Syscall::Shmdt),
+    (x86_64::SHMCTL, aarch64::SHMCTL, Syscall::Shmctl),
+    (x86_64::SETGROUPS, aarch64::SETGROUPS, Syscall::Setgroups),
+    (x86_64::SETREUID, aarch64::SETREUID, Syscall::Setreuid),
+    (x86_64::SETREGID, aarch64::SETREGID, Syscall::Setregid),
+    (x86_64::SETRESUID, aarch64::SETRESUID, Syscall::Setresuid),
+    (x86_64::SETRESGID, aarch64::SETRESGID, Syscall::Setresgid),
+    (x86_64::SETFSUID, aarch64::SETFSUID, Syscall::Setfsuid),
+    (x86_64::SETFSGID, aarch64::SETFSGID, Syscall::Setfsgid),
+    (x86_64::CAPGET, aarch64::CAPGET, Syscall::Capget),
+    (x86_64::CAPSET, aarch64::CAPSET, Syscall::Capset),
+    (x86_64::SETSID, aarch64::SETSID, Syscall::Setsid),
+    (x86_64::GETSID, aarch64::GETSID, Syscall::Getsid),
+    (
+        x86_64::SETHOSTNAME,
+        aarch64::SETHOSTNAME,
+        Syscall::Sethostname,
+    ),
+    (
+        x86_64::SETDOMAINNAME,
+        aarch64::SETDOMAINNAME,
+        Syscall::Setdomainname,
+    ),
+    (x86_64::SYSLOG, aarch64::SYSLOG, Syscall::Syslog),
+    (x86_64::REBOOT, aarch64::REBOOT, Syscall::Reboot),
+    (
+        x86_64::PERSONALITY,
+        aarch64::PERSONALITY,
+        Syscall::Personality,
+    ),
+    (
+        x86_64::INIT_MODULE,
+        aarch64::INIT_MODULE,
+        Syscall::InitModule,
+    ),
+    (
+        x86_64::FINIT_MODULE,
+        aarch64::FINIT_MODULE,
+        Syscall::FinitModule,
+    ),
+    (
+        x86_64::DELETE_MODULE,
+        aarch64::DELETE_MODULE,
+        Syscall::DeleteModule,
+    ),
+    (x86_64::SWAPON, aarch64::SWAPON, Syscall::Swapon),
+    (x86_64::SWAPOFF, aarch64::SWAPOFF, Syscall::Swapoff),
+    (x86_64::SETNS, aarch64::SETNS, Syscall::Setns),
+    (x86_64::VHANGUP, aarch64::VHANGUP, Syscall::Vhangup),
+    (x86_64::ACCT, aarch64::ACCT, Syscall::Acct),
+    (
+        x86_64::SETTIMEOFDAY,
+        aarch64::SETTIMEOFDAY,
+        Syscall::Settimeofday,
+    ),
+    (
+        x86_64::CLOCK_SETTIME,
+        aarch64::CLOCK_SETTIME,
+        Syscall::ClockSettime,
+    ),
+    (x86_64::ADJTIMEX, aarch64::ADJTIMEX, Syscall::Adjtimex),
+    (
+        x86_64::CLOCK_ADJTIME,
+        aarch64::CLOCK_ADJTIME,
+        Syscall::ClockAdjtime,
+    ),
+    (x86_64::TIMES, aarch64::TIMES, Syscall::Times),
+    (x86_64::GETITIMER, aarch64::GETITIMER, Syscall::Getitimer),
+    (x86_64::SETITIMER, aarch64::SETITIMER, Syscall::Setitimer),
+    (x86_64::PSELECT6, aarch64::PSELECT6, Syscall::Pselect6),
+    (
+        x86_64::RT_SIGPENDING,
+        aarch64::RT_SIGPENDING,
+        Syscall::RtSigpending,
+    ),
+    (
+        x86_64::RT_SIGTIMEDWAIT,
+        aarch64::RT_SIGTIMEDWAIT,
+        Syscall::RtSigtimedwait,
+    ),
+    (
+        x86_64::RT_SIGQUEUEINFO,
+        aarch64::RT_SIGQUEUEINFO,
+        Syscall::RtSigqueueinfo,
+    ),
+    (
+        x86_64::SCHED_SETPARAM,
+        aarch64::SCHED_SETPARAM,
+        Syscall::SchedSetparam,
+    ),
+    (
+        x86_64::SCHED_GET_PRIORITY_MAX,
+        aarch64::SCHED_GET_PRIORITY_MAX,
+        Syscall::SchedGetPriorityMax,
+    ),
+    (
+        x86_64::SCHED_GET_PRIORITY_MIN,
+        aarch64::SCHED_GET_PRIORITY_MIN,
+        Syscall::SchedGetPriorityMin,
+    ),
+    (
+        x86_64::SCHED_RR_GET_INTERVAL,
+        aarch64::SCHED_RR_GET_INTERVAL,
+        Syscall::SchedRrGetInterval,
+    ),
+    (
+        x86_64::GETPRIORITY,
+        aarch64::GETPRIORITY,
+        Syscall::Getpriority,
+    ),
+    (
+        x86_64::SETPRIORITY,
+        aarch64::SETPRIORITY,
+        Syscall::Setpriority,
+    ),
+    (x86_64::IOPRIO_GET, aarch64::IOPRIO_GET, Syscall::IoprioGet),
+    (x86_64::IOPRIO_SET, aarch64::IOPRIO_SET, Syscall::IoprioSet),
+    (x86_64::GETCPU, aarch64::GETCPU, Syscall::Getcpu),
 ];
 
 /// Every call either table maps, found by sweeping the number space.
@@ -973,23 +1119,24 @@ fn no_two_numbers_map_to_the_same_call() {
 #[test]
 fn unknown_numbers_map_to_none_without_panicking() {
     for nr in [
-        23,
-        31,
-        36,
-        44,
-        51,
-        55,
+        64,
         65,
+        66,
+        68,
+        69,
+        70,
         71,
         73,
         78,
         85,
         94,
         101,
-        111,
-        117,
-        119,
-        122,
+        132,
+        133,
+        134,
+        136,
+        139,
+        149,
         300,
         400,
         434,
@@ -1017,14 +1164,14 @@ fn unknown_numbers_map_to_none_without_panicking() {
         4,
         18,
         26,
-        30,
+        27,
         42,
-        58,
         60,
         70,
-        90,
+        75,
+        76,
+        109,
         110,
-        140,
         190,
         250,
         300,
@@ -1101,13 +1248,13 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        152,
-        "the x86-64 table maps 152 calls"
+        218,
+        "the x86-64 table maps 218 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        132,
-        "the AArch64 table maps 132 calls"
+        194,
+        "the AArch64 table maps 194 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -1135,6 +1282,11 @@ const ARM_ONLY: &[Syscall] = &[
     Syscall::FutexTime64,
     Syscall::ArmSetTls,
     Syscall::ArmCacheflush,
+    Syscall::ClockSettime64,
+    Syscall::ClockAdjtime64,
+    Syscall::Pselect6Time64,
+    Syscall::RtSigtimedwaitTime64,
+    Syscall::SchedRrGetIntervalTime64,
 ];
 
 /// Every ARMv7-A number this crate knows, paired with the call it means.
@@ -1148,149 +1300,219 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     // number is written out rather than taken from `nr::arm` so that a
     // wrong constant fails here instead of dispatching a call to the
     // wrong handler.
-    (1, Syscall::Exit),                   // exit
-    (2, Syscall::Fork),                   // fork
-    (3, Syscall::Read),                   // read
-    (4, Syscall::Write),                  // write
-    (5, Syscall::Open),                   // open
-    (6, Syscall::Close),                  // close
-    (9, Syscall::Link),                   // link
-    (10, Syscall::Unlink),                // unlink
-    (11, Syscall::Execve),                // execve
-    (12, Syscall::Chdir),                 // chdir
-    (15, Syscall::Chmod),                 // chmod
-    (19, Syscall::Lseek),                 // lseek
-    (20, Syscall::Getpid),                // getpid
-    (21, Syscall::Mount),                 // mount
-    (33, Syscall::Access),                // access
-    (36, Syscall::Sync),                  // sync
-    (37, Syscall::Kill),                  // kill
-    (38, Syscall::Rename),                // rename
-    (39, Syscall::Mkdir),                 // mkdir
-    (40, Syscall::Rmdir),                 // rmdir
-    (41, Syscall::Dup),                   // dup
-    (42, Syscall::Pipe),                  // pipe
-    (45, Syscall::Brk),                   // brk
-    (52, Syscall::Umount2),               // umount2
-    (54, Syscall::Ioctl),                 // ioctl
-    (55, Syscall::Fcntl),                 // fcntl
-    (57, Syscall::Setpgid),               // setpgid
-    (60, Syscall::Umask),                 // umask
-    (63, Syscall::Dup2),                  // dup2
-    (64, Syscall::Getppid),               // getppid
-    (75, Syscall::Setrlimit),             // setrlimit
-    (77, Syscall::Getrusage),             // getrusage
-    (78, Syscall::Gettimeofday),          // gettimeofday
-    (83, Syscall::Symlink),               // symlink
-    (85, Syscall::Readlink),              // readlink
-    (91, Syscall::Munmap),                // munmap
-    (92, Syscall::Truncate),              // truncate
-    (93, Syscall::Ftruncate),             // ftruncate
-    (94, Syscall::Fchmod),                // fchmod
-    (114, Syscall::Wait4),                // wait4
-    (116, Syscall::Sysinfo),              // sysinfo
-    (118, Syscall::Fsync),                // fsync
-    (120, Syscall::Clone),                // clone
-    (122, Syscall::Uname),                // uname
-    (125, Syscall::Mprotect),             // mprotect
-    (132, Syscall::Getpgid),              // getpgid
-    (133, Syscall::Fchdir),               // fchdir
-    (140, Syscall::Llseek),               // _llseek
-    (144, Syscall::Msync),                // msync
-    (145, Syscall::Readv),                // readv
-    (146, Syscall::Writev),               // writev
-    (148, Syscall::Fdatasync),            // fdatasync
-    (155, Syscall::SchedGetparam),        // sched_getparam
-    (156, Syscall::SchedSetscheduler),    // sched_setscheduler
-    (157, Syscall::SchedGetscheduler),    // sched_getscheduler
-    (158, Syscall::SchedYield),           // sched_yield
-    (162, Syscall::Nanosleep),            // nanosleep
-    (163, Syscall::Mremap),               // mremap
-    (168, Syscall::Poll),                 // poll
-    (172, Syscall::Prctl),                // prctl
-    (173, Syscall::RtSigreturn),          // rt_sigreturn
-    (174, Syscall::RtSigaction),          // rt_sigaction
-    (175, Syscall::RtSigprocmask),        // rt_sigprocmask
-    (179, Syscall::RtSigsuspend),         // rt_sigsuspend
-    (180, Syscall::Pread64),              // pread64
-    (181, Syscall::Pwrite64),             // pwrite64
-    (183, Syscall::Getcwd),               // getcwd
-    (186, Syscall::Sigaltstack),          // sigaltstack
-    (190, Syscall::Vfork),                // vfork
-    (191, Syscall::Getrlimit),            // ugetrlimit
-    (192, Syscall::Mmap2),                // mmap2
-    (193, Syscall::Truncate64),           // truncate64
-    (194, Syscall::Ftruncate64),          // ftruncate64
-    (195, Syscall::Stat64),               // stat64
-    (196, Syscall::Lstat64),              // lstat64
-    (197, Syscall::Fstat64),              // fstat64
-    (199, Syscall::Getuid),               // getuid32
-    (200, Syscall::Getgid),               // getgid32
-    (201, Syscall::Geteuid),              // geteuid32
-    (202, Syscall::Getegid),              // getegid32
-    (205, Syscall::Getgroups),            // getgroups32
-    (207, Syscall::Fchown),               // fchown32
-    (209, Syscall::Getresuid),            // getresuid32
-    (211, Syscall::Getresgid),            // getresgid32
-    (212, Syscall::Chown),                // chown32
-    (213, Syscall::Setuid),               // setuid32
-    (214, Syscall::Setgid),               // setgid32
-    (217, Syscall::Getdents64),           // getdents64
-    (220, Syscall::Madvise),              // madvise
-    (221, Syscall::Fcntl64),              // fcntl64
-    (224, Syscall::Gettid),               // gettid
-    (238, Syscall::Tkill),                // tkill
-    (239, Syscall::Sendfile64),           // sendfile64
-    (240, Syscall::Futex),                // futex
-    (241, Syscall::SchedSetaffinity),     // sched_setaffinity
-    (242, Syscall::SchedGetaffinity),     // sched_getaffinity
-    (248, Syscall::ExitGroup),            // exit_group
-    (251, Syscall::EpollCtl),             // epoll_ctl
-    (252, Syscall::EpollWait),            // epoll_wait
-    (256, Syscall::SetTidAddress),        // set_tid_address
-    (263, Syscall::ClockGettime),         // clock_gettime
-    (265, Syscall::ClockNanosleep),       // clock_nanosleep
-    (266, Syscall::Statfs64),             // statfs64
-    (267, Syscall::Fstatfs64),            // fstatfs64
-    (268, Syscall::Tgkill),               // tgkill
-    (280, Syscall::Waitid),               // waitid
-    (281, Syscall::Socket),               // socket
-    (283, Syscall::Connect),              // connect
-    (322, Syscall::Openat),               // openat
-    (323, Syscall::Mkdirat),              // mkdirat
-    (325, Syscall::Fchownat),             // fchownat
-    (327, Syscall::Fstatat64),            // fstatat64
-    (328, Syscall::Unlinkat),             // unlinkat
-    (329, Syscall::Renameat),             // renameat
-    (330, Syscall::Linkat),               // linkat
-    (331, Syscall::Symlinkat),            // symlinkat
-    (332, Syscall::Readlinkat),           // readlinkat
-    (333, Syscall::Fchmodat),             // fchmodat
-    (334, Syscall::Faccessat),            // faccessat
-    (336, Syscall::Ppoll),                // ppoll
-    (337, Syscall::Unshare),              // unshare
-    (338, Syscall::SetRobustList),        // set_robust_list
-    (339, Syscall::GetRobustList),        // get_robust_list
-    (346, Syscall::EpollPwait),           // epoll_pwait
-    (356, Syscall::Eventfd2),             // eventfd2
-    (357, Syscall::EpollCreate1),         // epoll_create1
-    (358, Syscall::Dup3),                 // dup3
-    (359, Syscall::Pipe2),                // pipe2
-    (369, Syscall::Prlimit64),            // prlimit64
-    (382, Syscall::Renameat2),            // renameat2
-    (384, Syscall::Getrandom),            // getrandom
-    (385, Syscall::MemfdCreate),          // memfd_create
-    (387, Syscall::Execveat),             // execveat
-    (389, Syscall::Membarrier),           // membarrier
-    (397, Syscall::Statx),                // statx
-    (398, Syscall::Rseq),                 // rseq
-    (403, Syscall::ClockGettime64),       // clock_gettime64
-    (407, Syscall::ClockNanosleepTime64), // clock_nanosleep_time64
-    (414, Syscall::PpollTime64),          // ppoll_time64
-    (422, Syscall::FutexTime64),          // futex_time64
-    (435, Syscall::Clone3),               // clone3
-    (437, Syscall::Openat2),              // openat2
-    (439, Syscall::Faccessat2),           // faccessat2
+    (1, Syscall::Exit),                       // exit
+    (2, Syscall::Fork),                       // fork
+    (3, Syscall::Read),                       // read
+    (4, Syscall::Write),                      // write
+    (5, Syscall::Open),                       // open
+    (6, Syscall::Close),                      // close
+    (9, Syscall::Link),                       // link
+    (10, Syscall::Unlink),                    // unlink
+    (11, Syscall::Execve),                    // execve
+    (12, Syscall::Chdir),                     // chdir
+    (15, Syscall::Chmod),                     // chmod
+    (19, Syscall::Lseek),                     // lseek
+    (20, Syscall::Getpid),                    // getpid
+    (21, Syscall::Mount),                     // mount
+    (29, Syscall::Pause),                     // pause
+    (33, Syscall::Access),                    // access
+    (36, Syscall::Sync),                      // sync
+    (37, Syscall::Kill),                      // kill
+    (38, Syscall::Rename),                    // rename
+    (39, Syscall::Mkdir),                     // mkdir
+    (40, Syscall::Rmdir),                     // rmdir
+    (41, Syscall::Dup),                       // dup
+    (42, Syscall::Pipe),                      // pipe
+    (43, Syscall::Times),                     // times
+    (45, Syscall::Brk),                       // brk
+    (51, Syscall::Acct),                      // acct
+    (52, Syscall::Umount2),                   // umount2
+    (54, Syscall::Ioctl),                     // ioctl
+    (55, Syscall::Fcntl),                     // fcntl
+    (57, Syscall::Setpgid),                   // setpgid
+    (60, Syscall::Umask),                     // umask
+    (63, Syscall::Dup2),                      // dup2
+    (64, Syscall::Getppid),                   // getppid
+    (65, Syscall::Getpgrp),                   // getpgrp
+    (66, Syscall::Setsid),                    // setsid
+    (74, Syscall::Sethostname),               // sethostname
+    (75, Syscall::Setrlimit),                 // setrlimit
+    (77, Syscall::Getrusage),                 // getrusage
+    (78, Syscall::Gettimeofday),              // gettimeofday
+    (79, Syscall::Settimeofday),              // settimeofday
+    (83, Syscall::Symlink),                   // symlink
+    (85, Syscall::Readlink),                  // readlink
+    (87, Syscall::Swapon),                    // swapon
+    (88, Syscall::Reboot),                    // reboot
+    (91, Syscall::Munmap),                    // munmap
+    (92, Syscall::Truncate),                  // truncate
+    (93, Syscall::Ftruncate),                 // ftruncate
+    (94, Syscall::Fchmod),                    // fchmod
+    (96, Syscall::Getpriority),               // getpriority
+    (97, Syscall::Setpriority),               // setpriority
+    (103, Syscall::Syslog),                   // syslog
+    (104, Syscall::Setitimer),                // setitimer
+    (105, Syscall::Getitimer),                // getitimer
+    (111, Syscall::Vhangup),                  // vhangup
+    (114, Syscall::Wait4),                    // wait4
+    (115, Syscall::Swapoff),                  // swapoff
+    (116, Syscall::Sysinfo),                  // sysinfo
+    (118, Syscall::Fsync),                    // fsync
+    (120, Syscall::Clone),                    // clone
+    (121, Syscall::Setdomainname),            // setdomainname
+    (122, Syscall::Uname),                    // uname
+    (124, Syscall::Adjtimex),                 // adjtimex
+    (125, Syscall::Mprotect),                 // mprotect
+    (128, Syscall::InitModule),               // init_module
+    (129, Syscall::DeleteModule),             // delete_module
+    (132, Syscall::Getpgid),                  // getpgid
+    (133, Syscall::Fchdir),                   // fchdir
+    (136, Syscall::Personality),              // personality
+    (140, Syscall::Llseek),                   // _llseek
+    (142, Syscall::Select),                   // _newselect
+    (144, Syscall::Msync),                    // msync
+    (145, Syscall::Readv),                    // readv
+    (146, Syscall::Writev),                   // writev
+    (147, Syscall::Getsid),                   // getsid
+    (148, Syscall::Fdatasync),                // fdatasync
+    (154, Syscall::SchedSetparam),            // sched_setparam
+    (155, Syscall::SchedGetparam),            // sched_getparam
+    (156, Syscall::SchedSetscheduler),        // sched_setscheduler
+    (157, Syscall::SchedGetscheduler),        // sched_getscheduler
+    (158, Syscall::SchedYield),               // sched_yield
+    (159, Syscall::SchedGetPriorityMax),      // sched_get_priority_max
+    (160, Syscall::SchedGetPriorityMin),      // sched_get_priority_min
+    (161, Syscall::SchedRrGetInterval),       // sched_rr_get_interval
+    (162, Syscall::Nanosleep),                // nanosleep
+    (163, Syscall::Mremap),                   // mremap
+    (168, Syscall::Poll),                     // poll
+    (172, Syscall::Prctl),                    // prctl
+    (173, Syscall::RtSigreturn),              // rt_sigreturn
+    (174, Syscall::RtSigaction),              // rt_sigaction
+    (175, Syscall::RtSigprocmask),            // rt_sigprocmask
+    (176, Syscall::RtSigpending),             // rt_sigpending
+    (177, Syscall::RtSigtimedwait),           // rt_sigtimedwait
+    (178, Syscall::RtSigqueueinfo),           // rt_sigqueueinfo
+    (179, Syscall::RtSigsuspend),             // rt_sigsuspend
+    (180, Syscall::Pread64),                  // pread64
+    (181, Syscall::Pwrite64),                 // pwrite64
+    (183, Syscall::Getcwd),                   // getcwd
+    (184, Syscall::Capget),                   // capget
+    (185, Syscall::Capset),                   // capset
+    (186, Syscall::Sigaltstack),              // sigaltstack
+    (190, Syscall::Vfork),                    // vfork
+    (191, Syscall::Getrlimit),                // ugetrlimit
+    (192, Syscall::Mmap2),                    // mmap2
+    (193, Syscall::Truncate64),               // truncate64
+    (194, Syscall::Ftruncate64),              // ftruncate64
+    (195, Syscall::Stat64),                   // stat64
+    (196, Syscall::Lstat64),                  // lstat64
+    (197, Syscall::Fstat64),                  // fstat64
+    (199, Syscall::Getuid),                   // getuid32
+    (200, Syscall::Getgid),                   // getgid32
+    (201, Syscall::Geteuid),                  // geteuid32
+    (202, Syscall::Getegid),                  // getegid32
+    (203, Syscall::Setreuid),                 // setreuid32
+    (204, Syscall::Setregid),                 // setregid32
+    (205, Syscall::Getgroups),                // getgroups32
+    (206, Syscall::Setgroups),                // setgroups32
+    (207, Syscall::Fchown),                   // fchown32
+    (208, Syscall::Setresuid),                // setresuid32
+    (209, Syscall::Getresuid),                // getresuid32
+    (210, Syscall::Setresgid),                // setresgid32
+    (211, Syscall::Getresgid),                // getresgid32
+    (212, Syscall::Chown),                    // chown32
+    (213, Syscall::Setuid),                   // setuid32
+    (214, Syscall::Setgid),                   // setgid32
+    (215, Syscall::Setfsuid),                 // setfsuid32
+    (216, Syscall::Setfsgid),                 // setfsgid32
+    (217, Syscall::Getdents64),               // getdents64
+    (220, Syscall::Madvise),                  // madvise
+    (221, Syscall::Fcntl64),                  // fcntl64
+    (224, Syscall::Gettid),                   // gettid
+    (238, Syscall::Tkill),                    // tkill
+    (239, Syscall::Sendfile64),               // sendfile64
+    (240, Syscall::Futex),                    // futex
+    (241, Syscall::SchedSetaffinity),         // sched_setaffinity
+    (242, Syscall::SchedGetaffinity),         // sched_getaffinity
+    (248, Syscall::ExitGroup),                // exit_group
+    (251, Syscall::EpollCtl),                 // epoll_ctl
+    (252, Syscall::EpollWait),                // epoll_wait
+    (256, Syscall::SetTidAddress),            // set_tid_address
+    (262, Syscall::ClockSettime),             // clock_settime
+    (263, Syscall::ClockGettime),             // clock_gettime
+    (265, Syscall::ClockNanosleep),           // clock_nanosleep
+    (266, Syscall::Statfs64),                 // statfs64
+    (267, Syscall::Fstatfs64),                // fstatfs64
+    (268, Syscall::Tgkill),                   // tgkill
+    (280, Syscall::Waitid),                   // waitid
+    (281, Syscall::Socket),                   // socket
+    (282, Syscall::Bind),                     // bind
+    (283, Syscall::Connect),                  // connect
+    (284, Syscall::Listen),                   // listen
+    (285, Syscall::Accept),                   // accept
+    (286, Syscall::Getsockname),              // getsockname
+    (287, Syscall::Getpeername),              // getpeername
+    (288, Syscall::Socketpair),               // socketpair
+    (290, Syscall::Sendto),                   // sendto
+    (292, Syscall::Recvfrom),                 // recvfrom
+    (293, Syscall::Shutdown),                 // shutdown
+    (294, Syscall::Setsockopt),               // setsockopt
+    (295, Syscall::Getsockopt),               // getsockopt
+    (296, Syscall::Sendmsg),                  // sendmsg
+    (297, Syscall::Recvmsg),                  // recvmsg
+    (305, Syscall::Shmat),                    // shmat
+    (306, Syscall::Shmdt),                    // shmdt
+    (307, Syscall::Shmget),                   // shmget
+    (308, Syscall::Shmctl),                   // shmctl
+    (314, Syscall::IoprioSet),                // ioprio_set
+    (315, Syscall::IoprioGet),                // ioprio_get
+    (322, Syscall::Openat),                   // openat
+    (323, Syscall::Mkdirat),                  // mkdirat
+    (325, Syscall::Fchownat),                 // fchownat
+    (327, Syscall::Fstatat64),                // fstatat64
+    (328, Syscall::Unlinkat),                 // unlinkat
+    (329, Syscall::Renameat),                 // renameat
+    (330, Syscall::Linkat),                   // linkat
+    (331, Syscall::Symlinkat),                // symlinkat
+    (332, Syscall::Readlinkat),               // readlinkat
+    (333, Syscall::Fchmodat),                 // fchmodat
+    (334, Syscall::Faccessat),                // faccessat
+    (335, Syscall::Pselect6),                 // pselect6
+    (336, Syscall::Ppoll),                    // ppoll
+    (337, Syscall::Unshare),                  // unshare
+    (338, Syscall::SetRobustList),            // set_robust_list
+    (339, Syscall::GetRobustList),            // get_robust_list
+    (345, Syscall::Getcpu),                   // getcpu
+    (346, Syscall::EpollPwait),               // epoll_pwait
+    (356, Syscall::Eventfd2),                 // eventfd2
+    (357, Syscall::EpollCreate1),             // epoll_create1
+    (358, Syscall::Dup3),                     // dup3
+    (359, Syscall::Pipe2),                    // pipe2
+    (366, Syscall::Accept4),                  // accept4
+    (369, Syscall::Prlimit64),                // prlimit64
+    (372, Syscall::ClockAdjtime),             // clock_adjtime
+    (375, Syscall::Setns),                    // setns
+    (379, Syscall::FinitModule),              // finit_module
+    (382, Syscall::Renameat2),                // renameat2
+    (384, Syscall::Getrandom),                // getrandom
+    (385, Syscall::MemfdCreate),              // memfd_create
+    (387, Syscall::Execveat),                 // execveat
+    (389, Syscall::Membarrier),               // membarrier
+    (397, Syscall::Statx),                    // statx
+    (398, Syscall::Rseq),                     // rseq
+    (403, Syscall::ClockGettime64),           // clock_gettime64
+    (404, Syscall::ClockSettime64),           // clock_settime64
+    (405, Syscall::ClockAdjtime64),           // clock_adjtime64
+    (407, Syscall::ClockNanosleepTime64),     // clock_nanosleep_time64
+    (413, Syscall::Pselect6Time64),           // pselect6_time64
+    (414, Syscall::PpollTime64),              // ppoll_time64
+    (421, Syscall::RtSigtimedwaitTime64),     // rt_sigtimedwait_time64
+    (422, Syscall::FutexTime64),              // futex_time64
+    (423, Syscall::SchedRrGetIntervalTime64), // sched_rr_get_interval_time64
+    (435, Syscall::Clone3),                   // clone3
+    (437, Syscall::Openat2),                  // openat2
+    (439, Syscall::Faccessat2),               // faccessat2
 ];
 
 // ---------------------------------------------------------------------------
@@ -1385,6 +1607,16 @@ fn arm_16_bit_credential_calls_are_absent() {
         (47, "getgid"),
         (49, "geteuid"),
         (23, "setuid"),
+        (70, "setreuid"),
+        (71, "setregid"),
+        (80, "getgroups"),
+        (81, "setgroups"),
+        (138, "setfsuid"),
+        (139, "setfsgid"),
+        (164, "setresuid"),
+        (165, "getresuid"),
+        (170, "setresgid"),
+        (171, "getresgid"),
     ] {
         assert_eq!(
             from_arm(nr),
@@ -1484,7 +1716,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 161, "the ARMv7-A table maps 161 calls");
+    assert_eq!(mapped_arm().len(), 231, "the ARMv7-A table maps 231 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in
