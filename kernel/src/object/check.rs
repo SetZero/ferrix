@@ -131,6 +131,12 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let counter = check_two_processes()?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+    // Checked, not only printed. The cycle check's own premise is that this
+    // count is what fails if a refusal stops happening, and a count nothing
+    // tested would boot green through exactly that.
+    if leaked != 0 {
+        return Err("the native object checks did not give every frame back");
+    }
 
     // Outside the measured window, both: a woken waker and a killed program
     // leave kernel stacks for the scheduler to reap later, and the frame count
@@ -138,6 +144,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let mut after = Counter::default();
     check_a_wait_is_woken_by_what_it_waits_for(&mut after)?;
     check_a_job_kill_takes_down_a_process_tree(&mut after)?;
+    check_a_long_chain_of_jobs_is_freed_without_recursion()?;
     check_two_programs_talk_over_a_channel(&mut after)?;
 
     Ok(Report {
@@ -183,6 +190,7 @@ fn check_two_processes() -> Result<Counter, &'static str> {
     check_rights_only_shrink(&receiver, arrived, &mut counter)?;
     check_a_refused_send_keeps_its_handles(&sender, near, &mut counter)?;
     check_a_cycle_of_channels_is_refused(&sender, &mut counter)?;
+    check_an_endpoint_survives_a_bad_buffer(&sender, &mut counter)?;
     check_a_full_channel_says_wait(&sender, near, &receiver, far, &mut counter)?;
     check_a_closed_peer_frees_what_was_queued(&sender, near, &receiver, far, &mut counter)?;
     if sender.call(0x1030, &[]) != Err(Errno::ENOSYS) {
@@ -1291,5 +1299,79 @@ fn check_two_programs_talk_over_a_channel(counter: &mut Counter) -> Result<(), &
     task_stops(&sender_task, deadline)?;
     // The message carrying the handle, and the reply.
     counter.exchanged += 2;
+    Ok(())
+}
+
+/// How long a chain of jobs the recursion check builds and frees.
+///
+/// Recursive dropping overflows a sixteen-kibibyte kernel stack within a few
+/// hundred levels. Ten thousand is far past that, and at a couple of hundred
+/// bytes a job it is two megabytes of heap.
+const JOB_CHAIN: usize = 10_000;
+
+/// A chain of jobs each holding the one above it is freed without a stack
+/// frame per job.
+///
+/// Built with one reference at a time, the way a program looping over
+/// `job_create` and `handle_close` would, and dropped from the deepest end. A
+/// recursive drop reaches the guard page long before the end of the chain.
+fn check_a_long_chain_of_jobs_is_freed_without_recursion() -> Result<(), &'static str> {
+    let root = Job::new_root();
+    let mut deepest = Arc::clone(&root);
+    for _ in 0..JOB_CHAIN {
+        deepest = deepest
+            .new_child()
+            .map_err(|_| "a live job refused a child")?;
+    }
+    drop(root);
+    drop(deepest);
+    Ok(())
+}
+
+/// A message carrying an endpoint, read into a buffer that faults, is put
+/// back whole, and the endpoint read afterwards is the one that was sent.
+///
+/// The put-back is the path that has to hold the topology lock, since it
+/// re-adds an edge the cycle check walks. The race it closes cannot be staged
+/// with one thread, but the path itself can: it must still deliver the right
+/// object once the buffer is good.
+fn check_an_endpoint_survives_a_bad_buffer(
+    side: &Side,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let (near, far) = side.channel()?;
+    let (carried, carried_far) = side.channel()?;
+    side.put_handles(&[carried])?;
+    let _ = side
+        .call(nr::CHANNEL_WRITE, &[reg(near), PAYLOAD, 0, HANDLES, 1])
+        .map_err(|_| "sending an endpoint failed")?;
+
+    refused(
+        side.call(nr::CHANNEL_READ, &[reg(far), INBOX, 0, 0x10, 1, ACTUAL]),
+        status::FAULT,
+        "a read into an unmapped handle buffer was not a fault",
+        counter,
+    )?;
+
+    let _ = side
+        .call(nr::CHANNEL_READ, &[reg(far), INBOX, 0, HANDLES, 1, ACTUAL])
+        .map_err(|_| "a message put back after a bad buffer could not be read")?;
+    let arrived = Handle(side.get_u32(HANDLES)?);
+    side.put(PAYLOAD, b"y")?;
+    let _ = side
+        .call(nr::CHANNEL_WRITE, &[reg(arrived), PAYLOAD, 1, HANDLES, 0])
+        .map_err(|_| "the endpoint delivered after a put-back does not write")?;
+    let _ = side
+        .call(
+            nr::CHANNEL_READ,
+            &[reg(carried_far), INBOX, 8, HANDLES, 0, ACTUAL],
+        )
+        .map_err(|_| "the endpoint delivered after a put-back is not the one sent")?;
+
+    for end in [near, far, arrived, carried_far] {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(end)])
+            .map_err(|_| "closing a channel end failed")?;
+    }
     Ok(())
 }

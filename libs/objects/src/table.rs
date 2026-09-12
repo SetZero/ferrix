@@ -101,6 +101,8 @@ pub struct HandleTable<T> {
     live: usize,
     /// The most that may be occupied at once.
     limit: usize,
+    /// Set by [`HandleTable::close`]; nothing is inserted afterwards.
+    closed: bool,
 }
 
 impl<T> HandleTable<T> {
@@ -115,6 +117,7 @@ impl<T> HandleTable<T> {
             free: VecDeque::new(),
             live: 0,
             limit: limit.min(MAX_SLOTS),
+            closed: false,
         }
     }
 
@@ -136,6 +139,9 @@ impl<T> HandleTable<T> {
     /// been retired has no room however few handles are open.
     #[must_use]
     pub fn room(&self) -> usize {
+        if self.closed {
+            return 0;
+        }
         let by_limit = self.limit - self.live;
         let by_slots = self.free.len() + (MAX_SLOTS - self.slots.len());
         by_limit.min(by_slots)
@@ -350,10 +356,33 @@ impl<T> HandleTable<T> {
             .collect())
     }
 
-    /// Close every handle, giving back every object.
+    /// Close every handle, give back every object, and refuse every insertion
+    /// from now on.
     ///
-    /// What a process's exit does. The table is left empty and usable, and
-    /// every value it had issued is stale.
+    /// What a process's end does. [`HandleTable::clear`] leaves the table
+    /// usable, which is wrong for one whose process has terminated: a system
+    /// call still running on another processor -- between taking a message
+    /// off a channel and putting its handles here, say -- would put them in a
+    /// table nobody will close again, and the objects would outlive the
+    /// process meant to release them, its channel peers never seeing
+    /// `PEER_CLOSED`. After this, every insertion is refused with its object
+    /// handed back, for the caller to dispose of.
+    pub fn close(&mut self) -> Vec<T> {
+        self.closed = true;
+        self.clear()
+    }
+
+    /// Whether [`HandleTable::close`] has been called.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// Close every handle, giving back every object, and leave the table
+    /// usable.
+    ///
+    /// For a table that lives on. A process that has ended wants
+    /// [`HandleTable::close`] instead.
     pub fn clear(&mut self) -> Vec<T> {
         let open: Vec<Handle> = self.handles().map(|(handle, _)| handle).collect();
         open.into_iter()

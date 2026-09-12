@@ -573,7 +573,7 @@ impl Process {
         // The handles too, and outside every lock: an object's drop can free
         // memory and drain other objects, which is `object::dispose`'s job,
         // and must not run under this process's table lock or state lock.
-        object::dispose(self.with_handles(HandleTable::clear));
+        object::dispose(self.with_handles(HandleTable::close));
         self.exited.wake_all();
         self.vfork_done.wake_all();
 

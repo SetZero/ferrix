@@ -252,6 +252,7 @@ fn channel_write(
     // Held from the check to the push, so no other send can close a cycle in
     // between. Only a message carrying an endpoint takes it: nothing else can
     // add an edge to the graph it guards.
+    let checked: Vec<*const Endpoint> = carried.iter().map(Arc::as_ptr).collect();
     let _topology = if carried.is_empty() {
         None
     } else {
@@ -268,6 +269,23 @@ fn channel_write(
         // Looked up again rather than trusting `writer`: the handle may have
         // been closed since, and a closed handle must not write.
         let endpoint = channel_in(table, channel, Rights::WRITE)?;
+        // And what is taken has to be what was checked. Between the two
+        // lookups another thread of this process can close a handle and be
+        // issued a new one, and handle values are predictable: a value that
+        // named nothing at the first lookup, and so was not checked, could
+        // name the writing end itself at the second. So the writing end and
+        // the endpoints the message carries are compared, and a message whose
+        // handles changed underneath it is refused as try-again.
+        let carried_now = carried_endpoints(table, &values);
+        if !Arc::ptr_eq(&endpoint, &writer)
+            || carried_now
+                .iter()
+                .map(Arc::as_ptr)
+                .ne(checked.iter().copied())
+        {
+            return Err(status::SHOULD_WAIT);
+        }
+        refuse_the_writing_end(&endpoint, channel, &values, &carried_now)?;
         endpoint
             .write(data, values.len(), || {
                 table.take_many(&values, Rights::TRANSFER)
@@ -328,16 +346,26 @@ fn channel_read(
     let handle_capacity = capacity(handles.count, CHANNEL_MAX_HANDLES);
     let endpoint = process.with_handles(|table| channel_in(table, channel, Rights::READ))?;
 
-    let message = match endpoint.read(byte_capacity, handle_capacity) {
-        Ok(message) => message,
-        Err(ReadError::TooSmall { bytes, handles }) => {
-            report_actual(process, actual, bytes, handles)?;
-            return Err(status::BUFFER_TOO_SMALL);
+    // A message carrying endpoints is taken only under the topology lock, and
+    // the lock is held until it is delivered or put back: see
+    // `Endpoint::read`. Everything else is read without it, so bulk traffic
+    // never waits on it. At most twice round.
+    let mut topology = None;
+    let message = loop {
+        match endpoint.read(byte_capacity, handle_capacity, topology.is_some()) {
+            Ok(message) => break message,
+            Err(ReadError::NeedsTopology) => topology = Some(object::TOPOLOGY.lock()),
+            Err(ReadError::TooSmall { bytes, handles }) => {
+                report_actual(process, actual, bytes, handles)?;
+                return Err(status::BUFFER_TOO_SMALL);
+            }
+            Err(ReadError::Empty) => return Err(status::SHOULD_WAIT),
+            Err(ReadError::PeerClosed) => return Err(status::PEER_CLOSED),
         }
-        Err(ReadError::Empty) => return Err(status::SHOULD_WAIT),
-        Err(ReadError::PeerClosed) => return Err(status::PEER_CLOSED),
     };
-    deliver(process, &endpoint, message, bytes.at, handles.at, actual)
+    let delivered = deliver(process, &endpoint, message, bytes.at, handles.at, actual);
+    drop(topology);
+    delivered
 }
 
 /// Put a message's handles in the reader's table and its bytes in the

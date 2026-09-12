@@ -46,9 +46,9 @@ pub(crate) enum JobError {
 pub(crate) struct Job {
     /// The job this one is inside, kept alive by it. `None` for a root.
     ///
-    /// Never read: holding it is its whole purpose, so a parent outlives every
-    /// job beneath it and a kill of the parent can still reach them.
-    #[expect(dead_code, reason = "held to keep the parent alive, not to be read")]
+    /// Holding it is its purpose: a parent outlives every job beneath it, so
+    /// a kill of the parent can still reach them. Read only by `Drop`, which
+    /// has to let go of a chain of these without recursing.
     parent: Option<Arc<Job>>,
     /// Its members, and whether it has been killed.
     state: SpinLock<Members>,
@@ -158,5 +158,28 @@ impl Job {
             job.waiters.wake_all();
         }
         ended
+    }
+}
+
+impl Drop for Job {
+    /// Let go of the chain of parents in a loop, not by recursion.
+    ///
+    /// A child holds its parent strongly, so dropping the last reference to
+    /// the deepest job of a chain would drop each ancestor inside the drop of
+    /// the one below it, a stack frame per job, to whatever depth a program
+    /// built. A loop of `job_create` then `handle_close` builds a chain of
+    /// hundreds of thousands with one handle open at a time. So each parent
+    /// this job was the last holder of is taken apart here: its own parent is
+    /// taken out first, and dropping it then has nothing above it to recurse
+    /// into.
+    fn drop(&mut self) {
+        let mut next = self.parent.take();
+        while let Some(parent) = next {
+            next = match Arc::try_unwrap(parent) {
+                Ok(mut owned) => owned.parent.take(),
+                // Someone else still holds it, so this reference frees nothing.
+                Err(_shared) => None,
+            };
+        }
     }
 }

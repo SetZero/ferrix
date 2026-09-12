@@ -26,6 +26,7 @@
 //! [`check_carry`] walks from what the message carries, through the endpoints
 //! queued in each, looking for the end it is about to land in.
 
+use alloc::collections::BTreeSet;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 
@@ -84,6 +85,9 @@ pub(crate) enum ReadError {
     PeerClosed,
     /// Nothing is queued yet.
     Empty,
+    /// The next message carries channel endpoints, and may only be taken
+    /// holding [`super::TOPOLOGY`]. Still queued.
+    NeedsTopology,
     /// The next message needs more room, and is still queued.
     TooSmall {
         /// Its size in bytes.
@@ -181,6 +185,14 @@ impl Endpoint {
 
     /// Take the next message, if it fits.
     ///
+    /// A message carrying channel endpoints is taken only when the caller
+    /// holds [`super::TOPOLOGY`], and the caller keeps holding it until the
+    /// message is delivered or put back with [`Endpoint::unread`]. Putting one
+    /// back re-adds edges to the graph the cycle check walks, and doing that
+    /// while a send is walking is how two processes could build the cycle
+    /// the check exists to refuse. A caller without the lock gets
+    /// [`ReadError::NeedsTopology`], takes it, and asks again.
+    ///
     /// # Errors
     ///
     /// [`ReadError`]. A message too large stays queued.
@@ -188,10 +200,22 @@ impl Endpoint {
         &self,
         byte_capacity: usize,
         handle_capacity: usize,
+        topology_held: bool,
     ) -> Result<ChannelMessage, ReadError> {
         let (taken, was_full) = {
             let mut inbox = self.inbox.lock();
             let was_full = inbox.is_full();
+            // Decided under the same lock as the pop, so the message looked at
+            // is the message taken.
+            let needs_topology = !topology_held
+                && inbox.iter().next().is_some_and(|head| {
+                    head.bytes.len() <= byte_capacity
+                        && head.handles.len() <= handle_capacity
+                        && carries_endpoints(head)
+                });
+            if needs_topology {
+                return Err(ReadError::NeedsTopology);
+            }
             (inbox.pop_fitting(byte_capacity, handle_capacity), was_full)
         };
         // A reader that makes room in a full queue is what a blocked writer
@@ -216,8 +240,15 @@ impl Endpoint {
 
     /// Put back a message [`Endpoint::read`] took and the caller could not
     /// deliver, at the head of the queue.
+    ///
+    /// Holding [`super::TOPOLOGY`] if the message carries endpoints, as
+    /// [`Endpoint::read`] required when it was taken.
+    ///
+    /// Wakes this end's waiters, because the message is readable again and a
+    /// second reader may have gone to sleep while it was out.
     pub(crate) fn unread(&self, message: ChannelMessage) {
         self.inbox.lock().unpop(message);
+        self.waiters.wake_all();
     }
 
     /// Whether nobody holds the other end.
@@ -281,18 +312,35 @@ fn identity(endpoint: &Arc<Endpoint>) -> usize {
 /// and the compiler is what asks the question.
 fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Vec<Arc<Endpoint>> {
     let inbox = endpoint.inbox.lock();
+    let mut distinct = BTreeSet::new();
     inbox
         .iter()
         .flat_map(|message| message.handles.iter())
         .filter_map(|(object, _)| match object {
-            Object::Channel(queued) => Some(Arc::clone(queued)),
+            Object::Channel(queued) => Some(queued),
             Object::Vmo(_)
             | Object::Job(_)
             | Object::Device(_)
             | Object::Interrupt(_)
             | Object::IoMapping(_) => None,
         })
+        // Once each, and no more than the walk could use: an inbox can hold
+        // two hundred and fifty-six messages of sixty-four handles, and
+        // cloning sixteen thousand references under the topology lock to
+        // find the walk was too far anyway would be the cost the bound is
+        // there to prevent.
+        .filter(|queued| distinct.insert(Arc::as_ptr(queued) as usize))
+        .take(MAX_WALK + 1)
+        .map(Arc::clone)
         .collect()
+}
+
+/// Whether a message carries a channel endpoint.
+fn carries_endpoints(message: &ChannelMessage) -> bool {
+    message
+        .handles
+        .iter()
+        .any(|(object, _)| matches!(object, Object::Channel(_)))
 }
 
 impl Drop for Endpoint {

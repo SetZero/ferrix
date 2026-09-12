@@ -379,3 +379,54 @@ fn a_node_reached_twice_is_expanded_once() {
     assert_eq!(answer, Reach::Clear, "the target is not in the graph");
     assert_eq!(expanded, vec![0, 1, 2, 3], "3 is expanded once");
 }
+
+#[test]
+fn a_closed_table_refuses_every_insertion() {
+    let mut t = table(8);
+    let _ = t.insert(1, Rights::ALL).unwrap();
+    let _ = t.insert(2, Rights::DUPLICATE).unwrap();
+    let mut objects = t.close();
+    objects.sort_unstable();
+    assert_eq!(objects, vec![1, 2], "every object back");
+    assert!(t.is_closed(), "closed");
+    assert_eq!(t.room(), 0, "no room");
+    assert_eq!(
+        t.insert(3, Rights::ALL),
+        Err(3),
+        "insert refused, object back"
+    );
+    assert_eq!(
+        t.insert_many(vec![(4, Rights::ALL)]),
+        Err(vec![(4, Rights::ALL)]),
+        "a batch refused whole"
+    );
+    assert!(t.is_empty(), "still empty");
+}
+
+#[test]
+fn duplicate_children_are_admitted_once() {
+    let mut expanded = 0;
+    let answer = reaches(
+        vec![0_usize],
+        |&node| node,
+        99,
+        |&node| {
+            expanded += 1;
+            if node == 0 {
+                vec![1; 10_000]
+            } else {
+                Vec::new()
+            }
+        },
+        2,
+    );
+    assert_eq!(
+        answer,
+        Reach::Clear,
+        "two distinct nodes fit a limit of two"
+    );
+    assert_eq!(
+        expanded, 2,
+        "a node offered ten thousand times is expanded once"
+    );
+}

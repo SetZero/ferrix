@@ -1043,7 +1043,9 @@ architectures.**
 * Objects that contain objects never drop them recursively. A closed endpoint
   hands its queue to `object::dispose`, which drops one level at a time, so a
   program that queues endpoints inside endpoints cannot turn a close into a
-  kernel stack overflow.
+  kernel stack overflow. Jobs too, since a review found this was true only of
+  channels: a child holds its parent, so a job's drop unwinds its chain of
+  parents in a loop, and the check frees a chain of ten thousand.
 * The self-check builds two processes and drives the handlers through raw
   registers: a message and a VMO handle cross from one table to the other and
   the handle that arrives reads back what the sender wrote; a read that does

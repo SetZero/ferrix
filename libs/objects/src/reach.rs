@@ -33,11 +33,15 @@ pub enum Reach {
 
 /// Whether the node identified by `target` is reachable from `start`.
 ///
-/// `identity` tells nodes apart, so a node reached along two paths is expanded
-/// once and a loop in the graph ends the walk rather than repeating it.
-/// `children` is called at most once per distinct node. Every node visited is
-/// held until the walk returns, so an identity derived from where a node
-/// lives stays unique for the whole walk.
+/// `identity` tells nodes apart. A node is admitted, and counted against
+/// `limit`, the first time it is offered, and never again: a node offered
+/// along a thousand paths, or a thousand times by one parent, costs one slot
+/// in the pending list and one call to `children`. Counting at admission
+/// rather than at expansion is what bounds the pending list by `limit`, so a
+/// parent with ten thousand copies of one child cannot fill memory while the
+/// walk holds a lock. Every node admitted is held until the walk returns, so
+/// an identity derived from where a node lives stays unique for the whole
+/// walk.
 pub fn reaches<N>(
     start: Vec<N>,
     identity: impl Fn(&N) -> usize,
@@ -46,21 +50,43 @@ pub fn reaches<N>(
     limit: usize,
 ) -> Reach {
     let mut seen = BTreeSet::new();
+    let mut pending = Vec::new();
     let mut held = Vec::new();
-    let mut pending = start;
-    while let Some(node) = pending.pop() {
+    for node in start {
         let id = identity(&node);
-        if id == target {
-            return Reach::Found;
+        if let Some(answer) = admit(node, id, target, &mut seen, &mut pending, limit) {
+            return answer;
         }
-        if !seen.insert(id) {
-            continue;
+    }
+    while let Some(node) = pending.pop() {
+        for child in children(&node) {
+            let id = identity(&child);
+            if let Some(answer) = admit(child, id, target, &mut seen, &mut pending, limit) {
+                return answer;
+            }
         }
-        if seen.len() > limit {
-            return Reach::TooFar;
-        }
-        pending.extend(children(&node));
         held.push(node);
     }
     Reach::Clear
+}
+
+/// Offer one node to the walk: the answer, if it settles the walk.
+fn admit<N>(
+    node: N,
+    id: usize,
+    target: usize,
+    seen: &mut BTreeSet<usize>,
+    pending: &mut Vec<N>,
+    limit: usize,
+) -> Option<Reach> {
+    if id == target {
+        return Some(Reach::Found);
+    }
+    if seen.insert(id) {
+        if seen.len() > limit {
+            return Some(Reach::TooFar);
+        }
+        pending.push(node);
+    }
+    None
 }
