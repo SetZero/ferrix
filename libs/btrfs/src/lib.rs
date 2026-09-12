@@ -1,10 +1,11 @@
 //! The btrfs on-disk format, as pure parsing.
 //!
-//! This crate is the foundation of the btrfs read path: it turns bytes that
-//! came off a block device into superblocks, chunk mappings, B-tree nodes and
-//! item payloads. It does not read the device, does not cache, does not write
-//! and knows nothing about transactions or allocation. Everything here is a
-//! function of a byte slice.
+//! This crate is the btrfs read path: it turns bytes that came off a block
+//! device into superblocks, chunk mappings, B-tree nodes and item payloads, and
+//! from those into directories and file contents. It does not cache, does not
+//! write and knows nothing about transactions or allocation. The parsing
+//! modules are functions of a byte slice; [`volume`] and [`fs`] read through a
+//! [`volume::Device`] the caller implements, and allocate nothing either.
 //!
 //! # Logical addresses are not physical addresses
 //!
@@ -22,8 +23,8 @@
 //! 4. feed every `CHUNK_ITEM` in the chunk tree into the same map,
 //! 5. only now is `root` — the root tree — reachable.
 //!
-//! Nothing in this crate performs step 1, 3 or 5; those need a device. What it
-//! provides is every parse and every check those steps depend on.
+//! [`volume::Volume::open`] performs exactly these steps, and then finds the
+//! default subvolume's fs tree in the root tree.
 //!
 //! # Totality
 //!
@@ -50,9 +51,11 @@ use core::fmt;
 pub mod chunk;
 pub mod compress;
 pub mod crc32c;
+pub mod fs;
 pub mod items;
 pub mod superblock;
 pub mod tree;
+pub mod volume;
 
 pub use chunk::{ChunkItem, ChunkMap, ChunkMapEntry, ChunkProfile};
 pub use crc32c::crc32c;
@@ -140,6 +143,29 @@ pub enum BtrfsError {
         /// The key type byte the payload was parsed as.
         item_type: u8,
     },
+    /// The device could not supply the bytes at this physical offset.
+    DeviceRead {
+        /// Where the failed read began.
+        physical: u64,
+    },
+    /// The superblock sets incompatible feature bits this crate does not know.
+    /// Carries the unknown bits.
+    UnsupportedFeature(u64),
+    /// The volume spans more than one device. Carries `num_devices`.
+    MultipleDevices(u64),
+    /// The superblock points at a log tree that has not been replayed, so the
+    /// fs trees alone are older than what was last fsync'd.
+    UnreplayedLog,
+    /// A node is not the one its parent pointed at: wrong level, wrong
+    /// generation, wrong filesystem, or a tree deeper than btrfs allows.
+    BadTree {
+        /// Logical address of the node that disagreed.
+        logical: u64,
+    },
+    /// The root tree has no `ROOT_ITEM` for this tree id.
+    MissingRoot(u64),
+    /// The fs tree has no `INODE_ITEM` for this inode number.
+    MissingInode(u64),
     /// An extent names a compression algorithm outside `0..=3`.
     UnsupportedCompression(u8),
     /// A compressed stream is malformed: a bad header, a back-reference
@@ -200,6 +226,21 @@ impl fmt::Display for BtrfsError {
             BtrfsError::BadItem { item_type } => {
                 write!(f, "malformed payload for item type {item_type}")
             }
+            BtrfsError::DeviceRead { physical } => {
+                write!(f, "device read at {physical:#x} failed")
+            }
+            BtrfsError::UnsupportedFeature(bits) => {
+                write!(f, "incompatible feature bits {bits:#x} are not supported")
+            }
+            BtrfsError::MultipleDevices(count) => {
+                write!(f, "volume spans {count} devices; only one is supported")
+            }
+            BtrfsError::UnreplayedLog => f.write_str("log tree has not been replayed"),
+            BtrfsError::BadTree { logical } => {
+                write!(f, "node at {logical:#x} is not the one its parent names")
+            }
+            BtrfsError::MissingRoot(objectid) => write!(f, "no root item for tree {objectid}"),
+            BtrfsError::MissingInode(ino) => write!(f, "no inode {ino}"),
             BtrfsError::UnsupportedCompression(kind) => {
                 write!(f, "compression type {kind} is not implemented")
             }
