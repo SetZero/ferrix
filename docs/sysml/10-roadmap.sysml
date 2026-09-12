@@ -222,10 +222,13 @@ package FerrixRoadmap {
              * takes down a process tree.
              *
              * Built: the byte-level half, in libs/native-abi and libs/objects,
-             * host-tested, fuzzed and under Miri. Missing: every kernel object,
-             * the native dispatch, and processes that are scheduled tasks --
-             * left for later by stage 6, not on stage 7's list, and required
-             * by the exit criterion. */
+             * host-tested, fuzzed and under Miri; and in kernel/src/object and
+             * syscall/native, a handle table on every Process, the native
+             * dispatch, channels carrying handles and VMO create/read/write,
+             * self-checked between two processes in the boot test. Missing:
+             * ports and waits, Job, Interrupt, IoMapping, vmo_map, and
+             * processes that are scheduled tasks, which the exit criterion
+             * needs and which is being built as stage 7's follow-up. */
     }
 
     #planned requirement <'S10'> stage10UserspaceDrivers : Stage {

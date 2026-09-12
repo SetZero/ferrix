@@ -1,0 +1,100 @@
+//! The native ABI's kernel objects, and what a handle names.
+//!
+//! Stage 9 of `docs/ROADMAP.md`. The rules — which handles are valid, which
+//! rights they carry, when a queue is full — are `libs/objects` and
+//! `libs/native-abi`, where the host tests and the fuzzer reach them. This is
+//! the part that needs a kernel: the reference counts, the locks, and freeing
+//! what an object held.
+//!
+//! # Dropping is deferred, and why
+//!
+//! An object can hold other objects. A channel endpoint holds the messages
+//! queued for it, and a message holds handles to anything — including other
+//! endpoints, holding further messages. Dropping the last reference to the
+//! outermost one would drop everything inside it recursively, on a
+//! sixteen-kibibyte kernel stack, to a depth the program chose. A chain of a
+//! few thousand endpoints, each queued in the next, is a short loop in ring 3
+//! and a guard-page fault in ring 0.
+//!
+//! So an object that contains objects never drops them itself: it hands them
+//! to [`dispose`], which drops them one level at a time in a loop. However
+//! deep the chain, the stack holds one drop at a time.
+
+pub(crate) mod channel;
+pub(crate) mod check;
+
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use ferrix_native_abi::rights::Rights;
+use ferrix_sync::SpinLock;
+
+use crate::user::vmo::Vmo;
+
+/// The most handles one process may hold at once.
+///
+/// A resource limit, not a structural one: the table itself can grow to
+/// `ferrix_objects::table::MAX_SLOTS`. Four thousand is far more than a driver
+/// needs, and small enough that a program leaking handles in a loop hits it
+/// long before the heap notices.
+pub(crate) const HANDLE_LIMIT: usize = 4096;
+
+/// Something a handle can name.
+#[derive(Debug, Clone)]
+pub(crate) enum Object {
+    /// One end of a channel.
+    Channel(Arc<channel::Endpoint>),
+    /// A memory object.
+    Vmo(Arc<Vmo>),
+}
+
+/// A process's handle table.
+pub(crate) type HandleTable = ferrix_objects::table::HandleTable<Object>;
+
+/// An object travelling in a message, with the rights its handle carried.
+///
+/// The rights travel with it: a read-only VMO sent to another process arrives
+/// read-only, which is what lets `devmgr` hand a driver less than it holds.
+pub(crate) type Transfer = (Object, Rights);
+
+/// Objects waiting to be dropped.
+static ORPHANS: SpinLock<Vec<Object>> = SpinLock::new(Vec::new());
+
+/// Whether some context is already draining [`ORPHANS`].
+static DISPOSING: AtomicBool = AtomicBool::new(false);
+
+/// Drop `objects`, and everything they contain, without recursing.
+///
+/// If another drop is already draining — this one was reached from inside an
+/// object's `Drop` — the objects are left for that loop and this returns at
+/// once, which is what bounds the depth at one. On another processor the
+/// same thing happens, and the clear-then-recheck at the bottom is what stops
+/// an object queued just as the drainer finished from being stranded.
+///
+/// Call it with no lock held that an object's drop might need: a channel's
+/// queue, a process's handle table.
+pub(crate) fn dispose(objects: impl IntoIterator<Item = Object>) {
+    ORPHANS.lock().extend(objects);
+    loop {
+        if DISPOSING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        loop {
+            let batch = core::mem::take(&mut *ORPHANS.lock());
+            if batch.is_empty() {
+                break;
+            }
+            // The lock is released before anything is dropped, so a drop
+            // that disposes further objects can take it again.
+            drop(batch);
+        }
+        DISPOSING.store(false, Ordering::Release);
+        if ORPHANS.lock().is_empty() {
+            return;
+        }
+    }
+}

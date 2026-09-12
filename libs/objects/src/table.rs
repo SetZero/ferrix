@@ -45,8 +45,13 @@ const GENERATION_MASK: u32 = (1 << GENERATION_BITS) - 1;
 /// The highest generation a slot may reach before it is retired.
 const MAX_GENERATION: u32 = GENERATION_MASK;
 
-/// The most slots a table can ever have: what the index bits can express.
-pub const MAX_SLOTS: usize = 1 << (32 - GENERATION_BITS);
+/// The most slots a table can ever have.
+///
+/// Nineteen bits of index, not the twenty the value has room for. A native
+/// call returns a new handle in the same register as an `errno`, and on a
+/// 32-bit machine a value at or above 2^31 reads as negative — the top 4095
+/// of them as an error. With nineteen, the largest handle is `0x7FFF_FFFF`.
+pub const MAX_SLOTS: usize = 1 << (31 - GENERATION_BITS);
 
 /// Why a table operation was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

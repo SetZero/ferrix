@@ -176,6 +176,96 @@ impl Vmo {
         Ok(frame)
     }
 
+    /// Copy `out.len()` bytes out of page `index`, starting `offset` into it.
+    ///
+    /// A page never committed reads as zeros and stays uncommitted: reading a
+    /// reservation must not pay for it. The copy is made under the object's
+    /// lock, which is what keeps the frame from being decommitted and freed
+    /// half-way through; the caller copies onwards to user memory after it is
+    /// released.
+    ///
+    /// # Errors
+    ///
+    /// [`VmoError::OutOfRange`] past the end of the object or of the page.
+    pub(crate) fn read_page(
+        &self,
+        index: u64,
+        offset: usize,
+        out: &mut [u8],
+    ) -> Result<(), VmoError> {
+        self.check_span(index, offset, out.len())?;
+        let pages = self.pages.lock();
+        match pages.get(&index) {
+            None => out.fill(0),
+            Some(&frame) => {
+                let at = mm::direct_map(frame * PAGE_SIZE) as usize + offset;
+                // SAFETY: the object holds a reference on `frame` for as long
+                // as its lock is held, `check_span` kept `offset + out.len()`
+                // inside the page, and the direct map covers all of RAM.
+                let source = unsafe { core::slice::from_raw_parts(at as *const u8, out.len()) };
+                out.copy_from_slice(source);
+            }
+        }
+        Ok(())
+    }
+
+    /// Copy `data` into page `index`, starting `offset` into it, committing
+    /// the page first if this is its first touch.
+    ///
+    /// A page this object shares with another — one `fork` left in both — is
+    /// copied before it is written, so that a write through this object is
+    /// never visible through the other. The mappings of *this* object are
+    /// not this function's to fix up; the native ABI creates no mapping of a
+    /// VMO yet, and `vmo_map` will have to invalidate what it maps when it
+    /// arrives.
+    ///
+    /// # Errors
+    ///
+    /// [`VmoError::OutOfRange`], or [`VmoError::OutOfMemory`].
+    pub(crate) fn write_page(
+        &self,
+        index: u64,
+        offset: usize,
+        data: &[u8],
+    ) -> Result<(), VmoError> {
+        self.check_span(index, offset, data.len())?;
+        let mut pages = self.pages.lock();
+        let frame = match pages.get(&index).copied() {
+            Some(frame) if mm::frame_references(frame) <= 1 => frame,
+            Some(shared) => {
+                let copy = mm::allocate_frames(0).ok_or(VmoError::OutOfMemory)?;
+                mm::copy_frame(copy, shared);
+                let _ = pages.insert(index, copy);
+                let _ = mm::release_frame(shared);
+                copy
+            }
+            None => {
+                let fresh = mm::allocate_frames(0).ok_or(VmoError::OutOfMemory)?;
+                mm::zero_frame(fresh);
+                let _ = pages.insert(index, fresh);
+                fresh
+            }
+        };
+        let at = mm::direct_map(frame * PAGE_SIZE) as usize + offset;
+        // SAFETY: the frame is this object's alone (copied above if it was
+        // not) and held under its lock; `check_span` kept the write inside
+        // the page; the direct map is writable for all of RAM.
+        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), at as *mut u8, data.len()) };
+        Ok(())
+    }
+
+    /// Refuse a byte range that leaves page `index` or the object.
+    fn check_span(&self, index: u64, offset: usize, len: usize) -> Result<(), VmoError> {
+        let end = offset.checked_add(len);
+        if index >= self.len || end.is_none_or(|end| end as u64 > PAGE_SIZE) {
+            return Err(VmoError::OutOfRange {
+                index,
+                pages: self.len,
+            });
+        }
+        Ok(())
+    }
+
     /// Replace the frame holding page `index`, giving back the reference the
     /// object held on the old one.
     ///

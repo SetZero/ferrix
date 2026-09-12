@@ -71,6 +71,8 @@ dependencies = [
  "ferrix-frame",
  "ferrix-heap",
  "ferrix-linux-abi",
+ "ferrix-native-abi",
+ "ferrix-objects",
  "ferrix-paging",
  "ferrix-qr",
  "ferrix-sched",

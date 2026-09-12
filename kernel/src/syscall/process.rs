@@ -27,6 +27,7 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_sync::SpinLock;
 use ferrix_vma::VmaFlags;
 
+use crate::object::{self, HandleTable};
 use crate::syscall::signal::Signals;
 use crate::user::space::{AddressSpace, SpaceError};
 
@@ -35,6 +36,12 @@ use crate::user::space::{AddressSpace, SpaceError};
 pub(crate) struct Process {
     /// What it can see.
     space: Arc<AddressSpace>,
+    /// The handles it holds, for the native ABI.
+    ///
+    /// A lock of its own rather than a field of `state`: a channel write looks
+    /// handles up and takes them out, and has no business waiting on a `brk`
+    /// or a signal mask to do it. See `crate::syscall::native`.
+    handles: SpinLock<HandleTable>,
     /// Everything else, behind one lock. One lock per process rather than a
     /// global one, for the same reason the address space has its own: two
     /// processes calling `brk` at once should contend for nothing.
@@ -70,6 +77,7 @@ impl Process {
     pub(crate) fn new(space: Arc<AddressSpace>) -> Process {
         Process {
             space,
+            handles: SpinLock::new(HandleTable::new(object::HANDLE_LIMIT)),
             state: SpinLock::new(State::default()),
         }
     }
@@ -77,6 +85,16 @@ impl Process {
     /// What it can see.
     pub(crate) fn space(&self) -> &Arc<AddressSpace> {
         &self.space
+    }
+
+    /// Do something with the handle table, under its lock.
+    ///
+    /// Whatever `change` takes out of the table it should hand back rather
+    /// than drop, so that the object dies after the lock is released: an
+    /// object's drop can free memory and drain other objects, and
+    /// `crate::object::dispose` is where that belongs.
+    pub(crate) fn with_handles<R>(&self, change: impl FnOnce(&mut HandleTable) -> R) -> R {
+        change(&mut self.handles.lock())
     }
 
     /// Record the address to clear when this thread exits, and report the

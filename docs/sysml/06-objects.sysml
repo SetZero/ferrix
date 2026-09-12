@@ -1,8 +1,9 @@
 /*
  * Ferrix — SysML v2 model, part 6: kernel objects and the two ABIs.
  *
- * docs/ARCHITECTURE.md §2 and §3. None of this exists in kernel/ yet; the
- * constants for the Linux half are in libs/linux-abi.
+ * docs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in
+ * libs/linux-abi and for the native half in libs/native-abi; handle tables,
+ * channels and VMO handles exist in kernel/src/object, the rest is planned.
  */
 package FerrixObjects {
     private import ScalarValues::*;
@@ -26,7 +27,7 @@ package FerrixObjects {
     #planned part def VmoObject :> KernelObject, Vmo;
     #planned part def AddressSpaceObject :> KernelObject, ProcessAddressSpace;
 
-    #planned part def Channel :> KernelObject {
+    #implemented part def Channel :> KernelObject {
         doc /* Bidirectional datagram pipe carrying bytes and handles. The
              * basis of driver IPC. */
         action write;
@@ -90,7 +91,7 @@ package FerrixObjects {
         action kill;
     }
 
-    #planned part def HandleTable {
+    #implemented part def HandleTable {
         @stage { number = 9; }
         attribute handles : Handle[0..*];
     }
@@ -199,7 +200,7 @@ package FerrixObjects {
     // The native ABI, stage 9
     // -----------------------------------------------------------------------
 
-    #planned part def NativeAbi {
+    #inProgress part def NativeAbi {
         @stage { number = 9; }
         doc /* Syscall numbers from 0x1000. Handle-table operations, channel
              * send/receive with handle passing, port wait, interrupt bind,

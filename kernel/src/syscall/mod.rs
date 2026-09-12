@@ -45,6 +45,7 @@ pub(crate) mod file;
 pub(crate) mod image;
 pub(crate) mod load;
 pub(crate) mod memory;
+pub(crate) mod native;
 pub(crate) mod process;
 pub(crate) mod signal;
 pub(crate) mod system;
@@ -107,6 +108,13 @@ pub(crate) enum Outcome {
 /// is a trap vector with a program waiting on it — so every path here has to
 /// end in a value.
 pub(crate) fn dispatch(args: &SyscallArgs) -> Outcome {
+    // The native ABI first, by range, before any Linux table is asked: the
+    // two ABIs never have to agree about a number, and `arch::decode_syscall`
+    // never sees one of Ferrix's own. See `native`.
+    if ferrix_native_abi::nr::is_native(args.number) {
+        let process = process::current();
+        return Outcome::Return(errno::encode(native::dispatch(args, process.as_deref())));
+    }
     let Some(call) = arch::decode_syscall(args.number) else {
         return Outcome::Return(Errno::ENOSYS.as_return_value());
     };

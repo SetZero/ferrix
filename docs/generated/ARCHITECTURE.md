@@ -85,7 +85,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixBoot` | `03-boot.sysml` | The hand-off ABI, the two address layouts, the loader's sequence, the kernel's bring-up through stage 4, and the trap path. All of this runs today on all three architectures. |
 | `FerrixMemory` | `04-memory.sysml` | docs/ARCHITECTURE.md §4. The physical allocator, the heap, the page-table arithmetic and the kernel arena run today; VMOs, process address spaces, copy-on-write and reclaim are stage 6 and after. |
 | `FerrixScheduling` | `05-scheduling.sysml` | Stages 3 to 5 run today: interrupts, a clock, every processor online, IPIs, TLB shootdown, grace periods, fair locks, and tasks scheduled by EEVDF in one Throughput domain. Stage 14's real-time domains are designed here (docs/ARCHITECTURE.md §5) and not yet written. |
-| `FerrixObjects` | `06-objects.sysml` | docs/ARCHITECTURE.md §2 and §3. None of this exists in kernel/ yet; the constants for the Linux half are in libs/linux-abi. |
+| `FerrixObjects` | `06-objects.sysml` | docs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in libs/linux-abi and for the native half in libs/native-abi; handle tables, channels and VMO handles exist in kernel/src/object, the rest is planned. |
 | `FerrixIsolation` | `07-isolation.sysml` | docs/ARCHITECTURE.md §6: namespaces, cgroups v2, seccomp, credentials. Stage 13, designed in from the start so that no global table has to be found later. |
 | `FerrixDrivers` | `08-drivers.sysml` | docs/ARCHITECTURE.md §7. The kernel enumerates buses because that needs ACPI or a device tree and privileged access; it does not drive devices. Enumeration's parsers and the kernel's access to the tables run today; everything from the device node outward is stage 10. |
 | `FerrixStorage` | `09-storage.sysml` | docs/ARCHITECTURE.md §8. Block core, VFS, the small in-kernel filesystems and btrfs in three stages. Only the btrfs and cpio parsers exist today. |
@@ -93,14 +93,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1406 elements, 155 relations. Model digest `1163a96995f71610`.
+13 files, 16 packages, 1406 elements, 155 relations. Model digest `ea8a0b0cfeae7313`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 111 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 8 | The owning stage has started; part of the element runs. |
-| `#writtenAhead` | 10 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 110 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#implemented` | 115 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#inProgress` | 9 | The owning stage has started; part of the element runs. |
+| `#writtenAhead` | 8 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
+| `#planned` | 107 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -1695,7 +1695,7 @@ The futex family over a hash of wait queues keyed by physical page and offset, s
 
 ### Kernel objects and the two ABIs
 
-docs/ARCHITECTURE.md §2 and §3. None of this exists in kernel/ yet; the constants for the Linux half are in libs/linux-abi.
+docs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in libs/linux-abi and for the native half in libs/native-abi; handle tables, channels and VMO handles exist in kernel/src/object, the rest is planned.
 
 ```mermaid
 flowchart TB
@@ -1719,7 +1719,9 @@ flowchart TB
   n8_FerrixObjects_Process -- "specializes" --> n0_FerrixObjects_KernelObject
   n9_FerrixObjects_Job -- "specializes" --> n0_FerrixObjects_KernelObject
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixObjects_KernelObject,n1_FerrixObjects_VmoObject,n2_FerrixObjects_AddressSpaceObject,n3_FerrixObjects_Channel,n4_FerrixObjects_Port,n5_FerrixObjects_Interrupt,n6_FerrixObjects_IoMapping,n7_FerrixObjects_TaskObject,n8_FerrixObjects_Process,n9_FerrixObjects_Job planned
+  classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
+  class n0_FerrixObjects_KernelObject,n1_FerrixObjects_VmoObject,n2_FerrixObjects_AddressSpaceObject,n4_FerrixObjects_Port,n5_FerrixObjects_Interrupt,n6_FerrixObjects_IoMapping,n7_FerrixObjects_TaskObject,n8_FerrixObjects_Process,n9_FerrixObjects_Job planned
+  class n3_FerrixObjects_Channel implemented
 ```
 
 **Figure 12 — Kernel object and its subtypes.** 9 definitions specialize `KernelObject`; the hollow arrow points at what they have in common. [SVG](diagrams/ferrix-objects-kernel-object.svg) Source: `06-objects.sysml`.
@@ -1744,7 +1746,7 @@ Typed, reference-counted, reached through per-process handle tables. The native 
 
 #### Channel
 
-`#planned`  ·  specialises `KernelObject`
+`#implemented`  ·  specialises `KernelObject`
 
 Bidirectional datagram pipe carrying bytes and handles. The basis of driver IPC.
 
@@ -1826,7 +1828,7 @@ A container of processes, where resource limits and kill authority live. A wedge
 
 #### HandleTable
 
-`#planned`  ·  stage 9
+`#implemented`  ·  stage 9
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -1901,7 +1903,7 @@ Pipes, ttys and job control: what an interactive shell needs.
 
 #### NativeAbi
 
-`#planned`  ·  stage 9
+`#inProgress`  ·  stage 9
 
 Syscall numbers from 0x1000. Handle-table operations, channel send/receive with handle passing, port wait, interrupt bind, VMO create/map, job create/kill. What devmgr and drivers speak; a process may use both ABIs.
 
@@ -2419,8 +2421,8 @@ docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code 
 | `libs/cpio` | `#writtenAhead` | 8 | `forbid` | 45 |  |
 | `libs/vfs` | `#writtenAhead` | 8 | `forbid` | 36 | Dentries with negative entries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store the kernel supplies, initramfs unpacking and the getdents64 packer. |
 | `libs/virtio` | `#writtenAhead` | 10 | allowed | 50 |  |
-| `libs/native-abi` | `#writtenAhead` | 9 | `forbid` | 13 | The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. |
-| `libs/objects` | `#writtenAhead` | 9 | `forbid` | 15 | The handle table and the channel message queue, generic over what a handle names. |
+| `libs/native-abi` | `#implemented` | 9 | `forbid` | 13 | The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. |
+| `libs/objects` | `#implemented` | 9 | `forbid` | 16 | The handle table and the channel message queue, generic over what a handle names. |
 | `libs/btrfs` | `#writtenAhead` | 11 | `forbid` | 38 |  |
 | `libs/seccomp` | `#planned` | 13 | `forbid` | — | The classic-BPF interpreter as a pure function over bytes. |
 | `boot` | `#implemented` | — | allowed | — |  |
@@ -2473,8 +2475,8 @@ flowchart LR
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef writtenAhead fill:#e5dff0,stroke:#6b4fa0,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixStructure_Workspace_bootinfo,n1_FerrixStructure_Workspace_elf,n2_FerrixStructure_Workspace_frameCrate,n3_FerrixStructure_Workspace_heap,n4_FerrixStructure_Workspace_paging,n5_FerrixStructure_Workspace_acpi,n6_FerrixStructure_Workspace_fdt,n7_FerrixStructure_Workspace_sync,n8_FerrixStructure_Workspace_sched,n9_FerrixStructure_Workspace_vma,n19_FerrixStructure_Workspace_bootCrate,n20_FerrixStructure_Workspace_kernelCrate,n21_FerrixStructure_Workspace_xtask,n22_FerrixStructure_Workspace_fuzz implemented
-  class n10_FerrixStructure_Workspace_linuxAbi,n11_FerrixStructure_Workspace_ustack,n12_FerrixStructure_Workspace_cpio,n13_FerrixStructure_Workspace_vfs,n14_FerrixStructure_Workspace_virtio,n15_FerrixStructure_Workspace_nativeAbi,n16_FerrixStructure_Workspace_objects,n17_FerrixStructure_Workspace_btrfs writtenAhead
+  class n0_FerrixStructure_Workspace_bootinfo,n1_FerrixStructure_Workspace_elf,n2_FerrixStructure_Workspace_frameCrate,n3_FerrixStructure_Workspace_heap,n4_FerrixStructure_Workspace_paging,n5_FerrixStructure_Workspace_acpi,n6_FerrixStructure_Workspace_fdt,n7_FerrixStructure_Workspace_sync,n8_FerrixStructure_Workspace_sched,n9_FerrixStructure_Workspace_vma,n15_FerrixStructure_Workspace_nativeAbi,n16_FerrixStructure_Workspace_objects,n19_FerrixStructure_Workspace_bootCrate,n20_FerrixStructure_Workspace_kernelCrate,n21_FerrixStructure_Workspace_xtask,n22_FerrixStructure_Workspace_fuzz implemented
+  class n10_FerrixStructure_Workspace_linuxAbi,n11_FerrixStructure_Workspace_ustack,n12_FerrixStructure_Workspace_cpio,n13_FerrixStructure_Workspace_vfs,n14_FerrixStructure_Workspace_virtio,n17_FerrixStructure_Workspace_btrfs writtenAhead
   class n18_FerrixStructure_Workspace_seccompBpf planned
 ```
 
@@ -2685,7 +2687,7 @@ Inode and dentry caches, the mount table, fd sharing rules, tmpfs, devfs, procfs
 
 Handle tables, Channel with handle passing, Port, Interrupt, IoMapping, Job; the 0x1000 syscalls. Exit: two processes exchange messages and a handle over a channel, and a Job kill takes down a process tree.
 
-Built: the byte-level half, in libs/native-abi and libs/objects, host-tested, fuzzed and under Miri. Missing: every kernel object, the native dispatch, and processes that are scheduled tasks -- left for later by stage 6, not on stage 7's list, and required by the exit criterion.
+Built: the byte-level half, in libs/native-abi and libs/objects, host-tested, fuzzed and under Miri; and in kernel/src/object and syscall/native, a handle table on every Process, the native dispatch, channels carrying handles and VMO create/read/write, self-checked between two processes in the boot test. Missing: ports and waits, Job, Interrupt, IoMapping, vmo_map, and processes that are scheduled tasks, which the exit criterion needs and which is being built as stage 7's follow-up.
 
 **Allocated to: **`ferrix.kernel.native`
 
@@ -3270,11 +3272,11 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 8 | `FerrixStorage::Devfs` | part | `#planned` |
 | 8 | `FerrixStorage::Procfs` | part | `#planned` |
 | 8 | `FerrixStorage::InitramfsUnpack` | part | `#planned` |
-| 9 | `FerrixStructure::Workspace::nativeAbi` | part | `#writtenAhead` |
-| 9 | `FerrixStructure::Workspace::objects` | part | `#writtenAhead` |
+| 9 | `FerrixStructure::Workspace::nativeAbi` | part | `#implemented` |
+| 9 | `FerrixStructure::Workspace::objects` | part | `#implemented` |
 | 9 | `FerrixObjects::KernelObject` | part | `#planned` |
-| 9 | `FerrixObjects::HandleTable` | part | `#planned` |
-| 9 | `FerrixObjects::NativeAbi` | part | `#planned` |
+| 9 | `FerrixObjects::HandleTable` | part | `#implemented` |
+| 9 | `FerrixObjects::NativeAbi` | part | `#inProgress` |
 | 10 | `FerrixStructure::ArchFacade::iommu` | part | `#planned` |
 | 10 | `FerrixStructure::X86_64Arch::vtd` | part | `#planned` |
 | 10 | `FerrixStructure::AArch64Arch::smmu` | part | `#planned` |

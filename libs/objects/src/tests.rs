@@ -7,7 +7,7 @@ use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::{Requested, Rights};
 
 use crate::message::{Limits, Message, MessageQueue, ReceiveError, SendError};
-use crate::table::{HandleTable, TableError};
+use crate::table::{HandleTable, MAX_SLOTS, TableError};
 
 /// Enough closes of one slot to use up every generation it has.
 const GENERATIONS: usize = 4095;
@@ -294,4 +294,13 @@ fn unpop_restores_the_head() {
     assert_eq!(q.peek_sizes(), Some((1, 0)), "the first is first again");
     assert_eq!(q.drain().len(), 2, "both");
     assert!(q.is_empty(), "drained");
+}
+
+#[test]
+fn every_handle_value_is_positive_in_a_32_bit_return_register() {
+    let largest = ((MAX_SLOTS - 1) << 12) | 0xFFF;
+    assert!(
+        largest < 1 << 31,
+        "{largest:#x} reads as negative in a 32-bit register"
+    );
 }

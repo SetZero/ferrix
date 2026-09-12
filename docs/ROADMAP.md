@@ -27,8 +27,9 @@ checked by `cargo xtask test-shell` rather than the boot test because it needs
 a binary the repository does not carry; its section lists what the Linux
 surface still owes. Stages 8 and 9 have both begun where the continuous rule
 says a stage should: their byte-level halves are in `libs/` — the VFS in
-`libs/vfs`, the handle table in `libs/objects` — and none of their kernel code
-exists yet.
+`libs/vfs`, the handle table in `libs/objects`. Stage 9's first kernel objects
+— handle tables, channels carrying handles, VMOs — are in the boot test;
+stage 8's kernel code does not exist yet.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -893,20 +894,47 @@ and under Miri; not yet reached from the kernel.
   model. Batch take and insert are all-or-nothing, and a read that does not
   fit takes nothing, because either failure half-done loses handles.
 
-**Still to do — everything that runs, and one thing that is not this stage's.**
+**Done — the first kernel objects, in the boot test on all three
+architectures.**
 
-* The kernel objects over those structures: `Channel`, `Port` and signal
-  waiting, VMO handles, `Job`, `Interrupt`, `IoMapping`; a handle table on
-  `Process`; the native dispatch, branched off before the Linux decode.
-* **Processes that are tasks.** The exit criterion needs two user programs
-  running at once, and today a program is a guest of the boot task: run
-  synchronously, interrupts masked, one global current-process slot, one
-  parked return point per processor. Making a program a scheduled task —
-  per-task entry stacks (`arch::set_kernel_stack`), exit as teardown, and
-  `process::current()` read from the running task — is left for later by
-  stage 6 and not on stage 7's list, and stage 9 cannot finish without it.
-* Process creation in the native ABI. `0x1030..=0x1037` is held for it and
-  decided together with the item above.
+* A handle table on every `Process`, behind a lock of its own, and the native
+  dispatch: `dispatch` branches on the range before any Linux table is asked,
+  so `arch::decode_syscall` never sees a native number.
+* `handle_close`, `handle_duplicate`, `handle_replace`; `channel_create`,
+  `channel_write` and `channel_read` with handle passing; `vmo_create`,
+  `vmo_read`, `vmo_write`, `vmo_get_size`. A channel write takes the sender's
+  handles out of its table only under the peer's queue lock, after the queue
+  has accepted the message, so a refused send moves nothing.
+* Objects that contain objects never drop them recursively. A closed endpoint
+  hands its queue to `object::dispose`, which drops one level at a time, so a
+  program that queues endpoints inside endpoints cannot turn a close into a
+  kernel stack overflow.
+* The self-check builds two processes and drives the handlers through raw
+  registers: a message and a VMO handle cross from one table to the other and
+  the handle that arrives reads back what the sender wrote; a read that does
+  not fit is refused with the sizes and leaves the message queued; rights only
+  shrink; a refused send keeps its handles; a full channel says wait; closing
+  a reader frees a VMO still queued in it, and the frame count says so.
+* `libs/objects` now keeps every handle value below 2^31. A new handle comes
+  back in the register an `errno` does, and on a 32-bit machine a larger value
+  reads as negative.
+
+**Still to do.**
+
+* Ports and signal waits (`object_wait_one`, `object_wait_async`, `port_*`),
+  `Job`, `Interrupt`, `IoMapping`, and `vmo_map`.
+* **Processes that are tasks**, which the exit criterion needs: two user
+  programs running at once, where today a program is a guest of the boot task.
+  It is being built as stage 7's follow-up — `process::load` and
+  `process::start`, a terminated level plus a wake-up on `Process`,
+  `process::kill` from outside, and `process::current()` read from the running
+  task — and stage 9 builds its exit test on that seam.
+* Process creation in the native ABI. `0x1030..=0x1037` is held for it.
+* **A leak a program can cause, written down.** Two endpoints each queued in
+  the other's inbox keep each other alive after every handle to both is
+  closed. An endpoint cannot be sent through itself or to its own peer, which
+  rules out the one-object cycle, but a longer one needs either a cycle check
+  on send or a collector, and neither exists.
 
 **Exit:** two user processes exchange messages and a handle over a channel, and
 a `Job` kill takes down a process tree.
@@ -1036,12 +1064,12 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 36 |
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory. | 50 |
-| `libs/native-abi` | 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
-| `libs/objects` | 9 — the handle table and the channel message queue, generic over what a handle names. Has its fuzz target and its Miri step already. | 15 |
+| `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
+| `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one. Has its fuzz target and its Miri step. | 16 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **554 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **555 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

@@ -543,6 +543,32 @@ pub(crate) static STAGE6_USER_MEMORY: Explanation = Explanation {
           docs/ROADMAP.md stage 6",
 };
 
+/// For `check_native_objects` in `main.rs`, when `object::check::run` fails.
+pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
+    code: "FX-0901",
+    title: "the native ABI's objects failed their self-check",
+    meaning: "`object::check::run` builds two processes and drives the native system call \
+              handlers between them, before any program can make a native call. A channel must \
+              carry bytes and a VMO handle from one process's table to the other's, removing it \
+              from the sender, and the handle that arrives must name the same object. A read \
+              that does not fit must report the sizes and leave the message queued; rights must \
+              only shrink; a closed handle must be refused; a refused send must leave every \
+              handle with its sender; and closing a channel must free what was queued in it. A \
+              kernel failing any of these would give userspace drivers a capability system that \
+              confines nothing.",
+    causes: &[
+        "The handle table in `libs/objects` or the rights rule in `libs/native-abi` changed, so \
+         a closed handle resolves again or a duplicate gains a right.",
+        "`Endpoint::write` took the sender's handles before the peer's queue had accepted the \
+         message, so a refused send lost them.",
+        "A copy to or from user memory in `syscall::native` used the wrong length or width.",
+        "`object::dispose` stopped draining, or an object was dropped under a lock its drop \
+         needs, so the frames behind a VMO queued in a closed channel were never freed.",
+    ],
+    see: "kernel/src/object/check.rs run; kernel/src/syscall/native.rs; \
+          kernel/src/object/channel.rs; docs/ROADMAP.md stage 9",
+};
+
 /// For `check_syscalls` in `main.rs`, when `syscall::check::run` fails.
 pub(crate) static STAGE7_SYSCALLS: Explanation = Explanation {
     code: "FX-0701",
@@ -684,6 +710,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE5_SCHEDULER,
     &STAGE6_USER_MEMORY,
     &STAGE7_SYSCALLS,
+    &STAGE9_OBJECTS,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,

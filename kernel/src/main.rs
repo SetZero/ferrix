@@ -28,6 +28,7 @@ mod init;
 mod irq;
 mod mm;
 mod mmio;
+mod object;
 mod panic;
 mod sched;
 mod smp;
@@ -206,6 +207,14 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // ring-3 transition, is a debugging session nobody wants.
     check_syscalls();
 
+    // Stage 9's objects, driven through the native handlers between two
+    // processes this check builds. After stage 7 because it shares the
+    // dispatch path and the user copy layer, and here rather than under a
+    // program for the reason stage 7's check gives: the rules a capability
+    // system rests on are cheaper to find broken at boot than inside a
+    // driver.
+    check_native_objects();
+
     // The rest of stage 2, deliberately last. Each of these needs something a
     // later part of boot brought up — the arena needs the heap, the sweep
     // needs every mapping the kernel is ever going to make, and reclaiming
@@ -285,6 +294,26 @@ fn check_syscalls() {
         Some(status) => println!("  usermode a program ran in user mode and exited with {status}"),
         None => println!("  usermode not on {} yet", arch::NAME),
     }
+}
+
+/// Stage 9: the native ABI's objects, driven through their handlers by two
+/// processes the check builds, before any program can make a native call.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_native_objects() {
+    let report = match object::check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE9_OBJECTS,
+            "stage 9 self-check failed: {problem}"
+        ),
+    };
+
+    println!(
+        "  native   {} messages and {} handles carried between two processes, \
+         {} refusals as specified, {} frames leaked",
+        report.messages, report.moved, report.refusals, report.leaked,
+    );
 }
 
 /// Stage 4: find every processor, start them, and require them to work

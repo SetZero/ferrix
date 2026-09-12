@@ -40,6 +40,7 @@ Causes are listed most likely first.
 | [FX-0502](#fx-0502) | the scheduler failed its self-check |
 | [FX-0601](#fx-0601) | the memory a process is built from failed its self-check |
 | [FX-0701](#fx-0701) | the system call dispatch path failed its self-check |
+| [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -558,6 +559,33 @@ would pass every host test and answer a program's `write` with a different call.
 
 See: kernel/src/syscall/check.rs run; kernel/src/syscall/mod.rs dispatch;
 libs/linux-abi; docs/ROADMAP.md stage 7.
+
+<a id="fx-0901"></a>
+
+## FX-0901 — the native ABI's objects failed their self-check
+
+`object::check::run` builds two processes and drives the native system call
+handlers between them, before any program can make a native call. A channel must
+carry bytes and a VMO handle from one process's table to the other's, removing
+it from the sender, and the handle that arrives must name the same object. A
+read that does not fit must report the sizes and leave the message queued;
+rights must only shrink; a closed handle must be refused; a refused send must
+leave every handle with its sender; and closing a channel must free what was
+queued in it. A kernel failing any of these would give userspace drivers a
+capability system that confines nothing.
+
+1. The handle table in `libs/objects` or the rights rule in `libs/native-abi`
+   changed, so a closed handle resolves again or a duplicate gains a right.
+2. `Endpoint::write` took the sender's handles before the peer's queue had
+   accepted the message, so a refused send lost them.
+3. A copy to or from user memory in `syscall::native` used the wrong length or
+   width.
+4. `object::dispose` stopped draining, or an object was dropped under a lock its
+   drop needs, so the frames behind a VMO queued in a closed channel were never
+   freed.
+
+See: kernel/src/object/check.rs run; kernel/src/syscall/native.rs;
+kernel/src/object/channel.rs; docs/ROADMAP.md stage 9.
 
 <a id="fx-9001"></a>
 

@@ -849,7 +849,7 @@ package FerrixStructure {
             attribute :>> hostTests = 50;
             @stage { number = 10; }
         }
-        #writtenAhead part nativeAbi : LibraryCrate {
+        #implemented part nativeAbi : LibraryCrate {
             attribute :>> path = "libs/native-abi";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 13;
@@ -859,10 +859,10 @@ package FerrixStructure {
                  * architecture, in 0x1000..=0x1FFF, tested clear of all three
                  * Linux tables. No argument wider than a register. */
         }
-        #writtenAhead part objects : LibraryCrate {
+        #implemented part objects : LibraryCrate {
             attribute :>> path = "libs/objects";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 15;
+            attribute :>> hostTests = 16;
             @stage { number = 9; }
             doc /* The handle table and the channel message queue, generic
                  * over what a handle names. A handle is a slot and a
