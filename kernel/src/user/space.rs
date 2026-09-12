@@ -615,6 +615,116 @@ fn shared_object(map: &ferrix_vma::AddressSpace, id: u64) -> bool {
     })
 }
 
+// ---------------------------------------------------------------------------
+// What `mmap`, `munmap` and `mprotect` need on top of the above.
+//
+// Kept in an impl block of its own because it was added by stage 7 against a
+// stage 6 interface that was already working: nothing here changes the
+// behaviour of anything above it.
+// ---------------------------------------------------------------------------
+
+impl AddressSpace {
+    /// Reserve `len` bytes wherever they fit, and say where that was.
+    ///
+    /// `mmap` with a null address. The search and the insertion happen under
+    /// one lock, which is the whole reason this is a method rather than
+    /// `find_free` followed by [`AddressSpace::map_anonymous`]: two threads
+    /// calling `mmap` at once would otherwise be told about the same hole and
+    /// the second insertion would fail, or worse, succeed.
+    ///
+    /// `hint` is advisory. A program that passes a non-null address without
+    /// `MAP_FIXED` is asking, not telling, and Linux is free to answer
+    /// somewhere else — so a hint that does not fit is not an error.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::BadRange`] if the length is malformed, and
+    /// [`SpaceError::OutOfMemory`] if there is no hole big enough.
+    pub(crate) fn map_anywhere(
+        &self,
+        hint: Option<u64>,
+        len: u64,
+        flags: VmaFlags,
+    ) -> Result<u64, SpaceError> {
+        if len == 0 {
+            return Err(SpaceError::BadRange);
+        }
+        let mut inner = self.inner.lock();
+
+        let at = inner
+            .map
+            .find_free(len, PAGE_SIZE, hint)
+            .ok_or(SpaceError::OutOfMemory)?;
+        if !is_user_address(at) || at.checked_add(len).is_none_or(|end| end > USER_VIRT_END) {
+            return Err(SpaceError::NotUserRange(at));
+        }
+        let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
+
+        let id = inner.next_id;
+        inner.next_id = inner.next_id.saturating_add(1);
+        let vmo = Vmo::new_anonymous(len.div_ceil(PAGE_SIZE));
+
+        inner
+            .map
+            .insert(range, flags, Backing::Anonymous { id, offset: 0 })
+            .map_err(|_| SpaceError::BadRange)?;
+        let _ = inner.objects.insert(id, vmo);
+        Ok(at)
+    }
+
+    /// Change the permissions of an already-mapped range.
+    ///
+    /// # Why the translations are taken down rather than rewritten
+    ///
+    /// The same reason `clone_for_fork` takes the parent's down. The page
+    /// tables hold translations carrying the *old* permissions, and a region
+    /// that has just become read-only is still writable through every one of
+    /// them until something invalidates it. Rewriting each leaf in place would
+    /// be faster and is what a later stage should do; unmapping costs one
+    /// fault per touched page and is correct with the primitives `crate::mm`
+    /// offers today, which is the right trade while there is no benchmark to
+    /// answer to.
+    ///
+    /// Note this is `mprotect`'s semantics and not `mmap`'s: the range must
+    /// already be mapped, and a hole in it is an error rather than a
+    /// reservation.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::BadRange`] if the range is malformed, or is not wholly
+    /// mapped.
+    pub(crate) fn protect(&self, at: u64, len: u64, flags: VmaFlags) -> Result<(), SpaceError> {
+        if !is_user_address(at) || at.checked_add(len).is_none_or(|end| end > USER_VIRT_END) {
+            return Err(SpaceError::NotUserRange(at));
+        }
+        let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
+        let mut inner = self.inner.lock();
+
+        inner
+            .map
+            .protect(range, flags)
+            .map_err(|_| SpaceError::BadRange)?;
+
+        // Every page in the range re-faults and is reinstalled with the
+        // permissions the map now carries.
+        let _ = mm::unmap_in(self.root * PAGE_SIZE, range.start(), range.bytes());
+        Ok(())
+    }
+
+    /// The highest address any region reaches, or `None` for an empty space.
+    ///
+    /// `brk` needs it to place the heap above everything the ELF loader
+    /// mapped, without the loader and the heap having to agree on a number.
+    pub(crate) fn highest_mapped(&self) -> Option<u64> {
+        self.inner
+            .lock()
+            .map
+            .iter()
+            .map(|vma| vma.range.end())
+            .max()
+    }
+}
+
 /// Whether any region still names object `id`.
 fn still_named(map: &ferrix_vma::AddressSpace, id: u64) -> bool {
     map.iter().any(|region| match region.backing {

@@ -40,12 +40,17 @@
 //! trace back here.
 
 pub(crate) mod check;
+pub(crate) mod memory;
+pub(crate) mod process;
+pub(crate) mod uaccess;
 
 use ferrix_linux_abi::errno::{self, Errno};
 use ferrix_linux_abi::nr::Syscall;
 
 use crate::arch;
 use crate::sched;
+use crate::syscall::memory::{MmapRequest, OffsetUnit};
+use crate::syscall::process::Process;
 
 /// A system call as it arrived, before anything has been decided about it.
 ///
@@ -60,11 +65,6 @@ pub(crate) struct SyscallArgs {
     /// The six argument registers, in order. A call taking fewer leaves the
     /// rest as whatever the program happened to have in them, which is why no
     /// handler may read past its own arity.
-    #[expect(
-        dead_code,
-        reason = "no handler reads an argument yet; the field is the agreed \
-                  shape of the seam, and the trap path fills it from the frame"
-    )]
     pub(crate) args: [u64; 6],
 }
 
@@ -103,43 +103,103 @@ pub(crate) fn dispatch(args: &SyscallArgs) -> Outcome {
     let Some(call) = arch::decode_syscall(args.number) else {
         return Outcome::Return(Errno::ENOSYS.as_return_value());
     };
-    Outcome::Return(errno::encode(handle(call, args)))
+    // Resolved once, here, rather than reached for inside each handler: the
+    // handlers take `&Process` so that the boot self-check can call them
+    // against a process it built itself, months before a program can.
+    let process = process::current();
+    Outcome::Return(errno::encode(handle(call, args, process.as_deref())))
 }
 
 /// The dispatch table proper.
 ///
-/// One match on an architecture-neutral call. The arms are grouped the way the
-/// roadmap groups the work, so that a stage which fills one group in touches
-/// one part of this function.
-fn handle(call: Syscall, args: &SyscallArgs) -> Result<usize, Errno> {
-    // No handler takes an argument yet. The parameter is part of the shape
-    // agreed with the trap path, and the first handler that reads user memory
-    // will need it; dropping it now would mean changing the signature then.
+/// Split in two by what a call needs rather than by what it does: the first
+/// group answers from the kernel's own state, the second needs the caller's
+/// address space and is `ESRCH` without one. `ESRCH` rather than `EFAULT`
+/// because the honest failure is "there is no process here", which is true of
+/// every call today and will be true of none once stage 6's transition lands.
+fn handle(call: Syscall, args: &SyscallArgs, process: Option<&Process>) -> Result<usize, Errno> {
+    if let Some(answer) = stateless(call, args) {
+        return answer;
+    }
+    let process = process.ok_or(Errno::ESRCH)?;
+    with_process(call, args, process)
+}
+
+/// The calls that need no process: identity, and yielding.
+///
+/// `None` means "not one of mine", which is what lets the two tables be read
+/// independently rather than as one match with a fallthrough nobody can see
+/// the end of.
+fn stateless(call: Syscall, args: &SyscallArgs) -> Option<Result<usize, Errno>> {
     let _ = args;
-    match call {
-        // Identity. These need no process state beyond the running task, which
-        // is why they are the first calls this kernel can honestly answer.
+    let answer = match call {
         Syscall::Getpid | Syscall::Gettid => Ok(current_id()),
         // Ferrix has one process tree and no init yet, so the boot task's
         // parent is itself. A program that walks up from here terminates.
         Syscall::Getppid => Ok(1),
-        // Everything runs as root because there are no credentials yet. This
-        // is a real answer, not a stub: it is what a single-user system with
-        // no `setuid` reports, and stage 12 replaces it with a lookup rather
-        // than unpicking it.
+        // Everything runs as root because there are no credentials yet. A real
+        // answer, not a stub: it is what a single-user system with no `setuid`
+        // reports, and stage 12 replaces it with a lookup rather than
+        // unpicking it.
         Syscall::Getuid | Syscall::Geteuid | Syscall::Getgid | Syscall::Getegid => Ok(0),
-
-        // Scheduling.
         Syscall::SchedYield => {
             sched::yield_now();
             Ok(0)
         }
+        _ => return None,
+    };
+    Some(answer)
+}
 
-        // Everything else. `ENOSYS` is Linux's own answer for a call it does
-        // not implement, so a program that gets it can fall back; a handler
-        // that pretended to succeed would go wrong somewhere else entirely.
+/// The calls that reshape or read the caller's address space.
+fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<usize, Errno> {
+    let a = args.args;
+    match call {
+        // `mmap` and `mmap2` differ in one argument's unit and nothing else,
+        // which is exactly why they are separate calls: the difference is
+        // invisible at the call site and catastrophic if guessed.
+        Syscall::Mmap => memory::sys_mmap(process, &mmap_request(&a, OffsetUnit::Bytes)),
+        Syscall::Mmap2 => memory::sys_mmap(process, &mmap_request(&a, OffsetUnit::Pages)),
+        Syscall::Munmap => memory::sys_munmap(process, a[0], a[1]),
+        Syscall::Mprotect => memory::sys_mprotect(process, a[0], a[1], truncate(a[2])),
+        Syscall::Brk => memory::sys_brk(process, a[0]),
+        Syscall::SetTidAddress => Ok(process.set_clear_child_tid(a[0], current_id())),
         _ => Err(Errno::ENOSYS),
     }
+}
+
+/// `mmap`'s six registers as a request.
+///
+/// `unit` is the caller's, not the register block's: it is the whole
+/// difference between `mmap` and `mmap2`, and it is not in the arguments.
+fn mmap_request(a: &[u64; 6], unit: OffsetUnit) -> MmapRequest {
+    MmapRequest {
+        addr: a[0],
+        len: a[1],
+        prot: truncate(a[2]),
+        flags: truncate(a[3]),
+        fd: signed(a[4]),
+        offset: a[5],
+        unit,
+    }
+}
+
+/// A flag word, which is 32 bits wide in the ABI however wide the register is.
+///
+/// Truncating rather than refusing: a 64-bit caller's upper half is whatever
+/// the compiler left in the register, and Linux ignores it. Refusing would
+/// break correct programs.
+fn truncate(value: u64) -> u32 {
+    value as u32
+}
+
+/// A file descriptor, which the ABI passes as a signed 32-bit value.
+///
+/// `mmap` is given `-1` for an anonymous mapping, and `-1` arrives in a 64-bit
+/// register as `0xFFFF_FFFF` from a 32-bit caller and `0xFFFF_FFFF_FFFF_FFFF`
+/// from a 64-bit one. Narrowing to `i32` first makes both of them `-1`.
+fn signed(value: u64) -> i64 {
+    i64::from(value as u32 as i32)
 }
 
 /// The running task's identifier, or the boot task's if the scheduler has not

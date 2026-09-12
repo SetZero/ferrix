@@ -244,6 +244,11 @@ fn check_syscalls() {
         report.getpid_number,
         arch::NAME,
     );
+    println!(
+        "  uaccess  {} pages mapped, written and read back through a user space, \
+         {} frames leaked",
+        report.pages, report.leaked,
+    );
 }
 
 /// Stage 4: find every processor, start them, and require them to work
