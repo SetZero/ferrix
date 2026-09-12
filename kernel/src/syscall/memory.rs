@@ -25,7 +25,7 @@ use ferrix_linux_abi::types::{
 use ferrix_vma::VmaFlags;
 
 use crate::syscall::process::Process;
-use crate::user::space::{Destination, SpaceError};
+use crate::user::space::{Destination, MMAP_MIN_ADDR, SpaceError};
 
 /// What `mmap`'s sixth argument is counted in.
 ///
@@ -163,6 +163,14 @@ pub(crate) fn sys_mmap(process: &Process, request: &MmapRequest) -> Result<usize
 
     if !addr.is_multiple_of(PAGE_SIZE) {
         return Err(Errno::EINVAL);
+    }
+    // Below the floor is `EPERM`, which is what Linux answers a process without
+    // `CAP_SYS_RAWIO`. There are no capabilities here to hold, so that is every
+    // process, root or not. Checked before the unmap below, so a refused call
+    // changes nothing. A hint is not refused for the same address: the search
+    // simply starts above the floor.
+    if addr < MMAP_MIN_ADDR {
+        return Err(Errno::EPERM);
     }
     if flags & MAP_FIXED_NOREPLACE == 0 {
         // Plain MAP_FIXED replaces whatever is there. Unmapping first is what

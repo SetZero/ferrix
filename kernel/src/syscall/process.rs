@@ -50,7 +50,7 @@ use crate::syscall::fd;
 use crate::syscall::registry;
 use crate::syscall::signal::Signals;
 use crate::syscall::{futex, kill, uaccess};
-use crate::user::space::{AddressSpace, SpaceError};
+use crate::user::space::{AddressSpace, MMAP_MIN_ADDR, SpaceError};
 
 /// A program, as far as the system call layer is concerned.
 #[derive(Debug)]
@@ -438,8 +438,9 @@ impl Process {
                 // First call. Place the heap above everything the ELF loader
                 // mapped, so the two never have to agree on a number, with a
                 // page of gap so a heap overrun cannot walk straight into the
-                // last data page.
-                let after = self.space.highest_mapped().unwrap_or(0);
+                // last data page. An empty space starts from the lowest address
+                // anything may be mapped at, not from zero.
+                let after = self.space.highest_mapped().unwrap_or(MMAP_MIN_ADDR);
                 let start = after.saturating_add(PAGE_SIZE);
                 let heap = Heap {
                     start,

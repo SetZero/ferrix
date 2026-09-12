@@ -24,9 +24,9 @@ use ferrix_bootinfo::{KERNEL_HALF_BASE, PAGE_SIZE};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     AT_FDCWD, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
-    MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED, MREMAP_MAYMOVE, O_APPEND,
-    O_CLOEXEC, O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_TRUNC, PROT_READ, PROT_WRITE, SEEK_CUR,
-    SEEK_END, SEEK_SET, TCGETS, TIOCGWINSZ,
+    MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED,
+    MREMAP_MAYMOVE, O_APPEND, O_CLOEXEC, O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_TRUNC, PROT_READ,
+    PROT_WRITE, SEEK_CUR, SEEK_END, SEEK_SET, TCGETS, TIOCGWINSZ,
 };
 
 use crate::arch;
@@ -37,6 +37,7 @@ use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{Outcome, SyscallArgs, dispatch, uaccess};
 use crate::syscall::{exec, fd, file, image, load, signal, system};
+use crate::user::space::MMAP_MIN_ADDR;
 
 /// What the checks measured, for the boot log.
 #[derive(Debug)]
@@ -521,6 +522,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_mmap_returns_usable_memory(&process)?;
     check_mmap_rejects_what_it_should(&process)?;
     check_fixed_mapping_lands_where_asked(&process)?;
+    check_nothing_is_mapped_near_page_zero(&process)?;
     check_copy_crosses_a_page_boundary(&process)?;
     check_a_user_pointer_into_the_kernel_is_refused(&process)?;
     check_an_unmapped_address_is_efault_not_a_kernel_fault(&process)?;
@@ -669,6 +671,57 @@ fn check_mmap_rejects_what_it_should(process: &Process) -> Result<(), &'static s
             let _ = what;
             return Err("mmap accepted arguments it should have refused");
         }
+    }
+    Ok(())
+}
+
+/// Nothing lands below `MMAP_MIN_ADDR`: a fixed request there is `EPERM`, as on
+/// Linux, and a hint there is moved above it rather than rounded down to zero.
+///
+/// With no SMAP or PAN, a page mapped at zero is what a kernel null
+/// dereference would read.
+fn check_nothing_is_mapped_near_page_zero(process: &Process) -> Result<(), &'static str> {
+    let request = |addr: u64, flags: u32| MmapRequest {
+        addr,
+        len: PAGE_SIZE,
+        prot: PROT_READ | PROT_WRITE,
+        flags: MAP_ANONYMOUS | MAP_PRIVATE | flags,
+        fd: -1,
+        offset: 0,
+        unit: OffsetUnit::Bytes,
+    };
+    for addr in [0, PAGE_SIZE, MMAP_MIN_ADDR - PAGE_SIZE] {
+        for fixed in [MAP_FIXED, MAP_FIXED_NOREPLACE] {
+            if memory::sys_mmap(process, &request(addr, fixed)) != Err(Errno::EPERM) {
+                return Err("a fixed mapping below mmap_min_addr was not refused with EPERM");
+            }
+        }
+    }
+
+    // A hint of 0x10 used to round down to page zero.
+    let at = memory::sys_mmap(process, &request(0x10, 0))
+        .map_err(|_| "a mapping hinted near page zero was refused")?;
+    let at = u64::try_from(at).map_err(|_| "mmap returned an impossible address")?;
+    let _ = memory::sys_munmap(process, at, PAGE_SIZE);
+    if at < MMAP_MIN_ADDR {
+        return Err("a hint near page zero placed a mapping below mmap_min_addr");
+    }
+
+    // The floor holds whichever call asks, not only `mmap`.
+    if process
+        .space()
+        .map_anonymous(0, PAGE_SIZE, ferrix_vma::VmaFlags::READ_WRITE)
+        .is_ok()
+    {
+        return Err("the address space mapped page zero");
+    }
+
+    // And the floor itself is mappable: a static ARM binary is linked there.
+    let at = memory::sys_mmap(process, &request(MMAP_MIN_ADDR, MAP_FIXED))
+        .map_err(|_| "a fixed mapping at mmap_min_addr was refused")?;
+    let _ = memory::sys_munmap(process, MMAP_MIN_ADDR, PAGE_SIZE);
+    if u64::try_from(at).unwrap_or(0) != MMAP_MIN_ADDR {
+        return Err("a fixed mapping at mmap_min_addr landed elsewhere");
     }
     Ok(())
 }

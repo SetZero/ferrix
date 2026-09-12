@@ -34,7 +34,7 @@ use crate::syscall::load::{self, LoadError};
 use crate::syscall::process::{self, Process, Startup};
 use crate::syscall::registry;
 use crate::syscall::uaccess;
-use crate::user::space::{AddressSpace, SpaceError};
+use crate::user::space::{AddressSpace, MMAP_MIN_ADDR, SpaceError};
 
 /// How much address space a program's stack gets.
 ///
@@ -540,10 +540,11 @@ fn descriptor_path(dirfd: i32, path: &[u8]) -> Vec<u8> {
 }
 
 /// Take every mapping out of the user half.
+///
+/// From [`MMAP_MIN_ADDR`] up, because nothing can be mapped below it and the
+/// map refuses a range that reaches outside its window.
 fn empty_user_half(space: &AddressSpace) -> Result<(), SpaceError> {
-    space
-        .unmap(0, USER_VIRT_END)
-        .or_else(|_| space.unmap(PAGE_SIZE, USER_VIRT_END - PAGE_SIZE))
+    space.unmap(MMAP_MIN_ADDR, USER_VIRT_END - MMAP_MIN_ADDR)
 }
 
 /// Read a `NULL`-terminated array of string pointers from the program, as

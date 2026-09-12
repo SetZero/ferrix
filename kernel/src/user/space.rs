@@ -37,6 +37,18 @@ use crate::arch;
 use crate::mm;
 use crate::user::vmo::{Vmo, VmoError};
 
+/// The lowest address a program may map anything at: 64 KiB, the
+/// `vm.mmap_min_addr` Linux distributions ship.
+///
+/// A null pointer the kernel follows must fault, not read memory a program
+/// chose to put there, and with no SMAP or PAN a kernel dereference of a low
+/// user address reads whatever is mapped at it. So the bottom of the user half
+/// is kept out of every map, not merely left free: `MAP_FIXED` cannot place a
+/// page there and a hint cannot round down into it. Nothing Linux would load is
+/// refused for it — a static ARM binary is linked at exactly this address, and
+/// the other two architectures link theirs higher.
+pub(crate) const MMAP_MIN_ADDR: u64 = 0x1_0000;
+
 /// Why an address space operation was refused.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SpaceError {
@@ -124,7 +136,7 @@ impl AddressSpace {
         // before it ran would have nowhere to go.
         arch::prepare_user_root(root * PAGE_SIZE);
 
-        let map = ferrix_vma::AddressSpace::new(0, USER_VIRT_END).map_err(|_| {
+        let map = ferrix_vma::AddressSpace::new(MMAP_MIN_ADDR, USER_VIRT_END).map_err(|_| {
             // The window is a compile-time constant of the layout, so this is
             // unreachable in practice; reported rather than panicked because a
             // kernel has no supervisor to restart it.
