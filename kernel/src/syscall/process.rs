@@ -27,6 +27,7 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_sync::SpinLock;
 use ferrix_vma::VmaFlags;
 
+use crate::syscall::signal::Signals;
 use crate::user::space::{AddressSpace, SpaceError};
 
 /// A program, as far as the system call layer is concerned.
@@ -49,6 +50,8 @@ struct State {
     /// dies, and which a threaded program's `pthread_join` waits on. Zero
     /// means nothing was registered.
     clear_child_tid: u64,
+    /// Dispositions, the blocked mask and the alternate stack.
+    signals: Signals,
 }
 
 /// The classic `brk` heap: one region that grows upward.
@@ -91,6 +94,15 @@ impl Process {
     /// The address `set_tid_address` registered, or zero.
     pub(crate) fn clear_child_tid(&self) -> u64 {
         self.state.lock().clear_child_tid
+    }
+
+    /// Read or change the signal state, under the process lock.
+    ///
+    /// A closure rather than a guard, so that nothing a handler does with user
+    /// memory can happen while the lock is held: every copy to or from the
+    /// program is outside it.
+    pub(crate) fn with_signals<R>(&self, change: impl FnOnce(&mut Signals) -> R) -> R {
+        change(&mut self.state.lock().signals)
     }
 
     /// Put the heap just past the loaded image, before anything asks for it.

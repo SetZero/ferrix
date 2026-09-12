@@ -31,7 +31,7 @@ use ferrix_elf::Class;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{Outcome, SyscallArgs, dispatch, uaccess};
-use crate::syscall::{exec, file, image, load, system};
+use crate::syscall::{exec, file, image, load, signal, system};
 
 /// What the checks measured, for the boot log.
 #[derive(Debug)]
@@ -316,6 +316,9 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_brk_grows_and_shrinks(&process)?;
     check_set_tid_address_answers_with_a_thread_id(&process)?;
     check_uname_says_linux_to_a_script_and_ferrix_to_a_person(&process)?;
+    check_a_signal_disposition_reads_back_as_it_was_set(&process)?;
+    check_the_blocked_mask_follows_how(&process)?;
+    check_an_alternate_stack_is_recorded_and_refused_when_small(&process)?;
     check_an_image_loads_where_its_headers_say(&process)?;
     check_the_loader_refuses_what_it_cannot_run(&process)?;
     if output == Output::Show {
@@ -714,6 +717,238 @@ fn check_uname_says_linux_to_a_script_and_ferrix_to_a_person(
     // A pointer into the kernel is EFAULT, not a write.
     if system::sys_uname(process, KERNEL_HALF_BASE) != Err(Errno::EFAULT) {
         return Err("uname into a kernel address was not EFAULT");
+    }
+
+    let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    Ok(())
+}
+
+/// `rt_sigaction` hands back, as `oldact`, exactly what the previous call set
+/// -- which is all a program starting up can see of signals today.
+///
+/// Read back through a second call rather than from the table, because the
+/// layout is the thing most likely to be wrong: three native words and an
+/// 8-byte mask, which is 32 bytes on 64-bit machines and 20 on ARMv7-A. A
+/// handler that wrote the 64-bit layout on a 32-bit build would put the flags
+/// where the program reads the restorer, and a check against the table would
+/// still pass.
+fn check_a_signal_disposition_reads_back_as_it_was_set(
+    process: &Process,
+) -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::{SA_RESTART, SA_RESTORER, SIGINT, SIGKILL, SIGUSR1};
+
+    let word = size_of::<usize>();
+    let size = word * 3 + 8;
+    let at = map_rw(process, PAGE_SIZE)?;
+    let old = at + PAGE_SIZE / 2;
+    let set = signal::SIGSET_SIZE;
+
+    // The action to install, in this architecture's own layout.
+    let mut act = [0_u8; 32];
+    let fields = [0x0001_2340_u64, SA_RESTORER | SA_RESTART, 0x0005_6780];
+    for (slot, value) in act.chunks_mut(word).zip(fields) {
+        slot.copy_from_slice(value.to_le_bytes().get(..word).ok_or("impossible word")?);
+    }
+    let mask = (1_u64 << (SIGUSR1 - 1)) | (1_u64 << (SIGKILL - 1));
+    act.get_mut(word * 3..size)
+        .ok_or("impossible sigaction size")?
+        .copy_from_slice(&mask.to_le_bytes());
+    let act_bytes = act.get(..size).ok_or("impossible sigaction size")?;
+    uaccess::copy_to_user(process.space(), at, act_bytes)
+        .map_err(|_| "could not stage a sigaction")?;
+
+    // The first call reports the default, into a poisoned buffer.
+    uaccess::copy_to_user(process.space(), old, &[0xAA_u8; 32])
+        .map_err(|_| "could not poison oldact")?;
+    if signal::sys_rt_sigaction(process, SIGINT, at, old, set) != Ok(0) {
+        return Err("rt_sigaction refused a valid handler");
+    }
+    let mut back = [0_u8; 32];
+    uaccess::copy_from_user(process.space(), old, &mut back)
+        .map_err(|_| "could not read oldact")?;
+    let (first, tail) = back
+        .split_at_checked(size)
+        .ok_or("impossible sigaction size")?;
+    if first.iter().any(|&byte| byte != 0) {
+        return Err("the first oldact was not the zeroed default");
+    }
+    if tail.iter().any(|&byte| byte != 0xAA) {
+        return Err("rt_sigaction wrote past the end of this architecture's sigaction");
+    }
+
+    // The second reports the first, with SIGKILL taken out of the mask.
+    if signal::sys_rt_sigaction(process, SIGINT, 0, old, set) != Ok(0) {
+        return Err("rt_sigaction refused a query");
+    }
+    uaccess::copy_from_user(process.space(), old, &mut back)
+        .map_err(|_| "could not read oldact")?;
+    let mut expected = act;
+    expected
+        .get_mut(word * 3..size)
+        .ok_or("impossible sigaction size")?
+        .copy_from_slice(&(1_u64 << (SIGUSR1 - 1)).to_le_bytes());
+    if back.get(..size) != expected.get(..size) {
+        return Err("oldact was not the action set before it, field for field");
+    }
+
+    // What Linux refuses.
+    if signal::sys_rt_sigaction(process, SIGINT, at, 0, 16) != Err(Errno::EINVAL) {
+        return Err("a sigsetsize other than 8 was accepted");
+    }
+    if signal::sys_rt_sigaction(process, 0, 0, old, set) != Err(Errno::EINVAL) {
+        return Err("signal 0 was accepted");
+    }
+    if signal::sys_rt_sigaction(process, 65, 0, old, set) != Err(Errno::EINVAL) {
+        return Err("signal 65 was accepted");
+    }
+    if signal::sys_rt_sigaction(process, SIGKILL, at, 0, set) != Err(Errno::EINVAL) {
+        return Err("a handler for SIGKILL was accepted");
+    }
+    if signal::sys_rt_sigaction(process, SIGKILL, 0, old, set) != Ok(0) {
+        return Err("asking what SIGKILL does was refused");
+    }
+    if signal::sys_rt_sigaction(process, SIGINT, KERNEL_HALF_BASE, 0, set) != Err(Errno::EFAULT) {
+        return Err("an action at a kernel address was not EFAULT");
+    }
+
+    let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    Ok(())
+}
+
+/// `rt_sigprocmask` applies `how`, never blocks SIGKILL, and leaves `oldset`
+/// untouched when it refuses.
+fn check_the_blocked_mask_follows_how(process: &Process) -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::{SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK, SIGINT, SIGKILL, SIGUSR1};
+
+    let at = map_rw(process, PAGE_SIZE)?;
+    let old = at + 8;
+    let set = signal::SIGSET_SIZE;
+    let usr1 = 1_u64 << (SIGUSR1 - 1);
+    let int = 1_u64 << (SIGINT - 1);
+    let kill = 1_u64 << (SIGKILL - 1);
+
+    let read_old = || -> Result<u64, &'static str> {
+        let mut bytes = [0_u8; 8];
+        uaccess::copy_from_user(process.space(), old, &mut bytes)
+            .map_err(|_| "could not read oldset")?;
+        Ok(u64::from_le_bytes(bytes))
+    };
+    let stage = |value: u64| {
+        uaccess::copy_to_user(process.space(), at, &value.to_le_bytes())
+            .map_err(|_| "could not stage a set")
+    };
+
+    stage(usr1 | kill)?;
+    if signal::sys_rt_sigprocmask(process, SIG_BLOCK, at, old, set) != Ok(0) {
+        return Err("SIG_BLOCK was refused");
+    }
+    stage(int)?;
+    if signal::sys_rt_sigprocmask(process, SIG_BLOCK, at, old, set) != Ok(0) || read_old()? != usr1
+    {
+        return Err("the mask after blocking SIGUSR1 and SIGKILL was not SIGUSR1 alone");
+    }
+    stage(usr1)?;
+    if signal::sys_rt_sigprocmask(process, SIG_UNBLOCK, at, old, set) != Ok(0)
+        || read_old()? != usr1 | int
+    {
+        return Err("SIG_BLOCK did not add to the mask");
+    }
+    stage(0)?;
+    if signal::sys_rt_sigprocmask(process, SIG_SETMASK, at, old, set) != Ok(0) || read_old()? != int
+    {
+        return Err("SIG_UNBLOCK did not take away from the mask");
+    }
+
+    // A refused `how` writes nothing; with no set it is not even looked at.
+    uaccess::copy_to_user(process.space(), old, &[0xAA_u8; 8])
+        .map_err(|_| "could not poison oldset")?;
+    if signal::sys_rt_sigprocmask(process, 7, at, old, set) != Err(Errno::EINVAL) {
+        return Err("a nonsense how was accepted");
+    }
+    if read_old()? != u64::from_le_bytes([0xAA; 8]) {
+        return Err("a refused sigprocmask still wrote oldset");
+    }
+    if signal::sys_rt_sigprocmask(process, 7, 0, old, set) != Ok(0) || read_old()? != 0 {
+        return Err("a query with a nonsense how was refused, or misreported the mask");
+    }
+    if signal::sys_rt_sigprocmask(process, SIG_BLOCK, at, old, 4) != Err(Errno::EINVAL) {
+        return Err("a sigsetsize other than 8 was accepted");
+    }
+
+    let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    Ok(())
+}
+
+/// `sigaltstack` records a stack big enough, refuses one too small, and
+/// reports `SS_DISABLE` when none is installed.
+fn check_an_alternate_stack_is_recorded_and_refused_when_small(
+    process: &Process,
+) -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::SS_DISABLE;
+
+    let word = size_of::<usize>();
+    let size = word * 3;
+    let at = map_rw(process, PAGE_SIZE)?;
+    let old = at + PAGE_SIZE / 2;
+
+    let stage = |sp: u64, flags: i32, bytes: u64| {
+        let mut raw = [0_u8; 24];
+        let _ = raw
+            .get_mut(..word)
+            .map(|slot| slot.copy_from_slice(sp.to_le_bytes().get(..word).unwrap_or(&[])));
+        let _ = raw
+            .get_mut(word..word + 4)
+            .map(|slot| slot.copy_from_slice(&flags.to_le_bytes()));
+        let _ = raw
+            .get_mut(word * 2..size)
+            .map(|slot| slot.copy_from_slice(bytes.to_le_bytes().get(..word).unwrap_or(&[])));
+        uaccess::copy_to_user(process.space(), at, raw.get(..size).unwrap_or(&[]))
+            .map_err(|_| "could not stage a stack_t")
+    };
+    let read_old = || -> Result<(u64, i32, u64), &'static str> {
+        let mut raw = [0_u8; 24];
+        let bytes = raw.get_mut(..size).ok_or("impossible stack_t size")?;
+        uaccess::copy_from_user(process.space(), old, bytes).map_err(|_| "could not read old")?;
+        let mut sp = [0_u8; 8];
+        let mut flags = [0_u8; 4];
+        let mut length = [0_u8; 8];
+        sp.get_mut(..word)
+            .ok_or("impossible word")?
+            .copy_from_slice(bytes.get(..word).ok_or("impossible word")?);
+        flags.copy_from_slice(bytes.get(word..word + 4).ok_or("impossible word")?);
+        length
+            .get_mut(..word)
+            .ok_or("impossible word")?
+            .copy_from_slice(bytes.get(word * 2..size).ok_or("impossible word")?);
+        Ok((
+            u64::from_le_bytes(sp),
+            i32::from_le_bytes(flags),
+            u64::from_le_bytes(length),
+        ))
+    };
+
+    if signal::sys_sigaltstack(process, 0, old) != Ok(0) || read_old()? != (0, SS_DISABLE, 0) {
+        return Err("with no alternate stack, sigaltstack did not report SS_DISABLE");
+    }
+    stage(0x0001_0000, 0, 1024)?;
+    if signal::sys_sigaltstack(process, at, 0) != Err(Errno::ENOMEM) {
+        return Err("an alternate stack below MINSIGSTKSZ was accepted");
+    }
+    stage(0x0001_0000, 5, 65536)?;
+    if signal::sys_sigaltstack(process, at, 0) != Err(Errno::EINVAL) {
+        return Err("a nonsense ss_flags was accepted");
+    }
+    stage(0x0001_0000, 0, 65536)?;
+    if signal::sys_sigaltstack(process, at, 0) != Ok(0) {
+        return Err("a valid alternate stack was refused");
+    }
+    if signal::sys_sigaltstack(process, 0, old) != Ok(0) || read_old()? != (0x0001_0000, 0, 65536) {
+        return Err("the installed alternate stack did not read back");
+    }
+    stage(0, SS_DISABLE, 0)?;
+    if signal::sys_sigaltstack(process, at, old) != Ok(0) || read_old()? != (0x0001_0000, 0, 65536)
+    {
+        return Err("disabling did not report the stack it replaced");
     }
 
     let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
