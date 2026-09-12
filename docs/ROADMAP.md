@@ -893,13 +893,27 @@ and removes it:
   tmpfs    4 pages written through a VMO and read back, 0 frames leaked
 ```
 
-**Still to do.** A descriptor table on `Process` in place of the three
-hardcoded console descriptors; the file system calls —
-`openat`, `getdents64`, `newfstatat`, `lseek`, `dup3`, `chdir` and `getcwd`,
-`mkdirat`, `unlinkat`, `renameat2`, `readlinkat`, and `fcntl`, whose
-`F_GETFL` on the console busybox's `printf` needs before it will print; devfs
-with the console in it; procfs; and the exit criterion's three commands under
-the boot test.
+**Done — the calls that take a path.** `kernel/src/syscall/path.rs` and
+`stat.rs`: `mkdirat`, `mknodat` (regular files, pipes and socket names; device
+nodes are `EPERM` until devfs owns the numbers), `unlinkat`, `renameat2` with
+`RENAME_NOREPLACE`, `symlinkat`, `linkat`, `readlinkat`, `chdir`, `fchdir`,
+`getcwd`, `faccessat` and `faccessat2`, `chmod`, `chown`, `utimensat`, `umask`,
+`getdents64`, and the stat family with `statx` — each with its pre-`*at` form
+where the architecture has one. The one architecture-dependent fact is which
+`struct stat` a stat call fills: x86-64's own 144 bytes, the generic 128, or
+ARMv7-A's 104-byte `stat64`, whose EABI padding `libs/linux-abi` now names.
+It is `arch::STAT_LAYOUT`, and all three encoders are compiled, and checked, on
+every architecture. The umask is per process, 0o022 to start, and applies to
+`openat`'s create too. The boot check makes each call by its number against
+`/tmp`, decodes every record back out of user memory, lists forty names in
+96-byte pieces, and runs twice:
+
+```
+  paths    145 path calls under /tmp, 42 names listed in 12 getdents64 calls, 0 frames leaked, dentry cache +0
+```
+
+**Still to do.** devfs with the console in it; procfs; and the exit
+criterion's three commands under the boot test.
 
 **Exit:** `busybox ls -R /proc`, `cat /proc/self/maps` and a shell script that
 manipulates files under tmpfs, all under the boot test.
@@ -1241,7 +1255,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges and `virtio,mmio` devices; stage 10 is still the rest of it. | 69 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
-| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 56 |
+| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 59 |
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 44 |
@@ -1252,7 +1266,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **622 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **625 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
