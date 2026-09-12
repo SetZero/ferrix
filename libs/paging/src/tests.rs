@@ -794,6 +794,86 @@ fn the_walk_behaves_the_same_on_armv7a() {
     walk_properties::<Armv7a>();
 }
 
+/// A range whose start is canonical and whose end is not is refused whole,
+/// before a table is allocated. The walk ignores the address bits above its
+/// top level, so without the check the page past the boundary would land in
+/// a root slot of the other half and map an address nobody asked for.
+fn a_range_may_not_leave_the_lower_half<E: Encoding>() {
+    let boundary = 1u64 << (E::VIRT_BITS - 1);
+    let last_low_page = boundary - PAGE_SIZE;
+    let first_high = E::canonical(boundary);
+
+    for (len, what) in [
+        (2 * PAGE_SIZE, "into the gap between the halves"),
+        (
+            first_high - last_low_page + PAGE_SIZE,
+            "across the gap into the upper half",
+        ),
+    ] {
+        let (mut memory, mapper) = Memory::with_root::<E>();
+        assert_eq!(
+            mapper
+                .map_range(
+                    &mut memory,
+                    VirtAddr(last_low_page),
+                    PhysAddr(0x1000),
+                    len,
+                    MapFlags::KERNEL_DATA,
+                )
+                .unwrap_err(),
+            MapError::NotCanonical,
+            "{}: a range running {what}",
+            E::NAME
+        );
+        assert_eq!(
+            memory.tables_allocated(),
+            1,
+            "{}: nothing was written for a range running {what}",
+            E::NAME
+        );
+    }
+}
+
+#[test]
+fn a_range_may_not_leave_the_lower_half_on_x86_64() {
+    a_range_may_not_leave_the_lower_half::<X86_64>();
+}
+
+#[test]
+fn a_range_may_not_leave_the_lower_half_on_aarch64() {
+    a_range_may_not_leave_the_lower_half::<AArch64>();
+}
+
+#[test]
+fn a_32_bit_range_may_not_run_past_four_gibibytes() {
+    let (mut memory, mapper) = Memory::with_root::<Armv7a>();
+    assert_eq!(
+        mapper
+            .map_range(
+                &mut memory,
+                VirtAddr(0xFFFF_F000),
+                PhysAddr(0x1000),
+                2 * PAGE_SIZE,
+                MapFlags::KERNEL_DATA,
+            )
+            .unwrap_err(),
+        MapError::NotCanonical,
+        "the second page would be slot 4 of a four-slot root"
+    );
+    assert_eq!(memory.tables_allocated(), 1, "nothing was written");
+
+    // The halves of a 32-bit space touch, so crossing between them is fine.
+    mapper
+        .map_range(
+            &mut memory,
+            VirtAddr(0x7FFF_F000),
+            PhysAddr(0x1000),
+            2 * PAGE_SIZE,
+            MapFlags::KERNEL_DATA,
+        )
+        .unwrap();
+}
+
 #[test]
 fn running_out_of_frames_is_reported_rather_than_ignored() {
     /// A memory that hands out exactly one frame: the root.

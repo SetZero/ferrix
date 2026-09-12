@@ -490,6 +490,26 @@ impl<E: Encoding> Mapper<E> {
         if !E::is_canonical(virt) {
             return Err(MapError::NotCanonical);
         }
+        // The whole range, not only its start, and before anything is written.
+        // A walk indexes each level from a few bits of the address and ignores
+        // the rest, so a page past the canonical boundary does not fail: it
+        // lands in another root slot and aliases an address somebody else owns.
+        if let Some(last_offset) = len.checked_sub(1) {
+            let last = virt
+                .0
+                .checked_add(last_offset)
+                .ok_or(MapError::RangeOverflow)?;
+            // The first address above the lower half. On the 64-bit pair it
+            // opens the gap between the halves, and a range from one half to
+            // the other runs through it with both ends canonical; on ARMv7-A
+            // the halves touch, and it is an address like any other.
+            let boundary = 1u64 << (E::VIRT_BITS - 1);
+            let crosses = virt.0 < boundary && last >= boundary;
+            if !E::is_canonical(VirtAddr(last)) || (crosses && !E::is_canonical(VirtAddr(boundary)))
+            {
+                return Err(MapError::NotCanonical);
+            }
+        }
         let limit = 1_u64.checked_shl(E::PHYS_BITS).unwrap_or(u64::MAX);
         if phys.0.checked_add(len).is_none_or(|end| end > limit) {
             return Err(MapError::PhysicalOutOfRange);
