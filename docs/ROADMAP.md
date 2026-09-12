@@ -34,8 +34,8 @@ so is most of stage 8: the root filesystem unpacked from an initramfs, every
 process's descriptor table, the calls that take a path, `/dev` and `/proc`.
 Stage 8's exit test, `cargo xtask test-vfs`, passes as the criterion is written
 — `ls -R /proc`, `cat /proc/self/maps` and one shell script, on all three
-architectures — and the stage waits only on fixes for five bugs a review found
-in its VFS.
+architectures — and the stage waits only on fixes for what a review found: five
+bugs in its VFS, and self-checks that measure leaks without failing on them.
 Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
 and its first kernel code — PCI enumeration, device nodes, and a device driven
 by DMA from the boot check — is in the boot test.
@@ -1009,12 +1009,17 @@ update, so the ancestry check reads a stale chain. The others: a racing
 `open(O_CREAT)` without `O_EXCL` can fail with `EEXIST`; `..` in a directory
 listing reports the directory's own inode number; `openat` at the descriptor
 limit creates the file before failing with `EMFILE`, leaving it behind; and a
-rename over an empty directory keeps it alive. Fixes, each with a host test
-that fails first, are in progress.
+rename over an empty directory keeps it alive. The same review found that the
+stage's self-checks measure frames leaked but do not fail on them: the tmpfs,
+path, descriptor, `/dev` and `/proc`, and pipe checks each print a count that
+nothing requires to be zero, so every "0 frames leaked" above is an observation
+rather than a check. Fixes for all of it, each with a test that fails first,
+are in progress.
 
 **Still to do.**
 
-* The five VFS bugs above.
+* The five VFS bugs above, and self-checks that fail on the leaks they
+  measure.
 * `SIGPIPE` on a write to a pipe with no reader, which is `EPIPE` alone until a
   signal can be delivered; and `proc` and `devtmpfs` as `mount` types, which
   are `ENODEV` until they are registered in `syscall/fsctl.rs`.
