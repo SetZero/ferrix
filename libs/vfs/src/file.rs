@@ -17,7 +17,7 @@ use ferrix_sync::SpinLock;
 
 use crate::Result;
 use crate::namespace::Location;
-use crate::node::{DirEntry, FIRST_CURSOR, FileType, Inode};
+use crate::node::{DirEntry, FIRST_CURSOR, FileType, Inode, Readiness};
 
 /// What `open` was asked for, decoded from the architecture's `O_*` bits.
 ///
@@ -283,6 +283,21 @@ impl OpenFile {
             return Err(Errno::EINVAL);
         }
         self.inode.set_len(len)
+    }
+
+    /// What `poll` reports for this open file: the opened object's answer,
+    /// masked by what the file was opened for.
+    #[must_use]
+    pub fn poll(&self) -> Readiness {
+        if self.path_only {
+            return Readiness::default();
+        }
+        let ready = self.io.poll();
+        Readiness {
+            readable: ready.readable && self.read,
+            writable: ready.writable && self.write,
+            ..ready
+        }
     }
 
     /// `lseek`.

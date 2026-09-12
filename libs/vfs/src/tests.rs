@@ -874,3 +874,114 @@ fn a_truncated_archive_is_an_error_not_a_partial_success() {
         Err(initramfs::UnpackError::Archive(_))
     ));
 }
+
+// -- Pipes, poll and statfs --------------------------------------------------
+
+use crate::pipe::{PIPE_BUF, PIPE_CAPACITY, PipeBuffer, ReadOutcome, WriteOutcome};
+
+fn open_pipe(capacity: usize) -> PipeBuffer {
+    let mut pipe = PipeBuffer::new(capacity);
+    pipe.open_reader();
+    pipe.open_writer();
+    pipe
+}
+
+#[test]
+fn a_drained_pipe_is_end_of_file_only_once_no_writer_is_left() {
+    let mut pipe = open_pipe(PIPE_CAPACITY);
+    let mut buf = [0_u8; 8];
+    assert_eq!(pipe.read(&mut buf), ReadOutcome::WouldBlock);
+    assert!(!pipe.read_readiness().readable);
+    assert_eq!(pipe.write(b"last"), WriteOutcome::Wrote(4));
+    pipe.close_writer();
+    assert_eq!(pipe.read(&mut buf), ReadOutcome::Read(4));
+    assert_eq!(&buf[..4], b"last");
+    assert_eq!(pipe.read(&mut buf), ReadOutcome::EndOfFile);
+    let ready = pipe.read_readiness();
+    assert!(
+        ready.readable && ready.hangup,
+        "end of file must wake a poller"
+    );
+}
+
+#[test]
+fn a_write_with_no_reader_is_broken_and_polls_as_an_error() {
+    let mut pipe = open_pipe(PIPE_CAPACITY);
+    pipe.close_reader();
+    assert_eq!(pipe.write(b"x"), WriteOutcome::Broken);
+    let ready = pipe.write_readiness();
+    assert!(ready.error && ready.writable);
+}
+
+#[test]
+fn a_small_write_is_never_split_and_a_large_one_takes_what_fits() {
+    let mut pipe = open_pipe(2 * PIPE_BUF);
+    let big = vec![7_u8; PIPE_BUF + PIPE_BUF / 2];
+    assert_eq!(pipe.write(&big), WriteOutcome::Wrote(big.len()));
+    let small = vec![1_u8; PIPE_BUF];
+    assert_eq!(
+        pipe.write(&small),
+        WriteOutcome::WouldBlock,
+        "a write of PIPE_BUF bytes must not be split"
+    );
+    assert!(!pipe.write_readiness().writable);
+    assert_eq!(pipe.write(&big), WriteOutcome::Wrote(PIPE_BUF / 2));
+    assert_eq!(pipe.write(&big), WriteOutcome::WouldBlock);
+    let mut out = vec![0_u8; 3 * PIPE_BUF];
+    assert_eq!(pipe.read(&mut out), ReadOutcome::Read(2 * PIPE_BUF));
+    assert!(pipe.write_readiness().writable);
+}
+
+#[test]
+fn a_pipe_delivers_bytes_in_order_against_a_model() {
+    let mut pipe = open_pipe(PIPE_CAPACITY);
+    let mut model = alloc::collections::VecDeque::new();
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    for _ in 0..4000 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let len = usize::try_from((state >> 8) % 9000).unwrap();
+        if state & 1 == 0 {
+            let data: Vec<u8> = (0..len).map(|i| (state as usize + i) as u8).collect();
+            match pipe.write(&data) {
+                WriteOutcome::Wrote(n) => {
+                    if data.len() <= PIPE_BUF {
+                        assert_eq!(n, data.len(), "a small write was split");
+                    }
+                    model.extend(&data[..n]);
+                }
+                WriteOutcome::WouldBlock => {}
+                WriteOutcome::Broken => panic!("a reader is open"),
+            }
+        } else {
+            let mut buf = vec![0_u8; len];
+            match pipe.read(&mut buf) {
+                ReadOutcome::Read(n) => {
+                    let expected: Vec<u8> = model.drain(..n).collect();
+                    assert_eq!(&buf[..n], &expected[..], "bytes came out of order");
+                }
+                ReadOutcome::WouldBlock => assert!(model.is_empty()),
+                ReadOutcome::EndOfFile => panic!("a writer is open"),
+            }
+        }
+        assert_eq!(pipe.len(), model.len());
+        assert!(pipe.len() <= PIPE_CAPACITY);
+    }
+}
+
+#[test]
+fn tmpfs_says_what_it_is_and_an_open_file_polls_for_its_access_mode() {
+    let (ns, ctx) = fresh();
+    write_file(&ns, &ctx, "/f", b"x");
+    let stat = ns.statfs(&ctx.root);
+    assert_eq!(stat.magic, crate::tmpfs::TMPFS_MAGIC);
+    assert_eq!(stat.name_max, 255);
+    assert_eq!(stat.files, 2, "the root and one file");
+    let file = ns.open(&ctx, None, b"/f", &READ, 0).unwrap();
+    let ready = file.poll();
+    assert!(
+        ready.readable && !ready.writable,
+        "masked by the access mode"
+    );
+}

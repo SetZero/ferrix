@@ -39,7 +39,7 @@ use ferrix_sync::{SpinLock, SpinLockGuard};
 use crate::Result;
 use crate::node::{
     Clock, DirEntry, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, SetAttributes,
-    Timespec,
+    StatFs, Timespec,
 };
 use crate::path::PATH_MAX;
 
@@ -48,6 +48,9 @@ pub const BLOCK_SIZE: u32 = 4096;
 
 /// The page size [`HeapPages`] stores in.
 const HEAP_PAGE: u64 = 4096;
+
+/// `TMPFS_MAGIC`, from `include/uapi/linux/magic.h`.
+pub const TMPFS_MAGIC: u64 = 0x0102_1994;
 
 /// What Linux's tmpfs counts each directory entry as, for a directory's size.
 const DIRENT_SIZE: u64 = 20;
@@ -92,6 +95,12 @@ pub trait Storage: Send + Sync + fmt::Debug {
 
     /// The largest a file may grow, which is `EFBIG` past.
     fn max_file_size(&self) -> u64;
+
+    /// Pages in total and pages free, for `statfs`. Unknown by default, which
+    /// `df` shows as a filesystem of no size rather than an invented one.
+    fn capacity(&self) -> (u64, u64) {
+        (0, 0)
+    }
 }
 
 /// [`Storage`] on the heap.
@@ -237,6 +246,25 @@ impl FileSystem for Tmpfs {
 
     fn device(&self) -> u64 {
         self.shared.device
+    }
+
+    fn statfs(&self) -> StatFs {
+        let (blocks, free) = self.shared.storage.capacity();
+        let files = self
+            .shared
+            .next_ino
+            .load(Ordering::Relaxed)
+            .saturating_sub(1);
+        StatFs {
+            magic: TMPFS_MAGIC,
+            block_size: u64::from(BLOCK_SIZE),
+            blocks,
+            blocks_free: free,
+            blocks_available: free,
+            files,
+            files_free: 0,
+            name_max: crate::path::NAME_MAX as u64,
+        }
     }
 }
 

@@ -55,6 +55,7 @@ pub mod initramfs;
 mod namespace;
 mod node;
 pub mod path;
+pub mod pipe;
 pub mod tmpfs;
 mod walk;
 
@@ -66,8 +67,8 @@ pub use ferrix_linux_abi::errno::Errno;
 pub use file::{OpenFile, OpenFlags, Whence};
 pub use namespace::{Context, DEFAULT_CACHE, Location, Mount, Namespace, RenameMode, Stat};
 pub use node::{
-    Clock, DirEntry, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, SetAttributes,
-    Timespec,
+    Clock, DirEntry, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, Readiness,
+    SetAttributes, StatFs, Timespec,
 };
 
 /// The result every operation here returns: a value, or the error number a

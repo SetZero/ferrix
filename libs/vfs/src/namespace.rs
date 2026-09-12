@@ -13,7 +13,7 @@ use ferrix_sync::SpinLock;
 use crate::Result;
 use crate::dentry::Dentry;
 use crate::file::{OpenFile, OpenFlags};
-use crate::node::{FileSystem, FileType, Inode, Metadata, NewNode, SetAttributes};
+use crate::node::{FileSystem, FileType, Inode, Metadata, NewNode, SetAttributes, StatFs};
 use crate::walk::{LastPart, Walked, up};
 
 /// How many dentries the namespace keeps alive that nothing else refers to.
@@ -286,6 +286,12 @@ impl Namespace {
             dev: at.mount.fs.device(),
             metadata: at.inode()?.metadata(),
         })
+    }
+
+    /// `statfs` on a location: the filesystem it is on.
+    #[must_use]
+    pub fn statfs(&self, at: &Location) -> StatFs {
+        at.mount.fs.statfs()
     }
 
     /// A symbolic link's target, without following it.

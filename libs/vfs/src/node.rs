@@ -192,6 +192,60 @@ pub struct DirEntry<'a> {
 /// this.
 pub const FIRST_CURSOR: u64 = 2;
 
+/// What an open object is ready for, as `poll` and `select` report it.
+///
+/// Four booleans rather than `POLL*` bits, because the bits are the system
+/// call layer's encoding and this crate does not encode anything.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each is one independent poll(2) condition, and a bit set would be \
+              the encoding this type exists to leave to the system call layer"
+)]
+pub struct Readiness {
+    /// A read would not block: `POLLIN`.
+    pub readable: bool,
+    /// A write would not block: `POLLOUT`.
+    pub writable: bool,
+    /// The other end is gone: `POLLHUP`.
+    pub hangup: bool,
+    /// Writing would fail: `POLLERR`.
+    pub error: bool,
+}
+
+impl Readiness {
+    /// Ready for both, which is what Linux reports for a regular file or a
+    /// directory: neither ever makes a reader or a writer wait.
+    pub const ALWAYS: Readiness = Readiness {
+        readable: true,
+        writable: true,
+        hangup: false,
+        error: false,
+    };
+}
+
+/// What `statfs` reports about a mounted filesystem.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StatFs {
+    /// The filesystem's magic number, `f_type`: `TMPFS_MAGIC` and the like.
+    /// Programs test it to find out what they are running on.
+    pub magic: u64,
+    /// The block size the counts below are in.
+    pub block_size: u64,
+    /// Blocks in total.
+    pub blocks: u64,
+    /// Blocks free.
+    pub blocks_free: u64,
+    /// Blocks free to an unprivileged user.
+    pub blocks_available: u64,
+    /// Inodes in total.
+    pub files: u64,
+    /// Inodes free.
+    pub files_free: u64,
+    /// The longest name a directory entry may have.
+    pub name_max: u64,
+}
+
 /// Where time comes from, for the timestamps a filesystem keeps.
 pub trait Clock: Send + Sync + fmt::Debug {
     /// The time now.
@@ -206,6 +260,19 @@ pub trait FileSystem: Send + Sync + fmt::Debug {
     fn name(&self) -> &'static str;
     /// The device number `stat` reports for every inode in it.
     fn device(&self) -> u64;
+
+    /// What `statfs` reports.
+    ///
+    /// The default knows nothing: no magic number, no counts, and the name
+    /// limit every filesystem here shares. A filesystem a program might test
+    /// for — tmpfs, procfs — says what it is.
+    fn statfs(&self) -> StatFs {
+        StatFs {
+            block_size: 4096,
+            name_max: crate::path::NAME_MAX as u64,
+            ..StatFs::default()
+        }
+    }
 }
 
 /// One file, directory, link or device, as a filesystem implements it.
@@ -257,6 +324,15 @@ pub trait Inode: Send + Sync + fmt::Debug {
     fn set_len(&self, len: u64) -> Result<()> {
         let _ = len;
         Err(Errno::EINVAL)
+    }
+
+    /// What the object is ready for.
+    ///
+    /// The default is [`Readiness::ALWAYS`], which is right for everything that
+    /// never makes a caller wait. An object that can — a pipe, a terminal —
+    /// reports its state, and wakes whoever waits on it when that changes.
+    fn poll(&self) -> Readiness {
+        Readiness::ALWAYS
     }
 
     /// Whether this object has no position: a terminal, a pipe. Offsets passed
