@@ -62,6 +62,25 @@ pub(crate) fn build_kernel_with_init(
     artifact(arch.kernel_target(), release, "ferrix-kernel")
 }
 
+/// Compile the kernel told to run the commands in `commands`, a file
+/// `vfs::encode` wrote, in place of a shell.
+///
+/// Named by path rather than carried in the variable, for the reason
+/// `kernel/build.rs` gives: the list is full of NULs.
+pub(crate) fn build_kernel_with_commands(
+    arch: Arch,
+    release: bool,
+    commands: &Path,
+) -> Result<PathBuf> {
+    build(
+        "ferrix-kernel",
+        arch.kernel_target(),
+        release,
+        &[("FERRIX_INIT_COMMANDS", commands.as_os_str())],
+    )?;
+    artifact(arch.kernel_target(), release, "ferrix-kernel")
+}
+
 /// Run `cargo build -p <package> --target <target>`, with `env` added.
 fn build(package: &str, target: &str, release: bool, env: &[(&str, &OsStr)]) -> Result<()> {
     refuse_inherited_rustflags()?;

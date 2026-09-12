@@ -1,0 +1,562 @@
+//! Stage 8's exit criterion, as programs with expected output.
+//!
+//! "`busybox ls -R /proc`, `cat /proc/self/maps` and a shell script that
+//! manipulates files under tmpfs, all under the boot test."
+//!
+//! # Why a list of programs and not one script
+//!
+//! Because this busybox's shell starts every applet with `fork`, `execve` and
+//! `wait4`, and none of its builtins makes, renames or removes a file -- all
+//! measured, in `docs/STAGE8-WHAT-THE-EXIT-NEEDS.md`. Until `clone` exists, a
+//! script that runs `mkdir` measures the absence of `clone`. So the kernel
+//! starts each program itself (`kernel/src/init.rs`), in order, over one tmpfs:
+//! the two `/proc` commands, three scripts of builtins that create, append,
+//! read back, test and truncate files, and between them the applets a script
+//! would have forked. When a shell can fork, the scripts and the applets
+//! become one script and this list becomes one command.
+//!
+//! # Why output as well as statuses
+//!
+//! Because the statuses lie. Refused `getdents64`, `ls -R` prints its headings
+//! and no names and exits 0; refused `poll`, `while read` reads nothing and
+//! the script goes on to its chosen status. So each command's output is
+//! checked, and the scripts exit with statuses that are not zero, so that a
+//! shell that died and reported success cannot pass.
+//!
+//! # The log
+//!
+//! `kernel/src/init.rs` writes `  init     command N: ARGV` before command `N`
+//! and `  init     command N exited with S` after it, and reports each call
+//! answered `ENOSYS` in between as `  syscall  ...`. Everything else between the
+//! two is the program's. Kernel lines start with two spaces and no program
+//! line here does, which is how the two are told apart; change the formats
+//! together.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use crate::{Error, Result};
+
+/// The start of the kernel's line before and after each command.
+pub(crate) const COMMAND: &str = "init     command ";
+/// What follows the number on the line after a command that ran.
+const EXITED: &str = " exited with ";
+/// What follows the number on the line after a command that did not start.
+const NOT_STARTED: &str = " could not be started: ";
+/// The kernel's line when the program itself could not be read.
+const UNREADABLE: &str = "could not be read: errno";
+/// The start of the kernel's line for a call answered `ENOSYS`.
+const UNANSWERED: &str = "syscall  ";
+/// The kernel's line when every command has run: what the boot waits for.
+pub(crate) const DONE: &str = "init     every command has run";
+
+/// A check's verdict: nothing, or why it failed.
+type Check = std::result::Result<(), String>;
+
+/// What a command's output must show, beyond its status.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Expect {
+    /// Nothing: the status is the whole answer.
+    Status,
+    /// These lines, in this order, among others.
+    Lines(&'static [&'static str]),
+    /// An `ls -R /proc` listing that reaches the program's own directory.
+    ProcListing,
+    /// Lines that each parse as a line of `/proc/<pid>/maps`, in order.
+    Maps,
+}
+
+/// One program for the kernel to run.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Command {
+    /// Its arguments, `argv[0]` naming the applet.
+    pub(crate) argv: &'static [&'static str],
+    /// The status it must exit with.
+    pub(crate) status: i32,
+    /// What its output must show.
+    pub(crate) expect: Expect,
+}
+
+/// Creates, appends to, reads back, tests and truncates files in `/tmp`,
+/// with builtins alone.
+const WRITE_SCRIPT: &str = r#"cd /tmp/vfs || exit 1
+echo "tmpfs: in $PWD"
+echo "tmpfs: one" > file
+echo "tmpfs: two" >> file
+while read -r line; do echo "read back: $line"; done < file
+[ -f file ] && echo "tmpfs: file is a regular file"
+[ -d deep ] && echo "tmpfs: deep is a directory"
+: > empty
+[ -s empty ] || echo "tmpfs: empty is empty"
+exit 5
+"#;
+
+/// Checks what `mv` and `ln -s` did, and reads through the link.
+const CHECK_SCRIPT: &str = r#"cd /tmp/vfs || exit 1
+[ -e file ] || echo "tmpfs: the old name is gone"
+[ -f deep/moved ] && echo "tmpfs: the new name is a file"
+[ -L link ] && echo "tmpfs: link is a symbolic link"
+while read -r line; do echo "through the link: $line"; done < link
+exit 6
+"#;
+
+/// Checks that `rm` and `rmdir` left nothing behind.
+const GONE_SCRIPT: &str = r#"[ -e /tmp/vfs ] || echo "tmpfs: removed"
+exit 7
+"#;
+
+/// The programs, in the order the kernel runs them.
+pub(crate) const COMMANDS: &[Command] = &[
+    Command {
+        argv: &["ls", "-R", "/proc"],
+        status: 0,
+        expect: Expect::ProcListing,
+    },
+    Command {
+        argv: &["cat", "/proc/self/maps"],
+        status: 0,
+        expect: Expect::Maps,
+    },
+    Command {
+        argv: &["mkdir", "-p", "/tmp/vfs/deep"],
+        status: 0,
+        expect: Expect::Status,
+    },
+    Command {
+        argv: &["sh", "-c", WRITE_SCRIPT],
+        status: 5,
+        expect: Expect::Lines(&[
+            "tmpfs: in /tmp/vfs",
+            "read back: tmpfs: one",
+            "read back: tmpfs: two",
+            "tmpfs: file is a regular file",
+            "tmpfs: deep is a directory",
+            "tmpfs: empty is empty",
+        ]),
+    },
+    Command {
+        argv: &["mv", "/tmp/vfs/file", "/tmp/vfs/deep/moved"],
+        status: 0,
+        expect: Expect::Status,
+    },
+    Command {
+        argv: &["ln", "-s", "deep/moved", "/tmp/vfs/link"],
+        status: 0,
+        expect: Expect::Status,
+    },
+    Command {
+        argv: &["cat", "/tmp/vfs/link"],
+        status: 0,
+        expect: Expect::Lines(&["tmpfs: one", "tmpfs: two"]),
+    },
+    Command {
+        argv: &["sh", "-c", CHECK_SCRIPT],
+        status: 6,
+        expect: Expect::Lines(&[
+            "tmpfs: the old name is gone",
+            "tmpfs: the new name is a file",
+            "tmpfs: link is a symbolic link",
+            "through the link: tmpfs: one",
+            "through the link: tmpfs: two",
+        ]),
+    },
+    Command {
+        argv: &[
+            "rm",
+            "/tmp/vfs/link",
+            "/tmp/vfs/deep/moved",
+            "/tmp/vfs/empty",
+        ],
+        status: 0,
+        expect: Expect::Status,
+    },
+    Command {
+        argv: &["rmdir", "/tmp/vfs/deep", "/tmp/vfs"],
+        status: 0,
+        expect: Expect::Status,
+    },
+    Command {
+        argv: &["sh", "-c", GONE_SCRIPT],
+        status: 7,
+        expect: Expect::Lines(&["tmpfs: removed"]),
+    },
+];
+
+/// The list as `kernel/build.rs` takes it: each argument ends in a NUL, and
+/// each command in an empty argument.
+///
+/// # Errors
+///
+/// A command with no arguments, or an argument that is empty or holds a NUL,
+/// none of which the encoding can carry.
+pub(crate) fn encode(commands: &[Command]) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    for command in commands {
+        if command.argv.is_empty() {
+            return Err(Error::new("a command with no arguments names no program"));
+        }
+        for arg in command.argv {
+            if arg.is_empty() || arg.contains('\0') {
+                return Err(Error::new(format!(
+                    "the argument {arg:?} is empty or holds a NUL, which the list cannot carry"
+                )));
+            }
+            bytes.extend_from_slice(arg.as_bytes());
+            bytes.push(0);
+        }
+        bytes.push(0);
+    }
+    Ok(bytes)
+}
+
+/// Write `bytes` to `path` unless it already holds them.
+///
+/// The kernel's build script reruns when the file's timestamp changes, so
+/// rewriting the same list would rebuild the kernel on every run.
+pub(crate) fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {
+    if std::fs::read(path).is_ok_and(|held| held == bytes) {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, bytes)
+        .map_err(|error| Error::new(format!("writing {}: {error}", path.display())))
+}
+
+/// How a command ended, as the log tells it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Ending {
+    /// It ran and exited with this status.
+    Exited(i32),
+    /// It never started, for this reason.
+    NotStarted(String),
+}
+
+/// What one command did, as the log tells it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Ran {
+    /// The program's lines.
+    pub(crate) output: Vec<String>,
+    /// The kernel's reports of calls answered `ENOSYS` while it ran.
+    pub(crate) unanswered: Vec<String>,
+    /// How it ended, if the log got that far.
+    pub(crate) ending: Option<Ending>,
+}
+
+/// A kernel line about command `N`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Marker {
+    /// It is starting.
+    Started,
+    /// It has ended.
+    Ended(Ending),
+}
+
+/// Read a kernel line about a command, if `line` is one.
+fn marker(line: &str) -> Option<(usize, Marker)> {
+    let (_, rest) = line.split_once(COMMAND)?;
+    let digits = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    let (number, tail) = rest.split_at_checked(digits)?;
+    let index = number.parse().ok()?;
+    if tail.starts_with(": ") {
+        return Some((index, Marker::Started));
+    }
+    if let Some(status) = tail.strip_prefix(EXITED) {
+        let status = status.trim().parse().ok()?;
+        return Some((index, Marker::Ended(Ending::Exited(status))));
+    }
+    let why = tail.strip_prefix(NOT_STARTED)?.trim().to_owned();
+    Some((index, Marker::Ended(Ending::NotStarted(why))))
+}
+
+/// Split a log into what each command did, by number.
+pub(crate) fn split(lines: &[String]) -> BTreeMap<usize, Ran> {
+    let mut ran: BTreeMap<usize, Ran> = BTreeMap::new();
+    let mut current = None;
+    for line in lines {
+        let line = line.trim_end();
+        if let Some((index, marker)) = marker(line) {
+            let entry = ran.entry(index).or_default();
+            match marker {
+                Marker::Started => current = Some(index),
+                Marker::Ended(ending) => {
+                    entry.ending = Some(ending);
+                    current = None;
+                }
+            }
+            continue;
+        }
+        let Some(entry) = current.and_then(|index| ran.get_mut(&index)) else {
+            continue;
+        };
+        if line.trim_start().starts_with(UNANSWERED) && line.starts_with("  ") {
+            entry.unanswered.push(line.trim().to_owned());
+        } else if !line.starts_with("  ") {
+            entry.output.push(line.to_owned());
+        }
+    }
+    ran
+}
+
+/// A line with terminal escape sequences removed: `ESC [`, parameters, and
+/// the letter that ends them. busybox colours `ls` when it thinks it is
+/// talking to a terminal, and whether it does depends on what the console
+/// answers to `ioctl`, which is not what this test is about.
+fn strip_escapes(line: &str) -> String {
+    let mut plain = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            let _ = chars.by_ref().find(char::is_ascii_alphabetic);
+        } else {
+            plain.push(c);
+        }
+    }
+    plain
+}
+
+/// An `ls -R` listing: each directory's heading, and the names under it.
+///
+/// Names are split on whitespace, so a listing in columns reads the same as
+/// one name per line.
+pub(crate) fn listing(output: &[String]) -> BTreeMap<String, Vec<String>> {
+    let mut sections: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut current: Option<String> = None;
+    for line in output {
+        let line = strip_escapes(line);
+        let line = line.trim_end();
+        if let Some(heading) = line.strip_suffix(':').filter(|h| h.starts_with('/')) {
+            let _ = sections.entry(heading.to_owned()).or_default();
+            current = Some(heading.to_owned());
+        } else if let Some(directory) = &current {
+            sections
+                .entry(directory.clone())
+                .or_default()
+                .extend(line.split_whitespace().map(str::to_owned));
+        }
+    }
+    sections
+}
+
+/// Whether `directory` is a process's own directory in `/proc`.
+fn is_own_directory(directory: &str) -> bool {
+    directory == "/proc/self"
+        || directory
+            .strip_prefix("/proc/")
+            .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// `ls -R /proc` reached `self` and the program's own `maps`.
+///
+/// `ls -R` does not follow `/proc/self`, which is a symbolic link, so the
+/// program's files appear under `/proc/<pid>:` -- or under `/proc/self:`, if
+/// procfs makes `self` a directory instead.
+fn proc_listing(output: &[String]) -> Check {
+    let sections = listing(output);
+    let top = sections
+        .get("/proc")
+        .ok_or("the listing has no `/proc:` heading")?;
+    if !top.iter().any(|name| name == "self") {
+        return Err(format!("`/proc:` does not list `self`; it lists {top:?}"));
+    }
+    let reached = sections
+        .iter()
+        .any(|(dir, names)| is_own_directory(dir) && names.iter().any(|name| name == "maps"));
+    if !reached {
+        let headings: Vec<&String> = sections.keys().collect();
+        return Err(format!(
+            "no `/proc/self:` or `/proc/<pid>:` section lists `maps`; the headings were \
+             {headings:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// One line of `/proc/<pid>/maps`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MapsLine {
+    /// The first address.
+    pub(crate) start: u64,
+    /// The first address past the end.
+    pub(crate) end: u64,
+    /// `r`, `w`, `x` or `-` each, then `p` or `s`.
+    pub(crate) perms: String,
+    /// The offset into the file.
+    pub(crate) offset: u64,
+    /// The file's device, major and minor.
+    pub(crate) dev: (u32, u32),
+    /// The file's inode, zero for anonymous memory.
+    pub(crate) inode: u64,
+    /// The file's path or a name like `[stack]`, if there is one.
+    pub(crate) path: Option<String>,
+}
+
+/// The next whitespace-separated field of `rest`, and what follows it.
+fn field(rest: &str) -> Option<(&str, &str)> {
+    let rest = rest.trim_start();
+    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    rest.split_at_checked(end)
+        .filter(|(field, _)| !field.is_empty())
+}
+
+/// A hexadecimal number, refusing an empty or signed one.
+fn hex(text: &str) -> Option<u64> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u64::from_str_radix(text, 16).ok()
+}
+
+/// Parse a line of `/proc/<pid>/maps`:
+/// `start-end perms offset major:minor inode [path]`.
+///
+/// # Errors
+///
+/// Which field is missing or malformed.
+pub(crate) fn maps_line(line: &str) -> std::result::Result<MapsLine, String> {
+    let (range, rest) = field(line).ok_or("the line is empty")?;
+    let (start, end) = range
+        .split_once('-')
+        .and_then(|(start, end)| Some((hex(start)?, hex(end)?)))
+        .ok_or_else(|| format!("`{range}` is not a hexadecimal `start-end` range"))?;
+    if start >= end {
+        return Err(format!("`{range}` does not end after it starts"));
+    }
+    let (perms, rest) = field(rest).ok_or("there are no permissions")?;
+    let bytes = perms.as_bytes();
+    let valid = matches!(bytes, [b'r' | b'-', b'w' | b'-', b'x' | b'-', b'p' | b's']);
+    if !valid {
+        return Err(format!("`{perms}` is not `rwxp`-shaped permissions"));
+    }
+    let (offset, rest) = field(rest).ok_or("there is no offset")?;
+    let offset = hex(offset).ok_or_else(|| format!("`{offset}` is not a hexadecimal offset"))?;
+    let (dev, rest) = field(rest).ok_or("there is no device")?;
+    let parsed_dev = dev.split_once(':').and_then(|(major, minor)| {
+        Some((
+            u32::try_from(hex(major)?).ok()?,
+            u32::try_from(hex(minor)?).ok()?,
+        ))
+    });
+    let dev = parsed_dev.ok_or_else(|| format!("`{dev}` is not a `major:minor` device"))?;
+    let (inode, rest) = field(rest).ok_or("there is no inode")?;
+    let inode = inode
+        .parse()
+        .map_err(|_| format!("`{inode}` is not a decimal inode"))?;
+    let path = Some(rest.trim()).filter(|path| !path.is_empty());
+    Ok(MapsLine {
+        start,
+        end,
+        perms: perms.to_owned(),
+        offset,
+        dev,
+        inode,
+        path: path.map(str::to_owned),
+    })
+}
+
+/// Every line parses as a maps line, and the ranges ascend without overlap.
+fn maps(output: &[String]) -> Check {
+    let mut previous_end = 0;
+    let mut count = 0_usize;
+    for line in output.iter().filter(|line| !line.trim().is_empty()) {
+        let parsed =
+            maps_line(line).map_err(|why| format!("`{line}` is not a maps line: {why}"))?;
+        if parsed.start < previous_end {
+            return Err(format!("`{line}` overlaps or precedes the line before it"));
+        }
+        previous_end = parsed.end;
+        count += 1;
+    }
+    if count == 0 {
+        return Err("it printed no maps lines".to_owned());
+    }
+    Ok(())
+}
+
+/// `want` appears among `output`, in order.
+fn in_order(output: &[String], want: &[&str]) -> Check {
+    let mut remaining = output.iter();
+    for line in want {
+        if !remaining.any(|got| got.trim_end() == *line) {
+            return Err(format!(
+                "its output is missing `{line}`, or it came out of order"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The most lines of a failing command's output an error repeats.
+const SHOWN_LINES: usize = 8;
+
+/// Judge one command by what the log says it did.
+fn verdict(command: &Command, ran: Option<&Ran>) -> Check {
+    let ran = ran.ok_or("it never started")?;
+    let unanswered = if ran.unanswered.is_empty() {
+        String::new()
+    } else {
+        format!("\n        unanswered: {}", ran.unanswered.join("; "))
+    };
+    let shown: Vec<&String> = ran.output.iter().take(SHOWN_LINES).collect();
+    match &ran.ending {
+        None => return Err(format!("it never exited{unanswered}")),
+        Some(Ending::NotStarted(why)) => return Err(format!("it could not be started: {why}")),
+        Some(Ending::Exited(status)) if *status != command.status => {
+            return Err(format!(
+                "it exited with {status}, not {}; its output began {shown:?}{unanswered}",
+                command.status
+            ));
+        }
+        Some(Ending::Exited(_)) => {}
+    }
+    let checked = match command.expect {
+        Expect::Status => Ok(()),
+        Expect::Lines(want) => in_order(&ran.output, want),
+        Expect::ProcListing => proc_listing(&ran.output),
+        Expect::Maps => maps(&ran.output),
+    };
+    checked.map_err(|why| format!("{why}{unanswered}"))
+}
+
+/// Judge a log, from the boot marker on, against `commands`.
+///
+/// # Errors
+///
+/// A line for each command that failed, saying why, with the calls it found
+/// unanswered. Every command is judged, not just the first to fail, because
+/// which of them a missing call breaks is the report.
+pub(crate) fn judge(
+    commands: &[Command],
+    lines: &[String],
+) -> std::result::Result<Vec<String>, Vec<String>> {
+    if let Some(line) = lines.iter().find(|line| line.contains(UNREADABLE)) {
+        return Err(vec![line.trim().to_owned()]);
+    }
+    let ran = split(lines);
+    let mut passed = Vec::new();
+    let mut failed = Vec::new();
+    for (index, command) in commands.iter().enumerate() {
+        let name = command
+            .argv
+            .iter()
+            .take(2)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ");
+        match verdict(command, ran.get(&index)) {
+            Ok(()) => passed.push(format!("command {index} ({name}) passed")),
+            Err(why) => failed.push(format!("command {index} ({name}): {why}")),
+        }
+    }
+    if failed.is_empty() {
+        Ok(passed)
+    } else {
+        Err(failed)
+    }
+}
+
+#[cfg(test)]
+mod tests;

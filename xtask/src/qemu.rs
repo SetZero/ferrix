@@ -129,6 +129,55 @@ pub(crate) fn test_shell(arch: Arch, image: &Path, kernel: &Path, args: &Args) -
     Ok(())
 }
 
+/// Boot an image whose kernel runs `vfs::COMMANDS`, and judge each command by
+/// its status and its output.
+///
+/// As with [`test_shell`], only what follows the boot marker counts.
+pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> Result<()> {
+    let commands = crate::vfs::COMMANDS;
+    println!(
+        "  {arch}: running {} programs under QEMU (timeout {}s)",
+        commands.len(),
+        args.timeout
+    );
+    let watched = watch(arch, image, kernel, args, crate::vfs::DONE)?;
+    let log = watched.log.display();
+    let after_boot = watched
+        .lines
+        .iter()
+        .position(|line| line.contains(SUCCESS_MARKER))
+        .and_then(|at| watched.lines.get(at..))
+        .unwrap_or_default();
+    let ending = match watched.verdict {
+        Verdict::Reached => None,
+        Verdict::Panicked => Some("the kernel panicked".to_owned()),
+        Verdict::Silent => Some(format!(
+            "the programs did not all finish within {}s",
+            args.timeout
+        )),
+    };
+
+    match (crate::vfs::judge(commands, after_boot), ending) {
+        (Ok(passed), None) => {
+            for line in passed {
+                println!("  {arch}: {line}");
+            }
+            println!("  {arch}: stage 8's exit programs all passed");
+            Ok(())
+        }
+        (Ok(_), Some(ending)) => Err(Error::new(format!(
+            "{arch}: {ending}.\n  Serial output is in {log}"
+        ))),
+        (Err(failed), ending) => Err(Error::new(format!(
+            "{arch}: {}{} of {} programs failed:\n    {}\n  Serial output is in {log}",
+            ending.map_or_else(String::new, |ending| format!("{ending}; ")),
+            failed.len(),
+            commands.len(),
+            failed.join("\n    ")
+        ))),
+    }
+}
+
 /// How a watched boot ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {

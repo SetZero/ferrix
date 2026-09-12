@@ -6,6 +6,7 @@
 //!                       [--accel auto|tcg|whpx|kvm|hvf]
 //! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS]
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
+//! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask check     [--fast]
 //! cargo xtask flash     [--arch armv7a] [--to MOUNT]
 //! cargo xtask watch-serial            [--port DEVICE] [--timeout SECONDS]
@@ -38,7 +39,9 @@ mod qemu;
 mod serial;
 mod shell;
 mod symbolize;
+mod vfs;
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use args::Args;
@@ -86,6 +89,7 @@ COMMANDS:
     run           Boot the image under QEMU, attached to the terminal
     test-boot     Boot the image under QEMU and assert the kernel came up
     test-shell    Boot with a static busybox built in and require its script's output
+    test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs
     check         Run every quality gate (fmt, clippy, layering, audits)
     model-doc     Regenerate docs/generated/ from the SysML model
     flash         Copy the loader and kernel onto a board's boot partition
@@ -103,7 +107,7 @@ OPTIONS:
     --fast                               check: skip the cross-target clippy passes
     --to <MOUNT>                         flash: the card's mounted boot partition
     --port <DEVICE>                      watch-serial: e.g. /dev/ttyACM0
-    --init <PATH>                        test-shell: the busybox; {arch} is replaced
+    --init <PATH>                        test-shell, test-vfs: the busybox; {arch} is replaced
     -h, --help                           This message
 ";
 
@@ -158,7 +162,7 @@ fn run() -> Result<()> {
                 )
             })?;
             for arch in args.arches()? {
-                let program = std::path::PathBuf::from(init.replace("{arch}", arch.name()));
+                let program = PathBuf::from(init.replace("{arch}", arch.name()));
                 if !program.is_file() {
                     return Err(Error::new(format!(
                         "no program at {} for {arch}",
@@ -173,6 +177,7 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
+        "test-vfs" => test_vfs(&args),
         "check" => check::run(&args),
         "model-doc" => check::model_doc(),
         "flash" => {
@@ -195,12 +200,56 @@ fn run() -> Result<()> {
     }
 }
 
+/// `test-vfs`: stage 8's exit programs, on each architecture asked for.
+///
+/// The program goes into the initramfs, at `/bin/busybox`, rather than into
+/// the kernel: loading it from a file is part of what stage 8 is for. Every
+/// architecture is run even after one fails, because which of the three a
+/// missing call breaks is the report.
+fn test_vfs(args: &Args) -> Result<()> {
+    let init = args.init.as_deref().ok_or_else(|| {
+        Error::new(
+            "test-vfs needs --init PATH, a static busybox for each architecture; \
+             `{arch}` in the path is replaced by the architecture's name",
+        )
+    })?;
+    let commands = vfs::encode(vfs::COMMANDS)?;
+    let mut failed = Vec::new();
+    for arch in args.arches()? {
+        let program = PathBuf::from(init.replace("{arch}", arch.name()));
+        if !program.is_file() {
+            return Err(Error::new(format!(
+                "no program at {} for {arch}",
+                program.display()
+            )));
+        }
+        let loader = cargo::build_loader(arch, args.release)?;
+        let list = paths::build_dir(arch).join("init-commands");
+        vfs::write_if_changed(&list, &commands)?;
+        let kernel = cargo::build_kernel_with_commands(arch, args.release, &list)?;
+        let initramfs = initramfs::build(Some(&program))?;
+        let image = fat::write_image_with(arch, &loader, &kernel, &initramfs)?;
+        if let Err(error) = qemu::test_vfs(arch, &image, &kernel, args) {
+            eprintln!("\n  {error}");
+            failed.push(arch.name());
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::new(format!(
+            "stage 8's exit programs failed on {}",
+            failed.join(", ")
+        )))
+    }
+}
+
 /// Compile both halves for `arch` and assemble the bootable image.
 ///
 /// The kernel ELF comes back beside the image, because it is what a panic
 /// report's backtrace is resolved against: the image holds the same kernel
 /// with nothing to look a symbol up in.
-fn build_image(arch: Arch, args: &Args) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let (loader, kernel) = build_halves(arch, args)?;
     let image = fat::write_image(arch, &loader, &kernel)?;
     Ok((image, kernel))
@@ -211,7 +260,7 @@ fn build_image(arch: Arch, args: &Args) -> Result<(std::path::PathBuf, std::path
 /// A board has its own filesystem already, put there by the vendor's firmware,
 /// so what it wants is the two files rather than something to write over the
 /// card with.
-fn build_halves(arch: Arch, args: &Args) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+fn build_halves(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel(arch, args.release)?;
     Ok((loader, kernel))
