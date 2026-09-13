@@ -226,9 +226,11 @@ pub(crate) fn test_shell(arch: Arch, image: &Path, kernel: &Path, args: &Args) -
 /// As with [`test_shell`], only what follows the boot marker counts.
 pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> Result<()> {
     let commands = crate::vfs::COMMANDS;
+    let applets = crate::vfs::APPLETS;
     println!(
-        "  {arch}: running {} programs under QEMU (timeout {}s)",
+        "  {arch}: running {} programs and {} applets under QEMU (timeout {}s)",
         commands.len(),
+        applets.len(),
         args.timeout
     );
     let watched = watch(arch, image, kernel, args, crate::vfs::DONE)?;
@@ -248,25 +250,52 @@ pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> 
         )),
     };
 
-    match (crate::vfs::judge(commands, after_boot), ending) {
-        (Ok(passed), None) => {
-            for line in passed {
-                println!("  {arch}: {line}");
-            }
-            println!("  {arch}: stage 8's exit programs all passed");
-            Ok(())
-        }
-        (Ok(_), Some(ending)) => Err(Error::new(format!(
-            "{arch}: {ending}.\n  Serial output is in {log}"
-        ))),
-        (Err(failed), ending) => Err(Error::new(format!(
-            "{arch}: {}{} of {} programs failed:\n    {}\n  Serial output is in {log}",
-            ending.map_or_else(String::new, |ending| format!("{ending}; ")),
-            failed.len(),
+    // The exit criterion and the applets are judged and reported apart, so
+    // that the criterion's line means what it did before the applets were
+    // added, whatever they do.
+    let groups = [
+        (
+            commands,
+            0,
+            "programs",
+            "stage 8's exit programs all passed",
+        ),
+        (
+            applets,
             commands.len(),
-            failed.join("\n    ")
-        ))),
+            "applets",
+            "stage 8's applets all passed",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (group, first, what, all_passed) in groups {
+        match (crate::vfs::judge(group, first, after_boot), &ending) {
+            (Ok(passed), None) => {
+                for line in passed {
+                    println!("  {arch}: {line}");
+                }
+                println!("  {arch}: {all_passed}");
+            }
+            (Ok(_), Some(_)) => {}
+            (Err(failed), _) => failures.push(format!(
+                "{} of {} {what} failed:\n    {}",
+                failed.len(),
+                group.len(),
+                failed.join("\n    ")
+            )),
+        }
     }
+    if ending.is_none() && failures.is_empty() {
+        return Ok(());
+    }
+    let why = match (ending, failures.is_empty()) {
+        (Some(ending), true) => format!("{ending}."),
+        (Some(ending), false) => format!("{ending}; {}", failures.join("\n  ")),
+        (None, _) => failures.join("\n  "),
+    };
+    Err(Error::new(format!(
+        "{arch}: {why}\n  Serial output is in {log}"
+    )))
 }
 
 /// How a watched boot ended.

@@ -22,6 +22,17 @@
 //! checked, and the scripts exit with statuses that are not zero, so that a
 //! shell that died and reported success cannot pass.
 //!
+//! # Applets, reported apart
+//!
+//! After the criterion's three, the same boot runs [`APPLETS`]: busybox
+//! applets that a sweep of the static Alpine build found failing, each for a
+//! filesystem piece that has since been added -- `/proc/<pid>/cwd` and
+//! `root`, `/proc/sys`, `/proc/partitions`, `/proc/stat`, and `mknod` of a
+//! character device. They guard those pieces against coming undone. They are
+//! not the criterion, so they are judged and reported as a group of their own:
+//! the criterion's line says what it always said, and a failing applet fails
+//! the test on a line of its own.
+//!
 //! # The log
 //!
 //! `kernel/src/init.rs` writes `  init     command N: ARGV` before command `N`
@@ -61,6 +72,14 @@ pub(crate) enum Expect {
     ProcListing,
     /// Lines that each parse as a line of `/proc/<pid>/maps`, in order.
     Maps,
+    /// Lines of these shapes, in this order, among others. In a shape, `#`
+    /// stands for a decimal number and `*` for any text, none included; every
+    /// other character stands for itself. For output that differs from boot
+    /// to boot or from one architecture to another: a pid, a CPU count, a
+    /// column's width.
+    Shaped(&'static [&'static str]),
+    /// No output, or blank lines only.
+    Nothing,
 }
 
 /// One program for the kernel to run.
@@ -142,6 +161,118 @@ pub(crate) const COMMANDS: &[Command] = &[
             "tmpfs: removed",
         ]),
     },
+];
+
+/// Changes the host name through `/proc/sys`, reads it back through `uname`,
+/// and puts the old name back whatever happened, so that no later applet sees
+/// this one's name.
+const HOSTNAME_SCRIPT: &str = r#"old=$(uname -n) || exit 1
+sysctl -w kernel.hostname=applets && uname -n
+sysctl -w "kernel.hostname=$old" && [ "$(uname -n)" = "$old" ] && echo "hostname: restored"
+exit 4
+"#;
+
+/// The applets, run in the same boot after [`COMMANDS`] and reported apart
+/// from them. Each guards a filesystem piece a busybox applet was found to
+/// need, and checks what the applet printed, not only that it exited.
+///
+/// A program the shell is not needed for is started by the kernel directly,
+/// so that its status is the applet's own. The rest are `sh -c` scripts that
+/// end in a status of their own, for the reason [`COMMANDS`]' script does.
+pub(crate) const APPLETS: &[Command] = &[
+    // `/proc/<pid>/cwd` and `root`: the directory the shell moved to, and
+    // the root it has.
+    Command {
+        argv: &[
+            "sh",
+            "-c",
+            "cd /tmp && pwdx $$ && readlink /proc/$$/root; exit 3",
+        ],
+        status: 3,
+        expect: Expect::Shaped(&["#: /tmp", "/"]),
+    },
+    // `/proc/sys`: a write the file refuses fails, and leaves the value
+    // alone, which the read after it shows.
+    Command {
+        argv: &["sysctl", "-w", "kernel.ostype=x"],
+        status: 1,
+        expect: Expect::Shaped(&["sysctl: *kernel.ostype*"]),
+    },
+    Command {
+        argv: &["sysctl", "kernel.ostype"],
+        status: 0,
+        expect: Expect::Lines(&["kernel.ostype = Linux"]),
+    },
+    Command {
+        argv: &["sysctl", "kernel.pid_max"],
+        status: 0,
+        expect: Expect::Shaped(&["kernel.pid_max = #"]),
+    },
+    Command {
+        argv: &["sh", "-c", HOSTNAME_SCRIPT],
+        status: 4,
+        expect: Expect::Shaped(&[
+            "kernel.hostname = applets",
+            "applets",
+            "kernel.hostname = *",
+            "hostname: restored",
+        ]),
+    },
+    // `/proc/partitions`: empty, with no block device, and `fdisk -l`,
+    // which reads it, finding nothing to list rather than dying of a signal.
+    Command {
+        argv: &["cat", "/proc/partitions"],
+        status: 0,
+        expect: Expect::Nothing,
+    },
+    Command {
+        argv: &["fdisk", "-l"],
+        status: 0,
+        expect: Expect::Nothing,
+    },
+    // `/proc/stat`: each reader's summary of the CPUs.
+    Command {
+        argv: &["top", "-b", "-n1"],
+        status: 0,
+        expect: Expect::Shaped(&["Mem: *", "CPU: *% usr *% idle*", "Load average:*"]),
+    },
+    Command {
+        argv: &["mpstat"],
+        status: 0,
+        expect: Expect::Shaped(&["*CPU *%usr*%idle", "* all *"]),
+    },
+    Command {
+        argv: &["iostat", "-c"],
+        status: 0,
+        expect: Expect::Shaped(&["avg-cpu: *%user*%idle"]),
+    },
+    // `mknod` of character devices, each opening as its devfs device: null
+    // swallows a write and reads empty, zero reads zeros, and a number no
+    // driver has fails to open.
+    Command {
+        argv: &[
+            "sh",
+            "-c",
+            "mknod /tmp/n c 1 3 && echo hi > /tmp/n && head -c 4 /tmp/n | wc -c; exit 5",
+        ],
+        status: 5,
+        expect: Expect::Lines(&["0"]),
+    },
+    Command {
+        argv: &[
+            "sh",
+            "-c",
+            "mknod /tmp/z c 1 5 && head -c 8 /tmp/z | od -An -tx1; exit 6",
+        ],
+        status: 6,
+        expect: Expect::Lines(&[" 00 00 00 00 00 00 00 00"]),
+    },
+    Command {
+        argv: &["sh", "-c", "mknod /tmp/x c 240 0 && cat /tmp/x"],
+        status: 1,
+        expect: Expect::Shaped(&["cat: *: No such device or address"]),
+    },
+    // `mount -t proc` and `mount -t devtmpfs` go here once mount takes them.
 ];
 
 /// The list as `kernel/build.rs` takes it: each argument ends in a NUL, and
@@ -438,11 +569,40 @@ fn maps(output: &[String]) -> Check {
     Ok(())
 }
 
-/// `want` appears among `output`, in order.
-fn in_order(output: &[String], want: &[&str]) -> Check {
+/// Whether `line` has the shape `shape`, as [`Expect::Shaped`] describes:
+/// `#` a run of digits, `*` any text, anything else itself.
+pub(crate) fn shaped(shape: &str, line: &str) -> bool {
+    fn from(shape: &[u8], line: &[u8]) -> bool {
+        match shape.split_first() {
+            None => line.is_empty(),
+            Some((b'*', rest)) => {
+                (0..=line.len()).any(|at| line.get(at..).is_some_and(|tail| from(rest, tail)))
+            }
+            Some((b'#', rest)) => {
+                let digits = line.iter().take_while(|b| b.is_ascii_digit()).count();
+                (1..=digits).any(|at| line.get(at..).is_some_and(|tail| from(rest, tail)))
+            }
+            Some((byte, rest)) => line
+                .split_first()
+                .is_some_and(|(first, tail)| first == byte && from(rest, tail)),
+        }
+    }
+    from(shape.as_bytes(), line.as_bytes())
+}
+
+/// Nothing but blank lines.
+fn nothing(output: &[String]) -> Check {
+    match output.iter().find(|line| !line.trim().is_empty()) {
+        Some(line) => Err(format!("it printed `{line}`, where nothing was expected")),
+        None => Ok(()),
+    }
+}
+
+/// `want` appears among `output`, in order, each line as `matches` says.
+fn in_order(output: &[String], want: &[&str], matches: fn(&str, &str) -> bool) -> Check {
     let mut remaining = output.iter();
     for line in want {
-        if !remaining.any(|got| got.trim_end() == *line) {
+        if !remaining.any(|got| matches(line, got.trim_end())) {
             return Err(format!(
                 "its output is missing `{line}`, or it came out of order"
             ));
@@ -475,14 +635,45 @@ fn verdict(command: &Command, ran: Option<&Ran>) -> Check {
         Some(Ending::Exited(_)) => {}
     }
     let checked = match command.expect {
-        Expect::Lines(want) => in_order(&ran.output, want),
+        Expect::Lines(want) => in_order(&ran.output, want, |want, got| want == got),
         Expect::ProcListing => proc_listing(&ran.output),
         Expect::Maps => maps(&ran.output),
+        Expect::Shaped(want) => in_order(&ran.output, want, shaped),
+        Expect::Nothing => nothing(&ran.output),
     };
-    checked.map_err(|why| format!("{why}{unanswered}"))
+    checked.map_err(|why| format!("{why}; its output began {shown:?}{unanswered}"))
 }
 
-/// Judge a log, from the boot marker on, against `commands`.
+/// The longest one-line script a command's name quotes.
+const NAMED_SCRIPT: usize = 80;
+
+/// A command as a report names it: its first two arguments, and a script's
+/// text when it is one short line, which is what tells one applet's `sh -c`
+/// from the next.
+fn name(command: &Command) -> String {
+    let mut name = command
+        .argv
+        .iter()
+        .take(2)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if let ["sh", "-c", script] = command.argv
+        && !script.contains('\n')
+    {
+        let quoted: String = script.chars().take(NAMED_SCRIPT).collect();
+        let more = if quoted.len() < script.len() {
+            "..."
+        } else {
+            ""
+        };
+        name = format!("{name} '{quoted}{more}'");
+    }
+    name
+}
+
+/// Judge a log, from the boot marker on, against `commands`, the first of
+/// which the log numbers `first`.
 ///
 /// # Errors
 ///
@@ -491,6 +682,7 @@ fn verdict(command: &Command, ran: Option<&Ran>) -> Check {
 /// which of them a missing call breaks is the report.
 pub(crate) fn judge(
     commands: &[Command],
+    first: usize,
     lines: &[String],
 ) -> std::result::Result<Vec<String>, Vec<String>> {
     if let Some(line) = lines.iter().find(|line| line.contains(UNREADABLE)) {
@@ -499,14 +691,8 @@ pub(crate) fn judge(
     let ran = split(lines);
     let mut passed = Vec::new();
     let mut failed = Vec::new();
-    for (index, command) in commands.iter().enumerate() {
-        let name = command
-            .argv
-            .iter()
-            .take(2)
-            .copied()
-            .collect::<Vec<_>>()
-            .join(" ");
+    for (index, command) in (first..).zip(commands) {
+        let name = name(command);
         match verdict(command, ran.get(&index)) {
             Ok(()) => passed.push(format!("command {index} ({name}) passed")),
             Err(why) => failed.push(format!("command {index} ({name}): {why}")),

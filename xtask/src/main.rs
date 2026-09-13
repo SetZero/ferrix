@@ -94,7 +94,7 @@ COMMANDS:
     run           Boot the image under QEMU, attached to the terminal
     test-boot     Boot the image under QEMU and assert the kernel came up
     test-shell    Boot with a static busybox built in and require its script's output
-    test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs
+    test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     check         Run every quality gate (fmt, clippy, layering, audits)
     model-doc     Regenerate docs/generated/ from the SysML model
     flash         Copy the loader and kernel onto a board's boot partition
@@ -200,7 +200,8 @@ fn run() -> Result<()> {
     }
 }
 
-/// `test-vfs`: stage 8's exit programs, on each architecture asked for.
+/// `test-vfs`: stage 8's exit programs, then its applets, on each
+/// architecture asked for.
 ///
 /// The program goes into the initramfs, at `/bin/busybox`, rather than into
 /// the kernel: loading it from a file is part of what stage 8 is for. Every
@@ -213,7 +214,7 @@ fn test_vfs(args: &Args) -> Result<()> {
              `{arch}` in the path is replaced by the architecture's name",
         )
     })?;
-    let commands = vfs::encode(vfs::COMMANDS)?;
+    let commands = vfs::encode(&[vfs::COMMANDS, vfs::APPLETS].concat())?;
     let mut failed = Vec::new();
     for arch in args.arches()? {
         let program = program_for(init, arch)?;
@@ -232,7 +233,7 @@ fn test_vfs(args: &Args) -> Result<()> {
         Ok(())
     } else {
         Err(Error::new(format!(
-            "stage 8's exit programs failed on {}",
+            "stage 8's exit programs or applets failed on {}",
             failed.join(", ")
         )))
     }

@@ -4,13 +4,24 @@ fn owned(lines: &[&str]) -> Vec<String> {
     lines.iter().map(|line| (*line).to_owned()).collect()
 }
 
+/// Every command the kernel runs, the criterion's and then the applets.
+fn every_command() -> impl Iterator<Item = &'static Command> {
+    COMMANDS.iter().chain(APPLETS)
+}
+
 /// The log a kernel that passes every command would write.
 fn passing_log() -> Vec<String> {
     let mut log = owned(&["FERRIX-BOOT-OK stages 1-9"]);
-    for (index, command) in COMMANDS.iter().enumerate() {
+    for (index, command) in every_command().enumerate() {
         log.push(format!("  init     command {index}: {}", command.argv[0]));
         match command.expect {
             Expect::Lines(lines) => log.extend(owned(lines)),
+            Expect::Shaped(shapes) => log.extend(
+                shapes
+                    .iter()
+                    .map(|shape| shape.replace('#', "1").replace('*', "x")),
+            ),
+            Expect::Nothing => {}
             Expect::ProcListing => {
                 log.extend(owned(&[
                     "/proc:", "1", "self", "", "/proc/1:", "maps", "exe",
@@ -49,6 +60,7 @@ fn the_list_encodes_as_nul_terminated_arguments_and_empty_ones_between_commands(
         b"ls\0-R\0\0sh\0-c\0echo a\necho b\0\0"
     );
     assert!(encode(COMMANDS).unwrap().ends_with(b"\0\0"));
+    assert!(encode(APPLETS).unwrap().ends_with(b"\0\0"));
 }
 
 #[test]
@@ -65,7 +77,7 @@ fn the_list_refuses_what_its_encoding_cannot_carry() {
 
 #[test]
 fn every_program_is_an_applet_the_initramfs_links() {
-    for command in COMMANDS {
+    for command in every_command() {
         assert!(
             crate::initramfs::APPLETS.contains(&command.argv[0]),
             "{} is not linked in /bin",
@@ -76,14 +88,191 @@ fn every_program_is_an_applet_the_initramfs_links() {
 
 #[test]
 fn no_script_exits_zero_and_no_expectation_is_empty() {
-    for command in COMMANDS {
+    for command in every_command() {
         if command.argv[0] == "sh" {
             assert_ne!(command.status, 0, "a dead shell reports 0");
         }
-        if let Expect::Lines(lines) = command.expect {
+        if let Expect::Lines(lines) | Expect::Shaped(lines) = command.expect {
             assert!(!lines.is_empty(), "{:?} expects no lines", command.argv);
         }
     }
+}
+
+#[test]
+fn shapes_stand_hashes_for_numbers_and_stars_for_any_text() {
+    assert!(shaped("#: /tmp", "60: /tmp"));
+    assert!(!shaped("#: /tmp", ": /tmp"), "a number has a digit");
+    assert!(!shaped("#: /tmp", "6x: /tmp"));
+    assert!(
+        !shaped("#: /tmp", "60: /tmp/vfs"),
+        "a shape matches the whole line"
+    );
+    assert!(shaped("kernel.pid_max = #", "kernel.pid_max = 32768"));
+    assert!(!shaped("kernel.pid_max = #", "kernel.pid_max = "));
+    assert!(shaped("* all *", "00:00:05     all   18.26    0.00"));
+    assert!(!shaped("* all *", "00:00:05     CPU    %usr"));
+    assert!(
+        shaped("Load average:*", "Load average:"),
+        "a star can be empty"
+    );
+    assert!(shaped("plain", "plain"));
+    assert!(!shaped("plain", "plainer"));
+}
+
+#[test]
+fn nothing_allows_blank_lines_and_no_more() {
+    assert_eq!(nothing(&[]), Ok(()));
+    assert_eq!(nothing(&owned(&["", "  "])), Ok(()));
+    assert!(nothing(&owned(&["", "major minor  #blocks  name"])).is_err());
+}
+
+#[test]
+fn a_one_line_script_is_named_by_its_text() {
+    let short = Command {
+        argv: &["sh", "-c", "pwdx $$; exit 3"],
+        status: 3,
+        expect: Expect::Nothing,
+    };
+    assert_eq!(name(&short), "sh -c 'pwdx $$; exit 3'");
+    let long = Command {
+        argv: &[
+            "sh",
+            "-c",
+            "echo 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 \
+             0123456789 0123456789; exit 3",
+        ],
+        status: 3,
+        expect: Expect::Nothing,
+    };
+    let named = name(&long);
+    assert!(named.ends_with(" 012345678...'"), "{named}");
+    assert_eq!(named.len(), "sh -c ''...".len() + NAMED_SCRIPT);
+    assert_eq!(
+        name(&COMMANDS[2]),
+        "sh -c",
+        "a script of many lines is not quoted"
+    );
+    assert_eq!(name(&COMMANDS[0]), "ls -R");
+}
+
+/// What the applets printed on `x86_64`, from `cargo xtask test-vfs`: the
+/// output the shapes were written against.
+const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
+    (3, &["60: /tmp", "/"]),
+    (
+        4,
+        &["sysctl: error setting key 'kernel.ostype': Permission denied"],
+    ),
+    (5, &["kernel.ostype = Linux"]),
+    (6, &["kernel.pid_max = 32768"]),
+    (
+        7,
+        &[
+            "kernel.hostname = applets",
+            "applets",
+            "kernel.hostname = ferrix",
+            "hostname: restored",
+        ],
+    ),
+    (8, &[]),
+    (9, &[]),
+    (
+        10,
+        &[
+            "Mem: 3964K used, 507124K free, 0K shrd, 0K buff, 0K cached",
+            "CPU:   2% usr   0% sys   0% nic  97% idle   0% io   0% irq   0% sirq",
+            "Load average: ",
+            "  PID  PPID USER     STAT   VSZ %VSZ CPU %CPU COMMAND",
+            "   74     1 root     R    10260   2%   2   0% {busybox} top -b -n1",
+            "",
+        ],
+    ),
+    (
+        11,
+        &[
+            "Linux 6.1.0-ferrix (ferrix)\t01/01/70\t_x86_64_\t(4 CPU)",
+            "",
+            "00:00:05     CPU    %usr   %nice    %sys %iowait    %irq   %soft  %steal  \
+             %guest   %idle",
+            "00:00:05     all   18.26    0.00    0.00    0.00    0.00    0.00    0.00    \
+             0.00   81.74",
+        ],
+    ),
+    (
+        12,
+        &[
+            "Linux 6.1.0-ferrix (ferrix) \t01/01/70 \t_x86_64_\t(4 CPU)",
+            "",
+            "avg-cpu:  %user   %nice %system %iowait  %steal   %idle",
+            "          18.27    0.00    0.00    0.00    0.00   81.73",
+            "",
+        ],
+    ),
+    (13, &["0"]),
+    (14, &[" 00 00 00 00 00 00 00 00"]),
+    (15, &["cat: can't open '/tmp/x': No such device or address"]),
+];
+
+/// A log of the applets alone, numbered after the criterion's commands, each
+/// printing `output` and exiting with its expected status.
+fn applets_log(outputs: &[(usize, &[&str])]) -> Vec<String> {
+    let mut log = owned(&["FERRIX-BOOT-OK stages 1-9"]);
+    for (index, output) in outputs {
+        let command = &APPLETS[index - COMMANDS.len()];
+        log.push(format!("  init     command {index}: {}", command.argv[0]));
+        log.extend(owned(output));
+        log.push(format!(
+            "  init     command {index} exited with {}",
+            command.status
+        ));
+    }
+    log
+}
+
+#[test]
+fn the_applets_pass_on_what_busybox_printed_on_ferrix() {
+    assert_eq!(APPLETS_ON_X86_64.len(), APPLETS.len());
+    let log = applets_log(APPLETS_ON_X86_64);
+    let passed = judge(APPLETS, COMMANDS.len(), &log).unwrap();
+    assert_eq!(passed.len(), APPLETS.len());
+    assert!(passed[0].starts_with("command 3 (sh -c 'cd /tmp && pwdx"));
+}
+
+#[test]
+fn a_failing_applet_is_named_by_its_number_with_its_output() {
+    let mut outputs = APPLETS_ON_X86_64.to_vec();
+    // `/proc/stat` gone: top prints its memory and no CPU line.
+    outputs[7].1 = &["Mem: 3964K used, 507124K free, 0K shrd, 0K buff, 0K cached"];
+    // A character node that opens as nothing, rather than as null.
+    outputs[10].1 = &["4"];
+    let failed = judge(APPLETS, COMMANDS.len(), &applets_log(&outputs)).unwrap_err();
+    assert_eq!(failed.len(), 2, "{failed:#?}");
+    assert!(failed[0].starts_with("command 10 (top -b)"), "{failed:#?}");
+    assert!(failed[0].contains("CPU: *% usr *% idle*"), "{failed:#?}");
+    assert!(failed[0].contains("507124K free"), "the output is shown");
+    assert!(
+        failed[1].starts_with("command 13 (sh -c 'mknod /tmp/n"),
+        "{failed:#?}"
+    );
+    assert!(failed[1].contains("[\"4\"]"), "{failed:#?}");
+}
+
+#[test]
+fn the_criterion_is_judged_apart_from_the_applets() {
+    let log = passing_log();
+    assert_eq!(judge(COMMANDS, 0, &log).unwrap().len(), COMMANDS.len());
+    assert_eq!(
+        judge(APPLETS, COMMANDS.len(), &log).unwrap().len(),
+        APPLETS.len()
+    );
+    // An applet that never ends leaves the criterion passing.
+    let last = COMMANDS.len() + APPLETS.len() - 1;
+    let mut log = log;
+    log.retain(|line| !line.contains(&format!("command {last} exited")));
+    assert!(judge(COMMANDS, 0, &log).is_ok());
+    let failed = judge(APPLETS, COMMANDS.len(), &log).unwrap_err();
+    assert_eq!(failed.len(), 1);
+    assert!(failed[0].contains("never exited"), "{failed:#?}");
 }
 
 #[test]
@@ -241,7 +430,7 @@ fn maps_must_ascend_without_overlap_and_not_be_empty() {
 
 #[test]
 fn a_passing_log_passes() {
-    let passed = judge(COMMANDS, &passing_log()).unwrap();
+    let passed = judge(COMMANDS, 0, &passing_log()).unwrap();
     assert_eq!(passed.len(), COMMANDS.len());
 }
 
@@ -262,7 +451,7 @@ fn every_failure_is_reported_with_the_calls_that_went_unanswered() {
         "  syscall  Dup2 (number 33) answered ENOSYS".to_owned(),
     );
 
-    let failed = judge(COMMANDS, &log).unwrap_err();
+    let failed = judge(COMMANDS, 0, &log).unwrap_err();
     assert_eq!(failed.len(), 2, "{failed:#?}");
     assert!(failed[0].starts_with("command 1 (cat /proc/self/maps)"));
     assert!(failed[1].starts_with("command 2 (sh -c)"));
@@ -277,7 +466,7 @@ fn a_command_that_never_ends_or_never_starts_fails() {
     log.retain(|line| {
         !line.contains(&format!("command {last} exited")) && !line.contains("command 0")
     });
-    let failed = judge(COMMANDS, &log).unwrap_err();
+    let failed = judge(COMMANDS, 0, &log).unwrap_err();
     assert!(failed[0].contains("never started"), "{failed:#?}");
     assert!(
         failed.last().unwrap().contains("never exited"),
@@ -289,7 +478,7 @@ fn a_command_that_never_ends_or_never_starts_fails() {
 fn an_unreadable_program_is_the_whole_report() {
     let log = owned(&["  init     /bin/busybox could not be read: errno 2"]);
     assert_eq!(
-        judge(COMMANDS, &log).unwrap_err(),
+        judge(COMMANDS, 0, &log).unwrap_err(),
         owned(&["init     /bin/busybox could not be read: errno 2"])
     );
 }
