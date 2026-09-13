@@ -26,16 +26,15 @@ somebody else's static musl busybox running a script on every architecture,
 checked by `cargo xtask test-shell` rather than the boot test because it needs
 a binary the repository does not carry. Since the exit, a program can
 `fork`, `execve` and `wait4`; its section lists what the Linux surface still
-owes. Stages 8 and 9 have both begun where the continuous rule
-says a stage should: their byte-level halves are in `libs/` — the VFS in
-`libs/vfs`, the handle table in `libs/objects`. Stage 9's first kernel objects
-— handle tables, channels carrying handles, VMOs — are in the boot test, and
-so is most of stage 8: the root filesystem unpacked from an initramfs, every
-process's descriptor table, the calls that take a path, `/dev` and `/proc`.
-Stage 8's exit is `cargo xtask test-vfs` passing as the criterion is written —
-`ls -R /proc`, `cat /proc/self/maps` and one shell script whose applets are
-forked programs — on all three architectures, for the reason stage 7's is a
-test of its own.
+owes. Stage 8's self-checks are in the boot test — the root filesystem
+unpacked from an initramfs, every process's descriptor table, the calls that
+take a path, pipes, `/dev` and `/proc` — and its exit, `cargo xtask test-vfs`
+running `ls -R /proc`, `cat /proc/self/maps` and one shell script whose applets
+are forked programs, passes on all three architectures; it is a test of its
+own for the reason stage 7's is. Stage 9 has begun where the continuous rule
+says a stage should, with its byte-level half, the handle table, in
+`libs/objects`, and its first kernel objects — handle tables, channels carrying
+handles, VMOs — are in the boot test.
 Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
 and its first kernel code — PCI enumeration, device nodes with MSI-X vectors a
 driver can be given, and a device driven by DMA and answering by MSI-X from the
@@ -1087,17 +1086,18 @@ every architecture. The umask is per process, 0o022 to start, and applies to
 descriptor table and a root and working directory, each behind an `Arc` so
 that `clone` can share them where `CLONE_FILES` and `CLONE_FS` ask and copy
 them where they do not. A new process's descriptors 0, 1 and 2 are one open
-description of `/dev/console`, whose inode carries the line discipline the
-shell prompt depends on. `openat`, `close`, `read`, `write`, `readv`,
+description of `/dev/console`. `openat`, `close`, `read`, `write`, `readv`,
 `writev`, `pread64`, `pwrite64`, `lseek` and `_llseek`, `dup`, `dup2`, `dup3`,
 `fcntl` and `ftruncate` answer through it. `fcntl(F_GETFL)` reports `O_RDWR` on
 the console, which is the one thing busybox's `printf` needed before it would
 print, and stage 7's shell test has its `printf` line back. The `O_*` bits
 x86-64 and the Arm architectures number differently are tables in
 `libs/linux-abi`, chosen through the architecture facade. `ioctl` on the
-console goes to `syscall/tty.rs`, which refuses `TCGETS` on purpose: with it
-answered, `sh -i` switches the terminal to raw mode and echoes for itself,
-doubling every character over the line discipline.
+console goes to `syscall/tty.rs`. It refused `TCGETS` while the console edited
+and echoed every line itself, because `sh -i` would then switch to raw mode
+and echo as well, doubling every character. Since stage 7 made the console a
+terminal that honours `ICANON` and `ECHO` (bc8c64b, 6de8907), `TCGETS`,
+`TCSETS`, `TIOCGWINSZ` and the job-control requests are answered.
 
 **Done — `/dev` and `/proc`.** devfs holds `null`, `zero`, `full`, `random`,
 `urandom`, `tty` and `console`, numbered as Linux numbers them. procfs renders
@@ -1112,7 +1112,7 @@ process now has a pid from a registry that finds a live process by it.
 
 ```
   devfs    7 nodes numbered as Linux numbers them; zero, null, full and urandom do what they are for
-  procfs   20 names listed and walked back to, 4 maps lines parsed, 2 of them named
+  procfs   21 names listed and walked back to, 4 maps lines parsed, 2 of them named
 ```
 
 **Done — pipes, FIFOs, and the calls about filesystems.** `pipe` and `pipe2`
@@ -1171,7 +1171,10 @@ gap was that every self-check measured the frames it leaked and printed the
 count without failing on it; each now fails on a non-zero count, and each
 assertion was shown to fire by leaking a frame on purpose. `vfs_ops` gained
 the property the worst bug broke: after every input, the namespace is still a
-tree.
+tree. After the stage was called done, the path check once failed under load
+with frames it had not leaked: the programs the syscall check had just run
+were reaped inside its measured window. It now waits for the reaper before its
+first count, and fails on a count that rises (e8c98da).
 
 **Left for later stages.**
 
