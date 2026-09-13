@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 ferrix-acpi.workspace = true
+ferrix-blkring.workspace = true
+ferrix-block.workspace = true
 ferrix-bootinfo.workspace = true
 ferrix-fdt.workspace = true
 ferrix-fbtext.workspace = true

@@ -651,6 +651,18 @@ pub(crate) fn wait_for_work() {
     cpu::wait_then_enable_interrupts();
 }
 
+/// Order every store this processor issued before the call against every load
+/// another processor issues after it, for memory shared across processors
+/// without a lock: the block ring's want-bell handshake.
+pub(crate) fn memory_barrier() {
+    // SAFETY: a data synchronisation barrier waits for every memory operation
+    // issued before it to complete; it reads and writes no memory and changes
+    // no flags.
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack, preserves_flags));
+    }
+}
+
 /// Whether this processor is taking interrupts right now.
 pub(crate) fn interrupts_enabled() -> bool {
     // Bit 7 of CPSR is the I bit, set when IRQs are masked.

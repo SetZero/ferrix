@@ -657,6 +657,17 @@ pub(crate) fn wait_for_work() {
     cpu::enable_interrupts_and_halt();
 }
 
+/// Order every store this processor issued before the call against every load
+/// another processor issues after it, for memory shared across processors
+/// without a lock: the block ring's want-bell handshake.
+pub(crate) fn memory_barrier() {
+    // SAFETY: `mfence` only serialises the store buffer; it reads and writes
+    // no memory and changes no flags, and every x86-64 processor has it.
+    unsafe {
+        core::arch::asm!("mfence", options(nostack, preserves_flags));
+    }
+}
+
 /// Whether this processor is taking interrupts right now.
 pub(crate) fn interrupts_enabled() -> bool {
     // Bit 9 of RFLAGS is IF.
