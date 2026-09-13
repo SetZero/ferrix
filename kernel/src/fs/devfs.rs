@@ -105,7 +105,7 @@ use ferrix_vfs::{
 };
 
 use crate::fs;
-use crate::fs::block::{self, BlockDevice};
+use crate::fs::block::BlockDevice;
 use crate::fs::console::console_inode;
 use crate::sync::SpinLock;
 use crate::syscall::time;
@@ -215,9 +215,6 @@ const BLOCK_INO_BASE: u64 = 1 << 32;
 /// the last static node's.
 const BLOCK_CURSOR_BASE: u64 = FIRST_CURSOR + DEVICES.len() as u64;
 
-/// The units `st_blocks` counts in, whatever the sector size.
-const STAT_BLOCK: u64 = 512;
-
 /// A devfs instance.
 #[derive(Debug)]
 pub(crate) struct Devfs {
@@ -279,16 +276,13 @@ impl Disk {
         self.name.get(..self.name_len).unwrap_or_default()
     }
 
-    /// What a node for it reports, as the disk answers now. Asks the device,
-    /// so it is called on a copy taken out of the registry, never under its
-    /// lock.
+    /// What a node for it reports: its serial and number, none of which asks
+    /// the device, since a block node's `stat` carries no size.
     fn node(&self) -> BlockNode {
         BlockNode {
             serial: self.serial,
             major: self.major,
             minor: self.minor,
-            size: block::size_in_bytes(self.device.as_ref()),
-            sector_size: self.device.sector_size(),
         }
     }
 }
@@ -474,10 +468,6 @@ struct BlockNode {
     major: u32,
     /// And minor half.
     minor: u32,
-    /// Sectors times the sector size, in bytes.
-    size: u64,
-    /// Bytes in a sector.
-    sector_size: u32,
 }
 
 /// Which object a node is.
@@ -547,15 +537,15 @@ impl Inode for Node {
                 rdev: makedev(device.major, device.minor),
                 ..directory
             },
+            // Size and blocks zero, as Linux reports a block special file: the
+            // disk's size is asked of the disk (`/proc/partitions`, and
+            // `BLKGETSIZE64` once a block node opens), not of its node.
             (Place::Block(disk), _) => Metadata {
                 ino: block_ino(disk.serial),
                 kind: FileType::BlockDevice,
                 permissions: BLOCK_PERMISSIONS,
                 nlink: 1,
-                size: disk.size,
                 rdev: makedev(disk.major, disk.minor),
-                blocks: disk.size.div_ceil(STAT_BLOCK),
-                block_size: disk.sector_size,
                 ..directory
             },
             _ => directory,

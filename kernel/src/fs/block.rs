@@ -27,15 +27,27 @@ pub(crate) trait BlockDevice: Send + Sync + fmt::Debug {
     /// has gone away (driver dead, unregistered, reset pending) returns EIO:
     /// it never blocks forever and never panics — a mount may outlive the
     /// registration by holding the Arc.
+    ///
+    /// A read may be any number of sectors. The implementation splits it into
+    /// as many requests as its device needs, so a caller never learns the
+    /// device's largest request. A `buf` that is empty, or whose length is not
+    /// a whole number of sectors, is `EINVAL`, never a panic.
     fn read(&self, sector: u64, buf: &mut [u8]) -> Result<(), Errno>;
 
     /// How many sectors the disk has.
+    ///
+    /// This and the other two geometry answers are fixed for the device's
+    /// life. They keep their last values after the device has gone away and
+    /// never panic, because the registry calls them with its lock released,
+    /// possibly after the driver has died.
     fn sectors(&self) -> u64;
 
-    /// How many bytes a sector is.
+    /// How many bytes a sector is. Fixed for the device's life, as
+    /// [`BlockDevice::sectors`] says.
     fn sector_size(&self) -> u32;
 
-    /// Whether the disk refuses writes.
+    /// Whether the disk refuses writes. Fixed for the device's life, as
+    /// [`BlockDevice::sectors`] says.
     fn read_only(&self) -> bool;
 }
 

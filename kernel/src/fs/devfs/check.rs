@@ -6,7 +6,8 @@
 //! all three to what Linux shows: the node listed after the character nodes,
 //! with a listing in pieces neither repeating nor skipping a name across a
 //! registration; `statx` reporting a block device with the registered number
-//! and size; `open` refused with `ENXIO` while `O_PATH` opens; the disk found
+//! and, as Linux does, a size of zero; `open` refused with `ENXIO` while
+//! `O_PATH` opens; the disk found
 //! by number and its sectors read back; exactly its row in
 //! `/proc/partitions`; clashing names and numbers refused, in order; and,
 //! once the registration is dropped, the node, the lookup and the row gone
@@ -311,11 +312,10 @@ fn check_the_node(process: &Process, page: u64, listed_ino: u64) -> Result<(), &
     {
         return Err("statx does not report the number the disk was registered with");
     }
-    if field(offset_of!(Statx, stx_size), 8) != SECTORS * u64::from(SECTOR)
-        || field(offset_of!(Statx, stx_blksize), 4) != u64::from(SECTOR)
-        || field(offset_of!(Statx, stx_blocks), 8) != SECTORS * u64::from(SECTOR) / 512
-    {
-        return Err("statx does not report the disk's size, sector size and 512-byte blocks");
+    // Linux reports a block special file's size and blocks as zero: the disk's
+    // size is the disk's to answer, not its node's.
+    if field(offset_of!(Statx, stx_size), 8) != 0 || field(offset_of!(Statx, stx_blocks), 8) != 0 {
+        return Err("statx reports a size or blocks for a block node, which Linux reports as 0");
     }
     if field(offset_of!(Statx, stx_ino), 8) != listed_ino {
         return Err("the /dev listing and statx disagree about the disk's inode number");
