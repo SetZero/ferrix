@@ -1223,7 +1223,13 @@ Ctrl-C with status 130 and the prompt back at once.
   interrupted read are proven at the kernel's decision, not yet end-to-end by a
   hand-assembled faulting or interrupted-read user program.
 * **Threads**, which nothing single-threaded calls: `CLONE_VM` without
-  `CLONE_VFORK`, and `CLONE_THREAD`, are `ENOSYS`.
+  `CLONE_VFORK`, and `CLONE_THREAD`, are `ENOSYS`. The ground is laid: every
+  program's task runs a `Thread` of its process, and signal state is split as
+  Linux splits it -- the dispositions, the signals sent to the process and
+  `ITIMER_REAL` on the process; the blocked mask, the alternate stack, the
+  signals sent to one thread and its restart state on each thread, which takes
+  its own signals before its process's. Next: `exit` apart from `exit_group`,
+  then `clone(CLONE_THREAD)`.
 * **Three stand-ins, each written down where it lives.** The console is the one
   terminal, its line discipline fed by a thread that looks every twenty
   milliseconds rather than waiting on the receive interrupt, and on x86-64 a
