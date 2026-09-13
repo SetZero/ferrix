@@ -105,11 +105,18 @@ struct Owned {
     compressed: Box<[u8]>,
     plain: Box<[u8]>,
     zstd: Box<[u8]>,
+    /// The checksum tree's node buffer, apart from the operation's own.
+    csum_node: Box<[u8]>,
 }
 
 impl ExtentBuffers for Owned {
-    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut [u8]) {
-        (&mut self.compressed, &mut self.plain, &mut self.zstd)
+    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) {
+        (
+            &mut self.compressed,
+            &mut self.plain,
+            &mut self.zstd,
+            &mut self.csum_node,
+        )
     }
 }
 
@@ -132,6 +139,7 @@ impl Scratch {
             compressed: zeroed(MAX_UNCOMPRESSED),
             plain: zeroed(MAX_UNCOMPRESSED),
             zstd: zeroed(Workspace::SIZE),
+            csum_node: zeroed(MAX_NODE_SIZE as usize),
         };
         Ok(Scratch {
             node: zeroed(MAX_NODE_SIZE as usize),

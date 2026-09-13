@@ -63,6 +63,13 @@ pub const ROOT_TREE_DIR_OBJECTID: u64 = 6;
 pub const CSUM_TREE_OBJECTID: u64 = 7;
 /// The first object id a file may use; everything below is reserved.
 pub const FIRST_FREE_OBJECTID: u64 = 256;
+/// Object id every `EXTENT_CSUM` item in the checksum tree is filed under:
+/// Linux's `BTRFS_EXTENT_CSUM_OBJECTID`, `-10` as a `u64`.
+pub const EXTENT_CSUM_OBJECTID: u64 = 0u64.wrapping_sub(10);
+
+/// Inode flag: the file's data has no checksums, so none are looked up or
+/// verified. Linux's `BTRFS_INODE_NODATASUM`, bit 0.
+pub const INODE_NODATASUM: u64 = 1 << 0;
 /// Object id under which `DEV_ITEM`s are filed in the chunk tree.
 pub const DEV_ITEMS_OBJECTID: u64 = 1;
 

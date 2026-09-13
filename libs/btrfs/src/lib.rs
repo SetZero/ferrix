@@ -86,6 +86,17 @@ pub enum BtrfsError {
         /// The checksum its bytes actually have.
         computed: u32,
     },
+    /// A data sector's CRC-32C disagrees with the checksum tree. A sector of a
+    /// file that should have a checksum and has none is reported the same way,
+    /// with `stored` zero, because that is how Linux reads it.
+    DataChecksum {
+        /// Logical address of the sector.
+        logical: u64,
+        /// The checksum the tree holds for it, or zero where it holds none.
+        stored: u32,
+        /// The checksum the sector's bytes actually have.
+        computed: u32,
+    },
     /// A checksum algorithm this crate does not implement. Carries the raw
     /// `csum_type`: 1 is xxhash64, 2 is sha256, 3 is blake2b.
     UnsupportedChecksum(u16),
@@ -196,6 +207,14 @@ impl fmt::Display for BtrfsError {
                     "checksum is {computed:#010x} but {stored:#010x} was stored"
                 )
             }
+            BtrfsError::DataChecksum {
+                logical,
+                stored,
+                computed,
+            } => write!(
+                f,
+                "data sector at {logical:#x} has checksum {computed:#010x} but {stored:#010x} was stored"
+            ),
             BtrfsError::UnsupportedChecksum(kind) => {
                 write!(f, "checksum type {kind} is not implemented")
             }

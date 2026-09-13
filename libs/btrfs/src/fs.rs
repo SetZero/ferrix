@@ -40,9 +40,11 @@ use core::ops::ControlFlow;
 
 use crate::chunk::ChunkStorage;
 use crate::compress::{self, MAX_UNCOMPRESSED};
+use crate::crc32c::crc32c;
 use crate::items::{
-    DIR_INDEX_KEY, DIR_ITEM_KEY, DirItem, DirItemIter, EXTENT_DATA_KEY, ExtentData, ExtentDataBody,
-    FileExtent, INODE_ITEM_KEY, InodeItem, ROOT_ITEM_KEY, name_hash,
+    CsumItem, DIR_INDEX_KEY, DIR_ITEM_KEY, DirItem, DirItemIter, EXTENT_CSUM_KEY,
+    EXTENT_CSUM_OBJECTID, EXTENT_DATA_KEY, ExtentData, ExtentDataBody, FileExtent, INODE_ITEM_KEY,
+    INODE_NODATASUM, InodeItem, ROOT_ITEM_KEY, name_hash,
 };
 use crate::tree::BtrfsKey;
 use crate::volume::{Device, TreeRoot, Volume};
@@ -81,27 +83,32 @@ pub struct DirEntry<'a> {
     pub kind: u8,
 }
 
-/// The memory a compressed extent is read and expanded in.
+/// The memory a file read works in beyond its node buffer.
 ///
-/// Two buffers of at least [`MAX_UNCOMPRESSED`] bytes and one of at least
-/// [`compress::zstd::Workspace::SIZE`] for zstd's tables, handed out as three disjoint
-/// borrows. A tuple of borrows is one; a mount
-/// implements it over buffers it owns.
+/// Two buffers of at least [`MAX_UNCOMPRESSED`] bytes, one of at least
+/// [`compress::zstd::Workspace::SIZE`] for zstd's tables, and a node buffer of
+/// at least the volume's `nodesize` for the checksum tree, handed out as four
+/// disjoint borrows. The checksum tree needs a node buffer of its own because
+/// data is checked from inside the walk over the file's extents, which holds
+/// the read's main one. A tuple of borrows is one; a mount implements it over
+/// buffers it owns.
 pub trait ExtentBuffers {
-    /// The buffer compressed bytes are read into, the buffer they expand
-    /// into, and the bytes zstd builds its tables in.
-    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut [u8]);
+    /// The buffer compressed bytes, and data being checked, are read into; the
+    /// buffer compressed bytes expand into; the bytes zstd builds its tables
+    /// in; and the checksum tree's node buffer.
+    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut [u8], &mut [u8]);
 }
 
-impl ExtentBuffers for (&mut [u8], &mut [u8], &mut [u8]) {
-    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut [u8]) {
-        (&mut *self.0, &mut *self.1, &mut *self.2)
+impl ExtentBuffers for (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) {
+    fn parts(&mut self) -> (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) {
+        (&mut *self.0, &mut *self.1, &mut *self.2, &mut *self.3)
     }
 }
 
 /// The working memory a file read needs beyond the node buffer.
 ///
-/// Two 128 KiB buffers and the zstd workspace: too large for a kernel stack,
+/// Two 128 KiB buffers, the zstd workspace and a checksum-tree node buffer:
+/// too large for a kernel stack,
 /// and worth keeping between reads because of the extent cache. It owns its
 /// [`ExtentBuffers`] rather than borrowing them, so a mount can keep one
 /// across calls: rebuilt around borrowed buffers on every call, the cache
@@ -120,13 +127,18 @@ struct Expanded {
     disk_num_bytes: u64,
     compression: u8,
     len: usize,
+    /// Whether the compressed bytes were checked against the checksum tree
+    /// before they were expanded. An extent shared with a `NODATASUM` file is
+    /// expanded unchecked for it, and must not be handed to a file whose data
+    /// is checksummed without being checked first.
+    verified: bool,
 }
 
 impl<B: ExtentBuffers> ReadBuffers<B> {
     /// Take over caller-allocated memory: the two extent buffers must hold at
     /// least [`MAX_UNCOMPRESSED`] bytes, and zstd's at least [`compress::zstd::Workspace::SIZE`].
     pub fn new(mut buffers: B) -> Result<Self, BtrfsError> {
-        let (compressed, plain, zstd) = buffers.parts();
+        let (compressed, plain, zstd, _) = buffers.parts();
         let shortest = compressed.len().min(plain.len());
         if shortest < MAX_UNCOMPRESSED {
             return Err(truncated(MAX_UNCOMPRESSED, shortest));
@@ -150,7 +162,7 @@ impl<B: ExtentBuffers> ReadBuffers<B> {
     ) -> Result<&[u8], BtrfsError> {
         // The buffer is about to be overwritten, so whatever it cached is gone.
         self.cached = None;
-        let (_, plain, zstd) = self.buffers.parts();
+        let (_, plain, zstd, _) = self.buffers.parts();
         let out = plain
             .get_mut(..expanded_len(ram_bytes)?)
             .unwrap_or_default();
@@ -160,23 +172,34 @@ impl<B: ExtentBuffers> ReadBuffers<B> {
     }
 
     /// Expand a compressed regular extent, or reuse it if it is the one held.
+    ///
+    /// With `verify`, the compressed bytes are checked against the checksum
+    /// tree before they are expanded, so damage is reported as a checksum
+    /// failure rather than as whatever the decoder makes of it.
     fn expand_extent<D: Device, S: ChunkStorage>(
         &mut self,
         volume: &Volume<S>,
         device: &mut D,
         extent: &ExtentData<'_>,
         file: &FileExtent,
+        verify: bool,
     ) -> Result<&[u8], BtrfsError> {
         let wanted = Expanded {
             disk_bytenr: file.disk_bytenr,
             disk_num_bytes: file.disk_num_bytes,
             compression: extent.compression,
             len: 0,
+            verified: verify,
         };
-        let hit = self
-            .cached
-            .filter(|held| Expanded { len: 0, ..*held } == wanted);
-        let (compressed, plain, zstd) = self.buffers.parts();
+        let hit = self.cached.filter(|held| {
+            let same = Expanded {
+                len: 0,
+                verified: verify,
+                ..*held
+            } == wanted;
+            same && (held.verified || !verify)
+        });
+        let (compressed, plain, zstd, node) = self.buffers.parts();
         let len = match hit {
             Some(held) => held.len,
             None => {
@@ -191,10 +214,13 @@ impl<B: ExtentBuffers> ReadBuffers<B> {
                     })?;
                 let input = compressed.get_mut(..stored).unwrap_or_default();
                 volume.read_logical(device, file.disk_bytenr, input)?;
+                let input = compressed.get(..stored).unwrap_or_default();
+                if verify {
+                    verify_sectors(volume, device, file.disk_bytenr, input, node)?;
+                }
                 let out = plain
                     .get_mut(..expanded_len(extent.ram_bytes)?)
                     .unwrap_or_default();
-                let input = compressed.get(..stored).unwrap_or_default();
                 let mut workspace = compress::zstd::Workspace::new(zstd)?;
                 let len = compress::decompress(
                     extent.compression,
@@ -208,6 +234,60 @@ impl<B: ExtentBuffers> ReadBuffers<B> {
             }
         };
         Ok(plain.get(..len).unwrap_or_default())
+    }
+
+    /// Read `dest.len()` bytes of uncompressed data at logical address `at`,
+    /// checking every sector they touch against the checksum tree first.
+    ///
+    /// Whole sectors are read into the compressed-extent buffer, at most
+    /// [`MAX_UNCOMPRESSED`] bytes at a time, checked, and only the part asked
+    /// for is copied out. That buffer holds nothing the extent cache names, so
+    /// using it here loses nothing.
+    fn read_verified<D: Device, S: ChunkStorage>(
+        &mut self,
+        volume: &Volume<S>,
+        device: &mut D,
+        at: u64,
+        dest: &mut [u8],
+    ) -> Result<(), BtrfsError> {
+        let sector = u64::from(volume.sectorsize());
+        let (scratch, _, _, node) = self.buffers.parts();
+        let room = scratch.len().min(MAX_UNCOMPRESSED) as u64;
+        let window = room - room % sector.max(1);
+        if sector == 0 || window == 0 {
+            return Err(truncated(sector as usize, scratch.len()));
+        }
+        let end = at
+            .checked_add(dest.len() as u64)
+            .ok_or(BtrfsError::NotMapped(at))?;
+        let mut done = 0usize;
+        while done < dest.len() {
+            let want = at
+                .checked_add(done as u64)
+                .ok_or(BtrfsError::NotMapped(at))?;
+            let first = want - want % sector;
+            let last = end
+                .checked_add(sector - 1)
+                .map(|e| e - e % sector)
+                .ok_or(BtrfsError::NotMapped(at))?;
+            let span = (last - first).min(window);
+            let buf = scratch.get_mut(..span as usize).unwrap_or_default();
+            volume.read_logical(device, first, buf)?;
+            let buf = &*buf;
+            verify_sectors(volume, device, first, buf, node)?;
+            let skip = (want - first) as usize;
+            let take = (dest.len() - done).min(buf.len().saturating_sub(skip));
+            if take == 0 {
+                return Err(BtrfsError::NotMapped(at));
+            }
+            if let (Some(to), Some(from)) =
+                (dest.get_mut(done..done + take), buf.get(skip..skip + take))
+            {
+                to.copy_from_slice(from);
+            }
+            done += take;
+        }
+        Ok(())
     }
 }
 
@@ -342,6 +422,8 @@ impl<S: ChunkStorage> Subvolume<'_, S> {
         let inode = self
             .inode(device, ino, node)?
             .ok_or(BtrfsError::MissingInode(ino))?;
+        // A file flagged `NODATASUM` has no checksums to check its data against.
+        let verify = inode.flags & INODE_NODATASUM == 0;
         let remaining = inode.size.saturating_sub(offset);
         let len = usize::try_from(remaining).map_or(out.len(), |r| r.min(out.len()));
         let out = out.get_mut(..len).unwrap_or_default();
@@ -381,14 +463,18 @@ impl<S: ChunkStorage> Subvolume<'_, S> {
                 covered = Some(extent.end(&key, sectorsize).ok_or(bad)?);
                 let place = Placement::new(key.offset, &extent, offset, out.len());
                 if let Some(place) = place {
-                    self.copy_extent(device, &extent, place, out, buffers)?;
+                    self.copy_extent(device, &extent, place, out, buffers, verify)?;
                 }
                 Ok(ControlFlow::Continue(()))
             })?;
         Ok(len)
     }
 
-    /// Copy the part of one extent that `place` selects into `out`.
+    /// Copy the part of one extent that `place` selects into `out`, checking
+    /// data read from disk against the checksum tree when `verify` is set.
+    ///
+    /// Inline extents are covered by their node's checksum, and holes and
+    /// preallocated extents have no data to check.
     fn copy_extent<D: Device, B: ExtentBuffers>(
         &self,
         device: &mut D,
@@ -396,6 +482,7 @@ impl<S: ChunkStorage> Subvolume<'_, S> {
         place: Placement,
         out: &mut [u8],
         buffers: &mut ReadBuffers<B>,
+        verify: bool,
     ) -> Result<(), BtrfsError> {
         let dest = out
             .get_mut(place.dest_start..place.dest_end)
@@ -426,10 +513,14 @@ impl<S: ChunkStorage> Subvolume<'_, S> {
                     .checked_add(file.offset)
                     .and_then(|a| a.checked_add(place.skip))
                     .ok_or(BtrfsError::NotMapped(file.disk_bytenr))?;
-                self.volume.read_logical(device, at, dest)
+                if verify {
+                    buffers.read_verified(self.volume, device, at, dest)
+                } else {
+                    self.volume.read_logical(device, at, dest)
+                }
             }
             ExtentDataBody::Regular(file) => {
-                let plain = buffers.expand_extent(self.volume, device, extent, &file)?;
+                let plain = buffers.expand_extent(self.volume, device, extent, &file, verify)?;
                 copy_from(dest, plain, file.offset.saturating_add(place.skip));
                 Ok(())
             }
@@ -469,6 +560,109 @@ impl Placement {
             dest_end: usize::try_from(to.checked_sub(offset)?).ok()?,
         })
     }
+}
+
+/// Bytes in one CRC-32C in an `EXTENT_CSUM` payload, the only checksum type a
+/// volume this crate mounts can have.
+const CRC32C_SIZE: usize = 4;
+
+/// What an `EXTENT_CSUM` item that breaks Linux's `check_csum_item` is.
+const BAD_CSUM_ITEM: BtrfsError = BtrfsError::BadItem {
+    item_type: EXTENT_CSUM_KEY,
+};
+
+/// Check the whole data sectors in `data`, starting at logical address
+/// `logical`, against the checksum tree.
+///
+/// A sector the tree has no checksum for is compared with zero, which is how
+/// Linux reads it: `btrfs_lookup_bio_sums` in `fs/btrfs/file-item.c` fills a
+/// missing checksum with zeros and warns of a "csum hole", and
+/// `btrfs_data_csum_ok` in `fs/btrfs/inode.c` then compares the sector against
+/// those zeros and fails the read. Only the data-relocation tree reads a hole
+/// as unchecksummed, and this reader never reads that tree.
+///
+/// The items walked are held to Linux's `check_csum_item`: a key offset on
+/// the sector grid, a payload a whole number of checksums long, and no item
+/// starting before the one ahead of it ends.
+fn verify_sectors<D: Device, S: ChunkStorage>(
+    volume: &Volume<S>,
+    device: &mut D,
+    logical: u64,
+    data: &[u8],
+    node: &mut [u8],
+) -> Result<(), BtrfsError> {
+    let sectorsize = volume.sectorsize();
+    let sector = u64::from(sectorsize);
+    let step = sectorsize as usize;
+    if step == 0 || !data.len().is_multiple_of(step) || !logical.is_multiple_of(sector) {
+        return Err(BtrfsError::BadItem {
+            item_type: EXTENT_DATA_KEY,
+        });
+    }
+    let end = logical
+        .checked_add(data.len() as u64)
+        .ok_or(BtrfsError::NotMapped(logical))?;
+    let check = |at: u64, stored: u32| -> Result<(), BtrfsError> {
+        let from = usize::try_from(at - logical).map_err(|_| BtrfsError::NotMapped(at))?;
+        let bytes = data
+            .get(from..from.saturating_add(step))
+            .ok_or(BtrfsError::NotMapped(at))?;
+        let computed = crc32c(bytes);
+        if computed == stored {
+            Ok(())
+        } else {
+            Err(BtrfsError::DataChecksum {
+                logical: at,
+                stored,
+                computed,
+            })
+        }
+    };
+
+    let tree = volume.csum_tree();
+    let probe = BtrfsKey::new(EXTENT_CSUM_OBJECTID, EXTENT_CSUM_KEY, logical);
+    let start = volume
+        .last_at_or_before(device, tree, &probe, node)?
+        .filter(|key| key.objectid == EXTENT_CSUM_OBJECTID && key.item_type == EXTENT_CSUM_KEY)
+        .unwrap_or(probe);
+    // The first sector not yet checked, and where the last item walked ended.
+    let mut next = logical;
+    let mut previous_end: Option<u64> = None;
+    let _: Option<()> = volume.walk(device, tree, start, node, |_, item| {
+        let key = item.key;
+        if key.objectid != EXTENT_CSUM_OBJECTID
+            || key.item_type != EXTENT_CSUM_KEY
+            || key.offset >= end
+        {
+            return Ok(ControlFlow::Break(()));
+        }
+        if !key.offset.is_multiple_of(sector) || !item.data.len().is_multiple_of(CRC32C_SIZE) {
+            return Err(BAD_CSUM_ITEM);
+        }
+        if previous_end.is_some_and(|previous| previous > key.offset) {
+            return Err(BAD_CSUM_ITEM);
+        }
+        let sums = CsumItem::new(key.offset, sectorsize, item.data)?;
+        let covered = (sums.len() as u64)
+            .checked_mul(sector)
+            .and_then(|len| key.offset.checked_add(len))
+            .ok_or(BAD_CSUM_ITEM)?;
+        previous_end = Some(covered);
+        while next < key.offset.min(end) {
+            check(next, 0)?;
+            next += sector;
+        }
+        while next < covered.min(end) {
+            check(next, sums.checksum_for(next).ok_or(BAD_CSUM_ITEM)?)?;
+            next += sector;
+        }
+        Ok(ControlFlow::Continue(()))
+    })?;
+    while next < end {
+        check(next, 0)?;
+        next += sector;
+    }
+    Ok(())
 }
 
 /// Copy `src[at..]` into the front of `dest`, as much as both have. Whatever

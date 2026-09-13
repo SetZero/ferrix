@@ -2053,6 +2053,14 @@ logic `cargo test`, Miri and a fuzzer can reach.
   subvolume is not the top-level tree; it mounts the subvolume, and its
   top-level file is not visible. Each decoder is also checked against an
   independent implementation: `miniz_oxide`, `lzokay-native` and `ruzstd`.
+* **Data checksums.** Every data sector a read takes from disk is checked
+  against the checksum tree before its bytes are used: an uncompressed extent
+  in whole sectors, a compressed one on its on-disk bytes before the decoder
+  sees them. A sector the tree has no checksum for fails, as on Linux, where
+  `btrfs_lookup_bio_sums` expects zeros for a checksum hole and
+  `btrfs_data_csum_ok` fails the read. `NODATASUM` files are read unchecked, and
+  inline extents are covered by their node's checksum. Checksum items are held
+  to `check_csum_item`. A damaged sector reads as an error, never as bytes.
 * `libs/btrfs-vfs` — the mount: stage 8's `FileSystem` and `Inode` over the
   read path, read-only, holding no lock across I/O. Tested through the trait,
   and through `Namespace` at `/mnt` on a tmpfs root.
@@ -2082,8 +2090,6 @@ logic `cargo test`, Miri and a fuzzer can reach.
   in ring 0 would be the first exception to it. What the driver still needs
   beyond stage 10's own list is stage 9's `vmo_map` with bus addresses and
   native process creation.
-* Data checksums from the checksum tree are not verified yet; metadata
-  checksums are.
 * Device numbers are passed through as btrfs stores them, not yet checked
   against how Linux reports them.
 * A file's hole is tested only by construction: `mkfs.btrfs --rootdir` writes a

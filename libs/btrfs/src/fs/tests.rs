@@ -57,6 +57,7 @@ struct Fixture {
     compressed: Vec<u8>,
     plain: Vec<u8>,
     zstd: Vec<u8>,
+    csum_node: Vec<u8>,
 }
 
 impl Fixture {
@@ -68,6 +69,7 @@ impl Fixture {
             compressed: vec![0; MAX_UNCOMPRESSED],
             plain: vec![0; MAX_UNCOMPRESSED],
             zstd: vec![0; compress::zstd::Workspace::SIZE],
+            csum_node: vec![0; 65536],
         }
     }
 }
@@ -144,8 +146,13 @@ fn check_image(name: &str) {
     let f = &mut Fixture::new(packed);
     let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
     let sub = volume.default_subvolume();
-    let mut buffers =
-        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut f.zstd[..])).unwrap();
+    let mut buffers = ReadBuffers::new((
+        &mut f.compressed[..],
+        &mut f.plain[..],
+        &mut f.zstd[..],
+        &mut f.csum_node[..],
+    ))
+    .unwrap();
     let manifest = manifest();
 
     check_listing(
@@ -264,8 +271,13 @@ fn a_read_past_the_end_returns_nothing_and_a_listing_can_resume() {
     let f = &mut Fixture::new(IMAGES[0].1);
     let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
     let sub = volume.default_subvolume();
-    let mut buffers =
-        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut f.zstd[..])).unwrap();
+    let mut buffers = ReadBuffers::new((
+        &mut f.compressed[..],
+        &mut f.plain[..],
+        &mut f.zstd[..],
+        &mut f.csum_node[..],
+    ))
+    .unwrap();
     let entry = resolve(&sub, &mut f.device, b"big.txt", &mut f.node);
     let Target::Inode(ino) = entry.target else {
         panic!("big.txt is a file");
@@ -313,8 +325,13 @@ fn a_hole_reads_as_zeroes() {
     let f = &mut Fixture::new(IMAGES[0].1);
     let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
     let sub = volume.default_subvolume();
-    let mut buffers =
-        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut f.zstd[..])).unwrap();
+    let mut buffers = ReadBuffers::new((
+        &mut f.compressed[..],
+        &mut f.plain[..],
+        &mut f.zstd[..],
+        &mut f.csum_node[..],
+    ))
+    .unwrap();
     let entry = resolve(&sub, &mut f.device, b"sparse.bin", &mut f.node);
     let Target::Inode(ino) = entry.target else {
         panic!("sparse.bin is a file");
@@ -499,8 +516,13 @@ fn a_read_refuses_an_extent_that_starts_inside_the_one_before() {
     let f = &mut Fixture::new(IMAGES[0].1);
     let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
     let sub = volume.default_subvolume();
-    let mut buffers =
-        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut f.zstd[..])).unwrap();
+    let mut buffers = ReadBuffers::new((
+        &mut f.compressed[..],
+        &mut f.plain[..],
+        &mut f.zstd[..],
+        &mut f.csum_node[..],
+    ))
+    .unwrap();
     let Target::Inode(ino) = resolve(&sub, &mut f.device, b"sparse.bin", &mut f.node).target else {
         panic!("sparse.bin is a file");
     };
@@ -537,11 +559,178 @@ fn read_buffers_smaller_than_an_extent_are_refused() {
     let mut small = vec![0u8; 4096];
     let mut plain = vec![0u8; MAX_UNCOMPRESSED];
     let mut zstd = vec![0u8; compress::zstd::Workspace::SIZE];
+    let mut csum_node = vec![0u8; 65536];
     assert!(
         matches!(
-            ReadBuffers::new((&mut small[..], &mut plain[..], &mut zstd[..])),
+            ReadBuffers::new((
+                &mut small[..],
+                &mut plain[..],
+                &mut zstd[..],
+                &mut csum_node[..]
+            )),
             Err(BtrfsError::Truncated { .. })
         ),
         "a 4 KiB buffer cannot hold a compressed extent"
     );
+}
+
+/// Inode number of `path`, and the first extent of its data, which the
+/// fixture makes a regular extent at file offset zero.
+fn first_extent(
+    volume: &Volume<&mut [ChunkMapEntry; 16]>,
+    sub: &Subvolume<'_, &mut [ChunkMapEntry; 16]>,
+    device: &mut PackedDevice,
+    path: &[u8],
+    node: &mut [u8],
+) -> (u64, FileExtent, u8) {
+    let Target::Inode(ino) = resolve(sub, device, path, node).target else {
+        panic!("the fixture's files are in the default subvolume");
+    };
+    let (key, _, payload) = find_item(volume, device, BtrfsKey::new(ino, EXTENT_DATA_KEY, 0), node);
+    assert_eq!(
+        (key.objectid, key.offset),
+        (ino, 0),
+        "the file's first extent"
+    );
+    let mut bytes = [0u8; crate::items::FILE_EXTENT_ITEM_SIZE];
+    device.read_at(payload, &mut bytes).unwrap();
+    let extent = ExtentData::parse_item(&key, &bytes, volume.sectorsize()).unwrap();
+    let ExtentDataBody::Regular(file) = extent.body else {
+        panic!("the file starts with a regular extent");
+    };
+    (ino, file, extent.compression)
+}
+
+#[test]
+fn a_data_sector_that_fails_its_checksum_is_an_error_not_bytes() {
+    let f = &mut Fixture::new(IMAGES[0].1);
+    let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
+    let sub = volume.default_subvolume();
+    let (ino, file, compression) =
+        first_extent(&volume, &sub, &mut f.device, b"random.bin", &mut f.node);
+    assert_eq!(
+        (compression, file.offset),
+        (0, 0),
+        "random data is stored as it is"
+    );
+    assert!(
+        file.disk_num_bytes >= 3 * 4096,
+        "the extent spans several sectors"
+    );
+    let (_, physical) = volume.chunks().map(file.disk_bytenr).unwrap();
+    // Damage the second sector only.
+    f.device.corrupt(physical + 4096 + 100);
+
+    let mut buffers = ReadBuffers::new((
+        &mut f.compressed[..],
+        &mut f.plain[..],
+        &mut f.zstd[..],
+        &mut f.csum_node[..],
+    ))
+    .unwrap();
+    let mut first = vec![0u8; 4096];
+    assert_eq!(
+        sub.read(&mut f.device, ino, 0, &mut first, &mut f.node, &mut buffers),
+        Ok(4096),
+        "the sector before the damage still checks out"
+    );
+    let mut piece = vec![0xAAu8; 100];
+    let error = sub
+        .read(
+            &mut f.device,
+            ino,
+            4096 + 50,
+            &mut piece,
+            &mut f.node,
+            &mut buffers,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            BtrfsError::DataChecksum { logical, stored, computed }
+                if logical == file.disk_bytenr + 4096 && stored != computed
+        ),
+        "a read inside the damaged sector names it: {error:?}"
+    );
+    assert!(
+        piece.iter().all(|&b| b == 0xAA || b == 0),
+        "and hands back none of its bytes"
+    );
+}
+
+#[test]
+fn damage_in_a_compressed_extent_fails_its_checksum_before_it_is_expanded() {
+    let (name, packed) = IMAGES[1];
+    assert_eq!(name, "zlib");
+    let f = &mut Fixture::new(packed);
+    let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
+    let sub = volume.default_subvolume();
+    let (ino, file, compression) =
+        first_extent(&volume, &sub, &mut f.device, b"big.txt", &mut f.node);
+    assert_ne!(compression, 0, "big.txt compresses");
+    let (_, physical) = volume.chunks().map(file.disk_bytenr).unwrap();
+    f.device.corrupt(physical + 10);
+
+    let mut buffers = ReadBuffers::new((
+        &mut f.compressed[..],
+        &mut f.plain[..],
+        &mut f.zstd[..],
+        &mut f.csum_node[..],
+    ))
+    .unwrap();
+    let mut piece = vec![0u8; 1000];
+    let error = sub
+        .read(&mut f.device, ino, 0, &mut piece, &mut f.node, &mut buffers)
+        .unwrap_err();
+    assert!(
+        matches!(error, BtrfsError::DataChecksum { logical, .. } if logical == file.disk_bytenr),
+        "the compressed bytes are checked before the decoder sees them: {error:?}"
+    );
+}
+
+#[test]
+fn a_nodatasum_file_is_read_without_checking_as_linux_reads_it() {
+    let f = &mut Fixture::new(IMAGES[0].1);
+    let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
+    let sub = volume.default_subvolume();
+    let (ino, file, _) = first_extent(&volume, &sub, &mut f.device, b"random.bin", &mut f.node);
+    let (_, physical) = volume.chunks().map(file.disk_bytenr).unwrap();
+    let mut before = [0u8; 4096];
+    f.device.read_at(physical, &mut before).unwrap();
+    f.device.corrupt(physical + 100);
+
+    // Flag the inode NODATASUM, in a leaf checksummed again after the edit.
+    const FLAGS: u64 = 64;
+    let (_, node_at, payload) = find_item(
+        &volume,
+        &mut f.device,
+        BtrfsKey::new(ino, INODE_ITEM_KEY, 0),
+        &mut f.node,
+    );
+    let mut flags = [0u8; 8];
+    f.device.read_at(payload + FLAGS, &mut flags).unwrap();
+    let flags = u64::from_le_bytes(flags) | INODE_NODATASUM;
+    f.device.write(payload + FLAGS, &flags.to_le_bytes());
+    f.device.reseal(node_at);
+
+    let mut buffers = ReadBuffers::new((
+        &mut f.compressed[..],
+        &mut f.plain[..],
+        &mut f.zstd[..],
+        &mut f.csum_node[..],
+    ))
+    .unwrap();
+    let mut after = vec![0u8; 4096];
+    assert_eq!(
+        sub.read(&mut f.device, ino, 0, &mut after, &mut f.node, &mut buffers),
+        Ok(4096),
+        "no checksum is looked up for a NODATASUM file"
+    );
+    assert_eq!(
+        after[100],
+        before[100] ^ 0x10,
+        "so the damage comes through"
+    );
+    assert_eq!(&after[..100], &before[..100], "and nothing else changed");
 }

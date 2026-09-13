@@ -45,8 +45,8 @@ use core::ops::ControlFlow;
 use crate::chunk::{ChunkItem, ChunkMap, ChunkStorage, FIRST_CHUNK_TREE_OBJECTID};
 use crate::fs::{Target, entry_named};
 use crate::items::{
-    CHUNK_ITEM_KEY, DIR_ITEM_KEY, FIRST_FREE_OBJECTID, FS_TREE_OBJECTID, ROOT_ITEM_KEY, RootItem,
-    name_hash,
+    CHUNK_ITEM_KEY, CSUM_TREE_OBJECTID, DIR_ITEM_KEY, FIRST_FREE_OBJECTID, FS_TREE_OBJECTID,
+    ROOT_ITEM_KEY, RootItem, name_hash,
 };
 use crate::superblock::{IncompatFlags, PRIMARY_OFFSET, SUPERBLOCK_SIZE, Superblock};
 use crate::tree::{BtrfsKey, Item, Node, NodeHeader};
@@ -124,6 +124,7 @@ pub struct Volume<S> {
     chunk_tree: TreeRoot,
     root_tree: TreeRoot,
     fs_tree: TreeRoot,
+    csum_tree: TreeRoot,
     subvolume: u64,
     root_dir: u64,
     total_bytes: u64,
@@ -179,6 +180,11 @@ impl<S: ChunkStorage> Volume<S> {
                 level: 0,
                 generation: 0,
             },
+            csum_tree: TreeRoot {
+                bytenr: 0,
+                level: 0,
+                generation: 0,
+            },
             subvolume: FS_TREE_OBJECTID,
             root_dir: 0,
             total_bytes: sb.total_bytes(),
@@ -194,6 +200,14 @@ impl<S: ChunkStorage> Volume<S> {
             generation: root.generation,
         };
         volume.root_dir = root.root_dirid;
+        // Every volume mkfs.btrfs makes has a checksum tree, and Linux refuses
+        // to mount one without it unless told to ignore data checksums.
+        let csums = volume.find_root(device, CSUM_TREE_OBJECTID, node)?;
+        volume.csum_tree = TreeRoot {
+            bytenr: csums.bytenr,
+            level: csums.level,
+            generation: csums.generation,
+        };
         Ok(volume)
     }
 
@@ -231,6 +245,12 @@ impl<S: ChunkStorage> Volume<S> {
     #[must_use]
     pub const fn fs_tree(&self) -> TreeRoot {
         self.fs_tree
+    }
+
+    /// The checksum tree: one `EXTENT_CSUM` item per run of data sectors.
+    #[must_use]
+    pub const fn csum_tree(&self) -> TreeRoot {
+        self.csum_tree
     }
 
     /// Tree id of the default subvolume: [`FS_TREE_OBJECTID`] unless the root
