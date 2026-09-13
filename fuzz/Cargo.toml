@@ -14,6 +14,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+ferrix-acpi = { path = "../libs/acpi" }
 ferrix-cpio = { path = "../libs/cpio" }
 ferrix-elf = { path = "../libs/elf" }
 ferrix-fdt = { path = "../libs/fdt" }
@@ -105,6 +106,13 @@ bench = false
 [[bin]]
 name = "fdt_parse"
 path = "fuzz_targets/fdt_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "acpi_tables"
+path = "fuzz_targets/acpi_tables.rs"
 test = false
 doc = false
 bench = false

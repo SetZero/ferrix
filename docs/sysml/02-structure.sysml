@@ -769,7 +769,9 @@ package FerrixStructure {
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 72;
             doc /* Reached at stage 3: the MADT walk the interrupt controller
-                 * needed. Stage 10 uses the rest. */
+                 * needed. Stage 10 uses the rest. The acpi_tables fuzz
+                 * target reads its input as physical memory and walks it
+                 * from the RSDP down, as the kernel does. */
         }
         #implemented part fdt : LibraryCrate {
             attribute :>> path = "libs/fdt";

@@ -2794,7 +2794,7 @@ at three in the morning against a machine that reboots on a mistake.
 
 | Crate | Waiting for | Tests |
 |---|---|---|
-| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG, GIC MSI frames, DMAR, IORT, and the HPET block's capability register with the arithmetic a 32-bit counter needs. No AML, and there will be none. | 77 |
+| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG, GIC MSI frames, DMAR, IORT, and the HPET block's capability register with the arithmetic a 32-bit counter needs. No AML, and there will be none. Has its fuzz target. | 77 |
 | `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. Has its fuzz target. | 70 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
@@ -2814,14 +2814,14 @@ loader's), `frame`, `heap`, `paging` — that is **706 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has ten:
+asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has eleven:
 `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`, `vfs_ops`,
-`pci_walk`, `btrfs_read`, `block_queue`, `cpio_parse` and `fdt_parse`. Every
-crate in the table above parses bytes that came from outside the system — a
-disk, a firmware table, an archive a stranger built — which is precisely the
-population the rule was written for. The fuzz targets still owed — `acpi`,
-`virtio` and `linux-abi` — are owed *before* the consuming stage starts, not
-when it ships.
+`pci_walk`, `btrfs_read`, `block_queue`, `cpio_parse`, `fdt_parse` and
+`acpi_tables`. Every crate in the table above parses bytes that came from
+outside the system — a disk, a firmware table, an archive a stranger built —
+which is precisely the population the rule was written for. The fuzz targets
+still owed — `virtio` and `linux-abi` — are owed *before* the consuming stage
+starts, not when it ships.
 
 `cpio_parse` asserts more than the absence of a panic: that every name and
 data slice lies inside the archive exactly where the format puts it, that the
@@ -2839,6 +2839,19 @@ their parents declared and exactly the properties after each name, and
 selects. Its seeds are `dtc`-compiled trees holding every binding the crate
 decodes, and token-built shapes `dtc` will not write: NOPs, a property after a
 subnode, nesting at and past the depth limit.
+
+`acpi_tables` reads its input as physical memory and walks it the way the
+kernel does, from an RSDP at address zero through the root table to every
+table listed, and it also reads every table whose signature appears anywhere
+in the input. Each table must be exactly its declared length inside that
+memory; each MADT entry, MCFG allocation, DMAR structure and IORT node must
+decode to the little-endian bytes at the specification's offsets, and be
+called malformed exactly when it is too short for its type; `check_entries`
+must accept a MADT exactly when its entries tile it; and `Acpi::find` must
+return the first listed table of a signature. Its seeds are hand-built with
+QEMU's values: a q35 machine with intel-iommu, an AArch64 `virt` machine with
+an SMMUv3, an ACPI 1.0 machine, each table alone, and the faults firmware
+ships.
 
 `ustack_build` is what the rule looks like when it is followed rather than
 recorded as debt: written before a line of stage 7 kernel code existed, and it
