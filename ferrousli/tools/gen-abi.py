@@ -52,7 +52,7 @@ waitid preadv pwritev mknodat setresuid setresgid fchmodat2
 set_robust_list get_robust_list sched_setparam sched_getparam
 sched_setscheduler sched_getscheduler sched_get_priority_max
 sched_get_priority_min sched_rr_get_interval sched_setaffinity getcpu prctl
-rt_tgsigqueueinfo
+rt_tgsigqueueinfo mount umount2 pivot_root chroot swapon swapoff syncfs readahead
 """.split()
 
 DEFINE_SYSCALL = re.compile(r"^#define __NR_(\w+) (\d+)$", re.M)

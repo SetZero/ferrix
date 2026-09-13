@@ -322,3 +322,19 @@ pub const GETCPU: usize = 309;
 pub const PRCTL: usize = 157;
 /// `rt_tgsigqueueinfo`.
 pub const RT_TGSIGQUEUEINFO: usize = 297;
+/// `mount`.
+pub const MOUNT: usize = 165;
+/// `umount2`.
+pub const UMOUNT2: usize = 166;
+/// `pivot_root`.
+pub const PIVOT_ROOT: usize = 155;
+/// `chroot`.
+pub const CHROOT: usize = 161;
+/// `swapon`.
+pub const SWAPON: usize = 167;
+/// `swapoff`.
+pub const SWAPOFF: usize = 168;
+/// `syncfs`.
+pub const SYNCFS: usize = 306;
+/// `readahead`.
+pub const READAHEAD: usize = 187;

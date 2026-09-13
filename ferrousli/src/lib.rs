@@ -51,6 +51,8 @@ pub mod locale;
 pub mod lock;
 pub mod malloc;
 pub mod mman;
+pub mod mntent;
+pub mod mount;
 pub mod multibyte;
 pub mod mutex;
 pub mod poll;
@@ -73,6 +75,7 @@ pub mod sigset;
 #[cfg(not(test))]
 pub mod start;
 pub mod stat;
+pub mod statvfs;
 pub mod stdio;
 pub mod stdlib;
 pub mod strerror;
