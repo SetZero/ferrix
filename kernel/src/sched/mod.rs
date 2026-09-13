@@ -626,9 +626,12 @@ extern "C" fn task_start(_argument: usize) -> ! {
     finish_switch();
     arch::enable_interrupts();
 
-    if let Some(task) = current()
-        && let Some((entry, argument)) = task.entry()
-    {
+    // The task's own reference is dropped before the entry runs, not after
+    // it. An entry that never returns -- a program entering user mode, which
+    // ends through `exit_group` or a kill -- would otherwise keep it on this
+    // frame for good, and with it the task, its process and its address space.
+    let entry = current().and_then(|task| task.entry());
+    if let Some((entry, argument)) = entry {
         entry(argument);
     }
     exit()
