@@ -64,6 +64,7 @@ use crate::fs::block::BlockDevice;
 use crate::fs::devfs::{BlockRefused, BlockRegistration, register_block};
 
 pub(crate) mod check;
+pub(crate) mod driver_check;
 
 /// The block major every ring's disk is published under. Linux allocates
 /// virtio-blk's major dynamically, usually 253 or 254; nothing keys on it.

@@ -218,12 +218,14 @@ pub(crate) const APPLETS: &[Command] = &[
             "hostname: restored",
         ]),
     },
-    // `/proc/partitions`: empty, with no block device, and `fdisk -l`,
-    // which reads it, finding nothing to list rather than dying of a signal.
+    // `/proc/partitions`: the disk the boot check's driver serves, in
+    // Linux's format, 64 MiB of 1 KiB blocks at the virtio-blk major; and
+    // `fdisk -l`, which reads it, finding nothing it can open rather than
+    // dying of a signal.
     Command {
         argv: &["cat", "/proc/partitions"],
         status: 0,
-        expect: Expect::Nothing,
+        expect: Expect::Lines(&["major minor  #blocks  name", " 254        0      65536 vda"]),
     },
     Command {
         argv: &["fdisk", "-l"],

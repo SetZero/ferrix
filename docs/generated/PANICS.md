@@ -58,6 +58,7 @@ Causes are listed most likely first.
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
 | [FX-1003](#fx-1003) | an IOMMU domain gave a device the wrong addresses |
 | [FX-1004](#fx-1004) | the block ring's control plane answered a driver wrongly |
+| [FX-1005](#fx-1005) | the ring-3 virtio-blk driver did not serve the test disk |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -1095,6 +1096,34 @@ nothing here; a request on the ring is the ring-3 driver's check.
 
 See: kernel/src/block_ring/mod.rs; kernel/src/block_ring/check.rs;
 docs/BLOCK-RING.md; docs/ROADMAP.md stage 10.
+
+<a id="fx-1005"></a>
+
+## FX-1005 — the ring-3 virtio-blk driver did not serve the test disk
+
+The boot check starts `/sbin/blk` from the initramfs the way `devmgr` will: a
+process given the device with `MANAGE` and the driver's end of a ring's control
+channel over its bootstrap channel, in the START message `block_ring::start_for`
+fills from the device node. The driver brings the device up over its
+`IoMapping`s, pins its memory into the device's domain, sends HELLO, and serves;
+the check requires its disk in the registry within ten seconds and sectors read
+through it to match what `xtask` wrote into the test disk. The driver is left
+running.
+
+1. The driver exited before publishing: the line above this report gives its
+   exit status, which is the step `user/blk` stopped at (1 START, 2 identity, 3
+   registers, 4 memory, 5 device bring-up, 6 ring or HELLO, 7 events).
+2. No disk appeared in time: HELLO was refused (the ring's task prints why), the
+   ring's task did not publish, or the device never came up under TCG within the
+   patience.
+3. A sector came back wrong or failed: the driver's request layout, the pin's
+   device addresses, the IOMMU domain, or the ring's data copy disagree with the
+   device.
+4. The initramfs carries no `/sbin/blk`: `xtask/src/native.rs` no longer lists
+   it.
+
+See: kernel/src/block_ring/driver_check.rs; user/blk/src/main.rs;
+docs/BLOCK-RING.md;           docs/ROADMAP.md stage 10.
 
 <a id="fx-9001"></a>
 

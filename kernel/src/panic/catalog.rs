@@ -731,6 +731,31 @@ pub(crate) static STAGE10_PCI: Explanation = Explanation {
           docs/ROADMAP.md stage 10",
 };
 
+/// For `check_driver` in `main.rs`, when `block_ring::driver_check::run`
+/// fails.
+pub(crate) static STAGE10_DRIVER: Explanation = Explanation {
+    code: "FX-1005",
+    title: "the ring-3 virtio-blk driver did not serve the test disk",
+    meaning: "The boot check starts `/sbin/blk` from the initramfs the way `devmgr` will: a \
+              process given the device with `MANAGE` and the driver's end of a ring's control \
+              channel over its bootstrap channel, in the START message `block_ring::start_for` \
+              fills from the device node. The driver brings the device up over its `IoMapping`s, \
+              pins its memory into the device's domain, sends HELLO, and serves; the check \
+              requires its disk in the registry within ten seconds and sectors read through it \
+              to match what `xtask` wrote into the test disk. The driver is left running.",
+    causes: &[
+        "The driver exited before publishing: the line above this report gives its exit \
+         status, which is the step `user/blk` stopped at (1 START, 2 identity, 3 registers, \
+         4 memory, 5 device bring-up, 6 ring or HELLO, 7 events).",
+        "No disk appeared in time: HELLO was refused (the ring's task prints why), the ring's \
+         task did not publish, or the device never came up under TCG within the patience.",
+        "A sector came back wrong or failed: the driver's request layout, the pin's device \
+         addresses, the IOMMU domain, or the ring's data copy disagree with the device.",
+        "The initramfs carries no `/sbin/blk`: `xtask/src/native.rs` no longer lists it.",
+    ],
+    see: "kernel/src/block_ring/driver_check.rs; user/blk/src/main.rs; docs/BLOCK-RING.md;           docs/ROADMAP.md stage 10",
+};
+
 /// For `check_block_ring` in `main.rs`, when `block_ring::check::run` fails.
 pub(crate) static STAGE10_RING: Explanation = Explanation {
     code: "FX-1004",
@@ -1220,6 +1245,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE10_DEVICES,
     &STAGE10_IOMMU,
     &STAGE10_RING,
+    &STAGE10_DRIVER,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,

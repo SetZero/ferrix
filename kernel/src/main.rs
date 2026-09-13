@@ -687,12 +687,39 @@ fn check_block_ring() {
     };
     if let Some(why) = report.skipped {
         println!("  ring     not checked: {why}");
+    } else {
+        println!(
+            "  ring     {} calls and HELLOs refused as specified, {} disk published from an              accepted HELLO and unpublished when its driver stopped or died, {} frames leaked",
+            report.refusals, report.published, report.leaked,
+        );
+    }
+    check_driver();
+}
+
+/// Stage 10's exit, the half that is a driver: `/sbin/blk`, started from
+/// here the way `devmgr` will start it, serves the test disk through the
+/// block ring with the IOMMU on, and sectors read through the registry come
+/// back as `xtask` wrote them. The driver is left running, and its disk in
+/// `/dev`, for what mounts it next.
+///
+/// Halts rather than returning, as every other stage's check does. A machine
+/// without a virtio-blk function passes and says so.
+fn check_driver() {
+    let report = match block_ring::driver_check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE10_DRIVER,
+            "stage 10 driver self-check failed: {problem}"
+        ),
+    };
+    if let Some(why) = report.skipped {
+        println!("  driver   not checked: {why}");
         return;
     }
     println!(
-        "  ring     {} calls and HELLOs refused as specified, {} disk published from an \
-         accepted HELLO and unpublished when its driver stopped or died, {} frames leaked",
-        report.refusals, report.published, report.leaked,
+        "  driver   /sbin/blk serves {} ({} sectors) through the block ring; {} sectors read \
+         back through the registry as xtask wrote them",
+        report.name, report.sectors, report.read,
     );
 }
 
