@@ -112,7 +112,7 @@ nobody has it yet.
 | A user-mode copy-on-write write check, and a `MAP_SHARED` write check | ferrix-e5 | 6 |
 | `SA_RESTART`; boot checks that drive `SIGCHLD`, stop and continue, `alarm`, `sigaltstack` and fault-to-signal | ferrix-a5 | 7; `rustc` needs `SIGSEGV` on the alternate stack |
 | Pid 1 for init and orphans reparented to it | ferrix-a5 | 7, 15 |
-| `TCGETS2`, `fcntl` record locks, `flock` | ferrix-a5 | 7 |
+| `fcntl` record locks, `flock` | ferrix-a5 | 7 |
 | `mount -t proc` and `devtmpfs` | ferrix-e6 | 8 |
 | An "applets" group in `test-vfs`, separate from the exit criterion | ferrix-e6 | 8 |
 | The EEVDF fairness flake, root-caused; then a preemption count so no plain spin lock taken with interrupts on can convoy | ferrix-34 | 5 |
