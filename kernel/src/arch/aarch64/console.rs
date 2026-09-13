@@ -41,6 +41,10 @@ const FR: u64 = 0x018;
 const FR_TXFF: u32 = 1 << 5;
 /// `FR`: the receive FIFO is empty.
 const FR_RXFE: u32 = 1 << 4;
+/// `FR`: the transmit FIFO is empty.
+const FR_TXFE: u32 = 1 << 7;
+/// `FR`: the port is still sending a byte, FIFO empty or not.
+const FR_BUSY: u32 = 1 << 3;
 
 /// The mapped base address, once [`init`] has run.
 struct Base(UnsafeCell<u64>);
@@ -99,6 +103,30 @@ pub(crate) fn write_byte(byte: u8) {
         core::hint::spin_loop();
     }
     write(DR, u32::from(byte));
+}
+
+/// Wait until everything written has left the port, for a caller about to
+/// power off or stop.
+///
+/// [`write_byte`] waits only for room in the FIFO, so the last line of a report
+/// can still be sending when it returns, and a power-off straight after cuts it
+/// off: seen on the STM32 USART of a DK1, and the same shape on any real
+/// PL011. Bounded, like the write.
+pub(crate) fn drain() {
+    /// About half a second of polling; a sixteen-byte FIFO empties in under two
+    /// milliseconds at 115200 baud.
+    const DRAIN_LIMIT: u32 = 10_000_000;
+
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return;
+    }
+    for _ in 0..DRAIN_LIMIT {
+        if read(FR) & (FR_TXFE | FR_BUSY) == FR_TXFE {
+            return;
+        }
+        core::hint::spin_loop();
+    }
 }
 
 /// One received byte, if the receive FIFO holds one.

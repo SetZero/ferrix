@@ -504,10 +504,16 @@ pub(crate) fn frame_pointer() -> u64 {
     cpu::frame_pointer()
 }
 
-/// Stop the machine.
+/// Stop the machine, once the console has sent its last line.
 pub(crate) fn shutdown() -> ! {
+    console::drain();
     cpu::psci_system_off();
     halt()
+}
+
+/// Wait until the console port has sent everything written to it.
+pub(crate) fn drain_console() {
+    console::drain();
 }
 
 /// Stop this CPU permanently.

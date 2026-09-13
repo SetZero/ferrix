@@ -590,10 +590,16 @@ pub(crate) fn frame_pointer() -> u64 {
     cpu::frame_pointer()
 }
 
-/// Stop the machine, and QEMU with it.
+/// Stop the machine, and QEMU with it, once the console has sent its last line.
 pub(crate) fn shutdown() -> ! {
+    console::drain();
     cpu::debug_exit();
     halt()
+}
+
+/// Wait until the console port has sent everything written to it.
+pub(crate) fn drain_console() {
+    console::drain();
 }
 
 /// Stop this CPU permanently.

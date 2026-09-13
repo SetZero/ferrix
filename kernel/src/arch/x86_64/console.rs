@@ -94,6 +94,29 @@ pub(crate) fn write_byte(byte: u8) {
     write_register(DATA, byte);
 }
 
+/// Wait until everything written has left the port, for a caller about to
+/// power off or stop.
+///
+/// [`write_byte`] waits for the holding register, which empties as soon as the
+/// byte moves to the shift register, so the last byte can still be sending when
+/// it returns. Harmless under QEMU, whose port sends instantly; on hardware a
+/// power-off straight after would cut the line, as it did on a DK1's USART.
+/// Bounded, like the write.
+pub(crate) fn drain() {
+    /// `LINE_STATUS`: the holding register and the shift register are both
+    /// empty.
+    const TRANSMITTER_IDLE: u8 = 1 << 6;
+    /// Far longer than a sixteen-byte FIFO takes to empty at 115200 baud.
+    const DRAIN_LIMIT: u32 = 10_000_000;
+
+    for _ in 0..DRAIN_LIMIT {
+        if read_register(LINE_STATUS) & TRANSMITTER_IDLE != 0 {
+            return;
+        }
+        core::hint::spin_loop();
+    }
+}
+
 /// One received byte, if the port has one.
 ///
 /// Polled rather than interrupt-driven, for the same reason [`init`] leaves

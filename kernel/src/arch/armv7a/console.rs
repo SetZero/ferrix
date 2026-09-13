@@ -151,6 +151,16 @@ pub(crate) fn write_byte(byte: u8) {
     }
 }
 
+/// Wait until whichever port the machine turned out to have has sent
+/// everything written to it.
+pub(crate) fn drain() {
+    match port() {
+        Some(Port::Pl011) => pl011::drain(),
+        Some(Port::Stm32) => stm32_usart::drain(),
+        None => {}
+    }
+}
+
 /// One received byte from whichever port the machine turned out to have, if
 /// one is waiting.
 ///
