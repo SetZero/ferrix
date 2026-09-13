@@ -2277,13 +2277,26 @@ The run recorded when it landed: 13 calls and HELLOs refused as specified, 2
 disks published and unpublished, 0 frames leaked, in about 50 ms, on x86-64,
 AArch64 and ARMv7-A at four processors and at two.
 
+**Done — virtio-blk's protocol and driver logic, as libraries, host-side.**
+`libs/virtio`'s `blk` module is the device protocol: features checked against
+Linux's header, the configuration, request headers and statuses, and a request
+split into descriptor chains one pinned page at a time. `libs/virtio-blk` is the
+driver's logic: bring-up to `DRIVER_OK`, read, write and flush, each completion
+counted exactly once even from a hostile device, and a teardown that hands
+memory back only after the device's reset has finished. Device addresses reach
+it only through `DevicePages`: the addresses the pin query (0x1026) returned,
+page by page of the pinned range, with no relation to physical addresses
+assumed. It is tested on the host, under Miri, and by the `virtio_blk` fuzz
+target. **No kernel crate or process uses it yet:** the driver process on
+`ferrix-rt` is still to do, below.
+
 **Still to do, in the order stage 11 needs it.** Stage 11 is done on the host
 and waits only for a ring-3 virtio-blk driver reading sectors, so everything on
 that path comes first and trusting decoding-off BARs, which it does not need,
 comes last. Stage 9 writes `Vmo::hold`, `vmo_map` and native process creation;
-stage 11 has written the ring protocol's crate (above) and is writing
-virtio-blk's device protocol, the driver's logic as a library and the native
-user-space runtime, all against the agreements recorded here.
+stage 11 has written the ring protocol's crate, virtio-blk's device protocol and
+the driver's logic as a library (above), and is writing the native user-space
+runtime, all against the agreements recorded here.
 
 * **Everything that runs in ring 3.** Stage 9's device handles, `Interrupt`
   and `IoMapping`, and `VMO_PIN` (above), are on main. Still to come, in this

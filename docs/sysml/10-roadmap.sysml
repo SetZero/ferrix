@@ -294,12 +294,12 @@ package FerrixRoadmap {
              * node has, which the entropy check's DMA goes through; VT-d
              * programmed at boot on x86-64 and the SMMUv3 under ACPI on
              * AArch64, with translated domains. VMO_PIN pinning VMO pages into
-             * a device's domain. The block ring's protocol as a host-tested
-             * library, ferrix-blkring, used by nothing yet. Next, in the order
-             * stage 11 needs: devmgr, the ring's kernel side and virtio-blk in
-             * ring 3, the ring-3 driver reading sectors on x86-64 and AArch64
-             * (ARMv7-A in degraded trusted mode); trusting decoding-off BARs
-             * last. */
+             * a device's domain. The block ring's protocol (ferrix-blkring) and
+             * virtio-blk's protocol and driver logic as host-tested libraries,
+             * used by nothing yet. Next, in the order stage 11 needs: devmgr,
+             * the ring's kernel side and virtio-blk in ring 3, the ring-3
+             * driver reading sectors on x86-64 and AArch64 (ARMv7-A in degraded
+             * trusted mode); trusting decoding-off BARs last. */
     }
 
     #inProgress requirement <'S11'> stage11BtrfsRead : Stage {
