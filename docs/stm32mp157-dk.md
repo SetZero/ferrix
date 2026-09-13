@@ -5,7 +5,9 @@ What to do with a DK board and an SD card, and what to expect at each step.
 Everything here is for the **DK1 and DK2**. The ED1 and EV1 have 1 GiB rather
 than 512 MiB, which puts their RAM's identity range on top of the direct map;
 `Layout::plan_identity_map` returns an error naming the collision rather than
-guessing, so those boards need a trampoline page that is not written yet.
+guessing. The loader's switch trampoline, which runs the switch from a page
+below the 2 GiB split when the loader cannot be mapped where it is, does not
+help them: all of their RAM is above the split, so there is no such page.
 
 **What has run on hardware.** An STM32MP157D-DK1, with the firmware described
 in step 1, has booted Ferrix through stage 5 (2026-09-12, `6df0925`) and then
@@ -14,8 +16,12 @@ with busybox started as init running `test-shell`'s script (2026-09-13,
 `fd4442e`). That run also found that the last line before power-off was cut
 off. The console now drains before shutting down, and a build with that drain
 and polled receive, run on the same board that day, sent the last line whole
-and answered a command typed at busybox's prompt. What *has* been checked is
-listed under [What is actually verified](#what-is-actually-verified).
+and answered a command typed at busybox's prompt. That evening, flashed from a
+Windows host, the board ran the `stage-9.1-console-and-iommu` tag with receive
+by interrupt and took pasted lines of up to 1000 characters whole; reset itself
+back to U-Boot under `ferrix.onexit=reset`; and booted the loader with its
+switch in a copyable block. What *has* been checked is listed under
+[What is actually verified](#what-is-actually-verified).
 
 ## TL;DR
 
@@ -189,9 +195,9 @@ Alpine's `busybox-static` for `armv7` is.
 > interrupt empties the port into a 4 KiB ring the kernel's `console` thread
 > drains, so a paste is held rather than overrun between looks. On the DK1 that
 > interrupt is GIC SPI 52, which the device tree reaches through EXTI line 30;
-> the boot's `input` line names the number it installed. Typing, and a
-> 300-character line sent at once, come back whole under QEMU; neither has been
-> tried on the board yet.
+> the boot's `input` line names the number it installed — `interrupt 84` on
+> the board. Typing, and lines of 65, 300 and 1000 characters each sent in one
+> write, come back whole on the board as under QEMU.
 
 Three files are copied, which are the three the image contains:
 
@@ -216,6 +222,34 @@ The desktop mounts `bootfs`; run `cargo xtask flash --arch armv7a --to <that
 mount>`, then Ctrl-C at the U-Boot console to end mass-storage mode. On the
 DK1 the card appears as a USB disk the size of the card, with the USB-C cable
 to the host.
+
+### From a Windows host
+
+`flash`, `watch-serial` and `deploy` do not run on Windows: they find ports
+under `/dev`, set them up with `stty`, and check destinations against
+`/proc/mounts`. Building does, and the rest is done by hand. This is how the
+board was flashed and driven on 2026-09-13:
+
+1. **The serial port.** The ST-LINK is `USB\VID_0483&PID_3752`, and its virtual
+   COM port shows under *Ports (COM & LPT)* — `COM8` on that machine, 115200
+   8N1, no flow control. Only one program can hold it, and U-Boot autoboots
+   straight into the kernel, so whatever logs the console has to hold the port
+   *before* the reset.
+2. **The files.** `cargo xtask build --arch armv7a --init <busybox>` writes
+   `build\armv7a\ferrix.img`; its FAT holds exactly the three files `flash`
+   copies, and 7-Zip extracts them (`7z x build\armv7a\ferrix.img`; it warns of
+   a header error in the image's minimal FAT and extracts correctly). The loader
+   and kernel are byte-identical to
+   `target\armv7-unknown-linux-musleabi\debug\ferrix-boot.efi` and
+   `target\armv7a-none-eabi\debug\ferrix-kernel`; record their SHA-256 sums.
+3. **The card.** At `STM32MP>`, `ums 0 mmc 0`. Windows shows *Linux UMS disk 0*
+   the size of the card and mounts `bootfs` (FAT32, 126 MB) under a drive
+   letter. It may offer to format the card's other partitions: cancel, since
+   those are TF-A and the FIP. Copy the three files to the same paths on
+   `bootfs`, run `Write-VolumeCache` on the drive, and check each file's
+   SHA-256 on the card against the recorded one.
+4. **Boot.** Ctrl-C at the console ends mass-storage mode; then the three lines
+   of step 3 below, one at a time.
 
 ## 3. Tell U-Boot to boot it
 
@@ -281,6 +315,21 @@ failure when the board is off: OpenOCD reaches the ST-LINK, reports
 to the target)`. A reading of 0 V means the board has no power — a reset cannot
 help, and someone has to restore it.
 
+**Or let Ferrix reset the board itself.** With
+
+```
+STM32MP> setenv bootargs 'ferrix.onexit=reset'
+```
+
+the end of boot — a `test-shell` script finishing, or the shell exiting — is
+PSCI `SYSTEM_RESET` rather than `SYSTEM_OFF`, and the board comes back through
+TF-A to `STM32MP>` for the next image with no hand at it. The boot says
+`power    ferrix.onexit=reset: the machine resets when boot ends`, and the end
+says `power    resetting, as ferrix.onexit=reset asks`. U-Boot keeps `bootargs`
+in RAM, so the option survives that reset only if it was saved with `saveenv`;
+reading it from a `CMDLINE.TXT` on the card instead, and a `test-boot --reset`
+that proves the path under QEMU, are the follow-ups `docs/BACKLOG.md` records.
+
 ## 4. What a good boot looks like
 
 Abridged. The stage 5 lines are the board's own, from its 2026-09-12 run; the
@@ -321,7 +370,10 @@ The loader's own lines come from firmware's console, so if even
   voltage; 0 V is a board with no power.
 * **Are both boot switches ON?** Both OFF is USB DFU, which prints nothing.
 * Is the micro-USB cable in the ST-LINK port, does `/dev/ttyACM0` exist, and
-  are you in `dialout`?
+  are you in `dialout`? If no port exists at all — on Windows, nothing under
+  *Ports* and no device with `VID_0483` — suspect the cable before the board:
+  the ST-LINK enumerates from its own cable even with the board unpowered, and
+  a charge-only micro-USB cable, which looks identical, enumerates nothing.
 * Is another program — a `picocom` left open — holding the port?
 
 ### It stops after about thirty seconds, with no panic
@@ -407,6 +459,11 @@ tasks onto one queue reads many times slower there than on the board.
 | Busybox runs as init on the board | `test-shell`'s script at `fd4442e`, its output on the console up to the cut last line |
 | `ums 0 mmc 0` exposes the card to the host | on the board, 2026-09-13 |
 | A command typed at busybox's prompt runs on the board | 2026-09-13, polled receive: `echo rx-$((6*7))`, a byte every 100 ms, echoed and printed `rx-42` |
+| The `stage-9.1-console-and-iommu` tag runs on the board, receiving by interrupt | `ec549f2`, 2026-09-13 evening: `the port receives by interrupt 84`, `FERRIX-BOOT-OK stages 1-9`, `test-shell`'s script typed into `sh -i` line by line with all seven lines in order |
+| Pasted input arrives whole on the board | the same run: a 65-character line of three commands that lost 37 characters under polled receive ran whole; 300 and 1000 characters in one write reached `wc -c` as 301 and 1001 |
+| `ferrix.onexit=reset` resets the board to U-Boot | `board-reset-3c`, the same evening: `exit 7`, then TF-A's banner 0.44 s later and `STM32MP>` with no hand at the board |
+| The loader with its switch in a copyable block boots the board | `armv7a-2gib` with the instruction-cache invalidation, the same evening: the in-place path, `FERRIX-BOOT-OK stages 1-9` at two processors |
+| Flashing from Windows through `ums` | the same evening, three times: the files copied to `bootfs`, flushed, and their SHA-256 checked on the card |
 | The console drains before power-off | the same run: after `exit 7`, `init     the shell exited with 7` arrived whole with nothing after it, where the earlier run stopped mid-word |
 | Both processors come up and share work | the same boot: `2 online`, `1000 threads ... on 2 processors (0b11)` |
 | `${fdtcontroladdr}` is the tree to pass; `${fdt_addr_r}` fails | on the board |
@@ -422,8 +479,9 @@ tasks onto one queue reads many times slower there than on the board.
 | `flash` refuses wrong destinations | unit tests, and tried against `/boot/efi` |
 | OpenOCD reads 0 V from an unpowered board | on the board, powered off |
 
-Not verified: pasting into a shell on the board, which polled receive is
-expected to lose characters of; the OpenOCD reset against a powered board; and
+Not verified: the OpenOCD reset against a powered board; the switch
+trampoline's *copied* path on any board, since none here has RAM below the
+split; and
 `console=`, `nosmp` and `noactlr` *as selections* — their parsing has host tests, but the paths they choose are only
 reachable on hardware, which is the point of them.
 
