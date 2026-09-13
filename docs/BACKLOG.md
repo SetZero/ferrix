@@ -107,6 +107,12 @@ Owners say in one line what a person can test when such a landing is on
 `main`. Tags are local until the customer pushes; the customer is told in a
 line or two and nothing stops for it.
 
+**Estimates are story points.** Since the evening of 2026-09-13 (customer) a
+session says what is left in story points, never in hours or days: 1 is a
+change whose pattern and tests already exist, 13 a new subsystem, Fibonacci
+between. The product owner measures points into time afterwards, from the
+landings, and never the other way round.
+
 **Calling a stage done.** The exit criterion as written, on all three
 architectures, and the marker moves in the same commit. A criterion met in a
 weaker form is written down as such in the stage's section.
