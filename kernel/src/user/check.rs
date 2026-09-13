@@ -480,6 +480,7 @@ fn check_a_read_of_an_inaccessible_region_is_refused() -> Result<(), &'static st
 /// space's own tables, and every frame goes back when the space is dropped.
 fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
     let before = quiet_frames()?;
+    let counts = crate::mm::window_counts();
     let base = 0x4000_0000;
     let pages = 4;
 
@@ -489,6 +490,9 @@ fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
         .map_err(|_| "mapping failed")?;
 
     // A whole region mapped and not one frame spent on it yet.
+    if quiet_frames()? != before - 1 {
+        crate::mm::print_window("objects", &counts);
+    }
     expect_frames(before - 1, "mapping a region cost more than the root table")?;
 
     // Fault them in out of order, so a handler that mapped a fixed address

@@ -296,7 +296,9 @@ fn insert_region(frames: &mut Frames<'static>, region: &MemRegion, hole: u64, ho
 
 /// Take `2^order` contiguous frames.
 pub(crate) fn allocate_frames(order: u8) -> Option<Frame> {
-    with_frames(|frames| frames.allocate(order))?
+    let frame = with_frames(|frames| frames.allocate(order))??;
+    let _ = WINDOW[W_ALLOC].fetch_add(1 << order, Ordering::Relaxed);
+    Some(frame)
 }
 
 /// Take `2^order` contiguous frames lying wholly below frame `limit`.
@@ -325,6 +327,7 @@ pub(crate) fn claim_frame(frame: Frame) -> Option<Frame> {
 
 /// Give back frames taken with [`allocate_frames`].
 pub(crate) fn deallocate_frames(frame: Frame, order: u8) {
+    let _ = WINDOW[W_FREE].fetch_add(1 << order, Ordering::Relaxed);
     let _ = with_frames(|frames| frames.deallocate(frame, order));
 }
 
@@ -347,8 +350,14 @@ pub(crate) fn share_frame(frame: Frame) -> Option<u32> {
 pub(crate) fn release_frame(frame: Frame) -> bool {
     // Qualified: `Released` is already `ferrix_paging`'s in this module, and
     // the two mean different things -- a page table given back versus a frame.
-    with_frames(|frames| matches!(frames.release(frame), Ok(ferrix_frame::Released::Freed)))
-        .unwrap_or(false)
+    let freed = with_frames(|frames| {
+        matches!(frames.release(frame), Ok(ferrix_frame::Released::Freed))
+    })
+    .unwrap_or(false);
+    if freed {
+        let _ = WINDOW[W_RELEASED].fetch_add(1, Ordering::Relaxed);
+    }
+    freed
 }
 
 /// How many references there are to a frame.
@@ -411,10 +420,12 @@ struct KernelPages;
 unsafe impl Backing for KernelPages {
     fn allocate_pages(&mut self, order: u8) -> Option<u64> {
         let frame = allocate_frames(order)?;
+        let _ = WINDOW[W_HEAP_TAKEN].fetch_add(1 << order, Ordering::Relaxed);
         Some(physmap(frame * PAGE_SIZE))
     }
 
     fn deallocate_pages(&mut self, address: u64, order: u8) {
+        let _ = WINDOW[W_HEAP_RETURNED].fetch_add(1 << order, Ordering::Relaxed);
         deallocate_frames(unmap(address) / PAGE_SIZE, order);
     }
 
@@ -670,6 +681,7 @@ pub(crate) fn unmap_in(root: u64, virt: u64, len: u64) -> Result<(), ferrix_pagi
         len.next_multiple_of(PAGE_SIZE),
         |freed| {
             if let Released::Table { phys } = freed {
+                let _ = WINDOW[W_USER_TABLES].fetch_add(1, Ordering::Relaxed);
                 deallocate_frames(phys.0 / PAGE_SIZE, 0);
             }
         },
@@ -822,6 +834,7 @@ pub(crate) fn unmap_kernel_all(
         released(frame, order);
     }
     for &frame in tables.iter() {
+        let _ = WINDOW[W_KERNEL_TABLES].fetch_add(1, Ordering::Relaxed);
         deallocate_frames(frame, 0);
     }
     removed
@@ -1137,4 +1150,43 @@ pub(crate) fn copy_frame(destination: Frame, source: Frame) {
             PAGE_SIZE as usize,
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// DIAGNOSTIC (not for landing): counts by route, for a frame window to print
+// ---------------------------------------------------------------------------
+
+const W_ALLOC: usize = 0;
+const W_FREE: usize = 1;
+const W_RELEASED: usize = 2;
+const W_HEAP_TAKEN: usize = 3;
+const W_HEAP_RETURNED: usize = 4;
+const W_USER_TABLES: usize = 5;
+const W_KERNEL_TABLES: usize = 6;
+const W_COUNT: usize = 7;
+
+/// Frames through each route since boot.
+static WINDOW: [core::sync::atomic::AtomicU64; W_COUNT] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; W_COUNT];
+
+/// A snapshot of the route counts, to print against at the end of a window.
+pub(crate) fn window_counts() -> [u64; W_COUNT] {
+    core::array::from_fn(|i| WINDOW[i].load(Ordering::Relaxed))
+}
+
+/// Print how each route moved since `start`, and the heap's pages.
+pub(crate) fn print_window(check: &str, start: &[u64; W_COUNT]) {
+    let now = window_counts();
+    let d = |i: usize| now[i].wrapping_sub(start[i]);
+    crate::console::println!(
+        "  {check:<8} window: alloc {} free {} released {} heap-taken {} heap-returned {} user-tables {} kernel-tables {} (heap pages now {})",
+        d(W_ALLOC),
+        d(W_FREE),
+        d(W_RELEASED),
+        d(W_HEAP_TAKEN),
+        d(W_HEAP_RETURNED),
+        d(W_USER_TABLES),
+        d(W_KERNEL_TABLES),
+        heap_pages(),
+    );
 }

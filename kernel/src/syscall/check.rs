@@ -3753,6 +3753,7 @@ mod paths {
         let cached = fs::namespace().cached();
         crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
         let before = mm::free_frames();
+        let counts = mm::window_counts();
         let mut report = check_path_calls()?;
         crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
         report.leaked = i64::try_from(before).unwrap_or(i64::MAX)
@@ -3765,6 +3766,9 @@ mod paths {
         // dentries the first left in /tmp, which is why `LINK` lives there. A
         // run that grew it has stopped being repeatable, and is told apart
         // from a call that lost a frame.
+        if report.leaked != 0 {
+            mm::print_window("paths", &counts);
+        }
         mm::print_frame_delta("paths", report.leaked);
         if report.leaked < 0 {
             return Err(
