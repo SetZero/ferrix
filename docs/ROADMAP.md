@@ -19,8 +19,8 @@ longer". This is a long program of work: stages 1–8 are a conventional kernel
 bring-up, 9–14 are the parts this design chose to do properly, and 15–17 are the
 goal. Nobody should read the table as a schedule.
 
-**Where it stands:** stages 0–7 are done and in the boot test on all three
-architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-7`.
+**Where it stands:** stages 0–8 are done and in the boot test on all three
+architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-8`.
 ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 7's exit is
 somebody else's static musl busybox running a script on every architecture,
 checked by `cargo xtask test-shell` rather than the boot test because it needs
@@ -32,10 +32,10 @@ says a stage should: their byte-level halves are in `libs/` — the VFS in
 — handle tables, channels carrying handles, VMOs — are in the boot test, and
 so is most of stage 8: the root filesystem unpacked from an initramfs, every
 process's descriptor table, the calls that take a path, `/dev` and `/proc`.
-Stage 8's exit test, `cargo xtask test-vfs`, passes as the criterion is written
-— `ls -R /proc`, `cat /proc/self/maps` and one shell script, on all three
-architectures — and the stage waits only on fixes for what a review found: five
-bugs in its VFS, and self-checks that measure leaks without failing on them.
+Stage 8's exit is `cargo xtask test-vfs` passing as the criterion is written —
+`ls -R /proc`, `cat /proc/self/maps` and one shell script whose applets are
+forked programs — on all three architectures, for the reason stage 7's is a
+test of its own.
 Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
 and its first kernel code — PCI enumeration, device nodes, and a device driven
 by DMA from the boot check — is in the boot test.
@@ -895,7 +895,7 @@ name `execve` was given.
 
 ---
 
-## Stage 8 — VFS, initramfs, the pseudo-filesystems  ·  *month*
+## Stage 8 — VFS, initramfs, the pseudo-filesystems ✅
 
 Inode and dentry caches, the mount table, file descriptors and their sharing
 rules, tmpfs, devfs, procfs (`self/maps`, `self/exe`, `self/fd`, `cpuinfo`,
@@ -1042,26 +1042,26 @@ all three architectures:
   armv7a: stage 8's exit programs all passed
 ```
 
-**Why the stage is not marked done anyway.** A review of the VFS by another
-session found five bugs, three reproduced on the host, and a stage whose exit
-test passes over them is not finished. The worst lets a racing rename move a
-directory inside itself: a lookup that loses a race with a create hands back a
-second, uncached dentry for a directory, whose parent a later rename does not
-update, so the ancestry check reads a stale chain. The others: a racing
-`open(O_CREAT)` without `O_EXCL` can fail with `EEXIST`; `..` in a directory
-listing reports the directory's own inode number; `openat` at the descriptor
-limit creates the file before failing with `EMFILE`, leaving it behind; and a
-rename over an empty directory keeps it alive. The same review found that the
-stage's self-checks measure frames leaked but do not fail on them: the tmpfs,
-path, descriptor, `/dev` and `/proc`, and pipe checks each print a count that
-nothing requires to be zero, so every "0 frames leaked" above is an observation
-rather than a check. Fixes for all of it, each with a test that fails first,
-are in progress.
+**What a review found before the stage was called done.** Another session
+read the VFS and its self-checks and found five bugs and one gap, three of the
+bugs reproduced on the host, and the stage waited on all of it. A lookup that
+lost a race with a create handed back a second, uncached dentry for a
+directory, whose parent a later rename did not update, so the ancestry check
+read a stale chain and a directory could be moved inside itself; a directory
+now has one dentry, and tmpfs refuses the move under its own locks as well
+(628d546). A racing `open(O_CREAT)` without `O_EXCL` failed with `EEXIST`
+(e626316); `..` in a listing carried the directory's own inode number
+(ed9f02b); a rename over an empty directory kept it alive (7ab4e3c); and
+`openat` at the descriptor limit created the file before failing with
+`EMFILE` (16ed9b7). Each fix came with a host test that failed before it. The
+gap was that every self-check measured the frames it leaked and printed the
+count without failing on it; each now fails on a non-zero count, and each
+assertion was shown to fire by leaking a frame on purpose. `vfs_ops` gained
+the property the worst bug broke: after every input, the namespace is still a
+tree.
 
-**Still to do.**
+**Left for later stages.**
 
-* The five VFS bugs above, and self-checks that fail on the leaks they
-  measure.
 * `SIGPIPE` on a write to a pipe with no reader, which is `EPIPE` alone until a
   signal can be delivered; and `proc` and `devtmpfs` as `mount` types, which
   are `ENODEV` until they are registered in `syscall/fsctl.rs`.

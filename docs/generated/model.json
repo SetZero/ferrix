@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "83e0999ac5be58945bbb6d903ad68647625695bcaaeb6271c3d1e255aa68c314",
+  "digest": "aeaed0cdd7403560b21b6164db211faa68f59039ef03cb2cc6c9f2cf2ba99094",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -59,8 +59,8 @@
     "packages": 16,
     "elements": 1414,
     "maturity": {
-      "implemented": 120,
-      "inProgress": 12,
+      "implemented": 121,
+      "inProgress": 11,
       "writtenAhead": 8,
       "planned": 101
     },
@@ -5997,7 +5997,7 @@
           "kind": "action",
           "definition": true,
           "maturity": "implemented",
-          "doc": "kmain. Every stage's exit criterion runs here on every boot, and each failure panics with its own message so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-7.",
+          "doc": "kmain. Every stage's exit criterion runs here on every boot, and each failure panics with its own message so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-8.",
           "flow": [
             "start",
             "validateHandoff",
@@ -14127,7 +14127,7 @@
               "qualifiedName": "FerrixRoadmap::BootTest::marker",
               "kind": "attribute",
               "type": "String",
-              "value": "\"FERRIX-BOOT-OK stages 1-7\"",
+              "value": "\"FERRIX-BOOT-OK stages 1-8\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
                 "line": 39
@@ -14683,7 +14683,7 @@
           "kind": "requirement",
           "shortName": "S8",
           "type": "Stage",
-          "maturity": "inProgress",
+          "maturity": "implemented",
           "doc": "Inode and dentry caches, the mount table, fd sharing rules, tmpfs, devfs, procfs, cpio initramfs. Exit: busybox ls -R /proc, cat /proc/self/maps, a script manipulating files under tmpfs.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
@@ -14706,7 +14706,7 @@
               "qualifiedName": "FerrixRoadmap::stage8Vfs",
               "kind": "attribute",
               "redefines": "status",
-              "value": "StageStatus::InProgress",
+              "value": "StageStatus::Done",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
                 "line": 216
@@ -18023,8 +18023,8 @@
           "id": "FerrixRoadmap::stage8Vfs",
           "label": "S8  Stage 8 VFS",
           "kind": "requirement",
-          "sublabel": "InProgress",
-          "maturity": "inProgress"
+          "sublabel": "Done",
+          "maturity": "implemented"
         },
         {
           "id": "FerrixRoadmap::stage12BtrfsWrite",
@@ -20089,8 +20089,8 @@
           "id": "FerrixRoadmap::stage8Vfs",
           "label": "S8  Stage 8 VFS",
           "kind": "requirement",
-          "sublabel": "InProgress · month",
-          "maturity": "inProgress"
+          "sublabel": "Done · month",
+          "maturity": "implemented"
         },
         {
           "id": "FerrixRoadmap::stage9NativeAbi",
@@ -20585,7 +20585,7 @@
           "id": "FerrixRoadmap::stage8Vfs",
           "label": "S8  Stage 8 VFS",
           "kind": "requirement",
-          "maturity": "inProgress"
+          "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Kernel::vfs",

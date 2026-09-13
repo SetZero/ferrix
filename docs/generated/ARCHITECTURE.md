@@ -93,12 +93,12 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1414 elements, 155 relations. Model digest `83e0999ac5be5894`.
+13 files, 16 packages, 1414 elements, 155 relations. Model digest `aeaed0cdd7403560`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 120 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 12 | The owning stage has started; part of the element runs. |
+| `#implemented` | 121 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#inProgress` | 11 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 8 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
 | `#planned` | 101 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
@@ -136,7 +136,7 @@ flowchart LR
   n9_FerrixRoadmap_stage5Scheduler["S5  Stage 5 scheduler<br>Done"]
   n10_FerrixRoadmap_stage6UserMode["S6  Stage 6 user mode<br>Done"]
   n11_FerrixRoadmap_stage7LinuxAbi["S7  Stage 7 Linux ABI<br>Done"]
-  n12_FerrixRoadmap_stage8Vfs["S8  Stage 8 VFS<br>InProgress"]
+  n12_FerrixRoadmap_stage8Vfs["S8  Stage 8 VFS<br>Done"]
   n13_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>Planned"]
   n14_FerrixRoadmap_stage13Isolation["S13  Stage 13 isolation<br>Planned"]
   n0_FerrixRequirements_hostsRustc -- "part of" --> n1_FerrixRequirements_hostsRustc_kernelThre
@@ -156,10 +156,8 @@ flowchart LR
   n13_FerrixRoadmap_stage12BtrfsWrite -. "depends on" .-> n7_FerrixRequirements_hostsRustc_durableFil
   n14_FerrixRoadmap_stage13Isolation -. "depends on" .-> n8_FerrixRequirements_hostsRustc_memoryPres
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
-  classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n9_FerrixRoadmap_stage5Scheduler,n10_FerrixRoadmap_stage6UserMode,n11_FerrixRoadmap_stage7LinuxAbi implemented
-  class n12_FerrixRoadmap_stage8Vfs inProgress
+  class n9_FerrixRoadmap_stage5Scheduler,n10_FerrixRoadmap_stage6UserMode,n11_FerrixRoadmap_stage7LinuxAbi,n12_FerrixRoadmap_stage8Vfs implemented
   class n13_FerrixRoadmap_stage12BtrfsWrite,n14_FerrixRoadmap_stage13Isolation planned
 ```
 
@@ -779,7 +777,7 @@ flowchart TB
 
 ### The kernel's bring-up
 
-kmain. Every stage's exit criterion runs here on every boot, and each failure panics with its own message so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-7.
+kmain. Every stage's exit criterion runs here on every boot, and each failure panics with its own message so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-8.
 
 1. `validateHandoff` — Magic, version, arch and layout constants. No console yet, so a mismatch halts silently: there is no valid way to make one.
 2. `initConsole`
@@ -2514,7 +2512,7 @@ flowchart TB
   n6_FerrixRoadmap_stage5Scheduler["S5  Stage 5 scheduler<br>Done · week"]
   n7_FerrixRoadmap_stage6UserMode["S6  Stage 6 user mode<br>Done · week"]
   n8_FerrixRoadmap_stage7LinuxAbi["S7  Stage 7 Linux ABI<br>Done · month"]
-  n9_FerrixRoadmap_stage8Vfs["S8  Stage 8 VFS<br>InProgress · month"]
+  n9_FerrixRoadmap_stage8Vfs["S8  Stage 8 VFS<br>Done · month"]
   n10_FerrixRoadmap_stage9NativeAbi["S9  Stage 9 native ABI<br>InProgress · week"]
   n11_FerrixRoadmap_stage10UserspaceDrivers["S10  Stage 10 userspace drivers<br>InProgress · month"]
   n12_FerrixRoadmap_stage11BtrfsRead["S11  Stage 11 btrfs read<br>Planned · month"]
@@ -2546,8 +2544,8 @@ flowchart TB
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi implemented
-  class n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers inProgress
+  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi,n9_FerrixRoadmap_stage8Vfs implemented
+  class n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers inProgress
   class n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stage12BtrfsWrite,n14_FerrixRoadmap_stage13Isolation,n15_FerrixRoadmap_stage14RealTime,n16_FerrixRoadmap_stage15Userland,n17_FerrixRoadmap_stage16Rustc,n18_FerrixRoadmap_stage17SelfHosting planned
 ```
 
@@ -2564,7 +2562,7 @@ flowchart TB
 | `S5` | 5 | Stage 5 scheduler | Done | week | `#implemented` |
 | `S6` | 6 | Stage 6 user mode | Done | week | `#implemented` |
 | `S7` | 7 | Stage 7 Linux ABI | Done | month | `#implemented` |
-| `S8` | 8 | Stage 8 VFS | InProgress | month | `#inProgress` |
+| `S8` | 8 | Stage 8 VFS | Done | month | `#implemented` |
 | `S9` | 9 | Stage 9 native ABI | InProgress | week | `#inProgress` |
 | `S10` | 10 | Stage 10 userspace drivers | InProgress | month | `#inProgress` |
 | `S11` | 11 | Stage 11 btrfs read | Planned | month | `#planned` |
@@ -2681,7 +2679,7 @@ Left: signal delivery and rt_sigreturn, threads, and the stand-ins for a tty, a 
 
 ### S8 — Stage 8 VFS
 
-**InProgress**  ·  size month  ·  `#inProgress`
+**Done**  ·  size month  ·  `#implemented`
 
 Inode and dentry caches, the mount table, fd sharing rules, tmpfs, devfs, procfs, cpio initramfs. Exit: busybox ls -R /proc, cat /proc/self/maps, a script manipulating files under tmpfs.
 
@@ -2971,8 +2969,8 @@ flowchart LR
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixStructure_Kernel_mm,n4_FerrixStructure_Kernel_vmap,n5_FerrixRoadmap_stage3TrapsInterruptsTime,n6_FerrixStructure_Kernel_trap,n7_FerrixStructure_Kernel_irq,n8_FerrixStructure_Kernel_timer,n9_FerrixRoadmap_stage4Smp,n10_FerrixStructure_Kernel_smp,n11_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_stage5Scheduler,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_tasks,n16_FerrixRoadmap_stage6UserMode,n18_FerrixRoadmap_stage7LinuxAbi implemented
-  class n17_FerrixStructure_Kernel_vm,n19_FerrixStructure_Kernel_syscalls,n20_FerrixStructure_Kernel_signals,n22_FerrixRoadmap_stage8Vfs,n25_FerrixRoadmap_stage9NativeAbi,n27_FerrixRoadmap_stage10UserspaceDrivers inProgress
+  class n0_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixStructure_Kernel_mm,n4_FerrixStructure_Kernel_vmap,n5_FerrixRoadmap_stage3TrapsInterruptsTime,n6_FerrixStructure_Kernel_trap,n7_FerrixStructure_Kernel_irq,n8_FerrixStructure_Kernel_timer,n9_FerrixRoadmap_stage4Smp,n10_FerrixStructure_Kernel_smp,n11_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_stage5Scheduler,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_tasks,n16_FerrixRoadmap_stage6UserMode,n18_FerrixRoadmap_stage7LinuxAbi,n22_FerrixRoadmap_stage8Vfs implemented
+  class n17_FerrixStructure_Kernel_vm,n19_FerrixStructure_Kernel_syscalls,n20_FerrixStructure_Kernel_signals,n25_FerrixRoadmap_stage9NativeAbi,n27_FerrixRoadmap_stage10UserspaceDrivers inProgress
   class n21_FerrixStructure_Kernel_futex,n23_FerrixStructure_Kernel_vfs,n24_FerrixStructure_Kernel_filesystems,n26_FerrixStructure_Kernel_native,n30_FerrixRoadmap_stage11BtrfsRead,n31_FerrixStructure_Kernel_blockCore,n32_FerrixRoadmap_stage13Isolation,n33_FerrixStructure_Kernel_namespaces,n34_FerrixStructure_Kernel_cgroups,n35_FerrixStructure_Kernel_seccomp,n36_FerrixRoadmap_stage14RealTime,n37_FerrixRoadmap_stage15Userland,n38_FerrixStructure_Ferrix_userland,n39_FerrixRoadmap_stage16Rustc planned
 ```
 
@@ -3136,7 +3134,7 @@ flowchart LR
 | `S5` | `stage5Scheduler` | `dependency` and `satisfy` | yes | `#implemented` |
 | `S6` | `stage6UserMode` | `allocate` and `dependency` | — | `#implemented` |
 | `S7` | `stage7LinuxAbi` | `allocate` and `dependency` | — | `#implemented` |
-| `S8` | `stage8Vfs` | `allocate` and `dependency` | — | `#inProgress` |
+| `S8` | `stage8Vfs` | `allocate` and `dependency` | — | `#implemented` |
 | `S9` | `stage9NativeAbi` | `allocate` and `dependency` | — | `#inProgress` |
 | `S10` | `stage10UserspaceDrivers` | `allocate` and `dependency` | — | `#inProgress` |
 | `S11` | `stage11BtrfsRead` | `allocate` and `dependency` | — | `#planned` |

@@ -36,7 +36,7 @@ package FerrixRoadmap {
              * invalidation is reachable. */
         subject os : Ferrix;
         attribute arch : IsaFamily;
-        attribute marker : String = "FERRIX-BOOT-OK stages 1-7";
+        attribute marker : String = "FERRIX-BOOT-OK stages 1-8";
     }
 
     // -----------------------------------------------------------------------
@@ -211,9 +211,9 @@ package FerrixRoadmap {
              * stand-ins for a tty, a clock chip and an entropy source. */
     }
 
-    #inProgress requirement <'S8'> stage8Vfs : Stage {
+    #implemented requirement <'S8'> stage8Vfs : Stage {
         attribute :>> number = 8;
-        attribute :>> status = StageStatus::InProgress;
+        attribute :>> status = StageStatus::Done;
         attribute :>> size = "month";
         doc /* Inode and dentry caches, the mount table, fd sharing rules,
              * tmpfs, devfs, procfs, cpio initramfs. Exit: busybox ls -R /proc,
