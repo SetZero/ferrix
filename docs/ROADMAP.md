@@ -1067,8 +1067,13 @@ child execs or ends. A new thread is still `ENOSYS`.
 Every general register is cleared on entry to user mode, with one exception a
 native process needs: `Startup.argument` arrives in the first argument
 register -- RDI, x0 or r0 -- which is how stage 9's `process_start` hands a
-driver its bootstrap handle. A Linux program's is zero. The boot test starts a
-two-instruction program that exits with that register:
+driver its bootstrap handle. A Linux program's is zero. A starter claims the
+start before it puts anything into the process (`process::claim_start`), so two
+starts cannot both move a handle in or overwrite each other's argument; a
+dropped claim gives the start back, and a process that has already ended cannot
+be claimed. `exec::load_native` loads an image with nothing on its stack for
+such a start. The boot test starts a two-instruction program that exits with
+that register, through a claim:
 
       argument a program started with an argument found it on entry and exited with 57
 

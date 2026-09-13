@@ -149,6 +149,31 @@ pub(crate) fn load(
     load_executable(program, args, env, random)
 }
 
+/// Load `image`, which came from no file, into a new process that starts with
+/// nothing on its stack: a native program, told its bootstrap handle by its
+/// start argument rather than by an argument vector.
+///
+/// It enters at the image's entry point with its stack pointer at
+/// [`Image::stack_top`], and its start argument is zero until a
+/// [`process::StartClaim`] starts it with one. `name` is what `/proc/<pid>/exe`
+/// and its command line report.
+///
+/// # Errors
+///
+/// [`ExecError`].
+pub(crate) fn load_native(image: &[u8], name: &[u8]) -> Result<Arc<Process>, ExecError> {
+    let space = AddressSpace::new().map_err(ExecError::Space)?;
+    let process = Process::new(Arc::clone(&space));
+    let loaded = load_into(&space, image)?;
+    process.record_exec(name, &[name]);
+    process.set_startup(Startup {
+        entry: loaded.loaded.entry,
+        stack: loaded.stack_top,
+        argument: 0,
+    });
+    Ok(registry::register(process))
+}
+
 /// Load `program` into a new process, ready to run and not yet running.
 ///
 /// # Errors

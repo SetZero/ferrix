@@ -5872,25 +5872,34 @@ fn check_a_program_is_handed_its_start_argument() -> Result<Option<i32>, &'stati
         image::Shape::Good,
         arch::USER_ARGUMENT_PROGRAM,
     );
-    let program = exec::load(
-        &file,
-        &[b"/argument"],
-        &[],
-        [0x5a; ferrix_ustack::RANDOM_BYTES],
-    )
-    .map_err(|_| "a program to hand a start argument to could not be loaded")?;
-    let startup = program
-        .startup()
-        .ok_or("a loaded program had no startup to add an argument to")?;
-    program.set_startup(process::Startup {
-        argument: START_ARGUMENT,
-        ..startup
-    });
-    let _task = process::start(&program)
+    let program = exec::load_native(&file, b"/argument")
+        .map_err(|_| "a program to hand a start argument to could not be loaded")?;
+    let claim = process::claim_start(&program)
+        .map_err(|_| "a loaded program's start could not be claimed")?;
+    if process::claim_start(&program).is_ok() {
+        return Err("a process's start was claimed twice at once");
+    }
+    drop(claim);
+    let claim = process::claim_start(&program)
+        .map_err(|_| "a released claim on a process could not be taken again")?;
+    let _task = claim
+        .start(None, START_ARGUMENT)
         .map_err(|_| "a program handed a start argument could not be started")?;
     if process::start(&program).is_ok() {
         return Err("a process that had already started was started a second time");
     }
+
+    // A process ended before anyone started it cannot be claimed: a native
+    // `process_start` on a killed child would otherwise report a start whose
+    // task returns before entering the program.
+    let ended = exec::load_native(&file, b"/argument")
+        .map_err(|_| "a program to end before its start could not be loaded")?;
+    process::kill(&ended, 137);
+    if process::claim_start(&ended).is_ok() {
+        return Err("the start of a process that had already ended was claimed");
+    }
+    drop(ended);
+
     let status = program
         .wait_for_exit(u64::MAX)
         .ok_or("a program handed a start argument never reported how it ended")?;

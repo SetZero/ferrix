@@ -1092,27 +1092,117 @@ pub(crate) fn start_on(
     process: &Arc<Process>,
     cpu: Option<usize>,
 ) -> Result<Arc<Task>, &'static str> {
+    claim_start(process)?.spawn(cpu, None)
+}
+
+/// The right to start a process, held by one starter at a time.
+///
+/// Taken before anything is put into the process that its program will find on
+/// entry -- a native starter's bootstrap handle, and the start argument that
+/// names it -- because two starts can race. With the claim taken first, a
+/// second `process_start` is refused before it has moved a handle into a table
+/// the child may already be reading, or overwritten the argument the first
+/// start's task has yet to read. Dropped without starting, it gives the start
+/// back, so a starter whose own preparation failed leaves the process
+/// startable.
+#[must_use = "dropping a claim gives the start back"]
+pub(crate) struct StartClaim {
+    /// The process it may start.
+    process: Arc<Process>,
+    /// Set once its task is spawned, after which the start is not given back.
+    spent: bool,
+}
+
+/// Claim the start of `process`, which must have a program loaded and must not
+/// have ended.
+///
+/// An ended process is refused with the claim already taken, so a kill that
+/// lands after this answers finds a claim a starter holds, and the task that
+/// start spawns returns before entering the program. Without the refusal, a
+/// native `process_start` on a child killed before its start would spawn that
+/// task and report a start that never ran anything.
+///
+/// # Errors
+///
+/// If no program was loaded into it, it has already ended, or it has already
+/// been claimed or started.
+pub(crate) fn claim_start(process: &Arc<Process>) -> Result<StartClaim, &'static str> {
     if process.startup().is_none() {
         return Err("the process has no program loaded");
     }
-    claim_start(process)?;
-    let task = sched::spawn_user("user", run_program, Arc::clone(process), cpu, None)
-        .inspect_err(|_| process.start_claimed.store(false, Ordering::Release))?;
-    process.tasks.lock().push(Arc::downgrade(&task));
-    Ok(task)
+    let claim = take_claim(process)?;
+    if process.is_terminated() {
+        // Dropping the claim gives the start back, which no one can use now.
+        return Err("the process has already ended");
+    }
+    Ok(claim)
 }
 
-/// Mark `process` started, or refuse if something already has.
-///
-/// Atomic, because two starts can race: a native `process_start` called twice
-/// at once must run one task, not two in the same process. A start whose task
-/// could not be spawned clears the mark again, so it can be retried.
-fn claim_start(process: &Process) -> Result<(), &'static str> {
+/// Take the claim whether or not a program is loaded: a fork child resumes from
+/// its parent's registers instead.
+fn take_claim(process: &Arc<Process>) -> Result<StartClaim, &'static str> {
     process
         .start_claimed
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .map(|_| ())
-        .map_err(|_| "the process has already started")
+        .map_err(|_| "the process has already started")?;
+    Ok(StartClaim {
+        process: Arc::clone(process),
+        spent: false,
+    })
+}
+
+impl StartClaim {
+    /// Start the process with `argument` in its first argument register.
+    ///
+    /// The argument is written while the claim is held, so no other start can
+    /// change it between here and the task reading it.
+    ///
+    /// # Errors
+    ///
+    /// If the process has no program loaded, or the scheduler has no stack for
+    /// its task; the start is given back either way. A spawn that fails leaves
+    /// `argument` written into the startup, which is harmless: the next start
+    /// writes its own before anything reads it.
+    pub(crate) fn start(
+        self,
+        cpu: Option<usize>,
+        argument: u64,
+    ) -> Result<Arc<Task>, &'static str> {
+        let loaded = if let Some(startup) = self.process.startup.lock().as_mut() {
+            startup.argument = argument;
+            true
+        } else {
+            false
+        };
+        if !loaded {
+            return Err("the process has no program loaded");
+        }
+        self.spawn(cpu, None)
+    }
+
+    /// Run the process's first task: entering its program, or with `state`
+    /// resuming a fork child with its parent's thread pointer and
+    /// floating-point registers.
+    fn spawn(
+        mut self,
+        cpu: Option<usize>,
+        state: Option<crate::arch::UserState>,
+    ) -> Result<Arc<Task>, &'static str> {
+        let task = sched::spawn_user("user", run_program, Arc::clone(&self.process), cpu, state)?;
+        self.process.tasks.lock().push(Arc::downgrade(&task));
+        self.spent = true;
+        Ok(task)
+    }
+}
+
+impl Drop for StartClaim {
+    /// Give the start back, unless the task was spawned.
+    fn drop(&mut self) {
+        if !self.spent {
+            self.process.start_claimed.store(false, Ordering::Release);
+        }
+    }
 }
 
 /// Run a fork child: `child` resumes from the registers [`Process::set_resume`]
@@ -1126,11 +1216,7 @@ pub(crate) fn start_forked(
     child: &Arc<Process>,
     state: crate::arch::UserState,
 ) -> Result<Arc<Task>, &'static str> {
-    claim_start(child)?;
-    let task = sched::spawn_user("user", run_program, Arc::clone(child), None, Some(state))
-        .inspect_err(|_| child.start_claimed.store(false, Ordering::Release))?;
-    child.tasks.lock().push(Arc::downgrade(&task));
-    Ok(task)
+    take_claim(child)?.spawn(None, Some(state))
 }
 
 /// End `process` from outside, with `status`.
