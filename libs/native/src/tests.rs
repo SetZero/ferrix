@@ -853,6 +853,7 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = job.create_child();
     let _ = job.kill();
     let _ = device.interrupt(0);
+    let _ = device.block_ring();
     let _ = interrupt.bind(&port, 0);
     let _ = interrupt.ack();
     let _ = device.io_mapping(IoMappingSpec::default());

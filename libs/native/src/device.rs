@@ -4,6 +4,7 @@ use ferrix_native_abi::nr;
 use ferrix_native_abi::types::IoMappingSpec;
 
 use crate::call::{Call, Syscall};
+use crate::channel::Channel;
 use crate::error::{Error, decode, decode_handle, decode_unit};
 use crate::handle::{Object, OwnedHandle, object_handle, register};
 use crate::port::Port;
@@ -65,6 +66,28 @@ impl<S: Syscall> Device<S> {
             .make(self.syscall());
         let handle = decode_handle(value)?;
         Ok(IoMapping::from_owned(OwnedHandle::from_raw(
+            self.syscall(),
+            handle,
+        )))
+    }
+}
+
+impl<S: Syscall> Device<S> {
+    /// Ask the kernel for a block ring on this device: the driver's end of
+    /// the ring's control channel, over which HELLO goes next
+    /// (`docs/BLOCK-RING.md` §6). Needs `MANAGE`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::WrongType`] for a handle that is not a device,
+    /// [`Error::AccessDenied`] without `MANAGE`, and the kernel's refusal
+    /// for a device that already has a ring.
+    pub fn block_ring(&self) -> Result<Channel<S>, Error> {
+        let value = Call::new(nr::BLOCK_RING_CREATE)
+            .value(register(self.handle()))
+            .make(self.syscall());
+        let handle = decode_handle(value)?;
+        Ok(Channel::from_owned(OwnedHandle::from_raw(
             self.syscall(),
             handle,
         )))
