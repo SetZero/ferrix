@@ -131,7 +131,7 @@ nobody has it yet.
 | An "applets" group in `test-vfs`, separate from the exit criterion | ferrix-e6 | 8 |
 | FX-0601 "reserving a thousand pages cost a frame", about one x86-64 boot in three under KVM: a reap landing inside stage 6's frame-count window; the check must settle first, as the path check does | ferrix-34 | 6 |
 | A regression check that exited programs give every frame back once reaped (the leak 0510a8a fixed) | ferrix-a5 | 7 |
-| The first hardware run of stages 6–9 on the DK1: the full boot marker and `test-shell` at two processors, recorded as a hardware column in the roadmap's ARMv7-A section. Needs the board powered, and a shell also needs console receive (next row) | ferrix-3c | ARMv7-A |
+| The first hardware run of stages 6–9 on the DK1: the full boot marker and `test-shell` at two processors, recorded as a hardware column in the roadmap's ARMv7-A section. Needs a reset press by the customer per run; the interactive shell also needs console receive (next row), the script test does not | ferrix-3c | ARMv7-A |
 | Console receive by interrupt on the PL011 and the STM32 USART, retiring the 20 ms polling thread | ferrix-4f, with ferrix-a5 | 7, 15 |
 | ARMv7-A with 2 GiB does not boot: the loader must allocate below the direct map's ceiling, and RAM beyond it is reported unused rather than fatal | ferrix-4f | ARMv7-A |
 
@@ -207,8 +207,11 @@ Dated, newest first. A decision here is final until the customer says otherwise.
 
 ## Waiting on the customer
 
-* The DK1 board has no power (ST-LINK reads 0 V); stages 6–9 have never run on
-  hardware.
+* The DK1 board is powered and reachable over serial, but the ST-LINK's
+  voltage sense and SWD are blind under this firmware, so a host-side reset
+  does not work: every board run that halts needs a reset button press by
+  the customer. Stages 6–9 have never run on hardware; the first run is
+  being prepared.
 * The root filesystem: 1.7 TB of the 1.9 TB is outside Ferrix. The sessions
   can only keep their own build output down.
 * Pushes to `origin`: local `main` is 60 commits ahead, and the last CI runs
