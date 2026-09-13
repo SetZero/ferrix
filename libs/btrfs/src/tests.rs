@@ -1443,6 +1443,193 @@ fn a_truncated_extent_item_is_refused() {
     );
 }
 
+/// A regular (`kind` 1) or preallocated (2) extent item.
+fn file_extent(
+    kind: u8,
+    compression: u8,
+    ram: u64,
+    disk: (u64, u64),
+    offset: u64,
+    num: u64,
+) -> Vec<u8> {
+    let mut bytes = vec![0u8; 53];
+    put_u64(&mut bytes, 0, 9); // generation
+    put_u64(&mut bytes, 8, ram);
+    bytes[16] = compression;
+    bytes[20] = kind;
+    put_u64(&mut bytes, 21, disk.0); // disk_bytenr
+    put_u64(&mut bytes, 29, disk.1); // disk_num_bytes
+    put_u64(&mut bytes, 37, offset);
+    put_u64(&mut bytes, 45, num);
+    bytes
+}
+
+/// An inline extent item holding `data`.
+fn inline_extent(compression: u8, ram: u64, data: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0u8; 21];
+    put_u64(&mut bytes, 8, ram);
+    bytes[16] = compression;
+    bytes[20] = 0;
+    bytes.extend_from_slice(data);
+    bytes
+}
+
+/// Check an extent item filed at file offset `at`, on a 4 KiB-sector volume.
+fn check_extent(at: u64, bytes: &[u8]) -> Result<(), BtrfsError> {
+    ExtentData::parse_item(&BtrfsKey::new(257, 108, at), bytes, 4096).map(|_| ())
+}
+
+#[test]
+fn an_extent_btrfs_would_not_write_is_refused() {
+    const REG: u8 = 1;
+    const PREALLOC: u8 = 2;
+    const DISK: u64 = 0x50_0000;
+    const TOP: u64 = 0xFFFF_FFFF_FFFF_F000;
+    let bad = Err(BtrfsError::BadItem { item_type: 108 });
+    let mut encrypted = file_extent(REG, 0, 4096, (DISK, 4096), 0, 4096);
+    encrypted[17] = 1;
+    let mut encoded = file_extent(REG, 0, 4096, (DISK, 4096), 0, 4096);
+    put_u16(&mut encoded, 18, 1);
+    let mut long = file_extent(REG, 0, 4096, (DISK, 4096), 0, 4096);
+    long.push(0);
+
+    let cases: Vec<(u64, Vec<u8>, &str)> = vec![
+        (
+            0,
+            file_extent(REG, 0, 8192, (DISK, 8192), 4096, 8192),
+            "a reference running past its extent into the next",
+        ),
+        (
+            0,
+            file_extent(REG, 1, 8192, (DISK, 4096), 4096, 8192),
+            "a compressed reference running past what the extent expands to",
+        ),
+        (
+            0,
+            file_extent(PREALLOC, 0, 4096, (DISK, 4096), 0, 8192),
+            "a preallocated reference running past its extent",
+        ),
+        (
+            0,
+            file_extent(REG, 0, 4096, (DISK, 4096), 0, 0),
+            "no bytes at all",
+        ),
+        (
+            0,
+            file_extent(REG, 0, 4096, (DISK, 4096), 0, 4095),
+            "num_bytes off the sector grid",
+        ),
+        (
+            0,
+            file_extent(REG, 0, 4096, (DISK + 1, 4096), 0, 4096),
+            "disk_bytenr off the sector grid",
+        ),
+        (
+            0,
+            file_extent(REG, 0, 4097, (DISK, 4096), 0, 4096),
+            "ram_bytes off the sector grid",
+        ),
+        (
+            0,
+            file_extent(REG, 0, 4096, (DISK, 4096), TOP, 4096),
+            "offset and num_bytes overflowing",
+        ),
+        (
+            TOP,
+            file_extent(REG, 0, 1 << 20, (0, 0), 0, 4096),
+            "an extent whose end overflows the file offset",
+        ),
+        (
+            4097,
+            file_extent(REG, 0, 4096, (DISK, 4096), 0, 4096),
+            "a file offset off the sector grid",
+        ),
+        (0, encrypted, "an encrypted extent"),
+        (0, encoded, "another encoding"),
+        (0, long, "a regular extent item longer than 53 bytes"),
+        (
+            4096,
+            inline_extent(0, 5, b"hello"),
+            "an inline extent past offset 0",
+        ),
+        (
+            0,
+            inline_extent(0, 6, b"hello"),
+            "an inline extent shorter than its ram_bytes",
+        ),
+    ];
+    for (at, bytes, what) in cases {
+        assert_eq!(check_extent(at, &bytes), bad, "{what} is refused");
+    }
+    assert_eq!(
+        check_extent(0, &file_extent(REG, 4, 4096, (DISK, 4096), 0, 4096)),
+        Err(BtrfsError::UnsupportedCompression(4)),
+        "a compression type Linux does not define"
+    );
+}
+
+#[test]
+fn every_extent_btrfs_writes_still_parses() {
+    const DISK: u64 = 0x50_0000;
+    let cases: [(u64, Vec<u8>, &str); 7] = [
+        (
+            4096,
+            file_extent(1, 0, 8192, (DISK, 8192), 4096, 4096),
+            "the tail of an extent, exactly to its end",
+        ),
+        (
+            0,
+            file_extent(1, 3, 8192, (DISK, 4096), 4096, 4096),
+            "the tail of a compressed extent",
+        ),
+        (
+            8192,
+            file_extent(1, 0, 1 << 20, (0, 0), 0, 1 << 20),
+            "a hole, which names no extent",
+        ),
+        (
+            0,
+            file_extent(2, 0, 8192, (DISK, 8192), 0, 8192),
+            "a preallocated extent",
+        ),
+        (
+            0xFFFF_FFFF_FFFF_E000,
+            file_extent(1, 0, 4096, (0, 0), 0, 4096),
+            "an extent ending at the last representable sector",
+        ),
+        (0, inline_extent(0, 5, b"hello"), "an inline extent"),
+        (
+            0,
+            inline_extent(1, 100, b"deflate"),
+            "a compressed inline extent, shorter than it expands",
+        ),
+    ];
+    for (at, bytes, what) in cases {
+        assert_eq!(check_extent(at, &bytes), Ok(()), "{what} parses");
+    }
+}
+
+#[test]
+fn an_extent_ends_where_linux_says_it_does() {
+    let key = |at| BtrfsKey::new(257, 108, at);
+    let inline = inline_extent(0, 5, b"hello");
+    let inline = ExtentData::parse(&inline).unwrap();
+    assert_eq!(
+        inline.end(&key(0), 4096),
+        Some(4096),
+        "an inline extent owns the rest of its sector"
+    );
+    let regular = file_extent(1, 0, 8192, (0x50_0000, 8192), 0, 4096);
+    let regular = ExtentData::parse(&regular).unwrap();
+    assert_eq!(regular.end(&key(8192), 4096), Some(12288));
+    let huge = inline_extent(1, u64::MAX, b"x");
+    assert_eq!(
+        ExtentData::parse(&huge).unwrap().end(&key(0), 4096),
+        None,
+        "an end past u64::MAX is no end"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The one that matters most
 // ---------------------------------------------------------------------------

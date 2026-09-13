@@ -355,6 +355,12 @@ impl<S: ChunkStorage> Subvolume<'_, S> {
             .last_at_or_before(device, self.tree, &probe, node)?
             .filter(|key| key.objectid == ino && key.item_type == EXTENT_DATA_KEY)
             .unwrap_or(BtrfsKey::new(ino, EXTENT_DATA_KEY, 0));
+        let sectorsize = self.volume.sectorsize();
+        // Where the previous extent of this walk ended. Linux's
+        // `check_extent_data_item` refuses an extent starting before it: two
+        // extents claiming one file range would make the bytes a read returns
+        // depend on which it copied last.
+        let mut covered: Option<u64> = None;
         // Every way out of the walk leaves `out` complete: extents past `end`
         // break it, and running out of items leaves the zero fill.
         let _: Option<()> = self
@@ -364,7 +370,14 @@ impl<S: ChunkStorage> Subvolume<'_, S> {
                 if key.objectid != ino || key.item_type != EXTENT_DATA_KEY || key.offset >= end {
                     return Ok(ControlFlow::Break(()));
                 }
-                let extent = ExtentData::parse(item.data)?;
+                let bad = BtrfsError::BadItem {
+                    item_type: EXTENT_DATA_KEY,
+                };
+                let extent = ExtentData::parse_item(&key, item.data, sectorsize)?;
+                if covered.is_some_and(|previous| previous > key.offset) {
+                    return Err(bad);
+                }
+                covered = Some(extent.end(&key, sectorsize).ok_or(bad)?);
                 let place = Placement::new(key.offset, &extent, offset, out.len());
                 if let Some(place) = place {
                     self.copy_extent(device, &extent, place, out, buffers)?;

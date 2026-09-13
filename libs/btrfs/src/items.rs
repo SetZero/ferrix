@@ -132,6 +132,10 @@ pub const XATTR_NAME_MAX: usize = 255;
 /// reference.
 pub const EXTENT_DATA_HEADER_SIZE: usize = 21;
 
+/// Bytes in a regular or preallocated `EXTENT_DATA` item: the header and four
+/// `u64`s. Unlike an inline extent, its size is fixed.
+pub const FILE_EXTENT_ITEM_SIZE: usize = 53;
+
 /// Bytes in an on-disk `DEV_ITEM`.
 pub const DEV_ITEM_SIZE: usize = 98;
 
@@ -613,7 +617,112 @@ impl<'a> ExtentData<'a> {
                 num_bytes: u64_at(bytes, 45)?,
             })
         };
-        get().ok_or_else(|| truncated(53, bytes.len()))
+        get().ok_or_else(|| truncated(FILE_EXTENT_ITEM_SIZE, bytes.len()))
+    }
+
+    /// Parse an `EXTENT_DATA` item and check it against the key it is filed
+    /// under and the volume's `sectorsize`.
+    ///
+    /// [`ExtentData::parse`] reads the fields; this is the form a file read
+    /// uses, because what makes an extent safe to follow is how its fields
+    /// relate to each other, to its key and to the sector grid, and `parse`
+    /// sees none of those. It mirrors Linux's `check_extent_data_item`, and
+    /// adds the bounds that decide which bytes a read lands on — see
+    /// `check_reference`.
+    pub fn parse_item(
+        key: &BtrfsKey,
+        bytes: &'a [u8],
+        sectorsize: u32,
+    ) -> Result<Self, BtrfsError> {
+        let extent = Self::parse(bytes)?;
+        extent.check(key, bytes.len(), u64::from(sectorsize))?;
+        Ok(extent)
+    }
+
+    /// The checks every kind of extent shares, then the kind's own.
+    ///
+    /// As `check_extent_data_item`: a compression type Linux defines, no
+    /// encryption or other encoding (btrfs has never written either, so a
+    /// non-zero value is an encoding this reader would misread), and a file
+    /// offset on a sector boundary. An inline extent starts the file, at
+    /// offset zero, and uncompressed it holds exactly `ram_bytes` bytes — the
+    /// length a read takes from it.
+    fn check(&self, key: &BtrfsKey, item_size: usize, sector: u64) -> Result<(), BtrfsError> {
+        if self.compression > COMPRESS_ZSTD {
+            return Err(BtrfsError::UnsupportedCompression(self.compression));
+        }
+        let consistent = self.encryption == 0
+            && self.other_encoding == 0
+            && key.offset.checked_rem(sector) == Some(0)
+            && match self.body {
+                ExtentDataBody::Inline(data) => {
+                    key.offset == 0
+                        && (!self.is_uncompressed() || data.len() as u64 == self.ram_bytes)
+                }
+                ExtentDataBody::Regular(file) | ExtentDataBody::Prealloc(file) => {
+                    item_size == FILE_EXTENT_ITEM_SIZE && self.check_reference(key, &file, sector)
+                }
+            };
+        if consistent {
+            Ok(())
+        } else {
+            Err(BtrfsError::BadItem {
+                item_type: EXTENT_DATA_KEY,
+            })
+        }
+    }
+
+    /// Whether a regular or preallocated extent's reference stays inside
+    /// the extent it names.
+    ///
+    /// From `check_extent_data_item`: every size and address a whole number of
+    /// sectors, and the key's offset plus `num_bytes` not wrapping. Beyond it,
+    /// a non-empty range, and the range this item uses — `offset` to
+    /// `offset + num_bytes` — inside the extent: inside `disk_num_bytes` when
+    /// the bytes are stored as they are, inside `ram_bytes` when they expand
+    /// from a compressed extent. Without that last bound a reference reaching
+    /// past its extent reads whatever the allocator put next, which is another
+    /// file's data, and passes every checksum on the way.
+    fn check_reference(&self, key: &BtrfsKey, file: &FileExtent, sector: u64) -> bool {
+        let aligned = [
+            self.ram_bytes,
+            file.disk_bytenr,
+            file.disk_num_bytes,
+            file.offset,
+            file.num_bytes,
+        ]
+        .into_iter()
+        .all(|value| value.checked_rem(sector) == Some(0));
+        let extent_len = if self.is_uncompressed() {
+            file.disk_num_bytes
+        } else {
+            self.ram_bytes
+        };
+        // A hole names no extent, so there is nothing to stay inside.
+        let inside = file
+            .offset
+            .checked_add(file.num_bytes)
+            .is_some_and(|used| file.is_hole() || used <= extent_len);
+        aligned && file.num_bytes != 0 && inside && key.offset.checked_add(file.num_bytes).is_some()
+    }
+
+    /// The file offset just past this extent, when it is filed under `key`.
+    ///
+    /// Linux's `btrfs_file_extent_end`: a regular or preallocated extent ends
+    /// `num_bytes` after its key, and an inline one at its expanded length
+    /// rounded up to a whole sector, because the rest of that sector belongs
+    /// to it. `None` if the end does not fit in a `u64`.
+    #[must_use]
+    pub fn end(&self, key: &BtrfsKey, sectorsize: u32) -> Option<u64> {
+        match self.body {
+            ExtentDataBody::Inline(_) => key
+                .offset
+                .checked_add(self.ram_bytes)?
+                .checked_next_multiple_of(u64::from(sectorsize)),
+            ExtentDataBody::Regular(file) | ExtentDataBody::Prealloc(file) => {
+                key.offset.checked_add(file.num_bytes)
+            }
+        }
     }
 
     /// The extent reference, for a regular or preallocated extent.

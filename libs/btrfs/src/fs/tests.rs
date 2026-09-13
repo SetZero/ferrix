@@ -17,7 +17,7 @@ use super::*;
 use crate::chunk::ChunkMapEntry;
 use crate::crc32c::crc32c;
 use crate::items::{FT_DIR, FT_REG_FILE, FT_SYMLINK};
-use crate::tree::HEADER_SIZE;
+use crate::tree::{HEADER_SIZE, ITEM_SIZE};
 use crate::volume::tests::{IMAGES, PackedDevice};
 
 /// One manifest line.
@@ -471,6 +471,47 @@ fn a_lookup_refuses_a_name_that_no_longer_matches_its_hash() {
         sub.lookup(&mut f.device, root, &name, &mut f.node),
         Err(BtrfsError::BadItem {
             item_type: DIR_ITEM_KEY
+        })
+    );
+}
+
+#[test]
+fn a_read_refuses_an_extent_that_starts_inside_the_one_before() {
+    // `sparse.bin` is 8 KiB written at 0, then 4 KiB at 1 MiB. Refile the
+    // extent item after the first at 4 KiB, inside the first one, and the two
+    // claim the same range of the file.
+    let f = &mut Fixture::new(IMAGES[0].1);
+    let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
+    let sub = volume.default_subvolume();
+    let mut buffers =
+        ReadBuffers::new((&mut f.compressed[..], &mut f.plain[..], &mut f.zstd[..])).unwrap();
+    let Target::Inode(ino) = resolve(&sub, &mut f.device, b"sparse.bin", &mut f.node).target else {
+        panic!("sparse.bin is a file");
+    };
+    let mut whole = vec![0u8; 2 << 20];
+    let intact = sub
+        .read(&mut f.device, ino, 0, &mut whole, &mut f.node, &mut buffers)
+        .expect("the image is well formed");
+    assert!(intact > 1 << 20, "the whole sparse file reads back first");
+
+    let after_first = BtrfsKey::new(ino, EXTENT_DATA_KEY, 1);
+    let (key, node_at, _) = find_item(&volume, &mut f.device, after_first, &mut f.node);
+    assert!(
+        key.offset >= 8192,
+        "the second extent starts after the first"
+    );
+    let leaf = volume
+        .seek(&mut f.device, volume.fs_tree(), &key, &mut f.node)
+        .unwrap();
+    let slot = leaf.node.search(&key).unwrap();
+    let descriptor = node_at + (HEADER_SIZE + slot as usize * ITEM_SIZE) as u64;
+    f.device.write(descriptor + 9, &4096u64.to_le_bytes());
+    f.device.reseal(node_at);
+
+    assert_eq!(
+        sub.read(&mut f.device, ino, 0, &mut whole, &mut f.node, &mut buffers),
+        Err(BtrfsError::BadItem {
+            item_type: EXTENT_DATA_KEY
         })
     );
 }
