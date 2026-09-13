@@ -1123,19 +1123,25 @@ every file at open, so a program reading `maps` in small pieces sees one
 snapshot, and its directories opt out of the dentry cache, so a pid looked up
 before its process existed is not remembered as missing. `/proc/self` links to
 the caller's pid; each `/proc/<pid>` has `fd`, `status`, `comm`, `cmdline`,
-`stat`, `maps` and `exe`; and `/proc` has `cpuinfo`, `meminfo`, `mounts`,
-`stat`, `filesystems`, `uptime` and `version`. The text is `libs/procfs`, pinned
+`stat`, `maps`, `exe`, `cwd` and `root`; and `/proc` has `cpuinfo`, `meminfo`,
+`mounts`, `stat`, `partitions`, `filesystems`, `uptime`, `version` and `sys`. The text is `libs/procfs`, pinned
 byte for byte against lines taken from a real Linux `/proc`. `/proc/stat`'s
 processor lines are each run queue's busy and idle time, read without charging
 anything, so a line never goes backwards between reads; all busy time is
 `user`, because the kernel keeps no split between a task's user and kernel
 time. `/proc/uptime`'s idle field is the same count. With it, `top`, `mpstat`,
-`iostat -c` and `nmeter` run. Behind it, every
+`iostat -c` and `nmeter` run. `/proc/sys` is a tree of the values the kernel
+already keeps — `kernel.ostype`, `osrelease`, `version`, `hostname`,
+`domainname` and `pid_max`, `fs.file-max` and `fs.nr_open` — in which the
+host and domain names write through to what `uname` reports, and every other
+value is refused at open with `EACCES`, as Linux refuses it. `/proc/partitions`
+is empty, as Linux prints it with no block devices. With them, `pwdx`,
+`sysctl` and `fdisk -l` run. Behind it, every
 process now has a pid from a registry that finds a live process by it.
 
 ```
   devfs    7 nodes numbered as Linux numbers them; zero, null, full and urandom do what they are for
-  procfs   21 names listed and walked back to, 4 maps lines parsed, 2 of them named
+  procfs   36 names listed and walked back to, 4 maps lines parsed, 2 of them named; cwd and root read as getcwd; 8 /proc/sys values read, a host name written there reached uname; partitions empty with no block devices
   procstat /proc/stat read twice 50 ms apart: a cpu line for each of 4 processors, 21 ticks advanced, no counter went backwards
 ```
 
