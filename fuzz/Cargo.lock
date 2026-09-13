@@ -69,6 +69,8 @@ dependencies = [
  "ferrix-pci",
  "ferrix-ustack",
  "ferrix-vfs",
+ "ferrix-virtio",
+ "ferrix-virtio-blk",
  "libfuzzer-sys",
 ]
 
@@ -112,6 +114,17 @@ dependencies = [
  "ferrix-cpio",
  "ferrix-linux-abi",
  "ferrix-sync",
+]
+
+[[package]]
+name = "ferrix-virtio"
+version = "0.1.0"
+
+[[package]]
+name = "ferrix-virtio-blk"
+version = "0.1.0"
+dependencies = [
+ "ferrix-virtio",
 ]
 
 [[package]]

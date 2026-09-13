@@ -25,6 +25,8 @@ ferrix-pci = { path = "../libs/pci" }
 ferrix-btrfs = { path = "../libs/btrfs" }
 ferrix-block = { path = "../libs/block", features = ["model"] }
 ferrix-blkring = { path = "../libs/blkring" }
+ferrix-virtio = { path = "../libs/virtio" }
+ferrix-virtio-blk = { path = "../libs/virtio-blk" }
 
 [[bin]]
 name = "elf_parse"
@@ -85,6 +87,8 @@ bench = false
 [[bin]]
 name = "blkring"
 path = "fuzz_targets/blkring.rs"
+name = "virtio_blk"
+path = "fuzz_targets/virtio_blk.rs"
 test = false
 doc = false
 bench = false
