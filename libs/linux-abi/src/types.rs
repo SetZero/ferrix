@@ -1297,6 +1297,26 @@ pub const F_GETLK: u32 = 5;
 pub const F_SETLK: u32 = 6;
 /// Set a record lock, waiting if necessary.
 pub const F_SETLKW: u32 = 7;
+/// Read a record lock through a `struct flock64`. ARMv7-A's `fcntl64` only.
+pub const F_GETLK64: u32 = 12;
+/// Set a record lock through a `struct flock64`, without blocking.
+/// ARMv7-A's `fcntl64` only.
+pub const F_SETLK64: u32 = 13;
+/// Set a record lock through a `struct flock64`, waiting if necessary.
+/// ARMv7-A's `fcntl64` only.
+pub const F_SETLKW64: u32 = 14;
+/// Read an open file description's record lock.
+pub const F_OFD_GETLK: u32 = 36;
+/// Set an open file description's record lock without blocking.
+pub const F_OFD_SETLK: u32 = 37;
+/// Set an open file description's record lock, waiting if necessary.
+pub const F_OFD_SETLKW: u32 = 38;
+/// A record lock's type: shared, for reading.
+pub const F_RDLCK: i16 = 0;
+/// A record lock's type: exclusive, for writing.
+pub const F_WRLCK: i16 = 1;
+/// A record lock's type: none, or release.
+pub const F_UNLCK: i16 = 2;
 /// Like [`F_DUPFD`], but set close-on-exec on the new descriptor.
 pub const F_DUPFD_CLOEXEC: u32 = 1030;
 /// The only descriptor flag: close this descriptor on `execve`.

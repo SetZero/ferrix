@@ -1135,6 +1135,22 @@ fn flock_operations_match_the_generic_header() {
 }
 
 #[test]
+fn record_lock_commands_match_the_generic_header() {
+    // `asm-generic/fcntl.h`. The `64` commands are ARMv7-A's alone: Linux's
+    // `fcntl64` exists only where a long is 32 bits.
+    assert_eq!((types::F_GETLK, types::F_SETLK, types::F_SETLKW), (5, 6, 7));
+    assert_eq!(
+        (types::F_GETLK64, types::F_SETLK64, types::F_SETLKW64),
+        (12, 13, 14)
+    );
+    assert_eq!(
+        (types::F_OFD_GETLK, types::F_OFD_SETLK, types::F_OFD_SETLKW),
+        (36, 37, 38)
+    );
+    assert_eq!((types::F_RDLCK, types::F_WRLCK, types::F_UNLCK), (0, 1, 2));
+}
+
+#[test]
 fn open_flags_match_the_generic_header() {
     assert_eq!(types::O_CREAT, 64, "O_CREAT is octal 100");
     assert_eq!(types::O_TRUNC, 512, "O_TRUNC is octal 1000");
