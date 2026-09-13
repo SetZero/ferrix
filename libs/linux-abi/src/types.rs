@@ -955,6 +955,13 @@ pub const MREMAP_MAYMOVE: u32 = 1;
 /// `mremap` must place the mapping at the given address.
 pub const MREMAP_FIXED: u32 = 2;
 
+/// `msync`: schedule the write-back and return.
+pub const MS_ASYNC: u32 = 1;
+/// `msync`: invalidate other mappings of the same file.
+pub const MS_INVALIDATE: u32 = 2;
+/// `msync`: write back and wait for it.
+pub const MS_SYNC: u32 = 4;
+
 // ---------------------------------------------------------------------------
 // clone
 // ---------------------------------------------------------------------------

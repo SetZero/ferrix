@@ -158,10 +158,16 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
 /// be allowed to stop the machine with `hlt` -- unless the kernel entered user
 /// mode with no process to blame.
 fn user_fault(frame: &arch::TrapFrame, trap: &Trap) {
+    user_fault_as(frame, trap, arch::fault_signal(frame, trap));
+}
+
+/// [`user_fault`] with the signal, `si_code` and address already decided, for
+/// a fault the architecture cannot classify alone: a touch of a file mapping
+/// past the end of its file is `SIGBUS`, which only the address space knows.
+fn user_fault_as(frame: &arch::TrapFrame, trap: &Trap, (signal, code, address): (u32, i32, u64)) {
     use crate::syscall::deliver;
     use crate::syscall::signal::{Origin, Posted};
 
-    let (signal, code, address) = arch::fault_signal(frame, trap);
     // Open while the signal is forced. A fatal one ends the process here, and
     // ending it closes its handles and descriptors, frees what they held and
     // tells whoever watches it, none of which may run with interrupts masked.
@@ -194,22 +200,22 @@ fn user_fault(frame: &arch::TrapFrame, trap: &Trap) {
 /// Everything else is a bug in the kernel and is fatal.
 /// Try to make a user fault true through the running program's address space.
 ///
-/// Returns whether the instruction may be retried. A `false` here is a real
-/// segmentation fault -- an address in no region, or an access the region
-/// forbids -- which will become `SIGSEGV` once there are signals, and is fatal
-/// until then.
-fn resolve_user_fault(fault: &PageFault) -> bool {
+/// `Ok` when the instruction may be retried. An error is a real fault: an
+/// address in no region, or an access the region forbids, is `SIGSEGV`; a page
+/// of a file mapping past the end of its file is `SIGBUS`. `None` in the error
+/// means there was no process to ask.
+fn resolve_user_fault(fault: &PageFault) -> Result<(), Option<crate::user::space::SpaceError>> {
     let Some(process) = crate::syscall::process::current() else {
         // A fault from user mode with no process is not a program's mistake,
         // it is the kernel having entered ring 3 without recording who was
         // running. Reported as fatal rather than resolved.
-        return false;
+        return Err(None);
     };
     let access = crate::user::space::Access {
         write: fault.write,
         execute: fault.execute,
     };
-    process.space().fault(fault.address, access).is_ok()
+    process.space().fault(fault.address, access).map_err(Some)
 }
 
 fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {
@@ -231,12 +237,28 @@ fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {
     // read-only copy-on-write page is exactly the fault that must copy, and
     // filtering on `!present` here would send that instruction back to fault
     // for ever.
-    if fault.user && resolve_user_fault(&fault) {
+    let resolved = if fault.user {
+        resolve_user_fault(&fault)
+    } else {
+        Err(None)
+    };
+    if resolved.is_ok() {
         let _ = FAULTS_HANDLED.fetch_add(1, Ordering::Relaxed);
         return;
     }
     if fault.user && frame.came_from_user() {
-        user_fault(frame, &Trap::PageFault(fault));
+        /// `SIGBUS`'s `si_code` for an address with nothing behind it, which
+        /// is what Linux reports for a touch of a file mapping past its file.
+        const BUS_ADRERR: i32 = 2;
+        let trap = Trap::PageFault(fault);
+        match resolved {
+            Err(Some(crate::user::space::SpaceError::PastEnd(address))) => user_fault_as(
+                frame,
+                &trap,
+                (ferrix_linux_abi::types::SIGBUS, BUS_ADRERR, address),
+            ),
+            _ => user_fault(frame, &trap),
+        }
         return;
     }
 

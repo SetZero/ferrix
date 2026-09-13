@@ -895,7 +895,8 @@ fn io_mapping_map(process: &Process, mapping: Handle, address: u64) -> Result<us
             SpaceError::NotUserRange(_)
             | SpaceError::BadRange
             | SpaceError::NotMapped(_)
-            | SpaceError::Backing(_) => status::INVALID_ARGS,
+            | SpaceError::Backing(_)
+            | SpaceError::PastEnd(_) => status::INVALID_ARGS,
         })?;
     usize::try_from(mapped).map_err(|_| status::INVALID_ARGS)
 }

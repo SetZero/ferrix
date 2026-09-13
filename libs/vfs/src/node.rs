@@ -467,4 +467,16 @@ pub trait Inode: Send + Sync + fmt::Debug {
     fn read_link(&self) -> Result<Vec<u8>> {
         Err(Errno::EINVAL)
     }
+
+    /// The object a memory mapping of this file maps: in the kernel, the
+    /// file's VMO, whose pages `read_at` copies out of too.
+    ///
+    /// `None`, the default, for an object that cannot be mapped, which `mmap`
+    /// answers with `ENODEV`. A filesystem whose file contents live in a
+    /// [`crate::tmpfs::Pages`] store answers that store's
+    /// [`crate::tmpfs::Pages::object`], making it first if a mapping comes
+    /// before any read.
+    fn mapping(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        None
+    }
 }

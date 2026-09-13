@@ -353,6 +353,7 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Mprotect => memory::sys_mprotect(process, a[0], a[1], truncate(a[2])),
         Syscall::Brk => memory::sys_brk(process, a[0]),
         Syscall::Mremap => memory::sys_mremap(process, a[0], a[1], a[2], truncate(a[3]), a[4]),
+        Syscall::Msync => memory::sys_msync(process, a[0], a[1], truncate(a[2])),
         Syscall::Unshare => namespace::sys_unshare(process, a[0]),
         Syscall::Setns => namespace::sys_setns(process, fd::arg(a[0]), truncate(a[1])),
         // The number `gettid` answers, which a libc keeps as the thread's id

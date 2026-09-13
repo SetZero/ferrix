@@ -80,6 +80,7 @@
 use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
+use core::any::Any;
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -122,6 +123,9 @@ pub(crate) enum SpaceError {
     Refused(u64),
     /// The backing object could not produce the page.
     Backing(VmoError),
+    /// The address is in a file mapping, on a page wholly past the end of the
+    /// file: the process gets a `SIGBUS`, as on Linux.
+    PastEnd(u64),
 }
 
 impl fmt::Display for SpaceError {
@@ -133,6 +137,7 @@ impl fmt::Display for SpaceError {
             SpaceError::NotMapped(at) => write!(f, "nothing is mapped at {at:#x}"),
             SpaceError::Refused(at) => write!(f, "the access at {at:#x} is not permitted"),
             SpaceError::Backing(why) => write!(f, "the backing object refused: {why}"),
+            SpaceError::PastEnd(at) => write!(f, "{at:#x} is past the end of the mapped file"),
         }
     }
 }
@@ -167,6 +172,11 @@ struct Inner {
     /// The objects those regions name, by the id the region carries. Every id
     /// in here is attached to its object, and detached as it leaves.
     objects: BTreeMap<u64, Arc<Vmo>>,
+    /// For an id a file mapping names, the open file it was mapped through:
+    /// what keeps the file alive for as long as the mapping is, as Linux's
+    /// `vm_file` does, and what `/proc/<pid>/maps` names the region by. It
+    /// leaves with its id's object.
+    files: BTreeMap<u64, Arc<dyn Any + Send + Sync>>,
     /// The next object id to hand out. Never zero, which `Backing` reserves
     /// for private memory with no named object.
     next_id: u64,
@@ -216,6 +226,7 @@ impl AddressSpace {
             inner: SpinLock::new(Inner {
                 map,
                 objects: BTreeMap::new(),
+                files: BTreeMap::new(),
                 next_id: 1,
             }),
         }))
@@ -304,6 +315,22 @@ fn this_logical_cpu() -> usize {
                 "an address space was installed or uninstalled on a processor with no per-CPU record"
             );
         }
+    }
+}
+
+/// The frame for page `index` of `vmo`, committed on first touch.
+///
+/// A page of a file mapping (`file`) wholly past the end of its file is
+/// refused with [`SpaceError::PastEnd`] at `address`, never committed: the
+/// end is read under the object's pages lock, and a truncation lowers it
+/// before it takes that lock to take pages away.
+fn commit_page(vmo: &Vmo, index: u64, file: bool, address: u64) -> Result<Frame, SpaceError> {
+    if file {
+        vmo.commit_within(index)
+            .map_err(SpaceError::Backing)?
+            .ok_or(SpaceError::PastEnd(address))
+    } else {
+        vmo.commit(index).map_err(SpaceError::Backing)
     }
 }
 
@@ -459,8 +486,9 @@ impl AddressSpace {
             }
         }
 
-        // Read before the lock goes, because the child inherits it.
+        // Read before the lock goes, because the child inherits them.
         let next_id = inner.next_id;
+        let files = inner.files.clone();
 
         // The parent's writable translations to the shared pages are out of
         // its tables, but may still be in the TLB of a processor in its set —
@@ -478,6 +506,7 @@ impl AddressSpace {
             inner: SpinLock::new(Inner {
                 map,
                 objects,
+                files,
                 // Continued rather than restarted, so that an id means the
                 // same object in a parent and a child for as long as they
                 // share one. Two spaces may hand out the same id afterwards,
@@ -529,15 +558,21 @@ impl AddressSpace {
         let page = address & !(PAGE_SIZE - 1);
         let into_region = page.saturating_sub(region.range.start());
 
-        let (id, offset) = match region.backing {
-            Backing::Anonymous { id, offset } => (id, offset.saturating_add(into_region)),
+        let (id, offset, file) = match region.backing {
+            Backing::Anonymous { id, offset } => (id, offset.saturating_add(into_region), false),
+            // A shared file mapping maps the file's own pages: the object is
+            // the file's VMO, the one `read` copies out of.
+            Backing::File { id, offset } if region.flags.shared => {
+                (id, offset.saturating_add(into_region), true)
+            }
             // A device region has no object: its page is the device's own.
             Backing::Device { physical } => {
                 return self.fault_device(page, physical.saturating_add(into_region), region.flags);
             }
-            // A file wants a page cache, which is a later stage. Reported rather
-            // than panicked: an unhandled backing is a kernel bug, but killing
-            // the process beats stopping the machine.
+            // A private file mapping copies into an object of its own on its
+            // first write, which `mmap` does not make yet: it refuses one, so
+            // no such region exists. Reported rather than panicked all the
+            // same, because killing the process beats stopping the machine.
             Backing::File { .. } => return Err(SpaceError::NotMapped(address)),
         };
 
@@ -648,7 +683,7 @@ impl AddressSpace {
             return Ok(());
         }
 
-        let frame = vmo.commit(index).map_err(SpaceError::Backing)?;
+        let frame = commit_page(&vmo, index, file, address)?;
 
         // A copy-on-write region is installed read-only however writable the
         // region is, so that the *next* write faults here again and can copy.
@@ -815,6 +850,9 @@ impl AddressSpace {
     /// so, with no other holder, has nobody to ask and no shootdown to send.
     fn give_back(&self, freeing: Vec<Freeing>) {
         let mut retiring: Vec<(Arc<Vmo>, Retired)> = Vec::new();
+        // Files no region maps any more, dropped once the lock is gone: the
+        // last reference to an open file may be the last to its inode.
+        let mut unkept: Vec<Arc<dyn Any + Send + Sync>> = Vec::new();
         {
             let mut inner = self.inner.lock();
             // Decided for every range before a reference is taken for any of
@@ -839,7 +877,12 @@ impl AddressSpace {
             // committed. Split borrows: the predicate reads the map while the
             // objects are being written.
             let me: *const AddressSpace = self;
-            let Inner { map, objects, .. } = &mut *inner;
+            let Inner {
+                map,
+                objects,
+                files,
+                ..
+            } = &mut *inner;
             objects.retain(|&id, vmo| {
                 let named = still_named(map, id);
                 if !named {
@@ -847,7 +890,14 @@ impl AddressSpace {
                 }
                 named
             });
+            let gone: Vec<u64> = files
+                .keys()
+                .copied()
+                .filter(|&id| !still_named(map, id))
+                .collect();
+            unkept.extend(gone.iter().filter_map(|id| files.remove(id)));
         }
+        drop(unkept);
         for (vmo, retired) in retiring {
             vmo.retire(
                 retired,
@@ -986,6 +1036,15 @@ struct Freeing {
     first: u64,
     /// How many.
     pages: u64,
+}
+
+/// Where [`AddressSpace::map_file`] puts a mapping.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FilePlace {
+    /// Exactly here: `MAP_FIXED`, with the range already cleared.
+    Fixed(u64),
+    /// Wherever it fits, near the hint if there is one.
+    Anywhere(Option<u64>),
 }
 
 /// Where `mremap` may put the region it resizes.
@@ -1513,6 +1572,67 @@ impl AddressSpace {
         Ok(at)
     }
 
+    /// Map `len` bytes of `vmo`, a file's object, from byte `offset` of it,
+    /// shared: the region shows the file's own pages, and a write through it
+    /// is a write to the file. `file` is kept for as long as a region names
+    /// the mapping, and names it. Returns where it went.
+    ///
+    /// `place` is [`FilePlace::Fixed`] for `MAP_FIXED`, whose range the caller
+    /// has already cleared, or [`FilePlace::Anywhere`] with the program's hint.
+    ///
+    /// # Errors
+    ///
+    /// As [`AddressSpace::map_anonymous`] and [`AddressSpace::map_anywhere`],
+    /// and [`SpaceError::BadRange`] for an offset that is not whole pages or a
+    /// range that would leave the object.
+    pub(crate) fn map_file(
+        &self,
+        place: FilePlace,
+        len: u64,
+        flags: VmaFlags,
+        vmo: Arc<Vmo>,
+        offset: u64,
+        file: Arc<dyn Any + Send + Sync>,
+    ) -> Result<u64, SpaceError> {
+        if len == 0
+            || !offset.is_multiple_of(PAGE_SIZE)
+            || offset
+                .checked_add(len)
+                .is_none_or(|end| end.div_ceil(PAGE_SIZE) > vmo.len_pages())
+        {
+            return Err(SpaceError::BadRange);
+        }
+        let mut inner = self.inner.lock();
+        let at = match place {
+            FilePlace::Fixed(at) => at,
+            FilePlace::Anywhere(hint) => inner
+                .map
+                .find_free(len, PAGE_SIZE, hint)
+                .ok_or(SpaceError::OutOfMemory)?,
+        };
+        if !is_user_address(at) || at.checked_add(len).is_none_or(|end| end > USER_VIRT_END) {
+            return Err(SpaceError::NotUserRange(at));
+        }
+        let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
+
+        let id = inner.next_id;
+        inner.next_id = inner.next_id.saturating_add(1);
+        inner
+            .map
+            .insert(range, flags, Backing::File { id, offset })
+            .map_err(|_| SpaceError::BadRange)?;
+        vmo.attach(self.me.clone(), id, Sharing::Shared);
+        let _ = inner.objects.insert(id, vmo);
+        let _ = inner.files.insert(id, file);
+        Ok(at)
+    }
+
+    /// The open file a file mapping's region names by `id`, for
+    /// `/proc/<pid>/maps`.
+    pub(crate) fn mapped_file(&self, id: u64) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.inner.lock().files.get(&id).map(Arc::clone)
+    }
+
     /// Change the permissions of an already-mapped range.
     ///
     /// # Why the translations are taken down rather than rewritten
@@ -1613,6 +1733,7 @@ impl Drop for AddressSpace {
             vmo.detach(me, id);
         }
         inner.objects.clear();
+        inner.files.clear();
 
         // The root itself. On x86-64 its upper half names the kernel's own
         // tables, which are emphatically not this space's to free -- but
@@ -1634,6 +1755,9 @@ pub(crate) struct Region {
     pub(crate) end: u64,
     /// Permissions and mapping kind.
     pub(crate) flags: VmaFlags,
+    /// For a file mapping, the id [`AddressSpace::mapped_file`] finds its file
+    /// by, and the byte offset of the region's first page in the file.
+    pub(crate) file: Option<(u64, u64)>,
 }
 
 impl AddressSpace {
@@ -1647,6 +1771,10 @@ impl AddressSpace {
                 start: vma.range.start(),
                 end: vma.range.end(),
                 flags: vma.flags,
+                file: match vma.backing {
+                    Backing::File { id, offset } => Some((id, offset)),
+                    _ => None,
+                },
             })
             .collect()
     }

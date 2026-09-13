@@ -53,6 +53,7 @@ Causes are listed most likely first.
 | [FX-0830](#fx-0830) | /dev or /proc failed its self-check |
 | [FX-0850](#fx-0850) | a panic was requested through /proc/sysrq-trigger |
 | [FX-0860](#fx-0860) | pipes, a FIFO or the filesystem calls failed their self-check |
+| [FX-0870](#fx-0870) | a shared file mapping failed its self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -931,6 +932,36 @@ run is done twice and must leave no frame behind.
 See: kernel/src/fs/check.rs run_calls; kernel/src/fs/pipe.rs;
 kernel/src/syscall/pipe.rs; kernel/src/syscall/fsctl.rs; libs/vfs/src/pipe.rs;
 libs/vfs/src/statfs.rs; docs/ROADMAP.md stage 8.
+
+<a id="fx-0870"></a>
+
+## FX-0870 — a shared file mapping failed its self-check
+
+`fs::mmap_check::run` builds a process, creates a file under /tmp and maps it
+shared. The mapping must show the file's bytes and zeros for the rest of its
+last page; a write through the mapping must be what the file reads back, and a
+write to the file what the mapping shows, because both are the file's own VMO
+pages. mmap must refuse a descriptor that names nothing with EBADF, a directory
+with ENODEV, a writable shared mapping of a file opened read-only with EACCES,
+and a private file mapping with ENODEV. msync must answer a whole mapping and
+refuse bad flags and an unmapped range as Linux does, and /proc/<pid>/maps must
+name the mapping by its file. A truncation must take the pages past the new end
+away from the mapping, and a grow must show zeros there. The whole run is done
+twice and must leave no frame behind.
+
+1. A file's VMO is not attached as a mapper of the space, so a truncation's
+   retirement never takes the mapping's translations down and a page past the
+   end stays readable.
+2. `VmoPages::resize` is not called before `discard_from`, so a fault racing the
+   cut commits a page past the new end.
+3. `sys_mmap` checks the descriptor's access after it clears a MAP_FIXED range,
+   or maps a file whose inode has no mapping object.
+4. `give_back` decommits a file mapping's pages on munmap, which takes them away
+   from the file itself.
+
+See: kernel/src/fs/mmap_check.rs; kernel/src/syscall/memory.rs sys_mmap,
+sys_msync; kernel/src/user/space.rs map_file, fault; kernel/src/fs/pages.rs;
+docs/ROADMAP.md stage 8.
 
 <a id="fx-0901"></a>
 

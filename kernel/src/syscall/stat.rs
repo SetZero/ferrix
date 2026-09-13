@@ -403,13 +403,13 @@ fn stat64(stat: &Stat) -> Vec<u8> {
 }
 
 /// A device number's major half, from Linux's `new_decode_dev`.
-fn major(dev: u64) -> u32 {
+pub(crate) fn major(dev: u64) -> u32 {
     ((dev & 0xfff00) >> 8) as u32
 }
 
 /// A device number's minor half, from Linux's `new_decode_dev`: the low byte,
 /// and the bits above the major.
-fn minor(dev: u64) -> u32 {
+pub(crate) fn minor(dev: u64) -> u32 {
     ((dev & 0xff) | ((dev >> 12) & 0xfff00)) as u32
 }
 

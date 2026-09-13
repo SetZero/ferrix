@@ -21,7 +21,7 @@ use ferrix_procfs::stat::{self, Stat};
 use ferrix_procfs::status::{self, State, Status};
 use ferrix_procfs::sysctl;
 use ferrix_vfs::fd::MAX_LIMIT;
-use ferrix_vfs::{Errno, Location, Result};
+use ferrix_vfs::{Errno, Location, OpenFile, Result};
 
 use super::Kernel;
 use crate::arch;
@@ -491,25 +491,46 @@ fn located(at: &Location, root: &Location) -> Vec<u8> {
 
 /// `/proc/<pid>/maps`.
 ///
-/// Every region is anonymous memory, including the program's own image:
+/// A file mapping is named by its file's path, with the offset, device and
+/// inode Linux prints for one, and ` (deleted)` after a file since removed.
+/// Everything else is anonymous memory, the program's own image included:
 /// the loader copies an ELF into fresh pages rather than mapping the file, so
-/// the offset, device and inode Linux would print for a file mapping would
-/// describe a mapping that does not exist. The names are the two the process
-/// knows — `[heap]` for the regions `brk` made, `[stack]` for the one holding
-/// the stack pointer it was started with.
+/// a file's offset, device and inode there would describe a mapping that does
+/// not exist. The anonymous names are the two the process knows — `[heap]`
+/// for the regions `brk` made, `[stack]` for the one holding the stack
+/// pointer it was started with.
 pub(super) fn maps(process: &Process) -> Result<Vec<u8>> {
     let heap = process.heap_range();
     let stack = start_stack(process);
+    let root = process.fs_context().lock().root.clone();
     let mut out = Vec::new();
     for region in process.space().regions() {
-        let name: Option<&[u8]> =
-            if heap.is_some_and(|(start, end)| region.start < end && start < region.end) {
-                Some(b"[heap]")
-            } else if holds(&region, stack) {
-                Some(b"[stack]")
-            } else {
-                None
-            };
+        let file = region.file.and_then(|(id, offset)| {
+            let file = process
+                .space()
+                .mapped_file(id)?
+                .downcast::<OpenFile>()
+                .ok()?;
+            Some((file, offset))
+        });
+        let path;
+        let (offset, dev, inode, name): (u64, u64, u64, Option<&[u8]>) = match &file {
+            Some((file, offset)) => {
+                path = located(file.location(), &root);
+                let stat = fs::namespace().stat(file.location()).ok();
+                (
+                    *offset,
+                    stat.map_or(0, |stat| stat.dev),
+                    stat.map_or(0, |stat| stat.metadata.ino),
+                    Some(path.as_slice()),
+                )
+            }
+            None if heap.is_some_and(|(start, end)| region.start < end && start < region.end) => {
+                (0, 0, 0, Some(b"[heap]"))
+            }
+            None if holds(&region, stack) => (0, 0, 0, Some(b"[stack]")),
+            None => (0, 0, 0, None),
+        };
         let mapping = Mapping {
             start: region.start,
             end: region.end,
@@ -517,10 +538,10 @@ pub(super) fn maps(process: &Process) -> Result<Vec<u8>> {
             write: region.flags.write,
             execute: region.flags.execute,
             shared: region.flags.shared,
-            offset: 0,
-            major: 0,
-            minor: 0,
-            inode: 0,
+            offset,
+            major: crate::syscall::stat::major(dev),
+            minor: crate::syscall::stat::minor(dev),
+            inode,
             name,
         };
         maps::render(&mut out, &mapping, Width::native());
