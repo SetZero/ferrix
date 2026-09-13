@@ -4,8 +4,8 @@
 //! only description of the machine the kernel gets: where RAM is, which UART is
 //! the console, where the interrupt controller lives, which processors there
 //! are. This crate turns those
-//! bytes into answers and nothing else — it does not modify a tree, resolve
-//! phandles or apply overlays.
+//! bytes into answers and nothing else — it does not modify a tree or apply
+//! overlays, and follows a phandle only when asked for the node it names.
 //!
 //! # Totality
 //!
@@ -1615,6 +1615,182 @@ fn ecam_host(node: &Node<'_>) -> Option<EcamHost> {
         start_bus,
         end_bus,
     })
+}
+
+// ---------------------------------------------------------------------------
+// IOMMUs, and what a PCI requester ID arrives at them as
+// ---------------------------------------------------------------------------
+
+/// The binding for an Arm `SMMUv3`.
+pub const SMMU_V3_COMPATIBLE: &str = "arm,smmu-v3";
+
+/// An `SMMUv3` the tree describes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SmmuV3Node {
+    /// Its register block: the first region of `reg`.
+    pub region: Region,
+    /// The phandle an `iommu-map` names it by, if it has one.
+    pub phandle: Option<u32>,
+    /// `#iommu-cells`: how many cells name one of its inputs. The binding
+    /// requires one, the stream ID.
+    pub iommu_cells: Option<u32>,
+}
+
+/// Every enabled `SMMUv3` with a `reg`. See [`Fdt::smmu_v3s`].
+#[derive(Clone, Copy, Debug)]
+pub struct SmmuV3s<'a> {
+    /// The nodes.
+    nodes: CompatibleNodes<'a, 'static>,
+}
+
+impl Iterator for SmmuV3s<'_> {
+    type Item = SmmuV3Node;
+
+    fn next(&mut self) -> Option<SmmuV3Node> {
+        loop {
+            let node = self.nodes.next()?;
+            let Some(region) = node.reg().next() else {
+                continue;
+            };
+            return Some(SmmuV3Node {
+                region,
+                phandle: node.phandle(),
+                iommu_cells: node
+                    .property("#iommu-cells")
+                    .and_then(|cells| cells.as_u32()),
+            });
+        }
+    }
+}
+
+/// One entry of an `iommu-map`: `length` requester IDs from `rid_base` arrive
+/// at the IOMMU `phandle` names as the IDs from `id_base`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct IdMapping {
+    /// The first requester ID the entry covers.
+    pub rid_base: u32,
+    /// The IOMMU they arrive at.
+    pub phandle: u32,
+    /// The ID the first of them arrives as.
+    pub id_base: u32,
+    /// How many requester IDs the entry covers.
+    pub length: u32,
+}
+
+impl IdMapping {
+    /// The ID requester ID `rid` arrives as, if this entry covers it.
+    #[must_use]
+    pub const fn translate(self, rid: u32) -> Option<u32> {
+        match rid.checked_sub(self.rid_base) {
+            Some(offset) if offset < self.length => self.id_base.checked_add(offset),
+            _ => None,
+        }
+    }
+}
+
+/// A PCI host's `iommu-map`, with its `iommu-map-mask`.
+///
+/// Only one-cell IOMMU specifiers are decoded, which is what an `SMMUv3`
+/// takes, so an entry is four cells; a map whose length is not a whole number
+/// of entries has none, rather than a last entry made of whatever follows.
+#[derive(Clone, Copy, Debug)]
+pub struct IdMap<'a> {
+    /// The `iommu-map` property.
+    map: Property<'a>,
+    /// What a requester ID is masked with before it is matched: all ones when
+    /// the tree gives no mask.
+    mask: u32,
+}
+
+impl<'a> IdMap<'a> {
+    /// Its entries, in the tree's order.
+    #[must_use]
+    pub const fn entries(&self) -> IdMappings<'a> {
+        IdMappings {
+            cells: self.map.cells(),
+            whole: self.map.len().is_multiple_of(16),
+        }
+    }
+
+    /// The IOMMU requester ID `rid` arrives at and the ID it arrives as, as
+    /// `(phandle, id)`: the first entry covering the masked ID wins, as in
+    /// Linux's `of_map_id`. `None` when no entry covers it.
+    #[must_use]
+    pub fn translate(&self, rid: u32) -> Option<(u32, u32)> {
+        let masked = rid & self.mask;
+        self.entries()
+            .find_map(|entry| Some((entry.phandle, entry.translate(masked)?)))
+    }
+}
+
+/// The entries of an [`IdMap`].
+#[derive(Clone, Copy, Debug)]
+pub struct IdMappings<'a> {
+    /// The map's cells.
+    cells: Cells<'a>,
+    /// Whether the map is a whole number of entries.
+    whole: bool,
+}
+
+impl Iterator for IdMappings<'_> {
+    type Item = IdMapping;
+
+    fn next(&mut self) -> Option<IdMapping> {
+        if !self.whole {
+            return None;
+        }
+        Some(IdMapping {
+            rid_base: self.cells.next()?,
+            phandle: self.cells.next()?,
+            id_base: self.cells.next()?,
+            length: self.cells.next()?,
+        })
+    }
+}
+
+impl Node<'_> {
+    /// The node's `phandle`, or its older spelling `linux,phandle`.
+    #[must_use]
+    pub fn phandle(&self) -> Option<u32> {
+        self.property("phandle")
+            .or_else(|| self.property("linux,phandle"))?
+            .as_u32()
+    }
+}
+
+impl<'a> Fdt<'a> {
+    /// Every enabled `SMMUv3`, in tree order.
+    #[must_use]
+    pub const fn smmu_v3s(&self) -> SmmuV3s<'a> {
+        SmmuV3s {
+            nodes: self.compatible_nodes(SMMU_V3_COMPATIBLE),
+        }
+    }
+
+    /// The node whose phandle is `phandle`.
+    #[must_use]
+    pub fn node_by_phandle(&self, phandle: u32) -> Option<Node<'a>> {
+        self.nodes().find(|node| node.phandle() == Some(phandle))
+    }
+
+    /// The `iommu-map` of the ECAM host `host` was decoded from.
+    ///
+    /// `None` when the host has none — which the binding says means its
+    /// devices are not behind an IOMMU — or when its `iommu-map-mask` is not
+    /// one cell, since a map matched without its mask sends a requester ID to
+    /// the wrong stream.
+    #[must_use]
+    pub fn ecam_iommu_map(&self, host: &EcamHost) -> Option<IdMap<'a>> {
+        let node = self
+            .nodes()
+            .find(|node| ecam_host(node).as_ref() == Some(host))?;
+        let map = node.property("iommu-map")?;
+        let mask = match node.property("iommu-map-mask") {
+            None => u32::MAX,
+            Some(mask) => mask.as_u32()?,
+        };
+        Some(IdMap { map, mask })
+    }
 }
 
 // ---------------------------------------------------------------------------

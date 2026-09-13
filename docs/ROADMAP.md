@@ -38,8 +38,8 @@ and device memory a driver can map built on the same objects.
 Stage 10 has begun where the continuous rule says a stage should, with PCI
 configuration space in `libs/pci`,
 and its first kernel code — PCI enumeration, device nodes with MSI-X vectors a
-driver can be given, and a device driven by DMA and answering by MSI-X from the
-boot check — is in the boot test.
+driver can be given, a device driven by DMA and answering by MSI-X from the
+boot check, and where each device's IOMMU is — is in the boot test.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -1612,11 +1612,54 @@ x86-64 and on ARMv7-A at four processors and at two, and "1 interrupt held
 from delivery to acknowledgement" on x86-64 for the first time. AArch64 mints
 none: its virtio-rng has memory decoding off, which the next item is for.
 
+**Done — where each device's IOMMU is, and virtio's DMA sent through it.**
+`kernel/src/iommu.rs` finds every IOMMU firmware describes and places every
+PCI function behind one, before any unit is programmed:
+
+* on x86-64, by the DMAR's endpoint scopes;
+* on AArch64, by following the IORT's root complex one mapping to its `SMMUv3`;
+* on ARMv7-A, by the `arm,smmu-v3` node a host's `iommu-map` names by phandle.
+
+What it cannot follow — a scope through a bridge, a mapping to a node that is
+not there — is counted as unresolved, never as bypassing, because a bypassing
+function is one no domain will ever be built for. Every unit's register block
+is withheld from apertures.
+
+* `libs/fdt` reads SMMU nodes, phandles, and `iommu-map` with its mask. It
+  masks the requester ID, then takes the first entry that matches, as Linux's
+  `of_map_id` does. `libs/pci` gives a function's requester ID.
+* `libs/paging` gains the two tables a domain is made of: VT-d's second level
+  and an `SMMUv3`'s stage 2. Both are three levels over 39 bits of I/O
+  address, with bits checked against QEMU's walkers, and they run through the
+  same walk tests as the processors' tables. `Mapper::pages_only` holds a
+  table to 4 KiB pages for a VT-d unit without superpages.
+* **QEMU lets virtio bypass the IOMMU** unless the device is made with
+  `iommu_platform=on`. So the test machines' virtio-rng now is, with
+  `disable-legacy=on`. The entropy check accepts `VIRTIO_F_ACCESS_PLATFORM`,
+  which such a device will not run without. Until a domain is switched on,
+  the translation is the identity, and the check reads its 64 bytes as
+  before.
+* **Not on ARMv7-A.** U-Boot 2025.10's virtio-pci driver fails a heap
+  assertion and resets when a device offers `VIRTIO_F_ACCESS_PLATFORM`, with
+  or without an SMMU, while the loader is still on boot services. So the
+  32-bit machine's virtio-rng bypasses its SMMU, and an out-of-domain fault
+  there needs another way in.
+* `xtask test-boot` fails a boot that places no function behind an IOMMU, or
+  leaves one unresolved.
+
+The run recorded when it landed:
+
+* x86-64 places its 6 functions behind the VT-d unit at `0xfed90000`.
+* AArch64 and ARMv7-A place their 2 behind the `SMMUv3` at `0x9050000`.
+* Every function arrives as its requester ID.
+* With the legacy interface off, AArch64's virtio-rng comes up with memory
+  decoding on, so that node now publishes an aperture and mints a vector.
+
 **Still to do, in the order it can be done:**
 
 * **Trusting a BAR firmware placed but did not enable**, so a device no
-  firmware driver used — virtio-rng on AArch64 today — can still be given to a
-  ring-3 driver. Worked out with the review that found the gap:
+  firmware driver used — as virtio-rng on AArch64 was until its legacy
+  interface was turned off — can still be given to a ring-3 driver. Worked out with the review that found the gap:
   * *Where the windows are.* The device tree's `ranges` on the Arm machines.
     Under ACPI they are in `_CRS`, which is AML — but before
     `ExitBootServices` the loader can ask each root bridge's
@@ -1643,19 +1686,22 @@ none: its virtio-rng has memory decoding off, which the next item is for.
   * Later, on the device tree machines: assign addresses to decoding-off
     functions inside the windows, as Linux does unless `linux,pci-probe-only`
     is set, rather than depend on firmware's choice.
-* **IOMMU domains, which need nothing from stage 9 either.** Where the
-  hardware is can already be read: `libs/acpi` decodes the DMAR — each VT-d
-  unit's register block and the devices behind it — and the IORT, following a
-  requester ID from the root complex to the `SMMUv3` that translates it and
-  the stream ID it arrives as. Both are tested against the exact layouts
-  QEMU's own `build_dmar_q35` and `build_iort` produce. Still missing: VT-d on
-  `q35` with `intel-iommu`, `SMMUv3` on `virt` with `iommu=smmuv3` — which
-  this QEMU also offers on the 32-bit machine — and the deliberate
-  out-of-domain DMA fault, driven from the boot check's virtio-rng harness.
-* **Everything that runs in ring 3, which does.** Device-node handles
-  (`Object::Device`); `Interrupt` and `IoMapping`, which stage 9 writes against
-  `device.rs`'s tokens; `devmgr`, the ring protocol, and virtio-blk as a
-  process. One consequence for the test machine:
+* **IOMMU domains.** Where the units are, and which stream each function
+  arrives as, is found (above), and the tables are in `libs/paging`. Still
+  missing:
+  * *A VT-d driver* in legacy mode: root and context tables, register-based
+    invalidation, and the single fault-recording register QEMU provides.
+  * *An `SMMUv3` driver*: a linear stream table, stage 2 with fault recording,
+    and the command and event queues.
+  * *The `GICv2m` doorbell mapped into every Arm domain.* QEMU sends a
+    device's MSI writes through the SMMU, where VT-d exempts them.
+  * *A domain the kernel builds* from those tables.
+  * *The deliberate out-of-domain fault*, from the boot check's virtio-rng
+    harness, on x86-64 and AArch64. ARMv7-A needs a device U-Boot does not
+    probe.
+* **Everything that runs in ring 3.** Stage 9's device handles, `Interrupt`
+  and `IoMapping` are built on `device.rs`'s tokens and are on main; still to
+  come are `devmgr`, the ring protocol, and virtio-blk as a process. One consequence for the test machine:
   under ACPI, QEMU describes AArch64's virtio-mmio devices only in the DSDT,
   which is AML, which Ferrix will not interpret — so the disk that driver
   reads has to be `virtio-blk-pci` there.

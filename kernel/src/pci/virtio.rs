@@ -471,7 +471,16 @@ fn drive(
     interrupt: Result<(), &'static str>,
 ) -> Result<Entropy, Failure> {
     let mut config = Common(common);
-    if let Err(error) = transport::negotiate(&mut config, 0, 0, RESET_POLLS) {
+    // Accepted when offered: the addresses the check hands the device are
+    // physical, which is what the platform's translation is until an IOMMU
+    // domain is switched on, and a device that offers it refuses a driver
+    // that does not accept it.
+    if let Err(error) = transport::negotiate(
+        &mut config,
+        transport::FEATURE_ACCESS_PLATFORM,
+        0,
+        RESET_POLLS,
+    ) {
         return Ok(Entropy::Skipped(refusal(error)));
     }
     let max = match transport::queue_max_size(&mut config, 0) {

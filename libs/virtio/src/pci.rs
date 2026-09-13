@@ -75,6 +75,12 @@ pub const STATUS_FAILED: u8 = 0x80;
 /// Feature: the device speaks virtio 1.x rather than the legacy interface.
 pub const FEATURE_VERSION_1: u64 = 1 << 32;
 
+/// `VIRTIO_F_ACCESS_PLATFORM`: the device reaches memory through the
+/// platform's DMA translation — an IOMMU — rather than by physical address.
+/// A device that offers it refuses `FEATURES_OK` from a driver that does not
+/// accept it (virtio 1.2 §6.1).
+pub const FEATURE_ACCESS_PLATFORM: u64 = 1 << 33;
+
 /// A vector number meaning "no MSI-X vector", for a queue or the configuration.
 pub const NO_VECTOR: u16 = 0xFFFF;
 

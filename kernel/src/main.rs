@@ -27,6 +27,7 @@ mod early;
 mod fdt;
 mod fs;
 mod init;
+mod iommu;
 mod irq;
 mod mm;
 mod mmio;
@@ -245,6 +246,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // rest on — nothing outside what the device has — required of each.
     // Straight after enumeration, which builds the PCI half.
     check_devices(view, pci, &reserved);
+    check_iommu(view);
 
     // Stage 9's device objects, on the nodes just published: an I/O mapping of
     // a device's own aperture and nothing past it, reached from a forked
@@ -612,6 +614,28 @@ fn check_pci(view: &BootView<'_>) -> (Vec<device::DeviceNode>, device::Reserved)
 /// apertures and vectors it has.
 ///
 /// Halts rather than returning, as every other stage's check does.
+/// Stage 10: find every IOMMU, and which one each PCI function's DMA arrives at.
+///
+/// Nothing is programmed yet, so nothing here can fail the boot: firmware that
+/// describes no IOMMU, or one this cannot follow, is reported and the boot goes
+/// on. `xtask test-boot` requires the placements on the machines it configures.
+fn check_iommu(view: &BootView<'_>) {
+    let (report, units, placements) = iommu::discover(view, device::devices());
+    println!(
+        "  iommu    {} VT-d units, {} SMMUv3s; {} PCI functions behind one, {} bypassing, \
+         {} unresolved",
+        report.vtd, report.smmu_v3, report.behind, report.bypassing, report.unresolved,
+    );
+    for placement in placements {
+        if let Some(unit) = units.get(placement.unit) {
+            println!(
+                "  iommu    pci {} behind the {:?} unit at {:#x} as stream {:#x}",
+                placement.function, unit.kind, unit.phys, placement.stream,
+            );
+        }
+    }
+}
+
 fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &device::Reserved) {
     let report = match device::publish(view, pci, reserved) {
         Ok(report) => report,

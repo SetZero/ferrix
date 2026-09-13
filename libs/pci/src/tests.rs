@@ -1473,3 +1473,15 @@ fn a_virtio_block_in_an_io_bar_fits_nothing() {
         "an I/O BAR is not memory"
     );
 }
+
+#[test]
+fn a_requester_id_packs_bus_device_and_function() {
+    let id = |bus, device, function| {
+        Address::new(0, bus, device, function)
+            .expect("in range")
+            .requester_id()
+    };
+    assert_eq!(id(0, 2, 0), 0x0010, "00:02.0, where QEMU puts virtio-rng");
+    assert_eq!(id(0xff, 31, 7), 0xffff, "the last function of the last bus");
+    assert_eq!(id(1, 0, 1), 0x0101, "a function on a secondary bus");
+}

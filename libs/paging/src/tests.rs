@@ -17,6 +17,8 @@ use std::vec::Vec;
 
 use super::aarch64::{AArch64, MAIR_DEVICE, MAIR_EL1, MAIR_NORMAL, MAIR_NORMAL_NC};
 use super::armv7a::{Armv7a, MAIR0, MAIR1};
+use super::stage2::ArmStage2;
+use super::vtd::VtdSecondLevel;
 use super::x86_64::X86_64;
 use super::*;
 
@@ -468,7 +470,6 @@ fn walk_properties<E: Encoding>() {
     unmapping_refuses_to_cut_a_block::<E>();
     protecting_keeps_the_frame_and_changes_the_permissions::<E>();
     protecting_a_hole_is_an_error::<E>();
-    every_flag_survives_a_descriptor::<E>();
     the_walk_finds_every_leaf::<E>();
     the_walk_reports_canonical_addresses::<E>();
     the_walk_can_stop_early::<E>();
@@ -674,6 +675,28 @@ fn every_flag_survives_a_descriptor<E: Encoding>() {
     }
 }
 
+/// Every flag an IOMMU descriptor can hold, the decoder reads back.
+///
+/// It holds fewer than a processor's — no user, global or execute bit — so
+/// the cases are the encoding's own rather than the kernel's mapping kinds.
+fn every_dma_flag_survives_a_descriptor<E: Encoding>(cases: &[MapFlags]) {
+    for &flags in cases {
+        for level in [Level::PAGE, Level::MEGABYTE, Level::GIGABYTE] {
+            if level != Level::PAGE && !E::supports_block(level) {
+                continue;
+            }
+            let entry = E::leaf_descriptor(PhysAddr(0x20_0000), level, flags);
+            assert_eq!(
+                E::leaf_flags(entry),
+                flags,
+                "{} lost a flag at level {}",
+                E::NAME,
+                level.depth()
+            );
+        }
+    }
+}
+
 /// A walk visits every leaf that was mapped, and nothing else.
 fn the_walk_finds_every_leaf<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
@@ -782,16 +805,19 @@ fn the_walk_can_stop_early<E: Encoding>() {
 #[test]
 fn the_walk_behaves_the_same_on_x86_64() {
     walk_properties::<X86_64>();
+    every_flag_survives_a_descriptor::<X86_64>();
 }
 
 #[test]
 fn the_walk_behaves_the_same_on_aarch64() {
     walk_properties::<AArch64>();
+    every_flag_survives_a_descriptor::<AArch64>();
 }
 
 #[test]
 fn the_walk_behaves_the_same_on_armv7a() {
     walk_properties::<Armv7a>();
+    every_flag_survives_a_descriptor::<Armv7a>();
 }
 
 /// A range whose start is canonical and whose end is not is refused whole,
@@ -1379,4 +1405,166 @@ fn a_physical_address_wider_than_a_descriptor_is_refused() {
             .is_ok(),
         "the last page LPAE holds"
     );
+}
+
+// ---------------------------------------------------------------------------
+// IOMMU tables
+// ---------------------------------------------------------------------------
+
+/// What an `SMMUv3` domain maps an MSI doorbell with: device memory a device
+/// may write.
+const DOORBELL: MapFlags = MapFlags {
+    device: true,
+    ..MapFlags::DMA
+};
+
+#[test]
+fn the_walk_behaves_the_same_through_vt_d() {
+    walk_properties::<VtdSecondLevel>();
+    every_dma_flag_survives_a_descriptor::<VtdSecondLevel>(&[
+        MapFlags::DMA,
+        MapFlags::DMA_READ_ONLY,
+    ]);
+}
+
+#[test]
+fn the_walk_behaves_the_same_through_an_smmu_stage_2() {
+    walk_properties::<ArmStage2>();
+    every_dma_flag_survives_a_descriptor::<ArmStage2>(&[
+        MapFlags::DMA,
+        MapFlags::DMA_READ_ONLY,
+        DOORBELL,
+    ]);
+}
+
+/// An encoding's name and its canonical-address test.
+type CanonicalCheck = (&'static str, fn(VirtAddr) -> bool);
+
+#[test]
+fn an_io_virtual_address_is_canonical_exactly_below_bit_39() {
+    let checks: [CanonicalCheck; 2] = [
+        (VtdSecondLevel::NAME, VtdSecondLevel::is_canonical),
+        (ArmStage2::NAME, ArmStage2::is_canonical),
+    ];
+    for (name, check) in checks {
+        assert!(check(VirtAddr(0)), "{name}: zero");
+        assert!(check(VirtAddr((1 << 39) - 1)), "{name}: the last address");
+        assert!(!check(VirtAddr(1 << 39)), "{name}: one past it");
+        assert!(
+            !check(VirtAddr(0xFFFF_FFC0_0000_0000)),
+            "{name}: nothing is sign extended"
+        );
+    }
+    assert_eq!(VtdSecondLevel::canonical(1 << 38), 1 << 38);
+    assert_eq!(ArmStage2::canonical(1 << 38), 1 << 38);
+}
+
+#[test]
+fn a_mapper_held_to_pages_never_builds_a_block() {
+    let (mut memory, mut mapper) = Memory::with_root::<VtdSecondLevel>();
+    mapper.pages_only();
+    mapper
+        .map_range(
+            &mut memory,
+            VirtAddr(0x20_0000),
+            PhysAddr(0x20_0000),
+            0x20_0000,
+            MapFlags::DMA,
+        )
+        .unwrap();
+    assert_eq!(
+        mapper.mapping_level(&memory, VirtAddr(0x20_0000)),
+        Some(Level::PAGE),
+        "a unit without 2 MiB pages never gets one"
+    );
+    assert_eq!(
+        mapper.translate(&memory, VirtAddr(0x3F_FFFF)),
+        Some(PhysAddr(0x3F_FFFF)),
+        "and every page of the range is still mapped"
+    );
+}
+
+mod vtd_bits {
+    use super::*;
+
+    #[test]
+    fn a_leaf_holds_read_write_and_the_superpage_bit_and_nothing_else() {
+        let page =
+            VtdSecondLevel::leaf_descriptor(PhysAddr(0x7F_FFFF_F000), Level::PAGE, MapFlags::DMA);
+        assert_eq!(page, 0x7F_FFFF_F000 | 0b11, "R is bit 0, W bit 1");
+        let block = VtdSecondLevel::leaf_descriptor(
+            PhysAddr(0x20_0000),
+            Level::MEGABYTE,
+            MapFlags::DMA_READ_ONLY,
+        );
+        assert_eq!(block, 0x20_0000 | 1 | 1 << 7, "read only, superpage");
+        assert!(VtdSecondLevel::is_leaf(block, Level::MEGABYTE));
+        assert!(!VtdSecondLevel::is_leaf(0x1000 | 0b11, Level::MEGABYTE));
+    }
+
+    #[test]
+    fn a_table_grants_both_and_the_leaf_decides() {
+        assert_eq!(
+            VtdSecondLevel::table_descriptor(PhysAddr(0x1000), MapFlags::DMA_READ_ONLY),
+            0x1000 | 0b11
+        );
+    }
+
+    #[test]
+    fn an_entry_that_permits_nothing_is_absent() {
+        assert!(!VtdSecondLevel::is_present(0x1000));
+        assert!(VtdSecondLevel::is_present(0x1000 | 1));
+    }
+
+    #[test]
+    fn the_address_is_bits_12_to_38() {
+        assert_eq!(VtdSecondLevel::address(u64::MAX), PhysAddr(0x7F_FFFF_F000));
+    }
+}
+
+mod stage2_bits {
+    use super::*;
+
+    #[test]
+    fn a_page_is_valid_accessed_shareable_normal_memory_nobody_executes() {
+        let page = ArmStage2::leaf_descriptor(PhysAddr(0x4000_0000), Level::PAGE, MapFlags::DMA);
+        assert_eq!(
+            page,
+            0x4000_0000 | 0b11 | 0b1111 << 2 | 0b11 << 6 | 0b11 << 8 | 1 << 10 | 1 << 54,
+            "valid page, MemAttr normal, S2AP read-write, SH inner, AF, XN"
+        );
+    }
+
+    #[test]
+    fn access_permissions_are_read_and_write_outright() {
+        let read_only =
+            ArmStage2::leaf_descriptor(PhysAddr(0x1000), Level::PAGE, MapFlags::DMA_READ_ONLY);
+        assert_eq!(read_only & (0b11 << 6), 0b01 << 6, "S2AP[0] only");
+    }
+
+    #[test]
+    fn a_doorbell_is_device_memory() {
+        let doorbell = ArmStage2::leaf_descriptor(PhysAddr(0x0802_0000), Level::PAGE, DOORBELL);
+        assert_eq!(doorbell & (0b1111 << 2), 0b0001 << 2, "device-nGnRE");
+        assert_eq!(doorbell & (0b11 << 8), 0, "not marked shareable");
+    }
+
+    #[test]
+    fn bit_one_means_the_opposite_at_a_leaf_and_at_a_block() {
+        let block = ArmStage2::leaf_descriptor(
+            PhysAddr(0x20_0000),
+            Level::MEGABYTE,
+            MapFlags::DMA_READ_ONLY,
+        );
+        assert_eq!(block & 0b11, 0b01, "a block clears bit 1");
+        assert!(ArmStage2::is_leaf(block, Level::MEGABYTE));
+        let table = ArmStage2::table_descriptor(PhysAddr(0x1000), MapFlags::DMA);
+        assert_eq!(table, 0x1000 | 0b11, "a table sets it");
+        assert!(!ArmStage2::is_leaf(table, Level::MEGABYTE));
+    }
+
+    #[test]
+    fn the_output_address_is_forty_bits() {
+        assert_eq!(ArmStage2::address(u64::MAX), PhysAddr(0xFF_FFFF_F000));
+    }
 }

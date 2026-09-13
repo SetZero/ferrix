@@ -60,6 +60,12 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
                     watched.log.display()
                 )));
             }
+            if let Some(problem) = iommu_problem(&watched.lines) {
+                return Err(Error::new(format!(
+                    "{arch}: {problem}.\n  Serial output is in {}",
+                    watched.log.display()
+                )));
+            }
             println!("  {arch}: boot ok");
             Ok(())
         }
@@ -112,6 +118,40 @@ fn entropy_problem(lines: &[String]) -> Option<String> {
     if !count_before(line, BY_MSIX).is_some_and(|count| count > 0) {
         return Some(format!(
             "no entropy request completed by MSI-X: `{}`",
+            line.trim()
+        ));
+    }
+    None
+}
+
+/// What stage 10's IOMMU discovery prints after the number of PCI functions
+/// firmware puts behind a unit.
+const BEHIND_IOMMU: &str = " PCI functions behind one";
+
+/// What it prints after the number of functions whose description it could
+/// not follow.
+const UNRESOLVED: &str = " unresolved";
+
+/// Why a boot that reached the marker still failed IOMMU discovery, if it did.
+///
+/// Every machine this tool boots has an IOMMU it configured — `intel-iommu` on
+/// `q35`, `iommu=smmuv3` on `virt` — and firmware that describes it. A boot that
+/// places no PCI function behind one has lost that description, and one that
+/// leaves a function unresolved reads it differently from the firmware that
+/// wrote it.
+fn iommu_problem(lines: &[String]) -> Option<String> {
+    let Some(line) = lines.iter().find(|line| line.contains(BEHIND_IOMMU)) else {
+        return Some("the kernel never reported where its IOMMUs are".to_owned());
+    };
+    if !count_before(line, BEHIND_IOMMU).is_some_and(|count| count > 0) {
+        return Some(format!(
+            "no PCI function was placed behind an IOMMU: `{}`",
+            line.trim()
+        ));
+    }
+    if count_before(line, UNRESOLVED) != Some(0) {
+        return Some(format!(
+            "an IOMMU description could not be followed: `{}`",
             line.trim()
         ));
     }
@@ -437,6 +477,11 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
                 // to port 0xF4 exits QEMU with status 33.
                 "-device",
                 "isa-debug-exit,iobase=0xf4,iosize=0x04",
+                // A VT-d unit for stage 10's IOMMU domains. Interrupt
+                // remapping stays off: the kernel's MSI-X messages are
+                // compatibility format, and nothing drives remapping.
+                "-device",
+                "intel-iommu,intremap=off",
             ]);
             let _ = command.args(["-drive", &format!("format=raw,file={}", display(image))]);
         }
@@ -450,8 +495,9 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
                 "cortex-a7"
             };
             let _ = command.args([
+                // An SMMUv3 for stage 10's IOMMU domains.
                 "-machine",
-                "virt",
+                "virt,iommu=smmuv3",
                 "-cpu",
                 cpu,
                 "-drive",
@@ -475,7 +521,20 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
     // walk. An entropy source because it needs no backend and nothing on the
     // guest side depends on it, so it changes what firmware and the kernel see
     // on the bus and nothing else.
-    let _ = command.args(["-device", "virtio-rng-pci"]);
+    //
+    // `disable-legacy=on,iommu_platform=on` sends the device's DMA through the
+    // machine's IOMMU, which QEMU otherwise lets virtio bypass, and which the
+    // out-of-domain fault stage 10 exits on needs. Not on ARMv7-A: U-Boot
+    // 2025.10's virtio-pci driver fails a heap assertion
+    // (`do_check_inuse_chunk`) and resets when a device offers
+    // VIRTIO_F_ACCESS_PLATFORM, with or without an SMMU, while the loader is
+    // still running on its boot services.
+    let rng = if arch == Arch::Armv7a {
+        "virtio-rng-pci,disable-legacy=on"
+    } else {
+        "virtio-rng-pci,disable-legacy=on,iommu_platform=on"
+    };
+    let _ = command.args(["-device", rng]);
 
     match &firmware {
         Firmware::Pflash { code, vars } => {
@@ -696,7 +755,7 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 
 #[cfg(test)]
 mod tests {
-    use super::entropy_problem;
+    use super::{entropy_problem, iommu_problem};
 
     fn lines(text: &[&str]) -> Vec<String> {
         text.iter().map(|line| (*line).to_owned()).collect()
@@ -732,5 +791,28 @@ mod tests {
             entropy_problem(&old).is_some(),
             "a kernel that does not say"
         );
+    }
+
+    #[test]
+    fn a_boot_that_placed_functions_behind_an_iommu_passes() {
+        let boot = lines(&[
+            "  iommu    1 VT-d units, 0 SMMUv3s; 6 PCI functions behind one, 0 bypassing, 0 unresolved",
+            "  iommu    pci 0000:00:02.0 behind the VtD unit at 0xfed90000 as stream 0x10",
+        ]);
+        assert_eq!(iommu_problem(&boot), None);
+    }
+
+    #[test]
+    fn a_boot_with_nothing_behind_an_iommu_or_anything_unresolved_fails() {
+        let nothing = lines(&[
+            "  iommu    0 VT-d units, 0 SMMUv3s; 0 PCI functions behind one, 2 bypassing, 0 unresolved",
+        ]);
+        assert!(iommu_problem(&nothing).is_some(), "nothing placed");
+        let unresolved = lines(&[
+            "  iommu    0 VT-d units, 1 SMMUv3s; 1 PCI functions behind one, 0 bypassing, 1 unresolved",
+        ]);
+        assert!(iommu_problem(&unresolved).is_some(), "one unresolved");
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-9"]);
+        assert!(iommu_problem(&silent).is_some(), "no line at all");
     }
 }

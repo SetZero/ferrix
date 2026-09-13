@@ -1282,7 +1282,17 @@ fn poke_at_everything(blob: &[u8]) {
         let _ = gic.redistributor();
         let _ = gic.cpu_interface();
     }
+    for smmu in fdt.smmu_v3s().take(64) {
+        let _ = smmu.phandle.map(|phandle| fdt.node_by_phandle(phandle));
+    }
+    for host in fdt.ecam_hosts().take(64) {
+        if let Some(map) = fdt.ecam_iommu_map(&host) {
+            let _ = map.entries().take(64).count();
+            let _ = (map.translate(0), map.translate(u32::MAX));
+        }
+    }
     for node in fdt.nodes().take(4096) {
+        let _ = node.phandle();
         let _ = node.base_name();
         let _ = node.unit_address();
         let _ = node.device_type();
@@ -2048,5 +2058,115 @@ fn qemu_virt_describes_a_gicv2m_frame_inside_its_gic() {
             },
         ],
         "QEMU's, one with overrides, and the disabled one skipped"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// IOMMUs, and what a PCI requester ID arrives at them as
+// ---------------------------------------------------------------------------
+
+/// An `SMMUv3` node as QEMU's `virt` machine writes it with `iommu=smmuv3`.
+fn smmu_node(builder: &mut Builder, phandle: u32) {
+    builder.begin("smmuv3@9050000");
+    builder.prop_u32("phandle", phandle);
+    builder.prop_u32("#iommu-cells", 1);
+    builder.prop_cells("reg", &[0, 0x0905_0000, 0, 0x2_0000]);
+    builder.prop_str("compatible", SMMU_V3_COMPATIBLE);
+    builder.end();
+}
+
+#[test]
+fn qemu_virt_sends_every_requester_id_to_its_smmu_as_the_same_stream_id() {
+    let blob = tree(|b| {
+        smmu_node(b, 0x8005);
+        ecam_node(b, 0x40_1000_0000, 0x1000_0000, |b| {
+            b.prop_cells("iommu-map", &[0, 0x8005, 0, 0x1_0000]);
+        });
+    });
+    let fdt = parse(&blob);
+    let smmus: Vec<SmmuV3Node> = fdt.smmu_v3s().collect();
+    assert_eq!(
+        smmus,
+        vec![SmmuV3Node {
+            region: Region {
+                address: 0x0905_0000,
+                size: 0x2_0000
+            },
+            phandle: Some(0x8005),
+            iommu_cells: Some(1),
+        }],
+        "the SMMU QEMU describes"
+    );
+    assert_eq!(
+        fdt.node_by_phandle(0x8005).map(|node| node.name),
+        Some("smmuv3@9050000"),
+        "the map's phandle names it"
+    );
+    let host = hosts(&blob)[0];
+    let map = fdt.ecam_iommu_map(&host).expect("the host's iommu-map");
+    assert_eq!(map.translate(0x0010), Some((0x8005, 0x0010)), "00:02.0");
+    assert_eq!(map.translate(0xffff), Some((0x8005, 0xffff)), "the last");
+    assert_eq!(map.translate(0x1_0000), None, "past the entry");
+}
+
+#[test]
+fn an_iommu_map_is_masked_then_matched_first_entry_first() {
+    let blob = tree(|b| {
+        ecam_node(b, 0x3f00_0000, 0x1000_0000, |b| {
+            b.prop_cells("iommu-map", &[0x100, 1, 0x40, 0x10, 0x100, 2, 0, 0x100]);
+            b.prop_u32("iommu-map-mask", 0xfff8);
+        });
+    });
+    let fdt = parse(&blob);
+    let map = fdt.ecam_iommu_map(&hosts(&blob)[0]).expect("a map");
+    assert_eq!(map.entries().count(), 2, "two entries");
+    assert_eq!(
+        map.translate(0x10b),
+        Some((1, 0x48)),
+        "function bits masked off, and the first entry wins"
+    );
+    assert_eq!(
+        map.translate(0x1f8),
+        Some((2, 0xf8)),
+        "only the second covers it"
+    );
+    assert_eq!(map.translate(0xff), None, "below every entry");
+    assert_eq!(
+        (IdMapping {
+            rid_base: 0,
+            phandle: 1,
+            id_base: u32::MAX,
+            length: 2,
+        })
+        .translate(1),
+        None,
+        "an ID past the top of the space is not wrapped"
+    );
+}
+
+#[test]
+fn a_ragged_map_or_a_malformed_mask_translates_nothing() {
+    let blob = tree(|b| {
+        ecam_node(b, 0x1000_0000, 0x1000_0000, |b| {
+            b.prop_cells("iommu-map", &[0, 1, 0]);
+        });
+        ecam_node(b, 0x2000_0000, 0x1000_0000, |b| {
+            b.prop_cells("iommu-map", &[0, 1, 0, 0x100]);
+            b.prop_cells("iommu-map-mask", &[0xff, 0xff]);
+        });
+        ecam_node(b, 0x3000_0000, 0x1000_0000, |_| {});
+    });
+    let fdt = parse(&blob);
+    let found = hosts(&blob);
+    let ragged = fdt.ecam_iommu_map(&found[0]).expect("present, if ragged");
+    assert_eq!(ragged.entries().count(), 0, "no partial entry");
+    assert_eq!(ragged.translate(0), None, "nothing translated");
+    assert!(
+        fdt.ecam_iommu_map(&found[1]).is_none(),
+        "a two-cell mask makes the map unusable"
+    );
+    assert!(
+        fdt.ecam_iommu_map(&found[2]).is_none(),
+        "a host with no map is not behind an IOMMU"
     );
 }

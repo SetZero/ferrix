@@ -168,6 +168,14 @@ impl Address {
         self.bus
     }
 
+    /// The requester ID the function's DMA and messages arrive as:
+    /// `bus << 8 | device << 3 | function`, which is what a DMAR device scope,
+    /// an IORT root complex and a device tree `iommu-map` all translate.
+    #[must_use]
+    pub const fn requester_id(self) -> u16 {
+        (self.bus as u16) << 8 | (self.device as u16) << 3 | self.function as u16
+    }
+
     /// The device number.
     #[must_use]
     pub const fn device(self) -> u8 {

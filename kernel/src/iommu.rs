@@ -1,0 +1,312 @@
+//! Stage 10: where the IOMMUs are, and which one each PCI function's DMA
+//! arrives at.
+//!
+//! Each firmware describes this its own way:
+//!
+//! * **The DMAR**, on x86-64: each VT-d unit's register block, and the
+//!   endpoints behind it by bus, device and function. A device arrives at its
+//!   unit as its requester ID.
+//! * **The IORT**, on AArch64 under ACPI: a root complex's ID mappings,
+//!   followed one hop to the `SMMUv3` that translates a requester ID, and the
+//!   stream ID it arrives as.
+//! * **The device tree**, on ARMv7-A: `arm,smmu-v3` nodes, and each ECAM host's
+//!   `iommu-map` from requester IDs to a phandle and a stream ID.
+//!
+//! Nothing here programs a unit. What it finds is what a domain is built on;
+//! until one is, the registers are only kept out of every driver's apertures,
+//! and every function's DMA still reaches physical memory directly.
+//!
+//! # What cannot be followed is said, not guessed
+//!
+//! A DMAR scope that names a function through a bridge, a mapping that points
+//! at a node or phandle that is not there, and a device tree host this cannot
+//! tell apart from another are reported as unresolved rather than as behind
+//! no IOMMU. The difference matters: a function counted as bypassing is one a
+//! domain will never be built for.
+
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+
+use ferrix_acpi::dmar::{self, Structure};
+use ferrix_acpi::iort;
+use ferrix_bootinfo::BootView;
+use ferrix_fdt::{EcamHost, Fdt};
+use ferrix_pci::Address;
+
+use crate::device::{DeviceNode, Location};
+use crate::{acpi, fdt};
+
+/// Bytes of a VT-d unit's registers kept from drivers: the first page, which
+/// holds every register a legacy-mode driver uses. A DRHD gives no length.
+const VTD_WINDOW: u64 = 0x1000;
+
+/// Bytes of an `SMMUv3`'s registers: its two 64 KiB register pages. The IORT
+/// gives no length.
+const SMMU_V3_WINDOW: u64 = 0x2_0000;
+
+/// A DMAR device scope for everything below a bridge.
+const SCOPE_PCI_SUB_HIERARCHY: u8 = 0x02;
+
+/// What kind of IOMMU a unit is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Kind {
+    /// An Intel VT-d remapping unit.
+    VtD,
+    /// An Arm `SMMUv3`.
+    SmmuV3,
+}
+
+/// One IOMMU.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Unit {
+    /// What kind.
+    pub(crate) kind: Kind,
+    /// Physical address of its register block.
+    pub(crate) phys: u64,
+    /// Bytes of it no driver may be given.
+    pub(crate) len: u64,
+}
+
+/// Where a function's DMA arrives.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Placement {
+    /// The function.
+    pub(crate) function: Address,
+    /// The unit, as an index into [`units`]' answer.
+    pub(crate) unit: usize,
+    /// What the unit sees it as: a VT-d source ID or an `SMMUv3` stream ID.
+    pub(crate) stream: u32,
+}
+
+/// What firmware says about one function.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Behind {
+    /// A unit translates its DMA, seeing it as this stream.
+    Unit {
+        /// The unit's index.
+        unit: usize,
+        /// The stream or source ID.
+        stream: u32,
+    },
+    /// No unit does.
+    Nothing,
+    /// Firmware says something this cannot follow.
+    Unresolved,
+}
+
+/// Every IOMMU the machine describes, each once.
+pub(crate) fn units(view: &BootView<'_>) -> Vec<Unit> {
+    let mut units = Vec::new();
+    if let Ok(firmware) = acpi::Firmware::open(view) {
+        let tables = firmware.acpi();
+        if let Ok(table) = tables.dmar() {
+            for structure in table.structures() {
+                if let Structure::Drhd(unit) = structure {
+                    add(&mut units, Kind::VtD, unit.register_base, VTD_WINDOW);
+                }
+            }
+        }
+        if let Ok(table) = tables.iort() {
+            for node in table.nodes() {
+                if let Some(smmu) = node.smmu_v3() {
+                    add(&mut units, Kind::SmmuV3, smmu.base_address, SMMU_V3_WINDOW);
+                }
+            }
+        }
+    } else if let Ok(tree) = fdt::open(view) {
+        for smmu in tree.smmu_v3s() {
+            add(
+                &mut units,
+                Kind::SmmuV3,
+                smmu.region.address,
+                smmu.region.size,
+            );
+        }
+    }
+    units
+}
+
+/// Record a unit, unless it is empty or already recorded.
+fn add(units: &mut Vec<Unit>, kind: Kind, phys: u64, len: u64) {
+    if phys != 0 && len != 0 && !units.iter().any(|unit| unit.phys == phys) {
+        units.push(Unit { kind, phys, len });
+    }
+}
+
+/// The index of the unit whose registers are at `phys`.
+fn unit_at(units: &[Unit], phys: u64) -> Option<usize> {
+    units.iter().position(|unit| unit.phys == phys)
+}
+
+/// A placement in `units`, or unresolved when the unit firmware named is not
+/// among them.
+fn behind(units: &[Unit], phys: u64, stream: u32) -> Behind {
+    unit_at(units, phys).map_or(Behind::Unresolved, |unit| Behind::Unit { unit, stream })
+}
+
+/// Where the DMAR puts `function`.
+///
+/// Only single-hop endpoint scopes name a function this can match. A scope
+/// through a bridge, or one covering everything below a bridge, on the
+/// function's segment makes an unmatched function unresolved rather than
+/// bypassing: it may be one of those.
+fn place_dmar(table: &dmar::Dmar<'_>, units: &[Unit], function: Address) -> Behind {
+    let endpoint = (function.bus(), function.device(), function.function());
+    let mut unfollowed = false;
+    for structure in table.structures() {
+        let Structure::Drhd(unit) = structure else {
+            continue;
+        };
+        if unit.segment != function.segment() {
+            continue;
+        }
+        for scope in unit.device_scopes() {
+            match scope.kind {
+                dmar::SCOPE_PCI_ENDPOINT => match scope.endpoint() {
+                    Some(found) if found == endpoint => {
+                        return behind(
+                            units,
+                            unit.register_base,
+                            u32::from(function.requester_id()),
+                        );
+                    }
+                    Some(_) => {}
+                    None => unfollowed = true,
+                },
+                SCOPE_PCI_SUB_HIERARCHY => unfollowed = true,
+                _ => {}
+            }
+        }
+    }
+    if unfollowed {
+        Behind::Unresolved
+    } else {
+        Behind::Nothing
+    }
+}
+
+/// Where the IORT puts `function`: its segment's root complex, one mapping
+/// on. A mapping to an ITS group is a function no `SMMUv3` translates.
+fn place_iort(table: &iort::Iort<'_>, units: &[Unit], function: Address) -> Behind {
+    let root = table.nodes().find(|node| {
+        node.root_complex()
+            .is_some_and(|complex| complex.segment == u32::from(function.segment()))
+    });
+    let Some(root) = root else {
+        return Behind::Nothing;
+    };
+    let Some((stream, reference)) = root.translate(u32::from(function.requester_id())) else {
+        return Behind::Nothing;
+    };
+    match table.node_at(reference) {
+        None => Behind::Unresolved,
+        Some(next) => match next.smmu_v3() {
+            Some(smmu) => behind(units, smmu.base_address, stream),
+            None if next.kind == iort::NODE_SMMU_V1_V2 => Behind::Unresolved,
+            None => Behind::Nothing,
+        },
+    }
+}
+
+/// Where the device tree puts `function`: its host's `iommu-map`.
+///
+/// The host is the one naming the function's segment in `linux,pci-domain`,
+/// or the only host when it names none; with several hosts and no domains the
+/// kernel numbered the segments itself, and this does not guess which is
+/// which.
+fn place_tree(tree: &Fdt<'_>, units: &[Unit], function: Address) -> Behind {
+    let hosts: Vec<EcamHost> = tree.ecam_hosts().collect();
+    let named = hosts
+        .iter()
+        .find(|host| host.segment == Some(function.segment()));
+    let host = match (named, hosts.as_slice()) {
+        (Some(host), _) => host,
+        (None, [only]) if only.segment.is_none() => only,
+        (None, _) => return Behind::Unresolved,
+    };
+    let Some(map) = tree.ecam_iommu_map(host) else {
+        return Behind::Nothing;
+    };
+    let Some((phandle, stream)) = map.translate(u32::from(function.requester_id())) else {
+        return Behind::Nothing;
+    };
+    match tree.smmu_v3s().find(|smmu| smmu.phandle == Some(phandle)) {
+        Some(smmu) => behind(units, smmu.region.address, stream),
+        None => Behind::Unresolved,
+    }
+}
+
+/// What discovery found.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Report {
+    /// VT-d units.
+    pub(crate) vtd: usize,
+    /// `SMMUv3`s.
+    pub(crate) smmu_v3: usize,
+    /// PCI functions whose DMA a unit translates.
+    pub(crate) behind: usize,
+    /// PCI functions firmware puts behind no unit.
+    pub(crate) bypassing: usize,
+    /// PCI functions firmware describes in a way this cannot follow.
+    pub(crate) unresolved: usize,
+}
+
+/// Find every unit, and place every PCI function among `nodes`.
+pub(crate) fn discover(
+    view: &BootView<'_>,
+    nodes: &[Arc<DeviceNode>],
+) -> (Report, Vec<Unit>, Vec<Placement>) {
+    let units = units(view);
+    let mut report = Report {
+        vtd: units.iter().filter(|unit| unit.kind == Kind::VtD).count(),
+        smmu_v3: units
+            .iter()
+            .filter(|unit| unit.kind == Kind::SmmuV3)
+            .count(),
+        ..Report::default()
+    };
+    let functions: Vec<Address> = nodes
+        .iter()
+        .filter_map(|node| match node.location() {
+            Location::Pci(address) => Some(address),
+            Location::VirtioMmio(_) => None,
+        })
+        .collect();
+
+    let mut placements = Vec::new();
+    let mut record = |function: Address, found: Behind| match found {
+        Behind::Unit { unit, stream } => {
+            report.behind += 1;
+            placements.push(Placement {
+                function,
+                unit,
+                stream,
+            });
+        }
+        Behind::Nothing => report.bypassing += 1,
+        Behind::Unresolved => report.unresolved += 1,
+    };
+
+    if let Ok(firmware) = acpi::Firmware::open(view) {
+        let tables = firmware.acpi();
+        let dmar = tables.dmar().ok();
+        let iort = tables.iort().ok();
+        for &function in &functions {
+            let found = match (&dmar, &iort) {
+                (Some(table), _) => place_dmar(table, &units, function),
+                (None, Some(table)) => place_iort(table, &units, function),
+                (None, None) => Behind::Nothing,
+            };
+            record(function, found);
+        }
+    } else if let Ok(tree) = fdt::open(view) {
+        for &function in &functions {
+            record(function, place_tree(&tree, &units, function));
+        }
+    } else {
+        for &function in &functions {
+            record(function, Behind::Nothing);
+        }
+    }
+    (report, units, placements)
+}

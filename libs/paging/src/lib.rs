@@ -1,4 +1,6 @@
-//! Page table construction for x86-64, AArch64 and ARMv7-A.
+//! Page table construction for x86-64, AArch64 and ARMv7-A, and for the
+//! IOMMUs that translate their devices' DMA: VT-d's second-level tables and an
+//! `SMMUv3`'s stage 2, both three-level walks over 39 bits of I/O address.
 //!
 //! All three use tables of 512 eight-byte descriptors over a 4 KiB granule,
 //! indexed by the same bits of the virtual address — ARMv7-A by way of the
@@ -41,6 +43,8 @@
 
 pub mod aarch64;
 pub mod armv7a;
+pub mod stage2;
+pub mod vtd;
 pub mod x86_64;
 
 use core::fmt;
@@ -202,6 +206,29 @@ impl MapFlags {
         execute: true,
         user: false,
         global: true,
+        device: false,
+    };
+
+    /// A page a device may read and write through an IOMMU: a DMA buffer.
+    ///
+    /// An IOMMU descriptor has no user, global or execute bit, so those are
+    /// clear rather than meaningful.
+    pub const DMA: MapFlags = MapFlags {
+        read: true,
+        write: true,
+        execute: false,
+        user: false,
+        global: false,
+        device: false,
+    };
+
+    /// A page a device may read but not write through an IOMMU.
+    pub const DMA_READ_ONLY: MapFlags = MapFlags {
+        read: true,
+        write: false,
+        execute: false,
+        user: false,
+        global: false,
         device: false,
     };
 
@@ -465,6 +492,12 @@ impl<E: Encoding> Mapper<E> {
     /// memory a few hundred descriptors instead of a few hundred thousand.
     pub const fn allow_gigabyte_blocks(&mut self) {
         self.largest_block = Level::GIGABYTE;
+    }
+
+    /// Map 4 KiB pages only, never a block: for a table whose walker may not
+    /// take one, such as a VT-d unit whose capabilities report no 2 MiB pages.
+    pub const fn pages_only(&mut self) {
+        self.largest_block = Level::PAGE;
     }
 
     /// Map `len` bytes at `virt` onto `phys`.

@@ -27,8 +27,9 @@
 //! an aperture is withheld rather than minted when it overlaps anything
 //! [`Reserved`] names — every region of the memory map except firmware's own
 //! descriptions of device memory, every ECAM window, every device window the
-//! kernel has mapped for itself, the device tree's console and the boot
-//! framebuffer — or an aperture another node already holds. A BAR of a
+//! kernel has mapped for itself, every IOMMU's registers, the device tree's
+//! console and the boot framebuffer — or an aperture another node already
+//! holds. A BAR of a
 //! function whose memory decoding is off is not an aperture at all: nothing
 //! says firmware placed it.
 //!
@@ -68,7 +69,7 @@ use ferrix_pci::msix::{
 use ferrix_sync::{IrqSpinLock, Once};
 
 use crate::mmio::Mmio;
-use crate::{acpi, arch, fdt, irq, vmap};
+use crate::{acpi, arch, fdt, iommu, irq, vmap};
 
 /// GIC interrupt identifiers below this are software-generated or private to
 /// one core, and neither is a device's line.
@@ -262,6 +263,11 @@ impl Reserved {
         }
         reserved.ranges.extend_from_slice(ecam);
         reserved.ranges.extend(vmap::device_windows());
+        // An IOMMU is programmed by the kernel alone: a driver that could map
+        // its registers could hand its own device the whole of memory.
+        for unit in iommu::units(view) {
+            reserved.add(unit.phys, unit.len);
+        }
         if acpi::Firmware::open(view).is_err()
             && let Ok(tree) = fdt::open(view)
             && let Some(console) = tree.console()

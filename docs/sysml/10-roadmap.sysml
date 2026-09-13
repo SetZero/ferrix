@@ -271,9 +271,12 @@ package FerrixRoadmap {
              * virtio-rng completion delivered by MSI-X on every architecture,
              * through arch::msi_allocate (local APIC vectors, GICv2m SPIs);
              * PCI vectors minted per MSI-X entry and masked at the entry,
-             * which stage 9's Interrupt uses. Next, and needing nothing from
-             * stage 9: trusting decoding-off BARs, IOMMU domains.
-             * Needing stage 9: everything that runs in ring 3. */
+             * which stage 9's Interrupt uses; every IOMMU found and each PCI
+             * function placed behind one (DMAR, IORT, device tree), virtio's
+             * DMA sent through it on x86-64 and AArch64, and VT-d and stage-2
+             * table encodings in libs/paging. Next: trusting decoding-off
+             * BARs, IOMMU drivers and domains, then devmgr, the ring
+             * protocol and virtio-blk in ring 3. */
     }
 
     #planned requirement <'S11'> stage11BtrfsRead : Stage {
