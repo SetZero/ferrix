@@ -459,4 +459,9 @@ impl Task {
     pub(crate) fn is_dead(&self) -> bool {
         self.state() == DEAD
     }
+
+    /// Whether it is waiting for something, on no run queue.
+    pub(crate) fn is_blocked(&self) -> bool {
+        self.state() == BLOCKED
+    }
 }

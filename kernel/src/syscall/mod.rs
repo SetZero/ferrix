@@ -524,14 +524,10 @@ fn current_id() -> usize {
 /// is the calling thread's, when the caller is a thread of `process`; the
 /// self-checks call with none.
 fn set_tid_address(process: &Process, address: u64) -> usize {
-    let tid = match process.pid() {
-        0 => current_id(),
-        pid => pid as usize,
-    };
-    if let Some(thread) = thread::current()
-        && core::ptr::eq(thread.process().as_ref(), process)
-    {
-        let _ = thread.set_clear_child_tid(address);
+    let tid = thread::current_of(process).map_or(0, |thread| thread.set_clear_child_tid(address));
+    match (tid, process.pid()) {
+        (0, 0) => current_id(),
+        (0, pid) => pid as usize,
+        (tid, _) => tid as usize,
     }
-    tid
 }

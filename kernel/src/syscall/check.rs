@@ -73,6 +73,11 @@ pub(crate) struct Report {
     pub(crate) killed: Option<i32>,
     /// What a program that forks and waits exited with: 24 when right.
     pub(crate) forked: Option<i32>,
+    /// The status a program that made threads exited with.
+    pub(crate) threaded: Option<i32>,
+    /// How many programs whose last two threads called `exit` together each
+    /// ended with their first thread's status.
+    pub(crate) exits_together: Option<u32>,
     /// How many runs of that program gave back every frame once reaped, and in
     /// which measured window they first did.
     pub(crate) reclaimed: Option<(u32, u32)>,
@@ -177,6 +182,9 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let killed = check_a_program_is_killed_from_outside()?;
     mark!(4);
     let forked = check_a_forked_child_is_waited_for()?;
+    let threaded = check_a_thread_shares_its_process_and_ends_alone()?;
+    let exits_together = check_two_last_threads_exiting_together_end_their_process()?;
+    check_a_reader_blocked_in_syslog_is_released_by_a_kill()?;
     mark!(5);
     let reclaimed = check_ended_programs_give_their_frames_back()?;
     let signalled = check_a_handler_runs_and_returns()?;
@@ -203,6 +211,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         concurrent,
         killed,
         forked,
+        threaded,
+        exits_together,
         reclaimed,
         signalled,
         copied,
@@ -4653,6 +4663,160 @@ fn check_a_forked_child_is_waited_for() -> Result<Option<i32>, &'static str> {
         99 => Err("wait4 reported a child other than the one fork made"),
         _ => Err("a program that forks and waits did not see its child exit with 23"),
     }
+}
+
+/// What [`arch::USER_THREAD_PROGRAM`] exits with when everything is right.
+const THREAD_STATUS: i32 = 42;
+
+/// A program makes threads with `clone(CLONE_THREAD)` and exits with 42.
+///
+/// The number covers: `CLONE_VM` without a thread or `vfork` still refused; a
+/// thread running in its process's memory, resumed from the caller's
+/// registers on a stack of its own; `exit` ending that thread and not the
+/// process; its tid written to `parent_tid`, differing from the pid, and
+/// cleared from `child_tid` with a futex wake as it ended, which is what the
+/// caller waits for; and, as the negative control, a thread made without
+/// `CLONE_CHILD_CLEARTID` whose word is left alone, so a timed wait on it runs
+/// out. The arguments are placed as each architecture's `clone` takes them.
+fn check_a_thread_shares_its_process_and_ends_alone() -> Result<Option<i32>, &'static str> {
+    if arch::USER_THREAD_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_THREAD_PROGRAM,
+    );
+    let status = exec::run(
+        &file,
+        &[b"/threads"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that makes threads could not be started")?;
+    match status {
+        THREAD_STATUS => Ok(Some(status)),
+        5 | 6 => Err("a thread's exit ended its whole process"),
+        95 => Err("clone with CLONE_VM but neither CLONE_THREAD nor CLONE_VFORK was not ENOSYS"),
+        96 => Err("a thread made without CLONE_CHILD_CLEARTID had its id word cleared"),
+        97 => Err("a thread did not run in its process's memory"),
+        98 => Err("clone did not write a thread's id to parent_tid"),
+        99 => Err("a thread's id was its process's pid"),
+        _ => Err("a program that makes threads did not exit as it should"),
+    }
+}
+
+/// Runs of [`arch::USER_EXITS_PROGRAM`].
+const EXITS_RUNS: u32 = 16;
+
+/// What [`arch::USER_EXITS_PROGRAM`]'s first thread exits with, and so its
+/// process; its other thread exits with 9.
+const EXITS_STATUS: i32 = 7;
+
+/// A program whose last two threads call `exit` at the same instant ends, with
+/// its first thread's status and not the last thread's, every time.
+///
+/// The two threads meet on a spin, each on its own processor, and exit with
+/// no other call between: the thread with 9, the main thread with 7. That the
+/// process ends at all, and with 7, is what this shows. It does not show the
+/// race the end of a thread was built against -- two last threads each seeing
+/// the other still there -- because that window is narrower than the two can
+/// be made to hit: a negative control with the old decision put back passed
+/// all sixteen runs. The fix rests on its review, not on this check. Skipped on
+/// one processor; each run waits with a deadline, so a process that never ends
+/// fails here by name rather than stopping the boot.
+fn check_two_last_threads_exiting_together_end_their_process() -> Result<Option<u32>, &'static str>
+{
+    if arch::USER_EXITS_PROGRAM.is_empty() || crate::smp::count() < 2 {
+        return Ok(None);
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_EXITS_PROGRAM,
+    );
+    for _ in 0..EXITS_RUNS {
+        let racer = process::load(
+            &file,
+            &[b"/exits"],
+            &[],
+            [0x5a; ferrix_ustack::RANDOM_BYTES],
+        )
+        .map_err(|_| "a program whose threads exit together could not be loaded")?;
+        let _task = process::start(&racer)
+            .map_err(|_| "a program whose threads exit together could not be started")?;
+        let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+        match racer.wait_for_exit(deadline) {
+            Some(EXITS_STATUS) => {}
+            Some(_) => {
+                return Err(
+                    "a process whose last two threads called exit together ended with another \
+                     status than its first thread's",
+                );
+            }
+            None => {
+                return Err("a process whose last two threads called exit together never ended");
+            }
+        }
+    }
+    Ok(Some(EXITS_RUNS))
+}
+
+/// The status [`check_a_reader_blocked_in_syslog_is_released_by_a_kill`] kills
+/// with: not 128 plus a signal, so the kill posts none.
+const SYSLOG_KILL_STATUS: i32 = 3;
+
+/// How often the check looks for the `syslog` reader's task to have blocked.
+const SYSLOG_POLL_NANOS: u64 = 1_000_000;
+
+/// A program blocked in `syslog`'s read, killed with a status and no signal, is
+/// released with that status.
+///
+/// The read waits for a signal, and a kill that posts none still ends the wait
+/// because a terminated process counts as one pending. A wait that did not
+/// would never let its thread reach its exit, and the process would never be
+/// released: `wait_for_exit` would run to its deadline.
+fn check_a_reader_blocked_in_syslog_is_released_by_a_kill() -> Result<(), &'static str> {
+    if arch::USER_SYSLOG_PROGRAM.is_empty() {
+        return Ok(());
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_SYSLOG_PROGRAM,
+    );
+    let reader = process::load(
+        &file,
+        &[b"/klogd"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that reads syslog could not be loaded")?;
+    let task =
+        process::start(&reader).map_err(|_| "a program that reads syslog could not be started")?;
+    // Killed only once its task is blocked, so that the kill meets the read's
+    // wait rather than a program not yet in it.
+    let settle = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+    while !task.is_blocked() {
+        if reader.is_terminated() {
+            return Err("a program blocked in syslog's read ended before it was killed");
+        }
+        if crate::timer::now_nanos() >= settle {
+            return Err("a program that reads syslog never blocked in the read");
+        }
+        crate::sched::sleep_for(SYSLOG_POLL_NANOS);
+    }
+    process::kill(&reader, SYSLOG_KILL_STATUS);
+    let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+    if reader.wait_for_exit(deadline) != Some(SYSLOG_KILL_STATUS) {
+        return Err(
+            "a program killed with no signal while blocked in syslog's read was never released",
+        );
+    }
+    Ok(())
 }
 
 /// Runs of the forking program measured by

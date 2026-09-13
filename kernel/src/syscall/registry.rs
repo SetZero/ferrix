@@ -31,6 +31,7 @@ use alloc::vec::Vec;
 use crate::sync::SpinLock;
 
 use crate::syscall::process::{self, Process};
+use crate::syscall::thread::Thread;
 
 /// One past the largest pid: Linux's default `pid_max`.
 pub(crate) const PID_MAX: u32 = 32_768;
@@ -109,6 +110,37 @@ pub(crate) fn register(process: Process) -> Arc<Process> {
     process
 }
 
+/// List a fork child's first thread on it, then make the child findable, in
+/// that order: nothing can find the child without the mask its thread
+/// inherited. See [`publish`].
+pub(crate) fn publish_forked(child: &Arc<Process>, thread: &Arc<Thread>) {
+    child.add_thread(thread);
+    publish(child);
+}
+
+/// Choose a thread id for a new thread of `process`, which is already shared
+/// and findable, and have it find `process` from the start: thread ids and
+/// pids are one space, as on Linux, so `kill` or `prlimit` given a thread's
+/// id reach its process. `None` if every number is in use.
+pub(crate) fn allocate_thread(process: &Arc<Process>) -> Option<u32> {
+    let tid = allocate()?;
+    let _ = REGISTRY.lock().live.insert(tid, Arc::downgrade(process));
+    Some(tid)
+}
+
+/// Give back thread id `tid` of `process`, if it still names that process.
+/// Called by a thread other than its process's first as it is dropped.
+pub(crate) fn release_thread(tid: u32, process: &Process) {
+    let mut registry = REGISTRY.lock();
+    if registry
+        .live
+        .get(&tid)
+        .is_some_and(|entry| core::ptr::eq(entry.as_ptr(), process))
+    {
+        let _ = registry.live.remove(&tid);
+    }
+}
+
 /// Make a process that is already shared findable by its pid.
 ///
 /// For a process that must be complete before `kill`, a process group's
@@ -137,8 +169,22 @@ pub(crate) fn find(pid: u32) -> Option<Arc<Process>> {
 /// before they are returned, so a caller that drops the last reference to a
 /// process drops it with the table unlocked — `release` needs the lock.
 pub(crate) fn live() -> Vec<Arc<Process>> {
-    let registry = REGISTRY.lock();
-    registry.live.values().filter_map(Weak::upgrade).collect()
+    // Each process once, under its pid and not under its other threads' ids.
+    // Filtered after the lock is let go, since a reference dropped here may be
+    // a process's last, and dropping a process takes the lock.
+    let entries: Vec<(u32, Arc<Process>)> = {
+        let registry = REGISTRY.lock();
+        registry
+            .live
+            .iter()
+            .filter_map(|(&number, entry)| entry.upgrade().map(|process| (number, process)))
+            .collect()
+    };
+    entries
+        .into_iter()
+        .filter(|(number, process)| process.pid() == *number)
+        .map(|(_, process)| process)
+        .collect()
 }
 
 /// The boot self-check's part: numbers are distinct, found, listed in order,

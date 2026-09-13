@@ -674,6 +674,22 @@ pub(crate) struct Inherited {
     alt: AltStack,
 }
 
+impl Inherited {
+    /// The same without the alternate stack: what a `CLONE_THREAD` child
+    /// inherits, since its stack is not the one the alternate stack was set
+    /// up beside.
+    pub(crate) const fn without_alt_stack(self) -> Inherited {
+        Inherited {
+            blocked: self.blocked,
+            alt: AltStack {
+                sp: 0,
+                size: 0,
+                autodisarm: false,
+            },
+        }
+    }
+}
+
 impl From<Inherited> for ThreadSignals {
     fn from(inherited: Inherited) -> Self {
         ThreadSignals {

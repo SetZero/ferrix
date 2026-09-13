@@ -13,12 +13,12 @@
 //! [`crate::sched::Task`], which holds the thread, as the thread holds its
 //! process.
 //!
-//! # One thread per process, for now
+//! # Thread ids
 //!
-//! Every process runs exactly one thread, its leader, whose thread id is the
-//! process id: what `gettid` answers and what a libc hands `tgkill`. A second
-//! thread, with a number of its own from the same space, is `clone` with
-//! `CLONE_THREAD`, which is still refused.
+//! A process's first thread, its leader, has the process id for its thread
+//! id: what `gettid` answers and what a libc hands `tgkill`. Every other
+//! thread, made by `clone` with `CLONE_THREAD`, has a number of its own from
+//! the same space, which finds its process too, and gives it back as it goes.
 //!
 //! # Locks
 //!
@@ -32,6 +32,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::sched;
 use crate::sync::SpinLock;
 use crate::syscall::process::Process;
+use crate::syscall::registry;
 use crate::syscall::signal::{self, Signals, ThreadSignals};
 
 /// One line of execution through a process.
@@ -47,6 +48,9 @@ pub(crate) struct Thread {
     clear_child_tid: AtomicU64,
     /// Its own signal state.
     signals: SpinLock<ThreadSignals>,
+    /// Registers its task resumes from instead of entering the program: a
+    /// fork child's first thread, and every thread `clone` makes. Taken once.
+    resume: SpinLock<Option<crate::arch::UserRegs>>,
 }
 
 impl Thread {
@@ -63,6 +67,18 @@ impl Thread {
         Thread::with(process, ThreadSignals::from(inherited))
     }
 
+    /// A thread of `process` other than its first, numbered `tid`, made by
+    /// `caller`: with the caller's blocked mask, no alternate stack and nothing
+    /// pending, as Linux's `copy_process` makes a `CLONE_THREAD` child.
+    pub(crate) fn sibling(process: &Arc<Process>, tid: u32, caller: &Thread) -> Thread {
+        let inherited = caller
+            .with_own_signals(|signals| signals.inherited())
+            .without_alt_stack();
+        let mut thread = Thread::with(process, ThreadSignals::from(inherited));
+        thread.tid = tid;
+        thread
+    }
+
     /// The first thread of `process`, numbered by its pid, with `signals`.
     fn with(process: &Arc<Process>, signals: ThreadSignals) -> Thread {
         Thread {
@@ -70,7 +86,18 @@ impl Thread {
             process: Arc::clone(process),
             clear_child_tid: AtomicU64::new(0),
             signals: SpinLock::new(signals),
+            resume: SpinLock::new(None),
         }
+    }
+
+    /// Have its task resume from `regs` rather than enter the program.
+    pub(crate) fn set_resume(&self, regs: crate::arch::UserRegs) {
+        *self.resume.lock() = Some(regs);
+    }
+
+    /// The registers to resume from, once.
+    pub(crate) fn take_resume(&self) -> Option<crate::arch::UserRegs> {
+        self.resume.lock().take()
     }
 
     /// Its thread id; zero if its process was made with every pid in use.
@@ -129,6 +156,16 @@ impl Thread {
     pub(crate) fn signal_pending(&self) -> bool {
         self.process.is_terminated()
             || self.with_signals(|shared, own| signal::deliverable(shared, own) != 0)
+    }
+}
+
+impl Drop for Thread {
+    /// Give its thread id back, unless it is its process's first, whose id is
+    /// the pid and goes with the process.
+    fn drop(&mut self) {
+        if self.tid != 0 && self.tid != self.process.pid() {
+            registry::release_thread(self.tid, &self.process);
+        }
     }
 }
 

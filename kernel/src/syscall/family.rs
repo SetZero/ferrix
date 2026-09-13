@@ -2,13 +2,15 @@
 //! `wait4`, `waitid`, and the process groups and sessions a shell's job control
 //! is built on.
 //!
-//! # One thread per process
+//! # Processes and threads
 //!
 //! A child made here is a new process with a copy of its parent's address
-//! space and a task of its own. `clone` asking for a new *thread* -- sharing
-//! the address space without `CLONE_VFORK`, or `CLONE_THREAD` -- is refused
-//! with `ENOSYS`, honestly: busybox never asks, and a thread is a task sharing
-//! a process, which is a change to what a process is rather than a flag here.
+//! space and a task of its own -- or, with `CLONE_THREAD`, a new thread of the
+//! caller's own process, sharing everything the process has and numbered from
+//! the same space. What Linux allows between the two is refused with `ENOSYS`,
+//! honestly: memory shared between processes without `CLONE_VFORK`, handlers
+//! shared between processes, and a thread with a descriptor table or
+//! directories of its own. Nothing a C library makes asks for those.
 //!
 //! # `vfork` copies
 //!
@@ -90,8 +92,9 @@ const WEXITED: u32 = 4;
 const WCONTINUED: u32 = 8;
 /// `waitid`: leave the child waitable.
 const WNOWAIT: u32 = 0x0100_0000;
-/// Linux's thread-selection bits, accepted on `wait4` and meaningless with one
-/// thread per process.
+/// Linux's thread-selection bits (`__WNOTHREAD`, `__WALL`, `__WCLONE`), accepted
+/// on `wait4` and not acted on: a thread is never a child here, so every child
+/// is one a wait may take whatever they say.
 const WAIT_THREAD_BITS: u32 = 0xE000_0000;
 
 /// `waitid`'s `idtype`: any child.
@@ -166,6 +169,23 @@ pub(crate) fn sys_clone(
             },
         },
     };
+    // A thread pointer that is not a user address is refused before anything
+    // is made, as Linux refuses it: on x86-64 it is written to `FS_BASE` at the
+    // next switch, where a non-canonical value is a fault in the kernel. The
+    // Arm architectures' thread registers hold any value.
+    if request.flags & CLONE_SETTLS != 0
+        && arch::ARCH == Arch::X86_64
+        && request.tls != 0
+        && !is_user_address(request.tls)
+    {
+        return Err(Errno::EPERM);
+    }
+    // So is a stack that is not in the user half: the system call returns on
+    // it, and on x86-64 the kernel briefly runs on the stack pointer it is
+    // given. `clone3`'s stack was checked as it was read.
+    if request.stack != 0 && !is_user_address(request.stack.wrapping_sub(1)) {
+        return Err(Errno::EINVAL);
+    }
     clone_with(parent, &request, regs)
 }
 
@@ -289,7 +309,18 @@ fn clone_with(
         child_tid,
         tls,
     } = *request;
-    if flags & (CLONE_THREAD | CLONE_SIGHAND) != 0 {
+    // Linux's own refusals: a thread shares its process's handlers, and
+    // handlers shared without the memory they are in would run nothing.
+    if flags & CLONE_THREAD != 0 && flags & CLONE_SIGHAND == 0 {
+        return Err(Errno::EINVAL);
+    }
+    if flags & CLONE_SIGHAND != 0 && flags & CLONE_VM == 0 {
+        return Err(Errno::EINVAL);
+    }
+    if flags & CLONE_THREAD != 0 {
+        return clone_thread(parent, request, regs);
+    }
+    if flags & CLONE_SIGHAND != 0 {
         return Err(Errno::ENOSYS);
     }
     if flags & CLONE_VM != 0 && flags & CLONE_VFORK == 0 {
@@ -333,15 +364,16 @@ fn clone_with(
     if flags & CLONE_CHILD_CLEARTID != 0 {
         let _ = thread.set_clear_child_tid(child_tid);
     }
-    child.add_thread(&thread);
-    registry::publish(&child);
+    registry::publish_forked(&child, &thread);
 
+    // A failure to write either id is ignored, as Linux ignores it: the child
+    // exists by now, and the addresses were the program's to get right.
     let id = pid.to_le_bytes();
     if flags & CLONE_PARENT_SETTID != 0 {
-        uaccess::copy_to_user(parent.space(), parent_tid, &id).map_err(|_| Errno::EFAULT)?;
+        let _ = uaccess::copy_to_user(parent.space(), parent_tid, &id);
     }
     if flags & CLONE_CHILD_SETTID != 0 {
-        uaccess::copy_to_user(child.space(), child_tid, &id).map_err(|_| Errno::EFAULT)?;
+        let _ = uaccess::copy_to_user(child.space(), child_tid, &id);
     }
 
     // The child starts with its parent's registers as they are right now, in
@@ -357,7 +389,7 @@ fn clone_with(
     if stack != 0 {
         child_regs.set_stack(&mut state, stack);
     }
-    child.set_resume(child_regs);
+    thread.set_resume(child_regs);
 
     parent.adopt(Arc::clone(&child));
     if process::start_forked(thread, state).is_err() {
@@ -368,6 +400,69 @@ fn clone_with(
         child.wait_vfork_release(parent);
     }
     Ok(pid as usize)
+}
+
+/// Make a thread of `parent`'s process beside the calling thread: what `clone`
+/// with `CLONE_THREAD` asks for. See [`sys_clone`].
+///
+/// The thread is no child: it has no exit signal, is in nobody's list of
+/// children, and `wait4` never sees it. It inherits the caller's blocked mask
+/// and nothing else of its signal state, resumes from a copy of the caller's
+/// registers with the call answering zero, on `stack` if one is given and with
+/// `tls` as its thread pointer if `CLONE_SETTLS` asks, and answers its tid to
+/// the caller.
+///
+/// # Errors
+///
+/// `ENOSYS` for a thread with a descriptor table or directories of its own, or
+/// with `CLONE_VFORK` or `CLONE_PIDFD`; `EAGAIN` with every id in use or the
+/// process already ending; `ESRCH` from a caller that is not a thread of it.
+fn clone_thread(
+    parent: &Arc<Process>,
+    request: &CloneRequest,
+    regs: &arch::UserRegs,
+) -> Result<usize, Errno> {
+    let CloneRequest {
+        flags,
+        stack,
+        parent_tid,
+        child_tid,
+        tls,
+    } = *request;
+    if flags & (CLONE_FILES | CLONE_FS) != CLONE_FILES | CLONE_FS
+        || flags & (CLONE_VFORK | CLONE_PIDFD) != 0
+    {
+        return Err(Errno::ENOSYS);
+    }
+    let caller = thread::current_of(parent).ok_or(Errno::ESRCH)?;
+    let tid = registry::allocate_thread(parent).ok_or(Errno::EAGAIN)?;
+    let thread = Arc::new(Thread::sibling(parent, tid, &caller));
+
+    // Ignored if they fail, as for a process; see `clone_with`.
+    let id = tid.to_le_bytes();
+    if flags & CLONE_PARENT_SETTID != 0 {
+        let _ = uaccess::copy_to_user(parent.space(), parent_tid, &id);
+    }
+    if flags & CLONE_CHILD_SETTID != 0 {
+        let _ = uaccess::copy_to_user(parent.space(), child_tid, &id);
+    }
+    if flags & CLONE_CHILD_CLEARTID != 0 {
+        let _ = thread.set_clear_child_tid(child_tid);
+    }
+
+    // SAFETY: inside the caller's own system call, so the live user registers
+    // are the caller's.
+    let mut state = unsafe { arch::UserState::capture() };
+    if flags & CLONE_SETTLS != 0 {
+        state.set_thread_pointer(tls);
+    }
+    let mut thread_regs = regs.for_child();
+    if stack != 0 {
+        thread_regs.set_stack(&mut state, stack);
+    }
+    thread.set_resume(thread_regs);
+    let _task = process::start_thread(thread, state).map_err(|_| Errno::EAGAIN)?;
+    Ok(tid as usize)
 }
 
 /// Which children a wait is for, decoded from `wait4`'s `pid`.

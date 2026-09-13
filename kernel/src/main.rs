@@ -567,6 +567,7 @@ fn check_syscalls() {
     if let Some(status) = report.forked {
         println!("  fork     a program forked, waited for its child, and exited with {status}");
     }
+    print_threads(&report);
     if let Some((runs, window)) = report.reclaimed {
         println!(
             "  exits    {runs} programs that forked and exited gave every frame back once \
@@ -625,6 +626,23 @@ fn check_syscalls() {
          roused {} waiters, and a wake that roused nobody was caught",
         report.futex_woken,
     );
+}
+
+/// Stage 7's thread checks, as `check_syscalls` reports them: each line only
+/// when its check ran on this architecture and processor count.
+fn print_threads(report: &syscall::check::Report) {
+    if let Some(status) = report.threaded {
+        println!(
+            "  threads  a program's threads ran in its memory and ended alone, one cleared its id as \
+             it went and one without CLONE_CHILD_CLEARTID did not, and it exited with {status}"
+        );
+    }
+    if let Some(runs) = report.exits_together {
+        println!(
+            "  threads  {runs} programs whose last two threads called exit together each ended \
+             with its first thread's status"
+        );
+    }
 }
 
 /// Stage 6's reverse map: a shared object's page decommitted, replaced and

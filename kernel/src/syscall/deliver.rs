@@ -530,12 +530,13 @@ pub(crate) fn force(signal: u32, origin: Origin) -> Option<Posted> {
     Some(posted)
 }
 
-/// Wait until a signal is deliverable, the process ends, `also` holds, or
-/// `deadline` passes.
-fn wait_for_signal(process: &Process, deadline: u64, mut also: impl FnMut() -> bool) {
-    let _ = process
+/// Wait until a signal `thread` does not block is pending, its process ends,
+/// `also` holds, or `deadline` passes.
+fn wait_for_signal(thread: &Thread, deadline: u64, mut also: impl FnMut() -> bool) {
+    let _ = thread
+        .process()
         .signalled()
-        .wait_until_deadline(|| process.signal_pending() || also(), deadline);
+        .wait_until_deadline(|| thread.signal_pending() || also(), deadline);
 }
 
 /// `rt_sigsuspend`: block `mask` instead, wait for a signal, and return
@@ -557,7 +558,7 @@ pub(crate) fn sys_rt_sigsuspend(
     }
     let mask = read_sigset(thread.process(), mask)?;
     thread.with_own_signals(|signals| signals.suspend_with(mask));
-    wait_for_signal(thread.process(), u64::MAX, || false);
+    wait_for_signal(thread, u64::MAX, || false);
     Err(Errno::EINTR)
 }
 
@@ -567,7 +568,9 @@ pub(crate) fn sys_rt_sigsuspend(
 ///
 /// `EINTR`, always.
 pub(crate) fn sys_pause(process: &Process) -> Result<usize, Errno> {
-    wait_for_signal(process, u64::MAX, || false);
+    let _ = process
+        .signalled()
+        .wait_until_deadline(|| process.signal_pending(), u64::MAX);
     Err(Errno::EINTR)
 }
 
@@ -620,7 +623,7 @@ pub(crate) fn sys_rt_sigtimedwait(
     } else {
         crate::timer::now_nanos().saturating_add(read_timespec(process, timeout, width)?)
     };
-    wait_for_signal(process, deadline, || {
+    wait_for_signal(thread, deadline, || {
         thread.with_signals(|shared, own| (shared.pending() | own.pending()) & set != 0)
     });
     match thread.with_signals(|shared, own| signal::take_from(shared, own, set)) {

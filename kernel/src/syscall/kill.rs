@@ -146,18 +146,27 @@ pub(crate) fn sys_kill(process: &Process, pid: i32, signal: u32) -> Result<usize
     Ok(0)
 }
 
-/// `tkill`: [`sys_kill`] of the one process whose only thread is `tid`.
+/// `tkill`: signal thread `tid`, which a thread's id finds through its process.
+///
+/// The signal goes to the process as a whole for now; sending it to the one
+/// thread comes with signals across threads.
 ///
 /// # Errors
 ///
 /// `EINVAL` for a thread id below one or a signal past 64; `ESRCH` for a
 /// thread nobody has.
 pub(crate) fn sys_tkill(process: &Process, tid: i32, signal: u32) -> Result<usize, Errno> {
-    sys_tgkill(process, tid, tid, signal)
+    if tid <= 0 || signal > NSIG {
+        return Err(Errno::EINVAL);
+    }
+    let target = registry::find(tid.unsigned_abs()).ok_or(Errno::ESRCH)?;
+    send(&target, signal, Origin::Thread { pid: process.pid() });
+    Ok(0)
 }
 
-/// `tgkill`: signal thread `tid` of process `tgid`, which exists only when the
-/// two are the same number.
+/// `tgkill`: signal thread `tid` of process `tgid`, which is what glibc's
+/// `raise`, `abort` and `pthread_kill` call. As [`sys_tkill`], with the thread
+/// required to be one of `tgid`'s.
 ///
 /// # Errors
 ///
@@ -171,10 +180,10 @@ pub(crate) fn sys_tgkill(
     if tgid <= 0 || tid <= 0 || signal > NSIG {
         return Err(Errno::EINVAL);
     }
-    if tgid != tid {
+    let target = registry::find(tid.unsigned_abs()).ok_or(Errno::ESRCH)?;
+    if target.pid() != tgid.unsigned_abs() {
         return Err(Errno::ESRCH);
     }
-    let target = registry::find(tid.unsigned_abs()).ok_or(Errno::ESRCH)?;
     send(&target, signal, Origin::Thread { pid: process.pid() });
     Ok(0)
 }

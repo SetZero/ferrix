@@ -554,6 +554,14 @@ fn execve_at(
     let arg_slices: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
     let env_slices: Vec<&[u8]> = env.iter().map(Vec::as_slice).collect();
 
+    // A second thread would keep running in the memory about to be replaced,
+    // and write its cleared id into the new program as it ended. Until
+    // `execve` ends a process's other threads first, it refuses while there
+    // are any; a thread `clone` makes after this test is that work's too.
+    if process.live_thread_count() > 1 {
+        return Err(Errno::EAGAIN.into());
+    }
+
     // The point of no return.
     empty_user_half(space).map_err(|_| ExecveError::Lost)?;
     process.reset_for_exec();

@@ -133,9 +133,6 @@ pub(crate) struct Process {
     /// judged against the mask of the thread that will take it. Weak, as
     /// `tasks` is.
     threads: SpinLock<Vec<Weak<Thread>>>,
-    /// Registers its first task resumes from instead of entering at the
-    /// program's start: set for a fork child, taken once.
-    resume: SpinLock<Option<crate::arch::UserRegs>>,
     /// The process that created it, or the one it was handed to when that one
     /// ended, if that process still exists. Weak, because a parent keeps its
     /// children (until it waits for them) and not the other way round.
@@ -258,7 +255,6 @@ impl Process {
             exit: Arc::new(Exit::new()),
             tasks: SpinLock::new(Vec::new()),
             threads: SpinLock::new(Vec::new()),
-            resume: SpinLock::new(None),
             parent: SpinLock::new(Weak::new()),
             // A process the kernel starts leads its own group and session.
             // A fork child inherits its parent's instead, below.
@@ -580,17 +576,6 @@ impl Process {
         *self.startup.lock()
     }
 
-    /// Have its first task resume from `regs` rather than enter the program:
-    /// a fork child, which carries on from its parent's system call.
-    pub(crate) fn set_resume(&self, regs: crate::arch::UserRegs) {
-        *self.resume.lock() = Some(regs);
-    }
-
-    /// The registers to resume from, once.
-    fn take_resume(&self) -> Option<crate::arch::UserRegs> {
-        self.resume.lock().take()
-    }
-
     /// Whether it has terminated, by exiting or by being killed.
     pub(crate) fn is_terminated(&self) -> bool {
         self.exit.is_terminated()
@@ -630,6 +615,11 @@ impl Process {
     /// no process is reaped while a thread of it is still in the kernel.
     pub(crate) fn is_released(&self) -> bool {
         self.release_finished.load(Ordering::Acquire)
+    }
+
+    /// How many of its threads have started and not yet ended.
+    pub(crate) fn live_thread_count(&self) -> u32 {
+        self.live_threads.load(Ordering::Acquire)
     }
 
     /// Count a thread about to start. Before its task is spawned, because the
@@ -1545,7 +1535,7 @@ impl Drop for StartClaim {
 }
 
 /// Run a fork child's first thread: its process resumes from the registers
-/// [`Process::set_resume`] gave it, with `state` -- its parent's thread pointer
+/// [`Thread::set_resume`] gave it, with `state` -- its parent's thread pointer
 /// and floating-point registers, as they were -- loaded when it is first
 /// switched to.
 ///
@@ -1558,6 +1548,38 @@ pub(crate) fn start_forked(
 ) -> Result<Arc<Task>, &'static str> {
     let claim = take_claim(thread.process())?;
     claim.spawn(thread, None, Some(state))
+}
+
+/// Run a thread `clone` made in a process already running: it resumes from the
+/// registers [`Thread::set_resume`] gave it, with `state` -- the caller's
+/// thread pointer, or the one `CLONE_SETTLS` asked for, and its floating-point
+/// registers -- loaded when it is first switched to.
+///
+/// A process that has begun to end is refused. One that begins to end after
+/// the test starts the thread anyway, and the thread leaves at once, on its
+/// way into the program, as every thread of an ending process does.
+///
+/// # Errors
+///
+/// If the process is ending, or the scheduler has no stack for its task.
+pub(crate) fn start_thread(
+    thread: Arc<Thread>,
+    state: crate::arch::UserState,
+) -> Result<Arc<Task>, &'static str> {
+    let process = Arc::clone(thread.process());
+    if process.is_terminated() {
+        return Err("the process is ending");
+    }
+    process.add_thread(&thread);
+    let task = sched::spawn_user("thread", run_program, thread, None, Some(state))?;
+    process.tasks.lock().push(Arc::downgrade(&task));
+    // As for a process's first thread: an end requested between the spawn and
+    // the push found no task to wake or interrupt, so it is told now.
+    if process.is_terminated() {
+        sched::wake(&task);
+        sched::interrupt(&task);
+    }
+    Ok(task)
 }
 
 /// End `process` from outside, with `status`.
@@ -1654,7 +1676,8 @@ fn run_program(_argument: usize) {
         drop(process);
         leave_current();
     }
-    if let Some(regs) = process.take_resume() {
+    let resume = thread::current().and_then(|thread| thread.take_resume());
+    if let Some(regs) = resume {
         drop(process);
         // SAFETY: this task was spawned in the child's address space with its
         // parent's user state, both installed by the switch that got here, and
