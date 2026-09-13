@@ -232,21 +232,34 @@ unsafe fn next_record(dir: *mut Dir) -> *mut Dirent {
             }
         }
     }
+    // `pos < end` here, whether the buffer was just filled or not.
+    let left = d.end - d.pos;
     let record = d.buf.as_mut_ptr().wrapping_byte_add(d.pos).cast::<Dirent>();
-    // SAFETY: the kernel wrote whole records, and `pos` is where one starts.
-    let reclen = unsafe { (*record).d_reclen };
-    // SAFETY: as above.
-    let off = unsafe { (*record).d_off };
-    if reclen == 0 {
-        // A corrupt buffer would otherwise return this record forever.
+    // The kernel is trusted to write whole records, but not blindly: a record
+    // shorter than its fixed part and a one-byte name, or longer than what is
+    // left, would have `readdir` hand out bytes past what the kernel filled,
+    // and `readdir_r` copy them. A zero length would return one record
+    // forever. Any of them ends the stream with `EIO`.
+    let reclen = if left < MIN_RECORD {
+        0
+    } else {
+        // SAFETY: the record's fixed part is within the filled bytes.
+        usize::from(unsafe { (*record).d_reclen })
+    };
+    if !(MIN_RECORD..=left).contains(&reclen) {
         d.pos = d.end;
         errno::set(errno::EIO);
         return null_mut();
     }
-    d.pos += usize::from(reclen);
-    d.tell = off;
+    // SAFETY: as above.
+    d.tell = unsafe { (*record).d_off };
+    d.pos += reclen;
     record
 }
+
+/// The shortest record `getdents64` can write: the fixed part and a name of
+/// one byte, its NUL.
+const MIN_RECORD: usize = offset_of!(Dirent, d_name) + 1;
 
 /// The next entry of the directory, or null at its end or on an error, which
 /// sets `errno`. The entry is valid until the next call on the stream.
@@ -570,4 +583,85 @@ pub(crate) fn get_errno() -> c_int {
     // SAFETY: the pointer is the calling thread's `errno`, which lives as long
     // as the thread.
     unsafe { errno::__errno_location().read() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stream whose buffer holds `records`, laid out as `getdents64` writes
+    /// them, with `end` bytes filled.
+    fn stream(records: &[(u16, &[u8])], end: usize) -> Dir {
+        let mut dir = Dir {
+            lock: SpinLock::new(),
+            fd: -1,
+            pos: 0,
+            end,
+            tell: 0,
+            buf: [0; BUFFER_WORDS],
+        };
+        // SAFETY: the buffer is `BUFFER_BYTES` of initialised words, and bytes
+        // have no alignment to keep.
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(dir.buf.as_mut_ptr().cast::<u8>(), BUFFER_BYTES)
+        };
+        let mut at = 0;
+        for (i, &(reclen, name)) in records.iter().enumerate() {
+            let name_at = at + offset_of!(Dirent, d_name);
+            bytes[at..at + 8].copy_from_slice(&1_u64.to_le_bytes());
+            bytes[at + 8..at + 16].copy_from_slice(&(i + 1).to_le_bytes());
+            bytes[at + 16..at + 18].copy_from_slice(&reclen.to_le_bytes());
+            bytes[name_at..name_at + name.len()].copy_from_slice(name);
+            at += usize::from(reclen).max(MIN_RECORD);
+        }
+        dir
+    }
+
+    /// Reads one record, returning it or the error it set.
+    fn next(dir: &mut Dir) -> Result<*mut Dirent, c_int> {
+        errno::set(0);
+        // SAFETY: the stream is valid, and the test has it to itself.
+        let record = unsafe { next_record(dir) };
+        if record.is_null() {
+            Err(get_errno())
+        } else {
+            Ok(record)
+        }
+    }
+
+    #[test]
+    fn whole_records_are_returned_in_turn() {
+        let mut dir = stream(&[(24, b"a\0"), (32, b"longer\0")], 56);
+        let first = next(&mut dir).unwrap();
+        // SAFETY: the record is within the buffer.
+        assert_eq!(unsafe { (*first).d_name[0] }, b'a' as c_char);
+        assert_eq!((dir.pos, dir.tell), (24, 1));
+        let _ = next(&mut dir).unwrap();
+        assert_eq!((dir.pos, dir.tell), (56, 2));
+    }
+
+    #[test]
+    fn a_record_past_the_filled_bytes_is_refused() {
+        let mut dir = stream(&[(48, b"a\0")], 24);
+        assert_eq!(next(&mut dir), Err(errno::EIO));
+        assert_eq!(dir.pos, dir.end);
+    }
+
+    #[test]
+    fn a_record_shorter_than_its_fixed_part_is_refused() {
+        let mut dir = stream(&[(8, b"")], 24);
+        assert_eq!(next(&mut dir), Err(errno::EIO));
+    }
+
+    #[test]
+    fn a_zero_length_is_refused() {
+        let mut dir = stream(&[(0, b"")], 24);
+        assert_eq!(next(&mut dir), Err(errno::EIO));
+    }
+
+    #[test]
+    fn a_fill_too_short_for_a_header_is_refused() {
+        let mut dir = stream(&[(24, b"a\0")], MIN_RECORD - 1);
+        assert_eq!(next(&mut dir), Err(errno::EIO));
+    }
 }
