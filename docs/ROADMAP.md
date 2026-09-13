@@ -21,7 +21,9 @@ goal. Nobody should read the table as a schedule.
 
 **Where it stands:** stages 0–9 are done and in the boot test on all three
 architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-9`.
-ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 7's exit is
+ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4 — and has run on
+hardware: an STM32MP157D-DK1 at two cores reached the same marker and ran
+stage 7's script at `fd4442e`. Stage 7's exit is
 somebody else's static musl busybox running a script on every architecture,
 checked by `cargo xtask test-shell` rather than the boot test because it needs
 a binary the repository does not carry. Since the exit, a program can
@@ -474,7 +476,31 @@ sweep then found 341 mappings, and the reclaim 4 MiB.
 
 **Deferred, with the reasons in `docs/arm32.md`:** RAM above 2 GiB physical,
 which the board has and QEMU cannot place; RAM beyond the direct map; the
-board's own UART; Thumb-2; VFP.
+board's own UART; Thumb-2; VFP. The UART has since landed and carried the run
+below.
+
+**On the board, stages 1–9.** On 2026-09-13, at `fd4442e`, an STM32MP157D-DK1
+— two Cortex-A7s and 512 MiB, under mainline TF-A, OP-TEE and U-Boot — booted
+the kernel `cargo xtask test-shell` builds, copied to the card through U-Boot's
+`ums` and started with `bootefi`. One boot on each, the same kernel:
+
+| | QEMU `virt`, `--smp 2` | STM32MP157D-DK1 |
+|---|---|---|
+| Boot marker | `FERRIX-BOOT-OK stages 1-9` | `FERRIX-BOOT-OK stages 1-9` |
+| `ACTLR.SMP` | clear on 2 of 2 | set on 2 of 2 |
+| Stage 3 | 251 ticks at 998 Hz | 251 ticks at 999 Hz |
+| Stage 4 | 50000 of 50000 | 50000 of 50000 |
+| Stage 5 | 2462 switches, 44 steals | 2743 switches, 5 steals |
+| Stages 6–9 | every check line | the same lines, except that the card carried no initramfs and the board has no PCI or IOMMU to find |
+| W^X sweep | 961 mappings, 392 executable | 944 mappings, 392 executable |
+| Stage 7's script | seven lines, then `the shell exited with 7` | the same seven lines; the exit line cut off |
+
+The exit line is lost because the STM32 USART driver returns as soon as the
+transmit register has room, and the PSCI `SYSTEM_OFF` after the last line
+powers the board off while that line is still being sent. The drain is a
+backlog row; the rerun that follows it, with the initramfs on the card, expects
+the line byte for byte. The serial log is kept outside the repository, at
+`~/.local/share/ferrix/board-boot-fd4442e-2026-09-13.log`.
 
 ---
 

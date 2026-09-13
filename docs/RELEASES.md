@@ -21,6 +21,10 @@ Stages 1–9 done, every known stage 5 and 6 intermittent failure fixed.
   and Ctrl-C, about 150 calls answered.
 - Static musl busybox runs a script and an interactive shell on all three
   architectures.
+- On hardware, verified after the tag at `fd4442e`: an STM32MP157D-DK1 at two
+  cores reaches `FERRIX-BOOT-OK stages 1-9` and runs `test-shell`'s script.
+  Known defect: the last console line before power-off is cut, because the
+  STM32 USART driver does not wait for its transmitter to drain.
 - VFS with tmpfs, devfs, procfs and initramfs; `ls -R /proc`,
   `cat /proc/self/maps` and a forking shell script pass; `top`, `ps`, `mpstat`
   run.
