@@ -8,6 +8,7 @@ members = [
     # the code `cargo test`, Miri and the fuzzers can actually reach.
     "libs/acpi",
     "libs/block",
+    "libs/blkring",
     "libs/bootinfo",
     "libs/elf",
     "libs/fbtext",
@@ -56,6 +57,7 @@ publish = false
 [workspace.dependencies]
 ferrix-acpi = { path = "libs/acpi" }
 ferrix-block = { path = "libs/block" }
+ferrix-blkring = { path = "libs/blkring" }
 ferrix-bootinfo = { path = "libs/bootinfo" }
 ferrix-elf = { path = "libs/elf" }
 ferrix-fbtext = { path = "libs/fbtext" }
