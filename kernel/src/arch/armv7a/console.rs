@@ -150,3 +150,16 @@ pub(crate) fn write_byte(byte: u8) {
         None => {}
     }
 }
+
+/// One received byte from whichever port the machine turned out to have, if
+/// one is waiting.
+///
+/// `None` before [`init`] has run, the receiving side of the silence
+/// [`write_byte`] keeps then.
+pub(crate) fn read_byte() -> Option<u8> {
+    match port() {
+        Some(Port::Pl011) => pl011::read_byte(),
+        Some(Port::Stm32) => stm32_usart::read_byte(),
+        None => None,
+    }
+}

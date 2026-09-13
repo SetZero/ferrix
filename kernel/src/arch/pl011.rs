@@ -21,12 +21,20 @@ use crate::early::{EarlyError, EarlyMemory};
 /// mapping area, below the arena, which keeps the low windows for early boot.
 const WINDOW: u64 = KERNEL_VMAP_BASE;
 
-/// Data register: writing transmits.
+/// Data register: writing transmits, reading takes a received byte.
 const DR: u64 = 0x000;
+/// `DR` as read: the framing, parity, break and overrun flags the byte arrived
+/// with, above the byte itself.
+const DR_ERRORS: u32 = 0xF00;
+/// Receive status register; writing it, as the error clear register, clears
+/// the flags.
+const RSR_ECR: u64 = 0x004;
 /// Flag register.
 const FR: u64 = 0x018;
 /// `FR`: the transmit FIFO is full.
 const FR_TXFF: u32 = 1 << 5;
+/// `FR`: the receive FIFO is empty.
+const FR_RXFE: u32 = 1 << 4;
 
 /// The mapped base address, once [`init`] has run.
 struct Base(UnsafeCell<u64>);
@@ -89,4 +97,25 @@ pub(crate) fn write_byte(byte: u8) {
         core::hint::spin_loop();
     }
     write(DR, u32::from(byte));
+}
+
+/// One received byte, if the receive FIFO holds one.
+///
+/// A byte that arrived with an error flag is still delivered, and the flags are
+/// cleared: a character mangled by line noise is better seen than silently
+/// dropped, and a break reads as the NUL the port puts in the FIFO for it.
+pub(crate) fn read_byte() -> Option<u8> {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return None;
+    }
+
+    if read(FR) & FR_RXFE != 0 {
+        return None;
+    }
+    let data = read(DR);
+    if data & DR_ERRORS != 0 {
+        write(RSR_ECR, 0);
+    }
+    Some(data.to_le_bytes()[0])
 }
