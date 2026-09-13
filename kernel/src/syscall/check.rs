@@ -4634,7 +4634,7 @@ fn check_what_an_applet_asks_of_the_system(process: &Process) -> Result<(), &'st
         .and_then(|()| check_limits_read_back_and_reach_the_descriptor_table(process, page))
         .and_then(|()| check_affinity_names_the_running_processors(process, page))
         .and_then(|()| check_a_task_name_round_trips(process, page))
-        .and_then(|()| check_credentials_refuse_another_user(process, page))
+        .and_then(|()| check_credentials_follow_linux_rules(process, page))
         .and_then(|()| check_nanosleep_takes_its_time(process, page))
         .and_then(|()| check_setting_the_clock_moves_only_realtime(process, page))
         .and_then(|()| check_a_host_name_reaches_uname(process, page))
@@ -4945,46 +4945,42 @@ fn check_a_task_name_round_trips(process: &Process, page: u64) -> Result<(), &'s
     )
 }
 
-/// Becoming root again is accepted and becoming anyone else is `EPERM`: see
-/// `credentials` for why that refusal is the honest answer.
-fn check_credentials_refuse_another_user(process: &Process, page: u64) -> Result<(), &'static str> {
-    use crate::syscall::credentials::dispatch as credential;
+/// One credential call on `on`, with three arguments.
+fn credential(
+    on: &Process,
+    call: ferrix_linux_abi::nr::Syscall,
+    [first, second, third]: [u64; 3],
+) -> Option<Result<usize, Errno>> {
+    crate::syscall::credentials::dispatch(call, &[first, second, third, 0, 0, 0], on)
+}
+
+/// Credentials follow Linux's rules, with an effective uid of 0 standing in
+/// for `CAP_SETUID` and `CAP_SETGID`: see `credentials`.
+///
+/// The shared check process stays root, so no later check runs as anyone
+/// else: it is only read, and refuses `setuid(-1)`. The rules are exercised on
+/// a process of their own, in [`check_a_process_that_drops_root`].
+fn check_credentials_follow_linux_rules(process: &Process, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::credentials::sys_getgroups;
     use ferrix_linux_abi::nr::Syscall as Call;
     let unchanged = u64::from(u32::MAX);
 
-    if credential(Call::Setuid, &[1000, 0, 0, 0, 0, 0], process) != Some(Err(Errno::EPERM)) {
-        return Err("setuid to another user was not refused with EPERM");
-    }
-    if credential(Call::Setuid, &[0; 6], process) != Some(Ok(0)) {
-        return Err("setuid(0) was refused to a process that is already root");
-    }
-    if credential(Call::Setuid, &[unchanged, 0, 0, 0, 0, 0], process) != Some(Err(Errno::EINVAL)) {
+    if credential(process, Call::Setuid, [unchanged, 0, 0]) != Some(Err(Errno::EINVAL)) {
         return Err("setuid(-1) was not EINVAL");
     }
-    if credential(
-        Call::Setresgid,
-        &[unchanged, 0, unchanged, 0, 0, 0],
-        process,
-    ) != Some(Ok(0))
-    {
-        return Err("setresgid to root, leaving the rest unchanged, was refused");
-    }
     poison_user(process, page, 16)?;
-    let ids = [page, page + 4, page + 8, 0, 0, 0];
-    if credential(Call::Getresuid, &ids, process) != Some(Ok(0)) {
+    if credential(process, Call::Getresuid, [page, page + 4, page + 8]) != Some(Ok(0)) {
         return Err("getresuid was refused");
     }
     let out: [u8; 16] = read_user(process, page)?;
     if !all_are(&out, 0, 12, 0) || !all_are(&out, 12, 16, UNWRITTEN) {
         return Err("getresuid did not write three 32-bit zeros and nothing else");
     }
-
     // `id` asks for the count with a size of zero, then for the list.
-    use crate::syscall::credentials::sys_getgroups;
     answers(
         sys_getgroups(process, 0, 0),
         1,
-        "getgroups(0, NULL) did not count group 0",
+        "getgroups(0, NULL) did not count root's group 0",
     )?;
     poison_user(process, page, 8)?;
     answers(
@@ -4996,8 +4992,208 @@ fn check_credentials_refuse_another_user(process: &Process, page: u64) -> Result
     if !all_are(&groups, 0, 4, 0) || !all_are(&groups, 4, 8, UNWRITTEN) {
         return Err("getgroups did not write group 0 as one 32-bit gid_t");
     }
-    if credential(Call::Setgroups, &[1, page + 4, 0, 0, 0, 0], process) != Some(Err(Errno::EPERM)) {
-        return Err("setgroups joining a group other than root's was not EPERM");
+
+    let user = process::new_for_check()
+        .map_err(|_| "could not make a process for the credential check")?;
+    let scratch = map_rw(&user, PAGE_SIZE)?;
+    let outcome = check_a_process_that_drops_root(&user, scratch);
+    let _ = memory::sys_munmap(&user, scratch, PAGE_SIZE);
+    outcome
+}
+
+/// Require one credential call on `on` to have answered `want`.
+fn expect_credential(
+    on: &Process,
+    call: ferrix_linux_abi::nr::Syscall,
+    args: [u64; 3],
+    want: Result<usize, Errno>,
+    what: &'static str,
+) -> Result<(), &'static str> {
+    if credential(on, call, args) == Some(want) {
+        Ok(())
+    } else {
+        Err(what)
+    }
+}
+
+/// Put one gid at `page`, as a one-group `setgroups` list.
+fn stage_group(on: &Process, page: u64, gid: u32) -> Result<(), &'static str> {
+    uaccess::put_u32(on.space(), page, gid).map_err(|_| "could not stage a group list")
+}
+
+/// A root process moves its effective uid away and back, joins group 1000 and
+/// drops to uid and gid 1000, the order `su` uses, after which every id reads
+/// 1000. Then [`check_uid_1000_cannot_take_root_back`] and
+/// [`check_what_uid_1000_is_told`].
+fn check_a_process_that_drops_root(user: &Arc<Process>, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::credentials::identity;
+    use ferrix_linux_abi::nr::Syscall as Call;
+    let unchanged = u64::from(u32::MAX);
+
+    // An effective uid moved away while the real and saved ids stay 0 comes
+    // back without privilege, because 0 is still one of its own.
+    expect_credential(
+        user,
+        Call::Setresuid,
+        [unchanged, 1000, unchanged],
+        Ok(0),
+        "root could not move its effective uid to 1000",
+    )?;
+    if (identity(Call::Getuid, user), identity(Call::Geteuid, user)) != (Some(0), Some(1000)) {
+        return Err("seteuid(1000) did not leave the real uid 0 and the effective uid 1000");
+    }
+    stage_group(user, page, 1000)?;
+    expect_credential(
+        user,
+        Call::Setgroups,
+        [1, page, 0],
+        Err(Errno::EPERM),
+        "setgroups was accepted from effective uid 1000",
+    )?;
+    expect_credential(
+        user,
+        Call::Setuid,
+        [0, 0, 0],
+        Ok(0),
+        "a process whose real uid is 0 could not take back effective uid 0",
+    )?;
+
+    expect_credential(
+        user,
+        Call::Setgroups,
+        [1, page, 0],
+        Ok(0),
+        "root could not set its supplementary groups to 1000",
+    )?;
+    expect_credential(
+        user,
+        Call::Setgid,
+        [1000, 0, 0],
+        Ok(0),
+        "root could not setgid(1000)",
+    )?;
+    expect_credential(
+        user,
+        Call::Setuid,
+        [1000, 0, 0],
+        Ok(0),
+        "root could not setuid(1000)",
+    )?;
+    let reported =
+        [Call::Getuid, Call::Geteuid, Call::Getgid, Call::Getegid].map(|call| identity(call, user));
+    if reported != [Some(1000); 4] {
+        return Err(
+            "getuid, geteuid, getgid and getegid did not all read 1000 after dropping root",
+        );
+    }
+    check_uid_1000_cannot_take_root_back(user, page)?;
+    check_what_uid_1000_is_told(user, page)
+}
+
+/// Once uid 1000, `setuid(0)` is `EPERM` -- the negative control, that the
+/// drop took -- and so is every other way back to an id or a group it gave up.
+/// Its own uid is still accepted, and `setfsuid(0)` answers 1000 and changes
+/// nothing, however often it is asked.
+fn check_uid_1000_cannot_take_root_back(user: &Process, page: u64) -> Result<(), &'static str> {
+    use ferrix_linux_abi::nr::Syscall as Call;
+    let unchanged = u64::from(u32::MAX);
+    let refusals = [
+        (
+            Call::Setuid,
+            [0, 0, 0],
+            "setuid(0) was not refused after root dropped to uid 1000",
+        ),
+        (
+            Call::Setresuid,
+            [unchanged, 0, unchanged],
+            "an unprivileged setresuid took back effective uid 0",
+        ),
+        (
+            Call::Setreuid,
+            [0, unchanged, 0],
+            "an unprivileged setreuid took back real uid 0",
+        ),
+        (
+            Call::Setgid,
+            [0, 0, 0],
+            "an unprivileged setgid took back gid 0",
+        ),
+    ];
+    for (call, args, what) in refusals {
+        expect_credential(user, call, args, Err(Errno::EPERM), what)?;
+    }
+    stage_group(user, page, 0)?;
+    expect_credential(
+        user,
+        Call::Setgroups,
+        [1, page, 0],
+        Err(Errno::EPERM),
+        "an unprivileged setgroups was accepted",
+    )?;
+    expect_credential(
+        user,
+        Call::Setuid,
+        [1000, 0, 0],
+        Ok(0),
+        "an unprivileged setuid to its own uid was refused",
+    )?;
+    for what in [
+        "setfsuid(0) did not answer the filesystem uid 1000",
+        "an unprivileged setfsuid(0) changed the filesystem uid",
+    ] {
+        expect_credential(user, Call::Setfsuid, [0, 0, 0], Ok(1000), what)?;
+    }
+    Ok(())
+}
+
+/// What uid 1000 is told: `getresuid` writes 1000 three times, `getgroups`
+/// the one group it set, `capget` no capabilities at all, and a child forked
+/// from it starts with every id and group it has.
+fn check_what_uid_1000_is_told(user: &Arc<Process>, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::credentials::sys_getgroups;
+    use ferrix_linux_abi::nr::Syscall as Call;
+
+    poison_user(user, page, 16)?;
+    if credential(user, Call::Getresuid, [page, page + 4, page + 8]) != Some(Ok(0)) {
+        return Err("getresuid was refused to uid 1000");
+    }
+    let ids: [u8; 16] = read_user(user, page)?;
+    if ids.get(..12) != Some([0xE8, 0x03, 0, 0].repeat(3).as_slice())
+        || !all_are(&ids, 12, 16, UNWRITTEN)
+    {
+        return Err("getresuid did not write 1000 three times as 32-bit ids");
+    }
+    poison_user(user, page, 8)?;
+    answers(
+        sys_getgroups(user, 4, page),
+        1,
+        "getgroups did not report the one group set",
+    )?;
+    let groups: [u8; 8] = read_user(user, page)?;
+    if groups.get(..4) != Some([0xE8, 0x03, 0, 0].as_slice()) || !all_are(&groups, 4, 8, UNWRITTEN)
+    {
+        return Err("getgroups did not write group 1000");
+    }
+
+    // A version 3 header for the caller, then two data structures to fill.
+    uaccess::put_u32(user.space(), page, 0x2008_0522).map_err(|_| "could not stage capget")?;
+    uaccess::put_u32(user.space(), page + 4, 0).map_err(|_| "could not stage capget")?;
+    poison_user(user, page + 8, 24)?;
+    if credential(user, Call::Capget, [page, page + 8, 0]) != Some(Ok(0)) {
+        return Err("capget was refused to uid 1000");
+    }
+    let sets: [u8; 24] = read_user(user, page + 8)?;
+    if !all_are(&sets, 0, 24, 0) {
+        return Err("capget reported capabilities for uid 1000");
+    }
+
+    let space = crate::user::space::AddressSpace::new()
+        .map_err(|_| "no address space for the credential check's child")?;
+    let child = Process::forked(user, space, false, false);
+    if child.with_credentials(|credentials| credentials.clone())
+        != user.with_credentials(|credentials| credentials.clone())
+    {
+        return Err("a forked child did not start with its parent's ids and groups");
     }
     Ok(())
 }

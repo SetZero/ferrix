@@ -244,6 +244,13 @@ fn populate(
     // What the processor can do. Not optional on Arm: musl's ARMv7-A `setjmp`
     // saves the callee-saved double registers only when told there is a VFP.
     let (hwcap, hwcap2) = arch::user_hwcaps();
+    // The ids the process keeps across `execve`, as `Credentials::exec` leaves
+    // them: nothing runs a set-user-id file, so `AT_SECURE` is set only for a
+    // process that moved its own effective id first, as on Linux.
+    let (user, group, secure) = process.with_credentials(|credentials| {
+        let secure = credentials.exec();
+        (credentials.user, credentials.group, secure)
+    });
     let auxv = [
         (AT_HWCAP, hwcap),
         (AT_HWCAP2, hwcap2),
@@ -252,13 +259,11 @@ fn populate(
         (AT_PHENT, loaded.phent),
         (AT_PHNUM, loaded.phnum),
         (AT_ENTRY, loaded.entry),
-        // No credentials yet, and no set-user-id path that could change them,
-        // so `AT_SECURE` is honestly zero rather than defensively one.
-        (AT_UID, 0),
-        (AT_EUID, 0),
-        (AT_GID, 0),
-        (AT_EGID, 0),
-        (AT_SECURE, 0),
+        (AT_UID, u64::from(user.real)),
+        (AT_EUID, u64::from(user.effective)),
+        (AT_GID, u64::from(group.real)),
+        (AT_EGID, u64::from(group.effective)),
+        (AT_SECURE, u64::from(secure)),
         (AT_CLKTCK, 100),
     ];
     let exec_fn = program.exec_fn;

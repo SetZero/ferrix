@@ -89,9 +89,6 @@ pub(crate) struct Attributes {
     pub(crate) robust_list: u64,
     /// Limits that were set, by resource. `None` reads as the default.
     pub(crate) limits: [Option<Limit>; RLIM_NLIMITS],
-    /// Whether group 0 is a supplementary group: true, as it is for root on
-    /// Linux, until `setgroups` gives an empty list.
-    pub(crate) in_root_group: bool,
 }
 
 impl Default for Attributes {
@@ -107,7 +104,6 @@ impl Default for Attributes {
             personality: 0,
             robust_list: 0,
             limits: [None; RLIM_NLIMITS],
-            in_root_group: true,
         }
     }
 }

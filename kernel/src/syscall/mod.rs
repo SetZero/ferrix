@@ -259,6 +259,9 @@ fn handle(call: Syscall, args: &SyscallArgs, process: Option<&Process>) -> Resul
     if let (Syscall::Getppid, Some(process)) = (call, process) {
         return Ok(process.parent_pid() as usize);
     }
+    if let Some(id) = process.and_then(|process| credentials::identity(call, process)) {
+        return Ok(id as usize);
+    }
     if let Some(answer) = stateless(call, args) {
         return answer;
     }
@@ -278,10 +281,9 @@ fn stateless(call: Syscall, args: &SyscallArgs) -> Option<Result<usize, Errno>> 
         // Ferrix has one process tree and no init yet, so the boot task's
         // parent is itself. A program that walks up from here terminates.
         Syscall::Getppid => Ok(1),
-        // Everything runs as root because there are no credentials yet. A real
-        // answer, not a stub: it is what a single-user system with no `setuid`
-        // reports, and stage 12 replaces it with a lookup rather than
-        // unpicking it.
+        // Root's ids, for a caller with no process: the boot checks, calling
+        // from a kernel task. A process's own ids are answered from its
+        // credentials in `handle`, before this table is asked.
         Syscall::Getuid | Syscall::Geteuid | Syscall::Getgid | Syscall::Getegid => Ok(0),
         Syscall::SchedYield => {
             sched::yield_now();

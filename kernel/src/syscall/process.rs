@@ -46,6 +46,7 @@ use ferrix_vma::VmaFlags;
 use crate::fs;
 use crate::object::{self, HandleTable};
 use crate::sched::{self, Task, WaitQueue};
+use crate::syscall::credentials::Credentials;
 use crate::syscall::fd;
 use crate::syscall::registry;
 use crate::syscall::signal::Signals;
@@ -148,6 +149,10 @@ pub(crate) struct Process {
     continue_report: AtomicBool,
     /// Woken when it continues, or ends, which is what a stopped task waits for.
     resumed: WaitQueue,
+    /// Its user and group ids and supplementary groups. A lock of its own:
+    /// `getuid` has no business waiting on a `brk`, and a `set*id` call must
+    /// see and change every id it names at once.
+    credentials: SpinLock<Credentials>,
 }
 
 /// Where a program starts: the two numbers `exec::load` computes and the task
@@ -233,6 +238,9 @@ impl Process {
             stop_report: AtomicU32::new(0),
             continue_report: AtomicBool::new(false),
             resumed: WaitQueue::new(),
+            // A process the kernel starts is root's. A fork child takes its
+            // parent's instead, below.
+            credentials: SpinLock::new(Credentials::root()),
         }
     }
 
@@ -242,7 +250,8 @@ impl Process {
     /// What is copied is what Linux copies: the file descriptor table and the
     /// working directory and root (or the same ones, shared, when `clone` asks
     /// for `CLONE_FILES` or `CLONE_FS`), the heap and the signal dispositions,
-    /// the process group and session, the umask, and the program's start. What is not is
+    /// the process group and session, the umask, the user and group ids and
+    /// supplementary groups, and the program's start. What is not is
     /// what belongs to the parent alone: its pid, its children, the address its
     /// thread asked to have cleared, and its handles, which the native ABI
     /// passes on only explicitly.
@@ -272,6 +281,7 @@ impl Process {
         child.pgid = AtomicU32::new(parent.pgid());
         child.sid = AtomicU32::new(parent.sid());
         child.umask = AtomicU32::new(parent.umask());
+        child.credentials = SpinLock::new(parent.credentials.lock().clone());
         child
     }
 
@@ -508,6 +518,13 @@ impl Process {
     /// the old one.
     pub(crate) fn set_umask(&self, mask: u32) -> u32 {
         self.umask.swap(mask & 0o777, Ordering::Relaxed)
+    }
+
+    /// Its user and group ids and supplementary groups, under their lock:
+    /// `change` sees all of them at once, and what it changes changes
+    /// together. Nothing that waits may be done inside it.
+    pub(crate) fn with_credentials<R>(&self, change: impl FnOnce(&mut Credentials) -> R) -> R {
+        change(&mut self.credentials.lock())
     }
 }
 
