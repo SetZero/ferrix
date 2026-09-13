@@ -1001,15 +1001,32 @@ applets and answered as a single-user system without networking answers them:
 `prctl` (name, death signal, dumpable, no-new-privileges, subreaper, bounding
 set), the robust-list head, resource limits (`RLIMIT_NOFILE` is the descriptor
 table's own), priorities and I/O priorities, `personality`, the scheduler's
-affinity and policy queries, credentials (uid and gid 0, anything else
-`EPERM`; `getgroups` reports group 0; capabilities 0 to 40 held), `nanosleep`
+affinity and policy queries, `nanosleep`
 and `clock_nanosleep`, `times` and `getrusage`, setting the real-time clock,
 `adjtimex` queries, host and domain names, `sysinfo`, `getcpu`, `syslog` over
 an empty log, `reboot` powering off, and every socket call refused as Linux
 without the address family refuses it. Their checks run in the handler group
 with every structure's buffer poisoned beyond its end. Still `ENOSYS`, each
-said so at its arm: swap, modules, System V shared memory, `acct`, `vhangup`
-and `rseq`.
+said so at its arm: swap, modules, System V IPC (shared memory, message
+queues and semaphores, each named in every architecture's table), `acct`,
+`vhangup` and `rseq`.
+**Credentials and file locks.** A process has real, effective, saved and
+filesystem user and group ids and a supplementary group list. Fork copies
+them; exec keeps them and makes the saved and filesystem ids the effective
+ones, as `cap_bprm_creds_from_file` does, with `AT_SECURE` set when the
+effective id is not the real one. The `set*id` calls, `setgroups` and `capget`
+follow `kernel/sys.c` and `kernel/groups.c`, an effective uid of 0 standing in
+for the capabilities, so busybox's `su` reaches a user. Nothing checks a
+file's permissions against the ids yet; that is the VFS's. `flock` locks
+belong to the open file description, so a forked command keeps its parent's.
+`fcntl` record locks come in both kinds: classic ones, owned by the
+descriptor table and released by any close of the file, and open file
+description locks, which end with the description; ranges split and merge,
+`F_GETLK` names the holder, and `F_SETLKW` waits until a signal, with no
+deadlock detection. Every path that ends a descriptor goes through
+`fd::closed`, which is how a close releases them, and busybox's `adduser` and
+`passwd` lock `/etc/passwd` rather than warning. `readahead` checks what
+Linux checks and answers 0, having no page cache to fill.
 
 **`mremap`, `execveat`, and what `/proc/self/exe` says.** `mremap` shrinks in
 place, grows in place when the pages after are free, and otherwise moves --
