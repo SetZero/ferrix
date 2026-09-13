@@ -1124,13 +1124,19 @@ snapshot, and its directories opt out of the dentry cache, so a pid looked up
 before its process existed is not remembered as missing. `/proc/self` links to
 the caller's pid; each `/proc/<pid>` has `fd`, `status`, `comm`, `cmdline`,
 `stat`, `maps` and `exe`; and `/proc` has `cpuinfo`, `meminfo`, `mounts`,
-`filesystems`, `uptime` and `version`. The text is `libs/procfs`, pinned byte
-for byte against lines taken from a real Linux `/proc`. Behind it, every
+`stat`, `filesystems`, `uptime` and `version`. The text is `libs/procfs`, pinned
+byte for byte against lines taken from a real Linux `/proc`. `/proc/stat`'s
+processor lines are each run queue's busy and idle time, read without charging
+anything, so a line never goes backwards between reads; all busy time is
+`user`, because the kernel keeps no split between a task's user and kernel
+time. `/proc/uptime`'s idle field is the same count. With it, `top`, `mpstat`,
+`iostat -c` and `nmeter` run. Behind it, every
 process now has a pid from a registry that finds a live process by it.
 
 ```
   devfs    7 nodes numbered as Linux numbers them; zero, null, full and urandom do what they are for
   procfs   21 names listed and walked back to, 4 maps lines parsed, 2 of them named
+  procstat /proc/stat read twice 50 ms apart: a cpu line for each of 4 processors, 21 ticks advanced, no counter went backwards
 ```
 
 **Done — pipes, FIFOs, and the calls about filesystems.** `pipe` and `pipe2`
@@ -1200,6 +1206,9 @@ first count, and fails on a count that rises (e8c98da).
   registered in `syscall/fsctl.rs`. (`SIGPIPE` on a write to a pipe with no
   reader, the other thing left here, came with stage 7's signal delivery in
   0e9591e.)
+* `/proc/loadavg`, which `top`'s load average line reads, and
+  `/proc/diskstats`, which `iostat` needs past its processor report and which
+  has nothing to count before stage 11's block core.
 
 **Exit:** `busybox ls -R /proc`, `cat /proc/self/maps` and a shell script that
 manipulates files under tmpfs, all under the boot test.
