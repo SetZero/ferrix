@@ -26,11 +26,12 @@
 //! A program runs as a scheduled task of its own ([`start`]), and the task
 //! holds the [`Arc`] that keeps its process alive. The process keeps only weak
 //! references back, which is enough to find its tasks when something outside
-//! ends it ([`kill`]). Ending is a condition with two sides: [`Process::is_terminated`]
-//! for anything that polls, and a wait queue woken once for anything that
-//! blocks ([`Process::wait_for_exit`]). `exit_group` from inside and `kill` from
-//! outside both reach the same `terminate`, and the first one to get there
-//! decides the status.
+//! ends it ([`kill`]). Ending has two moments. The request, after which
+//! [`Process::is_terminated`] is true and its threads leave; and the release,
+//! once the last of them has, after which [`Process::is_released`] is true and
+//! [`Process::wait_for_exit`] returns. `exit_group`, a last thread's `exit` and
+//! `kill` all make the same request, and the first one to get there decides the
+//! status.
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
@@ -109,6 +110,18 @@ pub(crate) struct Process {
     start_claimed: AtomicBool,
     /// Set by whichever of `exit_group` and `kill` gets there first.
     ending: AtomicBool,
+    /// Its threads that have started and not yet ended: raised before a
+    /// thread's task is spawned, lowered as the task ends. When it reaches
+    /// zero on a process that is ending, the process lets go of what it holds.
+    live_threads: AtomicU32,
+    /// Set by the one [`Process::release`] that runs, as it starts.
+    released: AtomicBool,
+    /// Set as that release finishes, after its orphans have gone on and before
+    /// its parent is told: what `wait4` reaps by.
+    release_finished: AtomicBool,
+    /// The status its first thread left with through `exit`, which is the
+    /// process's status when its last thread ends the same way.
+    leader_status: AtomicI32,
     /// How it ended, and who is waiting to hear. Apart from the process,
     /// because a handle to the process holds it: see [`Exit`].
     exit: Arc<Exit>,
@@ -238,6 +251,10 @@ impl Process {
             startup: SpinLock::new(None),
             start_claimed: AtomicBool::new(false),
             ending: AtomicBool::new(false),
+            live_threads: AtomicU32::new(0),
+            released: AtomicBool::new(false),
+            release_finished: AtomicBool::new(false),
+            leader_status: AtomicI32::new(0),
             exit: Arc::new(Exit::new()),
             tasks: SpinLock::new(Vec::new()),
             threads: SpinLock::new(Vec::new()),
@@ -567,63 +584,143 @@ impl Process {
             .then(|| self.exit.status.load(Ordering::Acquire))
     }
 
-    /// The queue woken, once, when it terminates -- for a waiter that has its
-    /// own condition to check alongside [`Process::is_terminated`].
+    /// The queue woken, once, when it has ended and let go of what it held --
+    /// for a waiter that has its own condition to check alongside
+    /// [`Process::is_released`].
     pub(crate) fn exited(&self) -> &WaitQueue {
         self.exit.exited()
     }
 
-    /// Block until it terminates or `deadline` passes, and report how it ended
-    /// if it has.
+    /// Block until it has ended and let go of what it held, or `deadline`
+    /// passes, and report how it ended if it has.
+    ///
+    /// Never for a process of the caller's own: its release waits for the
+    /// caller's thread to leave, which a caller waiting here never does.
     pub(crate) fn wait_for_exit(&self, deadline: u64) -> Option<i32> {
         let _ = self
             .exited()
-            .wait_until_deadline(|| self.is_terminated(), deadline);
-        self.exit_status()
+            .wait_until_deadline(|| self.is_released(), deadline);
+        if self.is_released() {
+            self.exit_status()
+        } else {
+            None
+        }
+    }
+
+    /// Whether it has ended and let go of its handles and descriptors: its
+    /// last thread gone, or none ever started. What `wait4` reaps by, so that
+    /// no process is reaped while a thread of it is still in the kernel.
+    pub(crate) fn is_released(&self) -> bool {
+        self.release_finished.load(Ordering::Acquire)
+    }
+
+    /// Count a thread about to start. Before its task is spawned, because the
+    /// task can reach its exit on another processor before the spawn returns.
+    pub(crate) fn thread_starting(&self) {
+        let _ = self.live_threads.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Count a thread gone -- one that `ended`, or one whose task could not be
+    /// spawned -- and, if that was its last thread, end the process or let go
+    /// of what it holds.
+    ///
+    /// The count reaching zero is one step, so this is where a last thread's
+    /// `exit` ends the process: two last threads leaving at once cannot each
+    /// see the other and both leave it running. With the process already
+    /// ending, this releases it; either this sees the ending, or the ending
+    /// sees no thread live, since each reads what the other writes after
+    /// writing its own. A thread that never started ends nothing, so a start
+    /// that failed leaves the process to be started again.
+    pub(crate) fn thread_gone(&self, ended: bool) {
+        let before = self
+            .live_threads
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+                live.checked_sub(1)
+            });
+        if before != Ok(1) {
+            return;
+        }
+        if self.is_terminated() {
+            self.release();
+        } else if ended {
+            // With the status its first thread left with. `end` finds no
+            // thread live and releases.
+            let _ = self.end(self.leader_status.load(Ordering::Acquire), 0);
+        }
     }
 
     /// End it with `status`, unless something already has. Answers whether
     /// this call was the one that did.
-    ///
-    /// Everything the process held beyond its address space is released here,
-    /// at the moment it ends, rather than when its last reference goes: a
-    /// killed process whose task has not yet noticed must not keep its
-    /// resources until it does. The address space goes when the last task
-    /// holding it is reaped, because a processor may still be translating
-    /// through it until then. The waiters are woken last, when there is nothing
-    /// left to observe half done.
     fn terminate(&self, status: i32) -> bool {
         self.end(status, 0)
     }
 
     /// End it with `status`, recording `signal` as what ended it when that is
-    /// not zero. The one path both `exit_group` and `kill` take.
+    /// not zero. The one path `exit_group`, `kill` and a last thread's `exit`
+    /// take.
+    ///
+    /// Ending has two moments, as on Linux. This is the first: the status is
+    /// recorded, [`Process::is_terminated`] turns true, and whatever its threads
+    /// wait in is woken so that they leave. The second, [`Process::release`],
+    /// lets go of what it holds once its last thread has gone -- here and now
+    /// if none is live: a process never started, or one whose threads have all
+    /// ended. Native process creation's `Control` relies on that when it drops
+    /// an unstarted child, and the orphan checks when they end processes that
+    /// never ran.
+    ///
+    /// A thread still in the kernel therefore keeps its process's descriptors
+    /// and orphans until it reaches its exit, which every wait it can be in
+    /// allows: each ends once its process is terminated or a signal is
+    /// pending. A wait that did not would hold the release back for as long as
+    /// it lasted.
     fn end(&self, status: i32, signal: u32) -> bool {
         if self.ending.swap(true, Ordering::AcqRel) {
             return false;
         }
         self.exit.record(status, signal);
-        // The heap record and the signal tables go now. Taken under the lock
-        // and dropped after it.
-        let released = core::mem::take(&mut *self.state.lock());
-        drop(released);
-        // The address each thread registered with `CLONE_CHILD_CLEARTID` or
-        // `set_tid_address` is zeroed and its futex woken, which is how a
-        // `pthread_join` or a `vfork`ing libc learns the thread is gone. Linux
-        // does it only when someone else can see the memory; nobody else can
-        // here yet, and a write into a space about to go is harmless. A failure
-        // is ignored, as Linux ignores it: the address was the program's to get
-        // right. The tasks are collected under their lock and their threads
-        // read after it, so no task's last reference goes with the lock held.
+        // A `vfork` parent waits for this, and a thread in `pause` or stopped
+        // waits for a signal or a continue; none should wait for the release.
+        self.vfork_done.wake_all();
+        self.signalled.wake_all();
+        self.resumed.wake_all();
+        // Its tasks find out on their way back to user mode: one blocked in a
+        // call is woken to, and one running in user mode is interrupted to.
+        // Waiting for a tick is not enough, because a task alone on its
+        // processor gets none -- the scheduler leaves a lone task to run -- and
+        // a program spinning there would outlive its end until it chose to make
+        // a call. The caller's own task, if it is one, is already on its way.
+        let current = sched::current();
         let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
-        for thread in tasks.iter().filter_map(|task| task.thread()) {
-            let clear_child_tid = thread.take_clear_child_tid();
-            if clear_child_tid != 0 {
-                let _ = uaccess::copy_to_user(&self.space, clear_child_tid, &0_u32.to_le_bytes());
-                let _ = futex::wake_address(&self.space, clear_child_tid, 1);
+        for task in &tasks {
+            if current.as_ref().is_some_and(|me| Arc::ptr_eq(me, task)) {
+                continue;
             }
+            sched::wake(task);
+            sched::interrupt(task);
         }
         drop(tasks);
+        if self.live_threads.load(Ordering::Acquire) == 0 {
+            self.release();
+        }
+        true
+    }
+
+    /// Let go of everything it holds beyond its address space, once, after
+    /// [`Process::end`] and when no thread of it is live.
+    ///
+    /// The address space goes when the last task holding it is reaped, because
+    /// a processor may still be translating through it until then. The waiters
+    /// are woken last, when there is nothing left to observe half done. Runs
+    /// with interrupts open: closing handles and firing watchers take plain
+    /// locks.
+    fn release(&self) {
+        if self.released.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        // The heap record and the signal tables go now. Taken under the lock
+        // and dropped after it.
+        let state = core::mem::take(&mut *self.state.lock());
+        drop(state);
         // The handles too, and outside every lock: an object's drop can free
         // memory and drain other objects, which is `object::dispose`'s job,
         // and must not run under this process's table lock or state lock.
@@ -663,19 +760,6 @@ impl Process {
             observer.fire(ObjectSignals::TERMINATED);
         }
 
-        // Its parent is told -- woken, and sent the signal it was created with,
-        // `SIGCHLD` for a fork -- and lets it go at once if it asked never to
-        // wait: otherwise it stays in the parent's list, ended, until `wait4`
-        // takes it.
-        let parent = self.parent.lock().upgrade();
-        if let Some(parent) = parent
-            && parent.with_signals(|signals| signals.reaps_children_automatically())
-        {
-            parent.disown(self);
-        }
-        let (code, told) = self.end_report();
-        kill::tell_parent(self, self.exit_signal.load(Ordering::Acquire), code, told);
-
         // Its own children are orphaned, and go where Linux's
         // `forget_original_parent` sends them: to the nearest ancestor still
         // running that asked to reap orphaned descendants, or else to init.
@@ -707,7 +791,7 @@ impl Process {
             reaper.adopt(Arc::clone(&orphan));
             *orphan.parent.lock() = Arc::downgrade(reaper);
             kill::send(&orphan, death_signal, Origin::Kernel);
-            if orphan.is_terminated() {
+            if orphan.is_released() {
                 if reaper.with_signals(|signals| signals.reaps_children_automatically()) {
                     reaper.disown(&orphan);
                 }
@@ -715,7 +799,25 @@ impl Process {
                 kill::tell_parent(&orphan, SIGCHLD, code, told);
             }
         }
-        true
+
+        // A parent that asked never to wait lets it go before it can be seen
+        // released, so that parent's `wait4` never reaps it.
+        let parent = self.parent.lock().upgrade();
+        if let Some(parent) = parent
+            && parent.with_signals(|signals| signals.reaps_children_automatically())
+        {
+            parent.disown(self);
+        }
+        // Released: what `wait4` reaps by and `wait_for_exit` waits for. After
+        // its orphans have gone on, so a parent that reaps it finds nothing left
+        // to do, and the queue woken again for the waiters that wait for this.
+        self.release_finished.store(true, Ordering::Release);
+        self.exit.exited.wake_all();
+        // Its parent is told -- woken, and sent the signal it was created with,
+        // `SIGCHLD` for a fork. It stays in the parent's list, ended, until
+        // `wait4` takes it.
+        let (code, told) = self.end_report();
+        kill::tell_parent(self, self.exit_signal.load(Ordering::Acquire), code, told);
     }
 
     /// How its end is reported to a parent: the `si_code` and the status or
@@ -972,7 +1074,7 @@ impl Process {
                 continue;
             }
             any = true;
-            if child.is_terminated() {
+            if child.is_released() {
                 ended = Some(at);
                 break;
             }
@@ -991,7 +1093,7 @@ impl Process {
         self.children
             .lock()
             .iter()
-            .any(|child| select(child) && child.is_terminated())
+            .any(|child| select(child) && child.is_released())
     }
 
     /// The queue woken whenever one of its children ends.
@@ -1042,8 +1144,9 @@ impl Process {
 ///
 /// Apart from the process, because this is what a handle to a process holds.
 /// A handle kept past the end must not keep the address space and everything
-/// else the process owned, and a wait needs nothing else. [`Process::end`] is
-/// the only writer.
+/// else the process owned, and a wait needs nothing else. [`Process::end`]
+/// records how it ended and [`Process::release`] closes it; nothing else
+/// writes it.
 #[derive(Debug)]
 pub(crate) struct Exit {
     /// Its exit status, valid once `terminated` is.
@@ -1053,7 +1156,8 @@ pub(crate) struct Exit {
     /// The terminated condition. Set after `status`, so a reader who sees it
     /// always reads the status that goes with it.
     terminated: AtomicBool,
-    /// Woken once, when it terminates.
+    /// Woken as it lets go of what it held: once its handles and descriptors are
+    /// closed, and again once it is released.
     exited: WaitQueue,
     /// Port registrations waiting for it to end, and `None` once it has
     /// closed its handles and descriptors and they have been taken.
@@ -1090,7 +1194,8 @@ impl Exit {
         self.closed.load(Ordering::Acquire)
     }
 
-    /// The queue woken, once, when it terminates.
+    /// The queue woken as it lets go of what it held; see
+    /// [`Process::is_released`].
     pub(crate) fn exited(&self) -> &WaitQueue {
         &self.exited
     }
@@ -1400,6 +1505,13 @@ impl StartClaim {
         self.process.add_thread(&thread);
         let task = sched::spawn_user("user", run_program, thread, cpu, state)?;
         self.process.tasks.lock().push(Arc::downgrade(&task));
+        // An end requested between the spawn and the push found no task to
+        // wake or interrupt; it is told now, rather than running on in user
+        // mode until it happens to make a call.
+        if self.process.is_terminated() {
+            sched::wake(&task);
+            sched::interrupt(&task);
+        }
         self.spent = true;
         Ok(task)
     }
@@ -1444,34 +1556,61 @@ pub(crate) fn kill(process: &Process, status: i32) {
     } else {
         0
     };
-    if !process.end(status, signal) {
-        return;
-    }
-    let tasks: Vec<Arc<Task>> = process
-        .tasks
-        .lock()
-        .iter()
-        .filter_map(Weak::upgrade)
-        .collect();
-    for task in &tasks {
-        // Blocked in a call: woken, it leaves on its way back to user mode.
-        sched::wake(task);
-        // Running in user mode: its processor is made to take an interrupt,
-        // which comes back through the check that ends it. Waiting for a tick
-        // is not enough, because a task alone on its processor gets none --
-        // the scheduler leaves a lone task to run -- and a program spinning
-        // there would outlive its own kill until it chose to make a call.
-        sched::interrupt(task);
-    }
+    let _ = process.end(status, signal);
 }
 
-/// End the running task's process with `status`, and the task with it.
-///
-/// What `exit_group` does. The process reference is dropped before the task
-/// ends, because nothing after `sched::exit` runs to drop it.
+/// End the running task's process with `status`, and the task's thread with
+/// it: what `exit_group` does.
 pub(crate) fn exit_current(status: i32) -> ! {
-    if let Some(process) = current() {
-        let _ = process.terminate(status);
+    end_thread(Some(status), true)
+}
+
+/// End the running task's thread with `status`: what `exit` does. Its process
+/// ends with it only when no other thread of it is live, with the status its
+/// first thread left with.
+pub(crate) fn exit_thread_current(status: i32) -> ! {
+    end_thread(Some(status), false)
+}
+
+/// End the running task's thread with no status of its own: a thread leaving
+/// because its process is ending, or one whose program never started.
+pub(crate) fn leave_current() -> ! {
+    end_thread(None, false)
+}
+
+/// End the running task's thread: end its process first when `group` asks;
+/// clear and wake the address it asked to have cleared; and count it gone,
+/// which ends the process if that was its last thread, or lets go of what the
+/// process holds if it was already ending.
+///
+/// Interrupts are opened first. A thread leaving from the way back to user
+/// mode, or from a program killed before it entered, arrives with them masked,
+/// and letting go of a process takes plain locks. Every reference is dropped
+/// before the task ends, because nothing after `sched::exit` runs to drop it.
+fn end_thread(status: Option<i32>, group: bool) -> ! {
+    crate::arch::enable_interrupts();
+    if let Some(thread) = thread::current() {
+        let process = Arc::clone(thread.process());
+        if let Some(status) = status {
+            if thread.tid() == process.pid() {
+                process.leader_status.store(status, Ordering::Release);
+            }
+            if group {
+                let _ = process.terminate(status);
+            }
+        }
+        // The address `CLONE_CHILD_CLEARTID` or `set_tid_address` registered
+        // is zeroed and its futex woken, which is how a `pthread_join` or a
+        // `vfork`ing libc learns the thread is gone. A failure is ignored, as
+        // Linux ignores it: the address was the program's to get right.
+        let clear_child_tid = thread.take_clear_child_tid();
+        if clear_child_tid != 0 {
+            let space = process.space();
+            let _ = uaccess::copy_to_user(space, clear_child_tid, &0_u32.to_le_bytes());
+            let _ = futex::wake_address(space, clear_child_tid, 1);
+        }
+        drop(thread);
+        process.thread_gone(true);
     }
     sched::exit()
 }
@@ -1494,8 +1633,8 @@ fn run_program(_argument: usize) {
     // instruction, where the check sees it. Entering user mode opens them.
     crate::arch::disable_interrupts();
     if process.is_terminated() {
-        crate::arch::enable_interrupts();
-        return;
+        drop(process);
+        leave_current();
     }
     if let Some(regs) = process.take_resume() {
         drop(process);
@@ -1514,7 +1653,7 @@ fn run_program(_argument: usize) {
         argument,
     }) = startup
     else {
-        return;
+        leave_current();
     };
     // SAFETY: this task was spawned in the process's address space, which the
     // scheduler installed when it switched here, along with the task's user

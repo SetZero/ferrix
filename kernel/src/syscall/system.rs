@@ -370,9 +370,15 @@ pub(crate) fn sys_syslog(
             if !is_user_address(buf) || !last.is_some_and(is_user_address) {
                 return Err(Errno::EFAULT);
             }
+            // Nothing is ever logged, so a read waits for a signal to end it,
+            // restarted under `SA_RESTART` as a blocking read is. It waits on
+            // its process's signals, never on its process's end, which only
+            // this thread leaving can bring about.
             if action == 2 {
-                let _ = process.wait_for_exit(u64::MAX);
-                return Err(Errno::EINTR);
+                let _ = process
+                    .signalled()
+                    .wait_until_deadline(|| process.signal_pending(), u64::MAX);
+                return Err(Errno::ERESTARTSYS);
             }
             Ok(0)
         }

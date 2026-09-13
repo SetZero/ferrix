@@ -731,6 +731,10 @@ pub(crate) fn spawn_user(
         None => (choose_cpu(&anywhere, here).unwrap_or(here), anywhere),
     };
     let space = Arc::clone(thread.process().space());
+    // Counted before the task exists: on another processor it can reach its
+    // thread's exit before this returns. A spawn that fails gives it back.
+    let process = Arc::clone(thread.process());
+    process.thread_starting();
     spawn_task(
         name,
         entry,
@@ -742,6 +746,7 @@ pub(crate) fn spawn_user(
         Some(thread),
         state,
     )
+    .inspect_err(|_| process.thread_gone(false))
 }
 
 /// Make a task and put it on `cpu`'s queue: the one path every kind takes.

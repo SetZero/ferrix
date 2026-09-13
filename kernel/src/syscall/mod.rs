@@ -145,14 +145,18 @@ pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Out
     // against a process it built itself, months before a program can.
     let process = process::current();
 
-    // `exit` and `exit_group` end the task here and never come back. One thread
-    // per process today, so the two are the same call; they part when `clone`
-    // makes a second thread. The reference is dropped first, because nothing
-    // after this line runs to drop it. A kernel thread has no process to end,
-    // and gets `ESRCH` from the table like every other call that needs one.
+    // `exit` ends the calling thread and `exit_group` its whole process; both
+    // end the task here and never come back, and with one thread they are the
+    // same. The reference is dropped first, because nothing after this line
+    // runs to drop it. A kernel thread has no process to end, and gets `ESRCH`
+    // from the table like every other call that needs one.
     if matches!(call, Syscall::Exit | Syscall::ExitGroup) && process.is_some() {
         drop(process);
-        process::exit_current(truncate(args.args[0]) as i32 & 0xFF);
+        let status = truncate(args.args[0]) as i32 & 0xFF;
+        if call == Syscall::Exit {
+            process::exit_thread_current(status);
+        }
+        process::exit_current(status);
     }
 
     // `clone`, `clone3`, `fork` and `vfork` need the caller's saved registers,

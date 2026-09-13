@@ -162,9 +162,10 @@ fn user_fault(frame: &arch::TrapFrame, trap: &Trap) {
     use crate::syscall::signal::{Origin, Posted};
 
     let (signal, code, address) = arch::fault_signal(frame, trap);
-    // Open while the signal is forced. A fatal one ends the process here, and
-    // ending it closes its handles and descriptors, frees what they held and
-    // tells whoever watches it, none of which may run with interrupts masked.
+    // Open while the signal is forced. A fatal one ends the process here, which
+    // wakes and interrupts its other threads and, when none of them is live,
+    // closes its handles and descriptors and tells whoever watches it, none of
+    // which may run with interrupts masked.
     // A trap from user mode holds no kernel lock, which is also what lets
     // `deliver::return_to_user` open them from this same dispatch; they are
     // masked again before anything else here runs.

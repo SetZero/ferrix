@@ -61,7 +61,6 @@ use ferrix_linux_abi::types::{SA_RESTART, SIG_DFL, SIG_IGN, SIGSEGV};
 
 use crate::arch;
 use crate::console::println;
-use crate::sched;
 use crate::syscall::process::{self, Process};
 use crate::syscall::signal::{
     self, DefaultAction, Origin, Posted, Restart, SIGSET_SIZE, Taken, UNBLOCKABLE,
@@ -295,12 +294,13 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
         restart_call(context, &ctx, kind);
     }
     thread.with_own_signals(signal::ThreadSignals::restore_saved_mask);
-    arch::disable_interrupts();
     if thread.process().is_terminated() {
-        // Nothing after `exit` runs to drop it.
+        // Left with interrupts still open, as the release its exit may run
+        // needs. Nothing after the thread's exit runs to drop it.
         drop(thread);
-        sched::exit();
+        process::leave_current();
     }
+    arch::disable_interrupts();
 }
 
 /// Which restart code a system call left in the return register, if any. The
