@@ -1253,6 +1253,52 @@ pub(crate) static UNEXPECTED_EXCEPTION: Explanation = Explanation {
           kernel/src/arch/aarch64/trap.rs class_name; kernel/src/arch/armv7a/trap.rs abort",
 };
 
+/// For `ferrix_paranoid_entry` in `arch/x86_64/paranoid.rs`, a machine check.
+pub(crate) static MACHINE_CHECK: Explanation = Explanation {
+    code: "FX-9005",
+    title: "the processor reported a hardware error",
+    meaning: "x86-64 raises the machine check, vector 18, when the processor or its memory \
+              finds an error it cannot correct: an uncorrectable ECC error, a bus or cache \
+              failure. The kernel reads no machine-check banks and recovers nothing, so it \
+              stops. The report is made on the machine check's own interrupt stack with the \
+              kernel's GS, whatever the processor was running, the system call entry's \
+              instructions on the program's stack included. `from` in the report says whether \
+              a program or the kernel was interrupted; that says nothing about the cause.",
+    causes: &[
+        "Failing memory or a failing processor; on a virtual machine, a host that forwarded \
+         an error, or a machine check injected through the monitor.",
+        "Kernel code executed `int $18`, which enters through the same gate; the saved \
+         instruction pointer then lies in the kernel image, just after it.",
+    ],
+    see: "kernel/src/arch/x86_64/paranoid.rs; kernel/src/arch/x86_64/trap.rs \
+          ferrix_paranoid_common",
+};
+
+/// For `ferrix_paranoid_entry` in `arch/x86_64/paranoid.rs`, a second entry
+/// onto an interrupt stack its first is still using.
+pub(crate) static NESTED_INTERRUPT_STACK: Explanation = Explanation {
+    code: "FX-9006",
+    title: "an exception nested on its own interrupt stack",
+    meaning: "On x86-64 the NMI, the debug exception, the machine check and the double fault \
+              each switch to the top of a stack of their own, per processor, unconditionally. \
+              A second one of the same kind taken while the first is still being handled \
+              starts at that same top, so it has already overwritten the first one's saved \
+              registers and part of its handler's stack, and the first could never return. \
+              The entry counts the occupants of each stack and stops here on a second. The \
+              registers in the report are the second exception's.",
+    causes: &[
+        "A handler on one of these stacks took an exception that returned, which lets the \
+         processor deliver another NMI before the first one's `iretq`; an NMI handler must \
+         not fault, not even on a page the demand window would map.",
+        "A hardware breakpoint on the paranoid entry's own instructions, before they clear \
+         `DR7`, or on an interrupt stack; nothing may arm one there.",
+        "A double fault inside the double-fault handler: that handler's report itself \
+         overflowed or faulted.",
+    ],
+    see: "kernel/src/arch/x86_64/paranoid.rs; kernel/src/arch/x86_64/trap.rs \
+          ferrix_paranoid_common; kernel/src/arch/x86_64/gdt.rs",
+};
+
 /// Every entry, in code order.
 #[expect(
     dead_code,
@@ -1306,4 +1352,6 @@ pub(crate) static ALL: &[&Explanation] = &[
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,
     &UNEXPECTED_EXCEPTION,
+    &MACHINE_CHECK,
+    &NESTED_INTERRUPT_STACK,
 ];

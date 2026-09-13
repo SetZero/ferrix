@@ -486,6 +486,34 @@ pub(crate) fn rdtsc() -> u64 {
     (u64::from(high) << 32) | u64::from(low)
 }
 
+// ---------------------------------------------------------------------------
+// Debug registers
+// ---------------------------------------------------------------------------
+
+/// Debug status: which condition raised the last `#DB`. Sticky: the processor
+/// sets bits and never clears them, so a handler clears it with [`write_dr6`].
+pub(crate) fn read_dr6() -> u64 {
+    let value: u64;
+    // SAFETY: reading a debug register at ring 0 has no side effects.
+    unsafe {
+        asm!("mov {}, dr6", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// Write the debug status register.
+///
+/// # Safety
+///
+/// `value` must keep DR6's reserved bits as the processor defines them:
+/// bits 63:32 clear, and the fixed-one bits set.
+pub(crate) unsafe fn write_dr6(value: u64) {
+    // SAFETY: the caller guarantees the reserved bits.
+    unsafe {
+        asm!("mov dr6, {}", in(reg) value, options(nomem, nostack, preserves_flags));
+    }
+}
+
 /// Read this processor's task register: the selector of its loaded TSS.
 ///
 /// # Safety

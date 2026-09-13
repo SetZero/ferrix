@@ -6,6 +6,7 @@ pub(crate) mod console;
 mod cpu;
 mod gdt;
 mod msi;
+mod paranoid;
 mod signal;
 mod smp;
 mod switch;

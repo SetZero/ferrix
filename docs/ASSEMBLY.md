@@ -62,6 +62,7 @@ Each entry names why Rust cannot express it. Entries are added to
 | Site | Why |
 |---|---|
 | Interrupt and exception stubs | The CPU pushes a hardware frame and, for some vectors, an error code — a difference of one word between vectors that Rust's calling convention cannot model. The stubs normalise this and call into Rust. |
+| Paranoid entry | The NMI, `#DB`, `#MC` and the double fault arrive on any instruction, including the `SYSCALL` trampoline's ring-0 stretches on the program's stack and `GS`, where the saved `CS` does not say which way round `GS` is. Before any Rust can run, the entry has to read `GS_BASE` with `rdmsr` and `swapgs` only if it is not the kernel's, clear `DR7` so no breakpoint fires on its IST stack, and move a ring-3 `#DB` off that stack onto the task's; and after Rust returns, undo exactly what it did. `swapgs`, `mov %dr7` and the stack switch are side effects on how the next instruction runs, which no function can hold. |
 | `SYSCALL` entry | `syscall` leaves the return address in `rcx`, flags in `r11`, and *does not switch the stack*. Entry has to swap to the kernel stack via `swapgs` and `%gs`-relative addressing before anything can be pushed. |
 | AP trampoline | Application processors start in 16-bit real mode at a page-aligned physical address below 1 MiB. Rust has no 16-bit real-mode target. This is the only 16-bit code in the project. |
 

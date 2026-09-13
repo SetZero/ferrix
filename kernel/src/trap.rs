@@ -282,7 +282,10 @@ fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {
 }
 
 /// Report a trap the kernel cannot continue past, and stop the machine.
-fn fatal(
+///
+/// Also for an architecture's own entries that never reach [`dispatch`]:
+/// x86-64's paranoid ones, which handle what they can and end here otherwise.
+pub(crate) fn fatal(
     frame: &arch::TrapFrame,
     what: &str,
     entry: &'static crate::panic::catalog::Explanation,

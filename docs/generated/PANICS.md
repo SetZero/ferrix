@@ -65,6 +65,8 @@ Causes are listed most likely first.
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
 | [FX-9004](#fx-9004) | a processor exception the kernel has no handler for |
+| [FX-9005](#fx-9005) | the processor reported a hardware error |
+| [FX-9006](#fx-9006) | an exception nested on its own interrupt stack |
 
 <a id="fx-0001"></a>
 
@@ -1270,3 +1272,46 @@ translation, access-flag or permission fault.
 See: kernel/src/trap.rs dispatch; kernel/src/arch/x86_64/trap.rs vector_name;
 kernel/src/arch/aarch64/trap.rs class_name; kernel/src/arch/armv7a/trap.rs
 abort.
+
+<a id="fx-9005"></a>
+
+## FX-9005 — the processor reported a hardware error
+
+x86-64 raises the machine check, vector 18, when the processor or its memory
+finds an error it cannot correct: an uncorrectable ECC error, a bus or cache
+failure. The kernel reads no machine-check banks and recovers nothing, so it
+stops. The report is made on the machine check's own interrupt stack with the
+kernel's GS, whatever the processor was running, the system call entry's
+instructions on the program's stack included. `from` in the report says whether
+a program or the kernel was interrupted; that says nothing about the cause.
+
+1. Failing memory or a failing processor; on a virtual machine, a host that
+   forwarded an error, or a machine check injected through the monitor.
+2. Kernel code executed `int $18`, which enters through the same gate; the saved
+   instruction pointer then lies in the kernel image, just after it.
+
+See: kernel/src/arch/x86_64/paranoid.rs; kernel/src/arch/x86_64/trap.rs
+ferrix_paranoid_common.
+
+<a id="fx-9006"></a>
+
+## FX-9006 — an exception nested on its own interrupt stack
+
+On x86-64 the NMI, the debug exception, the machine check and the double fault
+each switch to the top of a stack of their own, per processor, unconditionally.
+A second one of the same kind taken while the first is still being handled
+starts at that same top, so it has already overwritten the first one's saved
+registers and part of its handler's stack, and the first could never return. The
+entry counts the occupants of each stack and stops here on a second. The
+registers in the report are the second exception's.
+
+1. A handler on one of these stacks took an exception that returned, which lets
+   the processor deliver another NMI before the first one's `iretq`; an NMI
+   handler must not fault, not even on a page the demand window would map.
+2. A hardware breakpoint on the paranoid entry's own instructions, before they
+   clear `DR7`, or on an interrupt stack; nothing may arm one there.
+3. A double fault inside the double-fault handler: that handler's report itself
+   overflowed or faulted.
+
+See: kernel/src/arch/x86_64/paranoid.rs; kernel/src/arch/x86_64/trap.rs
+ferrix_paranoid_common; kernel/src/arch/x86_64/gdt.rs.

@@ -110,6 +110,12 @@ const IST_STACKS: usize = 4;
 /// four pages.
 const IST_STACK_SIZE: usize = 16 * 1024;
 
+/// Bytes left above each IST entry: one word counting the exceptions using the
+/// stack, and one to keep the entry sixteen-byte aligned. `trap.rs`'s paranoid
+/// entry reads the count at the entry itself, just above the frame the
+/// processor pushes there.
+const IST_OCCUPANCY_RESERVE: u64 = 16;
+
 const _: () = assert!(
     IST_STACK_SIZE as u64 == crate::vmap::STACK_PAGES * ferrix_bootinfo::PAGE_SIZE,
     "the boot processor's interrupt stacks are the size a secondary's vmap stacks are"
@@ -360,7 +366,15 @@ pub(crate) unsafe fn init_secondary() -> Result<(), &'static str> {
 /// stack nothing else uses.
 unsafe fn load(tables: &'static mut Tables, ist_tops: [u64; IST_STACKS]) {
     for (slot, top) in (1..).zip(ist_tops) {
-        tables.tss.set_interrupt_stack(slot, top);
+        // Sixteen bytes below the top, not the top: the word there counts the
+        // exceptions using the stack, which the paranoid entry reads just
+        // above the frame the processor pushes at the IST entry, and nothing
+        // else writes. It must start at zero, whatever the stack held.
+        let entry = top - IST_OCCUPANCY_RESERVE;
+        // SAFETY: `entry` is inside the stack `top` ends, which the caller
+        // guarantees nothing else is using, and eight-byte aligned.
+        unsafe { (entry as *mut u64).write(0) };
+        tables.tss.set_interrupt_stack(slot, entry);
     }
     tables.tss.deny_all_ports();
 

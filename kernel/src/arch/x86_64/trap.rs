@@ -132,6 +132,7 @@ ferrix_trap_common:
     jz 1f
     swapgs
 1:
+ferrix_trap_dispatch:
     movq %rsp, %rdi
     callq ferrix_trap_entry
 
@@ -140,9 +141,9 @@ ferrix_trap_common:
 .globl ferrix_trap_return
 ferrix_trap_return:
     testb $3, 144(%rsp)
-    jz 2f
+    jz ferrix_trap_restore
     swapgs
-2:
+ferrix_trap_restore:
     popq %r15
     popq %r14
     popq %r13
@@ -169,6 +170,105 @@ ferrix_resume_trap_frame:
     cli
     movq %rdi, %rsp
     jmp ferrix_trap_return
+
+// The paranoid entries: the four vectors on interrupt stacks of their own.
+// The same frame as every other stub builds, and then three things the CS test
+// cannot do. See `super::paranoid` for why each is there.
+.globl ferrix_paranoid_stubs
+.align 16
+ferrix_paranoid_stubs:
+ferrix_paranoid_debug:
+    pushq $0
+    pushq $1
+    jmp ferrix_paranoid_common
+.align 16
+ferrix_paranoid_nmi:
+    pushq $0
+    pushq $2
+    jmp ferrix_paranoid_common
+.align 16
+ferrix_paranoid_double_fault:
+    pushq $8
+    jmp ferrix_paranoid_common
+.align 16
+ferrix_paranoid_machine_check:
+    pushq $0
+    pushq $18
+    jmp ferrix_paranoid_common
+
+ferrix_paranoid_common:
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    cld
+
+    // A #DB from ring 3 is the program's own, and may end in a signal, a
+    // block or a switch, none of which can happen on a stack this processor
+    // shares with the next #DB. Its frame moves to the task's kernel stack --
+    // exactly where the processor would have put it without the IST -- and
+    // takes the ordinary path, whose CS test is right for a ring-3 frame.
+    testb $3, 144(%rsp)
+    jz 1f
+    cmpq $1, 120(%rsp)
+    je 4f
+1:
+    // Count this stack's occupants in the word above the frame, which the
+    // TSS's IST entry points at. Two is a second exception on a stack the first
+    // is still using, which has already overwritten it.
+    incq 176(%rsp)
+
+    // GS by asking the register, not the frame: kernel GS_BASE is a
+    // kernel address, sign bit set, and no program can load one. EBX says
+    // whether to swap back and survives the call.
+    movl $0xC0000101, %ecx
+    rdmsr
+    xorl %ebx, %ebx
+    testl %edx, %edx
+    js 2f
+    swapgs
+    movl $1, %ebx
+2:
+    // No breakpoint may fire while a handler is on this stack: a nested #DB
+    // would land on its top. R12 keeps DR7 across the call.
+    mov %dr7, %r12
+    xorl %eax, %eax
+    mov %rax, %dr7
+
+    movq %rsp, %rdi
+    movq 176(%rsp), %rsi
+    callq ferrix_paranoid_entry
+
+    mov %r12, %dr7
+    testl %ebx, %ebx
+    jz 3f
+    swapgs
+3:
+    decq 176(%rsp)
+    jmp ferrix_trap_restore
+
+4:
+    swapgs
+    movq %gs:8, %rdi
+    andq $-16, %rdi
+    subq $176, %rdi
+    movq %rdi, %rbx
+    movq %rsp, %rsi
+    movl $22, %ecx
+    rep movsq
+    movq %rbx, %rsp
+    jmp ferrix_trap_dispatch
 "#,
     options(att_syntax)
 );
@@ -186,9 +286,25 @@ const _: () = assert!(
     "the trap stub tests CS at 144(%rsp)"
 );
 
+// The paranoid entry names three more offsets by number: the vector it tests
+// to send a ring-3 `#DB` to the task's stack, the frame's size, which is where
+// the occupancy word sits above it, and the same size again as the 22 words it
+// copies there.
+const _: () = assert!(
+    core::mem::offset_of!(TrapFrame, vector) == 120,
+    "the paranoid entry tests the vector at 120(%rsp)"
+);
+const _: () = assert!(
+    size_of::<TrapFrame>() == 176,
+    "the paranoid entry finds the IST occupancy word at 176(%rsp) and copies 22 words"
+);
+
 unsafe extern "C" {
     /// The first of 256 entry stubs, each [`STUB_SIZE`] bytes apart.
     static ferrix_trap_stubs: [u8; VECTORS * STUB_SIZE];
+    /// The four paranoid entries, `#DB`, NMI, `#DF` and `#MC` in that order,
+    /// [`STUB_SIZE`] bytes apart.
+    static ferrix_paranoid_stubs: [u8; 4 * STUB_SIZE];
 }
 
 /// One interrupt descriptor table entry.
@@ -266,6 +382,7 @@ pub(crate) unsafe fn init() {
     // SAFETY: single-threaded early boot, and this is the only writer.
     let table = unsafe { &mut *IDT.0.get() };
     let stubs = (&raw const ferrix_trap_stubs) as u64;
+    let paranoid_stubs = (&raw const ferrix_paranoid_stubs) as u64;
 
     for (vector, gate) in table.iter_mut().enumerate() {
         // Four vectors cannot share the interrupted stack. The double fault,
@@ -276,14 +393,17 @@ pub(crate) unsafe fn init() {
         // exception and the machine check -- because the kernel is not always
         // on a stack of its own: the `SYSCALL` trampoline's first and last
         // instructions run in ring 0 on the program's stack.
-        let ist = match vector {
-            DEBUG => gdt::DEBUG_IST,
-            NMI => gdt::NMI_IST,
-            DOUBLE_FAULT => gdt::DOUBLE_FAULT_IST,
-            MACHINE_CHECK => gdt::MACHINE_CHECK_IST,
-            _ => 0,
+        //
+        // The same four take the paranoid entry, which cannot trust the saved
+        // CS to say which way round GS is; see `super::paranoid`.
+        let paranoid = |index: usize| paranoid_stubs + (index * STUB_SIZE) as u64;
+        *gate = match vector {
+            DEBUG => Gate::new(paranoid(0), gdt::DEBUG_IST),
+            NMI => Gate::new(paranoid(1), gdt::NMI_IST),
+            DOUBLE_FAULT => Gate::new(paranoid(2), gdt::DOUBLE_FAULT_IST),
+            MACHINE_CHECK => Gate::new(paranoid(3), gdt::MACHINE_CHECK_IST),
+            _ => Gate::new(stubs + (vector * STUB_SIZE) as u64, 0),
         };
-        *gate = Gate::new(stubs + (vector * STUB_SIZE) as u64, ist);
     }
 
     // SAFETY: the table was filled just above, and the GDT is loaded.
@@ -314,6 +434,11 @@ pub(crate) unsafe fn load_on_this_cpu() {
 /// Not called from Rust — the `callq` in the assembly above is its only caller.
 #[unsafe(no_mangle)]
 extern "C" fn ferrix_trap_entry(frame: &mut TrapFrame) {
+    // A program's own `#DB`, moved here from its IST stack by the paranoid
+    // entry. `DR6` is sticky, so it is cleared for the next one to read.
+    if frame.vector == DEBUG as u64 {
+        let _ = super::paranoid::take_debug_status();
+    }
     crate::trap::dispatch(frame);
 }
 
