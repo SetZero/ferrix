@@ -110,8 +110,9 @@ pub enum BtrfsError {
         /// The largest count the node's size allows.
         capacity: u32,
     },
-    /// A leaf item's data range falls outside the node, or overlaps the item
-    /// array at the front of the node.
+    /// A leaf item's data range falls outside the node, overlaps the item
+    /// array at the front of the node, or does not end exactly where the
+    /// previous item's data begins (the end of the node, for the first item).
     ItemOutOfBounds {
         /// Index of the offending item within the leaf.
         slot: u32,

@@ -1102,6 +1102,74 @@ fn items_out_of_order_are_refused() {
     );
 }
 
+/// Rewrite leaf item `slot`'s payload offset and size, and checksum the node
+/// again so only the layout is wrong.
+fn move_payload(bytes: &mut [u8], slot: usize, offset: u32, size: u32) {
+    let at = HEADER_SIZE + slot * ITEM_SIZE;
+    put_u32(bytes, at + 17, offset);
+    put_u32(bytes, at + 21, size);
+    let computed = crc32c(&bytes[32..]);
+    bytes[0..4].copy_from_slice(&computed.to_le_bytes());
+}
+
+#[test]
+fn leaf_payloads_that_are_not_packed_back_to_back_are_refused() {
+    // `sample_leaf` packs 32, 17 and 8 bytes down from the end of the node:
+    // item 0 at 3963..3995, item 1 at 3946..3963, item 2 at 3938..3946, all
+    // measured from the end of the header.
+    let end = (NODE_SIZE - HEADER_SIZE) as u32;
+    for (slot, offset, size, what) in [
+        (1, end - 32, 17, "item 1 sharing item 0's bytes"),
+        (1, end - 32 - 18, 17, "a one-byte gap between items 0 and 1"),
+        (0, end - 33, 32, "item 0 ending a byte short of the node"),
+        (
+            2,
+            end - 32 - 17 - 4,
+            8,
+            "item 2 overlapping item 1 by four bytes",
+        ),
+    ] {
+        let mut bytes = sample_leaf();
+        move_payload(&mut bytes, slot, offset, size);
+        assert_eq!(
+            Node::parse(&bytes, 0x4000).unwrap_err(),
+            BtrfsError::ItemOutOfBounds { slot: slot as u32 },
+            "{what} is refused"
+        );
+    }
+}
+
+#[test]
+fn a_packed_leaf_parses_up_to_its_boundaries() {
+    // An empty payload between two others takes no bytes, and a single item
+    // may fill the node exactly up to its own descriptor.
+    let bytes = leaf(
+        &[
+            (BtrfsKey::new(256, 1, 0), vec![0xAA; 16]),
+            (BtrfsKey::new(256, 2, 0), Vec::new()),
+            (BtrfsKey::new(256, 3, 0), vec![0xCC; 4]),
+        ],
+        0x4000,
+    );
+    let node = Node::parse(&bytes, 0x4000).unwrap();
+    assert_eq!(node.item(1).unwrap().data, &[] as &[u8]);
+    assert_eq!(node.item(2).unwrap().data, &[0xCC; 4]);
+
+    let room = NODE_SIZE - HEADER_SIZE - ITEM_SIZE;
+    let full = leaf(&[(BtrfsKey::new(256, 1, 0), vec![0xDD; room])], 0x4000);
+    assert!(
+        Node::parse(&full, 0x4000).is_ok(),
+        "a payload reaching exactly to the descriptor array"
+    );
+    let mut over = full;
+    move_payload(&mut over, 0, (ITEM_SIZE - 1) as u32, (room + 1) as u32);
+    assert_eq!(
+        Node::parse(&over, 0x4000).unwrap_err(),
+        BtrfsError::ItemOutOfBounds { slot: 0 },
+        "one byte further overlaps the descriptor"
+    );
+}
+
 #[test]
 fn a_node_deeper_than_any_tree_is_refused() {
     // Level 7 is the root of the deepest tree btrfs builds; 8 is no node at

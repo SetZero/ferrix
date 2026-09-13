@@ -260,10 +260,11 @@ impl<'a> Node<'a> {
     /// `bytes` must be exactly the node: its length is taken as the node size,
     /// because that is what the item offsets are measured against.
     ///
-    /// Beyond the header this checks that `nritems` fits, that every item's
-    /// payload lies inside the node and clear of the descriptor array, and that
-    /// keys ascend. A node that fails any of these would still "work" — it
-    /// would just return payloads assembled from the wrong bytes.
+    /// Beyond the header this checks that the level is one a tree can have,
+    /// that `nritems` fits, that leaf payloads are packed back to back from the
+    /// end of the node and clear of the descriptor array, and that keys ascend.
+    /// A node that fails any of these would still "work" — it would just
+    /// return payloads assembled from the wrong bytes.
     pub fn parse(bytes: &'a [u8], logical: u64) -> Result<Self, BtrfsError> {
         let node = Self::parse_unchecked_address(bytes)?;
         if node.header.bytenr != logical {
@@ -330,26 +331,40 @@ impl<'a> Node<'a> {
     }
 
     /// Validate every leaf item's payload range and the key ordering.
+    ///
+    /// Payloads are packed: item 0's ends exactly at the end of the node, and
+    /// each later item's ends exactly where the one before it begins. That is
+    /// Linux's `check_leaf` ("unexpected item end"), and it is stronger than
+    /// every payload merely lying inside the node — it is what stops two items
+    /// from sharing bytes, so that one item's payload cannot be read back,
+    /// through another item's key, as something else.
     fn check_leaf(&self) -> Result<(), BtrfsError> {
         // Payloads may not reach back into the descriptor array; this is the
         // low-water mark they must all stay above.
         let descriptors_end = HEADER_SIZE
             .checked_add((self.header.nritems as usize).saturating_mul(ITEM_SIZE))
             .ok_or(BtrfsError::ItemOutOfBounds { slot: 0 })?;
+        // Where the next payload must end, measured like an item's offset from
+        // the end of the header. For item 0 that is the end of the node.
+        let mut expected_end = self.bytes.len().saturating_sub(HEADER_SIZE);
         let mut previous: Option<BtrfsKey> = None;
         for slot in 0..self.header.nritems {
             let item = self
                 .raw_item(slot)
                 .ok_or(BtrfsError::ItemOutOfBounds { slot })?;
+            let (offset, size) = (item.1 as usize, item.2 as usize);
             let start = HEADER_SIZE
-                .checked_add(item.1 as usize)
+                .checked_add(offset)
                 .ok_or(BtrfsError::ItemOutOfBounds { slot })?;
-            let end = start
-                .checked_add(item.2 as usize)
+            let end = offset
+                .checked_add(size)
                 .ok_or(BtrfsError::ItemOutOfBounds { slot })?;
-            if start < descriptors_end || end > self.bytes.len() {
+            // `end` equal to a bound that starts at the node's end and only
+            // descends keeps every payload inside the node as well.
+            if start < descriptors_end || end != expected_end {
                 return Err(BtrfsError::ItemOutOfBounds { slot });
             }
+            expected_end = offset;
             if previous.is_some_and(|prev| prev >= item.0) {
                 return Err(BtrfsError::ItemsOutOfOrder { slot });
             }
