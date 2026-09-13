@@ -112,7 +112,7 @@ nobody has it yet.
 | The EEVDF fairness flake, root-caused; then a preemption count so no plain spin lock taken with interrupts on can convoy | ferrix-b9 | 5 |
 | FX-0601 "reserving a thousand pages cost a frame", about one x86-64 boot in three under KVM: a reap landing inside stage 6's frame-count window; the check must settle first, as the path check does | ferrix-b9 | 6 |
 | A regression check that exited programs give every frame back once reaped (the leak 0510a8a fixed) | ferrix-91 | 7 |
-| `xtask flash --init`; `docs/stm32mp157-dk.md` brought up to what the card actually runs; the first hardware run of stages 6–9 | ferrix-b1 | ARMv7-A |
+| The first hardware run of stages 6–9 on the DK1: the full boot marker and `test-shell` at two processors, recorded as a hardware column in the roadmap's ARMv7-A section. Needs the board powered, and a shell also needs console receive (next row) | ferrix-b1 | ARMv7-A |
 | Console receive by interrupt on the PL011 and the STM32 USART, retiring the 20 ms polling thread | ferrix-b1, with ferrix-91 | 7, 15 |
 | ARMv7-A with 2 GiB does not boot: the loader must allocate below the direct map's ceiling, and RAM beyond it is reported unused rather than fatal | ferrix-b1 | ARMv7-A |
 
