@@ -637,6 +637,9 @@ impl Process {
                     .filter_map(|fd| files.remove(fd).ok())
                     .collect()
             };
+            for file in &closed {
+                crate::syscall::flock::closed(self, file);
+            }
             drop(closed);
         }
         self.exited.wake_all();

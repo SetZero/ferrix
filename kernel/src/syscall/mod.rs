@@ -433,6 +433,9 @@ fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<
         Syscall::Dup => fd::sys_dup(process, fd),
         Syscall::Dup2 => fd::sys_dup2(process, fd, fd::arg(a[1])),
         Syscall::Dup3 => fd::sys_dup3(process, fd, fd::arg(a[1]), truncate(a[2])),
+        Syscall::Fcntl | Syscall::Fcntl64 if flock::is_record_lock(truncate(a[1]), call) => {
+            flock::sys_fcntl_lock(process, fd, truncate(a[1]), a[2], call)
+        }
         Syscall::Fcntl | Syscall::Fcntl64 => fd::sys_fcntl(process, fd, truncate(a[1]), a[2]),
         Syscall::Ftruncate => fd::sys_ftruncate(process, fd, native_signed(a[1])),
         Syscall::Ftruncate64 => fd::sys_ftruncate(process, fd, wide(a, 1)),

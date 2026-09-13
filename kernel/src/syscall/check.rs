@@ -2427,7 +2427,8 @@ fn check_descriptors(process: &Process) -> Result<(), &'static str> {
         .and_then(|()| check_fcntl_and_dup3_follow_linux(process, page))
         .and_then(|()| check_descriptors_are_refused_by_kind(process, page))
         .and_then(|()| check_flock_belongs_to_the_description(process, page))
-        .and_then(|()| check_readahead_accepts_only_a_readable_file(process, page));
+        .and_then(|()| check_readahead_accepts_only_a_readable_file(process, page))
+        .and_then(|()| check_record_locks_follow_linux(process, page));
 
     // Cleaned up whatever happened, so that a failure is reported as itself
     // and not also as leaked frames.
@@ -2441,6 +2442,227 @@ fn check_descriptors(process: &Process) -> Result<(), &'static str> {
     }
     let _ = memory::sys_munmap(process, page, PAGE_SIZE);
     outcome
+}
+
+/// Stage a 32-byte `struct flock` -- `struct flock64` on ARMv7-A, where the
+/// checks use the `64` commands -- at `at`.
+fn stage_flock(
+    on: &Process,
+    at: u64,
+    kind: i16,
+    start: i64,
+    len: i64,
+    pid: i32,
+) -> Result<(), &'static str> {
+    let mut bytes = [0_u8; 32];
+    for (offset, value) in [
+        (0, &kind.to_le_bytes()[..]),
+        (2, &0_i16.to_le_bytes()[..]),
+        (8, &start.to_le_bytes()[..]),
+        (16, &len.to_le_bytes()[..]),
+        (24, &pid.to_le_bytes()[..]),
+    ] {
+        if let Some(slot) = bytes.get_mut(offset..offset + value.len()) {
+            slot.copy_from_slice(value);
+        }
+    }
+    uaccess::copy_to_user(on.space(), at, &bytes).map_err(|_| "could not stage a struct flock")
+}
+
+/// What `F_GETLK` wrote at `at`: type, start, length and pid.
+fn reported_flock(on: &Process, at: u64) -> Result<(i16, i64, i64, i32), &'static str> {
+    let bytes: [u8; 32] = read_user(on, at)?;
+    let word = |from: usize| {
+        bytes
+            .get(from..from + 8)
+            .and_then(|slice| <[u8; 8]>::try_from(slice).ok())
+            .map_or(0, i64::from_le_bytes)
+    };
+    let kind = bytes
+        .get(..2)
+        .and_then(|slice| <[u8; 2]>::try_from(slice).ok())
+        .map_or(-1, i16::from_le_bytes);
+    let pid = bytes
+        .get(24..28)
+        .and_then(|slice| <[u8; 4]>::try_from(slice).ok())
+        .map_or(0, i32::from_le_bytes);
+    Ok((kind, word(8), word(16), pid))
+}
+
+/// One record-lock command on `on`, through `fcntl64` -- which a 64-bit build
+/// reads exactly as `fcntl` -- with its structure at `at`.
+fn record_lock(on: &Process, fd: i32, cmd: u32, at: u64) -> Result<usize, Errno> {
+    crate::syscall::flock::sys_fcntl_lock(on, fd, cmd, at, ferrix_linux_abi::nr::Syscall::Fcntl64)
+}
+
+/// Record locks follow Linux.
+///
+/// Two descriptions' OFD write locks over one range conflict -- the negative
+/// control -- and `F_OFD_GETLK` reports the holder with pid -1, while ranges
+/// that only touch do not conflict. A classic read lock conflicts with its own
+/// process's OFD lock and with another process's write lock, and `F_GETLK`
+/// reports it with its process's pid. Closing any descriptor the process has
+/// on the file releases it, not only the one that set it. Releasing the middle
+/// of a lock leaves the parts either side. A bad type is `EINVAL`, a write lock
+/// on a read-only descriptor `EBADF`, and an OFD request with a pid `EINVAL`.
+fn check_record_locks_follow_linux(process: &Process, page: u64) -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::{F_OFD_GETLK, F_OFD_SETLK, F_RDLCK, F_UNLCK, F_WRLCK};
+    let narrow = size_of::<usize>() == 4;
+    let (getlk, setlk) = if narrow {
+        (
+            ferrix_linux_abi::types::F_GETLK64,
+            ferrix_linux_abi::types::F_SETLK64,
+        )
+    } else {
+        (
+            ferrix_linux_abi::types::F_GETLK,
+            ferrix_linux_abi::types::F_SETLK,
+        )
+    };
+    let at = page + AT_RESULT;
+
+    let first = open_check_file(process, page, O_RDWR | O_CREAT)?;
+    let second = open_check_file(process, page, O_RDWR)?;
+    stage_flock(process, at, F_WRLCK, 0, 100, 0)?;
+    answers(
+        record_lock(process, first, F_OFD_SETLK, at),
+        0,
+        "an OFD write lock on an unlocked range was refused",
+    )?;
+    stage_flock(process, at, F_WRLCK, 50, 10, 0)?;
+    refuses(
+        record_lock(process, second, F_OFD_SETLK, at),
+        Errno::EAGAIN,
+        "a second description was granted an OFD write lock over the first's",
+    )?;
+    answers(
+        record_lock(process, second, F_OFD_GETLK, at),
+        0,
+        "F_OFD_GETLK was refused",
+    )?;
+    if reported_flock(process, at)? != (F_WRLCK, 0, 100, -1) {
+        return Err("F_OFD_GETLK did not report the OFD write lock over 0..100 with pid -1");
+    }
+    stage_flock(process, at, F_WRLCK, 100, 10, 7)?;
+    refuses(
+        record_lock(process, second, F_OFD_SETLK, at),
+        Errno::EINVAL,
+        "an OFD lock request with a pid was not EINVAL",
+    )?;
+    stage_flock(process, at, F_WRLCK, 100, 10, 0)?;
+    answers(
+        record_lock(process, second, F_OFD_SETLK, at),
+        0,
+        "an OFD lock on a range that only touches another was refused",
+    )?;
+
+    stage_flock(process, at, F_RDLCK, 200, 0, 0)?;
+    answers(
+        record_lock(process, first, setlk, at),
+        0,
+        "a classic read lock to the end of the file was refused",
+    )?;
+    stage_flock(process, at, F_WRLCK, 300, 10, 0)?;
+    refuses(
+        record_lock(process, second, F_OFD_SETLK, at),
+        Errno::EAGAIN,
+        "an OFD write lock was granted over its own process's classic read lock",
+    )?;
+
+    let other = process::new_for_check()
+        .map_err(|_| "could not make a process for the record-lock check")?;
+    let other_page = map_rw(&other, PAGE_SIZE)?;
+    let outcome =
+        check_record_locks_between_processes(process, &other, other_page, [getlk, setlk], page);
+    let _ = memory::sys_munmap(&other, other_page, PAGE_SIZE);
+    outcome?;
+
+    stage_flock(process, at, 7, 0, 1, 0)?;
+    refuses(
+        record_lock(process, second, setlk, at),
+        Errno::EINVAL,
+        "a record lock of type 7 was not EINVAL",
+    )?;
+    let read_only = open_check_file(process, page, O_RDONLY)?;
+    stage_flock(process, at, F_WRLCK, 0, 1, 0)?;
+    let refused = record_lock(process, read_only, setlk, at);
+    let _ = fd::sys_close(process, read_only);
+    refuses(
+        refused,
+        Errno::EBADF,
+        "a write lock through a read-only descriptor was not EBADF",
+    )?;
+    stage_flock(process, at, F_UNLCK, 0, 0, 0)?;
+    answers(
+        record_lock(process, second, F_OFD_SETLK, at),
+        0,
+        "releasing every OFD lock was refused",
+    )
+}
+
+/// The classic-lock half of [`check_record_locks_follow_linux`], between the
+/// check process, which holds a read lock from byte 200 to the end, and
+/// `other`.
+fn check_record_locks_between_processes(
+    process: &Process,
+    other: &Process,
+    other_page: u64,
+    [getlk, setlk]: [u32; 2],
+    page: u64,
+) -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::{F_RDLCK, F_UNLCK, F_WRLCK};
+    uaccess::copy_to_user(other.space(), other_page + AT_PATH, CHECK_PATH)
+        .map_err(|_| "could not stage the path in another process")?;
+    let theirs = open_check_file(other, other_page, O_RDWR)?;
+    let at = other_page + AT_RESULT;
+
+    stage_flock(other, at, F_WRLCK, 200, 10, 0)?;
+    refuses(
+        record_lock(other, theirs, setlk, at),
+        Errno::EAGAIN,
+        "another process was granted a write lock over a classic read lock",
+    )?;
+    stage_flock(other, at, F_WRLCK, 250, 1, 0)?;
+    answers(
+        record_lock(other, theirs, getlk, at),
+        0,
+        "F_GETLK was refused",
+    )?;
+    let pid = i32::try_from(process.pid()).unwrap_or(-1);
+    if reported_flock(other, at)? != (F_RDLCK, 200, 0, pid) {
+        return Err(
+            "F_GETLK did not report the classic read lock from 200 to the end with its process's pid",
+        );
+    }
+
+    // Any close of the file by the process releases its classic lock.
+    let another = open_check_file(process, page, O_RDONLY)?;
+    let _ = fd::sys_close(process, another);
+    stage_flock(other, at, F_WRLCK, 200, 10, 0)?;
+    answers(
+        record_lock(other, theirs, setlk, at),
+        0,
+        "closing another descriptor of the file left the process's classic lock in place",
+    )?;
+
+    stage_flock(other, at, F_UNLCK, 203, 2, 0)?;
+    answers(
+        record_lock(other, theirs, setlk, at),
+        0,
+        "releasing the middle of a lock was refused",
+    )?;
+    let mine = page + AT_RESULT;
+    stage_flock(process, mine, F_WRLCK, 200, 10, 0)?;
+    let second = open_check_file(process, page, O_RDONLY)?;
+    let asked = record_lock(process, second, getlk, mine);
+    let _ = fd::sys_close(process, second);
+    answers(asked, 0, "F_GETLK was refused to the check process")?;
+    let their_pid = i32::try_from(other.pid()).unwrap_or(-1);
+    if reported_flock(process, mine)? != (F_WRLCK, 200, 3, their_pid) {
+        return Err("F_GETLK did not report the part of a lock left before a released range");
+    }
+    let _ = fd::sys_close(other, theirs);
+    Ok(())
 }
 
 /// Open the descriptor checks' file with `flags`, as a descriptor number.

@@ -1,4 +1,4 @@
-//! `flock`: advisory locks on a whole file, held by an open file description.
+//! Advisory locks: `flock`'s whole-file locks, and `fcntl`'s record locks.
 //!
 //! # Whose lock it is
 //!
@@ -10,24 +10,35 @@
 //! busybox's `flock FILE -c CMD` relies on: it opens the file, locks it, and
 //! forks the command, which inherits the description and the lock with it.
 //!
-//! # Released when the description goes, with no hook in it
+//! A record lock has one of two owners. A classic one (`F_SETLK`) belongs to
+//! the process -- to its descriptor table, as Linux's `fl_owner` is
+//! `current->files` -- so a fork child does not inherit it, and any `close` by
+//! that process of a descriptor on the file releases it, whichever descriptor
+//! set it. An open file description lock (`F_OFD_SETLK`) belongs to the
+//! description, as a `flock` lock does. The two kinds conflict with each
+//! other, even within one process, as on Linux. `flock` locks and record locks
+//! never meet.
 //!
-//! The table holds a [`Weak`] reference to each holder's description, and
-//! every look at the table first sweeps out the holders whose description is
-//! gone. So a lock ends when its description does -- on `close`, on `exit`, on
-//! `execve` closing a close-on-exec descriptor -- without `ferrix_vfs::OpenFile`
-//! or `crate::fs` having to know that locks exist.
+//! # Released when the owner goes, with the smallest hook in it
 //!
-//! Nothing is woken at that moment, because nothing of this module runs then.
-//! A waiter sees the lock gone at its wait's next recheck, which
-//! `WaitQueue::wait_until_deadline` makes every few milliseconds whether or not
-//! it is woken. `LOCK_UN` and a conversion do wake the waiters, since those
-//! happen inside a call that can.
+//! The tables hold [`Weak`] references to their owners, and every look at one
+//! first sweeps out the entries whose owner is gone. So a `flock` or OFD lock
+//! ends when its description does -- on `close`, on `exit`, on `execve`
+//! closing a close-on-exec descriptor -- without `ferrix_vfs::OpenFile` having
+//! to know that locks exist. Nothing is woken at that moment, because nothing
+//! of this module runs then; a waiter sees the lock gone at its wait's next
+//! recheck, which `WaitQueue::wait_until_deadline` makes every few
+//! milliseconds whether or not it is woken.
 //!
-//! The table never upgrades a reference. Liveness is read with
-//! [`Weak::strong_count`] and identity by address, so the table's lock is
-//! never where a description's last strong reference is dropped -- which would
-//! run the description's teardown, and a pipe end's wake-ups, under it.
+//! A classic record lock cannot wait for its owner to go, because its owner --
+//! the descriptor table -- outlives the `close` that must release it. So the
+//! four places a descriptor is closed call [`closed`]: `close`, a `dup2` or
+//! `dup3` that displaces one, `execve`'s close-on-exec, and exit.
+//!
+//! The tables never upgrade a reference. Liveness is read with
+//! [`Weak::strong_count`] and identity by address, so a table's lock is never
+//! where an owner's last strong reference is dropped -- which would run a
+//! description's teardown, and a pipe end's wake-ups, under it.
 //!
 //! # Which file
 //!
@@ -40,22 +51,35 @@
 //!
 //! # A conversion is not atomic
 //!
-//! Asking for a lock a description already holds in the other mode first gives
-//! up the one it has, then asks, as Linux's `flock_lock_inode` does. A
-//! `LOCK_NB` conversion that is refused therefore leaves the description with
-//! no lock at all, which is what `flock(2)` documents.
+//! Asking for a `flock` lock a description already holds in the other mode
+//! first gives up the one it has, then asks, as Linux's `flock_lock_inode`
+//! does. A `LOCK_NB` conversion that is refused therefore leaves the
+//! description with no lock at all, which is what `flock(2)` documents.
+//!
+//! # What record locks do not do
+//!
+//! `F_SETLKW` does not detect deadlock: two processes each waiting for the
+//! other's classic lock wait until a signal, where Linux answers one of them
+//! `EDEADLK`.
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
-use ferrix_linux_abi::types::{LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN};
+use ferrix_linux_abi::nr::Syscall;
+use ferrix_linux_abi::types::{
+    F_GETLK, F_GETLK64, F_OFD_GETLK, F_OFD_SETLK, F_OFD_SETLKW, F_RDLCK, F_SETLK, F_SETLK64,
+    F_SETLKW, F_SETLKW64, F_UNLCK, F_WRLCK, LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN, SEEK_CUR, SEEK_END,
+    SEEK_SET,
+};
 use ferrix_sync::SpinLock;
-use ferrix_vfs::OpenFile;
+use ferrix_vfs::fd::FdTable;
+use ferrix_vfs::{OpenFile, Whence};
 
 use crate::sched::WaitQueue;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
+use crate::syscall::uaccess;
 
 /// A wait with no deadline of its own: a release or a signal ends it.
 const FOREVER: u64 = u64::MAX;
@@ -102,7 +126,7 @@ enum Attempt {
 /// handful at once, and a sweep has to visit every holder anyway.
 static HOLDERS: SpinLock<Vec<Holder>> = SpinLock::new(Vec::new());
 
-/// Woken when a call releases or converts a lock.
+/// Woken when a call releases, converts or narrows a lock of either kind.
 static RELEASED: WaitQueue = WaitQueue::new();
 
 /// `flock(fd, operation)`.
@@ -214,5 +238,525 @@ fn key_of(file: &OpenFile) -> Key {
             .cast::<()>()
             .addr(),
         ino: file.inode().metadata().ino,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Record locks
+// ---------------------------------------------------------------------------
+
+/// A process's descriptor table: what owns its classic record locks.
+type Table = SpinLock<FdTable<Arc<OpenFile>>>;
+
+/// Linux's `OFFSET_MAX`: the last byte of a lock that runs to the end of the
+/// file however far the file grows.
+const OFFSET_MAX: u64 = i64::MAX as u64;
+
+/// Who holds a record lock.
+#[derive(Debug, Clone)]
+enum Owner {
+    /// A classic lock: the descriptor table of the process that set it, and
+    /// that process's pid, which `F_GETLK` reports.
+    Table(Weak<Table>, u32),
+    /// An open file description lock, which `F_GETLK` reports with pid -1.
+    Description(Weak<OpenFile>),
+}
+
+impl Owner {
+    /// Whether the owner still exists.
+    fn alive(&self) -> bool {
+        match self {
+            Owner::Table(table, _) => table.strong_count() > 0,
+            Owner::Description(file) => file.strong_count() > 0,
+        }
+    }
+
+    /// Whether two owners are one: a lock never conflicts with its own owner's.
+    fn same(&self, other: &Owner) -> bool {
+        match (self, other) {
+            (Owner::Table(mine, _), Owner::Table(theirs, _)) => Weak::ptr_eq(mine, theirs),
+            (Owner::Description(mine), Owner::Description(theirs)) => Weak::ptr_eq(mine, theirs),
+            _ => false,
+        }
+    }
+
+    /// The pid `F_GETLK` reports for a lock of this owner's.
+    fn pid(&self) -> i32 {
+        match self {
+            Owner::Table(_, pid) => i32::try_from(*pid).unwrap_or(-1),
+            Owner::Description(_) => -1,
+        }
+    }
+}
+
+/// One owner's lock on a range of one file.
+#[derive(Debug, Clone)]
+struct Record {
+    /// The file.
+    key: Key,
+    /// Who holds it.
+    owner: Owner,
+    /// `F_WRLCK` rather than `F_RDLCK`.
+    exclusive: bool,
+    /// Its first byte.
+    start: u64,
+    /// Its last byte, inclusive; [`OFFSET_MAX`] to the end of the file.
+    end: u64,
+}
+
+impl Record {
+    /// Whether it and a lock of `owner` on `key` over `start..=end` cannot both
+    /// be held.
+    fn conflicts(&self, key: Key, owner: &Owner, exclusive: bool, start: u64, end: u64) -> bool {
+        self.key == key
+            && !self.owner.same(owner)
+            && self.start <= end
+            && start <= self.end
+            && (exclusive || self.exclusive)
+    }
+}
+
+/// Every record lock held, on every file.
+static RECORDS: SpinLock<Vec<Record>> = SpinLock::new(Vec::new());
+
+/// Where a `struct flock`'s fields are, and how wide its offsets.
+///
+/// From `asm-generic/fcntl.h`, which none of the three architectures overrides
+/// (QEMU's `linux-user/generic/fcntl.h` transcribes it the same way): two
+/// `short`s, then `l_start` and `l_len`, then `l_pid`, each aligned to its own
+/// size. Offsets are a `long` in `struct flock` and a `loff_t` in `struct
+/// flock64`, so on a 64-bit build the two are one layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Layout {
+    /// Bytes in the structure, tail padding included.
+    size: usize,
+    /// Where `l_start` is; `l_len` follows it.
+    start: usize,
+    /// Where `l_pid` is.
+    pid: usize,
+    /// Whether the offsets are 64 bits.
+    wide: bool,
+}
+
+/// `struct flock` on a 64-bit build, and `struct flock64` on every build.
+const WIDE_FLOCK: Layout = Layout {
+    size: 32,
+    start: 8,
+    pid: 24,
+    wide: true,
+};
+
+/// `struct flock` on ARMv7-A: 32-bit offsets, no padding.
+const NARROW_FLOCK: Layout = Layout {
+    size: 16,
+    start: 4,
+    pid: 12,
+    wide: false,
+};
+
+/// What a record-lock command asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Request {
+    /// `F_GETLK`: which lock, if any, would stop this one.
+    Get,
+    /// `F_SETLK`: take or release it now, or `EAGAIN`.
+    Set,
+    /// `F_SETLKW`: take it, waiting if necessary.
+    Wait,
+}
+
+/// A `struct flock`, decoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Flock {
+    /// `l_type`.
+    kind: i16,
+    /// `l_whence`.
+    whence: i16,
+    /// `l_start`.
+    start: i64,
+    /// `l_len`.
+    len: i64,
+    /// `l_pid`.
+    pid: i32,
+}
+
+/// What `cmd` is to `call`, or `None` if it is not a record-lock command
+/// there.
+///
+/// The plain commands read `struct flock`, whose offsets are a `long`. On a
+/// 32-bit build only `fcntl64` has the `64` commands and the OFD ones, which
+/// read `struct flock64` -- Linux's `do_fcntl` takes `F_OFD_*` only where a
+/// long is 64 bits, and says 32-bit architectures must use `fcntl64` -- so
+/// plain `fcntl` gets `EINVAL` for them from `fd::sys_fcntl`, as on Linux.
+fn command(cmd: u32, call: Syscall) -> Option<(Request, bool, Layout)> {
+    let narrow = size_of::<usize>() == 4;
+    let plain = if narrow { NARROW_FLOCK } else { WIDE_FLOCK };
+    let wide_call = !narrow || call == Syscall::Fcntl64;
+    let request = match cmd {
+        F_GETLK | F_GETLK64 | F_OFD_GETLK => Request::Get,
+        F_SETLK | F_SETLK64 | F_OFD_SETLK => Request::Set,
+        F_SETLKW | F_SETLKW64 | F_OFD_SETLKW => Request::Wait,
+        _ => return None,
+    };
+    match cmd {
+        F_GETLK | F_SETLK | F_SETLKW => Some((request, false, plain)),
+        F_GETLK64 | F_SETLK64 | F_SETLKW64 if narrow && wide_call => {
+            Some((request, false, WIDE_FLOCK))
+        }
+        F_OFD_GETLK | F_OFD_SETLK | F_OFD_SETLKW if wide_call => Some((request, true, WIDE_FLOCK)),
+        _ => None,
+    }
+}
+
+/// Whether `fcntl` or `fcntl64` with `cmd` is a record-lock command, which
+/// [`sys_fcntl_lock`] answers.
+pub(crate) fn is_record_lock(cmd: u32, call: Syscall) -> bool {
+    command(cmd, call).is_some()
+}
+
+/// `fcntl(fd, F_GETLK | F_SETLK | F_SETLKW, lock)`, the `64` forms, and the
+/// OFD forms.
+///
+/// # Errors
+///
+/// In Linux's order: `EBADF` for a closed or `O_PATH` descriptor; `EFAULT` for
+/// a structure that cannot be read; `EINVAL` for a bad `l_whence` or `l_type`,
+/// a range that starts before the file, or an OFD request whose `l_pid` is not
+/// 0; `EOVERFLOW` for a range past `OFFSET_MAX`, or a lock `F_GETLK` cannot
+/// describe in a 32-bit `struct flock`; `EBADF` for a read lock on a
+/// descriptor not open for reading or a write lock on one not open for
+/// writing; `EAGAIN` for `F_SETLK` meeting a conflicting lock; `EINTR` when a
+/// signal arrives during `F_SETLKW`'s wait.
+pub(crate) fn sys_fcntl_lock(
+    process: &Process,
+    fd: i32,
+    cmd: u32,
+    arg: u64,
+    call: Syscall,
+) -> Result<usize, Errno> {
+    let file = fd::file(process, fd)?;
+    if file.is_path() {
+        return Err(Errno::EBADF);
+    }
+    let (request, ofd, layout) = command(cmd, call).ok_or(Errno::EINVAL)?;
+    let mut raw = [0_u8; 32];
+    let bytes = raw.get_mut(..layout.size).ok_or(Errno::EINVAL)?;
+    uaccess::copy_from_user(process.space(), arg, bytes).map_err(|_| Errno::EFAULT)?;
+    let flock = decode(bytes, layout);
+    let owner = if ofd {
+        Owner::Description(Arc::downgrade(&file))
+    } else {
+        Owner::Table(Arc::downgrade(process.files()), process.pid())
+    };
+    match request {
+        Request::Get => {
+            let reported = get_lock(&file, &owner, flock, layout, ofd)?;
+            encode(reported, layout, bytes);
+            uaccess::copy_to_user(process.space(), arg, bytes).map_err(|_| Errno::EFAULT)?;
+            Ok(0)
+        }
+        Request::Set | Request::Wait => {
+            set_lock(process, &file, &owner, flock, ofd, request == Request::Wait)
+        }
+    }
+}
+
+/// `F_GETLK`: the first lock that would stop `flock`, described in its place,
+/// or `flock` with `l_type` set to `F_UNLCK` and nothing else changed.
+fn get_lock(
+    file: &OpenFile,
+    owner: &Owner,
+    flock: Flock,
+    layout: Layout,
+    ofd: bool,
+) -> Result<Flock, Errno> {
+    let exclusive = match flock.kind {
+        F_RDLCK => false,
+        F_WRLCK => true,
+        _ => return Err(Errno::EINVAL),
+    };
+    let (start, end) = range(file, flock)?;
+    if ofd && flock.pid != 0 {
+        return Err(Errno::EINVAL);
+    }
+    let key = key_of(file);
+    let found = {
+        let mut records = RECORDS.lock();
+        records.retain(|record| record.owner.alive());
+        records
+            .iter()
+            .find(|record| record.conflicts(key, owner, exclusive, start, end))
+            .map(|record| {
+                (
+                    record.exclusive,
+                    record.start,
+                    record.end,
+                    record.owner.pid(),
+                )
+            })
+    };
+    let Some((held_exclusive, held_start, held_end, pid)) = found else {
+        return Ok(Flock {
+            kind: F_UNLCK,
+            ..flock
+        });
+    };
+    let narrow_limit = u64::from(i32::MAX.unsigned_abs());
+    if !layout.wide
+        && (held_start > narrow_limit || (held_end != OFFSET_MAX && held_end > narrow_limit))
+    {
+        return Err(Errno::EOVERFLOW);
+    }
+    let len = if held_end == OFFSET_MAX {
+        0
+    } else {
+        held_end - held_start + 1
+    };
+    Ok(Flock {
+        kind: if held_exclusive { F_WRLCK } else { F_RDLCK },
+        whence: SEEK_SET as i16,
+        start: i64::try_from(held_start).unwrap_or(i64::MAX),
+        len: i64::try_from(len).unwrap_or(i64::MAX),
+        pid,
+    })
+}
+
+/// `F_SETLK` and `F_SETLKW`: take `flock`'s range for `owner`, or release it.
+fn set_lock(
+    process: &Process,
+    file: &OpenFile,
+    owner: &Owner,
+    flock: Flock,
+    ofd: bool,
+    wait: bool,
+) -> Result<usize, Errno> {
+    let (start, end) = range(file, flock)?;
+    let exclusive = match flock.kind {
+        F_RDLCK if !file.readable() => return Err(Errno::EBADF),
+        F_WRLCK if !file.writable() => return Err(Errno::EBADF),
+        F_RDLCK => Some(false),
+        F_WRLCK => Some(true),
+        F_UNLCK => None,
+        _ => return Err(Errno::EINVAL),
+    };
+    if ofd && flock.pid != 0 {
+        return Err(Errno::EINVAL);
+    }
+    let key = key_of(file);
+    let Some(exclusive) = exclusive else {
+        carve(&mut RECORDS.lock(), key, owner, start, end);
+        RELEASED.wake_all();
+        return Ok(0);
+    };
+    if place(key, owner, exclusive, start, end) {
+        // Taking a range can narrow what the owner held there, from a write
+        // lock to a read lock, which may let a waiter in.
+        RELEASED.wake_all();
+        return Ok(0);
+    }
+    if !wait {
+        return Err(Errno::EAGAIN);
+    }
+    let mut placed = false;
+    let _ = RELEASED.wait_until_deadline(
+        || {
+            placed = place(key, owner, exclusive, start, end);
+            placed || process.signal_pending()
+        },
+        FOREVER,
+    );
+    if !placed {
+        return Err(Errno::EINTR);
+    }
+    RELEASED.wake_all();
+    Ok(0)
+}
+
+/// Take `start..=end` of `key` for `owner` if nothing conflicts: replace
+/// whatever `owner` held there, and merge the result with `owner`'s
+/// neighbouring locks of the same type, as Linux's `posix_lock_inode` does.
+fn place(key: Key, owner: &Owner, exclusive: bool, start: u64, end: u64) -> bool {
+    let mut records = RECORDS.lock();
+    records.retain(|record| record.owner.alive());
+    if records
+        .iter()
+        .any(|record| record.conflicts(key, owner, exclusive, start, end))
+    {
+        return false;
+    }
+    carve(&mut records, key, owner, start, end);
+    records.push(Record {
+        key,
+        owner: owner.clone(),
+        exclusive,
+        start,
+        end,
+    });
+    coalesce(&mut records, key, owner);
+    true
+}
+
+/// Remove `start..=end` from every lock `owner` holds on `key`, splitting a
+/// lock the range falls inside into what is left either side.
+fn carve(records: &mut Vec<Record>, key: Key, owner: &Owner, start: u64, end: u64) {
+    let mut left = Vec::new();
+    records.retain(|record| {
+        if record.key != key
+            || !record.owner.same(owner)
+            || record.end < start
+            || end < record.start
+        {
+            return true;
+        }
+        if record.start < start {
+            left.push(Record {
+                end: start - 1,
+                ..record.clone()
+            });
+        }
+        if record.end > end {
+            left.push(Record {
+                start: end + 1,
+                ..record.clone()
+            });
+        }
+        false
+    });
+    records.extend(left);
+}
+
+/// Merge `owner`'s locks on `key` of one type that overlap or touch.
+fn coalesce(records: &mut Vec<Record>, key: Key, owner: &Owner) {
+    loop {
+        let mut pair = None;
+        for (i, a) in records.iter().enumerate() {
+            let j = records.iter().enumerate().skip(i + 1).find(|(_, b)| {
+                a.key == key
+                    && b.key == key
+                    && a.owner.same(owner)
+                    && b.owner.same(owner)
+                    && a.exclusive == b.exclusive
+                    && a.start <= b.end.saturating_add(1)
+                    && b.start <= a.end.saturating_add(1)
+            });
+            if let Some((j, _)) = j {
+                pair = Some((i, j));
+                break;
+            }
+        }
+        let Some((i, j)) = pair else {
+            return;
+        };
+        // `j` is after `i`, so moving the last entry into `j` leaves `i` where
+        // it was.
+        let merged = records.swap_remove(j);
+        if let Some(kept) = records.get_mut(i) {
+            kept.start = kept.start.min(merged.start);
+            kept.end = kept.end.max(merged.end);
+        }
+    }
+}
+
+/// The bytes `flock` names, as Linux's `flock_to_posix_lock` computes them:
+/// from the start of the file, the current offset or the end; forward for a
+/// positive length, backward for a negative one, to the end of the file for 0.
+fn range(file: &OpenFile, flock: Flock) -> Result<(u64, u64), Errno> {
+    let base = match u32::try_from(flock.whence).map_err(|_| Errno::EINVAL)? {
+        SEEK_SET => 0,
+        SEEK_CUR => file
+            .seek(0, Whence::Current)
+            .ok()
+            .and_then(|at| i64::try_from(at).ok())
+            .unwrap_or(0),
+        SEEK_END => i64::try_from(file.inode().metadata().size).unwrap_or(i64::MAX),
+        _ => return Err(Errno::EINVAL),
+    };
+    let start = base.checked_add(flock.start).ok_or(Errno::EOVERFLOW)?;
+    if start < 0 {
+        return Err(Errno::EINVAL);
+    }
+    let (first, last) = match flock.len {
+        0 => (start, i64::MAX),
+        len if len > 0 => (start, start.checked_add(len - 1).ok_or(Errno::EOVERFLOW)?),
+        len => {
+            let first = start.checked_add(len).ok_or(Errno::EINVAL)?;
+            if first < 0 {
+                return Err(Errno::EINVAL);
+            }
+            (first, start - 1)
+        }
+    };
+    let first = u64::try_from(first).map_err(|_| Errno::EINVAL)?;
+    let last = u64::try_from(last).map_err(|_| Errno::EINVAL)?;
+    Ok((first, last))
+}
+
+/// A little-endian field of `bytes`, or zeros past its end.
+fn field<const N: usize>(bytes: &[u8], at: usize) -> [u8; N] {
+    bytes
+        .get(at..at + N)
+        .and_then(|slice| <[u8; N]>::try_from(slice).ok())
+        .unwrap_or([0; N])
+}
+
+/// Read a `struct flock` of `layout`.
+fn decode(bytes: &[u8], layout: Layout) -> Flock {
+    let offset = |at: usize| {
+        if layout.wide {
+            i64::from_le_bytes(field(bytes, at))
+        } else {
+            i64::from(i32::from_le_bytes(field(bytes, at)))
+        }
+    };
+    let width = if layout.wide { 8 } else { 4 };
+    Flock {
+        kind: i16::from_le_bytes(field(bytes, 0)),
+        whence: i16::from_le_bytes(field(bytes, 2)),
+        start: offset(layout.start),
+        len: offset(layout.start + width),
+        pid: i32::from_le_bytes(field(bytes, layout.pid)),
+    }
+}
+
+/// Write `flock` over `bytes` in `layout`, leaving the padding as it was.
+fn encode(flock: Flock, layout: Layout, bytes: &mut [u8]) {
+    let mut put = |at: usize, value: &[u8]| {
+        if let Some(slot) = bytes.get_mut(at..at + value.len()) {
+            slot.copy_from_slice(value);
+        }
+    };
+    put(0, &flock.kind.to_le_bytes());
+    put(2, &flock.whence.to_le_bytes());
+    if layout.wide {
+        put(layout.start, &flock.start.to_le_bytes());
+        put(layout.start + 8, &flock.len.to_le_bytes());
+    } else {
+        put(layout.start, &(flock.start as i32).to_le_bytes());
+        put(layout.start + 4, &(flock.len as i32).to_le_bytes());
+    }
+    put(layout.pid, &flock.pid.to_le_bytes());
+}
+
+/// A descriptor on `file` was closed by `process`: its classic record locks on
+/// the file go, as Linux's `locks_remove_posix` takes them on every close,
+/// whichever descriptor set them.
+pub(crate) fn closed(process: &Process, file: &OpenFile) {
+    if RECORDS.lock().is_empty() {
+        return;
+    }
+    // Outside the table's lock: reading an inode's metadata takes its own.
+    let key = key_of(file);
+    let table = Arc::as_ptr(process.files());
+    let released = {
+        let mut records = RECORDS.lock();
+        let before = records.len();
+        records.retain(|record| {
+            let mine = matches!(&record.owner, Owner::Table(owner, _) if core::ptr::eq(owner.as_ptr(), table));
+            record.owner.alive() && !(mine && record.key == key)
+        });
+        records.len() != before
+    };
+    if released {
+        RELEASED.wake_all();
     }
 }

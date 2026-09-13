@@ -496,6 +496,9 @@ fn execve_at(
     // let go, since closing one can wake whatever waits on it. And a `vfork`
     // parent, asleep since the fork, may run again.
     let closed = process.files().lock().take_cloexec();
+    for file in &closed {
+        crate::syscall::flock::closed(process, file);
+    }
     drop(closed);
     process.mark_execed();
 

@@ -238,6 +238,7 @@ pub(crate) fn sys_close(process: &Process, fd: i32) -> Result<usize, Errno> {
     // The guard is a temporary of this statement, so the description is
     // dropped below with the lock already released.
     let file = process.files().lock().remove(fd)?;
+    crate::syscall::flock::closed(process, &file);
     drop(file);
     Ok(0)
 }
@@ -277,12 +278,15 @@ fn replace(process: &Process, old: i32, new: i32, cloexec: bool) -> Result<usize
         files.install(new, file, cloexec)?
     };
     // Released outside the lock: this may be the last reference.
+    if let Some(file) = &displaced {
+        crate::syscall::flock::closed(process, file);
+    }
     drop(displaced);
     number(new)
 }
 
 /// `fcntl` and `fcntl64`, which differ only in the record-lock commands, and
-/// those are refused by both.
+/// those are answered by `crate::syscall::flock` before this is reached.
 ///
 /// The descriptor is looked up before the command is: an unknown command on a
 /// closed descriptor is `EBADF`, as on Linux.
