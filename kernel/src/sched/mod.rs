@@ -139,6 +139,22 @@ fn mark_resched(cpu: usize) {
     }
 }
 
+/// Make this processor decide again soon, from any context running on it.
+///
+/// Called with interrupts masked, on `cpu` itself, because the timer it arms
+/// is this processor's. The flag alone is read only on the way out of an
+/// interrupt. A task that makes something runnable from a system call, or a
+/// kernel thread doing the same, goes back to what it was doing through no
+/// such exit. If it was alone its timer is stopped, and what it just made
+/// runnable waits for an interrupt with no reason to come. So the timer is
+/// armed too, for the shortest interval worth arming. From inside an interrupt
+/// the exit comes first, and `choose_next` re-arms the timer for the real
+/// decision before this one fires.
+fn resched_here(cpu: usize) {
+    mark_resched(cpu);
+    crate::timer::after(queue::MIN_ARM_NS);
+}
+
 /// Interrupt another processor so it notices its flag.
 ///
 /// Broadcast, because that is the only inter-processor interrupt the
@@ -589,15 +605,17 @@ fn spawn_task(
         // to make the queue worth stealing from is the one that says so.
         (wake, queue.len() > 1)
     };
-    let here = this_cpu();
+    // Decided while still masked: a spawn onto this processor arms this
+    // processor's timer, which is only this processor's while nothing can move
+    // the caller elsewhere.
+    let here = this_cpu() == Some(cpu);
+    if preempt && here {
+        resched_here(cpu);
+    }
     <arch::Irq as IrqControl>::restore(saved);
 
-    if preempt {
-        if here == Some(cpu) {
-            mark_resched(cpu);
-        } else {
-            kick(cpu);
-        }
+    if preempt && !here {
+        kick(cpu);
     }
 
     // **Tell the idle processors, or they will sleep through this.** An idle
@@ -765,13 +783,20 @@ pub(crate) fn wake(task: &Arc<Task>) {
         }
         break;
     }
+    // As `spawn_task`: a wake-up onto this processor arms this processor's
+    // timer, so it is decided and done before interrupts come back.
     let here = this_cpu();
+    let remote = match kick_cpu {
+        Some(cpu) if here == Some(cpu) => {
+            resched_here(cpu);
+            None
+        }
+        other => other,
+    };
     <arch::Irq as IrqControl>::restore(saved);
 
-    match kick_cpu {
-        Some(cpu) if here == Some(cpu) => mark_resched(cpu),
-        Some(cpu) => kick(cpu),
-        None => {}
+    if let Some(cpu) = remote {
+        kick(cpu);
     }
 }
 

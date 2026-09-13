@@ -57,7 +57,7 @@ pub(crate) const SLICE_NS: u64 = TARGET_LATENCY_NS;
 
 /// The shortest interval worth arming the timer for: below this the interrupt
 /// costs more than the time it measures.
-const MIN_ARM_NS: u64 = 20_000;
+pub(crate) const MIN_ARM_NS: u64 = 20_000;
 
 /// What one CPU's scheduling has done, for the boot report.
 #[derive(Clone, Copy, Debug, Default)]

@@ -135,6 +135,9 @@ pub(crate) struct Report {
 /// Tasks that have finished a phase.
 static DONE: AtomicU64 = AtomicU64::new(0);
 
+/// Tasks in the local wake-up check that have run.
+static RAN: AtomicU64 = AtomicU64::new(0);
+
 /// What the workers computed, so their work cannot be optimised away.
 static SUM: AtomicU64 = AtomicU64::new(0);
 
@@ -175,6 +178,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
 
     one_task()?;
     a_dead_task_is_not_filed_as_a_sleeper()?;
+    made_runnable_here_runs_without_another_interrupt()?;
     mark!(0);
     sleeping(&mut report)?;
     mark!(1);
@@ -704,6 +708,115 @@ fn woken_before_blocking(_argument: usize) {
         <crate::arch::Irq as IrqControl>::restore(saved);
     }
     finish();
+}
+
+/// How long the checking task spins, never yielding, for a task it made
+/// runnable on its own processor to get a turn.
+const LOCAL_WAKE_PATIENCE_NANOS: u64 = 200_000_000;
+
+/// A task spawned or woken onto the processor that did it runs without any
+/// other interrupt arriving there.
+///
+/// The spawner and the waker are this task, which spins while it waits. That
+/// is a task in a system call or a kernel thread, which is where a spawn or a
+/// wake-up onto its own processor comes from. It leaves through no interrupt
+/// exit, the one place a reschedule request was read. A processor running
+/// one task has its timer stopped, and a spin lets nothing else in, so only
+/// the scheduler's own arrangements can get the new task a turn. Each half
+/// begins with a yield, which re-arms this processor's timer for what is on
+/// it now. A timer still armed for an earlier sleep would rescue the task for
+/// the wrong reason.
+fn made_runnable_here_runs_without_another_interrupt() -> Result<(), &'static str> {
+    let allocations = crate::vmap::usage().allocations;
+    let here = super::current()
+        .ok_or("the checking task is not running")?
+        .cpu();
+    RAN.store(0, Ordering::Release);
+    DONE.store(0, Ordering::Release);
+
+    super::yield_now();
+    let spawned = super::spawn_on(
+        "check-spawned",
+        count_a_run,
+        0,
+        NICE_0_WEIGHT,
+        here,
+        CpuSet::of(here),
+    )?;
+    if !spin_until(|| RAN.load(Ordering::Acquire) >= 1) {
+        return Err(
+            "a task spawned onto its creator's processor waited for an unrelated interrupt",
+        );
+    }
+    // **Its stack given back before the second half, not after.** Freeing a
+    // stack invalidates every processor's translations, and on x86-64 that is
+    // an interrupt sent to each of them. An idle processor that reaps the
+    // first task during the second half's spin sends one here, and its exit
+    // makes the decision the second half is asking the scheduler to arrange,
+    // passing with the fix reverted. That is what this check first did.
+    wait_for(
+        || DONE.load(Ordering::Acquire) >= 1,
+        "a locally spawned task never finished",
+    )?;
+    reap_to(allocations, "a locally spawned task")?;
+
+    let parked = super::spawn_on(
+        "check-parked",
+        park_then_count_a_run,
+        0,
+        NICE_0_WEIGHT,
+        here,
+        CpuSet::of(here),
+    )?;
+    // Off the queue, not only marked: this task runs again only once the
+    // parked one has been switched away from, so both are true by then.
+    wait_for(
+        || parked.state() == BLOCKED && !parked.is_queued(),
+        "a task that blocked itself never left its run queue",
+    )?;
+    super::yield_now();
+    super::wake(&parked);
+    if !spin_until(|| RAN.load(Ordering::Acquire) >= 2) {
+        return Err("a task woken onto its waker's processor waited for an unrelated interrupt");
+    }
+
+    wait_for(
+        || DONE.load(Ordering::Acquire) >= 2,
+        "a locally woken task never finished",
+    )?;
+    reap_to(allocations, "local wake-ups")?;
+    drop((spawned, parked));
+    Ok(())
+}
+
+/// Spin, with interrupts on and without yielding, until `ready` or
+/// [`LOCAL_WAKE_PATIENCE_NANOS`] passes. Answers whether `ready` was the
+/// reason.
+fn spin_until(mut ready: impl FnMut() -> bool) -> bool {
+    let deadline = crate::timer::now_nanos().saturating_add(LOCAL_WAKE_PATIENCE_NANOS);
+    while !ready() {
+        if crate::timer::now_nanos() >= deadline {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+    true
+}
+
+/// Count a run, and finish.
+fn count_a_run(_argument: usize) {
+    let _ = RAN.fetch_add(1, Ordering::AcqRel);
+    finish();
+}
+
+/// Block with no deadline and on no wait queue, so that only a direct wake-up
+/// brings this back, then count a run.
+fn park_then_count_a_run(_argument: usize) {
+    if let Some(me) = super::current() {
+        me.set_state(BLOCKED);
+        super::block();
+    }
+    count_a_run(0);
 }
 
 /// A sleep gives the processor up and comes back on time.

@@ -607,6 +607,17 @@ check shown to fail without the fix:
   No boot check can hit the window on demand, so it was shown with a
   two-millisecond spin added inside it, locally: the old order hangs stage 5,
   and the new order boots clean with the same spin.
+* **A task spawned or woken onto the caller's own processor waited for an
+  unrelated interrupt.** The same class as the timer re-arm above, recorded
+  as fixed for a spawn or wake onto *another* processor. Onto the caller's
+  own, it only set the reschedule flag, which is read on the way out of an
+  interrupt, and a system call or kernel thread returns through none. On a
+  processor whose timer was stopped, the new task waited until the caller
+  blocked or something else happened to interrupt it. The flag now comes
+  with the timer armed for the shortest interval, and from inside an
+  interrupt the exit re-arms it for the real decision first. The check
+  spawns, then wakes, a task onto its own processor while it spins, and
+  requires the task to run.
 
 **Still missing against Linux**, none of it on stage 6's path: group scheduling
 and bandwidth control, which are stage 13; the real-time classes, which are
