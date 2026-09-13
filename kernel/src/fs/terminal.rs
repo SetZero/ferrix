@@ -30,16 +30,20 @@
 //! Flow control (`IXON`) and the baud rate are stored and reported but change
 //! nothing: QEMU's serial port and the boards' USB bridges have neither.
 //!
-//! # Input arrives when somebody looks
+//! # Input arrives when somebody looks, or every twenty milliseconds
 //!
 //! There is no receive interrupt, so the UART is drained by [`read`], [`poll`]
-//! and `FIONREAD`, and that is when a byte is echoed. A person typing at a
-//! prompt cannot tell: something is always reading or polling the console
-//! while a prompt is up. It is the part of this that becomes an interrupt
-//! handler when the UART drivers can take one.
+//! and `FIONREAD`, and that is when a byte is echoed. That alone is not enough
+//! for the signal characters: while a shell waits for a foreground program,
+//! nothing reads the console, and a Ctrl-C would sit in the UART until the
+//! program it was meant to stop had finished. So the first read starts a
+//! `console` thread that drains it every [`PUMP_NANOS`] whether anybody is
+//! reading or not. It is the part of this that becomes an interrupt handler
+//! when the UART drivers can take one.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_linux_abi::types::{
     B115200, CLOCAL, CREAD, CS8, ECHO, ECHOCTL, ECHOE, ECHOK, ECHOKE, ECHONL, ICANON, ICRNL,
@@ -70,6 +74,13 @@ const INPUT_LIMIT: usize = 4096;
 /// Two milliseconds is shorter than anyone types, and long enough that a shell
 /// waiting at its prompt costs a processor nothing measurable.
 const POLL_NANOS: u64 = 2_000_000;
+
+/// How often the `console` thread drains the UART when nobody is reading:
+/// short enough that a Ctrl-C feels immediate, long enough to cost nothing.
+const PUMP_NANOS: u64 = 20_000_000;
+
+/// Whether the `console` thread has been started. Set once, by the first read.
+static PUMPING: AtomicBool = AtomicBool::new(false);
 /// A tenth of a second, `VTIME`'s unit.
 const DECISECOND_NANOS: u64 = 100_000_000;
 
@@ -582,11 +593,12 @@ pub(crate) fn available() -> usize {
 ///
 /// # Errors
 ///
-/// `EAGAIN`, as above.
+/// `EAGAIN`, as above; `EINTR` when a signal is waiting to be delivered.
 pub(crate) fn read(buf: &mut [u8], nonblock: bool) -> Result<usize, Errno> {
     if buf.is_empty() {
         return Ok(0);
     }
+    start_pumping();
     let started = now();
     let mut seen = 0;
     let mut changed = started;
@@ -620,12 +632,38 @@ pub(crate) fn read(buf: &mut [u8], nonblock: bool) -> Result<usize, Errno> {
         if nonblock {
             return Err(Errno::EAGAIN);
         }
-        let killed =
-            crate::syscall::process::current().is_some_and(|process| process.is_terminated());
-        if killed {
-            return Ok(0);
+        if let Some(process) = crate::syscall::process::current() {
+            // Ended: end of file. A signal to deliver: `EINTR`, and the signal
+            // on the way out -- which is how a Ctrl-C at a prompt reaches the
+            // shell waiting here.
+            if process.is_terminated() {
+                return Ok(0);
+            }
+            if process.signal_pending() {
+                return Err(Errno::EINTR);
+            }
         }
         crate::sched::sleep_for(POLL_NANOS);
+    }
+}
+
+/// Start the `console` thread if it is not running. A failure to start one
+/// leaves the flag clear, so a later read tries again.
+fn start_pumping() {
+    if PUMPING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if crate::sched::spawn("console", run_pump, 0, ferrix_sched::NICE_0_WEIGHT).is_err() {
+        PUMPING.store(false, Ordering::Release);
+    }
+}
+
+/// The `console` thread: drain the UART into the line discipline, echoing and
+/// raising what it asks for, forever.
+fn run_pump(_argument: usize) {
+    loop {
+        pump();
+        crate::sched::sleep_for(PUMP_NANOS);
     }
 }
 

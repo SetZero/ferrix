@@ -82,7 +82,7 @@ pub(crate) fn ioctl(
             let mut bytes = [0_u8; 8];
             get(process, arg, &mut bytes)?;
             // Linux raises `SIGWINCH` on the foreground group when the size
-            // changes; see `signal_foreground_group` for why nothing is raised.
+            // changes; nothing raises it here yet.
             terminal::with(|terminal| terminal.winsize = Winsize::from_bytes(bytes));
             Ok(0)
         }
@@ -228,15 +228,23 @@ fn session_is_gone(sid: u32, live: &[Arc<Process>]) -> bool {
 /// Raise `signal` on the console's foreground process group: what `ISIG`
 /// asks for when the interrupt, quit or suspend character is typed.
 ///
-/// The hook signal delivery connects to. Nothing delivers a signal yet --
-/// `crate::syscall::signal` records dispositions and nothing more -- so this
-/// raises nothing, and the keystroke is simply consumed, as Linux consumes it.
-/// Ending the group instead would be wrong: a shell catches `SIGINT` and
-/// carries on. When a signal can be sent to a process group, the call goes
-/// here, to `foreground`.
+/// Raise `signal` on the console's foreground process group: what the
+/// interrupt, quit and suspend characters do.
+///
+/// Every live process in the group is sent it, as the kernel's own, which is
+/// what Linux's line discipline does; a shell that catches `SIGINT` carries on
+/// and a program that does not ends. With no foreground group, nothing is
+/// raised and the keystroke is simply consumed.
 pub(crate) fn signal_foreground_group(signal: u32) {
     let foreground = terminal::with(|terminal| terminal.foreground);
-    let _ = (signal, foreground);
+    if foreground == 0 {
+        return;
+    }
+    for target in registry::live() {
+        if target.pgid() == foreground {
+            crate::syscall::kill::send(&target, signal, crate::syscall::signal::Origin::Kernel);
+        }
+    }
 }
 
 /// Copy a request's structure out of the program.
