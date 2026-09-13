@@ -151,6 +151,16 @@ const SHARED: &[(usize, usize, Syscall)] = &[
     (x86_64::SHMAT, aarch64::SHMAT, Syscall::Shmat),
     (x86_64::SHMDT, aarch64::SHMDT, Syscall::Shmdt),
     (x86_64::SHMCTL, aarch64::SHMCTL, Syscall::Shmctl),
+    (x86_64::MSGGET, aarch64::MSGGET, Syscall::Msgget),
+    (x86_64::MSGSND, aarch64::MSGSND, Syscall::Msgsnd),
+    (x86_64::MSGRCV, aarch64::MSGRCV, Syscall::Msgrcv),
+    (x86_64::MSGCTL, aarch64::MSGCTL, Syscall::Msgctl),
+    (x86_64::SEMGET, aarch64::SEMGET, Syscall::Semget),
+    (x86_64::SEMOP, aarch64::SEMOP, Syscall::Semop),
+    (x86_64::SEMCTL, aarch64::SEMCTL, Syscall::Semctl),
+    (x86_64::SEMTIMEDOP, aarch64::SEMTIMEDOP, Syscall::Semtimedop),
+    (x86_64::FLOCK, aarch64::FLOCK, Syscall::Flock),
+    (x86_64::READAHEAD, aarch64::READAHEAD, Syscall::Readahead),
     (x86_64::SETGROUPS, aarch64::SETGROUPS, Syscall::Setgroups),
     (x86_64::SETREUID, aarch64::SETREUID, Syscall::Setreuid),
     (x86_64::SETREGID, aarch64::SETREGID, Syscall::Setregid),
@@ -1438,14 +1448,6 @@ fn no_two_numbers_map_to_the_same_call() {
 #[test]
 fn unknown_numbers_map_to_none_without_panicking() {
     for nr in [
-        64,
-        65,
-        66,
-        68,
-        69,
-        70,
-        71,
-        73,
         78,
         85,
         101,
@@ -1489,7 +1491,6 @@ fn unknown_numbers_map_to_none_without_panicking() {
         76,
         109,
         110,
-        190,
         250,
         300,
         400,
@@ -1565,13 +1566,13 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        223,
-        "the x86-64 table maps 223 calls"
+        233,
+        "the x86-64 table maps 233 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        196,
-        "the AArch64 table maps 196 calls"
+        206,
+        "the AArch64 table maps 206 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -1606,6 +1607,7 @@ const ARM_ONLY: &[Syscall] = &[
     Syscall::Pselect6Time64,
     Syscall::RtSigtimedwaitTime64,
     Syscall::SchedRrGetIntervalTime64,
+    Syscall::SemtimedopTime64,
 ];
 
 /// Every ARMv7-A number this crate knows, paired with the call it means.
@@ -1691,6 +1693,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (136, Syscall::Personality),              // personality
     (140, Syscall::Llseek),                   // _llseek
     (142, Syscall::Select),                   // _newselect
+    (143, Syscall::Flock),                    // flock
     (144, Syscall::Msync),                    // msync
     (145, Syscall::Readv),                    // readv
     (146, Syscall::Writev),                   // writev
@@ -1752,6 +1755,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (220, Syscall::Madvise),                  // madvise
     (221, Syscall::Fcntl64),                  // fcntl64
     (224, Syscall::Gettid),                   // gettid
+    (225, Syscall::Readahead),                // readahead
     (238, Syscall::Tkill),                    // tkill
     (239, Syscall::Sendfile64),               // sendfile64
     (240, Syscall::Futex),                    // futex
@@ -1783,10 +1787,18 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (295, Syscall::Getsockopt),               // getsockopt
     (296, Syscall::Sendmsg),                  // sendmsg
     (297, Syscall::Recvmsg),                  // recvmsg
+    (298, Syscall::Semop),                    // semop
+    (299, Syscall::Semget),                   // semget
+    (300, Syscall::Semctl),                   // semctl
+    (301, Syscall::Msgsnd),                   // msgsnd
+    (302, Syscall::Msgrcv),                   // msgrcv
+    (303, Syscall::Msgget),                   // msgget
+    (304, Syscall::Msgctl),                   // msgctl
     (305, Syscall::Shmat),                    // shmat
     (306, Syscall::Shmdt),                    // shmdt
     (307, Syscall::Shmget),                   // shmget
     (308, Syscall::Shmctl),                   // shmctl
+    (312, Syscall::Semtimedop),               // semtimedop
     (314, Syscall::IoprioSet),                // ioprio_set
     (315, Syscall::IoprioGet),                // ioprio_get
     (322, Syscall::Openat),                   // openat
@@ -1832,6 +1844,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (412, Syscall::UtimensatTime64),          // utimensat_time64
     (413, Syscall::Pselect6Time64),           // pselect6_time64
     (414, Syscall::PpollTime64),              // ppoll_time64
+    (420, Syscall::SemtimedopTime64),         // semtimedop_time64
     (421, Syscall::RtSigtimedwaitTime64),     // rt_sigtimedwait_time64
     (422, Syscall::FutexTime64),              // futex_time64
     (423, Syscall::SchedRrGetIntervalTime64), // sched_rr_get_interval_time64
@@ -2041,7 +2054,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 237, "the ARMv7-A table maps 237 calls");
+    assert_eq!(mapped_arm().len(), 248, "the ARMv7-A table maps 248 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in
@@ -2072,6 +2085,37 @@ fn filesystem_control_calls_match_the_kernel_tables() {
         assert_eq!(from_aarch64(generic), Some(call), "AArch64 {generic}");
         assert_eq!(from_arm(eabi), Some(call), "ARMv7-A {eabi}");
     }
+}
+
+/// `flock`, `readahead` and the System V message queue and semaphore calls,
+/// against `asm-x86/unistd_64.h`, `asm-generic/unistd.h` and
+/// `asm-arm/unistd-common.h` as QEMU vendors them. ARMv7-A has a time64 form
+/// of `semtimedop` alone; the other calls here take no time.
+#[test]
+fn locking_readahead_and_ipc_calls_match_the_kernel_tables() {
+    for (x86, generic, eabi, call) in [
+        (73, 32, 143, Syscall::Flock),
+        (187, 213, 225, Syscall::Readahead),
+        (68, 186, 303, Syscall::Msgget),
+        (69, 189, 301, Syscall::Msgsnd),
+        (70, 188, 302, Syscall::Msgrcv),
+        (71, 187, 304, Syscall::Msgctl),
+        (64, 190, 299, Syscall::Semget),
+        (65, 193, 298, Syscall::Semop),
+        (66, 191, 300, Syscall::Semctl),
+        (220, 192, 312, Syscall::Semtimedop),
+        (67, 197, 306, Syscall::Shmdt),
+    ] {
+        assert_eq!(from_x86_64(x86), Some(call), "x86-64 {x86}");
+        assert_eq!(from_aarch64(generic), Some(call), "AArch64 {generic}");
+        assert_eq!(from_arm(eabi), Some(call), "ARMv7-A {eabi}");
+    }
+    assert_eq!(from_arm(420), Some(Syscall::SemtimedopTime64));
+    assert_eq!(
+        from_aarch64(420),
+        None,
+        "a 64-bit semtimedop is already 64-bit"
+    );
 }
 
 // ---------------------------------------------------------------------------

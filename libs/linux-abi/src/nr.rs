@@ -174,10 +174,26 @@ pub mod x86_64 {
     pub const KILL: usize = 62;
     /// Report kernel name and version.
     pub const UNAME: usize = 63;
+    /// Create or look up a System V semaphore set.
+    pub const SEMGET: usize = 64;
+    /// Operate on the semaphores in a System V set.
+    pub const SEMOP: usize = 65;
+    /// Query or control a System V semaphore set.
+    pub const SEMCTL: usize = 66;
     /// Detach a System V shared memory segment.
     pub const SHMDT: usize = 67;
+    /// Create or look up a System V message queue.
+    pub const MSGGET: usize = 68;
+    /// Send a message to a System V message queue.
+    pub const MSGSND: usize = 69;
+    /// Receive a message from a System V message queue.
+    pub const MSGRCV: usize = 70;
+    /// Query or control a System V message queue.
+    pub const MSGCTL: usize = 71;
     /// Manipulate a file descriptor's flags and locks.
     pub const FCNTL: usize = 72;
+    /// Take or release an advisory lock on a whole open file.
+    pub const FLOCK: usize = 73;
     /// Flush a file's data and metadata to storage.
     pub const FSYNC: usize = 74;
     /// Flush a file's data, and only the metadata needed to read it back.
@@ -354,6 +370,8 @@ pub mod x86_64 {
     pub const DELETE_MODULE: usize = 176;
     /// Return the calling thread's identifier.
     pub const GETTID: usize = 186;
+    /// Ask for a range of a file to be read into the page cache ahead of use.
+    pub const READAHEAD: usize = 187;
     /// Send a signal to a thread by thread identifier.
     pub const TKILL: usize = 200;
     /// Read the wall clock in whole seconds, older still than `gettimeofday`.
@@ -368,6 +386,8 @@ pub mod x86_64 {
     pub const GETDENTS64: usize = 217;
     /// Register the address cleared and woken on thread exit.
     pub const SET_TID_ADDRESS: usize = 218;
+    /// Operate on System V semaphores, giving up after a timeout.
+    pub const SEMTIMEDOP: usize = 220;
     /// Set a clock.
     pub const CLOCK_SETTIME: usize = 227;
     /// Read a clock.
@@ -539,6 +559,8 @@ pub mod aarch64 {
     pub const IOPRIO_SET: usize = 30;
     /// Read a process's I/O scheduling class and priority.
     pub const IOPRIO_GET: usize = 31;
+    /// Take or release an advisory lock on a whole open file.
+    pub const FLOCK: usize = 32;
     /// Create a file, device node, pipe or socket name relative to a
     /// directory file descriptor.
     pub const MKNODAT: usize = 33;
@@ -788,6 +810,22 @@ pub mod aarch64 {
     pub const GETTID: usize = 178;
     /// Report system-wide memory and load statistics.
     pub const SYSINFO: usize = 179;
+    /// Create or look up a System V message queue.
+    pub const MSGGET: usize = 186;
+    /// Query or control a System V message queue.
+    pub const MSGCTL: usize = 187;
+    /// Receive a message from a System V message queue.
+    pub const MSGRCV: usize = 188;
+    /// Send a message to a System V message queue.
+    pub const MSGSND: usize = 189;
+    /// Create or look up a System V semaphore set.
+    pub const SEMGET: usize = 190;
+    /// Query or control a System V semaphore set.
+    pub const SEMCTL: usize = 191;
+    /// Operate on System V semaphores, giving up after a timeout.
+    pub const SEMTIMEDOP: usize = 192;
+    /// Operate on the semaphores in a System V set.
+    pub const SEMOP: usize = 193;
     /// Create or look up a System V shared memory segment.
     pub const SHMGET: usize = 194;
     /// Query or control a System V shared memory segment.
@@ -826,6 +864,8 @@ pub mod aarch64 {
     pub const SENDMSG: usize = 211;
     /// Receive a message with ancillary data from a socket.
     pub const RECVMSG: usize = 212;
+    /// Ask for a range of a file to be read into the page cache ahead of use.
+    pub const READAHEAD: usize = 213;
     /// Move the program break, the classic heap boundary.
     pub const BRK: usize = 214;
     /// Remove a mapping.
@@ -1081,6 +1121,8 @@ pub mod arm {
     pub const LLSEEK: usize = 140;
     /// Wait for readiness on sets of file descriptors, with a `timeval` timeout.
     pub const NEWSELECT: usize = 142;
+    /// Take or release an advisory lock on a whole open file.
+    pub const FLOCK: usize = 143;
     /// Flush a file-backed mapping to its file.
     pub const MSYNC: usize = 144;
     /// Read into several buffers in one call.
@@ -1215,6 +1257,8 @@ pub mod arm {
     pub const FCNTL64: usize = 221;
     /// Return the calling thread's identifier.
     pub const GETTID: usize = 224;
+    /// Ask for a range of a file to be read into the page cache ahead of use.
+    pub const READAHEAD: usize = 225;
     /// Send a signal to a thread by thread identifier.
     pub const TKILL: usize = 238;
     /// Copy data between two file descriptors, with a 64-bit offset argument.
@@ -1282,6 +1326,20 @@ pub mod arm {
     pub const SENDMSG: usize = 296;
     /// Receive a message with ancillary data from a socket.
     pub const RECVMSG: usize = 297;
+    /// Operate on the semaphores in a System V set.
+    pub const SEMOP: usize = 298;
+    /// Create or look up a System V semaphore set.
+    pub const SEMGET: usize = 299;
+    /// Query or control a System V semaphore set.
+    pub const SEMCTL: usize = 300;
+    /// Send a message to a System V message queue.
+    pub const MSGSND: usize = 301;
+    /// Receive a message from a System V message queue.
+    pub const MSGRCV: usize = 302;
+    /// Create or look up a System V message queue.
+    pub const MSGGET: usize = 303;
+    /// Query or control a System V message queue.
+    pub const MSGCTL: usize = 304;
     /// Attach a System V shared memory segment.
     pub const SHMAT: usize = 305;
     /// Detach a System V shared memory segment.
@@ -1290,6 +1348,8 @@ pub mod arm {
     pub const SHMGET: usize = 307;
     /// Query or control a System V shared memory segment.
     pub const SHMCTL: usize = 308;
+    /// Operate on System V semaphores, giving up after a timeout.
+    pub const SEMTIMEDOP: usize = 312;
     /// Set a process's I/O scheduling class and priority.
     pub const IOPRIO_SET: usize = 314;
     /// Read a process's I/O scheduling class and priority.
@@ -1391,6 +1451,8 @@ pub mod arm {
     /// Poll with a signal mask and a 64-bit `timespec`. The timeout is a pair
     /// of 64-bit fields rather than the 32-bit pair [`PPOLL`] takes.
     pub const PPOLL_TIME64: usize = 414;
+    /// Operate on System V semaphores, with a 64-bit `timespec` timeout.
+    pub const SEMTIMEDOP_TIME64: usize = 420;
     /// Wait for one of a set of signals, with a 64-bit `timespec` timeout.
     /// ARMv7-A only.
     pub const RT_SIGTIMEDWAIT_TIME64: usize = 421;
@@ -1687,6 +1749,25 @@ pub enum Syscall {
     Shmdt,
     /// Query or control a System V shared memory segment.
     Shmctl,
+    /// Create or look up a System V message queue.
+    Msgget,
+    /// Send a message to a System V message queue.
+    Msgsnd,
+    /// Receive a message from a System V message queue.
+    Msgrcv,
+    /// Query or control a System V message queue.
+    Msgctl,
+    /// Create or look up a System V semaphore set.
+    Semget,
+    /// Operate on the semaphores in a System V set.
+    Semop,
+    /// Query or control a System V semaphore set.
+    Semctl,
+    /// Operate on System V semaphores, giving up after a timeout.
+    Semtimedop,
+    /// Operate on System V semaphores with a 64-bit `timespec` timeout.
+    /// ARMv7-A only.
+    SemtimedopTime64,
     /// Create a process or thread; the primitive behind `fork` and `pthread`.
     Clone,
     /// Create a process or thread from a versioned argument structure.
@@ -1748,10 +1829,14 @@ pub enum Syscall {
     /// structures. ARMv7-A only; musl calls it for every `fcntl`, not only the
     /// locking commands.
     Fcntl64,
+    /// Take or release an advisory lock on a whole open file.
+    Flock,
     /// Flush a file's data and metadata to storage.
     Fsync,
     /// Flush a file's data, and only the metadata needed to read it back.
     Fdatasync,
+    /// Ask for a range of a file to be read into the page cache ahead of use.
+    Readahead,
     /// Flush all file systems.
     Sync,
     /// Set a file's length by path.
@@ -2132,6 +2217,7 @@ fn x86_64_metadata_and_ids(nr: usize) -> Option<Syscall> {
         x86_64::SCHED_GETSCHEDULER => Syscall::SchedGetscheduler,
         x86_64::PRCTL => Syscall::Prctl,
         x86_64::ARCH_PRCTL => Syscall::ArchPrctl,
+        x86_64::FLOCK => Syscall::Flock,
         _ => return None,
     };
     Some(call)
@@ -2159,6 +2245,7 @@ fn x86_64_threads_and_time(nr: usize) -> Option<Syscall> {
         x86_64::EPOLL_CTL => Syscall::EpollCtl,
         x86_64::TGKILL => Syscall::Tgkill,
         x86_64::WAITID => Syscall::Waitid,
+        x86_64::READAHEAD => Syscall::Readahead,
         _ => return None,
     };
     Some(call)
@@ -2229,7 +2316,7 @@ fn x86_64_recent(nr: usize) -> Option<Syscall> {
     Some(call)
 }
 
-/// x86-64 sockets and System V shared memory, wherever they sit in the table.
+/// x86-64 sockets and System V IPC, wherever they sit in the table.
 fn x86_64_sockets_and_shm(nr: usize) -> Option<Syscall> {
     let call = match nr {
         x86_64::SHMGET => Syscall::Shmget,
@@ -2252,6 +2339,14 @@ fn x86_64_sockets_and_shm(nr: usize) -> Option<Syscall> {
         x86_64::GETSOCKOPT => Syscall::Getsockopt,
         x86_64::SHMDT => Syscall::Shmdt,
         x86_64::ACCEPT4 => Syscall::Accept4,
+        x86_64::MSGGET => Syscall::Msgget,
+        x86_64::MSGSND => Syscall::Msgsnd,
+        x86_64::MSGRCV => Syscall::Msgrcv,
+        x86_64::MSGCTL => Syscall::Msgctl,
+        x86_64::SEMGET => Syscall::Semget,
+        x86_64::SEMOP => Syscall::Semop,
+        x86_64::SEMCTL => Syscall::Semctl,
+        x86_64::SEMTIMEDOP => Syscall::Semtimedop,
         _ => return None,
     };
     Some(call)
@@ -2418,6 +2513,7 @@ fn aarch64_files(nr: usize) -> Option<Syscall> {
         aarch64::UNSHARE => Syscall::Unshare,
         aarch64::FUTEX => Syscall::Futex,
         aarch64::SET_ROBUST_LIST => Syscall::SetRobustList,
+        aarch64::FLOCK => Syscall::Flock,
         _ => return None,
     };
     Some(call)
@@ -2491,6 +2587,7 @@ fn aarch64_memory_and_process(nr: usize) -> Option<Syscall> {
         aarch64::MEMBARRIER => Syscall::Membarrier,
         aarch64::STATX => Syscall::Statx,
         aarch64::RSEQ => Syscall::Rseq,
+        aarch64::READAHEAD => Syscall::Readahead,
         _ => return None,
     };
     Some(call)
@@ -2523,7 +2620,7 @@ fn aarch64_recent(nr: usize) -> Option<Syscall> {
     Some(call)
 }
 
-/// AArch64 sockets and System V shared memory, wherever they sit in the table.
+/// AArch64 sockets and System V IPC, wherever they sit in the table.
 fn aarch64_sockets_and_shm(nr: usize) -> Option<Syscall> {
     let call = match nr {
         aarch64::SHMGET => Syscall::Shmget,
@@ -2546,6 +2643,14 @@ fn aarch64_sockets_and_shm(nr: usize) -> Option<Syscall> {
         aarch64::SENDMSG => Syscall::Sendmsg,
         aarch64::RECVMSG => Syscall::Recvmsg,
         aarch64::ACCEPT4 => Syscall::Accept4,
+        aarch64::MSGGET => Syscall::Msgget,
+        aarch64::MSGSND => Syscall::Msgsnd,
+        aarch64::MSGRCV => Syscall::Msgrcv,
+        aarch64::MSGCTL => Syscall::Msgctl,
+        aarch64::SEMGET => Syscall::Semget,
+        aarch64::SEMOP => Syscall::Semop,
+        aarch64::SEMCTL => Syscall::Semctl,
+        aarch64::SEMTIMEDOP => Syscall::Semtimedop,
         _ => return None,
     };
     Some(call)
@@ -2738,6 +2843,7 @@ fn arm_signals_and_mm(nr: usize) -> Option<Syscall> {
         arm::FSTAT64 => Syscall::Fstat64,
         arm::LCHOWN32 => Syscall::Lchown,
         arm::GETUID32 => Syscall::Getuid,
+        arm::FLOCK => Syscall::Flock,
         _ => return None,
     };
     Some(call)
@@ -2783,6 +2889,7 @@ fn arm_ids_and_at_family(nr: usize) -> Option<Syscall> {
         arm::FSTATAT64 => Syscall::Fstatat64,
         arm::UNLINKAT => Syscall::Unlinkat,
         arm::RENAMEAT => Syscall::Renameat,
+        arm::READAHEAD => Syscall::Readahead,
         _ => return None,
     };
     Some(call)
@@ -2847,7 +2954,7 @@ fn arm_recent(nr: usize) -> Option<Syscall> {
     Some(call)
 }
 
-/// ARMv7-A sockets and System V shared memory, wherever they sit in the table.
+/// ARMv7-A sockets and System V IPC, wherever they sit in the table.
 fn arm_sockets_and_shm(nr: usize) -> Option<Syscall> {
     let call = match nr {
         arm::SOCKET => Syscall::Socket,
@@ -2870,6 +2977,15 @@ fn arm_sockets_and_shm(nr: usize) -> Option<Syscall> {
         arm::SHMGET => Syscall::Shmget,
         arm::SHMCTL => Syscall::Shmctl,
         arm::ACCEPT4 => Syscall::Accept4,
+        arm::MSGGET => Syscall::Msgget,
+        arm::MSGSND => Syscall::Msgsnd,
+        arm::MSGRCV => Syscall::Msgrcv,
+        arm::MSGCTL => Syscall::Msgctl,
+        arm::SEMGET => Syscall::Semget,
+        arm::SEMOP => Syscall::Semop,
+        arm::SEMCTL => Syscall::Semctl,
+        arm::SEMTIMEDOP => Syscall::Semtimedop,
+        arm::SEMTIMEDOP_TIME64 => Syscall::SemtimedopTime64,
         _ => return None,
     };
     Some(call)

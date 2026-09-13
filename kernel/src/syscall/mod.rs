@@ -318,8 +318,14 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Swapon | Syscall::Swapoff => Err(Errno::ENOSYS),
         // There are no loadable modules: the kernel is one image.
         Syscall::InitModule | Syscall::FinitModule | Syscall::DeleteModule => Err(Errno::ENOSYS),
-        // No System V shared memory; `mmap(MAP_SHARED)` is what there is.
+        // No System V IPC. `mmap(MAP_SHARED)` stands in for its shared memory,
+        // pipes and sockets for its message queues, futexes for its semaphores.
+        // Named here so each one is reported by name, not as a number no table
+        // has.
         Syscall::Shmget | Syscall::Shmat | Syscall::Shmdt | Syscall::Shmctl => Err(Errno::ENOSYS),
+        Syscall::Msgget | Syscall::Msgsnd | Syscall::Msgrcv | Syscall::Msgctl => Err(Errno::ENOSYS),
+        Syscall::Semget | Syscall::Semop | Syscall::Semctl => Err(Errno::ENOSYS),
+        Syscall::Semtimedop | Syscall::SemtimedopTime64 => Err(Errno::ENOSYS),
         // No process accounting to switch on.
         Syscall::Acct => Err(Errno::ENOSYS),
         // No controlling terminals to hang up until stage 15's tty layer.
