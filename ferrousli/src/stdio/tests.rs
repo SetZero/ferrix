@@ -211,6 +211,9 @@ fn compare(fmt: &str, ours: (String, c_int), host: (String, c_int), what: &str) 
 
 #[test]
 fn doubles_match_glibc_at_many_precisions_flags_and_widths() {
+    if !crate::host_glibc::is_recorded() {
+        return;
+    }
     let mut random = Random(0x9e37_79b9_7f4a_7c15);
     let mut values = boundary_doubles();
     for _ in 0..3000 {
@@ -245,6 +248,9 @@ fn doubles_match_glibc_at_many_precisions_flags_and_widths() {
 
 #[test]
 fn subnormal_and_huge_doubles_match_glibc_at_long_precisions() {
+    if !crate::host_glibc::is_recorded() {
+        return;
+    }
     let values = [
         f64::from_bits(1),
         f64::from_bits(3),
@@ -266,6 +272,9 @@ fn subnormal_and_huge_doubles_match_glibc_at_long_precisions() {
 
 #[test]
 fn integers_and_pointers_match_glibc() {
+    if !crate::host_glibc::is_recorded() {
+        return;
+    }
     let mut random = Random(0x2545_f491_4f6c_dd1d);
     let lengths = ["hh", "h", "", "l", "ll", "j", "z", "t"];
     let integer_flags = ["", "+", " ", "#", "0", "-", "-+ #"];
@@ -310,6 +319,9 @@ fn long_double(mantissa: u64, sign_exponent: u16) -> [u8; 16] {
 
 #[test]
 fn long_doubles_match_glibc() {
+    if !crate::host_glibc::is_recorded() {
+        return;
+    }
     let mut random = Random(0x1405_7b7e_f767_814f);
     let mut values = vec![
         long_double(0, 0),

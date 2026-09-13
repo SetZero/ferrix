@@ -43,6 +43,8 @@ pub mod float;
 pub mod futex;
 pub mod getopt;
 pub mod growable;
+#[cfg(test)]
+mod host_glibc;
 pub mod ioctl;
 pub mod key;
 pub mod locale;

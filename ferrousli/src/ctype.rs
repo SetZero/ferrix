@@ -420,6 +420,9 @@ mod tests {
 
     #[test]
     fn the_tables_match_glibcs_c_locale_at_every_index() {
+        if !crate::host_glibc::is_recorded() {
+            return;
+        }
         // The test binary never calls `setlocale`, so glibc is in the C locale.
         for c in -128..256 {
             // SAFETY: both functions return glibc's table layout, and `c` is
@@ -462,6 +465,9 @@ mod tests {
 
     #[test]
     fn the_functions_agree_with_glibc_from_eof_to_255() {
+        if !crate::host_glibc::is_recorded() {
+            return;
+        }
         let predicates: [(&str, Classify, Classify); 13] = [
             ("isalnum", isalnum, glibc_isalnum),
             ("isalpha", isalpha, glibc_isalpha),

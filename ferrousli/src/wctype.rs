@@ -626,6 +626,9 @@ mod tests {
 
     #[test]
     fn every_disagreement_with_glibcs_c_utf8_is_the_recorded_one() {
+        if !crate::host_glibc::is_recorded() {
+            return;
+        }
         let actual = disagreements();
         if let Some(path) = std::env::var_os("FERROUSLI_UNICODE_DIFFERENCES_OUT") {
             std::fs::write(path, &actual).unwrap_or_default();
