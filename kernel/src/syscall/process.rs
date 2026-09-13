@@ -49,7 +49,7 @@ use crate::sched::{self, Task, WaitQueue};
 use crate::syscall::fd;
 use crate::syscall::registry;
 use crate::syscall::signal::Signals;
-use crate::syscall::{futex, uaccess};
+use crate::syscall::{futex, kill, uaccess};
 use crate::user::space::{AddressSpace, SpaceError};
 
 /// A program, as far as the system call layer is concerned.
@@ -137,6 +137,17 @@ pub(crate) struct Process {
     execed: AtomicBool,
     /// Woken when `execed` is set or it ends.
     vfork_done: WaitQueue,
+    /// Woken when a signal is sent to it: what `pause`, `rt_sigsuspend` and
+    /// `rt_sigtimedwait` wait on.
+    signalled: WaitQueue,
+    /// The signal that stopped it, or zero while it runs.
+    stopped: AtomicU32,
+    /// A stop its parent has not yet been told of by `wait4`, or zero.
+    stop_report: AtomicU32,
+    /// Whether it continued since its parent was last told.
+    continue_report: AtomicBool,
+    /// Woken when it continues, or ends, which is what a stopped task waits for.
+    resumed: WaitQueue,
 }
 
 /// Where a program starts: the two numbers `exec::load` computes and the task
@@ -217,6 +228,11 @@ impl Process {
             ended_by: AtomicU32::new(0),
             execed: AtomicBool::new(false),
             vfork_done: WaitQueue::new(),
+            signalled: WaitQueue::new(),
+            stopped: AtomicU32::new(0),
+            stop_report: AtomicU32::new(0),
+            continue_report: AtomicBool::new(false),
+            resumed: WaitQueue::new(),
         }
     }
 
@@ -249,6 +265,7 @@ impl Process {
         };
         let mut state = parent.state.lock().clone();
         state.clear_child_tid = 0;
+        state.signals.reset_for_fork();
         child.state = SpinLock::new(state);
         child.startup = SpinLock::new(parent.startup());
         child.parent = SpinLock::new(Arc::downgrade(parent));
@@ -606,17 +623,25 @@ impl Process {
         }
         self.exited.wake_all();
         self.vfork_done.wake_all();
+        self.signalled.wake_all();
+        self.resumed.wake_all();
 
-        // Its parent is told, and lets it go at once if it asked never to wait:
-        // otherwise it stays in the parent's list, ended, until `wait4` takes
-        // it.
+        // Its parent is told -- woken, and sent the signal it was created with,
+        // `SIGCHLD` for a fork -- and lets it go at once if it asked never to
+        // wait: otherwise it stays in the parent's list, ended, until `wait4`
+        // takes it.
         let parent = self.parent.lock().upgrade();
-        if let Some(parent) = parent {
-            if parent.with_signals(|signals| signals.reaps_children_automatically()) {
-                parent.disown(self);
-            }
-            parent.child_exited.wake_all();
+        if let Some(parent) = parent
+            && parent.with_signals(|signals| signals.reaps_children_automatically())
+        {
+            parent.disown(self);
         }
+        let (code, told) = if signal == 0 {
+            (kill::CLD_EXITED, status & 0xFF)
+        } else {
+            (kill::CLD_KILLED, signal as i32)
+        };
+        kill::tell_parent(self, self.exit_signal.load(Ordering::Acquire), code, told);
 
         // Its own children are orphaned: an ended one is released here, and a
         // running one is released when it ends, since no parent is left to wait
@@ -632,6 +657,110 @@ impl Process {
 }
 
 impl Process {
+    /// Its parent, if it has one that still exists.
+    pub(crate) fn parent(&self) -> Option<Arc<Process>> {
+        self.parent.lock().upgrade()
+    }
+
+    /// The queue woken when a signal is sent to it.
+    pub(crate) fn signalled(&self) -> &WaitQueue {
+        &self.signalled
+    }
+
+    /// Whether a wait it is in should end: it has ended, or a signal it does
+    /// not block is pending. What every call that waits checks, beside its own
+    /// condition, to return `EINTR`.
+    pub(crate) fn signal_pending(&self) -> bool {
+        self.is_terminated() || self.with_signals(|signals| signals.deliverable() != 0)
+    }
+
+    /// Make sure its tasks look at a signal just made pending: one blocked in a
+    /// call is woken, so its wait sees [`Process::signal_pending`], and one
+    /// running in user mode on another processor is interrupted, so it comes
+    /// back through the kernel to have it delivered.
+    pub(crate) fn notify_signal(&self) {
+        self.signalled.wake_all();
+        let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
+        for task in &tasks {
+            sched::wake(task);
+            sched::interrupt(task);
+        }
+    }
+
+    /// Whether it is stopped.
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire) != 0
+    }
+
+    /// The queue woken when it continues or ends.
+    pub(crate) fn resumed(&self) -> &WaitQueue {
+        &self.resumed
+    }
+
+    /// Stop it for `signal`, and tell its parent. Its task waits on the way
+    /// back to user mode until [`Process::leave_stop`].
+    pub(crate) fn enter_stop(&self, signal: u32) {
+        if self.is_terminated() {
+            return;
+        }
+        self.stopped.store(signal, Ordering::Release);
+        self.continue_report.store(false, Ordering::Release);
+        self.stop_report.store(signal, Ordering::Release);
+        kill::tell_parent(
+            self,
+            ferrix_linux_abi::types::SIGCHLD,
+            kill::CLD_STOPPED,
+            signal as i32,
+        );
+    }
+
+    /// Continue it if it is stopped, and tell its parent: what `SIGCONT` does
+    /// as it is sent.
+    pub(crate) fn leave_stop(&self) {
+        if self.stopped.swap(0, Ordering::AcqRel) == 0 {
+            return;
+        }
+        self.stop_report.store(0, Ordering::Release);
+        self.continue_report.store(true, Ordering::Release);
+        self.resumed.wake_all();
+        kill::tell_parent(
+            self,
+            ferrix_linux_abi::types::SIGCHLD,
+            kill::CLD_CONTINUED,
+            ferrix_linux_abi::types::SIGCONT as i32,
+        );
+    }
+
+    /// A child `select` accepts with a stop (when `stops`) or a continue (when
+    /// `continues`) its parent has not been told of, and the signal that
+    /// stopped it -- zero for a continue. The report is taken when `consume`.
+    pub(crate) fn changed_child(
+        &self,
+        select: &dyn Fn(&Process) -> bool,
+        stops: bool,
+        continues: bool,
+        consume: bool,
+    ) -> Option<(Arc<Process>, u32)> {
+        let children = self.children.lock();
+        children
+            .iter()
+            .filter(|child| select(child))
+            .find_map(|child| {
+                let stop = match (stops, consume) {
+                    (false, _) => 0,
+                    (true, true) => child.stop_report.swap(0, Ordering::AcqRel),
+                    (true, false) => child.stop_report.load(Ordering::Acquire),
+                };
+                let continued = match (continues, consume) {
+                    (false, _) => false,
+                    _ if stop != 0 => false,
+                    (true, true) => child.continue_report.swap(false, Ordering::AcqRel),
+                    (true, false) => child.continue_report.load(Ordering::Acquire),
+                };
+                (stop != 0 || continued).then(|| (Arc::clone(child), stop))
+            })
+    }
+
     /// Its parent's pid, or zero when it has none: a process the kernel
     /// started, or one whose parent has ended.
     pub(crate) fn parent_pid(&self) -> u32 {
@@ -881,16 +1010,6 @@ pub(crate) fn exit_current(status: i32) -> ! {
         let _ = process.terminate(status);
     }
     sched::exit()
-}
-
-/// End the running task if its process has been ended from outside.
-///
-/// Called on every way back to user mode, with interrupts masked.
-pub(crate) fn before_return_to_user() {
-    let terminated = current().is_some_and(|process| process.is_terminated());
-    if terminated {
-        sched::exit();
-    }
 }
 
 /// Where a program's task begins: enter user mode where `exec::load` said.

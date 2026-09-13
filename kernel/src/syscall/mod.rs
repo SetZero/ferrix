@@ -42,6 +42,7 @@
 pub(crate) mod attributes;
 pub(crate) mod check;
 pub(crate) mod credentials;
+pub(crate) mod deliver;
 pub(crate) mod exec;
 pub(crate) mod family;
 pub(crate) mod fd;
@@ -49,6 +50,7 @@ pub(crate) mod file;
 pub(crate) mod fsctl;
 pub(crate) mod futex;
 pub(crate) mod image;
+pub(crate) mod kill;
 pub(crate) mod limits;
 pub(crate) mod load;
 pub(crate) mod memory;
@@ -188,6 +190,15 @@ pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Out
         };
     }
 
+    // `sigaltstack` needs the caller's stack pointer, to say whether it is
+    // running on the alternate stack; the self-checks, with no registers, get
+    // the table's arm below.
+    if let (Syscall::Sigaltstack, Some(caller), Some(regs)) = (call, process.as_deref(), regs) {
+        let [ss, old, ..] = args.args;
+        let sp = regs.stack_pointer();
+        return Outcome::Return(errno::encode(signal::sys_sigaltstack(caller, ss, old, sp)));
+    }
+
     let answer = handle(call, args, process.as_deref());
     if answer == Err(Errno::ENOSYS) {
         unanswered(Some(call), args.number);
@@ -297,7 +308,8 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         .or_else(|| credentials::dispatch(call, &a, process))
         .or_else(|| sockets::dispatch(call, &a, process))
         .or_else(|| system::dispatch(call, &a, process))
-        .or_else(|| time::dispatch(call, &a, process));
+        .or_else(|| time::dispatch(call, &a, process))
+        .or_else(|| kill::dispatch(call, &a, process));
     if let Some(answer) = answer {
         return answer;
     }
@@ -376,7 +388,7 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::RtSigprocmask => {
             signal::sys_rt_sigprocmask(process, truncate(a[0]), a[1], a[2], a[3])
         }
-        Syscall::Sigaltstack => signal::sys_sigaltstack(process, a[0], a[1]),
+        Syscall::Sigaltstack => signal::sys_sigaltstack(process, a[0], a[1], 0),
         _ => Err(Errno::ENOSYS),
     }
 }

@@ -81,11 +81,11 @@ const CLONE_CHILD_SETTID: u64 = 0x0100_0000;
 
 /// `wait4`: return at once if nothing has ended.
 const WNOHANG: u32 = 1;
-/// `wait4`: report stopped children too. Nothing stops yet, so accepted.
+/// `wait4`: report stopped children too; `WSTOPPED` to `waitid`.
 const WUNTRACED: u32 = 2;
 /// `waitid`: report children that exited.
 const WEXITED: u32 = 4;
-/// `wait4`/`waitid`: report continued children too. Accepted, never matched.
+/// `wait4`/`waitid`: report continued children too.
 const WCONTINUED: u32 = 8;
 /// `waitid`: leave the child waitable.
 const WNOWAIT: u32 = 0x0100_0000;
@@ -100,10 +100,7 @@ const P_PID: u32 = 1;
 /// `waitid`'s `idtype`: any child in this process group.
 const P_PGID: u32 = 2;
 
-/// `si_code` for a child that exited.
-const CLD_EXITED: i32 = 1;
-/// `si_code` for a child a signal ended.
-const CLD_KILLED: i32 = 2;
+use crate::syscall::kill::{CLD_CONTINUED, CLD_EXITED, CLD_KILLED, CLD_STOPPED};
 
 /// Bytes in `siginfo_t` on every architecture.
 const SIGINFO_BYTES: usize = 128;
@@ -371,28 +368,70 @@ fn wait4_selector(process: &Process, pid: i32) -> impl Fn(&Process) -> bool {
     }
 }
 
-/// Wait until a child `select` accepts has ended, then take it (or leave it,
-/// for `WNOWAIT`). `None` with `WNOHANG` when none has yet.
+/// What a wait found a child to have done.
+#[derive(Debug)]
+enum Change {
+    /// Ended.
+    Ended(Arc<Process>),
+    /// Stopped, for this signal.
+    Stopped(Arc<Process>, u32),
+    /// Continued.
+    Continued(Arc<Process>),
+}
+
+impl Change {
+    /// The child.
+    fn child(&self) -> &Arc<Process> {
+        match self {
+            Change::Ended(child) | Change::Stopped(child, _) | Change::Continued(child) => child,
+        }
+    }
+}
+
+/// Wait until a child `select` accepts has ended (with `WEXITED`), stopped
+/// (with `WUNTRACED`) or continued (with `WCONTINUED`), then take what it did
+/// (or leave it, for `WNOWAIT`). `None` with `WNOHANG` when none has yet.
+///
+/// # Errors
+///
+/// `ECHILD` with no child `select` accepts; `EINTR` when a signal the caller
+/// does not block arrives first, or the caller is ended.
 fn wait_for_child(
     process: &Process,
     select: &dyn Fn(&Process) -> bool,
     options: u32,
     remove: bool,
-) -> Result<Option<Arc<Process>>, Errno> {
+) -> Result<Option<Change>, Errno> {
+    let exits = options & WEXITED != 0;
+    let stops = options & WUNTRACED != 0;
+    let continues = options & WCONTINUED != 0;
     loop {
-        if let Some(child) = process.reap_child(select, remove)? {
-            return Ok(Some(child));
+        let ended = process.reap_child(select, remove && exits)?;
+        if exits && let Some(child) = ended {
+            return Ok(Some(Change::Ended(child)));
+        }
+        if let Some((child, signal)) = process.changed_child(select, stops, continues, remove) {
+            return Ok(Some(match signal {
+                0 => Change::Continued(child),
+                signal => Change::Stopped(child, signal),
+            }));
         }
         if options & WNOHANG != 0 {
             return Ok(None);
         }
-        let _ = process.child_exited().wait_until_deadline(
-            || process.is_terminated() || process.has_ended_child(select),
-            u64::MAX,
-        );
-        if process.is_terminated() {
+        if process.signal_pending() {
             return Err(Errno::EINTR);
         }
+        let _ = process.child_exited().wait_until_deadline(
+            || {
+                process.signal_pending()
+                    || (exits && process.has_ended_child(select))
+                    || process
+                        .changed_child(select, stops, continues, false)
+                        .is_some()
+            },
+            u64::MAX,
+        );
     }
 }
 
@@ -401,7 +440,8 @@ fn wait_for_child(
 /// # Errors
 ///
 /// `EINVAL` for an unknown option; `ECHILD` with no child to wait for; `EINTR`
-/// if the caller itself is ended while it waits; `EFAULT` for a bad pointer.
+/// if a signal arrives or the caller is ended while it waits; `EFAULT` for a
+/// bad pointer.
 pub(crate) fn sys_wait4(
     process: &Process,
     pid: i32,
@@ -413,11 +453,19 @@ pub(crate) fn sys_wait4(
         return Err(Errno::EINVAL);
     }
     let select = wait4_selector(process, pid);
-    let Some(child) = wait_for_child(process, &select, options, true)? else {
+    let Some(change) = wait_for_child(process, &select, options | WEXITED, true)? else {
         return Ok(0);
     };
+    let child = change.child();
     if wstatus != 0 {
-        let status = child.wait_status().unwrap_or(0);
+        // The status word: an exit or a killing signal as `wait_status` has
+        // it; a stop as the signal in the second byte over 0x7f; a continue
+        // as 0xffff.
+        let status = match &change {
+            Change::Ended(_) => child.wait_status().unwrap_or(0),
+            Change::Stopped(_, signal) => ((*signal as i32) << 8) | 0x7f,
+            Change::Continued(_) => 0xffff,
+        };
         uaccess::copy_to_user(process.space(), wstatus, &status.to_le_bytes())
             .map_err(|_| Errno::EFAULT)?;
     }
@@ -431,7 +479,8 @@ pub(crate) fn sys_wait4(
 ///
 /// # Errors
 ///
-/// As [`sys_wait4`], and `EINVAL` without `WEXITED` or for an unknown `idtype`.
+/// As [`sys_wait4`], and `EINVAL` without one of `WEXITED`, `WSTOPPED` and
+/// `WCONTINUED`, or for an unknown `idtype`.
 pub(crate) fn sys_waitid(
     process: &Process,
     idtype: u32,
@@ -440,7 +489,7 @@ pub(crate) fn sys_waitid(
     options: u32,
     rusage: u64,
 ) -> Result<usize, Errno> {
-    if options & WEXITED == 0
+    if options & (WEXITED | WUNTRACED | WCONTINUED) == 0
         || options & !(WNOHANG | WEXITED | WUNTRACED | WCONTINUED | WNOWAIT | WAIT_THREAD_BITS) != 0
     {
         return Err(Errno::EINVAL);
@@ -457,10 +506,15 @@ pub(crate) fn sys_waitid(
     let found = wait_for_child(process, &select, options, options & WNOWAIT == 0)?;
     if infop != 0 {
         let mut info = [0_u8; SIGINFO_BYTES];
-        if let Some(child) = &found {
-            let (code, status) = match child.ended_by_signal() {
-                Some(signal) => (CLD_KILLED, signal as i32),
-                None => (CLD_EXITED, child.exit_status().unwrap_or(0) & 0xFF),
+        if let Some(change) = &found {
+            let child = change.child();
+            let (code, status) = match (change, child.ended_by_signal()) {
+                (Change::Stopped(_, signal), _) => (CLD_STOPPED, *signal as i32),
+                (Change::Continued(_), _) => {
+                    (CLD_CONTINUED, ferrix_linux_abi::types::SIGCONT as i32)
+                }
+                (Change::Ended(_), Some(signal)) => (CLD_KILLED, signal as i32),
+                (Change::Ended(_), None) => (CLD_EXITED, child.exit_status().unwrap_or(0) & 0xFF),
             };
             // `si_signo`, `si_errno`, `si_code`, then the union, which starts
             // at the first pointer-aligned offset: 16 on 64-bit, 12 on 32-bit.

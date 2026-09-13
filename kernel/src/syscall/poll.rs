@@ -160,7 +160,8 @@ fn wait(process: &Process, fds: u64, nfds: u64, deadline: Option<u64>) -> Result
             }
             return Ok(ready);
         }
-        if process.is_terminated() {
+        // Ended, or a signal to deliver: `EINTR`, and the signal on the way out.
+        if process.signal_pending() {
             return Err(Errno::EINTR);
         }
         let slice = now().saturating_add(SLICE_NANOS);

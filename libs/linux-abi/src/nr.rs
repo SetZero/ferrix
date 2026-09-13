@@ -1051,6 +1051,9 @@ pub mod arm {
     pub const SYSINFO: usize = 116;
     /// Flush a file's data and metadata to storage.
     pub const FSYNC: usize = 118;
+    /// Return from a handler entered without `SA_SIGINFO`, through the frame
+    /// that has no `siginfo` in front of it.
+    pub const SIGRETURN: usize = 119;
     /// Create a process or thread; the primitive behind `fork` and `pthread`.
     pub const CLONE: usize = 120;
     /// Set the NIS domain name `uname` reports.
@@ -1545,6 +1548,10 @@ pub enum Syscall {
     RtSigprocmask,
     /// Return from a signal handler, restoring the interrupted context.
     RtSigreturn,
+    /// Return from a handler installed without `SA_SIGINFO`, whose frame has
+    /// no `siginfo`. ARMv7-A only: musl and glibc both point a plain handler's
+    /// restorer at it there, where the 64-bit machines have only the `rt` form.
+    Sigreturn,
     /// Replace the signal mask and wait for a signal.
     RtSigsuspend,
     /// Sleep until a signal arrives. x86-64 and ARMv7-A only.
@@ -2694,6 +2701,7 @@ fn arm_signals_and_mm(nr: usize) -> Option<Syscall> {
         arm::WAIT4 => Syscall::Wait4,
         arm::SYSINFO => Syscall::Sysinfo,
         arm::FSYNC => Syscall::Fsync,
+        arm::SIGRETURN => Syscall::Sigreturn,
         arm::CLONE => Syscall::Clone,
         arm::UNAME => Syscall::Uname,
         arm::MPROTECT => Syscall::Mprotect,

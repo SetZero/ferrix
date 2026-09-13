@@ -285,7 +285,7 @@ ferrix_enter_user:
 /// AArch64's reason: a tick in USR mode could switch to a task with an address
 /// space and back, and the switch back uninstalled the program's root. A
 /// program is a task of its own now, so a tick is an ordinary preemption.
-const USER_CPSR: u32 = MODE_USR | (1 << 8) | (1 << 6);
+pub(super) const USER_CPSR: u32 = MODE_USR | (1 << 8) | (1 << 6);
 
 /// `CPSR.T`: execute Thumb instructions.
 ///
@@ -324,6 +324,48 @@ impl UserRegs {
     /// user stack pointer is banked, so it goes in `state`.
     pub(crate) fn set_stack(&mut self, state: &mut super::UserState, stack: u64) {
         state.set_user_stack(stack as u32);
+    }
+
+    /// The stack pointer the program made the call with: banked, so read
+    /// from the processor, which inside the call still holds it.
+    pub(crate) fn stack_pointer(&self) -> u64 {
+        u64::from(super::switch::user_banked().0)
+    }
+}
+
+/// The signal Linux raises for a trap a program's own instruction took and
+/// nothing resolved, as `(signal, si_code, si_addr)`: a translation or
+/// permission fault `SIGSEGV`, an alignment fault `SIGBUS` with
+/// `BUS_ADRALN` and any other abort `SIGBUS` with `BUS_OBJERR`, all at the
+/// fault address; a `bkpt` `SIGTRAP`; and an undefined instruction or anything
+/// else `SIGILL` at the instruction.
+pub(crate) fn fault_signal(frame: &TrapFrame, trap: &crate::trap::Trap) -> (u32, i32, u64) {
+    use crate::trap::Trap;
+    use ferrix_linux_abi::types::{SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
+
+    /// `SIGSEGV`: nothing mapped at the address.
+    const SEGV_MAPERR: i32 = 1;
+    /// `SIGSEGV`: mapped, and the access refused.
+    const SEGV_ACCERR: i32 = 2;
+    /// `SIGBUS`: a misaligned address.
+    const BUS_ADRALN: i32 = 1;
+    /// `SIGBUS`: an error the hardware reported for the object.
+    const BUS_OBJERR: i32 = 3;
+    /// `SIGILL`: an illegal opcode.
+    const ILL_ILLOPC: i32 = 1;
+    /// `SIGTRAP`: a breakpoint.
+    const TRAP_BRKPT: i32 = 1;
+
+    let pc = u64::from(frame.pc);
+    let far = u64::from(frame.far);
+    let abort = frame.kind == KIND_DATA_ABORT || frame.kind == KIND_PREFETCH_ABORT;
+    match trap {
+        Trap::PageFault(fault) if fault.present => (SIGSEGV, SEGV_ACCERR, fault.address),
+        Trap::PageFault(fault) => (SIGSEGV, SEGV_MAPERR, fault.address),
+        Trap::Breakpoint => (SIGTRAP, TRAP_BRKPT, pc),
+        _ if abort && frame.fsr & FSR_STATUS == STATUS_ALIGNMENT => (SIGBUS, BUS_ADRALN, far),
+        _ if abort => (SIGBUS, BUS_OBJERR, far),
+        _ => (SIGILL, ILL_ILLOPC, pc),
     }
 }
 
@@ -400,6 +442,20 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         if let Some(result) = frame.r.first_mut() {
             *result = 0;
         }
+        return Ok(());
+    }
+
+    // `rt_sigreturn` and `sigreturn` replace the whole frame, `r0` included,
+    // so they have no return value to write: answered here rather than
+    // through `dispatch`.
+    if let Some(call @ (Syscall::RtSigreturn | Syscall::Sigreturn)) =
+        super::decode_syscall(args.number)
+    {
+        let mut context = super::signal::UserContext::from_trap(frame);
+        super::enable_interrupts();
+        crate::syscall::deliver::sigreturn(&mut context, call == Syscall::RtSigreturn);
+        super::disable_interrupts();
+        context.store_trap(frame);
         return Ok(());
     }
 

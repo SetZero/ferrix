@@ -1,19 +1,15 @@
-//! Signal dispositions, recorded and reported back, and nothing delivered.
+//! Signal state: what a program asked to happen on each signal, what it has
+//! blocked, and what is waiting to reach it.
 //!
-//! # Why a table with no delivery behind it
+//! # Three modules, one table
 //!
-//! Because that is exactly what a program starting up asks for. musl's
-//! startup and busybox's `ash` both install handlers and adjust the blocked
-//! mask before they do anything else, and they read the previous values back
-//! to restore them later. Nothing in a clean run *raises* a signal, so nothing
-//! ever looks for the handler. What a program does see is whether the answers
-//! are consistent: the `oldact` from the second `rt_sigaction` has to be the
-//! `act` from the first.
-//!
-//! Delivery -- a frame pushed on the user stack and `rt_sigreturn` to unwind
-//! it -- is a large piece of work of its own, and it belongs with the first
-//! thing that has to kill a program. When it arrives it reads this table; it
-//! does not replace it.
+//! This one keeps the table and answers the calls that only read or change it
+//! -- `rt_sigaction`, `rt_sigprocmask`, `sigaltstack`. Sending a signal is
+//! `super::kill`'s, and a signal reaching a program -- a frame on its stack, a
+//! handler run, `rt_sigreturn` unwinding it -- is `super::deliver`'s. Both work
+//! through the methods here, under the process lock, so that "is it blocked,
+//! is it ignored, is it already pending" is one decision rather than three
+//! reads with a sender racing in between.
 //!
 //! # Layouts
 //!
@@ -30,14 +26,20 @@
 //!   as a word. On a 64-bit machine the `int` is padded to the word, which is
 //!   why the size sits at the second word on both widths.
 
+use alloc::boxed::Box;
+use alloc::vec;
+
 use ferrix_bootinfo::Arch;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
-    NSIG, SA_NOCLDWAIT, SIG_BLOCK, SIG_IGN, SIG_SETMASK, SIG_UNBLOCK, SIGCHLD, SIGKILL, SIGSTOP,
-    SS_DISABLE, SS_ONSTACK,
+    NSIG, SA_NOCLDSTOP, SA_NOCLDWAIT, SA_NODEFER, SA_ONSTACK, SA_RESETHAND, SIG_BLOCK, SIG_DFL,
+    SIG_IGN, SIG_SETMASK, SIG_UNBLOCK, SIGABRT, SIGBUS, SIGCHLD, SIGCONT, SIGFPE, SIGILL, SIGKILL,
+    SIGQUIT, SIGSEGV, SIGSTOP, SIGSYS, SIGTRAP, SIGTSTP, SIGTTIN, SIGTTOU, SIGURG, SIGWINCH,
+    SIGXCPU, SIGXFSZ, SS_DISABLE, SS_ONSTACK,
 };
 
 use crate::arch;
+use crate::syscall::deliver::StackRecord;
 use crate::syscall::process::Process;
 use crate::syscall::uaccess;
 
@@ -63,7 +65,15 @@ const SIGACTION_BYTES: usize = WORD * 3 + 8;
 const STACK_BYTES: usize = WORD * 3;
 
 /// The two signals nothing may catch, block or ignore.
-const UNBLOCKABLE: u64 = bit(SIGKILL) | bit(SIGSTOP);
+pub(crate) const UNBLOCKABLE: u64 = bit(SIGKILL) | bit(SIGSTOP);
+
+/// The signals whose default action is to stop.
+const STOP_SIGNALS: u64 = bit(SIGSTOP) | bit(SIGTSTP) | bit(SIGTTIN) | bit(SIGTTOU);
+
+/// The signals a fault raises, which Linux hands to a program before any
+/// other pending signal: the instruction that faulted is the one it is about.
+const SYNCHRONOUS: u64 =
+    bit(SIGSEGV) | bit(SIGBUS) | bit(SIGILL) | bit(SIGTRAP) | bit(SIGFPE) | bit(SIGSYS);
 
 /// What a program asked to happen on one signal.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -72,11 +82,127 @@ pub(crate) struct Disposition {
     pub(crate) handler: u64,
     /// The `SA_*` flags.
     pub(crate) flags: u64,
-    /// The trampoline that would issue `rt_sigreturn`.
+    /// The trampoline the handler returns into, which issues `rt_sigreturn`.
     pub(crate) restorer: u64,
     /// Signals blocked while the handler runs, never including the two that
     /// cannot be blocked.
     pub(crate) mask: u64,
+}
+
+/// What happens to a signal nobody installed a handler for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DefaultAction {
+    /// The process ends, reported as killed by the signal.
+    Terminate,
+    /// The same, for the signals Linux would also dump core for. Nothing
+    /// dumps core here, so a waiting parent sees no core flag.
+    Core,
+    /// Nothing happens.
+    Ignore,
+    /// The process stops until `SIGCONT`.
+    Stop,
+    /// A stopped process continues; nothing else happens.
+    Continue,
+}
+
+/// The default action of `signal`, from `signal(7)`'s table.
+pub(crate) const fn default_action(signal: u32) -> DefaultAction {
+    match signal {
+        SIGCHLD | SIGURG | SIGWINCH => DefaultAction::Ignore,
+        SIGCONT => DefaultAction::Continue,
+        SIGSTOP | SIGTSTP | SIGTTIN | SIGTTOU => DefaultAction::Stop,
+        SIGQUIT | SIGILL | SIGTRAP | SIGABRT | SIGBUS | SIGFPE | SIGSEGV | SIGXCPU | SIGXFSZ
+        | SIGSYS => DefaultAction::Core,
+        _ => DefaultAction::Terminate,
+    }
+}
+
+/// Who or what raised a pending signal: the `siginfo` a handler is given.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Origin {
+    /// The kernel, for its own reasons: an interval timer, a broken pipe.
+    #[default]
+    Kernel,
+    /// `kill` from the process with this pid.
+    User {
+        /// The sender.
+        pid: u32,
+    },
+    /// `tkill` or `tgkill` from the process with this pid.
+    Thread {
+        /// The sender.
+        pid: u32,
+    },
+    /// A child changed state.
+    Child {
+        /// `CLD_EXITED`, `CLD_KILLED`, `CLD_STOPPED` or `CLD_CONTINUED`.
+        code: i32,
+        /// The child.
+        pid: u32,
+        /// Its exit code, or the signal that ended, stopped or continued it.
+        status: i32,
+    },
+    /// A fault in the program's own instruction.
+    Fault {
+        /// `SEGV_MAPERR`, `SEGV_ACCERR`, `ILL_ILLOPC` and their like.
+        code: i32,
+        /// The address the fault was about.
+        address: u64,
+    },
+}
+
+/// `si_code` for a signal the kernel raised.
+const SI_KERNEL: i32 = 0x80;
+/// `si_code` for `kill`.
+const SI_USER: i32 = 0;
+/// `si_code` for `tkill` and `tgkill`.
+const SI_TKILL: i32 = -6;
+
+/// Bytes in `siginfo_t` on every architecture.
+pub(crate) const SIGINFO_BYTES: usize = 128;
+
+impl Origin {
+    /// The `siginfo_t` a handler sees for `signal` raised this way.
+    ///
+    /// `si_signo`, `si_errno` and `si_code` are three `int`s; the union starts
+    /// at the first pointer-aligned offset after them, 16 on a 64-bit machine
+    /// and 12 on a 32-bit one. In it, `kill` and a child put the pid and uid
+    /// first, a child its status after them, and a fault the address.
+    pub(crate) fn encode(self, signal: u32) -> [u8; SIGINFO_BYTES] {
+        let mut info = [0_u8; SIGINFO_BYTES];
+        let union = if WORD == 8 { 16 } else { 12 };
+        put_int(&mut info, 0, signal as i32);
+        let code = match self {
+            Origin::Kernel => SI_KERNEL,
+            Origin::User { pid } => {
+                put_int(&mut info, union, pid as i32);
+                SI_USER
+            }
+            Origin::Thread { pid } => {
+                put_int(&mut info, union, pid as i32);
+                SI_TKILL
+            }
+            Origin::Child { code, pid, status } => {
+                put_int(&mut info, union, pid as i32);
+                put_int(&mut info, union + 8, status);
+                code
+            }
+            Origin::Fault { code, address } => {
+                let _ = put_word(&mut info, union, address);
+                code
+            }
+        };
+        put_int(&mut info, 8, code);
+        info
+    }
+}
+
+/// Put an `int` into a `siginfo` buffer. Every offset used is a constant well
+/// inside the 128 bytes.
+fn put_int(buffer: &mut [u8], at: usize, value: i32) {
+    if let Some(slot) = buffer.get_mut(at..at + 4) {
+        slot.copy_from_slice(&value.to_le_bytes());
+    }
 }
 
 /// An installed alternate signal stack. A size of zero means none.
@@ -90,15 +216,65 @@ struct AltStack {
     autodisarm: bool,
 }
 
-/// Everything about signals a process has told the kernel.
+/// `ITIMER_REAL`: when `SIGALRM` is next due, and how often after.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Alarm {
+    /// When it is next due, in nanoseconds on the counter; zero when disarmed.
+    pub(crate) deadline: u64,
+    /// The period it re-arms with once due; zero for a one-shot.
+    pub(crate) interval: u64,
+}
+
+/// What [`Signals::post`] decided about a signal sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Posted {
+    /// Ignored, and gone.
+    Discarded,
+    /// Its default action ends the process, and nothing blocks it: the sender
+    /// ends the process at once rather than leaving it to find out.
+    Fatal,
+    /// Waiting for the process to reach user mode, or to unblock it.
+    Pending,
+}
+
+/// A signal taken off the pending set, with everything delivery needs.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Taken {
+    /// Its number.
+    pub(crate) signal: u32,
+    /// Who raised it.
+    pub(crate) origin: Origin,
+    /// What the program asked to happen.
+    pub(crate) action: Disposition,
+}
+
+/// Everything about signals a process has told the kernel, and what is
+/// waiting to reach it.
+///
+/// The two per-signal tables are on the heap rather than inline. Inline they
+/// are three kibibytes, and a `Process` carries this by value through
+/// `Process::new`, `registry::register` and `Arc::new` -- each a copy on a
+/// sixteen-kibibyte kernel stack. That was the x86-64 boot's double fault in
+/// `Process::new`, and the AArch64 boot's hang at the same check.
 #[derive(Debug, Clone)]
 pub(crate) struct Signals {
-    /// Signal `n` is at index `n - 1`.
-    actions: [Disposition; NSIG as usize],
+    /// Signal `n` is at index `n - 1`. Always 64 entries.
+    actions: Box<[Disposition]>,
     /// The blocked mask, bit `n - 1` for signal `n`.
     blocked: u64,
     /// The alternate stack, if one is installed.
     alt: AltStack,
+    /// Signals raised and not yet delivered. One bit each: a second `SIGUSR1`
+    /// sent before the first is delivered is the same pending signal, as on
+    /// Linux for the classic signals.
+    pending: u64,
+    /// Who raised each pending signal, first sender kept. Always 64 entries.
+    origins: Box<[Origin]>,
+    /// The mask `rt_sigsuspend` replaced, to be put back on the way to user
+    /// mode -- after a handler's frame has saved it, if one runs.
+    saved_mask: Option<u64>,
+    /// `ITIMER_REAL`.
+    alarm: Alarm,
 }
 
 impl Signals {
@@ -111,13 +287,21 @@ impl Signals {
             .is_some_and(|action| action.handler == SIG_IGN || action.flags & SA_NOCLDWAIT != 0)
     }
 
+    /// Whether a child stopping or continuing should go untold: `SIGCHLD`
+    /// installed with `SA_NOCLDSTOP`.
+    pub(crate) fn ignores_child_stops(&self) -> bool {
+        self.actions
+            .get(SIGCHLD as usize - 1)
+            .is_some_and(|action| action.flags & SA_NOCLDSTOP != 0)
+    }
+
     /// What `execve` does to them: every handler goes back to the default,
     /// because the new program has none of the old one's code to run; a signal
     /// that was ignored stays ignored, which is how `nohup` works; the blocked
-    /// mask is kept; and the alternate stack goes, since it was the old
-    /// program's memory.
+    /// mask, the pending signals and the interval timer are kept; and the
+    /// alternate stack goes, since it was the old program's memory.
     pub(crate) fn reset_for_exec(&mut self) {
-        for action in &mut self.actions {
+        for action in self.actions.iter_mut() {
             let ignored = action.handler == SIG_IGN;
             *action = Disposition::default();
             if ignored {
@@ -126,20 +310,282 @@ impl Signals {
         }
         self.alt = AltStack::default();
     }
+
+    /// What a `fork` child starts without: its parent's pending signals and
+    /// interval timer, which were its parent's.
+    pub(crate) fn reset_for_fork(&mut self) {
+        self.pending = 0;
+        self.origins.fill(Origin::Kernel);
+        self.saved_mask = None;
+        self.alarm = Alarm::default();
+    }
+
+    /// Pending signals nothing blocks: what delivery has to act on.
+    pub(crate) const fn deliverable(&self) -> u64 {
+        self.pending & !self.blocked
+    }
+
+    /// Pending signals, blocked ones included.
+    pub(crate) const fn pending(&self) -> u64 {
+        self.pending
+    }
+
+    /// The blocked mask.
+    pub(crate) const fn blocked(&self) -> u64 {
+        self.blocked
+    }
+
+    /// Whether the way back to user mode has anything to do here: a signal to
+    /// deliver, or a mask `rt_sigsuspend` left to put back.
+    pub(crate) const fn needs_attention(&self) -> bool {
+        self.deliverable() != 0 || self.saved_mask.is_some()
+    }
+
+    /// Record `signal` sent to this process, or decide it needs no recording.
+    ///
+    /// Linux's order. A signal the program ignores, explicitly or by default,
+    /// is discarded -- unless it is blocked, because the program may install a
+    /// handler before it unblocks it. One whose default action is fatal and
+    /// which nothing blocks is fatal now. Sending a stop signal cancels a
+    /// pending `SIGCONT`, and `SIGCONT` cancels pending stops.
+    pub(crate) fn post(&mut self, signal: u32, origin: Origin) -> Posted {
+        let Ok(index) = index_of(signal) else {
+            return Posted::Discarded;
+        };
+        if signal == SIGKILL {
+            return Posted::Fatal;
+        }
+        if bit(signal) & STOP_SIGNALS != 0 {
+            self.pending &= !bit(SIGCONT);
+        }
+        if signal == SIGCONT {
+            self.pending &= !STOP_SIGNALS;
+        }
+        let action = self.actions.get(index).copied().unwrap_or_default();
+        let blocked = self.blocked & bit(signal) != 0;
+        let default = default_action(signal);
+        let ignored = action.handler == SIG_IGN
+            || action.handler == SIG_DFL
+                && matches!(default, DefaultAction::Ignore | DefaultAction::Continue);
+        if ignored && !blocked {
+            return Posted::Discarded;
+        }
+        if action.handler == SIG_DFL
+            && !blocked
+            && matches!(default, DefaultAction::Terminate | DefaultAction::Core)
+        {
+            return Posted::Fatal;
+        }
+        if self.pending & bit(signal) == 0
+            && let Some(slot) = self.origins.get_mut(index)
+        {
+            *slot = origin;
+        }
+        self.pending |= bit(signal);
+        Posted::Pending
+    }
+
+    /// Raise `signal` for a fault the program cannot be allowed to ignore: a
+    /// blocked or ignored one is unblocked and reset to its default first, so
+    /// the program either handles it or dies of it, and never retries the
+    /// instruction for ever. Linux's `force_sig_info`.
+    pub(crate) fn force(&mut self, signal: u32, origin: Origin) -> Posted {
+        let Ok(index) = index_of(signal) else {
+            return Posted::Discarded;
+        };
+        let blocked = self.blocked & bit(signal) != 0;
+        if let Some(action) = self.actions.get_mut(index)
+            && (blocked || action.handler == SIG_IGN)
+        {
+            action.handler = SIG_DFL;
+        }
+        self.blocked &= !bit(signal);
+        self.post(signal, origin)
+    }
+
+    /// Take the next deliverable signal off the pending set: a fault's first,
+    /// then the lowest numbered, as Linux chooses.
+    pub(crate) fn take_next(&mut self) -> Option<Taken> {
+        let ready = self.deliverable();
+        if ready == 0 {
+            return None;
+        }
+        let chosen = if ready & SYNCHRONOUS != 0 {
+            ready & SYNCHRONOUS
+        } else {
+            ready
+        };
+        self.take(chosen.trailing_zeros() + 1)
+    }
+
+    /// Take the lowest pending signal in `set`, blocked or not: what
+    /// `rt_sigtimedwait` accepts.
+    pub(crate) fn take_from(&mut self, set: u64) -> Option<Taken> {
+        let ready = self.pending & set;
+        if ready == 0 {
+            return None;
+        }
+        self.take(ready.trailing_zeros() + 1)
+    }
+
+    /// Take `signal` off the pending set.
+    fn take(&mut self, signal: u32) -> Option<Taken> {
+        let index = index_of(signal).ok()?;
+        self.pending &= !bit(signal);
+        let origin = self.origins.get(index).copied().unwrap_or_default();
+        let action = self.actions.get(index).copied().unwrap_or_default();
+        Some(Taken {
+            signal,
+            origin,
+            action,
+        })
+    }
+
+    /// Where a handler's frame goes below, for a program whose stack pointer
+    /// is `sp`: the alternate stack's top when the handler asked for it and the
+    /// program is not already on it, and otherwise the program's own stack
+    /// past the red zone the ABI lets a leaf function use without moving `sp`.
+    pub(crate) fn frame_base(&self, flags: u64, sp: u64) -> u64 {
+        let base = sp.wrapping_sub(arch::SIGNAL_RED_ZONE);
+        if flags & SA_ONSTACK != 0 && self.alt.size != 0 && !self.on_alt_stack(base) {
+            self.alt.sp.wrapping_add(self.alt.size)
+        } else {
+            base
+        }
+    }
+
+    /// Whether `sp` is on the alternate stack. Never, with `SS_AUTODISARM`:
+    /// the stack is disarmed while a handler runs on it, so nothing is on it.
+    fn on_alt_stack(&self, sp: u64) -> bool {
+        !self.alt.autodisarm && sp > self.alt.sp && sp - self.alt.sp <= self.alt.size
+    }
+
+    /// Enter a handler for `taken`: answer the mask its frame saves and the
+    /// alternate stack as its frame records it, then block what the handler
+    /// asked to have blocked, forget the handler if it was one-shot, and
+    /// disarm the alternate stack if it asked for that.
+    pub(crate) fn enter_handler(&mut self, taken: &Taken) -> (u64, StackRecord) {
+        let saved = self.saved_mask.take().unwrap_or(self.blocked);
+        let mut adding = taken.action.mask;
+        if taken.action.flags & SA_NODEFER == 0 {
+            adding |= bit(taken.signal);
+        }
+        self.blocked = (self.blocked | adding) & !UNBLOCKABLE;
+        if taken.action.flags & SA_RESETHAND != 0
+            && let Ok(index) = index_of(taken.signal)
+            && let Some(action) = self.actions.get_mut(index)
+        {
+            action.handler = SIG_DFL;
+        }
+        let record = StackRecord {
+            sp: self.alt.sp,
+            flags: self.alt_flags(),
+            size: self.alt.size,
+        };
+        if self.alt.autodisarm {
+            self.alt = AltStack::default();
+        }
+        (saved, record)
+    }
+
+    /// The alternate stack's flags as `sigaltstack` and a frame report them.
+    fn alt_flags(&self) -> i32 {
+        let mut flags = if self.alt.size == 0 { SS_DISABLE } else { 0 };
+        if self.alt.autodisarm {
+            flags |= SS_AUTODISARM;
+        }
+        flags
+    }
+
+    /// Leave a handler, as `rt_sigreturn` does: the mask its frame saved comes
+    /// back, and so does the alternate stack, if that is still a stack
+    /// `sigaltstack` would accept from a program whose stack pointer is `sp`.
+    pub(crate) fn leave_handler(&mut self, mask: u64, stack: StackRecord, sp: u64) {
+        self.blocked = mask & !UNBLOCKABLE;
+        let _ = self.install_alt_stack((stack.sp, stack.flags, stack.size), sp);
+    }
+
+    /// Put back the mask `rt_sigsuspend` replaced, if no handler's frame took
+    /// it first.
+    pub(crate) fn restore_saved_mask(&mut self) {
+        if let Some(mask) = self.saved_mask.take() {
+            self.blocked = mask;
+        }
+    }
+
+    /// Block `mask` instead until the way back to user mode, as
+    /// `rt_sigsuspend` does.
+    pub(crate) fn suspend_with(&mut self, mask: u64) {
+        if self.saved_mask.is_none() {
+            self.saved_mask = Some(self.blocked);
+        }
+        self.blocked = mask & !UNBLOCKABLE;
+    }
+
+    /// `ITIMER_REAL` as it stands.
+    pub(crate) const fn alarm(&self) -> Alarm {
+        self.alarm
+    }
+
+    /// Replace `ITIMER_REAL`, and answer what it was.
+    pub(crate) const fn set_alarm(&mut self, alarm: Alarm) -> Alarm {
+        core::mem::replace(&mut self.alarm, alarm)
+    }
+
+    /// Whether `ITIMER_REAL` is due at `now`, re-arming or disarming it if so.
+    /// A periodic timer that fell more than a period behind is re-armed from
+    /// `now`, so a stalled machine owes one `SIGALRM`, not a backlog.
+    pub(crate) fn tick_alarm(&mut self, now: u64) -> bool {
+        let Alarm { deadline, interval } = self.alarm;
+        if deadline == 0 || deadline > now {
+            return false;
+        }
+        self.alarm.deadline = match deadline.checked_add(interval) {
+            _ if interval == 0 => 0,
+            Some(next) if next > now => next,
+            _ => now.saturating_add(interval),
+        };
+        true
+    }
+
+    /// Install an alternate stack from `sigaltstack`'s `(sp, flags, size)`,
+    /// for a program whose stack pointer is `sp_now`.
+    fn install_alt_stack(&mut self, stack: (u64, i32, u64), sp_now: u64) -> Result<(), Errno> {
+        let (sp, flags, size) = stack;
+        if self.on_alt_stack(sp_now) {
+            return Err(Errno::EPERM);
+        }
+        let autodisarm = flags & SS_AUTODISARM != 0;
+        self.alt = match flags & !SS_AUTODISARM {
+            SS_DISABLE => AltStack::default(),
+            0 | SS_ONSTACK if size < minimum_stack() => return Err(Errno::ENOMEM),
+            0 | SS_ONSTACK => AltStack {
+                sp,
+                size,
+                autodisarm,
+            },
+            _ => return Err(Errno::EINVAL),
+        };
+        Ok(())
+    }
 }
 
 impl Default for Signals {
     fn default() -> Self {
         Signals {
-            actions: [Disposition::default(); NSIG as usize],
+            actions: vec![Disposition::default(); NSIG as usize].into_boxed_slice(),
             blocked: 0,
             alt: AltStack::default(),
+            pending: 0,
+            origins: vec![Origin::Kernel; NSIG as usize].into_boxed_slice(),
+            saved_mask: None,
+            alarm: Alarm::default(),
         }
     }
 }
 
 /// The mask bit for signal `number`, which must be `1..=64`.
-const fn bit(number: u32) -> u64 {
+pub(crate) const fn bit(number: u32) -> u64 {
     1 << (number - 1)
 }
 
@@ -148,7 +594,8 @@ const fn bit(number: u32) -> u64 {
 /// Linux's order, which a program can observe: the new action is read before
 /// anything changes, so a bad `act` pointer changes nothing; the old action
 /// is written after, so a bad `oldact` pointer reports `EFAULT` with the new
-/// action already installed.
+/// action already installed. A pending signal the new action ignores is
+/// discarded, as it would have been had it arrived now.
 pub(crate) fn sys_rt_sigaction(
     process: &Process,
     signal: u32,
@@ -174,6 +621,15 @@ pub(crate) fn sys_rt_sigaction(
         if let Some(mut new) = new {
             new.mask &= !UNBLOCKABLE;
             *slot = new;
+            let ignored = new.handler == SIG_IGN
+                || new.handler == SIG_DFL
+                    && matches!(
+                        default_action(signal),
+                        DefaultAction::Ignore | DefaultAction::Continue
+                    );
+            if ignored {
+                signals.pending &= !bit(signal);
+            }
         }
         Ok(previous)
     })?;
@@ -188,7 +644,8 @@ pub(crate) fn sys_rt_sigaction(
 ///
 /// `how` is only looked at when there is a set to apply, as on Linux: a query
 /// with a nonsense `how` succeeds. When `how` is refused the old mask is not
-/// written either.
+/// written either. A signal this unblocks is delivered on the way back to user
+/// mode, before the call appears to return.
 pub(crate) fn sys_rt_sigprocmask(
     process: &Process,
     how: u32,
@@ -227,44 +684,38 @@ pub(crate) fn sys_rt_sigprocmask(
     Ok(0)
 }
 
-/// `sigaltstack`.
+/// `sigaltstack`, for a program whose stack pointer is `sp`.
 ///
 /// The old stack is reported only if the new one was accepted, which is
-/// Linux's order. Nothing ever runs on the alternate stack yet, so the old
-/// flags are never `SS_ONSTACK` and a change is never refused with `EPERM`.
-pub(crate) fn sys_sigaltstack(process: &Process, ss: u64, old: u64) -> Result<usize, Errno> {
+/// Linux's order. A program running on its alternate stack sees `SS_ONSTACK`
+/// in the old flags and may not change the stack: `EPERM`. The boot
+/// self-check, which has no stack pointer, passes zero, which is on no stack.
+pub(crate) fn sys_sigaltstack(
+    process: &Process,
+    ss: u64,
+    old: u64,
+    sp: u64,
+) -> Result<usize, Errno> {
     let request = if ss == 0 {
         None
     } else {
         Some(read_stack(process, ss)?)
     };
 
-    let previous = process.with_signals(|signals| {
+    let (previous, on_stack) = process.with_signals(|signals| {
         let previous = signals.alt;
-        if let Some((sp, flags, size)) = request {
-            let autodisarm = flags & SS_AUTODISARM != 0;
-            signals.alt = match flags & !SS_AUTODISARM {
-                SS_DISABLE => AltStack {
-                    sp: 0,
-                    size: 0,
-                    autodisarm,
-                },
-                0 | SS_ONSTACK if size < minimum_stack() => return Err(Errno::ENOMEM),
-                0 | SS_ONSTACK => AltStack {
-                    sp,
-                    size,
-                    autodisarm,
-                },
-                _ => return Err(Errno::EINVAL),
-            };
+        let on_stack = signals.on_alt_stack(sp);
+        let flags = signals.alt_flags();
+        if let Some(request) = request {
+            signals.install_alt_stack(request, sp)?;
         }
-        Ok(previous)
+        Ok::<_, Errno>(((previous, flags), on_stack))
     })?;
 
     if old != 0 {
-        let mut flags = if previous.size == 0 { SS_DISABLE } else { 0 };
-        if previous.autodisarm {
-            flags |= SS_AUTODISARM;
+        let (previous, mut flags) = previous;
+        if on_stack {
+            flags = SS_ONSTACK;
         }
         write_stack(process, old, previous.sp, flags, previous.size)?;
     }

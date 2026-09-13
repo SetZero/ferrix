@@ -176,6 +176,24 @@ impl UserState {
             vectors: [0; 512],
         }
     }
+
+    /// `FPCR` and `FPSR`, as a signal frame's `fpsimd_context` records them.
+    pub(super) const fn fp_control(&self) -> (u64, u64) {
+        (self.fpcr, self.fpsr)
+    }
+
+    /// `q0` to `q31`, sixteen little-endian bytes each.
+    pub(super) const fn vectors(&self) -> &[u8; 512] {
+        &self.vectors
+    }
+
+    /// Replace the floating-point and SIMD registers, as `rt_sigreturn` does.
+    /// The thread pointer is left as it was.
+    pub(super) const fn set_fp(&mut self, fpcr: u64, fpsr: u64, vectors: [u8; 512]) {
+        self.fpcr = fpcr;
+        self.fpsr = fpsr;
+        self.vectors = vectors;
+    }
 }
 
 global_asm!(

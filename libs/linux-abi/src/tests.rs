@@ -1510,6 +1510,7 @@ const ARM_ONLY: &[Syscall] = &[
     Syscall::UtimensatTime64,
     Syscall::PpollTime64,
     Syscall::FutexTime64,
+    Syscall::Sigreturn,
     Syscall::ArmSetTls,
     Syscall::ArmCacheflush,
     Syscall::ClockSettime64,
@@ -1589,6 +1590,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (115, Syscall::Swapoff),                  // swapoff
     (116, Syscall::Sysinfo),                  // sysinfo
     (118, Syscall::Fsync),                    // fsync
+    (119, Syscall::Sigreturn),                // sigreturn
     (120, Syscall::Clone),                    // clone
     (121, Syscall::Setdomainname),            // setdomainname
     (122, Syscall::Uname),                    // uname
@@ -1951,7 +1953,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 236, "the ARMv7-A table maps 236 calls");
+    assert_eq!(mapped_arm().len(), 237, "the ARMv7-A table maps 237 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in

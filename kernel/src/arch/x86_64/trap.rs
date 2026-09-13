@@ -128,6 +128,8 @@ ferrix_trap_common:
 
     // And back, on exactly the paths that swapped. The same test, because the
     // handler cannot have changed where the frame says it came from.
+.globl ferrix_trap_return
+ferrix_trap_return:
     testb $3, 144(%rsp)
     jz 2f
     swapgs
@@ -149,6 +151,15 @@ ferrix_trap_common:
     popq %rax
     addq $16, %rsp
     iretq
+
+// Resume ring 3 from a whole frame, as `rt_sigreturn` must: every register,
+// through the restore half above.
+//   rdi = a `TrapFrame` from ring 3, on the running task's kernel stack
+.globl ferrix_resume_trap_frame
+ferrix_resume_trap_frame:
+    cli
+    movq %rdi, %rsp
+    jmp ferrix_trap_return
 "#,
     options(att_syntax)
 );
@@ -366,6 +377,43 @@ pub(crate) fn classify(frame: &TrapFrame) -> crate::trap::Trap {
         vector => Trap::Fault {
             name: vector_name(vector),
             code: frame.error_code,
+        },
+    }
+}
+
+/// The signal Linux raises for a trap a program's own instruction took and
+/// nothing resolved, as `(signal, si_code, si_addr)`: a page fault `SIGSEGV`
+/// at the address, `#UD` `SIGILL` and `#DE` `SIGFPE` at the instruction,
+/// `#MF` and `#XM` `SIGFPE`, `#AC` `SIGBUS`, a breakpoint `SIGTRAP`, and
+/// everything else -- `#GP` from a privileged instruction, `#SS`, `#NP` --
+/// `SIGSEGV` from the kernel with no address.
+pub(crate) fn fault_signal(frame: &TrapFrame, trap: &crate::trap::Trap) -> (u32, i32, u64) {
+    use crate::trap::Trap;
+    use ferrix_linux_abi::types::{SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP};
+
+    /// `si_code`: raised by the kernel for its own reasons.
+    const SI_KERNEL: i32 = 0x80;
+    /// `SIGSEGV`: nothing mapped at the address.
+    const SEGV_MAPERR: i32 = 1;
+    /// `SIGSEGV`: mapped, and the access refused.
+    const SEGV_ACCERR: i32 = 2;
+    /// `SIGBUS`: a misaligned address.
+    const BUS_ADRALN: i32 = 1;
+    /// `SIGILL`: an illegal operand, which is what Linux reports for `#UD`.
+    const ILL_ILLOPN: i32 = 2;
+    /// `SIGFPE`: an integer divided by zero.
+    const FPE_INTDIV: i32 = 1;
+
+    match trap {
+        Trap::PageFault(fault) if fault.present => (SIGSEGV, SEGV_ACCERR, fault.address),
+        Trap::PageFault(fault) => (SIGSEGV, SEGV_MAPERR, fault.address),
+        Trap::IllegalInstruction => (SIGILL, ILL_ILLOPN, frame.rip),
+        _ => match frame.vector {
+            0 => (SIGFPE, FPE_INTDIV, frame.rip),
+            16 | 19 => (SIGFPE, SI_KERNEL, frame.rip),
+            17 => (SIGBUS, BUS_ADRALN, 0),
+            1 | 3 => (SIGTRAP, SI_KERNEL, 0),
+            _ => (SIGSEGV, SI_KERNEL, 0),
         },
     }
 }

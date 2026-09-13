@@ -258,7 +258,7 @@ ferrix_enter_user:
 /// program's root. A program is a task of its own now, carrying its space, so
 /// a tick in EL0 is an ordinary preemption and the scheduler puts the right
 /// root back when it returns.
-const USER_SPSR: u64 = (1 << 9) | (1 << 8) | (1 << 6);
+pub(super) const USER_SPSR: u64 = (1 << 9) | (1 << 8) | (1 << 6);
 
 unsafe extern "C" {
     /// Enter EL0 at `entry` on `stack`.
@@ -289,6 +289,53 @@ impl UserRegs {
     pub(crate) const fn set_stack(&mut self, state: &mut super::UserState, stack: u64) {
         let _ = state;
         self.0.sp = stack;
+    }
+
+    /// The stack pointer the program made the call with.
+    pub(crate) const fn stack_pointer(&self) -> u64 {
+        self.0.sp
+    }
+}
+
+/// The signal Linux raises for a trap a program's own instruction took and
+/// nothing resolved, as `(signal, si_code, si_addr)`: an abort `SIGSEGV` at
+/// the fault address, a misaligned program counter or stack pointer
+/// `SIGBUS`, a floating-point exception `SIGFPE`, a `brk` `SIGTRAP`, and an
+/// undefined instruction or anything else `SIGILL` at the instruction.
+pub(crate) fn fault_signal(frame: &TrapFrame, trap: &crate::trap::Trap) -> (u32, i32, u64) {
+    use crate::trap::Trap;
+    use ferrix_linux_abi::types::{SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP};
+
+    /// `si_code`: raised by the kernel for its own reasons.
+    const SI_KERNEL: i32 = 0x80;
+    /// `SIGSEGV`: nothing mapped at the address.
+    const SEGV_MAPERR: i32 = 1;
+    /// `SIGSEGV`: mapped, and the access refused.
+    const SEGV_ACCERR: i32 = 2;
+    /// `SIGBUS`: a misaligned address.
+    const BUS_ADRALN: i32 = 1;
+    /// `SIGILL`: an illegal opcode.
+    const ILL_ILLOPC: i32 = 1;
+    /// `SIGTRAP`: a breakpoint.
+    const TRAP_BRKPT: i32 = 1;
+
+    /// Exception class: the program counter was misaligned.
+    const EC_PC_ALIGNMENT: u64 = 0b100010;
+    /// Exception class: the stack pointer was misaligned.
+    const EC_SP_ALIGNMENT: u64 = 0b100110;
+    /// Exception class: a trapped floating-point exception.
+    const EC_FP_EXCEPTION: u64 = 0b101100;
+
+    match trap {
+        Trap::PageFault(fault) if fault.present => (SIGSEGV, SEGV_ACCERR, fault.address),
+        Trap::PageFault(fault) => (SIGSEGV, SEGV_MAPERR, fault.address),
+        Trap::Breakpoint => (SIGTRAP, TRAP_BRKPT, frame.elr),
+        _ => match frame.exception_class() {
+            EC_PC_ALIGNMENT => (SIGBUS, BUS_ADRALN, frame.elr),
+            EC_SP_ALIGNMENT => (SIGBUS, BUS_ADRALN, frame.sp),
+            EC_FP_EXCEPTION => (SIGFPE, SI_KERNEL, frame.elr),
+            _ => (SIGILL, ILL_ILLOPC, frame.elr),
+        },
     }
 }
 
@@ -343,6 +390,17 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         number: x8 as usize,
         args: [x0, x1, x2, x3, x4, x5],
     };
+
+    // `rt_sigreturn` replaces the whole frame, `x0` included, so it has no
+    // return value to write: answered here rather than through `dispatch`.
+    if let Some(ferrix_linux_abi::nr::Syscall::RtSigreturn) = super::decode_syscall(args.number) {
+        let mut context = super::signal::UserContext::from_trap(frame);
+        super::enable_interrupts();
+        crate::syscall::deliver::sigreturn(&mut context, true);
+        super::disable_interrupts();
+        context.store_trap(frame);
+        return Ok(());
+    }
 
     let regs = UserRegs(*frame);
     super::enable_interrupts();

@@ -193,6 +193,54 @@ impl UserState {
     pub(crate) const fn set_user_stack(&mut self, stack: u32) {
         self.user_sp = stack;
     }
+
+    /// `FPSCR` and `d0` to `d31`, as a signal frame's VFP record carries them.
+    pub(super) const fn fp(&self) -> (u32, &[u64; 32]) {
+        (self.fpscr, &self.doubles)
+    }
+
+    /// Replace the floating-point registers, as `sigreturn` does.
+    pub(super) const fn set_fp(&mut self, fpscr: u32, doubles: [u64; 32]) {
+        self.fpscr = fpscr;
+        self.doubles = doubles;
+    }
+}
+
+/// USR mode's banked stack pointer and link register, as they are now.
+///
+/// What a signal frame saves: no trap frame holds either on this architecture.
+pub(super) fn user_banked() -> (u32, u32) {
+    let mut words = [0_u32; 2];
+    // SAFETY: two writable words; reading USR's banked registers through System
+    // mode changes nothing.
+    unsafe { ferrix_user_banked_save(words.as_mut_ptr()) };
+    let [sp, lr] = words;
+    (sp, lr)
+}
+
+/// Set USR mode's banked stack pointer and link register, as entering a
+/// signal handler and returning from one do.
+pub(super) fn set_user_banked(sp: u32, lr: u32) {
+    let words = [sp, lr];
+    // SAFETY: two readable words; loading USR's banked registers cannot affect
+    // the kernel, which runs in SVC mode.
+    unsafe { ferrix_user_banked_restore(words.as_ptr()) };
+}
+
+/// Load `state`'s floating-point registers and nothing else, if this core has
+/// any: what `sigreturn` puts back.
+///
+/// # Safety
+///
+/// The registers must be the calling task's own.
+pub(super) unsafe fn load_user_fpu(state: &UserState) {
+    let doubles = super::cpu::user_fpu_doubles();
+    if doubles != 0 {
+        // SAFETY: the FPU exists and is enabled, and `state` is a live
+        // `UserState` whose layout is asserted above; loading user registers
+        // cannot affect the kernel, which uses none of them.
+        unsafe { ferrix_user_fpu_restore(core::ptr::from_ref(state), u32::from(doubles == 32)) };
+    }
 }
 
 global_asm!(

@@ -430,6 +430,12 @@ fn check_syscalls() {
     if let Some(status) = report.forked {
         println!("  fork     a program forked, waited for its child, and exited with {status}");
     }
+    if let Some(status) = report.signalled {
+        println!(
+            "  signals  a program's handler ran on its own frame, changed a saved register, \
+             returned through sigreturn, and the program exited with {status}"
+        );
+    }
     if let Some((found, missing)) = report.execed {
         println!(
             "  execve   a program became another and exited with {found}; with the file gone \

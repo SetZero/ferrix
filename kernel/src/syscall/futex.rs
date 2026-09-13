@@ -246,7 +246,8 @@ fn wait(
     }
 
     let _ = SLEEP.wait_until_deadline(
-        || sleeper.woken.load(Ordering::Acquire) || process.is_terminated(),
+        // A pending signal ends the wait with `EINTR`, as it ends every wait.
+        || sleeper.woken.load(Ordering::Acquire) || process.signal_pending(),
         deadline.unwrap_or(u64::MAX),
     );
 
@@ -260,7 +261,7 @@ fn wait(
     // whoever the waker meant it for.
     if sleeper.woken.load(Ordering::Acquire) {
         Ok(0)
-    } else if process.is_terminated() {
+    } else if process.signal_pending() {
         Err(Errno::EINTR)
     } else {
         Err(Errno::ETIMEDOUT)

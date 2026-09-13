@@ -176,6 +176,29 @@ impl UserState {
             fxsave,
         }
     }
+
+    /// The 512-byte `FXSAVE` area: what a signal frame carries as `fpstate`.
+    pub(super) const fn fxsave(&self) -> &[u8; 512] {
+        &self.fxsave
+    }
+
+    /// The same area, for `rt_sigreturn` to fill from the frame.
+    pub(super) const fn fxsave_mut(&mut self) -> &mut [u8; 512] {
+        &mut self.fxsave
+    }
+}
+
+/// Load `state`'s x87 and SSE registers and nothing else: not the thread
+/// pointer, and not the entry stack. What `rt_sigreturn` puts back.
+///
+/// # Safety
+///
+/// The registers must be the calling task's own, and `state`'s `MXCSR` must
+/// have no reserved bit set, which `FXRSTOR64` answers with `#GP` in ring 0.
+pub(super) unsafe fn load_fpu(state: &UserState) {
+    // SAFETY: a 512-byte area inside a sixteen-byte-aligned structure, whose
+    // `MXCSR` the caller has masked.
+    unsafe { ferrix_fpu_restore(state.fxsave.as_ptr()) };
 }
 
 global_asm!(

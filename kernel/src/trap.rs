@@ -88,7 +88,15 @@ pub(crate) fn user_interrupt_count() -> u64 {
 
 /// Where every trap arrives, from any architecture's entry stub.
 pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
-    match arch::classify(frame) {
+    let trap = arch::classify(frame);
+    match trap {
+        // A program's own breakpoint, undefined instruction or other fault is
+        // the program's problem, not the kernel's: a signal, as on Linux.
+        Trap::Breakpoint | Trap::IllegalInstruction | Trap::Fault { .. }
+            if frame.came_from_user() =>
+        {
+            user_fault(frame, &trap);
+        }
         Trap::Breakpoint => {
             // The architectures disagree about where the saved instruction
             // pointer lands: x86-64's `int3` pushes the address after itself,
@@ -134,10 +142,37 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
     }
 
     // On the way back to a program, which is where a program killed from
-    // outside finds out: a task spinning in user mode reaches here on its next
-    // tick, and one that was preempted reaches here when it is resumed.
-    if frame.came_from_user() {
-        crate::syscall::process::before_return_to_user();
+    // outside finds out and a signal is delivered: a task spinning in user
+    // mode reaches here on its next tick, and one that was preempted reaches
+    // here when it is resumed. See `crate::syscall::deliver`.
+    if frame.came_from_user() && crate::syscall::deliver::needs_attention() {
+        let mut context = arch::UserContext::from_trap(frame);
+        crate::syscall::deliver::return_to_user(&mut context);
+        context.store_trap(frame);
+    }
+}
+
+/// A trap a program's own instruction took that nothing resolves: the signal
+/// Linux would raise for it, forced on the program so that it either handles
+/// it or ends with it as its status. Never a kernel panic -- a program cannot
+/// be allowed to stop the machine with `hlt` -- unless the kernel entered user
+/// mode with no process to blame.
+fn user_fault(frame: &arch::TrapFrame, trap: &Trap) {
+    use crate::syscall::deliver;
+    use crate::syscall::signal::{Origin, Posted};
+
+    let (signal, code, address) = arch::fault_signal(frame, trap);
+    match deliver::force(signal, Origin::Fault { code, address }) {
+        None => fatal(
+            frame,
+            "a fault from user mode with no process",
+            &crate::panic::catalog::UNEXPECTED_EXCEPTION,
+        ),
+        Some(Posted::Fatal) => {
+            let pid = crate::syscall::process::current().map_or(0, |process| process.pid());
+            println!("  signal   pid {pid} ended by signal {signal} at {address:#x}: {trap:?}");
+        }
+        Some(Posted::Discarded | Posted::Pending) => {}
     }
 }
 
@@ -189,6 +224,10 @@ fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {
     // for ever.
     if fault.user && resolve_user_fault(&fault) {
         let _ = FAULTS_HANDLED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    if fault.user && frame.came_from_user() {
+        user_fault(frame, &Trap::PageFault(fault));
         return;
     }
 

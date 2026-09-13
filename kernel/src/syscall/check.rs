@@ -62,6 +62,9 @@ pub(crate) struct Report {
     pub(crate) killed: Option<i32>,
     /// What a program that forks and waits exited with: 24 when right.
     pub(crate) forked: Option<i32>,
+    /// What a program that signals itself exited with once its handler had
+    /// run and returned: 77 when right.
+    pub(crate) signalled: Option<i32>,
     /// What a program exited with that `execve`d a program which exists, then
     /// one that does not: 42 and 2 when right.
     pub(crate) execed: Option<(i32, i32)>,
@@ -115,6 +118,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let concurrent = check_two_programs_take_turns_on_one_processor()?;
     let killed = check_a_program_is_killed_from_outside()?;
     let forked = check_a_forked_child_is_waited_for()?;
+    let signalled = check_a_handler_runs_and_returns()?;
     check_an_ended_process_closes_its_descriptors()?;
     let execed = check_execve_replaces_the_program()?;
     let futex_woken = check_futexes()?;
@@ -129,6 +133,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         concurrent,
         killed,
         forked,
+        signalled,
         execed,
         pids,
         futex_woken,
@@ -356,6 +361,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_poll_reports_ready_invalid_and_skipped(&process)?;
     check_a_signal_disposition_reads_back_as_it_was_set(&process)?;
     check_the_blocked_mask_follows_how(&process)?;
+    check_kill_finds_its_targets_and_refuses_what_it_should(&process)?;
     check_an_alternate_stack_is_recorded_and_refused_when_small(&process)?;
     check_an_image_loads_where_its_headers_say(&process)?;
     check_the_loader_refuses_what_it_cannot_run(&process)?;
@@ -1078,26 +1084,29 @@ fn check_an_alternate_stack_is_recorded_and_refused_when_small(
         ))
     };
 
-    if signal::sys_sigaltstack(process, 0, old) != Ok(0) || read_old()? != (0, SS_DISABLE, 0) {
+    if signal::sys_sigaltstack(process, 0, old, 0) != Ok(0) || read_old()? != (0, SS_DISABLE, 0) {
         return Err("with no alternate stack, sigaltstack did not report SS_DISABLE");
     }
     stage(0x0001_0000, 0, 1024)?;
-    if signal::sys_sigaltstack(process, at, 0) != Err(Errno::ENOMEM) {
+    if signal::sys_sigaltstack(process, at, 0, 0) != Err(Errno::ENOMEM) {
         return Err("an alternate stack below MINSIGSTKSZ was accepted");
     }
     stage(0x0001_0000, 5, 65536)?;
-    if signal::sys_sigaltstack(process, at, 0) != Err(Errno::EINVAL) {
+    if signal::sys_sigaltstack(process, at, 0, 0) != Err(Errno::EINVAL) {
         return Err("a nonsense ss_flags was accepted");
     }
     stage(0x0001_0000, 0, 65536)?;
-    if signal::sys_sigaltstack(process, at, 0) != Ok(0) {
+    if signal::sys_sigaltstack(process, at, 0, 0) != Ok(0) {
         return Err("a valid alternate stack was refused");
     }
-    if signal::sys_sigaltstack(process, 0, old) != Ok(0) || read_old()? != (0x0001_0000, 0, 65536) {
+    if signal::sys_sigaltstack(process, 0, old, 0) != Ok(0)
+        || read_old()? != (0x0001_0000, 0, 65536)
+    {
         return Err("the installed alternate stack did not read back");
     }
     stage(0, SS_DISABLE, 0)?;
-    if signal::sys_sigaltstack(process, at, old) != Ok(0) || read_old()? != (0x0001_0000, 0, 65536)
+    if signal::sys_sigaltstack(process, at, old, 0) != Ok(0)
+        || read_old()? != (0x0001_0000, 0, 65536)
     {
         return Err("disabling did not report the stack it replaced");
     }
@@ -2901,6 +2910,89 @@ fn check_a_forked_child_is_waited_for() -> Result<Option<i32>, &'static str> {
         99 => Err("wait4 reported a child other than the one fork made"),
         _ => Err("a program that forks and waits did not see its child exit with 23"),
     }
+}
+
+/// What [`arch::USER_SIGNAL_PROGRAM`] exits with when everything is right.
+const SIGNAL_STATUS: i32 = 77;
+
+/// A program installs a handler with a restorer, signals itself with `tgkill`
+/// -- the way `abort` does -- and exits with a register its handler changed
+/// through the `ucontext` of the frame it ran on.
+///
+/// One number covers the whole round trip: the signal was pending on the way
+/// back from `tgkill`, a frame in Linux's layout was written to the program's
+/// stack, the handler was entered with the signal, `siginfo` and `ucontext` in
+/// the right registers and the signal blocked, it returned into its restorer,
+/// and `rt_sigreturn` read the frame back -- the changed register included --
+/// and put the old mask back. On ARMv7-A the program does it a second time
+/// without `SA_SIGINFO`, through the other frame and `sigreturn`.
+fn check_a_handler_runs_and_returns() -> Result<Option<i32>, &'static str> {
+    if arch::USER_SIGNAL_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_SIGNAL_PROGRAM,
+    );
+    let status = exec::run(
+        &file,
+        &[b"/signal"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that handles a signal could not be started")?;
+    match status {
+        SIGNAL_STATUS => Ok(Some(status)),
+        7 => Err(
+            "a signal handler did not run, or returning from it did not restore the registers \
+             its frame held",
+        ),
+        98 => Err("a signal handler was entered with the wrong signal, siginfo or blocked mask"),
+        99 => Err("rt_sigaction, tgkill or the mask after a handler returned was wrong"),
+        129..=192 => Err(
+            "a program that handles a signal was killed by a signal instead: its frame, its \
+             handler's entry or its return was wrong",
+        ),
+        _ => Err("a program that handles a signal did not exit with 77"),
+    }
+}
+
+/// `kill` and its thread forms find a process by pid, refuse a signal past 64
+/// and a thread that is not the process, and discard a signal the process
+/// ignores by default rather than leaving it pending.
+///
+/// Against a process with no task, so nothing sent here is ever delivered:
+/// signal zero, which only asks, and `SIGCHLD`, which is ignored.
+fn check_kill_finds_its_targets_and_refuses_what_it_should(
+    process: &Process,
+) -> Result<(), &'static str> {
+    use crate::syscall::kill;
+    use ferrix_linux_abi::types::SIGCHLD;
+
+    let pid = i32::try_from(process.pid()).map_err(|_| "a pid does not fit an int")?;
+    if kill::sys_kill(process, pid, 0) != Ok(0) {
+        return Err("kill with signal zero did not find the process by its pid");
+    }
+    if kill::sys_kill(process, i32::MAX, 0) != Err(Errno::ESRCH) {
+        return Err("kill of a pid nobody has was not ESRCH");
+    }
+    if kill::sys_kill(process, pid, 65) != Err(Errno::EINVAL) {
+        return Err("kill with signal 65 was not EINVAL");
+    }
+    if kill::sys_tgkill(process, pid, pid.saturating_add(1), 0) != Err(Errno::ESRCH) {
+        return Err("tgkill of a thread that is not its process's was not ESRCH");
+    }
+    if kill::sys_tkill(process, 0, 0) != Err(Errno::EINVAL) {
+        return Err("tkill of thread zero was not EINVAL");
+    }
+    if kill::sys_tgkill(process, pid, pid, SIGCHLD) != Ok(0)
+        || process.with_signals(|signals| signals.pending()) != 0
+    {
+        return Err("SIGCHLD, ignored by default, was left pending instead of discarded");
+    }
+    Ok(())
 }
 
 /// Where [`arch::USER_EXEC_PROGRAM`] looks for its target: a symbolic link,

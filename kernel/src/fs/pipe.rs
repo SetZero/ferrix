@@ -22,12 +22,11 @@
 //! the last descriptor that could use it closes -- which is when a reader must
 //! see end of file and a writer `EPIPE`.
 //!
-//! # `EPIPE` without `SIGPIPE`
+//! # `EPIPE` and `SIGPIPE`
 //!
 //! Linux raises `SIGPIPE` on a write with no reader left, and most programs
-//! die of it before they see the error. There is no signal delivery yet, so a
-//! program here gets `EPIPE` and decides for itself. The signal belongs in
-//! [`End::write_stream`] once a signal can be sent.
+//! die of it before they see the error; one that ignores or handles the signal
+//! gets `EPIPE`. [`End::write_stream`] does both.
 //!
 //! # Named pipes
 //!
@@ -121,10 +120,11 @@ impl Pipe {
     }
 }
 
-/// Whether the process a wait is on behalf of has been killed, which ends the
-/// wait. The boot self-check calls with no process, and is never killed.
+/// Whether the process a wait is on behalf of has been killed, or has a signal
+/// to take, either of which ends the wait with `EINTR`. The boot self-check
+/// calls with no process, and is never killed.
 fn killed(caller: Option<&Arc<Process>>) -> bool {
-    caller.is_some_and(|process| process.is_terminated())
+    caller.is_some_and(|process| process.signal_pending())
 }
 
 /// A count so far, or `errno` if nothing was done: a transfer that stopped
@@ -285,7 +285,12 @@ impl Inode for End {
                     self.pipe.readable.wake_all();
                     continue;
                 }
-                WriteOutcome::Broken => Errno::EPIPE,
+                WriteOutcome::Broken => {
+                    // `SIGPIPE` to the writer as well, as Linux sends it; a
+                    // writer that survives it still gets `EPIPE`.
+                    crate::syscall::kill::send_to_current(ferrix_linux_abi::types::SIGPIPE);
+                    Errno::EPIPE
+                }
                 WriteOutcome::WouldBlock if nonblock => Errno::EAGAIN,
                 WriteOutcome::WouldBlock => match self.wait_to_write(rest.len()) {
                     Ok(()) => continue,
