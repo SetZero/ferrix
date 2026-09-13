@@ -36,7 +36,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END, is_user_address};
 use ferrix_elf::{Elf, ElfError, PF_R, PF_W, PF_X, Segment};
 use ferrix_vma::VmaFlags;
 
@@ -77,6 +77,8 @@ pub(crate) enum LoadError {
     Empty,
     /// A page would have to be both writable and executable.
     WriteExecute(u64),
+    /// The entry point is not a user address.
+    EntryNotUser(u64),
     /// The address space refused a mapping.
     Space(SpaceError),
     /// A segment's contents could not be written into the space.
@@ -116,7 +118,32 @@ pub(crate) fn check(image: &[u8]) -> Result<(), LoadError> {
     }
     elf.validate_segments().map_err(LoadError::Malformed)?;
     let _ = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
+    let _ = entry_point(&elf)?;
     Ok(())
+}
+
+/// Where execution starts, if a program may run there.
+///
+/// An entry point outside the user half is refused as a property of the image,
+/// before anything is mapped, because entering it does not merely fault in the
+/// program. x86-64 enters user mode with `sysretq`, which takes the address in
+/// `RCX` and raises `#GP` *in ring 0* when that address is not canonical, so
+/// the kernel would take the program's mistake as its own fault.
+///
+/// On ARMv7-A bit 0 of the entry point says Thumb, and the instruction is at
+/// the address with that bit clear. The test needs no mask for it: the bound is
+/// even, so clearing bit 0 cannot move an address from one side of it to the
+/// other, and the answer is the same with the bit or without it.
+fn entry_point(elf: &Elf<'_>) -> Result<u64, LoadError> {
+    const _: () = assert!(
+        USER_VIRT_END.is_multiple_of(2),
+        "the Thumb bit could cross the bound"
+    );
+    let entry = elf.entry();
+    if !is_user_address(entry) {
+        return Err(LoadError::EntryNotUser(entry));
+    }
+    Ok(entry)
 }
 
 /// Load `image` into `space`.
@@ -136,6 +163,7 @@ pub(crate) fn load(space: &AddressSpace, image: &[u8]) -> Result<Loaded, LoadErr
         return Err(LoadError::NeedsRelocation);
     }
     elf.validate_segments().map_err(LoadError::Malformed)?;
+    let entry = entry_point(&elf)?;
 
     let (low, high) = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
     let span = high.checked_sub(low).ok_or(LoadError::Empty)?;
@@ -155,7 +183,7 @@ pub(crate) fn load(space: &AddressSpace, image: &[u8]) -> Result<Loaded, LoadErr
     apply_permissions(space, &elf, low, high)?;
 
     Ok(Loaded {
-        entry: elf.entry(),
+        entry,
         phdr: program_headers_at(&elf),
         phent: u64::from(elf.header().phentsize),
         phnum: u64::from(elf.header().phnum),

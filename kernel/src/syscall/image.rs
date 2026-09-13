@@ -19,7 +19,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
 use ferrix_elf::{Class, PF_R, PF_W, PF_X, PT_LOAD};
 
 /// Where the synthetic image is linked. Well above zero and well below
@@ -55,6 +55,9 @@ pub(crate) enum Shape {
     /// Text and data linked into the same page, so the page would have to be
     /// writable and executable at once.
     WriteExecute,
+    /// An entry point at the first address past the user half: non-canonical
+    /// on x86-64, the kernel's half on the other two.
+    EntryOutsideUser,
 }
 
 /// Build one.
@@ -159,16 +162,21 @@ fn write_header(file: &mut [u8], class: Class, machine: u16, shape: Shape, phoff
     put(file, 18, &machine.to_le_bytes());
     put(file, 20, &1_u32.to_le_bytes());
 
+    let entry = if shape == Shape::EntryOutsideUser {
+        USER_VIRT_END
+    } else {
+        ENTRY
+    };
     match class {
         Class::Elf32 => {
-            put(file, 24, &(ENTRY as u32).to_le_bytes());
+            put(file, 24, &(entry as u32).to_le_bytes());
             put(file, 28, &(phoff as u32).to_le_bytes());
             put(file, 40, &header_size.to_le_bytes());
             put(file, 42, &phentsize.to_le_bytes());
             put(file, 44, &2_u16.to_le_bytes());
         }
         Class::Elf64 => {
-            put(file, 24, &ENTRY.to_le_bytes());
+            put(file, 24, &entry.to_le_bytes());
             put(file, 32, &(phoff as u64).to_le_bytes());
             put(file, 52, &header_size.to_le_bytes());
             put(file, 54, &phentsize.to_le_bytes());

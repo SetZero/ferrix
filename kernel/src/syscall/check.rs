@@ -1990,7 +1990,7 @@ fn check_the_segments_got_their_own_permissions(process: &Process) -> Result<(),
     Ok(())
 }
 
-/// The four images the loader must refuse, and refuse by name.
+/// The images the loader must refuse, and refuse by name.
 fn check_the_loader_refuses_what_it_cannot_run(process: &Process) -> Result<(), &'static str> {
     let class = class_of_this_build();
     let machine = arch::ARCH.elf_machine();
@@ -2024,6 +2024,21 @@ fn check_the_loader_refuses_what_it_cannot_run(process: &Process) -> Result<(), 
     let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
     if load::load(scratch.space(), b"not an ELF image").is_ok() {
         return Err("the loader accepted something that is not an ELF image");
+    }
+
+    // An entry point past the user half, which x86-64's `sysretq` would fault
+    // on in ring 0. Refused by name, and by `check` too, which is what
+    // `execve` asks before its point of no return.
+    let file = image::build(class, machine, image::Shape::EntryOutsideUser);
+    let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
+    if !matches!(
+        load::load(scratch.space(), &file),
+        Err(load::LoadError::EntryNotUser(_))
+    ) {
+        return Err("the loader accepted an entry point outside the user half");
+    }
+    if !matches!(load::check(&file), Err(load::LoadError::EntryNotUser(_))) {
+        return Err("execve's image check accepted an entry point outside the user half");
     }
     let _ = process;
     Ok(())
