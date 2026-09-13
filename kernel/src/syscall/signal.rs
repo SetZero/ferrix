@@ -389,6 +389,32 @@ impl Signals {
         self.restart_block.take()
     }
 
+    /// Install a disposition directly, for the boot self-checks: they drive the
+    /// delivery decision without a user-space `rt_sigaction`, which would need a
+    /// `struct sigaction` written into a program's own memory first.
+    pub(crate) fn install_action(&mut self, signal: u32, handler: u64, flags: u64) {
+        if let Ok(index) = index_of(signal)
+            && let Some(slot) = self.actions.get_mut(index)
+        {
+            *slot = Disposition {
+                handler,
+                flags,
+                restorer: 0,
+                mask: 0,
+            };
+        }
+    }
+
+    /// Arm an alternate stack directly, for the boot self-check that a handler
+    /// with `SA_ONSTACK` is placed on it.
+    pub(crate) const fn arm_alt_stack_for_check(&mut self, sp: u64, size: u64) {
+        self.alt = AltStack {
+            sp,
+            size,
+            autodisarm: false,
+        };
+    }
+
     /// Pending signals nothing blocks: what delivery has to act on.
     pub(crate) const fn deliverable(&self) -> u64 {
         self.pending & !self.blocked

@@ -303,7 +303,7 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
 /// kernel-internal codes are the only errors above what a program can see, so
 /// a value outside them -- an ordinary result, or the live register of a way
 /// back that is not a syscall return -- is `None` and starts no restart.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RestartKind {
     /// `ERESTARTSYS`: restart under `SA_RESTART`, or with no handler.
     Sys,
@@ -343,16 +343,78 @@ fn runs_a_handler(taken: &Taken) -> bool {
 /// if the code and the handler's `SA_RESTART` flag allow it, and otherwise
 /// leave `EINTR` in the return register, at the call's own resume point.
 fn resolve_restart(context: &mut arch::UserContext, ctx: &Restart, kind: RestartKind, flags: u64) {
-    let restart = match kind {
-        RestartKind::NoIntr => true,
-        RestartKind::Sys => flags & SA_RESTART != 0,
-        RestartKind::NoHand | RestartKind::RestartBlock => false,
-    };
-    if restart {
+    if restarts(kind, true, flags) {
         restart_call(context, ctx, kind);
     } else {
         context.set_syscall_result(Errno::EINTR.as_return_value());
     }
+}
+
+/// Whether a call with restart code `kind` restarts, given whether a handler
+/// runs and its `SA_*` flags. Linux's rule, in one place so the boot self-check
+/// can assert the whole truth table:
+///
+/// * with no handler, every code restarts (the call had nothing to report to);
+/// * `ERESTARTNOINTR` always restarts;
+/// * `ERESTARTSYS` restarts only under `SA_RESTART`;
+/// * `ERESTARTNOHAND` and `ERESTART_RESTARTBLOCK` never restart through a
+///   handler -- they become `EINTR`.
+fn restarts(kind: RestartKind, runs_handler: bool, flags: u64) -> bool {
+    if !runs_handler {
+        return true;
+    }
+    match kind {
+        RestartKind::NoIntr => true,
+        RestartKind::Sys => flags & SA_RESTART != 0,
+        RestartKind::NoHand | RestartKind::RestartBlock => false,
+    }
+}
+
+/// Assert the restart decision matches Linux's for every code, with and without
+/// a handler and its `SA_RESTART` flag -- the boot self-check for `SA_RESTART`,
+/// each row its own negative control. It proves the decision this module makes;
+/// the per-architecture rewind that carries it out is in each `UserContext` and
+/// cross-checked against `arch/*/kernel/signal.c` and QEMU's `cpu_loop`.
+pub(crate) fn check_restart_decisions() -> Result<(), &'static str> {
+    // Only the kernel-internal codes classify; an ordinary result or `EINTR`
+    // must not, or a live register at a tick could be mistaken for one.
+    if RestartKind::of(0).is_some()
+        || RestartKind::of(Errno::EINTR.as_return_value()).is_some()
+        || RestartKind::of(Errno::EFAULT.as_return_value()).is_some()
+    {
+        return Err("an ordinary return value was read as a restart code");
+    }
+    for (value, kind) in [
+        (Errno::ERESTARTSYS.as_return_value(), RestartKind::Sys),
+        (Errno::ERESTARTNOINTR.as_return_value(), RestartKind::NoIntr),
+        (Errno::ERESTARTNOHAND.as_return_value(), RestartKind::NoHand),
+        (
+            Errno::ERESTART_RESTARTBLOCK.as_return_value(),
+            RestartKind::RestartBlock,
+        ),
+    ] {
+        if RestartKind::of(value) != Some(kind) {
+            return Err("a restart code did not classify as itself");
+        }
+    }
+    // (kind, a handler runs, its flags, whether the call should restart).
+    let matrix = [
+        (RestartKind::Sys, true, SA_RESTART, true),
+        (RestartKind::Sys, true, 0, false),
+        (RestartKind::NoIntr, true, 0, true),
+        (RestartKind::NoHand, true, SA_RESTART, false),
+        (RestartKind::RestartBlock, true, SA_RESTART, false),
+        (RestartKind::Sys, false, 0, true),
+        (RestartKind::NoHand, false, 0, true),
+        (RestartKind::RestartBlock, false, 0, true),
+        (RestartKind::NoIntr, false, 0, true),
+    ];
+    for (kind, handler, flags, expect) in matrix {
+        if restarts(kind, handler, flags) != expect {
+            return Err("the restart decision does not match Linux's for some case");
+        }
+    }
+    Ok(())
 }
 
 /// Rewind the saved registers so the interrupted call re-executes: back to its

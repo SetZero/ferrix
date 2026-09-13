@@ -33,6 +33,7 @@ use crate::arch;
 use crate::mm;
 use ferrix_elf::Class;
 
+use crate::console::println;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{Outcome, SyscallArgs, dispatch, uaccess};
@@ -161,6 +162,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     mark!(5);
     let reclaimed = check_ended_programs_give_their_frames_back()?;
     let signalled = check_a_handler_runs_and_returns()?;
+    check_untested_signal_paths()?;
     mark!(6);
     check_an_ended_process_closes_its_descriptors()?;
     let execed = check_execve_replaces_the_program()?;
@@ -4656,6 +4658,221 @@ fn check_a_handler_runs_and_returns() -> Result<Option<i32>, &'static str> {
         ),
         _ => Err("a program that handles a signal did not exit with 77"),
     }
+}
+
+/// A user address a handler is pretended to live at, for the checks that drive
+/// the delivery decision kernel-side: never entered, only inspected, so any
+/// user address distinguishable from `SIG_DFL` (0) and `SIG_IGN` (1) does.
+const CHECK_HANDLER: u64 = 0x4000;
+
+/// The signal paths nothing else here drives, each with a negative control,
+/// checked against the kernel's own decision functions -- what the boot log's
+/// one `sigpaths` line stands for.
+///
+/// These are kernel-side rather than hand-assembled programs because what is
+/// untested is the *decision*: which signal becomes deliverable, what `wait4`
+/// reports, when an alarm fires, where a handler's frame lands, whether a fault
+/// forces its signal, and whether an interrupted call restarts. Each is a
+/// method the delivery path calls, driven here against processes the check
+/// builds, the way `check_futexes` drives the futex table.
+fn check_untested_signal_paths() -> Result<(), &'static str> {
+    check_a_childs_end_reaches_a_sigchld_handler_and_still_reaps()?;
+    check_a_childs_stop_and_continue_are_reported()?;
+    check_an_alarm_delivers_sigalrm()?;
+    check_sa_onstack_puts_the_handler_on_the_alternate_stack()?;
+    check_a_fault_forces_its_signal_past_a_block()?;
+    crate::syscall::deliver::check_restart_decisions()?;
+    println!(
+        "  sigpaths SIGCHLD reached a handler and wait4 still reaped; a stop and continue were \
+         reported; an alarm raised SIGALRM; SA_ONSTACK chose the alternate stack; a blocked \
+         fault was forced; SA_RESTART restarts, poll and a flagless handler do not"
+    );
+    Ok(())
+}
+
+/// Build a child linked to `parent`, registered and adopted, ready to end.
+fn child_of(parent: &Arc<Process>) -> Result<Arc<Process>, &'static str> {
+    let space = crate::user::space::AddressSpace::new()
+        .map_err(|_| "a check could not make an address space")?;
+    let child = crate::syscall::registry::register(Process::forked(parent, space, false, false));
+    parent.adopt(Arc::clone(&child));
+    Ok(child)
+}
+
+/// (a) A parent with a `SIGCHLD` handler: when its child ends, `SIGCHLD` reaches
+/// the handler and `wait4` still reaps the child. The negative control is a
+/// parent that ignores `SIGCHLD`, for which the child's end leaves nothing to
+/// deliver -- Linux discards a `SIG_IGN` `SIGCHLD` rather than queuing it.
+fn check_a_childs_end_reaches_a_sigchld_handler_and_still_reaps() -> Result<(), &'static str> {
+    use crate::syscall::family;
+    use ferrix_linux_abi::types::{SA_RESTART, SIG_IGN, SIGCHLD};
+
+    let parent = process::new_for_check().map_err(|_| "could not make a parent process")?;
+    parent.with_signals(|signals| signals.install_action(SIGCHLD, CHECK_HANDLER, SA_RESTART));
+    let child = child_of(&parent)?;
+    let child_pid = child.pid();
+    process::kill(&child, 0);
+    let taken = parent
+        .with_signals(signal::Signals::take_next)
+        .ok_or("a child's end did not reach a parent that handles SIGCHLD")?;
+    if taken.signal != SIGCHLD || taken.action.handler != CHECK_HANDLER {
+        return Err("a child's end delivered the wrong signal, or not to the handler");
+    }
+    let reaped = family::sys_wait4(&parent, child_pid as i32, 0, 0, 0)
+        .map_err(|_| "wait4 refused to reap a child whose SIGCHLD had a handler")?;
+    if reaped != child_pid as usize {
+        return Err("wait4 did not reap the child SIGCHLD announced");
+    }
+
+    let ignorer = process::new_for_check().map_err(|_| "could not make a parent process")?;
+    ignorer.with_signals(|signals| signals.install_action(SIGCHLD, SIG_IGN, 0));
+    let orphan = child_of(&ignorer)?;
+    process::kill(&orphan, 0);
+    if ignorer.with_signals(|signals| signals.deliverable() & signal::bit(SIGCHLD) != 0) {
+        return Err("a parent ignoring SIGCHLD was still given one to deliver");
+    }
+    Ok(())
+}
+
+/// (b) A stopped child is reported to `wait4` with `WUNTRACED`, and a continued
+/// one with `WCONTINUED`. The negative controls ask without each flag and must
+/// see nothing, since Linux reports a stop or a continue only when asked.
+fn check_a_childs_stop_and_continue_are_reported() -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::SIGTSTP;
+
+    let parent = process::new_for_check().map_err(|_| "could not make a parent process")?;
+    let child = child_of(&parent)?;
+    let child_pid = child.pid();
+    let any = |_: &Process| true;
+
+    if parent.changed_child(&any, true, true, false).is_some() {
+        return Err("a child that had not stopped was reported as stopped");
+    }
+    child.enter_stop(SIGTSTP);
+    if parent.changed_child(&any, false, false, false).is_some() {
+        return Err("a stop was reported to a wait without WUNTRACED");
+    }
+    let (stopped, signal) = parent
+        .changed_child(&any, true, false, true)
+        .ok_or("WUNTRACED did not report a stopped child")?;
+    if stopped.pid() != child_pid || signal != SIGTSTP {
+        return Err("WUNTRACED reported the wrong child or stop signal");
+    }
+
+    child.leave_stop();
+    if parent.changed_child(&any, false, false, false).is_some() {
+        return Err("a continue was reported to a wait without WCONTINUED");
+    }
+    let (continued, signal) = parent
+        .changed_child(&any, false, true, true)
+        .ok_or("WCONTINUED did not report a continued child")?;
+    if continued.pid() != child_pid || signal != 0 {
+        return Err("WCONTINUED reported the wrong child, or a stop signal for a continue");
+    }
+    Ok(())
+}
+
+/// (c) An armed `ITIMER_REAL` is due at its deadline and raises `SIGALRM`, then
+/// disarms itself, being one-shot. The negative control ticks it a nanosecond
+/// early and must find it not yet due.
+fn check_an_alarm_delivers_sigalrm() -> Result<(), &'static str> {
+    use crate::syscall::kill;
+    use crate::syscall::signal::{Alarm, Origin};
+    use ferrix_linux_abi::types::SIGALRM;
+
+    let process = process::new_for_check().map_err(|_| "could not make a process")?;
+    process.with_signals(|signals| signals.install_action(SIGALRM, CHECK_HANDLER, 0));
+    let now = crate::timer::now_nanos();
+    let deadline = now.saturating_add(1_000_000).max(2);
+    process.with_signals(|signals| {
+        let _ = signals.set_alarm(Alarm {
+            deadline,
+            interval: 0,
+        });
+    });
+
+    if process.with_signals(|signals| signals.tick_alarm(deadline - 1)) {
+        return Err("an interval timer fired before its deadline");
+    }
+    if !process.with_signals(|signals| signals.tick_alarm(deadline)) {
+        return Err("an interval timer did not fire at its deadline");
+    }
+    kill::send(&process, SIGALRM, Origin::Kernel);
+    if process.with_signals(|signals| signals.deliverable() & signal::bit(SIGALRM) == 0) {
+        return Err("a due alarm did not raise a deliverable SIGALRM");
+    }
+    if process.with_signals(|signals| signals.alarm().deadline) != 0 {
+        return Err("a one-shot alarm did not disarm after firing");
+    }
+    Ok(())
+}
+
+/// (d) A handler installed with `SA_ONSTACK` has its frame built on the
+/// alternate stack; the handler's stack pointer will be inside its range. The
+/// negative control, the same handler without `SA_ONSTACK`, stays on the
+/// program's own stack.
+fn check_sa_onstack_puts_the_handler_on_the_alternate_stack() -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::SA_ONSTACK;
+
+    let process = process::new_for_check().map_err(|_| "could not make a process")?;
+    let alt_sp = 0x2000_0000_u64;
+    let alt_size = 0x4000_u64;
+    let program_sp = 0x7000_0000_u64;
+    process.with_signals(|signals| signals.arm_alt_stack_for_check(alt_sp, alt_size));
+
+    let on_alt = process.with_signals(|signals| signals.frame_base(SA_ONSTACK, program_sp));
+    if !(on_alt > alt_sp && on_alt <= alt_sp + alt_size) {
+        return Err("SA_ONSTACK did not put the handler frame on the alternate stack");
+    }
+    let off_alt = process.with_signals(|signals| signals.frame_base(0, program_sp));
+    if off_alt > alt_sp && off_alt <= alt_sp + alt_size {
+        return Err("a handler without SA_ONSTACK was put on the alternate stack");
+    }
+    Ok(())
+}
+
+/// (e) A fault becomes a signal its handler catches: a `SIGSEGV` handler that
+/// the program did not block is kept and made deliverable when the fault is
+/// forced, which is exactly what lets rustc's guard-page handler catch a stack
+/// overflow rather than the process dying. The negative control forces the same
+/// fault against a program that had blocked it: `force_sig_info` resets it to
+/// its default and past the block to fatal, so a program cannot mask a fault to
+/// spin on the faulting instruction for ever.
+fn check_a_fault_forces_its_signal_past_a_block() -> Result<(), &'static str> {
+    use crate::syscall::signal::{Origin, Posted};
+    use ferrix_linux_abi::types::{SA_ONSTACK, SIGSEGV};
+
+    // `SEGV_MAPERR`: nothing mapped at the address, as `arch::fault_signal`
+    // reports for a write to address zero. Local, as it is there.
+    const SEGV_MAPERR: i32 = 1;
+    let fault = Origin::Fault {
+        code: SEGV_MAPERR,
+        address: 0,
+    };
+
+    let caught = process::new_for_check().map_err(|_| "could not make a process")?;
+    caught.with_signals(|signals| signals.install_action(SIGSEGV, CHECK_HANDLER, SA_ONSTACK));
+    let posted = caught.with_signals(|signals| signals.force(SIGSEGV, fault));
+    if posted != Posted::Pending {
+        return Err("a fault with an unblocked handler was not made pending for it");
+    }
+    let taken = caught
+        .with_signals(signal::Signals::take_next)
+        .ok_or("a forced fault did not become deliverable to its handler")?;
+    if taken.signal != SIGSEGV || taken.action.handler != CHECK_HANDLER {
+        return Err("a forced fault reset the handler the program had not blocked");
+    }
+
+    let dies = process::new_for_check().map_err(|_| "could not make a process")?;
+    dies.with_signals(|signals| {
+        signals.install_action(SIGSEGV, CHECK_HANDLER, SA_ONSTACK);
+        let _ = signals.replace_blocked(signal::bit(SIGSEGV));
+    });
+    let fatal = dies.with_signals(|signals| signals.force(SIGSEGV, fault));
+    if fatal != Posted::Fatal {
+        return Err("a fault a program had blocked was not forced past the block to fatal");
+    }
+    Ok(())
 }
 
 /// `kill` and its thread forms find a process by pid, refuse a signal past 64
