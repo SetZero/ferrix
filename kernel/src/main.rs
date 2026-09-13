@@ -553,6 +553,24 @@ fn check_syscalls() {
              returned through sigreturn, and the program exited with {status}"
         );
     }
+    if let Some(status) = report.copied {
+        println!(
+            "  cow      a forked child and its parent each wrote a page the other shared, \
+             neither saw the other's write, and the program exited with {status}"
+        );
+    }
+    if let Some(status) = report.shared {
+        println!(
+            "  shared   a child's writes to MAP_SHARED pages reached its parent and its \
+             MAP_PRIVATE write did not; the program exited with {status}"
+        );
+    }
+    if let Some(status) = report.narrowed {
+        println!(
+            "  mprotect a program wrote a page, made it read-only, wrote it again and was \
+             ended with {status}"
+        );
+    }
     println!(
         "  cost     ms per check: numbers={} handlers={} user={} procs={} kill={} fork={} signals={} execve={} futex={}",
         report.spent_ms[0],

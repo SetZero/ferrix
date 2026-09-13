@@ -928,17 +928,28 @@ object to name. One lock per address space, never a global one.
   `test-shell` types nothing, so input is exercised only by hand. The ring
   itself is checked at boot.
 
-**What the boot test cannot see, written down rather than trusted.** A
+**What the boot test could not see, now seen from user mode.** A
 copy-on-write fault replaces a live read-only translation with a writable one,
 and leaving the stale entry makes the retrying instruction fault forever — a
-hang with no message. Deleting that invalidation fails no boot test on any architecture — not under
-`tcg`, and not under KVM on x86-64 either, where the host's own TLB is in play.
-The check resolves the fault with the space installed and writes through the
-faulting address, and it still passes; but it writes from the kernel, and a
-stale read-only entry is only certain to fault a write made from user mode. A
-program that writes to a copy-on-write page after its fault is the test that
-would see this, and nothing runs one yet. The same holds for `protect` above,
-and stage 4 has the converse writeup.
+hang with no message; `protect` takes translations down and, until the reverse
+map's scoped shootdown, left a processor's cached copy more permissive than the
+map. No kernel-side check could see either. One writes from the kernel, through
+the direct map or with the space installed, and a stale entry is only certain to
+matter for a write made from user mode, on the processor that cached it. Stage
+7's check now runs three hand-assembled programs per architecture, each the
+witness this paragraph used to say nothing ran. A program writes a page, narrows
+it to `PROT_READ`, writes again and must die of `SIGSEGV`; it is pinned to
+another processor, so no switch between the two writes drops the entry by
+accident, and without the shootdown it wrote through and exited with 1 on every
+architecture, under `tcg` and under KVM alike; the reverse map's own check walks
+the same narrowing from the kernel side, as its fourth step. A forked parent and
+child, ordered
+by a pipe, each write a page the other still shares copy-on-write, and neither
+sees the other's write (61). A child's writes to `MAP_SHARED` anonymous pages,
+one of them first touched by the child, reach its parent, and its `MAP_PRIVATE`
+write does not (62). The last two have no failure shown without what they check:
+a deliberate break in the fault path is caught by stage 6's kernel-side check
+before stage 7 runs.
 Relatedly: a check that reads or writes user memory through the direct map tests
 no permission bit at all. To test the tables, ask `translate_in`, or install the
 space and use the address.

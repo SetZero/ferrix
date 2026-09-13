@@ -30,9 +30,10 @@ mod stm32_usart;
 #[cfg(target_arch = "aarch64")]
 pub(crate) use aarch64::{
     ARCH, CpuStarter, Irq, NAME, OPEN_FLAGS, PageEncoding, STAT_LAYOUT, TLB_FLUSH_IS_BROADCAST,
-    TrapFrame, USER_ARGUMENT_PROGRAM, USER_EXEC_PROGRAM, USER_FAULT_PROGRAM, USER_FORK_PROGRAM,
-    USER_NATIVE_PROGRAM, USER_SPIN_PROGRAM, USER_STEP_PROGRAM, USER_STEP_STATUS, USER_TEST_PROGRAM,
-    USER_TEST_STATUS, UserRegs, UserState, advance_past_breakpoint, breakpoint, classify, console,
+    TrapFrame, USER_ARGUMENT_PROGRAM, USER_COW_PROGRAM, USER_EXEC_PROGRAM, USER_FAULT_PROGRAM,
+    USER_FORK_PROGRAM, USER_MPROTECT_PROGRAM, USER_NATIVE_PROGRAM, USER_SHARED_PROGRAM,
+    USER_SPIN_PROGRAM, USER_STEP_PROGRAM, USER_STEP_STATUS, USER_TEST_PROGRAM, USER_TEST_STATUS,
+    UserRegs, UserState, advance_past_breakpoint, breakpoint, classify, console,
     console_receive_irq, counter_hz, counter_now, cpu_local, cpu_local_register, decode_syscall,
     describe_cpus, disable_interrupts, drain_console, drop_identity_map, enable_console_receive,
     enable_interrupts, enter_user, flush_tlb, frame_pointer, halt, hardware_id, identity_map_live,
@@ -47,9 +48,10 @@ pub(crate) use aarch64::{
 #[cfg(target_arch = "arm")]
 pub(crate) use armv7a::{
     ARCH, CpuStarter, Irq, NAME, OPEN_FLAGS, PageEncoding, STAT_LAYOUT, TLB_FLUSH_IS_BROADCAST,
-    TrapFrame, USER_ARGUMENT_PROGRAM, USER_EXEC_PROGRAM, USER_FAULT_PROGRAM, USER_FORK_PROGRAM,
-    USER_NATIVE_PROGRAM, USER_SPIN_PROGRAM, USER_STEP_PROGRAM, USER_STEP_STATUS, USER_TEST_PROGRAM,
-    USER_TEST_STATUS, UserRegs, UserState, advance_past_breakpoint, breakpoint, classify, console,
+    TrapFrame, USER_ARGUMENT_PROGRAM, USER_COW_PROGRAM, USER_EXEC_PROGRAM, USER_FAULT_PROGRAM,
+    USER_FORK_PROGRAM, USER_MPROTECT_PROGRAM, USER_NATIVE_PROGRAM, USER_SHARED_PROGRAM,
+    USER_SPIN_PROGRAM, USER_STEP_PROGRAM, USER_STEP_STATUS, USER_TEST_PROGRAM, USER_TEST_STATUS,
+    UserRegs, UserState, advance_past_breakpoint, breakpoint, classify, console,
     console_receive_irq, counter_hz, counter_now, cpu_local, cpu_local_register, decode_syscall,
     describe_cpus, disable_interrupts, drain_console, drop_identity_map, enable_console_receive,
     enable_interrupts, enter_user, flush_tlb, frame_pointer, halt, hardware_id, identity_map_live,
@@ -76,9 +78,10 @@ pub(crate) use armv7a::{
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{
     ARCH, CpuStarter, Irq, NAME, OPEN_FLAGS, PageEncoding, STAT_LAYOUT, TLB_FLUSH_IS_BROADCAST,
-    TrapFrame, USER_ARGUMENT_PROGRAM, USER_EXEC_PROGRAM, USER_FAULT_PROGRAM, USER_FORK_PROGRAM,
-    USER_NATIVE_PROGRAM, USER_SPIN_PROGRAM, USER_STEP_PROGRAM, USER_STEP_STATUS, USER_TEST_PROGRAM,
-    USER_TEST_STATUS, UserRegs, UserState, advance_past_breakpoint, breakpoint, classify, console,
+    TrapFrame, USER_ARGUMENT_PROGRAM, USER_COW_PROGRAM, USER_EXEC_PROGRAM, USER_FAULT_PROGRAM,
+    USER_FORK_PROGRAM, USER_MPROTECT_PROGRAM, USER_NATIVE_PROGRAM, USER_SHARED_PROGRAM,
+    USER_SPIN_PROGRAM, USER_STEP_PROGRAM, USER_STEP_STATUS, USER_TEST_PROGRAM, USER_TEST_STATUS,
+    UserRegs, UserState, advance_past_breakpoint, breakpoint, classify, console,
     console_receive_irq, counter_hz, counter_now, cpu_local, cpu_local_register, decode_syscall,
     describe_cpus, disable_interrupts, drain_console, drop_identity_map, enable_console_receive,
     enable_interrupts, enter_user, flush_tlb, frame_pointer, halt, hardware_id, identity_map_live,

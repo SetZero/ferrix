@@ -79,6 +79,15 @@ pub(crate) struct Report {
     /// What a program that signals itself exited with once its handler had
     /// run and returned: 77 when right.
     pub(crate) signalled: Option<i32>,
+    /// What a program exited with whose parent and child each wrote a page
+    /// they shared copy-on-write: 61 when right.
+    pub(crate) copied: Option<i32>,
+    /// What a program exited with whose child wrote a `MAP_SHARED` and a
+    /// `MAP_PRIVATE` page: 62 when right.
+    pub(crate) shared: Option<i32>,
+    /// What a program that wrote a page after `mprotect` made it read-only was
+    /// ended with: 139, `SIGSEGV`, when right.
+    pub(crate) narrowed: Option<i32>,
     /// What a program exited with that `execve`d a program which exists, then
     /// one that does not: 42 and 2 when right.
     pub(crate) execed: Option<(i32, i32)>,
@@ -173,6 +182,9 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let signalled = check_a_handler_runs_and_returns()?;
     check_untested_signal_paths()?;
     mark!(6);
+    let copied = check_a_copy_on_write_page_is_copied_for_the_side_that_writes()?;
+    let shared = check_a_shared_mapping_is_shared_across_fork()?;
+    let narrowed = check_a_write_after_mprotect_read_only_faults()?;
     check_an_ended_process_closes_its_descriptors()?;
     let execed = check_execve_replaces_the_program()?;
     mark!(7);
@@ -193,6 +205,9 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         forked,
         reclaimed,
         signalled,
+        copied,
+        shared,
+        narrowed,
         execed,
         started_with,
         pids,
@@ -5090,6 +5105,158 @@ fn check_a_signal_is_judged_against_its_takers_mask() -> Result<(), &'static str
         return Err("a SIGTERM nothing blocks was not judged fatal");
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// A program's own writes
+//
+// Stage 6's permissions and sharing, tested from the side where they matter. A
+// check that writes user memory from the kernel goes through the direct map: it
+// sees no permission bit and nothing a processor cached, so it passes against a
+// stale translation that a program's own write would go straight through. The
+// writes below are the programs' own.
+// ---------------------------------------------------------------------------
+
+/// What [`arch::USER_COW_PROGRAM`] exits with when everything is right.
+const COW_STATUS: i32 = 61;
+
+/// A forked child and its parent each write a page the other still shares
+/// copy-on-write, and neither sees the other's write.
+///
+/// Each write is the program's own instruction faulting on the read-only entry
+/// its read of the page left, so the copy, the replacement of a live
+/// translation and the invalidation after it are all on the path. A fault that
+/// mapped the shared frame writable instead of copying it would pass every
+/// kernel-side check of `fork`; it fails this one.
+fn check_a_copy_on_write_page_is_copied_for_the_side_that_writes()
+-> Result<Option<i32>, &'static str> {
+    if arch::USER_COW_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_COW_PROGRAM,
+    );
+    let status = exec::run(&file, &[b"/cow"], &[], [0x5a; ferrix_ustack::RANDOM_BYTES])
+        .map_err(|_| "a program that writes after fork could not be started")?;
+    match status {
+        COW_STATUS => Ok(Some(status)),
+        12 => Err("a parent's write to a page it shared copy-on-write showed in its child"),
+        5 => Err("a child's write to a page it shared copy-on-write showed in its parent"),
+        6 | 13 => Err("a write to a copy-on-write page did not stick for the side that made it"),
+        4 => Err("a private page did not hold after fork what was written to it before"),
+        10 => Err("the child of a program that writes after fork was killed by a signal"),
+        97 => Err("mmap of two private anonymous pages was refused"),
+        11 | 98 => Err("pipe2, fork, read, write or wait4 was refused in a program that forks"),
+        _ => Err(
+            "a program whose parent and child each write a page they share copy-on-write did \
+             not exit with 61",
+        ),
+    }
+}
+
+/// What [`arch::USER_SHARED_PROGRAM`] exits with when everything is right.
+const SHARED_STATUS: i32 = 62;
+
+/// A forked child's writes to `MAP_SHARED` anonymous pages reach its parent,
+/// and its write to a `MAP_PRIVATE` page does not.
+///
+/// One of the shared pages is first touched by the child, so the page the
+/// child's fault commits has to land in the object both processes name rather
+/// than in a copy of it.
+fn check_a_shared_mapping_is_shared_across_fork() -> Result<Option<i32>, &'static str> {
+    if arch::USER_SHARED_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_SHARED_PROGRAM,
+    );
+    let status = exec::run(
+        &file,
+        &[b"/shared"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that shares a mapping with its child could not be started")?;
+    match status {
+        SHARED_STATUS => Ok(Some(status)),
+        2 => Err("a child's write to a MAP_SHARED anonymous page did not reach its parent"),
+        3 => Err(
+            "a MAP_SHARED anonymous page first touched by a child was not the page its parent \
+             reads",
+        ),
+        4 => Err("a child's write to a MAP_PRIVATE anonymous page reached its parent"),
+        10..=20 => Err("the child of a program that shares a mapping did not exit with 0"),
+        97 => Err("mmap of a MAP_SHARED or MAP_PRIVATE anonymous mapping was refused"),
+        98 => Err("fork or wait4 was refused in a program that shares a mapping"),
+        _ => Err("a program that shares a mapping with its child did not exit with 62"),
+    }
+}
+
+/// What [`arch::USER_MPROTECT_PROGRAM`] is ended with when everything is
+/// right: death by `SIGSEGV`.
+const MPROTECT_STATUS: i32 = 128 + ferrix_linux_abi::types::SIGSEGV as i32;
+
+/// A program writes a page, makes it read-only with `mprotect`, writes it
+/// again, and is ended by `SIGSEGV`.
+///
+/// The first write leaves a writable translation in the processor's TLB, and
+/// only an invalidation takes it out: `mprotect` removing the entry from the
+/// tables is not enough, because a processor holding the old entry never walks
+/// them. Without the invalidation the second write goes through and the program
+/// exits with 1.
+///
+/// **Pinned to a processor other than this one**, which is what makes the
+/// result the same on every boot. Alone there, the program is neither
+/// preempted nor moved between its two writes -- this checker only waits -- so
+/// the processor that took the first write takes the second, and no switch in
+/// between reloads its root and drops the entry by accident. A program free to
+/// move would pass without the invalidation whenever it was switched between
+/// the two, which is the stale entry hidden rather than removed.
+fn check_a_write_after_mprotect_read_only_faults() -> Result<Option<i32>, &'static str> {
+    if arch::USER_MPROTECT_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let here = crate::smp::this_cpu()
+        .ok_or("no processor to run a program on")?
+        .logical;
+    let count = crate::smp::count();
+    let elsewhere = if count > 1 { (here + 1) % count } else { here };
+
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_MPROTECT_PROGRAM,
+    );
+    let program = process::load(
+        &file,
+        &[b"/mprotect"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that narrows its own mapping could not be loaded")?;
+    let _task = process::start_on(&program, Some(elsewhere))
+        .map_err(|_| "a program that narrows its own mapping could not be started")?;
+    let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+    match program.wait_for_exit(deadline) {
+        Some(MPROTECT_STATUS) => Ok(Some(MPROTECT_STATUS)),
+        Some(1) => Err(
+            "a program wrote a page it had just made read-only with mprotect: a writable \
+             translation outlived the change in a processor's TLB",
+        ),
+        Some(97) => Err("mmap of one private anonymous page was refused"),
+        Some(98) => Err("mprotect to PROT_READ was refused"),
+        Some(_) => {
+            Err("a program that wrote a page it had made read-only was not ended by SIGSEGV")
+        }
+        None => Err("a program that narrows its own mapping never ended"),
+    }
 }
 
 /// `kill` and its thread forms find a process by pid, refuse a signal past 64
