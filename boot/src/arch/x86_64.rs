@@ -21,6 +21,10 @@ const IA32_EFER: u32 = 0xC000_0080;
 const EFER_NXE: u64 = 1 << 11;
 /// `CR4.PGE` — makes the global bit in a page table entry mean anything.
 const CR4_PGE: u64 = 1 << 7;
+/// `CR0.WP` — makes ring 0 obey a read-only page table entry. Clear, the
+/// kernel can write its own text and rodata, and the W^X sweep, which reads
+/// entries rather than trying a write, would not notice.
+const CR0_WP: u64 = 1 << 16;
 
 /// Enable the CPU features the page tables the loader built depend on.
 ///
@@ -112,26 +116,40 @@ pub(crate) unsafe fn enter_kernel(handoff: Handoff) -> ! {
         "x86-64 has a single root table for both halves"
     );
 
+    // Every operand is bound to a named register, for AArch64's reason:
+    // `options(noreturn)` forbids outputs, so the only way to have a scratch
+    // register the compiler agrees is free is to claim one as an input.
+    //
     // SAFETY: the caller's contract is exactly the set of conditions that make
     // this sequence sound. `cli` first, because firmware's interrupt handlers
     // stopped existing at `exit_boot_services` and its timer has not.
     unsafe {
         asm!(
             "cli",
-            "mov cr3, {root}",
+            // Write protection before the tables that depend on it, and here
+            // rather than in `prepare_cpu`: firmware is gone, so nothing that
+            // expected to write through its own read-only entries runs again.
+            // Nothing between here and the jump writes memory at all.
+            "mov rax, cr0",
+            "or rax, {wp}",
+            "mov cr0, rax",
+            "mov cr3, rcx",
             // From here the loader is running out of its identity mapping in
             // the kernel's tables.
-            "mov rsp, {stack}",
+            "mov rsp, rdx",
             // A null frame pointer terminates any backtrace the kernel walks,
             // rather than letting it wander into the loader's dead frames.
             "xor rbp, rbp",
-            "jmp {entry}",
-            root = in(reg) handoff.root_table,
-            stack = in(reg) handoff.stack_top,
-            entry = in(reg) handoff.entry,
+            "jmp rsi",
+            wp = const CR0_WP,
+            in("rcx") handoff.root_table,
+            in("rdx") handoff.stack_top,
+            in("rsi") handoff.entry,
             // The System V argument register: the kernel entry takes the boot
             // info pointer as its only argument.
             in("rdi") handoff.boot_info,
+            // Claimed so the scratch above cannot collide with anything live.
+            in("rax") 0u64,
             options(noreturn),
         );
     }

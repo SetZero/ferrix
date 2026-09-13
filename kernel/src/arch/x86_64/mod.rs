@@ -151,6 +151,18 @@ pub(crate) const fn identity_root(_view: &BootView<'_>) -> Option<u64> {
     None
 }
 
+/// `CR0.WP`: ring 0 obeys a read-only page table entry only while it is set.
+const CR0_WP: u64 = 1 << 16;
+
+/// True if the kernel faults when it writes through a read-only mapping.
+///
+/// On x86-64 that is `CR0.WP`, which the loader sets and firmware is free to
+/// have left clear. Without it every read-only kernel mapping is writable from
+/// ring 0, and the W^X sweep, which reads entries, cannot tell.
+pub(crate) fn kernel_write_protected() -> bool {
+    cpu::read_cr0() & CR0_WP != 0
+}
+
 /// The first root-table slot belonging to the upper half.
 ///
 /// A 48-bit address space has 512 top-level slots, and the upper half starts

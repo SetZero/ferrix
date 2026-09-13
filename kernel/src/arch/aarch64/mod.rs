@@ -444,6 +444,14 @@ pub(crate) fn identity_root(view: &BootView<'_>) -> Option<u64> {
 /// Set once [`drop_identity_map`] has run.
 static IDENTITY_DROPPED: AtomicBool = AtomicBool::new(false);
 
+/// True if the kernel faults when it writes through a read-only mapping.
+///
+/// Always, at EL1: the access permissions in a descriptor bind the kernel, and
+/// there is no switch to turn that off.
+pub(crate) const fn kernel_write_protected() -> bool {
+    true
+}
+
 /// Drop the loader's identity map.
 ///
 /// # Safety

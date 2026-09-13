@@ -1542,24 +1542,108 @@ fn self_check(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(), &'sta
         return Err("the memory map reports no usable RAM");
     }
 
-    // The loader must have described its own allocations, or the kernel will
-    // hand the frames holding its own page tables to the first caller that asks
-    // for memory.
-    let mut kinds = (false, false, false);
-    for region in regions {
-        match region.kind {
-            MemKind::Kernel => kinds.0 = true,
-            MemKind::PageTables => kinds.1 = true,
-            MemKind::BootInfo => kinds.2 = true,
-            _ => {}
-        }
-    }
-    if kinds != (true, true, true) {
-        return Err("the memory map does not describe the loader's own allocations");
+    check_loader_allocations(view)?;
+
+    // Every read-only mapping the loader made, the kernel's text and rodata
+    // among them, protects nothing from the kernel itself unless this holds.
+    if !arch::kernel_write_protected() {
+        return Err("the kernel can write through a read-only mapping: CR0.WP is clear");
     }
 
     check_direct_map(view, memory)?;
     check_early_mapper(view, memory)
+}
+
+/// Require each thing the loader handed over to lie inside one region of the
+/// memory map, of the kind that keeps it.
+///
+/// The kind decides what becomes of the frames: the allocator takes `Usable`
+/// at once, and `Loader` data when boot memory is reclaimed. So it is not
+/// enough that a region of each kind exists somewhere. A boot stack reported
+/// as loader data would be handed out while the kernel still ran on it, and
+/// a check that only looked for a `BootStack` region anywhere would pass.
+fn check_loader_allocations(view: &BootView<'_>) -> Result<(), &'static str> {
+    let info = view.raw();
+    // The boot info, its array and the stack are handed over as direct-map
+    // addresses; everything else as physical ones.
+    let physical = |virt: u64| {
+        virt.checked_sub(info.physmap_base)
+            .and_then(|offset| offset.checked_add(info.physmap_phys))
+    };
+    let info_at = physical(core::ptr::from_ref(info).addr() as u64);
+    let array_at = physical(view.regions().as_ptr().addr() as u64);
+    let array_len = size_of_val(view.regions()) as u64;
+    let stack_base =
+        physical(info.boot_stack_top).and_then(|top| top.checked_sub(info.boot_stack_size));
+
+    let required = [
+        (
+            Some(info.kernel_phys),
+            info.kernel_len,
+            MemKind::Kernel,
+            "the memory map does not describe the kernel image as the kernel",
+        ),
+        (
+            Some(info.root_table_phys),
+            PAGE_SIZE,
+            MemKind::PageTables,
+            "the memory map does not describe the root table as page tables",
+        ),
+        (
+            info_at,
+            size_of::<BootInfo>() as u64,
+            MemKind::BootInfo,
+            "the memory map does not describe the boot info as boot info",
+        ),
+        (
+            array_at,
+            array_len,
+            MemKind::BootInfo,
+            "the memory map does not describe its own array as boot info",
+        ),
+        (
+            stack_base,
+            info.boot_stack_size,
+            MemKind::BootStack,
+            "the memory map does not describe the boot stack as the boot stack",
+        ),
+    ];
+    for (at, len, kind, problem) in required {
+        if !at.is_some_and(|at| described_as(view, at, len, kind)) {
+            return Err(problem);
+        }
+    }
+
+    let optional = [
+        (
+            (info.ttbr0_phys != 0).then_some((info.ttbr0_phys, PAGE_SIZE)),
+            MemKind::PageTables,
+            "the memory map does not describe the identity root table as page tables",
+        ),
+        (
+            view.device_tree(),
+            MemKind::DeviceTree,
+            "the memory map does not describe the device tree copy as the device tree",
+        ),
+        (
+            view.initrd(),
+            MemKind::Initrd,
+            "the memory map does not describe the initramfs as the initramfs",
+        ),
+    ];
+    for (range, kind, problem) in optional {
+        if range.is_some_and(|(at, len)| !described_as(view, at, len, kind)) {
+            return Err(problem);
+        }
+    }
+    Ok(())
+}
+
+/// True if `len` bytes from `at` lie inside a single region of kind `kind`.
+fn described_as(view: &BootView<'_>, at: u64, len: u64, kind: MemKind) -> bool {
+    view.region_of(at).is_some_and(|region| {
+        region.kind == kind && at.checked_add(len).is_some_and(|end| end <= region.end())
+    })
 }
 
 /// Prove the direct map really does alias physical memory.
