@@ -37,8 +37,9 @@ Stage 8's exit is `cargo xtask test-vfs` passing as the criterion is written —
 forked programs — on all three architectures, for the reason stage 7's is a
 test of its own.
 Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
-and its first kernel code — PCI enumeration, device nodes, and a device driven
-by DMA from the boot check — is in the boot test.
+and its first kernel code — PCI enumeration, device nodes with MSI-X vectors a
+driver can be given, and a device driven by DMA and answering by MSI-X from the
+boot check — is in the boot test.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -1267,9 +1268,9 @@ open for what stage 10 needs beyond the criterion.
   wait queue takes a plain lock, which an interrupt handler may not, so the
   handler only masks and marks and the waiter notices through its wait's
   recheck. Waking from interrupt context needs an interrupt-safe wake.
-* An `Interrupt` on x86-64, where device interrupts are MSI-X and are masked
-  in the device's own table, which stage 10's `Vector::mask` will route to;
-  and sub-page apertures, which need each access trapped.
+* Sub-page apertures, which need each access trapped. (An `Interrupt` on
+  x86-64, masked in the device's own MSI-X table, came with stage 10's PCI
+  vectors.)
 * Process creation in the native ABI. `0x1030..=0x1037` is held for it.
 
 **Exit:** two user processes exchange messages and a handle over a channel, and
@@ -1501,6 +1502,33 @@ no completion arrived by interrupt.
 The run recorded when it landed: one completion by MSI-X, 64 bytes, on x86-64
 and AArch64 at four processors and on ARMv7-A at four and at two.
 
+**Done — PCI vectors a driver can be given.** A PCI device node's vectors are
+its MSI-X table entries. `DeviceNode::vector(i)` mints entry *i*'s the first
+time it is asked — from `arch::msi_allocate`, programmed into the entry with
+the entry masked — and hands out the same vector every time after. Minting
+waits for the ask because a vector is spent for good and a machine has 64 to
+give devices. The first mint on a function masks every entry and turns MSI-X
+on; it does not turn bus mastering on, which belongs to whatever gives the
+device DMA.
+
+* **Masking says where.** A `Vector` carries whether it is a controller line or
+  an MSI-X entry, and `Vector::mask` and `unmask` write the entry's own mask
+  bit for the second — which the interrupt controller cannot reach — without a
+  lock, since the interrupt handler calls them. Stage 9's `Interrupt` now
+  masks and unmasks through them, agreed with that stage; its handler finds
+  the object before masking, because only the object's vector knows where.
+* **The check** mints one function's first entry after publishing — minting
+  needs the node's place in the published list — and requires the same vector
+  on a second ask, no handler already on its number, an entry that reads back
+  masked and then unmasked and masked as told, and nothing past the table.
+  Stage 9's interrupt check then claims that vector through `interrupt_create`,
+  which on x86-64 it could not do before: the machine had no device vector.
+
+The run recorded when it landed: one MSI-X table and one vector minted on
+x86-64 and on ARMv7-A at four processors and at two, and "1 interrupt held
+from delivery to acknowledgement" on x86-64 for the first time. AArch64 mints
+none: its virtio-rng has memory decoding off, which the next item is for.
+
 **Still to do, in the order it can be done:**
 
 * **Trusting a BAR firmware placed but did not enable**, so a device no
@@ -1532,11 +1560,6 @@ and AArch64 at four processors and on ARMv7-A at four and at two.
   * Later, on the device tree machines: assign addresses to decoding-off
     functions inside the windows, as Linux does unless `linux,pci-probe-only`
     is set, rather than depend on firmware's choice.
-* **PCI vectors a driver can be given.** Mint a `Vector` for each MSI-X
-  entry of a PCI node, from the allocator below, and route `Vector::mask` and
-  `unmask` to the entry's own mask bit — which the interrupt controller does
-  not reach — together with stage 9, whose `Interrupt` masks through
-  `arch::mask_interrupt` today.
 * **IOMMU domains, which need nothing from stage 9 either.** Where the
   hardware is can already be read: `libs/acpi` decodes the DMAR — each VT-d
   unit's register block and the devices behind it — and the IORT, following a

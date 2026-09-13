@@ -272,8 +272,10 @@ package FerrixRoadmap {
              * defects a review found fixed, apertures screened against
              * everything the kernel owns and each other; the
              * virtio-rng completion delivered by MSI-X on every architecture,
-             * through arch::msi_allocate (local APIC vectors, GICv2m SPIs). Next, and
-             * needing nothing from stage 9: MSI-X vectors, IOMMU domains.
+             * through arch::msi_allocate (local APIC vectors, GICv2m SPIs);
+             * PCI vectors minted per MSI-X entry and masked at the entry,
+             * which stage 9's Interrupt uses. Next, and needing nothing from
+             * stage 9: trusting decoding-off BARs, IOMMU domains.
              * Needing stage 9: everything that runs in ring 3. */
     }
 

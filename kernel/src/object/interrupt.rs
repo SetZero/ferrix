@@ -139,7 +139,7 @@ impl Interrupt {
             return Err(InterruptError::Taken);
         }
 
-        if arch::unmask_interrupt(number).is_err() {
+        if vector.unmask().is_err() {
             let _ = BOUND.lock().remove(&number);
             return Err(InterruptError::NotMaskable);
         }
@@ -204,7 +204,7 @@ impl Interrupt {
     /// If the controller refuses to unmask, which a line it masked does not.
     pub(crate) fn acknowledge(&self) -> Result<(), &'static str> {
         self.pending.store(false, Ordering::Release);
-        arch::unmask_interrupt(self.vector.number())
+        self.vector.unmask()
     }
 }
 
@@ -229,7 +229,7 @@ impl Drop for Interrupt {
             dead
         };
         if held_it {
-            let _ = arch::mask_interrupt(number);
+            let _ = self.vector.mask();
         }
     }
 }
@@ -241,10 +241,21 @@ impl Drop for Interrupt {
 /// what an interrupt handler may not do. The reference taken to the object is
 /// dropped after the table's lock is released, because if it was the last one
 /// the object's own drop takes that lock.
+///
+/// The object is found before the line is masked, because only its [`Vector`]
+/// knows where masking happens: at the controller for a line, at the device's
+/// table entry for an MSI-X vector, which the controller cannot reach. A line
+/// nobody holds is masked at the controller; an MSI-X entry nobody holds was
+/// masked by its holder's drop.
 pub(crate) fn on_interrupt(number: u32) {
-    let _ = arch::mask_interrupt(number);
     let target = BOUND.lock().get(&number).and_then(Weak::upgrade);
-    if let Some(interrupt) = target {
-        interrupt.fire();
+    match target {
+        Some(interrupt) => {
+            let _ = interrupt.vector.mask();
+            interrupt.fire();
+        }
+        None => {
+            let _ = arch::mask_interrupt(number);
+        }
     }
 }

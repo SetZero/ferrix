@@ -68,8 +68,9 @@ package FerrixDrivers {
              * IoMapping and Interrupt take those rather than numbers, so a
              * driver cannot name memory or an interrupt its device does not
              * have. The pages of a PCI function's MSI-X table and pending-bit
-             * array are withheld from its apertures. Missing: PCI vectors
-             * (programming MSI-X). */
+             * array are withheld from its apertures. A PCI function's vectors
+             * are its MSI-X entries, minted on first ask and masked at the
+             * entry's own bit. */
         attribute compatible : String;
         attribute mmioWindows : Natural[0..*];
         attribute interrupts : Natural[0..*];

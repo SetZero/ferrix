@@ -1178,8 +1178,10 @@ fn check_a_device_gives_exactly_its_own_memory(counter: &mut Counter) -> Result<
 /// here is the kernel's own handler, [`interrupt::on_interrupt`], called as the
 /// controller would call it: everything after the hardware — masking, the
 /// pending level a wait sees, acknowledgement unmasking — is what is being
-/// checked. Only a machine whose devices have vectors runs it; today that is
-/// ARMv7-A's virtio-mmio transports.
+/// checked. Only a machine whose devices have vectors runs it: every machine
+/// with a PCI function whose MSI-X table can be minted from, where the vector
+/// is that function's first entry and masking is the entry's own bit, and
+/// ARMv7-A's virtio-mmio transports besides.
 fn check_an_interrupt_is_held_until_acknowledged(
     counter: &mut Counter,
 ) -> Result<(), &'static str> {

@@ -566,7 +566,8 @@ fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &d
     println!(
         "  devices  {} nodes ({} from the device tree, {} with decoding off), {} apertures \
          ({} not whole pages, {} withheld, {} MSI-X ranges withheld), {} vectors ({} edge, \
-         {} withheld), {} refusals as specified; {} published",
+         {} withheld), {} MSI-X tables ({} vectors minted), {} refusals as specified; \
+         {} published",
         report.nodes,
         report.tree,
         report.undecoded,
@@ -577,6 +578,8 @@ fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &d
         report.vectors,
         report.edge,
         report.vectors_withheld,
+        report.msix_tables,
+        report.msix_minted,
         report.refusals,
         device::devices().len(),
     );

@@ -32,11 +32,26 @@
 //! function whose memory decoding is off is not an aperture at all: nothing
 //! says firmware placed it.
 //!
-//! Vectors are screened the same way. A device tree node gets only shared
-//! peripheral interrupts, none the kernel has registered a handler on, and
-//! none another node already holds.
+//! # Vectors
+//!
+//! A device tree node's vectors are its interrupt specifiers, screened: only
+//! shared peripheral interrupts, none the kernel has registered a handler on,
+//! and none another node already holds.
+//!
+//! A PCI function's vectors are its MSI-X table entries, minted the first time
+//! one is asked for rather than at boot, because each takes a vector from the
+//! architecture's allocator and a machine has few to spend on devices nobody
+//! drives. The first mint masks every entry and turns MSI-X on; each mint
+//! programs its entry, still masked, and the vector belongs to that entry for
+//! the life of the machine. Minting does not turn bus mastering on, and a
+//! message is a write the device makes, so nothing arrives until whoever gives
+//! the device DMA does that.
+//!
+//! Masking an MSI-X vector is a write to its entry's mask bit, which the
+//! interrupt controller cannot reach, so [`Vector::mask`] knows which kind it
+//! is. It takes no lock: an interrupt handler calls it.
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
@@ -45,15 +60,23 @@ use ferrix_bootinfo::{BootView, MemKind, PAGE_SIZE};
 use ferrix_fdt::{Trigger as TreeTrigger, VIRTIO_MMIO_COMPATIBLE};
 use ferrix_pci::Address;
 use ferrix_pci::bar::{Bar, Region};
-use ferrix_pci::capability::MsiX;
-use ferrix_pci::msix;
-use ferrix_sync::Once;
+use ferrix_pci::capability::{Capability, MSIX_ENTRY_SIZE, MsiX};
+use ferrix_pci::msix::{
+    self, CAPABILITY_CONTROL, CONTROL_ENABLE, CONTROL_FUNCTION_MASK, ENTRY_ADDRESS_HIGH,
+    ENTRY_ADDRESS_LOW, ENTRY_DATA, ENTRY_VECTOR_CONTROL, VECTOR_CONTROL_MASKED,
+};
+use ferrix_sync::{IrqSpinLock, Once};
 
-use crate::{acpi, fdt, irq, vmap};
+use crate::mmio::Mmio;
+use crate::{acpi, arch, fdt, irq, vmap};
 
 /// GIC interrupt identifiers below this are software-generated or private to
 /// one core, and neither is a device's line.
 const FIRST_SHARED_INTERRUPT: u32 = 32;
+
+/// Bytes of a function's legacy configuration space, which holds every
+/// standard capability.
+const LEGACY_CONFIG_BYTES: u64 = 256;
 
 /// A range of device memory a driver may be given, and nothing else.
 ///
@@ -116,6 +139,20 @@ pub(crate) enum Trigger {
     Level,
 }
 
+/// Where a vector is masked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Masking {
+    /// At the interrupt controller: a device tree node's line.
+    Controller,
+    /// At an MSI-X table entry of a published node.
+    MsiX {
+        /// The node's index in [`devices`].
+        node: usize,
+        /// The entry.
+        entry: u16,
+    },
+}
+
 /// An interrupt a driver may be given, and nothing else.
 ///
 /// Constructible only in this module.
@@ -126,6 +163,8 @@ pub(crate) struct Vector {
     number: u32,
     /// How the line signals, where firmware said.
     trigger: Option<Trigger>,
+    /// Where it is masked.
+    masking: Masking,
 }
 
 impl Vector {
@@ -137,6 +176,40 @@ impl Vector {
     /// How the line signals, where firmware said.
     pub(crate) const fn trigger(self) -> Option<Trigger> {
         self.trigger
+    }
+
+    /// Stop the vector being raised, wherever that is decided.
+    ///
+    /// Takes no lock, so an interrupt handler may call it.
+    ///
+    /// # Errors
+    ///
+    /// What the interrupt controller says for a line. An MSI-X vector's
+    /// table is mapped before the vector exists, so it cannot fail.
+    pub(crate) fn mask(self) -> Result<(), &'static str> {
+        self.set_masked(true)
+    }
+
+    /// Let the vector be raised again.
+    ///
+    /// # Errors
+    ///
+    /// As [`Vector::mask`].
+    pub(crate) fn unmask(self) -> Result<(), &'static str> {
+        self.set_masked(false)
+    }
+
+    /// Mask or unmask it.
+    fn set_masked(self, masked: bool) -> Result<(), &'static str> {
+        match self.masking {
+            Masking::Controller if masked => arch::mask_interrupt(self.number),
+            Masking::Controller => arch::unmask_interrupt(self.number),
+            Masking::MsiX { node, entry } => devices()
+                .get(node)
+                .and_then(|node| node.msix.as_ref())
+                .ok_or("the vector's device is not published")?
+                .set_masked(entry, masked),
+        }
     }
 }
 
@@ -223,16 +296,135 @@ impl Reserved {
     }
 }
 
+/// A PCI function's MSI-X table, and the vectors minted from it.
+struct MsixTable {
+    /// Physical address of the function's configuration space.
+    config_phys: u64,
+    /// Offset of the MSI-X capability in it.
+    capability: u16,
+    /// Physical address of the table's first entry.
+    table_phys: u64,
+    /// Entries in the table.
+    table_size: u16,
+    /// The table, mapped with every entry masked and MSI-X on, from the first
+    /// mint. Read by interrupt handlers, and `Once::get` takes no lock.
+    table: Once<Result<Mmio, &'static str>>,
+    /// The vector each entry was minted with.
+    minted: IrqSpinLock<BTreeMap<u16, u32>, arch::Irq>,
+}
+
+impl fmt::Debug for MsixTable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MsixTable")
+            .field("config_phys", &self.config_phys)
+            .field("capability", &self.capability)
+            .field("table_phys", &self.table_phys)
+            .field("table_size", &self.table_size)
+            .finish_non_exhaustive()
+    }
+}
+
+impl MsixTable {
+    /// Offset of `entry`'s vector control register in the table.
+    fn control(entry: u16) -> u64 {
+        u64::from(entry) * MSIX_ENTRY_SIZE + ENTRY_VECTOR_CONTROL
+    }
+
+    /// Mask or unmask `entry`. Takes no lock.
+    fn set_masked(&self, entry: u16, masked: bool) -> Result<(), &'static str> {
+        let Some(&Ok(table)) = self.table.get() else {
+            return Err("the vector's MSI-X table is not mapped");
+        };
+        if entry >= self.table_size {
+            return Err("there is no such MSI-X entry");
+        }
+        // The other thirty-one bits are reserved, and software keeps them.
+        let at = Self::control(entry);
+        let value = table.read32(at);
+        let value = if masked {
+            value | VECTOR_CONTROL_MASKED
+        } else {
+            value & !VECTOR_CONTROL_MASKED
+        };
+        table.write32(at, value);
+        Ok(())
+    }
+
+    /// Whether `entry` reads back masked.
+    fn is_masked(&self, entry: u16) -> Option<bool> {
+        let Some(&Ok(table)) = self.table.get() else {
+            return None;
+        };
+        (entry < self.table_size)
+            .then(|| table.read32(Self::control(entry)) & VECTOR_CONTROL_MASKED != 0)
+    }
+
+    /// Map the table, mask every entry, and turn MSI-X on with the function
+    /// mask clear. Once per table; every entry stays masked until its holder
+    /// unmasks it.
+    fn open(&self) -> Result<Mmio, &'static str> {
+        let len = u64::from(self.table_size) * MSIX_ENTRY_SIZE;
+        let table = vmap::map_device(self.table_phys, len)
+            .map(Mmio::at)
+            .map_err(|_| "the MSI-X table could not be mapped")?;
+        for entry in 0..self.table_size {
+            let at = Self::control(entry);
+            table.write32(at, table.read32(at) | VECTOR_CONTROL_MASKED);
+        }
+
+        let config = vmap::map_device(self.config_phys, LEGACY_CONFIG_BYTES)
+            .map_err(|_| "the function's configuration space could not be mapped")?;
+        let registers = Mmio::at(config);
+        let at = u64::from(self.capability + CAPABILITY_CONTROL);
+        let control = registers.read16(at);
+        registers.write16(at, (control | CONTROL_ENABLE) & !CONTROL_FUNCTION_MASK);
+        let _ = vmap::unmap_device(config);
+        Ok(table)
+    }
+
+    /// The vector for `entry`, minting it if nothing has.
+    fn mint(&self, node: usize, entry: u16) -> Result<Vector, &'static str> {
+        let vector = |number| Vector {
+            number,
+            trigger: Some(Trigger::Edge),
+            masking: Masking::MsiX { node, entry },
+        };
+        if entry >= self.table_size {
+            return Err("there is no such MSI-X entry");
+        }
+        // Mapped outside the lock: mapping and unmapping take the address
+        // space's locks and may wait on other processors.
+        let table = (*self.table.call_once(|| self.open()))?;
+
+        let mut minted = self.minted.lock();
+        if let Some(&number) = minted.get(&entry) {
+            return Ok(vector(number));
+        }
+        let msi = arch::msi_allocate()?;
+        let at = u64::from(entry) * MSIX_ENTRY_SIZE;
+        table.write32(at + ENTRY_ADDRESS_LOW, msi.address as u32);
+        table.write32(at + ENTRY_ADDRESS_HIGH, (msi.address >> 32) as u32);
+        table.write32(at + ENTRY_DATA, msi.data);
+        let _ = minted.insert(entry, msi.number);
+        Ok(vector(msi.number))
+    }
+}
+
 /// A device a driver can be given, with exactly the apertures and vectors it
 /// has.
 #[derive(Debug)]
 pub(crate) struct DeviceNode {
     /// Where it was found.
     location: Location,
+    /// Its index in [`devices`], once published.
+    index: usize,
     /// Its memory, in BAR or `reg` order.
     apertures: Vec<Aperture>,
-    /// Its interrupts, in firmware's order.
+    /// A device tree node's interrupts, in firmware's order.
     vectors: Vec<Vector>,
+    /// A PCI function's MSI-X table, when it has one vectors can be minted
+    /// from.
+    msix: Option<MsixTable>,
     /// Apertures not minted because the kernel or another device has that
     /// memory.
     withheld: usize,
@@ -252,8 +444,10 @@ impl DeviceNode {
     const fn empty(location: Location) -> Self {
         DeviceNode {
             location,
+            index: 0,
             apertures: Vec::new(),
             vectors: Vec::new(),
+            msix: None,
             withheld: 0,
             interrupt_tables: Vec::new(),
             undecoded: false,
@@ -268,12 +462,16 @@ impl DeviceNode {
     /// aperture either, and no BAR is when `decoding` says the function's
     /// memory decoding is off. The pages holding the MSI-X table and
     /// pending-bit array are cut out of whichever BAR holds them and recorded
-    /// instead, so a BAR that is all table becomes no aperture at all. PCI
-    /// vectors wait for MSI-X to be programmed, so there are none yet.
+    /// instead, so a BAR that is all table becomes no aperture at all.
+    ///
+    /// The MSI-X table is kept for minting vectors from when it lies whole in
+    /// an assigned memory BAR, clear of reserved memory, and `config_phys`
+    /// says where the function's configuration space is.
     pub(crate) fn pci(
         address: Address,
+        config_phys: Option<u64>,
         regions: &[Region],
-        msix: Option<&MsiX>,
+        msix: Option<&(Capability, MsiX)>,
         decoding: bool,
         reserved: &Reserved,
     ) -> Self {
@@ -284,6 +482,7 @@ impl DeviceNode {
                 .any(|region| matches!(region.bar, Bar::Memory { .. }));
             return node;
         }
+        let table = msix.map(|(_, table)| table);
         for region in regions {
             let Bar::Memory {
                 address: base,
@@ -296,17 +495,20 @@ impl DeviceNode {
             if base == 0 {
                 continue;
             }
-            for &(offset, len) in msix::withheld(region, msix, PAGE_SIZE).as_slice() {
+            for &(offset, len) in msix::withheld(region, table, PAGE_SIZE).as_slice() {
                 if let Some(start) = base.checked_add(offset) {
                     node.interrupt_tables.push((start, len));
                 }
             }
-            for &(offset, len) in msix::mappable(region, msix, PAGE_SIZE).as_slice() {
+            for &(offset, len) in msix::mappable(region, table, PAGE_SIZE).as_slice() {
                 if let Some(start) = base.checked_add(offset) {
                     node.mint(start, len, prefetchable, reserved);
                 }
             }
         }
+        node.msix = config_phys
+            .zip(msix)
+            .and_then(|(config_phys, found)| MsixTable::of(config_phys, found, regions, reserved));
         node
     }
 
@@ -338,9 +540,12 @@ impl DeviceNode {
         &self.apertures
     }
 
-    /// Every vector the device has.
-    pub(crate) fn vectors(&self) -> &[Vector] {
-        &self.vectors
+    /// How many vectors the device can be asked for: a device tree node's
+    /// interrupts, or a PCI function's MSI-X entries.
+    pub(crate) fn vector_count(&self) -> usize {
+        self.msix
+            .as_ref()
+            .map_or(self.vectors.len(), |table| usize::from(table.table_size))
     }
 
     /// `len` bytes at `phys`, if they lie inside one of the device's
@@ -361,8 +566,56 @@ impl DeviceNode {
     }
 
     /// The device's vector at `index`, if it has one.
+    ///
+    /// For a PCI function, the vector of MSI-X entry `index`: minted the first
+    /// time it is asked for, and the same vector every time after. `None` if
+    /// the table has no such entry, the node is not published yet, or the
+    /// architecture has no vector left to give.
     pub(crate) fn vector(&self, index: usize) -> Option<Vector> {
-        self.vectors.get(index).copied()
+        let Some(table) = &self.msix else {
+            return self.vectors.get(index).copied();
+        };
+        let published = devices()
+            .get(self.index)
+            .is_some_and(|node| core::ptr::eq(node.as_ref(), self));
+        if !published {
+            return None;
+        }
+        table.mint(self.index, u16::try_from(index).ok()?).ok()
+    }
+}
+
+impl MsixTable {
+    /// The table `msix` describes, if vectors can be minted from it: in an
+    /// assigned memory BAR, whole, and clear of memory the kernel owns.
+    fn of(
+        config_phys: u64,
+        (capability, msix): &(Capability, MsiX),
+        regions: &[Region],
+        reserved: &Reserved,
+    ) -> Option<Self> {
+        let region = regions
+            .iter()
+            .find(|region| region.index == msix.table.bar)?;
+        let Bar::Memory { address: base, .. } = region.bar else {
+            return None;
+        };
+        let offset = u64::from(msix.table.offset);
+        if base == 0 || !region.contains(offset, msix.table_len()) {
+            return None;
+        }
+        let table_phys = base.checked_add(offset)?;
+        if reserved.overlaps(table_phys, msix.table_len()) {
+            return None;
+        }
+        Some(MsixTable {
+            config_phys,
+            capability: capability.offset,
+            table_phys,
+            table_size: msix.table_size,
+            table: Once::new(),
+            minted: IrqSpinLock::new(BTreeMap::new()),
+        })
     }
 }
 
@@ -410,6 +663,7 @@ fn tree_nodes(view: &BootView<'_>, reserved: &Reserved) -> Vec<DeviceNode> {
                         TreeTrigger::EdgeRising | TreeTrigger::EdgeFalling => Trigger::Edge,
                         TreeTrigger::LevelHigh | TreeTrigger::LevelLow => Trigger::Level,
                     }),
+                    masking: Masking::Controller,
                 });
             }
             node.withheld_vectors += interrupts.count();
@@ -445,12 +699,17 @@ pub(crate) struct Report {
     pub(crate) msix_withheld: usize,
     /// Functions whose BARs were left out because memory decoding was off.
     pub(crate) undecoded: usize,
-    /// Vectors minted.
+    /// Device tree vectors minted.
     pub(crate) vectors: usize,
     /// Of those, edge-triggered.
     pub(crate) edge: usize,
     /// Firmware's interrupts not minted as vectors.
     pub(crate) vectors_withheld: usize,
+    /// PCI functions with an MSI-X table vectors can be minted from.
+    pub(crate) msix_tables: usize,
+    /// MSI-X vectors the check minted: one, from the first such table, or
+    /// none when the architecture has no vector to give.
+    pub(crate) msix_minted: usize,
     /// Requests refused, each exactly as the rule requires.
     pub(crate) refusals: usize,
 }
@@ -477,8 +736,9 @@ impl fmt::Display for Failure {
 /// # Errors
 ///
 /// The first node that mints an aperture or vector it should refuse, refuses
-/// one it should mint, holds an aperture overlapping reserved memory, or
-/// shares an aperture or vector with another node.
+/// one it should mint, holds an aperture overlapping reserved memory, shares
+/// an aperture or vector with another node, or mints an MSI-X vector that does
+/// not behave as one.
 pub(crate) fn publish(
     view: &BootView<'_>,
     pci: Vec<DeviceNode>,
@@ -495,7 +755,8 @@ pub(crate) fn publish(
     // Two nodes with overlapping apertures are two drivers for one set of
     // registers, so a later node loses what an earlier one already holds.
     let mut claimed: Vec<(u64, u64)> = Vec::new();
-    for node in &mut nodes {
+    for (index, node) in nodes.iter_mut().enumerate() {
+        node.index = index;
         let before = node.apertures.len();
         node.apertures.retain(|aperture| {
             let clash = claimed
@@ -516,7 +777,56 @@ pub(crate) fn publish(
 
     let published = DEVICES.call_once(|| nodes.into_iter().map(Arc::new).collect());
     report.nodes = published.len();
+    report.msix_tables = published.iter().filter(|node| node.msix.is_some()).count();
+    if let Some(node) = published.iter().find(|node| node.msix.is_some()) {
+        check_msix(node, &mut report)?;
+    }
     Ok(report)
+}
+
+/// Mint one PCI node's first MSI-X vector and require it to behave as one:
+/// the same vector when asked again, no handler already on its number, an
+/// entry that reads back unmasked and masked as told, and nothing minted past
+/// the table.
+///
+/// Runs on a published node, because minting needs the node's place in
+/// [`devices`], and on one only, because the vector is spent for good. The
+/// entry is left masked; a driver that asks for entry 0 gets this vector.
+fn check_msix(node: &DeviceNode, report: &mut Report) -> Result<(), Failure> {
+    let fail = |what| Failure {
+        location: node.location(),
+        what,
+    };
+    let Some(table) = &node.msix else {
+        return Ok(());
+    };
+    if node.vector(node.vector_count()).is_some() {
+        return Err(fail("a vector past the MSI-X table was minted"));
+    }
+    report.refusals += 1;
+    let Some(first) = node.vector(0) else {
+        // No vector to give, as on a machine without an MSI frame: nothing
+        // to check, and no rule broken.
+        return Ok(());
+    };
+    report.msix_minted += 1;
+    if node.vector(0) != Some(first) {
+        return Err(fail("an MSI-X entry was minted twice as different vectors"));
+    }
+    if irq::is_registered(first.number()) {
+        return Err(fail(
+            "an MSI-X vector was minted on a number with a handler",
+        ));
+    }
+    if table.is_masked(0) != Some(true) {
+        return Err(fail("a minted MSI-X entry was not masked"));
+    }
+    let unmasked = first.set_masked(false).map(|()| table.is_masked(0));
+    let masked = first.set_masked(true).map(|()| table.is_masked(0));
+    if unmasked != Ok(Some(false)) || masked != Ok(Some(true)) {
+        return Err(fail("a minted MSI-X entry did not mask as told"));
+    }
+    Ok(())
 }
 
 /// Require no two apertures anywhere to overlap, no vector to be held twice,
@@ -615,19 +925,24 @@ fn check_node(node: &DeviceNode, reserved: &Reserved, report: &mut Report) -> Re
     }
     report.refusals += 1;
 
-    for (index, &vector) in node.vectors().iter().enumerate() {
-        report.vectors += 1;
-        if vector.trigger() == Some(Trigger::Edge) {
-            report.edge += 1;
+    // A PCI node's vectors are minted on demand and only once it is
+    // published, so asking here would neither mint nor check anything;
+    // `check_msix` does that after publishing.
+    if node.msix.is_none() {
+        for (index, &vector) in node.vectors.iter().enumerate() {
+            report.vectors += 1;
+            if vector.trigger() == Some(Trigger::Edge) {
+                report.edge += 1;
+            }
+            if node.vector(index) != Some(vector) {
+                return Err(fail("a vector was not handed out as recorded"));
+            }
         }
-        if node.vector(index) != Some(vector) {
-            return Err(fail("a vector was not handed out as recorded"));
+        if node.vector(node.vector_count()).is_some() {
+            return Err(fail("a vector past the end was handed out"));
         }
+        report.refusals += 1;
     }
-    if node.vector(node.vectors().len()).is_some() {
-        return Err(fail("a vector past the end was handed out"));
-    }
-    report.refusals += 1;
     for &(start, len) in &node.interrupt_tables {
         report.msix_withheld += 1;
         // The whole range, its first byte and its last: a driver that could

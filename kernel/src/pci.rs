@@ -420,10 +420,17 @@ fn check_host(
 
     for function in found {
         let (regions, msix, decoding) = check_function(&mut space, function, reserved, report)?;
+        // Where the function's configuration space is, which minting one of
+        // its MSI-X vectors writes to turn MSI-X on.
+        let config_phys = host
+            .window
+            .offset(function.address, 0, 1)
+            .and_then(|offset| host.phys.checked_add(offset));
         nodes.push(DeviceNode::pci(
             function.address,
+            config_phys,
             &regions,
-            msix.as_ref().map(|(_, table)| table),
+            msix.as_ref(),
             decoding,
             reserved,
         ));
