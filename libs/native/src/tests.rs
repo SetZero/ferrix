@@ -21,7 +21,9 @@ use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::{Requested, Rights, SAME_RIGHTS};
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
-use ferrix_native_abi::types::{IoMappingSpec, PACKET_SIGNAL, PACKET_USER, PortPacket};
+use ferrix_native_abi::types::{
+    IoMappingSpec, PACKET_SIGNAL, PACKET_USER, PIN_READ_ONLY, PortPacket,
+};
 
 use crate::call::{Raw, Syscall};
 use crate::channel::{self, Channel, ReadError, Received};
@@ -29,7 +31,8 @@ use crate::device::{Device, Interrupt, IoMapping};
 use crate::error::{Error, decode, decode_handle};
 use crate::handle::{Deadline, Object, OwnedHandle, rights_register};
 use crate::job::Job;
-use crate::pending::{self, Pin, Process, Protection};
+use crate::pending::{self, Process, Protection};
+use crate::pin::{Addresses, Pin, PinAccess, device_address};
 use crate::port::{self, Port};
 use crate::vmo::{self, Vmo};
 
@@ -588,12 +591,12 @@ fn vmo_map_lets_the_kernel_choose_the_address() {
         0x7000_0000
     });
     assert_eq!(
-        vmo.map(0x2000, Protection::ReadWrite, 0x1000),
+        vmo.map(None, 0x2000, Protection::ReadWrite, 0x1000),
         Ok(0x7000_0000)
     );
     sys.fails(Errno::ENOSYS);
     assert_eq!(
-        vmo.map(0x1000, Protection::Read, 0),
+        vmo.map(None, 0x1000, Protection::Read, 0),
         Err(Error::Unsupported)
     );
     let calls = sys.take();
@@ -671,12 +674,7 @@ fn a_device_hands_out_interrupts_and_apertures() {
 
 #[test]
 fn pending_numbers_are_native_and_not_yet_in_the_table() {
-    for number in [
-        pending::PROCESS_CREATE,
-        pending::PROCESS_START,
-        pending::VMO_PIN,
-        pending::VMO_PIN_ADDRESSES,
-    ] {
+    for number in [pending::PROCESS_CREATE, pending::PROCESS_START] {
         assert!(nr::is_native(number), "{number:#x}");
         assert_eq!(
             nr::decode(number),
@@ -725,44 +723,98 @@ fn process_creation_makes_the_real_calls_and_surfaces_enosys() {
 }
 
 #[test]
-fn pinning_makes_the_real_calls_and_reads_device_addresses() {
+fn a_process_is_watched_for_its_end_through_wait_async() {
     let sys = Recorder::default();
-    let vmo = Vmo::from_owned(owned(&sys, 0xC1));
-    let device = Device::from_owned(owned(&sys, 0xC2));
+    let process = Process::from_owned(owned(&sys, 0xB5));
+    let port = Port::from_owned(owned(&sys, 0xB6));
     sys.answer(|raw| {
-        let [vmo, device, offset, length, ..] = raw.args();
-        assert_eq!((vmo, device, length), (0xC1, 0xC2, 0x3000));
-        assert_eq!(read_u64(raw, offset), 0x1000);
-        0xC3
+        let [process, port, signals, key, ..] = raw.args();
+        assert_eq!((process, port), (0xB5, 0xB6));
+        assert_eq!(signals, Signals::TERMINATED.0 as usize);
+        assert_eq!(read_u64(raw, key), 0x5EED);
+        0
     });
-    let pin: Pin<_> = vmo.pin(&device, 0x1000, 0x3000).unwrap();
-    sys.answer(|raw| {
-        let [pin, out, capacity, ..] = raw.args();
-        assert_eq!((pin, capacity), (0xC3, 2));
-        let addresses: Vec<u8> = [0x8000_u64, 0x9000]
-            .iter()
-            .flat_map(|a| a.to_ne_bytes())
-            .collect();
-        write(raw, out, &addresses);
-        3
-    });
-    let mut addresses = [0_u64; 2];
+    process.notify_on_exit(&port, 0x5EED).unwrap();
     assert_eq!(
-        pin.addresses(&mut addresses),
-        Ok(3),
-        "three pages, two asked for"
+        sys.take()[0].number,
+        nr::OBJECT_WAIT_ASYNC,
+        "no call of its own"
     );
-    assert_eq!(addresses, [0x8000, 0x9000]);
-    sys.fails(Errno::ENOSYS);
-    assert_eq!(vmo.pin(&device, 0, 1).unwrap_err(), Error::Unsupported);
-    let numbers = sys.numbers();
+}
+
+// ---------------------------------------------------------------------------
+// Pinning
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_pin_names_the_device_first_and_passes_its_range_in_registers() {
+    let sys = Recorder::default();
+    let device = Device::from_owned(owned(&sys, 0xC2));
+    let vmo = Vmo::from_owned(owned(&sys, 0xC1));
+    sys.returns(0xC3);
+    let pin: Pin<_> = device
+        .pin(&vmo, 0x1000, 0x3000, PinAccess::ReadWrite)
+        .unwrap();
+    assert_eq!(pin.handle(), Handle(0xC3));
+    sys.fails(status::ALREADY_BOUND);
+    let refused = device.pin(&vmo, 0, 0x1000, PinAccess::ReadOnly);
+    assert_eq!(refused.unwrap_err(), Error::AlreadyBound);
+    drop(pin);
     assert_eq!(
-        numbers,
+        sys.take(),
         [
-            pending::VMO_PIN,
-            pending::VMO_PIN_ADDRESSES,
-            pending::VMO_PIN
+            made(nr::VMO_PIN, &[0xC2, 0xC1, 0x1000, 0x3000, 0]),
+            made(
+                nr::VMO_PIN,
+                &[0xC2, 0xC1, 0, 0x1000, PIN_READ_ONLY as usize]
+            ),
+            made(nr::HANDLE_CLOSE, &[0xC3]),
         ]
+    );
+}
+
+#[test]
+fn an_address_query_tells_a_short_buffer_from_a_complete_one() {
+    let sys = Recorder::default();
+    let pin = Pin::from_owned(owned(&sys, 0xC3));
+    let pages: Vec<u8> = [0x8000_u64, 0x9000, 0xF000]
+        .iter()
+        .flat_map(|address| address.to_ne_bytes())
+        .collect();
+    for capacity in [2_usize, 4] {
+        let pages = pages.clone();
+        sys.answer(move |raw| {
+            let [pin, out, offered, ..] = raw.args();
+            assert_eq!((pin, offered), (0xC3, capacity));
+            let fits = capacity.min(3) * 8;
+            write(raw, out, &pages[..fits]);
+            3
+        });
+    }
+
+    let mut short = [[0_u8; 8]; 2];
+    let found = pin.addresses(&mut short).unwrap();
+    assert_eq!(
+        found,
+        Addresses {
+            pages: 3,
+            written: 2
+        }
+    );
+    assert!(!found.is_complete(), "three pages, room for two");
+    assert_eq!(short.map(device_address), [0x8000, 0x9000]);
+
+    let mut room = [[0_u8; 8]; 4];
+    let found = pin.addresses(&mut room).unwrap();
+    assert!(found.is_complete());
+    assert_eq!(room.map(device_address), [0x8000, 0x9000, 0xF000, 0]);
+
+    sys.fails(status::ACCESS_DENIED);
+    assert_eq!(pin.addresses(&mut []), Err(Error::AccessDenied));
+    assert_eq!(
+        sys.take()[2],
+        made(nr::VMO_PIN_ADDRESSES, &[0xC3, 0, 0]),
+        "empty is null"
     );
 }
 
@@ -797,7 +849,7 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = vmo.read(&mut [], 0);
     let _ = vmo.write(&[], 0);
     let _ = vmo.size();
-    let _ = vmo.map(1, Protection::Read, 0);
+    let _ = vmo.map(None, 1, Protection::Read, 0);
     let _ = job.create_child();
     let _ = job.kill();
     let _ = device.interrupt(0);
@@ -805,6 +857,8 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = interrupt.ack();
     let _ = device.io_mapping(IoMappingSpec::default());
     let _ = mapping.map(None);
+    let _ = device.pin(&vmo, 0, 1, PinAccess::ReadOnly);
+    let _ = Pin::from_owned(handle()).addresses(&mut []);
 
     let wrapped: BTreeSet<usize> = sys.numbers().into_iter().collect();
     let table: BTreeSet<usize> = nr::ALL.iter().map(|&call| nr::number(call)).collect();

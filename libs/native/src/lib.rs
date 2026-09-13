@@ -32,9 +32,8 @@
 //!
 //! # Not yet on main
 //!
-//! [`pending`] wraps process creation and VMO pinning, whose numbers are
-//! agreed and whose handlers are not written; they answer
-//! [`Error::Unsupported`] until they are.
+//! [`pending`] wraps process creation and `vmo_map`, whose handlers are not
+//! written; they answer [`Error::Unsupported`] until they are.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -46,6 +45,7 @@ pub mod error;
 pub mod handle;
 pub mod job;
 pub mod pending;
+pub mod pin;
 pub mod port;
 pub mod vmo;
 
