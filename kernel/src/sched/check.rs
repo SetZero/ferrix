@@ -192,6 +192,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     mark!(5);
     load_tracking(topology, &mut report)?;
     mark!(6);
+    a_pulled_task_runs(topology)?;
     balancing(topology, &mut report)?;
     mark!(7);
     slice_scaling(&mut report)?;
@@ -801,6 +802,88 @@ fn spin_until(mut ready: impl FnMut() -> bool) -> bool {
         core::hint::spin_loop();
     }
     true
+}
+
+/// The longest a deaf spinner keeps interrupts masked, whether or not it is
+/// told to stop. A bound, so that anything that turns out to need that
+/// processor's answer, such as a shootdown, is late rather than wedged.
+const DEAF_LIMIT_NANOS: u64 = 2_000_000_000;
+
+/// A task pulled onto this processor by balancing gets a turn without any
+/// other interrupt arriving here.
+///
+/// The pull is the same one `balance` makes, made from here. The task pulled
+/// waits behind a spinner on another processor that runs with interrupts
+/// masked, so that processor can neither run the task first nor be told to.
+/// This task then spins without yielding, as a processor's lone task does
+/// with its timer stopped, and requires the pulled task to run.
+fn a_pulled_task_runs(topology: &Topology) -> Result<(), &'static str> {
+    let online = topology.online();
+    if online < 2 {
+        return Ok(());
+    }
+    let allocations = crate::vmap::usage().allocations;
+    let here = super::current()
+        .ok_or("the checking task is not running")?
+        .cpu();
+    let there = (here + 1) % online;
+    STOP.store(false, Ordering::Release);
+    SPINNING.store(0, Ordering::Release);
+    DONE.store(0, Ordering::Release);
+    RAN.store(0, Ordering::Release);
+
+    let deaf = super::spawn_on(
+        "check-deaf",
+        deaf_spinner,
+        0,
+        NICE_0_WEIGHT,
+        there,
+        CpuSet::of(there),
+    )?;
+    wait_for(
+        || SPINNING.load(Ordering::Acquire) >= 1,
+        "a spinner with interrupts masked never started",
+    )?;
+    let mut both = CpuSet::of(here);
+    both.insert(there)
+        .map_err(|_| "a processor outside the set's range")?;
+    let pulled = super::spawn_on("check-pulled", count_a_run, 0, NICE_0_WEIGHT, there, both)?;
+
+    super::yield_now();
+    let saved = <crate::arch::Irq as IrqControl>::disable();
+    let moved = super::pull(here, there);
+    <crate::arch::Irq as IrqControl>::restore(saved);
+    let ran = moved && spin_until(|| RAN.load(Ordering::Acquire) >= 1);
+
+    STOP.store(true, Ordering::Release);
+    wait_for(
+        || DONE.load(Ordering::Acquire) >= 2,
+        "a pulled task or its deaf neighbour never finished",
+    )?;
+    if !moved {
+        return Err("a task queued behind a busy processor could not be pulled");
+    }
+    if !ran {
+        return Err("a task pulled by balancing waited for an unrelated interrupt");
+    }
+
+    reap_to(allocations, "a pulled task")?;
+    drop((deaf, pulled));
+    Ok(())
+}
+
+/// Spin with interrupts masked until told to stop, or until
+/// [`DEAF_LIMIT_NANOS`] has passed.
+fn deaf_spinner(_argument: usize) {
+    let saved = <crate::arch::Irq as IrqControl>::disable();
+    let _ = SPINNING.fetch_add(1, Ordering::AcqRel);
+    notify();
+    let until = crate::timer::now_nanos().saturating_add(DEAF_LIMIT_NANOS);
+    while !STOP.load(Ordering::Acquire) && crate::timer::now_nanos() < until {
+        core::hint::spin_loop();
+    }
+    <crate::arch::Irq as IrqControl>::restore(saved);
+    finish();
 }
 
 /// Count a run, and finish.

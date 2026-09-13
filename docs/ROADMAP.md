@@ -618,6 +618,15 @@ check shown to fail without the fix:
   interrupt the exit re-arms it for the real decision first. The check
   spawns, then wakes, a task onto its own processor while it spins, and
   requires the task to run.
+* **A task pulled by periodic balancing was not scheduled.** A pull added a
+  task behind a processor's lone running task and asked nothing of it. Its
+  timer was stopped, and later wake-ups saw two tasks and did not kick, so
+  the pulled task waited for an unrelated interrupt. This was the
+  intermittent "a balancing task never started": an anchor-only processor
+  took a placement's broadcast, pulled a movable spinner, and never ran it.
+  A pull now asks the puller to decide again. The check pulls a task from
+  behind a spinner running with interrupts masked, then spins, and requires
+  the pulled task to run.
 
 **Still missing against Linux**, none of it on stage 6's path: group scheduling
 and bandwidth control, which are stage 13; the real-time classes, which are

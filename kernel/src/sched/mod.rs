@@ -1188,9 +1188,7 @@ fn balance() {
 
     // Pull first: if somebody is busier than this processor, take from them.
     if let Some(victim) = folded.pull_from() {
-        if steal_from(me, victim) {
-            let _ = BALANCED.fetch_add(1, Ordering::Relaxed);
-        }
+        let _ = pull(me, victim);
         return;
     }
 
@@ -1212,6 +1210,34 @@ fn balance() {
         // The receiver may have been asleep with nothing to run; tell it.
         kick(target);
     }
+}
+
+/// Take one task from `victim` for `me`, which is this processor, and make
+/// sure it gets a turn.
+///
+/// **Moving it is not enough.** `me` is running something, and if that is all
+/// it was running its timer is stopped, so a task added behind it waits until
+/// something asks `me` to decide again. Nothing did. `balance` runs on an
+/// interrupt exit that asked for no reschedule, or it would have been spent
+/// on one, and wake-ups onto `me` found two tasks there and so saw no reason
+/// to kick. The balancing check lost its movable tasks this way, one boot in
+/// a few: an anchor-only processor took a placement's broadcast, pulled a
+/// movable spinner, and never started it. That is "a balancing task never
+/// started". On an interrupt exit the flag is read right after `balance`
+/// returns, and the timer covers any other caller.
+fn pull(me: usize, victim: usize) -> bool {
+    if !steal_from(me, victim) {
+        return false;
+    }
+    let _ = BALANCED.fetch_add(1, Ordering::Relaxed);
+    let saved = <arch::Irq as IrqControl>::disable();
+    if this_cpu() == Some(me) {
+        resched_here(me);
+    } else {
+        kick(me);
+    }
+    <arch::Irq as IrqControl>::restore(saved);
+    true
 }
 
 /// Tasks moved by [`balance`], as opposed to by an idle processor stealing.
