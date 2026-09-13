@@ -76,9 +76,16 @@ pub(crate) fn run(built: &Built) -> Result<Report, &'static str> {
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
     // Checked, not only printed: a count nothing tests would boot green
-    // through the very leak it exists to show.
+    // through the very leak it exists to show. The number and its sign are
+    // printed first: a count that fell is frames the check kept, one that
+    // rose is something outside it freeing inside the window.
     if leaked != 0 {
-        return Err("the tmpfs check did not give every frame back");
+        crate::console::println!("  tmpfs    {leaked} frames across the second run");
+        return Err(if leaked > 0 {
+            "the tmpfs check kept frames it did not give back"
+        } else {
+            "the free frame count rose across the tmpfs check: something outside it freed frames in the window"
+        });
     }
 
     Ok(Report {
@@ -368,9 +375,18 @@ pub(crate) fn run_calls() -> Result<CallsReport, &'static str> {
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
     // Checked, not only printed: a count nothing tests would boot green
-    // through the very leak it exists to show.
+    // through the very leak it exists to show. The number and its sign are
+    // printed first, so the report says which of the two it was.
     if leaked != 0 {
-        return Err("the pipe and filesystem call checks did not give every frame back");
+        crate::console::println!("  pipes    {leaked} frames across the second run");
+    }
+    if leaked < 0 {
+        return Err(
+            "the free frame count rose across the pipe and filesystem call checks: something outside them freed frames in the window",
+        );
+    }
+    if leaked > 0 {
+        return Err("the pipe and filesystem call checks kept frames they did not give back");
     }
     Ok(CallsReport { bytes, leaked })
 }
