@@ -82,3 +82,13 @@ fn lrand48_starts_deterministically() {
 fn rand48_rand_and_rand_r_follow_their_specifications() {
     check(&Case::named("stdlib/rand48"));
 }
+
+#[test]
+fn temporary_files_and_directories_get_exclusive_names() {
+    check(&Case::named("stdlib/temp"));
+}
+
+#[test]
+fn realpath_resolves_links_dots_and_the_working_directory() {
+    check(&Case::named("stdlib/realpath"));
+}

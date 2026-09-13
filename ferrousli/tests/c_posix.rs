@@ -79,3 +79,8 @@ fn syscall_passes_long_arguments() {
 fn glibc_large_file_and_xstat_names() {
     check(&Case::named("posix/glibc_names"));
 }
+
+#[test]
+fn programs_run_through_popen_system_the_execl_family_and_daemon() {
+    check(&Case::named("posix/spawn"));
+}

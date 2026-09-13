@@ -201,6 +201,9 @@ pub struct Inner {
     pub eof: bool,
     /// The error indicator.
     pub error: bool,
+    /// The shell `popen` started on this stream, whose exit `pclose` waits
+    /// for, or 0.
+    pub pipe_pid: c_int,
     /// How the stream buffers.
     mode: Mode,
     /// Whether the mode was chosen, by `setvbuf` or when the stream was made,
@@ -237,6 +240,7 @@ impl Inner {
             append: false,
             eof: false,
             error: false,
+            pipe_pid: 0,
             mode,
             chosen: !matches!(mode, Mode::Auto),
             buf: null_mut(),
@@ -937,6 +941,41 @@ fn for_each(mut op: impl FnMut(&mut Inner)) {
         at = unsafe { &*at }.next.load(Ordering::Relaxed);
     }
     LIST_LOCK.unlock();
+}
+
+/// Takes the open list's lock, for `popen`, which forks while holding it so
+/// that the child's copy of the list is whole.
+pub fn lock_list() {
+    LIST_LOCK.lock();
+}
+
+/// Releases what [`lock_list`] took.
+pub fn unlock_list() {
+    LIST_LOCK.unlock();
+}
+
+/// Closes the descriptor of every stream an earlier `popen` opened, in the
+/// child of a `popen`.
+///
+/// # Safety
+///
+/// Only the child of a `fork` made while [`lock_list`] was held may call this,
+/// before it runs anything else. It reads the streams without their locks,
+/// which threads the child does not have may have held at the fork.
+pub unsafe fn close_popen_descriptors() {
+    let mut at = OPEN.load(Ordering::Relaxed);
+    while !at.is_null() {
+        // SAFETY: the list was whole at the fork, and its streams live.
+        let this = unsafe { &*at };
+        // SAFETY: the child has one thread, and nothing else reads this copy.
+        let inner = unsafe { &*this.inner.get() };
+        if inner.pipe_pid != 0
+            && let Backend::Fd(fd) = inner.backend
+        {
+            let _ = crate::unistd::close(fd);
+        }
+        at = this.next.load(Ordering::Relaxed);
+    }
 }
 
 /// Writes every stream's pending output, for `fflush(NULL)`. False if any
