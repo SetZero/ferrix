@@ -117,6 +117,17 @@ struct Inner {
     native: BTreeSet<u64>,
 }
 
+impl Inner {
+    /// The object a region names and its offset, if the Linux calls that
+    /// reshape a region may: anonymous memory that `vmo_map` did not put here.
+    fn reshapeable(&self, backing: Backing) -> Option<(u64, u64)> {
+        match backing {
+            Backing::Anonymous { id, offset } if !self.native.contains(&id) => Some((id, offset)),
+            Backing::Anonymous { .. } | Backing::File { .. } | Backing::Device { .. } => None,
+        }
+    }
+}
+
 /// One process's address space.
 #[derive(Debug)]
 pub(crate) struct AddressSpace {
@@ -756,12 +767,9 @@ impl AddressSpace {
             if region.range.end() < old_range.end() {
                 return Err(SpaceError::NotMapped(old));
             }
-            let Backing::Anonymous { id, offset } = region.backing else {
+            let Some((id, offset)) = inner.reshapeable(region.backing) else {
                 return Err(SpaceError::Refused(old));
             };
-            if inner.native.contains(&id) {
-                return Err(SpaceError::Refused(old));
-            }
             // Where in the object the old range starts, in bytes.
             let first = offset
                 .checked_add(old - region.range.start())

@@ -270,7 +270,30 @@ fn check_a_vmo_maps_as_shared_memory(counter: &mut Counter) -> Result<(), &'stat
     }
     drop(child);
 
-    // A protection needs the rights behind it.
+    let [narrow, no_map] = check_vmo_map_needs_its_rights(&side, vmo, counter)?;
+    let [end, other_end] = check_what_vmo_map_refuses(&side, vmo, counter)?;
+
+    for handle in [vmo, narrow, no_map, end, other_end] {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(handle)])
+            .map_err(|_| "closing a handle the mapping check made failed")?;
+    }
+    if side.get(MAPPED + 0x10, SECRET.len())? != SECRET {
+        return Err("a mapping lost its VMO when the handle it was made with closed");
+    }
+    side.close_everything();
+    Ok(())
+}
+
+/// A `vmo_map` protection needs the rights behind it, and `mprotect` and
+/// `mremap` may not change a region `vmo_map` made. Returns the two narrowed
+/// handles, for the caller to close.
+fn check_vmo_map_needs_its_rights(
+    side: &Side,
+    vmo: Handle,
+    counter: &mut Counter,
+) -> Result<[Handle; 2], &'static str> {
+    let both = u64::from(MAP_READ | MAP_WRITE);
     side.put_offset(0)?;
     let read_only = u64::from((Rights::MAP | Rights::READ).0);
     let narrow = side.handle(
@@ -333,6 +356,19 @@ fn check_a_vmo_maps_as_shared_memory(counter: &mut Counter) -> Result<(), &'stat
         "a handle without MAP mapped a VMO",
         counter,
     )?;
+    Ok([narrow, no_map])
+}
+
+/// What `vmo_map` refuses whatever the handle carries: another kind of object,
+/// a protection that is not read or read-write, part of a page, a range over
+/// another mapping, past the object's end or from inside a page. Returns the
+/// channel it made, for the caller to close.
+fn check_what_vmo_map_refuses(
+    side: &Side,
+    vmo: Handle,
+    counter: &mut Counter,
+) -> Result<[Handle; 2], &'static str> {
+    let both = u64::from(MAP_READ | MAP_WRITE);
     let (end, other_end) = side.channel()?;
     let spare = MAPPED + 8 * PAGE_SIZE;
     refused(
@@ -388,16 +424,7 @@ fn check_a_vmo_maps_as_shared_memory(counter: &mut Counter) -> Result<(), &'stat
         counter,
     )?;
 
-    for handle in [vmo, narrow, no_map, end, other_end] {
-        let _ = side
-            .call(nr::HANDLE_CLOSE, &[reg(handle)])
-            .map_err(|_| "closing a handle the mapping check made failed")?;
-    }
-    if side.get(MAPPED + 0x10, SECRET.len())? != SECRET {
-        return Err("a mapping lost its VMO when the handle it was made with closed");
-    }
-    side.close_everything();
-    Ok(())
+    Ok([end, other_end])
 }
 
 /// One of the two processes.
