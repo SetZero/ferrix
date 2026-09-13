@@ -43,6 +43,7 @@ pub mod float;
 pub mod futex;
 pub mod getopt;
 pub mod growable;
+pub mod grp;
 #[cfg(test)]
 mod host_glibc;
 pub mod inet;
@@ -62,6 +63,7 @@ pub mod poll;
 pub mod process;
 pub mod pthread;
 pub mod pthread_attr;
+pub mod pwd;
 pub mod qsort;
 pub mod rand;
 pub mod random;
@@ -74,6 +76,7 @@ pub mod sched;
 pub mod select;
 #[cfg(not(test))]
 pub mod setjmp;
+pub mod shadow;
 pub mod sigaction;
 pub mod signal;
 pub mod sigset;
