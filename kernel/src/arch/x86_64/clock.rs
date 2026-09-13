@@ -14,17 +14,28 @@
 //!
 //! Either way the answer is a counter and a frequency, and the rest of the
 //! kernel is told neither which one it got nor that there was a choice.
+//!
+//! # A 32-bit HPET
+//!
+//! The HPET's main counter may be 32 bits wide — capability bit 13 says, and
+//! AMD chipsets commonly are — and at 14.3 `MHz` that wraps every five minutes.
+//! Handed out as the time base, it would send `CLOCK_MONOTONIC` backwards at
+//! each wrap. Extending it in software needs a read at least once per wrap
+//! period, and a processor running one task with its timer stopped makes none.
+//! So a narrow HPET is not the counter: it is the reference the TSC is
+//! calibrated against, over ten milliseconds and subtracted in 32 bits, which
+//! keeps its exactly-stated period and costs the PIT nothing. Every counter
+//! this module hands out is therefore 64 bits wide.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use ferrix_acpi::hpet::{self, Capabilities};
 use ferrix_acpi::{Acpi, GenericAddress};
 
 use super::cpu;
 use crate::acpi::DirectMap;
 use crate::mmio::Mmio;
 
-/// General capabilities: the counter's period lives in the top 32 bits.
-const HPET_CAPABILITIES: u64 = 0x000;
 /// General configuration.
 const HPET_CONFIG: u64 = 0x010;
 /// The main counter.
@@ -33,16 +44,6 @@ const HPET_MAIN_COUNTER: u64 = 0x0F0;
 const HPET_CONFIG_ENABLE: u64 = 1 << 0;
 /// Bytes of register window a timer block occupies.
 const HPET_WINDOW: u64 = 0x400;
-
-/// Femtoseconds in a second, which is the unit the HPET states its period in.
-const FEMTOS_PER_SECOND: u64 = 1_000_000_000_000_000;
-
-/// The slowest period the specification permits: 100 ns, or 10 `MHz`.
-///
-/// Firmware reporting something slower has not described an HPET, and dividing
-/// by whatever it did say would produce a frequency the rest of the kernel
-/// would then trust.
-const HPET_MAX_PERIOD_FS: u64 = 0x05F5_E100;
 
 /// The 8254's input frequency: 105/88 `MHz`, fixed since the PC/AT and the one
 /// number on a PC that has never changed.
@@ -100,10 +101,11 @@ fn start_hpet(phys: u64) -> Result<&'static str, &'static str> {
     let base = crate::vmap::map_device(phys, HPET_WINDOW).map_err(|_| "could not map the HPET")?;
     let regs = Mmio::at(base);
 
-    let period_fs = u64::from(regs.read32(HPET_CAPABILITIES + 4));
-    if period_fs == 0 || period_fs > HPET_MAX_PERIOD_FS {
-        return Err("the HPET reports a period outside the specification");
-    }
+    // The register, not the table: firmware's copy of these bits is a hint.
+    let caps = Capabilities(read64(regs, hpet::CAPABILITIES));
+    let hpet_hz = caps
+        .counter_hz()
+        .ok_or("the HPET reports a period outside the specification")?;
 
     let enabled = read64(regs, HPET_CONFIG) | HPET_CONFIG_ENABLE;
     write64(regs, HPET_CONFIG, enabled);
@@ -120,9 +122,48 @@ fn start_hpet(phys: u64) -> Result<&'static str, &'static str> {
         }
     }
 
-    HPET.store(base, Ordering::Relaxed);
-    COUNTER_HZ.store(FEMTOS_PER_SECOND / period_fs, Ordering::Relaxed);
-    Ok("HPET")
+    if caps.counter_is_64_bit() {
+        HPET.store(base, Ordering::Relaxed);
+        COUNTER_HZ.store(hpet_hz, Ordering::Relaxed);
+        return Ok("HPET");
+    }
+
+    // Narrow: measure the TSC against it and hand out the TSC. `HPET` stays
+    // zero, so `counter_now` reads the TSC. The window stays mapped all the
+    // same: a mapped device window is how the kernel knows which registers
+    // are its own and no driver's.
+    let tsc_hz = calibrate_tsc_against_hpet(regs, hpet_hz, caps.counter_mask())
+        .ok_or("the HPET is 32 bits wide, and the TSC could not be measured against it")?;
+    COUNTER_HZ.store(tsc_hz, Ordering::Relaxed);
+    Ok("TSC, calibrated against a 32-bit HPET")
+}
+
+/// Count TSC ticks over [`CALIBRATION_MILLIS`] of an HPET counting at
+/// `hpet_hz`, whose counter is `mask` wide.
+///
+/// Ten milliseconds is about 143 thousand ticks of a 14.3 `MHz` counter, far
+/// inside one wrap, so a single wrap-aware subtraction is exact however close
+/// to the top the counter started.
+fn calibrate_tsc_against_hpet(regs: Mmio, hpet_hz: u64, mask: u64) -> Option<u64> {
+    let window = hpet_hz * CALIBRATION_MILLIS / 1000;
+    let hpet_start = main_counter(regs);
+    let tsc_start = cpu::rdtsc();
+
+    let mut spins = 0u32;
+    let hpet_elapsed = loop {
+        let elapsed = hpet::ticks_between(hpet_start, main_counter(regs), mask);
+        if elapsed >= window {
+            break elapsed;
+        }
+        spins = spins.saturating_add(1);
+        // As `calibrate_tsc`: a counter that stops is not one to hang on.
+        if spins > 200_000_000 {
+            return None;
+        }
+    };
+    let tsc_elapsed = cpu::rdtsc().checked_sub(tsc_start)?;
+
+    hpet::measured_hz(tsc_elapsed, hpet_elapsed, hpet_hz)
 }
 
 /// Measure the TSC against the PIT and use that.
@@ -225,4 +266,18 @@ pub(crate) fn counter_now() -> u64 {
 /// How fast it counts, or zero before [`init`].
 pub(crate) fn counter_hz() -> u64 {
     COUNTER_HZ.load(Ordering::Relaxed)
+}
+
+/// The width of the counter [`counter_now`] reads: all 64 bits, whichever it
+/// is, because a 32-bit HPET is only ever a calibration reference.
+const COUNTER_MASK: u64 = u64::MAX;
+
+/// Ticks from one [`counter_now`] reading to a later one, subtracted in the
+/// counter's own width.
+///
+/// The one place a caller measuring an interval should subtract, so the width
+/// is decided here, beside the choice of counter, and not assumed at each
+/// call site.
+pub(crate) fn ticks_between(earlier: u64, later: u64) -> u64 {
+    hpet::ticks_between(earlier, later, COUNTER_MASK)
 }

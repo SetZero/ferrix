@@ -216,7 +216,12 @@ between a program and an operating system.
   calibrated against the HPET, whose period firmware states exactly in
   femtoseconds so that nothing has to be measured. A machine with no HPET
   table falls back to the TSC calibrated against the PIT, which is the only
-  clock a PC is guaranteed to have. Every I/O APIC firmware described is
+  clock a PC is guaranteed to have. An HPET whose main counter is 32 bits
+  wide — capability bit 13, and common on AMD chipsets — wraps every five
+  minutes, so it is not handed out as the counter: the TSC is calibrated
+  against it, subtracting in 32 bits, and used instead. QEMU's HPET is
+  64-bit, so the boot test does not reach that path; `libs/acpi`'s `hpet`
+  module holds its arithmetic and its tests. Every I/O APIC firmware described is
   mapped and every input masked — not configured, because nothing is wired to
   a device line until stage 10, but quiesced, because a line firmware left
   enabled would arrive at a vector chosen by whoever wrote the firmware.
@@ -1608,7 +1613,7 @@ at three in the morning against a machine that reboots on a mistake.
 
 | Crate | Waiting for | Tests |
 |---|---|---|
-| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG, GIC MSI frames, DMAR, IORT. No AML, and there will be none. | 72 |
+| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG, GIC MSI frames, DMAR, IORT, and the HPET block's capability register with the arithmetic a 32-bit counter needs. No AML, and there will be none. | 77 |
 | `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. | 70 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |

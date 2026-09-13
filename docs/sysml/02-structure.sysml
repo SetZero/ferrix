@@ -516,7 +516,9 @@ package FerrixStructure {
         part clock : X86Clock {
             doc /* HPET main counter, whose period firmware states in
                  * femtoseconds. Falls back to the TSC calibrated against the
-                 * PIT on a machine with no HPET table. */
+                 * PIT on a machine with no HPET table, and to the TSC
+                 * calibrated against the HPET when its counter is 32 bits
+                 * wide and would wrap every five minutes. */
         }
         part serial : Serial16550 {
             doc /* COM1 through port I/O. The one in-kernel device. */

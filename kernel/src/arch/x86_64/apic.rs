@@ -183,7 +183,10 @@ fn calibrate(regs: Mmio) -> Result<(), &'static str> {
     regs.write32(LAPIC_TIMER_ICR, u32::MAX);
 
     let started = clock::counter_now();
-    while clock::counter_now().wrapping_sub(started) < window_ticks {}
+    // Subtracted in the counter's width, which `clock` decides: a 32-bit
+    // counter subtracted in 64 bits across its wrap reads as an interval of
+    // centuries, and the measurement would end at once with a tiny count.
+    while clock::ticks_between(started, clock::counter_now()) < window_ticks {}
     let remaining = regs.read32(LAPIC_TIMER_CCR);
 
     regs.write32(LAPIC_TIMER_ICR, 0);

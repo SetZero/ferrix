@@ -288,7 +288,8 @@ processor.
    interface in the device tree on ARMv7-A.
 3. On x86-64 there is no HPET and the PIT did not answer, so there is no
    counter; or the HPET is described but its counter does not advance, or
-   reports a period outside the specification.
+   reports a period outside the specification; or its counter is 32 bits wide
+   and the TSC, which is measured against it instead, did not count.
 4. Firmware left the generic timer's frequency register, `CNTFRQ_EL0` or
    `CNTFRQ`, at zero.
 5. The kernel address arena refused a device window for the controller, the HPET

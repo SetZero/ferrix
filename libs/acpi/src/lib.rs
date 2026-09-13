@@ -52,6 +52,7 @@
 #![forbid(unsafe_code)]
 
 pub mod dmar;
+pub mod hpet;
 pub mod iort;
 
 use core::fmt;
@@ -1711,11 +1712,11 @@ const HPET_VENDOR_SHIFT: u32 = 16;
 ///
 /// Deliberately thin. This table says *where* to look and what the block
 /// claims about itself; the authoritative width, period and comparator count
-/// are in the block's own capability register, which is `MMIO` and therefore
-/// not this crate's business. Firmware has been known to disagree with the
-/// hardware here, and when it does the hardware is right — so a caller should
-/// treat [`Hpet::comparators`] and [`Hpet::counter_is_64_bit`] as a hint and
-/// the register as the answer.
+/// are in the block's own capability register. Reading that is `MMIO` and the
+/// kernel's business; decoding it is [`hpet::Capabilities`]. Firmware has been
+/// known to disagree with the hardware here, and when it does the hardware is
+/// right — so a caller should treat [`Hpet::comparators`] and
+/// [`Hpet::counter_is_64_bit`] as a hint and the register as the answer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Hpet<'a> {
     /// The table these fields are read out of.
