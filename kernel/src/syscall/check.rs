@@ -26,7 +26,7 @@ use ferrix_linux_abi::types::{
     AT_FDCWD, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
     MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED,
     MREMAP_MAYMOVE, O_APPEND, O_CLOEXEC, O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_TRUNC, PROT_READ,
-    PROT_WRITE, SEEK_CUR, SEEK_END, SEEK_SET, TCGETS, TIOCGWINSZ,
+    PROT_WRITE, SEEK_CUR, SEEK_END, SEEK_SET, TCGETS, TCGETS2, TIOCGWINSZ,
 };
 
 use crate::arch;
@@ -1834,6 +1834,7 @@ fn terminal_settings_answer(process: &Process, page: u64) -> Result<(), &'static
     if read_termios()? != raw {
         return Err("TCGETS did not report what TCSETSW set");
     }
+    terminal_termios2_answers(process, page, settings, raw)?;
     uaccess::copy_to_user(process.space(), page + TTY_TERMIOS, &settings.to_bytes())
         .map_err(|_| "could not stage a termios")?;
     answers(
@@ -1873,6 +1874,107 @@ fn terminal_settings_answer(process: &Process, page: u64) -> Result<(), &'static
         Errno::ENOTTY,
         "an unknown terminal request was not ENOTTY",
     )
+}
+
+/// See [`check_the_console_answers_as_a_terminal`]: `TCGETS2` and `TCSETS2`,
+/// which a newer glibc's `tcgetattr` and `tcsetattr` ask instead. Called with
+/// the console in `raw` mode, and leaves it in `raw` mode.
+fn terminal_termios2_answers(
+    process: &Process,
+    page: u64,
+    settings: crate::fs::terminal::Termios,
+    raw: crate::fs::terminal::Termios,
+) -> Result<(), &'static str> {
+    use crate::fs::terminal::Termios;
+    use ferrix_linux_abi::types::{
+        B115200, BOTHER, CBAUD, TCGETS2, TCSETS2, TCSETSF2, TERMIOS_BYTES, TERMIOS2_BYTES,
+    };
+
+    // A `struct termios2` of `termios`'s flags, with `BOTHER` and the speed
+    // `rate` as a number where `termios` names a code.
+    let stage = |termios: Termios, rate: u32| {
+        let numbered = Termios {
+            cflag: (termios.cflag & !CBAUD) | BOTHER,
+            ..termios
+        };
+        let mut bytes = [0_u8; TERMIOS2_BYTES];
+        let all = numbered
+            .to_bytes()
+            .into_iter()
+            .chain(rate.to_le_bytes())
+            .chain(rate.to_le_bytes());
+        for (slot, byte) in bytes.iter_mut().zip(all) {
+            *slot = byte;
+        }
+        uaccess::copy_to_user(process.space(), page + TTY_TERMIOS, &bytes)
+            .map_err(|_| "could not stage a termios2")
+    };
+    let read_termios2 = || {
+        let mut bytes = [0_u8; TERMIOS2_BYTES];
+        uaccess::copy_from_user(process.space(), page + TTY_TERMIOS, &mut bytes)
+            .map_err(|_| "could not read a termios2 back")?;
+        Ok::<_, &'static str>(bytes)
+    };
+    let speeds = |bytes: &[u8; TERMIOS2_BYTES]| {
+        let (_, tail) = bytes.split_first_chunk::<TERMIOS_BYTES>()?;
+        let input = u32::from_le_bytes(*tail.first_chunk::<4>()?);
+        let output = u32::from_le_bytes(*tail.last_chunk::<4>()?);
+        Some((input, output))
+    };
+
+    // The same settings `TCGETS` reported, and the serial console's speed.
+    answers(
+        fd::sys_ioctl(process, 0, TCGETS2, page + TTY_TERMIOS),
+        0,
+        "TCGETS2 on the console was refused",
+    )?;
+    let got = read_termios2()?;
+    if got.first_chunk::<TERMIOS_BYTES>() != Some(&raw.to_bytes()) {
+        return Err("TCGETS2 did not report the settings TCGETS does");
+    }
+    if raw.cflag & CBAUD != B115200 || speeds(&got) != Some((115_200, 115_200)) {
+        return Err("TCGETS2 did not report the console's 115200 baud");
+    }
+
+    // `TCSETS2` changes them: back to canonical mode, with the speed given
+    // as a number, which settles on the code for it.
+    stage(settings, 115_200)?;
+    answers(
+        fd::sys_ioctl(process, 0, TCSETS2, page + TTY_TERMIOS),
+        0,
+        "TCSETS2 on the console was refused",
+    )?;
+    answers(
+        fd::sys_ioctl(process, 0, TCGETS, page + TTY_TERMIOS),
+        0,
+        "TCGETS on the console was refused",
+    )?;
+    let mut bytes = [0_u8; TERMIOS_BYTES];
+    uaccess::copy_from_user(process.space(), page + TTY_TERMIOS, &mut bytes)
+        .map_err(|_| "could not read a termios back")?;
+    if Termios::from_bytes(&bytes) != settings {
+        return Err("TCGETS did not report what TCSETS2 set");
+    }
+
+    // A speed no code names cannot be kept, and the console's stays.
+    stage(raw, 12_345)?;
+    answers(
+        fd::sys_ioctl(process, 0, TCSETSF2, page + TTY_TERMIOS),
+        0,
+        "TCSETSF2 on the console was refused",
+    )?;
+    answers(
+        fd::sys_ioctl(process, 0, TCGETS2, page + TTY_TERMIOS),
+        0,
+        "TCGETS2 on the console was refused",
+    )?;
+    let got = read_termios2()?;
+    if got.first_chunk::<TERMIOS_BYTES>() != Some(&raw.to_bytes())
+        || speeds(&got) != Some((115_200, 115_200))
+    {
+        return Err("TCSETSF2 at a speed no code names changed the console's speed");
+    }
+    Ok(())
 }
 
 /// See [`check_the_console_answers_as_a_terminal`].
@@ -2602,6 +2704,11 @@ fn check_descriptors_are_refused_by_kind(process: &Process, page: u64) -> Result
         fd::sys_ioctl(process, relative, TCGETS, page + AT_RESULT),
         Errno::ENOTTY,
         "a regular file answered TCGETS, as if it were a terminal",
+    )?;
+    refuses(
+        fd::sys_ioctl(process, relative, TCGETS2, page + AT_RESULT),
+        Errno::ENOTTY,
+        "a regular file answered TCGETS2, as if it were a terminal",
     )?;
     refuses(
         fd::sys_ioctl(process, relative, TIOCGWINSZ, page + AT_RESULT),

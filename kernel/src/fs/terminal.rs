@@ -46,9 +46,10 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_linux_abi::types::{
-    B115200, CLOCAL, CREAD, CS8, ECHO, ECHOCTL, ECHOE, ECHOK, ECHOKE, ECHONL, ICANON, ICRNL,
-    IEXTEN, IGNCR, INLCR, ISIG, ISTRIP, IXON, NCCS, NOFLSH, ONLCR, OPOST, SIGINT, SIGQUIT, SIGTSTP,
-    TERMIOS_BYTES, VEOF, VEOL, VEOL2, VERASE, VINTR, VKILL, VMIN, VQUIT, VSUSP, VTIME, VWERASE,
+    B115200, BAUD_RATES, BOTHER, CBAUD, CLOCAL, CREAD, CS8, ECHO, ECHOCTL, ECHOE, ECHOK, ECHOKE,
+    ECHONL, IBSHIFT, ICANON, ICRNL, IEXTEN, IGNCR, INLCR, ISIG, ISTRIP, IXON, NCCS, NOFLSH, ONLCR,
+    OPOST, SIGINT, SIGQUIT, SIGTSTP, TERMIOS_BYTES, TERMIOS2_BYTES, VEOF, VEOL, VEOL2, VERASE,
+    VINTR, VKILL, VMIN, VQUIT, VSUSP, VTIME, VWERASE,
 };
 use ferrix_sync::SpinLock;
 use ferrix_vfs::{Errno, Readiness};
@@ -156,6 +157,80 @@ impl Termios {
         }
     }
 
+    /// The kernel's `struct termios2`, as `TCGETS2` reports it: the structure
+    /// [`Termios::to_bytes`] gives, then the input and output speeds.
+    pub(crate) fn to_bytes2(self) -> [u8; TERMIOS2_BYTES] {
+        let mut bytes = [0_u8; TERMIOS2_BYTES];
+        let speeds = [self.input_speed(), self.output_speed()];
+        let all = self
+            .to_bytes()
+            .into_iter()
+            .chain(speeds.into_iter().flat_map(u32::to_le_bytes));
+        for (slot, byte) in bytes.iter_mut().zip(all) {
+            *slot = byte;
+        }
+        bytes
+    }
+
+    /// A `struct termios2` as a program wrote it, replacing settings
+    /// `current`: see [`Termios::with_speeds`] for what becomes of its speeds.
+    pub(crate) fn from_bytes2(bytes: &[u8; TERMIOS2_BYTES], current: Termios) -> Termios {
+        let Some((head, speeds)) = bytes.split_first_chunk::<TERMIOS_BYTES>() else {
+            return current;
+        };
+        let word = |four: Option<&[u8; 4]>| four.copied().map_or(0, u32::from_le_bytes);
+        let input = word(speeds.first_chunk::<4>());
+        let output = word(speeds.last_chunk::<4>());
+        Termios::from_bytes(head).with_speeds(input, output, current)
+    }
+
+    /// These settings, with a speed given as a number rather than a `B` code
+    /// -- `BOTHER` in `c_cflag` -- turned into the code for that number.
+    ///
+    /// The console holds no speed of its own: the speed is whatever `c_cflag`
+    /// names, so a number no `B` code names cannot be kept, and the speed
+    /// `current` has stays instead. That is what a serial driver that cannot
+    /// run at the rate asked for does on Linux, and a serial console's speed
+    /// is the one thing here that setting never changes anyway. A structure
+    /// with no speeds in it -- `TCSETS`'s -- passes `current`'s own.
+    pub(crate) fn with_speeds(self, input: u32, output: u32, current: Termios) -> Termios {
+        let settle = |code: u32, rate: u32, kept: u32| {
+            if code != BOTHER {
+                return code;
+            }
+            BAUD_RATES
+                .iter()
+                .find(|&&(_, known)| known == rate)
+                .map_or(kept, |&(code, _)| code)
+        };
+        let output = settle(self.cflag & CBAUD, output, current.cflag & CBAUD);
+        let input = settle(
+            (self.cflag >> IBSHIFT) & CBAUD,
+            input,
+            (current.cflag >> IBSHIFT) & CBAUD,
+        );
+        Termios {
+            cflag: (self.cflag & !(CBAUD | (CBAUD << IBSHIFT))) | output | (input << IBSHIFT),
+            ..self
+        }
+    }
+
+    /// The output speed `c_cflag` names, in bits a second; zero for a code
+    /// that names none.
+    pub(crate) fn output_speed(&self) -> u32 {
+        rate(self.cflag & CBAUD)
+    }
+
+    /// The input speed `c_cflag` names. Its input bits are zero unless a
+    /// program split the speeds, and zero there means the output speed, as
+    /// Linux reads it.
+    pub(crate) fn input_speed(&self) -> u32 {
+        match (self.cflag >> IBSHIFT) & CBAUD {
+            0 => self.output_speed(),
+            code => rate(code),
+        }
+    }
+
     /// Whether reads are a line at a time.
     pub(crate) const fn canonical(&self) -> bool {
         self.lflag & ICANON != 0
@@ -172,6 +247,14 @@ impl Termios {
         let special = self.cc(index);
         special != 0 && special == byte
     }
+}
+
+/// The bits a second a `B` speed code names, or zero for one that names none.
+fn rate(code: u32) -> u32 {
+    BAUD_RATES
+        .iter()
+        .find(|&&(known, _)| known == code)
+        .map_or(0, |&(_, rate)| rate)
 }
 
 /// `struct winsize`: rows, columns, and the two pixel sizes nobody fills in.

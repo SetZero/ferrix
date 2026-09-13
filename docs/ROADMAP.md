@@ -1138,7 +1138,10 @@ console goes to `syscall/tty.rs`. It refused `TCGETS` while the console edited
 and echoed every line itself, because `sh -i` would then switch to raw mode
 and echo as well, doubling every character. Since stage 7 made the console a
 terminal that honours `ICANON` and `ECHO` (bc8c64b, 6de8907), `TCGETS`,
-`TCSETS`, `TIOCGWINSZ` and the job-control requests are answered.
+`TCSETS`, `TIOCGWINSZ` and the job-control requests are answered. So are
+`TCGETS2` and `TCSETS2`, which a newer glibc's `tcgetattr` asks instead:
+refusing them made Ubuntu's static busybox decide it had no terminal, so its
+`stty -a`, `tty`, `login` and `less` failed where Alpine's worked.
 
 **Done — `/dev` and `/proc`.** devfs holds `null`, `zero`, `full`, `random`,
 `urandom`, `tty` and `console`, numbered as Linux numbers them. A device node

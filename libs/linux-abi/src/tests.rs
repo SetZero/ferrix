@@ -1030,6 +1030,76 @@ fn terminal_ioctls_match_the_generic_header() {
 }
 
 #[test]
+fn termios2_requests_carry_their_structure_size() {
+    // `_IOC(dir, type, nr, size)` in `asm-generic/ioctl.h`: eight bits of
+    // number, eight of type, fourteen of size, two of direction, with
+    // `_IOC_READ` 2 and `_IOC_WRITE` 1. x86-64, AArch64 and ARMv7-A all take
+    // the generic encoding.
+    let size = u32::try_from(types::TERMIOS2_BYTES).expect("a small size");
+    let ioc = |direction: u32, nr: u32| (direction << 30) | (size << 16) | (0x54 << 8) | nr;
+    assert_eq!(types::TCGETS2, ioc(2, 0x2A), "TCGETS2 is _IOR('T', 0x2A)");
+    assert_eq!(types::TCSETS2, ioc(1, 0x2B), "TCSETS2 is _IOW('T', 0x2B)");
+    assert_eq!(types::TCSETSW2, ioc(1, 0x2C), "TCSETSW2 is _IOW('T', 0x2C)");
+    assert_eq!(types::TCSETSF2, ioc(1, 0x2D), "TCSETSF2 is _IOW('T', 0x2D)");
+    // What the disassembly of glibc's `tcgetattr` passes.
+    assert_eq!(types::TCGETS2, 0x802C_542A);
+}
+
+#[test]
+fn termios2_matches_the_generic_termbits_header() {
+    #[repr(C)]
+    struct Termios2 {
+        c_iflag: u32,
+        c_oflag: u32,
+        c_cflag: u32,
+        c_lflag: u32,
+        c_line: u8,
+        c_cc: [u8; types::NCCS],
+        c_ispeed: u32,
+        c_ospeed: u32,
+    }
+    assert_eq!(size_of::<Termios2>(), types::TERMIOS2_BYTES);
+    assert_eq!(offset_of!(Termios2, c_cc), 17);
+    assert_eq!(offset_of!(Termios2, c_ispeed), types::TERMIOS_BYTES);
+    assert_eq!(offset_of!(Termios2, c_ospeed), types::TERMIOS_BYTES + 4);
+    assert_eq!(align_of::<u32>(), 4, "speed_t aligns to four on all three");
+}
+
+#[test]
+fn baud_rates_match_the_termbits_headers() {
+    assert_eq!(
+        (types::CBAUD, types::BOTHER, types::IBSHIFT),
+        (0x100F, 0x1000, 16)
+    );
+    let codes: HashSet<u32> = types::BAUD_RATES.iter().map(|&(code, _)| code).collect();
+    assert_eq!(
+        codes.len(),
+        types::BAUD_RATES.len(),
+        "every code is listed once"
+    );
+    assert!(!codes.contains(&types::BOTHER), "BOTHER names no rate");
+    assert!(codes.iter().all(|code| code & !types::CBAUD == 0));
+    assert!(
+        types::BAUD_RATES
+            .windows(2)
+            .all(|pair| pair[0].1 < pair[1].1),
+        "the rates rise with the codes"
+    );
+    for (code, rate) in [
+        (0x000D, 9600),
+        (0x000F, 38400),
+        (0x1001, 57600),
+        (0x1002, 115_200),
+    ] {
+        assert!(
+            types::BAUD_RATES.contains(&(code, rate)),
+            "{code:#x} is {rate}"
+        );
+    }
+    assert!(types::BAUD_RATES.contains(&(0x100F, 4_000_000)), "B4000000");
+}
+
+#[test]
 fn termios_matches_the_generic_termbits_header() {
     // Four `tcflag_t`, `c_line`, `c_cc[NCCS]`: no padding, since every field
     // after the flags is a byte.

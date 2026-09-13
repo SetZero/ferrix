@@ -1332,6 +1332,20 @@ pub const TIOCINQ: u32 = FIONREAD;
 pub const TIOCNOTTY: u32 = 0x5422;
 /// Read the session the terminal controls: `tcgetsid`.
 pub const TIOCGSID: u32 = 0x5429;
+/// Read a terminal's settings with their speeds, `struct termios2`. What
+/// glibc's `tcgetattr` asks since glibc stopped translating `struct termios`.
+///
+/// `_IOR('T', 0x2A, struct termios2)` in `asm-generic/ioctls.h`: direction
+/// `_IOC_READ` (2) in the top two bits, then [`TERMIOS2_BYTES`] in the next
+/// fourteen, then `'T'` and the number. The size is part of the number, so it
+/// is the same on all three architectures because the structure is.
+pub const TCGETS2: u32 = 0x802C_542A;
+/// [`TCSETS`], with speeds: `_IOW('T', 0x2B, struct termios2)`.
+pub const TCSETS2: u32 = 0x402C_542B;
+/// [`TCSETSW`], with speeds: `_IOW('T', 0x2C, struct termios2)`.
+pub const TCSETSW2: u32 = 0x402C_542C;
+/// [`TCSETSF`], with speeds: `_IOW('T', 0x2D, struct termios2)`.
+pub const TCSETSF2: u32 = 0x402C_542D;
 
 /// Bytes in the kernel's `struct termios` on all three architectures: four
 /// `unsigned int` flag words, `c_line`, and `NCCS` (19) control characters.
@@ -1342,6 +1356,10 @@ pub const TIOCGSID: u32 = 0x5429;
 pub const TERMIOS_BYTES: usize = 36;
 /// Control characters in the kernel's `struct termios`.
 pub const NCCS: usize = 19;
+/// Bytes in `struct termios2`: `struct termios`, then `c_ispeed` and
+/// `c_ospeed`, two `speed_t` (`unsigned int`). [`TERMIOS_BYTES`] is already a
+/// multiple of four, so there is no padding before them on any of the three.
+pub const TERMIOS2_BYTES: usize = 44;
 
 /// `c_cc` index: the character that raises `SIGINT`.
 pub const VINTR: usize = 0;
@@ -1384,6 +1402,51 @@ pub const ONLCR: u32 = 0x04;
 
 /// `c_cflag`: 115200 baud.
 pub const B115200: u32 = 0x1002;
+/// `c_cflag`: the bits that name the output speed.
+pub const CBAUD: u32 = 0x100F;
+/// `c_cflag`: a speed given as a number, in `struct termios2`'s `c_ospeed`
+/// (or `c_ispeed`, shifted by [`IBSHIFT`]), rather than as a `B` code.
+pub const BOTHER: u32 = 0x1000;
+/// How far `CIBAUD`, the input speed's bits, sit above [`CBAUD`]'s. Zero
+/// there means the input speed is the output speed.
+pub const IBSHIFT: u32 = 16;
+/// Every `B` speed code with the bits a second it names, from
+/// `asm-generic/termbits-common.h` (`B0` to `B38400`) and
+/// `asm-generic/termbits.h` (`B57600` to `B4000000`), which all three
+/// architectures use.
+pub const BAUD_RATES: [(u32, u32); 31] = [
+    (0x0000, 0),
+    (0x0001, 50),
+    (0x0002, 75),
+    (0x0003, 110),
+    (0x0004, 134),
+    (0x0005, 150),
+    (0x0006, 200),
+    (0x0007, 300),
+    (0x0008, 600),
+    (0x0009, 1200),
+    (0x000A, 1800),
+    (0x000B, 2400),
+    (0x000C, 4800),
+    (0x000D, 9600),
+    (0x000E, 19200),
+    (0x000F, 38400),
+    (0x1001, 57600),
+    (B115200, 115_200),
+    (0x1003, 230_400),
+    (0x1004, 460_800),
+    (0x1005, 500_000),
+    (0x1006, 576_000),
+    (0x1007, 921_600),
+    (0x1008, 1_000_000),
+    (0x1009, 1_152_000),
+    (0x100A, 1_500_000),
+    (0x100B, 2_000_000),
+    (0x100C, 2_500_000),
+    (0x100D, 3_000_000),
+    (0x100E, 3_500_000),
+    (0x100F, 4_000_000),
+];
 /// `c_cflag`: eight bits a character.
 pub const CS8: u32 = 0x30;
 /// `c_cflag`: the receiver is enabled.

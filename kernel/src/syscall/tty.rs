@@ -15,6 +15,16 @@
 //! because `crate::fs::terminal` honours `ICANON` and `ECHO`: raw mode really
 //! is raw.
 //!
+//! # `struct termios2`
+//!
+//! A newer glibc's `tcgetattr` and `tcsetattr` ask `TCGETS2` and `TCSETS2`
+//! instead, whose structure adds the input and output speeds as numbers, and
+//! Ubuntu's static busybox is linked against one. Refusing them made `isatty`
+//! false, so its `stty`, `tty`, `login` and `less` all decided there was no
+//! terminal. They take the same settings as their older twins; the speeds are
+//! the ones `c_cflag` names, and a speed given as a number (`BOTHER`) becomes
+//! the code for it -- see `Termios::with_speeds`.
+//!
 //! # The controlling terminal
 //!
 //! Linux gives a session leader with no controlling terminal the first
@@ -33,9 +43,9 @@ use alloc::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
-    FIONREAD, TCFLSH, TCGETS, TCIFLUSH, TCIOFLUSH, TCION, TCOFLUSH, TCSETS, TCSETSF, TCSETSW,
-    TCXONC, TERMIOS_BYTES, TIOCGPGRP, TIOCGSID, TIOCGWINSZ, TIOCNOTTY, TIOCSCTTY, TIOCSPGRP,
-    TIOCSWINSZ,
+    FIONREAD, TCFLSH, TCGETS, TCGETS2, TCIFLUSH, TCIOFLUSH, TCION, TCOFLUSH, TCSETS, TCSETS2,
+    TCSETSF, TCSETSF2, TCSETSW, TCSETSW2, TCXONC, TERMIOS_BYTES, TERMIOS2_BYTES, TIOCGPGRP,
+    TIOCGSID, TIOCGWINSZ, TIOCNOTTY, TIOCSCTTY, TIOCSPGRP, TIOCSWINSZ,
 };
 use ferrix_vfs::OpenFile;
 
@@ -60,17 +70,24 @@ pub(crate) fn ioctl(
             let termios = terminal::with(|terminal| terminal.discipline.termios());
             put(process, arg, &termios.to_bytes())
         }
+        TCGETS2 => {
+            let termios = terminal::with(|terminal| terminal.discipline.termios());
+            put(process, arg, &termios.to_bytes2())
+        }
         TCSETS | TCSETSW | TCSETSF => {
             let mut bytes = [0_u8; TERMIOS_BYTES];
             get(process, arg, &mut bytes)?;
-            let termios = Termios::from_bytes(&bytes);
-            // Nothing is buffered on the way out, so "once output has
-            // drained" is now, and `TCSETSW` is `TCSETS`.
-            terminal::with(|terminal| {
-                if request == TCSETSF {
-                    terminal.discipline.flush_input();
-                }
-                terminal.discipline.set_termios(termios);
+            set(request == TCSETSF, |current| {
+                let speeds = (current.input_speed(), current.output_speed());
+                Termios::from_bytes(&bytes).with_speeds(speeds.0, speeds.1, current)
+            });
+            Ok(0)
+        }
+        TCSETS2 | TCSETSW2 | TCSETSF2 => {
+            let mut bytes = [0_u8; TERMIOS2_BYTES];
+            get(process, arg, &mut bytes)?;
+            set(request == TCSETSF2, |current| {
+                Termios::from_bytes2(&bytes, current)
             });
             Ok(0)
         }
@@ -108,6 +125,21 @@ pub(crate) fn ioctl(
         }
         _ => Err(Errno::ENOTTY),
     }
+}
+
+/// Change the console's settings to what `settings` makes of the current
+/// ones, discarding unread input first if `flush` -- the `F` requests.
+///
+/// Nothing is buffered on the way out, so "once output has drained" is now,
+/// and the `W` requests are the plain ones.
+fn set(flush: bool, settings: impl FnOnce(Termios) -> Termios) {
+    terminal::with(|terminal| {
+        if flush {
+            terminal.discipline.flush_input();
+        }
+        let termios = settings(terminal.discipline.termios());
+        terminal.discipline.set_termios(termios);
+    });
 }
 
 /// The requests about sessions and process groups.
