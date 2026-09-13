@@ -164,6 +164,20 @@ What is left in `kernel/` is the part that genuinely needs a CPU, and it is
 covered by the QEMU boot test instead: every roadmap stage's exit criterion
 becomes a boot test and stays in CI forever after.
 
+## Miri
+
+Miri interprets the host tests of the `libs/` crates the kernel leans on
+hardest, checking every borrow, index and pointer against the allocation it
+came from. CI's Miri job names each crate in its own step, with the reason it
+is there; `cargo xtask check --miri` runs the same list locally, and an xtask
+test fails when the two disagree.
+
+A test that is merely slow under interpretation runs shorter under
+`cfg(miri)` rather than being skipped: the frame allocator's random workload
+runs 2,000 of its 20,000 steps there. A test that cannot run under Miri at all
+gets `#[cfg_attr(miri, ignore)]` with the reason beside it, never a blanket
+skip of the crate.
+
 ## Fuzzing
 
 The surfaces that parse bytes somebody else chose are small in a kernel, but

@@ -23,6 +23,8 @@ pub(crate) struct Args {
     pub(crate) fast: bool,
     /// `--ferrousli`: `check` also runs ferrousli's gates, its own workspace.
     pub(crate) ferrousli: bool,
+    /// `--miri`: add CI's Miri steps to `check`.
+    pub(crate) miri: bool,
     /// `-h`/`--help`.
     pub(crate) help: bool,
     /// `--smp`, virtual CPUs.
@@ -65,6 +67,7 @@ impl Args {
                 "--gdb" => args.gdb = true,
                 "--fast" => args.fast = true,
                 "--ferrousli" => args.ferrousli = true,
+                "--miri" => args.miri = true,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
                 "--smp" => args.smp = number(&mut items, "--smp")?,
                 "--memory" => args.memory = number(&mut items, "--memory")?,
@@ -149,6 +152,14 @@ mod tests {
         assert_eq!(args.single_arch().unwrap(), Arch::AArch64);
         assert!(args.release);
         assert_eq!(args.timeout, 30);
+    }
+
+    #[test]
+    fn miri_is_off_unless_asked_for() {
+        let args = parse(&["check", "--fast", "--miri"]).unwrap();
+        assert!(args.fast && args.miri);
+        let plain = parse(&["check"]).unwrap();
+        assert!(!plain.fast && !plain.miri, "both are opt-in");
     }
 
     #[test]

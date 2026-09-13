@@ -96,8 +96,10 @@ package FerrixAssurance {
     }
     #implemented verification miri : Gate {
         attribute :>> command = "cargo miri test";
-        doc /* libs/elf, libs/bootinfo and libs/ustack today. frame, heap and
-             * paging are owed. */
+        doc /* libs/elf, bootinfo, ustack, objects, vfs, pci, block, blkring, native, virtio-blk, frame, heap and paging. cargo xtask check --miri runs the same list,
+             * and an xtask test holds it to the workflow. A test too slow to
+             * interpret runs shorter under cfg(miri) rather than being
+             * ignored. */
     }
     #implemented verification fuzz : Gate {
         attribute :>> command = "cargo fuzz run elf_parse; cargo fuzz run frame_alloc; cargo fuzz run ustack_build";

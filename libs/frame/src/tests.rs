@@ -426,7 +426,14 @@ fn a_long_random_workload_never_hands_out_the_same_frame_twice() {
     let mut owner = vec![0u32; FRAMES];
     let mut next_id = 1u32;
 
-    for step in 0..20_000 {
+    // Miri interprets every step, and the books are balanced over the whole
+    // live list after each one: at twenty thousand steps this one test was
+    // 97% of the crate's nine-minute Miri run. Two thousand still takes the
+    // arena through thousands of splits and merges, which is where an aliasing
+    // mistake in the free lists would show; the full count stays on the host,
+    // where it costs a fraction of a second.
+    let steps = if cfg!(miri) { 2_000 } else { 20_000 };
+    for step in 0..steps {
         let allocating = live.is_empty() || rng.below(100) < 55;
 
         if allocating {

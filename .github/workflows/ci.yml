@@ -491,6 +491,30 @@ jobs:
       - name: Miri (virtio-blk driver)
         run: cargo +nightly miri test -p ferrix-virtio-blk --lib
 
+      # The buddy allocator, which every page in the kernel comes from. Its
+      # state is one array of entries addressed by frame number, split and
+      # merged through index arithmetic on a slice the kernel lends it for its
+      # whole life; Miri checks every one of those indices and borrows. The
+      # long random workload runs a tenth of its host length here: at full
+      # length it alone was nine minutes of interpretation.
+      - name: Miri (frame allocator)
+        run: cargo +nightly miri test -p ferrix-frame --lib
+
+      # The kernel heap. It keeps its free lists inside the free objects,
+      # read and written through an unsafe trait at addresses it computes from
+      # a page and a size class, so a link written one object off lands in a
+      # neighbour. The tests back that trait with real buffers, and Miri checks
+      # each link against the buffer it was carved from.
+      - name: Miri (heap)
+        run: cargo +nightly miri test -p ferrix-heap --lib
+
+      # Page-table construction for every encoding the kernel builds: the
+      # three CPUs', VT-d's second level and the SMMU's stage 2. The walk
+      # derives each next table's index from the descriptor it just read,
+      # which is exactly the arithmetic this job's comment is about.
+      - name: Miri (page tables)
+        run: cargo +nightly miri test -p ferrix-paging --lib
+
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.
   #

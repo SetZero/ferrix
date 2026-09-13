@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "9e1be3910be6690f78333e820de36a830da50940c1edd0ca754a2b21ce7d83af",
+  "digest": "d8422624fa3d425a60052f6b0f54019506ca99612af416fd3bda3074b5ae8eb0",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -15902,7 +15902,7 @@
           "kind": "verification",
           "type": "Gate",
           "maturity": "implemented",
-          "doc": "libs/elf, libs/bootinfo and libs/ustack today. frame, heap and paging are owed.",
+          "doc": "libs/elf, bootinfo, ustack, objects, vfs, pci, block, blkring, native, virtio-blk, frame, heap and paging. cargo xtask check --miri runs the same list, and an xtask test holds it to the workflow. A test too slow to interpret runs shorter under cfg(miri) rather than being ignored.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
             "line": 97
@@ -15930,7 +15930,7 @@
           "doc": "Replays the committed corpus first, searches second: an input that crashed once fails again in seconds. ustack_build asserts a round trip rather than the absence of a crash -- whatever the builder accepts, a walk that knows only the stack pointer must recover exactly what went in -- which is how it found that a string containing a NUL built an image that read back short.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 102
+            "line": 104
           },
           "children": [
             {
@@ -15941,7 +15941,7 @@
               "value": "\"cargo fuzz run elf_parse; cargo fuzz run frame_alloc; cargo fuzz run ustack_build\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 103
+                "line": 105
               }
             }
           ]
@@ -15955,7 +15955,7 @@
           "doc": "One bootable FAT32 image per architecture, byte-for-byte reproducible, uploaded as a CI artifact. xtask refuses to build a kernel with RUSTFLAGS set, because cargo lets that variable replace the per-target flags and silently drop the linker script.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 111
+            "line": 113
           },
           "children": [
             {
@@ -15966,7 +15966,7 @@
               "value": "\"cargo xtask build --arch all --release\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 112
+                "line": 114
               }
             }
           ]
@@ -15980,7 +15980,7 @@
           "doc": "The gate that answers the question the others cannot. An OS that compiles and does not boot is not a passing build.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 119
+            "line": 121
           },
           "children": [
             {
@@ -15991,7 +15991,7 @@
               "value": "\"cargo xtask test-boot --arch all\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 120
+                "line": 122
               }
             },
             {
@@ -16000,7 +16000,7 @@
               "kind": "objective",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 123
+                "line": 125
               }
             }
           ]
@@ -16012,7 +16012,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 130
+            "line": 132
           },
           "children": [
             {
@@ -16022,7 +16022,7 @@
               "type": "String",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 131
+                "line": 133
               }
             },
             {
@@ -16032,7 +16032,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 132
+                "line": 134
               }
             }
           ]
@@ -16046,7 +16046,7 @@
           "doc": "An absolute cap, because assembly here is a fixed cost that a scheduler, a filesystem or a driver must add nothing to. The ratio is a backstop and the target is the direction of travel: reached by writing the operating system, not by shrinking the vector table. 303 lines and about 99.2% Rust when this was written, across fifteen sites.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 135
+            "line": 137
           },
           "children": [
             {
@@ -16057,7 +16057,7 @@
               "value": "800",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 142
+                "line": 144
               }
             },
             {
@@ -16068,7 +16068,7 @@
               "value": "0.06",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 143
+                "line": 145
               }
             },
             {
@@ -16079,7 +16079,7 @@
               "value": "0.001",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 144
+                "line": 146
               }
             },
             {
@@ -16091,7 +16091,7 @@
               "value": "( AssemblySite(file = \"boot/src/arch/x86_64.rs\", maxLines = 30), AssemblySite(file = \"boot/src/arch/aarch64.rs\", maxLines = 60), AssemblySite(file = \"boot/src/arch/armv7a.rs\", maxLines = 60), AssemblySite(file = \"kernel/src/arch/x86_64/cpu.rs\", maxLines = 100), AssemblySite(file = \"kernel/src/arch/aarch64/cpu.rs\", maxLines = 100), AssemblySite(file = \"kernel/src/arch/armv7a/cpu.rs\", maxLines = 100), AssemblySite(file = \"kernel/src/arch/x86_64/trap.rs\", maxLines = 90), AssemblySite(file = \"kernel/src/arch/aarch64/trap.rs\", maxLines = 90), AssemblySite(file = \"kernel/src/arch/armv7a/trap.rs\", maxLines = 90), AssemblySite(file = \"kernel/src/arch/x86_64/smp.rs\", maxLines = 40), AssemblySite(file = \"kernel/src/arch/aarch64/smp.rs\", maxLines = 30), AssemblySite(file = \"kernel/src/arch/armv7a/smp.rs\", maxLines = 40), AssemblySite(file = \"kernel/src/arch/x86_64/switch.rs\", maxLines = 30), AssemblySite(file = \"kernel/src/arch/aarch64/switch.rs\", maxLines = 30), AssemblySite(file = \"kernel/src/arch/armv7a/switch.rs\", maxLines = 30) )",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 161
+                "line": 163
               }
             },
             {
@@ -16105,7 +16105,7 @@
               "doc": "The SYSCALL / SVC trampolines: the last entries the list is meant to gain.",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 162
+                "line": 164
               }
             }
           ]
@@ -16117,7 +16117,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 173
+            "line": 175
           },
           "children": [
             {
@@ -16126,7 +16126,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 174
+                "line": 176
               }
             },
             {
@@ -16135,7 +16135,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 175
+                "line": 177
               }
             },
             {
@@ -16144,7 +16144,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 176
+                "line": 178
               }
             },
             {
@@ -16153,7 +16153,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 177
+                "line": 179
               }
             }
           ]
@@ -16165,7 +16165,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 180
+            "line": 182
           },
           "children": [
             {
@@ -16175,7 +16175,7 @@
               "type": "String",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 181
+                "line": 183
               }
             },
             {
@@ -16186,7 +16186,7 @@
               "multiplicity": "1..*",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 182
+                "line": 184
               }
             }
           ]
@@ -16198,7 +16198,7 @@
           "type": "LayerReach",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 185
+            "line": 187
           },
           "children": [
             {
@@ -16209,7 +16209,7 @@
               "value": "\"libs/\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 186
+                "line": 188
               }
             },
             {
@@ -16220,7 +16220,7 @@
               "value": "(TestReach::CargoTest, TestReach::Miri, TestReach::Fuzzer)",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 187
+                "line": 189
               }
             }
           ]
@@ -16232,7 +16232,7 @@
           "type": "LayerReach",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 189
+            "line": 191
           },
           "children": [
             {
@@ -16243,7 +16243,7 @@
               "value": "\"boot/\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 190
+                "line": 192
               }
             },
             {
@@ -16254,7 +16254,7 @@
               "value": "(TestReach::QemuBoot)",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 191
+                "line": 193
               }
             }
           ]
@@ -16267,7 +16267,7 @@
           "doc": "Miri cannot interpret a privileged instruction and a fuzzer cannot drive a page-fault handler, which is the whole argument for libs/.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 193
+            "line": 195
           },
           "children": [
             {
@@ -16278,7 +16278,7 @@
               "value": "\"kernel/\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 194
+                "line": 196
               }
             },
             {
@@ -16289,7 +16289,7 @@
               "value": "(TestReach::QemuBoot)",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 195
+                "line": 197
               }
             }
           ]
@@ -16301,7 +16301,7 @@
           "type": "LayerReach",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 200
+            "line": 202
           },
           "children": [
             {
@@ -16312,7 +16312,7 @@
               "value": "\"xtask/\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 201
+                "line": 203
               }
             },
             {
@@ -16323,7 +16323,7 @@
               "value": "(TestReach::CargoTest)",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 202
+                "line": 204
               }
             }
           ]
@@ -16338,7 +16338,7 @@
           "doc": "Every CI run builds an image with real mkfs.btrfs, mounts it under Ferrix in QEMU, runs a workload, and hands the result to host btrfs check. A filesystem only our own reader can read is not a filesystem.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 209
+            "line": 211
           },
           "children": [
             {
@@ -16348,7 +16348,7 @@
               "type": "Ferrix",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 215
+                "line": 217
               }
             }
           ]
@@ -16363,7 +16363,7 @@
           "doc": "Kill QEMU at a random point inside a transaction, remount, replay, btrfs check again, over hundreds of seeds. The test a CoW filesystem actually has to pass.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 217
+            "line": 219
           },
           "children": [
             {
@@ -16373,7 +16373,7 @@
               "type": "Ferrix",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 222
+                "line": 224
               }
             },
             {
@@ -16383,7 +16383,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 223
+                "line": 225
               }
             }
           ]
@@ -16398,7 +16398,7 @@
           "doc": "Wake-up latency on a HardRt domain while a Throughput domain on other cores is saturated; the maximum must be inside the stated bound.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
-            "line": 225
+            "line": 227
           },
           "children": [
             {
@@ -16408,7 +16408,7 @@
               "type": "Ferrix",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 230
+                "line": 232
               }
             },
             {
@@ -16418,7 +16418,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
-                "line": 231
+                "line": 233
               }
             }
           ]
@@ -17828,7 +17828,7 @@
       ],
       "origin": "FerrixAssurance::bootTest",
       "file": "docs/sysml/11-assurance.sysml",
-      "line": 123
+      "line": 125
     },
     {
       "kind": "verify",
@@ -17838,7 +17838,7 @@
       ],
       "origin": "FerrixAssurance::bootTest",
       "file": "docs/sysml/11-assurance.sysml",
-      "line": 123
+      "line": 125
     },
     {
       "kind": "import",

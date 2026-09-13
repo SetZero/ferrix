@@ -100,6 +100,15 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         ferrousli(&root)?;
     }
 
+    // Opt-in, because it is minutes rather than seconds and needs a nightly
+    // toolchain with the miri component: the same crates, in the same order,
+    // as CI's Miri job, so a UB report can be reproduced before pushing.
+    if args.miri {
+        for package in MIRI_PACKAGES {
+            step(&format!("miri ({package})"), || miri(package))?;
+        }
+    }
+
     if args.fast {
         println!("\nchecked (--fast: cross-target clippy skipped)");
         return Ok(());
@@ -192,6 +201,45 @@ const FREESTANDING: &[&str] = &[
     "ferrix-blk",
 ];
 
+/// The crates CI's Miri job interprets, in its order.
+///
+/// A test below reads `.github/workflows/ci.yml` and fails when the two
+/// disagree, so a step added to one and not the other is found by `cargo
+/// xtask check` rather than by a contributor who trusted `--miri`.
+const MIRI_PACKAGES: [&str; 13] = [
+    "ferrix-elf",
+    "ferrix-bootinfo",
+    "ferrix-ustack",
+    "ferrix-objects",
+    "ferrix-vfs",
+    "ferrix-pci",
+    "ferrix-block",
+    "ferrix-blkring",
+    "ferrix-native",
+    "ferrix-virtio-blk",
+    "ferrix-frame",
+    "ferrix-heap",
+    "ferrix-paging",
+];
+
+/// `cargo +nightly miri test -p <package> --lib`.
+///
+/// Through the rustup proxy by name rather than [`cargo_binary`]: `CARGO` is
+/// the pinned toolchain's own cargo, which does not understand `+nightly`. The
+/// variables the outer cargo exported would otherwise pin the inner one back
+/// to that toolchain.
+fn miri(package: &str) -> Result<()> {
+    let mut command = Command::new("cargo");
+    let _ = command
+        .current_dir(paths::workspace_root())
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .env_remove("CARGO")
+        .env_remove("RUSTC")
+        .env_remove("RUSTDOC")
+        .args(["+nightly", "miri", "test", "-p", package, "--lib"]);
+    cargo::run(command, "cargo +nightly miri test")
+}
+
 /// Announce a gate, run it, and report.
 fn step(name: &str, body: impl FnOnce() -> Result<()>) -> Result<()> {
     println!("\n== {name}");
@@ -244,4 +292,30 @@ fn python_interpreter() -> Option<&'static str> {
             .status()
             .is_ok_and(|status| status.success())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn miri_runs_the_crates_ci_interprets_in_the_same_order() {
+        let workflow =
+            std::fs::read_to_string(paths::workspace_root().join(".github/workflows/ci.yml"))
+                .unwrap();
+        let in_ci: Vec<&str> = workflow
+            .lines()
+            .filter_map(|line| {
+                let rest = line
+                    .trim()
+                    .strip_prefix("run: cargo +nightly miri test -p ")?;
+                rest.split_whitespace().next()
+            })
+            .collect();
+        assert_eq!(
+            in_ci, MIRI_PACKAGES,
+            "`cargo xtask check --miri` and CI's Miri job must name the same \
+             crates; change MIRI_PACKAGES in xtask/src/check.rs with the workflow"
+        );
+    }
 }

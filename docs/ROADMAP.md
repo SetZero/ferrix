@@ -2831,11 +2831,16 @@ builder now refuses it. Nothing about that bug is visible from the kernel side
 been found, if at all, by whoever was debugging a shell that mangled its own
 arguments.
 
-Miri is further behind than fuzzing. CI runs it over `libs/elf`,
-`libs/bootinfo`, `libs/ustack`, `libs/objects`, `libs/vfs` and `libs/pci`, although the CI file's own comment names the
-page-table arithmetic and the allocators as the reason the job exists — so
-`frame`, `heap` and `paging`, all running in the kernel today, are owed a Miri
-step too, and ahead of every crate in the table.
+Miri was further behind than fuzzing, and the crates the CI file's own comment
+names as the reason the job exists had no step. They have one now: CI
+interprets `libs/elf`, `libs/bootinfo`, `libs/ustack`, `libs/objects`,
+`libs/vfs`, `libs/pci`, `libs/block`, and the three the kernel runs on every
+allocation and every mapping, `libs/frame`, `libs/heap` and `libs/paging`. None
+of the three had undefined behaviour to report. Their local run times were 541
+seconds for `frame`, 102 for `heap` and 142 for `paging`; the frame
+allocator's long random workload was 97% of the first, and runs 2,000 of its
+20,000 steps under Miri. `cargo xtask check --miri` runs the same list, and a
+test fails when it and the workflow disagree.
 
 **`ferrousli/` is on the goal's path.** It is a C library for Linux written in
 Rust, modelled on musl and aimed in time at glibc's binary interface. It is its
