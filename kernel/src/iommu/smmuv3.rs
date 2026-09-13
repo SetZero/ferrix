@@ -31,6 +31,7 @@ use ferrix_paging::stage2::ArmStage2;
 use ferrix_paging::{MapError, MapFlags};
 use ferrix_sync::IrqSpinLock;
 
+use super::Fault;
 use crate::mmio::Mmio;
 use crate::{arch, mm, timer, vmap};
 
@@ -105,6 +106,12 @@ const COMMAND_BITS: u32 = 8;
 const COMMAND_BYTES: u64 = 16;
 /// Events the queue holds, as bits: 128 of 32 bytes, one page.
 const EVENT_BITS: u32 = 7;
+/// Bytes of one event record.
+const EVENT_BYTES: u64 = 32;
+/// Event type: a translation fault.
+const EVENT_F_TRANSLATION: u64 = 0x10;
+/// Event record word 3: the access was a read.
+const EVENT_READ: u64 = 1 << 3;
 
 /// STE word 0: valid.
 const STE_VALID: u64 = 1;
@@ -139,6 +146,8 @@ pub(crate) struct Unit {
     table: u64,
     /// Physical address of the command queue.
     commands: u64,
+    /// Physical address of the event queue.
+    events: u64,
     /// The largest VMID the unit takes.
     vmids: u32,
     /// The `GICv2m` doorbell page every domain maps, if the machine has one.
@@ -166,6 +175,13 @@ pub(crate) struct Attached {
     vmid: u16,
     /// Physical address of the stage-2 root table.
     root: u64,
+}
+
+impl Attached {
+    /// The stream ID the unit sees the function as.
+    pub(crate) fn stream(&self) -> u32 {
+        self.stream
+    }
 }
 
 impl Unit {
@@ -215,6 +231,7 @@ impl Unit {
             registers,
             table,
             commands,
+            events,
             vmids: if idr0 & IDR0_VMID16 != 0 {
                 0xFFFF
             } else {
@@ -254,6 +271,34 @@ impl Unit {
     /// A unit that never acknowledged.
     pub(crate) fn enable(&self) -> Result<(), &'static str> {
         self.control(CMDQEN | EVENTQEN | SMMUEN, "it never started translating")
+    }
+
+    /// The next translation fault in the event queue, consuming every event up
+    /// to it, or `None` when the queue holds none.
+    pub(crate) fn take_fault(&self) -> Option<Fault> {
+        let index = (1_u32 << (EVENT_BITS + 1)) - 1;
+        loop {
+            let produced = self.registers.read32(EVENTQ_PROD) & index;
+            let consumed = self.registers.read32(EVENTQ_CONS) & index;
+            if produced == consumed {
+                return None;
+            }
+            let slot = consumed & ((1 << EVENT_BITS) - 1);
+            let at = self.events + u64::from(slot) * EVENT_BYTES;
+            // Words 0 and 1: the type and the stream. Words 2 and 3: the
+            // access. Words 4 and 5: the input address.
+            let first = read_entry(at);
+            let access = read_entry(at + 8);
+            let address = read_entry(at + 16);
+            self.registers.write32(EVENTQ_CONS, (consumed + 1) & index);
+            if first & 0xFF == EVENT_F_TRANSLATION {
+                return Some(Fault {
+                    stream: (first >> 32) as u32,
+                    page: address & !0xFFF,
+                    write: (access >> 32) & EVENT_READ == 0,
+                });
+            }
+        }
     }
 
     /// Give `stream` a domain of its own: an empty stage-2 tree with the MSI

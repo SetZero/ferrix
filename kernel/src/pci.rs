@@ -299,6 +299,10 @@ pub(crate) struct Report {
     pub(crate) entropy_by_interrupt: usize,
     /// Why the last request that completed without MSI-X was polled instead.
     pub(crate) entropy_polled: Option<&'static str>,
+    /// Writes outside a device's translated domain that its unit faulted.
+    pub(crate) out_of_domain_faulted: usize,
+    /// Why the last out-of-domain write was not shown to fault, if one was not.
+    pub(crate) out_of_domain_skip: Option<&'static str>,
 }
 
 /// Why enumeration failed.
@@ -383,6 +387,8 @@ pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>, Res
         entropy_skip: None,
         entropy_by_interrupt: 0,
         entropy_polled: None,
+        out_of_domain_faulted: 0,
+        out_of_domain_skip: None,
     };
     let mut nodes = Vec::new();
     for host in hosts {
@@ -509,11 +515,20 @@ fn check_function(
                 msix.as_ref(),
                 reserved,
             )? {
-                virtio::Entropy::Read { bytes, polled } => {
+                virtio::Entropy::Read {
+                    bytes,
+                    polled,
+                    out_of_domain,
+                } => {
                     report.entropy_bytes = report.entropy_bytes.saturating_add(bytes);
                     match polled {
                         None => report.entropy_by_interrupt += 1,
                         Some(why) => report.entropy_polled = Some(why),
+                    }
+                    match out_of_domain {
+                        Some(Ok(())) => report.out_of_domain_faulted += 1,
+                        Some(Err(why)) => report.out_of_domain_skip = Some(why),
+                        None => {}
                     }
                 }
                 virtio::Entropy::Skipped(why) => {

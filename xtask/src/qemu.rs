@@ -66,6 +66,12 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
                     watched.log.display()
                 )));
             }
+            if let Some(problem) = fault_problem(arch, &watched.lines) {
+                return Err(Error::new(format!(
+                    "{arch}: {problem}.\n  Serial output is in {}",
+                    watched.log.display()
+                )));
+            }
             println!("  {arch}: boot ok");
             Ok(())
         }
@@ -156,6 +162,34 @@ fn iommu_problem(lines: &[String]) -> Option<String> {
         ));
     }
     None
+}
+
+/// What stage 10's PCI check prints after the number of writes outside a
+/// translated domain that its unit faulted.
+const FAULTED: &str = " out-of-domain writes faulted";
+
+/// Why a boot on a machine whose IOMMU translates still failed the stage 10
+/// exit criterion's out-of-domain check, if it did.
+///
+/// On the machines this tool boots, x86-64 and AArch64 send the entropy
+/// device's DMA through a translated domain. ARMv7-A does not — U-Boot keeps
+/// its virtio devices from offering the platform's translation, which the exit
+/// criterion states as degraded trusted mode — so it is not asked.
+fn fault_problem(arch: Arch, lines: &[String]) -> Option<String> {
+    if arch == Arch::Armv7a {
+        return None;
+    }
+    let Some(line) = lines.iter().find(|line| line.contains(FAULTED)) else {
+        return Some("the kernel never reported an out-of-domain write".to_owned());
+    };
+    if count_before(line, FAULTED).is_some_and(|count| count > 0) {
+        None
+    } else {
+        Some(format!(
+            "no write outside a translated domain faulted: `{}`",
+            line.trim()
+        ))
+    }
 }
 
 /// Boot an image with a program and a script built in, and require the
@@ -790,7 +824,7 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 
 #[cfg(test)]
 mod tests {
-    use super::{entropy_problem, iommu_problem};
+    use super::{Arch, entropy_problem, fault_problem, iommu_problem};
 
     fn lines(text: &[&str]) -> Vec<String> {
         text.iter().map(|line| (*line).to_owned()).collect()
@@ -849,5 +883,30 @@ mod tests {
         assert!(iommu_problem(&unresolved).is_some(), "one unresolved");
         let silent = lines(&["FERRIX-BOOT-OK stages 1-9"]);
         assert!(iommu_problem(&silent).is_some(), "no line at all");
+    }
+
+    #[test]
+    fn a_translating_machine_must_show_its_out_of_domain_fault() {
+        let faulted = lines(&[
+            "  pci      2 functions, 64 entropy bytes read by DMA, 1 completions by MSI-X, 1 out-of-domain writes faulted",
+        ]);
+        assert_eq!(fault_problem(Arch::X86_64, &faulted), None);
+        let none = lines(&[
+            "  pci      2 functions, 64 entropy bytes read by DMA, 1 completions by MSI-X, 0 out-of-domain writes faulted",
+        ]);
+        assert!(
+            fault_problem(Arch::AArch64, &none).is_some(),
+            "nothing faulted"
+        );
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-9"]);
+        assert!(
+            fault_problem(Arch::X86_64, &silent).is_some(),
+            "no line at all"
+        );
+        assert_eq!(
+            fault_problem(Arch::Armv7a, &none),
+            None,
+            "ARMv7-A is not asked"
+        );
     }
 }

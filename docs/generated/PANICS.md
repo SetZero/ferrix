@@ -871,6 +871,9 @@ none.
    wrote — which is what a wrong DMA address looks like. A device that merely
    refuses or stalls is skipped and reported instead, because on a hypervisor
    somebody else configured that is not a fault in the kernel.
+5. The out-of-domain probe saw the device complete a write into a page its IOMMU
+   domain does not map: the unit let through DMA it should have faulted, or the
+   domain maps more than was pinned into it.
 
 See: kernel/src/pci.rs check; libs/pci; libs/acpi Mcfg; libs/fdt ecam_hosts;
 docs/ROADMAP.md stage 10.

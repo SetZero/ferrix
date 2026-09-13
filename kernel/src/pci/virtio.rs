@@ -95,6 +95,10 @@ pub(super) enum Entropy {
         /// `None` if the completion arrived by MSI-X; otherwise why it was
         /// polled for.
         polled: Option<&'static str>,
+        /// On a translated domain, whether a write outside it faulted: `Ok`
+        /// when the unit recorded it, otherwise why it was not shown. `None`
+        /// when no unit translates the device.
+        out_of_domain: Option<Result<(), &'static str>>,
     },
     /// The device refused or stalled, for this reason, and was left alone.
     Skipped(&'static str),
@@ -453,7 +457,11 @@ pub(super) fn entropy(
         transport.notify_multiplier,
         &rings,
         &buffer,
-        bus,
+        Granted {
+            rings_at: bus.0,
+            buffer_at: bus.1,
+            domain: &domain,
+        },
         delivery.as_ref().map(|_| ()).map_err(|why| *why),
     );
 
@@ -486,6 +494,18 @@ pub(super) fn entropy(
     outcome
 }
 
+/// What the check's device was granted: its two pages' device addresses, and
+/// the domain that gave them.
+#[derive(Clone, Copy, Debug)]
+struct Granted<'a> {
+    /// Where the device reaches the rings.
+    rings_at: u64,
+    /// Where the device reaches the buffer it writes entropy into.
+    buffer_at: u64,
+    /// The domain both are pinned into.
+    domain: &'a iommu::Domain,
+}
+
 /// Bring the device up, make one request and wait for it: for its MSI-X
 /// interrupt when `interrupt` is `Ok`, and by polling otherwise.
 fn drive(
@@ -494,9 +514,14 @@ fn drive(
     multiplier: u32,
     rings: &DmaPage,
     buffer: &DmaPage,
-    (rings_at, buffer_at): (u64, u64),
+    granted: Granted<'_>,
     interrupt: Result<(), &'static str>,
 ) -> Result<Entropy, Failure> {
+    let Granted {
+        rings_at,
+        buffer_at,
+        domain,
+    } = granted;
     let mut config = Common(common);
     // Accepted when offered: the addresses the check hands the device are
     // physical, which is what the platform's translation is until an IOMMU
@@ -598,8 +623,77 @@ fn drive(
             "the device wrote nothing into the buffer it was given",
         ));
     }
+    let out_of_domain = domain
+        .translated()
+        .then(|| probe_out_of_domain(&mut queue, notify, doorbell, domain))
+        .transpose()?;
     Ok(Entropy::Read {
         bytes: completion.written,
         polled,
+        out_of_domain,
     })
+}
+
+/// Where the out-of-domain probe aims: a page no translated domain of this
+/// check maps, since such a domain maps only what was pinned into it and the
+/// check pins only its own two frames.
+const PROBE_PAGE: u64 = 0x1000;
+
+/// Ask the device to write where its domain maps nothing, and require its
+/// unit to fault it: the stage 10 exit criterion's deliberate out-of-domain
+/// DMA.
+///
+/// The unit's fault record is cleared first, because VT-d has a single record
+/// and drops a second fault from the same device while it is full. QEMU's
+/// virtio device marks itself broken when a descriptor will not map and
+/// completes nothing, so the answer is the unit's record rather than a
+/// completion; the caller resets the device either way.
+///
+/// # Errors
+///
+/// A completion saying the device wrote into the page: DMA its domain should
+/// have stopped. A probe that could not be made, or a unit that recorded
+/// nothing, is a reason in the `Ok` rather than a failed boot.
+fn probe_out_of_domain(
+    queue: &mut SplitQueue<Rings>,
+    notify: &Block,
+    doorbell: u64,
+    domain: &iommu::Domain,
+) -> Result<Result<(), &'static str>, Failure> {
+    let Some(stream) = domain.stream() else {
+        return Ok(Err("the domain names no stream"));
+    };
+    if domain.resolve(PROBE_PAGE).is_some() {
+        return Ok(Err("the probe page is mapped in the domain"));
+    }
+    domain.clear_faults();
+    if queue
+        .add_chain(&[Buffer::writable(PROBE_PAGE, REQUEST)])
+        .is_err()
+    {
+        return Ok(Err("no descriptor was free for the probe"));
+    }
+    notify.registers.write16(doorbell, 0);
+    let deadline = timer::now_nanos().saturating_add(DEADLINE_NANOS);
+    loop {
+        if let Some(fault) = domain.take_fault() {
+            if fault.stream != stream || fault.page != PROBE_PAGE || !fault.write {
+                return Ok(Err("the unit recorded a fault other than the probe's"));
+            }
+            return Ok(Ok(()));
+        }
+        if let Some(completion) = queue.take_used()?
+            && completion.written > 0
+        {
+            return Err(Failure::Entropy(
+                "the device wrote into a page its domain does not map",
+            ));
+        }
+        if timer::now_nanos() > deadline {
+            return Ok(Err(
+                "the unit recorded no fault for a write outside the domain",
+            ));
+        }
+        core::hint::spin_loop();
+    }
 }

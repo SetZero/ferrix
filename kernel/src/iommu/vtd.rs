@@ -27,6 +27,7 @@ use ferrix_paging::{MapError, MapFlags};
 use ferrix_pci::Address;
 use ferrix_sync::IrqSpinLock;
 
+use super::Fault;
 use crate::mmio::Mmio;
 use crate::{arch, mm, timer, vmap};
 
@@ -87,6 +88,8 @@ const IOTLB_DOMAIN: u64 = 2 << 60;
 const PFO: u32 = 1 << 0;
 /// Fault recording register, high half: the record holds a fault.
 const FRCD_F: u64 = 1 << 63;
+/// Fault recording register, high half: the faulting access was a read.
+const FRCD_READ: u64 = 1 << 62;
 
 /// Root and context entries: present.
 const PRESENT: u64 = 1;
@@ -136,6 +139,13 @@ pub(crate) struct Attached {
     identifier: u16,
     /// Physical address of the second-level root table.
     root: u64,
+}
+
+impl Attached {
+    /// The source ID the unit sees the function as.
+    pub(crate) fn stream(&self) -> u32 {
+        u32::from(self.function.requester_id())
+    }
 }
 
 impl Unit {
@@ -200,6 +210,27 @@ impl Unit {
         }
         self.registers.write32(FSTS, PFO);
         self.command(TE, "it never started translating")
+    }
+
+    /// The fault the unit's first recording register holds, cleared so the unit
+    /// can record the next, or `None`.
+    ///
+    /// QEMU's unit has one record, and drops a second fault from the same
+    /// device while it is full, so a caller that wants a particular fault clears
+    /// the record before provoking it.
+    pub(crate) fn take_fault(&self) -> Option<Fault> {
+        let high = read64(self.registers, self.faults + 8);
+        if high & FRCD_F == 0 {
+            return None;
+        }
+        let low = read64(self.registers, self.faults);
+        self.registers.write32(self.faults + 12, 1 << 31);
+        self.registers.write32(FSTS, PFO);
+        Some(Fault {
+            stream: (high & 0xFFFF) as u32,
+            page: low & !0xFFF,
+            write: high & FRCD_READ == 0,
+        })
     }
 
     /// Give `function` a domain of its own on this unit: an empty second-level

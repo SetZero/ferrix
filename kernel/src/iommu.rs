@@ -344,6 +344,18 @@ static DEGRADED: AtomicBool = AtomicBool::new(false);
 /// be pinned into one.
 const TRANSLATED_BITS: u32 = 39;
 
+/// A DMA fault a unit recorded.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Fault {
+    /// The device's stream: its source ID on VT-d, its stream ID on an
+    /// `SMMUv3`.
+    pub(crate) stream: u32,
+    /// The page it addressed.
+    pub(crate) page: u64,
+    /// Whether the access was a write.
+    pub(crate) write: bool,
+}
+
 /// Why a domain refused to pin or unpin.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum DomainError {
@@ -450,6 +462,24 @@ impl Translation {
         }
     }
 
+    /// The stream the unit sees the domain's device as.
+    fn stream(&self) -> Option<u32> {
+        match self {
+            Translation::None => None,
+            Translation::VtD { attached, .. } => Some(attached.stream()),
+            Translation::SmmuV3 { attached, .. } => Some(attached.stream()),
+        }
+    }
+
+    /// The next fault the domain's unit recorded, for any device.
+    fn take_fault(&self) -> Option<Fault> {
+        match self {
+            Translation::None => None,
+            Translation::VtD { unit, .. } => unit.take_fault(),
+            Translation::SmmuV3 { unit, .. } => unit.take_fault(),
+        }
+    }
+
     /// Detach the domain from its unit and give back its tables.
     fn detach(&self) -> Result<(), &'static str> {
         match self {
@@ -514,6 +544,28 @@ impl Domain {
     /// points.
     pub(crate) fn resolve(&self, address: u64) -> Option<u64> {
         self.translation.resolve(address)
+    }
+
+    /// The stream the unit sees this domain's device as, if a unit translates
+    /// the domain.
+    pub(crate) fn stream(&self) -> Option<u32> {
+        self.translation.stream()
+    }
+
+    /// The next DMA fault the domain's unit recorded, for any device on it, or
+    /// `None`. Taking it clears it, so the unit can record the next.
+    pub(crate) fn take_fault(&self) -> Option<Fault> {
+        self.translation.take_fault()
+    }
+
+    /// Clear every fault the domain's unit holds, so the next one read is new.
+    /// Bounded: a device faulting without end cannot keep the caller here.
+    pub(crate) fn clear_faults(&self) {
+        for _ in 0..256 {
+            if self.take_fault().is_none() {
+                return;
+            }
+        }
     }
 
     /// Pages pinned and not yet unpinned.

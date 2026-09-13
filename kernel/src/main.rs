@@ -618,7 +618,7 @@ fn check_pci(view: &BootView<'_>) -> (Vec<device::DeviceNode>, device::Reserved)
     println!(
         "  pci      {} functions from {} {} hosts ({} descriptions refused), {} host bridges, \
          {} unfollowed bridges; {} BARs sized ({} KiB), {} capabilities, {} virtio transports, \
-         {} entropy bytes read by DMA, {} completions by MSI-X",
+         {} entropy bytes read by DMA, {} completions by MSI-X, {} out-of-domain writes faulted",
         report.functions,
         report.hosts,
         report.source,
@@ -631,7 +631,11 @@ fn check_pci(view: &BootView<'_>) -> (Vec<device::DeviceNode>, device::Reserved)
         report.virtio,
         report.entropy_bytes,
         report.entropy_by_interrupt,
+        report.out_of_domain_faulted,
     );
+    if let Some(why) = report.out_of_domain_skip {
+        println!("  pci      an out-of-domain write was not shown to fault: {why}");
+    }
     if let Some(why) = report.entropy_polled {
         println!("  pci      an entropy request was polled, not interrupted: {why}");
     }
