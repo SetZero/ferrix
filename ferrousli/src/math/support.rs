@@ -5,6 +5,8 @@
 //! Ported from musl 1.2.5's `src/internal/libm.h` and `src/math/__math_*.c`
 //! (MIT; see [`crate::math`] for the notice).
 
+#![allow(dead_code, reason = "shared by modules still being written")]
+
 use core::hint::black_box;
 
 /// A hexadecimal floating constant taken apart: its value is
@@ -240,6 +242,31 @@ pub(crate) const fn with_low_word(x: f64, low: u32) -> f64 {
     from_words(high_word(x), low)
 }
 
+/// Whether `x` is a NaN, tested on its bits. A comparison would raise invalid
+/// for a signalling NaN.
+#[inline]
+pub(crate) const fn is_nan(x: f64) -> bool {
+    x.to_bits() << 1 > 0x7ff << 53
+}
+
+/// [`is_nan`] for `float`.
+#[inline]
+pub(crate) const fn is_nanf(x: f32) -> bool {
+    x.to_bits() << 1 > 0xff << 24
+}
+
+/// Whether `x` is neither infinite nor a NaN, tested on its bits.
+#[inline]
+pub(crate) const fn is_finite(x: f64) -> bool {
+    x.to_bits() << 1 < 0x7ff << 53
+}
+
+/// [`is_finite`] for `float`.
+#[inline]
+pub(crate) const fn is_finitef(x: f32) -> bool {
+    x.to_bits() << 1 < 0xff << 24
+}
+
 /// `x`, hidden from the optimiser, so an operation on it happens at run time
 /// in the current rounding mode and raises its exceptions. musl's
 /// `fp_barrier`.
@@ -273,14 +300,14 @@ pub(crate) fn force_evalf(x: f32) {
 #[inline(never)]
 pub(crate) fn invalid(x: f64) -> f64 {
     let difference = barrier(x) - x;
-    difference / difference
+    difference / barrier(difference)
 }
 
 /// [`invalid`] for `float`.
 #[inline(never)]
 pub(crate) fn invalidf(x: f32) -> f32 {
     let difference = barrierf(x) - x;
-    difference / difference
+    difference / barrierf(difference)
 }
 
 /// An infinity with the sign `sign` gives (nonzero for negative), raising

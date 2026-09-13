@@ -400,3 +400,68 @@ pub extern "C" fn drem(x: f64, y: f64) -> f64 {
 pub extern "C" fn dremf(x: f32, y: f32) -> f32 {
     remquof_parts(x, y).0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::mtest::{self, Rules, Verdict};
+
+    /// libc-test's remainder programs check the exceptions loosely.
+    const REMAINDER: Rules = Rules::EXACT.loose();
+
+    #[test]
+    fn fmod_matches_libc_test() {
+        let files = ["ucb/fmod.h", "sanity/fmod.h", "special/fmod.h"];
+        mtest::dd_d("fmod", &files, |x, y| fmod(x, y), REMAINDER, &[]);
+        let files = ["ucb/fmodf.h", "sanity/fmodf.h", "special/fmodf.h"];
+        mtest::dd_d("fmodf", &files, |x, y| fmodf(x, y), REMAINDER, &[]);
+    }
+
+    #[test]
+    fn remainder_and_drem_match_libc_test() {
+        let files = ["sanity/remainder.h", "special/remainder.h"];
+        mtest::dd_d("remainder", &files, |x, y| remainder(x, y), REMAINDER, &[]);
+        mtest::dd_d("drem", &files, |x, y| drem(x, y), REMAINDER, &[]);
+        let files = ["sanity/remainderf.h", "special/remainderf.h"];
+        mtest::dd_d("remainderf", &files, |x, y| remainderf(x, y), REMAINDER, &[]);
+        mtest::dd_d("dremf", &files, |x, y| dremf(x, y), REMAINDER, &[]);
+    }
+
+    /// Adds to `verdict` the check of a `remquo` quotient: its sign and low
+    /// three bits, unless the expected remainder is a NaN.
+    fn quotient_verdict(verdict: Verdict, row: &mtest::Row, nan: bool, got: c_int) -> Verdict {
+        let want = row.int(4);
+        let low_bits_differ = i64::from(got & 7) != want & 7;
+        if !nan && (low_bits_differ || (got < 0) != (want < 0)) {
+            let message = format!("{}: quotient want {want} got {got}", row.place);
+            return verdict.and(Verdict::Fail(message));
+        }
+        verdict
+    }
+
+    #[test]
+    fn remquo_matches_libc_test() {
+        let files = ["sanity/remquo.h", "special/remquo.h"];
+        mtest::run("remquo", &files, &[], |row| {
+            let (x, y, want, dy) = (row.f64(0), row.f64(1), row.f64(2), row.f32(3));
+            let mut quo = 0;
+            // SAFETY: `quo` is a local `int`.
+            let (got, raised) = mtest::under(row.mode, || unsafe { remquo(x, y, &raw mut quo) });
+            let verdict = mtest::judge(&REMAINDER, row, raised, got, want, dy, || {
+                format!("remquo({}, {})", mtest::hex(x), mtest::hex(y))
+            });
+            quotient_verdict(verdict, row, want.is_nan(), quo)
+        });
+        let files = ["sanity/remquof.h", "special/remquof.h"];
+        mtest::run("remquof", &files, &[], |row| {
+            let (x, y, want, dy) = (row.f32(0), row.f32(1), row.f32(2), row.f32(3));
+            let mut quo = 0;
+            // SAFETY: `quo` is a local `int`.
+            let (got, raised) = mtest::under(row.mode, || unsafe { remquof(x, y, &raw mut quo) });
+            let verdict = mtest::judge(&REMAINDER, row, raised, got, want, dy, || {
+                format!("remquof({}, {})", mtest::hex(x), mtest::hex(y))
+            });
+            quotient_verdict(verdict, row, want.is_nan(), quo)
+        });
+    }
+}

@@ -20,3 +20,17 @@ pub extern "C" fn sqrt(x: f64) -> f64 {
 pub extern "C" fn sqrtf(x: f32) -> f32 {
     arch::sqrtf(x)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::mtest::{self, Rules};
+
+    #[test]
+    fn sqrt_matches_libc_test() {
+        let files = ["ucb/sqrt.h", "sanity/sqrt.h", "special/sqrt.h"];
+        mtest::d_d("sqrt", &files, |x| sqrt(x), Rules::EXACT, &[]);
+        let files = ["ucb/sqrtf.h", "sanity/sqrtf.h", "special/sqrtf.h"];
+        mtest::d_d("sqrtf", &files, |x| sqrtf(x), Rules::EXACT, &[]);
+    }
+}

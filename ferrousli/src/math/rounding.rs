@@ -338,3 +338,105 @@ pub extern "C" fn nearbyintf(x: f32) -> f32 {
     }
     y
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fenv::{FE_DOWNWARD, FE_INEXACT, FE_TONEAREST, FE_TOWARDZERO, FE_UPWARD, feraiseexcept};
+    use crate::math::mtest::{self, Rules};
+
+    /// libc-test's `ceil`, `floor`, `trunc` and `round` programs accept a
+    /// result that leaves out inexact.
+    const DISCARDING: Rules = Rules::EXACT.inexact_optional();
+
+    #[test]
+    fn ceil_matches_libc_test() {
+        let files = ["ucb/ceil.h", "sanity/ceil.h", "special/ceil.h"];
+        mtest::d_d("ceil", &files, |x| ceil(x), DISCARDING, &[]);
+        let files = ["ucb/ceilf.h", "sanity/ceilf.h", "special/ceilf.h"];
+        mtest::d_d("ceilf", &files, |x| ceilf(x), DISCARDING, &[]);
+    }
+
+    #[test]
+    fn floor_matches_libc_test() {
+        let files = ["ucb/floor.h", "sanity/floor.h", "special/floor.h"];
+        mtest::d_d("floor", &files, |x| floor(x), DISCARDING, &[]);
+        let files = ["ucb/floorf.h", "sanity/floorf.h", "special/floorf.h"];
+        mtest::d_d("floorf", &files, |x| floorf(x), DISCARDING, &[]);
+    }
+
+    #[test]
+    fn trunc_and_round_match_libc_test() {
+        let files = ["sanity/trunc.h", "special/trunc.h"];
+        mtest::d_d("trunc", &files, |x| trunc(x), DISCARDING, &[]);
+        let files = ["sanity/truncf.h", "special/truncf.h"];
+        mtest::d_d("truncf", &files, |x| truncf(x), DISCARDING, &[]);
+        let files = ["sanity/round.h", "special/round.h"];
+        mtest::d_d("round", &files, |x| round(x), DISCARDING, &[]);
+        let files = ["sanity/roundf.h", "special/roundf.h"];
+        mtest::d_d("roundf", &files, |x| roundf(x), DISCARDING, &[]);
+    }
+
+    #[test]
+    fn rint_and_nearbyint_match_libc_test() {
+        let files = ["sanity/rint.h", "special/rint.h"];
+        mtest::d_d("rint", &files, |x| rint(x), Rules::EXACT, &[]);
+        let files = ["sanity/rintf.h", "special/rintf.h"];
+        mtest::d_d("rintf", &files, |x| rintf(x), Rules::EXACT, &[]);
+        let files = ["sanity/nearbyint.h", "special/nearbyint.h"];
+        mtest::d_d("nearbyint", &files, |x| nearbyint(x), Rules::EXACT, &[]);
+        let files = ["sanity/nearbyintf.h", "special/nearbyintf.h"];
+        mtest::d_d("nearbyintf", &files, |x| nearbyintf(x), Rules::EXACT, &[]);
+    }
+
+    #[test]
+    fn integer_conversions_match_libc_test() {
+        let rint_rules = Rules::INTEGER.unless_invalid();
+        let files = ["sanity/lrint.h", "special/lrint.h"];
+        mtest::d_i("lrint", &files, |x| lrint(x), rint_rules, &[]);
+        let files = ["sanity/lrintf.h", "special/lrintf.h"];
+        mtest::d_i("lrintf", &files, |x| lrintf(x), rint_rules, &[]);
+        let files = ["sanity/llrint.h", "special/llrint.h"];
+        mtest::d_i("llrint", &files, |x| llrint(x), rint_rules, &[]);
+        let files = ["sanity/llrintf.h", "special/llrintf.h"];
+        mtest::d_i("llrintf", &files, |x| llrintf(x), rint_rules, &[]);
+        let round_rules = rint_rules.inexact_optional();
+        let files = ["sanity/lround.h", "special/lround.h"];
+        mtest::d_i("lround", &files, |x| lround(x), round_rules, &[]);
+        let files = ["sanity/lroundf.h", "special/lroundf.h"];
+        mtest::d_i("lroundf", &files, |x| lroundf(x), round_rules, &[]);
+        let files = ["sanity/llround.h", "special/llround.h"];
+        mtest::d_i("llround", &files, |x| llround(x), round_rules, &[]);
+        let files = ["sanity/llroundf.h", "special/llroundf.h"];
+        mtest::d_i("llroundf", &files, |x| llroundf(x), round_rules, &[]);
+    }
+
+    #[test]
+    fn rint_follows_every_rounding_mode() {
+        let cases = [
+            (FE_TONEAREST, 2.0, -2.0),
+            (FE_DOWNWARD, 2.0, -3.0),
+            (FE_UPWARD, 3.0, -2.0),
+            (FE_TOWARDZERO, 2.0, -2.0),
+        ];
+        for (mode, up, down) in cases {
+            let ((positive, negative, long), raised) =
+                mtest::under(mode, || (rint(2.5), rint(-2.5), lrint(-2.5)));
+            assert_eq!((positive, negative), (up, down), "mode {mode:#x}");
+            assert_eq!(long as f64, down, "mode {mode:#x}");
+            assert_eq!(raised, FE_INEXACT);
+            let (value, raised) = mtest::under(mode, || nearbyintf(-2.5));
+            assert_eq!(value, down as f32);
+            assert_eq!(raised, 0);
+        }
+    }
+
+    #[test]
+    fn nearbyint_keeps_an_inexact_raised_before_it() {
+        let (_, raised) = mtest::under(FE_TONEAREST, || {
+            let _ = feraiseexcept(FE_INEXACT);
+            nearbyint(0.5)
+        });
+        assert_eq!(raised, FE_INEXACT);
+    }
+}

@@ -124,9 +124,9 @@ mod tests {
     use core::hint::black_box;
 
     /// Starts and ends each test in the default environment.
-    struct Default;
+    struct DefaultEnv;
 
-    impl Default {
+    impl DefaultEnv {
         fn new() -> Self {
             // SAFETY: `FE_DFL_ENV` is the default environment's name.
             let _ = unsafe { fesetenv(FE_DFL_ENV) };
@@ -134,7 +134,7 @@ mod tests {
         }
     }
 
-    impl Drop for Default {
+    impl Drop for DefaultEnv {
         fn drop(&mut self) {
             // SAFETY: as in `new`.
             let _ = unsafe { fesetenv(FE_DFL_ENV) };
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn each_flag_is_raised_tested_and_cleared_alone() {
-        let _default = Default::new();
+        let _default = DefaultEnv::new();
         for flag in [
             FE_INVALID,
             FE_DIVBYZERO,
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn arithmetic_raises_the_flags_it_should() {
-        let _default = Default::new();
+        let _default = DefaultEnv::new();
         let _ = black_box(black_box(1.0f64) / 0.0);
         assert_eq!(fetestexcept(FE_ALL_EXCEPT), FE_DIVBYZERO);
         let _ = feclearexcept(FE_ALL_EXCEPT);
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn the_rounding_mode_reaches_sse_and_the_x87() {
-        let _default = Default::new();
+        let _default = DefaultEnv::new();
         for (mode, third) in [
             (FE_TONEAREST, 0x3fd5_5555_5555_5555),
             (FE_DOWNWARD, 0x3fd5_5555_5555_5555),
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn flt_rounds_numbers_the_modes_as_float_h_does() {
-        let _default = Default::new();
+        let _default = DefaultEnv::new();
         assert_eq!(__flt_rounds(), 1);
         let _ = fesetround(FE_TOWARDZERO);
         assert_eq!(__flt_rounds(), 0);
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn x87_flags_are_tested_cleared_and_kept_apart_from_the_mask() {
-        let _default = Default::new();
+        let _default = DefaultEnv::new();
         arch::x87_divide_by_zero();
         assert_eq!(fetestexcept(FE_ALL_EXCEPT), FE_DIVBYZERO);
         let _ = feraiseexcept(FE_INEXACT);
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn exception_flags_are_saved_and_restored() {
-        let _default = Default::new();
+        let _default = DefaultEnv::new();
         let _ = feraiseexcept(FE_OVERFLOW | FE_INEXACT);
         let mut saved: fexcept_t = 0;
         // SAFETY: `saved` is a local `fexcept_t`.
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn environments_are_saved_restored_held_and_updated() {
-        let _default = Default::new();
+        let _default = DefaultEnv::new();
         let _ = fesetround(FE_UPWARD);
         let _ = feraiseexcept(FE_UNDERFLOW);
         let mut env = arch::zeroed_env();

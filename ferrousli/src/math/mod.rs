@@ -103,6 +103,8 @@ pub(crate) mod arch;
 pub mod classify;
 pub mod fma;
 pub mod manipulate;
+#[cfg(test)]
+pub(crate) mod mtest;
 pub mod remainder;
 pub mod rounding;
 pub mod sqrt;

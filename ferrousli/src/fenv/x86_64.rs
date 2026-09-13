@@ -109,6 +109,9 @@ const DEFAULT_ENV: fenv_t = fenv_t {
     __mxcsr: 0x1f80,
 };
 
+/// [`DEFAULT_ENV`] at an address, for `fldenv` to read.
+static DEFAULT_ENV_STORAGE: fenv_t = DEFAULT_ENV;
+
 /// MXCSR.
 fn mxcsr() -> u32 {
     let mut value = 0u32;
@@ -271,7 +274,7 @@ pub unsafe extern "C" fn fegetenv(envp: *mut fenv_t) -> c_int {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn fesetenv(envp: *const fenv_t) -> c_int {
     let envp = if envp.addr() == FE_DFL_ENV.addr() {
-        &raw const DEFAULT_ENV
+        &raw const DEFAULT_ENV_STORAGE
     } else {
         envp
     };
