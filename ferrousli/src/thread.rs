@@ -12,7 +12,9 @@
 //!
 //! Those offsets come from glibc's `tcbhead_t`. [`Thread`] keeps glibc's layout
 //! for its first 0x80 bytes, so that programs built for either C library find
-//! what they expect. Ferrousli's own fields follow.
+//! what they expect. Ferrousli's own fields follow: `errno`, the kernel's
+//! thread id, the locale `uselocale` set, and the [`State`] the thread
+//! functions share.
 //!
 //! # Where TLS goes
 //!
@@ -21,17 +23,30 @@
 //! offset from the thread pointer, with the block starting
 //! `round_up(p_memsz, p_align)` below it. The block holds the `PT_TLS`
 //! segment's first `p_filesz` bytes, and zeros after them.
+//!
+//! Every thread gets the same layout. [`init_main`] records the program's TLS
+//! image for [`new_control_block`], which `pthread_create` calls on memory it
+//! mapped for the new thread.
+//!
+//! # Sharing a control block
+//!
+//! Other threads read and write a thread's [`State`] while it runs: a joiner
+//! waits on its detach state, `pthread_cancel` sets its cancel flag. So every
+//! field of `State` is an atomic, and [`state`] hands out a shared reference to
+//! it alone. Nothing makes a reference to a whole `Thread`, whose `errno` its
+//! own thread writes without one.
 
 use core::cell::UnsafeCell;
-use core::ffi::c_int;
+use core::ffi::{c_int, c_void};
 use core::mem::{offset_of, size_of};
 use core::ptr::{null, null_mut, with_exposed_provenance, with_exposed_provenance_mut};
+use core::sync::atomic::{AtomicI32, AtomicIsize, AtomicPtr, AtomicU8, AtomicUsize, Ordering};
 
-use crate::auxv;
-use crate::errno;
+use crate::cancel::Cleanup;
 use crate::locale::Locale;
-use crate::string;
+use crate::lock::SpinLock;
 use crate::syscall::{self, nr};
+use crate::{arch, auxv, errno, string};
 
 /// A thread's control block. The thread pointer points at it.
 #[repr(C)]
@@ -58,24 +73,115 @@ pub struct Thread {
     glibc_0x78: usize,
     /// 0x80: this thread's `errno`.
     errno: c_int,
-    /// 0x84: the kernel's id for this thread.
-    tid: c_int,
+    /// 0x84: the kernel's id for this thread. Zero once the thread has begun
+    /// to exit, so that nothing signals a reused id.
+    tid: AtomicI32,
     /// 0x88: the locale `uselocale` gave this thread, or null while it follows
-    /// the global locale.
+    /// the global locale. A new thread starts with null: the global locale.
     locale: *mut Locale,
+    /// 0x90: what the thread functions share about this thread.
+    state: State,
+}
+
+/// The part of a control block other threads may touch while the thread runs.
+/// Every field is atomic.
+#[repr(C)]
+#[derive(Debug)]
+pub struct State {
+    /// Whether the thread is joinable, detached, exiting or gone: one of
+    /// `pthread`'s `DT_` values. Joiners sleep on it.
+    pub detach_state: AtomicI32,
+    /// Nonzero once `pthread_cancel` has asked the thread to end.
+    pub cancel: AtomicI32,
+    /// `PTHREAD_CANCEL_ENABLE`, `PTHREAD_CANCEL_DISABLE`, or the library's
+    /// masked state, in which a cancellation point reports `ECANCELED`.
+    pub cancel_disable: AtomicU8,
+    /// Nonzero for asynchronous cancellation.
+    pub cancel_async: AtomicU8,
+    /// Nonzero if the thread may have set a thread-specific value.
+    pub tsd_used: AtomicU8,
+    /// Held while anything uses the thread's id to act on it, and while the
+    /// thread clears the id on exit.
+    pub kill_lock: SpinLock,
+    /// The previous thread in the list of running threads.
+    pub prev: AtomicPtr<Thread>,
+    /// The next thread in the list of running threads.
+    pub next: AtomicPtr<Thread>,
+    /// The start of the mapping holding the thread's stack, TLS and control
+    /// block, or zero for the main thread.
+    pub map_base: AtomicUsize,
+    /// The length of that mapping.
+    pub map_size: AtomicUsize,
+    /// The top of the thread's stack, or zero for the main thread.
+    pub stack: AtomicUsize,
+    /// The usable size of the stack below `stack`.
+    pub stack_size: AtomicUsize,
+    /// The size of the inaccessible guard below the stack.
+    pub guard_size: AtomicUsize,
+    /// What the thread returned or passed to `pthread_exit`.
+    pub result: AtomicPtr<c_void>,
+    /// The innermost cleanup handler `pthread_cleanup_push` registered.
+    pub cancel_buf: AtomicPtr<Cleanup>,
+    /// The thread's `PTHREAD_KEYS_MAX` thread-specific values.
+    pub tsd: AtomicPtr<AtomicPtr<c_void>>,
+    /// The kernel's `struct robust_list_head`, from `linux/futex.h`: the
+    /// robust mutexes the thread holds, as a list through each mutex's `next`
+    /// field. It points at itself when empty.
+    pub robust_head: AtomicPtr<c_void>,
+    /// The offset from a mutex's `next` field to its lock word.
+    pub robust_off: AtomicIsize,
+    /// A mutex the thread is in the middle of linking or unlinking.
+    pub robust_pending: AtomicPtr<c_void>,
 }
 
 const _: () = assert!(offset_of!(Thread, stack_guard) == 0x28);
+const _: () = assert!(offset_of!(Thread, pointer_guard) == 0x30);
 const _: () = assert!(offset_of!(Thread, split_stack_limit) == 0x70);
 const _: () = assert!(offset_of!(Thread, errno) == 0x80);
 const _: () = assert!(offset_of!(Thread, tid) == 0x84);
+const _: () = assert!(offset_of!(Thread, locale) == 0x88);
+const _: () = assert!(offset_of!(Thread, state) == 0x90);
+// `struct robust_list_head` is three words: the list, the offset and the
+// pending entry, at 0, 8 and 16.
+const _: () = assert!(offset_of!(State, robust_off) - offset_of!(State, robust_head) == 8);
+const _: () = assert!(offset_of!(State, robust_pending) - offset_of!(State, robust_head) == 16);
+
+impl State {
+    /// The state of a thread that is joinable and has done nothing yet.
+    const fn new() -> Self {
+        Self {
+            detach_state: AtomicI32::new(0),
+            cancel: AtomicI32::new(0),
+            cancel_disable: AtomicU8::new(0),
+            cancel_async: AtomicU8::new(0),
+            tsd_used: AtomicU8::new(0),
+            kill_lock: SpinLock::new(),
+            prev: AtomicPtr::new(null_mut()),
+            next: AtomicPtr::new(null_mut()),
+            map_base: AtomicUsize::new(0),
+            map_size: AtomicUsize::new(0),
+            stack: AtomicUsize::new(0),
+            stack_size: AtomicUsize::new(0),
+            guard_size: AtomicUsize::new(0),
+            result: AtomicPtr::new(null_mut()),
+            cancel_buf: AtomicPtr::new(null_mut()),
+            tsd: AtomicPtr::new(null_mut()),
+            robust_head: AtomicPtr::new(null_mut()),
+            robust_off: AtomicIsize::new(0),
+            robust_pending: AtomicPtr::new(null_mut()),
+        }
+    }
+
+    /// The address of the robust list head, which is what the kernel is given
+    /// and what an empty list points back at.
+    pub fn robust_head_address(&self) -> *mut c_void {
+        (&raw const self.robust_head).cast_mut().cast()
+    }
+}
 
 /// The least alignment of a thread pointer. glibc aligns its control block to
 /// 64 bytes so that the loader can keep vector register state there.
 const TP_ALIGN: usize = 64;
-
-/// `arch_prctl`'s request to set the `%fs` base.
-const ARCH_SET_FS: usize = 0x1002;
 
 /// `PROT_READ | PROT_WRITE`.
 const PROT_READ_WRITE: usize = 0x1 | 0x2;
@@ -160,6 +266,16 @@ struct Tls {
     memsz: usize,
     align: usize,
 }
+
+/// The program's TLS image's address, recorded by [`init_main`] for new
+/// threads.
+static TLS_IMAGE: AtomicUsize = AtomicUsize::new(0);
+/// How many bytes of the image are initialised.
+static TLS_FILESZ: AtomicUsize = AtomicUsize::new(0);
+/// The size of a TLS block.
+static TLS_MEMSZ: AtomicUsize = AtomicUsize::new(0);
+/// The alignment of a TLS block.
+static TLS_ALIGN: AtomicUsize = AtomicUsize::new(1);
 
 /// The program's TLS image, read from its headers through the auxiliary
 /// vector. A program without one gets an empty image.
@@ -250,27 +366,31 @@ fn map(len: usize) -> *mut u8 {
     }
 }
 
-/// Sets up the main thread: its TLS block, its control block, the thread
-/// pointer and the canary. A program that cannot have a thread pointer cannot
-/// run, so every failure traps.
+/// Bytes a new thread needs for its TLS block and control block.
+pub fn tls_reservation() -> Option<usize> {
+    reservation(
+        TLS_MEMSZ.load(Ordering::Relaxed),
+        TLS_ALIGN.load(Ordering::Relaxed),
+    )
+}
+
+/// Builds a control block in `len` bytes at `base`: places the thread pointer
+/// and the TLS block, copies the program's TLS image, and writes a fresh
+/// control block with the given guards.
 ///
 /// # Safety
 ///
-/// Called once, before anything reads the thread pointer, after
-/// [`auxv::init`].
-pub unsafe fn init_main() {
-    let tls = program_tls();
-    let Some(len) = reservation(tls.memsz, tls.align) else {
-        syscall::trap()
-    };
-    let base = if len <= BUILTIN_LEN {
-        BUILTIN.0.get().cast::<u8>()
-    } else {
-        map(len)
-    };
-    let Some((tp_address, block_address)) = place(base.addr(), len, tls.memsz, tls.align) else {
-        syscall::trap()
-    };
+/// `base..base + len` must be zeroed memory nothing else uses, and
+/// [`TLS_IMAGE`] and its companions must describe the program's image.
+unsafe fn build(
+    base: *mut u8,
+    len: usize,
+    stack_guard: usize,
+    pointer_guard: usize,
+) -> Option<*mut Thread> {
+    let memsz = TLS_MEMSZ.load(Ordering::Relaxed);
+    let align = TLS_ALIGN.load(Ordering::Relaxed);
+    let (tp_address, block_address) = place(base.addr(), len, memsz, align)?;
     #[expect(
         clippy::cast_ptr_alignment,
         reason = "`place` aligned the thread pointer to at least 64 bytes"
@@ -278,15 +398,14 @@ pub unsafe fn init_main() {
     let tp = base.wrapping_add(tp_address - base.addr()).cast::<Thread>();
     let block = base.wrapping_add(block_address - base.addr());
 
-    if tls.filesz > 0 {
+    let filesz = TLS_FILESZ.load(Ordering::Relaxed);
+    if filesz > 0 {
+        let image = with_exposed_provenance::<c_void>(TLS_IMAGE.load(Ordering::Relaxed));
         // SAFETY: the image is `filesz` mapped bytes, and the block has room
         // for `memsz`, which is at least `filesz`, in memory nothing else uses.
-        let _ = unsafe { string::memcpy(block.cast(), tls.image.cast(), tls.filesz) };
+        let _ = unsafe { string::memcpy(block.cast(), image, filesz) };
     }
 
-    let (stack_guard, pointer_guard) = guards();
-    // SAFETY: `gettid` takes no arguments.
-    let tid = unsafe { syscall::syscall0(nr::GETTID) } as c_int;
     // SAFETY: `place` put the control block inside the reservation, aligned,
     // and nothing else refers to that memory.
     unsafe {
@@ -301,15 +420,91 @@ pub unsafe fn init_main() {
             split_stack_limit: 0,
             glibc_0x78: 0,
             errno: 0,
-            tid,
+            tid: AtomicI32::new(0),
             locale: null_mut(),
+            state: State::new(),
         });
     }
+    // SAFETY: the control block was just written.
+    let state = unsafe { state(tp) };
+    state
+        .robust_head
+        .store(state.robust_head_address(), Ordering::Relaxed);
+    state.prev.store(tp, Ordering::Relaxed);
+    state.next.store(tp, Ordering::Relaxed);
+    Some(tp)
+}
 
-    // SAFETY: the new `%fs` base is a control block that lives for the rest
-    // of the process.
-    let ret = unsafe { syscall::syscall2(nr::ARCH_PRCTL, ARCH_SET_FS, tp.expose_provenance()) };
-    if ret != 0 {
+/// Builds a new thread's control block in `len` bytes at `base`, which must
+/// be at least [`tls_reservation`] bytes, with the calling thread's canary and
+/// pointer guard. `None` if it does not fit.
+///
+/// # Safety
+///
+/// `base..base + len` must be zeroed memory nothing else uses, and
+/// [`init_main`] must have run.
+pub unsafe fn new_control_block(base: *mut u8, len: usize) -> Option<*mut Thread> {
+    let me = current();
+    // SAFETY: after `init_main` the thread pointer is a control block, and
+    // its guards never change.
+    let stack_guard = unsafe { (*me).stack_guard };
+    // SAFETY: as above.
+    let pointer_guard = unsafe { (*me).pointer_guard };
+    // SAFETY: the caller vouches for the memory, and `init_main` recorded the
+    // image.
+    unsafe { build(base, len, stack_guard, pointer_guard) }
+}
+
+/// Sets up the main thread: its TLS block, its control block, the thread
+/// pointer and the canary. A program that cannot have a thread pointer cannot
+/// run, so every failure traps.
+///
+/// The kernel is told to clear the thread list lock when the main thread
+/// ends, as every thread's `clone` tells it, so that the lock's holder is
+/// always a live thread.
+///
+/// # Safety
+///
+/// Called once, before anything reads the thread pointer, after
+/// [`auxv::init`].
+pub unsafe fn init_main() {
+    let tls = program_tls();
+    TLS_IMAGE.store(tls.image.expose_provenance(), Ordering::Relaxed);
+    TLS_FILESZ.store(tls.filesz, Ordering::Relaxed);
+    TLS_MEMSZ.store(tls.memsz, Ordering::Relaxed);
+    TLS_ALIGN.store(tls.align, Ordering::Relaxed);
+
+    let Some(len) = reservation(tls.memsz, tls.align) else {
+        syscall::trap()
+    };
+    let base = if len <= BUILTIN_LEN {
+        BUILTIN.0.get().cast::<u8>()
+    } else {
+        map(len)
+    };
+    let (stack_guard, pointer_guard) = guards();
+    // SAFETY: the builtin memory and a fresh mapping are zeroed and unused,
+    // and the image was recorded above.
+    let Some(tp) = (unsafe { build(base, len, stack_guard, pointer_guard) }) else {
+        syscall::trap()
+    };
+    // SAFETY: `build` wrote the control block.
+    let state = unsafe { state(tp) };
+    state
+        .detach_state
+        .store(crate::pthread::DT_JOINABLE, Ordering::Relaxed);
+    state.tsd.store(crate::key::main_tsd(), Ordering::Relaxed);
+
+    let lock = crate::pthread::THREAD_LIST_LOCK.as_ptr();
+    // SAFETY: the lock is a static the kernel may clear at any time after the
+    // thread ends. `set_tid_address` returns the caller's id.
+    let tid = unsafe { syscall::syscall2(nr::SET_TID_ADDRESS, lock.addr(), 0) };
+    // SAFETY: as above.
+    unsafe { self::tid(tp) }.store(tid as c_int, Ordering::Relaxed);
+
+    // SAFETY: the new thread pointer is a control block that lives for the
+    // rest of the process.
+    if unsafe { arch::set_thread_pointer(tp.expose_provenance()) } != 0 {
         syscall::trap();
     }
 }
@@ -318,18 +513,48 @@ pub unsafe fn init_main() {
 ///
 /// Before [`init_main`] the thread pointer is zero, and this faults.
 pub fn current() -> *mut Thread {
-    let tp: usize;
-    // SAFETY: reading `%fs:0` reads memory only. After `init_main` it holds
-    // the thread pointer, and before it the read faults rather than
-    // returning garbage.
-    unsafe {
-        core::arch::asm!(
-            "mov {}, qword ptr fs:[0]",
-            out(reg) tp,
-            options(nostack, readonly, preserves_flags),
-        );
-    }
-    with_exposed_provenance_mut(tp)
+    with_exposed_provenance_mut(arch::thread_pointer())
+}
+
+/// The shared state of the thread whose control block is at `t`.
+///
+/// # Safety
+///
+/// `t` must be a control block that stays mapped for `'a`.
+pub unsafe fn state<'a>(t: *mut Thread) -> &'a State {
+    // SAFETY: the caller vouches for the control block. `State` is all
+    // atomics, so a shared reference to it permits every write other threads
+    // make.
+    unsafe { &(*t).state }
+}
+
+/// The kernel's id for the thread whose control block is at `t`.
+///
+/// # Safety
+///
+/// As [`state`].
+pub unsafe fn tid<'a>(t: *mut Thread) -> &'a AtomicI32 {
+    // SAFETY: the caller vouches for the control block, and the field is
+    // atomic.
+    unsafe { &(*t).tid }
+}
+
+/// The calling thread's shared state.
+///
+/// Before [`init_main`] this faults.
+pub fn me() -> &'static State {
+    // SAFETY: after `init_main` the thread pointer is the calling thread's
+    // control block, which lives as long as the thread, and so as long as
+    // anything running on it.
+    unsafe { state(current()) }
+}
+
+/// The calling thread's id.
+///
+/// Before [`init_main`] this faults.
+pub fn my_tid() -> c_int {
+    // SAFETY: as in `me`.
+    unsafe { tid(current()) }.load(Ordering::Relaxed)
 }
 
 /// Records the calling thread's id in its control block again.
@@ -339,12 +564,9 @@ pub fn current() -> *mut Thread {
 pub fn refresh_tid() {
     // SAFETY: `gettid` takes no arguments.
     let tid = unsafe { syscall::syscall0(nr::GETTID) } as c_int;
-    let at = current()
-        .wrapping_byte_add(offset_of!(Thread, tid))
-        .cast::<c_int>();
     // SAFETY: after `init_main` the thread pointer is this thread's control
-    // block, and only this thread writes its id.
-    unsafe { at.write(tid) };
+    // block.
+    unsafe { self::tid(current()) }.store(tid, Ordering::Relaxed);
 }
 
 /// The calling thread's `errno`.
@@ -384,5 +606,10 @@ mod tests {
         assert_eq!(place(0x1000, 100, 5, 1), None);
         assert_eq!(place(0x1000, 1024, 5, 3), None);
         assert_eq!(reservation(usize::MAX, 16), None);
+    }
+
+    #[test]
+    fn a_control_block_leaves_the_main_threads_builtin_memory_room_for_tls() {
+        assert!(size_of::<Thread>() <= 272);
     }
 }

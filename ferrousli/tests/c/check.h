@@ -2,9 +2,12 @@
  * CHECK, for test programs that must not depend on stdio.
  *
  * A failed check writes "file:line: check failed: expression" to standard
- * error with write(), and sets t_status. A program returns t_status from
+ * error with one write(), and sets t_status. A program returns t_status from
  * main. The file is named without its directory, so the message does not
  * depend on where the tree is checked out.
+ *
+ * Checks may fail on several threads at once: t_status is atomic, and each
+ * message is written whole, so messages from two threads do not interleave.
  */
 
 #ifndef FERROUSLI_TEST_CHECK_H
@@ -14,21 +17,22 @@
 #include <unistd.h>
 
 __attribute__((unused))
-static int t_status;
+static _Atomic int t_status;
 
 __attribute__((unused))
 static void t_fail(const char *file, const char *line, const char *what)
 {
+	char buf[512];
+	unsigned long n = 0;
 	const char *base = file;
 	for (const char *p = file; *p; p++)
 		if (*p == '/')
 			base = p + 1;
-	write(2, base, strlen(base));
-	write(2, ":", 1);
-	write(2, line, strlen(line));
-	write(2, ": check failed: ", 16);
-	write(2, what, strlen(what));
-	write(2, "\n", 1);
+	const char *parts[] = { base, ":", line, ": check failed: ", what, "\n" };
+	for (unsigned i = 0; i < sizeof parts / sizeof *parts; i++)
+		for (const char *p = parts[i]; *p && n < sizeof buf; p++)
+			buf[n++] = *p;
+	write(2, buf, n);
 	t_status = 1;
 }
 

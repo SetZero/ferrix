@@ -28,8 +28,11 @@
 #[cfg(not(target_arch = "x86_64"))]
 compile_error!("ferrousli supports only x86-64 so far");
 
+pub mod arch;
 pub mod arith;
 pub mod auxv;
+pub mod cancel;
+pub mod cond;
 pub mod ctype;
 pub mod env;
 pub mod errno;
@@ -38,18 +41,23 @@ pub mod fcntl;
 pub mod float;
 pub mod futex;
 pub mod ioctl;
+pub mod key;
 pub mod locale;
 pub mod lock;
 pub mod malloc;
 pub mod mman;
 pub mod multibyte;
+pub mod mutex;
 pub mod poll;
 pub mod process;
+pub mod pthread;
+pub mod pthread_attr;
 pub mod qsort;
 pub mod rand;
 pub mod random;
 pub mod rename;
 pub mod resource;
+pub mod rwlock;
 pub mod scan;
 pub mod select;
 #[cfg(not(test))]

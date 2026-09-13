@@ -12,7 +12,9 @@
 use core::ffi::c_int;
 use core::sync::atomic::{AtomicI32, Ordering};
 
+use crate::errno;
 use crate::syscall::{self, nr};
+use crate::time::Timespec;
 
 /// `FUTEX_WAIT`.
 pub const FUTEX_WAIT: usize = 0;
@@ -104,6 +106,116 @@ pub fn wait_counted(atom: &AtomicI32, waiters: Option<&AtomicI32>, value: c_int,
     if let Some(w) = waiters {
         let _ = w.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// Nanoseconds in a second.
+const NANOS: i64 = 1_000_000_000;
+
+/// How long until `at` on `clock`, or the error a timed wait reports: `EINVAL`
+/// for a bad time or clock, `ETIMEDOUT` if it has passed.
+///
+/// # Safety
+///
+/// `at` must be valid for a read of a `struct timespec`.
+unsafe fn relative(clock: c_int, at: *const Timespec) -> Result<Timespec, c_int> {
+    // SAFETY: the caller vouches for `at`.
+    let at = unsafe { at.read() };
+    if !(0..NANOS).contains(&at.tv_nsec) {
+        return Err(errno::EINVAL);
+    }
+    let mut now = Timespec::default();
+    // SAFETY: the kernel writes a `struct timespec` to a live local. The call
+    // is made directly, so that `errno` is left alone.
+    let ret =
+        unsafe { syscall::syscall2(nr::CLOCK_GETTIME, clock as usize, (&raw mut now).addr()) };
+    if ret != 0 {
+        return Err(errno::EINVAL);
+    }
+    let mut sec = at.tv_sec.saturating_sub(now.tv_sec);
+    let mut nsec = at.tv_nsec - now.tv_nsec;
+    if nsec < 0 {
+        sec = sec.saturating_sub(1);
+        nsec += NANOS;
+    }
+    if sec < 0 {
+        return Err(errno::ETIMEDOUT);
+    }
+    Ok(Timespec {
+        tv_sec: sec,
+        tv_nsec: nsec,
+    })
+}
+
+/// Sleeps on `atom` while it holds `value`, until woken or until the absolute
+/// time `at` on `clock`, if `at` is not null. The sleep is a cancellation
+/// point.
+///
+/// Returns 0 for a wake, which may be spurious; `EINTR` if a signal handler
+/// ran; `ETIMEDOUT`; `EINVAL` for a bad time or clock; or `ECANCELED` if
+/// cancellation is masked and was requested.
+///
+/// A wait interrupted by a handler installed without `SA_RESTART` reports
+/// `EINTR`. musl turns that into a spurious wake unless the program has
+/// installed such a handler, working around old kernels that reported `EINTR`
+/// for restarting handlers too; the kernels this library supports do not, so
+/// it passes `EINTR` on, which POSIX allows.
+///
+/// # Safety
+///
+/// `at` must be null or valid for a read of a `struct timespec`.
+pub unsafe fn timedwait_cp(
+    atom: &AtomicI32,
+    value: c_int,
+    clock: c_int,
+    at: *const Timespec,
+    private: bool,
+) -> c_int {
+    let mut timeout = None;
+    if !at.is_null() {
+        // SAFETY: the caller vouches for a non-null `at`.
+        match unsafe { relative(clock, at) } {
+            Ok(left) => timeout = Some(left),
+            Err(error) => return error,
+        }
+    }
+    let timeout_address = crate::time::timeout_address(&mut timeout);
+    // SAFETY: the kernel reads the live atomic and the timeout, a live local
+    // or null.
+    let ret = unsafe {
+        crate::cancel::syscall_cp(
+            nr::FUTEX,
+            atom.as_ptr().addr(),
+            FUTEX_WAIT | flag(private),
+            value as usize,
+            timeout_address,
+            0,
+            0,
+        )
+    };
+    match errno::decode(ret) {
+        Err(error @ (errno::EINTR | errno::ETIMEDOUT | errno::ECANCELED)) => error,
+        _ => 0,
+    }
+}
+
+/// [`timedwait_cp`] with cancellation disabled, for waits that must not be
+/// cancellation points.
+///
+/// # Safety
+///
+/// As [`timedwait_cp`].
+pub unsafe fn timedwait(
+    atom: &AtomicI32,
+    value: c_int,
+    clock: c_int,
+    at: *const Timespec,
+    private: bool,
+) -> c_int {
+    let state = crate::cancel::set_state(crate::cancel::DISABLE);
+    // SAFETY: the caller's contract is `timedwait_cp`'s.
+    let ret = unsafe { timedwait_cp(atom, value, clock, at, private) };
+    let _ = crate::cancel::set_state(state);
+    ret
 }
 
 #[cfg(test)]
