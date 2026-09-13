@@ -16,6 +16,7 @@
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
@@ -80,6 +81,15 @@ const WAKE_AFTER_NANOS: u64 = 20_000_000;
 const PATIENCE_NANOS: u64 = 120_000_000_000;
 /// How long the spinning programs run before a job is killed under them.
 const KILL_AFTER_NANOS: u64 = 20_000_000;
+/// How many deliveries the wake check times through each kind of wait.
+const WAKE_ROUNDS: u32 = 8;
+/// A wake slower than this is slow.
+const FAST_WAKE_NANOS: u64 = 2_000_000;
+/// How much later each round of the wake check delivers than the one before:
+/// the wait's five-millisecond recheck period, divided by [`WAKE_ROUNDS`].
+const WAKE_STAGGER_NANOS: u64 = 625_000;
+/// Slow rounds of one kind the wake check forgives, for a busy host.
+const SLOW_WAKES_FORGIVEN: u32 = 2;
 
 /// What travels in the VMO, to show the handle that arrives names it.
 const SECRET: &[u8] = b"carried by a handle";
@@ -130,6 +140,10 @@ struct Counter {
     interrupts: u32,
     /// See [`DeviceReport::pinned`].
     pinned: u32,
+    /// See [`DeviceReport::wakes`].
+    wakes: u32,
+    /// See [`DeviceReport::slowest_wake`].
+    slowest_wake: u64,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -1019,6 +1033,10 @@ pub(crate) struct DeviceReport {
     pub(crate) pinned: u32,
     /// Calls refused with exactly the status they had to be refused with.
     pub(crate) refusals: u32,
+    /// Interrupt deliveries timed from delivery to the woken wait's return.
+    pub(crate) wakes: u32,
+    /// The slowest of those, in nanoseconds.
+    pub(crate) slowest_wake: u64,
 }
 
 /// The device objects: I/O mappings and interrupts, minted from the device
@@ -1060,6 +1078,8 @@ pub(crate) fn run_devices() -> Result<DeviceReport, &'static str> {
         interrupts: counter.interrupts,
         pinned: counter.pinned,
         refusals: counter.refusals,
+        wakes: counter.wakes,
+        slowest_wake: counter.slowest_wake,
     })
 }
 
@@ -1420,6 +1440,7 @@ fn check_an_interrupt_is_held_until_acknowledged(
     )?;
 
     check_a_bound_interrupt_reaches_its_port(&side, first, vector.number(), counter)?;
+    check_an_interrupt_wakes_its_waiter(&side, first, vector.number(), counter)?;
 
     let _ = side
         .call(nr::HANDLE_CLOSE, &[reg(first)])
@@ -1818,6 +1839,111 @@ fn check_a_port_wait_is_woken_by_a_message(counter: &mut Counter) -> Result<(), 
     counter.woken += 1;
     counter.packets += 1;
     side.close_everything();
+    Ok(())
+}
+
+/// The line [`fire_after_a_delay`] delivers on.
+static FIRE_LINE: AtomicU32 = AtomicU32::new(0);
+/// When it last delivered.
+static FIRED_AT: AtomicU64 = AtomicU64::new(0);
+
+/// A kernel thread that delivers an interrupt `extra` nanoseconds after the
+/// usual delay, noting when.
+///
+/// Through the function the interrupt handler calls, from a thread rather than
+/// an interrupt, so that the delivery is timed from a known moment. The wakes
+/// it issues are the ones a real delivery issues.
+fn fire_after_a_delay(extra: usize) {
+    let extra = u64::try_from(extra).unwrap_or(0);
+    crate::sched::sleep_for(WAKE_AFTER_NANOS.saturating_add(extra));
+    FIRED_AT.store(crate::timer::now_nanos(), Ordering::Release);
+    interrupt::on_interrupt(FIRE_LINE.load(Ordering::Acquire));
+}
+
+/// A delivered interrupt wakes a task waiting on it, and a task waiting on the
+/// port it is bound to, rather than leaving either to find it at its wait's
+/// recheck.
+///
+/// [`WAKE_ROUNDS`] deliveries each way, from another thread after a delay,
+/// timed from the delivery to the wait's return. A round slower than
+/// [`FAST_WAKE_NANOS`] is slow, and more than [`SLOW_WAKES_FORGIVEN`] slow
+/// rounds of one kind fail: a woken task can still wait out the slice of
+/// whatever runs on its processor.
+///
+/// # Staggered, or the recheck passes for a wake
+///
+/// A wait rechecks five milliseconds after it started, and so on, and the
+/// firer starts with it. A delay that is a whole number of recheck periods
+/// would put every delivery just before a recheck, and a wait nobody woke would
+/// come back at once. So each round delivers [`WAKE_STAGGER_NANOS`] later than
+/// the last, spreading the deliveries across the period: a wait left to its
+/// recheck is slow in about five rounds of eight.
+///
+/// Called with the interrupt acknowledged, and leaves it acknowledged, bound to
+/// a port that is closed.
+fn check_an_interrupt_wakes_its_waiter(
+    side: &Side,
+    interrupt: Handle,
+    number: u32,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
+    side.put(KEY, &43_u64.to_ne_bytes())?;
+    let _ = side
+        .call(nr::INTERRUPT_BIND, &[reg(interrupt), reg(port), KEY])
+        .map_err(|_| "binding an interrupt for the wake check failed")?;
+    FIRE_LINE.store(number, Ordering::Release);
+    let readable = u64::from(Signals::READABLE.0);
+
+    // The port first: every delivery queues a packet on it, and the waits on
+    // the interrupt itself leave theirs unread.
+    for (through_port, not_woken) in [
+        (
+            true,
+            "an interrupt's port waiter was not woken by the delivery",
+        ),
+        (false, "an interrupt's waiter was not woken by the delivery"),
+    ] {
+        let mut slow = 0;
+        for round in 0..WAKE_ROUNDS {
+            let extra = u64::from(round).saturating_mul(WAKE_STAGGER_NANOS);
+            let _firer = crate::sched::spawn(
+                "interrupt firer",
+                fire_after_a_delay,
+                usize::try_from(extra).unwrap_or(0),
+                ferrix_sched::NICE_0_WEIGHT,
+            )
+            .map_err(|_| "could not start the interrupt firer")?;
+            stage_deadline(side, PATIENCE_NANOS)?;
+            let woke = if through_port {
+                side.call(nr::PORT_WAIT, &[reg(port), DEADLINE, PACKET_AT])
+            } else {
+                side.call(
+                    nr::OBJECT_WAIT_ONE,
+                    &[reg(interrupt), readable, DEADLINE, OBSERVED],
+                )
+            };
+            let latency =
+                crate::timer::now_nanos().saturating_sub(FIRED_AT.load(Ordering::Acquire));
+            if woke != Ok(0) {
+                return Err("a wait on an interrupt about to be delivered failed");
+            }
+            if latency > FAST_WAKE_NANOS {
+                slow += 1;
+            }
+            counter.wakes += 1;
+            counter.slowest_wake = counter.slowest_wake.max(latency);
+            let _ = side
+                .call(nr::INTERRUPT_ACK, &[reg(interrupt)])
+                .map_err(|_| "acknowledging a timed delivery failed")?;
+        }
+        if slow > SLOW_WAKES_FORGIVEN {
+            return Err(not_woken);
+        }
+    }
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(port)])
+        .map_err(|_| "closing the wake check's port failed")?;
     Ok(())
 }
 

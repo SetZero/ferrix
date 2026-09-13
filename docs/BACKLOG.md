@@ -148,7 +148,6 @@ nobody has it yet.
 | Trusting a BAR firmware placed but did not enable | ferrix-d9 | 10 |
 | btrfs: CI Miri step for `libs/btrfs` and `libs/block` under 15 minutes, whole-image tests ignored under Miri | ferrix-61 | 11 |
 | Process observers, so a port can watch a process end | ferrix-4b, reviewed by ferrix-a5 | 9, for `devmgr` |
-| An interrupt wakes its port waiter at once, not at the 5 ms recheck | ferrix-34 | 9, on the virtio-blk latency path |
 | `mprotect` leaves stale translations: `AddressSpace::protect` must invalidate, shown by a user-mode check | ferrix-e5 | 6 |
 | A user-mode copy-on-write write check, and a `MAP_SHARED` write check | ferrix-e5 | 6 |
 | `SA_RESTART`; boot checks that drive `SIGCHLD`, stop and continue, `alarm`, `sigaltstack` and fault-to-signal | ferrix-a5 | 7; `rustc` needs `SIGSEGV` on the alternate stack |

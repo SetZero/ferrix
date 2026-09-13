@@ -12,14 +12,17 @@
 //! therefore cannot keep a processor in the handler, and a driver that has
 //! wedged costs one masked line rather than an interrupt storm.
 //!
-//! # What an interrupt handler may not do
+//! # What an interrupt handler may do
 //!
-//! A plain `SpinLock` must never be taken in an interrupt handler, and a
-//! `WaitQueue` is one. So the handler touches nothing but atomics and the
-//! interrupt-safe table below, and does not wake a waiter: a task waiting on
-//! an interrupt notices it through the wait's periodic recheck, within five
-//! milliseconds. That latency is written down in the roadmap as debt, until
-//! there is a wake that can be issued from interrupt context.
+//! Take interrupt-safe locks, and wake. The handler marks the object pending
+//! and queues its port's packet under interrupt-safe locks only, lets go of
+//! them, and then wakes whoever waits on the interrupt and on the port.
+//! `WaitQueue::wake_all` may be called from a handler: its own lock and every
+//! run queue's are taken with interrupts masked, it allocates nothing, and it
+//! leaves the reschedule to the way out of the interrupt or to an IPI. What it
+//! must not be called with is a lock it needs already held, which is why the
+//! binding's lock is released first. A plain `SpinLock` is still never taken
+//! here.
 //!
 //! # One kernel handler per line, for good
 //!
@@ -38,6 +41,7 @@ use super::port::Port;
 use crate::arch;
 use crate::device::Vector;
 use crate::irq;
+use crate::sched::WaitQueue;
 
 /// The live `Interrupt` on each line, by vector number.
 static BOUND: IrqSpinLock<BTreeMap<u32, Weak<Interrupt>>, arch::Irq> =
@@ -81,6 +85,8 @@ pub(crate) struct Interrupt {
     /// serialises the two: a delivery and a bind racing on two processors
     /// produce exactly one packet between them, never none and never two.
     binding: IrqSpinLock<Option<Binding>, arch::Irq>,
+    /// Woken by the handler each time it goes from quiet to pending.
+    waiters: WaitQueue,
 }
 
 impl Interrupt {
@@ -105,6 +111,7 @@ impl Interrupt {
             vector,
             pending: AtomicBool::new(false),
             binding: IrqSpinLock::new(None),
+            waiters: WaitQueue::new(),
         });
 
         {
@@ -176,24 +183,38 @@ impl Interrupt {
         Ok(())
     }
 
-    /// Mark it pending, and queue its packet if it is bound and was quiet.
-    /// From its interrupt handler: atomics and interrupt-safe locks only.
+    /// Mark it pending, queue its packet if it is bound and was quiet, and
+    /// wake whoever waits on it and on its port.
+    ///
+    /// From its interrupt handler. The marking and the packet happen under
+    /// interrupt-safe locks only, and the wakes after those are released: see
+    /// the module documentation.
     fn fire(&self) {
-        let binding = self.binding.lock();
-        if self.pending.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let Some(bound) = binding.as_ref() else {
-            return;
+        let port = {
+            let binding = self.binding.lock();
+            if self.pending.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            binding.as_ref().and_then(|bound| {
+                let port = bound.port.upgrade()?;
+                let _ = port.queue_from_interrupt(bound.key, crate::timer::now_nanos());
+                Some(port)
+            })
         };
-        if let Some(port) = bound.port.upgrade() {
-            let _ = port.queue_from_interrupt(bound.key, crate::timer::now_nanos());
+        self.waiters.wake_all();
+        if let Some(port) = port {
+            port.waiters().wake_all();
         }
     }
 
     /// Whether it has fired and not been acknowledged.
     pub(crate) fn is_pending(&self) -> bool {
         self.pending.load(Ordering::Acquire)
+    }
+
+    /// The queue woken when it fires.
+    pub(crate) fn waiters(&self) -> &WaitQueue {
+        &self.waiters
     }
 
     /// The driver has serviced the device: clear pending and let the line

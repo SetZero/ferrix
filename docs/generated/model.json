@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "1e538fa5c4b3e8ab085714df4203972d9ef54d2470294c7bb2dbe358a6e4abd2",
+  "digest": "f3c14a4e657306196757afa5a45465d4b6732ba15a18df20039c6e39ba387104",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -14829,7 +14829,7 @@
           "shortName": "S9",
           "type": "Stage",
           "maturity": "implemented",
-          "doc": "Handle tables, Channel with handle passing, Port, Interrupt, IoMapping, Job; the 0x1000 syscalls. Exit: two processes exchange messages and a handle over a channel, and a Job kill takes down a process tree.\n\nBuilt: the byte-level half, in libs/native-abi and libs/objects, host-tested, fuzzed and under Miri; and in kernel/src/object and syscall/native, handle tables on every Process, channels carrying handles, VMOs, signals and object_wait_one, Job, ports with object_wait_async, and IoMapping and Interrupt minted from stage 10's device nodes, with interrupts delivered to ports. The exit criterion runs in the boot test: two user-mode programs exchange a message and a VMO handle over a channel, and a job kill ends every program in the job and beneath it. Left for later: an interrupt-safe wake, vmo_map, sub-page apertures, and process creation in the native ABI. Vmo::hold, which keeps a page a DMA pin holds on its frame, is in.",
+          "doc": "Handle tables, Channel with handle passing, Port, Interrupt, IoMapping, Job; the 0x1000 syscalls. Exit: two processes exchange messages and a handle over a channel, and a Job kill takes down a process tree.\n\nBuilt: the byte-level half, in libs/native-abi and libs/objects, host-tested, fuzzed and under Miri; and in kernel/src/object and syscall/native, handle tables on every Process, channels carrying handles, VMOs, signals and object_wait_one, Job, ports with object_wait_async, and IoMapping and Interrupt minted from stage 10's device nodes, with interrupts delivered to ports. The exit criterion runs in the boot test: two user-mode programs exchange a message and a VMO handle over a channel, and a job kill ends every program in the job and beneath it. Since: Vmo::hold, which keeps a page a DMA pin holds on its frame, and an interrupt that wakes its waiter from the handler. Left for later: vmo_map, sub-page apertures, and process creation in the native ABI.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 231

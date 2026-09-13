@@ -245,10 +245,10 @@ package FerrixRoadmap {
              * 10's device nodes, with interrupts delivered to ports. The exit
              * criterion runs in the boot test: two user-mode programs exchange
              * a message and a VMO handle over a channel, and a job kill ends
-             * every program in the job and beneath it. Left for later: an
-             * interrupt-safe wake, vmo_map, sub-page apertures, and process
-             * creation in the native ABI. Vmo::hold, which keeps a page a DMA pin
-             * holds on its frame, is in. */
+             * every program in the job and beneath it. Since: Vmo::hold, which
+             * keeps a page a DMA pin holds on its frame, and an interrupt that
+             * wakes its waiter from the handler. Left for later: vmo_map,
+             * sub-page apertures, and process creation in the native ABI. */
     }
 
     #inProgress requirement <'S10'> stage10UserspaceDrivers : Stage {

@@ -103,14 +103,9 @@ impl Object {
             Object::Channel(endpoint) => endpoint.waiters(),
             Object::Job(job) => job.waiters(),
             Object::Port(port) => port.waiters(),
-            // An interrupt is quiet too, but not because its signals never
-            // change: they change in an interrupt handler, which may not take
-            // a wait queue's lock. A waiter notices through its recheck.
-            Object::Vmo(_)
-            | Object::Device(_)
-            | Object::Interrupt(_)
-            | Object::IoMapping(_)
-            | Object::Pin(_) => &QUIET,
+            // Woken from the interrupt handler itself; see `interrupt`.
+            Object::Interrupt(interrupt) => interrupt.waiters(),
+            Object::Vmo(_) | Object::Device(_) | Object::IoMapping(_) | Object::Pin(_) => &QUIET,
         }
     }
 }

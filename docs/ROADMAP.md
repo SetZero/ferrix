@@ -1522,6 +1522,18 @@ a system call could resume with another program's user stack pointer; stage
 7's `144b0cc` fixed it. The job check found that a kill never reached a
 program spinning alone on its processor; `301aec4` fixed that.
 
+**Done — an interrupt wakes its waiter at once.** The handler marks the
+interrupt pending and queues its port's packet under interrupt-safe locks,
+lets go of them, and wakes whoever waits on the interrupt and on the port.
+Since `0cda8de` made a wait queue's lock interrupt-safe, `WaitQueue::wake_all`
+may be called from a handler as it is: every lock it takes is taken with
+interrupts masked, it allocates nothing, and it leaves the reschedule to the
+way out of the interrupt or to an IPI. The device check times sixteen
+deliveries from another thread, eight waited on through the interrupt and
+eight through its port, staggered across the five-millisecond recheck period
+so that the recheck cannot pass for a wake, and fails if more than two of
+either take over 2 ms; left to the recheck, about five of eight would.
+
 **Left for later stages**, none of it on the exit criterion's path:
 
 * `vmo_map`. What a DMA pin needs from the VMO under it is in: `Vmo::hold`
@@ -1529,10 +1541,6 @@ program spinning alone on its processor; `301aec4` fixed that.
   Decommitting skips the page, a copy-on-write replace is refused, and a fork
   copies it instead of sharing it; a stage 6 self-check walks a held page
   through each of those and through nested holds.
-* **An interrupt wakes its waiter within five milliseconds, not at once.** A
-  wait queue takes a plain lock, which an interrupt handler may not, so the
-  handler only masks and marks and the waiter notices through its wait's
-  recheck. Waking from interrupt context needs an interrupt-safe wake.
 * Sub-page apertures, which need each access trapped. (An `Interrupt` on
   x86-64, masked in the device's own MSI-X table, came with stage 10's PCI
   vectors.)

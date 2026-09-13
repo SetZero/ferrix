@@ -594,6 +594,13 @@ fn check_device_objects() {
          device and found at their device addresses, {} refusals as specified",
         report.mapped, report.interrupts, report.pinned, report.refusals,
     );
+    if report.wakes > 0 {
+        println!(
+            "  wake     {} interrupt deliveries woke their waiters, the slowest after {} us",
+            report.wakes,
+            report.slowest_wake / 1_000,
+        );
+    }
 }
 
 /// Stage 10: find every PCI function, size its BARs and walk its

@@ -26,9 +26,9 @@
 //!
 //! # The queue's lock is interrupt-safe
 //!
-//! So that an interrupt handler can queue a packet once interrupts are bound
-//! to ports. Waking a waiter is still not something a handler may do; see
-//! `object::interrupt`.
+//! So that an interrupt handler can queue a packet for an interrupt bound to
+//! the port. The handler wakes the port's waiters once it has let go of this
+//! lock; see `object::interrupt`.
 
 use alloc::collections::VecDeque;
 use alloc::sync::{Arc, Weak};
@@ -111,9 +111,9 @@ impl Port {
     /// Touches only this queue's interrupt-safe lock and allocates nothing: a
     /// queue already at its reserved capacity drops the packet, and the
     /// interrupt stays pending, which a wait on the interrupt itself still
-    /// sees. Wakes no waiter, because a wait queue's lock may not be taken in
-    /// an interrupt handler; a waiter notices through its recheck. Returns
-    /// whether the packet was queued.
+    /// sees. Wakes no waiter: the handler does that once it has let go of
+    /// this lock and the interrupt's own. Returns whether the packet was
+    /// queued.
     pub(crate) fn queue_from_interrupt(&self, key: u64, fired_at: u64) -> bool {
         let mut queue = self.queue.lock();
         if queue.len() >= queue.capacity() {
