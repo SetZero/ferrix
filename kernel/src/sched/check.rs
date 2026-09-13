@@ -19,9 +19,16 @@
 //!
 //! A request is the slice, plus however late the timer cut it — under an
 //! emulator whose host can deschedule a whole virtual processor, that lateness
-//! is not a rounding error. So the bound is not a constant: the scheduler
-//! records the worst overrun it actually served, and the check requires the
-//! worst lag to be inside a slice plus that. Both numbers go in the boot log,
+//! is not a rounding error. So the bound is not a constant: each processor
+//! adds up every overrun it served while the window was open, and the check
+//! requires that processor's worst lag to be inside a slice plus that sum. The
+//! sum rather than the worst one, because each overrun is time one task was
+//! charged without being chosen for it, and nothing stops them all landing on
+//! the same task. And the lags are levelled when the window opens, because
+//! what a processor was charged *before* the window is not the window's to
+//! repay: a host stall while the first spinner ran alone left its siblings
+//! owed sixteen milliseconds, EEVDF paid them inside the window, and the
+//! check read the payment as a violation. Both numbers go in the boot log,
 //! because a bound that moves is only honest if it is printed.
 
 use alloc::sync::Arc;
@@ -1005,16 +1012,30 @@ fn fairness(topology: &Topology, report: &mut Report) -> Result<(), &'static str
         "a spinner never stopped",
     )?;
 
-    let summary = super::summary();
     report.spinners = spinners.len();
-    report.worst_lag = summary.worst_lag;
-    report.bound = SLICE_NS.saturating_add(summary.worst_overrun);
+    // Per processor: the lag a queue measured is bounded by the overruns that
+    // queue served, not by another's. The boot log carries the worst lag and
+    // the bound it was held to.
+    let mut bounds = Vec::with_capacity(topology.online());
+    for cpu in 0..topology.online() {
+        let measured = super::cpu_report(cpu).ok_or("a processor has no queue")?;
+        let bound = SLICE_NS.saturating_add(measured.overrun_total);
+        if measured.worst_lag > report.worst_lag {
+            report.worst_lag = measured.worst_lag;
+            report.bound = bound;
+        }
+        bounds.push(bound);
+    }
 
-    if report.worst_lag > report.bound {
-        describe_shares(topology, &spinners, report.bound);
+    if bounds
+        .iter()
+        .enumerate()
+        .any(|(cpu, bound)| super::cpu_report(cpu).is_some_and(|m| m.worst_lag > *bound))
+    {
+        describe_shares(topology, &spinners, &bounds);
         return Err("a task's service strayed further from its share than EEVDF allows");
     }
-    shares_are_proportional(topology, &spinners, report.bound)?;
+    shares_are_proportional(topology, &spinners, &bounds)?;
 
     reap_to(allocations, "fairness")?;
     drop(spinners);
@@ -1059,9 +1080,10 @@ fn start_spinners(topology: &Topology) -> Result<Vec<Arc<Task>>, &'static str> {
 fn shares_are_proportional(
     topology: &Topology,
     spinners: &[Arc<Task>],
-    bound: u64,
+    bounds: &[u64],
 ) -> Result<(), &'static str> {
     for cpu in 0..topology.online() {
+        let bound = bounds.get(cpu).copied().unwrap_or(SLICE_NS);
         let group: Vec<&Arc<Task>> = spinners
             .iter()
             .skip(cpu * SPINNERS_PER_CPU)
@@ -1084,7 +1106,7 @@ fn shares_are_proportional(
             let had = u128::from(task.measured_runtime());
             let share = total * u128::from(task.entity_state().weight) / weights;
             if share.abs_diff(had) > u128::from(bound) {
-                describe_shares(topology, spinners, bound);
+                describe_shares(topology, spinners, bounds);
                 return Err("a task's share of its processor was not its weight's share");
             }
         }
@@ -1098,12 +1120,15 @@ fn shares_are_proportional(
 ///
 /// Which task it was says whether the weights or the accounting is at fault,
 /// and which processor says whether the host stalled one of them.
-fn describe_shares(topology: &Topology, spinners: &[Arc<Task>], bound: u64) {
+fn describe_shares(topology: &Topology, spinners: &[Arc<Task>], bounds: &[u64]) {
     for cpu in 0..topology.online() {
+        let bound = bounds.get(cpu).copied().unwrap_or(SLICE_NS);
         if let Some(report) = super::cpu_report(cpu) {
             crate::console::println!(
-                "  fair     cpu {cpu} measured worst lag {} us, worst overrun {} us, {} picks, {} against the scan",
+                "  fair     cpu {cpu} measured worst lag {} us against a bound of {} us; overruns {} us in all, {} us at worst; {} picks, {} against the scan",
                 report.worst_lag / 1000,
+                bound / 1000,
+                report.overrun_total / 1000,
                 report.worst_overrun / 1000,
                 report.picks,
                 report.wrong_picks,

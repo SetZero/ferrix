@@ -649,6 +649,34 @@ check shown to fail without the fix:
   behind a spinner running with interrupts masked, then spins, and requires
   the pulled task to run.
 
+**Four intermittent failures, found a day later and each a real bug.** Stage
+5's checks had been failing one boot in three to six on a loaded host, and
+had been counted as noise for a day. Probes printed from the worker tasks,
+not the checker, and a per-pick trace found them:
+
+* *"a task's stack was never given back"* — the idle loop reaped the whole
+  zombie list at once and could be switched out mid-batch when the checker
+  was woken onto its processor; the checker then yielded forever waiting for
+  stacks the idle task held. The idle task now frees one stack at a time and
+  is not switched out while holding one.
+* *The thousand-task check taking 20–50 s* — the wait queue's lock was a
+  plain ticket lock taken with interrupts on. A worker preempted inside the
+  few instructions it is held started a convoy: every finishing worker spun
+  its slice away holding a ticket, and each hand-off cost a full round of the
+  queue. Two hundred thousand switches to run a thousand tasks. A holder with
+  interrupts masked cannot be preempted, so that lock now masks them. Any
+  plain spin lock taken from a task with interrupts on is exposed to the same
+  thing once contended.
+* *"every thread ran on one processor"* and *"a balancing task never
+  started"* — a task spawned onto the spawner's own tickless processor, or
+  pulled there by the balancer, waited for an interrupt that never came.
+* *"a task's service strayed further from its share than EEVDF allows"* —
+  not the scheduler. Lag carried *into* the window: a host stall while the
+  first spinner ran alone was charged to it as service, EEVDF repaid its
+  siblings inside the window, and the check read the repayment as a
+  violation. The window now levels every lag when it opens, and its bound is
+  a slice plus the sum of the overruns that processor served inside it.
+
 **Still missing against Linux**, none of it on stage 6's path: group scheduling
 and bandwidth control, which are stage 13; the real-time classes, which are
 stage 14; and NUMA and capacity awareness, which need a topology this kernel

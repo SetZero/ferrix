@@ -539,8 +539,8 @@ pub(crate) static STAGE5_SCHEDULER: Explanation = Explanation {
         "An exited task's stack was never given back to the vmap arena; the arena's count and \
          the expected count are printed before the panic.",
         "The emulator's host descheduled virtual processors for long stretches, delaying a \
-         sleep or distorting measured service; the fairness bound grows with the overrun the \
-         scheduler saw, but a sleep twenty times late fails regardless.",
+         sleep or distorting measured service; the fairness bound grows with the overruns a \
+         processor served inside the window, but a sleep twenty times late fails regardless.",
         "Stealing, placement or balancing moved nothing between processors, or a task ran \
          on a processor its affinity excluded.",
     ],

@@ -1401,9 +1401,15 @@ pub(crate) fn reap() -> usize {
 /// that the shares read afterwards end where the window did.
 pub(crate) fn open_window(tasks: &[Arc<Task>]) {
     for_each_queue_charged(|cpu, queue| {
+        // Charged up to now, and then levelled: whatever anyone was owed or
+        // ahead by before this instant — including a host stall charged to
+        // whichever spinner was running while its siblings were still being
+        // made — is not the window's to repay. See `RunQueue::level`.
+        queue.fair.level();
         queue.stats.measuring = true;
         queue.stats.worst_lag = 0;
         queue.stats.worst_overrun = 0;
+        queue.stats.overrun_total = 0;
         queue.stats.picks = 0;
         queue.stats.wrong_picks = 0;
         queue.trace = [queue::Pick::default(); queue::TRACE_PICKS];
@@ -1588,6 +1594,8 @@ pub(crate) struct CpuReport {
     pub(crate) worst_lag: u64,
     /// The worst overrun it has served.
     pub(crate) worst_overrun: u64,
+    /// Every overrun it served while the last window was open, added up.
+    pub(crate) overrun_total: u64,
     /// Picks made while the last window was open.
     pub(crate) picks: u64,
     /// Of those, picks a scan of the queue disagreed with.
@@ -1607,6 +1615,7 @@ pub(crate) fn cpu_report(cpu: usize) -> Option<CpuReport> {
             queued: queue.len(),
             worst_lag: queue.stats.worst_lag,
             worst_overrun: queue.stats.worst_overrun,
+            overrun_total: queue.stats.overrun_total,
             picks: queue.stats.picks,
             wrong_picks: queue.stats.wrong_picks,
         }

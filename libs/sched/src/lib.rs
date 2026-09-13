@@ -79,6 +79,7 @@ mod tree;
 mod tests;
 
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use core::fmt;
 
 pub use balance::{
@@ -618,6 +619,50 @@ impl<T> RunQueue<T> {
         } else {
             to_real(left as u64, curr.weight)
         })
+    }
+
+    /// Forgive every lag: put every entity, running or waiting, at the queue's
+    /// virtual time with a fresh deadline a slice away, so that from here on
+    /// nobody is owed anything and nobody is ahead.
+    ///
+    /// For measuring the scheduler, not for scheduling with. A window that
+    /// measures each entity's service against its share assumes every entity
+    /// starts the window even; it does not, because everything that happened
+    /// before is still in the lags — and on an emulator the host can stall a
+    /// processor for tens of milliseconds while one entity is charged for
+    /// them as if it had run. The queue then spends the window repaying a debt
+    /// that was never service, and the measurement reads the repayment as
+    /// unfairness. Levelling first makes the window measure only what the
+    /// queue decides inside it.
+    ///
+    /// The virtual time itself does not move: every entity goes to the
+    /// average, which leaves the average where it was.
+    pub fn level(&mut self) {
+        let avg = self.avg_vruntime();
+        let slice_ns = self.config.slice_ns;
+        let mut keys = Vec::with_capacity(self.tree.len());
+        self.tree.for_each(|entity| keys.push(entity.key()));
+        let mut entities = Vec::with_capacity(keys.len());
+        for key in keys {
+            if let Some(entity) = self.tree.remove(key) {
+                entities.push(entity);
+            }
+        }
+        self.deadlines.clear();
+        if let Some(curr) = self.curr.as_mut() {
+            curr.vruntime = avg;
+            curr.deadline = avg.wrapping_add(to_virtual(slice_ns, curr.weight));
+        }
+        for mut entity in entities {
+            entity.vruntime = avg;
+            entity.deadline = avg.wrapping_add(to_virtual(slice_ns, entity.weight));
+            let _ = self.deadlines.insert(entity.id, entity.deadline);
+            self.tree.insert(entity);
+        }
+        // Everything sits at the average, so the weighted sum about it is
+        // nothing, and the base may as well be the average itself.
+        self.zero = avg;
+        self.sum = 0;
     }
 
     /// Take the running entity off the queue — it is blocking, exiting or

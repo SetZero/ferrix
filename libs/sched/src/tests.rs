@@ -419,6 +419,47 @@ fn removing_the_running_entity_by_name_works_like_remove_curr() {
 }
 
 #[test]
+fn levelling_forgives_every_lag_and_keeps_the_average() {
+    let mut queue = queue();
+    for id in 1..=3 {
+        queue
+            .enqueue(id, id, EntityState::new(NICE_0_WEIGHT))
+            .unwrap();
+    }
+    // Run one entity well past everybody: it is far ahead, the others owed.
+    let _ = queue.pick_next();
+    let _ = queue.update_curr(SLICE * 7);
+    let avg_before = queue.avg_vruntime();
+    assert!(
+        queue.for_each_lag().iter().any(|lag| *lag != 0),
+        "the setup should have created lag"
+    );
+
+    queue.level();
+
+    check(&queue);
+    assert_eq!(
+        queue.avg_vruntime(),
+        avg_before,
+        "levelling keeps the virtual time"
+    );
+    assert!(
+        queue.for_each_lag().iter().all(|lag| *lag == 0),
+        "every lag is forgiven: {:?}",
+        queue.for_each_lag()
+    );
+    assert_eq!(queue.len(), 3, "nothing was lost");
+    // And the queue still schedules: three picks visit three entities.
+    let mut seen = alloc::vec::Vec::new();
+    for _ in 0..3 {
+        seen.push(*queue.pick_next().unwrap());
+        let _ = queue.update_curr(SLICE);
+    }
+    seen.sort_unstable();
+    assert_eq!(seen, alloc::vec![1, 2, 3], "everyone still gets a turn");
+}
+
+#[test]
 fn virtual_time_that_wraps_still_orders() {
     let mut queue = queue();
     queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
@@ -446,6 +487,15 @@ fn virtual_time_that_wraps_still_orders() {
 /// The pick a brute-force search over `queue`'s entities would make: the
 /// earliest deadline, then the lowest identifier, among those whose lag is
 /// not negative.
+impl RunQueue<u64> {
+    /// Every entity's lag, running one first.
+    fn for_each_lag(&self) -> alloc::vec::Vec<i64> {
+        let mut lags = alloc::vec::Vec::new();
+        self.for_each(|view| lags.push(view.lag));
+        lags
+    }
+}
+
 fn brute_force_pick(queue: &RunQueue<u64>) -> Option<u64> {
     let mut best: Option<(u64, u64)> = None;
     queue.for_each(|view| {

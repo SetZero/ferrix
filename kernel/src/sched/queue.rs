@@ -70,6 +70,11 @@ pub(crate) struct Stats {
     pub(crate) stolen_out: u64,
     /// The most any task ran past its deadline before being switched out.
     pub(crate) worst_overrun: u64,
+    /// Every overrun served while the window was open, added up. What the
+    /// fairness bound has to allow for: each is time one task was charged
+    /// without the scheduler having chosen to give it, and in the worst case
+    /// they all landed on the same task.
+    pub(crate) overrun_total: u64,
     /// The most any task's service strayed from its share while a measurement
     /// window was open.
     pub(crate) worst_lag: u64,
@@ -277,6 +282,9 @@ impl CpuQueue {
         if self.fair.update_curr(delta) {
             let overrun = delta.saturating_sub(remaining);
             self.stats.worst_overrun = self.stats.worst_overrun.max(overrun);
+            if self.stats.measuring {
+                self.stats.overrun_total = self.stats.overrun_total.saturating_add(overrun);
+            }
         }
         if self.stats.measuring {
             self.measure();

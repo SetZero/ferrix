@@ -544,8 +544,8 @@ user process included, is scheduled by the code this measures.
    count and the expected count are printed before the panic.
 3. The emulator's host descheduled virtual processors for long stretches,
    delaying a sleep or distorting measured service; the fairness bound grows
-   with the overrun the scheduler saw, but a sleep twenty times late fails
-   regardless.
+   with the overruns a processor served inside the window, but a sleep twenty
+   times late fails regardless.
 4. Stealing, placement or balancing moved nothing between processors, or a task
    ran on a processor its affinity excluded.
 
