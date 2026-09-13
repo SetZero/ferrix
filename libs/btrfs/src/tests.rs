@@ -1733,3 +1733,79 @@ fn the_lookup_table_matches_the_polynomial() {
         );
     }
 }
+
+/// One `INODE_EXTREF` record.
+fn inode_extref(parent: u64, index: u64, name: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&parent.to_le_bytes());
+    bytes.extend_from_slice(&index.to_le_bytes());
+    bytes.extend_from_slice(&u16::try_from(name.len()).unwrap().to_le_bytes());
+    bytes.extend_from_slice(name);
+    bytes
+}
+
+#[test]
+fn the_extref_hash_is_the_key_offset_mkfs_btrfs_files_extrefs_under() {
+    // From `btrfs inspect-internal dump-tree` of an image mkfs.btrfs 6.17.1
+    // made from a directory holding 300 hard links to one file, which forces
+    // INODE_EXTREF: `key (258 INODE_EXTREF 16484832)` names `link-160-` and 200
+    // zeros in directory 257, and `key (258 INODE_EXTREF 37574397)` names
+    // `link-178-` and 200 zeros there.
+    let name = |prefix: &[u8]| {
+        let mut bytes = prefix.to_vec();
+        bytes.extend_from_slice(&[b'0'; 200]);
+        bytes
+    };
+    assert_eq!(items::extref_hash(257, &name(b"link-160-")), 16_484_832);
+    assert_eq!(items::extref_hash(257, &name(b"link-178-")), 37_574_397);
+}
+
+#[test]
+fn inode_extref_records_parse_and_ones_linux_refuses_are_refused() {
+    use crate::items::{
+        FIRST_FREE_OBJECTID, INODE_EXTREF_KEY, InodeExtrefIter, LAST_FREE_OBJECTID,
+    };
+    let mut two = inode_extref(257, 7, b"first");
+    two.extend(inode_extref(300, 8, b"second"));
+    let records: Vec<_> = InodeExtrefIter::new(&two).map(Result::unwrap).collect();
+    assert_eq!(records.len(), 2, "records follow one another");
+    assert_eq!(
+        (records[0].parent, records[0].index, records[0].name),
+        (257, 7, &b"first"[..])
+    );
+    assert_eq!(
+        (records[1].parent, records[1].index, records[1].name),
+        (300, 8, &b"second"[..])
+    );
+
+    let bad = BtrfsError::BadItem {
+        item_type: INODE_EXTREF_KEY,
+    };
+    let refused = |payload: &[u8]| InodeExtrefIter::new(payload).any(|record| record == Err(bad));
+    assert!(
+        !refused(&inode_extref(257, 1, &[b'x'; 255])),
+        "a 255-byte name parses"
+    );
+    assert!(
+        refused(&inode_extref(257, 1, b"")),
+        "an empty name is refused"
+    );
+    assert!(
+        refused(&inode_extref(257, 1, &[b'x'; 256])),
+        "so is one over 255 bytes"
+    );
+    assert!(
+        refused(&inode_extref(FIRST_FREE_OBJECTID - 1, 1, b"x")),
+        "a parent below the first free id is no directory a file is in"
+    );
+    assert!(
+        refused(&inode_extref(LAST_FREE_OBJECTID + 1, 1, b"x")),
+        "nor is one above the last"
+    );
+    let whole = inode_extref(257, 1, b"name");
+    assert!(
+        refused(&whole[..whole.len() - 1]),
+        "a name cut short is refused"
+    );
+    assert!(refused(&whole[..17]), "and so is a header cut short");
+}

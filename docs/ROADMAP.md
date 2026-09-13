@@ -2061,6 +2061,9 @@ logic `cargo test`, Miri and a fuzzer can reach.
   `btrfs_data_csum_ok` fails the read. `NODATASUM` files are read unchecked, and
   inline extents are covered by their node's checksum. Checksum items are held
   to `check_csum_item`. A damaged sector reads as an error, never as bytes.
+* **`INODE_EXTREF`** records parse, held to `check_inode_extref`, and their key
+  hash matches the offsets `mkfs.btrfs` filed real extrefs under. Nothing reads
+  back-references yet: lookups and listings use directory entries.
 * `libs/btrfs-vfs` — the mount: stage 8's `FileSystem` and `Inode` over the
   read path, read-only, holding no lock across I/O. Tested through the trait,
   and through `Namespace` at `/mnt` on a tmpfs root.

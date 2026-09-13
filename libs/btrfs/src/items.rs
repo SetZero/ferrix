@@ -63,6 +63,9 @@ pub const ROOT_TREE_DIR_OBJECTID: u64 = 6;
 pub const CSUM_TREE_OBJECTID: u64 = 7;
 /// The first object id a file may use; everything below is reserved.
 pub const FIRST_FREE_OBJECTID: u64 = 256;
+/// The last object id a file may use: Linux's `BTRFS_LAST_FREE_OBJECTID`,
+/// `-256` as a `u64`. The ids above it are reserved for special objects.
+pub const LAST_FREE_OBJECTID: u64 = 0u64.wrapping_sub(256);
 /// Object id every `EXTENT_CSUM` item in the checksum tree is filed under:
 /// Linux's `BTRFS_EXTENT_CSUM_OBJECTID`, `-10` as a `u64`.
 pub const EXTENT_CSUM_OBJECTID: u64 = 0u64.wrapping_sub(10);
@@ -366,6 +369,113 @@ impl<'a> Iterator for InodeRefIter<'a> {
                 self.done = true;
                 Some(Err(BtrfsError::BadItem {
                     item_type: INODE_REF_KEY,
+                }))
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// INODE_EXTREF
+// ---------------------------------------------------------------------------
+
+/// The key offset an `INODE_EXTREF` item is filed under: Linux's
+/// `btrfs_extref_hash`, `crc32c(parent_objectid, name, len)`.
+///
+/// The kernel's `crc32c` is the raw register, as in [`name_hash`]: seeded with
+/// the parent's low 32 bits, since that is all a `u32` seed keeps, and not
+/// complemented at the end.
+#[must_use]
+pub fn extref_hash(parent: u64, name: &[u8]) -> u64 {
+    let low = parent.to_le_bytes();
+    let seed = u32::from_le_bytes([low[0], low[1], low[2], low[3]]);
+    u64::from(crc32c_update(seed, name))
+}
+
+/// One extended back-reference: a name this inode is known by, and the
+/// directory that name is in.
+///
+/// Volumes with `EXTENDED_IREF` use it once an inode's `INODE_REF` for one
+/// directory would no longer fit in a leaf, as with many hard links. Unlike an
+/// [`InodeRef`], the directory is in the record, and the key's `offset` is
+/// [`extref_hash`] of directory and name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InodeExtref<'a> {
+    /// The directory holding the name.
+    pub parent: u64,
+    /// Position of the entry within that directory, matching the `DIR_INDEX`
+    /// key offset.
+    pub index: u64,
+    /// The name, as raw bytes.
+    pub name: &'a [u8],
+}
+
+/// Iterator over the records packed into one `INODE_EXTREF` item.
+///
+/// Names whose hashes collide share an item, so it may hold more than one.
+#[derive(Debug, Clone, Copy)]
+pub struct InodeExtrefIter<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    done: bool,
+}
+
+impl<'a> InodeExtrefIter<'a> {
+    /// Iterate the records in an `INODE_EXTREF` payload from an fs tree.
+    #[must_use]
+    pub const fn new(bytes: &'a [u8]) -> Self {
+        InodeExtrefIter {
+            bytes,
+            at: 0,
+            done: false,
+        }
+    }
+
+    /// Parse the record at the cursor, returning it and the next cursor.
+    ///
+    /// As Linux's `check_inode_extref` for a leaf of an fs tree: a parent from
+    /// [`FIRST_FREE_OBJECTID`] to [`LAST_FREE_OBJECTID`], since only such ids
+    /// are directories a file can be in, and a name between one and
+    /// [`NAME_LEN`] bytes that fits in the payload.
+    fn record(&self) -> Option<(InodeExtref<'a>, usize)> {
+        let parent = u64_at(self.bytes, self.at)?;
+        let index = u64_at(self.bytes, self.at.checked_add(8)?)?;
+        let name_len = usize::from(u16_at(self.bytes, self.at.checked_add(16)?)?);
+        if !(FIRST_FREE_OBJECTID..=LAST_FREE_OBJECTID).contains(&parent)
+            || name_len == 0
+            || name_len > NAME_LEN
+        {
+            return None;
+        }
+        let name_at = self.at.checked_add(18)?;
+        let name = slice_at(self.bytes, name_at, name_len)?;
+        Some((
+            InodeExtref {
+                parent,
+                index,
+                name,
+            },
+            name_at.checked_add(name_len)?,
+        ))
+    }
+}
+
+impl<'a> Iterator for InodeExtrefIter<'a> {
+    type Item = Result<InodeExtref<'a>, BtrfsError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done || self.at >= self.bytes.len() {
+            return None;
+        }
+        match self.record() {
+            Some((entry, next)) => {
+                self.at = next;
+                Some(Ok(entry))
+            }
+            None => {
+                self.done = true;
+                Some(Err(BtrfsError::BadItem {
+                    item_type: INODE_EXTREF_KEY,
                 }))
             }
         }
