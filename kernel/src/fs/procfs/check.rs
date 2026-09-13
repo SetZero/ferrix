@@ -130,7 +130,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let task = sched::spawn_user(
         "procfs-check",
         in_the_process,
-        Arc::clone(&process),
+        Arc::new(crate::syscall::thread::Thread::leader(&process)),
         None,
         None,
     )

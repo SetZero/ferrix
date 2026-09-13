@@ -32,6 +32,7 @@ use ferrix_linux_abi::types::SIGCHLD;
 
 use crate::arch;
 use crate::syscall::process::{self, Process};
+use crate::syscall::thread::Thread;
 use crate::syscall::{registry, uaccess};
 
 /// The low byte of `clone`'s flags: the signal the parent is told with.
@@ -327,8 +328,11 @@ fn clone_with(
     if flags & CLONE_CHILD_SETTID != 0 {
         uaccess::copy_to_user(child.space(), child_tid, &id).map_err(|_| Errno::EFAULT)?;
     }
+    // The child's one thread, made here so that the address it is to clear
+    // when it ends is recorded before it can run.
+    let thread = Arc::new(Thread::leader(&child));
     if flags & CLONE_CHILD_CLEARTID != 0 {
-        let _ = child.set_clear_child_tid(child_tid, pid as usize);
+        let _ = thread.set_clear_child_tid(child_tid);
     }
 
     // The child starts with its parent's registers as they are right now, in
@@ -347,7 +351,7 @@ fn clone_with(
     child.set_resume(child_regs);
 
     parent.adopt(Arc::clone(&child));
-    if process::start_forked(&child, state).is_err() {
+    if process::start_forked(thread, state).is_err() {
         parent.disown(&child);
         return Err(Errno::EAGAIN);
     }

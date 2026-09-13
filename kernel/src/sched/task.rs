@@ -22,6 +22,7 @@ use ferrix_sched::{CpuSet, EntityState};
 
 use crate::arch;
 use crate::syscall::process::Process;
+use crate::syscall::thread::Thread;
 use crate::user::space::AddressSpace;
 use crate::vmap::Stack;
 
@@ -59,12 +60,13 @@ pub(crate) struct Task {
     /// dies keeps it until it is reaped, which is after the last switch away
     /// from it.
     address_space: Option<Arc<AddressSpace>>,
-    /// The process whose code this task runs in user mode, or `None` for a
-    /// kernel thread. Holding it is what keeps the process alive while its
-    /// task is: a process does not own its tasks, its tasks own it.
-    process: Option<Arc<Process>>,
+    /// The thread of a process whose code this task runs in user mode, or
+    /// `None` for a kernel thread. Holding it is what keeps the thread, and
+    /// through it the process, alive while the task is: a process does not own
+    /// its tasks, its tasks own it.
+    thread: Option<Arc<Thread>>,
     /// The user registers no trap saves -- thread pointer, floating point --
-    /// kept here while the task is not running. `Some` exactly when `process`
+    /// kept here while the task is not running. `Some` exactly when `thread`
     /// is. Boxed because it is half a kilobyte and most tasks have none.
     user: Option<Box<UnsafeCell<arch::UserState>>>,
     /// [`RUNNABLE`], [`BLOCKED`] or [`DEAD`].
@@ -149,9 +151,9 @@ pub(crate) struct NewTask {
     pub(crate) affinity: CpuSet,
     /// The address space it runs in, or `None` for a kernel thread.
     pub(crate) address_space: Option<Arc<AddressSpace>>,
-    /// The process it runs user code for, or `None` for a kernel thread.
-    pub(crate) process: Option<Arc<Process>>,
-    /// The user registers it starts with, for a task with a process: `None`
+    /// The thread it runs user code for, or `None` for a kernel thread.
+    pub(crate) thread: Option<Arc<Thread>>,
+    /// The user registers it starts with, for a task with a thread: `None`
     /// is a program's starting state, and a fork child passes a copy of its
     /// parent's.
     pub(crate) user_state: Option<arch::UserState>,
@@ -171,10 +173,10 @@ impl Task {
             cpu,
             affinity,
             address_space,
-            process,
+            thread,
             user_state,
         } = new;
-        let user = process.as_ref().map(|_| {
+        let user = thread.as_ref().map(|_| {
             Box::new(UnsafeCell::new(
                 user_state.unwrap_or_else(arch::UserState::new),
             ))
@@ -190,7 +192,7 @@ impl Task {
             queued: AtomicBool::new(false),
             affinity,
             address_space,
-            process,
+            thread,
             user,
             weight: AtomicU32::new(weight),
             vlag: AtomicI64::new(0),
@@ -226,7 +228,7 @@ impl Task {
             // The boot task and the idle tasks are the kernel's own and have
             // no user half to translate.
             address_space: None,
-            process: None,
+            thread: None,
             user: None,
             weight: AtomicU32::new(weight),
             vlag: AtomicI64::new(0),
@@ -429,7 +431,12 @@ impl Task {
     /// The process this task runs user code for, or `None` for a kernel
     /// thread.
     pub(crate) fn process(&self) -> Option<&Arc<Process>> {
-        self.process.as_ref()
+        self.thread.as_ref().map(|thread| thread.process())
+    }
+
+    /// The thread this task runs user code for, or `None` for a kernel thread.
+    pub(crate) fn thread(&self) -> Option<&Arc<Thread>> {
+        self.thread.as_ref()
     }
 
     /// Where this task's user registers are kept while it is not running, or

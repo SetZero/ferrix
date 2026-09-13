@@ -496,7 +496,8 @@ fn sweep_in_a_process() -> Result<Swept, &'static str> {
 
     let process = process::new_for_check().map_err(|_| "could not make a process for the sweep")?;
     SWEEP_PID.store(process.pid(), Ordering::Release);
-    let task = crate::sched::spawn_user("sweep", sweep, Arc::clone(&process), None, None)
+    let thread = Arc::new(crate::syscall::thread::Thread::leader(&process));
+    let task = crate::sched::spawn_user("sweep", sweep, thread, None, None)
         .map_err(|_| "could not start the sweep's task")?;
 
     let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
@@ -1304,13 +1305,19 @@ fn check_brk_grows_and_shrinks(process: &Process) -> Result<(), &'static str> {
 ///
 /// musl uses the return value as its process id during startup, so this is one
 /// of the few calls where a plausible-looking stub is worse than an error.
-fn check_set_tid_address_answers_with_a_thread_id(process: &Process) -> Result<(), &'static str> {
+fn check_set_tid_address_answers_with_a_thread_id(
+    process: &Arc<Process>,
+) -> Result<(), &'static str> {
     let at = map_rw(process, PAGE_SIZE)?;
-    let tid = process.set_clear_child_tid(at, 42);
+    let thread = crate::syscall::thread::Thread::leader(process);
+    let tid = thread.set_clear_child_tid(at);
     if tid == 0 {
         return Err("set_tid_address reported thread zero");
     }
-    if process.clear_child_tid() != at {
+    if tid != process.pid() {
+        return Err("a process's first thread was not numbered by its pid");
+    }
+    if thread.clear_child_tid() != at {
         return Err("set_tid_address did not record the address");
     }
     let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;

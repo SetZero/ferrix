@@ -52,6 +52,7 @@ use crate::syscall::credentials::Credentials;
 use crate::syscall::fd;
 use crate::syscall::registry;
 use crate::syscall::signal::Signals;
+use crate::syscall::thread::Thread;
 use crate::syscall::{attributes, futex, kill, uaccess};
 use crate::user::space::{AddressSpace, MMAP_MIN_ADDR, SpaceError};
 use ferrix_linux_abi::types::SIGCHLD;
@@ -174,10 +175,6 @@ pub(crate) struct Startup {
 struct State {
     /// The heap, once something has asked for one.
     heap: Option<Heap>,
-    /// The address `set_tid_address` asked to have cleared when this thread
-    /// dies, and which a threaded program's `pthread_join` waits on. Zero
-    /// means nothing was registered.
-    clear_child_tid: u64,
     /// Dispositions, the blocked mask and the alternate stack.
     signals: Signals,
 }
@@ -268,9 +265,8 @@ impl Process {
     /// for `CLONE_FILES` or `CLONE_FS`), the heap and the signal dispositions,
     /// the process group and session, the umask, the user and group ids and
     /// supplementary groups, and the program's start. What is not is
-    /// what belongs to the parent alone: its pid, its children, the address its
-    /// thread asked to have cleared, and its handles, which the native ABI
-    /// passes on only explicitly.
+    /// what belongs to the parent alone: its pid, its children, its threads,
+    /// and its handles, which the native ABI passes on only explicitly.
     pub(crate) fn forked(
         parent: &Arc<Process>,
         space: Arc<AddressSpace>,
@@ -289,7 +285,6 @@ impl Process {
             Arc::new(SpinLock::new(parent.fs.lock().clone()))
         };
         let mut state = parent.state.lock().clone();
-        state.clear_child_tid = 0;
         state.signals.reset_for_fork();
         child.state = SpinLock::new(state);
         child.startup = SpinLock::new(parent.startup());
@@ -382,23 +377,6 @@ impl Process {
         change(&mut self.handles.lock())
     }
 
-    /// Record the address to clear when this thread exits, and report the
-    /// thread id, which is what `set_tid_address` returns.
-    ///
-    /// musl uses the *return value* as its process id during startup, so this
-    /// must answer with a real identifier. It is one of the few calls where a
-    /// plausible-looking stub is worse than an error: an `ENOSYS` musl
-    /// survives, a wrong pid it does not.
-    pub(crate) fn set_clear_child_tid(&self, address: u64, tid: usize) -> usize {
-        self.state.lock().clear_child_tid = address;
-        tid
-    }
-
-    /// The address `set_tid_address` registered, or zero.
-    pub(crate) fn clear_child_tid(&self) -> u64 {
-        self.state.lock().clear_child_tid
-    }
-
     /// Read or change the signal state, under the process lock.
     ///
     /// A closure rather than a guard, so that nothing a handler does with user
@@ -409,12 +387,12 @@ impl Process {
     }
 
     /// Forget what the old program set up, as `execve` does before loading the
-    /// new one: its heap, the address its thread asked to have cleared, and
-    /// its signal handlers. The address space is emptied by the caller.
+    /// new one: its heap and its signal handlers. The address space is emptied
+    /// by the caller, which also forgets the address its thread asked to have
+    /// cleared.
     pub(crate) fn reset_for_exec(&self) {
         let mut state = self.state.lock();
         state.heap = None;
-        state.clear_child_tid = 0;
         state.signals.reset_for_exec();
     }
 
@@ -619,17 +597,27 @@ impl Process {
             return false;
         }
         self.exit.record(status, signal);
-        let clear_child_tid = core::mem::take(&mut *self.state.lock()).clear_child_tid;
-        // The address `CLONE_CHILD_CLEARTID` or `set_tid_address` registered
-        // is zeroed and its futex woken, which is how a `pthread_join` or a
-        // `vfork`ing libc learns the thread is gone. Linux does it only when
-        // someone else can see the memory; nobody else can here yet, and a
-        // write into a space about to go is harmless. A failure is ignored, as
-        // Linux ignores it: the address was the program's to get right.
-        if clear_child_tid != 0 {
-            let _ = uaccess::copy_to_user(&self.space, clear_child_tid, &0_u32.to_le_bytes());
-            let _ = futex::wake_address(&self.space, clear_child_tid, 1);
+        // The heap record and the signal tables go now. Taken under the lock
+        // and dropped after it.
+        let released = core::mem::take(&mut *self.state.lock());
+        drop(released);
+        // The address each thread registered with `CLONE_CHILD_CLEARTID` or
+        // `set_tid_address` is zeroed and its futex woken, which is how a
+        // `pthread_join` or a `vfork`ing libc learns the thread is gone. Linux
+        // does it only when someone else can see the memory; nobody else can
+        // here yet, and a write into a space about to go is harmless. A failure
+        // is ignored, as Linux ignores it: the address was the program's to get
+        // right. The tasks are collected under their lock and their threads
+        // read after it, so no task's last reference goes with the lock held.
+        let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
+        for thread in tasks.iter().filter_map(|task| task.thread()) {
+            let clear_child_tid = thread.take_clear_child_tid();
+            if clear_child_tid != 0 {
+                let _ = uaccess::copy_to_user(&self.space, clear_child_tid, &0_u32.to_le_bytes());
+                let _ = futex::wake_address(&self.space, clear_child_tid, 1);
+            }
         }
+        drop(tasks);
         // The handles too, and outside every lock: an object's drop can free
         // memory and drain other objects, which is `object::dispose`'s job,
         // and must not run under this process's table lock or state lock.
@@ -1260,7 +1248,8 @@ pub(crate) fn start_on(
     process: &Arc<Process>,
     cpu: Option<usize>,
 ) -> Result<Arc<Task>, &'static str> {
-    claim_start(process)?.spawn(cpu, None)
+    let claim = claim_start(process)?;
+    claim.spawn(Arc::new(Thread::leader(process)), cpu, None)
 }
 
 /// The right to start a process, held by one starter at a time.
@@ -1346,18 +1335,20 @@ impl StartClaim {
         if !loaded {
             return Err("the process has no program loaded");
         }
-        self.spawn(cpu, None)
+        let thread = Arc::new(Thread::leader(&self.process));
+        self.spawn(thread, cpu, None)
     }
 
-    /// Run the process's first task: entering its program, or with `state`
-    /// resuming a fork child with its parent's thread pointer and
-    /// floating-point registers.
+    /// Run the process's first task, for `thread`, one of its own: entering
+    /// its program, or with `state` resuming a fork child with its parent's
+    /// thread pointer and floating-point registers.
     fn spawn(
         mut self,
+        thread: Arc<Thread>,
         cpu: Option<usize>,
         state: Option<crate::arch::UserState>,
     ) -> Result<Arc<Task>, &'static str> {
-        let task = sched::spawn_user("user", run_program, Arc::clone(&self.process), cpu, state)?;
+        let task = sched::spawn_user("user", run_program, thread, cpu, state)?;
         self.process.tasks.lock().push(Arc::downgrade(&task));
         self.spent = true;
         Ok(task)
@@ -1373,18 +1364,20 @@ impl Drop for StartClaim {
     }
 }
 
-/// Run a fork child: `child` resumes from the registers [`Process::set_resume`]
-/// gave it, with `state` -- its parent's thread pointer and floating-point
-/// registers, as they were -- loaded when it is first switched to.
+/// Run a fork child's first thread: its process resumes from the registers
+/// [`Process::set_resume`] gave it, with `state` -- its parent's thread pointer
+/// and floating-point registers, as they were -- loaded when it is first
+/// switched to.
 ///
 /// # Errors
 ///
 /// As [`start`].
 pub(crate) fn start_forked(
-    child: &Arc<Process>,
+    thread: Arc<Thread>,
     state: crate::arch::UserState,
 ) -> Result<Arc<Task>, &'static str> {
-    take_claim(child)?.spawn(None, Some(state))
+    let claim = take_claim(thread.process())?;
+    claim.spawn(thread, None, Some(state))
 }
 
 /// End `process` from outside, with `status`.

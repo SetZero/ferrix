@@ -53,7 +53,7 @@ use ferrix_sync::{IrqControl, IrqSpinLock, Once, SpinLock};
 
 use crate::arch;
 use crate::smp::Topology;
-use crate::syscall::process::Process;
+use crate::syscall::thread::Thread;
 use queue::CpuQueue;
 use task::{DEAD, RUNNABLE};
 
@@ -506,7 +506,7 @@ fn new_idle_task(cpu: usize) -> Result<Arc<Task>, &'static str> {
         affinity: CpuSet::of(cpu),
         // A processor's idle task is the kernel's own and has no user half.
         address_space: None,
-        process: None,
+        thread: None,
         user_state: None,
     })))
 }
@@ -720,7 +720,7 @@ pub(crate) fn spawn_on_in(
 pub(crate) fn spawn_user(
     name: &'static str,
     entry: fn(usize),
-    process: Arc<Process>,
+    thread: Arc<Thread>,
     cpu: Option<usize>,
     state: Option<arch::UserState>,
 ) -> Result<Arc<Task>, &'static str> {
@@ -730,7 +730,7 @@ pub(crate) fn spawn_user(
         Some(cpu) => (cpu, CpuSet::of(cpu)),
         None => (choose_cpu(&anywhere, here).unwrap_or(here), anywhere),
     };
-    let space = Arc::clone(process.space());
+    let space = Arc::clone(thread.process().space());
     spawn_task(
         name,
         entry,
@@ -739,7 +739,7 @@ pub(crate) fn spawn_user(
         cpu,
         affinity,
         Some(space),
-        Some(process),
+        Some(thread),
         state,
     )
 }
@@ -757,7 +757,7 @@ fn spawn_task(
     cpu: usize,
     affinity: CpuSet,
     address_space: Option<Arc<crate::user::space::AddressSpace>>,
-    process: Option<Arc<Process>>,
+    thread: Option<Arc<Thread>>,
     user_state: Option<arch::UserState>,
 ) -> Result<Arc<Task>, &'static str> {
     let stack = crate::vmap::allocate_stack().map_err(|problem| {
@@ -781,7 +781,7 @@ fn spawn_task(
         cpu,
         affinity,
         address_space,
-        process,
+        thread,
         user_state,
     }));
 

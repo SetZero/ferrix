@@ -66,6 +66,7 @@ pub(crate) mod signal;
 pub(crate) mod sockets;
 pub(crate) mod stat;
 pub(crate) mod system;
+pub(crate) mod thread;
 pub(crate) mod time;
 pub(crate) mod tty;
 pub(crate) mod uaccess;
@@ -258,13 +259,23 @@ fn unanswered(call: Option<Syscall>, number: usize) {
 fn handle(call: Syscall, args: &SyscallArgs, process: Option<&Process>) -> Result<usize, Errno> {
     // The process's own number when there is a process, and the running
     // task's when there is not -- the boot self-checks call this with none.
-    // `gettid` stays the task's number either way, which is what it is.
     if matches!(call, Syscall::Getpid | Syscall::Gettid) {
-        // One thread per process, so a program's thread id is its pid, which
-        // is what glibc's `raise` and a fork child's `CLONE_CHILD_SETTID`
-        // expect to agree.
+        // A thread answers `gettid` with its own number, when the caller is a
+        // thread of this process. A process's first thread is numbered by its
+        // pid, which is what glibc's `raise` and a fork child's
+        // `CLONE_CHILD_SETTID` expect to agree.
         let pid = process.map(Process::pid).filter(|&pid| pid != 0);
-        return Ok(pid.map_or_else(current_id, |pid| pid as usize));
+        let tid = thread::current()
+            .filter(|thread| {
+                process.is_some_and(|process| core::ptr::eq(thread.process().as_ref(), process))
+            })
+            .map(|thread| thread.tid())
+            .filter(|&tid| tid != 0);
+        let id = match call {
+            Syscall::Gettid => tid.or(pid),
+            _ => pid,
+        };
+        return Ok(id.map_or_else(current_id, |id| id as usize));
     }
     if let (Syscall::Getppid, Some(process)) = (call, process) {
         return Ok(process.parent_pid() as usize);
@@ -355,15 +366,7 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Mremap => memory::sys_mremap(process, a[0], a[1], a[2], truncate(a[3]), a[4]),
         Syscall::Unshare => namespace::sys_unshare(process, a[0]),
         Syscall::Setns => namespace::sys_setns(process, fd::arg(a[0]), truncate(a[1])),
-        // The number `gettid` answers, which a libc keeps as the thread's id
-        // and later hands to `tgkill`; the task's own number would disagree.
-        Syscall::SetTidAddress => {
-            let tid = match process.pid() {
-                0 => current_id(),
-                pid => pid as usize,
-            };
-            Ok(process.set_clear_child_tid(a[0], tid))
-        }
+        Syscall::SetTidAddress => Ok(set_tid_address(process, a[0])),
         Syscall::ClockGettime => {
             time::sys_clock_gettime(process, a[0], a[1], time::TimeWidth::Native)
         }
@@ -531,4 +534,24 @@ fn current_id() -> usize {
         Some(task) => usize::try_from(task.id).unwrap_or(1),
         None => 1,
     }
+}
+
+/// `set_tid_address`: record the address to clear when the calling thread
+/// ends, and answer its id.
+///
+/// The number `gettid` answers, which a libc keeps as the thread's id and
+/// later hands to `tgkill`; the task's own number would disagree. The address
+/// is the calling thread's, when the caller is a thread of `process`; the
+/// self-checks call with none.
+fn set_tid_address(process: &Process, address: u64) -> usize {
+    let tid = match process.pid() {
+        0 => current_id(),
+        pid => pid as usize,
+    };
+    if let Some(thread) = thread::current()
+        && core::ptr::eq(thread.process().as_ref(), process)
+    {
+        let _ = thread.set_clear_child_tid(address);
+    }
+    tid
 }
