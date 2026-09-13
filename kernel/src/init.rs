@@ -41,6 +41,14 @@ use crate::syscall::{self, exec};
 /// The embedded program, or nothing. See `kernel/build.rs`.
 pub(crate) static IMAGE: &[u8] = include_bytes!(env!("FERRIX_INIT_IMAGE"));
 
+/// What `/proc/self/exe` names for [`IMAGE`], which has no file of its own.
+///
+/// Absolute, because glibc's static start-up reads that link back and asserts
+/// it is (`_dl_get_origin`): named after its first argument, `sh`, Ubuntu's
+/// static busybox aborted with 134 before `main`. It is named where busybox
+/// lives; `AT_EXECFN` keeps the name it was started by.
+const BUILT_IN_EXE: &[u8] = b"/bin/busybox";
+
 /// A script for the shell to run with `-c`, or nothing for an interactive
 /// one. See `kernel/build.rs`.
 static SCRIPT: &[u8] = include_bytes!(env!("FERRIX_INIT_SCRIPT_FILE"));
@@ -88,8 +96,14 @@ pub(crate) fn run() {
         IMAGE.len() / 1024
     );
 
-    let status = exec::run(
-        IMAGE,
+    let name = args.first().copied().unwrap_or(b"");
+    let program = exec::Executable {
+        image: IMAGE,
+        exe: BUILT_IN_EXE,
+        exec_fn: name,
+    };
+    let status = exec::run_executable(
+        program,
         args,
         &[b"PATH=/bin", b"HOME=/", b"TERM=dumb", b"PS1=ferrix# "],
         random_bytes(),
