@@ -51,6 +51,7 @@ Causes are listed most likely first.
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
+| [FX-1003](#fx-1003) | an IOMMU domain gave a device the wrong addresses |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -870,6 +871,30 @@ exactly the right answers before any node is published.
    enumeration had not checked.
 
 See: kernel/src/device.rs publish; kernel/src/pci.rs; docs/ROADMAP.md stage 10.
+
+<a id="fx-1003"></a>
+
+## FX-1003 — an IOMMU domain gave a device the wrong addresses
+
+A driver in ring 3 pins the pages it gives a device into that device's IOMMU
+domain and hands the device the addresses the pin returns, so the domain decides
+what the device's DMA can reach. `iommu::check_domains` pins two frames through
+a device node's domain and requires one domain per node, an address for each
+frame, a count of the pages the domain holds, and a pin refused by every domain
+but the one that took it. A domain that gets any of these wrong sends a device's
+writes somewhere its driver did not choose.
+
+1. `DeviceNode::domain` built a second domain for a node instead of handing back
+   the first.
+2. An untranslated domain gave an address other than the frame's physical
+   address, which is the address a device must be given while no IOMMU domain is
+   programmed.
+3. `Domain::unpin` accepted a pin another domain took, or kept counting pages it
+   had unpinned.
+4. No frame could be allocated for the check.
+
+See: kernel/src/iommu.rs Domain and check_domains; kernel/src/device.rs
+DeviceNode::domain; docs/ARCHITECTURE.md section 7; docs/ROADMAP.md stage 10.
 
 <a id="fx-9001"></a>
 

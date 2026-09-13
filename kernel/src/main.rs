@@ -644,6 +644,18 @@ fn check_iommu(view: &BootView<'_>) {
             );
         }
     }
+    let domains = match iommu::check_domains(device::devices()) {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE10_IOMMU,
+            "stage 10 self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  iommu    {} pages pinned and unpinned through a device's domain, {} refusals as \
+         specified",
+        domains.pinned, domains.refusals,
+    );
 }
 
 fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &device::Reserved) {

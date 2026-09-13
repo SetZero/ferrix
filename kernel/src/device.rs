@@ -431,6 +431,9 @@ pub(crate) struct DeviceNode {
     /// A PCI function's MSI-X table, when it has one vectors can be minted
     /// from.
     msix: Option<MsixTable>,
+    /// The IOMMU domain its DMA goes through, made the first time it is asked
+    /// for.
+    domain: Once<Arc<iommu::Domain>>,
     /// Apertures not minted because the kernel or another device has that
     /// memory.
     withheld: usize,
@@ -454,6 +457,7 @@ impl DeviceNode {
             apertures: Vec::new(),
             vectors: Vec::new(),
             msix: None,
+            domain: Once::new(),
             withheld: 0,
             interrupt_tables: Vec::new(),
             undecoded: false,
@@ -552,6 +556,15 @@ impl DeviceNode {
         self.msix
             .as_ref()
             .map_or(self.vectors.len(), |table| usize::from(table.table_size))
+    }
+
+    /// The IOMMU domain the device's DMA goes through: one per node, the same
+    /// one every time.
+    pub(crate) fn domain(&self) -> Arc<iommu::Domain> {
+        Arc::clone(
+            self.domain
+                .call_once(|| Arc::new(iommu::Domain::untranslated())),
+        )
     }
 
     /// `len` bytes at `phys`, if they lie inside one of the device's

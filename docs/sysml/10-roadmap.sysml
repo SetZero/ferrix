@@ -274,9 +274,11 @@ package FerrixRoadmap {
              * which stage 9's Interrupt uses; every IOMMU found and each PCI
              * function placed behind one (DMAR, IORT, device tree), virtio's
              * DMA sent through it on x86-64 and AArch64, and VT-d and stage-2
-             * table encodings in libs/paging. Next: trusting decoding-off
-             * BARs, IOMMU drivers and domains, then devmgr, the ring
-             * protocol and virtio-blk in ring 3. */
+             * table encodings in libs/paging; an iommu::Domain every device
+             * node has, untranslated until a unit is programmed, which the
+             * entropy check's DMA goes through. Next, in the order stage 11
+             * needs: VMO_PIN, devmgr, the block ring and virtio-blk in ring 3,
+             * VT-d and SMMUv3 domains; trusting decoding-off BARs last. */
     }
 
     #planned requirement <'S11'> stage11BtrfsRead : Stage {

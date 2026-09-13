@@ -23,18 +23,31 @@
 //! tell apart from another are reported as unresolved rather than as behind
 //! no IOMMU. The difference matters: a function counted as bypassing is one a
 //! domain will never be built for.
+//!
+//! # Domains
+//!
+//! A [`Domain`] is the memory one device's DMA may reach, and the device
+//! addresses it reaches it by: a driver pins pages into its device's domain
+//! and gives the device the addresses the pin returns. Every domain is
+//! untranslated for now — no unit is programmed, so a device address is the
+//! physical address and a device can reach all of memory, which is the
+//! degraded trusted mode `docs/ARCHITECTURE.md` §7 requires the kernel to
+//! announce, and the first pin does. The VT-d and `SMMUv3` domains replace
+//! what [`Domain::pin`] does behind the same signature.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use ferrix_acpi::dmar::{self, Structure};
 use ferrix_acpi::iort;
-use ferrix_bootinfo::BootView;
+use ferrix_bootinfo::{BootView, PAGE_SIZE};
 use ferrix_fdt::{EcamHost, Fdt};
+use ferrix_paging::MapFlags;
 use ferrix_pci::Address;
 
 use crate::device::{DeviceNode, Location};
-use crate::{acpi, fdt};
+use crate::{acpi, fdt, mm, println};
 
 /// Bytes of a VT-d unit's registers kept from drivers: the first page, which
 /// holds every register a legacy-mode driver uses. A DRHD gives no length.
@@ -309,4 +322,221 @@ pub(crate) fn discover(
         }
     }
     (report, units, placements)
+}
+
+// ---------------------------------------------------------------------------
+// Domains
+// ---------------------------------------------------------------------------
+
+/// The next domain's number, so a pin can be checked against the domain that
+/// took it.
+static NEXT_DOMAIN: AtomicU64 = AtomicU64::new(1);
+
+/// Whether degraded trusted mode has been announced.
+static DEGRADED: AtomicBool = AtomicBool::new(false);
+
+/// Why a domain refused to pin or unpin.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DomainError {
+    /// There was nothing to pin.
+    Empty,
+    /// A frame's address does not fit in a physical address.
+    OutOfRange,
+    /// The pin was taken by another domain.
+    Foreign,
+}
+
+/// The memory one device's DMA may reach, and the addresses it reaches it by.
+#[derive(Debug)]
+pub(crate) struct Domain {
+    /// This domain's number.
+    id: u64,
+    /// Pages pinned and not yet unpinned.
+    pinned: AtomicU64,
+}
+
+/// Pages pinned into one domain, and each one's device address.
+///
+/// Goes back through [`Domain::unpin`] before its frames are freed. A pin that
+/// cannot be given back is forgotten with its frames rather than dropped: the
+/// device may still reach them.
+#[derive(Debug)]
+#[must_use = "unpin it, or leak its frames with it"]
+pub(crate) struct Pinned {
+    /// The domain that took it.
+    domain: u64,
+    /// Each page's device address, in the order its frame was given.
+    addresses: Vec<u64>,
+}
+
+impl Pinned {
+    /// Each page's device address, in the order its frame was given. Not
+    /// necessarily contiguous.
+    pub(crate) fn addresses(&self) -> &[u64] {
+        &self.addresses
+    }
+
+    /// Never give the pin back: its pages stay reachable by the device for
+    /// good, and whoever holds their frames must keep them too.
+    pub(crate) fn leak(self) {
+        let _ = core::mem::ManuallyDrop::new(self);
+    }
+}
+
+impl Domain {
+    /// A domain no unit translates.
+    pub(crate) fn untranslated() -> Self {
+        Domain {
+            id: NEXT_DOMAIN.fetch_add(1, Ordering::Relaxed),
+            pinned: AtomicU64::new(0),
+        }
+    }
+
+    /// Whether a unit translates this domain's DMA, so a device can reach only
+    /// what is pinned into it.
+    pub(crate) const fn translated(&self) -> bool {
+        false
+    }
+
+    /// Pages pinned and not yet unpinned.
+    pub(crate) fn pinned_pages(&self) -> u64 {
+        self.pinned.load(Ordering::Relaxed)
+    }
+
+    /// Make `frames` reachable by the device, writable when `flags` says so,
+    /// and say at which device addresses.
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::Empty`] for no frames, [`DomainError::OutOfRange`] for a
+    /// frame number no physical address can hold.
+    pub(crate) fn pin(&self, frames: &[u64], flags: MapFlags) -> Result<Pinned, DomainError> {
+        // Nothing enforces a read-only pin until a unit translates the domain.
+        let _ = flags;
+        if frames.is_empty() {
+            return Err(DomainError::Empty);
+        }
+        let addresses = frames
+            .iter()
+            .map(|frame| frame.checked_mul(PAGE_SIZE).ok_or(DomainError::OutOfRange))
+            .collect::<Result<Vec<u64>, DomainError>>()?;
+        if !DEGRADED.swap(true, Ordering::Relaxed) {
+            println!(
+                "  iommu    degraded trusted mode: no IOMMU domain is programmed, so device \
+                 DMA reaches all of memory"
+            );
+        }
+        let _ = self
+            .pinned
+            .fetch_add(addresses.len() as u64, Ordering::Relaxed);
+        Ok(Pinned {
+            domain: self.id,
+            addresses,
+        })
+    }
+
+    /// Take `pinned`'s pages back out of the domain.
+    ///
+    /// On a translated domain the device can no longer reach them once this
+    /// returns, and their frames may be freed. On an untranslated one it still
+    /// can: nothing stands between the device and physical memory, so the
+    /// frames may be freed only once the device is known to be quiet — reset,
+    /// or never given the addresses — and are otherwise held for good.
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::Foreign`], handing the pin back, when another domain took
+    /// it.
+    pub(crate) fn unpin(&self, pinned: Pinned) -> Result<(), (DomainError, Pinned)> {
+        if pinned.domain != self.id {
+            return Err((DomainError::Foreign, pinned));
+        }
+        let _ = self
+            .pinned
+            .fetch_sub(pinned.addresses.len() as u64, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+/// What the domain check found.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DomainReport {
+    /// Pages pinned and unpinned.
+    pub(crate) pinned: u64,
+    /// Requests refused, each exactly as the rule requires.
+    pub(crate) refusals: usize,
+}
+
+/// Pin two frames through the first PCI node's domain, and require the node to
+/// hand out one domain, the pin to give each frame an address, the domain to
+/// count what it holds, and a pin to be refused by any domain but its own.
+///
+/// # Errors
+///
+/// The first thing that is not so. The frames are then kept out of the
+/// allocator, since a pin that was not given back may still be reachable.
+pub(crate) fn check_domains(nodes: &[Arc<DeviceNode>]) -> Result<DomainReport, &'static str> {
+    let mut report = DomainReport::default();
+    let Some(node) = nodes
+        .iter()
+        .find(|node| matches!(node.location(), Location::Pci(_)))
+    else {
+        return Ok(report);
+    };
+    let domain = node.domain();
+    if !Arc::ptr_eq(&domain, &node.domain()) {
+        return Err("a device node handed out two domains");
+    }
+    let Some(first) = mm::allocate_frames(0) else {
+        return Err("no frame to pin");
+    };
+    let Some(second) = mm::allocate_frames(0) else {
+        mm::deallocate_frames(first, 0);
+        return Err("no frame to pin");
+    };
+    pin_and_unpin(&domain, [first, second], &mut report)?;
+    mm::deallocate_frames(first, 0);
+    mm::deallocate_frames(second, 0);
+    Ok(report)
+}
+
+/// The body of [`check_domains`], once it has its frames.
+fn pin_and_unpin(
+    domain: &Domain,
+    frames: [u64; 2],
+    report: &mut DomainReport,
+) -> Result<(), &'static str> {
+    let before = domain.pinned_pages();
+    let pinned = domain
+        .pin(&frames, MapFlags::DMA)
+        .map_err(|_| "a domain refused to pin two frames")?;
+    let expected = frames.map(|frame| frame * PAGE_SIZE);
+    let addressed = domain.translated() || pinned.addresses() == expected.as_slice();
+    let counted = domain.pinned_pages() == before + 2;
+
+    let Err((DomainError::Foreign, pinned)) = Domain::untranslated().unpin(pinned) else {
+        return Err("a domain unpinned a pin another domain took");
+    };
+    report.refusals += 1;
+    if !addressed || !counted {
+        pinned.leak();
+        return Err(if addressed {
+            "a domain miscounted the pages pinned into it"
+        } else {
+            "an untranslated domain gave a device address other than the frame's"
+        });
+    }
+    if !matches!(domain.pin(&[], MapFlags::DMA), Err(DomainError::Empty)) {
+        pinned.leak();
+        return Err("a domain pinned nothing");
+    }
+    report.refusals += 1;
+    if domain.unpin(pinned).is_err() {
+        return Err("a domain refused its own pin");
+    }
+    if domain.pinned_pages() != before {
+        return Err("a domain still counted pages it had unpinned");
+    }
+    report.pinned += 2;
+    Ok(())
 }

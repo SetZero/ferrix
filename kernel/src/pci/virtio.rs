@@ -41,6 +41,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_paging::MapFlags;
 use ferrix_pci::bar::{Bar, Region};
 use ferrix_pci::capability::{Capability, MSIX_ENTRY_SIZE, MsiX};
 use ferrix_pci::header::{COMMAND, COMMAND_BUS_MASTER, COMMAND_MEMORY_SPACE};
@@ -59,6 +60,7 @@ use ferrix_virtio::{Buffer, Layout, QueueMemory, SplitQueue};
 use super::{Failure, Space};
 use crate::arch;
 use crate::device::Reserved;
+use crate::iommu;
 use crate::irq::{self, Msi};
 use crate::mm;
 use crate::mmio::Mmio;
@@ -416,6 +418,23 @@ pub(super) fn entropy(
     let (Some(rings), Some(buffer)) = (DmaPage::new(), DmaPage::new()) else {
         return Ok(Entropy::Skipped("no frame for DMA"));
     };
+    // The device is given the addresses a domain gives the pages, not their
+    // physical addresses: the same once an IOMMU domain is programmed.
+    let domain = iommu::Domain::untranslated();
+    let Ok(pinned) = domain.pin(&[rings.frame, buffer.frame], MapFlags::DMA) else {
+        return Ok(Entropy::Skipped("the DMA pages could not be pinned"));
+    };
+    let bus = match *pinned.addresses() {
+        [rings_at, buffer_at] => (rings_at, buffer_at),
+        _ => {
+            pinned.leak();
+            rings.leak();
+            buffer.leak();
+            return Err(Failure::Entropy(
+                "a domain gave two pages a different number of addresses",
+            ));
+        }
+    };
 
     let command = space.read16(address, COMMAND);
     space.write16(
@@ -434,6 +453,7 @@ pub(super) fn entropy(
         transport.notify_multiplier,
         &rings,
         &buffer,
+        bus,
         delivery.as_ref().map(|_| ()).map_err(|why| *why),
     );
 
@@ -447,6 +467,7 @@ pub(super) fn entropy(
             COMMAND,
             command & !(COMMAND_BUS_MASTER | COMMAND_MEMORY_SPACE),
         );
+        pinned.leak();
         rings.leak();
         buffer.leak();
         return match outcome {
@@ -457,6 +478,11 @@ pub(super) fn entropy(
         };
     }
     space.write16(address, COMMAND, command);
+    if domain.unpin(pinned).is_err() {
+        rings.leak();
+        buffer.leak();
+        return Err(Failure::Entropy("the check's own domain refused its pin"));
+    }
     outcome
 }
 
@@ -468,6 +494,7 @@ fn drive(
     multiplier: u32,
     rings: &DmaPage,
     buffer: &DmaPage,
+    (rings_at, buffer_at): (u64, u64),
     interrupt: Result<(), &'static str>,
 ) -> Result<Entropy, Failure> {
     let mut config = Common(common);
@@ -497,7 +524,7 @@ fn drive(
     if layout.total_size as u64 > PAGE_SIZE {
         return Ok(Entropy::Skipped("the rings do not fit in a page"));
     }
-    let base = rings.phys();
+    let base = rings_at;
     let addresses = QueueAddresses {
         descriptors: base + layout.descriptor_table as u64,
         driver: base + layout.available_ring as u64,
@@ -519,7 +546,7 @@ fn drive(
     let by_interrupt = polled.is_none();
 
     let mut queue = SplitQueue::new(layout, Rings { virt: rings.virt() });
-    let head = queue.add_chain(&[Buffer::writable(buffer.phys(), REQUEST)])?;
+    let head = queue.add_chain(&[Buffer::writable(buffer_at, REQUEST)])?;
 
     let doorbell = transport::notify_offset(active.notify_off, multiplier);
     if doorbell.checked_add(2).is_none_or(|end| end > notify.len) {

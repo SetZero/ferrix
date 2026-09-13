@@ -1670,11 +1670,68 @@ The run recorded when it landed:
 * With the legacy interface off, AArch64's virtio-rng comes up with memory
   decoding on, so that node now publishes an aperture and mints a vector.
 
-**Still to do, in the order it can be done:**
+**Done — the domain a device's DMA goes through.** `iommu::Domain` is what a
+driver pins its DMA pages into and takes device addresses back from.
+`Domain::pin(frames, flags)` gives each page its device address — not
+necessarily contiguous — and `Domain::unpin` takes them back, refusing a pin
+another domain took. Every device node has one, made the first time it is
+asked for. No unit is programmed yet, so every domain is untranslated: the
+device address is the physical address, the first pin announces the degraded
+trusted mode `docs/ARCHITECTURE.md` §7 requires, and an unpinned frame may be
+freed only once its device is known to be quiet. The VT-d and `SMMUv3` domains
+go in behind the same two calls.
 
+* **The entropy check gives its device the addresses its domain returns**
+  rather than physical ones, so it is already the harness the translated
+  domains will be proven on.
+* **The boot check** pins two frames through a device node's domain, and
+  requires one domain per node, each frame's address, a count that returns to
+  where it started, and a refusal of an empty pin and of a pin unpinned by the
+  wrong domain.
+* **Agreed with stage 9 and stage 11:** `VMO_PIN` (0x1025) pins a range of a
+  VMO — held by stage 9's `Vmo::hold` — into a device's domain, owned by a
+  `Pin` handle that unpins before it lets the frames go, and 0x1026 writes the
+  pages' device addresses. The block ring, drafted by stage 11 and reviewed
+  here, copies data through one pinned data VMO and rings doorbells as port
+  packets.
+
+The run recorded when it landed: 2 pages pinned and unpinned and 2 refusals, and
+the entropy check's 64 bytes through its domain, on x86-64, AArch64 and ARMv7-A.
+
+**Still to do, in the order stage 11 needs it.** Stage 11 is done on the host
+and waits only for a ring-3 virtio-blk driver reading sectors, so everything on
+that path comes first and trusting decoding-off BARs, which it does not need,
+comes last. Stage 9 writes `Vmo::hold`, `vmo_map` and native process creation;
+stage 11 writes virtio-blk's device protocol, the driver's logic as a library,
+the ring protocol's crate and the native user-space runtime, all against the
+agreements recorded here.
+
+* **Everything that runs in ring 3.** Stage 9's device handles, `Interrupt`
+  and `IoMapping` are built on `device.rs`'s tokens and are on main. Still to
+  come, in this order: `VMO_PIN` and its address query over `Domain` and
+  stage 9's `Vmo::hold`; a virtio-blk-pci test disk; a minimal `devmgr` that
+  hands the disk's device node to a driver process; the block ring's kernel
+  side; and virtio-blk as a process, reading sectors. The disk has to be
+  `virtio-blk-pci` on AArch64: under ACPI, QEMU describes the virtio-mmio
+  devices only in the DSDT, which is AML, which Ferrix will not interpret.
+* **IOMMU domains.** Where the units are, and which stream each function
+  arrives as, is found (above), and the tables are in `libs/paging`. Still
+  missing:
+  * *A VT-d driver* in legacy mode: root and context tables, register-based
+    invalidation, and the single fault-recording register QEMU provides.
+  * *An `SMMUv3` driver*: a linear stream table, stage 2 with fault recording,
+    and the command and event queues.
+  * *The `GICv2m` doorbell mapped into every Arm domain.* QEMU sends a
+    device's MSI writes through the SMMU, where VT-d exempts them.
+  * *VT-d and `SMMUv3` domains* built from those tables, behind
+    `Domain::pin` and `unpin`, which exist and are untranslated today.
+  * *The deliberate out-of-domain fault*, from the boot check's virtio-rng
+    harness, on x86-64 and AArch64. ARMv7-A needs a device U-Boot does not
+    probe.
 * **Trusting a BAR firmware placed but did not enable**, so a device no
   firmware driver used — as virtio-rng on AArch64 was until its legacy
-  interface was turned off — can still be given to a ring-3 driver. Worked out with the review that found the gap:
+  interface was turned off — can still be given to a ring-3 driver. Worked
+  out with the review that found the gap:
   * *Where the windows are.* The device tree's `ranges` on the Arm machines.
     Under ACPI they are in `_CRS`, which is AML — but before
     `ExitBootServices` the loader can ask each root bridge's
@@ -1701,25 +1758,6 @@ The run recorded when it landed:
   * Later, on the device tree machines: assign addresses to decoding-off
     functions inside the windows, as Linux does unless `linux,pci-probe-only`
     is set, rather than depend on firmware's choice.
-* **IOMMU domains.** Where the units are, and which stream each function
-  arrives as, is found (above), and the tables are in `libs/paging`. Still
-  missing:
-  * *A VT-d driver* in legacy mode: root and context tables, register-based
-    invalidation, and the single fault-recording register QEMU provides.
-  * *An `SMMUv3` driver*: a linear stream table, stage 2 with fault recording,
-    and the command and event queues.
-  * *The `GICv2m` doorbell mapped into every Arm domain.* QEMU sends a
-    device's MSI writes through the SMMU, where VT-d exempts them.
-  * *A domain the kernel builds* from those tables.
-  * *The deliberate out-of-domain fault*, from the boot check's virtio-rng
-    harness, on x86-64 and AArch64. ARMv7-A needs a device U-Boot does not
-    probe.
-* **Everything that runs in ring 3.** Stage 9's device handles, `Interrupt`
-  and `IoMapping` are built on `device.rs`'s tokens and are on main; still to
-  come are `devmgr`, the ring protocol, and virtio-blk as a process. One consequence for the test machine:
-  under ACPI, QEMU describes AArch64's virtio-mmio devices only in the DSDT,
-  which is AML, which Ferrix will not interpret — so the disk that driver
-  reads has to be `virtio-blk-pci` there.
 
 ---
 

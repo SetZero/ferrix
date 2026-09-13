@@ -602,6 +602,29 @@ pub(crate) static STAGE10_PCI: Explanation = Explanation {
           docs/ROADMAP.md stage 10",
 };
 
+/// For `check_iommu` in `main.rs`, when `iommu::check_domains` fails.
+pub(crate) static STAGE10_IOMMU: Explanation = Explanation {
+    code: "FX-1003",
+    title: "an IOMMU domain gave a device the wrong addresses",
+    meaning: "A driver in ring 3 pins the pages it gives a device into that device's IOMMU domain \
+              and hands the device the addresses the pin returns, so the domain decides what the \
+              device's DMA can reach. `iommu::check_domains` pins two frames through a device \
+              node's domain and requires one domain per node, an address for each frame, a count \
+              of the pages the domain holds, and a pin refused by every domain but the one that \
+              took it. A domain that gets any of these wrong sends a device's writes somewhere its \
+              driver did not choose.",
+    causes: &[
+        "`DeviceNode::domain` built a second domain for a node instead of handing back the first.",
+        "An untranslated domain gave an address other than the frame's physical address, which is \
+         the address a device must be given while no IOMMU domain is programmed.",
+        "`Domain::unpin` accepted a pin another domain took, or kept counting pages it had \
+         unpinned.",
+        "No frame could be allocated for the check.",
+    ],
+    see: "kernel/src/iommu.rs Domain and check_domains; kernel/src/device.rs DeviceNode::domain; \
+          docs/ARCHITECTURE.md section 7; docs/ROADMAP.md stage 10",
+};
+
 /// For `check_devices` in `main.rs`, when `device::publish` fails.
 pub(crate) static STAGE10_DEVICES: Explanation = Explanation {
     code: "FX-1002",
@@ -999,6 +1022,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,
+    &STAGE10_IOMMU,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,
