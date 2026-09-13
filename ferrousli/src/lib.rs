@@ -93,6 +93,7 @@ pub mod strtol;
 pub mod stubs;
 pub mod syscall;
 pub mod sysconf;
+pub mod termios;
 pub mod thread;
 pub mod time;
 pub mod times;
