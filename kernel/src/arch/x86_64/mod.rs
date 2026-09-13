@@ -597,6 +597,94 @@ pub(crate) fn shutdown() -> ! {
     halt()
 }
 
+/// The FADT's reset register, when firmware describes one in I/O space: its
+/// port, zero for none, and the value that resets the machine. Recorded by
+/// [`init_interrupts`], because by the time anything resets, the tables' memory
+/// has been reclaimed.
+static ACPI_RESET_PORT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
+static ACPI_RESET_VALUE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// The 8042 keyboard controller's command and status port.
+const KBC_PORT: u16 = 0x64;
+/// Status bit 1: the controller's input buffer is still full.
+const KBC_INPUT_FULL: u8 = 1 << 1;
+/// The command that pulses the reset line.
+const KBC_PULSE_RESET: u8 = 0xFE;
+
+/// Reset the machine, once the console has sent its last line.
+///
+/// Three ways, in the order Linux tries them on a PC: the FADT's reset
+/// register, the keyboard controller's reset pulse, and a triple fault. Each
+/// of the first two gets time to act, and one that returns is a machine that
+/// did not reset, so the next is tried. A triple fault cannot return.
+pub(crate) fn reset() -> ! {
+    console::drain();
+    cpu::disable_interrupts();
+
+    let port = ACPI_RESET_PORT.load(core::sync::atomic::Ordering::Relaxed);
+    if port != 0 {
+        let value = ACPI_RESET_VALUE.load(core::sync::atomic::Ordering::Relaxed);
+        // SAFETY: firmware named this port and value as the way to reset the
+        // machine, and resetting it is the point.
+        unsafe { cpu::outb(port, value) };
+        settle();
+    }
+
+    for _ in 0..10 {
+        for _ in 0..1000 {
+            // SAFETY: reading the 8042's status port has no side effect.
+            if unsafe { cpu::inb(KBC_PORT) } & KBC_INPUT_FULL == 0 {
+                break;
+            }
+            settle_briefly();
+        }
+        // SAFETY: the reset pulse is the command's only effect, and on a
+        // machine with no controller the write is discarded.
+        unsafe { cpu::outb(KBC_PORT, KBC_PULSE_RESET) };
+        settle();
+    }
+
+    // SAFETY: the last way to reset the machine, taken on purpose.
+    unsafe { cpu::triple_fault() }
+}
+
+/// About a millisecond, by writing to the POST code port: the delay a PC's I/O
+/// bus has always been timed by, and with interrupts masked there is no clock
+/// to wait on.
+fn settle_briefly() {
+    for _ in 0..1000 {
+        // SAFETY: port 0x80 is the POST diagnostic port; writes to it are
+        // discarded or shown on a debug card, and nothing reads it.
+        unsafe { cpu::outb(0x80, 0) };
+    }
+}
+
+/// About fifty milliseconds, for a reset that was asked for to take hold.
+fn settle() {
+    for _ in 0..50 {
+        settle_briefly();
+    }
+}
+
+/// Remember the FADT's reset register for [`reset`].
+///
+/// Only a register in I/O space is kept. That is where a PC's firmware puts it;
+/// one in memory space would need a mapping made by a machine on its way down,
+/// and the keyboard controller and the triple fault still follow.
+fn record_reset_register(acpi: &ferrix_acpi::Acpi<'_, crate::acpi::DirectMap>) {
+    let Some((register, value)) = acpi.fadt().ok().and_then(|fadt| fadt.reset()) else {
+        return;
+    };
+    if register.address_space_id != ferrix_acpi::GenericAddress::SYSTEM_IO {
+        return;
+    }
+    let Ok(port) = u16::try_from(register.address) else {
+        return;
+    };
+    ACPI_RESET_VALUE.store(value, core::sync::atomic::Ordering::Relaxed);
+    ACPI_RESET_PORT.store(port, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// Wait until the console port has sent everything written to it.
 pub(crate) fn drain_console() {
     console::drain();
@@ -625,6 +713,7 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
     let firmware =
         crate::acpi::Firmware::open(view).map_err(|_| "the machine has no readable ACPI tables")?;
     let acpi = firmware.acpi();
+    record_reset_register(&acpi);
 
     let counter = clock::init(&acpi)?;
     // SAFETY: called once from `kmain`, on the boot CPU, after `init_traps`

@@ -511,6 +511,18 @@ pub(crate) fn shutdown() -> ! {
     halt()
 }
 
+/// Reset the machine, once the console has sent its last line.
+///
+/// A firmware without PSCI `SYSTEM_RESET` returns, and the machine is powered
+/// off instead: one that stops when asked to come back is noticed, one that
+/// carries on as though it had reset is not.
+pub(crate) fn reset() -> ! {
+    console::drain();
+    cpu::psci_system_reset();
+    crate::console::println!("  power    firmware did not reset the machine; powering off");
+    shutdown()
+}
+
 /// Wait until the console port has sent everything written to it.
 pub(crate) fn drain_console() {
     console::drain();

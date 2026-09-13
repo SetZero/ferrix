@@ -26,6 +26,8 @@ pub(crate) const TTBCR_EPD0: u32 = 1 << 7;
 
 /// PSCI `SYSTEM_OFF`, in the 32-bit calling convention.
 const PSCI_SYSTEM_OFF: u32 = 0x8400_0008;
+/// PSCI `SYSTEM_RESET`, in the 32-bit calling convention.
+const PSCI_SYSTEM_RESET: u32 = 0x8400_0009;
 
 /// Wait for an interrupt.
 pub(crate) fn wfi() {
@@ -123,14 +125,29 @@ pub(crate) fn flush_tlb() {
 /// AArch64 it is made only after the success marker, because the wrong conduit
 /// is an undefined-instruction exception rather than an error code.
 pub(crate) fn psci_system_off(conduit: PsciConduit) {
+    psci_system(conduit, PSCI_SYSTEM_OFF);
+}
+
+/// Ask the platform to reset the machine, through the same conduit as
+/// [`psci_system_off`].
+///
+/// Returns if firmware does not implement `SYSTEM_RESET`, which is why the
+/// caller powers off afterwards.
+pub(crate) fn psci_system_reset(conduit: PsciConduit) {
+    psci_system(conduit, PSCI_SYSTEM_RESET);
+}
+
+/// One of PSCI's whole-system calls, which take no arguments and either do not
+/// return or return an error in `r0`.
+fn psci_system(conduit: PsciConduit, function: u32) {
     match conduit {
-        // SAFETY: `hvc` with r0 = SYSTEM_OFF either powers off or returns an
-        // error in r0; the caller halts either way.
+        // SAFETY: `hvc` with r0 = SYSTEM_OFF or SYSTEM_RESET either does what it
+        // names or returns an error in r0; the callers carry on either way.
         PsciConduit::Hvc => unsafe {
             asm!(
                 ".arch_extension virt",
                 "hvc #0",
-                inout("r0") PSCI_SYSTEM_OFF => _,
+                inout("r0") function => _,
                 lateout("r1") _,
                 lateout("r2") _,
                 lateout("r3") _,
@@ -142,7 +159,7 @@ pub(crate) fn psci_system_off(conduit: PsciConduit) {
             asm!(
                 ".arch_extension sec",
                 "smc #0",
-                inout("r0") PSCI_SYSTEM_OFF => _,
+                inout("r0") function => _,
                 lateout("r1") _,
                 lateout("r2") _,
                 lateout("r3") _,

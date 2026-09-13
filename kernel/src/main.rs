@@ -34,6 +34,7 @@ mod mmio;
 mod object;
 mod panic;
 mod pci;
+mod power;
 mod sched;
 mod smp;
 mod sync;
@@ -160,6 +161,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
         ),
     };
     report_clocks(&clocks);
+    power::init(view);
 
     if let Err(problem) = timer::init() {
         fatal!(
@@ -280,7 +282,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // After the marker, on purpose: see `init`. Returns at once when no program
     // was built in.
     init::run();
-    arch::shutdown()
+    power::finish()
 }
 
 /// Stage 6: the memory objects, the frames they must give back, and the

@@ -339,6 +339,25 @@ pub(crate) unsafe fn load_idt(pointer: u64) {
     }
 }
 
+/// Reset the processor the hard way: load an interrupt descriptor table with no
+/// entries and raise an exception. Delivering it needs a gate there is not, the
+/// double fault that follows needs one too, and a third fault resets.
+///
+/// # Safety
+///
+/// Destroys the machine's state on purpose. Only the last step of a reset may
+/// call it.
+pub(crate) unsafe fn triple_fault() -> ! {
+    // An `lidt` operand: a limit of zero and a base of zero, so no gate exists.
+    let empty = [0_u8; 10];
+    // SAFETY: an empty table is exactly what this function is for, and the
+    // caller has given up on the machine.
+    unsafe { load_idt(empty.as_ptr() as u64) };
+    // SAFETY: with no gate for it, this breakpoint becomes a double fault and
+    // then a triple fault, which resets the processor.
+    unsafe { asm!("int3", options(noreturn)) }
+}
+
 /// Load the task register.
 ///
 /// # Safety

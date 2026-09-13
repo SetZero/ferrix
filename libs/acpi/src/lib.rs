@@ -1477,6 +1477,33 @@ impl<'a> Fadt<'a> {
         u32_at(self.table.bytes(), 112)
     }
 
+    /// The reset register: writing [`Self::reset_value`] to it resets the
+    /// machine (ACPI 6.5 section 4.8.2.6). Read whether or not firmware says it
+    /// implements one; [`Self::reset`] is the question with that answered.
+    #[must_use]
+    pub fn reset_register(&self) -> Option<GenericAddress> {
+        GenericAddress::parse(self.table.bytes(), 116)
+    }
+
+    /// The value to write to [`Self::reset_register`].
+    #[must_use]
+    pub fn reset_value(&self) -> Option<u8> {
+        u8_at(self.table.bytes(), 128)
+    }
+
+    /// The reset register and the value that resets the machine, or `None`
+    /// when the FADT is too short to have them, firmware leaves flags bit 10
+    /// (`RESET_REG_SUP`) clear, or the register is zeroed out.
+    #[must_use]
+    pub fn reset(&self) -> Option<(GenericAddress, u8)> {
+        const RESET_REG_SUP: u32 = 1 << 10;
+        if self.flags()? & RESET_REG_SUP == 0 {
+            return None;
+        }
+        let register = self.reset_register().filter(GenericAddress::is_present)?;
+        Some((register, self.reset_value()?))
+    }
+
     /// The offset into CMOS RAM of the century byte, or `None` when the FADT is
     /// too short to have the field.
     ///
