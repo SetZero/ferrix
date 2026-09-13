@@ -35,7 +35,11 @@ pub mod errno;
 pub mod exit;
 pub mod lock;
 pub mod malloc;
+#[cfg(not(test))]
+pub mod setjmp;
+pub mod sigaction;
 pub mod signal;
+pub mod sigset;
 #[cfg(not(test))]
 pub mod start;
 pub mod stdio;
