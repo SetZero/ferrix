@@ -834,9 +834,10 @@ name. One lock per address space, never a global one.
 * `AddressSpace::protect` takes translations down without invalidating them, so
   after `mprotect` a stale entry can stay more permissive than the map. glibc's
   RELRO is the first real program to walk into it.
-* `read_console_byte` returns `None` on both Arm architectures, whose UART
-  drivers are write-only, so a program reading fd 0 there waits forever — and no
-  check reads the console.
+* No check reads the console. Every architecture receives now — the Arm UART
+  drivers were write-only, so a program reading fd 0 there waited forever, until
+  the PL011 and the STM32 USART gained polled receive — but `test-shell` types
+  nothing, so input is exercised only by hand.
 
 **What the boot test cannot see, written down rather than trusted.** A
 copy-on-write fault replaces a live read-only translation with a writable one,
@@ -1106,7 +1107,8 @@ its own line editing without a doubled echo. `select`, `pselect6` and
 they are given, as `ppoll` does. Ctrl-C, Ctrl-\ and Ctrl-Z raise their signals
 on the foreground process group, and since nothing reads the console while a
 shell waits for a foreground program, the first read starts a `console` thread
-that drains the UART every twenty milliseconds; a console read returns `EINTR`
+that drains the UART every twenty milliseconds — the 16550, the PL011 and the
+STM32 USART alike, each polled; a console read returns `EINTR`
 when a signal is waiting. In the shell, `sleep 30` and `cat` are each ended by
 Ctrl-C with status 130 and the prompt back at once.
 

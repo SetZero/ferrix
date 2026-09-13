@@ -181,10 +181,12 @@ busybox at `/bin/busybox` with a link beside it for every applet. `FERRIX_INIT`
 works in place of `--init`. The binary must be static and hard-float ARMv7;
 Alpine's `busybox-static` for `armv7` is.
 
-> **The shell cannot read the keyboard on Arm yet.** Neither the STM32 USART
-> driver nor the PL011 driver receives: `read_console_byte` returns nothing on
-> both Arm architectures, so `sh -i` prints its prompt and never sees a
-> keystroke. Only x86-64's 16550 reads input today.
+> **The shell reads the keyboard by polling.** The STM32 USART and PL011
+> drivers receive, and the kernel's `console` thread drains the port every
+> 20 ms. Typing works — so far seen under QEMU, not yet on the board. Pasting
+> may not: at 115200 baud, 20 ms is about 230 bytes, far more than the port
+> buffers, so a long paste can lose characters until receive is
+> interrupt-driven.
 
 Three files are copied, which are the three the image contains:
 

@@ -375,15 +375,10 @@ pub(crate) const USER_NATIVE_PROGRAM: &[u8] = &[
 
 /// One byte from the console, if one has arrived.
 ///
-/// Always `None` here for now: this architecture's UART drivers are
-/// write-only, and nothing reads from the console until a program can run in
-/// user mode on it.
-#[expect(
-    clippy::missing_const_for_fn,
-    reason = "one architecture's version of this reads a register"
-)]
+/// Polled, as on x86-64: the `console` thread in `fs::terminal` drains it into
+/// the line discipline.
 pub(crate) fn read_console_byte() -> Option<u8> {
-    None
+    console::read_byte()
 }
 
 /// `AT_HWCAP` and `AT_HWCAP2` for a program started on this machine: what the

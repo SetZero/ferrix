@@ -5,7 +5,9 @@
 //! there is a choice at all: the STM32MP157's UART4 is ST's own design rather
 //! than an Arm primecell. The same three things happen as in the PL011 driver
 //! beside it — wait for room, write the byte, leave the baud rate alone — at
-//! different offsets and with the flag the other way up.
+//! different offsets and with the flag the other way up. Receiving is its
+//! mirror: look for a byte, take it, and clear an overrun, which on this port
+//! stays set until it is cleared.
 //!
 //! The layout is the one Linux calls `stm32h7`, which is what every UART on an
 //! STM32MP15 declares itself to be. As with the PL011, these are `MMIO`
@@ -28,6 +30,17 @@ const ISR: u64 = 0x1C;
 /// `ISR`: there is room for another byte, in the transmit register or in the
 /// transmit FIFO on a port configured to have one. The same bit either way.
 const ISR_TXE: u32 = 1 << 7;
+/// `ISR`: a received byte is waiting, in the receive register or in the receive
+/// FIFO on a port configured to have one. The same bit either way.
+const ISR_RXNE: u32 = 1 << 5;
+/// `ISR`: a byte arrived while the one before it was still unread, and was lost.
+const ISR_ORE: u32 = 1 << 3;
+/// Interrupt clear register: writing a bit clears the matching `ISR` flag.
+const ICR: u64 = 0x20;
+/// `ICR`: clear [`ISR_ORE`].
+const ICR_ORECF: u32 = 1 << 3;
+/// Receive data register: reading it takes the byte.
+const RDR: u64 = 0x24;
 /// Transmit data register: writing it sends.
 const TDR: u64 = 0x28;
 
@@ -95,4 +108,26 @@ pub(crate) fn write_byte(byte: u8) {
         core::hint::spin_loop();
     }
     write(TDR, u32::from(byte));
+}
+
+/// One received byte, if the port has one waiting.
+///
+/// An overrun is cleared whenever it is seen. The byte it reports is already
+/// gone, and the flag is sticky: left set, it would stay set through every
+/// later byte, and with the receive interrupt enabled it would hold the line
+/// asserted.
+pub(crate) fn read_byte() -> Option<u8> {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return None;
+    }
+
+    let status = read(ISR);
+    if status & ISR_ORE != 0 {
+        write(ICR, ICR_ORECF);
+    }
+    if status & ISR_RXNE == 0 {
+        return None;
+    }
+    Some(read(RDR).to_le_bytes()[0])
 }
