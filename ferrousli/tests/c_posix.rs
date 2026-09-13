@@ -84,3 +84,8 @@ fn glibc_large_file_and_xstat_names() {
 fn programs_run_through_popen_system_the_execl_family_and_daemon() {
     check(&Case::named("posix/spawn"));
 }
+
+#[test]
+fn login_records_are_empty_and_masked_messages_are_not_sent() {
+    check(&Case::named("posix/logging"));
+}
