@@ -1043,6 +1043,14 @@ identity; a failure after that ends it with `SIGSEGV`'s status, as on Linux.
 `vfork` copies rather than lends memory, and the parent still sleeps until the
 child execs or ends. A new thread is still `ENOSYS`.
 
+Every general register is cleared on entry to user mode, with one exception a
+native process needs: `Startup.argument` arrives in the first argument
+register -- RDI, x0 or r0 -- which is how stage 9's `process_start` hands a
+driver its bootstrap handle. A Linux program's is zero. The boot test starts a
+two-instruction program that exits with that register:
+
+      argument a program started with an argument found it on entry and exited with 57
+
 **`futex` and `clone3`.** `futex` waits, wakes and requeues, plain and with a
 bitset, keyed by address space and user address, with the word compared under
 the table's lock so no wake is lost; the priority-inheritance operations and
