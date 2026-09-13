@@ -41,6 +41,8 @@ pub(crate) struct Args {
     /// `build` and `run` put in the kernel and at `/bin/busybox`. `{arch}` in it
     /// is replaced by each architecture's name, so one path serves `--arch all`.
     pub(crate) init: Option<String>,
+    /// `--script`, the file of snippets `sweep` runs.
+    pub(crate) script: Option<String>,
 }
 
 impl Args {
@@ -69,6 +71,7 @@ impl Args {
                 "--to" => args.to = Some(value(&mut items, "--to")?),
                 "--port" => args.port = Some(value(&mut items, "--port")?),
                 "--init" => args.init = Some(value(&mut items, "--init")?),
+                "--script" => args.script = Some(value(&mut items, "--script")?),
                 other if other.starts_with('-') => {
                     return Err(Error::new(format!("unknown option `{other}`")));
                 }

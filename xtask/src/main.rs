@@ -7,6 +7,7 @@
 //! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS]
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
+//! cargo xtask sweep     --arch all --init PATH/{arch}/busybox --script FILE [--timeout SECONDS]
 //! cargo xtask check     [--fast]
 //! cargo xtask flash     [--arch armv7a] [--to MOUNT]
 //! cargo xtask watch-serial            [--port DEVICE] [--timeout SECONDS]
@@ -43,6 +44,7 @@ mod pe;
 mod qemu;
 mod serial;
 mod shell;
+mod sweep;
 mod symbolize;
 mod vfs;
 
@@ -95,6 +97,7 @@ COMMANDS:
     test-boot     Boot the image under QEMU and assert the kernel came up
     test-shell    Boot with a static busybox built in and require its script's output
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs
+    sweep         Run a script's snippets as programs and report every call refused ENOSYS
     check         Run every quality gate (fmt, clippy, layering, audits)
     model-doc     Regenerate docs/generated/ from the SysML model
     flash         Copy the loader and kernel onto a board's boot partition
@@ -114,6 +117,7 @@ OPTIONS:
     --port <DEVICE>                      watch-serial: e.g. /dev/ttyACM0
     --init <PATH>                        The busybox; {arch} is replaced. build, run: [or FERRIX_INIT]
                                          start `sh -i`, with the applets linked in /bin
+    --script <FILE>                      sweep: `### NAME` lines start each snippet
     -h, --help                           This message
 ";
 
@@ -178,6 +182,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         "test-vfs" => test_vfs(&args),
+        "sweep" => sweep(&args),
         "check" => check::run(&args),
         "model-doc" => check::model_doc(),
         "flash" => {
@@ -233,6 +238,51 @@ fn test_vfs(args: &Args) -> Result<()> {
     } else {
         Err(Error::new(format!(
             "stage 8's exit programs failed on {}",
+            failed.join(", ")
+        )))
+    }
+}
+
+/// `sweep`: a script's snippets as programs, on each architecture asked for,
+/// and a report of every call the kernel refused with `ENOSYS`.
+///
+/// A measurement rather than a test: it fails only when the kernel panicked or
+/// the snippets did not all finish, and the report is written beside the
+/// serial log either way. See `sweep.rs`.
+fn sweep(args: &Args) -> Result<()> {
+    let init = args.init.as_deref().ok_or_else(|| {
+        Error::new(
+            "sweep needs --init PATH, a static busybox for each architecture; \
+             `{arch}` in the path is replaced by the architecture's name",
+        )
+    })?;
+    let script = args
+        .script
+        .as_deref()
+        .ok_or_else(|| Error::new("sweep needs --script FILE, the snippets to run"))?;
+    let text = std::fs::read_to_string(script)
+        .map_err(|error| Error::new(format!("reading {script}: {error}")))?;
+    let snippets = sweep::parse(&text)?;
+    let commands = sweep::encode(&snippets);
+    let mut failed = Vec::new();
+    for arch in args.arches()? {
+        let program = program_for(init, arch)?;
+        let loader = cargo::build_loader(arch, args.release)?;
+        let list = paths::build_dir(arch).join("sweep-commands");
+        vfs::write_if_changed(&list, &commands)?;
+        let kernel = cargo::build_kernel_with_commands(arch, args.release, &list)?;
+        let initramfs = initramfs::build(Some(&program))?;
+        let image = fat::write_image_with(arch, &loader, &kernel, &initramfs)?;
+        if let Err(error) = qemu::sweep(arch, &image, &kernel, args, &snippets) {
+            eprintln!("\n  {error}");
+            failed.push(arch.name());
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::new(format!(
+            "the sweep did not finish on {}",
             failed.join(", ")
         )))
     }
