@@ -272,6 +272,23 @@ fn check(a: usize) -> Result<Report, &'static str> {
         }
     }
 
+    // Both address spaces gone before the check returns, so that what they
+    // held is given back inside this check's frame window and not a later
+    // one's. Both processes are released by now: `wait_for_exit` reports only
+    // once a release has come, and a killed one is released when its last
+    // thread leaves, before its task is dead. But the release keeps the address
+    // space, whose last reference goes when the last task holding it is reaped,
+    // in the reaper's `reap_one`, so this waits on the reaper. The caller's
+    // `wait_until_reaper_quiet` is not enough on its own, because it says the
+    // reaper is idle, not that these two spaces were among what it reaped.
+    let child_signal = child.ended_by_signal();
+    let spaces = [
+        Arc::downgrade(parent.space()),
+        Arc::downgrade(child.space()),
+    ];
+    drop((parent_task, child_task, parent, child));
+    wait_for_spaces_to_go(&spaces)?;
+
     let taken = outcome?;
     if statuses.contains(&Some(SAW_POISON)) {
         return Err(
@@ -281,7 +298,7 @@ fn check(a: usize) -> Result<Report, &'static str> {
     }
     // The parent leaves when told; the child was ended by the protect step.
     let [parent_status, _] = statuses;
-    if parent_status != Some(0) || child.ended_by_signal() != Some(SIGSEGV) {
+    if parent_status != Some(0) || child_signal != Some(SIGSEGV) {
         return Err("a process in the reverse map check did not end as the check drove it");
     }
     Ok(Report {
@@ -291,6 +308,24 @@ fn check(a: usize) -> Result<Report, &'static str> {
         global: smp::shootdowns(),
         leaked: 0,
     })
+}
+
+/// Wait until neither of the check's two address spaces has a reference left,
+/// for the reason given where [`check`] calls it.
+fn wait_for_spaces_to_go(
+    spaces: &[alloc::sync::Weak<crate::user::space::AddressSpace>; 2],
+) -> Result<(), &'static str> {
+    let released_by = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    while spaces.iter().any(|space| space.strong_count() > 0) {
+        if crate::timer::now_nanos() >= released_by {
+            return Err(
+                "a process of the reverse map check kept its address space after its task was \
+                 reaped",
+            );
+        }
+        crate::sched::sleep_for(1_000_000);
+    }
+    Ok(())
 }
 
 /// The two programs, and the object through whose control page they are
