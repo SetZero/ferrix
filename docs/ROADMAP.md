@@ -1897,7 +1897,12 @@ logic `cargo test`, Miri and a fuzzer can reach.
 
 * **The kernel mount**, which needs a block device: stage 10's virtio-blk driver
   and ring protocol, with `libs/block` between it and `libs/btrfs-vfs`. Then
-  the exit criterion, in QEMU.
+  the exit criterion, in QEMU. It waits for the ring-3 driver itself: a
+  kernel-side virtio-blk read path to run the exit sooner was considered and
+  declined, because §7 of the architecture puts drivers in ring 3 and a harness
+  in ring 0 would be the first exception to it. What the driver still needs
+  beyond stage 10's own list is stage 9's `vmo_map` with bus addresses and
+  native process creation.
 * Data checksums from the checksum tree are not verified yet; metadata
   checksums are.
 * Device numbers are passed through as btrfs stores them, not yet checked
