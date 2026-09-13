@@ -29,6 +29,8 @@
 //! * [`initramfs`] — unpacking a cpio archive into a namespace.
 //! * [`dirent`] — packing directory entries in `getdents64`'s layout.
 //! * [`pipe`] — the buffer behind a pipe, and the rules at its edges.
+//! * [`socket`] — the buffer behind one direction of a socket: a byte stream
+//!   or a run of records, with ancillary data kept at its boundaries.
 //! * [`statfs`] — packing a `statfs` answer in the three layouts it has.
 //!
 //! # What is deliberately absent
@@ -76,6 +78,7 @@ mod namespace;
 mod node;
 pub mod path;
 pub mod pipe;
+pub mod socket;
 pub mod statfs;
 pub mod tmpfs;
 mod walk;

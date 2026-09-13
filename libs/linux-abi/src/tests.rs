@@ -2432,3 +2432,637 @@ fn arm_fields_are_read_as_linux_reads_them() {
         base | HWCAP_VFP | HWCAP_VFPV3 | HWCAP_VFPD32 | HWCAP_NEON | HWCAP_VFPV4
     );
 }
+
+// ---------------------------------------------------------------------------
+// Sockets
+// ---------------------------------------------------------------------------
+
+use crate::socket::{
+    self, AddressError, BadControlMessage, CmsgHdr, ControlMessage, ControlMessages, Linger,
+    MsgHdr, SOCKADDR_UN_SIZE, Ucred, UnixAddress, Width, cmsg_align, cmsg_len, cmsg_space,
+};
+
+#[test]
+fn socket_families_types_and_shutdown_match_the_headers() {
+    for (value, expected, name) in [
+        (socket::AF_UNSPEC, 0, "AF_UNSPEC"),
+        (socket::AF_UNIX, 1, "AF_UNIX"),
+        (socket::AF_LOCAL, 1, "AF_LOCAL"),
+        (socket::AF_INET, 2, "AF_INET"),
+        (socket::AF_INET6, 10, "AF_INET6"),
+        (socket::AF_NETLINK, 16, "AF_NETLINK"),
+        (socket::AF_MAX, 46, "AF_MAX"),
+    ] {
+        assert_eq!(value, expected, "{name}");
+    }
+    for (value, expected, name) in [
+        (socket::SOCK_STREAM, 1, "SOCK_STREAM"),
+        (socket::SOCK_DGRAM, 2, "SOCK_DGRAM"),
+        (socket::SOCK_RAW, 3, "SOCK_RAW"),
+        (socket::SOCK_RDM, 4, "SOCK_RDM"),
+        (socket::SOCK_SEQPACKET, 5, "SOCK_SEQPACKET"),
+        (socket::SOCK_DCCP, 6, "SOCK_DCCP"),
+        (socket::SOCK_PACKET, 10, "SOCK_PACKET"),
+        (socket::SOCK_TYPE_MASK, 0xf, "SOCK_TYPE_MASK"),
+        (socket::SOCK_NONBLOCK, 0o4000, "SOCK_NONBLOCK"),
+        (socket::SOCK_CLOEXEC, 0o2000000, "SOCK_CLOEXEC"),
+        (socket::SHUT_RD, 0, "SHUT_RD"),
+        (socket::SHUT_WR, 1, "SHUT_WR"),
+        (socket::SHUT_RDWR, 2, "SHUT_RDWR"),
+    ] {
+        assert_eq!(value, expected, "{name}");
+    }
+    assert_eq!(
+        (socket::SOCK_NONBLOCK | socket::SOCK_CLOEXEC) & socket::SOCK_TYPE_MASK,
+        0,
+        "the creation flags must be clear of the type"
+    );
+}
+
+#[test]
+fn message_flags_are_distinct_bits_with_the_header_values() {
+    let flags = [
+        (socket::MSG_OOB, 0x1, "MSG_OOB"),
+        (socket::MSG_PEEK, 0x2, "MSG_PEEK"),
+        (socket::MSG_DONTROUTE, 0x4, "MSG_DONTROUTE"),
+        (socket::MSG_CTRUNC, 0x8, "MSG_CTRUNC"),
+        (socket::MSG_PROXY, 0x10, "MSG_PROXY"),
+        (socket::MSG_TRUNC, 0x20, "MSG_TRUNC"),
+        (socket::MSG_DONTWAIT, 0x40, "MSG_DONTWAIT"),
+        (socket::MSG_EOR, 0x80, "MSG_EOR"),
+        (socket::MSG_WAITALL, 0x100, "MSG_WAITALL"),
+        (socket::MSG_FIN, 0x200, "MSG_FIN"),
+        (socket::MSG_SYN, 0x400, "MSG_SYN"),
+        (socket::MSG_CONFIRM, 0x800, "MSG_CONFIRM"),
+        (socket::MSG_RST, 0x1000, "MSG_RST"),
+        (socket::MSG_ERRQUEUE, 0x2000, "MSG_ERRQUEUE"),
+        (socket::MSG_NOSIGNAL, 0x4000, "MSG_NOSIGNAL"),
+        (socket::MSG_MORE, 0x8000, "MSG_MORE"),
+        (socket::MSG_WAITFORONE, 0x10000, "MSG_WAITFORONE"),
+        (socket::MSG_BATCH, 0x40000, "MSG_BATCH"),
+        (socket::MSG_ZEROCOPY, 0x4000000, "MSG_ZEROCOPY"),
+        (socket::MSG_FASTOPEN, 0x20000000, "MSG_FASTOPEN"),
+        (socket::MSG_CMSG_CLOEXEC, 0x40000000, "MSG_CMSG_CLOEXEC"),
+        (socket::MSG_CMSG_COMPAT, 0x80000000, "MSG_CMSG_COMPAT"),
+    ];
+    let mut seen = 0_u32;
+    for (value, expected, name) in flags {
+        assert_eq!(value, expected, "{name}");
+        assert_eq!(value.count_ones(), 1, "{name} is one bit");
+        assert_eq!(seen & value, 0, "{name} shares a bit");
+        seen |= value;
+    }
+}
+
+#[test]
+fn socket_options_match_the_generic_header() {
+    assert_eq!(socket::SOL_SOCKET, 1, "SOL_SOCKET");
+    for (value, expected, name) in [
+        (socket::SO_DEBUG, 1, "SO_DEBUG"),
+        (socket::SO_REUSEADDR, 2, "SO_REUSEADDR"),
+        (socket::SO_TYPE, 3, "SO_TYPE"),
+        (socket::SO_ERROR, 4, "SO_ERROR"),
+        (socket::SO_DONTROUTE, 5, "SO_DONTROUTE"),
+        (socket::SO_BROADCAST, 6, "SO_BROADCAST"),
+        (socket::SO_SNDBUF, 7, "SO_SNDBUF"),
+        (socket::SO_RCVBUF, 8, "SO_RCVBUF"),
+        (socket::SO_KEEPALIVE, 9, "SO_KEEPALIVE"),
+        (socket::SO_OOBINLINE, 10, "SO_OOBINLINE"),
+        (socket::SO_NO_CHECK, 11, "SO_NO_CHECK"),
+        (socket::SO_PRIORITY, 12, "SO_PRIORITY"),
+        (socket::SO_LINGER, 13, "SO_LINGER"),
+        (socket::SO_BSDCOMPAT, 14, "SO_BSDCOMPAT"),
+        (socket::SO_REUSEPORT, 15, "SO_REUSEPORT"),
+        (socket::SO_PASSCRED, 16, "SO_PASSCRED"),
+        (socket::SO_PEERCRED, 17, "SO_PEERCRED"),
+        (socket::SO_RCVLOWAT, 18, "SO_RCVLOWAT"),
+        (socket::SO_SNDLOWAT, 19, "SO_SNDLOWAT"),
+        (socket::SO_RCVTIMEO_OLD, 20, "SO_RCVTIMEO_OLD"),
+        (socket::SO_SNDTIMEO_OLD, 21, "SO_SNDTIMEO_OLD"),
+        (socket::SO_ACCEPTCONN, 30, "SO_ACCEPTCONN"),
+        (socket::SO_PEERSEC, 31, "SO_PEERSEC"),
+        (socket::SO_SNDBUFFORCE, 32, "SO_SNDBUFFORCE"),
+        (socket::SO_RCVBUFFORCE, 33, "SO_RCVBUFFORCE"),
+        (socket::SO_PASSSEC, 34, "SO_PASSSEC"),
+        (socket::SO_PROTOCOL, 38, "SO_PROTOCOL"),
+        (socket::SO_DOMAIN, 39, "SO_DOMAIN"),
+        (socket::SO_PEEK_OFF, 42, "SO_PEEK_OFF"),
+        (socket::SO_PEERGROUPS, 59, "SO_PEERGROUPS"),
+        (socket::SO_RCVTIMEO_NEW, 66, "SO_RCVTIMEO_NEW"),
+        (socket::SO_SNDTIMEO_NEW, 67, "SO_SNDTIMEO_NEW"),
+        (socket::SO_PASSPIDFD, 76, "SO_PASSPIDFD"),
+        (socket::SO_PEERPIDFD, 77, "SO_PEERPIDFD"),
+        (socket::SCM_RIGHTS, 1, "SCM_RIGHTS"),
+        (socket::SCM_CREDENTIALS, 2, "SCM_CREDENTIALS"),
+    ] {
+        assert_eq!(value, expected, "{name}");
+    }
+}
+
+#[test]
+fn socket_limits_and_queue_ioctls_match_linux() {
+    assert_eq!(socket::SCM_MAX_FD, 253, "SCM_MAX_FD");
+    assert_eq!(socket::UNIX_PATH_MAX, 108, "UNIX_PATH_MAX");
+    assert_eq!(SOCKADDR_UN_SIZE, 110, "sizeof(struct sockaddr_un)");
+    assert_eq!(socket::SOMAXCONN, 4096, "net.core.somaxconn since 5.4");
+    assert_eq!(socket::SOCKET_BUFFER_DEFAULT, 212_992, "rmem_default");
+    assert_eq!(socket::SOCKET_BUFFER_MAX, 212_992, "rmem_max");
+    assert_eq!(socket::SOCKET_BUFFER_MIN, 4096, "one page");
+    assert_eq!(types::TIOCOUTQ, 0x5411, "TIOCOUTQ is 'T' 0x11");
+    assert_eq!(socket::SIOCINQ, 0x541B, "SIOCINQ is FIONREAD");
+    assert_eq!(socket::SIOCOUTQ, 0x5411, "SIOCOUTQ is TIOCOUTQ");
+}
+
+#[test]
+fn msghdr_is_seven_words_with_every_field_on_a_word_boundary() {
+    // Independent transcriptions of the kernel's `struct user_msghdr`, with
+    // each architecture's `size_t` and pointer.
+    #[repr(C)]
+    struct Wide {
+        name: u64,
+        namelen: u32,
+        iov: u64,
+        iovlen: u64,
+        control: u64,
+        controllen: u64,
+        flags: u32,
+    }
+    #[repr(C)]
+    struct Narrow {
+        name: u32,
+        namelen: u32,
+        iov: u32,
+        iovlen: u32,
+        control: u32,
+        controllen: u32,
+        flags: u32,
+    }
+    let wide = [
+        offset_of!(Wide, namelen),
+        offset_of!(Wide, iov),
+        offset_of!(Wide, iovlen),
+        offset_of!(Wide, control),
+        offset_of!(Wide, controllen),
+        offset_of!(Wide, flags),
+    ];
+    let narrow = [
+        offset_of!(Narrow, namelen),
+        offset_of!(Narrow, iov),
+        offset_of!(Narrow, iovlen),
+        offset_of!(Narrow, control),
+        offset_of!(Narrow, controllen),
+        offset_of!(Narrow, flags),
+    ];
+    assert_eq!(offset_of!(Wide, name), 0);
+    assert_eq!(offset_of!(Narrow, name), 0);
+    for (width, size, model_size, model, literal) in [
+        (
+            Width::Bits64,
+            56,
+            size_of::<Wide>(),
+            wide,
+            [8, 16, 24, 32, 40, 48],
+        ),
+        (
+            Width::Bits32,
+            28,
+            size_of::<Narrow>(),
+            narrow,
+            [4, 8, 12, 16, 20, 24],
+        ),
+    ] {
+        let offsets = [
+            MsgHdr::name_len_offset(width),
+            MsgHdr::iov_offset(width),
+            MsgHdr::iov_len_offset(width),
+            MsgHdr::control_offset(width),
+            MsgHdr::control_len_offset(width),
+            MsgHdr::flags_offset(width),
+        ];
+        assert_eq!(MsgHdr::size(width), size, "{width:?} size");
+        assert_eq!(model_size, size, "{width:?} model size");
+        assert_eq!(offsets, literal, "{width:?} offsets");
+        assert_eq!(offsets, model, "{width:?} offsets against the model");
+    }
+}
+
+#[test]
+fn msghdr_decodes_at_the_kernel_offsets_and_encodes_its_padding_zero() {
+    let expected = MsgHdr {
+        name: 0x1122_3344_5566_7788,
+        name_len: 110,
+        iov: 0x0000_7FFF_0000_1000,
+        iov_len: 3,
+        control: 0x0000_7FFF_0000_2000,
+        control_len: 64,
+        flags: socket::MSG_TRUNC,
+    };
+    // The 64-bit layout, with its padding zeroed as musl leaves it.
+    let mut wide = [0_u8; 56];
+    wide[0..8].copy_from_slice(&expected.name.to_le_bytes());
+    wide[8..12].copy_from_slice(&110_u32.to_le_bytes());
+    wide[16..24].copy_from_slice(&expected.iov.to_le_bytes());
+    wide[24..32].copy_from_slice(&3_u64.to_le_bytes());
+    wide[32..40].copy_from_slice(&expected.control.to_le_bytes());
+    wide[40..48].copy_from_slice(&64_u64.to_le_bytes());
+    wide[48..52].copy_from_slice(&socket::MSG_TRUNC.to_le_bytes());
+    assert_eq!(MsgHdr::decode(&wide, Width::Bits64), Some(expected));
+    assert_eq!(MsgHdr::decode(&wide[..55], Width::Bits64), None);
+
+    let mut out = [0xFF_u8; 60];
+    expected.encode(&mut out, Width::Bits64).unwrap();
+    assert_eq!(&out[..56], &wide[..], "padding must be written zero");
+    assert_eq!(&out[56..], &[0xFF; 4], "nothing past the structure");
+
+    let mut narrow = [0_u8; 28];
+    for (at, value) in [
+        (0, 0x1000_u32),
+        (4, 16),
+        (8, 0x2000),
+        (12, 2),
+        (16, 0x3000),
+        (20, 24),
+        (24, 0x80),
+    ] {
+        narrow[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    let short = MsgHdr {
+        name: 0x1000,
+        name_len: 16,
+        iov: 0x2000,
+        iov_len: 2,
+        control: 0x3000,
+        control_len: 24,
+        flags: socket::MSG_EOR,
+    };
+    assert_eq!(MsgHdr::decode(&narrow, Width::Bits32), Some(short));
+    let mut out = [0xFF_u8; 28];
+    short.encode(&mut out, Width::Bits32).unwrap();
+    assert_eq!(out, narrow);
+    assert_eq!(short.encode(&mut out[..27], Width::Bits32), None);
+}
+
+#[test]
+fn msghdr_round_trips_on_both_widths_and_refuses_what_does_not_fit() {
+    let header = MsgHdr {
+        name: 0xBEEF,
+        name_len: 3,
+        iov: 0xCAFE,
+        iov_len: 1024,
+        control: 0xF00D,
+        control_len: 1032,
+        flags: socket::MSG_CTRUNC | socket::MSG_TRUNC,
+    };
+    for width in [Width::Bits64, Width::Bits32] {
+        let mut bytes = [0_u8; 56];
+        header.encode(&mut bytes, width).unwrap();
+        assert_eq!(MsgHdr::decode(&bytes, width), Some(header), "{width:?}");
+        // What the kernel writes back after `recvmsg`, one field at a time.
+        bytes[MsgHdr::name_len_offset(width)..][..4].copy_from_slice(&7_u32.to_le_bytes());
+        width
+            .put_word(&mut bytes, MsgHdr::control_len_offset(width), 20)
+            .unwrap();
+        bytes[MsgHdr::flags_offset(width)..][..4].copy_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(
+            MsgHdr::decode(&bytes, width),
+            Some(MsgHdr {
+                name_len: 7,
+                control_len: 20,
+                flags: 0,
+                ..header
+            }),
+            "{width:?}"
+        );
+    }
+    let wide = MsgHdr {
+        control_len: 1 << 32,
+        ..header
+    };
+    let mut out = [0x55_u8; 28];
+    assert_eq!(wide.encode(&mut out, Width::Bits32), None);
+    assert_eq!(out, [0x55; 28], "a refused encode writes nothing");
+    assert_eq!(Width::Bits32.put_word(&mut out, 0, 1 << 32), None);
+    assert_eq!(Width::Bits64.put_word(&mut out, 24, 1), None);
+}
+
+#[test]
+fn cmsghdr_is_a_word_and_two_ints() {
+    for (width, size, level, kind) in [(Width::Bits64, 16, 8, 12), (Width::Bits32, 12, 4, 8)] {
+        assert_eq!(CmsgHdr::size(width), size, "{width:?}");
+        assert_eq!(CmsgHdr::level_offset(width), level, "{width:?}");
+        assert_eq!(CmsgHdr::kind_offset(width), kind, "{width:?}");
+        let header = CmsgHdr {
+            len: 20,
+            level: socket::SOL_SOCKET,
+            kind: -2,
+        };
+        let mut bytes = [0xAA_u8; 16];
+        header.encode(&mut bytes, width).unwrap();
+        assert_eq!(
+            &bytes[..width.bytes()],
+            &20_u64.to_le_bytes()[..width.bytes()]
+        );
+        assert_eq!(&bytes[level..level + 4], &1_i32.to_le_bytes());
+        assert_eq!(&bytes[kind..kind + 4], &(-2_i32).to_le_bytes());
+        assert_eq!(CmsgHdr::decode(&bytes, width), Some(header));
+        assert_eq!(CmsgHdr::decode(&bytes[..size - 1], width), None);
+        assert_eq!(header.encode(&mut bytes[..size - 1], width), None);
+    }
+}
+
+#[test]
+fn cmsg_arithmetic_matches_the_musl_macros() {
+    // musl: `CMSG_ALIGN(len)` is `(len + sizeof(size_t) - 1) & ~(sizeof(size_t)
+    // - 1)`, `CMSG_SPACE(len)` is `CMSG_ALIGN(len) + CMSG_ALIGN(sizeof(struct
+    // cmsghdr))` and `CMSG_LEN(len)` is `CMSG_ALIGN(sizeof(struct cmsghdr)) +
+    // len`.
+    let align = |len: usize, word: usize| (len + word - 1) & !(word - 1);
+    let most_rights = 4 * socket::SCM_MAX_FD;
+    for (width, word, header) in [(Width::Bits64, 8, 16), (Width::Bits32, 4, 12)] {
+        for len in [0, 1, 4, 8, 12, most_rights] {
+            assert_eq!(cmsg_align(len, width), align(len, word), "{width:?} {len}");
+            assert_eq!(
+                cmsg_space(len, width),
+                align(len, word) + align(header, word),
+                "{width:?} {len}"
+            );
+            assert_eq!(
+                cmsg_len(len, width),
+                align(header, word) + len,
+                "{width:?} {len}"
+            );
+        }
+    }
+    // The same numbers written out: (data, CMSG_ALIGN, CMSG_SPACE, CMSG_LEN).
+    let wide = [
+        (1, 8, 24, 17),
+        (4, 8, 24, 20),
+        (8, 8, 24, 24),
+        (12, 16, 32, 28),
+        (1012, 1016, 1032, 1028),
+    ];
+    let narrow = [
+        (1, 4, 16, 13),
+        (4, 4, 16, 16),
+        (8, 8, 20, 20),
+        (12, 12, 24, 24),
+        (1012, 1012, 1024, 1024),
+    ];
+    for (width, table) in [(Width::Bits64, wide), (Width::Bits32, narrow)] {
+        for (len, aligned, space, total) in table {
+            assert_eq!(cmsg_align(len, width), aligned, "{width:?} {len}");
+            assert_eq!(cmsg_space(len, width), space, "{width:?} {len}");
+            assert_eq!(cmsg_len(len, width), total, "{width:?} {len}");
+        }
+    }
+    assert!(
+        cmsg_align(usize::MAX - 2, Width::Bits64) >= usize::MAX - 2,
+        "aligning saturates rather than wrapping"
+    );
+}
+
+/// A control buffer holding an `SCM_RIGHTS` message with one descriptor and
+/// an `SCM_CREDENTIALS` one, each at its `CMSG_SPACE`, followed by `tail`
+/// spare bytes.
+fn two_control_messages(width: Width, cred: Ucred, tail: usize) -> Vec<u8> {
+    let header = CmsgHdr::size(width);
+    let second = cmsg_space(4, width);
+    let mut control = std::vec![0_u8; second + cmsg_space(Ucred::SIZE, width) + tail];
+    CmsgHdr {
+        len: u64::try_from(cmsg_len(4, width)).unwrap(),
+        level: socket::SOL_SOCKET,
+        kind: socket::SCM_RIGHTS,
+    }
+    .encode(&mut control, width)
+    .unwrap();
+    control[header..header + 4].copy_from_slice(&7_i32.to_le_bytes());
+    CmsgHdr {
+        len: u64::try_from(cmsg_len(Ucred::SIZE, width)).unwrap(),
+        level: socket::SOL_SOCKET,
+        kind: socket::SCM_CREDENTIALS,
+    }
+    .encode(&mut control[second..], width)
+    .unwrap();
+    control[second + header..second + header + Ucred::SIZE].copy_from_slice(&cred.to_bytes());
+    control
+}
+
+#[test]
+fn control_messages_are_walked_as_for_each_cmsghdr_walks_them() {
+    let cred = Ucred {
+        pid: 42,
+        uid: 1000,
+        gid: 100,
+    };
+    let rights = 7_i32.to_le_bytes();
+    let cred_bytes = cred.to_bytes();
+    for width in [Width::Bits64, Width::Bits32] {
+        let expected = [
+            Ok(ControlMessage {
+                level: socket::SOL_SOCKET,
+                kind: socket::SCM_RIGHTS,
+                data: &rights[..],
+            }),
+            Ok(ControlMessage {
+                level: socket::SOL_SOCKET,
+                kind: socket::SCM_CREDENTIALS,
+                data: &cred_bytes[..],
+            }),
+        ];
+        // Spare bytes too few for a header are not a message.
+        let control = two_control_messages(width, cred, CmsgHdr::size(width) - 1);
+        let found: Vec<_> = ControlMessages::new(&control, width).collect();
+        assert_eq!(found, expected, "{width:?}");
+        // Without the last message's padding the walk still finds it:
+        // `CMSG_OK` measures `cmsg_len`, not `CMSG_SPACE`.
+        let unpadded = cmsg_space(4, width) + cmsg_len(Ucred::SIZE, width);
+        let found: Vec<_> = ControlMessages::new(&control[..unpadded], width).collect();
+        assert_eq!(found, expected, "{width:?} unpadded");
+        assert_eq!(ControlMessages::new(&[], width).count(), 0);
+        assert_eq!(
+            ControlMessages::new(&control[..CmsgHdr::size(width) - 1], width).count(),
+            0,
+            "{width:?}: a buffer shorter than a header has no first message"
+        );
+    }
+}
+
+#[test]
+fn a_control_message_whose_length_is_wrong_ends_the_walk_with_an_error() {
+    let cred = Ucred::default();
+    for width in [Width::Bits64, Width::Bits32] {
+        let header = CmsgHdr::size(width);
+        let second = cmsg_space(4, width);
+        for bad_len in [0, header as u64 - 1, 1 << 20] {
+            let mut control = two_control_messages(width, cred, 0);
+            width.put_word(&mut control, second, bad_len).unwrap();
+            let found: Vec<_> = ControlMessages::new(&control, width).collect();
+            assert_eq!(found.len(), 2, "{width:?} {bad_len}");
+            assert!(found[0].is_ok(), "{width:?} {bad_len}");
+            assert_eq!(found[1], Err(BadControlMessage), "{width:?} {bad_len}");
+        }
+        // A length one past the buffer is refused; exactly the buffer is not.
+        let mut control = two_control_messages(width, cred, 0);
+        let rest = u64::try_from(control.len() - second).unwrap();
+        width.put_word(&mut control, second, rest + 1).unwrap();
+        assert_eq!(
+            ControlMessages::new(&control, width).nth(1),
+            Some(Err(BadControlMessage))
+        );
+        width.put_word(&mut control, second, rest).unwrap();
+        assert!(matches!(
+            ControlMessages::new(&control, width).nth(1),
+            Some(Ok(_))
+        ));
+    }
+}
+
+/// A `struct sockaddr_un` of family `family` with `name` at `sun_path`, in a
+/// buffer longer than the structure so a too-long length can be tried.
+fn sockaddr_un(family: u16, name: &[u8]) -> [u8; 112] {
+    let mut bytes = [0_u8; 112];
+    bytes[..2].copy_from_slice(&family.to_le_bytes());
+    bytes[2..2 + name.len()].copy_from_slice(name);
+    bytes
+}
+
+#[test]
+fn a_unix_address_is_told_apart_by_its_length_and_first_byte() {
+    let unix = socket::AF_UNIX;
+    assert_eq!(
+        UnixAddress::parse(&sockaddr_un(unix, b""), 2),
+        Ok(UnixAddress::Unnamed)
+    );
+    let path = sockaddr_un(unix, b"/run/x.sock");
+    let named = Ok(UnixAddress::Path(b"/run/x.sock"));
+    assert_eq!(UnixAddress::parse(&path, 2 + 11), named, "no terminator");
+    assert_eq!(UnixAddress::parse(&path, 2 + 12), named, "with its NUL");
+    assert_eq!(
+        UnixAddress::parse(&path, SOCKADDR_UN_SIZE),
+        named,
+        "the whole structure, as most programs pass it"
+    );
+    assert_eq!(
+        UnixAddress::parse(&sockaddr_un(unix, b"/a\0bc"), 7),
+        Ok(UnixAddress::Path(b"/a")),
+        "a path stops at its first NUL within the length"
+    );
+    let full = [b'p'; 108];
+    assert_eq!(
+        UnixAddress::parse(&sockaddr_un(unix, &full), SOCKADDR_UN_SIZE),
+        Ok(UnixAddress::Path(&full)),
+        "108 bytes need no terminator"
+    );
+    let hidden = sockaddr_un(unix, b"\0name\0with\0nuls");
+    assert_eq!(
+        UnixAddress::parse(&hidden, 2 + 15),
+        Ok(UnixAddress::Abstract(b"name\0with\0nuls"))
+    );
+    assert_eq!(
+        UnixAddress::parse(&hidden, 3),
+        Ok(UnixAddress::Abstract(b""))
+    );
+    assert_eq!(
+        UnixAddress::parse(&hidden, SOCKADDR_UN_SIZE),
+        Ok(UnixAddress::Abstract(&hidden[3..110])),
+        "the length, not a terminator, ends an abstract name"
+    );
+}
+
+#[test]
+fn a_unix_address_of_the_wrong_length_or_family_is_refused() {
+    let unix = sockaddr_un(socket::AF_UNIX, b"/s");
+    assert_eq!(UnixAddress::parse(&unix, 0), Err(AddressError::TooShort));
+    assert_eq!(UnixAddress::parse(&unix, 1), Err(AddressError::TooShort));
+    assert_eq!(
+        UnixAddress::parse(&unix, SOCKADDR_UN_SIZE + 1),
+        Err(AddressError::TooLong)
+    );
+    assert_eq!(
+        UnixAddress::parse(&unix[..3], 4),
+        Err(AddressError::TooShort),
+        "fewer bytes than the length claims"
+    );
+    assert_eq!(
+        UnixAddress::parse(&sockaddr_un(socket::AF_INET, b"/s"), 4),
+        Err(AddressError::WrongFamily)
+    );
+    assert_eq!(
+        UnixAddress::parse(&sockaddr_un(0x0101, b"/s"), 4),
+        Err(AddressError::WrongFamily),
+        "the family is sixteen bits, not one byte"
+    );
+    assert_eq!(
+        UnixAddress::parse(&sockaddr_un(socket::AF_UNSPEC, b""), 2),
+        Err(AddressError::WrongFamily)
+    );
+}
+
+#[test]
+fn a_unix_address_encodes_to_what_parses_back_to_it() {
+    let full = [b'p'; 108];
+    let longest_abstract = [1_u8; 107];
+    for (address, len) in [
+        (UnixAddress::Unnamed, 2),
+        (UnixAddress::Path(b"/run/x.sock"), 14),
+        (UnixAddress::Path(&full), 110),
+        (UnixAddress::Abstract(b"name\0x"), 9),
+        (UnixAddress::Abstract(b""), 3),
+        (UnixAddress::Abstract(&longest_abstract), 110),
+    ] {
+        let mut out = [0xEE_u8; SOCKADDR_UN_SIZE];
+        assert_eq!(address.encoded_len(), len, "{address:?}");
+        assert_eq!(address.encode(&mut out), Some(len), "{address:?}");
+        assert_eq!(&out[..2], &socket::AF_UNIX.to_le_bytes(), "{address:?}");
+        assert_eq!(UnixAddress::parse(&out, len), Ok(address), "{address:?}");
+        assert!(out[len..].iter().all(|&byte| byte == 0xEE), "{address:?}");
+        if let UnixAddress::Path(path) = address
+            && path.len() < 108
+        {
+            assert_eq!(out[len - 1], 0, "a short path is terminated");
+        }
+        assert_eq!(address.encode(&mut out[..len - 1]), None, "{address:?}");
+    }
+    let mut out = [0xEE_u8; SOCKADDR_UN_SIZE + 8];
+    for invalid in [
+        UnixAddress::Path(b""),
+        UnixAddress::Path(b"a\0b"),
+        UnixAddress::Path(&[b'p'; 109]),
+        UnixAddress::Abstract(&[1; 108]),
+    ] {
+        assert_eq!(invalid.encode(&mut out), None, "{invalid:?}");
+    }
+    assert!(out.iter().all(|&byte| byte == 0xEE), "nothing written");
+}
+
+#[test]
+fn ucred_and_linger_are_plain_ints_on_every_architecture() {
+    assert_eq!(size_of::<Ucred>(), Ucred::SIZE);
+    assert_eq!(Ucred::SIZE, 12);
+    assert_eq!(offset_of!(Ucred, uid), 4);
+    assert_eq!(offset_of!(Ucred, gid), 8);
+    assert_eq!(size_of::<Linger>(), Linger::SIZE);
+    assert_eq!(Linger::SIZE, 8);
+    assert_eq!(offset_of!(Linger, linger), 4);
+
+    let cred = Ucred {
+        pid: 1234,
+        uid: 1000,
+        gid: 100,
+    };
+    let bytes = cred.to_bytes();
+    assert_eq!(&bytes[0..4], &1234_i32.to_le_bytes());
+    assert_eq!(&bytes[4..8], &1000_u32.to_le_bytes());
+    assert_eq!(&bytes[8..12], &100_u32.to_le_bytes());
+    assert_eq!(Ucred::from_bytes(&bytes), Some(cred));
+    assert_eq!(Ucred::from_bytes(&bytes[..11]), None);
+
+    let linger = Linger {
+        onoff: 1,
+        linger: -30,
+    };
+    let bytes = linger.to_bytes();
+    assert_eq!(&bytes[4..8], &(-30_i32).to_le_bytes());
+    assert_eq!(Linger::from_bytes(&bytes), Some(linger));
+    assert_eq!(Linger::from_bytes(&bytes[..7]), None);
+}

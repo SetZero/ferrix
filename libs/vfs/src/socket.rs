@@ -1,0 +1,453 @@
+//! The buffer behind one direction of a socket, and the rules that make it one.
+//!
+//! A connected `AF_UNIX` socket is two of these, one each way, and like a pipe
+//! almost everything a program relies on happens at the edges rather than in
+//! the queue. What a pipe does not have is the two things this adds:
+//!
+//! * **Records.** A `SOCK_SEQPACKET` or `SOCK_DGRAM` socket delivers each send
+//!   as one receive, whole or cut short but never run together with the next,
+//!   and a receive into a buffer too small for the record discards the rest
+//!   while still able to say how long it was, which is what `MSG_TRUNC`
+//!   reports. A `SOCK_STREAM` socket has no boundaries, and this buffer joins
+//!   consecutive writes into one segment so a stream of one-byte writes is not
+//!   a segment per byte.
+//! * **Ancillary data.** An `SCM_RIGHTS` message rides with the bytes it was
+//!   sent with, and belongs to their first byte. Linux treats the socket buffer
+//!   that carries one as a boundary even in a stream, and so does this: a read
+//!   never runs on past the end of the bytes that brought descriptors, and
+//!   never runs on into bytes that bring some after reading others. So each
+//!   receive hands back at most one set, and the bytes it came with.
+//!
+//! The ancillary type is a parameter, `A`, because what it holds -- open
+//! files, credentials -- is the kernel's, and this crate stays a pure function
+//! of bytes that host tests can reach every edge of. That has one consequence
+//! the interface is shaped around: dropping an `A` may mean closing a file,
+//! and the kernel holds this buffer's lock. So an `A` is never dropped here.
+//! [`SocketBuffer::write`] takes it only when it attaches it, and leaves it with
+//! the caller otherwise; [`SocketBuffer::read`] returns it;
+//! [`SocketBuffer::close_reader`] and [`SocketBuffer::drain`] hand back every
+//! one still queued. The caller drops them after unlocking.
+//!
+//! As in [`crate::pipe`], waiting is not here: every outcome that would block
+//! is a value, and the kernel turns it into a sleep or `EAGAIN`. Unlike a
+//! pipe's there is no `poll` answer here, because a socket's is not a fact
+//! about one buffer: it combines this direction's buffer with the other's, and
+//! with a connection state -- listening, connecting, shut down -- that only
+//! the kernel has.
+
+use alloc::collections::VecDeque;
+use alloc::vec::Vec;
+
+use ferrix_linux_abi::socket::SOCKET_BUFFER_MIN;
+
+/// Whether a buffer keeps the boundaries between writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// `SOCK_STREAM`: bytes, with a boundary only where ancillary data is.
+    Stream,
+    /// `SOCK_SEQPACKET` and `SOCK_DGRAM`: every write is one record, and
+    /// every read takes one.
+    Record,
+}
+
+/// What a write did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteOutcome {
+    /// Bytes were queued, and the ancillary data with them if there was any.
+    /// A stream may take fewer bytes than offered; the caller waits and
+    /// writes the rest. Zero only for an empty stream write, which queues
+    /// nothing and leaves any ancillary data with the caller.
+    Wrote(usize),
+    /// Not enough room: none at all for a stream, or too little for the
+    /// whole record.
+    WouldBlock,
+    /// No reader is left. The caller reports `EPIPE`, and raises `SIGPIPE`
+    /// unless told not to.
+    Broken,
+    /// A record larger than the buffer could ever hold: `EMSGSIZE`, rather
+    /// than a wait nothing could end.
+    TooBig,
+}
+
+/// What a read did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadOutcome<A> {
+    /// Bytes were copied out.
+    Read {
+        /// Bytes copied. Zero for a zero-length read, and for a zero-length
+        /// record.
+        bytes: usize,
+        /// For a record, its whole length, which is more than `bytes` when
+        /// it was cut short: what `MSG_TRUNC` asks for. For a stream, `bytes`.
+        full: usize,
+        /// The ancillary data that came with the first byte read, taken off
+        /// the queue. Always `None` for a peek, which takes nothing.
+        ancillary: Option<A>,
+    },
+    /// Nothing to read, and a writer could still add something.
+    WouldBlock,
+    /// Nothing to read, and no writer is left to add anything.
+    EndOfFile,
+}
+
+/// One write's bytes, or several coalesced writes', and what came with them.
+#[derive(Debug)]
+struct Segment<A> {
+    bytes: VecDeque<u8>,
+    ancillary: Option<A>,
+}
+
+impl<A> Segment<A> {
+    /// What the segment counts against the capacity: its bytes, or one for
+    /// an empty record.
+    ///
+    /// Linux charges every datagram its bookkeeping as well as its payload,
+    /// so a program sending empty records does run out of room. Charging
+    /// payload alone would let it queue them without end. One byte keeps
+    /// the count finite while leaving what [`SocketBuffer::queued`] reports
+    /// payload only.
+    fn charge(&self) -> usize {
+        self.bytes.len().max(1)
+    }
+}
+
+/// The queue of one direction of a socket, and whether each end is open.
+#[derive(Debug)]
+pub struct SocketBuffer<A> {
+    kind: Kind,
+    segments: VecDeque<Segment<A>>,
+    capacity: usize,
+    /// Payload bytes in `segments`.
+    queued: usize,
+    /// `Segment::charge` summed over `segments`.
+    charged: usize,
+    writer_closed: bool,
+    reader_closed: bool,
+}
+
+impl<A> SocketBuffer<A> {
+    /// An empty buffer of `kind` holding at most `capacity` bytes, both ends
+    /// open.
+    ///
+    /// The capacity is raised to [`SOCKET_BUFFER_MIN`] if it is less, as
+    /// [`crate::pipe::PipeBuffer::new`] raises its own, so any record of a
+    /// page or less can be accepted.
+    #[must_use]
+    pub fn new(kind: Kind, capacity: usize) -> SocketBuffer<A> {
+        SocketBuffer {
+            kind,
+            segments: VecDeque::new(),
+            capacity: capacity.max(SOCKET_BUFFER_MIN),
+            queued: 0,
+            charged: 0,
+            writer_closed: false,
+            reader_closed: false,
+        }
+    }
+
+    /// Whether the buffer keeps record boundaries.
+    #[must_use]
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// The most bytes the buffer holds.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Change the capacity: `SO_RCVBUF`. Raised to [`SOCKET_BUFFER_MIN`] if
+    /// less.
+    ///
+    /// Shrinking below what is queued discards nothing. Writes find no room
+    /// until reads have brought the queue back under the new size.
+    pub fn set_capacity(&mut self, bytes: usize) {
+        self.capacity = bytes.max(SOCKET_BUFFER_MIN);
+    }
+
+    /// Payload bytes queued: `SIOCOUTQ` for the writer, and `FIONREAD` for
+    /// a stream or a `SOCK_SEQPACKET` reader, which Linux answers with the
+    /// whole queue.
+    #[must_use]
+    pub fn queued(&self) -> usize {
+        self.queued
+    }
+
+    /// The length of the record the next read takes, or `None` if nothing is
+    /// queued: `FIONREAD` for a `SOCK_DGRAM` reader. A stream has no records,
+    /// so for one this is the whole queue.
+    #[must_use]
+    pub fn next_record(&self) -> Option<usize> {
+        match self.kind {
+            Kind::Record => self.segments.front().map(|record| record.bytes.len()),
+            Kind::Stream => (!self.segments.is_empty()).then_some(self.queued),
+        }
+    }
+
+    fn free(&self) -> usize {
+        self.capacity.saturating_sub(self.charged)
+    }
+
+    /// Whether [`SocketBuffer::read`] would not answer
+    /// [`ReadOutcome::WouldBlock`]: the condition a blocked reader waits for.
+    ///
+    /// True with something queued -- an empty record included -- or with the
+    /// writer gone, when the read is end of file.
+    #[must_use]
+    pub fn can_read(&self) -> bool {
+        !self.segments.is_empty() || self.writer_closed
+    }
+
+    /// Whether [`SocketBuffer::write`] of `len` bytes would not answer
+    /// [`WriteOutcome::WouldBlock`]: the condition a blocked writer waits for.
+    ///
+    /// The write's own rules, so a writer woken by this never finds it still
+    /// cannot write: a stream needs room for one byte, a record room for all
+    /// of it. With the reader gone, or a record too big to ever fit, it is
+    /// true, because the write then answers [`WriteOutcome::Broken`] or
+    /// [`WriteOutcome::TooBig`] rather than waiting for room nobody will make.
+    #[must_use]
+    pub fn can_write(&self, len: usize) -> bool {
+        if self.reader_closed {
+            return true;
+        }
+        match self.kind {
+            Kind::Stream => len == 0 || self.free() > 0,
+            Kind::Record => len > self.capacity || self.free() >= len.max(1),
+        }
+    }
+
+    /// Queue as much of `data` as the rules allow, with `ancillary`
+    /// attached to its first byte.
+    ///
+    /// The ancillary data is taken out of `ancillary` only when it is queued,
+    /// which is only when at least one byte of `data` is -- or, for a record,
+    /// when the record is, however short. On any other outcome it is left
+    /// where it was, so a writer that waits for room retries with it, and one
+    /// that gives up drops it after releasing the lock.
+    ///
+    /// A stream takes whatever room there is. Bytes without ancillary data
+    /// join the last segment if that has none either; bytes with it start a
+    /// segment of their own, which is the boundary a read stops at. A record
+    /// goes in whole or not at all.
+    pub fn write(&mut self, data: &[u8], ancillary: &mut Option<A>) -> WriteOutcome {
+        match self.kind {
+            Kind::Stream => self.write_stream(data, ancillary),
+            Kind::Record => self.write_record(data, ancillary),
+        }
+    }
+
+    fn write_stream(&mut self, data: &[u8], ancillary: &mut Option<A>) -> WriteOutcome {
+        if self.reader_closed {
+            return WriteOutcome::Broken;
+        }
+        if data.is_empty() {
+            return WriteOutcome::Wrote(0);
+        }
+        let count = data.len().min(self.free());
+        if count == 0 {
+            return WriteOutcome::WouldBlock;
+        }
+        let accepted = data.get(..count).unwrap_or_default().iter().copied();
+        match self.segments.back_mut() {
+            Some(last) if ancillary.is_none() && last.ancillary.is_none() => {
+                last.bytes.extend(accepted);
+            }
+            _ => self.segments.push_back(Segment {
+                bytes: accepted.collect(),
+                ancillary: ancillary.take(),
+            }),
+        }
+        self.queued = self.queued.saturating_add(count);
+        self.charged = self.charged.saturating_add(count);
+        WriteOutcome::Wrote(count)
+    }
+
+    fn write_record(&mut self, data: &[u8], ancillary: &mut Option<A>) -> WriteOutcome {
+        // Linux checks the size before it looks for the peer, so an
+        // oversized record is `EMSGSIZE` even to a closed reader.
+        if data.len() > self.capacity {
+            return WriteOutcome::TooBig;
+        }
+        if self.reader_closed {
+            return WriteOutcome::Broken;
+        }
+        let record = Segment {
+            bytes: data.iter().copied().collect(),
+            ancillary: None,
+        };
+        if self.free() < record.charge() {
+            return WriteOutcome::WouldBlock;
+        }
+        self.charged = self.charged.saturating_add(record.charge());
+        self.queued = self.queued.saturating_add(data.len());
+        self.segments.push_back(Segment {
+            ancillary: ancillary.take(),
+            ..record
+        });
+        WriteOutcome::Wrote(data.len())
+    }
+
+    /// Take bytes into `out`, or with `peek` copy them and take nothing.
+    ///
+    /// A stream fills `out` from as many segments as the ancillary
+    /// boundaries allow. A record read takes exactly one record, whatever
+    /// the size of `out`: what does not fit is discarded, and
+    /// [`ReadOutcome::Read::full`] says how much that was. A peek copies the
+    /// same bytes the read would have and returns no ancillary data, so the
+    /// read that follows still gets it.
+    ///
+    /// What is queued is delivered even after the writer has gone; end of
+    /// file comes only once it is drained. A zero-length read of a stream
+    /// with something queued copies nothing and takes nothing, ancillary data
+    /// included; of an empty one it waits, as Linux's does.
+    pub fn read(&mut self, out: &mut [u8], peek: bool) -> ReadOutcome<A> {
+        if self.segments.is_empty() {
+            return if self.writer_closed {
+                ReadOutcome::EndOfFile
+            } else {
+                ReadOutcome::WouldBlock
+            };
+        }
+        match (self.kind, peek) {
+            (Kind::Stream, true) => self.peek_stream(out),
+            (Kind::Stream, false) => self.read_stream(out),
+            (Kind::Record, true) => self.peek_record(out),
+            (Kind::Record, false) => self.read_record(out),
+        }
+    }
+
+    fn peek_stream(&self, out: &mut [u8]) -> ReadOutcome<A> {
+        let mut copied = 0;
+        for segment in &self.segments {
+            let carries = segment.ancillary.is_some();
+            if copied == out.len() || (copied > 0 && carries) {
+                break;
+            }
+            copied += copy_out(&segment.bytes, out.get_mut(copied..).unwrap_or_default());
+            if carries {
+                break;
+            }
+        }
+        ReadOutcome::Read {
+            bytes: copied,
+            full: copied,
+            ancillary: None,
+        }
+    }
+
+    fn read_stream(&mut self, out: &mut [u8]) -> ReadOutcome<A> {
+        let mut copied = 0;
+        let mut ancillary = None;
+        while let Some(segment) = self.segments.front_mut() {
+            let carries = segment.ancillary.is_some();
+            if copied == out.len() || (copied > 0 && carries) {
+                break;
+            }
+            let space = out.get_mut(copied..).unwrap_or_default();
+            // A stream never keeps an empty segment and `space` is not
+            // empty, so this takes at least the first byte, and with it
+            // whatever came with that byte.
+            let count = space.len().min(segment.bytes.len());
+            for (slot, byte) in space.iter_mut().zip(segment.bytes.drain(..count)) {
+                *slot = byte;
+            }
+            if carries {
+                ancillary = segment.ancillary.take();
+            }
+            copied += count;
+            if segment.bytes.is_empty() {
+                let _ = self.segments.pop_front();
+            }
+            if carries {
+                break;
+            }
+        }
+        self.queued = self.queued.saturating_sub(copied);
+        self.charged = self.charged.saturating_sub(copied);
+        ReadOutcome::Read {
+            bytes: copied,
+            full: copied,
+            ancillary,
+        }
+    }
+
+    fn peek_record(&self, out: &mut [u8]) -> ReadOutcome<A> {
+        match self.segments.front() {
+            Some(record) => ReadOutcome::Read {
+                bytes: copy_out(&record.bytes, out),
+                full: record.bytes.len(),
+                ancillary: None,
+            },
+            None => ReadOutcome::WouldBlock,
+        }
+    }
+
+    fn read_record(&mut self, out: &mut [u8]) -> ReadOutcome<A> {
+        let Some(record) = self.segments.pop_front() else {
+            return ReadOutcome::WouldBlock;
+        };
+        self.queued = self.queued.saturating_sub(record.bytes.len());
+        self.charged = self.charged.saturating_sub(record.charge());
+        ReadOutcome::Read {
+            bytes: copy_out(&record.bytes, out),
+            full: record.bytes.len(),
+            ancillary: record.ancillary,
+        }
+    }
+
+    /// No more data will arrive: the writing end shut down or went away.
+    /// Once what is queued has been read, reads are end of file.
+    pub fn close_writer(&mut self) {
+        self.writer_closed = true;
+    }
+
+    /// Nobody will read: the reading end shut down or went away. Writes are
+    /// [`WriteOutcome::Broken`] from now on, and what is queued will never be
+    /// delivered, so it is emptied here and its ancillary data handed back,
+    /// in the order it was written, for the caller to drop outside its lock.
+    #[must_use = "the ancillary data must be dropped after releasing the buffer's lock"]
+    pub fn close_reader(&mut self) -> Vec<A> {
+        self.reader_closed = true;
+        self.drain()
+    }
+
+    /// Whether [`SocketBuffer::close_writer`] has been called.
+    #[must_use]
+    pub fn writer_closed(&self) -> bool {
+        self.writer_closed
+    }
+
+    /// Whether [`SocketBuffer::close_reader`] has been called.
+    #[must_use]
+    pub fn reader_closed(&self) -> bool {
+        self.reader_closed
+    }
+
+    /// Empty the buffer, handing back every queued ancillary value in the
+    /// order it was written.
+    ///
+    /// For the kernel tearing a socket down, or breaking a cycle of sockets
+    /// that hold each other's descriptors in flight, which it must do without
+    /// dropping those descriptors while it holds this buffer's lock.
+    #[must_use = "the ancillary data must be dropped after releasing the buffer's lock"]
+    pub fn drain(&mut self) -> Vec<A> {
+        self.queued = 0;
+        self.charged = 0;
+        self.segments
+            .drain(..)
+            .filter_map(|segment| segment.ancillary)
+            .collect()
+    }
+}
+
+/// Copy the front of `from` into `to`, as much as fits, and say how much that
+/// was.
+fn copy_out(from: &VecDeque<u8>, to: &mut [u8]) -> usize {
+    let count = to.len().min(from.len());
+    for (slot, byte) in to.iter_mut().zip(from) {
+        *slot = *byte;
+    }
+    count
+}

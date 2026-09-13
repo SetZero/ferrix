@@ -40,6 +40,7 @@
 pub mod errno;
 pub mod hwcap;
 pub mod nr;
+pub mod socket;
 pub mod types;
 
 #[cfg(test)]

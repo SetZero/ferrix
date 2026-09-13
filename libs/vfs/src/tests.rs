@@ -2490,3 +2490,427 @@ fn two_readers_of_the_same_missing_pages_both_see_the_sources_bytes() {
         assert_eq!(pages.committed_bytes(), 41 * PAGE_SIZE);
     }
 }
+
+// -- Socket buffers ----------------------------------------------------------
+
+use ferrix_linux_abi::socket::SOCKET_BUFFER_MIN;
+
+use crate::socket::{Kind, ReadOutcome as SocketRead, SocketBuffer, WriteOutcome as SocketWrite};
+
+/// The smallest capacity a socket buffer has, which is what these tests use
+/// so a full buffer is a page rather than 200 KiB.
+const SOCKET_CAP: usize = SOCKET_BUFFER_MIN;
+
+/// Read or peek into a buffer larger than anything queued, and keep the bytes.
+fn read_all(buf: &mut SocketBuffer<u32>, peek: bool) -> (SocketRead<u32>, Vec<u8>) {
+    let mut out = vec![0_u8; 2 * SOCKET_CAP];
+    let outcome = buf.read(&mut out, peek);
+    let len = match outcome {
+        SocketRead::Read { bytes, .. } => bytes,
+        _ => 0,
+    };
+    out.truncate(len);
+    (outcome, out)
+}
+
+fn got(bytes: usize, full: usize, ancillary: Option<u32>) -> SocketRead<u32> {
+    SocketRead::Read {
+        bytes,
+        full,
+        ancillary,
+    }
+}
+
+#[test]
+fn a_stream_joins_plain_writes_into_one_read() {
+    let mut buf = SocketBuffer::<u32>::new(Kind::Stream, SOCKET_CAP);
+    for chunk in [&b"ab"[..], b"cd", b"e"] {
+        assert_eq!(buf.write(chunk, &mut None), SocketWrite::Wrote(chunk.len()));
+    }
+    assert_eq!(buf.queued(), 5);
+    assert_eq!(buf.next_record(), Some(5), "a stream is one record");
+    assert_eq!(
+        read_all(&mut buf, false),
+        (got(5, 5, None), b"abcde".to_vec())
+    );
+    assert_eq!(buf.queued(), 0);
+    assert_eq!(buf.next_record(), None);
+}
+
+#[test]
+fn a_stream_write_takes_what_fits_and_a_full_one_would_block() {
+    let mut buf = SocketBuffer::<u32>::new(Kind::Stream, SOCKET_CAP);
+    let most = vec![1_u8; SOCKET_CAP - 3];
+    assert_eq!(
+        buf.write(&most, &mut None),
+        SocketWrite::Wrote(SOCKET_CAP - 3)
+    );
+    assert!(buf.can_write(10), "a stream needs room for one byte");
+    assert_eq!(buf.write(b"0123456789", &mut None), SocketWrite::Wrote(3));
+    assert!(!buf.can_write(1));
+    assert!(buf.can_write(0));
+    assert_eq!(buf.write(b"x", &mut None), SocketWrite::WouldBlock);
+    assert_eq!(buf.write(b"", &mut None), SocketWrite::Wrote(0));
+    let mut two = [0_u8; 2];
+    assert_eq!(buf.read(&mut two, false), got(2, 2, None));
+    assert!(buf.can_write(1));
+    assert_eq!(buf.write(b"xyz", &mut None), SocketWrite::Wrote(2));
+    assert_eq!(buf.queued(), SOCKET_CAP);
+}
+
+#[test]
+fn shrinking_a_socket_buffer_blocks_writes_until_it_drains() {
+    let mut buf = SocketBuffer::<u32>::new(Kind::Stream, 2 * SOCKET_CAP);
+    let data = vec![3_u8; SOCKET_CAP + 10];
+    assert_eq!(buf.write(&data, &mut None), SocketWrite::Wrote(data.len()));
+    buf.set_capacity(SOCKET_CAP);
+    assert_eq!(buf.queued(), SOCKET_CAP + 10, "shrinking discards nothing");
+    assert_eq!(buf.write(b"x", &mut None), SocketWrite::WouldBlock);
+    let mut ten = [0_u8; 10];
+    assert_eq!(buf.read(&mut ten, false), got(10, 10, None));
+    assert_eq!(buf.write(b"x", &mut None), SocketWrite::WouldBlock);
+    assert_eq!(buf.read(&mut ten[..1], false), got(1, 1, None));
+    assert_eq!(buf.write(b"xy", &mut None), SocketWrite::Wrote(1));
+    buf.set_capacity(1);
+    assert_eq!(buf.capacity(), SOCKET_BUFFER_MIN, "the floor holds");
+    assert_eq!(
+        SocketBuffer::<u32>::new(Kind::Record, 0).capacity(),
+        SOCKET_BUFFER_MIN
+    );
+}
+
+#[test]
+fn a_stream_read_stops_at_ancillary_data_from_either_side() {
+    let mut buf = SocketBuffer::<u32>::new(Kind::Stream, SOCKET_CAP);
+    assert_eq!(buf.write(b"plain", &mut None), SocketWrite::Wrote(5));
+    assert_eq!(buf.write(b"rights", &mut Some(1)), SocketWrite::Wrote(6));
+    assert_eq!(buf.write(b"after", &mut None), SocketWrite::Wrote(5));
+    assert_eq!(buf.write(b"more", &mut Some(2)), SocketWrite::Wrote(4));
+    assert_eq!(
+        read_all(&mut buf, false),
+        (got(5, 5, None), b"plain".to_vec()),
+        "a read must not run on into bytes that bring descriptors"
+    );
+    assert_eq!(
+        read_all(&mut buf, false),
+        (got(6, 6, Some(1)), b"rights".to_vec()),
+        "a read must not run on past the bytes that brought them"
+    );
+    assert_eq!(
+        read_all(&mut buf, false),
+        (got(5, 5, None), b"after".to_vec())
+    );
+    assert_eq!(
+        read_all(&mut buf, false),
+        (got(4, 4, Some(2)), b"more".to_vec())
+    );
+    assert_eq!(buf.read(&mut [0_u8; 8], false), SocketRead::WouldBlock);
+}
+
+#[test]
+fn ancillary_data_comes_with_the_first_byte_of_a_segment_read_in_pieces() {
+    let mut buf = SocketBuffer::<u32>::new(Kind::Stream, SOCKET_CAP);
+    assert_eq!(buf.write(b"rights", &mut Some(1)), SocketWrite::Wrote(6));
+    assert_eq!(buf.write(b"tail", &mut None), SocketWrite::Wrote(4));
+    let mut zero = [0_u8; 0];
+    assert_eq!(
+        buf.read(&mut zero, false),
+        got(0, 0, None),
+        "a zero-length read takes nothing, ancillary data included"
+    );
+    let mut two = [0_u8; 2];
+    assert_eq!(buf.read(&mut two, false), got(2, 2, Some(1)));
+    assert_eq!(&two, b"ri");
+    assert_eq!(
+        read_all(&mut buf, false),
+        (got(8, 8, None), b"ghtstail".to_vec()),
+        "once its data is taken the rest is ordinary bytes"
+    );
+}
+
+#[test]
+fn ancillary_data_stays_with_the_writer_unless_it_is_queued() {
+    let mut stream = SocketBuffer::<u32>::new(Kind::Stream, SOCKET_CAP);
+    let full = vec![0_u8; SOCKET_CAP];
+    assert_eq!(
+        stream.write(&full, &mut None),
+        SocketWrite::Wrote(SOCKET_CAP)
+    );
+    let mut rights = Some(7);
+    assert_eq!(stream.write(b"x", &mut rights), SocketWrite::WouldBlock);
+    assert_eq!(rights, Some(7), "lost on WouldBlock");
+    assert_eq!(stream.write(b"", &mut rights), SocketWrite::Wrote(0));
+    assert_eq!(rights, Some(7), "lost on an empty stream write");
+    assert_eq!(stream.read(&mut [0_u8; 1], false), got(1, 1, None));
+    assert_eq!(stream.write(b"xy", &mut rights), SocketWrite::Wrote(1));
+    assert_eq!(rights, None, "one byte accepted takes it");
+    assert_eq!(stream.close_reader(), [7], "and it is handed back on close");
+    let mut rights = Some(8);
+    assert_eq!(stream.write(b"x", &mut rights), SocketWrite::Broken);
+    assert_eq!(rights, Some(8), "lost on Broken to a stream");
+
+    let mut record = SocketBuffer::<u32>::new(Kind::Record, SOCKET_CAP);
+    let too_big = vec![0_u8; SOCKET_CAP + 1];
+    assert_eq!(record.write(&too_big, &mut rights), SocketWrite::TooBig);
+    assert_eq!(rights, Some(8), "lost on TooBig");
+    assert_eq!(
+        record.write(&full, &mut None),
+        SocketWrite::Wrote(SOCKET_CAP)
+    );
+    assert_eq!(record.write(b"", &mut rights), SocketWrite::WouldBlock);
+    assert_eq!(rights, Some(8), "lost on WouldBlock to a record");
+    assert!(record.close_reader().is_empty());
+    assert_eq!(record.write(b"r", &mut rights), SocketWrite::Broken);
+    assert_eq!(rights, Some(8), "lost on Broken to a record");
+    assert_eq!(record.write(&too_big, &mut rights), SocketWrite::TooBig);
+}
+
+#[test]
+fn a_record_read_takes_one_record_and_says_how_long_it_was() {
+    let mut buf = SocketBuffer::<u32>::new(Kind::Record, SOCKET_CAP);
+    assert_eq!(
+        buf.write(b"first record", &mut Some(1)),
+        SocketWrite::Wrote(12)
+    );
+    assert_eq!(buf.write(b"second", &mut None), SocketWrite::Wrote(6));
+    assert_eq!(buf.next_record(), Some(12));
+    assert_eq!(buf.queued(), 18);
+    let mut five = [0_u8; 5];
+    assert_eq!(buf.read(&mut five, false), got(5, 12, Some(1)));
+    assert_eq!(&five, b"first");
+    assert_eq!(
+        read_all(&mut buf, false),
+        (got(6, 6, None), b"second".to_vec()),
+        "the rest of a cut-short record is discarded"
+    );
+    assert_eq!(buf.queued(), 0);
+    assert_eq!(buf.read(&mut five, false), SocketRead::WouldBlock);
+}
+
+#[test]
+fn a_record_goes_in_whole_or_not_at_all() {
+    let mut buf = SocketBuffer::<u32>::new(Kind::Record, SOCKET_CAP);
+    let most = vec![1_u8; SOCKET_CAP - 4];
+    assert_eq!(buf.write(&most, &mut None), SocketWrite::Wrote(most.len()));
+    assert!(!buf.can_write(5));
+    assert_eq!(buf.write(b"12345", &mut None), SocketWrite::WouldBlock);
+    assert_eq!(buf.queued(), most.len(), "a refused record adds nothing");
+    assert!(buf.can_write(4));
+    assert_eq!(buf.write(b"1234", &mut None), SocketWrite::Wrote(4));
+    assert!(
+        buf.can_write(SOCKET_CAP + 1),
+        "a record that can never fit must not wait"
+    );
+    assert_eq!(
+        buf.write(&vec![0_u8; SOCKET_CAP + 1], &mut None),
+        SocketWrite::TooBig
+    );
+}
+
+#[test]
+fn empty_records_are_records_and_run_out_of_room() {
+    let mut buf = SocketBuffer::<u32>::new(Kind::Record, SOCKET_CAP);
+    assert_eq!(buf.write(b"ab", &mut None), SocketWrite::Wrote(2));
+    assert_eq!(buf.write(b"", &mut Some(5)), SocketWrite::Wrote(0));
+    assert_eq!(buf.write(b"cd", &mut None), SocketWrite::Wrote(2));
+    assert_eq!(buf.queued(), 4);
+    assert_eq!(read_all(&mut buf, false), (got(2, 2, None), b"ab".to_vec()));
+    assert_eq!(buf.next_record(), Some(0));
+    assert!(buf.can_read(), "an empty record is something to read");
+    assert_eq!(read_all(&mut buf, false), (got(0, 0, Some(5)), Vec::new()));
+    assert_eq!(read_all(&mut buf, false), (got(2, 2, None), b"cd".to_vec()));
+    assert!(!buf.can_read());
+
+    let mut count = 0;
+    while buf.write(b"", &mut None) == SocketWrite::Wrote(0) {
+        count += 1;
+        assert!(count <= SOCKET_CAP, "empty records were free");
+    }
+    assert_eq!(count, SOCKET_CAP, "each empty record costs one byte");
+    assert_eq!(buf.queued(), 0, "but queues no payload");
+    assert!(!buf.can_write(0));
+}
+
+#[test]
+fn a_peek_copies_what_a_read_would_take_and_takes_nothing() {
+    let mut stream = SocketBuffer::<u32>::new(Kind::Stream, SOCKET_CAP);
+    assert_eq!(stream.write(b"plain", &mut None), SocketWrite::Wrote(5));
+    assert_eq!(stream.write(b"rights", &mut Some(3)), SocketWrite::Wrote(6));
+    for _ in 0..2 {
+        assert_eq!(
+            read_all(&mut stream, true),
+            (got(5, 5, None), b"plain".to_vec())
+        );
+    }
+    assert_eq!(
+        read_all(&mut stream, false),
+        (got(5, 5, None), b"plain".to_vec())
+    );
+    assert_eq!(
+        read_all(&mut stream, true),
+        (got(6, 6, None), b"rights".to_vec()),
+        "a peek returns no ancillary data"
+    );
+    assert_eq!(
+        read_all(&mut stream, false),
+        (got(6, 6, Some(3)), b"rights".to_vec()),
+        "and leaves it for the read"
+    );
+
+    let mut record = SocketBuffer::<u32>::new(Kind::Record, SOCKET_CAP);
+    assert_eq!(record.write(b"record", &mut Some(4)), SocketWrite::Wrote(6));
+    let mut three = [0_u8; 3];
+    assert_eq!(record.read(&mut three, true), got(3, 6, None));
+    assert_eq!(&three, b"rec");
+    assert_eq!(record.next_record(), Some(6), "a peek takes no record");
+    assert_eq!(
+        read_all(&mut record, false),
+        (got(6, 6, Some(4)), b"record".to_vec())
+    );
+}
+
+#[test]
+fn end_of_file_comes_only_once_a_closed_writers_data_is_read() {
+    for kind in [Kind::Stream, Kind::Record] {
+        let mut buf = SocketBuffer::<u32>::new(kind, SOCKET_CAP);
+        assert_eq!(buf.read(&mut [0_u8; 8], false), SocketRead::WouldBlock);
+        assert!(!buf.can_read());
+        assert_eq!(buf.write(b"last", &mut Some(1)), SocketWrite::Wrote(4));
+        buf.close_writer();
+        assert!(buf.writer_closed() && !buf.reader_closed());
+        assert!(buf.can_read());
+        assert_eq!(
+            read_all(&mut buf, false),
+            (got(4, 4, Some(1)), b"last".to_vec()),
+            "{kind:?}: queued data outlives the writer"
+        );
+        for _ in 0..2 {
+            assert_eq!(buf.read(&mut [0_u8; 8], false), SocketRead::EndOfFile);
+            assert_eq!(buf.read(&mut [0_u8; 8], true), SocketRead::EndOfFile);
+        }
+        assert!(buf.can_read(), "{kind:?}: end of file must wake a reader");
+    }
+}
+
+#[test]
+fn a_closed_reader_breaks_writes_and_hands_back_what_was_queued() {
+    for kind in [Kind::Stream, Kind::Record] {
+        let mut buf = SocketBuffer::<u32>::new(kind, SOCKET_CAP);
+        assert_eq!(buf.write(b"one", &mut Some(1)), SocketWrite::Wrote(3));
+        assert_eq!(buf.write(b"two", &mut None), SocketWrite::Wrote(3));
+        assert_eq!(buf.write(b"three", &mut Some(3)), SocketWrite::Wrote(5));
+        let dropped = buf.close_reader();
+        assert_eq!(dropped, [1, 3], "{kind:?}");
+        assert!(buf.reader_closed());
+        assert_eq!(buf.queued(), 0);
+        assert!(buf.can_write(1) && buf.can_write(2 * SOCKET_CAP));
+        assert_eq!(buf.write(b"x", &mut None), SocketWrite::Broken, "{kind:?}");
+        assert_eq!(buf.write(b"", &mut None), SocketWrite::Broken, "{kind:?}");
+    }
+}
+
+#[test]
+fn drain_returns_every_ancillary_value_in_order_and_empties_the_buffer() {
+    let mut stream = SocketBuffer::<u32>::new(Kind::Stream, SOCKET_CAP);
+    for (data, ancillary) in [
+        (&b"a"[..], Some(1)),
+        (b"b", None),
+        (b"c", Some(2)),
+        (b"d", Some(3)),
+    ] {
+        let mut ancillary = ancillary;
+        assert_eq!(stream.write(data, &mut ancillary), SocketWrite::Wrote(1));
+    }
+    assert_eq!(stream.read(&mut [0_u8; 1], false), got(1, 1, Some(1)));
+    assert_eq!(stream.drain(), [2, 3]);
+    assert_eq!(stream.queued(), 0);
+    assert_eq!(stream.read(&mut [0_u8; 1], false), SocketRead::WouldBlock);
+    let full = vec![0_u8; SOCKET_CAP];
+    assert_eq!(
+        stream.write(&full, &mut None),
+        SocketWrite::Wrote(SOCKET_CAP),
+        "a drained buffer has all its room back"
+    );
+
+    let mut record = SocketBuffer::<u32>::new(Kind::Record, SOCKET_CAP);
+    for ancillary in [Some(10), None, Some(20), Some(30)] {
+        let mut ancillary = ancillary;
+        assert_eq!(record.write(b"r", &mut ancillary), SocketWrite::Wrote(1));
+    }
+    assert_eq!(record.drain(), [10, 20, 30]);
+    assert_eq!(record.next_record(), None);
+    assert!(record.drain().is_empty());
+}
+
+#[test]
+fn a_stream_delivers_bytes_and_ancillary_data_in_order_against_a_model() {
+    let mut buf = SocketBuffer::<u64>::new(Kind::Stream, SOCKET_CAP);
+    // Every queued byte, the step that wrote it, and on the first byte of a
+    // write that brought ancillary data, that data.
+    let mut model = alloc::collections::VecDeque::<(u8, usize, Option<u64>)>::new();
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    for step in 0..6000 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let len = usize::try_from((state >> 8) % 700).unwrap();
+        if state & 1 == 0 {
+            let data: Vec<u8> = (0..len).map(|i| (step + i) as u8).collect();
+            let offered = (state & 6 == 0).then_some(state);
+            let mut ancillary = offered;
+            match buf.write(&data, &mut ancillary) {
+                SocketWrite::Wrote(n) => {
+                    assert!(n == data.len() || model.len() + n == SOCKET_CAP);
+                    assert_eq!(ancillary, if n > 0 { None } else { offered });
+                    for (i, &byte) in data[..n].iter().enumerate() {
+                        model.push_back((byte, step, offered.filter(|_| i == 0)));
+                    }
+                }
+                SocketWrite::WouldBlock => {
+                    assert_eq!(model.len(), SOCKET_CAP);
+                    assert_eq!(ancillary, offered, "ancillary data was lost");
+                }
+                other => panic!("a reader is open: {other:?}"),
+            }
+        } else {
+            let peek = state & 2 != 0;
+            // What Linux's rule says the read takes: across writes, but not
+            // into bytes that bring ancillary data, and not past the write
+            // whose ancillary data it took.
+            let mut expected = Vec::new();
+            let mut taken = None;
+            for (i, &(byte, write, carried)) in model.iter().enumerate() {
+                if expected.len() == len
+                    || (i > 0 && carried.is_some())
+                    || (taken.is_some() && write != model[0].1)
+                {
+                    break;
+                }
+                if i == 0 {
+                    taken = carried;
+                }
+                expected.push(byte);
+            }
+            let mut out = vec![0_u8; len];
+            match buf.read(&mut out, peek) {
+                SocketRead::Read {
+                    bytes,
+                    full,
+                    ancillary,
+                } => {
+                    assert_eq!(bytes, full);
+                    assert_eq!(&out[..bytes], &expected[..], "bytes came out wrong");
+                    if peek {
+                        assert_eq!(ancillary, None);
+                    } else {
+                        assert_eq!(ancillary, taken, "ancillary data came out wrong");
+                        let _ = model.drain(..bytes);
+                    }
+                }
+                SocketRead::WouldBlock => assert!(model.is_empty()),
+                SocketRead::EndOfFile => panic!("a writer is open"),
+            }
+        }
+        assert_eq!(buf.queued(), model.len());
+    }
+}

@@ -1368,6 +1368,9 @@ pub const TIOCSCTTY: u32 = 0x540E;
 pub const TIOCGPGRP: u32 = 0x540F;
 /// Set the terminal's foreground process group: `tcsetpgrp`.
 pub const TIOCSPGRP: u32 = 0x5410;
+/// How many bytes are written and not yet sent: the output-side counterpart
+/// of [`TIOCINQ`].
+pub const TIOCOUTQ: u32 = 0x5411;
 /// Read a terminal's size in rows and columns, `struct winsize`.
 pub const TIOCGWINSZ: u32 = 0x5413;
 /// Set a terminal's size.
