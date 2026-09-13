@@ -68,15 +68,17 @@ x86-64, static programs linked at a fixed address.
 | `stdio.h` | `FILE` streams, fully, line or not buffered, each with a recursive lock; `fopen`, `fdopen`, `freopen`, `fmemopen`, `open_memstream`, `fopencookie`; reading, writing, seeking and the `_unlocked` forms; the `printf` family with glibc's `__*printf_chk` names, exact for `double` and x87 `long double`; streams flushed at `exit` | `scanf`, `popen`, wide-character streams, `tmpnam`, `gets` |
 | `signal.h` | `sigaction`, `signal`, sets and masks, `sigpending`, `sigsuspend`, `sigtimedwait`, `sigqueue`, `kill`, `sigaltstack`, `raise`, `abort`, `pthread_kill` | `psignal` |
 | `setjmp.h` | `setjmp`, `longjmp`, `sigsetjmp`, `siglongjmp`, glibc's `__sigsetjmp` and `__longjmp_chk`, with saved pointers mangled | |
+| `dirent.h` | `opendir`, `fdopendir`, `readdir`, `readdir_r`, `rewinddir`, `seekdir`, `telldir`, `dirfd`, `closedir`, `scandir`, `alphasort`, `versionsort`, with glibc's `64` names; records the kernel sends are checked against the bytes it filled | |
+| `getopt.h` | `getopt`, `getopt_long`, `getopt_long_only`, permuting as glibc does unless `POSIXLY_CORRECT` or a leading `+`, and `optreset` | |
 | `errno.h` | `__errno_location`, per thread | |
 | `sys/auxv.h` | `getauxval` | |
 | C++ runtime | `__cxa_atexit`, and `__cxa_finalize` for a static program | |
 
 ## Next
 
-1. In progress: **`scanf`**, **`dirent`, `getopt`, `glob` and `regex`**,
-   **thread cancellation, semaphores and C11 threads**, and **the math
-   library**.
+1. In progress: **`scanf`**, **`glob`, `fnmatch`, `regex`, `search.h` and
+   `libgen.h`**, **thread cancellation, semaphores and C11 threads**, and **the
+   math library**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
 3. **`long double` math and `complex.h`.**
