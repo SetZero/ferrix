@@ -170,7 +170,6 @@ nobody has it yet.
 | The cost of the 20 µs one-shot armed on every wake onto the caller's processor, measured on pipe and futex paths | ferrix-34 |
 | Per-CPU frame and heap caches, deferred since stage 2 | open, once a workload can measure them |
 | ASIDs and PCIDs, so a switch stops invalidating every user entry | open, after threads |
-| x86-64 kernel-mode NMI, #DB and #MC on IST stacks with a paranoid entry | ferrix-e5 |
 | `getrandom` seeded from virtio-rng into a real generator; a real-time clock read from the RTC and `/dev/rtc` | open |
 | The debt the roadmap names: Miri for `frame`, `heap`, `paging`; fuzz targets for `cpio`, `fdt`, `acpi`, `virtio`, `linux-abi` | ferrix-e5 (the first three crates and `cpio`, `fdt`, `acpi`) |
 | The host-test table in the roadmap generated from `cargo test --list` with a gate, instead of counted by hand | ferrix-24 |

@@ -218,15 +218,28 @@ say why.
   is wrong on the trampoline's ring-0 instructions that hold the program's
   `GS`. The entry reads `GS_BASE` instead, as Linux's `paranoid_entry` does:
   a kernel base is an upper-half record and no program can load one, so it
-  swaps only for anything else and remembers to swap back, which holds because
-  a program starts with `GS` base zero, as on Linux. It clears `DR7` for
+  swaps only for anything else and remembers to swap back. That rule needed a
+  fix of its own: `syscall::init` had parked the kernel's record in the shadow
+  MSR, so every program ran with the record as its `GS` base, both halves of
+  `swapgs` held one address, and a wrong swap was invisible — the first boot
+  of an entry that decided by `CS` passed the breakpoint check. A program now
+  starts with `GS` base zero, as on Linux, and the check requires it. It clears `DR7` for
   the handler's run, which is what keeps `#DB` from nesting on its own stack
   (Linux's scheme since it retired the IST shift), counts each stack's
   occupants so a nested entry is reported as FX-9006 instead of returned
   from, and moves a ring-3 `#DB` onto the task's stack, where a signal may
-  block or end the task. Every handler behind it still stops the machine —
-  `#MC` as FX-9005, the rest as FX-9004 — but on its own stack and the
-  kernel's `GS`, wherever the processor was.
+  block or end the task. An NMI is counted and returned from; its handler
+  takes no exception that could `iretq` early and let a second NMI in. A
+  kernel `#DB` from a hardware breakpoint returns with `RF`; `#MC` stops the
+  machine as FX-9005, on its own stack and the kernel's `GS`. A boot check
+  after the trap flag check shows it (`paranoid::check`): an NMI sent to the
+  processor itself with interrupts masked comes back; instruction breakpoints
+  on the trampoline's `swapgs` and its `sysretq`, while a pinned program makes
+  its calls, each find the kernel's `GS`, and the program's own `GS` base must
+  not be a per-CPU record; and a breakpoint on code the `#DB` handler runs
+  does not fire inside it. Each part stops the boot with its fix taken out,
+  under tcg and kvm alike — tcg implements the debug registers and delivers
+  the NMI.
 * AArch64 — the `VBAR_EL1` vector table and its handlers.
 * One dispatch path above both (`kernel/src/trap.rs`), reached only through the
   architecture facade — `TrapFrame`, `classify`, `report_trap` — so generic code

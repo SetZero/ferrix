@@ -94,7 +94,7 @@
     {
       "file": "kernel/src/arch/x86_64/cpu.rs",
       "max_lines": 100,
-      "reason": "CPU primitives, one instruction each: `out`/`in` reach the I/O address space, which is not memory and has no Rust syntax; `hlt` and `cli` are CPU state; reading and writing CR3 is a control register; `mov` to and from DR6 is the debug status the paranoid entry's #DB path reads and clears. Grows with stage 3 (IDT, TSS, APIC) and must not grow with anything else."
+      "reason": "CPU primitives, one instruction each: `out`/`in` reach the I/O address space, which is not memory and has no Rust syntax; `hlt` and `cli` are CPU state; reading and writing CR3 is a control register; `mov` to and from DR0-DR3, DR6 and DR7 is the debug registers the paranoid entry's boot check arms a breakpoint with and its #DB handler reads. Grows with stage 3 (IDT, TSS, APIC) and must not grow with anything else."
     },
     {
       "file": "kernel/src/arch/x86_64/smp.rs",

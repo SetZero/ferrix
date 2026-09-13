@@ -210,6 +210,10 @@ ferrix_syscall_stub:
     popq %rsp             // user stack, straight into RSP
 
     swapgs
+    // Named for the boot check that breaks here: ring 0, the program's stack
+    // and GS, which only the paranoid entry survives. See `super::paranoid`.
+.globl ferrix_syscall_sysret
+ferrix_syscall_sysret:
     sysretq
 
 // Enter ring 3 for the first time.
@@ -531,6 +535,19 @@ pub(crate) unsafe fn init() {
     // SAFETY: the shadow MSR exists on every 64-bit x86, and zero is a
     // canonical address that no kernel code reaches through.
     unsafe { cpu::write_msr(IA32_KERNEL_GS_BASE, 0) };
+}
+
+/// The `GS` base of the program this processor last ran, read from the kernel
+/// side of `swapgs`, where it is parked.
+///
+/// # Safety
+///
+/// Must be called from the kernel with its own `GS` installed -- anywhere but
+/// the trampoline's ring-0 stretches before and after `swapgs`, which run with
+/// interrupts masked and cannot call this.
+pub(crate) unsafe fn program_gs_base() -> u64 {
+    // SAFETY: reading the shadow MSR has no side effects.
+    unsafe { cpu::read_msr(IA32_KERNEL_GS_BASE) }
 }
 
 /// Set the thread pointer a program reads through `FS`.

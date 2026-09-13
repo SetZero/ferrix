@@ -465,6 +465,23 @@ pub(crate) const USER_STEP_PROGRAM: &[u8] = &[];
 /// What [`USER_STEP_PROGRAM`] would exit with; unused while it is empty.
 pub(crate) const USER_STEP_STATUS: i32 = 0;
 
+/// Nothing to check: no exception finds the kernel on a program's stack.
+///
+/// x86-64 checks that an NMI or a hardware breakpoint in its `SYSCALL`
+/// trampoline, which runs in ring 0 on the program's stack and `GS`, is
+/// survived. An exception taken at EL1 here runs on `SP_EL1`, which a program
+/// never sets, and the per-CPU register `TPIDR_EL1` is not one EL0 can write.
+///
+/// # Errors
+///
+/// Never.
+pub(crate) fn check_exception_entry() -> Result<(), &'static str> {
+    crate::console::println!(
+        "  entry    every exception on {NAME} enters on a stack a program cannot set"
+    );
+    Ok(())
+}
+
 /// A program that `execve`s `/exec-target` and, if that returns, exits with
 /// the error number: the target's own status when it exists, 2 (`ENOENT`) when
 /// it does not.

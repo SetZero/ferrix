@@ -282,10 +282,21 @@ pub(crate) static STAGE3_TRAPS: Explanation = Explanation {
               the write to retry and read back, the rest of each page to be zero, and the \
               frames consumed to be one per page plus at most one per table level. Every \
               fault the kernel resolves rather than reports goes through this path, which is \
-              how demand paging works from stage 6.",
+              how demand paging works from stage 6. On x86-64, `check_exception_entry` runs \
+              after stage 7's checks and requires three more traps to come back: an NMI sent \
+              to the processor itself, hardware breakpoints on the `SYSCALL` trampoline's \
+              first instruction and its `sysretq` while a program makes calls, and a \
+              breakpoint on code the `#DB` handler runs, which must not fire inside it.",
     causes: &[
         "The architecture's trap entry or exit does not save or restore a register the frame \
          carries, or `arch::advance_past_breakpoint` returns to the wrong instruction.",
+        "On x86-64, a paranoid entry that decides `swapgs` from the saved CS rather than from \
+         `GS_BASE`, so a breakpoint in the trampoline runs its handler with the program's GS \
+         (the message says so), or one that does not clear `DR7`, so the nesting check \
+         stops with FX-9006.",
+        "On x86-64 under an accelerator or emulator that does not deliver an NMI sent through \
+         the local APIC, or does not implement debug registers, the check says the NMI never \
+         arrived or a breakpoint did not fire.",
         "Something mapped an address inside `mm::DEMAND_WINDOW` before the check ran, so the \
          window was already mapped.",
         "Mapping a page in a region that already had its tables cost more than one frame, \

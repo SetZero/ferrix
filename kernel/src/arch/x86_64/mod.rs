@@ -116,6 +116,17 @@ pub(crate) use trap::{
     TrapFrame, advance_past_breakpoint, breakpoint, classify, fault_signal, report_trap,
 };
 
+/// Show that the exceptions nothing masks are survived where they land: an NMI
+/// in the kernel, and hardware breakpoints in the `SYSCALL` trampoline's ring-0
+/// stretches on the program's stack and `GS`. See `paranoid`.
+///
+/// # Errors
+///
+/// What did not come back.
+pub(crate) fn check_exception_entry() -> Result<(), &'static str> {
+    paranoid::check()
+}
+
 /// Install the descriptor tables and the trap handlers.
 ///
 /// Until this runs the kernel is executing on firmware's tables: a fault would

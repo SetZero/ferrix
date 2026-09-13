@@ -51,6 +51,9 @@ const LAPIC_LVT_TIMER: u64 = 0x320;
 const ICR_INIT: u32 = 0b101 << 8;
 /// Interrupt command: delivery mode start-up. The vector is a page number.
 const ICR_STARTUP: u32 = 0b110 << 8;
+/// Interrupt command: delivery mode NMI. The vector field is ignored; the
+/// processor enters through vector 2.
+const ICR_NMI: u32 = 0b100 << 8;
 /// Interrupt command: level assert, required for everything except the INIT
 /// de-assert that only processors older than the Pentium 4 ever needed.
 const ICR_ASSERT: u32 = 1 << 14;
@@ -369,6 +372,16 @@ pub(crate) fn send_ipi_to_others() -> Result<(), &'static str> {
 /// may name itself; the interrupt is taken when it next unmasks.
 pub(crate) fn send_ipi_to(apic_id: u32) -> Result<(), &'static str> {
     send(apic_id, ICR_ASSERT | IPI_VECTOR as u32)
+}
+
+/// Raise a non-maskable interrupt on this processor, through its own local
+/// APIC: addressed to its own identifier, since the "self" shorthand is
+/// defined for fixed delivery only.
+///
+/// For the boot check that an NMI taken in the kernel is survived. The
+/// interrupt may arrive before this returns -- `cli` does not hold it off.
+pub(crate) fn send_nmi_to_self() -> Result<(), &'static str> {
+    send(id(), ICR_NMI | ICR_ASSERT)
 }
 
 /// Send `command` to the local APIC `apic_id` and wait for it to be accepted.

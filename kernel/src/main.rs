@@ -226,10 +226,9 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // so after stage 7's check has shown they do.
     check_reverse_map();
 
-    // The one way into the kernel a program can bend from ring 3: on x86-64 a
-    // trap flag it set survives into the kernel unless `SYSCALL` masks it.
-    // After stage 7's check, which has shown a program runs at all.
-    check_trap_flag_entry();
+    // The ways into the kernel a program can bend from ring 3, and the ones
+    // nobody can mask. After stage 7's check, which has shown a program runs.
+    check_entry_paths();
 
     // Stage 8's path calls, through the same dispatch table. After stage 7's
     // check because they share its table and its copy layer, and after the
@@ -494,6 +493,33 @@ fn check_trap_flag_entry() {
     println!(
         "  step     a program made a system call with its trap flag set and exited with {status}"
     );
+}
+
+/// What arrives in the kernel from ring 3 without being asked for: first a
+/// trap flag a program set, which `SYSCALL` must mask; then the exceptions
+/// nothing masks, which must find the kernel's `GS` wherever they land. In
+/// that order, because the second is checked where the first was shown safe.
+fn check_entry_paths() {
+    check_trap_flag_entry();
+    check_exception_entry();
+}
+
+/// The exceptions nothing masks come back from wherever they land.
+///
+/// On x86-64 an NMI, a debug exception or a machine check can arrive on the
+/// `SYSCALL` trampoline's instructions that run in ring 0 on the program's
+/// stack and `GS`; the architecture raises an NMI and hardware breakpoints
+/// there and requires each to return with the kernel's `GS`. The Arm pair
+/// take every exception on a stack a program cannot set, and say so.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_exception_entry() {
+    if let Err(problem) = arch::check_exception_entry() {
+        fatal!(
+            catalog::STAGE3_TRAPS,
+            "stage 3 self-check failed: {problem}"
+        );
+    }
 }
 
 /// Stage 7: the system call dispatch path, before there is anything to call

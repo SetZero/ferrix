@@ -508,6 +508,23 @@ pub(crate) const USER_STEP_PROGRAM: &[u8] = &[];
 /// What [`USER_STEP_PROGRAM`] would exit with; unused while it is empty.
 pub(crate) const USER_STEP_STATUS: i32 = 0;
 
+/// Nothing to check: no exception finds the kernel on a program's stack.
+///
+/// x86-64 checks that an NMI or a hardware breakpoint in its `SYSCALL`
+/// trampoline, which runs in ring 0 on the program's stack and `GS`, is
+/// survived. Every exception here is taken into a mode with its own banked
+/// stack pointer and stored on the SVC stack, which USR mode cannot set.
+///
+/// # Errors
+///
+/// Never.
+pub(crate) fn check_exception_entry() -> Result<(), &'static str> {
+    crate::console::println!(
+        "  entry    every exception on {NAME} enters on a stack a program cannot set"
+    );
+    Ok(())
+}
+
 /// A program that spins, then writes a tagged line and exits with a status it
 /// reads out of its own image.
 ///

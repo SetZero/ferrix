@@ -490,6 +490,50 @@ pub(crate) fn rdtsc() -> u64 {
 // Debug registers
 // ---------------------------------------------------------------------------
 
+/// Point hardware breakpoint `slot`, 0 to 3, at `address`. Arming it is
+/// [`write_dr7`]'s. A slot above 3 is ignored: there are four.
+///
+/// # Safety
+///
+/// Changes which accesses raise `#DB` once `DR7` enables the slot. The kernel
+/// must be ready to take one there: not on the entry stubs, and not on an
+/// interrupt stack, which a nested `#DB` would land on.
+pub(crate) unsafe fn write_breakpoint_address(slot: usize, address: u64) {
+    // Each: writing a debug address register at ring 0 changes nothing until
+    // DR7 enables it, and the caller guarantees the address is one to trap on.
+    match slot {
+        // SAFETY: as above, for DR0.
+        0 => unsafe {
+            asm!("mov dr0, {}", in(reg) address, options(nomem, nostack, preserves_flags));
+        },
+        // SAFETY: as above, for DR1.
+        1 => unsafe {
+            asm!("mov dr1, {}", in(reg) address, options(nomem, nostack, preserves_flags));
+        },
+        // SAFETY: as above, for DR2.
+        2 => unsafe {
+            asm!("mov dr2, {}", in(reg) address, options(nomem, nostack, preserves_flags));
+        },
+        // SAFETY: as above, for DR3.
+        3 => unsafe {
+            asm!("mov dr3, {}", in(reg) address, options(nomem, nostack, preserves_flags));
+        },
+        _ => {}
+    }
+}
+
+/// Debug control: which of the four breakpoints are armed, and on what.
+///
+/// # Safety
+///
+/// As [`write_breakpoint_address`], for every slot `value` enables.
+pub(crate) unsafe fn write_dr7(value: u64) {
+    // SAFETY: the caller guarantees each enabled slot's address.
+    unsafe {
+        asm!("mov dr7, {}", in(reg) value, options(nomem, nostack, preserves_flags));
+    }
+}
+
 /// Debug status: which condition raised the last `#DB`. Sticky: the processor
 /// sets bits and never clears them, so a handler clears it with [`write_dr6`].
 pub(crate) fn read_dr6() -> u64 {

@@ -106,3 +106,11 @@ pub(crate) use aarch64::{USER_RMAP_PROGRAM, flush_tlb_page, send_ipi_to};
 pub(crate) use armv7a::{USER_RMAP_PROGRAM, flush_tlb_page, send_ipi_to};
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{USER_RMAP_PROGRAM, flush_tlb_page, send_ipi_to};
+
+// The boot check for exceptions that arrive wherever the processor is.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::check_exception_entry;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::check_exception_entry;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::check_exception_entry;
