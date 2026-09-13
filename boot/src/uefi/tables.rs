@@ -13,7 +13,8 @@ use super::{Guid, Handle, Status, TableHeader};
 ///
 /// The loader never asks for a particular address — the kernel is
 /// position-independent as to *physical* placement, and the page tables built
-/// below map wherever firmware chose — so only `ANY_PAGES` is defined here.
+/// below map wherever firmware chose. It does sometimes need an upper bound,
+/// on a 32-bit machine with more RAM than the direct map holds.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AllocateType(pub(crate) u32);
@@ -21,6 +22,8 @@ pub(crate) struct AllocateType(pub(crate) u32);
 impl AllocateType {
     /// Anywhere firmware likes.
     pub(crate) const ANY_PAGES: AllocateType = AllocateType(0);
+    /// Anywhere whose last byte is at or below the address passed in.
+    pub(crate) const MAX_ADDRESS: AllocateType = AllocateType(1);
 }
 
 /// UEFI memory types.

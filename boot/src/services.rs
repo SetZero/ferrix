@@ -4,6 +4,7 @@
 //! being attempted and what firmware said, because "load error" on its own at
 //! this stage of boot is close to useless.
 
+use core::cell::Cell;
 use core::ffi::c_void;
 use core::fmt;
 use core::ptr;
@@ -108,11 +109,13 @@ impl MemoryMap {
 }
 
 /// The loader's handle on firmware.
-#[derive(Clone, Copy)]
 pub(crate) struct Services {
     image: Handle,
     system_table: *mut SystemTable,
     boot: *mut BootServices,
+    /// One past the highest physical address an allocation may reach, or
+    /// `u64::MAX` for anywhere; see [`Services::allocate_below`].
+    ceiling: Cell<u64>,
 }
 
 impl fmt::Debug for Services {
@@ -141,6 +144,7 @@ impl Services {
             image,
             system_table,
             boot,
+            ceiling: Cell::new(u64::MAX),
         })
     }
 
@@ -174,6 +178,17 @@ impl Services {
 
     // -- memory ------------------------------------------------------------
 
+    /// Keep every later allocation below `end`.
+    ///
+    /// Firmware allocates from the top of RAM down, so on a 32-bit machine with
+    /// more RAM than the direct map holds, the kernel image and everything
+    /// handed over with it would otherwise land where the kernel cannot reach
+    /// them. An allocation that does not fit below `end` fails rather than
+    /// going above it.
+    pub(crate) fn allocate_below(&self, end: u64) {
+        self.ceiling.set(end);
+    }
+
     /// Allocate `len` bytes of physical memory, rounded up to whole pages.
     ///
     /// The `kind` is what firmware's memory map will report the region as, and
@@ -189,16 +204,14 @@ impl Services {
         if pages == 0 {
             return Err(BootError::plain(context));
         }
-        let mut address = 0u64;
-        // SAFETY: `address` is a live local, and `pages` is non-zero.
-        let status = unsafe {
-            (self.boot().allocate_pages)(
-                AllocateType::ANY_PAGES,
-                kind,
-                pages as usize,
-                &raw mut address,
-            )
+        // For MAX_ADDRESS the address going in is the highest byte allowed.
+        let (how, mut address) = match self.ceiling.get() {
+            u64::MAX => (AllocateType::ANY_PAGES, 0u64),
+            end => (AllocateType::MAX_ADDRESS, end - 1),
         };
+        // SAFETY: `address` is a live local, and `pages` is non-zero.
+        let status =
+            unsafe { (self.boot().allocate_pages)(how, kind, pages as usize, &raw mut address) };
         check(context, status)?;
 
         let allocation = Allocation {
@@ -207,6 +220,16 @@ impl Services {
         };
         self.zero(allocation);
         Ok(allocation)
+    }
+
+    /// Give an allocation back to firmware.
+    pub(crate) fn free(&self, context: &'static str, allocation: Allocation) -> Result<()> {
+        // SAFETY: the range came from `allocate`, which rounded it to whole
+        // pages, and the caller holds nothing inside it any more.
+        let status = unsafe {
+            (self.boot().free_pages)(allocation.address, (allocation.len / PAGE_SIZE) as usize)
+        };
+        check(context, status)
     }
 
     /// Fill an allocation with zeroes.

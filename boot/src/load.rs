@@ -192,7 +192,7 @@ fn copy_segment(elf: &Elf<'_>, segment: &Segment, base: u64, virt_base: u64) -> 
 /// For the same reason, only what the memory map describes as memory is mapped
 /// inside the span, and a hole between RAM banks is not; see
 /// [`direct_map_runs`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DirectMap {
     /// The physical address at [`PHYSMAP_BASE`].
     pub(crate) origin: u64,
@@ -222,6 +222,22 @@ impl DirectMap {
             origin,
             len: (end - origin).min(PHYSMAP_END - PHYSMAP_BASE),
         })
+    }
+
+    /// Check that `map`, fetched after the loader's allocations, gives the same
+    /// direct map as the one measured before them.
+    ///
+    /// It must: allocating turns free RAM into the loader's own types, which
+    /// are RAM too, so the span cannot have moved. A firmware for which it did
+    /// would have placed the kernel against a ceiling that no longer holds.
+    pub(crate) fn confirm(self, map: &MemoryMap) -> Result<()> {
+        if DirectMap::of(map)? == self {
+            Ok(())
+        } else {
+            Err(BootError::plain(
+                "the direct map changed while the loader was allocating",
+            ))
+        }
     }
 
     /// Where physical address `phys` appears in the direct map.

@@ -90,12 +90,31 @@ extern "efiapi" fn efi_main(image: Handle, system_table: *mut SystemTable) -> St
     }
 }
 
+/// Where the direct map will end, measured before anything the kernel is
+/// handed is allocated, so that all of it can be placed below that.
+///
+/// Only a 32-bit machine with more RAM than the direct map holds is changed by
+/// the ceiling this sets; everywhere else it is the top of RAM.
+fn measure_direct_map(services: &Services) -> Result<DirectMap> {
+    let probe = services.allocate(
+        "allocating a buffer to measure RAM",
+        services.memory_map_size()?,
+        MemoryType::LOADER_DATA,
+    )?;
+    let direct = DirectMap::of(&services.memory_map(probe)?)?;
+    services.free("freeing the RAM measuring buffer", probe)?;
+    Ok(direct)
+}
+
 /// Everything between firmware and the kernel.
 fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     // SAFETY: these are the arguments firmware passed to `efi_main`, and boot
     // services have not been exited.
     let services = unsafe { Services::new(image, system_table)? };
     arch::prepare_cpu().map_err(BootError::plain)?;
+
+    let direct = measure_direct_map(&services)?;
+    services.allocate_below(direct.end());
 
     let kernel = stage_kernel(&services)?;
     let mut memory = LoaderMemory::new(&services)?;
@@ -122,7 +141,7 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     // fetched here is stale the moment anything else is allocated, which is
     // why the one handed to the kernel is fetched again below.
     let first_look = services.memory_map(map_buffer)?;
-    let direct = DirectMap::of(&first_look)?;
+    direct.confirm(&first_look)?;
     println!(
         "  direct map of {:#x}..{:#x}, kernel at {:#x}",
         direct.origin,
@@ -131,8 +150,8 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     );
 
     // Everything the kernel is handed has to be reachable through the direct
-    // map. That is not a given on a 32-bit machine with more RAM than the
-    // direct map holds, because firmware allocates from the top down.
+    // map. The ceiling set above is meant to guarantee it; this is the check
+    // that it did, since firmware is the one choosing the addresses.
     let handed_over = [kernel.image.memory, memory.pool(), stack, info_area];
     let copied = device_tree.map(|(copy, _)| copy);
     if !handed_over
