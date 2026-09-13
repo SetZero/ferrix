@@ -475,7 +475,8 @@ overlapping and 39,725 updates lost by the unlocked count beside it. The
 sweep then found 341 mappings, and the reclaim 4 MiB.
 
 **Deferred, with the reasons in `docs/arm32.md`:** RAM above 2 GiB physical,
-which the board has and QEMU cannot place; RAM beyond the direct map; the
+which the board has and QEMU cannot place; using RAM beyond the direct map
+(a machine with it boots, since 2026-09-13, and reports the excess unused); the
 board's own UART; Thumb-2; VFP. The UART has since landed and carried the run
 below.
 

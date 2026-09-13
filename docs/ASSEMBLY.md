@@ -35,6 +35,16 @@ its life, after `ExitBootServices`: writing `CR3`; or programming `MAIR_EL1`,
 that did not exist a moment earlier. That sequence cannot be a Rust function
 call, because the return address would be in the old address space.
 
+On ARMv7-A that sequence is also *copyable*. Firmware may load the loader where
+neither translation tree can map it at its own address while the MMU comes back
+on — QEMU's `virt` with 2 GiB puts it inside the direct map's virtual range —
+and then the loader copies the switch to a page below the split and runs it
+there. So the sequence is a block between `ferrix_switch_start` and
+`ferrix_switch_end`, register-only and position-independent, and
+`xtask/src/pe.rs` refuses a loader whose block is over a page or holds a
+relocation. It is the same instructions, not more of them; the product owner
+admitted the block on 2026-09-13 on exactly those conditions.
+
 ## The list
 
 Each entry names why Rust cannot express it. Entries are added to

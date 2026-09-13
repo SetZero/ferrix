@@ -214,6 +214,74 @@ fn segments(elf: &Elf<'_>) -> Result<Vec<Section>> {
     Ok(sections)
 }
 
+/// The size a copy of the switch has to fit: one page of the loader's own.
+const SWITCH_PAGE: u64 = 4096;
+
+/// Check the loader's switch block can be copied to a trampoline page.
+///
+/// `boot/src/arch/armv7a.rs` runs its switch either where it is or from a copy
+/// on a page below the split. A copy runs only if nothing in the block names
+/// an absolute address — which, in a static PIE, is exactly a relocation site
+/// inside it — and if it fits the one page the loader allocates. Both are
+/// properties of what the compiler and linker emitted, not of the source, so
+/// they are checked on every build rather than trusted.
+pub(crate) fn check_switch(elf_image: &[u8]) -> Result<()> {
+    let elf = Elf::parse(elf_image).map_err(fail)?;
+    let symbols = elf
+        .symbols()
+        .ok_or_else(|| fail("the loader has no symbol table to find its switch block in"))?;
+    let find = |name: &[u8]| {
+        symbols
+            .clone()
+            .find(|symbol| symbol.name == name)
+            .map(|symbol| symbol.value)
+    };
+    let (Some(start), Some(end)) = (find(b"ferrix_switch_start"), find(b"ferrix_switch_end"))
+    else {
+        return Err(fail(
+            "the loader has no ferrix_switch_start/ferrix_switch_end block",
+        ));
+    };
+    let mut sites = Vec::new();
+    for relocation in elf.relocations().map_err(fail)? {
+        sites.push(relocation.map_err(fail)?.offset);
+    }
+    if let Some(reason) = switch_violation(start, end, &sites) {
+        return Err(fail(reason));
+    }
+    println!(
+        "  switch block {} bytes at {start:#x}, no relocation inside",
+        end - start
+    );
+    Ok(())
+}
+
+/// What is wrong with a switch block at `start..end` in an image whose
+/// relocated words are at `sites`, if anything.
+fn switch_violation(start: u64, end: u64, sites: &[u64]) -> Option<String> {
+    if end <= start {
+        return Some(format!(
+            "the switch block {start:#x}..{end:#x} is empty or reversed"
+        ));
+    }
+    if end - start > SWITCH_PAGE {
+        return Some(format!(
+            "the switch block is {} bytes, more than the one page a trampoline holds",
+            end - start
+        ));
+    }
+    // A relocated word is four bytes; any of them inside the block is an
+    // absolute address a copy would carry to the wrong place.
+    sites
+        .iter()
+        .find(|&&site| site < end && site + 4 > start)
+        .map(|site| {
+            format!(
+                "the switch block {start:#x}..{end:#x} holds a relocation at {site:#x},                  so a copy of it would not run: every reference in it must be PC-relative"
+            )
+        })
+}
+
 /// The address of every word firmware has to relocate, sorted.
 ///
 /// A `REL` entry's addend is already in the word, which is the only form PE

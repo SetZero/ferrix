@@ -17,7 +17,8 @@
 //! the root's address plus sixteen — what Linux calls `TTBR1_OFFSET` — and a
 //! test in `libs/paging` pins the half of that arithmetic that lives there.
 
-use core::arch::asm;
+use core::arch::{asm, global_asm};
+use core::slice;
 
 use ferrix_bootinfo::Arch;
 use ferrix_elf::Class;
@@ -157,86 +158,124 @@ fn memory_model() -> u32 {
     features & 0xF
 }
 
+// The switch itself, as a block of instructions the loader can run in place or
+// copy to a page of its choosing and run there; see `switch_code`.
+//
+// Everything in it is register-only and position-independent: no branch leaves
+// it except the last, no literal pool, no address loaded from memory. That is
+// what lets a copy run anywhere, and `xtask/src/pe.rs` refuses a loader whose
+// block has a relocation inside it or does not fit one page.
+//
+// On entry: r0 the boot info, r1 and r2 MAIR0 and MAIR1, r3 TTBCR, r4 and r5
+// the two table roots, r8 the stack top, r10 the kernel entry. r12 is scratch.
+global_asm!(
+    ".pushsection .text.ferrix_switch, \"ax\", %progbits",
+    ".arm",
+    ".balign 4",
+    ".global ferrix_switch_start",
+    ".global ferrix_switch_end",
+    "ferrix_switch_start:",
+    "cpsid aif",
+    "dsb",
+    "isb",
+    // The MMU and both caches off. From here until the MMU is back on the
+    // program counter is a physical address, which is fine only because
+    // whatever page this runs from is identity mapped.
+    "mrc p15, 0, r12, c1, c0, 0",
+    "bic r12, r12, #{mmu}",
+    "bic r12, r12, #{dcache}",
+    "bic r12, r12, #{icache}",
+    "mcr p15, 0, r12, c1, c0, 0",
+    "isb",
+    // The kernel's text was written as data. The data cache was cleaned by the
+    // caller; the instruction cache and the branch predictor may still hold
+    // what was there before, and are discarded.
+    "mov r12, #0",
+    "mcr p15, 0, r12, c7, c5, 0",
+    "mcr p15, 0, r12, c7, c5, 6",
+    // Our own translation regime: attributes, split, then the two roots as
+    // 64-bit values whose upper words — and so ASIDs — are zero.
+    "mcr p15, 0, r1, c10, c2, 0",
+    "mcr p15, 0, r2, c10, c2, 1",
+    "mcr p15, 0, r3, c2, c0, 2",
+    "mcrr p15, 0, r4, r12, c2",
+    "mcrr p15, 1, r5, r12, c2",
+    "isb",
+    "mcr p15, 0, r12, c8, c7, 0",
+    "dsb",
+    "isb",
+    // And back on.
+    "mrc p15, 0, r12, c1, c0, 0",
+    "orr r12, r12, #{mmu}",
+    "orr r12, r12, #{dcache}",
+    "orr r12, r12, #{icache}",
+    "bic r12, r12, #{wxn}",
+    "mcr p15, 0, r12, c1, c0, 0",
+    "isb",
+    "mov sp, r8",
+    // Null frame and link registers terminate any backtrace the kernel walks,
+    // rather than letting it wander into the loader's frames.
+    "mov r11, #0",
+    "mov lr, #0",
+    "bx r10",
+    "ferrix_switch_end:",
+    ".popsection",
+    mmu = const SCTLR_MMU,
+    dcache = const SCTLR_DCACHE,
+    icache = const SCTLR_ICACHE,
+    wxn = const SCTLR_WXN,
+);
+
+unsafe extern "C" {
+    /// The first instruction of the switch.
+    static ferrix_switch_start: u8;
+    /// One past its last.
+    static ferrix_switch_end: u8;
+}
+
+/// The switch's instructions, for copying to a trampoline page.
+pub(crate) fn switch_code() -> Option<&'static [u8]> {
+    let start = &raw const ferrix_switch_start;
+    let end = &raw const ferrix_switch_end;
+    // SAFETY: both symbols bound one block of this image's own text, which is
+    // mapped and never written for the loader's whole life.
+    Some(unsafe { slice::from_raw_parts(start, end.addr() - start.addr()) })
+}
+
 /// Install the loader's translation regime and jump to the kernel.
 ///
 /// # Safety
 ///
 /// Boot services must already have been exited; the loader must be running in
-/// SVC mode and identity mapped, because the middle of this sequence executes
-/// with the MMU off; and everything `handoff` points at must already have been
-/// cleaned out of the data cache with [`clean_dcache`].
+/// SVC mode; the page the switch runs from — the loader's own image, or the
+/// trampoline in `handoff.switch` — must be identity mapped in the tables
+/// installed, because the middle of the switch executes with the MMU off; and
+/// everything `handoff` points at, the trampoline included, must already have
+/// been cleaned out of the data cache with [`clean_dcache`].
 pub(crate) unsafe fn enter_kernel(handoff: Handoff) -> ! {
     // Every address here is below 4 GiB by construction — the kernel's layout
     // is `LAYOUT_32`, and firmware allocated the tables — so a register holds
     // each exactly.
     let identity = handoff.identity_table as u32;
     let kernel_half = (handoff.root_table + TTBR1_OFFSET) as u32;
+    let switch = handoff
+        .switch
+        .map_or((&raw const ferrix_switch_start).addr() as u32, |page| {
+            page as u32
+        });
 
     // As on AArch64, every operand is bound to a named register, because
     // `options(noreturn)` forbids outputs and so forbids asking for scratch.
     // `r6`, `r7`, `r9` and `r11` are the registers the compiler reserves on
-    // this architecture, so none of them is an operand; `r11`, the frame
-    // pointer, is only ever written, on the way out.
+    // this architecture, so none of them is an operand.
     //
     // SAFETY: the caller's contract is exactly the set of conditions that make
-    // this sequence sound. Interrupts and aborts are masked first, because
-    // firmware's handlers stopped existing at `exit_boot_services`.
+    // the switch sound. Interrupts and aborts are masked before the branch,
+    // because firmware's handlers stopped existing at `exit_boot_services`.
     unsafe {
         asm!(
             "cpsid aif",
-            "dsb",
-            "isb",
-
-            // The MMU and both caches off. From here until the MMU is back on
-            // the program counter is a physical address, which is fine only
-            // because firmware identity mapped us.
-            "mrc p15, 0, r12, c1, c0, 0",
-            "bic r12, r12, #{mmu}",
-            "bic r12, r12, #{dcache}",
-            "bic r12, r12, #{icache}",
-            "mcr p15, 0, r12, c1, c0, 0",
-            "isb",
-
-            // The kernel's text was written as data. The data cache was cleaned
-            // by the caller; the instruction cache and the branch predictor may
-            // still hold what was there before, and are discarded.
-            "mov r12, #0",
-            "mcr p15, 0, r12, c7, c5, 0",
-            "mcr p15, 0, r12, c7, c5, 6",
-
-            // Our own translation regime: attributes, split, then the two roots
-            // as 64-bit values whose upper words — and so ASIDs — are zero.
-            "mcr p15, 0, r1, c10, c2, 0",
-            "mcr p15, 0, r2, c10, c2, 1",
-            "mcr p15, 0, r3, c2, c0, 2",
-            "mcrr p15, 0, r4, r12, c2",
-            "mcrr p15, 1, r5, r12, c2",
-            "isb",
-            "mcr p15, 0, r12, c8, c7, 0",
-            "dsb",
-            "isb",
-
-            // And back on.
-            "mrc p15, 0, r12, c1, c0, 0",
-            "orr r12, r12, #{mmu}",
-            "orr r12, r12, #{dcache}",
-            "orr r12, r12, #{icache}",
-            "bic r12, r12, #{wxn}",
-            "mcr p15, 0, r12, c1, c0, 0",
-            "isb",
-
-            "mov sp, r8",
-            // Null frame and link registers terminate any backtrace the kernel
-            // walks, rather than letting it wander into the loader's frames.
-            "mov r11, #0",
-            "mov lr, #0",
-            "bx r10",
-
-            mmu = const SCTLR_MMU,
-            dcache = const SCTLR_DCACHE,
-            icache = const SCTLR_ICACHE,
-            wxn = const SCTLR_WXN,
-
+            "bx r12",
             // The AAPCS argument register: the kernel entry takes the boot
             // info pointer as its only argument.
             in("r0") handoff.boot_info as u32,
@@ -247,8 +286,7 @@ pub(crate) unsafe fn enter_kernel(handoff: Handoff) -> ! {
             in("r5") kernel_half,
             in("r8") handoff.stack_top as u32,
             in("r10") handoff.entry as u32,
-            // Claimed so the scratch above cannot collide with anything live.
-            in("r12") 0u32,
+            in("r12") switch,
             options(noreturn),
         );
     }

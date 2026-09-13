@@ -526,7 +526,15 @@ it. `docs/BOOT-LOG.md` has U-Boot's lines.
   than guessing.
 * **RAM beyond the direct map.** A 32-bit kernel with more than 1.25 GiB of RAM
   needs a high-memory scheme; the kernel ignores the excess and says how much,
-  loudly, in the boot log. No board this port targets has it.
+  loudly, in the boot log. No board this port targets has it. Such a machine
+  does *boot*, though, which it did not before 2026-09-13: the loader measures
+  where the direct map ends before allocating and keeps everything the kernel
+  is handed below it, and when firmware has loaded the loader itself inside
+  the kernel's half — QEMU's `virt` with 2 GiB puts it in the direct map's
+  virtual range — it copies the switch to a page below the split and runs it
+  from there (`IdentityTree::Trampoline`, and `docs/ASSEMBLY.md` under
+  *Boot*). `test-boot --arch armv7a --memory 2048` reaches the marker at two
+  processors and at four, reporting 768 MiB unused; 3 GiB does too.
 * **The board's console.** The STM32MP1 UART is `st,stm32h7-uart`, not a PL011.
   A second early console driver, chosen by `compatible`, is board bring-up
   work.

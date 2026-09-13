@@ -568,3 +568,31 @@ fn refuses_a_relocation_it_cannot_express() {
     put32(&mut pie.bytes, 0x2104, 2); // R_ARM_ABS32, which needs a symbol
     assert!(refusal(&pie).contains("relocation type 2"));
 }
+
+#[test]
+fn a_switch_block_with_no_relocation_inside_and_under_a_page_passes() {
+    assert_eq!(
+        switch_violation(0x2000, 0x20B0, &[0x1FFC, 0x20B0, 0x4000]),
+        None
+    );
+}
+
+#[test]
+fn a_switch_block_with_a_relocation_inside_is_refused() {
+    let inside = switch_violation(0x2000, 0x20B0, &[0x2040]).expect("refused");
+    assert!(inside.contains("PC-relative"), "{inside}");
+
+    // A word that starts before the block but reaches into it counts too.
+    assert!(switch_violation(0x2000, 0x20B0, &[0x1FFE]).is_some());
+}
+
+#[test]
+fn a_switch_block_larger_than_a_page_or_empty_is_refused() {
+    assert!(switch_violation(0x2000, 0x3001, &[]).is_some());
+    assert_eq!(
+        switch_violation(0x2000, 0x3000, &[]),
+        None,
+        "exactly one page fits"
+    );
+    assert!(switch_violation(0x2000, 0x2000, &[]).is_some());
+}

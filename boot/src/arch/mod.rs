@@ -22,11 +22,17 @@ mod mem;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
-pub(crate) use aarch64::{ARCH, ELF_CLASS, ELF_MACHINE, clean_dcache, enter_kernel, prepare_cpu};
+pub(crate) use aarch64::{
+    ARCH, ELF_CLASS, ELF_MACHINE, clean_dcache, enter_kernel, prepare_cpu, switch_code,
+};
 #[cfg(target_arch = "arm")]
-pub(crate) use armv7a::{ARCH, ELF_CLASS, ELF_MACHINE, clean_dcache, enter_kernel, prepare_cpu};
+pub(crate) use armv7a::{
+    ARCH, ELF_CLASS, ELF_MACHINE, clean_dcache, enter_kernel, prepare_cpu, switch_code,
+};
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86_64::{ARCH, ELF_CLASS, ELF_MACHINE, clean_dcache, enter_kernel, prepare_cpu};
+pub(crate) use x86_64::{
+    ARCH, ELF_CLASS, ELF_MACHINE, clean_dcache, enter_kernel, prepare_cpu, switch_code,
+};
 
 /// The page table descriptor layout this machine uses.
 #[cfg(target_arch = "x86_64")]
@@ -69,4 +75,12 @@ pub(crate) struct Handoff {
     pub(crate) stack_top: u64,
     /// Virtual address of the boot info structure.
     pub(crate) boot_info: u64,
+    /// Physical address of a trampoline page holding a copy of the switch, on
+    /// a machine where the loader's own image cannot be identity mapped; see
+    /// `ferrix_bootinfo::IdentityTree::Trampoline`. Only ever set on ARMv7-A.
+    #[cfg_attr(
+        not(target_arch = "arm"),
+        expect(dead_code, reason = "a 64-bit layout never plans a trampoline")
+    )]
+    pub(crate) switch: Option<u64>,
 }

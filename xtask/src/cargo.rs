@@ -26,6 +26,7 @@ pub(crate) fn build_loader(arch: Arch, release: bool) -> Result<PathBuf> {
     let elf = artifact(arch.loader_target(), release, "ferrix-boot")?;
     let bytes = std::fs::read(&elf)
         .map_err(|error| Error::new(format!("reading {}: {error}", elf.display())))?;
+    crate::pe::check_switch(&bytes)?;
     let image = crate::pe::convert(&bytes)?;
     let efi = elf.with_extension("efi");
     std::fs::write(&efi, &image)?;

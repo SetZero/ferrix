@@ -148,6 +148,12 @@ fn current_exception_level() -> u64 {
     (level >> 2) & 0b11
 }
 
+/// The switch's instructions, for copying to a trampoline page: none here,
+/// because a 64-bit layout never plans one.
+pub(crate) const fn switch_code() -> Option<&'static [u8]> {
+    None
+}
+
 /// Install the loader's translation regime and jump to the kernel.
 ///
 /// # Safety

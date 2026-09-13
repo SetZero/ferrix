@@ -100,6 +100,12 @@ unsafe fn write_msr(msr: u32, value: u64) {
     }
 }
 
+/// The switch's instructions, for copying to a trampoline page: none here,
+/// because a 64-bit layout never plans one.
+pub(crate) const fn switch_code() -> Option<&'static [u8]> {
+    None
+}
+
 /// Install the loader's page tables and jump to the kernel.
 ///
 /// # Safety

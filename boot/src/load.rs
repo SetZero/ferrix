@@ -257,6 +257,78 @@ impl DirectMap {
     }
 }
 
+/// Where the switch runs from, and so what has to be identity mapped for it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Switch {
+    /// The mapping `build_address_space` makes.
+    pub(crate) identity: IdentityPlan,
+    /// A page holding a copy of the switch, when the loader's own image could
+    /// not be mapped at its own address.
+    pub(crate) trampoline: Option<Allocation>,
+}
+
+impl Switch {
+    /// Clean the trampoline, if there is one, out of the data cache: it was
+    /// written as data and is about to be run with the caches off.
+    pub(crate) fn clean(self) {
+        if let Some(page) = self.trampoline {
+            arch::clean_dcache(page.address, page.len);
+        }
+    }
+}
+
+/// Decide where the switch runs from, and copy it there if that is not here.
+///
+/// Where the loader may map itself is a property of the machine's memory, and
+/// is decided in `libs/bootinfo` so that the answer for a board nobody here can
+/// boot is still something the host tests pin down. When the answer is a
+/// trampoline, the page comes from RAM below the split and below the direct
+/// map's ceiling, and holds the switch's instructions and nothing else.
+pub(crate) fn place_switch(
+    services: &Services,
+    direct: DirectMap,
+    loader: (u64, u64),
+    kernel_len: u64,
+) -> Result<Switch> {
+    let plan = LAYOUT
+        .plan_identity_map(direct.origin, direct.len, loader.0, loader.1, kernel_len)
+        .map_err(BootError::plain)?;
+    if plan.tree != IdentityTree::Trampoline {
+        return Ok(Switch {
+            identity: plan,
+            trampoline: None,
+        });
+    }
+
+    let code = arch::switch_code()
+        .ok_or_else(|| BootError::plain("this architecture has no switch to copy"))?;
+    let page = services.allocate_under(
+        "allocating the switch trampoline",
+        PAGE_SIZE,
+        MemoryType::LOADER_DATA,
+        plan.base + plan.len,
+    )?;
+    if page.address < plan.base || code.len() as u64 > page.len {
+        return Err(BootError::plain(
+            "the switch trampoline is not a page below the split",
+        ));
+    }
+    // SAFETY: the page was just allocated to us and is identity mapped under
+    // boot services; `code` is the loader's own text, which does not overlap
+    // it, and its length was checked against the page's.
+    unsafe {
+        ptr::copy_nonoverlapping(code.as_ptr(), page.address as *mut u8, code.len());
+    }
+    Ok(Switch {
+        identity: IdentityPlan {
+            tree: IdentityTree::Separate,
+            base: page.address,
+            len: page.len,
+        },
+        trampoline: Some(page),
+    })
+}
+
 /// The page tables the kernel will start on.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AddressSpace {
@@ -280,14 +352,15 @@ pub(crate) struct AddressSpace {
 /// the direct map already covers them.
 ///
 /// `map` is the memory map `direct` was measured from, and says which parts of
-/// that span are memory at all. `rsdp` is firmware's root table pointer, or
-/// zero, whose pages are mapped whatever `map` says; see [`rsdp_region`].
+/// that span are memory at all. `plan` is where the switch is identity mapped,
+/// from [`place_switch`]. `rsdp` is firmware's root table pointer, or zero,
+/// whose pages are mapped whatever `map` says; see [`rsdp_region`].
 pub(crate) fn build_address_space(
     memory: &mut LoaderMemory,
     elf: &Elf<'_>,
     image: &KernelImage,
     (direct, map): (DirectMap, &MemoryMap),
-    loader: (u64, u64),
+    plan: IdentityPlan,
     rsdp: u64,
 ) -> Result<AddressSpace> {
     let kernel_root = memory
@@ -304,18 +377,6 @@ pub(crate) fn build_address_space(
     let kernel: Mapper<PageEncoding> = Mapper::new(kernel_root);
     let identity: Mapper<PageEncoding> = Mapper::new(identity_root);
 
-    // Where the loader may map itself is a property of the machine's memory,
-    // and is decided in `libs/bootinfo` so that the answer for a board nobody
-    // here can boot is still something the host tests pin down.
-    let plan = LAYOUT
-        .plan_identity_map(
-            direct.origin,
-            direct.len,
-            loader.0,
-            loader.1,
-            image.memory.len,
-        )
-        .map_err(BootError::plain)?;
     map_identity(&kernel, &identity, memory, plan)?;
     // Run by run, so that a device window or a hole between RAM banks is not
     // mapped as memory; `direct_map_runs` says why that matters.
@@ -392,6 +453,13 @@ fn map_identity(
     let mapper = match plan.tree {
         IdentityTree::Separate => identity,
         IdentityTree::Kernel => kernel,
+        // `place_switch` turns a trampoline plan into a separate-tree mapping
+        // of the page it chose, so none reaches here.
+        IdentityTree::Trampoline => {
+            return Err(BootError::plain(
+                "a trampoline plan was never given its page",
+            ));
+        }
     };
     mapper
         .map_range(

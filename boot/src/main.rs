@@ -106,6 +106,24 @@ fn measure_direct_map(services: &Services) -> Result<DirectMap> {
     Ok(direct)
 }
 
+/// Say what the kernel's address space came to.
+fn report_address_space(memory: &LoaderMemory, space: &AddressSpace, switch: load::Switch) {
+    println!(
+        "  {} page tables, roots {:#x}/{:#x}",
+        memory.tables_used(),
+        space.kernel_root.0,
+        space.identity_root.0
+    );
+    // Only on a machine that needed either, so that the log of a machine that
+    // did not is the log it always was.
+    if let Some((base, len)) = space.loader_alias {
+        println!("  loader mapped at {base:#x} inside the kernel tree, {len} bytes");
+    }
+    if let Some(page) = switch.trampoline {
+        println!("  switch copied to a trampoline at {:#x}", page.address);
+    }
+}
+
 /// Everything between firmware and the kernel.
 fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     // SAFETY: these are the arguments firmware passed to `efi_main`, and boot
@@ -131,6 +149,8 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     )?;
     let device_tree = copy_device_tree(&services)?;
     let initrd = load_initrd(&services)?;
+    let loader = services.image_range()?;
+    let switch = load::place_switch(&services, direct, loader, kernel.image.memory.len)?;
     let map_buffer = services.allocate(
         "allocating the memory map buffer",
         services.memory_map_size()?,
@@ -165,7 +185,6 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
         ));
     }
 
-    let loader = services.image_range()?;
     let space = load::build_address_space(
         &mut memory,
         &kernel.elf()?,
@@ -174,20 +193,10 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
         // allocated since, and the buffer is not fetched into again until
         // the final map is taken below.
         (direct, &first_look),
-        loader,
+        switch.identity,
         firmware_rsdp(&services),
     )?;
-    println!(
-        "  {} page tables, roots {:#x}/{:#x}",
-        memory.tables_used(),
-        space.kernel_root.0,
-        space.identity_root.0
-    );
-    // Only on a machine that needed it, so that the log of a machine that did
-    // not is the log it always was.
-    if let Some((base, len)) = space.loader_alias {
-        println!("  loader mapped at {base:#x} inside the kernel tree, {len} bytes");
-    }
+    report_address_space(&memory, &space, switch);
 
     write_boot_info(
         &services,
@@ -218,6 +227,7 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     arch::clean_dcache(kernel.image.memory.address, kernel.image.memory.len);
     arch::clean_dcache(info_area.address, info_area.len);
     arch::clean_dcache(stack.address, stack.len);
+    switch.clean();
     if let Some((copy, _)) = device_tree {
         arch::clean_dcache(copy.address, copy.len);
     }
@@ -226,8 +236,9 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     }
 
     // SAFETY: boot services are gone, `prepare_cpu` ran above, and the tables
-    // in `space` identity map the loader's own code, which is what makes the
-    // instruction after the switch fetchable.
+    // in `space` identity map the page the switch runs from — the loader's own
+    // code, or the trampoline — which is what makes the instruction after the
+    // switch fetchable.
     unsafe {
         arch::enter_kernel(arch::Handoff {
             root_table: space.kernel_root.0,
@@ -237,6 +248,7 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
             // already covers them and neither needs a mapping of its own.
             stack_top: direct.address(stack.address + stack.len),
             boot_info: direct.address(info_area.address),
+            switch: switch.trampoline.map(|page| page.address),
         })
     }
 }

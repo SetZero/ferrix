@@ -407,6 +407,12 @@ pub enum IdentityTree {
     /// for the mapping to go — and the kernel has to unmap it rather than
     /// abandon a table.
     Kernel,
+    /// Neither. The loader's image is where the kernel's half is already
+    /// spoken for, so what gets mapped is not the loader at all but a page
+    /// holding a copy of the switch, placed in RAM below the split and mapped
+    /// in the separate tree. The plan's `base` and `len` are then the range
+    /// that page has to come from, not a mapping; the loader picks the page.
+    Trampoline,
 }
 
 /// Where the loader may map its own code at its own address.
@@ -445,6 +451,12 @@ impl Layout {
     ///   tree translates them, and what gets mapped is the loader's image
     ///   alone rather than all of RAM.
     ///
+    /// * **The loader's image under a kernel region**, on a machine that also
+    ///   has RAM below the split — QEMU's `virt` with 2 GiB, whose direct map
+    ///   runs over the addresses firmware loaded the loader at. Nothing can map
+    ///   the loader where it is, so a copy of the switch is run from a page
+    ///   below the split instead; see [`IdentityTree::Trampoline`].
+    ///
     /// `physmap_phys` and `physmap_len` are the direct map, which is also the
     /// RAM the first case maps; `loader_base` and `loader_len` are the loader
     /// image as firmware placed it; `kernel_len` is the kernel image, which is
@@ -453,8 +465,9 @@ impl Layout {
     /// # Errors
     ///
     /// When the loader's image sits where the kernel's address space is
-    /// already spoken for, naming the region it collided with. Each of those
-    /// has a different answer — move the direct map, move the image, move the
+    /// already spoken for *and* the machine has no RAM below the split to put
+    /// a trampoline in, naming the region it collided with. Each of those has
+    /// a different answer — move the direct map, move the image, move the
     /// arena — and none of them is this function's to choose.
     pub const fn plan_identity_map(
         &self,
@@ -487,22 +500,34 @@ impl Layout {
                 len: end - base,
             });
         }
-        if base < self.user_end {
-            return Err("firmware placed the loader's image across the split between the halves");
-        }
-        if overlaps(
+
+        let collision = if base < self.user_end {
+            Some("firmware placed the loader's image across the split between the halves")
+        } else if overlaps(
             base,
             end,
             self.physmap_base,
             self.physmap_base + physmap_len,
         ) {
-            return Err("the loader's image is where the kernel's direct map already is");
-        }
-        if overlaps(base, end, self.vmap_base, self.vmap_base + self.vmap_size) {
-            return Err("the loader's image is where the kernel's mapping arena already is");
-        }
-        if overlaps(base, end, self.kernel_base, self.kernel_base + kernel_len) {
-            return Err("the loader's image is where the kernel image itself is");
+            Some("the loader's image is where the kernel's direct map already is")
+        } else if overlaps(base, end, self.vmap_base, self.vmap_base + self.vmap_size) {
+            Some("the loader's image is where the kernel's mapping arena already is")
+        } else if overlaps(base, end, self.kernel_base, self.kernel_base + kernel_len) {
+            Some("the loader's image is where the kernel image itself is")
+        } else {
+            None
+        };
+        if let Some(reason) = collision {
+            // RAM starts below the split, so there is a page to run the switch
+            // from that the separate tree can map at its own address.
+            if physmap_phys < self.user_end {
+                return Ok(IdentityPlan {
+                    tree: IdentityTree::Trampoline,
+                    base: physmap_phys,
+                    len: self.user_end - physmap_phys,
+                });
+            }
+            return Err(reason);
         }
 
         Ok(IdentityPlan {
@@ -1703,6 +1728,42 @@ mod tests {
             over_arena,
             Err("the loader's image is where the kernel's mapping arena already is")
         );
+    }
+
+    #[test]
+    fn a_loader_image_under_a_kernel_region_uses_a_trampoline_when_ram_is_below_the_split() {
+        // QEMU's 32-bit `virt` with 2 GiB: RAM at 0x4000_0000..0xC000_0000, a
+        // direct map of 0x5000_0000 bytes over 0xA000_0000..0xF000_0000, and
+        // firmware having loaded the loader near the top of RAM.
+        let plan = LAYOUT_32
+            .plan_identity_map(0x4000_0000, 0x5000_0000, 0xBE68_7000, 0x3_0000, 0x4_1000)
+            .unwrap();
+
+        assert_eq!(plan.tree, IdentityTree::Trampoline);
+        assert_eq!(
+            (plan.base, plan.len),
+            (0x4000_0000, 0x4000_0000),
+            "the page must come from RAM below the split"
+        );
+    }
+
+    #[test]
+    fn a_loader_image_across_the_split_uses_a_trampoline_when_ram_is_below_it() {
+        let plan = LAYOUT_32
+            .plan_identity_map(0x4000_0000, 0x5000_0000, 0x7FFF_0000, 0x3_0000, 0x4_1000)
+            .unwrap();
+        assert_eq!(plan.tree, IdentityTree::Trampoline);
+    }
+
+    #[test]
+    fn a_loader_image_the_kernel_tree_can_hold_does_not_use_a_trampoline() {
+        // RAM below the split, but the loader landed in the gap between the
+        // arena and the direct map's end: the kernel-tree alias still works,
+        // and a machine that booted before must not change path.
+        let plan = LAYOUT_32
+            .plan_identity_map(0x4000_0000, 0x5000_0000, 0xF800_0000, 0x3_0000, 0x4_1000)
+            .unwrap();
+        assert_eq!(plan.tree, IdentityTree::Kernel);
     }
 
     #[test]

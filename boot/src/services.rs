@@ -200,12 +200,23 @@ impl Services {
         len: u64,
         kind: MemoryType,
     ) -> Result<Allocation> {
+        self.allocate_under(context, len, kind, u64::MAX)
+    }
+
+    /// [`Services::allocate`], with every byte also below `end`.
+    pub(crate) fn allocate_under(
+        &self,
+        context: &'static str,
+        len: u64,
+        kind: MemoryType,
+        end: u64,
+    ) -> Result<Allocation> {
         let pages = len.div_ceil(PAGE_SIZE);
         if pages == 0 {
             return Err(BootError::plain(context));
         }
         // For MAX_ADDRESS the address going in is the highest byte allowed.
-        let (how, mut address) = match self.ceiling.get() {
+        let (how, mut address) = match self.ceiling.get().min(end) {
             u64::MAX => (AllocateType::ANY_PAGES, 0u64),
             end => (AllocateType::MAX_ADDRESS, end - 1),
         };
