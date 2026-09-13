@@ -511,7 +511,9 @@ pub(crate) static STAGE4_SMP: Explanation = Explanation {
         "A processor did not finish its share of the work within thirty seconds, because it \
          missed the interrupt meant to wake it or sat with interrupts masked.",
         "The spin lock let two processors in at once, or the processors never ran their \
-         increments at the same time, so the lock was never contended.",
+         increments at the same time in any of five rounds, so the lock was never contended. \
+         A loaded host can run the processors one after another for a round; each round that \
+         did not overlap is printed with its shares.",
         "Run again once the scheduler is up: a task that moved to another processor while \
          waiting for a shootdown recorded its flushes for the processor it left, because the \
          wait used a per-CPU record read before the move rather than the processor it was on.",

@@ -735,13 +735,22 @@ placement clamp. Stage 7's first spinner arrived owed 59 ms and ran its
 whole loop before the checker could start the second. `insert` and `release`
 now charge first, as Linux's `enqueue_entity` calls `update_curr` before it
 places; found by stage 7's session with a trace ring, 598 of 600 looped
-iterations under KVM. And the check that caught it measures preemption now
+iterations under KVM, and 2 of 12 whole boots under KVM on the tree before
+the charge against 0 of 12 after it. And the check that caught it measures preemption now
 -- each program switched out still runnable at the exit of an interrupt that
 arrived in its user code, twice -- rather than being switched to twice,
 which a program never preempted shows too, or switched away at all, which a
 lock released inside its one write with a reschedule pending also does; it
 gets three attempts, since a host stall charged to one program as service
 lets the other run its whole loop, and prints what each attempt saw.
+
+**Stage 4's contended count judges its overlap over five rounds.** The count
+requires two processors' increments to overlap, and an emulator whose host
+deschedules whole virtual processors can run the shares one after another
+for a round. Each round is judged for the lock's correctness, the first
+round that overlaps ends the check, a round that did not is printed with its
+shares, and only five rounds without overlap fail it -- the same shape as
+stage 7's three-attempt pair check.
 
 **Still missing against Linux**, none of it on stage 6's path: group scheduling
 and bandwidth control, which are stage 13; the real-time classes, which are

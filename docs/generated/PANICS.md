@@ -514,7 +514,9 @@ rely on each of these whenever more than one processor runs.
    because it missed the interrupt meant to wake it or sat with interrupts
    masked.
 5. The spin lock let two processors in at once, or the processors never ran
-   their increments at the same time, so the lock was never contended.
+   their increments at the same time in any of five rounds, so the lock was
+   never contended. A loaded host can run the processors one after another for a
+   round; each round that did not overlap is printed with its shares.
 6. Run again once the scheduler is up: a task that moved to another processor
    while waiting for a shootdown recorded its flushes for the processor it left,
    because the wait used a per-CPU record read before the move rather than the
