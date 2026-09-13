@@ -1240,6 +1240,13 @@ all three architectures:
   armv7a: stage 8's exit programs all passed
 ```
 
+After the exit programs, the same boot runs a group of applets, reported on a
+line of its own and not part of the criterion: `pwdx`, `sysctl` reads with a
+refused and an accepted write, `/proc/partitions` and `fdisk -l`, `top`,
+`mpstat` and `iostat -c`, and `mknod` of a null, a zero and an unknown device.
+They are the applets a sweep of busybox found failing, kept from failing again,
+each judged on its output as well as its status.
+
 **What a review found before the stage was called done.** Another session
 read the VFS and its self-checks and found five bugs and one gap, three of the
 bugs reproduced on the host, and the stage waited on all of it. A lookup that
