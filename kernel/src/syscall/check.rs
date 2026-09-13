@@ -109,6 +109,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let concurrent = check_two_programs_take_turns_on_one_processor()?;
     let killed = check_a_program_is_killed_from_outside()?;
     let forked = check_a_forked_child_is_waited_for()?;
+    check_an_ended_process_closes_its_descriptors()?;
     let execed = check_execve_replaces_the_program()?;
     let futex_woken = check_futexes()?;
 
@@ -3547,6 +3548,30 @@ fn check_sockets_are_refused_honestly(process: &Process) -> Result<(), &'static 
     }
     if sockets::dispatch(Call::Listen, &[99, 0, 0, 0, 0, 0], process) != Some(Err(Errno::EBADF)) {
         return Err("listen on a closed descriptor was not EBADF");
+    }
+    Ok(())
+}
+
+/// A process that ends closes its descriptors then, not when it is reaped.
+///
+/// A never-started process holds a pipe's only write end; after its kill, the
+/// read end must see the hangup that end of file is made of, while the process
+/// itself is still referenced here, as an unreaped child is by its parent.
+/// Without it, `ls | wc -l` in the shell hangs.
+fn check_an_ended_process_closes_its_descriptors() -> Result<(), &'static str> {
+    let holder = process::new_for_check().map_err(|_| "no process to hold a pipe's write end")?;
+    let (reader, writer) = crate::fs::pipe::new_pipe(false).map_err(|_| "could not make a pipe")?;
+    let _fd = holder
+        .files()
+        .lock()
+        .insert(writer, false)
+        .map_err(|_| "could not give a process a pipe's write end")?;
+    if reader.poll().hangup {
+        return Err("a pipe's read end saw a hangup while its writer was still open");
+    }
+    process::kill(&holder, 137);
+    if !reader.poll().hangup {
+        return Err("a process that ended kept its descriptors open until it was let go");
     }
     Ok(())
 }

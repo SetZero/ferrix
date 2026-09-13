@@ -585,6 +585,25 @@ impl Process {
         // memory and drain other objects, which is `object::dispose`'s job,
         // and must not run under this process's table lock or state lock.
         object::dispose(self.with_handles(HandleTable::close));
+        // Its descriptors close now, as Linux's exit closes them, rather than
+        // when the last reference to the process goes -- which a parent that
+        // has not reaped it yet still holds. Otherwise a pipe's write end
+        // outlives the program that wrote, and `ls | wc -l` hangs: `wc` waits
+        // for an end of file that only comes when the shell reaps `ls`, and the
+        // shell reaps nothing until `wc` ends. Only when no other process
+        // shares the table (`CLONE_FILES`), whose descriptors are still its
+        // own. Taken out under the lock and dropped after it, because closing
+        // a pipe end wakes its queues.
+        if Arc::strong_count(&self.files) == 1 {
+            let closed: Vec<Arc<OpenFile>> = {
+                let mut files = self.files.lock();
+                let open: Vec<i32> = files.iter().map(|(fd, _)| fd).collect();
+                open.into_iter()
+                    .filter_map(|fd| files.remove(fd).ok())
+                    .collect()
+            };
+            drop(closed);
+        }
         self.exited.wake_all();
         self.vfork_done.wake_all();
 
