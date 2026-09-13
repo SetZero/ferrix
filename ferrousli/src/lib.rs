@@ -1,0 +1,59 @@
+//! Ferrousli: a C library for Linux, written in Rust.
+//!
+//! The name is *ferrous* and *musl*. The model is musl: small, correct, and
+//! built to be linked statically. The destination is further. A program built
+//! against glibc should one day be able to load this library in glibc's place,
+//! which means matching glibc's exported symbols, structure layouts and startup
+//! contract rather than only its API.
+//!
+//! The library talks to the kernel only through system calls, so it runs on
+//! any Linux, and it is tested on the host that builds it.
+//!
+//! # Building for C and for tests
+//!
+//! Built normally, this is a `no_std` static library whose functions carry
+//! their C names. Built for `cargo test`, it links std, and every export keeps
+//! its Rust mangled name, so the functions can be unit tested without
+//! colliding with the host libc's `strlen` in the same test binary. That is
+//! what each `cfg_attr(not(test), unsafe(no_mangle))` is for.
+
+#![cfg_attr(not(test), no_std)]
+// LLVM recognises a byte-copying loop and replaces it with a call to `memcpy`.
+// Inside `memcpy` that call is the function calling itself until the stack
+// runs out. `no_builtins` turns the recognition off, and it can only be turned
+// off for a whole crate. It does not stop rustc copying large values with
+// `memcpy`; `string`'s module documentation covers that half.
+#![no_builtins]
+
+#[cfg(not(target_arch = "x86_64"))]
+compile_error!("ferrousli supports only x86-64 so far");
+
+pub mod errno;
+#[cfg(not(test))]
+pub mod start;
+pub mod stdio;
+pub mod stdlib;
+pub mod string;
+pub mod syscall;
+pub mod unistd;
+
+/// A panic inside the library has nothing to unwind into, because every frame
+/// above it is C. Trapping stops the program at the fault, where a debugger or
+/// a core dump can still see it.
+#[cfg(not(test))]
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
+    syscall::trap()
+}
+
+/// The unwinder's personality routine, which nothing ever calls.
+///
+/// This target's precompiled `core` was built to unwind, and its unwind tables
+/// name this symbol even though this library aborts instead. Without a
+/// definition, every C program fails to link. A frame is never unwound through,
+/// so reaching this is a bug, and it traps.
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_eh_personality() {
+    syscall::trap()
+}
