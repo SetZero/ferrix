@@ -92,6 +92,10 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         cargo::run(command, "cargo test")
     })?;
 
+    if args.ferrousli {
+        ferrousli(&root)?;
+    }
+
     if args.fast {
         println!("\nchecked (--fast: cross-target clippy skipped)");
         return Ok(());
@@ -111,6 +115,49 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 
     println!("\nchecked");
     Ok(())
+}
+
+/// ferrousli's gates, behind `--ferrousli`.
+///
+/// ferrousli is a workspace of its own, so none of the steps above reach it,
+/// and a change elsewhere could break it without a gate noticing. These are
+/// the gates its landings have always run. The tests run twice because each C
+/// program is built at `-O0` and `-O2` in both profiles, and the library
+/// itself behaves differently optimised: a release build is where the
+/// optimiser turns loops into calls to the library's own `memcpy`.
+///
+/// Off by default: building the library and its C programs twice is minutes,
+/// and most landings cannot affect it. `docs/BACKLOG.md` says which landings
+/// must pass it.
+fn ferrousli(root: &std::path::Path) -> Result<()> {
+    let dir = root.join("ferrousli");
+    let in_ferrousli = |arguments: &[&str]| {
+        let mut command = Command::new(cargo_binary());
+        let _ = command.current_dir(&dir).args(arguments);
+        command
+    };
+
+    step("ferrousli: generated ABI", || {
+        python_with("ferrousli/tools/gen-abi.py", &["--check"])
+    })?;
+    step("ferrousli: formatting", || {
+        cargo::run(in_ferrousli(&["fmt", "--check"]), "cargo fmt (ferrousli)")
+    })?;
+    step("ferrousli: clippy", || {
+        cargo::run(
+            in_ferrousli(&["clippy", "--all-targets", "--", "-D", "warnings"]),
+            "cargo clippy (ferrousli)",
+        )
+    })?;
+    step("ferrousli: tests", || {
+        cargo::run(in_ferrousli(&["test"]), "cargo test (ferrousli)")
+    })?;
+    step("ferrousli: tests (release)", || {
+        cargo::run(
+            in_ferrousli(&["test", "--release"]),
+            "cargo test --release (ferrousli)",
+        )
+    })
 }
 
 /// `cargo xtask model-doc` -- regenerate the document the gate above checks.

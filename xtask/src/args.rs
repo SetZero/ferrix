@@ -21,6 +21,8 @@ pub(crate) struct Args {
     pub(crate) gdb: bool,
     /// `--fast`: skip the slow half of `check`.
     pub(crate) fast: bool,
+    /// `--ferrousli`: `check` also runs ferrousli's gates, its own workspace.
+    pub(crate) ferrousli: bool,
     /// `-h`/`--help`.
     pub(crate) help: bool,
     /// `--smp`, virtual CPUs.
@@ -61,6 +63,7 @@ impl Args {
                 "--release" => args.release = true,
                 "--gdb" => args.gdb = true,
                 "--fast" => args.fast = true,
+                "--ferrousli" => args.ferrousli = true,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
                 "--smp" => args.smp = number(&mut items, "--smp")?,
                 "--memory" => args.memory = number(&mut items, "--memory")?,
@@ -219,5 +222,12 @@ mod tests {
             parse(&["build", "run"]).is_err(),
             "two commands is a typo, not a request"
         );
+    }
+
+    #[test]
+    fn ferrousli_is_off_unless_asked_for() {
+        assert!(!parse(&["check"]).unwrap().ferrousli);
+        let args = parse(&["check", "--fast", "--ferrousli"]).unwrap();
+        assert!(args.fast && args.ferrousli);
     }
 }
