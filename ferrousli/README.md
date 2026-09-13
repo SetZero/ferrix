@@ -55,9 +55,11 @@ x86-64, static programs linked at a fixed address.
 | Threads | the main thread's control block in glibc's layout, static TLS, the stack protector's canary | `pthread_*` |
 | Memory | the `malloc` family, on `mmap`, with size classes and integrity checks | returning empty regions to the kernel |
 | `stdlib.h` | `exit`, `_Exit`, `atexit` without a limit, `abort`, the environment functions; `strtol` and `strtod` families, correctly rounded for `float`, `double` and x87 `long double`, with glibc's `__isoc23_` names; `qsort`, `qsort_r`, `bsearch`; `abs` and `div` families; `rand`, `random` and `rand48` families | `ecvt`, `fcvt`, `gcvt`; NaN payloads and rounding modes in parsing |
-| `string.h`, `strings.h` | everything but the allocating functions; word-at-a-time scans; two-way `strstr` and `memmem` | `strdup`, `strndup`, the `_l` forms |
-| `ctype.h` | the C locale, and glibc's `__ctype_b_loc` tables | the `_l` forms |
-| Error text | `strerror`, `strerror_r` (XSI), `__xpg_strerror_r`, `strsignal` | glibc's GNU `strerror_r` |
+| `string.h`, `strings.h` | everything, with word-at-a-time scans and two-way `strstr` and `memmem`; `strcoll_l` and `strxfrm_l` | `strcasecmp_l`, `strncasecmp_l` |
+| `ctype.h` | the C locale, glibc's `__ctype_b_loc` tables, and the `_l` forms | |
+| `locale.h`, `langinfo.h` | `setlocale`, `localeconv`, `newlocale`, `duplocale`, `freelocale`, `uselocale`, `nl_langinfo`; musl's C and C.UTF-8 locales, any other name behaving as UTF-8 | message catalogues, glibc's `locale_t` layout |
+| Multibyte and wide characters | UTF-8 conversion in `stdlib.h`, `wchar.h` and `uchar.h`, strict as musl's; `wctype.h`'s classes, case mappings and `wcwidth` from musl's Unicode 12.1 tables, with every difference from glibc recorded; `wchar.h`'s string and memory functions | wide stdio, `wcstol` and `wcstod`, `iconv` |
+| Error text | `strerror`, `strerror_l`, `strerror_r` (XSI), `__xpg_strerror_r`, `strsignal` | glibc's GNU `strerror_r` |
 | `unistd.h` | files, directories and links, `pipe` and `dup`, identities, `fork` on `clone`, `execve`, `execv`, `execvp`, `sleep`, `alarm`, `sysconf`, `isatty`, `syscall` | the `execl` family, `getcwd(NULL, 0)`, `set*id` across threads |
 | `fcntl.h`, `sys/stat.h`, `sys/mman.h` | every function, with glibc's `*64` and `__xstat` names | |
 | Clocks | `time`, `clock_gettime` and the rest, `gettimeofday`, `nanosleep` | the vDSO |
@@ -72,8 +74,8 @@ x86-64, static programs linked at a fixed address.
 ## Next
 
 1. In progress: **buffered stdio, `printf` and `scanf`**, **time zones and
-   `strftime`**, **locales and wide characters**, **`dirent`, `getopt`, `glob`
-   and `regex`**, **threads**, and **the math library**.
+   `strftime`**, **`dirent`, `getopt`, `glob` and `regex`**, **threads**, and
+   **the math library**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
 3. **`long double` math and `complex.h`.**
