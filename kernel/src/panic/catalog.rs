@@ -636,9 +636,12 @@ pub(crate) static STAGE8_PATH_CALLS: Explanation = Explanation {
               chdir, fchdir and getcwd, faccessat, chmod, chown, utimensat and unlinkat -- by \
               their numbers, through the dispatch table, against the real namespace under /tmp, \
               and decodes every stat record back out of the user buffer in this architecture's \
-              layout. A failure means a program would be told something false about a file: a \
-              size read out of padding, a listing that skips or repeats a name, or a working \
-              directory that is not where chdir put it.",
+              layout. It also makes device nodes with mknodat and opens them, expecting 1:3 and \
+              1:5 to act as /dev/null and /dev/zero and a number devfs lacks, or a block device, \
+              to be ENXIO. A failure means a program would be told something false about a file: \
+              a size read out of padding, a listing that skips or repeats a name, a working \
+              directory that is not where chdir put it, or a device node reaching the wrong \
+              device.",
     causes: &[
         "`arch::STAT_LAYOUT` names the wrong `struct stat` for this architecture, or a layout in \
          `libs/linux-abi` moved a field.",
@@ -646,8 +649,11 @@ pub(crate) static STAGE8_PATH_CALLS: Explanation = Explanation {
          wrong width.",
         "The namespace in `libs/vfs` changed what a walk, a rename or a directory cursor does.",
         "/tmp is not mounted, or a previous run left /tmp/pathcheck behind.",
+        "`fs::devfs::attach_device` is not called from `openat`, or `devfs::open_char_device` \
+         matches numbers in a different encoding from the one `mknodat` stores.",
     ],
     see: "kernel/src/syscall/check.rs run_paths; kernel/src/syscall/path.rs; \
+          kernel/src/fs/devfs.rs; \
           kernel/src/syscall/stat.rs; libs/vfs; docs/ROADMAP.md stage 8",
 };
 

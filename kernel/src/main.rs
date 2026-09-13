@@ -387,8 +387,13 @@ fn check_path_calls() {
     };
     println!(
         "  paths    {} path calls under /tmp, {} names listed in {} getdents64 calls, \
-         {} frames leaked, dentry cache {:+}",
-        report.calls, report.listed, report.listing_calls, report.leaked, report.cache_growth,
+         {} device nodes opened by number, {} frames leaked, dentry cache {:+}",
+        report.calls,
+        report.listed,
+        report.listing_calls,
+        report.devices,
+        report.leaked,
+        report.cache_growth,
     );
 }
 

@@ -2901,11 +2901,12 @@ mod paths {
     use ferrix_linux_abi::errno::Errno;
     use ferrix_linux_abi::nr::Syscall;
     use ferrix_linux_abi::types::{
-        self, AT_EMPTY_PATH, AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_NOFOLLOW, DT_REG, R_OK,
-        RENAME_EXCHANGE, RENAME_NOREPLACE, S_IFLNK, S_IFREG, STATX_BASIC_STATS, Statx, UTIME_OMIT,
-        W_OK, X_OK,
+        self, AT_EMPTY_PATH, AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_NOFOLLOW, DT_REG, O_PATH, O_RDONLY,
+        O_WRONLY, R_OK, RENAME_EXCHANGE, RENAME_NOREPLACE, S_IFBLK, S_IFCHR, S_IFDIR, S_IFLNK,
+        S_IFREG, STATX_BASIC_STATS, Statx, UTIME_OMIT, W_OK, X_OK,
     };
     use ferrix_vfs::dirent::{self, Record};
+    use ferrix_vfs::initramfs::makedev;
     use ferrix_vfs::{FileType, Metadata, OpenFlags, Stat, Timespec};
 
     use super::{map_rw, number_for};
@@ -2925,6 +2926,8 @@ mod paths {
         pub(crate) listed: usize,
         /// How many `getdents64` calls that took.
         pub(crate) listing_calls: u32,
+        /// Device nodes `mknodat` made and the check opened by number.
+        pub(crate) devices: usize,
         /// Frames the measured run cost once everything was removed. Zero, or
         /// a path call is leaking.
         pub(crate) leaked: i64,
@@ -3034,6 +3037,7 @@ mod paths {
         let (listed, listing_calls) = check_a_listing_in_pieces_sees_each_name_once(&mut p)?;
         check_the_working_directory_follows_chdir(&mut p)?;
         check_access_and_attributes(&mut p)?;
+        let devices = check_device_nodes_open_by_number(&mut p)?;
         check_names_are_removed(&mut p)?;
         let calls = p.calls;
         p.release()?;
@@ -3041,6 +3045,7 @@ mod paths {
             calls,
             listed,
             listing_calls,
+            devices,
             leaked: 0,
             cache_growth: 0,
         })
@@ -3172,6 +3177,7 @@ mod paths {
         uid: u64,
         size: u64,
         mtime: u64,
+        rdev: u64,
     }
 
     /// An unsigned little-endian field of `width` bytes.
@@ -3198,6 +3204,7 @@ mod paths {
                 uid: le(b, offset_of!(Legacy, st_uid), 4)?,
                 size: le(b, offset_of!(Legacy, st_size), 8)?,
                 mtime: le(b, offset_of!(Legacy, st_mtime), 8)?,
+                rdev: le(b, offset_of!(Legacy, st_rdev), 8)?,
             },
             StatLayout::Generic => Decoded {
                 dev: le(b, offset_of!(Generic, st_dev), 8)?,
@@ -3207,6 +3214,7 @@ mod paths {
                 uid: le(b, offset_of!(Generic, st_uid), 4)?,
                 size: le(b, offset_of!(Generic, st_size), 8)?,
                 mtime: le(b, offset_of!(Generic, st_mtime), 8)?,
+                rdev: le(b, offset_of!(Generic, st_rdev), 8)?,
             },
             StatLayout::Stat64 => Decoded {
                 dev: le(b, offset_of!(Stat64, st_dev), 8)?,
@@ -3216,6 +3224,7 @@ mod paths {
                 uid: le(b, offset_of!(Stat64, st_uid), 4)?,
                 size: le(b, offset_of!(Stat64, st_size), 8)?,
                 mtime: le(b, offset_of!(Stat64, st_mtime), 4)?,
+                rdev: le(b, offset_of!(Stat64, st_rdev), 8)?,
             },
         })
     }
@@ -3238,7 +3247,7 @@ mod paths {
                 uid: 7,
                 gid: 9,
                 size: 0x1_2345_6789,
-                rdev: 0,
+                rdev: 0x0105,
                 blocks: 11,
                 block_size: 4096,
                 atime: time(1000),
@@ -3254,6 +3263,7 @@ mod paths {
             uid: 7,
             size: 0x1_2345_6789,
             mtime: 2000,
+            rdev: 0x0105,
         };
         for layout in [StatLayout::Legacy, StatLayout::Generic, StatLayout::Stat64] {
             let bytes = layout.encode(&stat);
@@ -3628,6 +3638,149 @@ mod paths {
             return Err("umask did not swap the mask, keeping permission bits only");
         }
         Ok(())
+    }
+
+    /// A device node and the number `mknodat` was given for it.
+    struct DeviceNode {
+        path: &'static [u8],
+        kind: u32,
+        major: u32,
+        minor: u32,
+    }
+
+    /// A node with `/dev/null`'s number.
+    const NULL_NODE: DeviceNode = DeviceNode {
+        path: b"/tmp/pathcheck/null",
+        kind: S_IFCHR,
+        major: 1,
+        minor: 3,
+    };
+
+    /// A node with `/dev/zero`'s number.
+    const ZERO_NODE: DeviceNode = DeviceNode {
+        path: b"/tmp/pathcheck/zero",
+        kind: S_IFCHR,
+        major: 1,
+        minor: 5,
+    };
+
+    /// Nodes nothing answers: a character number devfs does not have, and a
+    /// block device.
+    const UNANSWERED_NODES: [DeviceNode; 2] = [
+        DeviceNode {
+            path: b"/tmp/pathcheck/unregistered",
+            kind: S_IFCHR,
+            major: 240,
+            minor: 0,
+        },
+        DeviceNode {
+            path: b"/tmp/pathcheck/disk",
+            kind: S_IFBLK,
+            major: 8,
+            minor: 0,
+        },
+    ];
+
+    /// `mknodat` makes character and block device nodes with the number it
+    /// was given and the umask applied; a character node opens as the devfs
+    /// device with its number, whatever filesystem it is on; a number devfs
+    /// does not have, and every block device, is `ENXIO` on open but not with
+    /// `O_PATH`; and a directory is still `EPERM`. Returns the nodes made.
+    fn check_device_nodes_open_by_number(p: &mut Paths<'_>) -> Result<usize, &'static str> {
+        let directory = p.path(b"/tmp/pathcheck/dir")?;
+        if p.call(
+            Syscall::Mknodat,
+            [CWD, directory, u64::from(S_IFDIR | 0o755), 0, 0, 0],
+        ) != Err(Errno::EPERM)
+        {
+            return Err("mknodat of a directory was not EPERM");
+        }
+        let every_node = || {
+            [&NULL_NODE, &ZERO_NODE]
+                .into_iter()
+                .chain(&UNANSWERED_NODES)
+        };
+        for node in every_node() {
+            let name = p.path(node.path)?;
+            // Bits above the low 32 are set, and must be ignored: Linux takes
+            // `dev` as an `unsigned int`.
+            let dev = makedev(node.major, node.minor) | 0xDEAD_0000_0000_0000;
+            let mode = u64::from(node.kind | 0o666);
+            if p.call(Syscall::Mknodat, [CWD, name, mode, dev, 0, 0]) != Ok(0) {
+                return Err("mknodat of a device node was refused");
+            }
+        }
+
+        let null = p.path(NULL_NODE.path)?;
+        let described = stat_into(p, fstatat()?, [CWD, null, p.out, 0, 0, 0])?;
+        // 0o666 through the default umask of 0o022.
+        if described.mode != S_IFCHR | 0o644 || described.rdev != makedev(1, 3) {
+            return Err(
+                "stat of a character node did not report S_IFCHR, its number and the umask",
+            );
+        }
+        let fd = p
+            .call(Syscall::Openat, [CWD, null, u64::from(O_WRONLY), 0, 0, 0])
+            .map_err(|_| "a character node devfs has a number for did not open")?;
+        let fd = fd as u64;
+        let _ = p.stage(p.out, b"swallowed")?;
+        let wrote = p.call(Syscall::Write, [fd, p.out, 9, 0, 0, 0]);
+        let fstat = first_of(&[Syscall::Fstat, Syscall::Fstat64]).ok_or("no fstat here")?;
+        let by_fd = stat_into(p, fstat, [fd, p.out, 0, 0, 0, 0]);
+        if p.call(Syscall::Close, [fd, 0, 0, 0, 0, 0]) != Ok(0) {
+            return Err("close of a device node's descriptor was refused");
+        }
+        if wrote != Ok(9) {
+            return Err("a node numbered 1:3 did not swallow a write as /dev/null does");
+        }
+        if by_fd? != described {
+            return Err("fstat of an opened node did not describe the node itself");
+        }
+
+        let zero = p.path(ZERO_NODE.path)?;
+        let fd = p
+            .call(Syscall::Openat, [CWD, zero, u64::from(O_RDONLY), 0, 0, 0])
+            .map_err(|_| "a character node devfs has a number for did not open")?;
+        let fd = fd as u64;
+        p.fill_out(64, 0xA5)?;
+        let read = p.call(Syscall::Read, [fd, p.out, 64, 0, 0, 0]);
+        if p.call(Syscall::Close, [fd, 0, 0, 0, 0, 0]) != Ok(0) {
+            return Err("close of a device node's descriptor was refused");
+        }
+        if read != Ok(64) || p.read_out(64)?.iter().any(|&byte| byte != 0) {
+            return Err("a node numbered 1:5 did not read as zeros as /dev/zero does");
+        }
+
+        for node in &UNANSWERED_NODES {
+            let name = p.path(node.path)?;
+            let described = stat_into(p, fstatat()?, [CWD, name, p.out, 0, 0, 0])?;
+            if described.mode != node.kind | 0o644
+                || described.rdev != makedev(node.major, node.minor)
+            {
+                return Err("stat of a device node did not report its kind and number");
+            }
+            if p.call(Syscall::Openat, [CWD, name, u64::from(O_RDONLY), 0, 0, 0])
+                != Err(Errno::ENXIO)
+            {
+                return Err("a device node with no device behind it did not open ENXIO");
+            }
+            let handle = p
+                .call(Syscall::Openat, [CWD, name, u64::from(O_PATH), 0, 0, 0])
+                .map_err(|_| "O_PATH of a device node with no device behind it was refused")?;
+            if p.call(Syscall::Close, [handle as u64, 0, 0, 0, 0, 0]) != Ok(0) {
+                return Err("close of an O_PATH descriptor was refused");
+            }
+        }
+
+        let mut made = 0;
+        for node in every_node() {
+            let name = p.path(node.path)?;
+            if p.call(Syscall::Unlinkat, [CWD, name, 0, 0, 0, 0]) != Ok(0) {
+                return Err("unlinkat of a device node was refused");
+            }
+            made += 1;
+        }
+        Ok(made)
     }
 
     /// `unlinkat` removes names, with and without `AT_REMOVEDIR`, and refuses

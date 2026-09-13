@@ -214,9 +214,10 @@ pub(crate) fn sys_openat(
             &flags,
             mode & 0o7777 & !process.umask(),
         )
-        // A named pipe opens as a pipe end; everything else is returned as it
-        // is.
-        .and_then(fs::pipe::attach_fifo);
+        // A named pipe opens as a pipe end, and a device node as the device
+        // its number names; everything else is returned as it is.
+        .and_then(fs::pipe::attach_fifo)
+        .and_then(fs::devfs::attach_device);
     let file = match opened {
         Ok(file) => file,
         Err(errno) => {

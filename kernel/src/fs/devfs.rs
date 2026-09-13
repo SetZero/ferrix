@@ -4,10 +4,19 @@
 //! is the kernel's statement of which devices exist, and until drivers come
 //! and go — stage 10's — that statement is a constant: the three memory
 //! devices a C library and a shell reach for, the two random devices, and the
-//! console under both of its names. A node made by `mknod` in a tmpfs names a
-//! device by number and reaches nothing until the VFS routes numbers to
-//! drivers; here the node *is* the device, which is why this is a filesystem
-//! of its own rather than a tmpfs with nodes unpacked into it.
+//! console under both of its names. Here the node *is* the device, which is
+//! why this is a filesystem of its own rather than a tmpfs with nodes unpacked
+//! into it.
+//!
+//! # Nodes elsewhere
+//!
+//! A character device node made by `mknod` in a tmpfs, or unpacked from the
+//! initramfs, names a device by number. [`attach_device`] opens it as the
+//! device this table gives that number, exactly as the devfs node would open:
+//! `/tmp/null` made as `c 1 3` is `/dev/null` to every read and write, and its
+//! own inode to `stat`. A number the table does not have is `ENXIO` on open,
+//! which is Linux's answer for a character number no driver registered; so is
+//! every block device, until stage 11 gives block numbers a driver to reach.
 //!
 //! # Numbers
 //!
@@ -37,7 +46,8 @@ use core::any::Any;
 
 use ferrix_vfs::initramfs::makedev;
 use ferrix_vfs::{
-    DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, Result, Timespec,
+    DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, OpenFile, Result,
+    Timespec,
 };
 
 use crate::fs;
@@ -286,20 +296,7 @@ impl Inode for Node {
             .iter()
             .position(|device| device.name == name)
             .ok_or(Errno::ENOENT)?;
-        // `/dev/console` is the console itself rather than a node standing for
-        // it. `fs::console::open_console` names a process's descriptors
-        // `/dev/console` only when that name reaches this very inode, and
-        // `stat` then reports the console's own number and identity.
-        if DEVICES
-            .get(index)
-            .is_some_and(|device| device.behaviour == Behaviour::ConsoleItself)
-        {
-            return Ok(console_inode());
-        }
-        Ok(Arc::new(Node {
-            place: Place::Device(index),
-            made: self.made,
-        }))
+        Ok(node(index, self.made))
     }
 
     fn read_dir(&self, cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
@@ -325,6 +322,72 @@ impl Inode for Node {
         }
         Ok(())
     }
+}
+
+/// The inode `DEVICES[index]` is, stamped `made`.
+///
+/// `/dev/console` is the console itself rather than a node standing for it.
+/// `fs::console::open_console` names a process's descriptors `/dev/console`
+/// only when that name reaches this very inode, and `stat` then reports the
+/// console's own number and identity.
+fn node(index: usize, made: Timespec) -> Arc<dyn Inode> {
+    if DEVICES
+        .get(index)
+        .is_some_and(|device| device.behaviour == Behaviour::ConsoleItself)
+    {
+        return console_inode();
+    }
+    Arc::new(Node {
+        place: Place::Device(index),
+        made,
+    })
+}
+
+/// What reads and writes of the character device numbered `rdev` go to: the
+/// devfs node with that number, opened as an open of it in `/dev` would be.
+///
+/// # Errors
+///
+/// `ENXIO` for a number no device here has.
+pub(crate) fn open_char_device(rdev: u64) -> Result<Arc<dyn Inode>> {
+    let index = DEVICES
+        .iter()
+        .position(|device| makedev(device.major, device.minor) == rdev)
+        .ok_or(Errno::ENXIO)?;
+    // The stamp is never seen: `stat` reports the node that was opened, and
+    // this inode only takes its reads and writes.
+    let device = node(index, Timespec::default());
+    Ok(device.open()?.unwrap_or(device))
+}
+
+/// An open file of a device node, made to read and write the device its
+/// number names. Anything else -- a devfs node, which already is its device,
+/// and a node opened with `O_PATH`, which is a handle on the name -- comes
+/// back as it was.
+///
+/// The open keeps its location and inode, so `fstat` reports the node that
+/// was opened, with its own inode number and `st_rdev`, as `/dev/tty` reports
+/// its own while reading and writing the console.
+///
+/// # Errors
+///
+/// `ENXIO` for a character number no device here has, and for every block
+/// device: nothing answers block numbers before stage 11's block core.
+pub(crate) fn attach_device(file: Arc<OpenFile>) -> Result<Arc<OpenFile>> {
+    if file.is_path() {
+        return Ok(file);
+    }
+    match file.kind() {
+        FileType::CharDevice => {}
+        FileType::BlockDevice => return Err(Errno::ENXIO),
+        _ => return Ok(file),
+    }
+    let inode = file.inode();
+    if Arc::clone(inode).into_any().is::<Node>() || Arc::ptr_eq(inode, &console_inode()) {
+        return Ok(file);
+    }
+    let device = open_char_device(inode.metadata().rdev)?;
+    Ok(file.with_io(device))
 }
 
 /// Mount a devfs on `/dev`, making the directory if the archive had none.

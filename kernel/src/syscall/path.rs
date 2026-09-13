@@ -42,6 +42,7 @@ use ferrix_linux_abi::types::{
     RENAME_NOREPLACE, RENAME_WHITEOUT, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFMT, S_IFREG,
     S_IFSOCK, UTIME_NOW, UTIME_OMIT,
 };
+use ferrix_vfs::initramfs::makedev;
 use ferrix_vfs::{
     Context, FileType, Location, NewNode, OpenFile, RenameMode, SetAttributes, Stat, Timespec,
 };
@@ -99,8 +100,8 @@ fn change(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<usize
     let answer = match call {
         Syscall::Mkdir => sys_mkdirat(process, AT_FDCWD, a[0], word(a[1])),
         Syscall::Mkdirat => sys_mkdirat(process, int(a[0]), a[1], word(a[2])),
-        Syscall::Mknod => sys_mknodat(process, AT_FDCWD, a[0], word(a[1])),
-        Syscall::Mknodat => sys_mknodat(process, int(a[0]), a[1], word(a[2])),
+        Syscall::Mknod => sys_mknodat(process, AT_FDCWD, a[0], word(a[1]), word(a[2])),
+        Syscall::Mknodat => sys_mknodat(process, int(a[0]), a[1], word(a[2]), word(a[3])),
         Syscall::Unlink => sys_unlinkat(process, AT_FDCWD, a[0], 0),
         Syscall::Rmdir => sys_unlinkat(process, AT_FDCWD, a[0], AT_REMOVEDIR),
         Syscall::Unlinkat => sys_unlinkat(process, int(a[0]), a[1], word(a[2])),
@@ -269,23 +270,53 @@ fn sys_mkdirat(process: &Process, dirfd: i32, at: u64, mode: u32) -> Result<usiz
 
 /// `mknodat` and `mknod`.
 ///
-/// Regular files, named pipes and socket names. A device node is refused with
-/// `EPERM` although root may make one on Linux: a node made on tmpfs today
-/// would name a device number no driver answers, and whether a program may
-/// make one at all is a decision for devfs, which owns the numbers. The mode's
-/// kind is checked before the path is looked at, as Linux does.
-fn sys_mknodat(process: &Process, dirfd: i32, at: u64, mode: u32) -> Result<usize, Errno> {
+/// Regular files, named pipes, socket names, and character and block device
+/// nodes, which root may make on Linux and the one user here is root. A device
+/// node records the number `dev` gives; what opening it reaches is devfs's to
+/// say, by that number (`fs::devfs::attach_device`). A directory is `EPERM`,
+/// as Linux answers: `mkdir` makes those. The mode's kind is checked before the
+/// path is looked at, as Linux does.
+fn sys_mknodat(
+    process: &Process,
+    dirfd: i32,
+    at: u64,
+    mode: u32,
+    dev: u32,
+) -> Result<usize, Errno> {
     let node = match mode & S_IFMT {
         0 | S_IFREG => NewNode::Regular,
         S_IFIFO => NewNode::Fifo,
         S_IFSOCK => NewNode::Socket,
-        S_IFCHR | S_IFBLK | S_IFDIR => return Err(Errno::EPERM),
+        S_IFCHR => NewNode::Device {
+            kind: FileType::CharDevice,
+            rdev: decode_dev(dev),
+        },
+        S_IFBLK => NewNode::Device {
+            kind: FileType::BlockDevice,
+            rdev: decode_dev(dev),
+        },
+        S_IFDIR => return Err(Errno::EPERM),
         _ => return Err(Errno::EINVAL),
     };
     let named = named_at(process, dirfd, at)?;
     let permissions = mode & 0o7777 & !process.umask();
     fs::namespace().mknod(&named.ctx, named.start(), &named.path, node, permissions)?;
     Ok(0)
+}
+
+/// The device number a program passed to `mknod`, as a 64-bit `dev_t`.
+///
+/// Linux's `sys_mknodat` takes `dev` as an `unsigned int` on every
+/// architecture, so only the register's low 32 bits count, and decodes them
+/// with `new_decode_dev` from `include/linux/kdev_t.h`: the major is bits 8 to
+/// 19, the minor the low byte with bits 20 to 31 above it. That is the layout
+/// `makedev` writes for every number Linux can hold -- a 12-bit major and a
+/// 20-bit minor -- so the node reports back through `st_rdev` what the program
+/// passed in.
+fn decode_dev(dev: u32) -> u64 {
+    let major = (dev & 0xfff00) >> 8;
+    let minor = (dev & 0xff) | ((dev >> 12) & 0xfff00);
+    makedev(major, minor)
 }
 
 /// `unlinkat`, `unlink` and `rmdir`.
