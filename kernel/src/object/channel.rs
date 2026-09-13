@@ -371,6 +371,8 @@ fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Vec<Arc<Endpoint>> {
             | Object::Interrupt(_)
             | Object::IoMapping(_)
             | Object::Pin(_)
+            // A process handle holds how the process ended, not its table.
+            | Object::Process(_)
             | Object::Port(_) => None,
         })
         // Once each, and no more than the walk could use: an inbox can hold

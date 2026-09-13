@@ -65,6 +65,8 @@ pub(crate) enum Object {
     IoMapping(Arc<io_mapping::IoMapping>),
     /// Pages of a VMO a device may reach.
     Pin(Arc<pin::Pin>),
+    /// A process: how it ended, and not the process itself.
+    Process(crate::syscall::process::ProcessRef),
     /// An event queue.
     Port(Arc<port::Port>),
 }
@@ -84,11 +86,13 @@ impl Object {
             Object::Job(job) if job.is_killed() => Signals::TERMINATED,
             Object::Interrupt(interrupt) if interrupt.is_pending() => Signals::READABLE,
             Object::Port(port) if !port.is_empty() => Signals::READABLE,
+            Object::Process(process) if process.exit().is_closed() => Signals::TERMINATED,
             Object::Job(_)
             | Object::Device(_)
             | Object::Interrupt(_)
             | Object::IoMapping(_)
             | Object::Pin(_)
+            | Object::Process(_)
             | Object::Port(_) => Signals::NONE,
         }
     }
@@ -103,6 +107,7 @@ impl Object {
             Object::Channel(endpoint) => endpoint.waiters(),
             Object::Job(job) => job.waiters(),
             Object::Port(port) => port.waiters(),
+            Object::Process(process) => process.exit().exited(),
             // Woken from the interrupt handler itself; see `interrupt`.
             Object::Interrupt(interrupt) => interrupt.waiters(),
             Object::Vmo(_) | Object::Device(_) | Object::IoMapping(_) | Object::Pin(_) => &QUIET,

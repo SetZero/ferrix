@@ -84,6 +84,13 @@ impl Rights {
     /// reach those pages, and it is kept, or given back by closing it, where it
     /// was made.
     pub const PIN: Rights = Rights(Rights::READ.0);
+    /// What a handle to a process carries.
+    ///
+    /// [`Rights::WAIT`] to hear that it has ended, directly or through a port,
+    /// and [`Rights::MANAGE`] for the calls that act on it, which come with
+    /// native process creation.
+    pub const PROCESS: Rights =
+        Rights(Rights::DUPLICATE.0 | Rights::TRANSFER.0 | Rights::WAIT.0 | Rights::MANAGE.0);
 
     /// Whether every right in `other` is also in `self`.
     #[must_use]

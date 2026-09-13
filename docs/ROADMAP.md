@@ -1534,6 +1534,19 @@ eight through its port, staggered across the five-millisecond recheck period
 so that the recheck cannot pass for a wake, and fails if more than two of
 either take over 2 ms; left to the recheck, about five of eight would.
 
+**Done — a port hears that a process has ended.** A handle to a process
+names its `Exit`: its status, the signal that ended it, the queue woken when it
+ends, and the port registrations waiting for it. It never names the process,
+so a handle kept past the end does not keep the address space or anything else
+the process owned. `object_wait_async` on the handle queues a `TERMINATED`
+packet once the process has ended and closed its handles and descriptors, at
+once for one that already has, and the handle's own `TERMINATED` signal asserts
+at the same point. So `devmgr` hears of a driver's death only after the
+driver's pins have been given back or kept. Until `process_create` hands them
+out, only the object check makes process handles. It watches a process through
+a port and directly, sees a channel the process held close before the packet
+arrives, and sees the process freed while the handle is still open.
+
 **Left for later stages**, none of it on the exit criterion's path:
 
 * `vmo_map`. What a DMA pin needs from the VMO under it is in: `Vmo::hold`

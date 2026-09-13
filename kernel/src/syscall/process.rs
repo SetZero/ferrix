@@ -39,11 +39,13 @@ use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::errno::Errno;
+use ferrix_native_abi::signals::Signals as ObjectSignals;
 use ferrix_vfs::fd::FdTable;
 use ferrix_vfs::{Context, OpenFile};
 use ferrix_vma::VmaFlags;
 
 use crate::fs;
+use crate::object::port::{self, Observer, PortError};
 use crate::object::{self, HandleTable};
 use crate::sched::{self, Task, WaitQueue};
 use crate::syscall::credentials::Credentials;
@@ -102,13 +104,9 @@ pub(crate) struct Process {
     startup: SpinLock<Option<Startup>>,
     /// Set by whichever of `exit_group` and `kill` gets there first.
     ending: AtomicBool,
-    /// Its exit status, valid once `terminated` is.
-    status: AtomicI32,
-    /// The terminated condition. Set after `status`, so a reader who sees it
-    /// always reads the status that goes with it.
-    terminated: AtomicBool,
-    /// Woken once, when it terminates.
-    exited: WaitQueue,
+    /// How it ended, and who is waiting to hear. Apart from the process,
+    /// because a handle to the process holds it: see [`Exit`].
+    exit: Arc<Exit>,
     /// The tasks running its code. Weak, because a task keeps its process
     /// alive and not the other way round.
     tasks: SpinLock<Vec<Weak<Task>>>,
@@ -131,8 +129,6 @@ pub(crate) struct Process {
     /// The signal its parent is told with when it ends; `SIGCHLD` for an
     /// ordinary fork, whatever `clone` asked for otherwise.
     exit_signal: AtomicU32,
-    /// The signal that ended it, or zero if it exited.
-    ended_by: AtomicU32,
     /// Set by a successful `execve`: what a `vfork` parent waits for, besides
     /// the child ending.
     execed: AtomicBool,
@@ -217,9 +213,7 @@ impl Process {
             state: SpinLock::new(State::default()),
             startup: SpinLock::new(None),
             ending: AtomicBool::new(false),
-            status: AtomicI32::new(0),
-            terminated: AtomicBool::new(false),
-            exited: WaitQueue::new(),
+            exit: Arc::new(Exit::new()),
             tasks: SpinLock::new(Vec::new()),
             resume: SpinLock::new(None),
             parent: SpinLock::new(Weak::new()),
@@ -230,7 +224,6 @@ impl Process {
             children: SpinLock::new(Vec::new()),
             child_exited: WaitQueue::new(),
             exit_signal: AtomicU32::new(ferrix_linux_abi::types::SIGCHLD),
-            ended_by: AtomicU32::new(0),
             execed: AtomicBool::new(false),
             vfork_done: WaitQueue::new(),
             signalled: WaitQueue::new(),
@@ -558,19 +551,19 @@ impl Process {
 
     /// Whether it has terminated, by exiting or by being killed.
     pub(crate) fn is_terminated(&self) -> bool {
-        self.terminated.load(Ordering::Acquire)
+        self.exit.is_terminated()
     }
 
     /// How it ended, once it has.
     pub(crate) fn exit_status(&self) -> Option<i32> {
         self.is_terminated()
-            .then(|| self.status.load(Ordering::Acquire))
+            .then(|| self.exit.status.load(Ordering::Acquire))
     }
 
     /// The queue woken, once, when it terminates -- for a waiter that has its
     /// own condition to check alongside [`Process::is_terminated`].
     pub(crate) fn exited(&self) -> &WaitQueue {
-        &self.exited
+        self.exit.exited()
     }
 
     /// Block until it terminates or `deadline` passes, and report how it ended
@@ -602,9 +595,7 @@ impl Process {
         if self.ending.swap(true, Ordering::AcqRel) {
             return false;
         }
-        self.ended_by.store(signal, Ordering::Release);
-        self.status.store(status, Ordering::Release);
-        self.terminated.store(true, Ordering::Release);
+        self.exit.record(status, signal);
         let clear_child_tid = core::mem::take(&mut *self.state.lock()).clear_child_tid;
         // The address `CLONE_CHILD_CLEARTID` or `set_tid_address` registered
         // is zeroed and its futex woken, which is how a `pthread_join` or a
@@ -642,10 +633,18 @@ impl Process {
             }
             drop(closed);
         }
-        self.exited.wake_all();
+        // Whoever watches it through a port hears now, once its handles and
+        // descriptors are closed: a driver's pins are given back or kept
+        // before `devmgr` learns that the driver has gone. Taken before the
+        // queue is woken, so a waiter it wakes sees the handle's `TERMINATED`.
+        let observers = self.exit.close();
+        self.exit.exited.wake_all();
         self.vfork_done.wake_all();
         self.signalled.wake_all();
         self.resumed.wake_all();
+        for observer in observers {
+            observer.fire(ObjectSignals::TERMINATED);
+        }
 
         // Its parent is told -- woken, and sent the signal it was created with,
         // `SIGCHLD` for a fork -- and lets it go at once if it asked never to
@@ -887,7 +886,7 @@ impl Process {
     /// bits.
     pub(crate) fn wait_status(&self) -> Option<i32> {
         let status = self.exit_status()?;
-        let signal = self.ended_by.load(Ordering::Acquire);
+        let signal = self.exit.ended_by.load(Ordering::Acquire);
         Some(if signal == 0 {
             (status & 0xFF) << 8
         } else {
@@ -897,7 +896,7 @@ impl Process {
 
     /// The signal that ended it, if a signal did.
     pub(crate) fn ended_by_signal(&self) -> Option<u32> {
-        let signal = self.ended_by.load(Ordering::Acquire);
+        let signal = self.exit.ended_by.load(Ordering::Acquire);
         (self.is_terminated() && signal != 0).then_some(signal)
     }
 
@@ -918,6 +917,128 @@ impl Process {
             },
             u64::MAX,
         );
+    }
+}
+
+/// How a process ended, and who is waiting to hear.
+///
+/// Apart from the process, because this is what a handle to a process holds.
+/// A handle kept past the end must not keep the address space and everything
+/// else the process owned, and a wait needs nothing else. [`Process::end`] is
+/// the only writer.
+#[derive(Debug)]
+pub(crate) struct Exit {
+    /// Its exit status, valid once `terminated` is.
+    status: AtomicI32,
+    /// The signal that ended it, or zero.
+    ended_by: AtomicU32,
+    /// The terminated condition. Set after `status`, so a reader who sees it
+    /// always reads the status that goes with it.
+    terminated: AtomicBool,
+    /// Woken once, when it terminates.
+    exited: WaitQueue,
+    /// Port registrations waiting for it to end, and `None` once it has
+    /// closed its handles and descriptors and they have been taken.
+    observers: SpinLock<Option<Vec<Observer>>>,
+    /// Set under the observers lock as they are taken, so that
+    /// [`Exit::is_closed`], which every poll of a handle's signals asks, need
+    /// not take the lock.
+    closed: AtomicBool,
+}
+
+impl Exit {
+    /// Not ended, and watched by nobody.
+    fn new() -> Exit {
+        Exit {
+            status: AtomicI32::new(0),
+            ended_by: AtomicU32::new(0),
+            terminated: AtomicBool::new(false),
+            exited: WaitQueue::new(),
+            observers: SpinLock::new(Some(Vec::new())),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    /// Whether it has terminated, by exiting or by being killed. True from the
+    /// moment it starts to end, before it has let go of anything.
+    pub(crate) fn is_terminated(&self) -> bool {
+        self.terminated.load(Ordering::Acquire)
+    }
+
+    /// Whether it has ended and closed its handles and descriptors: what a
+    /// handle's `TERMINATED` signal reports, a little after
+    /// [`Exit::is_terminated`] is true.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    /// The queue woken, once, when it terminates.
+    pub(crate) fn exited(&self) -> &WaitQueue {
+        &self.exited
+    }
+
+    /// Queue `observer`'s packet once it has ended and closed its handles, or
+    /// at once if it already has.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::Full`] at [`port::MAX_OBSERVERS`] registrations.
+    pub(crate) fn observe(&self, observer: Observer) -> Result<(), PortError> {
+        debug_assert!(
+            crate::arch::interrupts_enabled(),
+            "a process's watchers were reached with interrupts off, which its plain lock may not be"
+        );
+        let mut observers = self.observers.lock();
+        if let Some(list) = observers.as_mut() {
+            return port::register(list, observer);
+        }
+        drop(observers);
+        observer.fire(ObjectSignals::TERMINATED);
+        Ok(())
+    }
+
+    /// Record how it ended.
+    fn record(&self, status: i32, signal: u32) {
+        self.ended_by.store(signal, Ordering::Release);
+        self.status.store(status, Ordering::Release);
+        self.terminated.store(true, Ordering::Release);
+    }
+
+    /// Take the registrations waiting for it, for the caller to fire once it
+    /// holds no lock, and refuse to keep any more.
+    fn close(&self) -> Vec<Observer> {
+        debug_assert!(
+            crate::arch::interrupts_enabled(),
+            "a process's watchers were reached with interrupts off, which its plain lock may not be"
+        );
+        let mut observers = self.observers.lock();
+        self.closed.store(true, Ordering::Release);
+        observers.take().unwrap_or_default()
+    }
+}
+
+/// What a handle to a process holds.
+///
+/// Its [`Exit`], and not the process: see there. The calls that act on a
+/// process, which come with native process creation, will add a weak way back
+/// to it.
+#[derive(Debug, Clone)]
+pub(crate) struct ProcessRef {
+    /// How it ended.
+    exit: Arc<Exit>,
+}
+
+impl ProcessRef {
+    /// A handle's view of `process`.
+    pub(crate) fn new(process: &Process) -> ProcessRef {
+        ProcessRef {
+            exit: Arc::clone(&process.exit),
+        }
+    }
+
+    /// How it ended, and who is waiting to hear.
+    pub(crate) fn exit(&self) -> &Exit {
+        &self.exit
     }
 }
 

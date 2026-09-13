@@ -39,7 +39,7 @@ use crate::object::{self, Object};
 use crate::sched::Task;
 use crate::syscall::check::spinner;
 use crate::syscall::image;
-use crate::syscall::process::{self, Process};
+use crate::syscall::process::{self, Process, ProcessRef};
 use crate::syscall::{self as linux, Outcome, SyscallArgs, native, uaccess};
 use crate::user::space::Access;
 use ferrix_elf::Class;
@@ -223,6 +223,7 @@ fn check_two_processes() -> Result<Counter, &'static str> {
     check_a_cycle_of_channels_is_refused(&sender, &mut counter)?;
     check_an_endpoint_survives_a_bad_buffer(&sender, &mut counter)?;
     check_ports(&sender, &mut counter)?;
+    check_a_port_hears_a_process_end(&sender, &mut counter)?;
     check_a_full_channel_says_wait(&sender, near, &receiver, far, &mut counter)?;
     check_a_closed_peer_frees_what_was_queued(&sender, near, &receiver, far, &mut counter)?;
     if sender.call(0x1030, &[]) != Err(Errno::ENOSYS) {
@@ -232,6 +233,127 @@ fn check_two_processes() -> Result<Counter, &'static str> {
     sender.close_everything();
     receiver.close_everything();
     Ok(counter)
+}
+
+/// A port hears that a process has ended, after the process has closed its
+/// handles, and a handle to it keeps nothing of it but that.
+///
+/// A watch registered while the process runs fires only when it ends, one
+/// registered afterwards fires at once, and the handle says `TERMINATED` from
+/// the same moment. A watch on the far end of a channel the process held fires
+/// first, so the close came before the packet: what lets `devmgr` reset a
+/// device only once its driver's pins are gone. And with nothing but the
+/// handle left, the process is freed.
+fn check_a_port_hears_a_process_end(
+    side: &Side,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let watched = Side::new()?;
+    let (_inside, outside) = connect(&watched, side)?;
+    let handle = side
+        .process
+        .with_handles(|table| {
+            table.insert(
+                Object::Process(ProcessRef::new(&watched.process)),
+                Rights::PROCESS,
+            )
+        })
+        .map_err(|_| "no room for a process handle")?;
+    let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
+    let terminated = u64::from(Signals::TERMINATED.0);
+    let watch = |target: Handle, signals: u64, key: u64| {
+        side.put(KEY, &key.to_ne_bytes())
+            .map_err(|_| Errno::EFAULT)?;
+        side.call(
+            nr::OBJECT_WAIT_ASYNC,
+            &[reg(target), reg(port), signals, KEY],
+        )
+    };
+
+    let _ =
+        watch(handle, terminated, 51).map_err(|_| "watching a process through a port failed")?;
+    refused(
+        take_now(side, port),
+        status::TIMED_OUT,
+        "a watch on a running process fired",
+        counter,
+    )?;
+    stage_deadline(side, 0)?;
+    refused(
+        side.call(
+            nr::OBJECT_WAIT_ONE,
+            &[reg(handle), terminated, DEADLINE, OBSERVED],
+        ),
+        status::TIMED_OUT,
+        "a running process said it had terminated",
+        counter,
+    )?;
+    let blind = side.handle(
+        nr::HANDLE_DUPLICATE,
+        &[
+            reg(handle),
+            u64::from((Rights::DUPLICATE | Rights::TRANSFER).0),
+        ],
+        "duplicating a process handle without WAIT failed",
+    )?;
+    refused(
+        watch(blind, terminated, 59),
+        status::ACCESS_DENIED,
+        "a process handle without WAIT was watched",
+        counter,
+    )?;
+    let _ = watch(outside, u64::from(Signals::PEER_CLOSED.0), 53)
+        .map_err(|_| "watching a channel the process held failed")?;
+
+    let alive = Arc::downgrade(&watched.process);
+    process::kill(&watched.process, 3);
+    for (key, signal, what) in [
+        (
+            53,
+            Signals::PEER_CLOSED,
+            "a watcher heard of a process's end before its handles closed",
+        ),
+        (
+            51,
+            Signals::TERMINATED,
+            "a process's end did not fire the watch on it",
+        ),
+    ] {
+        let _ = take_now(side, port).map_err(|_| what)?;
+        let (fired, kind, signals, _, _) = read_packet(side)?;
+        if fired != key || kind != PACKET_SIGNAL || !Signals(signals).intersects(signal) {
+            return Err(what);
+        }
+        counter.packets += 1;
+    }
+    stage_deadline(side, 0)?;
+    let _ = side
+        .call(
+            nr::OBJECT_WAIT_ONE,
+            &[reg(handle), terminated, DEADLINE, OBSERVED],
+        )
+        .map_err(|_| "an ended process did not say it had terminated")?;
+    let _ = watch(handle, terminated, 52).map_err(|_| "watching an ended process failed")?;
+    let _ = take_now(side, port).map_err(|_| "a watch on an ended process did not fire at once")?;
+    if read_packet(side)?.0 != 52 {
+        return Err("a watch on an ended process fired with the wrong key");
+    }
+    counter.packets += 1;
+
+    // Freed at once only because a process made for a check has no task. A
+    // started program's task holds its process until the idle loop's reaper
+    // lets it go, which `kill` does not wait for: pointed at one, this would
+    // have to wait for the reaper first.
+    drop(watched);
+    if alive.upgrade().is_some() {
+        return Err("a handle to an ended process kept the process");
+    }
+    for closing in [handle, blind, port, outside] {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(closing)])
+            .map_err(|_| "closing a handle the process check made failed")?;
+    }
+    Ok(())
 }
 
 /// One of the two processes.

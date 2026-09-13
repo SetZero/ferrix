@@ -1017,6 +1017,7 @@ fn object_wait_async(
     let registered = match &target {
         Object::Channel(endpoint) => Some(endpoint.observe(observer)),
         Object::Job(job) => Some(job.observe(observer)),
+        Object::Process(process) => Some(process.exit().observe(observer)),
         Object::Vmo(_)
         | Object::Port(_)
         | Object::Device(_)
