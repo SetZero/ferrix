@@ -848,6 +848,19 @@ so anything that touches ring 3 wants a KVM boot before it is called done.
   not yet dropped by its reaper, nothing on the zombie list, no free in flight.
   The time-based settle before it let a task that had exited, but was not yet
   reaped, move the count ("running tasks in address spaces leaked frames").
+  What every window counts is `mm::FrameWindow`'s: free frames and the heap's
+  slab pages together. A slab page a size class takes or gives back inside a
+  window moves one frame between the two and changes nothing. Before that, the
+  first touch of a class failed stage 6's region check about one boot in five
+  on a branch that grew the address space, and a slab drained elsewhere failed
+  stage 8's path check under a slow boot, each by one frame that was not a
+  leak. Large heap allocations still count. A small-object leak does not, by
+  construction, so teardown of one is proven with a `Weak` that must fail to
+  upgrade. A window that fails prints what it held at open and now, the heap's
+  live bytes, and the frames through each route (allocated, freed, released,
+  heap taken, heap returned, user and kernel tables), so a failure names its
+  way in. A boot check holds a committed page and a large buffer across a
+  window, and requires the window to count both.
 * **An object knows who maps it, and a shootdown reaches only who may cache
   it.** Every address space that names a VMO is in that object's mapper list.
   So a page the object takes away is taken out of every space that maps it
