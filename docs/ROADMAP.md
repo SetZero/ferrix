@@ -847,24 +847,44 @@ so anything that touches ring 3 wants a KVM boot before it is called done.
   not yet dropped by its reaper, nothing on the zombie list, no free in flight.
   The time-based settle before it let a task that had exited, but was not yet
   reaped, move the count ("running tasks in address spaces leaked frames").
+* **An object knows who maps it, and a shootdown reaches only who may cache
+  it.** Every address space that names a VMO is in that object's mapper list.
+  So a page the object takes away is taken out of every space that maps it
+  before its frame goes back. That covers a decommit, a replace, a move, and
+  the copy a write makes of a page `fork` left shared. It happens in three
+  phases: out of the page list under the object's lock; translations down in
+  each space, with no object lock held, and one shootdown to the union of
+  their processors; only then the frame. A shootdown names its pages and goes
+  only to the processors in the space's set. A processor more than one
+  generation behind, or a request with more pages than its slots, flushes
+  everything. An object backing a private region has exactly one mapper,
+  checked at every attach and before `mremap` moves its pages (FX-0005), which
+  is what lets that move tell nobody else. `mprotect` shoots down what it takes
+  down. The check poisons a page two processes on two processors have both
+  touched, takes it away, and requires that neither reads the poison from user
+  mode. It holds a page for a device across a decommit and a replace. Then it
+  has a protect end the child's next write with `SIGSEGV`:
+
+  ```
+    rmap     2 frames taken from two processes on processors 0 and 1 and poisoned, never reached from user mode; a held page kept its mappings; scoped shootdowns 3 sent to 3 processors and 5 needing no interrupt, against 2 global; 0 frames leaked
+  ```
+
+  On the Arm pair a scoped shootdown needs no interrupt: `tlbi` with the `is`
+  suffix reaches every processor. So the line counts none sent there.
 
 **Decisions worth not reversing silently.** No `ASID`s or `PCID`s: a full
 invalidation of user entries on switch is the correct baseline, and eliding it
 later makes the switch faster rather than unpicking anything. On the Arm pair it
 is still an invalidation *by* `ASID` — every space is `ASID` zero — because that
-is the only form that drops user entries and keeps the kernel's global ones. The
-global broadcast flush is right for a mapping change, which has to reach other
-processors, and wrong in the switch path. Anonymous memory names a VMO, so
-shared anonymous mappings, futex keys and `/proc/self/maps` have an object to
-name. One lock per address space, never a global one.
+is the only form that drops user entries and keeps the kernel's global ones. A
+mapping change is flushed by page, on the processors in the space's set, and a
+switch never broadcasts. A frame is released only after every space its object
+names has let go of it and the shootdown has returned. Anonymous memory names a
+VMO, so shared anonymous mappings, futex keys and `/proc/self/maps` have an
+object to name. One lock per address space, never a global one.
 
 **Left for later, none of it on stage 6's path:**
 
-* Scoping the user TLB shootdown: one page rather than all of them, told only to
-  the processors running that space.
-* `AddressSpace::protect` takes translations down without invalidating them, so
-  after `mprotect` a stale entry can stay more permissive than the map. glibc's
-  RELRO is the first real program to walk into it.
 * No check types at the console. Every architecture receives now — the Arm UART
   drivers were write-only, so a program reading fd 0 there waited forever, until
   the PL011 and the STM32 USART gained receive, by interrupt into a ring — but
@@ -1585,6 +1605,14 @@ program that writes through a null pointer on every architecture and requires
 
 **Left for later stages**, none of it on the exit criterion's path:
 
+* **No native handle to a Linux mapping's object or a file's VMO until
+  `mremap` makes other mappers forget moved pages under its own lock.** The
+  VMO reverse map (stage 6, *An object knows who maps it*) tells a moved
+  object's other mappers to forget its pages only after `mremap`'s lock is
+  released. That is safe only while a private region's object has exactly one
+  mapper, which an assertion at `Vmo::attach` and in `mremap`'s adopt path
+  checks. `vmo_map` cannot break it: a VMO handle comes only from
+  `vmo_create`, and native regions refuse `mremap`.
 * `vmo_map`. What a DMA pin needs from the VMO under it is in: `Vmo::hold`
   keeps a page on the frame a device was given for as long as a pin holds it.
   Decommitting skips the page, a copy-on-write replace is refused, and a fork

@@ -132,7 +132,7 @@ nobody has it yet.
 | Item | Owner | Why it is P0 |
 |---|---|---|
 | Threads: `clone(CLONE_VM\|CLONE_THREAD\|CLONE_SETTLS)` and everything a thread implies | ferrix-a5 | `rustc` is threaded; the largest missing piece on the roadmap. Exit test: a static musl Rust `std::thread` program under `test-shell` on all three architectures |
-| File-backed `mmap`: a file mapping maps the inode's own VMO pages, shared and private, with faults served from them | ferrix-e6 | `mmap` with a descriptor answers `ENODEV` today; `rustc` and the linker map rlibs. Same interface as the btrfs page cache |
+| File-backed `mmap`: a file mapping maps the inode's own VMO pages, shared and private, with faults served from them. In order: (1) the VMO reverse map with scoped shootdown, landed; (2) `libs/vfs`'s `PageSource` over tmpfs, with no open file's lock held across an inode call; (3) the kernel VMO filling from a source, then file mappings on it: `MAP_SHARED` writing through, `MAP_PRIVATE` copying into a shadow object of its own on first write (reads served from the file's VMO until then, since a file's VMO has shared mappers and `Vmo::attach` refuses a private one beside them), `msync`, and a boot check that writes through a mapping and reads back with `read`, and the reverse | ferrix-e6; mm reviewer for the space.rs half | `mmap` with a descriptor answers `ENODEV` today; `rustc` and the linker map rlibs. Same interface as the btrfs page cache; stage 11's kernel mount waits on (3) |
 | Ring-3 virtio-blk reading sectors: `devmgr` (waiting on stage 9's `process_create`/`process_start`, which follow ferrix-a5's start argument, ferrix-4b; process observers are in); the block ring's kernel side (the devfs node from HELLO, and reset before release on driver death); the virtio-blk driver process on `ferrix-rt` reading sectors through a translated domain | ferrix-d9, with ferrix-61 | Stage 11's mount and exit wait on it; the customer declined a kernel-side disk path |
 | `vmo_map` and native process creation | ferrix-4b, space.rs half reviewed by ferrix-e5 | `devmgr` cannot start a driver without them |
 | Stage 11's kernel mount, through the VFS, with file data in the inode's VMO | ferrix-61 | The read-only sysroot |
@@ -146,7 +146,6 @@ nobody has it yet.
 | Reset on driver death, designed in the ring spec before the driver lands | ferrix-d9 | 10 |
 | Trusting a BAR firmware placed but did not enable | ferrix-d9 | 10 |
 | btrfs: CI Miri step for `libs/btrfs` and `libs/block` under 15 minutes, whole-image tests ignored under Miri | ferrix-61 | 11 |
-| `mprotect` leaves stale translations: `AddressSpace::protect` must invalidate, shown by a user-mode check | ferrix-e5 | 6 |
 | A user-mode copy-on-write write check, and a `MAP_SHARED` write check | ferrix-e5 | 6 |
 | `SA_RESTART`; boot checks that drive `SIGCHLD`, stop and continue, `alarm`, `sigaltstack` and fault-to-signal | ferrix-a5 | 7; `rustc` needs `SIGSEGV` on the alternate stack |
 | Pid 1 for init and orphans reparented to it | ferrix-a5 | 7, 15 |
@@ -157,7 +156,6 @@ nobody has it yet.
 
 | Item | Owner |
 |---|---|
-| Scoped user TLB shootdown: one page, only the processors running the space; part of the VMO reverse map | ferrix-e6, reviewed by ferrix-e5 |
 | The cost of the 20 µs one-shot armed on every wake onto the caller's processor, measured on pipe and futex paths | ferrix-34 |
 | Per-CPU frame and heap caches, deferred since stage 2 | open, once a workload can measure them |
 | ASIDs and PCIDs, so a switch stops invalidating every user entry | open, after threads |
@@ -257,7 +255,6 @@ row and the btrfs node cache. All branches and tags are on origin. Branches
 with unlanded work, each committed and pushed, base and state as handed off:
 
 * `board-reset-3c` (95884cd): `arch::reset`, `reboot` resets, `ferrix.onexit=reset`; both reviews in, board proof A passed; needs a rebase over ec549f2's `arch/mod.rs` export lists, the row, proof B (`exit 7` under the option; no press needed). Then the CMDLINE.TXT follow-up and `test-boot --reset`.
-* `worktree-agent-a658b7811c6e2577d`: VMO reverse map with scoped shootdown; d5b515c passed the full row and review, two unbuilt WIP commits on top (review fixes, `protect` shootdown); needs squash, full row with KVM, re-review by the mm owner, then the stage 9 bullet.
 * `worktree-agent-a2d52ca1305875553` (a67f795): devfs block-device registry; full row passed on ec549f2; needs the stage 11 owner's trait review and a go.
 * `stage10-ring` (32d29fb, WIP, never compiled): the block ring's kernel side; rebase onto c9677b7, drop the picked commits, wire the module and the native call, use the registry, write `user/blkring-check` on the runtime, full row.
 * `worktree-agent-a16ff91583057388b` (24da536): virtio-blk library; Miri and fuzz passed; needs rebase and the full row.
