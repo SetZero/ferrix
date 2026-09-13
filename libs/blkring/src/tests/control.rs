@@ -4,16 +4,20 @@ use std::vec::Vec;
 
 use ferrix_native_abi::rights::Rights;
 
-use super::support::device;
+use super::support::{device, identity};
 use crate::control::{
-    HELLO_RIGHTS, Hello, Message, MessageError, PORT_RIGHTS, READY_RIGHTS, Refusal, VMO_RIGHTS,
+    Accepted, HELLO_RIGHTS, Hello, Message, MessageError, PORT_RIGHTS, READY_RIGHTS, Refusal,
+    VMO_RIGHTS, hello,
 };
+
+fn usable() -> Hello {
+    Hello::new(&device(), &identity())
+}
 
 #[test]
 fn every_message_round_trips() {
-    let hello = Hello::for_device(&device());
     let messages = [
-        Message::Hello(hello),
+        Message::Hello(usable()),
         Message::Ready,
         Message::Refused(Refusal::Rights.raw()),
         Message::Refused(77),
@@ -31,6 +35,29 @@ fn every_message_round_trips() {
 }
 
 #[test]
+fn hello_offsets_are_the_specifications() {
+    let offsets = [
+        hello::TYPE,
+        hello::LENGTH,
+        hello::VERSION,
+        hello::QUEUES,
+        hello::BLOCK_SIZE,
+        hello::CAPACITY,
+        hello::MAX_SECTORS,
+        hello::DEVICE_FLAGS,
+        hello::DATA_VMO_SIZE,
+        hello::LOCATION,
+        hello::SERIAL,
+        hello::NAME,
+    ];
+    assert_eq!(
+        offsets,
+        [0, 4, 8, 10, 12, 16, 24, 28, 32, 40, 44, 64],
+        "HELLO offsets"
+    );
+}
+
+#[test]
 fn hello_is_laid_out_as_specified() {
     let hello = Hello {
         version: 1,
@@ -40,12 +67,15 @@ fn hello_is_laid_out_as_specified() {
         max_sectors: 0x99AA,
         device_flags: 0b101,
         data_vmo_size: 0x0102_0304_0506_0708,
+        location: 0x0001_0318,
+        serial: *b"0123456789abcdefghij",
+        name: *b"vdab\0\0\0\0",
     };
     let encoded = Message::Hello(hello).encode();
     let bytes = encoded.as_bytes();
-    assert_eq!(bytes.len(), 40, "HELLO is 40 bytes");
+    assert_eq!(bytes.len(), 72, "HELLO is 72 bytes");
     assert_eq!(bytes[0..4], 1_u32.to_le_bytes(), "type");
-    assert_eq!(bytes[4..8], 40_u32.to_le_bytes(), "length");
+    assert_eq!(bytes[4..8], 72_u32.to_le_bytes(), "length");
     assert_eq!(bytes[8..10], 1_u16.to_le_bytes(), "version");
     assert_eq!(bytes[10..12], 1_u16.to_le_bytes(), "queues");
     assert_eq!(bytes[12..16], 4096_u32.to_le_bytes(), "block_size");
@@ -65,6 +95,13 @@ fn hello_is_laid_out_as_specified() {
         hello.data_vmo_size.to_le_bytes(),
         "data_vmo_size"
     );
+    assert_eq!(
+        bytes[40..44],
+        [0x18, 0x03, 0x01, 0x00],
+        "location, little-endian"
+    );
+    assert_eq!(&bytes[44..64], b"0123456789abcdefghij", "serial");
+    assert_eq!(&bytes[64..72], b"vdab\0\0\0\0", "name");
     assert_eq!(
         Message::Hello(hello).handles(),
         3,
@@ -92,15 +129,18 @@ fn the_short_messages_are_laid_out_as_specified() {
 
 #[test]
 fn bytes_that_are_not_a_message_are_malformed() {
-    let hello = Message::Hello(Hello::for_device(&device())).encode();
-    let mut short_hello = hello.as_bytes()[..39].to_vec();
-    short_hello[4..8].copy_from_slice(&39_u32.to_le_bytes());
-    let cases: [(&[u8], MessageError); 5] = [
+    let hello = Message::Hello(usable()).encode();
+    let mut short_hello = hello.as_bytes()[..71].to_vec();
+    short_hello[4..8].copy_from_slice(&71_u32.to_le_bytes());
+    let mut old_hello = hello.as_bytes()[..40].to_vec();
+    old_hello[4..8].copy_from_slice(&40_u32.to_le_bytes());
+    let cases: [(&[u8], MessageError); 6] = [
         (&[1, 0, 0], MessageError::Short),
         (&[9, 0, 0, 0, 8, 0, 0, 0], MessageError::UnknownType(9)),
         (&[2, 0, 0, 0, 12, 0, 0, 0], MessageError::Length),
         (&[2, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0], MessageError::Length),
         (&short_hello, MessageError::Length),
+        (&old_hello, MessageError::Length),
     ];
     for (bytes, error) in cases {
         assert_eq!(Message::decode(bytes), Err(error), "{bytes:?}");
@@ -110,11 +150,11 @@ fn bytes_that_are_not_a_message_are_malformed() {
 
 #[test]
 fn a_hello_for_another_version_is_refused_for_its_version_whatever_its_length() {
-    let mut hello = Hello::for_device(&device());
+    let mut hello = usable();
     hello.version = 2;
     let mut bytes: Vec<u8> = Message::Hello(hello).encode().as_bytes().to_vec();
     bytes.extend_from_slice(&[0; 8]);
-    bytes[4..8].copy_from_slice(&48_u32.to_le_bytes());
+    bytes[4..8].copy_from_slice(&80_u32.to_le_bytes());
     assert_eq!(
         Message::decode(&bytes),
         Err(MessageError::Version(2)),
@@ -135,7 +175,7 @@ fn a_hello_for_another_version_is_refused_for_its_version_whatever_its_length() 
 #[test]
 fn hello_is_refused_unless_it_announces_exactly_one_queue() {
     for queues in [0, 2, u16::MAX] {
-        let mut hello = Hello::for_device(&device());
+        let mut hello = usable();
         hello.queues = queues;
         assert_eq!(
             hello.validate(&HELLO_RIGHTS),
@@ -146,9 +186,25 @@ fn hello_is_refused_unless_it_announces_exactly_one_queue() {
 }
 
 #[test]
+fn an_accepted_hello_describes_the_device_and_the_disk() {
+    let accepted = Accepted {
+        device: device(),
+        identity: identity(),
+    };
+    assert_eq!(usable().validate(&HELLO_RIGHTS), Ok(accepted), "accepted");
+    let mut silent = usable();
+    silent.serial = [0; 20];
+    let identity = silent.validate(&HELLO_RIGHTS).expect("accepted").identity;
+    assert_eq!(
+        identity.serial, [0; 20],
+        "a device that did not answer GET_ID"
+    );
+}
+
+#[test]
 fn hello_handles_must_carry_exactly_the_specified_rights() {
-    let hello = Hello::for_device(&device());
-    assert_eq!(hello.validate(&HELLO_RIGHTS), Ok(device()), "exact rights");
+    let hello = usable();
+    assert!(hello.validate(&HELLO_RIGHTS).is_ok(), "exact rights");
     assert!(
         !VMO_RIGHTS.contains(Rights::DUPLICATE) && !VMO_RIGHTS.contains(Rights::TRANSFER),
         "a VMO handed to the kernel can be given to nobody else"
@@ -206,7 +262,7 @@ fn hello_handles_must_carry_exactly_the_specified_rights() {
 
 #[test]
 fn hello_with_an_unusable_device_is_refused() {
-    let usable = Hello::for_device(&device());
+    let usable = usable();
     let cases = [
         Hello {
             block_size: 256,
@@ -239,6 +295,45 @@ fn hello_with_an_unusable_device_is_refused() {
 }
 
 #[test]
+fn hello_with_a_malformed_name_is_refused() {
+    let names: [&[u8; 8]; 12] = [
+        b"\0\0\0\0\0\0\0\0",
+        b"vd\0\0\0\0\0\0",
+        b"vda\0\0\0\0x",
+        b"vda\0b\0\0\0",
+        b"vdaaaa\0\0",
+        b"vdA\0\0\0\0\0",
+        b"vd1\0\0\0\0\0",
+        b"vd{\0\0\0\0\0",
+        b"vd`\0\0\0\0\0",
+        b"sda\0\0\0\0\0",
+        b"VDA\0\0\0\0\0",
+        b"vda     ",
+    ];
+    for name in names {
+        let hello = Hello {
+            name: *name,
+            ..usable()
+        };
+        assert_eq!(
+            hello.validate(&HELLO_RIGHTS),
+            Err(Refusal::Name),
+            "{name:?}"
+        );
+    }
+    let device_first = Hello {
+        name: [0; 8],
+        max_sectors: 0,
+        ..usable()
+    };
+    assert_eq!(
+        device_first.validate(&HELLO_RIGHTS),
+        Err(Refusal::Device),
+        "the device description is checked before the name"
+    );
+}
+
+#[test]
 fn refusal_reasons_round_trip() {
     let all = [
         Refusal::Version,
@@ -247,8 +342,12 @@ fn refusal_reasons_round_trip() {
         Refusal::Rights,
         Refusal::Malformed,
         Refusal::Device,
+        Refusal::Name,
+        Refusal::NameInUse,
+        Refusal::LocationInUse,
     ];
-    for refusal in all {
+    for (raw, refusal) in (1..).zip(all) {
+        assert_eq!(refusal.raw(), raw, "{refusal:?} is numbered in order");
         assert_eq!(
             Refusal::from_raw(refusal.raw()),
             Some(refusal),
@@ -256,5 +355,5 @@ fn refusal_reasons_round_trip() {
         );
     }
     assert_eq!(Refusal::from_raw(0), None, "zero names nothing");
-    assert_eq!(Refusal::from_raw(7), None, "past the last");
+    assert_eq!(Refusal::from_raw(10), None, "past the last");
 }
