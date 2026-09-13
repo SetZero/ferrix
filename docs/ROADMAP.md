@@ -1561,7 +1561,14 @@ at the same point. So `devmgr` hears of a driver's death only after the
 driver's pins have been given back or kept. Until `process_create` hands them
 out, only the object check makes process handles. It watches a process through
 a port and directly, sees a channel the process held close before the packet
-arrives, and sees the process freed while the handle is still open.
+arrives, and sees the process freed while the handle is still open. A program
+that dies of its own fault is heard the same way: the kill a user-mode fault
+forces ran inside the trap with interrupts masked, where ending a process may
+not run, until the reverse map's first boot check to end a child by `SIGSEGV`
+stopped the kernel on it. The trap now opens interrupts while it forces the
+signal, as the way back to user mode already did, and the object check runs a
+program that writes through a null pointer on every architecture and requires
+`128 + SIGSEGV`, the `TERMINATED` packet, and the process freed.
 
 **Left for later stages**, none of it on the exit criterion's path:
 

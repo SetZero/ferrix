@@ -172,6 +172,30 @@ pub(crate) const USER_TEST_STATUS: i32 = 42;
 /// Two instructions, checked against the host's disassembler.
 pub(crate) const USER_ARGUMENT_PROGRAM: &[u8] = &[0xc8, 0x0b, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4];
 
+/// A program that writes through a null pointer, and exits with 98 if that did
+/// not fault.
+///
+/// For the check that a program ended by its own fault is ended, heard by
+/// whoever watches it, and freed: a kill forced from a trap, which has to run
+/// with interrupts open.
+///
+/// ```text
+///   mov x0, #0
+///   str x0, [x0]    ; SIGSEGV
+///   mov x8, #94     ; exit_group
+///   mov x0, #98
+///   svc #0
+/// ```
+///
+/// Assembled by rustc's LLVM and read back out of the object file.
+pub(crate) const USER_FAULT_PROGRAM: &[u8] = &[
+    0x00, 0x00, 0x80, 0xd2, // mov  x0, #0
+    0x00, 0x00, 0x00, 0xf9, // str  x0, [x0]
+    0xc8, 0x0b, 0x80, 0xd2, // mov  x8, #94
+    0x40, 0x0c, 0x80, 0xd2, // mov  x0, #98
+    0x01, 0x00, 0x00, 0xd4, // svc  #0
+];
+
 /// A program that forks, has its child exit with 23, waits for it, and exits
 /// with the child's exit code plus one: 24 when `fork`, the child's copy of
 /// its parent's registers and `wait4`'s status word are all right, 99 when

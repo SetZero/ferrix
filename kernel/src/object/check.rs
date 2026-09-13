@@ -176,6 +176,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_a_long_chain_of_jobs_is_freed_without_recursion()?;
     check_a_port_wait_is_woken_by_a_message(&mut after)?;
     check_two_programs_talk_over_a_channel(&mut after)?;
+    check_a_program_ended_by_its_fault_is_heard_and_freed(&mut after)?;
 
     Ok(Report {
         messages: counter.messages,
@@ -187,6 +188,105 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         killed: after.killed,
         exchanged: after.exchanged,
     })
+}
+
+/// A program that dies of its own fault is ended by it, heard by whoever
+/// watches it, and freed.
+///
+/// A fault from user mode arrives in a trap, and the kill it forces ends the
+/// process there: its handles and descriptors close, what they held is freed,
+/// and its watchers fire, none of which may run with interrupts masked. Nothing
+/// else in the boot test ends a program that way, which is how a kill run from
+/// the trap with interrupts masked went unseen until a reverse-map check made a
+/// child write through a read-only page. The program here writes through a null
+/// pointer, which faults alike on every architecture, and has to end with
+/// `128 + SIGSEGV`; the watch on its handle has to queue `TERMINATED`; and once
+/// the reaper has run, nothing may keep the process.
+fn check_a_program_ended_by_its_fault_is_heard_and_freed(
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    const SEGV_STATUS: i32 = 128 + ferrix_linux_abi::types::SIGSEGV as i32;
+    const WATCH_KEY: u64 = 61;
+
+    if arch::USER_FAULT_PROGRAM.is_empty() {
+        return Ok(());
+    }
+    let class = if size_of::<usize>() == 8 {
+        Class::Elf64
+    } else {
+        Class::Elf32
+    };
+    let file = image::build_with(
+        class,
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_FAULT_PROGRAM,
+    );
+    let faulting = process::load(
+        &file,
+        &[b"/fault"],
+        &[],
+        [0x3b; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that faults could not be loaded")?;
+
+    let watcher = Side::new()?;
+    let handle = watcher
+        .process
+        .with_handles(|table| {
+            table.insert(Object::Process(ProcessRef::new(&faulting)), Rights::PROCESS)
+        })
+        .map_err(|_| "no room for a handle to a program that faults")?;
+    let port = watcher.handle(nr::PORT_CREATE, &[], "port_create failed")?;
+    watcher.put(KEY, &WATCH_KEY.to_ne_bytes())?;
+    let _ = watcher
+        .call(
+            nr::OBJECT_WAIT_ASYNC,
+            &[
+                reg(handle),
+                reg(port),
+                u64::from(Signals::TERMINATED.0),
+                KEY,
+            ],
+        )
+        .map_err(|_| "watching a program that faults failed")?;
+
+    let task =
+        process::start(&faulting).map_err(|_| "a program that faults could not be started")?;
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    let status = faulting.wait_for_exit(deadline);
+    if status != Some(SEGV_STATUS) {
+        crate::console::println!(
+            "  fault    a program writing through a null pointer ended with {status:?}"
+        );
+        return Err("a program writing through a null pointer did not end with SIGSEGV");
+    }
+
+    // The watch fires after the process has closed its handles, a little
+    // after the status above was readable: waited for, not taken at once.
+    watcher.put(DEADLINE, &deadline.to_ne_bytes())?;
+    let _ = watcher
+        .call(nr::PORT_WAIT, &[reg(port), DEADLINE, PACKET_AT])
+        .map_err(|_| "a program ended by its fault did not fire the watch on it")?;
+    let (key, kind, signals, _, _) = read_packet(&watcher)?;
+    if key != WATCH_KEY
+        || kind != PACKET_SIGNAL
+        || !Signals(signals).intersects(Signals::TERMINATED)
+    {
+        return Err("the packet for a program ended by its fault did not say what fired it");
+    }
+    counter.packets += 1;
+
+    task_stops(&task, deadline)?;
+    let alive = Arc::downgrade(&faulting);
+    drop(task);
+    drop(faulting);
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
+    if alive.upgrade().is_some() {
+        return Err("a program ended by its fault was never freed");
+    }
+    watcher.close_everything();
+    Ok(())
 }
 
 /// A native number reaches the native dispatcher and no Linux handler.
