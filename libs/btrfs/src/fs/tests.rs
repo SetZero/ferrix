@@ -215,21 +215,37 @@ fn check_listing(
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads every file of a real image; plain cargo test covers it, Miri runs the small image tests"
+)]
 fn the_uncompressed_image_reads_back_exactly() {
     check_image("none");
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads every file of a real image; plain cargo test covers it, Miri runs the small image tests"
+)]
 fn the_zlib_image_reads_back_exactly() {
     check_image("zlib");
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads every file of a real image; plain cargo test covers it, Miri runs the small image tests"
+)]
 fn the_lzo_image_reads_back_exactly() {
     check_image("lzo");
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads every file of a real image; plain cargo test covers it, Miri runs the small image tests"
+)]
 fn the_zstd_image_reads_back_exactly() {
     check_image("zstd");
 }

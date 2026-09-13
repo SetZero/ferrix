@@ -87,13 +87,20 @@ impl Device for PackedDevice {
         {
             return Err(BtrfsError::DeviceRead { physical });
         }
-        for (i, byte) in buf.iter_mut().enumerate() {
-            let at = physical + i as u64;
+        // A block at a time: a per-byte loop made every image test crawl,
+        // and under Miri it never finished.
+        let mut done = 0;
+        while done < buf.len() {
+            let at = physical + done as u64;
             let base = at - at % BLOCK as u64;
-            *byte = self
-                .blocks
-                .get(&base)
-                .map_or(0, |block| block[(at - base) as usize]);
+            let within = (at - base) as usize;
+            let len = (BLOCK - within).min(buf.len() - done);
+            let dest = &mut buf[done..done + len];
+            match self.blocks.get(&base) {
+                Some(block) => dest.copy_from_slice(&block[within..within + len]),
+                None => dest.fill(0),
+            }
+            done += len;
         }
         Ok(())
     }
@@ -138,6 +145,10 @@ fn manifest_entries() -> usize {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "walks all four real images key by key; plain cargo test covers it"
+)]
 fn every_image_mounts_and_finds_its_fs_tree() {
     for (name, packed) in IMAGES {
         with_volume(packed, |_, volume, _| {
@@ -166,6 +177,10 @@ fn every_image_mounts_and_finds_its_fs_tree() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "walks all four real images key by key; plain cargo test covers it"
+)]
 fn a_walk_visits_every_key_once_in_order() {
     for (name, packed) in IMAGES {
         with_volume(packed, |device, volume, node| {
@@ -209,6 +224,10 @@ fn a_walk_stops_when_the_visitor_breaks() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "walks all four real images key by key; plain cargo test covers it"
+)]
 fn the_last_key_at_or_before_is_found_across_leaf_boundaries() {
     for (name, packed) in IMAGES {
         with_volume(packed, |device, volume, node| {

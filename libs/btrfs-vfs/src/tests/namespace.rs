@@ -74,6 +74,10 @@ fn under_mnt(path: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads every file of a real image; plain cargo test covers it, Miri runs the small image tests"
+)]
 fn every_path_reads_back_through_open_and_read() {
     let (ns, ctx) = mounted("zstd");
     for (path, expected) in &manifest() {

@@ -217,21 +217,37 @@ fn check_image(name: &str) {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads every file of a real image; plain cargo test covers it, Miri runs the small image tests"
+)]
 fn the_uncompressed_image_mounts_and_reads_back() {
     check_image("none");
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads every file of a real image; plain cargo test covers it, Miri runs the small image tests"
+)]
 fn the_zlib_image_mounts_and_reads_back() {
     check_image("zlib");
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads every file of a real image; plain cargo test covers it, Miri runs the small image tests"
+)]
 fn the_lzo_image_mounts_and_reads_back() {
     check_image("lzo");
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads every file of a real image; plain cargo test covers it, Miri runs the small image tests"
+)]
 fn the_zstd_image_mounts_and_reads_back() {
     check_image("zstd");
 }
@@ -312,6 +328,10 @@ fn inodes_report_the_mount_device_and_their_own_numbers() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads every file of a real image; plain cargo test covers it, Miri runs the small image tests"
+)]
 fn concurrent_readers_of_one_compressed_file_each_get_its_bytes() {
     let fs = mount("zstd");
     let expected = read_all(&resolve(&fs, b"big.txt"));
