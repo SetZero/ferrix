@@ -39,7 +39,8 @@ pub(crate) use aarch64::{
     mask_interrupt, msi_allocate, prepare_stack, prepare_user_root, read_console_byte, report_trap,
     reset_user_state, restore_user_state, resume_user, save_user_state, send_ipi_to_others,
     service_interrupts, set_cpu_local, shutdown, switch_to, system_call, timer_arm, timer_disarm,
-    timer_irq, uninstall_user_root, unmask_interrupt, wait_for_interrupt, wait_for_work,
+    timer_irq, uninstall_user_root, unmask_interrupt, user_hwcaps, wait_for_interrupt,
+    wait_for_work,
 };
 #[cfg(target_arch = "arm")]
 pub(crate) use armv7a::{
@@ -53,7 +54,8 @@ pub(crate) use armv7a::{
     mask_interrupt, msi_allocate, prepare_stack, prepare_user_root, read_console_byte, report_trap,
     reset_user_state, restore_user_state, resume_user, save_user_state, send_ipi_to_others,
     service_interrupts, set_cpu_local, shutdown, switch_to, system_call, timer_arm, timer_disarm,
-    timer_irq, uninstall_user_root, unmask_interrupt, wait_for_interrupt, wait_for_work,
+    timer_irq, uninstall_user_root, unmask_interrupt, user_hwcaps, wait_for_interrupt,
+    wait_for_work,
 };
 // Signal delivery: the register context the way back to user mode loads, the
 // architecture's signal frame, and the signal a user-mode fault becomes.
@@ -79,7 +81,8 @@ pub(crate) use x86_64::{
     mask_interrupt, msi_allocate, prepare_stack, prepare_user_root, read_console_byte, report_trap,
     reset_user_state, restore_user_state, resume_user, save_user_state, send_ipi_to_others,
     service_interrupts, set_cpu_local, shutdown, switch_to, system_call, timer_arm, timer_disarm,
-    timer_irq, uninstall_user_root, unmask_interrupt, wait_for_interrupt, wait_for_work,
+    timer_irq, uninstall_user_root, unmask_interrupt, user_hwcaps, wait_for_interrupt,
+    wait_for_work,
 };
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{

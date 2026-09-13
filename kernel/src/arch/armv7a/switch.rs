@@ -284,6 +284,12 @@ ferrix_fpu_features:
     vmrs   r0, mvfr0
     bx     lr
 
+// u32 ferrix_fpu_features1(void): MVFR1
+.globl ferrix_fpu_features1
+ferrix_fpu_features1:
+    vmrs   r0, mvfr1
+    bx     lr
+
 // void ferrix_user_fpu_save(UserState *state, u32 all_32)
 .globl ferrix_user_fpu_save
 ferrix_user_fpu_save:
@@ -319,6 +325,8 @@ unsafe extern "C" {
     fn ferrix_fpu_enable();
     /// Read `MVFR0`.
     fn ferrix_fpu_features() -> u32;
+    /// Read `MVFR1`.
+    fn ferrix_fpu_features1() -> u32;
     /// Store this processor's floating-point registers into `state`.
     fn ferrix_user_fpu_save(state: *mut UserState, all_32: u32);
     /// Load `state`'s floating-point registers onto this processor.
@@ -345,6 +353,16 @@ pub(super) unsafe fn fpu_enable() {
 pub(super) unsafe fn fpu_features() -> u32 {
     // SAFETY: the caller guarantees access; the read has no side effects.
     unsafe { ferrix_fpu_features() }
+}
+
+/// `MVFR1`, the FPU's second feature register.
+///
+/// # Safety
+///
+/// As [`fpu_enable`].
+pub(super) unsafe fn fpu_features1() -> u32 {
+    // SAFETY: the caller guarantees access; the read has no side effects.
+    unsafe { ferrix_fpu_features1() }
 }
 
 /// Store the program state this processor holds into `state`.

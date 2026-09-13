@@ -21,8 +21,8 @@ use alloc::vec::Vec;
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
-    AT_CLKTCK, AT_EGID, AT_EMPTY_PATH, AT_ENTRY, AT_EUID, AT_FDCWD, AT_GID, AT_PAGESZ, AT_PHDR,
-    AT_PHENT, AT_PHNUM, AT_SECURE, AT_SYMLINK_NOFOLLOW, AT_UID,
+    AT_CLKTCK, AT_EGID, AT_EMPTY_PATH, AT_ENTRY, AT_EUID, AT_FDCWD, AT_GID, AT_HWCAP, AT_HWCAP2,
+    AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM, AT_SECURE, AT_SYMLINK_NOFOLLOW, AT_UID,
 };
 use ferrix_ustack::{Spec, Width};
 use ferrix_vfs::{FileType, OpenFile, OpenFlags};
@@ -209,7 +209,12 @@ fn populate(
     // reach user memory is through the copy layer, one page at a time.
     let mut scratch = vec![0_u8; STARTUP_BYTES];
     let base = top - STARTUP_BYTES as u64;
+    // What the processor can do. Not optional on Arm: musl's ARMv7-A `setjmp`
+    // saves the callee-saved double registers only when told there is a VFP.
+    let (hwcap, hwcap2) = arch::user_hwcaps();
     let auxv = [
+        (AT_HWCAP, hwcap),
+        (AT_HWCAP2, hwcap2),
         (AT_PAGESZ, PAGE_SIZE),
         (AT_PHDR, loaded.phdr),
         (AT_PHENT, loaded.phent),

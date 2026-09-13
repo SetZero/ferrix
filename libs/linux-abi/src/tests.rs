@@ -2003,3 +2003,194 @@ fn filesystem_control_calls_match_the_kernel_tables() {
         assert_eq!(from_arm(eabi), Some(call), "ARMv7-A {eabi}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// AT_HWCAP
+//
+// The register values are QEMU's reset values for the cores the boot test
+// runs (`target/arm/tcg/cpu32.c` and `target/arm/cpu64.c`), so each expected
+// set is what a program on that machine should be told.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hwcap_bits_match_the_uapi_headers() {
+    use crate::hwcap::{aarch64 as a64, arm};
+    // From QEMU's `linux-user/elfload.c`, which transcribes
+    // `arch/arm/include/uapi/asm/hwcap.h` and its arm64 counterpart.
+    for (bit, shift, name) in [
+        (arm::HWCAP_HALF, 1, "HALF"),
+        (arm::HWCAP_THUMB, 2, "THUMB"),
+        (arm::HWCAP_FAST_MULT, 4, "FAST_MULT"),
+        (arm::HWCAP_VFP, 6, "VFP"),
+        (arm::HWCAP_EDSP, 7, "EDSP"),
+        (arm::HWCAP_NEON, 12, "NEON"),
+        (arm::HWCAP_VFPV3, 13, "VFPv3"),
+        (arm::HWCAP_VFPV3D16, 14, "VFPv3D16"),
+        (arm::HWCAP_TLS, 15, "TLS"),
+        (arm::HWCAP_VFPV4, 16, "VFPv4"),
+        (arm::HWCAP_IDIVA, 17, "IDIVA"),
+        (arm::HWCAP_IDIVT, 18, "IDIVT"),
+        (arm::HWCAP_VFPD32, 19, "VFPD32"),
+        (arm::HWCAP_LPAE, 20, "LPAE"),
+    ] {
+        assert_eq!(bit, 1 << shift, "arm HWCAP_{name}");
+    }
+    for (bit, shift, name) in [
+        (a64::HWCAP_FP, 0, "FP"),
+        (a64::HWCAP_ASIMD, 1, "ASIMD"),
+        (a64::HWCAP_AES, 3, "AES"),
+        (a64::HWCAP_PMULL, 4, "PMULL"),
+        (a64::HWCAP_SHA1, 5, "SHA1"),
+        (a64::HWCAP_SHA2, 6, "SHA2"),
+        (a64::HWCAP_CRC32, 7, "CRC32"),
+        (a64::HWCAP_ATOMICS, 8, "ATOMICS"),
+        (a64::HWCAP_FPHP, 9, "FPHP"),
+        (a64::HWCAP_ASIMDHP, 10, "ASIMDHP"),
+        (a64::HWCAP_ASIMDRDM, 12, "ASIMDRDM"),
+        (a64::HWCAP_JSCVT, 13, "JSCVT"),
+        (a64::HWCAP_FCMA, 14, "FCMA"),
+        (a64::HWCAP_LRCPC, 15, "LRCPC"),
+        (a64::HWCAP_DCPOP, 16, "DCPOP"),
+        (a64::HWCAP_SHA3, 17, "SHA3"),
+        (a64::HWCAP_SM3, 18, "SM3"),
+        (a64::HWCAP_SM4, 19, "SM4"),
+        (a64::HWCAP_ASIMDDP, 20, "ASIMDDP"),
+        (a64::HWCAP_SHA512, 21, "SHA512"),
+        (a64::HWCAP_ASIMDFHM, 23, "ASIMDFHM"),
+        (a64::HWCAP_ILRCPC, 26, "ILRCPC"),
+        (a64::HWCAP_FLAGM, 27, "FLAGM"),
+        (a64::HWCAP_SB, 29, "SB"),
+        (a64::HWCAP2_DCPODP, 0, "2_DCPODP"),
+        (a64::HWCAP2_FLAGM2, 7, "2_FLAGM2"),
+        (a64::HWCAP2_FRINT, 8, "2_FRINT"),
+        (a64::HWCAP2_I8MM, 13, "2_I8MM"),
+        (a64::HWCAP2_BF16, 14, "2_BF16"),
+        (a64::HWCAP2_RNG, 16, "2_RNG"),
+    ] {
+        assert_eq!(bit, 1 << shift, "arm64 HWCAP{name}");
+    }
+}
+
+#[test]
+fn a_cortex_a15_is_told_about_its_fpu_neon_and_divide() {
+    use crate::hwcap::arm::{
+        HWCAP_EDSP, HWCAP_FAST_MULT, HWCAP_HALF, HWCAP_IDIVA, HWCAP_IDIVT, HWCAP_LPAE, HWCAP_NEON,
+        HWCAP_THUMB, HWCAP_TLS, HWCAP_VFP, HWCAP_VFPD32, HWCAP_VFPV3, HWCAP_VFPV4, IdRegisters,
+        hwcap,
+    };
+    // QEMU's cortex-a15: MVFR0 0x10110222, MVFR1 0x11111111, ID_ISAR0
+    // 0x02101110, ID_MMFR0 0x10201105. QEMU's cortex-a7 differs only in
+    // ID_MMFR0 (0x10101105), which leaves VMSA at 5.
+    let ids = IdRegisters {
+        id_isar0: 0x0210_1110,
+        id_mmfr0: 0x1020_1105,
+        mvfr0: 0x1011_0222,
+        mvfr1: 0x1111_1111,
+    };
+    let want = HWCAP_HALF
+        | HWCAP_THUMB
+        | HWCAP_FAST_MULT
+        | HWCAP_EDSP
+        | HWCAP_TLS
+        | HWCAP_VFP
+        | HWCAP_VFPV3
+        | HWCAP_VFPD32
+        | HWCAP_VFPV4
+        | HWCAP_NEON
+        | HWCAP_IDIVA
+        | HWCAP_IDIVT
+        | HWCAP_LPAE;
+    assert_eq!(hwcap(ids), want);
+    let a7 = IdRegisters {
+        id_mmfr0: 0x1010_1105,
+        ..ids
+    };
+    assert_eq!(hwcap(a7), want);
+}
+
+#[test]
+fn an_arm_core_without_an_fpu_is_told_about_none() {
+    use crate::hwcap::arm::{
+        HWCAP_NEON, HWCAP_TLS, HWCAP_VFP, HWCAP_VFPD32, HWCAP_VFPV3, HWCAP_VFPV3D16, HWCAP_VFPV4,
+        IdRegisters, hwcap,
+    };
+    let ids = IdRegisters {
+        id_isar0: 0x0210_1110,
+        id_mmfr0: 0x1020_1105,
+        mvfr0: 0,
+        mvfr1: 0,
+    };
+    let fpu = HWCAP_VFP | HWCAP_VFPV3 | HWCAP_VFPV3D16 | HWCAP_VFPD32 | HWCAP_VFPV4 | HWCAP_NEON;
+    assert_eq!(hwcap(ids) & fpu, 0);
+    assert_ne!(
+        hwcap(ids) & HWCAP_TLS,
+        0,
+        "TPIDRURO is ARMv7-A's, FPU or not"
+    );
+}
+
+#[test]
+fn a_sixteen_register_vfpv3_is_d16_and_not_d32() {
+    use crate::hwcap::arm::{
+        HWCAP_IDIVA, HWCAP_NEON, HWCAP_VFP, HWCAP_VFPD32, HWCAP_VFPV3, HWCAP_VFPV3D16, HWCAP_VFPV4,
+        IdRegisters, hwcap,
+    };
+    // A VFPv3-D16 without Advanced SIMD: SIMDReg 1, FPSP 2, FPDP 2.
+    let ids = IdRegisters {
+        mvfr0: 0x1011_0221,
+        mvfr1: 0x0000_0011,
+        ..IdRegisters::default()
+    };
+    let bits = hwcap(ids);
+    assert_eq!(
+        bits & (HWCAP_VFP | HWCAP_VFPV3 | HWCAP_VFPV3D16),
+        HWCAP_VFP | HWCAP_VFPV3 | HWCAP_VFPV3D16
+    );
+    assert_eq!(
+        bits & (HWCAP_VFPD32 | HWCAP_NEON | HWCAP_VFPV4 | HWCAP_IDIVA),
+        0
+    );
+}
+
+#[test]
+fn a_cortex_a57_is_told_about_its_fp_simd_and_crypto() {
+    use crate::hwcap::aarch64::{
+        HWCAP_AES, HWCAP_ASIMD, HWCAP_CRC32, HWCAP_FP, HWCAP_PMULL, HWCAP_SHA1, HWCAP_SHA2,
+        IdRegisters, hwcap, hwcap2,
+    };
+    // QEMU's cortex-a57: ID_AA64PFR0 0x2222, ID_AA64ISAR0 0x11120, ISAR1 0.
+    let ids = IdRegisters {
+        pfr0: 0x2222,
+        isar0: 0x0001_1120,
+        isar1: 0,
+    };
+    assert_eq!(
+        hwcap(ids),
+        HWCAP_FP | HWCAP_ASIMD | HWCAP_AES | HWCAP_PMULL | HWCAP_SHA1 | HWCAP_SHA2 | HWCAP_CRC32
+    );
+    assert_eq!(hwcap2(ids), 0);
+}
+
+#[test]
+fn an_aarch64_core_without_fp_and_with_the_later_fields_is_told_exactly() {
+    use crate::hwcap::aarch64::{
+        HWCAP_DCPOP, HWCAP_FLAGM, HWCAP_ILRCPC, HWCAP_LRCPC, HWCAP_SHA2, HWCAP_SHA512, HWCAP2_BF16,
+        HWCAP2_DCPODP, HWCAP2_FLAGM2, HWCAP2_FRINT, HWCAP2_I8MM, HWCAP2_RNG, IdRegisters, hwcap,
+        hwcap2,
+    };
+    // FP and AdvSIMD 0xF: absent. ID_AA64ISAR0: SHA2 2, TS 2, RNDR 1.
+    // ID_AA64ISAR1: DPB 2, LRCPC 2, FRINTTS 1, BF16 1, I8MM 1.
+    let ids = IdRegisters {
+        pfr0: 0x00FF_0000,
+        isar0: 0x1020_0000_0000_2000,
+        isar1: 0x0010_1001_0020_0002,
+    };
+    assert_eq!(
+        hwcap(ids),
+        HWCAP_SHA2 | HWCAP_SHA512 | HWCAP_FLAGM | HWCAP_DCPOP | HWCAP_LRCPC | HWCAP_ILRCPC
+    );
+    assert_eq!(
+        hwcap2(ids),
+        HWCAP2_DCPODP | HWCAP2_FLAGM2 | HWCAP2_RNG | HWCAP2_FRINT | HWCAP2_BF16 | HWCAP2_I8MM
+    );
+}

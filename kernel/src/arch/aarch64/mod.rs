@@ -375,6 +375,20 @@ pub(crate) fn read_console_byte() -> Option<u8> {
     None
 }
 
+/// `AT_HWCAP` and `AT_HWCAP2` for a program started on this machine: what the
+/// core's identification registers say it has, in the bits
+/// `arch/arm64/include/uapi/asm/hwcap.h` numbers, and only the features a
+/// program can use without more from the kernel. See `ferrix_linux_abi::hwcap`.
+pub(crate) fn user_hwcaps() -> (u64, u64) {
+    use ferrix_linux_abi::hwcap::aarch64::{IdRegisters, hwcap, hwcap2};
+    let ids = IdRegisters {
+        pfr0: cpu::read_id_aa64pfr0(),
+        isar0: cpu::read_id_aa64isar0(),
+        isar1: cpu::read_id_aa64isar1(),
+    };
+    (hwcap(ids), hwcap2(ids))
+}
+
 /// Make a freshly allocated user root usable.
 ///
 /// Nothing to do: the kernel's half is reached through `TTBR1_EL1` and a user root is

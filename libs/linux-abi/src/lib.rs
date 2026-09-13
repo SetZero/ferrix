@@ -3,9 +3,10 @@
 //! Ferrix's native system call interface *is* the Linux one, because the
 //! programs it is meant to run — static-musl binaries, ultimately `rustc` —
 //! were linked against that interface and cannot be asked to change. This
-//! crate is the single written-down copy of it. Nothing here executes: it is
-//! constants and `repr(C)` layouts, so it is `no_std`, has no dependencies,
-//! forbids `unsafe`, and cannot panic.
+//! crate is the single written-down copy of it. It is constants, `repr(C)`
+//! layouts and pure functions of them -- the number tables, and [`hwcap`]'s
+//! reading of identification registers into `AT_HWCAP` -- so it is `no_std`,
+//! has no dependencies, forbids `unsafe`, and cannot panic.
 //!
 //! # Why one crate rather than a module in the kernel
 //!
@@ -37,6 +38,7 @@
 #![forbid(unsafe_code)]
 
 pub mod errno;
+pub mod hwcap;
 pub mod nr;
 pub mod types;
 

@@ -221,6 +221,10 @@ pub(crate) fn enable_user_fpu() {
     // sixteen, two for thirty-two.
     // SAFETY: as above; a read of an identification register.
     let features = unsafe { super::switch::fpu_features() };
+    // SAFETY: as above.
+    let more = unsafe { super::switch::fpu_features1() };
+    USER_MVFR0.store(features, core::sync::atomic::Ordering::Relaxed);
+    USER_MVFR1.store(more, core::sync::atomic::Ordering::Relaxed);
     let doubles = match features & 0xF {
         1 => 16,
         2 => 32,
@@ -236,6 +240,42 @@ static USER_FPU_DOUBLES: core::sync::atomic::AtomicU8 = core::sync::atomic::Atom
 /// How many double registers a program's floating-point state has.
 pub(crate) fn user_fpu_doubles() -> u8 {
     USER_FPU_DOUBLES.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// `MVFR0` as [`enable_user_fpu`] read it; zero with no FPU.
+static USER_MVFR0: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// `MVFR1` as [`enable_user_fpu`] read it; zero with no FPU.
+static USER_MVFR1: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// `MVFR0` and `MVFR1`, the FPU's feature registers, or zeroes with no FPU.
+///
+/// Kept from [`enable_user_fpu`] rather than read again, because reading them
+/// needs the coprocessor access only that function has checked for.
+pub(crate) fn user_fpu_features() -> (u32, u32) {
+    (
+        USER_MVFR0.load(core::sync::atomic::Ordering::Relaxed),
+        USER_MVFR1.load(core::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// Read `ID_ISAR0`, which says whether the core divides in hardware.
+pub(crate) fn read_id_isar0() -> u32 {
+    let value: u32;
+    // SAFETY: reading an identification register has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c0, c2, 0", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// Read `ID_MMFR0`, which says whether the core has LPAE.
+pub(crate) fn read_id_mmfr0() -> u32 {
+    let value: u32;
+    // SAFETY: reading an identification register has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c0, c1, 4", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
 }
 
 /// Read `TPIDRURO`, a program's thread pointer.

@@ -442,6 +442,15 @@ pub(crate) fn read_console_byte() -> Option<u8> {
     console::read_byte()
 }
 
+/// `AT_HWCAP` and `AT_HWCAP2` for a program started on this machine.
+///
+/// Linux reports `CPUID` leaf 1's `EDX` as `AT_HWCAP` on x86-64. `AT_HWCAP2`
+/// carries only `FSGSBASE` and ring-3 `MWAIT`, which are bits the kernel sets
+/// when it has enabled them for user mode, and this one enables neither.
+pub(crate) fn user_hwcaps() -> (u64, u64) {
+    (u64::from(core::arch::x86_64::__cpuid(1).edx), 0)
+}
+
 /// Enter ring 3 for the first time, at `entry` on `stack`. Does not return.
 ///
 /// # Safety

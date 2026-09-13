@@ -834,7 +834,9 @@ handler below directly.
 * **The startup stack.** `libs/ustack` writes `argc`, `argv`, `envp` and the
   auxiliary vector at both pointer widths, and reads them back; its fuzz target
   found that a string containing a NUL built a well-formed image which read back
-  as a different, shorter string.
+  as a different, shorter string. `execve` puts `AT_HWCAP` and `AT_HWCAP2` in it,
+  from the core's own identification registers on both Arm architectures:
+  musl's ARMv7-A `setjmp` saves `d8`-`d15` only when told there is a VFP.
 * **Dispatch.** `kernel/src/syscall/`: `SyscallArgs`, `Outcome` and `dispatch`,
   reached through `arch::decode_syscall`, and total. The boot test puts every
   number in `0..=600` except `exit`, `exit_group`, `pause` and `alarm` through
@@ -1757,7 +1759,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. | 70 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
-| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts. Constants only; nothing executes. Three number tables, one of them 32-bit. | 62 |
+| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts, and which identification register fields grant each Arm `AT_HWCAP` bit. Constants and pure functions of them. Three number tables, one of them 32-bit. | 70 |
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 59 |
@@ -1769,7 +1771,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **698 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **706 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

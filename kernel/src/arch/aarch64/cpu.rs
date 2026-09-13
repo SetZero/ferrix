@@ -404,6 +404,36 @@ pub(crate) fn read_mpidr() -> u64 {
     mpidr
 }
 
+/// `ID_AA64PFR0_EL1`: whether the core has floating point and Advanced SIMD.
+pub(crate) fn read_id_aa64pfr0() -> u64 {
+    let value: u64;
+    // SAFETY: reading an identification register has no side effects.
+    unsafe {
+        asm!("mrs {}, id_aa64pfr0_el1", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// `ID_AA64ISAR0_EL1`: the first instruction set attribute register.
+pub(crate) fn read_id_aa64isar0() -> u64 {
+    let value: u64;
+    // SAFETY: reading an identification register has no side effects.
+    unsafe {
+        asm!("mrs {}, id_aa64isar0_el1", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// `ID_AA64ISAR1_EL1`: the second instruction set attribute register.
+pub(crate) fn read_id_aa64isar1() -> u64 {
+    let value: u64;
+    // SAFETY: reading an identification register has no side effects.
+    unsafe {
+        asm!("mrs {}, id_aa64isar1_el1", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
 /// `CPACR_EL1.FPEN`, both bits: floating point and SIMD do not trap at EL0 or
 /// EL1.
 const CPACR_FPEN_NO_TRAP: u64 = 0b11 << 20;
