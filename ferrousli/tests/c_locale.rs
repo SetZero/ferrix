@@ -1,5 +1,5 @@
-//! The C programs that exercise `locale.h` and `langinfo.h`, and the
-//! multibyte and wide character conversions.
+//! The C programs that exercise `locale.h` and `langinfo.h`, the multibyte
+//! and wide character conversions, and `wctype.h`.
 //!
 //! Each is built with `-fno-builtin`, so the compiler cannot answer a call on
 //! constant arguments itself, and every check reaches the library. Several are
@@ -83,6 +83,11 @@ fn multibyte_conversions_in_c_and_utf8() {
 #[test]
 fn char16_and_char32_conversions() {
     check(&locale("locale/uchar"));
+}
+
+#[test]
+fn wide_classes_case_and_width() {
+    check(&locale("locale/wctype"));
 }
 
 #[test]

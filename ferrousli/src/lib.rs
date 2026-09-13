@@ -74,6 +74,7 @@ pub mod uio;
 pub mod unistd;
 pub mod utsname;
 pub mod wait;
+pub mod wctype;
 
 /// A panic inside the library has nothing to unwind into, because every frame
 /// above it is C. Trapping stops the program at the fault, where a debugger or
