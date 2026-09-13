@@ -890,7 +890,10 @@ handler below directly.
   found that a string containing a NUL built a well-formed image which read back
   as a different, shorter string. `execve` puts `AT_HWCAP` and `AT_HWCAP2` in it,
   from the core's own identification registers on both Arm architectures:
-  musl's ARMv7-A `setjmp` saves `d8`-`d15` only when told there is a VFP.
+  musl's ARMv7-A `setjmp` saves `d8`-`d15` only when told there is a VFP. The
+  bit values are checked against Linux's uapi headers and the fields are read
+  as Linux reads them, signed where Linux reads them signed; `DCPOP` is not
+  reported, because `DC CVAP` traps from EL0 without `SCTLR_EL1.UCI`.
 * **Dispatch.** `kernel/src/syscall/`: `SyscallArgs`, `Outcome` and `dispatch`,
   reached through `arch::decode_syscall`, and total. The boot test puts every
   number in `0..=600` except `exit`, `exit_group`, `pause` and `alarm` through
@@ -2122,7 +2125,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. | 70 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
-| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts, and which identification register fields grant each Arm `AT_HWCAP` bit. Constants and pure functions of them. Three number tables, one of them 32-bit. | 70 |
+| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts, and which identification register fields grant each Arm `AT_HWCAP` bit. Constants and pure functions of them. Three number tables, one of them 32-bit. | 72 |
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 59 |

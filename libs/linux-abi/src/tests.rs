@@ -2159,8 +2159,9 @@ fn locking_readahead_and_ipc_calls_match_the_kernel_tables() {
 #[test]
 fn hwcap_bits_match_the_uapi_headers() {
     use crate::hwcap::{aarch64 as a64, arm};
-    // From QEMU's `linux-user/elfload.c`, which transcribes
-    // `arch/arm/include/uapi/asm/hwcap.h` and its arm64 counterpart.
+    // Linux's `arch/arm/include/uapi/asm/hwcap.h` and
+    // `arch/arm64/include/uapi/asm/hwcap.h`, read at torvalds/linux master on
+    // 2026-09-13.
     for (bit, shift, name) in [
         (arm::HWCAP_HALF, 1, "HALF"),
         (arm::HWCAP_THUMB, 2, "THUMB"),
@@ -2194,7 +2195,6 @@ fn hwcap_bits_match_the_uapi_headers() {
         (a64::HWCAP_JSCVT, 13, "JSCVT"),
         (a64::HWCAP_FCMA, 14, "FCMA"),
         (a64::HWCAP_LRCPC, 15, "LRCPC"),
-        (a64::HWCAP_DCPOP, 16, "DCPOP"),
         (a64::HWCAP_SHA3, 17, "SHA3"),
         (a64::HWCAP_SM3, 18, "SM3"),
         (a64::HWCAP_SM4, 19, "SM4"),
@@ -2204,7 +2204,6 @@ fn hwcap_bits_match_the_uapi_headers() {
         (a64::HWCAP_ILRCPC, 26, "ILRCPC"),
         (a64::HWCAP_FLAGM, 27, "FLAGM"),
         (a64::HWCAP_SB, 29, "SB"),
-        (a64::HWCAP2_DCPODP, 0, "2_DCPODP"),
         (a64::HWCAP2_FLAGM2, 7, "2_FLAGM2"),
         (a64::HWCAP2_FRINT, 8, "2_FRINT"),
         (a64::HWCAP2_I8MM, 13, "2_I8MM"),
@@ -2318,12 +2317,12 @@ fn a_cortex_a57_is_told_about_its_fp_simd_and_crypto() {
 #[test]
 fn an_aarch64_core_without_fp_and_with_the_later_fields_is_told_exactly() {
     use crate::hwcap::aarch64::{
-        HWCAP_DCPOP, HWCAP_FLAGM, HWCAP_ILRCPC, HWCAP_LRCPC, HWCAP_SHA2, HWCAP_SHA512, HWCAP2_BF16,
-        HWCAP2_DCPODP, HWCAP2_FLAGM2, HWCAP2_FRINT, HWCAP2_I8MM, HWCAP2_RNG, IdRegisters, hwcap,
-        hwcap2,
+        HWCAP_FLAGM, HWCAP_ILRCPC, HWCAP_LRCPC, HWCAP_SHA2, HWCAP_SHA512, HWCAP2_BF16,
+        HWCAP2_FLAGM2, HWCAP2_FRINT, HWCAP2_I8MM, HWCAP2_RNG, IdRegisters, hwcap, hwcap2,
     };
     // FP and AdvSIMD 0xF: absent. ID_AA64ISAR0: SHA2 2, TS 2, RNDR 1.
-    // ID_AA64ISAR1: DPB 2, LRCPC 2, FRINTTS 1, BF16 1, I8MM 1.
+    // ID_AA64ISAR1: DPB 2, LRCPC 2, FRINTTS 1, BF16 1, I8MM 1. DPB grants
+    // nothing: see the next test.
     let ids = IdRegisters {
         pfr0: 0x00FF_0000,
         isar0: 0x1020_0000_0000_2000,
@@ -2331,10 +2330,99 @@ fn an_aarch64_core_without_fp_and_with_the_later_fields_is_told_exactly() {
     };
     assert_eq!(
         hwcap(ids),
-        HWCAP_SHA2 | HWCAP_SHA512 | HWCAP_FLAGM | HWCAP_DCPOP | HWCAP_LRCPC | HWCAP_ILRCPC
+        HWCAP_SHA2 | HWCAP_SHA512 | HWCAP_FLAGM | HWCAP_LRCPC | HWCAP_ILRCPC
     );
     assert_eq!(
         hwcap2(ids),
-        HWCAP2_DCPODP | HWCAP2_FLAGM2 | HWCAP2_RNG | HWCAP2_FRINT | HWCAP2_BF16 | HWCAP2_I8MM
+        HWCAP2_FLAGM2 | HWCAP2_RNG | HWCAP2_FRINT | HWCAP2_BF16 | HWCAP2_I8MM
+    );
+}
+
+#[test]
+fn aarch64_fields_are_read_as_linux_reads_them() {
+    use crate::hwcap::aarch64::{
+        HWCAP_ASIMD, HWCAP_ASIMDHP, HWCAP_ATOMICS, HWCAP_FP, HWCAP_FPHP, IdRegisters, hwcap, hwcap2,
+    };
+    // ID_AA64PFR0.FP and .AdvSIMD are signed fields, and Linux's
+    // `feature_matches` compares them signed: 0x8 to 0xE are negative and
+    // grant nothing, not only 0xF.
+    for negative in 0x8..=0xE_u64 {
+        let ids = IdRegisters {
+            pfr0: (negative << 20) | (negative << 16),
+            ..IdRegisters::default()
+        };
+        assert_eq!(
+            hwcap(ids) & (HWCAP_FP | HWCAP_FPHP | HWCAP_ASIMD | HWCAP_ASIMDHP),
+            0,
+            "FP and AdvSIMD {negative:#x}"
+        );
+    }
+    // ID_AA64ISAR0.Atomic starts at 2 (`arch/arm64/tools/sysreg`: 0b0010 IMP),
+    // and 1 is not LSE.
+    let one = IdRegisters {
+        pfr0: 0x00FF_0000,
+        isar0: 1 << 20,
+        ..IdRegisters::default()
+    };
+    assert_eq!(hwcap(one) & HWCAP_ATOMICS, 0);
+    let two = IdRegisters {
+        isar0: 2 << 20,
+        ..one
+    };
+    assert_eq!(hwcap(two) & HWCAP_ATOMICS, HWCAP_ATOMICS);
+    // DPB 2 is `DC CVAP` and `DC CVADP`, which trap from EL0 unless
+    // SCTLR_EL1.UCI is set, and nothing here sets it.
+    let dpb = IdRegisters {
+        pfr0: 0x00FF_0000,
+        isar1: 2,
+        ..IdRegisters::default()
+    };
+    assert_eq!(hwcap(dpb), 0);
+    assert_eq!(hwcap2(dpb), 0);
+}
+
+#[test]
+fn arm_fields_are_read_as_linux_reads_them() {
+    use crate::hwcap::arm::{
+        HWCAP_EDSP, HWCAP_FAST_MULT, HWCAP_HALF, HWCAP_NEON, HWCAP_THUMB, HWCAP_TLS, HWCAP_VFP,
+        HWCAP_VFPD32, HWCAP_VFPV3, HWCAP_VFPV4, IdRegisters, hwcap,
+    };
+    let base = HWCAP_HALF | HWCAP_THUMB | HWCAP_FAST_MULT | HWCAP_EDSP | HWCAP_TLS;
+    // `cpuid_feature_extract_field` is signed: a Divide or VMSA field of 0x8
+    // to 0xF is negative, so no divide and no LPAE.
+    for negative in 0x8..=0xF_u32 {
+        let ids = IdRegisters {
+            id_isar0: negative << 24,
+            id_mmfr0: negative,
+            ..IdRegisters::default()
+        };
+        assert_eq!(hwcap(ids), base, "Divide and VMSA {negative:#x}");
+    }
+    // `vfp_init` tests equality: VFPv3 is FPSP or FPDP exactly 2, D16 is
+    // SIMDReg exactly 1 and anything else D32, NEON is SIMDLS, SIMDInt and
+    // SIMDSP all exactly 1, and VFPv4 is SIMDFMAC exactly 1.
+    let beyond = IdRegisters {
+        mvfr0: 0x0000_0330,
+        mvfr1: 0x2002_2200,
+        ..IdRegisters::default()
+    };
+    assert_eq!(hwcap(beyond), base | HWCAP_VFP);
+    let no_simd_registers = IdRegisters {
+        mvfr0: 0x0000_0220,
+        mvfr1: 0,
+        ..IdRegisters::default()
+    };
+    assert_eq!(
+        hwcap(no_simd_registers),
+        base | HWCAP_VFP | HWCAP_VFPV3 | HWCAP_VFPD32
+    );
+    let exact = IdRegisters {
+        mvfr0: 0x0000_0222,
+        mvfr1: 0x1001_1100,
+        ..IdRegisters::default()
+    };
+    assert_eq!(
+        hwcap(exact),
+        base | HWCAP_VFP | HWCAP_VFPV3 | HWCAP_VFPD32 | HWCAP_NEON | HWCAP_VFPV4
     );
 }

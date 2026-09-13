@@ -9,12 +9,21 @@
 //! # Where the numbers come from
 //!
 //! The bit values are Linux's `arch/arm/include/uapi/asm/hwcap.h` and
-//! `arch/arm64/include/uapi/asm/hwcap.h`. The copy they were checked against is
-//! QEMU's `linux-user/elfload.c`, whose `ARM_HWCAP_ARM_*` and `ARM_HWCAP_A64_*`
-//! enums transcribe those headers; QEMU's `linux-headers/` does not carry
-//! `hwcap.h`. Which identification register field grants a bit, and at what
-//! value, is from QEMU's `target/arm/cpu.h` (the `FIELD` positions) and
-//! `target/arm/cpu-features.h` (the tests of them).
+//! `arch/arm64/include/uapi/asm/hwcap.h`, checked against torvalds/linux master
+//! on 2026-09-13; every one matched the QEMU `linux-user/elfload.c` copy they
+//! were first taken from.
+//!
+//! Which identification register field grants a bit, and how the field is
+//! compared, is Linux's too. On ARMv7-A that is `cpuid_init_hwcaps` in
+//! `arch/arm/kernel/setup.c` for divide and LPAE, whose
+//! `cpuid_feature_extract_field` reads every field signed, and `vfp_init` in
+//! `arch/arm/vfp/vfpmodule.c` for the FPU bits, which tests exact values. On
+//! AArch64 the fields and their least values are
+//! `Documentation/arch/arm64/elf_hwcaps.rst` and `arch/arm64/tools/sysreg`,
+//! compared as `cpufeature.c` compares them: at least the value, and signed
+//! where the field is. QEMU's tests of the same fields are looser about values
+//! the architecture reserves, and a core reporting one would have been told
+//! something Linux does not tell it.
 //!
 //! # What is left out, on purpose
 //!
@@ -23,8 +32,11 @@
 //! SME (their state is neither enabled nor saved), no pointer authentication
 //! (no keys are installed), no BTI or MTE (no page attributes for them), no
 //! `CPUID` (reading ID registers from EL0 is not emulated), no `EVTSTRM` (the
-//! timer's event stream is off), and on ARMv7-A no `SWP` (not emulated) and no
-//! `ThumbEE` (its register is not switched).
+//! timer's event stream is off), no `DCPOP` or `DCPODP` (`DC CVAP` and
+//! `DC CVADP` trap from EL0 unless `SCTLR_EL1.UCI` is set, and the kernel keeps
+//! whatever the firmware left there), and on ARMv7-A no `SWP` (not emulated)
+//! and no `ThumbEE` (its register is not switched). `HWCAP_TLS` is kept:
+//! `TPIDRURO` is switched with the thread.
 
 /// ARMv7-A (EABI) bits and how to derive them.
 pub mod arm {
@@ -75,6 +87,15 @@ pub mod arm {
         (register >> shift) & 0xF
     }
 
+    /// The four-bit field at `shift` as Linux's `cpuid_feature_extract_field`
+    /// reads it, signed, with a negative value (0x8 to 0xF) as zero. Every
+    /// test of such a field is "at least" some positive value, which a
+    /// negative one never is.
+    const fn signed_field(register: u32, shift: u32) -> u32 {
+        let value = field(register, shift);
+        if value < 0x8 { value } else { 0 }
+    }
+
     /// `AT_HWCAP` for a core with these registers.
     ///
     /// Half-word transfers, Thumb, long multiplies, the DSP extension and
@@ -85,38 +106,39 @@ pub mod arm {
         let mut bits = HWCAP_HALF | HWCAP_THUMB | HWCAP_FAST_MULT | HWCAP_EDSP | HWCAP_TLS;
 
         // ID_ISAR0.Divide, bits 27:24: 1 is Thumb only, 2 adds ARM.
-        let divide = field(ids.id_isar0, 24);
-        if divide != 0 {
+        let divide = signed_field(ids.id_isar0, 24);
+        if divide >= 1 {
             bits |= HWCAP_IDIVT;
         }
-        if divide > 1 {
+        if divide >= 2 {
             bits |= HWCAP_IDIVA;
         }
         // ID_MMFR0.VMSA, bits 3:0: 5 is VMSAv7 with LPAE.
-        if field(ids.id_mmfr0, 0) >= 5 {
+        if signed_field(ids.id_mmfr0, 0) >= 5 {
             bits |= HWCAP_LPAE;
         }
 
-        // MVFR0: SIMDReg 3:0, FPSP 7:4, FPDP 11:8.
+        // MVFR0: SIMDReg 3:0, FPSP 7:4, FPDP 11:8. Linux sets `HWCAP_VFP` for
+        // any VFP it finds; a zero MVFR0 is how this is told there is none.
         let registers = field(ids.mvfr0, 0);
         let single = field(ids.mvfr0, 4);
         let double = field(ids.mvfr0, 8);
         if single > 0 || double > 0 {
             bits |= HWCAP_VFP;
         }
-        if single >= 2 || double >= 2 {
+        if single == 2 || double == 2 {
             bits |= HWCAP_VFPV3;
-            bits |= if registers >= 2 {
-                HWCAP_VFPD32
-            } else {
+            bits |= if registers == 1 {
                 HWCAP_VFPV3D16
+            } else {
+                HWCAP_VFPD32
             };
         }
         // MVFR1: SIMDLS 11:8, SIMDInt 15:12, SIMDSP 19:16, SIMDFMAC 31:28.
-        if field(ids.mvfr1, 8) != 0 && field(ids.mvfr1, 12) != 0 && field(ids.mvfr1, 16) != 0 {
+        if field(ids.mvfr1, 8) == 1 && field(ids.mvfr1, 12) == 1 && field(ids.mvfr1, 16) == 1 {
             bits |= HWCAP_NEON;
         }
-        if field(ids.mvfr1, 28) != 0 {
+        if field(ids.mvfr1, 28) == 1 {
             bits |= HWCAP_VFPV4;
         }
         bits
@@ -153,8 +175,6 @@ pub mod aarch64 {
     pub const HWCAP_FCMA: u64 = 1 << 14;
     /// `LDAPR`: loads with release-consistent processor-correct semantics.
     pub const HWCAP_LRCPC: u64 = 1 << 15;
-    /// `DC CVAP`.
-    pub const HWCAP_DCPOP: u64 = 1 << 16;
     /// SHA-3 instructions.
     pub const HWCAP_SHA3: u64 = 1 << 17;
     /// SM3 instructions.
@@ -174,8 +194,6 @@ pub mod aarch64 {
     /// Speculation barrier.
     pub const HWCAP_SB: u64 = 1 << 29;
 
-    /// `DC CVADP`.
-    pub const HWCAP2_DCPODP: u64 = 1 << 0;
     /// The second flag manipulation extension.
     pub const HWCAP2_FLAGM2: u64 = 1 << 7;
     /// Rounding to 32- and 64-bit integers.
@@ -211,15 +229,15 @@ pub mod aarch64 {
     /// `AT_HWCAP` for a core with these registers.
     #[must_use]
     pub const fn hwcap(ids: IdRegisters) -> u64 {
-        // ID_AA64PFR0 FP 19:16 and AdvSIMD 23:20 are signed: 0xF is absent, 0
-        // present, 1 present with half precision.
+        // ID_AA64PFR0 FP 19:16 and AdvSIMD 23:20 are signed: 0 present, 1
+        // present with half precision, and 0x8 to 0xF negative, so absent.
         let fp = field(ids.pfr0, 16);
         let simd = field(ids.pfr0, 20);
         let mut bits = 0;
-        if fp != 0xF {
+        if fp < 0x8 {
             bits |= HWCAP_FP | when(fp, 1, HWCAP_FPHP);
         }
-        if simd != 0xF {
+        if simd < 0x8 {
             bits |= HWCAP_ASIMD | when(simd, 1, HWCAP_ASIMDHP);
         }
 
@@ -228,7 +246,8 @@ pub mod aarch64 {
         bits |= when(field(isar0, 8), 1, HWCAP_SHA1);
         bits |= when(field(isar0, 12), 1, HWCAP_SHA2) | when(field(isar0, 12), 2, HWCAP_SHA512);
         bits |= when(field(isar0, 16), 1, HWCAP_CRC32);
-        bits |= when(field(isar0, 20), 1, HWCAP_ATOMICS);
+        // Atomic has no value 1: LSE is 2.
+        bits |= when(field(isar0, 20), 2, HWCAP_ATOMICS);
         bits |= when(field(isar0, 28), 1, HWCAP_ASIMDRDM);
         bits |= when(field(isar0, 32), 1, HWCAP_SHA3);
         bits |= when(field(isar0, 36), 1, HWCAP_SM3);
@@ -238,7 +257,6 @@ pub mod aarch64 {
         bits |= when(field(isar0, 52), 1, HWCAP_FLAGM);
 
         let isar1 = ids.isar1;
-        bits |= when(field(isar1, 0), 1, HWCAP_DCPOP);
         bits |= when(field(isar1, 12), 1, HWCAP_JSCVT);
         bits |= when(field(isar1, 16), 1, HWCAP_FCMA);
         bits |= when(field(isar1, 20), 1, HWCAP_LRCPC) | when(field(isar1, 20), 2, HWCAP_ILRCPC);
@@ -249,8 +267,7 @@ pub mod aarch64 {
     /// `AT_HWCAP2` for a core with these registers.
     #[must_use]
     pub const fn hwcap2(ids: IdRegisters) -> u64 {
-        when(field(ids.isar1, 0), 2, HWCAP2_DCPODP)
-            | when(field(ids.isar0, 52), 2, HWCAP2_FLAGM2)
+        when(field(ids.isar0, 52), 2, HWCAP2_FLAGM2)
             | when(field(ids.isar1, 32), 1, HWCAP2_FRINT)
             | when(field(ids.isar1, 52), 1, HWCAP2_I8MM)
             | when(field(ids.isar1, 44), 1, HWCAP2_BF16)
