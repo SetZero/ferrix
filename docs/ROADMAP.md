@@ -39,7 +39,8 @@ Stage 10 has begun where the continuous rule says a stage should, with PCI
 configuration space in `libs/pci`,
 and its first kernel code — PCI enumeration, device nodes with MSI-X vectors a
 driver can be given, a device driven by DMA and answering by MSI-X from the
-boot check, and where each device's IOMMU is — is in the boot test.
+boot check, where each device's IOMMU is, and VT-d translating on x86-64 — is
+in the boot test.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -1422,7 +1423,20 @@ virtio-blk — as a user process.
 
 **Exit:** a boot test that reads a sector from a virtio disk through a driver
 running in ring 3, with the IOMMU on and a deliberate out-of-domain DMA
-attempt faulting.
+attempt faulting — on x86-64, through VT-d, and on AArch64, through the
+`SMMUv3`. The check itself clears VT-d's single fault record before it probes,
+and requires every Arm domain to map the `GICv2m` doorbell, since QEMU sends
+a device's MSI writes through the SMMU.
+
+**ARMv7-A runs its drivers in degraded trusted mode.** U-Boot 2025.10 resets
+when a virtio device offers `VIRTIO_F_ACCESS_PLATFORM`, so the 32-bit
+machine's devices bypass its `SMMUv3`: a ring-3 driver there can DMA anywhere
+in physical memory, the kernel prints `degraded trusted mode` on the console
+at the first pin into an untranslated domain (`docs/ARCHITECTURE.md` §7), and
+the exit's out-of-domain fault is checked on x86-64 and AArch64 only. A driver
+reading sectors through an untranslated domain may land before then, so stage
+11 can go on, but the stage is not done until both 64-bit machines translate
+and fault.
 
 **Done — configuration space, ahead of the kernel code that reads it.**
 Started while stage 9 is still under way, because the exit criterion needs
@@ -1736,6 +1750,36 @@ go in behind the same two calls.
 The run recorded when it landed: 2 pages pinned and unpinned and 2 refusals, and
 the entropy check's 64 bytes through its domain, on x86-64, AArch64 and ARMv7-A.
 
+**Done — VT-d translating, and a function behind it given a translated
+domain.** On x86-64 the kernel programs the VT-d unit the DMAR describes before
+PCI enumeration, so from the first DMA on, a function behind it reaches only
+what its domain maps and a function with no domain reaches nothing.
+`kernel/src/iommu/vtd.rs` drives the unit in legacy mode, checked against
+QEMU's `intel_iommu.c`: a root table per unit, a context table per bus, a
+context entry per function naming a domain identifier and its second-level
+tables, and register-based invalidation of the context cache and the IOTLB
+after every change the unit may have cached. A unit firmware left translating,
+or one that needs write-buffer flushing, is left alone and says why.
+
+* **`iommu::domain_for(function)`** attaches a function to the unit its DMAR
+  endpoint scope names, and gives an untranslated domain where no unit
+  translates. `DeviceNode::domain` and the entropy check both use it, so the
+  entropy device's rings and buffer are now reached through VT-d.
+* **A translated domain maps each pinned page at its own physical address.**
+  Nothing but what was pinned is mapped, which needs no I/O address allocator
+  and refuses frames above 39 bits. A failed pin unmaps what it mapped; a
+  domain dropped with nothing pinned detaches and gives back its tables.
+* **`mm::map_io`, `unmap_io` and `translate_io`** build IOMMU tables beside
+  the kernel's, generic over `libs/paging`'s encodings, a page at a time, so a
+  unit is never asked to walk a block.
+* **The domain check** now also requires a translated domain to resolve each
+  pinned page to its frame and to fault it again once unpinned.
+
+The run recorded when it landed: on x86-64, 1 VT-d unit translating, the
+entropy check's 64 bytes and its MSI-X completion through a translated domain,
+and 2 pages pinned and unpinned through a translated domain with 2 refusals.
+AArch64 and ARMv7-A still say degraded trusted mode.
+
 **Still to do, in the order stage 11 needs it.** Stage 11 is done on the host
 and waits only for a ring-3 virtio-blk driver reading sectors, so everything on
 that path comes first and trusting decoding-off BARs, which it does not need,
@@ -1755,14 +1799,14 @@ agreements recorded here.
 * **IOMMU domains.** Where the units are, and which stream each function
   arrives as, is found (above), and the tables are in `libs/paging`. Still
   missing:
-  * *A VT-d driver* in legacy mode: root and context tables, register-based
-    invalidation, and the single fault-recording register QEMU provides.
+  * *VT-d's fault record read and cleared*, for the out-of-domain check; the
+    unit and its translated domains are done (above).
   * *An `SMMUv3` driver*: a linear stream table, stage 2 with fault recording,
     and the command and event queues.
   * *The `GICv2m` doorbell mapped into every Arm domain.* QEMU sends a
     device's MSI writes through the SMMU, where VT-d exempts them.
-  * *VT-d and `SMMUv3` domains* built from those tables, behind
-    `Domain::pin` and `unpin`, which exist and are untranslated today.
+  * *`SMMUv3` domains* built from those tables, behind `Domain::pin` and
+    `unpin`, which translate through VT-d today.
   * *The deliberate out-of-domain fault*, from the boot check's virtio-rng
     harness, on x86-64 and AArch64. ARMv7-A needs a device U-Boot does not
     probe.

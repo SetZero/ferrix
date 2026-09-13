@@ -418,9 +418,9 @@ pub(super) fn entropy(
     let (Some(rings), Some(buffer)) = (DmaPage::new(), DmaPage::new()) else {
         return Ok(Entropy::Skipped("no frame for DMA"));
     };
-    // The device is given the addresses a domain gives the pages, not their
-    // physical addresses: the same once an IOMMU domain is programmed.
-    let domain = iommu::Domain::untranslated();
+    // The device is given the addresses its domain gives the pages, and on a
+    // translated domain reaches nothing else.
+    let domain = iommu::domain_for(address);
     let Ok(pinned) = domain.pin(&[rings.frame, buffer.frame], MapFlags::DMA) else {
         return Ok(Entropy::Skipped("the DMA pages could not be pinned"));
     };

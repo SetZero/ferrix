@@ -55,7 +55,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use ferrix_bootinfo::{BootView, MemKind, MemRegion, PAGE_SIZE};
 use ferrix_frame::{Frame, Frames, PageEntry};
 use ferrix_heap::{Backing, Heap, Request};
-use ferrix_paging::{Leaf, MapFlags, Mapper, PhysAddr, PhysMem, Released, VirtAddr, WalkOutcome};
+use ferrix_paging::{
+    Encoding, Leaf, MapFlags, Mapper, PhysAddr, PhysMem, Released, VirtAddr, WalkOutcome,
+};
 use ferrix_sync::IrqSpinLock;
 
 /// Why memory could not be brought up.
@@ -631,6 +633,53 @@ pub(crate) fn unmap_in(root: u64, virt: u64, len: u64) -> Result<(), ferrix_pagi
         },
     )?;
     Ok(())
+}
+
+/// Map the 4 KiB page `phys` at I/O address `iova` in the IOMMU tree rooted at
+/// `root`, whose descriptors `E` encodes.
+///
+/// The IOMMU counterpart of [`map_in`]: the tables come from the frame
+/// allocator through the direct map, and the caller owns the tree, so no lock
+/// is taken. One page at a time, so no block mapping is ever built, which a
+/// unit without superpages could not walk.
+pub(crate) fn map_io<E: Encoding>(
+    root: u64,
+    iova: u64,
+    phys: u64,
+    flags: MapFlags,
+) -> Result<(), ferrix_paging::MapError> {
+    let mut mapper: Mapper<E> = Mapper::new(PhysAddr(root));
+    mapper.pages_only();
+    mapper.map_range(
+        &mut KernelPhysMem,
+        VirtAddr(iova),
+        PhysAddr(phys),
+        PAGE_SIZE,
+        flags,
+    )
+}
+
+/// Take down the page [`map_io`] put at `iova`, giving back every table under
+/// `root` it leaves empty. The frame the page pointed at is not freed: the
+/// caller knows what it is, and must not free it before the unit's cached
+/// translations are invalidated.
+pub(crate) fn unmap_io<E: Encoding>(root: u64, iova: u64) -> Result<(), ferrix_paging::MapError> {
+    let mapper: Mapper<E> = Mapper::new(PhysAddr(root));
+    let _ = mapper.unmap_range(&mut KernelPhysMem, VirtAddr(iova), PAGE_SIZE, |freed| {
+        if let Released::Table { phys } = freed {
+            deallocate_frames(phys.0 / PAGE_SIZE, 0);
+        }
+    })?;
+    Ok(())
+}
+
+/// Where I/O address `iova` leads in the IOMMU tree rooted at `root`, walked
+/// as the unit would.
+pub(crate) fn translate_io<E: Encoding>(root: u64, iova: u64) -> Option<u64> {
+    let mapper: Mapper<E> = Mapper::new(PhysAddr(root));
+    mapper
+        .translate(&KernelPhysMem, VirtAddr(iova))
+        .map(|at| at.0)
 }
 
 /// Run `body` with a mapper over the live kernel page tables, holding

@@ -85,7 +85,7 @@ nobody has it yet.
 
 | Item | Owner | Stage |
 |---|---|---|
-| Translated IOMMU domains (VT-d, SMMUv3) and the out-of-domain fault, on x86-64 and AArch64; ARMv7-A stated as degraded trusted mode | ferrix-8b | 10 |
+| Translated `SMMUv3` domains, and the out-of-domain fault on x86-64 and AArch64 (VT-d translates since this landing; ARMv7-A is stated as degraded trusted mode in the exit criterion) | ferrix-8b | 10 |
 | Reset on driver death, designed in the ring spec before the driver lands | ferrix-8b | 10 |
 | Trusting a BAR firmware placed but did not enable | ferrix-8b | 10 |
 | btrfs: honour the default subvolume; verify data checksums from the csum tree; parse `INODE_EXTREF`; a bounded metadata node cache | ferrix-4d | 11 |

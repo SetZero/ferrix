@@ -43,11 +43,14 @@ use ferrix_acpi::dmar::{self, Structure};
 use ferrix_acpi::iort;
 use ferrix_bootinfo::{BootView, PAGE_SIZE};
 use ferrix_fdt::{EcamHost, Fdt};
-use ferrix_paging::MapFlags;
+use ferrix_paging::{MapError, MapFlags};
 use ferrix_pci::Address;
+use ferrix_sync::{IrqSpinLock, Once};
 
 use crate::device::{DeviceNode, Location};
-use crate::{acpi, fdt, mm, println};
+use crate::{acpi, arch, fdt, mm, println};
+
+mod vtd;
 
 /// Bytes of a VT-d unit's registers kept from drivers: the first page, which
 /// holds every register a legacy-mode driver uses. A DRHD gives no length.
@@ -335,24 +338,58 @@ static NEXT_DOMAIN: AtomicU64 = AtomicU64::new(1);
 /// Whether degraded trusted mode has been announced.
 static DEGRADED: AtomicBool = AtomicBool::new(false);
 
+/// Bits of I/O address a translated domain's tables reach. A translated domain
+/// maps each page at its physical address, so a frame at or above this cannot
+/// be pinned into one.
+const TRANSLATED_BITS: u32 = 39;
+
 /// Why a domain refused to pin or unpin.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum DomainError {
     /// There was nothing to pin.
     Empty,
-    /// A frame's address does not fit in a physical address.
+    /// A frame's address does not fit in what the domain can address.
     OutOfRange,
     /// The pin was taken by another domain.
     Foreign,
+    /// A page is already pinned into this domain.
+    AlreadyPinned,
+    /// The domain's tables could not be changed: no frame for a table.
+    Tables,
+    /// The unit never finished a command.
+    Unit(&'static str),
 }
 
 /// The memory one device's DMA may reach, and the addresses it reaches it by.
+///
+/// A translated domain maps each pinned page at its own physical address.
+/// What makes it a domain is what it leaves out: nothing is mapped but what was
+/// pinned. That saves an I/O address allocator, at the cost of refusing frames
+/// above [`TRANSLATED_BITS`].
 #[derive(Debug)]
 pub(crate) struct Domain {
     /// This domain's number.
     id: u64,
     /// Pages pinned and not yet unpinned.
     pinned: AtomicU64,
+    /// Who translates it.
+    translation: Translation,
+}
+
+/// Who translates a domain.
+#[derive(Debug)]
+enum Translation {
+    /// Nobody: a device address is a physical address.
+    None,
+    /// A VT-d unit.
+    VtD {
+        /// The unit.
+        unit: &'static vtd::Unit,
+        /// The domain on it.
+        attached: vtd::Attached,
+        /// Held across a pin's or an unpin's changes to the tables.
+        changing: IrqSpinLock<(), arch::Irq>,
+    },
 }
 
 /// Pages pinned into one domain, and each one's device address.
@@ -386,16 +423,32 @@ impl Pinned {
 impl Domain {
     /// A domain no unit translates.
     pub(crate) fn untranslated() -> Self {
+        Domain::with(Translation::None)
+    }
+
+    /// A domain translated by `translation`.
+    fn with(translation: Translation) -> Self {
         Domain {
             id: NEXT_DOMAIN.fetch_add(1, Ordering::Relaxed),
             pinned: AtomicU64::new(0),
+            translation,
         }
     }
 
     /// Whether a unit translates this domain's DMA, so a device can reach only
     /// what is pinned into it.
-    pub(crate) const fn translated(&self) -> bool {
-        false
+    pub(crate) fn translated(&self) -> bool {
+        !matches!(self.translation, Translation::None)
+    }
+
+    /// Where an access by the device to `address` lands, or `None` when the
+    /// unit would fault it. An untranslated domain lands every access where it
+    /// points.
+    pub(crate) fn resolve(&self, address: u64) -> Option<u64> {
+        match &self.translation {
+            Translation::None => Some(address),
+            Translation::VtD { unit, attached, .. } => unit.resolve(attached, address),
+        }
     }
 
     /// Pages pinned and not yet unpinned.
@@ -409,10 +462,11 @@ impl Domain {
     /// # Errors
     ///
     /// [`DomainError::Empty`] for no frames, [`DomainError::OutOfRange`] for a
-    /// frame number no physical address can hold.
+    /// frame the domain cannot address, [`DomainError::AlreadyPinned`],
+    /// [`DomainError::Tables`] and [`DomainError::Unit`]. Whatever was mapped
+    /// before a failure is unmapped again, except after a unit that never
+    /// finished, whose pages stay mapped for good.
     pub(crate) fn pin(&self, frames: &[u64], flags: MapFlags) -> Result<Pinned, DomainError> {
-        // Nothing enforces a read-only pin until a unit translates the domain.
-        let _ = flags;
         if frames.is_empty() {
             return Err(DomainError::Empty);
         }
@@ -420,7 +474,18 @@ impl Domain {
             .iter()
             .map(|frame| frame.checked_mul(PAGE_SIZE).ok_or(DomainError::OutOfRange))
             .collect::<Result<Vec<u64>, DomainError>>()?;
-        if !DEGRADED.swap(true, Ordering::Relaxed) {
+        if let Translation::VtD {
+            unit,
+            attached,
+            changing,
+        } = &self.translation
+        {
+            if addresses.iter().any(|&phys| phys >> TRANSLATED_BITS != 0) {
+                return Err(DomainError::OutOfRange);
+            }
+            let _held = changing.lock();
+            map_all(unit, attached, &addresses, flags)?;
+        } else if !DEGRADED.swap(true, Ordering::Relaxed) {
             println!(
                 "  iommu    degraded trusted mode: no IOMMU domain is programmed, so device \
                  DMA reaches all of memory"
@@ -451,10 +516,167 @@ impl Domain {
         if pinned.domain != self.id {
             return Err((DomainError::Foreign, pinned));
         }
+        if let Translation::VtD {
+            unit,
+            attached,
+            changing,
+        } = &self.translation
+        {
+            let _held = changing.lock();
+            if pinned
+                .addresses
+                .iter()
+                .any(|&iova| unit.unmap(attached, iova).is_err())
+            {
+                return Err((DomainError::Tables, pinned));
+            }
+            // Only once the unit has forgotten the pages may their frames go.
+            if let Err(why) = unit.flush(attached, false) {
+                return Err((DomainError::Unit(why), pinned));
+            }
+        }
         let _ = self
             .pinned
             .fetch_sub(pinned.addresses.len() as u64, Ordering::Relaxed);
         Ok(())
+    }
+}
+
+/// Map every page in `addresses` at its own address in `attached`'s tables,
+/// or none of them.
+fn map_all(
+    unit: &vtd::Unit,
+    attached: &vtd::Attached,
+    addresses: &[u64],
+    flags: MapFlags,
+) -> Result<(), DomainError> {
+    for (done, &phys) in addresses.iter().enumerate() {
+        let Err(error) = unit.map(attached, phys, phys, flags) else {
+            continue;
+        };
+        for &mapped in addresses.iter().take(done) {
+            let _ = unit.unmap(attached, mapped);
+        }
+        let _ = unit.flush(attached, false);
+        return Err(match error {
+            MapError::AlreadyMapped(_) => DomainError::AlreadyPinned,
+            _ => DomainError::Tables,
+        });
+    }
+    unit.flush(attached, true).map_err(DomainError::Unit)
+}
+
+impl Drop for Domain {
+    /// Detach a translated domain from its unit, unless pages are still pinned
+    /// into it: the device may still be using those, so its tables and context
+    /// entry stay.
+    fn drop(&mut self) {
+        if let Translation::VtD { unit, attached, .. } = &self.translation
+            && self.pinned.load(Ordering::Relaxed) == 0
+        {
+            let _ = unit.detach(*attached);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Units the kernel programs
+// ---------------------------------------------------------------------------
+
+/// Every unit translation was turned on for, and the functions behind each.
+#[derive(Debug, Default)]
+struct Programmed {
+    /// VT-d units translating.
+    vtd: Vec<vtd::Unit>,
+    /// The functions the DMAR's endpoint scopes name, with their unit's index.
+    behind: Vec<(Address, usize)>,
+}
+
+/// What [`bring_up`] turned on.
+static PROGRAMMED: Once<Programmed> = Once::new();
+
+/// What bringing the units up did.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct BringUp {
+    /// VT-d units now translating.
+    pub(crate) vtd: usize,
+    /// Units left alone.
+    pub(crate) refused: usize,
+    /// Why the last of them was.
+    pub(crate) why: Option<&'static str>,
+}
+
+/// Turn translation on for every VT-d unit the DMAR describes, before any
+/// device is given DMA. From here a function behind one reaches only what a
+/// domain maps for it, and one with no domain reaches nothing.
+///
+/// A unit that cannot be brought up is left alone, and the functions behind it
+/// get untranslated domains. Only the first call does anything.
+pub(crate) fn bring_up(view: &BootView<'_>) -> BringUp {
+    let mut report = BringUp::default();
+    let mut programmed = Programmed::default();
+    if let Ok(firmware) = acpi::Firmware::open(view)
+        && let Ok(table) = firmware.acpi().dmar()
+    {
+        for structure in table.structures() {
+            let Structure::Drhd(unit) = structure else {
+                continue;
+            };
+            let opened = vtd::Unit::open(unit.register_base)
+                .and_then(|opened| opened.enable().map(|()| opened));
+            match opened {
+                Ok(opened) => {
+                    let index = programmed.vtd.len();
+                    programmed
+                        .behind
+                        .extend(endpoints(&unit).map(|address| (address, index)));
+                    programmed.vtd.push(opened);
+                    report.vtd += 1;
+                }
+                Err(why) => {
+                    report.refused += 1;
+                    report.why = Some(why);
+                }
+            }
+        }
+    }
+    let _ = PROGRAMMED.call_once(|| programmed);
+    report
+}
+
+/// The functions a DRHD's single-hop endpoint scopes name.
+fn endpoints<'a>(unit: &dmar::Drhd<'a>) -> impl Iterator<Item = Address> + 'a {
+    let segment = unit.segment;
+    unit.device_scopes()
+        .filter(|scope| scope.kind == dmar::SCOPE_PCI_ENDPOINT)
+        .filter_map(|scope| scope.endpoint())
+        .filter_map(move |(bus, device, function)| Address::new(segment, bus, device, function))
+}
+
+/// The domain `function`'s DMA goes through: one on the VT-d unit the DMAR
+/// puts it behind, when that unit is translating, and an untranslated one
+/// otherwise.
+pub(crate) fn domain_for(function: Address) -> Domain {
+    let unit = PROGRAMMED.get().and_then(|programmed| {
+        let &(_, index) = programmed
+            .behind
+            .iter()
+            .find(|(address, _)| *address == function)?;
+        programmed.vtd.get(index)
+    });
+    let Some(unit) = unit else {
+        return Domain::untranslated();
+    };
+    match unit.attach(function) {
+        Ok(attached) => Domain::with(Translation::VtD {
+            unit,
+            attached,
+            changing: IrqSpinLock::new(()),
+        }),
+        Err(why) => {
+            println!("  iommu    pci {function} gets no translated domain: {why}");
+            Domain::untranslated()
+        }
     }
 }
 
@@ -465,6 +687,8 @@ pub(crate) struct DomainReport {
     pub(crate) pinned: u64,
     /// Requests refused, each exactly as the rule requires.
     pub(crate) refusals: usize,
+    /// Whether the domain checked was translated.
+    pub(crate) translated: bool,
 }
 
 /// Pin two frames through the first PCI node's domain, and require the node to
@@ -511,7 +735,12 @@ fn pin_and_unpin(
         .pin(&frames, MapFlags::DMA)
         .map_err(|_| "a domain refused to pin two frames")?;
     let expected = frames.map(|frame| frame * PAGE_SIZE);
-    let addressed = domain.translated() || pinned.addresses() == expected.as_slice();
+    // Every domain gives a page its physical address as its device address;
+    // a translated one must also send the device there and nowhere else.
+    let addressed = pinned.addresses() == expected.as_slice()
+        && expected
+            .iter()
+            .all(|&phys| domain.resolve(phys) == Some(phys));
     let counted = domain.pinned_pages() == before + 2;
 
     let Err((DomainError::Foreign, pinned)) = Domain::untranslated().unpin(pinned) else {
@@ -537,6 +766,10 @@ fn pin_and_unpin(
     if domain.pinned_pages() != before {
         return Err("a domain still counted pages it had unpinned");
     }
+    if domain.translated() && expected.iter().any(|&phys| domain.resolve(phys).is_some()) {
+        return Err("a translated domain still reached a page it had unpinned");
+    }
+    report.translated = domain.translated();
     report.pinned += 2;
     Ok(())
 }

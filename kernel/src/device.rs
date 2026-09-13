@@ -561,10 +561,12 @@ impl DeviceNode {
     /// The IOMMU domain the device's DMA goes through: one per node, the same
     /// one every time.
     pub(crate) fn domain(&self) -> Arc<iommu::Domain> {
-        Arc::clone(
-            self.domain
-                .call_once(|| Arc::new(iommu::Domain::untranslated())),
-        )
+        Arc::clone(self.domain.call_once(|| {
+            Arc::new(match self.location {
+                Location::Pci(address) => iommu::domain_for(address),
+                Location::VirtioMmio(_) => iommu::Domain::untranslated(),
+            })
+        }))
     }
 
     /// `len` bytes at `phys`, if they lie inside one of the device's

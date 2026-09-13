@@ -239,6 +239,14 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // `finish_memory`, which reclaims the ACPI tables the MCFG is read from
     // and sweeps the kernel's mappings, so the bus windows this maps have to
     // be given back first.
+    let iommu = iommu::bring_up(view);
+    println!(
+        "  iommu    {} VT-d units translating, {} left alone",
+        iommu.vtd, iommu.refused
+    );
+    if let Some(why) = iommu.why {
+        println!("  iommu    a unit was left alone: {why}");
+    }
     let (pci, reserved) = check_pci(view);
 
     // Stage 10's device nodes: every PCI function above and every virtio,mmio
@@ -654,9 +662,15 @@ fn check_iommu(view: &BootView<'_>) {
         ),
     };
     println!(
-        "  iommu    {} pages pinned and unpinned through a device's domain, {} refusals as \
-         specified",
-        domains.pinned, domains.refusals,
+        "  iommu    {} pages pinned and unpinned through a device's {} domain, {} refusals \
+         as specified",
+        domains.pinned,
+        if domains.translated {
+            "translated"
+        } else {
+            "untranslated"
+        },
+        domains.refusals,
     );
 }
 

@@ -276,10 +276,12 @@ package FerrixRoadmap {
              * function placed behind one (DMAR, IORT, device tree), virtio's
              * DMA sent through it on x86-64 and AArch64, and VT-d and stage-2
              * table encodings in libs/paging; an iommu::Domain every device
-             * node has, untranslated until a unit is programmed, which the
-             * entropy check's DMA goes through. Next, in the order stage 11
+             * node has, which the entropy check's DMA goes through; VT-d
+             * programmed at boot on x86-64, with translated domains. Next, in the order stage 11
              * needs: VMO_PIN, devmgr, the block ring and virtio-blk in ring 3,
-             * VT-d and SMMUv3 domains; trusting decoding-off BARs last. */
+             * SMMUv3 domains and the out-of-domain fault on x86-64 and
+             * AArch64 (ARMv7-A in degraded trusted mode); trusting
+             * decoding-off BARs last. */
     }
 
     #planned requirement <'S11'> stage11BtrfsRead : Stage {
