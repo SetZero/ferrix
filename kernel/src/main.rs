@@ -1008,6 +1008,15 @@ fn check_demand_paging() -> Result<(), &'static str> {
 ///
 /// So: arm once, wait for the tick, then wait several further intervals and
 /// require the count not to have moved.
+///
+/// **On x86-64 the second half cannot fail, and that is known.** The local
+/// APIC's one-shot does not refire whether or not the handler disarms it, so
+/// there is no handler bug for the count to catch. The one mistake that would
+/// make it refire -- programming the timer's LVT in periodic mode -- was tried:
+/// at this one-millisecond interval under `tcg` the boot stops after the
+/// interrupt bring-up line and never reaches this check's report, the same
+/// shape as AArch64's storm. There the boot test's timeout is what catches it,
+/// and what this check contributes is its first half: that the timer fires.
 fn check_one_shot(interval_nanos: u64) -> Result<(), &'static str> {
     let before = timer::ticks();
     timer::after(interval_nanos);

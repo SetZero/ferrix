@@ -277,7 +277,10 @@ further intervals. That check is there for one specific bug: AArch64's timer
 interrupt is level triggered, so a handler that acknowledges the controller
 without disarming the timer is re-entered immediately and forever. It does
 not fail by producing a wrong number — it fails by never returning, with
-nothing in the log after the line before it.
+nothing in the log after the line before it. On x86-64 the count cannot move
+at all, because the local APIC's one-shot never refires. The mistake that would
+make it refire, a timer programmed periodic, was tried there: it hangs the boot
+before the check reports, and the boot test's timeout catches it instead.
 
 The boot marker reads `FERRIX-BOOT-OK stages 1-3`, and it is now the whole
 truth.
