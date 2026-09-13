@@ -9,28 +9,11 @@
 use core::arch::asm;
 use core::ffi::c_int;
 
-/// System call numbers, checked against `asm/unistd_64.h`.
+/// System call numbers, generated from `asm/unistd_64.h` by `tools/gen-abi.py`.
+/// To use another call, add its name there and run it; never write a number
+/// here by hand.
 pub mod nr {
-    /// `read`.
-    pub const READ: usize = 0;
-    /// `write`.
-    pub const WRITE: usize = 1;
-    /// `mmap`.
-    pub const MMAP: usize = 9;
-    /// `rt_sigaction`.
-    pub const RT_SIGACTION: usize = 13;
-    /// `rt_sigprocmask`.
-    pub const RT_SIGPROCMASK: usize = 14;
-    /// `getpid`.
-    pub const GETPID: usize = 39;
-    /// `arch_prctl`: sets the `%fs` base, among other things.
-    pub const ARCH_PRCTL: usize = 158;
-    /// `gettid`.
-    pub const GETTID: usize = 186;
-    /// `exit_group`: ends every thread in the process.
-    pub const EXIT_GROUP: usize = 231;
-    /// `tgkill`.
-    pub const TGKILL: usize = 234;
+    include!("generated/nr.rs");
 }
 
 /// Makes a system call with no arguments.

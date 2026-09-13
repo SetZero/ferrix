@@ -7,16 +7,12 @@
 
 use core::ffi::c_int;
 
-/// `ENOENT`: no such file, or no such entry.
-pub const ENOENT: c_int = 2;
-/// `EINTR`: interrupted by a signal before anything happened.
-pub const EINTR: c_int = 4;
-/// `EBADF`: not an open file descriptor.
-pub const EBADF: c_int = 9;
-/// `ENOMEM`: out of memory.
-pub const ENOMEM: c_int = 12;
-/// `EINVAL`: an invalid argument.
-pub const EINVAL: c_int = 22;
+// The error numbers, generated from the kernel's headers by `tools/gen-abi.py`.
+include!("generated/errno.rs");
+
+/// `ENOTSUP`: not supported. C names it separately from `EOPNOTSUPP`, and
+/// Linux gives both the same number.
+pub const ENOTSUP: c_int = EOPNOTSUPP;
 
 #[cfg(test)]
 std::thread_local! {

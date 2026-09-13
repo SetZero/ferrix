@@ -22,12 +22,15 @@ From this directory:
 cargo test
 ```
 
-The unit tests call the functions from Rust. `tests/c_programs.rs` compiles the
+The unit tests call the functions from Rust. The C program tests, in
+`tests/c_*.rs` with their shared harness in `tests/common`, compile the
 programs in `tests/c/` with the host's `cc`, against the headers in `include/`
-rather than the host's. It links them against `crt1.o` and `libferrousli.a` and
-nothing else, runs them, and checks their output and how they end. Each program
-is built at `-O0` and at `-O2`, with the stack protector on, as a
-distribution's compiler leaves it.
+rather than the host's. The harness links them against `crt1.o` and
+`libferrousli.a` and nothing else, runs each in a fresh directory, and checks
+its output and how it ends. Each program is built at `-O0` and at `-O2`, with
+the stack protector on, as a distribution's compiler leaves it.
+
+[CONVENTIONS.md](CONVENTIONS.md) has the rules every change here follows.
 
 `cargo build` leaves `target/debug/libferrousli.a`. `crt1.o` is built by
 `build.rs` into cargo's `OUT_DIR`. A program builds as:
