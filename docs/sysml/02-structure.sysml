@@ -776,7 +776,9 @@ package FerrixStructure {
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 70;
             doc /* Reached at stage 1 on ARMv7-A: console, GIC, timer
-                 * interrupt and PSCI conduit come from it there. */
+                 * interrupt and PSCI conduit come from it there. The
+                 * fdt_parse fuzz target holds it to a second walk of the
+                 * token stream written from the specification. */
         }
         #implemented part sync : LibraryCrate {
             attribute :>> path = "libs/sync";

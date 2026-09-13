@@ -16,6 +16,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 ferrix-cpio = { path = "../libs/cpio" }
 ferrix-elf = { path = "../libs/elf" }
+ferrix-fdt = { path = "../libs/fdt" }
 ferrix-frame = { path = "../libs/frame" }
 ferrix-ustack = { path = "../libs/ustack" }
 ferrix-linux-abi = { path = "../libs/linux-abi" }
@@ -97,6 +98,13 @@ bench = false
 [[bin]]
 name = "cpio_parse"
 path = "fuzz_targets/cpio_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fdt_parse"
+path = "fuzz_targets/fdt_parse.rs"
 test = false
 doc = false
 bench = false

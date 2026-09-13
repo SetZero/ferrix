@@ -2795,7 +2795,7 @@ at three in the morning against a machine that reboots on a mistake.
 | Crate | Waiting for | Tests |
 |---|---|---|
 | `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG, GIC MSI frames, DMAR, IORT, and the HPET block's capability register with the arithmetic a 32-bit counter needs. No AML, and there will be none. | 77 |
-| `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. | 70 |
+| `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. Has its fuzz target. | 70 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
 | `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts, and which identification register fields grant each Arm `AT_HWCAP` bit. Constants and pure functions of them. Three number tables, one of them 32-bit. | 78 |
@@ -2814,13 +2814,14 @@ loader's), `frame`, `heap`, `paging` — that is **706 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has nine:
+asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has ten:
 `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`, `vfs_ops`,
-`pci_walk`, `btrfs_read`, `block_queue` and `cpio_parse`. Every crate in the
-table above parses bytes that came from outside the system — a disk, a firmware
-table, an archive a stranger built — which is precisely the population the rule
-was written for. The fuzz targets still owed — `fdt`, `acpi`, `virtio` and
-`linux-abi` — are owed *before* the consuming stage starts, not when it ships.
+`pci_walk`, `btrfs_read`, `block_queue`, `cpio_parse` and `fdt_parse`. Every
+crate in the table above parses bytes that came from outside the system — a
+disk, a firmware table, an archive a stranger built — which is precisely the
+population the rule was written for. The fuzz targets still owed — `acpi`,
+`virtio` and `linux-abi` — are owed *before* the consuming stage starts, not
+when it ships.
 
 `cpio_parse` asserts more than the absence of a panic: that every name and
 data slice lies inside the archive exactly where the format puts it, that the
@@ -2829,6 +2830,15 @@ prefix of an archive never reads a different entry, and that any archive
 walked to its trailer, written out again from what the reader reported, reads
 back identical. Its seeds include the archive every boot image carries, byte
 for byte, and two that GNU cpio wrote.
+
+`fdt_parse` holds the device tree reader to a second walk of the token stream
+written from the specification: a tree the reader accepts must be well formed
+by that walk, `nodes()` must yield exactly its nodes with the cell counts
+their parents declared and exactly the properties after each name, and
+`find_node` must return the first node the specification's path matching
+selects. Its seeds are `dtc`-compiled trees holding every binding the crate
+decodes, and token-built shapes `dtc` will not write: NOPs, a property after a
+subnode, nesting at and past the depth limit.
 
 `ustack_build` is what the rule looks like when it is followed rather than
 recorded as debt: written before a line of stage 7 kernel code existed, and it

@@ -55,6 +55,10 @@ name = "ferrix-elf"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-fdt"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-frame"
 version = "0.1.0"
 
@@ -67,6 +71,7 @@ dependencies = [
  "ferrix-btrfs",
  "ferrix-cpio",
  "ferrix-elf",
+ "ferrix-fdt",
  "ferrix-frame",
  "ferrix-linux-abi",
  "ferrix-native-abi",

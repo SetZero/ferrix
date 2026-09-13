@@ -94,7 +94,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1426 elements, 157 relations. Model digest `a6fb1a2e88b816e9`.
+13 files, 16 packages, 1426 elements, 157 relations. Model digest `b5a1d6cb76d5308c`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
