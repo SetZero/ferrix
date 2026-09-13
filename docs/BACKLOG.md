@@ -173,8 +173,9 @@ nobody has it yet.
 
 | Item | Owner | Stage |
 |---|---|---|
-| POSIX.1-2024 interface sweep: from musl's implementation of every mandatory POSIX.1-2024 function, the list of Linux system calls (and flags) they need; the stage 7 sweep tooling runs each on all three architectures and files every `ENOSYS`, `EINVAL` on a mandatory flag, or wrong result with the area that owns it, as rows here. Sockets and threads are known and excluded | os-b6, after its five branches | 7, 8 |
-| `AF_UNIX` sockets: `socket`, `socketpair`, `bind`, `listen`, `accept`, `connect`, `send*`/`recv*` with `SCM_RIGHTS`, `shutdown`, `getsockopt` for what busybox and POSIX need; no net core, no `AF_INET` | open — the first free session after the stage 8 chain lands | 7 |
+| POSIX.1-2024 interface sweep: from musl's implementation of every mandatory POSIX.1-2024 function, the list of Linux system calls (and flags) they need; the stage 7 sweep tooling runs each on all three architectures and files every `ENOSYS`, `EINVAL` on a mandatory flag, or wrong result with the area that owns it, as rows here. Sockets and threads are known and excluded; the `epoll`, `eventfd`, `timerfd` and `signalfd` families are in scope because stage 17 needs them | os-b6, after its five branches | 7, 8, 17 |
+| `AF_UNIX` sockets: `socket`, `socketpair`, `bind`, `listen`, `accept`, `connect`, `send*`/`recv*` with `SCM_RIGHTS`, `shutdown`, `getsockopt` for what busybox, POSIX and Wayland need; no net core, no `AF_INET`. On the compositor's path (stage 17) as well as POSIX's | open — wants a session of its own | 7, 17 |
+| `memfd_create` with `F_ADD_SEALS`/`F_GET_SEALS`, on tmpfs, after file-backed `mmap`: `wl_shm` is a sealed memfd both sides map | os-c4, after the chain | 8, 17 |
 | Trusting a BAR firmware placed but did not enable | ferrix-d9 | 10 |
 | btrfs: CI Miri step for `libs/btrfs` and `libs/block` under 15 minutes, whole-image tests ignored under Miri | ferrix-61 | 11 |
 | A two-last-threads exit check that provably races: spin-meet on two processors, with its negative control -- the old last-thread decision put back -- failing by name. Today's check passes that control too, so it shows only that such a process ends with its first thread's status (from stage 9's review of threads commit 4). 1 point | threads (os-9f) | 7 |
@@ -196,8 +197,19 @@ nobody has it yet.
 | The debt the roadmap names: fuzz targets for `virtio`, `linux-abi` | open |
 | The host-test table in the roadmap generated from `cargo test --list` with a gate, instead of counted by hand | ferrix-24 |
 | The POSIX measure: musl's libc-test functional and conformance programs built static against musl and against ferrousli, run under `test-shell` on all three architectures, with the pass count in the roadmap's host-test table and every failure filed with its owner | os-7c, with os-9f once threads run | 
+| `futex.rs` holds `TABLE` across `read_word`, a read fault; safe only while a read fault never invalidates and frame allocation has no reclaim. Stage 13's reclaim makes it a bug: read the word before taking the table, or retry after. From the 2026-09-13 spin-lock audit | os-a6, before stage 13's reclaim |
 | Zero-copy block reads: pin the page-cache pages themselves as the block ring's buffers, removing the data-VMO and scratch copies of stage 11's first read path (ARCHITECTURE §3) | ferrix-61, after stage 11's kernel mount |
 | ferrousli's busybox beyond the gates' applets: the 30 stubs in `ferrousli/src/stubs.rs` (regex for `grep` and `sed` patterns busybox does not handle itself, the math functions `awk` calls, name resolution with interface and Ethernet lookups), each ending the program when an applet reaches it; and `crypt`'s traditional DES and `$2*$` blowfish hashes, which return `"*"` | open |
+
+### After `rustc` — the compositor's path, unowned until stage 16 is near
+
+| Item | Stage |
+|---|---|
+| Display core + ring-3 virtio-gpu driver, `/dev/dri/card0` with dumb buffers, atomic page flip and vblank; `xtask` reading QEMU's screendump | 17 |
+| Input core + ring-3 virtio-input driver as evdev; QEMU monitor input injection in `xtask` | 17 |
+| The compositor workspace: Smithay base (assumed), CPU rendering, dwindle and master, `hyprland.conf`, `hyprctl` IPC, two Rust test clients | 18 |
+| GPU path decision, then `renderD128`, dmabuf, GBM, animations, blur and rounding | 19 |
+| The DK1's LTDC display and USB HID as the hardware variant of stage 17 | 17, P3 |
 
 ### P3 — hardware variants and later stages, unowned
 
@@ -225,6 +237,17 @@ Dated, newest first. A decision here is final until the customer says otherwise.
   it. This carries out the customer's 2026-09-13 order below once the binary
   passed both, at 5e9b0b6 with no stub reached.
 
+* **2026-09-13 (customer)** The goal after `rustc` is a Hyprland-shaped
+  Wayland compositor, written in Rust, running on Ferrix. Roadmap stages 17
+  (display and input), 18 (the compositor) and 19 (Hyprland fidelity and the
+  GPU) carry it; self-hosting moves to stage 20. Pulled onto the path by it:
+  `AF_UNIX` with `SCM_RIGHTS` (from networking), `memfd_create` with sealing
+  and `MAP_SHARED` file mappings (stage 8), and the `epoll`, `eventfd`,
+  `timerfd` and `signalfd` families (the POSIX sweep files them). Three
+  choices are the customer's, written into stages 18 and 19 as assumptions
+  until made: Smithay as the compositor base rather than from scratch;
+  `xkbcommon` as the one C library at stage 18; Mesa on ferrousli versus a
+  Rust GPU path at stage 19.
 * **2026-09-13 (customer)** POSIX.1-2024 compatibility is a goal, on the
   condition that it never breaks Linux compatibility. Ferrix takes POSIX
   through its libc over the Linux ABI (ARCHITECTURE §2), so the goal costs

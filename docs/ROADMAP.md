@@ -16,8 +16,11 @@ Two rules govern the ordering:
 
 Sizes are order-of-magnitude, in the sense of "a weekend / a week / a month /
 longer". This is a long program of work: stages 1–8 are a conventional kernel
-bring-up, 9–14 are the parts this design chose to do properly, and 15–17 are the
-goal. Nobody should read the table as a schedule.
+bring-up, 9–14 are the parts this design chose to do properly, 15–16 are the
+goal, and 17–19 are the goal after it: a Hyprland-shaped Wayland compositor,
+written in Rust, running on Ferrix (decided 2026-09-13). Nobody should read
+the table as a schedule; from that date sizes for new work are story points,
+measured into time only after the fact.
 
 **Where it stands:** stages 0–11 are done and in the boot test on all three
 architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-11`.
@@ -2716,7 +2719,9 @@ busybox's applets over stage 8's root showed how much of a real userland does:
 local socket, fail today, because stage 7 refuses every socket call.
 
 The net core sits beside the block core. It provides sockets in the Linux
-ABI: `AF_UNIX` stream and datagram with descriptor passing, `AF_INET` and
+ABI: `AF_UNIX` stream and datagram with descriptor passing (pulled forward to
+stage 17's path on 2026-09-13, because Wayland is an `AF_UNIX` socket
+carrying descriptors, and needing no net core), `AF_INET` and
 `AF_INET6` TCP and UDP, and the `AF_NETLINK` route family that `ip` configures
 interfaces through. Those run over interfaces, routes and a loopback device.
 virtio-net is the first driver. It runs in user mode on stage 10's device
@@ -2791,10 +2796,119 @@ The remaining syscall surface, the memory scale, the process spawn path for
 
 ---
 
-## Stage 17 — Self-hosting
+## Stage 17 — Display and input  ·  *55 points*
 
-Build Ferrix on Ferrix. At that point the acceptance test writes itself: the
-image produced by the Ferrix-hosted compiler boots and passes every test above.
+The first stage of the goal after `rustc`: a Hyprland-shaped Wayland
+compositor, written in Rust, running on Ferrix. The compositor is a user
+program on the Linux ABI, so what it needs from the kernel is what a Linux
+compositor needs, and this stage provides it the way stage 10 provides disks:
+a kernel core with a ring-3 driver on stage 10's device objects, exposed
+through the Linux ABI so that Rust's existing compositor crates run unchanged.
+
+* **A display core and a virtio-gpu driver in ring 3.** The core owns
+  connectors, modes and scanout buffers; the driver drives virtio-gpu's 2D
+  commands (resource create, attach backing, set scanout, transfer, flush)
+  through a translated domain, the way virtio-blk drives the disk. The Linux
+  ABI is `/dev/dri/card0` with the DRM/KMS subset a software-rendered
+  compositor uses: `GET_RESOURCES`, connectors and modes, dumb buffers
+  (`MODE_CREATE_DUMB`, `MODE_MAP_DUMB` served by file-backed `mmap`),
+  `MODE_ADDFB2`, the atomic commit with page flip, and the vblank event read
+  from the descriptor. No GEM import, no PRIME, no render node yet: rendering
+  is on the CPU into a dumb buffer.
+* **An input core and a virtio-input driver in ring 3,** exposed as evdev:
+  `/dev/input/event*` with `EVIOCGBIT`, `EVIOCGNAME`, `EVIOCGABS` and the
+  `input_event` stream, keyboard, mouse and tablet as QEMU offers them.
+* **The calls a Rust event loop needs:** `epoll_create1`/`epoll_ctl`/`epoll_wait`,
+  `eventfd2`, `timerfd_create`/`timerfd_settime`, `signalfd4`, `memfd_create`
+  with sealing, and `AF_UNIX` sockets with `SCM_RIGHTS`, pulled forward from
+  the networking stage because Wayland is a Unix socket carrying descriptors
+  and `wl_shm` is a sealed memfd mapped by both sides. The `AF_INET` half
+  stays where it is.
+* **Nothing is drawn by the kernel.** `docs/ARCHITECTURE.md` keeps its rule:
+  the firmware framebuffer is a panic's, once. The display core hands scanout
+  to whoever opened the card; a panic after that still writes text over it.
+
+**Exit:** in the boot test on x86-64 and AArch64 (ARMv7-A's QEMU machine has
+no virtio-gpu; the DK1's LTDC is a hardware row, P3), a user program opens
+`/dev/dri/card0`, sets the mode, draws a known pattern into a dumb buffer and
+page-flips it; `cargo xtask` reads QEMU's screendump and requires the pattern
+pixel for pixel. A key and a pointer motion sent through QEMU's monitor arrive
+as `input_event`s on `/dev/input/event0` and are echoed on the console. Two
+processes exchange a sealed memfd over an `AF_UNIX` socket and both see the
+other's writes through `MAP_SHARED`.
+
+---
+
+## Stage 18 — The compositor  ·  *89 points*
+
+A Wayland compositor in Rust, on `libs/`' side of the tree as its own
+workspace the way ferrousli is, built on the Smithay compositor crates unless
+the customer decides on a compositor written from scratch (an open decision
+recorded in `docs/BACKLOG.md`); the window management, the layouts, the
+configuration and the IPC are written new, in Rust, to Hyprland's shape.
+
+* **Protocols:** `wl_compositor`, `wl_subcompositor`, `wl_shm`, `wl_seat`
+  with keyboard and pointer (keymaps through `xkbcommon`, the one C library
+  allowed at this stage, built on ferrousli; a Rust keymap compiler is a
+  later row), `xdg_shell` with toplevels and popups, `xdg_decoration`,
+  `wlr_layer_shell` for bars; `zwp_linux_dmabuf` withheld until stage 19.
+* **Rendering** on the CPU into stage 17's dumb buffers: damage tracking,
+  a pixman-shaped Rust rasteriser (`tiny-skia`), one page flip per frame,
+  frame callbacks on vblank.
+* **Hyprland's shape:** the dwindle and master layouts, workspaces, the
+  keybind and dispatcher model (`movefocus`, `movewindow`, `workspace`,
+  `killactive`, `togglefloating`, `fullscreen`), gaps and borders, window
+  rules, and a configuration file that parses Hyprland's `hyprland.conf`
+  syntax (sections, `$variables`, `bind`, `windowrule`, `exec-once`).
+* **IPC:** a Unix socket with `hyprctl`'s request shape (`clients`,
+  `workspaces`, `activewindow`, `dispatch`, `keyword`, `reload`) and the
+  event socket, so a Rust `hyprctl` and a bar can be written against it.
+* **Clients for the tests,** in Rust over `wl_shm`: a solid-colour client
+  that draws a given pattern, and a small terminal emulator over the
+  console's pty, both static, both under `cargo xtask` like busybox.
+
+**Exit:** in a test of its own on x86-64 and AArch64, the compositor starts
+from a `hyprland.conf`, `exec-once` launches two pattern clients, they tile
+dwindle-style with the configured gaps and borders, a keybind sent through
+QEMU's monitor moves focus and another swaps them, and each state is
+required from QEMU's screendump; `hyprctl clients` and `hyprctl
+activewindow` over the IPC socket report the same. A person at the serial
+console can run the terminal client in it.
+
+---
+
+## Stage 19 — Hyprland fidelity, and the GPU  ·  *144 points*
+
+What makes it Hyprland rather than a tiling compositor: animations with its
+bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
+special workspaces, groups, multi-monitor with per-monitor workspaces and
+scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
+
+Those are shaders. This stage brings the GPU: virtio-gpu's 3D commands
+through a render node (`/dev/dri/renderD128`), `zwp_linux_dmabuf`, GBM-shaped
+buffer allocation, and either Mesa's virgl and Venus drivers built on
+ferrousli for OpenGL ES and Vulkan, or a Rust path over Vulkan (`wgpu`) once a
+Vulkan driver exists — the choice is the customer's, recorded in
+`docs/BACKLOG.md` when it is made. Until it is made, every effect has a
+software fallback with a stated frame-time bound, so the compositor is never
+GPU-only.
+
+**Exit:** the stage 18 test with animations on, requiring a sequence of
+screendumps to show a window moving along the configured curve with rounded
+corners and blur behind a translucent client, at the stated frame rate under
+the GPU path and inside the stated bound under the fallback; two monitors on
+QEMU with independent workspaces; a plugin-shaped extension loaded from the
+configuration.
+
+---
+
+## Stage 20 — Self-hosting
+
+Build Ferrix — and its compositor — on Ferrix. At that point the acceptance
+test writes itself: the image produced by the Ferrix-hosted compiler boots
+and passes every test above. Moved from 17 on 2026-09-13, when the compositor
+became the goal after `rustc`; it is not on the compositor's path, and the
+compositor is cross-compiled until it is.
 
 ---
 
