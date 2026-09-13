@@ -361,7 +361,7 @@ fn check_filesystems(view: &BootView<'_>) {
     };
     println!(
         "  pipes    {} bytes through a pipe, a FIFO and sendfile; statfs, truncate and \
-         fallocate answered; {} frames leaked",
+         fallocate answered; proc and devtmpfs mounted, read and unmounted; {} frames leaked",
         calls.bytes, calls.leaked,
     );
 

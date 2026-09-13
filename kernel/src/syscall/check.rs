@@ -509,6 +509,23 @@ fn number_for(call: ferrix_linux_abi::nr::Syscall) -> Option<usize> {
     (0..=600).find(|&number| arch::decode_syscall(number) == Some(call))
 }
 
+/// Make `call` for `process` as a program on this architecture would: by its
+/// number, decoded by this build's own table, and through the table
+/// `dispatch` uses once it has found a process.
+///
+/// For the self-checks outside this module that want a call to go in the way
+/// a program's does, so that a number missing from one architecture's table,
+/// or a routing line that sends the call elsewhere, fails on that architecture.
+pub(crate) fn call_by_number(
+    process: &Process,
+    call: ferrix_linux_abi::nr::Syscall,
+    args: [u64; 6],
+) -> Result<usize, Errno> {
+    let number = number_for(call).ok_or(Errno::ENOSYS)?;
+    let decoded = arch::decode_syscall(number).ok_or(Errno::ENOSYS)?;
+    crate::syscall::handle(decoded, &SyscallArgs { number, args }, Some(process))
+}
+
 // ---------------------------------------------------------------------------
 // The handlers, against a real address space
 //
@@ -3052,7 +3069,7 @@ mod paths {
     use crate::mm;
     use crate::syscall::process::{self, Process};
     use crate::syscall::stat::StatLayout;
-    use crate::syscall::{SyscallArgs, memory, uaccess};
+    use crate::syscall::{memory, uaccess};
 
     /// What the path checks measured, for the boot log.
     #[derive(Debug)]
@@ -3241,9 +3258,7 @@ mod paths {
         /// Make `call` as a program on this architecture would.
         fn call(&mut self, call: Syscall, args: [u64; 6]) -> Result<usize, Errno> {
             self.calls = self.calls.saturating_add(1);
-            let number = number_for(call).ok_or(Errno::ENOSYS)?;
-            let decoded = arch::decode_syscall(number).ok_or(Errno::ENOSYS)?;
-            crate::syscall::handle(decoded, &SyscallArgs { number, args }, Some(self.process))
+            super::call_by_number(self.process, call, args)
         }
 
         /// Fill the start of the output page with `byte`.

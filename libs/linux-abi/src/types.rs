@@ -486,6 +486,14 @@ pub const ST_VALID: u64 = 0x0020;
 /// `mount`: mount read-only. Every `MS_*` here is from
 /// `include/uapi/linux/mount.h`.
 pub const MS_RDONLY: u32 = 1;
+/// `mount`: ignore set-user-ID and set-group-ID bits on the mount.
+pub const MS_NOSUID: u32 = 2;
+/// `mount`: refuse to open device nodes on the mount.
+pub const MS_NODEV: u32 = 4;
+/// `mount`: refuse to run programs from the mount.
+pub const MS_NOEXEC: u32 = 8;
+/// `mount`: update access times only when older than the modification time.
+pub const MS_RELATIME: u32 = 1 << 21;
 /// `mount`: change the flags of an existing mount rather than make one.
 pub const MS_REMOUNT: u32 = 32;
 /// `mount`: make a directory visible at a second place.

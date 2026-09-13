@@ -14,11 +14,25 @@
 //!
 //! # Mounting what exists
 //!
-//! `mount` makes a new tmpfs on a directory, which is what busybox's `mount -t
-//! tmpfs` asks. The other filesystem types a shell mounts at boot -- `proc`,
-//! `devtmpfs`, `sysfs`, `devpts` -- do not exist yet and are `ENODEV`, Linux's
-//! answer for a type the kernel was built without; they are added to
-//! [`filesystem_named`] as they arrive. Changing an existing mount --
+//! `mount` makes a new filesystem on a directory: a `tmpfs`, a `proc` or a
+//! `devtmpfs`, the three an init script mounts first. Each `proc` mount is a
+//! new procfs instance over the one kernel, so every one of them shows the
+//! same processes, as on Linux; each `devtmpfs` mount is a new devfs over the
+//! one device table. Mounting on a directory that is already a mount's root
+//! stacks the new one on top, so `mount -t proc proc /proc` over the boot's
+//! `/proc` works, and unmounting it uncovers the old one.
+//!
+//! The types that do not exist yet -- `sysfs`, `devpts`, `cgroup2` and every
+//! other -- are `ENODEV`, Linux's answer for a type the kernel was built
+//! without; they are added to [`filesystem_named`] as they arrive.
+//!
+//! The per-mount flags `MS_NOSUID`, `MS_NODEV`, `MS_NOEXEC`, `MS_RELATIME`
+//! and the rest of the access-time ones are accepted for every type and do
+//! nothing, because there is nothing yet for any of them to switch off: no
+//! program runs set-user-ID, and no access time is kept apart from the others.
+//! `/proc/mounts` does not print them, for the same reason. The options string
+//! -- tmpfs's `size=`, procfs's `hidepid=` -- is not read for any type, so an
+//! option is never refused and never has an effect. Changing an existing mount --
 //! `MS_REMOUNT`, `MS_BIND`, `MS_MOVE` and the propagation flags -- is `EINVAL`,
 //! because the mount table has no operation that does it.
 //!
@@ -43,6 +57,8 @@ use ferrix_vfs::statfs::StatfsLayout;
 use ferrix_vfs::{FileSystem, FileType};
 
 use crate::fs;
+use crate::fs::devfs::Devfs;
+use crate::fs::procfs::Procfs;
 use crate::syscall::path::{self, Target};
 use crate::syscall::process::Process;
 use crate::syscall::{fd, pipe, uaccess};
@@ -283,19 +299,23 @@ pub(crate) fn sys_chroot(process: &Process, at: u64) -> Result<usize, Errno> {
 
 /// The filesystem a `mount` type names, new.
 ///
-/// `proc` and `devtmpfs` join this match when the devfs and procfs work lands;
-/// `sysfs` and `devpts` when they exist. Until then they fall to `ENODEV`
-/// with every name Linux would not know either.
+/// The names are the ones Linux registers, and the ones `/proc/filesystems`
+/// lists. `sysfs`, `devpts` and `cgroup2` join this match when they exist;
+/// until then they fall to `ENODEV` with every name Linux would not know
+/// either.
 fn filesystem_named(name: &[u8]) -> Result<Arc<dyn FileSystem>, Errno> {
     match name {
         b"tmpfs" => Ok(fs::new_tmpfs()),
+        b"proc" => Ok(Arc::new(Procfs::new())),
+        b"devtmpfs" => Ok(Arc::new(Devfs::new())),
         _ => Err(Errno::ENODEV),
     }
 }
 
 /// `mount(source, target, type, flags, data)`, for the one kind of mount there
 /// is: a new filesystem on a directory. The source and the options string
-/// mean nothing to tmpfs and are not read.
+/// mean nothing to any filesystem here and are not read; see the module
+/// documentation.
 ///
 /// In Linux's order: the type is copied in before the target is looked up,
 /// the flags are judged after, and the type is only looked for last.

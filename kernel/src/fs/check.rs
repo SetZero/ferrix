@@ -11,16 +11,19 @@
 //! filesystems answer as a program meets them. Those waits and wake-ups, the
 //! user-memory byte layouts and the descriptors left behind are the kernel's,
 //! not the library's, so they are driven through the system call handlers
-//! against a process built for the check.
+//! against a process built for the check. Last, `mount -t proc` and `mount -t
+//! devtmpfs` go in by syscall number, as an init script's do, and are read
+//! through, listed in `/proc/mounts` and unmounted again.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
-    AT_FDCWD, F_GETFD, FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE, FD_CLOEXEC, MAP_ANONYMOUS,
-    MAP_PRIVATE, O_APPEND, O_CLOEXEC, O_CREAT, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY,
-    PROT_READ, PROT_WRITE, SEEK_CUR,
+    AT_FDCWD, AT_REMOVEDIR, F_GETFD, FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE, FD_CLOEXEC,
+    MAP_ANONYMOUS, MAP_PRIVATE, MS_NODEV, MS_NOEXEC, MS_NOSUID, MS_RELATIME, O_APPEND, O_CLOEXEC,
+    O_CREAT, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, PROT_READ, PROT_WRITE, SEEK_CUR,
 };
 use ferrix_vfs::pipe::PIPEFS_MAGIC;
 use ferrix_vfs::tmpfs::TMPFS_MAGIC;
@@ -28,6 +31,7 @@ use ferrix_vfs::{Errno, FileType, Namespace, NewNode, OpenFlags, RenameMode};
 
 use crate::fs::{self, Report as Built};
 use crate::mm;
+use crate::syscall::check as syscall_check;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{fd, file, fsctl, pipe, uaccess};
@@ -278,12 +282,61 @@ const AT_BACK: u64 = 256;
 const AT_STATFS: u64 = 512;
 /// `sendfile`'s offset.
 const AT_OFFSET: u64 = 768;
+/// The directory a second procfs is mounted on.
+const AT_PROC_DIR: u64 = 800;
+/// The directory a second devtmpfs is mounted on.
+const AT_DEV_DIR: u64 = 832;
+/// `proc`, as a type and as a source.
+const AT_PROC_TYPE: u64 = 864;
+/// `devtmpfs`, as a type and as a source.
+const AT_DEVTMPFS_TYPE: u64 = 880;
+/// `sysfs`, which is not a type here.
+const AT_SYSFS_TYPE: u64 = 896;
+/// An options string procfs has on Linux and does not read here.
+const AT_OPTIONS: u64 = 912;
+/// `self` in the second procfs.
+const AT_PROC_SELF: u64 = 944;
+/// `/proc/self`, to compare it with.
+const AT_SELF: u64 = 976;
+/// `zero` in the second devtmpfs.
+const AT_DEV_ZERO: u64 = 1000;
+/// `/proc/mounts`.
+const AT_MOUNTS: u64 = 1024;
+/// The check process's own `stat` in the second procfs, written at run time:
+/// room for the longest pid.
+const AT_STAT: u64 = 1040;
+/// Where the link `self` in the second procfs is read to.
+const AT_LINK: u64 = 1104;
+/// Where `/proc/self` is read to.
+const AT_LINK_PROC: u64 = 1136;
+/// Where zeros are read to.
+const AT_ZEROS: u64 = 1168;
+/// Where `/proc/mounts` is read to, to the end of the page.
+const AT_LISTING: u64 = 1536;
 
 const TMP: &[u8] = b"/tmp\0";
 const FIFO: &[u8] = b"/tmp/stage8-fifo\0";
 const FILE: &[u8] = b"/tmp/stage8-calls\0";
 const COPY: &[u8] = b"/tmp/stage8-calls.copy\0";
 const DATA: &[u8] = b"through a pipe\n";
+const PROC_DIR: &[u8] = b"/tmp/stage8-proc\0";
+const DEV_DIR: &[u8] = b"/tmp/stage8-dev\0";
+const PROC_TYPE: &[u8] = b"proc\0";
+const DEVTMPFS_TYPE: &[u8] = b"devtmpfs\0";
+const SYSFS_TYPE: &[u8] = b"sysfs\0";
+const OPTIONS: &[u8] = b"hidepid=invisible\0";
+const PROC_SELF: &[u8] = b"/tmp/stage8-proc/self\0";
+const SELF: &[u8] = b"/proc/self\0";
+const DEV_ZERO: &[u8] = b"/tmp/stage8-dev/zero\0";
+const MOUNTS: &[u8] = b"/proc/mounts\0";
+
+/// The flags an init script mounts `/proc` with.
+const PROC_FLAGS: u32 = MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_RELATIME;
+/// The flags an init script mounts `/dev` with.
+const DEVTMPFS_FLAGS: u32 = MS_NOSUID | MS_RELATIME;
+
+/// `AT_FDCWD`, as a register carries it.
+const CWD: u64 = AT_FDCWD as i64 as u64;
 
 /// An address no program may write, for the check that `pipe2` hands back
 /// nothing it could not deliver.
@@ -334,6 +387,16 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         (AT_FILE, FILE),
         (AT_COPY, COPY),
         (AT_DATA, DATA),
+        (AT_PROC_DIR, PROC_DIR),
+        (AT_DEV_DIR, DEV_DIR),
+        (AT_PROC_TYPE, PROC_TYPE),
+        (AT_DEVTMPFS_TYPE, DEVTMPFS_TYPE),
+        (AT_SYSFS_TYPE, SYSFS_TYPE),
+        (AT_OPTIONS, OPTIONS),
+        (AT_PROC_SELF, PROC_SELF),
+        (AT_SELF, SELF),
+        (AT_DEV_ZERO, DEV_ZERO),
+        (AT_MOUNTS, MOUNTS),
     ] {
         uaccess::copy_to_user(process.space(), page + offset, bytes)
             .map_err(|_| "could not stage the file system call checks")?;
@@ -344,12 +407,21 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         .and_then(|piped| check_a_fifo_is_one_pipe(process, page).map(|fifo| piped + fifo))
         .and_then(|bytes| check_statfs_says_tmp_is_tmpfs(process, page).map(|()| bytes))
         .and_then(|bytes| check_truncate_and_fallocate_grow(process, page).map(|()| bytes))
-        .and_then(|bytes| check_sendfile_copies_a_file(process, page).map(|sent| bytes + sent));
+        .and_then(|bytes| check_sendfile_copies_a_file(process, page).map(|sent| bytes + sent))
+        .and_then(|bytes| check_proc_and_devtmpfs_mount(process, page).map(|()| bytes));
 
     // Cleaned up whatever happened, so a failure reports itself and not also
     // leaked frames.
     for fd in 3..32 {
         let _ = fd::sys_close(process, fd);
+    }
+    for dir in [AT_PROC_DIR, AT_DEV_DIR] {
+        let _ = by_number(process, Syscall::Umount2, [page + dir, 0, 0, 0, 0, 0]);
+        let _ = by_number(
+            process,
+            Syscall::Unlinkat,
+            [CWD, page + dir, u64::from(AT_REMOVEDIR), 0, 0, 0],
+        );
     }
     let ns = fs::namespace();
     let ctx = ns.context();
@@ -770,4 +842,245 @@ fn check_sendfile_copies_a_file(process: &Process, page: u64) -> Result<u64, &'s
         "sendfile's copy is not as long as what it sent",
     )?;
     Ok(17_990)
+}
+
+/// Make `call` by its number, as a program on this architecture would.
+fn by_number(process: &Process, call: Syscall, args: [u64; 6]) -> Result<usize, Errno> {
+    syscall_check::call_by_number(process, call, args)
+}
+
+/// A descriptor, as a register carries it.
+fn register(fd: i32) -> u64 {
+    u64::from(fd.unsigned_abs())
+}
+
+/// `mount -t proc` and `mount -t devtmpfs`, by number, as an init script makes
+/// them: each on a directory under /tmp, with the flags scripts pass and, for
+/// proc, an option it does not read. Through the second procfs the check
+/// process finds itself, and `self` answers as `/proc/self` does; from the
+/// second devtmpfs `zero` reads zeros; `/proc/mounts` lists both; both unmount;
+/// and `sysfs`, which does not exist, is still `ENODEV`.
+fn check_proc_and_devtmpfs_mount(process: &Process, page: u64) -> Result<(), &'static str> {
+    for dir in [AT_PROC_DIR, AT_DEV_DIR] {
+        answers(
+            by_number(process, Syscall::Mkdirat, [CWD, page + dir, 0o755, 0, 0, 0]),
+            0,
+            "a directory to mount on could not be made under /tmp",
+        )?;
+    }
+    check_a_second_procfs(process, page)?;
+    check_a_second_devtmpfs(process, page)?;
+    check_both_are_listed_and_unmount(process, page)
+}
+
+/// `mount -t proc` with the flags and an option: `self` in it answers as
+/// `/proc/self` does, and the check process is found in it by its pid.
+fn check_a_second_procfs(process: &Process, page: u64) -> Result<(), &'static str> {
+    answers(
+        by_number(
+            process,
+            Syscall::Mount,
+            [
+                page + AT_PROC_TYPE,
+                page + AT_PROC_DIR,
+                page + AT_PROC_TYPE,
+                u64::from(PROC_FLAGS),
+                page + AT_OPTIONS,
+                0,
+            ],
+        ),
+        0,
+        "mount -t proc with nosuid, nodev, noexec, relatime and hidepid= was refused",
+    )?;
+    // `self` is the reader's pid, and `ENOENT` to a task with no process,
+    // which the boot task is. What matters is that a second procfs answers
+    // exactly as the first.
+    let through_mount = by_number(
+        process,
+        Syscall::Readlinkat,
+        [CWD, page + AT_PROC_SELF, page + AT_LINK, 32, 0, 0],
+    );
+    let through_proc = by_number(
+        process,
+        Syscall::Readlinkat,
+        [CWD, page + AT_SELF, page + AT_LINK_PROC, 32, 0, 0],
+    );
+    let same = match (through_mount, through_proc) {
+        (Ok(a), Ok(b)) => {
+            a == b
+                && read_back(process, page + AT_LINK, a)?
+                    == read_back(process, page + AT_LINK_PROC, b)?
+        }
+        (Err(a), Err(b)) => a == b,
+        _ => false,
+    };
+    if !same {
+        return Err("self in a second procfs does not answer as /proc/self does");
+    }
+    // The same processes: the check's own, found by its pid.
+    let pid = process.pid();
+    let stat = alloc::format!("/tmp/stage8-proc/{pid}/stat\0");
+    uaccess::copy_to_user(process.space(), page + AT_STAT, stat.as_bytes())
+        .map_err(|_| "could not stage a path into a second procfs")?;
+    let own = descriptor(
+        by_number(
+            process,
+            Syscall::Openat,
+            [CWD, page + AT_STAT, u64::from(O_RDONLY), 0, 0, 0],
+        ),
+        "the check process's stat would not open through a second procfs",
+    )?;
+    let read = by_number(
+        process,
+        Syscall::Read,
+        [register(own), page + AT_LINK, 32, 0, 0, 0],
+    )
+    .map_err(|_| "the check process's stat would not read through a second procfs")?;
+    answers(
+        by_number(process, Syscall::Close, [register(own), 0, 0, 0, 0, 0]),
+        0,
+        "a file in a second procfs would not close",
+    )?;
+    let prefix = alloc::format!("{pid} (");
+    if !read_back(process, page + AT_LINK, read)?.starts_with(prefix.as_bytes()) {
+        return Err("a second procfs does not show the check process as /proc does");
+    }
+    Ok(())
+}
+
+/// `mount -t devtmpfs` with the flags: `zero` in it reads zeros.
+fn check_a_second_devtmpfs(process: &Process, page: u64) -> Result<(), &'static str> {
+    answers(
+        by_number(
+            process,
+            Syscall::Mount,
+            [
+                page + AT_DEVTMPFS_TYPE,
+                page + AT_DEV_DIR,
+                page + AT_DEVTMPFS_TYPE,
+                u64::from(DEVTMPFS_FLAGS),
+                0,
+                0,
+            ],
+        ),
+        0,
+        "mount -t devtmpfs with nosuid and relatime was refused",
+    )?;
+    uaccess::copy_to_user(process.space(), page + AT_ZEROS, &[0xA5; 16])
+        .map_err(|_| "could not stage a buffer for zeros")?;
+    let zero = descriptor(
+        by_number(
+            process,
+            Syscall::Openat,
+            [CWD, page + AT_DEV_ZERO, u64::from(O_RDONLY), 0, 0, 0],
+        ),
+        "zero in a second devtmpfs would not open",
+    )?;
+    answers(
+        by_number(
+            process,
+            Syscall::Read,
+            [register(zero), page + AT_ZEROS, 16, 0, 0, 0],
+        ),
+        16,
+        "zero in a second devtmpfs did not fill a read",
+    )?;
+    answers(
+        by_number(process, Syscall::Close, [register(zero), 0, 0, 0, 0, 0]),
+        0,
+        "zero in a second devtmpfs would not close",
+    )?;
+    if read_back(process, page + AT_ZEROS, 16)? != [0; 16] {
+        return Err("zero in a second devtmpfs read something other than zeros");
+    }
+    Ok(())
+}
+
+/// `/proc/mounts` lists both mounts as Linux prints them; both unmount and
+/// their directories can be removed; and `sysfs` is still `ENODEV`.
+fn check_both_are_listed_and_unmount(process: &Process, page: u64) -> Result<(), &'static str> {
+    let listing = read_mounts(process, page)?;
+    for line in [
+        &b"proc /tmp/stage8-proc proc rw 0 0\n"[..],
+        b"devtmpfs /tmp/stage8-dev devtmpfs rw 0 0\n",
+    ] {
+        if !listing.windows(line.len()).any(|window| window == line) {
+            return Err("/proc/mounts does not list a proc or devtmpfs mount as Linux prints it");
+        }
+    }
+
+    for dir in [AT_PROC_DIR, AT_DEV_DIR] {
+        answers(
+            by_number(process, Syscall::Umount2, [page + dir, 0, 0, 0, 0, 0]),
+            0,
+            "umount2 of a proc or devtmpfs mount was refused",
+        )?;
+    }
+    refuses(
+        by_number(
+            process,
+            Syscall::Umount2,
+            [page + AT_PROC_DIR, 0, 0, 0, 0, 0],
+        ),
+        Errno::EINVAL,
+        "umount2 of a directory nothing is mounted on any more was not EINVAL",
+    )?;
+    refuses(
+        by_number(
+            process,
+            Syscall::Mount,
+            [
+                page + AT_SYSFS_TYPE,
+                page + AT_PROC_DIR,
+                page + AT_SYSFS_TYPE,
+                0,
+                0,
+                0,
+            ],
+        ),
+        Errno::ENODEV,
+        "mount -t sysfs, a type that does not exist, was not ENODEV",
+    )?;
+    for dir in [AT_PROC_DIR, AT_DEV_DIR] {
+        answers(
+            by_number(
+                process,
+                Syscall::Unlinkat,
+                [CWD, page + dir, u64::from(AT_REMOVEDIR), 0, 0, 0],
+            ),
+            0,
+            "a directory unmounted from could not be removed",
+        )?;
+    }
+    Ok(())
+}
+
+/// The whole of `/proc/mounts`, read by number in pieces.
+fn read_mounts(process: &Process, page: u64) -> Result<Vec<u8>, &'static str> {
+    let mounts = descriptor(
+        by_number(
+            process,
+            Syscall::Openat,
+            [CWD, page + AT_MOUNTS, u64::from(O_RDONLY), 0, 0, 0],
+        ),
+        "/proc/mounts would not open",
+    )?;
+    let room = PAGE_SIZE - AT_LISTING;
+    let mut listing = Vec::new();
+    let outcome = loop {
+        match by_number(
+            process,
+            Syscall::Read,
+            [register(mounts), page + AT_LISTING, room, 0, 0, 0],
+        ) {
+            Ok(0) => break Ok(()),
+            Ok(count) if listing.len() < 4 * PAGE_SIZE as usize => {
+                listing.extend_from_slice(&read_back(process, page + AT_LISTING, count)?);
+            }
+            Ok(_) => break Err("/proc/mounts did not end"),
+            Err(_) => break Err("/proc/mounts would not read"),
+        }
+    };
+    let _ = by_number(process, Syscall::Close, [register(mounts), 0, 0, 0, 0, 0]);
+    outcome.map(|()| listing)
 }

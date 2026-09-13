@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use ferrix_bootinfo::{Arch, PAGE_SIZE};
+use ferrix_procfs::filesystems::{self, Filesystem};
 use ferrix_procfs::kstat::{self, CpuTimes, Kstat};
 use ferrix_procfs::maps::{self, Mapping, Width};
 use ferrix_procfs::meminfo::{self, Meminfo};
@@ -99,10 +100,18 @@ pub(super) fn cpuinfo(_: &Kernel) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// `/proc/filesystems`: the filesystem types this kernel has, none of them
-/// needing a block device.
+/// `/proc/filesystems`: the filesystem types `mount` takes, none of them
+/// needing a block device, in the order Linux registers them.
+///
+/// The same names `syscall::fsctl`'s `filesystem_named` matches: a type this
+/// file lists and `mount` refuses, or the other way round, is a program
+/// deciding what to mount on a list the kernel does not keep.
 pub(super) fn filesystems(_: &Kernel) -> Result<Vec<u8>> {
-    Ok(b"nodev\ttmpfs\nnodev\tproc\nnodev\tdevfs\n".to_vec())
+    let mut out = Vec::new();
+    for name in [&b"tmpfs"[..], b"proc", b"devtmpfs"] {
+        filesystems::render(&mut out, &Filesystem { name, nodev: true });
+    }
+    Ok(out)
 }
 
 /// `/proc/meminfo`.

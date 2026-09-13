@@ -778,7 +778,11 @@ descriptors again when it cannot hand them back. A FIFO under /tmp must be one
 pipe for its openers. statfs of /tmp must decode TMPFS_MAGIC, and statfs64 must
 take 84 and musl's 88 as its size. truncate and fallocate must grow a file and
 fallocate never shrink one, and sendfile must copy a file with and without an
-offset. The whole run is done twice and must leave no frame behind.
+offset. Then, by syscall number, mount -t proc and mount -t devtmpfs must each
+make a new instance on a directory under /tmp: the check process must be found
+through the procfs, zero must read zeros from the devtmpfs, /proc/mounts must
+list both, both must unmount, and mount -t sysfs must still be ENODEV. The whole
+run is done twice and must leave no frame behind.
 
 1. A pipe end's drop no longer counts it out of the buffer, so a reader never
    sees end of file and the pipe outlives its descriptors as leaked frames.

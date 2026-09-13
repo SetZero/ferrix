@@ -26,6 +26,7 @@
 //!   counters, and the parser the kernel's boot check reads it back with.
 //! * [`mounts`] — `/proc/mounts`, with the octal escapes a mount point with a
 //!   space in it needs.
+//! * [`filesystems`] — `/proc/filesystems`, the types `mount -t` takes.
 //! * [`partitions`] — `/proc/partitions`.
 //! * [`sysctl`] — the values under `/proc/sys`, and what a write to a string
 //!   one stores.
@@ -35,6 +36,7 @@
 
 extern crate alloc;
 
+pub mod filesystems;
 pub mod kstat;
 pub mod maps;
 pub mod meminfo;

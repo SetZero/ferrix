@@ -8,6 +8,7 @@
 
 use alloc::vec::Vec;
 
+use crate::filesystems::{self, Filesystem};
 use crate::kstat::{self, CpuTimes, Kstat};
 use crate::maps::{self, Mapping, Width};
 use crate::meminfo::{self, Meminfo};
@@ -407,6 +408,70 @@ fn a_mounts_line_is_what_linux_printed_and_escapes_what_would_split_it() {
         show(&out),
         "tmpfs /mnt/a\\040b\\134c\\011d\\012e tmpfs rw 0 0\n",
         "escapes"
+    );
+}
+
+#[test]
+fn a_devtmpfs_mounts_line_is_what_linux_printed() {
+    // The host's `/dev`, mounted by its initramfs with the source `udev`.
+    let host = Mount {
+        source: b"udev",
+        point: b"/dev",
+        fstype: b"devtmpfs",
+        options: b"rw,nosuid,relatime,size=27067912k,nr_inodes=6766978,mode=755,inode64",
+    };
+    let out = rendered(|out| mounts::render(out, &host));
+    assert_eq!(
+        show(&out),
+        show(
+            b"udev /dev devtmpfs rw,nosuid,relatime,size=27067912k,nr_inodes=6766978,mode=755,inode64 0 0\n"
+        ),
+        "the host's /dev"
+    );
+
+    // What `mount -t devtmpfs devtmpfs /tmp/d` shows here: the source is the
+    // type's name, and the options are the ones the kernel enforces.
+    let here = Mount {
+        source: b"devtmpfs",
+        point: b"/tmp/d",
+        fstype: b"devtmpfs",
+        options: b"rw",
+    };
+    let out = rendered(|out| mounts::render(out, &here));
+    assert_eq!(show(&out), "devtmpfs /tmp/d devtmpfs rw 0 0\n", "here");
+}
+
+#[test]
+fn filesystems_lines_are_what_linux_printed() {
+    // Three lines of the host's `/proc/filesystems`, in its order, and one
+    // for a filesystem that needs a block device.
+    let types = [
+        Filesystem {
+            name: b"tmpfs",
+            nodev: true,
+        },
+        Filesystem {
+            name: b"proc",
+            nodev: true,
+        },
+        Filesystem {
+            name: b"devtmpfs",
+            nodev: true,
+        },
+        Filesystem {
+            name: b"ext4",
+            nodev: false,
+        },
+    ];
+    let out = rendered(|out| {
+        for filesystem in &types {
+            filesystems::render(out, filesystem);
+        }
+    });
+    assert_eq!(
+        show(&out),
+        show(b"nodev\ttmpfs\nnodev\tproc\nnodev\tdevtmpfs\n\text4\n"),
+        "the host's /proc/filesystems"
     );
 }
 

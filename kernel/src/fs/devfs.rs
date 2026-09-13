@@ -27,12 +27,22 @@
 //! daemon checks that what it was handed as `/dev/null` is 1:3 before writing
 //! to it. A node with the right name and the wrong number is a wrong answer.
 //!
-//! # Why it is called devfs
+//! # Why it says it is devtmpfs
 //!
-//! `/proc/mounts` says what a filesystem is, and this is not Linux's
-//! `devtmpfs`: nothing can be created in it. `devfs` is the name Linux gave a
-//! kernel-populated `/dev` before `devtmpfs` replaced it, so a program that
-//! looks is told something true in a word it may know.
+//! `/proc/mounts` and `/proc/filesystems` name a filesystem by the word
+//! `mount -t` takes, and programs decide by that word. An init script greps
+//! `/proc/filesystems` for `devtmpfs` before it mounts `/dev`, and a service
+//! manager looks in `/proc/mounts` for a `devtmpfs` on `/dev` before deciding
+//! whether to mount one. `mount -t devtmpfs` is how a program asks for this
+//! filesystem, so the type it reads back is the type it asked for, and the
+//! boot's own `/dev` reads the same as one a script mounted. Linux has had no
+//! type called `devfs` since 2.6.18, so that name would be a word no program
+//! looks for and no `mount` takes.
+//!
+//! The difference from Linux's is that nothing can be created in it: Linux's
+//! `devtmpfs` is a tmpfs the kernel populates, and `mknod` in it works. Here
+//! the table is the filesystem, so a program that tries is refused, which it
+//! can see, rather than given a node no device answers.
 //!
 //! # Streams
 //!
@@ -173,7 +183,7 @@ impl FileSystem for Devfs {
     }
 
     fn name(&self) -> &'static str {
-        "devfs"
+        "devtmpfs"
     }
 
     fn device(&self) -> u64 {
