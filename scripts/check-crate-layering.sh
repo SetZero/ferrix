@@ -98,6 +98,7 @@ forbid ferrix-pci      "PCI configuration space" "ferrix-kernel|ferrix-boot"
 forbid ferrix-block    "block core" "ferrix-kernel|ferrix-boot"
 forbid ferrix-btrfs    "btrfs read path" "ferrix-kernel|ferrix-boot"
 forbid ferrix-btrfs-vfs "btrfs mount" "ferrix-kernel|ferrix-boot"
+forbid ferrix-blkring  "block ring protocol" "ferrix-kernel|ferrix-boot"
 
 # ---------------------------------------------------------------------------
 # 3. Generic kernel code reaches architecture code through the facade.

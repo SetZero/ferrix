@@ -31,6 +31,14 @@ name = "ferrix-acpi"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-blkring"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
+]
+
+[[package]]
 name = "ferrix-block"
 version = "0.1.0"
 

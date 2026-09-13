@@ -456,6 +456,13 @@ jobs:
       - name: Miri (block request queue)
         run: cargo +nightly miri test -p ferrix-block --lib
 
+      # The block ring. The crate forbids unsafe, so as for PCI, what Miri adds
+      # is a check of every entry offset and probe index against the test
+      # memory's and the id table's real extent, including the lockstep tests
+      # that race the two sides' want-bell handshakes on real threads.
+      - name: Miri (block ring)
+        run: cargo +nightly miri test -p ferrix-blkring --lib
+
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.
   #
