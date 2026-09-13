@@ -49,7 +49,7 @@ ATTRIBUTE = re.compile(r"#!?\[(expect|allow)\(")
 TEST_MODULE = re.compile(r"#\[cfg\(test\)\]\s*(?:pub\s+)?mod\s+\w+\s*\{")
 
 # The crates whose sources are production code.
-ROOTS = ("kernel", "boot", "libs", "xtask")
+ROOTS = ("kernel", "boot", "libs", "user", "xtask")
 
 
 def balanced(source: str, opening: int, open_ch: str, close_ch: str) -> int:

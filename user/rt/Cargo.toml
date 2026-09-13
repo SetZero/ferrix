@@ -1,0 +1,19 @@
+[package]
+name = "ferrix-rt"
+description = "The runtime a Ferrix native program links: entry, the system call instruction, exit and panic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# Names the linker script to the build script of every program that links this
+# crate: a dependency's `rustc-link-arg` never reaches its dependents, but its
+# `links` metadata does, as `DEP_FERRIX_RT_LINKER_SCRIPT`.
+links = "ferrix-rt"
+
+[dependencies]
+ferrix-linux-abi.workspace = true
+ferrix-native.workspace = true
+
+[lints]
+workspace = true

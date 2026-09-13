@@ -127,10 +127,13 @@ fi
 # `target_pointer_width` and `target_endian` are not architecture selection --
 # they are properties both of our targets share, and asserting one is fine
 # anywhere. `target_os` likewise: xtask is a host program.
+#
+# A native program under `user/` follows the same rule: its crate's
+# `src/arch/` is the facade, as `kernel/src/arch/` is the kernel's.
 # ---------------------------------------------------------------------------
-offenders=$(grep -rnE 'cfg[^)]*target_arch' kernel/src boot/src libs 2>/dev/null \
+offenders=$(grep -rnE 'cfg[^)]*target_arch' kernel/src boot/src libs user 2>/dev/null \
     --include='*.rs' \
-    | grep -vE '^(kernel|boot)/src/arch/' || true)
+    | grep -vE '^((kernel|boot)/src/arch/|user/[^/]+/src/arch/)' || true)
 if [[ -n "$offenders" ]]; then
     echo "LAYERING VIOLATION: target_arch conditional outside an arch directory:" >&2
     echo "$offenders" | sed 's/^/    /' >&2
@@ -160,7 +163,7 @@ while IFS= read -r manifest; do
         echo >&2 "        workspace = true"
         status=1
     fi
-done < <(find boot kernel libs xtask -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort)
+done < <(find boot kernel libs user xtask -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort)
 
 if [[ $status -ne 0 ]]; then
     echo >&2

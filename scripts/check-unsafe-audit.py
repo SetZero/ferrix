@@ -38,7 +38,7 @@ import pathlib
 import re
 import sys
 
-ROOTS = ("kernel", "boot", "libs", "xtask")
+ROOTS = ("kernel", "boot", "libs", "user", "xtask")
 
 # `unsafe {` opening a block, but not `unsafe fn`, `unsafe impl`, `unsafe trait`
 # or `unsafe extern`. Also matches the `unsafe` in `unsafe { ... }` used as an

@@ -77,6 +77,20 @@ CPU primitives above. What ARMv7-A does not need is AArch64's EL2 → EL1 drop:
 the loader refuses to start in HYP mode rather than leaving it, because U-Boot
 enters in SVC mode unless the machine was built with virtualisation.
 
+### A native program, on every architecture
+
+`user/rt`, the runtime a native program links, has one file per architecture
+under `user/rt/src/arch/`, and each holds the same three things.
+
+| Site | Why |
+|---|---|
+| `_start` | A process is *entered*, not called. The kernel drops to user mode with `SYSRET`, `eret` or `rfeia`, so there is no return address and no caller's frame. The stack is aligned for a program entry, not for a callee: on x86-64 that is eight bytes off what a function prologue assumes. Two to five instructions zero the frame pointer (and link register), align the stack, and call `ferrix_rt_start`, leaving the bootstrap handle in the first argument register. |
+| The trap | `syscall` or `svc #0`, and the register each argument goes in. This is the kernel's system call entry, read from the other side, and it has no Rust spelling. It is one instruction in an `asm!` block. Each register is named as an operand, and the budget counts those lines too, because the register assignment *is* the contract. |
+| `exit_group` | The same trap, with nothing to return to. |
+
+Nothing a runtime grows later belongs here: not threads, thread-local storage
+or an allocator.
+
 ## The budget
 
 `max_total_lines` in the allow-list is an **absolute** cap, not a percentage,

@@ -1,0 +1,20 @@
+[package]
+name = "ferrix-channel-echo"
+description = "The smallest native program: a message through a channel and back, built on ferrix-rt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "channel-echo"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferrix-rt.workspace = true
+
+[lints]
+workspace = true

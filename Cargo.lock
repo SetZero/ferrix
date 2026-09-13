@@ -74,6 +74,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-channel-echo"
+version = "0.1.0"
+dependencies = [
+ "ferrix-rt",
+]
+
+[[package]]
 name = "ferrix-cpio"
 version = "0.1.0"
 
@@ -169,6 +176,14 @@ version = "0.1.0"
 dependencies = [
  "qrcode",
  "rqrr",
+]
+
+[[package]]
+name = "ferrix-rt"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-native",
 ]
 
 [[package]]

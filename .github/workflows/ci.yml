@@ -203,9 +203,23 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
 
+      # The native runtime and programs are freestanding like the kernel, so
+      # they are left out of every host step and linted per target below.
       - name: Clippy (host libraries and xtask)
         if: runner.os == 'Linux'
-        run: cargo clippy --workspace --exclude ferrix-kernel --exclude ferrix-boot --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude ferrix-kernel --exclude ferrix-boot --exclude ferrix-rt --exclude ferrix-channel-echo --all-targets -- -D warnings
+
+      - name: Clippy (native runtime and programs, x86_64)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p ferrix-rt -p ferrix-channel-echo --target x86_64-unknown-none -- -D warnings
+
+      - name: Clippy (native runtime and programs, AArch64)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p ferrix-rt -p ferrix-channel-echo --target aarch64-unknown-none-softfloat -- -D warnings
+
+      - name: Clippy (native runtime and programs, ARMv7-A)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p ferrix-rt -p ferrix-channel-echo --target armv7a-none-eabi -- -D warnings
 
       - name: Clippy (kernel, x86_64)
         if: runner.os == 'Linux'
@@ -237,19 +251,19 @@ jobs:
       # The freestanding crates cannot run tests -- there is no host to run
       # them on -- which is exactly why the algorithmic core lives in libs/.
       - name: Tests
-        run: cargo test --workspace --exclude ferrix-kernel --exclude ferrix-boot --all-targets
+        run: cargo test --workspace --exclude ferrix-kernel --exclude ferrix-boot --exclude ferrix-rt --exclude ferrix-channel-echo --all-targets
 
       # `cargo test --all-targets` skips doctests; the lint config denies
       # broken intra-doc links, so run them too.
       - name: Doc tests
         if: runner.os == 'Linux'
-        run: cargo test --workspace --exclude ferrix-kernel --exclude ferrix-boot --doc
+        run: cargo test --workspace --exclude ferrix-kernel --exclude ferrix-boot --exclude ferrix-rt --exclude ferrix-channel-echo --doc
 
       - name: Documentation builds without warnings
         if: runner.os == 'Linux'
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --exclude ferrix-kernel --exclude ferrix-boot --no-deps
+        run: cargo doc --workspace --exclude ferrix-kernel --exclude ferrix-boot --exclude ferrix-rt --exclude ferrix-channel-echo --no-deps
 
   # ----------------------------------------------------------------
   # ferrousli, the C library in Rust, is a cargo workspace of its own,
@@ -462,6 +476,12 @@ jobs:
       # that race the two sides' want-bell handshakes on real threads.
       - name: Miri (block ring)
         run: cargo +nightly miri test -p ferrix-blkring --lib
+
+      # The native call wrappers. The crate forbids unsafe too; what Miri
+      # checks is the tests' kernel writing through each call's borrowed
+      # output buffers by address, which is the aliasing a real trap relies on.
+      - name: Miri (native call wrappers)
+        run: cargo +nightly miri test -p ferrix-native --lib
 
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.

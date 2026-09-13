@@ -67,28 +67,32 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         cargo::run(command, "scripts/check-crate-layering.sh")
     })?;
 
+    // The runtime and the native programs are freestanding like the kernel:
+    // a `_start`, a panic handler, a linker script. The host can build none of
+    // them, so they are linted per target below, and what of them can be
+    // tested lives in `libs/native`.
     step("clippy (host)", || {
-        clippy(&[
-            "--workspace",
-            "--exclude",
-            "ferrix-kernel",
-            "--exclude",
-            "ferrix-boot",
-            "--all-targets",
-        ])
+        let mut arguments = vec!["--workspace"];
+        arguments.extend(
+            FREESTANDING
+                .iter()
+                .flat_map(|&package| ["--exclude", package]),
+        );
+        arguments.push("--all-targets");
+        clippy(&arguments)
     })?;
 
     step("tests", || {
         let mut command = Command::new(cargo_binary());
-        let _ = command.current_dir(&root).args([
-            "test",
-            "--workspace",
-            "--exclude",
-            "ferrix-kernel",
-            "--exclude",
-            "ferrix-boot",
-            "--all-targets",
-        ]);
+        let _ = command
+            .current_dir(&root)
+            .args(["test", "--workspace"])
+            .args(
+                FREESTANDING
+                    .iter()
+                    .flat_map(|&package| ["--exclude", package]),
+            )
+            .arg("--all-targets");
         cargo::run(command, "cargo test")
     })?;
 
@@ -111,6 +115,15 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         step(&format!("clippy (loader, {arch})"), || {
             clippy(&["-p", "ferrix-boot", "--target", arch.loader_target()])
         })?;
+        step(
+            &format!("clippy (native runtime and programs, {arch})"),
+            || {
+                let mut arguments: Vec<&str> =
+                    NATIVE.iter().flat_map(|&package| ["-p", package]).collect();
+                arguments.extend(["--target", arch.kernel_target()]);
+                clippy(&arguments)
+            },
+        )?;
     }
 
     println!("\nchecked");
@@ -164,6 +177,19 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
 pub(crate) fn model_doc() -> Result<()> {
     python_with("scripts/gen-arch-doc.py", &[])
 }
+
+/// The native runtime and the programs built on it: freestanding, so linted
+/// once per kernel target rather than for the host.
+const NATIVE: &[&str] = &["ferrix-rt", "ferrix-channel-echo"];
+
+/// Every workspace member the host cannot build: the loader, the kernel, and
+/// [`NATIVE`].
+const FREESTANDING: &[&str] = &[
+    "ferrix-kernel",
+    "ferrix-boot",
+    "ferrix-rt",
+    "ferrix-channel-echo",
+];
 
 /// Announce a gate, run it, and report.
 fn step(name: &str, body: impl FnOnce() -> Result<()>) -> Result<()> {

@@ -43,7 +43,7 @@ import pathlib
 import re
 import sys
 
-ROOTS = ("kernel", "boot", "libs", "xtask")
+ROOTS = ("kernel", "boot", "libs", "user", "xtask")
 
 # The macros that introduce assembly. `asm!` and `naked_asm!` may be reached
 # through a `core::arch::` path, so allow a qualified prefix.
