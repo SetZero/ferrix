@@ -785,11 +785,12 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
         smp.grace_periods, smp.reads,
     );
     println!(
-        "  counter  {} of {}, {} of {} shares overlapping, {} updates lost without the lock",
+        "  counter  {} of {}, {} of {} shares overlapping in round {}, {} updates lost without the lock",
         smp.counter,
         smp.expected,
         smp.overlapping,
         cpus.online(),
+        smp.rounds,
         smp.lost,
     );
     println!(

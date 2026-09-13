@@ -96,6 +96,25 @@ static REAPING: Once<Vec<AtomicBool>> = Once::new();
 /// to switch with the count raised, so the boot test finds any such holder.
 static PREEMPT_OFF: Once<Vec<AtomicU32>> = Once::new();
 
+/// Where each processor's count was last raised: the file and line that took
+/// the lock, kept so that a holder found asleep is named rather than counted.
+/// A pointer to a `'static` `Location`, or null.
+static PREEMPT_SITE: Once<Vec<core::sync::atomic::AtomicPtr<core::panic::Location<'static>>>> =
+    Once::new();
+
+/// Per processor, how many times [`preempt_enable`] found the count already
+/// at zero: a lock released on a processor other than the one it was taken
+/// on, which the count cannot survive and a report about it should say.
+static PREEMPT_UNDERFLOWS: Once<Vec<AtomicU32>> = Once::new();
+
+/// How many enables `cpu` has seen with nothing to lower.
+fn preempt_underflows(cpu: usize) -> u32 {
+    PREEMPT_UNDERFLOWS
+        .get()
+        .and_then(|counts| counts.get(cpu))
+        .map_or(0, |count| count.load(Ordering::Relaxed))
+}
+
 /// The kernel's half of `ferrix_sync::PreemptControl`: this processor's
 /// entry in [`PREEMPT_OFF`].
 pub(crate) struct Preempt;
@@ -105,8 +124,9 @@ pub(crate) struct Preempt;
 // decision that was deferred. Both are no-ops before the scheduler has a
 // count or a processor has a number, when nothing can be switched out.
 unsafe impl ferrix_sync::PreemptControl for Preempt {
+    #[track_caller]
     fn disable() {
-        preempt_disable();
+        preempt_disable_at(core::panic::Location::caller());
     }
 
     fn enable() {
@@ -116,10 +136,30 @@ unsafe impl ferrix_sync::PreemptControl for Preempt {
 
 /// Keep the running context on this processor until the matching
 /// [`preempt_enable`].
+#[track_caller]
 pub(crate) fn preempt_disable() {
-    if let Some(count) = this_cpu().and_then(|cpu| PREEMPT_OFF.get()?.get(cpu)) {
+    preempt_disable_at(core::panic::Location::caller());
+}
+
+/// [`preempt_disable`], remembering `site` as the reason.
+fn preempt_disable_at(site: &'static core::panic::Location<'static>) {
+    let Some(cpu) = this_cpu() else {
+        return;
+    };
+    if let Some(count) = PREEMPT_OFF.get().and_then(|counts| counts.get(cpu)) {
         let _ = count.fetch_add(1, Ordering::AcqRel);
+        if let Some(slot) = PREEMPT_SITE.get().and_then(|sites| sites.get(cpu)) {
+            slot.store(core::ptr::from_ref(site).cast_mut(), Ordering::Release);
+        }
     }
+}
+
+/// The file and line that last raised `cpu`'s count, if any is recorded.
+fn preempt_site(cpu: usize) -> Option<&'static core::panic::Location<'static>> {
+    let pointer = PREEMPT_SITE.get()?.get(cpu)?.load(Ordering::Acquire);
+    // SAFETY: only `preempt_disable_at` stores here, and only a pointer to a
+    // `'static` location the compiler handed it.
+    unsafe { pointer.cast_const().as_ref() }
 }
 
 /// Undo one [`preempt_disable`], and if that was the last, make the decision
@@ -141,10 +181,21 @@ pub(crate) fn preempt_enable() {
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
             count.checked_sub(1)
         })
-        .unwrap_or(0);
+        .unwrap_or_else(|_| {
+            if let Some(count) = PREEMPT_UNDERFLOWS.get().and_then(|counts| counts.get(cpu)) {
+                let _ = count.fetch_add(1, Ordering::Relaxed);
+            }
+            0
+        });
     if was == 1 && started() && arch::interrupts_enabled() && take_resched(cpu) {
         schedule();
     }
+}
+
+/// How many locks that disable preemption `cpu`'s running context holds,
+/// for a check to print beside a result that preemption would explain.
+pub(crate) fn preemption_held(cpu: usize) -> u32 {
+    preempt_count(cpu)
 }
 
 /// How many reasons `cpu`'s running context has not to be switched out.
@@ -304,6 +355,12 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
     let _ = NEED_RESCHED.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
     let _ = REAPING.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
     let _ = PREEMPT_OFF.call_once(|| (0..online).map(|_| AtomicU32::new(0)).collect());
+    let _ = PREEMPT_UNDERFLOWS.call_once(|| (0..online).map(|_| AtomicU32::new(0)).collect());
+    let _ = PREEMPT_SITE.call_once(|| {
+        (0..online)
+            .map(|_| core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()))
+            .collect()
+    });
     let _ = NEXT_BALANCE.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
 
     adopt_boot_task()?;
@@ -448,14 +505,25 @@ fn idle_loop() -> ! {
     let cpu = this_cpu();
     loop {
         let reaped = reap_one();
-        // An interrupt that arrived while the stack was held was not allowed
-        // to switch this task out. Make the decision it asked for now, through
+        // An interrupt that arrived while `REAPING` was set was not allowed to
+        // switch this task out. Make the decision it asked for now, through
         // `schedule` and not through the look at the queue below: a sleeper
         // whose timer fired meanwhile is in the sleeper set, not the fair
         // class, and only `choose_next` moves it across and re-arms the timer.
         // Halting here instead left it asleep until some other interrupt
         // happened to arrive.
-        if reaped && cpu.is_some_and(take_resched) {
+        //
+        // **Whether or not a stack was found.** `REAPING` is set before the
+        // list is looked at, so a look that finds it empty has the same window,
+        // and by the time the exit is skipped the timer's handler has already
+        // disarmed the one-shot that fired. This was once asked only after a
+        // stack had been freed, and a sleeper's timer that fired during an
+        // empty look left the idle task halting with the decision owed and no
+        // timer armed. With a second processor, its interrupts came along
+        // sooner or later; on one, nothing ever did. That was
+        // `timeout -s KILL 1 sleep 5` never returning on a single-processor
+        // ARMv7-A machine, with every sleeping program on it asleep for good.
+        if cpu.is_some_and(take_resched) {
             schedule();
             continue;
         }
@@ -1001,10 +1069,15 @@ fn schedule() {
     if let Some(cpu) = this_cpu()
         && preempt_count(cpu) > 0
     {
+        let site = preempt_site(cpu);
         crate::panic::fatal!(
             crate::panic::catalog::SCHEDULE_WITH_PREEMPTION_HELD,
-            "a task blocked or yielded while holding a lock that disables preemption ({} held)",
-            preempt_count(cpu)
+            "a task blocked or yielded while holding a lock that disables preemption ({} held; \
+             the last was taken at {}:{}; {} enables on this processor found nothing to lower)",
+            preempt_count(cpu),
+            site.map_or("?", |site| site.file()),
+            site.map_or(0, core::panic::Location::line),
+            preempt_underflows(cpu),
         );
     }
     pick_and_switch();
@@ -1077,6 +1150,11 @@ fn choose_next(lock: &'static SpinLock<CpuQueue>, cpu: usize) -> Option<(*mut u6
 
     let (previous, next) = (previous?, next?);
     queue.stats.switches += 1;
+    // Still runnable and yet leaving: this is a preemption, the one thing a
+    // check about taking turns can count.
+    if previous.state() == RUNNABLE {
+        previous.note_preemption();
+    }
     queue.previous = Some(Arc::clone(&previous));
     queue.current = Some(Arc::clone(&next));
     queue.exec_start = now;
@@ -1475,6 +1553,9 @@ fn reap_one() -> bool {
     // answer an interrupt, and they may be waiting for this lock to file a
     // zombie of their own, with interrupts masked in turn.
     let task = ZOMBIES.lock().pop();
+    if task.is_none() {
+        hold_empty_look(cpu);
+    }
     let reaped = match task {
         Some(task) => {
             if let Some(stack) = task.stack() {
@@ -1493,6 +1574,49 @@ fn reap_one() -> bool {
     set_reaping(cpu, false);
     preempt_enable();
     reaped
+}
+
+/// Which processor's idle task should hold its next empty look for exited
+/// tasks open, as that processor's number plus one, or zero for none.
+///
+/// For `check::a_timer_during_an_empty_reap_is_not_lost`, which needs a timer
+/// to fire inside that window every time rather than once in a long while.
+/// Cleared by the look that honours it.
+static HOLD_EMPTY_REAP: AtomicU64 = AtomicU64::new(0);
+
+/// Empty looks held open until an interrupt exit had been skipped inside them.
+/// What says the check above hit the window it is about.
+static EMPTY_REAPS_HELD: AtomicU64 = AtomicU64::new(0);
+
+/// The longest [`hold_empty_look`] holds a look open, so that a check whose
+/// timer never comes costs a second rather than the idle task.
+const EMPTY_REAP_HOLD_LIMIT_NANOS: u64 = 1_000_000_000;
+
+/// If the check asked `cpu` to, keep this empty look open, with [`REAPING`]
+/// set and interrupts on, until an interrupt exit has been skipped because of
+/// it: until a reschedule request is left pending. One atomic read otherwise.
+fn hold_empty_look(cpu: usize) {
+    let mine = cpu as u64 + 1;
+    if HOLD_EMPTY_REAP.load(Ordering::Acquire) != mine {
+        return;
+    }
+    let until = crate::timer::now_nanos().saturating_add(EMPTY_REAP_HOLD_LIMIT_NANOS);
+    while !resched_pending(cpu) && crate::timer::now_nanos() < until {
+        core::hint::spin_loop();
+    }
+    if resched_pending(cpu) {
+        let _ = EMPTY_REAPS_HELD.fetch_add(1, Ordering::Relaxed);
+    }
+    let _ = HOLD_EMPTY_REAP.compare_exchange(mine, 0, Ordering::AcqRel, Ordering::Acquire);
+}
+
+/// Whether an interrupt asked `cpu` to reschedule and nothing has acted on it
+/// yet. Reads the request without taking it.
+fn resched_pending(cpu: usize) -> bool {
+    NEED_RESCHED
+        .get()
+        .and_then(|flags| flags.get(cpu))
+        .is_some_and(|flag| flag.load(Ordering::Acquire))
 }
 
 /// Free the stacks of tasks that have exited, and return how many.

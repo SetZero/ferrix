@@ -78,6 +78,17 @@ static SPANS: Once<Vec<(AtomicU64, AtomicU64)>> = Once::new();
 /// Increments each processor makes.
 const INCREMENTS: u64 = 25_000;
 
+/// How many rounds the contended count is given to show its processors
+/// running at the same time before the check gives up on them.
+///
+/// One round was enough on a quiet host and not on a loaded one: an emulator
+/// whose host deschedules whole virtual processors can run the rounds' shares
+/// one after another, and the check then said the lock was never contended
+/// when it was the host that never let the processors meet. The lock's
+/// correctness is judged on every round; only the overlap, which is about the
+/// host as much as the kernel, gets more than one chance.
+const ROUNDS: usize = 5;
+
 /// Increment the counter, from every processor at once.
 fn count(me: &'static PerCpu) {
     // Everyone starts together, so the counter is contended from the first
@@ -138,38 +149,55 @@ fn contended(topology: &Topology, report: &mut Report) -> Result<(), &'static st
             .collect()
     });
 
-    run_everywhere(count)?;
-
     let processors = topology.online() as u64;
     let expected = INCREMENTS * processors;
-    let total = *COUNTER.lock();
-    if total != expected {
-        return Err("the contended counter came out wrong: the lock let two processors in at once");
-    }
 
-    let shares: Vec<(u64, u64)> = spans
-        .iter()
-        .map(|(first, last)| (first.load(Ordering::Relaxed), last.load(Ordering::Relaxed)))
-        .collect();
-    let overlapping = shares
-        .iter()
-        .enumerate()
-        .filter(|&(index, &share)| {
-            shares
-                .iter()
-                .enumerate()
-                .any(|(other, &theirs)| other != index && overlaps(share, theirs))
-        })
-        .count();
-    if processors > 1 && overlapping == 0 {
-        return Err("no two processors' increments overlapped, so the lock was never contended");
-    }
+    for round in 1..=ROUNDS {
+        *COUNTER.lock() = 0;
+        UNLOCKED.store(0, Ordering::Relaxed);
+        AT_START.store(0, Ordering::SeqCst);
+        run_everywhere(count)?;
 
-    report.counter = total;
-    report.expected = expected;
-    report.overlapping = overlapping as u64;
-    report.lost = expected.saturating_sub(UNLOCKED.load(Ordering::Relaxed));
-    Ok(())
+        // The lock is judged on every round: a wrong total is the kernel's
+        // fault whatever the host did.
+        let total = *COUNTER.lock();
+        if total != expected {
+            return Err(
+                "the contended counter came out wrong: the lock let two processors in at once",
+            );
+        }
+
+        let shares: Vec<(u64, u64)> = spans
+            .iter()
+            .map(|(first, last)| (first.load(Ordering::Relaxed), last.load(Ordering::Relaxed)))
+            .collect();
+        let overlapping = shares
+            .iter()
+            .enumerate()
+            .filter(|&(index, &share)| {
+                shares
+                    .iter()
+                    .enumerate()
+                    .any(|(other, &theirs)| other != index && overlaps(share, theirs))
+            })
+            .count();
+
+        report.counter = total;
+        report.expected = expected;
+        report.overlapping = overlapping as u64;
+        report.lost = expected.saturating_sub(UNLOCKED.load(Ordering::Relaxed));
+        report.rounds = round as u64;
+        if processors == 1 || overlapping > 0 {
+            return Ok(());
+        }
+        // Every share, so the log shows the processors ran one after
+        // another rather than the lock keeping them apart.
+        crate::console::println!(
+            "  counter  round {round}: no two shares overlapped, the host ran the processors one \
+             after another; shares {shares:?}",
+        );
+    }
+    Err("no two processors' increments overlapped in any round, so the lock was never contended")
 }
 
 /// What a grace-period reader finds through [`PUBLISHED`].

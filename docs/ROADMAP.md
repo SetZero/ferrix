@@ -712,6 +712,34 @@ not the checker, and a per-pick trace found them:
   violation. The window now levels every lag when it opens, and its bound is
   a slice plus the sum of the overruns that processor served inside it.
 
+**A queue insert charges the running task first.** `CpuQueue::insert`
+placed a newcomer before charging the task already running, so a task alone
+on a tickless processor -- charged only at its next decision, with an
+`exec_start` a hundred milliseconds old -- had all of that billed after the
+newcomer was counted, and the newcomer came out owed half of it, past the
+placement clamp. Stage 7's first spinner arrived owed 59 ms and ran its
+whole loop before the checker could start the second. `insert` and `release`
+now charge first, as Linux's `enqueue_entity` calls `update_curr` before it
+places; found by stage 7's session with a trace ring, 598 of 600 looped
+iterations under KVM.
+
+**Two checks that a loaded host could fake now judge over bounded attempts.**
+Stage 4's contended count requires two processors' shares to overlap, and
+stage 7's pair of spinning programs requires each to have been preempted twice
+(switched away from while runnable — being switched *to* twice, which the
+check used to ask, is what a program that was never preempted shows too, once
+from its start and once from its first write, and a kernel that never
+rescheduled at interrupt exit passed it);
+an emulator whose host deschedules a whole virtual processor can run the
+shares one after another, or charge a stall to one program as service so
+that the scheduler, correctly, lets the other run its whole loop. Each check
+now gets a bounded number of rounds — five and three — judges every round on
+the same evidence as before, prints what each round measured (the shares;
+the preemption and switch counts, the processor's worst overrun and its
+preemption-lock count), and fails only when no round shows the property. A
+kernel that never reschedules at interrupt exit fails every attempt, which
+was checked by building one.
+
 **Preemption is disabled under every task-context spin lock.** The convoy
 above was one lock; the kernel had forty more plain ticket locks taken from
 tasks with interrupts on, each exposed to the same thing once contended.

@@ -35,10 +35,14 @@ const RECHECK_NANOS: u64 = 5_000_000;
 pub(crate) struct WaitQueue {
     /// Who is waiting.
     ///
-    /// **Masking interrupts, though no interrupt handler takes it.** The
-    /// wait's correctness rests on the order in `wait_until_deadline`, not
-    /// on the lock; what the masking buys is that a holder cannot be
-    /// switched out with it held. The lock is a ticket lock, and a ticket
+    /// **Masking interrupts, so that a handler may wake the queue and a
+    /// holder cannot be switched out.** A device's interrupt handler calls
+    /// `wake_all` to rouse the task waiting for it -- the UART's receive, an
+    /// interrupt object's port -- and a plain lock taken by a handler that
+    /// interrupted its own holder would spin forever. The wait's correctness
+    /// still rests on the order in `wait_until_deadline`, not on the lock.
+    /// The other thing the masking buys is the reason it was added: a holder
+    /// cannot be switched out with it held. The lock is a ticket lock, and a ticket
     /// lock hands itself to whoever is next in line whether or not that
     /// context is running. A holder preempted while holding it — a worker in
     /// `wake_all`, cut by the timer inside the few instructions the lock is

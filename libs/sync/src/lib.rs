@@ -418,6 +418,12 @@ impl<T: ?Sized + fmt::Display> fmt::Display for SpinLockGuard<'_, T> {
 /// prevent.
 pub unsafe trait PreemptControl {
     /// Keep the running task on this CPU until the matching `enable`.
+    ///
+    /// `#[track_caller]`, and so are the lock's `lock` and `try_lock`, so an
+    /// implementation that records `Location::caller()` records the line
+    /// that took the lock -- which is what a report about a holder that
+    /// went to sleep needs to name.
+    #[track_caller]
     fn disable();
     /// Let it be switched out again, once every `disable` is matched.
     fn enable();
@@ -467,6 +473,7 @@ impl<T: ?Sized, P: PreemptControl> PreemptSpinLock<T, P> {
     /// with preemption on could be switched out holding the ticket, which is
     /// the second half of the convoy.
     #[must_use = "the task stays on its CPU until the guard is dropped"]
+    #[track_caller]
     pub fn lock(&self) -> PreemptSpinLockGuard<'_, T, P> {
         P::disable();
         self.inner.acquire();
@@ -479,6 +486,7 @@ impl<T: ?Sized, P: PreemptControl> PreemptSpinLock<T, P> {
     /// Takes the lock if it is free right now, and gives up otherwise,
     /// leaving preemption as it found it.
     #[must_use = "the task stays on its CPU until the guard is dropped"]
+    #[track_caller]
     pub fn try_lock(&self) -> Option<PreemptSpinLockGuard<'_, T, P>> {
         P::disable();
         if self.inner.try_acquire() {

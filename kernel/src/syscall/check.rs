@@ -3388,7 +3388,75 @@ fn check_two_programs_take_turns_on_one_processor() -> Result<Option<(u64, u64)>
         .ok_or("no processor to run two programs on")?
         .logical;
 
-    let user_interrupts = crate::trap::user_interrupt_count();
+    // What is required of a pair is that each program was *preempted* at
+    // least twice: switched away from while still runnable, by the
+    // scheduler's decision. Not that each was switched to twice, which the
+    // check used to ask and which a program that was never preempted also
+    // shows -- once when it starts and once coming back from its first write
+    // -- so a kernel that never rescheduled at interrupt exit passed it. And
+    // twice rather than once, because one preemption is what a program gets
+    // from that write on any kernel: a pending reschedule is also taken when
+    // a lock that disables preemption is released, and the write releases
+    // one. Two means the timer cut its loop.
+    //
+    // More than one pair, because one pair measures the host as much as the
+    // kernel: an emulator whose host stalls this virtual processor while
+    // program A is running charges the stall to A as service, EEVDF then owes
+    // B the same amount and lets B run its whole loop before A is looked at
+    // again, and B finishes never preempted -- the scheduler doing the right
+    // thing with accounting the host faked. Every attempt is judged on the
+    // same evidence, and printed, so a kernel that never preempts still
+    // fails all of them; only a stall gets another chance.
+    for attempt in 1..=TURN_ATTEMPTS {
+        let overrun_before =
+            crate::sched::cpu_report(here).map_or(0, |report| report.worst_overrun);
+        let user_interrupts = crate::trap::user_interrupt_count();
+        let Turns {
+            switched,
+            preempted,
+        } = one_pair_takes_turns(here)?;
+        let overrun = crate::sched::cpu_report(here).map_or(0, |report| report.worst_overrun);
+        if preempted.0 >= 2 && preempted.1 >= 2 && switched.0 >= 2 && switched.1 >= 2 {
+            if crate::trap::user_interrupt_count() == user_interrupts {
+                return Err("no interrupt arrived while two spinning programs were in user mode");
+            }
+            return Ok(Some(switched));
+        }
+        crate::console::println!(
+            "  procs    attempt {attempt}: preempted {} and {} times, switched to {} and {}; this \
+             processor's worst overrun {} us (was {} us), {} preemption-disabling locks held",
+            preempted.0,
+            preempted.1,
+            switched.0,
+            switched.1,
+            overrun / 1000,
+            overrun_before / 1000,
+            crate::sched::preemption_held(here),
+        );
+    }
+    Err(
+        "two programs on one processor were never both preempted twice, in every attempt: a \
+         host stall charged to one as service would explain one attempt, not all",
+    )
+}
+
+/// How many pairs of programs the turn-taking check runs before it decides
+/// the processor never preempts.
+const TURN_ATTEMPTS: usize = 3;
+
+/// What one pair of spinning programs showed: per program, how many times
+/// it was switched to and how many times it was preempted.
+struct Turns {
+    /// Switched-to counts, first and second program.
+    switched: (u64, u64),
+    /// Preemption counts, first and second program.
+    preempted: (u64, u64),
+}
+
+/// One pair: two spinning programs on `here`, both required to exit with
+/// their own status. Answers how many times each was switched to, and how
+/// many times each was preempted.
+fn one_pair_takes_turns(here: usize) -> Result<Turns, &'static str> {
     let first = spinner(b'1', SPIN_ROUNDS, 41)?;
     let second = spinner(b'2', SPIN_ROUNDS, 43)?;
     let first_task = process::start_on(&first, Some(here))
@@ -3410,17 +3478,10 @@ fn check_two_programs_take_turns_on_one_processor() -> Result<Option<(u64, u64)>
     if statuses.1 != Some(43) {
         return Err("the second of two programs did not exit with its own status");
     }
-
-    let switched = (first_task.switches(), second_task.switches());
-    if switched.0 < 2 || switched.1 < 2 {
-        return Err(
-            "two programs on one processor ran one after the other rather than taking turns",
-        );
-    }
-    if crate::trap::user_interrupt_count() == user_interrupts {
-        return Err("no interrupt arrived while two spinning programs were in user mode");
-    }
-    Ok(Some(switched))
+    Ok(Turns {
+        switched: (first_task.switches(), second_task.switches()),
+        preempted: (first_task.preemptions(), second_task.preemptions()),
+    })
 }
 
 /// A program that would spin for minutes is ended from outside: it reports

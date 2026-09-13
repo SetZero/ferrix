@@ -363,7 +363,21 @@ impl CpuQueue {
     }
 
     /// Put a runnable task into the fair class, carrying its lag.
+    ///
+    /// **The running task is charged first**, as Linux's `enqueue_entity`
+    /// calls `update_curr` before placing anything. A task alone on a tickless
+    /// processor is charged only at its next decision, so its `exec_start` can
+    /// be a hundred milliseconds old when something arrives. Charged after the
+    /// arrival is placed, all of that moves the virtual time with the newcomer
+    /// already counted, and the newcomer comes out owed half of it: the stage 7
+    /// check's first spinner arrived at lag +59 ms behind a checker that had
+    /// run 118 ms uncharged, ran its whole loop before the checker was eligible
+    /// to start the second, and the two "ran one after the other". The clamp in
+    /// `placement_lag` cannot see this, because the lag is made after placement.
     pub(crate) fn insert(&mut self, task: &Arc<Task>) {
+        if self.current.is_some() {
+            self.account(crate::timer::now_nanos());
+        }
         if let Err(refused) = self
             .fair
             .enqueue(task.id, Arc::clone(task), task.entity_state())
@@ -489,6 +503,12 @@ impl CpuQueue {
 
     /// Take a queued task off this queue, for another one to run.
     pub(crate) fn release(&mut self, id: TaskId) -> Option<(Arc<Task>, EntityState)> {
+        // Charged first for the reason `insert` is: the lag the leaving task
+        // takes with it is measured against a virtual time that must include
+        // everything the running task has had.
+        if self.current.is_some() {
+            self.account(crate::timer::now_nanos());
+        }
         let (task, state) = self.fair.remove(id)?;
         task.set_queued(false);
         self.rescale_slice();

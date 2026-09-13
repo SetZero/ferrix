@@ -99,6 +99,9 @@ pub(crate) struct Task {
     sleep_until: AtomicU64,
     /// How many times it has been switched to.
     switches: AtomicU64,
+    /// How many times it was switched away from while still runnable: taken
+    /// off the processor by the scheduler's decision, not by its own.
+    preemptions: AtomicU64,
     /// Which CPUs it has run on, one bit each.
     cpus_run_on: AtomicU64,
 }
@@ -196,6 +199,7 @@ impl Task {
             measured: AtomicBool::new(false),
             sleep_until: AtomicU64::new(0),
             switches: AtomicU64::new(0),
+            preemptions: AtomicU64::new(0),
             cpus_run_on: AtomicU64::new(0),
         }
     }
@@ -231,6 +235,7 @@ impl Task {
             measured: AtomicBool::new(false),
             sleep_until: AtomicU64::new(0),
             switches: AtomicU64::new(0),
+            preemptions: AtomicU64::new(0),
             cpus_run_on: AtomicU64::new(0),
         }
     }
@@ -383,6 +388,21 @@ impl Task {
     /// How many times it has been switched to.
     pub(crate) fn switches(&self) -> u64 {
         self.switches.load(Ordering::Relaxed)
+    }
+
+    /// Note that it is being switched away from while still runnable.
+    pub(crate) fn note_preemption(&self) {
+        let _ = self.preemptions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// How many times it was switched away from while still runnable.
+    ///
+    /// The number a check about preemption has to read. Being switched *to*
+    /// says nothing about it: a task is switched to once when it starts and
+    /// again after any call that blocked, so two switches are what a program
+    /// that was never preempted shows.
+    pub(crate) fn preemptions(&self) -> u64 {
+        self.preemptions.load(Ordering::Relaxed)
     }
 
     /// Which CPUs it has run on, one bit each.
