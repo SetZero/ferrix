@@ -74,6 +74,7 @@ pub mod uio;
 pub mod unistd;
 pub mod utsname;
 pub mod wait;
+pub mod wchar;
 pub mod wctype;
 
 /// A panic inside the library has nothing to unwind into, because every frame

@@ -1,5 +1,6 @@
 //! The C programs that exercise `locale.h` and `langinfo.h`, the multibyte
-//! and wide character conversions, and `wctype.h`.
+//! and wide character conversions, `wctype.h`, and `wchar.h`'s string
+//! functions.
 //!
 //! Each is built with `-fno-builtin`, so the compiler cannot answer a call on
 //! constant arguments itself, and every check reaches the library. Several are
@@ -76,6 +77,11 @@ fn newlocale_duplocale_freelocale_and_uselocale() {
 }
 
 #[test]
+fn the_l_forms_agree_with_the_plain_ones_in_every_locale() {
+    check(&locale("locale/locale_l"));
+}
+
+#[test]
 fn multibyte_conversions_in_c_and_utf8() {
     check(&locale("locale/multibyte"));
 }
@@ -91,6 +97,26 @@ fn wide_classes_case_and_width() {
 }
 
 #[test]
+fn wide_string_functions() {
+    check(&locale("locale/wchar"));
+}
+
+#[test]
 fn libc_test_mbc() {
     check(&locale("locale/mbc"));
+}
+
+#[test]
+fn libc_test_clocale_mbfuncs() {
+    check(&locale("locale/clocale_mbfuncs"));
+}
+
+#[test]
+fn libc_test_wcsstr() {
+    check(&locale("locale/wcsstr"));
+}
+
+#[test]
+fn libc_test_regressions() {
+    check(&locale("locale/regressions"));
 }
