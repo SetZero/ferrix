@@ -54,11 +54,14 @@ x86-64, static programs linked at a fixed address.
 | Startup | `_start`, `__libc_start_main`, `environ`, the auxiliary vector, `.preinit_array` and `.init_array` | position-independent static programs |
 | Threads | the main thread's control block in glibc's layout, static TLS, the stack protector's canary | `pthread_*` |
 | Memory | the `malloc` family, on `mmap`, with size classes and integrity checks | returning empty regions to the kernel |
-| `stdlib.h` | `exit`, `_Exit`, `atexit` without a limit, `abort`, `getenv`, `setenv`, `unsetenv`, `putenv`, `clearenv` | conversions, sorting, random numbers |
+| `stdlib.h` | `exit`, `_Exit`, `atexit` without a limit, `abort`, the environment functions; `strtol` and `strtod` families, correctly rounded for `float`, `double` and x87 `long double`, with glibc's `__isoc23_` names; `qsort`, `qsort_r`, `bsearch`; `abs` and `div` families; `rand`, `random` and `rand48` families | `ecvt`, `fcvt`, `gcvt`; NaN payloads and rounding modes in parsing |
 | `string.h`, `strings.h` | everything but the allocating functions; word-at-a-time scans; two-way `strstr` and `memmem` | `strdup`, `strndup`, the `_l` forms |
 | `ctype.h` | the C locale, and glibc's `__ctype_b_loc` tables | the `_l` forms |
 | Error text | `strerror`, `strerror_r` (XSI), `__xpg_strerror_r`, `strsignal` | glibc's GNU `strerror_r` |
-| `unistd.h` | `read`, `write`, `_exit` | the rest |
+| `unistd.h` | files, directories and links, `pipe` and `dup`, identities, `fork` on `clone`, `execve`, `execv`, `execvp`, `sleep`, `alarm`, `sysconf`, `isatty`, `syscall` | the `execl` family, `getcwd(NULL, 0)`, `set*id` across threads |
+| `fcntl.h`, `sys/stat.h`, `sys/mman.h` | every function, with glibc's `*64` and `__xstat` names | |
+| Clocks | `time`, `clock_gettime` and the rest, `gettimeofday`, `nanosleep` | the vDSO |
+| Processes and I/O | the `wait` family, `getrlimit` family, `uname`, `poll`, `select`, `getrandom`, `ioctl`, vector I/O, `rename` | |
 | `stdio.h` | `puts`, unbuffered | `FILE`, `printf`, `scanf` |
 | `signal.h` | `sigaction`, `signal`, sets and masks, `sigpending`, `sigsuspend`, `sigtimedwait`, `sigqueue`, `kill`, `sigaltstack`, `raise`, `abort` | `psignal`, `pthread_kill` |
 | `setjmp.h` | `setjmp`, `longjmp`, `sigsetjmp`, `siglongjmp`, glibc's `__sigsetjmp` and `__longjmp_chk`, with saved pointers mangled | |
@@ -68,14 +71,11 @@ x86-64, static programs linked at a fixed address.
 
 ## Next
 
-1. **`stdlib.h`'s conversions, sorting and random numbers**, and **the file,
-   process, time and memory system calls**.
-2. **Buffered stdio, `printf` and `scanf`**, **time zones and `strftime`**,
-   **locales and wide characters**, and **`dirent`, `getopt`, `glob` and
-   `regex`**.
-3. **libc-test**, musl's conformance suite, as the measure of progress, and a
+1. In progress: **buffered stdio, `printf` and `scanf`**, **time zones and
+   `strftime`**, **locales and wide characters**, **`dirent`, `getopt`, `glob`
+   and `regex`**, **threads**, and **the math library**.
+2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
-4. **Threads.**
-5. **The math library.**
-6. **AArch64 and ARMv7**, the other two architectures Ferrix runs.
-7. **Dynamic linking**: a loader, then glibc's symbol versions.
+3. **`long double` math and `complex.h`.**
+4. **AArch64 and ARMv7**, the other two architectures Ferrix runs.
+5. **Dynamic linking**: a loader, then glibc's symbol versions.
