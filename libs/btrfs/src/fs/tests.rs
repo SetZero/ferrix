@@ -492,9 +492,13 @@ fn a_lookup_refuses_a_name_that_no_longer_matches_its_hash() {
 
     // Read the name back out of the image, then change its first byte.
     let mut header = [0u8; 30];
-    f.device.read_at(payload, &mut header).unwrap();
+    f.device
+        .read_at(payload, &mut header, ReadKind::Metadata)
+        .unwrap();
     let mut name = vec![0u8; usize::from(u16::from_le_bytes([header[27], header[28]]))];
-    f.device.read_at(payload + 30, &mut name).unwrap();
+    f.device
+        .read_at(payload + 30, &mut name, ReadKind::Metadata)
+        .unwrap();
     assert_eq!(name_hash(&name), key.offset, "the image is well formed");
     f.device.write(payload + 30, &[name[0] ^ 0x01]);
     f.device.reseal(node_at);
@@ -593,7 +597,9 @@ fn first_extent(
         "the file's first extent"
     );
     let mut bytes = [0u8; crate::items::FILE_EXTENT_ITEM_SIZE];
-    device.read_at(payload, &mut bytes).unwrap();
+    device
+        .read_at(payload, &mut bytes, ReadKind::Metadata)
+        .unwrap();
     let extent = ExtentData::parse_item(&key, &bytes, volume.sectorsize()).unwrap();
     let ExtentDataBody::Regular(file) = extent.body else {
         panic!("the file starts with a regular extent");
@@ -697,7 +703,9 @@ fn a_nodatasum_file_is_read_without_checking_as_linux_reads_it() {
     let (ino, file, _) = first_extent(&volume, &sub, &mut f.device, b"random.bin", &mut f.node);
     let (_, physical) = volume.chunks().map(file.disk_bytenr).unwrap();
     let mut before = [0u8; 4096];
-    f.device.read_at(physical, &mut before).unwrap();
+    f.device
+        .read_at(physical, &mut before, ReadKind::Data)
+        .unwrap();
     f.device.corrupt(physical + 100);
 
     // Flag the inode NODATASUM, in a leaf checksummed again after the edit.
@@ -709,7 +717,9 @@ fn a_nodatasum_file_is_read_without_checking_as_linux_reads_it() {
         &mut f.node,
     );
     let mut flags = [0u8; 8];
-    f.device.read_at(payload + FLAGS, &mut flags).unwrap();
+    f.device
+        .read_at(payload + FLAGS, &mut flags, ReadKind::Metadata)
+        .unwrap();
     let flags = u64::from_le_bytes(flags) | INODE_NODATASUM;
     f.device.write(payload + FLAGS, &flags.to_le_bytes());
     f.device.reseal(node_at);

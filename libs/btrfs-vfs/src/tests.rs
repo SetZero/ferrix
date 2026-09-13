@@ -15,6 +15,7 @@ use std::thread;
 use ferrix_btrfs::crc32c;
 
 use super::*;
+use ferrix_btrfs::volume::ReadKind;
 
 mod namespace;
 
@@ -55,7 +56,12 @@ impl Image {
 }
 
 impl Device for Image {
-    fn read_at(&mut self, physical: u64, buf: &mut [u8]) -> core::result::Result<(), BtrfsError> {
+    fn read_at(
+        &mut self,
+        physical: u64,
+        buf: &mut [u8],
+        _kind: ReadKind,
+    ) -> core::result::Result<(), BtrfsError> {
         if physical
             .checked_add(buf.len() as u64)
             .is_none_or(|end| end > IMAGE_SIZE)
@@ -383,4 +389,128 @@ fn the_mount_shows_the_default_subvolume_not_the_top_level_tree() {
         matches!(fs.root().lookup(b"top-level-only"), Err(Errno::ENOENT)),
         "Linux mounts the default subvolume, so the top-level tree's file is not visible"
     );
+}
+
+/// An [`Image`] that counts the metadata and data reads it serves.
+#[derive(Clone)]
+struct Counting {
+    image: Image,
+    metadata: Arc<core::sync::atomic::AtomicU64>,
+    data: Arc<core::sync::atomic::AtomicU64>,
+}
+
+impl Counting {
+    fn new(packed: &[u8]) -> Counting {
+        Counting {
+            image: Image::new(packed),
+            metadata: Arc::default(),
+            data: Arc::default(),
+        }
+    }
+
+    /// Metadata reads and data reads served so far.
+    fn counts(&self) -> (u64, u64) {
+        let ordering = core::sync::atomic::Ordering::SeqCst;
+        (self.metadata.load(ordering), self.data.load(ordering))
+    }
+}
+
+impl Device for Counting {
+    fn read_at(
+        &mut self,
+        physical: u64,
+        buf: &mut [u8],
+        kind: ReadKind,
+    ) -> core::result::Result<(), BtrfsError> {
+        let counter = match kind {
+            ReadKind::Metadata => &self.metadata,
+            ReadKind::Data => &self.data,
+        };
+        let _ = counter.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+        self.image.read_at(physical, buf, kind)
+    }
+}
+
+/// Resolve `path` from the root of a mount over any device.
+fn resolve_in<D: BlockHandle>(fs: &Btrfs<D>, path: &[u8]) -> Arc<dyn Inode> {
+    path.split(|&b| b == b'/').fold(fs.root(), |dir, name| {
+        dir.lookup(name)
+            .unwrap_or_else(|e| panic!("{} missing: {e:?}", String::from_utf8_lossy(path)))
+    })
+}
+
+#[test]
+fn a_second_walk_to_a_file_reads_no_metadata_from_the_device() {
+    let device = Counting::new(IMAGES[0].1);
+    let fs = Btrfs::mount(device.clone(), 42).unwrap();
+    let path = b"dir03/sub0/file07.txt";
+    let _ = resolve_in(&fs, path).metadata();
+    let (metadata, _) = device.counts();
+    assert!(metadata > 0, "the first walk reads nodes from the device");
+    let _ = resolve_in(&fs, path).metadata();
+    assert_eq!(
+        device.counts().0,
+        metadata,
+        "every node the second walk needs comes from the cache"
+    );
+}
+
+#[test]
+fn file_data_is_read_from_the_device_every_time() {
+    let device = Counting::new(IMAGES[0].1);
+    let fs = Btrfs::mount(device.clone(), 42).unwrap();
+    let file = resolve_in(&fs, b"random.bin");
+    let start = device.counts().1;
+    let first = read_all(&file);
+    let once = device.counts().1 - start;
+    let second = read_all(&file);
+    let twice = device.counts().1 - start - once;
+    assert!(
+        once > 0,
+        "an uncompressed file's data comes from the device"
+    );
+    assert_eq!(
+        twice, once,
+        "and is read again, not cached: file data belongs in the page cache"
+    );
+    assert_eq!(first, second, "both reads return the same bytes");
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads every file of a real image; plain cargo test covers it"
+)]
+fn a_cache_too_small_for_one_walk_still_reads_every_file_back() {
+    let fs = Btrfs::mount_with(Image::new(IMAGES[0].1), 42, 2).unwrap();
+    for (path, expected) in manifest() {
+        if expected.kind != "file" {
+            continue;
+        }
+        let contents = read_all(&resolve_in(&fs, &path));
+        let shown = String::from_utf8_lossy(&path);
+        assert_eq!(contents.len() as u64, expected.size, "{shown} size");
+        assert_eq!(crc32c(&contents), expected.crc, "{shown} contents");
+    }
+}
+
+#[test]
+fn the_node_cache_is_bounded_and_gives_a_hit_entry_a_second_chance() {
+    let cache = NodeCache::new(2);
+    cache.insert(1, &[1; 4]);
+    cache.insert(2, &[2; 4]);
+    assert!(cache.get(1, 4).is_some(), "entry 1 is hit");
+    cache.insert(3, &[3; 4]);
+    assert_eq!(cache.stats().2, 2, "never more entries than the capacity");
+    assert!(
+        cache.get(2, 4).is_none(),
+        "entry 2, never hit, was the one evicted"
+    );
+    assert_eq!(
+        cache.get(1, 4).as_deref(),
+        Some(&[1u8; 4][..]),
+        "entry 1 kept its bytes on its second chance"
+    );
+    assert!(cache.get(3, 4).is_some(), "the new entry is held");
+    assert!(cache.get(1, 8).is_none(), "a read of another length misses");
 }

@@ -47,7 +47,7 @@ use crate::items::{
     INODE_NODATASUM, InodeItem, ROOT_ITEM_KEY, name_hash,
 };
 use crate::tree::BtrfsKey;
-use crate::volume::{Device, TreeRoot, Volume};
+use crate::volume::{Device, ReadKind, TreeRoot, Volume};
 use crate::{BtrfsError, truncated};
 
 /// What a directory entry points at.
@@ -213,7 +213,7 @@ impl<B: ExtentBuffers> ReadBuffers<B> {
                         item_type: EXTENT_DATA_KEY,
                     })?;
                 let input = compressed.get_mut(..stored).unwrap_or_default();
-                volume.read_logical(device, file.disk_bytenr, input)?;
+                volume.read_logical(device, file.disk_bytenr, input, ReadKind::Data)?;
                 let input = compressed.get(..stored).unwrap_or_default();
                 if verify {
                     verify_sectors(volume, device, file.disk_bytenr, input, node)?;
@@ -272,7 +272,7 @@ impl<B: ExtentBuffers> ReadBuffers<B> {
                 .ok_or(BtrfsError::NotMapped(at))?;
             let span = (last - first).min(window);
             let buf = scratch.get_mut(..span as usize).unwrap_or_default();
-            volume.read_logical(device, first, buf)?;
+            volume.read_logical(device, first, buf, ReadKind::Data)?;
             let buf = &*buf;
             verify_sectors(volume, device, first, buf, node)?;
             let skip = (want - first) as usize;
@@ -516,7 +516,7 @@ impl<S: ChunkStorage> Subvolume<'_, S> {
                 if verify {
                     buffers.read_verified(self.volume, device, at, dest)
                 } else {
-                    self.volume.read_logical(device, at, dest)
+                    self.volume.read_logical(device, at, dest, ReadKind::Data)
                 }
             }
             ExtentDataBody::Regular(file) => {

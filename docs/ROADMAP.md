@@ -2115,6 +2115,17 @@ logic `cargo test`, Miri and a fuzzer can reach.
 * **`INODE_EXTREF`** records parse, held to `check_inode_extref`, and their key
   hash matches the offsets `mkfs.btrfs` filed real extrefs under. Nothing reads
   back-references yet: lookups and listings use directory entries.
+* **A bounded cache of metadata reads.** Every lookup descends a tree from its
+  root, and each descent used to read every node on the way from the device
+  again. `ferrix-btrfs`'s `Device` now says what each read is for —
+  `ReadKind::Metadata` for the superblock and tree nodes, `ReadKind::Data` for
+  an extent's bytes — and `libs/btrfs-vfs` keeps metadata reads in a CLOCK cache
+  of 1024 entries every handle of a mount shares: a hit hands out a shared
+  reference and copies with no lock held, and a miss reads with no lock held. A
+  cached node is trusted no more than a read one, since every node is still
+  checked against its parent pointer and its checksum. File data is never kept
+  there; it belongs in the page cache. A second walk to a file reads no metadata
+  from the device, and a cache of two entries still reads every file back.
 * `libs/btrfs-vfs` — the mount: stage 8's `FileSystem` and `Inode` over the
   read path, read-only, holding no lock across I/O. Tested through the trait,
   and through `Namespace` at `/mnt` on a tmpfs root.

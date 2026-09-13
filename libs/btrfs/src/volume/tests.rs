@@ -78,7 +78,12 @@ impl PackedDevice {
 }
 
 impl Device for PackedDevice {
-    fn read_at(&mut self, physical: u64, buf: &mut [u8]) -> Result<(), BtrfsError> {
+    fn read_at(
+        &mut self,
+        physical: u64,
+        buf: &mut [u8],
+        _kind: ReadKind,
+    ) -> Result<(), BtrfsError> {
         let end = physical.checked_add(buf.len() as u64);
         if end.is_none_or(|end| end > IMAGE_SIZE)
             || self

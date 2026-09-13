@@ -19,6 +19,9 @@
 //!
 //! * the device is a handle, cloned for each operation, so how concurrent reads
 //!   meet is the device's business — in the kernel, the block core's queue;
+//! * metadata read through it is kept in a bounded cache every handle shares
+//!   ([`cache`]), whose lock is held to look an entry up or add one, never
+//!   across the read that fills it;
 //! * the [`Volume`] does not change after mount and is shared freely;
 //! * working memory comes from a pool whose lock is held to take a set of
 //!   buffers and to give it back, never while the buffers are in use. An
@@ -69,6 +72,10 @@ use ferrix_vfs::{
     DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, Result,
     SetAttributes, StatFs, Timespec,
 };
+
+mod cache;
+
+use cache::{Cached, NodeCache};
 
 /// How many chunks a mounted volume may have.
 ///
@@ -160,7 +167,7 @@ fn zeroed(len: usize) -> Box<[u8]> {
 /// What every inode of one mount shares.
 struct Shared<D> {
     volume: Volume<Box<[ChunkMapEntry]>>,
-    device: D,
+    device: Cached<D>,
     dev_no: u64,
     pool: SpinLock<Vec<Scratch>>,
 }
@@ -171,7 +178,7 @@ impl<D: BlockHandle> Shared<D> {
         &self,
         op: impl FnOnce(
             &Subvolume<'_, Box<[ChunkMapEntry]>>,
-            &mut D,
+            &mut Cached<D>,
             &mut Scratch,
         ) -> core::result::Result<R, BtrfsError>,
     ) -> Result<R> {
@@ -212,6 +219,13 @@ impl<D: BlockHandle> Btrfs<D> {
     /// `EINVAL` when the device does not hold a btrfs volume this reader will
     /// read, and `EIO` when it does but cannot be read.
     pub fn mount(device: D, dev_no: u64) -> Result<Arc<Btrfs<D>>> {
+        Self::mount_with(device, dev_no, cache::ENTRIES)
+    }
+
+    /// [`Btrfs::mount`] with a metadata cache of `entries` reads, so a test can
+    /// make one small enough that every walk evicts.
+    fn mount_with(device: D, dev_no: u64, entries: usize) -> Result<Arc<Btrfs<D>>> {
+        let device = Cached::new(device, Arc::new(NodeCache::new(entries)));
         let mut reader = device.clone();
         let chunks = vec![ChunkMapEntry::EMPTY; MAX_CHUNKS].into_boxed_slice();
         let mut scratch = Scratch::new()?;

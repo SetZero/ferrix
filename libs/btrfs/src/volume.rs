@@ -57,6 +57,21 @@ use crate::{BtrfsError, truncated};
 /// apart on how deep a tree is.
 pub use crate::tree::MAX_LEVEL;
 
+/// What a read through a [`Device`] is for, so a device that caches can keep
+/// only what is worth keeping.
+///
+/// Tree nodes are read again by every lookup that descends past them; file data
+/// is read once, and belongs in a page cache above the filesystem. A device
+/// that caches should keep only [`ReadKind::Metadata`], so a node cache and the
+/// page cache never hold the same bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadKind {
+    /// The superblock or a tree node.
+    Metadata,
+    /// File data: an extent's bytes, compressed or not.
+    Data,
+}
+
 /// Byte-addressed access to the one device a volume lives on.
 ///
 /// The reader never asks for anything but whole nodes and whole extents, so an
@@ -67,7 +82,9 @@ pub trait Device {
     /// A short device or a failed read is an error, typically
     /// [`BtrfsError::DeviceRead`]; a partially filled buffer must never be
     /// reported as success.
-    fn read_at(&mut self, physical: u64, buf: &mut [u8]) -> Result<(), BtrfsError>;
+    ///
+    /// `kind` says what the bytes are for; see [`ReadKind`].
+    fn read_at(&mut self, physical: u64, buf: &mut [u8], kind: ReadKind) -> Result<(), BtrfsError>;
 }
 
 /// Where a tree starts, and what its top node must say about itself.
@@ -141,7 +158,7 @@ impl<S: ChunkStorage> Volume<S> {
     /// refuses.
     pub fn open<D: Device>(device: &mut D, chunks: S, node: &mut [u8]) -> Result<Self, BtrfsError> {
         let mut block = [0u8; SUPERBLOCK_SIZE];
-        device.read_at(PRIMARY_OFFSET, &mut block)?;
+        device.read_at(PRIMARY_OFFSET, &mut block, ReadKind::Metadata)?;
         let sb = Superblock::parse_at(&block, PRIMARY_OFFSET)?;
         check_mountable(&sb)?;
 
@@ -293,13 +310,14 @@ impl<S: ChunkStorage> Volume<S> {
         device: &mut D,
         logical: u64,
         buf: &mut [u8],
+        kind: ReadKind,
     ) -> Result<(), BtrfsError> {
         let (_devid, physical) = self.chunks.map(logical)?;
         let span = self.chunks.contiguous_len(logical).unwrap_or(0);
         if span < buf.len() as u64 {
             return Err(BtrfsError::NotMapped(logical.saturating_add(span)));
         }
-        device.read_at(physical, buf)
+        device.read_at(physical, buf, kind)
     }
 
     /// Descend `root` to the leaf that holds `key` or would.
@@ -415,7 +433,7 @@ impl<S: ChunkStorage> Volume<S> {
         at: TreeRoot,
         block: &mut [u8],
     ) -> Result<(), BtrfsError> {
-        self.read_logical(device, at.bytenr, block)?;
+        self.read_logical(device, at.bytenr, block, ReadKind::Metadata)?;
         let header = NodeHeader::parse(block)?;
         if header.level != at.level
             || header.generation != at.generation
