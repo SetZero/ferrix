@@ -22,6 +22,7 @@ use crate::sched;
 use crate::syscall::attributes::int;
 use crate::syscall::process::Process;
 use crate::syscall::signal::RestartBlock;
+use crate::syscall::thread::Thread;
 use crate::syscall::uaccess::{self, WORD};
 
 /// Nanoseconds in a second.
@@ -97,6 +98,31 @@ fn set_realtime(target: u64) {
     REALTIME_OFFSET.store(offset, Ordering::Relaxed);
 }
 
+/// Answer the sleeps and `restart_syscall`, or `None` for any other call.
+///
+/// Apart from [`dispatch`] because an interrupted sleep leaves its restart in
+/// the calling thread, so these take the thread rather than its process; they
+/// are reached through `super::signal::dispatch`.
+pub(crate) fn sleep_dispatch(
+    call: Syscall,
+    a: &[u64; 6],
+    thread: &Thread,
+) -> Option<Result<usize, Errno>> {
+    use TimeWidth::{Native, Wide};
+    let answer = match call {
+        Syscall::RestartSyscall => sys_restart_syscall(thread),
+        Syscall::Nanosleep => sys_nanosleep(thread, a[0], a[1]),
+        Syscall::ClockNanosleep => {
+            sys_clock_nanosleep(thread, int(a[0]), a[1], [a[2], a[3]], Native)
+        }
+        Syscall::ClockNanosleepTime64 => {
+            sys_clock_nanosleep(thread, int(a[0]), a[1], [a[2], a[3]], Wide)
+        }
+        _ => return None,
+    };
+    Some(answer)
+}
+
 /// Answer `call` if it is one of the calls this module added to the table in
 /// `mod.rs`. (`clock_gettime`, `gettimeofday` and `getrandom` are dispatched
 /// there, where they were first.)
@@ -107,14 +133,6 @@ pub(crate) fn dispatch(
 ) -> Option<Result<usize, Errno>> {
     use TimeWidth::{Native, Wide};
     let answer = match call {
-        Syscall::RestartSyscall => sys_restart_syscall(process),
-        Syscall::Nanosleep => sys_nanosleep(process, a[0], a[1]),
-        Syscall::ClockNanosleep => {
-            sys_clock_nanosleep(process, int(a[0]), a[1], [a[2], a[3]], Native)
-        }
-        Syscall::ClockNanosleepTime64 => {
-            sys_clock_nanosleep(process, int(a[0]), a[1], [a[2], a[3]], Wide)
-        }
         Syscall::Times => sys_times(process, a[0]),
         Syscall::Getrusage => sys_getrusage(process, int(a[0]), a[1]),
         Syscall::ClockSettime => sys_clock_settime(process, int(a[0]), a[1], Native),
@@ -281,12 +299,8 @@ fn nanos_of(seconds: i64, nanos: i64) -> Result<u64, Errno> {
 /// from `deliver::return_to_user`), or to return `EINTR` when one does. The
 /// absolute deadline is what a resume waits to, so the time left is exact
 /// however many times it is interrupted.
-fn sleep_until(
-    process: &Process,
-    deadline: u64,
-    rem: u64,
-    width: TimeWidth,
-) -> Result<usize, Errno> {
+fn sleep_until(thread: &Thread, deadline: u64, rem: u64, width: TimeWidth) -> Result<usize, Errno> {
+    let process = thread.process();
     loop {
         let now = crate::timer::now_nanos();
         if now >= deadline {
@@ -299,14 +313,14 @@ fn sleep_until(
             }
             return Err(Errno::EINTR);
         }
-        if process.signal_pending() {
+        if thread.signal_pending() {
             // A catchable signal: report the time left and leave a
             // `restart_block`, so a no-handler resume waits out only that.
             if rem != 0 {
                 let left = deadline.saturating_sub(now);
                 write_pair(process, rem, left / NANOS, left % NANOS, width)?;
             }
-            process.with_signals(|signals| {
+            thread.with_own_signals(|signals| {
                 signals.set_restart_block(RestartBlock {
                     deadline,
                     rem,
@@ -324,20 +338,21 @@ fn sleep_until(
 /// an interrupted `nanosleep` or `clock_nanosleep` at this call when no handler
 /// ran; no program issues it. With nothing to resume it is `EINTR`, as Linux's
 /// `do_no_restart_syscall` answers.
-pub(crate) fn sys_restart_syscall(process: &Process) -> Result<usize, Errno> {
-    let Some(block) = process.with_signals(super::signal::Signals::take_restart_block) else {
+pub(crate) fn sys_restart_syscall(thread: &Thread) -> Result<usize, Errno> {
+    let Some(block) = thread.with_own_signals(super::signal::ThreadSignals::take_restart_block)
+    else {
         return Err(Errno::EINTR);
     };
-    sleep_until(process, block.deadline, block.rem, block.width)
+    sleep_until(thread, block.deadline, block.rem, block.width)
 }
 
 /// `nanosleep`: a relative sleep, in a native-width `timespec` (ARMv7-A has no
 /// `time64` form of this call; its libc uses `clock_nanosleep_time64`).
-pub(crate) fn sys_nanosleep(process: &Process, req: u64, rem: u64) -> Result<usize, Errno> {
-    let (seconds, nanos) = read_pair(process, req, TimeWidth::Native)?;
+pub(crate) fn sys_nanosleep(thread: &Thread, req: u64, rem: u64) -> Result<usize, Errno> {
+    let (seconds, nanos) = read_pair(thread.process(), req, TimeWidth::Native)?;
     let length = nanos_of(seconds, nanos)?;
     let deadline = crate::timer::now_nanos().saturating_add(length);
-    sleep_until(process, deadline, rem, TimeWidth::Native)
+    sleep_until(thread, deadline, rem, TimeWidth::Native)
 }
 
 /// `TIMER_ABSTIME`: the request is a time on the clock, not a duration.
@@ -358,7 +373,7 @@ const TIMER_ABSTIME: u64 = 1;
 /// validated after that. The CPU-time clocks are `EINVAL`, as
 /// `clock_gettime` answers them. An absolute sleep never writes `rem`.
 pub(crate) fn sys_clock_nanosleep(
-    process: &Process,
+    thread: &Thread,
     clock: i32,
     flags: u64,
     [req, rem]: [u64; 2],
@@ -377,11 +392,11 @@ pub(crate) fn sys_clock_nanosleep(
         }
         _ => return Err(Errno::EINVAL),
     }
-    let (seconds, nanos) = read_pair(process, req, width)?;
+    let (seconds, nanos) = read_pair(thread.process(), req, width)?;
     let requested = nanos_of(seconds, nanos)?;
     if flags & TIMER_ABSTIME == 0 {
         let deadline = crate::timer::now_nanos().saturating_add(requested);
-        return sleep_until(process, deadline, rem, width);
+        return sleep_until(thread, deadline, rem, width);
     }
     let deadline = if clock == CLOCK_REALTIME {
         let counter = i128::from(requested) - i128::from(realtime_offset());
@@ -389,7 +404,7 @@ pub(crate) fn sys_clock_nanosleep(
     } else {
         requested
     };
-    sleep_until(process, deadline, 0, width)
+    sleep_until(thread, deadline, 0, width)
 }
 
 /// `USER_HZ`: the clock ticks per second `times` counts in, 100 on all three.

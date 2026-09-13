@@ -39,6 +39,7 @@ use ferrix_linux_abi::errno::Errno;
 use crate::sched;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
+use crate::syscall::thread::Thread;
 use crate::syscall::time::TimeWidth;
 use crate::syscall::uaccess;
 
@@ -106,7 +107,7 @@ pub(crate) fn sys_poll(
 /// timeout or a wrong signal set size; `EFAULT` for a bad pointer; `EINTR` if
 /// the caller is ended while it waits.
 pub(crate) fn sys_ppoll(
-    process: &Process,
+    thread: &Thread,
     fds: u64,
     nfds: u64,
     timeout: u64,
@@ -114,6 +115,7 @@ pub(crate) fn sys_ppoll(
     sigsetsize: u64,
     width: TimeWidth,
 ) -> Result<usize, Errno> {
+    let process = thread.process();
     let deadline = if timeout == 0 {
         None
     } else {
@@ -121,7 +123,7 @@ pub(crate) fn sys_ppoll(
         Some(now().saturating_add(nanos))
     };
     let mask = read_sigset(process, sigmask, sigsetsize)?;
-    with_sigmask(process, mask, || wait(process, fds, nfds, deadline))
+    with_sigmask(thread, mask, || wait(process, fds, nfds, deadline))
 }
 
 /// `select`, and ARMv7-A's `_newselect`: three sets of `nfds` descriptors, and
@@ -166,13 +168,14 @@ pub(crate) fn sys_select(
 /// size; `EFAULT` for a bad pointer; `EBADF` for a set bit naming a descriptor
 /// that is not open; `EINTR` if the caller is ended while it waits.
 pub(crate) fn sys_pselect6(
-    process: &Process,
+    thread: &Thread,
     nfds: i32,
     sets: [u64; 3],
     timeout: u64,
     sigmask: u64,
     width: TimeWidth,
 ) -> Result<usize, Errno> {
+    let process = thread.process();
     let limit = if timeout == 0 {
         None
     } else {
@@ -187,7 +190,7 @@ pub(crate) fn sys_pselect6(
         read_sigset(process, word(pair, 0), word(pair, WORD_BYTES))?
     };
     let deadline = limit.map(|nanos| now().saturating_add(nanos));
-    let answer = with_sigmask(process, mask, || select(process, nfds, sets, deadline));
+    let answer = with_sigmask(thread, mask, || select(process, nfds, sets, deadline));
     if let (Some(nanos), Some(deadline)) = (limit, deadline)
         && nanos != 0
     {
@@ -211,13 +214,13 @@ fn read_sigset(process: &Process, at: u64, size: u64) -> Result<Option<u64>, Err
     Ok(Some(u64::from_le_bytes(bytes)))
 }
 
-/// Run `body` with the blocked mask replaced by `mask`, if there is one, and
-/// put the caller's back afterwards.
-fn with_sigmask<R>(process: &Process, mask: Option<u64>, body: impl FnOnce() -> R) -> R {
-    let saved = mask.map(|mask| process.with_signals(|signals| signals.replace_blocked(mask)));
+/// Run `body` with the calling thread's blocked mask replaced by `mask`, if
+/// there is one, and put its own back afterwards.
+fn with_sigmask<R>(thread: &Thread, mask: Option<u64>, body: impl FnOnce() -> R) -> R {
+    let saved = mask.map(|mask| thread.with_own_signals(|signals| signals.replace_blocked(mask)));
     let answer = body();
     if let Some(saved) = saved {
-        let _ = process.with_signals(|signals| signals.replace_blocked(saved));
+        let _ = thread.with_own_signals(|signals| signals.replace_blocked(saved));
     }
     answer
 }

@@ -1489,11 +1489,22 @@ fn check_a_signal_disposition_reads_back_as_it_was_set(
     Ok(())
 }
 
+/// A thread of `process`, for a check that calls a handler acting on a thread's
+/// own signal state as a program's thread would. The check's process runs no
+/// thread of its own, so one is made for it, found again by its pid for the
+/// shared reference a thread holds.
+fn check_thread(process: &Process) -> Result<crate::syscall::thread::Thread, &'static str> {
+    let process = crate::syscall::registry::find(process.pid())
+        .ok_or("a check's process was not findable by its pid")?;
+    Ok(crate::syscall::thread::Thread::leader(&process))
+}
+
 /// `rt_sigprocmask` applies `how`, never blocks SIGKILL, and leaves `oldset`
 /// untouched when it refuses.
 fn check_the_blocked_mask_follows_how(process: &Process) -> Result<(), &'static str> {
     use ferrix_linux_abi::types::{SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK, SIGINT, SIGKILL, SIGUSR1};
 
+    let thread = check_thread(process)?;
     let at = map_rw(process, PAGE_SIZE)?;
     let old = at + 8;
     let set = signal::SIGSET_SIZE;
@@ -1513,22 +1524,22 @@ fn check_the_blocked_mask_follows_how(process: &Process) -> Result<(), &'static 
     };
 
     stage(usr1 | kill)?;
-    if signal::sys_rt_sigprocmask(process, SIG_BLOCK, at, old, set) != Ok(0) {
+    if signal::sys_rt_sigprocmask(&thread, SIG_BLOCK, at, old, set) != Ok(0) {
         return Err("SIG_BLOCK was refused");
     }
     stage(int)?;
-    if signal::sys_rt_sigprocmask(process, SIG_BLOCK, at, old, set) != Ok(0) || read_old()? != usr1
+    if signal::sys_rt_sigprocmask(&thread, SIG_BLOCK, at, old, set) != Ok(0) || read_old()? != usr1
     {
         return Err("the mask after blocking SIGUSR1 and SIGKILL was not SIGUSR1 alone");
     }
     stage(usr1)?;
-    if signal::sys_rt_sigprocmask(process, SIG_UNBLOCK, at, old, set) != Ok(0)
+    if signal::sys_rt_sigprocmask(&thread, SIG_UNBLOCK, at, old, set) != Ok(0)
         || read_old()? != usr1 | int
     {
         return Err("SIG_BLOCK did not add to the mask");
     }
     stage(0)?;
-    if signal::sys_rt_sigprocmask(process, SIG_SETMASK, at, old, set) != Ok(0) || read_old()? != int
+    if signal::sys_rt_sigprocmask(&thread, SIG_SETMASK, at, old, set) != Ok(0) || read_old()? != int
     {
         return Err("SIG_UNBLOCK did not take away from the mask");
     }
@@ -1536,16 +1547,16 @@ fn check_the_blocked_mask_follows_how(process: &Process) -> Result<(), &'static 
     // A refused `how` writes nothing; with no set it is not even looked at.
     uaccess::copy_to_user(process.space(), old, &[0xAA_u8; 8])
         .map_err(|_| "could not poison oldset")?;
-    if signal::sys_rt_sigprocmask(process, 7, at, old, set) != Err(Errno::EINVAL) {
+    if signal::sys_rt_sigprocmask(&thread, 7, at, old, set) != Err(Errno::EINVAL) {
         return Err("a nonsense how was accepted");
     }
     if read_old()? != u64::from_le_bytes([0xAA; 8]) {
         return Err("a refused sigprocmask still wrote oldset");
     }
-    if signal::sys_rt_sigprocmask(process, 7, 0, old, set) != Ok(0) || read_old()? != 0 {
+    if signal::sys_rt_sigprocmask(&thread, 7, 0, old, set) != Ok(0) || read_old()? != 0 {
         return Err("a query with a nonsense how was refused, or misreported the mask");
     }
-    if signal::sys_rt_sigprocmask(process, SIG_BLOCK, at, old, 4) != Err(Errno::EINVAL) {
+    if signal::sys_rt_sigprocmask(&thread, SIG_BLOCK, at, old, 4) != Err(Errno::EINVAL) {
         return Err("a sigsetsize other than 8 was accepted");
     }
 
@@ -1601,28 +1612,29 @@ fn check_an_alternate_stack_is_recorded_and_refused_when_small(
         ))
     };
 
-    if signal::sys_sigaltstack(process, 0, old, 0) != Ok(0) || read_old()? != (0, SS_DISABLE, 0) {
+    let thread = check_thread(process)?;
+    if signal::sys_sigaltstack(&thread, 0, old, 0) != Ok(0) || read_old()? != (0, SS_DISABLE, 0) {
         return Err("with no alternate stack, sigaltstack did not report SS_DISABLE");
     }
     stage(0x0001_0000, 0, 1024)?;
-    if signal::sys_sigaltstack(process, at, 0, 0) != Err(Errno::ENOMEM) {
+    if signal::sys_sigaltstack(&thread, at, 0, 0) != Err(Errno::ENOMEM) {
         return Err("an alternate stack below MINSIGSTKSZ was accepted");
     }
     stage(0x0001_0000, 5, 65536)?;
-    if signal::sys_sigaltstack(process, at, 0, 0) != Err(Errno::EINVAL) {
+    if signal::sys_sigaltstack(&thread, at, 0, 0) != Err(Errno::EINVAL) {
         return Err("a nonsense ss_flags was accepted");
     }
     stage(0x0001_0000, 0, 65536)?;
-    if signal::sys_sigaltstack(process, at, 0, 0) != Ok(0) {
+    if signal::sys_sigaltstack(&thread, at, 0, 0) != Ok(0) {
         return Err("a valid alternate stack was refused");
     }
-    if signal::sys_sigaltstack(process, 0, old, 0) != Ok(0)
+    if signal::sys_sigaltstack(&thread, 0, old, 0) != Ok(0)
         || read_old()? != (0x0001_0000, 0, 65536)
     {
         return Err("the installed alternate stack did not read back");
     }
     stage(0, SS_DISABLE, 0)?;
-    if signal::sys_sigaltstack(process, at, old, 0) != Ok(0)
+    if signal::sys_sigaltstack(&thread, at, old, 0) != Ok(0)
         || read_old()? != (0x0001_0000, 0, 65536)
     {
         return Err("disabling did not report the stack it replaced");
@@ -1702,7 +1714,8 @@ fn check_poll_reports_ready_invalid_and_skipped(process: &Process) -> Result<(),
         return Err("poll with nothing ready returned before its timeout");
     }
 
-    if poll::sys_ppoll(process, at, 1, 0, at, 16, time::TimeWidth::Native) != Err(Errno::EINVAL) {
+    let thread = check_thread(process)?;
+    if poll::sys_ppoll(&thread, at, 1, 0, at, 16, time::TimeWidth::Native) != Err(Errno::EINVAL) {
         return Err("ppoll accepted a signal set of the wrong size");
     }
     let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
@@ -1826,11 +1839,12 @@ fn pselect_answers(process: &Process, page: u64) -> Result<(), &'static str> {
     stage(SELECT_MASK, &mask.to_le_bytes())?;
     stage(SELECT_WRITE, &[0b110])?;
     stage(SELECT_TIME, &word_pair(0, 0))?;
+    let thread = check_thread(process)?;
     let pselect = |nfds: i32, set: usize, size: usize| {
         let pack = word_pair(set, size);
         stage(SELECT_PACK, &pack)?;
         Ok::<_, &'static str>(poll::sys_pselect6(
-            process,
+            &thread,
             nfds,
             [0, write_set, 0],
             page + SELECT_TIME,
@@ -1846,7 +1860,7 @@ fn pselect_answers(process: &Process, page: u64) -> Result<(), &'static str> {
         return Err("pselect6 looked at the size of a signal set it was not given");
     }
     let blocked = |process: &Process| {
-        let _ = signal::sys_rt_sigprocmask(process, 0, 0, page + SELECT_OLD_MASK, 8)
+        let _ = signal::sys_rt_sigprocmask(&thread, 0, 0, page + SELECT_OLD_MASK, 8)
             .map_err(|_| "rt_sigprocmask could not report the mask")?;
         let mut bytes = [0_u8; 8];
         uaccess::copy_from_user(process.space(), page + SELECT_OLD_MASK, &mut bytes)
@@ -4785,11 +4799,15 @@ fn check_untested_signal_paths() -> Result<(), &'static str> {
     check_an_alarm_delivers_sigalrm()?;
     check_sa_onstack_puts_the_handler_on_the_alternate_stack()?;
     check_a_fault_forces_its_signal_past_a_block()?;
+    check_a_threads_own_signal_goes_before_its_processs()?;
+    check_a_signal_is_judged_against_its_takers_mask()?;
     crate::syscall::deliver::check_restart_decisions()?;
     println!(
         "  sigpaths SIGCHLD reached a handler and wait4 still reaped; a stop and continue were \
          reported; an alarm raised SIGALRM; SA_ONSTACK chose the alternate stack; a blocked \
-         fault was forced; SA_RESTART restarts, poll and a flagless handler do not"
+         fault was forced; a thread took its own signal before its process's; a signal was \
+         judged against its taker's mask, a fork child's included; SA_RESTART restarts, poll \
+         and a flagless handler do not"
     );
     Ok(())
 }
@@ -4816,8 +4834,8 @@ fn check_a_childs_end_reaches_a_sigchld_handler_and_still_reaps() -> Result<(), 
     let child = child_of(&parent)?;
     let child_pid = child.pid();
     process::kill(&child, 0);
-    let taken = parent
-        .with_signals(signal::Signals::take_next)
+    let taken = crate::syscall::thread::Thread::leader(&parent)
+        .with_signals(signal::take_next)
         .ok_or("a child's end did not reach a parent that handles SIGCHLD")?;
     if taken.signal != SIGCHLD || taken.action.handler != CHECK_HANDLER {
         return Err("a child's end delivered the wrong signal, or not to the handler");
@@ -4832,7 +4850,7 @@ fn check_a_childs_end_reaches_a_sigchld_handler_and_still_reaps() -> Result<(), 
     ignorer.with_signals(|signals| signals.install_action(SIGCHLD, SIG_IGN, 0));
     let orphan = child_of(&ignorer)?;
     process::kill(&orphan, 0);
-    if ignorer.with_signals(|signals| signals.deliverable() & signal::bit(SIGCHLD) != 0) {
+    if ignorer.with_signals(|signals| signals.pending() & signal::bit(SIGCHLD) != 0) {
         return Err("a parent ignoring SIGCHLD was still given one to deliver");
     }
     Ok(())
@@ -4902,7 +4920,7 @@ fn check_an_alarm_delivers_sigalrm() -> Result<(), &'static str> {
         return Err("an interval timer did not fire at its deadline");
     }
     kill::send(&process, SIGALRM, Origin::Kernel);
-    if process.with_signals(|signals| signals.deliverable() & signal::bit(SIGALRM) == 0) {
+    if process.with_signals(|signals| signals.pending() & signal::bit(SIGALRM) == 0) {
         return Err("a due alarm did not raise a deliverable SIGALRM");
     }
     if process.with_signals(|signals| signals.alarm().deadline) != 0 {
@@ -4922,13 +4940,14 @@ fn check_sa_onstack_puts_the_handler_on_the_alternate_stack() -> Result<(), &'st
     let alt_sp = 0x2000_0000_u64;
     let alt_size = 0x4000_u64;
     let program_sp = 0x7000_0000_u64;
-    process.with_signals(|signals| signals.arm_alt_stack_for_check(alt_sp, alt_size));
+    let thread = crate::syscall::thread::Thread::leader(&process);
+    thread.with_own_signals(|signals| signals.arm_alt_stack_for_check(alt_sp, alt_size));
 
-    let on_alt = process.with_signals(|signals| signals.frame_base(SA_ONSTACK, program_sp));
+    let on_alt = thread.with_own_signals(|signals| signals.frame_base(SA_ONSTACK, program_sp));
     if !(on_alt > alt_sp && on_alt <= alt_sp + alt_size) {
         return Err("SA_ONSTACK did not put the handler frame on the alternate stack");
     }
-    let off_alt = process.with_signals(|signals| signals.frame_base(0, program_sp));
+    let off_alt = thread.with_own_signals(|signals| signals.frame_base(0, program_sp));
     if off_alt > alt_sp && off_alt <= alt_sp + alt_size {
         return Err("a handler without SA_ONSTACK was put on the alternate stack");
     }
@@ -4956,25 +4975,109 @@ fn check_a_fault_forces_its_signal_past_a_block() -> Result<(), &'static str> {
 
     let caught = process::new_for_check().map_err(|_| "could not make a process")?;
     caught.with_signals(|signals| signals.install_action(SIGSEGV, CHECK_HANDLER, SA_ONSTACK));
-    let posted = caught.with_signals(|signals| signals.force(SIGSEGV, fault));
+    let caught_thread = crate::syscall::thread::Thread::leader(&caught);
+    let posted =
+        caught_thread.with_signals(|shared, own| signal::force(shared, own, SIGSEGV, fault));
     if posted != Posted::Pending {
         return Err("a fault with an unblocked handler was not made pending for it");
     }
-    let taken = caught
-        .with_signals(signal::Signals::take_next)
+    let taken = caught_thread
+        .with_signals(signal::take_next)
         .ok_or("a forced fault did not become deliverable to its handler")?;
     if taken.signal != SIGSEGV || taken.action.handler != CHECK_HANDLER {
         return Err("a forced fault reset the handler the program had not blocked");
     }
 
     let dies = process::new_for_check().map_err(|_| "could not make a process")?;
-    dies.with_signals(|signals| {
-        signals.install_action(SIGSEGV, CHECK_HANDLER, SA_ONSTACK);
-        let _ = signals.replace_blocked(signal::bit(SIGSEGV));
+    let dies_thread = crate::syscall::thread::Thread::leader(&dies);
+    dies_thread.with_signals(|shared, own| {
+        shared.install_action(SIGSEGV, CHECK_HANDLER, SA_ONSTACK);
+        let _ = own.replace_blocked(signal::bit(SIGSEGV));
     });
-    let fatal = dies.with_signals(|signals| signals.force(SIGSEGV, fault));
+    let fatal = dies_thread.with_signals(|shared, own| signal::force(shared, own, SIGSEGV, fault));
     if fatal != Posted::Fatal {
         return Err("a fault a program had blocked was not forced past the block to fatal");
+    }
+    Ok(())
+}
+
+/// (f) A thread takes the signals sent to it alone before the ones sent to its
+/// process, whatever their numbers, as Linux's `dequeue_signal` does: a
+/// `SIGUSR2` (12) forced on the thread goes before a `SIGINT` (2) sent to the
+/// process. Neither is a fault's, so the order is the queues' and not the
+/// preference for synchronous signals. The negative control sends both to the
+/// process, where the lower number goes first.
+fn check_a_threads_own_signal_goes_before_its_processs() -> Result<(), &'static str> {
+    use crate::syscall::signal::{Origin, Posted};
+    use crate::syscall::thread::Thread;
+    use ferrix_linux_abi::types::{SIGINT, SIGUSR2};
+
+    let process = process::new_for_check().map_err(|_| "could not make a process")?;
+    let (sent, forced, first, second) = Thread::leader(&process).with_signals(|shared, own| {
+        shared.install_action(SIGINT, CHECK_HANDLER, 0);
+        shared.install_action(SIGUSR2, CHECK_HANDLER, 0);
+        let sent = shared.post(own.blocked(), SIGINT, Origin::Kernel);
+        let forced = signal::force(shared, own, SIGUSR2, Origin::Kernel);
+        let first = signal::take_next(shared, own).map(|taken| taken.signal);
+        let second = signal::take_next(shared, own).map(|taken| taken.signal);
+        (sent, forced, first, second)
+    });
+    if sent != Posted::Pending || forced != Posted::Pending {
+        return Err("a handled signal was not left pending for a thread or its process");
+    }
+    if (first, second) != (Some(SIGUSR2), Some(SIGINT)) {
+        return Err("a thread did not take its own signal before its process's lower-numbered one");
+    }
+
+    let control = process::new_for_check().map_err(|_| "could not make a process")?;
+    let first = Thread::leader(&control).with_signals(|shared, own| {
+        shared.install_action(SIGINT, CHECK_HANDLER, 0);
+        shared.install_action(SIGUSR2, CHECK_HANDLER, 0);
+        let _ = shared.post(own.blocked(), SIGUSR2, Origin::Kernel);
+        let _ = shared.post(own.blocked(), SIGINT, Origin::Kernel);
+        signal::take_next(shared, own).map(|taken| taken.signal)
+    });
+    if first != Some(SIGINT) {
+        return Err("of two signals sent to a process, the lower-numbered was not taken first");
+    }
+    Ok(())
+}
+
+/// (g) A signal sent to a process is judged against the mask of the thread that
+/// will take it -- a fork child's too, before the child can be found, which is
+/// when a process group's signal can reach it. A thread that blocks `SIGTERM`
+/// leaves it pending, and so does a fork child whose thread inherited the
+/// block; the negative control, a thread that does not block it, is told it is
+/// fatal. Nothing is killed: `post_signal` only decides, and `kill::send` acts.
+fn check_a_signal_is_judged_against_its_takers_mask() -> Result<(), &'static str> {
+    use crate::syscall::signal::{Origin, Posted};
+    use crate::syscall::thread::Thread;
+    use ferrix_linux_abi::types::SIGTERM;
+
+    let parent = process::new_for_check().map_err(|_| "could not make a process")?;
+    let parent_thread = Arc::new(Thread::leader(&parent));
+    parent.add_thread(&parent_thread);
+    parent_thread.with_own_signals(|own| {
+        let _ = own.replace_blocked(signal::bit(SIGTERM));
+    });
+    if parent.post_signal(SIGTERM, Origin::Kernel) != Posted::Pending {
+        return Err("a SIGTERM its only thread blocks was not left pending");
+    }
+
+    let space = crate::user::space::AddressSpace::new()
+        .map_err(|_| "a check could not make an address space")?;
+    let child = Arc::new(Process::forked(&parent, space, false, false));
+    let child_thread = Arc::new(Thread::forked(&child, &parent_thread));
+    child.add_thread(&child_thread);
+    if child.post_signal(SIGTERM, Origin::Kernel) != Posted::Pending {
+        return Err("a fork child was judged without the mask its thread inherited");
+    }
+
+    let control = process::new_for_check().map_err(|_| "could not make a process")?;
+    let unblocked = Arc::new(Thread::leader(&control));
+    control.add_thread(&unblocked);
+    if control.post_signal(SIGTERM, Origin::Kernel) != Posted::Fatal {
+        return Err("a SIGTERM nothing blocks was not judged fatal");
     }
     Ok(())
 }
@@ -5966,17 +6069,18 @@ fn check_nanosleep_takes_its_time(process: &Process, page: u64) -> Result<(), &'
     use crate::syscall::time::sys_nanosleep;
     const NAP: u64 = 20_000_000;
     let word = size_of::<usize>() as u64;
+    let thread = check_thread(process)?;
 
     write_word(process, page, 0)?;
     write_word(process, page + word, NAP)?;
     let start = crate::timer::now_nanos();
-    answers(sys_nanosleep(process, page, 0), 0, "nanosleep was refused")?;
+    answers(sys_nanosleep(&thread, page, 0), 0, "nanosleep was refused")?;
     if crate::timer::now_nanos().saturating_sub(start) < NAP {
         return Err("nanosleep returned before its time had passed");
     }
     write_word(process, page + word, 1_000_000_000)?;
     refuses(
-        sys_nanosleep(process, page, 0),
+        sys_nanosleep(&thread, page, 0),
         Errno::EINVAL,
         "a nanosecond field of a whole second was accepted",
     )

@@ -32,7 +32,7 @@ use ferrix_linux_abi::types::SIGCHLD;
 
 use crate::arch;
 use crate::syscall::process::{self, Process};
-use crate::syscall::thread::Thread;
+use crate::syscall::thread::{self, Thread};
 use crate::syscall::{registry, uaccess};
 
 /// The low byte of `clone`'s flags: the signal the parent is told with.
@@ -302,7 +302,10 @@ fn clone_with(
     }
 
     let space = parent.space().fork().map_err(|_| Errno::ENOMEM)?;
-    let child = registry::register(Process::forked(
+    // Not findable yet. Everything a signal sent to it is judged by -- its
+    // dispositions and its thread's mask -- is in place before `kill`, a
+    // process group's signal or `/proc` can reach it.
+    let child = Arc::new(Process::forked(
         parent,
         space,
         flags & CLONE_FILES != 0,
@@ -315,11 +318,23 @@ fn clone_with(
     child.set_exit_signal((flags & CSIGNAL) as u32);
     // What glibc's `posix_spawn` asks for, so that its child need not reset
     // every handler itself before `execve`. Linux leaves the alternate stack
-    // alone here and the exec reset takes it; the child is about to `execve`,
-    // where it goes anyway.
+    // alone here, and so does this; the child is about to `execve`, where it
+    // goes anyway.
     if flags & CLONE_CLEAR_SIGHAND != 0 {
         child.with_signals(crate::syscall::signal::Signals::reset_for_exec);
     }
+    // The child's one thread, made here so that the address it is to clear
+    // when it ends is recorded before it can run. It inherits the calling
+    // thread's blocked mask and alternate stack.
+    let thread = Arc::new(match thread::current_of(parent) {
+        Some(caller) => Thread::forked(&child, &caller),
+        None => Thread::leader(&child),
+    });
+    if flags & CLONE_CHILD_CLEARTID != 0 {
+        let _ = thread.set_clear_child_tid(child_tid);
+    }
+    child.add_thread(&thread);
+    registry::publish(&child);
 
     let id = pid.to_le_bytes();
     if flags & CLONE_PARENT_SETTID != 0 {
@@ -327,12 +342,6 @@ fn clone_with(
     }
     if flags & CLONE_CHILD_SETTID != 0 {
         uaccess::copy_to_user(child.space(), child_tid, &id).map_err(|_| Errno::EFAULT)?;
-    }
-    // The child's one thread, made here so that the address it is to clear
-    // when it ends is recorded before it can run.
-    let thread = Arc::new(Thread::leader(&child));
-    if flags & CLONE_CHILD_CLEARTID != 0 {
-        let _ = thread.set_clear_child_tid(child_tid);
     }
 
     // The child starts with its parent's registers as they are right now, in

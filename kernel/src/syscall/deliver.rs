@@ -66,6 +66,7 @@ use crate::syscall::process::{self, Process};
 use crate::syscall::signal::{
     self, DefaultAction, Origin, Posted, Restart, SIGSET_SIZE, Taken, UNBLOCKABLE,
 };
+use crate::syscall::thread::{self, Thread};
 use crate::syscall::time::TimeWidth;
 use crate::syscall::uaccess;
 use crate::user::space::AddressSpace;
@@ -223,15 +224,17 @@ impl FrameBytes {
 }
 
 /// Whether the way back to user mode has anything to do for the running task:
-/// its process ended or stopped, a signal to deliver, or a mask to put back.
+/// its process ended or stopped, a signal to deliver to its thread, or a mask
+/// to put back.
 ///
 /// Cheap, and asked on every way back, so that the registers are only copied
 /// out into an [`arch::UserContext`] when something will use them.
 pub(crate) fn needs_attention() -> bool {
-    process::current().is_some_and(|process| {
+    thread::current().is_some_and(|thread| {
+        let process = thread.process();
         process.is_terminated()
             || process.is_stopped()
-            || process.with_signals(|signals| signals.needs_attention())
+            || thread.with_signals(|shared, own| signal::needs_attention(shared, own))
     })
 }
 
@@ -244,9 +247,10 @@ pub(crate) fn needs_attention() -> bool {
 ///
 /// Does not return when the process has ended.
 pub(crate) fn return_to_user(context: &mut arch::UserContext) {
-    let Some(process) = process::current() else {
+    let Some(thread) = thread::current() else {
         return;
     };
+    let process = thread.process();
     arch::enable_interrupts();
 
     // A blocking call interrupted by a signal returns a restart code in the
@@ -255,8 +259,8 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
     // `Some` only just after such a call, and takes it once so a later trap
     // cannot act on a stale one; the register is checked too, so a way back
     // that is not a syscall return -- a tick, a fault -- is never rewound.
-    let mut restart = process
-        .with_signals(signal::Signals::take_restart)
+    let mut restart = thread
+        .with_own_signals(signal::ThreadSignals::take_restart)
         .zip(RestartKind::of(context.syscall_result()));
 
     for _ in 0..DELIVERY_ROUNDS {
@@ -270,7 +274,7 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
             );
             continue;
         }
-        let Some(taken) = process.with_signals(signal::Signals::take_next) else {
+        let Some(taken) = thread.with_signals(signal::take_next) else {
             break;
         };
         // The first signal that runs a handler settles the restart: only a
@@ -283,18 +287,18 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
             resolve_restart(context, &ctx, kind, taken.action.flags);
             restart = None;
         }
-        act(&process, context, &taken);
+        act(&thread, context, &taken);
     }
     // No handler ran -- a stop, an ignore, or nothing was left to deliver --
     // so the call restarts transparently.
     if let Some((ctx, kind)) = restart {
         restart_call(context, &ctx, kind);
     }
-    process.with_signals(signal::Signals::restore_saved_mask);
+    thread.with_own_signals(signal::ThreadSignals::restore_saved_mask);
     arch::disable_interrupts();
-    if process.is_terminated() {
+    if thread.process().is_terminated() {
         // Nothing after `exit` runs to drop it.
-        drop(process);
+        drop(thread);
         sched::exit();
     }
 }
@@ -426,8 +430,10 @@ fn restart_call(context: &mut arch::UserContext, ctx: &Restart, kind: RestartKin
     context.rewind_syscall(ctx.nr, ctx.arg0, restart_block);
 }
 
-/// Do what `taken` asks: nothing, the default action, or its handler.
-fn act(process: &Process, context: &mut arch::UserContext, taken: &Taken) {
+/// Do what `taken` asks of `thread`: nothing, the default action, or its
+/// handler.
+fn act(thread: &Thread, context: &mut arch::UserContext, taken: &Taken) {
+    let process = thread.process();
     match taken.action.handler {
         SIG_IGN => {}
         SIG_DFL => match signal::default_action(taken.signal) {
@@ -438,7 +444,7 @@ fn act(process: &Process, context: &mut arch::UserContext, taken: &Taken) {
             DefaultAction::Ignore | DefaultAction::Continue => {}
         },
         _ => {
-            if run_handler(process, context, taken).is_err() {
+            if run_handler(thread, context, taken).is_err() {
                 // Linux's `force_sigsegv`: a handler that cannot be entered
                 // is a program that cannot go on.
                 println!(
@@ -455,7 +461,7 @@ fn act(process: &Process, context: &mut arch::UserContext, taken: &Taken) {
 /// Enter `taken`'s handler: choose the stack, change the mask, and have the
 /// architecture write the frame and point the registers at the handler.
 fn run_handler(
-    process: &Process,
+    thread: &Thread,
     context: &mut arch::UserContext,
     taken: &Taken,
 ) -> Result<(), BadFrame> {
@@ -463,9 +469,9 @@ fn run_handler(
         return Err(BadFrame);
     }
     let sp = context.stack_pointer();
-    let (mask, altstack, stack) = process.with_signals(|signals| {
-        let stack = signals.frame_base(taken.action.flags, sp);
-        let (mask, altstack) = signals.enter_handler(taken);
+    let (mask, altstack, stack) = thread.with_signals(|shared, own| {
+        let stack = own.frame_base(taken.action.flags, sp);
+        let (mask, altstack) = signal::enter_handler(shared, own, taken);
         (mask, altstack, stack)
     });
     let request = FrameRequest {
@@ -478,7 +484,7 @@ fn run_handler(
         stack,
         altstack,
     };
-    arch::setup_signal_frame(process.space(), context, &request)
+    arch::setup_signal_frame(thread.process().space(), context, &request)
 }
 
 /// `rt_sigreturn`, and ARMv7-A's `sigreturn` when `rt` is false: put back the
@@ -489,13 +495,14 @@ fn run_handler(
 /// A frame that cannot be read, or does not hold together, ends the process
 /// with `SIGSEGV`, as on Linux: there is no context left to return an error to.
 pub(crate) fn sigreturn(context: &mut arch::UserContext, rt: bool) {
-    let Some(process) = process::current() else {
+    let Some(thread) = thread::current() else {
         return;
     };
+    let process = thread.process();
     match arch::restore_signal_frame(process.space(), context, rt) {
         Ok(restored) => {
             let sp = context.stack_pointer();
-            process.with_signals(|signals| {
+            thread.with_own_signals(|signals| {
                 signals.leave_handler(restored.mask, restored.altstack, sp);
             });
         }
@@ -504,21 +511,21 @@ pub(crate) fn sigreturn(context: &mut arch::UserContext, rt: bool) {
                 "  signal   pid {} returned from a handler through a bad frame; ending it with SIGSEGV",
                 process.pid()
             );
-            process::kill(&process, 128 + SIGSEGV as i32);
+            process::kill(process, 128 + SIGSEGV as i32);
         }
     }
 }
 
-/// Raise `signal` against the running task's process for a fault its own
+/// Raise `signal` against the running task's thread for a fault its own
 /// instruction took, so that it can neither block nor ignore it. Answers what
 /// became of it -- [`Posted::Fatal`] when the process has already been ended --
-/// or `None` when the running task has no process, which a fault from user
+/// or `None` when the running task has no thread, which a fault from user
 /// mode never lacks unless the kernel entered user mode without one.
 pub(crate) fn force(signal: u32, origin: Origin) -> Option<Posted> {
-    let process = process::current()?;
-    let posted = process.with_signals(|signals| signals.force(signal, origin));
+    let thread = thread::current()?;
+    let posted = thread.with_signals(|shared, own| signal::force(shared, own, signal, origin));
     if posted == Posted::Fatal {
-        process::kill(&process, 128 + signal as i32);
+        process::kill(thread.process(), 128 + signal as i32);
     }
     Some(posted)
 }
@@ -541,16 +548,16 @@ fn wait_for_signal(process: &Process, deadline: u64, mut also: impl FnMut() -> b
 /// `EINVAL` for a set size other than eight; `EFAULT` for a bad set; `EINTR`,
 /// always, once it has waited.
 pub(crate) fn sys_rt_sigsuspend(
-    process: &Process,
+    thread: &Thread,
     mask: u64,
     sigsetsize: u64,
 ) -> Result<usize, Errno> {
     if sigsetsize != SIGSET_SIZE {
         return Err(Errno::EINVAL);
     }
-    let mask = read_sigset(process, mask)?;
-    process.with_signals(|signals| signals.suspend_with(mask));
-    wait_for_signal(process, u64::MAX, || false);
+    let mask = read_sigset(thread.process(), mask)?;
+    thread.with_own_signals(|signals| signals.suspend_with(mask));
+    wait_for_signal(thread.process(), u64::MAX, || false);
     Err(Errno::EINTR)
 }
 
@@ -564,21 +571,19 @@ pub(crate) fn sys_pause(process: &Process) -> Result<usize, Errno> {
     Err(Errno::EINTR)
 }
 
-/// `rt_sigpending`: the pending signals the caller blocks. Linux copies
-/// `sigsetsize` bytes of the set and refuses only a size larger than its own.
+/// `rt_sigpending`: the pending signals the calling thread blocks, its own and
+/// its process's. Linux copies `sigsetsize` bytes of the set and refuses only a
+/// size larger than its own.
 ///
 /// # Errors
 ///
 /// `EINVAL` for a size above eight; `EFAULT` for a bad pointer.
-pub(crate) fn sys_rt_sigpending(
-    process: &Process,
-    at: u64,
-    sigsetsize: u64,
-) -> Result<usize, Errno> {
+pub(crate) fn sys_rt_sigpending(thread: &Thread, at: u64, sigsetsize: u64) -> Result<usize, Errno> {
     if sigsetsize > SIGSET_SIZE {
         return Err(Errno::EINVAL);
     }
-    let set = process.with_signals(|signals| signals.pending() & signals.blocked());
+    let process = thread.process();
+    let set = thread.with_signals(|shared, own| (shared.pending() | own.pending()) & own.blocked());
     let bytes = set.to_le_bytes();
     let len = usize::try_from(sigsetsize).map_err(|_| Errno::EINVAL)?;
     if len > 0 {
@@ -598,7 +603,7 @@ pub(crate) fn sys_rt_sigpending(
 /// bad pointer; `EAGAIN` when the timeout passes first; `EINTR` when another
 /// signal, one the caller does not block, arrives first.
 pub(crate) fn sys_rt_sigtimedwait(
-    process: &Process,
+    thread: &Thread,
     set: u64,
     info: u64,
     timeout: u64,
@@ -608,6 +613,7 @@ pub(crate) fn sys_rt_sigtimedwait(
     if sigsetsize != SIGSET_SIZE {
         return Err(Errno::EINVAL);
     }
+    let process = thread.process();
     let set = read_sigset(process, set)? & !UNBLOCKABLE;
     let deadline = if timeout == 0 {
         u64::MAX
@@ -615,9 +621,9 @@ pub(crate) fn sys_rt_sigtimedwait(
         crate::timer::now_nanos().saturating_add(read_timespec(process, timeout, width)?)
     };
     wait_for_signal(process, deadline, || {
-        process.with_signals(|signals| signals.pending() & set != 0)
+        thread.with_signals(|shared, own| (shared.pending() | own.pending()) & set != 0)
     });
-    match process.with_signals(|signals| signals.take_from(set)) {
+    match thread.with_signals(|shared, own| signal::take_from(shared, own, set)) {
         Some(taken) => {
             if info != 0 {
                 uaccess::copy_to_user(process.space(), info, &taken.origin.encode(taken.signal))
@@ -625,7 +631,7 @@ pub(crate) fn sys_rt_sigtimedwait(
             }
             Ok(taken.signal as usize)
         }
-        None if process.signal_pending() => Err(Errno::EINTR),
+        None if thread.signal_pending() => Err(Errno::EINTR),
         None => Err(Errno::EAGAIN),
     }
 }

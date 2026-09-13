@@ -41,7 +41,6 @@ use crate::syscall::deliver;
 use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
 use crate::syscall::signal::{Alarm, Origin, Posted};
-use crate::syscall::time::TimeWidth;
 use crate::syscall::uaccess;
 
 /// `si_code` for a child that exited.
@@ -69,17 +68,7 @@ pub(crate) fn dispatch(
         Syscall::Kill => sys_kill(process, int(0), flag(1)),
         Syscall::Tkill => sys_tkill(process, int(0), flag(1)),
         Syscall::Tgkill => sys_tgkill(process, int(0), int(1), flag(2)),
-        Syscall::RtSigsuspend => deliver::sys_rt_sigsuspend(process, word(0), word(1)),
         Syscall::Pause => deliver::sys_pause(process),
-        Syscall::RtSigpending => deliver::sys_rt_sigpending(process, word(0), word(1)),
-        Syscall::RtSigtimedwait | Syscall::RtSigtimedwaitTime64 => {
-            let width = if call == Syscall::RtSigtimedwait {
-                TimeWidth::Native
-            } else {
-                TimeWidth::Wide
-            };
-            deliver::sys_rt_sigtimedwait(process, word(0), word(1), word(2), word(3), width)
-        }
         Syscall::Alarm => Ok(sys_alarm(process, flag(0))),
         Syscall::Getitimer => sys_getitimer(process, flag(0), word(1)),
         Syscall::Setitimer => sys_setitimer(process, flag(0), word(1), word(2)),
@@ -101,7 +90,7 @@ pub(crate) fn send(target: &Process, signal: u32, origin: Origin) {
     if signal == ferrix_linux_abi::types::SIGCONT {
         target.leave_stop();
     }
-    match target.with_signals(|signals| signals.post(signal, origin)) {
+    match target.post_signal(signal, origin) {
         Posted::Discarded => {}
         Posted::Fatal => process::kill(target, 128 + signal as i32),
         Posted::Pending => target.notify_signal(),

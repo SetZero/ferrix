@@ -105,11 +105,20 @@ pub(crate) fn is_free(pid: u32) -> bool {
 /// `kill` and `/proc` cannot see.
 pub(crate) fn register(process: Process) -> Arc<Process> {
     let process = Arc::new(process);
+    publish(&process);
+    process
+}
+
+/// Make a process that is already shared findable by its pid.
+///
+/// For a process that must be complete before `kill`, a process group's
+/// signal or `/proc` can reach it: a fork child, whose first thread -- with
+/// the blocked mask a signal sent to it is judged against -- is listed first.
+pub(crate) fn publish(process: &Arc<Process>) {
     let pid = process.pid();
     if pid != 0 {
-        let _ = REGISTRY.lock().live.insert(pid, Arc::downgrade(&process));
+        let _ = REGISTRY.lock().live.insert(pid, Arc::downgrade(process));
     }
-    process
 }
 
 /// Give a pid back. Called by a process as it is dropped.

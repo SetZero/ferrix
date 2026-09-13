@@ -557,13 +557,14 @@ fn execve_at(
     // The point of no return.
     empty_user_half(space).map_err(|_| ExecveError::Lost)?;
     process.reset_for_exec();
-    // The address the calling thread asked to have cleared was in the memory
-    // just emptied. Only the caller's own thread: a self-check can exec into a
-    // process it is not running in.
+    // The address the calling thread asked to have cleared, and its alternate
+    // stack, were in the memory just emptied. Only the caller's own thread: a
+    // self-check can exec into a process it is not running in.
     if let Some(thread) = crate::syscall::thread::current()
         && core::ptr::eq(Arc::as_ptr(thread.process()), process)
     {
         let _ = thread.take_clear_child_tid();
+        thread.with_own_signals(crate::syscall::signal::ThreadSignals::reset_for_exec);
     }
     let program = Executable {
         image: &image,

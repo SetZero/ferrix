@@ -51,8 +51,8 @@ use crate::sched::{self, Task, WaitQueue};
 use crate::syscall::credentials::Credentials;
 use crate::syscall::fd;
 use crate::syscall::registry;
-use crate::syscall::signal::Signals;
-use crate::syscall::thread::Thread;
+use crate::syscall::signal::{Origin, Posted, Signals};
+use crate::syscall::thread::{self, Thread};
 use crate::syscall::{attributes, futex, kill, uaccess};
 use crate::user::space::{AddressSpace, MMAP_MIN_ADDR, SpaceError};
 use ferrix_linux_abi::types::SIGCHLD;
@@ -115,6 +115,11 @@ pub(crate) struct Process {
     /// The tasks running its code. Weak, because a task keeps its process
     /// alive and not the other way round.
     tasks: SpinLock<Vec<Weak<Task>>>,
+    /// Its threads, each listed before it can run -- and a fork child's before
+    /// the child can be found -- so that a signal sent to the process is
+    /// judged against the mask of the thread that will take it. Weak, as
+    /// `tasks` is.
+    threads: SpinLock<Vec<Weak<Thread>>>,
     /// Registers its first task resumes from instead of entering at the
     /// program's start: set for a fork child, taken once.
     resume: SpinLock<Option<crate::arch::UserRegs>>,
@@ -235,6 +240,7 @@ impl Process {
             ending: AtomicBool::new(false),
             exit: Arc::new(Exit::new()),
             tasks: SpinLock::new(Vec::new()),
+            threads: SpinLock::new(Vec::new()),
             resume: SpinLock::new(None),
             parent: SpinLock::new(Weak::new()),
             // A process the kernel starts leads its own group and session.
@@ -691,11 +697,7 @@ impl Process {
             let death_signal = attributes::get(&orphan).parent_death_signal;
             let Some(reaper) = &reaper else {
                 *orphan.parent.lock() = Weak::new();
-                kill::send(
-                    &orphan,
-                    death_signal,
-                    crate::syscall::signal::Origin::Kernel,
-                );
+                kill::send(&orphan, death_signal, Origin::Kernel);
                 continue;
             };
             // Linux's reason, verbatim: "We don't want people slaying init."
@@ -704,11 +706,7 @@ impl Process {
             orphan.exit_signal.store(SIGCHLD, Ordering::Release);
             reaper.adopt(Arc::clone(&orphan));
             *orphan.parent.lock() = Arc::downgrade(reaper);
-            kill::send(
-                &orphan,
-                death_signal,
-                crate::syscall::signal::Origin::Kernel,
-            );
+            kill::send(&orphan, death_signal, Origin::Kernel);
             if orphan.is_terminated() {
                 if reaper.with_signals(|signals| signals.reaps_children_automatically()) {
                     reaper.disown(&orphan);
@@ -761,11 +759,19 @@ impl Process {
         &self.signalled
     }
 
-    /// Whether a wait it is in should end: it has ended, or a signal it does
-    /// not block is pending. What every call that waits checks, beside its own
-    /// condition, to return `EINTR`.
+    /// Whether a wait it is in should end: it has ended, or a signal the
+    /// waiting thread does not block is pending. What every call that waits
+    /// checks, beside its own condition, to return `EINTR`.
+    ///
+    /// Asked of the calling thread when the caller is one of its threads, and
+    /// otherwise of its first. A kernel task waiting on behalf of a process
+    /// with no thread at all -- a self-check's -- has no mask to block with,
+    /// so any signal sent to the process ends its wait.
     pub(crate) fn signal_pending(&self) -> bool {
-        self.is_terminated() || self.with_signals(|signals| signals.deliverable() != 0)
+        match self.signal_taker() {
+            Some(thread) => thread.signal_pending(),
+            None => self.is_terminated() || self.with_signals(|signals| signals.pending() != 0),
+        }
     }
 
     /// Make sure its tasks look at a signal just made pending: one blocked in a
@@ -779,6 +785,49 @@ impl Process {
             sched::wake(task);
             sched::interrupt(task);
         }
+    }
+
+    /// Its threads.
+    pub(crate) fn threads(&self) -> Vec<Arc<Thread>> {
+        self.threads
+            .lock()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect()
+    }
+
+    /// List `thread` as one of its own, if it is not already: before the
+    /// thread can run, and for a fork child before the child is published.
+    pub(crate) fn add_thread(&self, thread: &Arc<Thread>) {
+        let mut threads = self.threads.lock();
+        threads.retain(|listed| listed.strong_count() > 0);
+        if !threads
+            .iter()
+            .any(|listed| core::ptr::eq(listed.as_ptr(), Arc::as_ptr(thread)))
+        {
+            threads.push(Arc::downgrade(thread));
+        }
+    }
+
+    /// The thread a signal sent to the process is judged for: the caller when
+    /// the caller is one of its threads, and its first otherwise.
+    fn signal_taker(&self) -> Option<Arc<Thread>> {
+        thread::current_of(self).or_else(|| self.threads().into_iter().next())
+    }
+
+    /// Record `signal` sent to it as a whole, or decide it needs no recording:
+    /// [`Signals::post`] under its signal lock, judged against the blocked mask
+    /// of the thread that would take it. A process with no thread yet -- a
+    /// native child before `process_start` -- is judged against no mask, which
+    /// is the truth: nothing in it can have blocked anything.
+    pub(crate) fn post_signal(&self, signal: u32, origin: Origin) -> Posted {
+        let taker = self.signal_taker();
+        self.with_signals(|signals| {
+            let blocked = taker
+                .as_ref()
+                .map_or(0, |thread| thread.with_own_signals(|own| own.blocked()));
+            signals.post(blocked, signal, origin)
+        })
     }
 
     /// Whether it is stopped.
@@ -1348,6 +1397,7 @@ impl StartClaim {
         cpu: Option<usize>,
         state: Option<crate::arch::UserState>,
     ) -> Result<Arc<Task>, &'static str> {
+        self.process.add_thread(&thread);
         let task = sched::spawn_user("user", run_program, thread, cpu, state)?;
         self.process.tasks.lock().push(Arc::downgrade(&task));
         self.spent = true;

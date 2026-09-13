@@ -192,16 +192,15 @@ pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Out
         };
     }
 
-    // `sigaltstack` needs the caller's stack pointer, to say whether it is
-    // running on the alternate stack; the self-checks, with no registers, get
-    // the table's arm below.
-    if let (Syscall::Sigaltstack, Some(caller), Some(regs)) = (call, process.as_deref(), regs) {
-        let [ss, old, ..] = args.args;
-        let sp = regs.stack_pointer();
-        return Outcome::Return(errno::encode(signal::sys_sigaltstack(caller, ss, old, sp)));
-    }
-
-    let answer = handle(call, args, process.as_deref());
+    // The calls that act on the calling thread's own signal state go to their
+    // own table, with the caller's stack pointer for `sigaltstack`; a kernel
+    // caller, with no registers, passes zero, which is on no stack.
+    let thread = thread::current();
+    let sp = regs.map_or(0, arch::UserRegs::stack_pointer);
+    let answer = match signal::dispatch(call, &args.args, thread.as_deref(), sp) {
+        Some(answer) => answer,
+        None => handle(call, args, process.as_deref()),
+    };
     if answer == Err(Errno::ENOSYS) {
         unanswered(Some(call), args.number);
     }
@@ -210,10 +209,10 @@ pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Out
     // restart it or turn it into `EINTR`. The number and first argument are
     // captured from the entry registers here, because the return register is
     // about to overwrite one of them. See `deliver::return_to_user`.
-    if let (Err(error), Some(process)) = (answer, process.as_ref())
+    if let (Err(error), Some(thread)) = (answer, thread.as_ref())
         && error.is_restart()
     {
-        process.with_signals(|signals| signals.mark_restart(args.number as u64, args.args[0]));
+        thread.with_own_signals(|signals| signals.mark_restart(args.number as u64, args.args[0]));
     }
     Outcome::Return(errno::encode(answer))
 }
@@ -378,27 +377,7 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Getrandom => time::sys_getrandom(process, a[0], a[1], a[2]),
         Syscall::Uname => system::sys_uname(process, a[0]),
         Syscall::Poll => poll::sys_poll(process, a[0], a[1], a[2] as i32),
-        Syscall::Ppoll => poll::sys_ppoll(
-            process,
-            a[0],
-            a[1],
-            a[2],
-            a[3],
-            a[4],
-            time::TimeWidth::Native,
-        ),
-        Syscall::PpollTime64 => {
-            poll::sys_ppoll(process, a[0], a[1], a[2], a[3], a[4], time::TimeWidth::Wide)
-        }
         Syscall::Select => poll::sys_select(process, a[0] as i32, [a[1], a[2], a[3]], a[4]),
-        Syscall::Pselect6 | Syscall::Pselect6Time64 => {
-            let width = if call == Syscall::Pselect6 {
-                time::TimeWidth::Native
-            } else {
-                time::TimeWidth::Wide
-            };
-            poll::sys_pselect6(process, a[0] as i32, [a[1], a[2], a[3]], a[4], a[5], width)
-        }
         Syscall::Wait4 => family::sys_wait4(process, a[0] as i32, a[1], truncate(a[2]), a[3]),
         Syscall::Waitid => family::sys_waitid(
             process,
@@ -416,10 +395,6 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Futex => futex::sys_futex(process, &a, time::TimeWidth::Native),
         Syscall::FutexTime64 => futex::sys_futex(process, &a, time::TimeWidth::Wide),
         Syscall::RtSigaction => signal::sys_rt_sigaction(process, truncate(a[0]), a[1], a[2], a[3]),
-        Syscall::RtSigprocmask => {
-            signal::sys_rt_sigprocmask(process, truncate(a[0]), a[1], a[2], a[3])
-        }
-        Syscall::Sigaltstack => signal::sys_sigaltstack(process, a[0], a[1], 0),
         _ => Err(Errno::ENOSYS),
     }
 }
