@@ -47,6 +47,7 @@ pub(crate) mod exec;
 pub(crate) mod family;
 pub(crate) mod fd;
 pub(crate) mod file;
+pub(crate) mod flock;
 pub(crate) mod fsctl;
 pub(crate) mod futex;
 pub(crate) mod image;
@@ -434,6 +435,7 @@ fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<
         Syscall::Ftruncate => fd::sys_ftruncate(process, fd, native_signed(a[1])),
         Syscall::Ftruncate64 => fd::sys_ftruncate(process, fd, wide(a, 1)),
         Syscall::Ioctl => fd::sys_ioctl(process, fd, truncate(a[1]), a[2]),
+        Syscall::Flock => flock::sys_flock(process, fd, truncate(a[1])),
         _ => return None,
     };
     Some(answer)

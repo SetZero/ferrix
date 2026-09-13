@@ -1121,6 +1121,20 @@ fn termios_matches_the_generic_termbits_header() {
 }
 
 #[test]
+fn flock_operations_match_the_generic_header() {
+    // `asm-generic/fcntl.h`, which all three architectures use unchanged.
+    assert_eq!(
+        (
+            types::LOCK_SH,
+            types::LOCK_EX,
+            types::LOCK_NB,
+            types::LOCK_UN
+        ),
+        (1, 2, 4, 8)
+    );
+}
+
+#[test]
 fn open_flags_match_the_generic_header() {
     assert_eq!(types::O_CREAT, 64, "O_CREAT is octal 100");
     assert_eq!(types::O_TRUNC, 512, "O_TRUNC is octal 1000");

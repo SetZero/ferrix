@@ -94,6 +94,7 @@ pub(crate) fn dispatch(
         Syscall::Sync => Ok(0),
         Syscall::Syncfs => sys_syncfs(process, fd),
         Syscall::Fsync | Syscall::Fdatasync => sys_fsync(process, fd),
+        Syscall::Readahead => sys_readahead(process, fd, readahead_count(a)),
         Syscall::Truncate => sys_truncate(process, a[0], super::native_signed(a[1])),
         Syscall::Truncate64 => sys_truncate(process, a[0], super::wide(a, 1)),
         // `fallocate(fd, mode, offset, len)`: on ARMv7-A the offset is in the
@@ -225,6 +226,40 @@ pub(crate) fn sys_fsync(process: &Process, fd: i32) -> Result<usize, Errno> {
     match usable(process, fd)?.kind() {
         FileType::Regular | FileType::Directory => Ok(0),
         _ => Err(Errno::EINVAL),
+    }
+}
+
+/// `readahead`: done as soon as it is asked, because there is no page cache
+/// to fill -- every file is in memory already.
+///
+/// What is still checked is what Linux's `ksys_readahead` checks, in its
+/// order: a descriptor not open for reading, `O_PATH` included, is `EBADF`;
+/// anything but a regular file is `EINVAL`; and a count too large to be a
+/// `loff_t` is `EINVAL`, from `generic_fadvise`. The offset is never looked
+/// at, as Linux does not look at it either before the page cache does.
+pub(crate) fn sys_readahead(process: &Process, fd: i32, count: u64) -> Result<usize, Errno> {
+    let file = fd::file(process, fd)?;
+    if !file.readable() {
+        return Err(Errno::EBADF);
+    }
+    if file.kind() != FileType::Regular || i64::try_from(count).is_err() {
+        return Err(Errno::EINVAL);
+    }
+    Ok(0)
+}
+
+/// `readahead`'s count register.
+///
+/// `readahead(fd, offset, count)` puts a 64-bit `loff_t` second. One register
+/// on a 64-bit architecture, so the count is the third. On ARMv7-A the EABI
+/// starts the offset at the next even register, r2 and r3, which leaves r1
+/// empty and the 32-bit count in r4 -- what `regpairs_aligned` makes QEMU's
+/// linux-user read, and what `super::wide` assumes for the offset.
+fn readahead_count(a: &[u64; 6]) -> u64 {
+    if size_of::<usize>() == 8 {
+        a[2]
+    } else {
+        a[4] & 0xFFFF_FFFF
     }
 }
 

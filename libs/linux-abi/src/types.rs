@@ -1303,6 +1303,19 @@ pub const F_DUPFD_CLOEXEC: u32 = 1030;
 pub const FD_CLOEXEC: u32 = 1;
 
 // ---------------------------------------------------------------------------
+// flock
+// ---------------------------------------------------------------------------
+
+/// `flock`: a shared lock.
+pub const LOCK_SH: u32 = 1;
+/// `flock`: an exclusive lock.
+pub const LOCK_EX: u32 = 2;
+/// `flock`: or'd with `LOCK_SH` or `LOCK_EX`, refuse rather than wait.
+pub const LOCK_NB: u32 = 4;
+/// `flock`: release the lock.
+pub const LOCK_UN: u32 = 8;
+
+// ---------------------------------------------------------------------------
 // Terminal ioctls
 // ---------------------------------------------------------------------------
 

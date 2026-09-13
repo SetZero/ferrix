@@ -2425,7 +2425,9 @@ fn check_descriptors(process: &Process) -> Result<(), &'static str> {
         .and_then(|()| check_a_file_opens_on_the_lowest_free_descriptor(process, page))
         .and_then(|()| check_a_dup_shares_the_offset(process, page))
         .and_then(|()| check_fcntl_and_dup3_follow_linux(process, page))
-        .and_then(|()| check_descriptors_are_refused_by_kind(process, page));
+        .and_then(|()| check_descriptors_are_refused_by_kind(process, page))
+        .and_then(|()| check_flock_belongs_to_the_description(process, page))
+        .and_then(|()| check_readahead_accepts_only_a_readable_file(process, page));
 
     // Cleaned up whatever happened, so that a failure is reported as itself
     // and not also as leaked frames.
@@ -2439,6 +2441,162 @@ fn check_descriptors(process: &Process) -> Result<(), &'static str> {
     }
     let _ = memory::sys_munmap(process, page, PAGE_SIZE);
     outcome
+}
+
+/// Open the descriptor checks' file with `flags`, as a descriptor number.
+fn open_check_file(process: &Process, page: u64, flags: u32) -> Result<i32, &'static str> {
+    fd::sys_openat(process, AT_FDCWD, page + AT_PATH, flags, 0o644)
+        .ok()
+        .and_then(|fd| i32::try_from(fd).ok())
+        .ok_or("could not open the descriptor checks' file")
+}
+
+/// A `flock` lock is the open file description's, not the descriptor's.
+///
+/// A second `open` of the file is refused `LOCK_NB` while the first holds
+/// `LOCK_EX` -- the negative control, that a lock is really held -- and is
+/// still refused after the first descriptor closes while a `dup` of it keeps
+/// the description alive. Once the description is gone it is granted. Between
+/// those, two shared locks coexist and a `dup` converts its description's
+/// lock in place. A bad operation is `EINVAL`, and a closed or `O_PATH`
+/// descriptor `EBADF`.
+fn check_flock_belongs_to_the_description(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    use crate::syscall::flock::sys_flock;
+    use ferrix_linux_abi::types::{LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN, O_PATH};
+    let nb = |fd: i32, operation: u32| sys_flock(process, fd, operation | LOCK_NB);
+
+    let first = open_check_file(process, page, O_RDWR | O_CREAT)?;
+    let second = open_check_file(process, page, O_RDONLY)?;
+    answers(
+        sys_flock(process, first, LOCK_EX),
+        0,
+        "flock(LOCK_EX) on a file nobody had locked was refused",
+    )?;
+    refuses(
+        nb(second, LOCK_EX),
+        Errno::EAGAIN,
+        "a second description was granted LOCK_EX while the first held LOCK_EX",
+    )?;
+    refuses(
+        nb(second, LOCK_SH),
+        Errno::EAGAIN,
+        "a second description was granted LOCK_SH while the first held LOCK_EX",
+    )?;
+    answers(
+        nb(first, LOCK_EX),
+        0,
+        "a description asking again for the lock it holds was refused",
+    )?;
+
+    let shared = fd::sys_dup(process, first)
+        .ok()
+        .and_then(|fd| i32::try_from(fd).ok())
+        .ok_or("dup was refused in the flock check")?;
+    answers(
+        nb(shared, LOCK_SH),
+        0,
+        "a dup could not convert its description's LOCK_EX to LOCK_SH",
+    )?;
+    answers(
+        nb(second, LOCK_SH),
+        0,
+        "two descriptions could not both hold LOCK_SH",
+    )?;
+    answers(
+        sys_flock(process, second, LOCK_UN),
+        0,
+        "LOCK_UN was refused",
+    )?;
+    answers(
+        nb(shared, LOCK_EX),
+        0,
+        "a description alone on a file could not convert LOCK_SH back to LOCK_EX",
+    )?;
+
+    let _ = fd::sys_close(process, first);
+    refuses(
+        nb(second, LOCK_SH),
+        Errno::EAGAIN,
+        "closing one of two descriptors of a description released its lock",
+    )?;
+    let _ = fd::sys_close(process, shared);
+    answers(
+        nb(second, LOCK_EX),
+        0,
+        "LOCK_NB was still refused after the holding description was dropped",
+    )?;
+    answers(
+        sys_flock(process, second, LOCK_UN),
+        0,
+        "LOCK_UN was refused",
+    )?;
+
+    refuses(
+        sys_flock(process, second, 0),
+        Errno::EINVAL,
+        "flock with no operation was not EINVAL",
+    )?;
+    refuses(
+        sys_flock(process, second, LOCK_SH | LOCK_EX),
+        Errno::EINVAL,
+        "flock asking for both LOCK_SH and LOCK_EX was not EINVAL",
+    )?;
+    let _ = fd::sys_close(process, second);
+    refuses(
+        sys_flock(process, second, LOCK_SH),
+        Errno::EBADF,
+        "flock on a closed descriptor was not EBADF",
+    )?;
+    let path_only = open_check_file(process, page, O_PATH)?;
+    let refused = sys_flock(process, path_only, LOCK_SH);
+    let _ = fd::sys_close(process, path_only);
+    refuses(
+        refused,
+        Errno::EBADF,
+        "flock on an O_PATH descriptor was not EBADF",
+    )
+}
+
+/// `readahead` has nothing to fill and answers 0 for a readable regular file;
+/// a descriptor not open for reading is `EBADF`, and the console, which is
+/// not a regular file, is `EINVAL`.
+fn check_readahead_accepts_only_a_readable_file(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    use crate::syscall::fsctl::sys_readahead;
+    use ferrix_linux_abi::types::O_WRONLY;
+
+    let readable = open_check_file(process, page, O_RDONLY)?;
+    let answered = sys_readahead(process, readable, 4096);
+    let too_long = sys_readahead(process, readable, u64::MAX);
+    let _ = fd::sys_close(process, readable);
+    answers(
+        answered,
+        0,
+        "readahead on a readable regular file was refused",
+    )?;
+    refuses(
+        too_long,
+        Errno::EINVAL,
+        "a readahead count too large for a loff_t was accepted",
+    )?;
+    let written = open_check_file(process, page, O_WRONLY)?;
+    let refused = sys_readahead(process, written, 4096);
+    let _ = fd::sys_close(process, written);
+    refuses(
+        refused,
+        Errno::EBADF,
+        "readahead on a descriptor open only for writing was not EBADF",
+    )?;
+    refuses(
+        sys_readahead(process, 0, 4096),
+        Errno::EINVAL,
+        "readahead on the console was not EINVAL",
+    )
 }
 
 /// Require a handler to have answered `want`.
