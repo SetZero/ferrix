@@ -39,7 +39,9 @@ int main(void)
 
 	/* uname and gethostname. */
 	CHECK(uname(&u) == 0);
-	CHECK(strcmp(u.sysname, "Linux") == 0 && strcmp(u.machine, "x86_64") == 0);
+	/* Linux on the host; Ferrix reports its own name. */
+	CHECK(strcmp(u.sysname, "Linux") == 0 || strcmp(u.sysname, "Ferrix") == 0);
+	CHECK(strcmp(u.machine, "x86_64") == 0);
 	CHECK(u.release[0] != 0);
 	CHECK(gethostname(host, sizeof host) == 0 && strcmp(host, u.nodename) == 0);
 	n = strlen(u.nodename);
