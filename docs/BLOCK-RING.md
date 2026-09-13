@@ -382,6 +382,43 @@ and `serial` are carried as given: stage 11 validates neither beyond size.
   * The kernel's side is unchanged: every outstanding request fails with EIO at
     once, without waiting for the reset.
 
+### 6.4 devmgr → driver: START (type 6)
+
+The first and only message on a driver's bootstrap channel — `Handle(1)`,
+which `ferrix-rt`'s `Bootstrap` adopts — sent by whoever started the driver:
+`devmgr`, or the boot check in its stead. A driver handed anything else first
+exits.
+
+```
+0   4  type = 6
+4   4  length = 92
+8   16 common       Block: virtio's common configuration
+24  16 notify       Block: the notification area
+40  16 isr          Block: interrupt status
+56  16 device       Block: device-specific configuration; all zero if none
+72  4  notify_off_multiplier
+76  2  msix_table_size   entries; 0 for a device with a line only
+78  2  pci_device_id     0x1042 modern, 0x1001 transitional virtio-blk
+80  4  location          as HELLO carries it
+84  8  name              the node name chosen for the disk, as HELLO carries it
+handles: [device (TRANSFER | MANAGE), control channel (TRANSFER | READ | WRITE | WAIT)]
+
+a Block:
+0   8  phys      page-aligned physical start of the pages holding the block,
+                 inside one of the device's apertures
+8   4  offset    the block's first byte, from phys
+12  4  length    bytes
+```
+
+Ring 3 cannot walk configuration space, so START carries where each virtio
+register block lies, in the form `io_mapping_create` takes: the driver maps
+`[phys, phys + round_up(offset + length))` and adds `offset`. The kernel
+keeps these on the device node from enumeration and reports them through
+`device_info` (0x1049), which is where `devmgr` reads them; the boot check
+builds the same START from the node directly. The handles carry exactly the
+rights shown, checked as HELLO's are (`Start::validate`). The driver carries
+`location` and `name` back in HELLO unchanged.
+
 ## 7. Mapping to what exists
 
 * `libs/block` → one submission per `Dispatch`; `Token::raw()` is the `id`;

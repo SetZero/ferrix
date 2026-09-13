@@ -63,6 +63,66 @@ pub struct ReadActual {
 /// them.
 pub const PIN_READ_ONLY: u64 = 1;
 
+/// Where one of a device's virtio register blocks lies, as `device_info`
+/// reports it and a driver's START carries it: the page-aligned physical
+/// start of the pages holding it, inside one of the device's apertures, the
+/// block's first byte within those pages, and its length. A block the device
+/// does not have is all zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(C)]
+pub struct DeviceBlock {
+    /// Physical address of the first page, a multiple of the page size.
+    pub phys: u64,
+    /// The block's first byte, from `phys`.
+    pub offset: u32,
+    /// Bytes in the block.
+    pub length: u32,
+}
+
+/// What `device_info` writes: the device as enumeration found it, for
+/// whoever starts a driver on it. [`DEVICE_INFO_BYTES`] long, laid out as
+/// declared with no padding until the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(C)]
+pub struct DeviceInfo {
+    /// virtio's common configuration block.
+    pub common: DeviceBlock,
+    /// virtio's notification area.
+    pub notify: DeviceBlock,
+    /// virtio's ISR status block.
+    pub isr: DeviceBlock,
+    /// virtio's device-specific configuration block.
+    pub device: DeviceBlock,
+    /// The PCI address as a word (segment in bits 31:16, bus in 15:8, devfn
+    /// in 7:0), or [`DEVICE_NOT_PCI`] for a device tree node.
+    pub location: u32,
+    /// The PCI class code: base class in bits 23:16, subclass in 15:8, the
+    /// programming interface in 7:0. Zero for a device tree node.
+    pub class: u32,
+    /// Apertures the device has, each an `io_mapping_create` can claim.
+    pub apertures: u32,
+    /// Vectors the device has, each an `interrupt_create` can claim.
+    pub vectors: u32,
+    /// virtio's `notify_off_multiplier`.
+    pub notify_off_multiplier: u32,
+    /// The PCI vendor identifier; zero for a device tree node.
+    pub vendor_id: u16,
+    /// The PCI device identifier; zero for a device tree node.
+    pub device_id: u16,
+    /// MSI-X table entries; zero for a device with a line only.
+    pub msix_table_size: u16,
+    /// [`DEVICE_VIRTIO_PCI`] when the blocks above describe a virtio PCI
+    /// transport, else zero and the blocks are zero.
+    pub virtio: u16,
+}
+
+/// Bytes `device_info` writes: a [`DeviceInfo`], padded to its alignment.
+pub const DEVICE_INFO_BYTES: usize = 96;
+/// [`DeviceInfo::location`] of a device that is not a PCI function.
+pub const DEVICE_NOT_PCI: u32 = u32::MAX;
+/// [`DeviceInfo::virtio`] of a virtio PCI transport.
+pub const DEVICE_VIRTIO_PCI: u16 = 1;
+
 /// The aperture an `io_mapping_create` claims.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(C)]

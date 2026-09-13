@@ -59,6 +59,8 @@ fn pinning_sits_in_the_vmo_block() {
     assert_eq!(nr::decode(0x1025), Some(NativeCall::VmoPin));
     assert_eq!(nr::decode(0x1026), Some(NativeCall::VmoPinAddresses));
     assert_eq!(nr::decode(0x1048), Some(NativeCall::BlockRingCreate));
+    assert_eq!(nr::decode(0x1049), Some(NativeCall::DeviceInfo));
+    assert_eq!(nr::decode(0x104A), Some(NativeCall::DeviceQuiesce));
     assert_eq!(nr::decode(0x1027), None, "0x1027 stays free");
     assert!(
         !Rights::PIN.contains(Rights::TRANSFER),

@@ -1,9 +1,10 @@
-//! The control plane: HELLO, READY, REFUSED, STOP and STOPPED.
+//! The control plane: HELLO, READY, REFUSED, STOP and STOPPED between the
+//! kernel and a driver, and START from `devmgr` to a driver it starts.
 //!
 //! Every message is a fixed little-endian structure whose first four bytes are
 //! its type and next four its length; handles ride in the channel message's
 //! handle array, and the glue passes the rights it read off them to
-//! [`Hello::validate`].
+//! [`Hello::validate`] or [`Start::validate`].
 //!
 //! ```text
 //! HELLO    driver -> kernel, 72 bytes, handles [ring VMO, data VMO, driver port]
@@ -16,7 +17,21 @@
 //!   8 reason u32, a Refusal
 //! STOP     kernel -> driver, 8 bytes
 //! STOPPED  driver -> kernel, 8 bytes
+//! START    devmgr -> driver, 92 bytes, handles [device, control channel]
+//!   8 common Block   24 notify Block   40 isr Block   56 device Block
+//!     (a Block: 0 phys u64, 8 offset u32, 12 length u32)
+//!   72 notify_off_multiplier u32   76 msix_table_size u16
+//!   78 pci_device_id u16   80 location u32   84 name [u8; 8]
 //! ```
+//!
+//! START is the first and only message on a driver's bootstrap channel: the
+//! device it is to drive, as `devmgr` read it off the kernel's enumeration,
+//! and the driver's end of the ring's control channel `devmgr` made for it.
+//! Ring 3 cannot walk configuration space, so START carries where each virtio
+//! register block lies in physical memory — the page-aligned start of the
+//! pages holding it, inside one of the device's apertures, the block's offset
+//! within those pages and its length — which is what `io_mapping_create`
+//! takes. A driver handed anything else first exits.
 
 use core::fmt;
 
@@ -36,6 +51,8 @@ pub const REFUSED: u32 = 3;
 pub const STOP: u32 = 4;
 /// STOPPED's message type.
 pub const STOPPED: u32 = 5;
+/// START's message type.
+pub const START: u32 = 6;
 
 /// Bytes of the type and length every message starts with, and all of READY,
 /// STOP and STOPPED.
@@ -44,8 +61,10 @@ pub const HEADER_BYTES: usize = 8;
 pub const HELLO_BYTES: usize = 72;
 /// Bytes of REFUSED.
 pub const REFUSED_BYTES: usize = 12;
+/// Bytes of START.
+pub const START_BYTES: usize = 92;
 /// Bytes of the longest message.
-pub const MAX_BYTES: usize = HELLO_BYTES;
+pub const MAX_BYTES: usize = START_BYTES;
 
 /// Ring pairs a v1 HELLO may announce.
 pub const QUEUES: u16 = 1;
@@ -63,6 +82,21 @@ pub const HELLO_RIGHTS: [Rights; 3] = [VMO_RIGHTS, VMO_RIGHTS, PORT_RIGHTS];
 
 /// READY's handle, with exactly the rights it must carry.
 pub const READY_RIGHTS: [Rights; 1] = [Rights::WRITE];
+
+/// Exactly the rights a driver holds its end of the ring's control channel
+/// with: it sends and receives on it, waits on it and was handed it, and
+/// nobody copies it. The kernel inserts the end `block_ring_create` answers
+/// with these, and `devmgr` passes it on unchanged.
+pub const CONTROL_RIGHTS: Rights =
+    Rights(Rights::TRANSFER.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::WAIT.0);
+
+/// Exactly the rights a driver holds its device with: `MANAGE`, for
+/// `vmo_pin`, `interrupt_create` and `io_mapping_create`, and the `TRANSFER`
+/// it arrived with.
+pub const DEVICE_RIGHTS: Rights = Rights(Rights::TRANSFER.0 | Rights::MANAGE.0);
+
+/// START's handles, in order, with exactly the rights each must carry.
+pub const START_RIGHTS: [Rights; 2] = [DEVICE_RIGHTS, CONTROL_RIGHTS];
 
 /// Field offsets of HELLO.
 pub mod hello {
@@ -90,6 +124,37 @@ pub mod hello {
     pub const SERIAL: usize = 44;
     /// `name`, 8 bytes, NUL-padded.
     pub const NAME: usize = 64;
+}
+
+/// Field offsets of START, and of a [`Block`] within it.
+pub mod start {
+    /// `common`, a `Block`: virtio's common configuration.
+    pub const COMMON: usize = 8;
+    /// `notify`, a `Block`: the notification area.
+    pub const NOTIFY: usize = 24;
+    /// `isr`, a `Block`: the ISR status byte.
+    pub const ISR: usize = 40;
+    /// `device`, a `Block`: the device-specific configuration.
+    pub const DEVICE: usize = 56;
+    /// `notify_off_multiplier`, `u32`.
+    pub const NOTIFY_OFF_MULTIPLIER: usize = 72;
+    /// `msix_table_size`, `u16`: entries, 0 for a device with a line only.
+    pub const MSIX_TABLE_SIZE: usize = 76;
+    /// `pci_device_id`, `u16`.
+    pub const PCI_DEVICE_ID: usize = 78;
+    /// `location`, `u32`: the PCI address, as HELLO carries it.
+    pub const LOCATION: usize = 80;
+    /// `name`, 8 bytes, NUL-padded: the node name `devmgr` chose.
+    pub const NAME: usize = 84;
+
+    /// A `Block`'s `phys`, `u64`.
+    pub const BLOCK_PHYS: usize = 0;
+    /// A `Block`'s `offset`, `u32`.
+    pub const BLOCK_OFFSET: usize = 8;
+    /// A `Block`'s `length`, `u32`.
+    pub const BLOCK_LENGTH: usize = 12;
+    /// Bytes of a `Block`.
+    pub const BLOCK_BYTES: usize = 16;
 }
 
 /// Field offsets of REFUSED beyond the common header.
@@ -274,6 +339,70 @@ impl Hello {
     }
 }
 
+/// Where a virtio register block lies, as START carries it: the page-aligned
+/// physical start of the pages holding it, inside one of the device's
+/// apertures, the block's offset within those pages, and its length.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Block {
+    /// Physical address of the first page, a multiple of the page size.
+    pub phys: u64,
+    /// The block's first byte, from `phys`.
+    pub offset: u32,
+    /// Bytes in the block.
+    pub length: u32,
+}
+
+/// START's fields: what `devmgr` tells a driver about the device it starts
+/// it on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Start {
+    /// virtio's common configuration block.
+    pub common: Block,
+    /// The notification area.
+    pub notify: Block,
+    /// The ISR status block.
+    pub isr: Block,
+    /// The device-specific configuration block.
+    pub device: Block,
+    /// virtio's `notify_off_multiplier`.
+    pub notify_off_multiplier: u32,
+    /// MSI-X table entries; 0 when the device has a line only.
+    pub msix_table_size: u16,
+    /// The PCI device identifier, so a driver can refuse a device that is
+    /// not its own before touching it.
+    pub pci_device_id: u16,
+    /// [`Location`], as a word: what HELLO must carry back.
+    pub location: u32,
+    /// The node name `devmgr` chose, NUL-padded: what HELLO must carry back.
+    pub name: [u8; NAME_BYTES],
+}
+
+/// Why a START is not one a driver may act on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StartError {
+    /// A handle is missing, extra, or carries rights other than exactly the
+    /// specified ones.
+    Rights,
+    /// `name` is not one HELLO could carry.
+    Name,
+}
+
+impl Start {
+    /// Every check a driver makes on a START, given the rights of the handles
+    /// that came with it: exactly [`START_RIGHTS`], and a name HELLO can
+    /// carry back. What the blocks describe is checked by mapping them.
+    ///
+    /// # Errors
+    ///
+    /// The [`StartError`], on which the driver exits.
+    pub fn validate(&self, handle_rights: &[Rights]) -> Result<DiskName, StartError> {
+        if handle_rights != START_RIGHTS {
+            return Err(StartError::Rights);
+        }
+        DiskName::new(self.name).ok_or(StartError::Name)
+    }
+}
+
 /// One control message.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Message {
@@ -289,6 +418,8 @@ pub enum Message {
     Stop,
     /// Driver to kernel: finished, device reset.
     Stopped,
+    /// `devmgr` to driver: this device, this ring.
+    Start(Start),
 }
 
 /// Why bytes on the control channel are not a message.
@@ -353,6 +484,7 @@ impl Message {
             Message::Hello(_) => HELLO_RIGHTS.len(),
             Message::Ready => READY_RIGHTS.len(),
             Message::Refused(_) | Message::Stop | Message::Stopped => 0,
+            Message::Start(_) => START_RIGHTS.len(),
         }
     }
 
@@ -372,6 +504,10 @@ impl Message {
             }
             Message::Stop => (STOP, HEADER_BYTES),
             Message::Stopped => (STOPPED, HEADER_BYTES),
+            Message::Start(start) => {
+                encode_start(&mut bytes, start);
+                (START, START_BYTES)
+            }
         };
         put(&mut bytes, hello::TYPE, &kind.to_le_bytes());
         // Every length is at most `MAX_BYTES`.
@@ -395,6 +531,7 @@ impl Message {
             HELLO => HELLO_BYTES,
             READY | STOP | STOPPED => HEADER_BYTES,
             REFUSED => REFUSED_BYTES,
+            START => START_BYTES,
             other => return Err(MessageError::UnknownType(other)),
         };
         if kind == HELLO
@@ -432,6 +569,46 @@ fn encode_hello(bytes: &mut [u8], hello: &Hello) {
     put(bytes, hello::NAME, &hello.name);
 }
 
+/// START's fields, after the type and length.
+fn encode_start(bytes: &mut [u8], message: &Start) {
+    for (at, block) in [
+        (start::COMMON, &message.common),
+        (start::NOTIFY, &message.notify),
+        (start::ISR, &message.isr),
+        (start::DEVICE, &message.device),
+    ] {
+        put(bytes, at + start::BLOCK_PHYS, &block.phys.to_le_bytes());
+        put(bytes, at + start::BLOCK_OFFSET, &block.offset.to_le_bytes());
+        put(bytes, at + start::BLOCK_LENGTH, &block.length.to_le_bytes());
+    }
+    put(
+        bytes,
+        start::NOTIFY_OFF_MULTIPLIER,
+        &message.notify_off_multiplier.to_le_bytes(),
+    );
+    put(
+        bytes,
+        start::MSIX_TABLE_SIZE,
+        &message.msix_table_size.to_le_bytes(),
+    );
+    put(
+        bytes,
+        start::PCI_DEVICE_ID,
+        &message.pci_device_id.to_le_bytes(),
+    );
+    put(bytes, start::LOCATION, &message.location.to_le_bytes());
+    put(bytes, start::NAME, &message.name);
+}
+
+/// A [`Block`] at `at`.
+fn block_at(bytes: &[u8], at: usize) -> Option<Block> {
+    Some(Block {
+        phys: u64_at(bytes, at.checked_add(start::BLOCK_PHYS)?)?,
+        offset: u32_at(bytes, at.checked_add(start::BLOCK_OFFSET)?)?,
+        length: u32_at(bytes, at.checked_add(start::BLOCK_LENGTH)?)?,
+    })
+}
+
 /// The body of a message whose type and length have been checked.
 fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
     Some(match kind {
@@ -451,6 +628,17 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
         REFUSED => Message::Refused(u32_at(bytes, refused::REASON)?),
         STOP => Message::Stop,
         STOPPED => Message::Stopped,
+        START => Message::Start(Start {
+            common: block_at(bytes, start::COMMON)?,
+            notify: block_at(bytes, start::NOTIFY)?,
+            isr: block_at(bytes, start::ISR)?,
+            device: block_at(bytes, start::DEVICE)?,
+            notify_off_multiplier: u32_at(bytes, start::NOTIFY_OFF_MULTIPLIER)?,
+            msix_table_size: u16_at(bytes, start::MSIX_TABLE_SIZE)?,
+            pci_device_id: u16_at(bytes, start::PCI_DEVICE_ID)?,
+            location: u32_at(bytes, start::LOCATION)?,
+            name: array_at(bytes, start::NAME)?,
+        }),
         _ => return None,
     })
 }

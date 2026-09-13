@@ -1,7 +1,7 @@
 //! A device, and the interrupts and register windows it hands a driver.
 
 use ferrix_native_abi::nr;
-use ferrix_native_abi::types::IoMappingSpec;
+use ferrix_native_abi::types::{DEVICE_INFO_BYTES, DeviceBlock, DeviceInfo, IoMappingSpec};
 
 use crate::call::{Call, Syscall};
 use crate::channel::Channel;
@@ -73,6 +73,40 @@ impl<S: Syscall> Device<S> {
 }
 
 impl<S: Syscall> Device<S> {
+    /// `device_info`: the device as enumeration found it, which is what
+    /// whoever starts a driver on it puts in the driver's START. Any device
+    /// handle will do.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::WrongType`] for a handle that is not a device.
+    pub fn info(&self) -> Result<DeviceInfo, Error> {
+        let mut bytes = [0_u8; DEVICE_INFO_BYTES];
+        let value = Call::new(nr::DEVICE_INFO)
+            .value(register(self.handle()))
+            .output(&mut bytes)
+            .make(self.syscall());
+        decode_unit(value)?;
+        Ok(device_info(&bytes))
+    }
+
+    /// `device_quiesce`: the device's driver is gone, so turn its bus
+    /// mastering off and release its block ring for the next driver. Needs
+    /// `MANAGE`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadState`] while a driver still serves the device through a
+    /// ring, or if the device's configuration space could not be reached;
+    /// [`Error::AccessDenied`] without `MANAGE`.
+    pub fn quiesce(&self) -> Result<(), Error> {
+        decode_unit(
+            Call::new(nr::DEVICE_QUIESCE)
+                .value(register(self.handle()))
+                .make(self.syscall()),
+        )
+    }
+
     /// Ask the kernel for a block ring on this device: the driver's end of
     /// the ring's control channel, over which HELLO goes next
     /// (`docs/BLOCK-RING.md` §6). Needs `MANAGE`.
@@ -145,5 +179,48 @@ impl<S: Syscall> IoMapping<S> {
             .value(at.unwrap_or(0))
             .make(self.syscall());
         decode(value)
+    }
+}
+
+/// A `DeviceInfo` as `device_info` wrote it: field by field, in the order
+/// declared, native-endian.
+fn device_info(bytes: &[u8; DEVICE_INFO_BYTES]) -> DeviceInfo {
+    let word = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .and_then(|word| <[u8; 4]>::try_from(word).ok())
+            .map_or(0, u32::from_ne_bytes)
+    };
+    let half = |at: usize| {
+        bytes
+            .get(at..at + 2)
+            .and_then(|word| <[u8; 2]>::try_from(word).ok())
+            .map_or(0, u16::from_ne_bytes)
+    };
+    let long = |at: usize| {
+        bytes
+            .get(at..at + 8)
+            .and_then(|word| <[u8; 8]>::try_from(word).ok())
+            .map_or(0, u64::from_ne_bytes)
+    };
+    let block = |at: usize| DeviceBlock {
+        phys: long(at),
+        offset: word(at + 8),
+        length: word(at + 12),
+    };
+    DeviceInfo {
+        common: block(0),
+        notify: block(16),
+        isr: block(32),
+        device: block(48),
+        location: word(64),
+        class: word(68),
+        apertures: word(72),
+        vectors: word(76),
+        notify_off_multiplier: word(80),
+        vendor_id: half(84),
+        device_id: half(86),
+        msix_table_size: half(88),
+        virtio: half(90),
     }
 }

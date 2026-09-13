@@ -41,8 +41,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use ferrix_blkring::kernel::Ending;
 use ferrix_blkring::{
-    Completed, Device, DeviceFlags, KernelSide, Location, Message, Refusal, RingMemory, Slot,
-    Status, Submission, SubmitError, Wait,
+    Block, Completed, Device, DeviceFlags, DiskName, KernelSide, Location, Message, Refusal,
+    RingMemory, Slot, Start as StartMessage, Status, Submission, SubmitError, Wait,
 };
 use ferrix_block::{Config, Limits, Queue, Request, Token};
 use ferrix_bootinfo::PAGE_SIZE;
@@ -70,9 +70,9 @@ pub(crate) mod check;
 pub(crate) const VIRTIO_BLK_MAJOR: u32 = 254;
 
 /// The rights the driver's end of the control channel carries: it sends and
-/// receives on it, waits on it and is handed it, and nobody copies it.
-pub(crate) const CONTROL_RIGHTS: Rights =
-    Rights(Rights::TRANSFER.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::WAIT.0);
+/// receives on it, waits on it and is handed it, and nobody copies it. The
+/// crate's definition, so START's check and this agree by construction.
+pub(crate) const CONTROL_RIGHTS: Rights = ferrix_blkring::control::CONTROL_RIGHTS;
 
 /// How long a ring waits for its driver's HELLO.
 const HELLO_PATIENCE_NANOS: u64 = 10_000_000_000;
@@ -216,6 +216,48 @@ pub(crate) fn wait_until_tasks_stopped(deadline: u64) -> Result<(), &'static str
     }
 }
 
+/// START for `node`, the disk to be named `name`: what `devmgr` sends the
+/// driver it starts on the device, or what the boot check sends in its
+/// stead. `None` for a node that is not a virtio PCI function.
+pub(crate) fn start_for(node: &DeviceNode, name: DiskName) -> Option<StartMessage> {
+    let location = location_of(node)?;
+    let function = node.pci_function()?;
+    let virtio = function.virtio?;
+    let block = |block: device::RegisterBlock| Block {
+        phys: block.phys,
+        offset: block.offset,
+        length: block.length,
+    };
+    Some(StartMessage {
+        common: block(virtio.common),
+        notify: block(virtio.notify),
+        isr: block(virtio.isr),
+        device: virtio.device.map(block).unwrap_or_default(),
+        notify_off_multiplier: virtio.notify_multiplier,
+        msix_table_size: function.msix_table_size,
+        pci_device_id: function.device,
+        location: location.raw(),
+        name: *name.as_bytes(),
+    })
+}
+
+/// Whether a driver serves `node`'s disk through a ring right now.
+pub(crate) fn is_served(node: &Arc<DeviceNode>) -> bool {
+    CLAIMS
+        .lock()
+        .iter()
+        .any(|claim| Arc::ptr_eq(&claim.device, node) && claim.served.is_some())
+}
+
+/// Release `node`'s ring claim: `devmgr` has quiesced the device, so the next
+/// driver may have it. A ring still waiting for its HELLO keeps running and
+/// finds nothing to release when it ends.
+pub(crate) fn release_claim(node: &Arc<DeviceNode>) {
+    CLAIMS
+        .lock()
+        .retain(|claim| !Arc::ptr_eq(&claim.device, node));
+}
+
 /// The PCI location HELLO must name for `node`, if it is a PCI function.
 pub(crate) fn location_of(node: &DeviceNode) -> Option<Location> {
     let device::Location::Pci(address) = node.location() else {
@@ -277,7 +319,6 @@ fn run(id: usize) {
         unclaim(id);
         return;
     };
-    set_served(id, Some(start.location));
     let ending = ring.serve();
     set_served(id, None);
     ring.finish(ending);
@@ -288,6 +329,9 @@ fn run(id: usize) {
 
 /// The first message on the control channel, or `None` if the driver closed
 /// it or said nothing in time.
+///
+/// Runs in the ring's own kernel thread, never in a process, so the wait
+/// below need not watch for a terminated process.
 fn receive_hello(control: &Endpoint) -> Option<object::channel::ChannelMessage> {
     let deadline = timer::now_nanos().saturating_add(HELLO_PATIENCE_NANOS);
     loop {
@@ -320,7 +364,7 @@ struct Accepted {
     /// The device, as HELLO described it.
     device: Device,
     /// Its node name.
-    name: ferrix_blkring::DiskName,
+    name: DiskName,
     /// The ring VMO.
     ring: Arc<Vmo>,
     /// The data VMO.
@@ -444,6 +488,9 @@ fn take_up<'s>(
     if served_elsewhere(start.id, start.location) {
         return Err(Refusal::LocationInUse);
     }
+    // Served from before READY goes out, not after: the driver may act on
+    // READY, and devmgr may ask after the device, the instant it is sent.
+    set_served(start.id, Some(start.location));
     let ready = Message::Ready.encode().as_bytes().to_vec();
     let handed = (Object::Port(Arc::clone(&kernel_port)), Rights::WRITE);
     if start
@@ -451,6 +498,7 @@ fn take_up<'s>(
         .write(ready, 1, || Ok::<Vec<Transfer>, Infallible>(vec![handed]))
         .is_err()
     {
+        set_served(start.id, None);
         return Err(Refusal::Malformed);
     }
     let region_bytes = u64::from(device.max_sectors()) * u64::from(device.block_size());
@@ -635,9 +683,19 @@ impl RingDisk {
         // Not interruptible by signals, as a disk read on Linux is not; the
         // ring's end, or the patience, is what ends it.
         let deadline = timer::now_nanos().saturating_add(READ_PATIENCE_NANOS);
+        // The reader is whoever reads through the registered disk, a user
+        // thread inside a read as often as not, so its process being
+        // terminated ends the wait too: a killed process lets go of what it
+        // holds only once its last thread is out of the kernel.
+        let process = crate::syscall::process::current();
+        let terminated = || {
+            process
+                .as_ref()
+                .is_some_and(|process| process.is_terminated())
+        };
         let _ = self
             .done
-            .wait_until_deadline(|| self.finished(id), deadline);
+            .wait_until_deadline(|| self.finished(id) || terminated(), deadline);
         let mut state = self.state.lock();
         match state.reads.remove(&id) {
             Some(Pending {
@@ -872,6 +930,9 @@ impl Serving<'_> {
     }
 
     /// Sleep on the completion port until something arrives, or a while.
+    ///
+    /// Runs in the ring's own kernel thread, never in a process, so the wait
+    /// need not watch for a terminated process.
     fn sleep(&mut self) {
         if !self.watching {
             let observer = Observer::new(
@@ -899,6 +960,8 @@ impl Serving<'_> {
         {
             let mut state = self.disk.state.lock();
             state.ended = true;
+            // A reader that gave up is not coming back for its answer.
+            state.reads.retain(|_, pending| !pending.abandoned);
             for pending in state.reads.values_mut() {
                 if pending.result.is_none() {
                     pending.result = Some(Err(Errno::EIO));

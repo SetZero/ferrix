@@ -56,16 +56,20 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::{BootView, MemKind, PAGE_SIZE};
 use ferrix_fdt::{Trigger as TreeTrigger, VIRTIO_MMIO_COMPATIBLE};
+use ferrix_native_abi::types::{DEVICE_NOT_PCI, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo};
 use ferrix_pci::Address;
 use ferrix_pci::bar::{Bar, Region};
 use ferrix_pci::capability::{Capability, MSIX_ENTRY_SIZE, MsiX};
+use ferrix_pci::header::{COMMAND, COMMAND_BUS_MASTER, COMMAND_MEMORY_SPACE, Identity};
 use ferrix_pci::msix::{
     self, CAPABILITY_CONTROL, CONTROL_ENABLE, CONTROL_FUNCTION_MASK, ENTRY_ADDRESS_HIGH,
     ENTRY_ADDRESS_LOW, ENTRY_DATA, ENTRY_VECTOR_CONTROL, VECTOR_CONTROL_MASKED,
 };
+use ferrix_pci::virtio::{Location as VirtioLocation, Transport};
 use ferrix_sync::{IrqSpinLock, Once};
 
 use crate::mmio::Mmio;
@@ -416,12 +420,112 @@ impl MsixTable {
     }
 }
 
+/// One of a virtio PCI transport's register blocks, as physical memory: the
+/// page-aligned start of the pages holding it, inside one of the function's
+/// BARs, the block's first byte within those pages, and its length. What a
+/// driver, which cannot walk configuration space, is told in START.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RegisterBlock {
+    /// Physical address of the first page.
+    pub(crate) phys: u64,
+    /// The block's first byte, from `phys`.
+    pub(crate) offset: u32,
+    /// Bytes in the block.
+    pub(crate) length: u32,
+}
+
+/// A virtio PCI transport's blocks, from its vendor capabilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VirtioBlocks {
+    /// Common configuration.
+    pub(crate) common: RegisterBlock,
+    /// The notification area.
+    pub(crate) notify: RegisterBlock,
+    /// Interrupt status.
+    pub(crate) isr: RegisterBlock,
+    /// Device-specific configuration, which some device types do not have.
+    pub(crate) device: Option<RegisterBlock>,
+    /// What a queue's notify offset is multiplied by.
+    pub(crate) notify_multiplier: u32,
+}
+
+impl VirtioBlocks {
+    /// The transport's blocks, placed through its BARs; `None` if a block
+    /// names a BAR that is not an assigned memory BAR.
+    fn of(transport: &Transport, regions: &[Region]) -> Option<VirtioBlocks> {
+        let place = |location: &VirtioLocation| {
+            let region = regions.iter().find(|region| region.index == location.bar)?;
+            let Bar::Memory { address: base, .. } = region.bar else {
+                return None;
+            };
+            if base == 0 {
+                return None;
+            }
+            let start = base.checked_add(u64::from(location.offset))?;
+            let phys = start - start % PAGE_SIZE;
+            Some(RegisterBlock {
+                phys,
+                offset: u32::try_from(start - phys).ok()?,
+                length: location.length,
+            })
+        };
+        Some(VirtioBlocks {
+            common: place(&transport.common)?,
+            notify: place(&transport.notify)?,
+            isr: place(&transport.isr)?,
+            device: match transport.device.as_ref() {
+                Some(location) => Some(place(location)?),
+                None => None,
+            },
+            notify_multiplier: transport.notify_multiplier,
+        })
+    }
+}
+
+/// What enumeration read off a PCI function's configuration space and hands
+/// [`DeviceNode::pci`], beyond its BARs.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Seen<'a> {
+    /// Physical address of the function's configuration space, if the host
+    /// window placed it.
+    pub(crate) config_phys: Option<u64>,
+    /// Its header.
+    pub(crate) identity: &'a Identity,
+    /// Its virtio transport, if it has one.
+    pub(crate) transport: Option<&'a Transport>,
+}
+
+/// What enumeration read off a PCI function and kept, because whoever starts
+/// a driver on it needs it and a driver cannot read configuration space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PciFunction {
+    /// The vendor identifier.
+    pub(crate) vendor: u16,
+    /// The device identifier.
+    pub(crate) device: u16,
+    /// The class code: base class in bits 23:16, subclass in 15:8, the
+    /// programming interface in 7:0.
+    pub(crate) class: u32,
+    /// Physical address of the function's configuration space, if the host
+    /// window placed it.
+    pub(crate) config_phys: Option<u64>,
+    /// Its virtio transport, if it has one.
+    pub(crate) virtio: Option<VirtioBlocks>,
+    /// Entries in its MSI-X table; zero without one.
+    pub(crate) msix_table_size: u16,
+}
+
 /// A device a driver can be given, with exactly the apertures and vectors it
 /// has.
 #[derive(Debug)]
 pub(crate) struct DeviceNode {
     /// Where it was found.
     location: Location,
+    /// What its configuration space said, for a PCI function.
+    pci: Option<PciFunction>,
+    /// Whether the function's bus mastering has been turned on for a driver,
+    /// which the first pin into its domain does and a quiesce undoes.
+    dma_on: AtomicBool,
     /// Its index in [`devices`], once published.
     index: usize,
     /// Its memory, in BAR or `reg` order.
@@ -453,6 +557,8 @@ impl DeviceNode {
     const fn empty(location: Location) -> Self {
         DeviceNode {
             location,
+            pci: None,
+            dma_on: AtomicBool::new(false),
             index: 0,
             apertures: Vec::new(),
             vectors: Vec::new(),
@@ -479,13 +585,26 @@ impl DeviceNode {
     /// says where the function's configuration space is.
     pub(crate) fn pci(
         address: Address,
-        config_phys: Option<u64>,
+        seen: &Seen<'_>,
         regions: &[Region],
         msix: Option<&(Capability, MsiX)>,
         decoding: bool,
         reserved: &Reserved,
     ) -> Self {
         let mut node = DeviceNode::empty(Location::Pci(address));
+        let identity = seen.identity;
+        node.pci = Some(PciFunction {
+            vendor: identity.vendor,
+            device: identity.device,
+            class: (u32::from(identity.class.base) << 16)
+                | (u32::from(identity.class.sub) << 8)
+                | u32::from(identity.class.interface),
+            config_phys: seen.config_phys,
+            virtio: seen
+                .transport
+                .and_then(|transport| VirtioBlocks::of(transport, regions)),
+            msix_table_size: msix.map_or(0, |(_, table)| table.table_size),
+        });
         if !decoding {
             node.undecoded = regions
                 .iter()
@@ -516,7 +635,8 @@ impl DeviceNode {
                 }
             }
         }
-        node.msix = config_phys
+        node.msix = seen
+            .config_phys
             .zip(msix)
             .and_then(|(config_phys, found)| MsixTable::of(config_phys, found, regions, reserved));
         node
@@ -543,6 +663,99 @@ impl DeviceNode {
     /// Where the device was found.
     pub(crate) const fn location(&self) -> Location {
         self.location
+    }
+
+    /// What configuration space said, for a PCI function.
+    pub(crate) const fn pci_function(&self) -> Option<&PciFunction> {
+        self.pci.as_ref()
+    }
+
+    /// The device as `device_info` reports it.
+    pub(crate) fn describe(&self) -> DeviceInfo {
+        let block = |block: RegisterBlock| DeviceBlock {
+            phys: block.phys,
+            offset: block.offset,
+            length: block.length,
+        };
+        let mut info = DeviceInfo {
+            location: match self.location {
+                Location::Pci(address) => {
+                    (u32::from(address.segment()) << 16)
+                        | (u32::from(address.bus()) << 8)
+                        | (u32::from(address.device()) << 3)
+                        | u32::from(address.function())
+                }
+                _ => DEVICE_NOT_PCI,
+            },
+            apertures: u32::try_from(self.apertures.len()).unwrap_or(u32::MAX),
+            vectors: u32::try_from(self.vector_count()).unwrap_or(u32::MAX),
+            ..DeviceInfo::default()
+        };
+        if let Some(function) = &self.pci {
+            info.vendor_id = function.vendor;
+            info.device_id = function.device;
+            info.class = function.class;
+            info.msix_table_size = function.msix_table_size;
+            if let Some(virtio) = function.virtio {
+                info.virtio = DEVICE_VIRTIO_PCI;
+                info.notify_off_multiplier = virtio.notify_multiplier;
+                info.common = block(virtio.common);
+                info.notify = block(virtio.notify);
+                info.isr = block(virtio.isr);
+                info.device = virtio.device.map(block).unwrap_or_default();
+            }
+        }
+        info
+    }
+
+    /// Turn the function's bus mastering on, the first time a driver pins a
+    /// page into its domain: from then on the device reaches what its domain
+    /// maps. Nothing to do for a device tree node, whose transport has no
+    /// such switch.
+    ///
+    /// # Errors
+    ///
+    /// Configuration space that could not be mapped; bus mastering stays off.
+    pub(crate) fn enable_dma(&self) -> Result<(), &'static str> {
+        if self.dma_on.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.set_bus_master(true)
+            .inspect_err(|_| self.dma_on.store(false, Ordering::Release))
+    }
+
+    /// Turn the function's bus mastering off: the device's driver is gone,
+    /// and until the next one pins, the device reaches nothing.
+    ///
+    /// # Errors
+    ///
+    /// Configuration space that could not be mapped; the device is still on.
+    pub(crate) fn disable_dma(&self) -> Result<(), &'static str> {
+        self.set_bus_master(false)?;
+        self.dma_on.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    /// Write the function's command register with bus mastering `on` or off,
+    /// keeping memory decoding on either way, through a mapping of its
+    /// configuration space held only for the write.
+    fn set_bus_master(&self, on: bool) -> Result<(), &'static str> {
+        let Some(config_phys) = self.pci.as_ref().and_then(|function| function.config_phys) else {
+            return Ok(());
+        };
+        let config = vmap::map_device(config_phys, LEGACY_CONFIG_BYTES)
+            .map_err(|_| "the function's configuration space could not be mapped")?;
+        let registers = Mmio::at(config);
+        let at = u64::from(COMMAND);
+        let command = registers.read16(at);
+        let value = if on {
+            command | COMMAND_MEMORY_SPACE | COMMAND_BUS_MASTER
+        } else {
+            command & !COMMAND_BUS_MASTER
+        };
+        registers.write16(at, value);
+        let _ = vmap::unmap_device(config);
+        Ok(())
     }
 
     /// Every aperture the device has.

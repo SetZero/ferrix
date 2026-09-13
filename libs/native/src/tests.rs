@@ -22,7 +22,8 @@ use ferrix_native_abi::rights::{Requested, Rights, SAME_RIGHTS};
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{
-    IoMappingSpec, PACKET_SIGNAL, PACKET_USER, PIN_READ_ONLY, PortPacket,
+    DEVICE_INFO_BYTES, DEVICE_VIRTIO_PCI, DeviceBlock, IoMappingSpec, PACKET_SIGNAL, PACKET_USER,
+    PIN_READ_ONLY, PortPacket,
 };
 
 use crate::call::{Raw, Syscall};
@@ -668,6 +669,49 @@ fn a_device_hands_out_interrupts_and_apertures() {
     assert_eq!(calls[5], made(nr::IO_MAPPING_MAP, &[0xA4, 0x6000_0000]));
 }
 
+#[test]
+fn device_info_reads_the_kernel_bytes_back_and_quiesce_takes_the_handle() {
+    let sys = Recorder::default();
+    sys.answer(|raw| {
+        let mut bytes = [0_u8; DEVICE_INFO_BYTES];
+        bytes[0..8].copy_from_slice(&0x8000_0000_u64.to_ne_bytes());
+        bytes[8..12].copy_from_slice(&0x10_u32.to_ne_bytes());
+        bytes[12..16].copy_from_slice(&56_u32.to_ne_bytes());
+        bytes[64..68].copy_from_slice(&0x0001_0318_u32.to_ne_bytes());
+        bytes[72..76].copy_from_slice(&2_u32.to_ne_bytes());
+        bytes[84..86].copy_from_slice(&0x1AF4_u16.to_ne_bytes());
+        bytes[86..88].copy_from_slice(&0x1042_u16.to_ne_bytes());
+        bytes[90..92].copy_from_slice(&DEVICE_VIRTIO_PCI.to_ne_bytes());
+        write(raw, raw.args()[1], &bytes);
+        0
+    });
+    let device = Device::from_owned(owned(&sys, 0xA7));
+    let info = device.info().expect("an info");
+    assert_eq!(info.common.phys, 0x8000_0000, "common phys");
+    assert_eq!(info.common.offset, 0x10, "common offset");
+    assert_eq!(info.common.length, 56, "common length");
+    assert_eq!(info.location, 0x0001_0318, "location");
+    assert_eq!(info.apertures, 2, "apertures");
+    assert_eq!(
+        (info.vendor_id, info.device_id),
+        (0x1AF4, 0x1042),
+        "identity"
+    );
+    assert_eq!(info.virtio, DEVICE_VIRTIO_PCI, "virtio");
+    assert_eq!(
+        info.notify,
+        DeviceBlock::default(),
+        "a block never written is zero"
+    );
+
+    sys.returns(0);
+    device.quiesce().expect("quiesced");
+    let calls = sys.take();
+    assert_eq!(calls[0].number, nr::DEVICE_INFO);
+    assert_eq!(calls[0].args[0], 0xA7, "the device handle first");
+    assert_eq!(calls[1], made(nr::DEVICE_QUIESCE, &[0xA7]));
+}
+
 // ---------------------------------------------------------------------------
 // Process creation, now on the table
 // ---------------------------------------------------------------------------
@@ -854,6 +898,8 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = job.kill();
     let _ = device.interrupt(0);
     let _ = device.block_ring();
+    let _ = device.info();
+    let _ = device.quiesce();
     let _ = pending::create_process(&job, &vmo, "x");
     let _ = Process::from_owned(handle()).start(handle());
     let _ = interrupt.bind(&port, 0);

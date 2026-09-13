@@ -50,7 +50,7 @@ use ferrix_pci::{Address, ConfigSpace, PciError};
 
 mod virtio;
 
-use crate::device::{DeviceNode, Reserved};
+use crate::device::{DeviceNode, Reserved, Seen};
 use crate::mmio::Mmio;
 use crate::vmap;
 use crate::{acpi, fdt};
@@ -430,7 +430,8 @@ fn check_host(
     }
 
     for function in found {
-        let (regions, msix, decoding) = check_function(&mut space, function, reserved, report)?;
+        let (regions, msix, decoding, transport) =
+            check_function(&mut space, function, reserved, report)?;
         // Where the function's configuration space is, which minting one of
         // its MSI-X vectors writes to turn MSI-X on.
         let config_phys = host
@@ -439,7 +440,11 @@ fn check_host(
             .and_then(|offset| host.phys.checked_add(offset));
         nodes.push(DeviceNode::pci(
             function.address,
-            config_phys,
+            &Seen {
+                config_phys,
+                identity: &function.identity,
+                transport: transport.as_ref(),
+            },
             &regions,
             msix.as_ref(),
             decoding,
@@ -451,7 +456,12 @@ fn check_host(
 
 /// What examining one function yields: its sized BARs, its MSI-X capability
 /// if it has one, and whether firmware left its memory decoding on.
-type Examined = (Vec<Region>, Option<(Capability, MsiX)>, bool);
+type Examined = (
+    Vec<Region>,
+    Option<(Capability, MsiX)>,
+    bool,
+    Option<Transport>,
+);
 
 /// Size every BAR of one function and walk both its capability lists,
 /// returning the BARs it decodes, its MSI-X capability if it has one, and
@@ -506,11 +516,13 @@ fn check_function(
     } else {
         0
     };
+    let mut found_transport = None;
     if let Some(kind) = virtio_pci::device_type(&identity, subsystem)
         && let Some(transport) = Transport::find(&*space, address)?
     {
         transport.verify(&regions)?;
         report.virtio += 1;
+        found_transport = Some(transport);
         if kind == TYPE_ENTROPY {
             match virtio::entropy(
                 space,
@@ -547,5 +559,5 @@ fn check_function(
             }
         }
     }
-    Ok((regions, msix, decoding))
+    Ok((regions, msix, decoding, found_transport))
 }

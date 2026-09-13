@@ -51,6 +51,12 @@ pub struct Location(
 );
 
 impl Location {
+    /// The word HELLO and START carry.
+    #[must_use]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+
     /// The location of `segment:bus:devfn`.
     #[must_use]
     pub const fn new(segment: u16, bus: u8, devfn: u8) -> Self {

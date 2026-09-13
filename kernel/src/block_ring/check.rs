@@ -22,7 +22,12 @@
 //!   STOPPED, after which the next round's ring finds the device free;
 //! * the second round of all that gives every frame back;
 //! * a driver that closes the channel without STOPPED takes its disk with it
-//!   too, but leaves the device bound: nothing has reset it.
+//!   too, but leaves the device bound until `device_quiesce`, which turns the
+//!   device off and frees it for the next ring;
+//! * `device_info` describes the device as enumeration found it, every virtio
+//!   block it names inside an aperture, and the START the kernel would build
+//!   from it agrees; `device_quiesce` is refused without `MANAGE` and while a
+//!   driver serves the device.
 //!
 //! [`native::dispatch`]: crate::syscall::native::dispatch
 
@@ -38,9 +43,10 @@ use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
+use ferrix_native_abi::types::{DEVICE_INFO_BYTES, DEVICE_VIRTIO_PCI};
 use ferrix_vfs::initramfs::makedev;
 
-use super::{VIRTIO_BLK_MAJOR, location_of};
+use super::{VIRTIO_BLK_MAJOR, location_of, start_for};
 use crate::device::{self, DeviceNode};
 use crate::fs::devfs;
 use crate::object::check::{SCRATCH, Side, device_handle, reg};
@@ -67,6 +73,8 @@ const OBSERVED: u64 = HERE + 0x338;
 const OFFSET: u64 = HERE + 0x340;
 /// The ring header being written.
 const HEADER: u64 = HERE + 0x400;
+/// A `DeviceInfo`.
+const INFO: u64 = HERE + 0x600;
 
 /// How long the check waits for the ring's task to answer, or to notice the
 /// channel closed and unpublish the disk.
@@ -169,6 +177,7 @@ fn round(
     let side = Side::new()?;
     let device = device_handle(&side, node)?;
     let location = location_of(node).ok_or("the node is not a PCI function after all")?;
+    described(&side, node, device, location)?;
     refusals(&side, node, device, location, counter)?;
 
     let control = ring(&side, device)?;
@@ -176,6 +185,12 @@ fn round(
     expect_ready(&side, control)?;
     let rdev = makedev(VIRTIO_BLK_MAJOR, 0);
     published(rdev)?;
+    refused(
+        side.call(nr::DEVICE_QUIESCE, &[reg(device)]),
+        status::BAD_STATE,
+        "a device was quiesced under the driver serving it",
+        counter,
+    )?;
     end(&side, device, control, rdev, ending, counter)?;
     side.close_everything();
     Ok(())
@@ -204,11 +219,23 @@ fn refusals(
         "a ring was made through a device handle without MANAGE",
         counter,
     )?;
+    refused(
+        side.call(nr::DEVICE_QUIESCE, &[reg(bare)]),
+        status::ACCESS_DENIED,
+        "a device was quiesced through a handle without MANAGE",
+        counter,
+    )?;
     let vmo = side.handle(nr::VMO_CREATE, &[PAGE_SIZE], "vmo_create failed")?;
     refused(
         side.call(nr::BLOCK_RING_CREATE, &[reg(vmo)]),
         status::WRONG_TYPE,
         "a ring was made on a VMO",
+        counter,
+    )?;
+    refused(
+        side.call(nr::DEVICE_INFO, &[reg(vmo), INFO]),
+        status::WRONG_TYPE,
+        "a VMO was described as a device",
         counter,
     )?;
     let _ = side
@@ -301,17 +328,109 @@ fn end(
     }
     counter.published += 1;
     if ending == Ending::DriverDied {
-        // Nothing reset the device: no ring until devmgr does.
-        return refused(
+        // Nothing reset the device: no ring until devmgr quiesces it, and
+        // one again after.
+        refused(
             side.call(nr::BLOCK_RING_CREATE, &[reg(device)]),
             status::ALREADY_BOUND,
             "a device whose driver died without a reset was given a new ring",
             counter,
-        );
+        )?;
+        let _ = side
+            .call(nr::DEVICE_QUIESCE, &[reg(device)])
+            .map_err(|_| "quiescing a device whose driver died failed")?;
+        let again = ring(side, device)?;
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(again)])
+            .map_err(|_| "closing the ring made after a quiesce failed")?;
+        return Ok(());
     }
     // STOPPED said the device was reset: the next round's first ring shows
     // it free. A round ends only once the kernel's end has closed, which
     // comes after the device is released, so the next ring cannot race it.
+    Ok(())
+}
+
+/// Require `device_info` to describe `node` as enumeration found it, every
+/// virtio block inside one of its apertures, and the kernel's own START for
+/// the node to agree with it.
+fn described(
+    side: &Side,
+    node: &Arc<DeviceNode>,
+    device: Handle,
+    location: ferrix_blkring::Location,
+) -> Result<(), &'static str> {
+    let _ = side
+        .call(nr::DEVICE_INFO, &[reg(device), INFO])
+        .map_err(|_| "device_info on a device handle failed")?;
+    let bytes = side.get(INFO, DEVICE_INFO_BYTES)?;
+    let word = |at: usize| -> Result<u32, &'static str> {
+        bytes
+            .get(at..at + 4)
+            .and_then(|word| <[u8; 4]>::try_from(word).ok())
+            .map(u32::from_ne_bytes)
+            .ok_or("a short device_info")
+    };
+    let half = |at: usize| -> Result<u16, &'static str> {
+        bytes
+            .get(at..at + 2)
+            .and_then(|word| <[u8; 2]>::try_from(word).ok())
+            .map(u16::from_ne_bytes)
+            .ok_or("a short device_info")
+    };
+    let long = |at: usize| -> Result<u64, &'static str> {
+        bytes
+            .get(at..at + 8)
+            .and_then(|word| <[u8; 8]>::try_from(word).ok())
+            .map(u64::from_ne_bytes)
+            .ok_or("a short device_info")
+    };
+    if word(64)? != location.raw() {
+        return Err("device_info named another location than the node's");
+    }
+    if word(72)? as usize != node.apertures().len() || word(76)? as usize != node.vector_count() {
+        return Err("device_info counted the node's apertures or vectors wrongly");
+    }
+    let function = node
+        .pci_function()
+        .ok_or("a PCI node has no function record")?;
+    if half(84)? != function.vendor || half(86)? != function.device {
+        return Err("device_info named another vendor or device than enumeration read");
+    }
+    let virtio = half(90)?;
+    let start = start_for(node, DiskName::for_index(0).ok_or("no name for disk 0")?);
+    match (virtio, function.virtio, start) {
+        (0, None, None) => return Ok(()),
+        (DEVICE_VIRTIO_PCI, Some(_), Some(_)) => {}
+        _ => return Err("device_info and the kernel's START disagree about a virtio transport"),
+    }
+    let start = start.ok_or("no START for a virtio node")?;
+    for (at, block) in [
+        (0, start.common),
+        (16, start.notify),
+        (32, start.isr),
+        (48, start.device),
+    ] {
+        if long(at)? != block.phys
+            || word(at + 8)? != block.offset
+            || word(at + 12)? != block.length
+        {
+            return Err("device_info and the kernel's START place a virtio block differently");
+        }
+        if block.length == 0 {
+            continue;
+        }
+        let span =
+            (u64::from(block.offset) + u64::from(block.length)).div_ceil(PAGE_SIZE) * PAGE_SIZE;
+        if node.aperture(block.phys, span).is_none() {
+            return Err(
+                "a virtio block device_info names is not inside one of the node's apertures",
+            );
+        }
+    }
+    if word(80)? != start.notify_off_multiplier || half(88)? != start.msix_table_size {
+        return Err("device_info and the kernel's START disagree about the transport's numbers");
+    }
     Ok(())
 }
 

@@ -2296,6 +2296,45 @@ assumed. It is tested on the host, under Miri, and by the `virtio_blk` fuzz
 target. **No kernel crate or process uses it yet:** the driver process on
 `ferrix-rt` is still to do, below.
 
+**Done — the kernel's half of `devmgr`: what a driver is started with, and
+what ends it.** `docs/ARCHITECTURE.md` §7 has `devmgr` hand a driver its device
+and its channel to the subsystem it serves; a ring-3 driver cannot walk
+configuration space, so whoever starts it must say where its device's
+registers are. Enumeration now keeps, on the device node, what it read and
+threw away before: the PCI identity, the virtio transport's register blocks as
+physical memory — the page-aligned pages holding each, the block's offset in
+them, its length, the form `io_mapping_create` takes — the MSI-X table size
+and the function's configuration space address. From that, `device_info`
+(0x1049) writes a `DeviceInfo` for any device handle, `block_ring::start_for`
+builds the START message `docs/BLOCK-RING.md` §6.4 now specifies — type 6, the
+first message on a driver's bootstrap channel, carrying the blocks, the
+location, the name, the device with `MANAGE` and the driver's end of the ring's
+control channel — and `ferrix-blkring` encodes, decodes and checks it. Two more
+things nothing did before:
+
+* **Bus mastering goes on at a device's first `VMO_PIN`**, the moment a driver
+  gives it memory, and memory decoding with it; until then a device nobody
+  drives stays quiet. No kernel code had ever enabled it for a driver, so a
+  ring-3 driver's DMA would have gone nowhere.
+* **`device_quiesce` (0x104A)** is the reset before release §6.3 gives
+  `devmgr`: with `MANAGE`, once the driver is gone, it turns bus mastering off
+  and releases the device's ring claim, so the next driver may have it;
+  `BAD_STATE` while a driver still serves the device through a ring. A ring
+  now records its device as served before it answers READY, since the driver
+  may act on READY, and `devmgr` ask after the device, the instant it is sent.
+
+The ring check covers it: `device_info` compared field by field with the
+kernel's own START for the node, every virtio block required to lie inside one
+of the node's apertures; a quiesce refused without `MANAGE`, refused under a
+serving driver, and, after a driver dies, freeing the device for a new ring.
+The P1 row for reset on driver death closes here: §6.3 is the design and this
+its kernel side. `devmgr` itself, the program, waits on the native runtime and
+comes next.
+
+The run recorded when it landed: 19 calls and HELLOs refused as specified, 2
+disks published and unpublished, 0 frames leaked, on x86-64, AArch64 and
+ARMv7-A at four processors and at two.
+
 **Still to do, in the order stage 11 needs it.** Stage 11 is done on the host
 and waits only for a ring-3 virtio-blk driver reading sectors, so everything on
 that path comes first and trusting decoding-off BARs, which it does not need,
@@ -2307,10 +2346,11 @@ runtime, all against the agreements recorded here.
 * **Everything that runs in ring 3.** Stage 9's device handles, `Interrupt`
   and `IoMapping`, and `VMO_PIN` (above), are on main. Still to come, in this
   order:
-  * *A minimal `devmgr`* that hands the disk's device node to a driver process,
-    once stage 9's native process creation is on main. It watches each driver
-    through stage 9's process observers and, when a driver's job ends, resets
-    its device before any frame pinned for it is freed.
+  * *`devmgr`, the program*, on the native runtime: given every device node
+    at boot, it finds the virtio-blk function, makes its ring, starts the
+    driver with START through `process_create` and `process_start`, watches
+    it through a process observer, and on its death quiesces the device before
+    anything of it is reused. Its kernel half is above.
   * *No driver faults on the disk it serves.* A driver serving a disk that
     faulted on a file mapping of that same disk would wait on its own
     completion forever. So its image and data come from the initramfs, tmpfs,

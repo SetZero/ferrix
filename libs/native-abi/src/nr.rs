@@ -78,6 +78,10 @@ pub const IO_MAPPING_MAP: usize = 0x1041;
 
 /// [`NativeCall::BlockRingCreate`].
 pub const BLOCK_RING_CREATE: usize = 0x1048;
+/// [`NativeCall::DeviceInfo`].
+pub const DEVICE_INFO: usize = 0x1049;
+/// [`NativeCall::DeviceQuiesce`].
+pub const DEVICE_QUIESCE: usize = 0x104A;
 /// The largest name [`NativeCall::ProcessCreate`] takes, in bytes.
 pub const PROCESS_NAME_MAX: usize = 32;
 
@@ -184,10 +188,19 @@ pub enum NativeCall {
     /// ring's control channel and answers with the other, on which the driver
     /// sends HELLO. Needs `MANAGE` on the device, which has one ring.
     BlockRingCreate,
+    /// `(device, info)` → 0. Write a `DeviceInfo` at `info`: the device as
+    /// enumeration found it, which is what whoever starts a driver on it puts
+    /// in the driver's START. Any device handle will do.
+    DeviceInfo,
+    /// `(device)` → 0. The device's driver is gone and nothing else will
+    /// reach the device: turn its bus mastering off and release its block
+    /// ring, so the next driver can have it. Needs `MANAGE`; `BAD_STATE`
+    /// while a driver still serves it.
+    DeviceQuiesce,
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 28] = [
+pub const ALL: [NativeCall; 30] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -216,6 +229,8 @@ pub const ALL: [NativeCall; 28] = [
     NativeCall::IoMappingCreate,
     NativeCall::IoMappingMap,
     NativeCall::BlockRingCreate,
+    NativeCall::DeviceInfo,
+    NativeCall::DeviceQuiesce,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -259,6 +274,8 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         IO_MAPPING_CREATE => NativeCall::IoMappingCreate,
         IO_MAPPING_MAP => NativeCall::IoMappingMap,
         BLOCK_RING_CREATE => NativeCall::BlockRingCreate,
+        DEVICE_INFO => NativeCall::DeviceInfo,
+        DEVICE_QUIESCE => NativeCall::DeviceQuiesce,
         _ => return None,
     };
     Some(call)
@@ -296,5 +313,7 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::IoMappingCreate => IO_MAPPING_CREATE,
         NativeCall::IoMappingMap => IO_MAPPING_MAP,
         NativeCall::BlockRingCreate => BLOCK_RING_CREATE,
+        NativeCall::DeviceInfo => DEVICE_INFO,
+        NativeCall::DeviceQuiesce => DEVICE_QUIESCE,
     }
 }

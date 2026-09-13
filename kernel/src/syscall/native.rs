@@ -39,7 +39,8 @@ use ferrix_native_abi::rights::{Requested, Rights};
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{
-    CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, MAP_READ, MAP_WRITE, PortPacket, ReadActual,
+    CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, DEVICE_INFO_BYTES, DeviceInfo, MAP_READ, MAP_WRITE,
+    PortPacket, ReadActual,
 };
 use ferrix_objects::message::Message;
 use ferrix_objects::reach::Reach;
@@ -159,6 +160,8 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::InterruptBind => interrupt_bind(process, handle(a[0]), handle(a[1]), a[2]),
         NativeCall::IoMappingCreate => io_mapping_create(process, handle(a[0]), a[1]),
         NativeCall::BlockRingCreate => block_ring_create(process, handle(a[0])),
+        NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
+        NativeCall::DeviceQuiesce => device_quiesce(process, handle(a[0])),
         NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1]),
         NativeCall::VmoPin => vmo_pin(process, handle(a[0]), handle(a[1]), a[2], a[3], a[4]),
         NativeCall::VmoPinAddresses => vmo_pin_addresses(process, handle(a[0]), a[1], a[2]),
@@ -989,6 +992,61 @@ fn block_ring_create(process: &Process, device: Handle) -> Result<usize, Errno> 
     )
 }
 
+/// `device_info`.
+///
+/// Any device handle will do: what enumeration found is not a capability, and
+/// whoever holds the device at all may know what it is.
+fn device_info(process: &Process, device: Handle, at: u64) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::NONE)?;
+    let info = node.describe();
+    uaccess::copy_to_user(process.space(), at, &info_bytes(&info)).map_err(fault)?;
+    Ok(0)
+}
+
+/// A `DeviceInfo` as its user buffer holds it: field by field, in the order
+/// declared, padded to `DEVICE_INFO_BYTES`.
+fn info_bytes(info: &DeviceInfo) -> [u8; DEVICE_INFO_BYTES] {
+    let mut bytes = [0; DEVICE_INFO_BYTES];
+    let mut at = 0;
+    let mut put = |source: &[u8]| {
+        if let Some(slot) = bytes.get_mut(at..at + source.len()) {
+            slot.copy_from_slice(source);
+        }
+        at += source.len();
+    };
+    for block in [info.common, info.notify, info.isr, info.device] {
+        put(&block.phys.to_ne_bytes());
+        put(&block.offset.to_ne_bytes());
+        put(&block.length.to_ne_bytes());
+    }
+    put(&info.location.to_ne_bytes());
+    put(&info.class.to_ne_bytes());
+    put(&info.apertures.to_ne_bytes());
+    put(&info.vectors.to_ne_bytes());
+    put(&info.notify_off_multiplier.to_ne_bytes());
+    put(&info.vendor_id.to_ne_bytes());
+    put(&info.device_id.to_ne_bytes());
+    put(&info.msix_table_size.to_ne_bytes());
+    put(&info.virtio.to_ne_bytes());
+    bytes
+}
+
+/// `device_quiesce`.
+///
+/// The driver is gone and the device must reach nothing: bus mastering off,
+/// then the block ring's claim on the device released for the next driver.
+/// `BAD_STATE` while a driver still serves the device through a ring, or if
+/// the device's configuration space could not be reached.
+fn device_quiesce(process: &Process, device: Handle) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::MANAGE)?;
+    if block_ring::is_served(&node) {
+        return Err(status::BAD_STATE);
+    }
+    node.disable_dma().map_err(|_| status::BAD_STATE)?;
+    block_ring::release_claim(&node);
+    Ok(0)
+}
+
 /// `vmo_pin`.
 ///
 /// Whole pages of the VMO, held and pinned into the device's domain. The device
@@ -1014,6 +1072,9 @@ fn vmo_pin(
     }
     let read_only = options & known != 0;
     let node = device_in(process, device, Rights::MANAGE)?;
+    // The first pin is what gives the device DMA, so it is where bus
+    // mastering goes on; a device whose switch cannot be reached gets no pin.
+    node.enable_dma().map_err(|_| status::BAD_STATE)?;
     let vmo = process.with_handles(|table| {
         if !read_only {
             let _ = vmo_in(table, vmo, Rights::WRITE)?;
