@@ -1,6 +1,6 @@
 [package]
 name = "ferrix-procfs"
-description = "The text of /proc: maps, meminfo, status, stat, /proc/stat and mounts, byte for byte as Linux prints them"
+description = "The text of /proc: maps, meminfo, status, stat, /proc/stat, mounts, partitions and the sysctl values, byte for byte as Linux prints them"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"

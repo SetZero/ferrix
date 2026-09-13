@@ -12,8 +12,10 @@ use crate::kstat::{self, CpuTimes, Kstat};
 use crate::maps::{self, Mapping, Width};
 use crate::meminfo::{self, Meminfo};
 use crate::mounts::{self, Mount};
+use crate::partitions::{self, Partition};
 use crate::stat::{self, Stat};
 use crate::status::{self, State, Status};
+use crate::sysctl;
 
 fn rendered(render: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
     let mut out = Vec::new();
@@ -545,4 +547,83 @@ fn the_kstat_parser_refuses_what_the_renderer_cannot_produce() {
         assert_ne!(text, HOST_KSTAT, "{why}: the fixture did not change");
         assert_eq!(kstat::parse(text.as_bytes()), None, "{why}");
     }
+}
+
+#[test]
+fn partitions_is_the_header_and_a_row_per_device_as_linux_printed() {
+    let host = [
+        Partition {
+            major: 7,
+            minor: 0,
+            blocks: 4,
+            name: b"loop0",
+        },
+        Partition {
+            major: 7,
+            minor: 1,
+            blocks: 68452,
+            name: b"loop1",
+        },
+    ];
+    let out = rendered(|out| partitions::render(out, &host));
+    assert_eq!(
+        show(&out),
+        show(
+            b"major minor  #blocks  name\n\n   7        0          4 loop0\n   7        1      68452 loop1\n"
+        ),
+        "the host's /proc/partitions"
+    );
+}
+
+#[test]
+fn partitions_with_one_device_is_the_header_the_blank_line_and_its_row() {
+    let host = [Partition {
+        major: 7,
+        minor: 0,
+        blocks: 4,
+        name: b"loop0",
+    }];
+    let out = rendered(|out| partitions::render(out, &host));
+    assert_eq!(
+        show(&out),
+        "major minor  #blocks  name\n\n   7        0          4 loop0\n"
+    );
+}
+
+#[test]
+fn partitions_with_no_devices_is_empty() {
+    let out = rendered(|out| partitions::render(out, &[]));
+    assert_eq!(show(&out), "");
+}
+
+#[test]
+fn a_sysctl_value_is_what_linux_printed() {
+    let cases: [(Vec<u8>, &[u8]); 5] = [
+        (rendered(|out| sysctl::string(out, b"Linux")), b"Linux\n"),
+        (
+            rendered(|out| sysctl::string(out, b"7.0.0-29-generic")),
+            b"7.0.0-29-generic\n",
+        ),
+        (rendered(|out| sysctl::string(out, b"(none)")), b"(none)\n"),
+        (rendered(|out| sysctl::number(out, 4_194_304)), b"4194304\n"),
+        (
+            rendered(|out| sysctl::number(out, i64::MAX as u64)),
+            b"9223372036854775807\n",
+        ),
+    ];
+    for (out, host) in cases {
+        assert_eq!(show(&out), show(host));
+    }
+}
+
+/// Derived: the rule `_proc_do_string` states, for a write from offset 0.
+#[test]
+fn a_string_write_stops_at_a_newline_or_nul_and_is_cut_at_the_limit() {
+    assert_eq!(sysctl::stored(b"name\n", 64), b"name");
+    assert_eq!(sysctl::stored(b"name", 64), b"name");
+    assert_eq!(sysctl::stored(b"one\ntwo\n", 64), b"one");
+    assert_eq!(sysctl::stored(b"a\0b", 64), b"a");
+    assert_eq!(sysctl::stored(b"\n", 64), b"");
+    let long = [b'x'; 70];
+    assert_eq!(sysctl::stored(&long, 64), &long[..64]);
 }

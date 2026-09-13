@@ -26,6 +26,9 @@
 //!   counters, and the parser the kernel's boot check reads it back with.
 //! * [`mounts`] — `/proc/mounts`, with the octal escapes a mount point with a
 //!   space in it needs.
+//! * [`partitions`] — `/proc/partitions`.
+//! * [`sysctl`] — the values under `/proc/sys`, and what a write to a string
+//!   one stores.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -36,8 +39,10 @@ pub mod kstat;
 pub mod maps;
 pub mod meminfo;
 pub mod mounts;
+pub mod partitions;
 pub mod stat;
 pub mod status;
+pub mod sysctl;
 mod text;
 
 #[cfg(test)]
