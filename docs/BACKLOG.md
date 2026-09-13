@@ -117,7 +117,7 @@ alive.
 | ferrix-e5 (was ferrix-54) | The memory-management package below; reviewer of the VMO reverse map and the space.rs half of file-backed mmap |
 | ferrix-4f (was ferrix-b1) | `xtask flash` and `deploy`, `docs/stm32mp157-dk.md`, the Arm UART drivers and console receive |
 | ferrix-3c | The STM32MP157D-DK1 board itself: the serial link, OpenOCD, every hardware run, and filing what the board shows with the area that owns it |
-| ferrix-ce (was ferrix-53) | `ferrousli/`, beside the roadmap. Done: locales and wide characters; time zones, `strftime` and `strptime`; buffered stdio and `printf`. In progress: `scanf`, `dirent` and `getopt`, threads, the math library |
+| ferrix-ce (was ferrix-53) | `ferrousli/`, beside the roadmap. Done: locales and wide characters; time zones, `strftime` and `strptime`; buffered stdio and `printf`; threads, mutexes, condition variables and keys, with `tests/c/thread/on_ferrix.c` ready as a static threaded program for `CLONE_THREAD`. In progress: `scanf`, `dirent` and `getopt`, thread cancellation and semaphores, the math library |
 
 ---
 
