@@ -20,7 +20,7 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED,
-    MREMAP_MAYMOVE, PROT_EXEC, PROT_READ, PROT_WRITE,
+    MREMAP_MAYMOVE, PROT_EXEC, PROT_GROWSDOWN, PROT_GROWSUP, PROT_READ, PROT_SEM, PROT_WRITE,
 };
 use ferrix_vma::VmaFlags;
 
@@ -98,7 +98,7 @@ pub(crate) struct MmapRequest {
     pub(crate) prot: u32,
     /// `MAP_*`.
     pub(crate) flags: u32,
-    /// The file to map, or `-1` for anonymous memory.
+    /// The file to map. Ignored for anonymous memory, as Linux ignores it.
     pub(crate) fd: i64,
     /// The offset into that file, in `unit`s.
     pub(crate) offset: u64,
@@ -135,18 +135,22 @@ pub(crate) fn sys_mmap(process: &Process, request: &MmapRequest) -> Result<usize
     }
     vma.shared = shared;
 
-    // An anonymous mapping's fd must be -1 and its offset zero. Checking is
-    // not pedantry: a program passing a real fd here meant `MAP_ANONYMOUS` to
-    // be absent, and succeeding would hand it zeroes.
-    if fd != -1 {
-        return Err(Errno::EINVAL);
-    }
-    let offset = match unit {
-        OffsetUnit::Bytes => offset,
-        OffsetUnit::Pages => offset.checked_mul(PAGE_SIZE).ok_or(Errno::EINVAL)?,
+    // Linux ignores an anonymous mapping's descriptor, and its offset once the
+    // offset is whole pages, so a program passing a real fd with
+    // `MAP_ANONYMOUS` gets zeroes there and must get them here. What Linux does
+    // refuse is refused: a byte offset that is not a page boundary, which the
+    // entry point checks before it looks at any flag, and an offset whose
+    // pages would wrap.
+    let _ = fd;
+    let page_offset = match unit {
+        OffsetUnit::Bytes if !offset.is_multiple_of(PAGE_SIZE) => return Err(Errno::EINVAL),
+        OffsetUnit::Bytes => offset / PAGE_SIZE,
+        OffsetUnit::Pages => offset,
     };
-    if offset != 0 {
-        return Err(Errno::EINVAL);
+    let page_offset = usize::try_from(page_offset).map_err(|_| Errno::EOVERFLOW)?;
+    let pages = usize::try_from(len / PAGE_SIZE).map_err(|_| Errno::ENOMEM)?;
+    if page_offset.checked_add(pages).is_none() {
+        return Err(Errno::EOVERFLOW);
     }
 
     let fixed = flags & (MAP_FIXED | MAP_FIXED_NOREPLACE) != 0;
@@ -203,18 +207,43 @@ pub(crate) fn sys_munmap(process: &Process, addr: u64, len: u64) -> Result<usize
 /// Load-bearing, and one of only three calls a static binary cannot survive
 /// losing: a libc applies `RELRO` with it after relocation and aborts if that
 /// fails.
+///
+/// The checks run in Linux's order, because the order decides which error a
+/// bad call gets: both growth flags, then alignment, then a zero length --
+/// which succeeds before `prot` is even looked at -- then wrapping, then the
+/// protection bits. `PROT_SEM` is accepted and means nothing, as on Linux.
+///
+/// `PROT_GROWSDOWN` and `PROT_GROWSUP` extend the change to the start or end of
+/// a region that grows. No region here grows -- the stack is a fixed
+/// reservation -- and Linux answers either flag on a region that does not grow
+/// with `EINVAL`, which is what they get.
 pub(crate) fn sys_mprotect(
     process: &Process,
     addr: u64,
     len: u64,
     prot: u32,
 ) -> Result<usize, Errno> {
-    if !addr.is_multiple_of(PAGE_SIZE) {
+    const GROWS: u32 = PROT_GROWSDOWN | PROT_GROWSUP;
+    if prot & GROWS == GROWS || !addr.is_multiple_of(PAGE_SIZE) {
         return Err(Errno::EINVAL);
     }
-    let vma = protection(prot)?;
+    if len == 0 {
+        return Ok(0);
+    }
     let len = pages_for(len)?;
-    process.space().protect(addr, len, vma).map_err(refused)?;
+    let vma = protection(prot & !(PROT_SEM | GROWS))?;
+    if prot & GROWS != 0 {
+        return Err(Errno::EINVAL);
+    }
+    process
+        .space()
+        .protect(addr, len, vma)
+        .map_err(|error| match error {
+            // A range that is not wholly mapped, or runs out of the user half,
+            // is `ENOMEM` from `mprotect`, not `EINVAL`.
+            SpaceError::NotUserRange(_) | SpaceError::BadRange => Errno::ENOMEM,
+            other => refused(other),
+        })?;
     Ok(0)
 }
 

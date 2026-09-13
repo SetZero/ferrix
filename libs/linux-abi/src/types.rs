@@ -917,6 +917,13 @@ pub const PROT_READ: u32 = 1;
 pub const PROT_WRITE: u32 = 2;
 /// The mapping may be executed.
 pub const PROT_EXEC: u32 = 4;
+/// Pages may be used for atomic operations; accepted and meaningless, as on
+/// Linux. From `asm-generic/mman-common.h`, as are the two below.
+pub const PROT_SEM: u32 = 0x8;
+/// `mprotect`: extend the change to the start of a region that grows down.
+pub const PROT_GROWSDOWN: u32 = 0x0100_0000;
+/// `mprotect`: extend the change to the end of a region that grows up.
+pub const PROT_GROWSUP: u32 = 0x0200_0000;
 
 /// Writes are visible to other mappers of the same object.
 pub const MAP_SHARED: u32 = 0x1;
@@ -1215,6 +1222,8 @@ pub const CLOCK_REALTIME_COARSE: u32 = 5;
 pub const CLOCK_MONOTONIC_COARSE: u32 = 6;
 /// Monotonic clock that does count time spent suspended.
 pub const CLOCK_BOOTTIME: u32 = 7;
+/// International Atomic Time: real time plus the TAI offset.
+pub const CLOCK_TAI: u32 = 11;
 
 // ---------------------------------------------------------------------------
 // poll and epoll

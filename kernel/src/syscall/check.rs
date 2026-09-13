@@ -36,7 +36,7 @@ use ferrix_elf::Class;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{Outcome, SyscallArgs, dispatch, uaccess};
-use crate::syscall::{exec, fd, file, image, load, signal, system};
+use crate::syscall::{exec, fd, file, image, load, signal, system, time};
 use crate::user::space::MMAP_MIN_ADDR;
 
 /// What the checks measured, for the boot log.
@@ -521,6 +521,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
 
     check_mmap_returns_usable_memory(&process)?;
     check_mmap_rejects_what_it_should(&process)?;
+    check_memory_and_time_answer_as_linux_does(&process)?;
     check_fixed_mapping_lands_where_asked(&process)?;
     check_nothing_is_mapped_near_page_zero(&process)?;
     check_copy_crosses_a_page_boundary(&process)?;
@@ -621,7 +622,7 @@ fn check_mmap_returns_usable_memory(process: &Process) -> Result<(), &'static st
 /// The argument checks, which is where `mmap`'s bugs live.
 fn check_mmap_rejects_what_it_should(process: &Process) -> Result<(), &'static str> {
     let anon = MAP_ANONYMOUS | MAP_PRIVATE;
-    let cases: [(u64, u64, u32, u32, i64, &str); 6] = [
+    let cases: [(u64, u64, u32, u32, i64, &str); 5] = [
         (0, 0, PROT_READ, anon, -1, "a zero length"),
         (
             0,
@@ -639,14 +640,6 @@ fn check_mmap_rejects_what_it_should(process: &Process) -> Result<(), &'static s
             MAP_PRIVATE,
             -1,
             "a file mapping, with no VFS",
-        ),
-        (
-            0,
-            PAGE_SIZE,
-            PROT_READ,
-            anon,
-            3,
-            "an anonymous mapping with a real fd",
         ),
         (
             0,
@@ -671,6 +664,76 @@ fn check_mmap_rejects_what_it_should(process: &Process) -> Result<(), &'static s
             let _ = what;
             return Err("mmap accepted arguments it should have refused");
         }
+    }
+    Ok(())
+}
+
+/// Where Linux answers a memory or time call differently from the obvious
+/// reading, the answer here is Linux's.
+fn check_memory_and_time_answer_as_linux_does(process: &Process) -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::{CLOCK_TAI, PROT_GROWSDOWN, PROT_GROWSUP, PROT_SEM};
+
+    // An anonymous mapping ignores its fd, and a whole-page offset; a byte
+    // offset off a page boundary is still refused.
+    let anon = |fd: i64, offset: u64| MmapRequest {
+        addr: 0,
+        len: PAGE_SIZE,
+        prot: PROT_READ | PROT_WRITE,
+        flags: MAP_ANONYMOUS | MAP_PRIVATE,
+        fd,
+        offset,
+        unit: OffsetUnit::Bytes,
+    };
+    let at = memory::sys_mmap(process, &anon(3, PAGE_SIZE))
+        .map_err(|_| "an anonymous mapping with a real fd was refused")?;
+    let at = u64::try_from(at).map_err(|_| "mmap returned an impossible address")?;
+    if memory::sys_mmap(process, &anon(-1, 1)) != Err(Errno::EINVAL) {
+        return Err("mmap accepted a byte offset off a page boundary");
+    }
+
+    // mprotect: a zero length succeeds before anything else is looked at,
+    // PROT_SEM is accepted, a range with nothing mapped is ENOMEM, and the
+    // growth flags are EINVAL on a region that does not grow.
+    let answers = [
+        (memory::sys_mprotect(process, at, 0, 0x40), Ok(0)),
+        (
+            memory::sys_mprotect(process, at, PAGE_SIZE, PROT_READ | PROT_SEM),
+            Ok(0),
+        ),
+        (
+            memory::sys_mprotect(process, TEST_BASE, PAGE_SIZE, PROT_READ),
+            Err(Errno::ENOMEM),
+        ),
+        (
+            memory::sys_mprotect(process, at, PAGE_SIZE, PROT_READ | PROT_GROWSDOWN),
+            Err(Errno::EINVAL),
+        ),
+        (
+            memory::sys_mprotect(process, at, PAGE_SIZE, PROT_GROWSDOWN | PROT_GROWSUP),
+            Err(Errno::EINVAL),
+        ),
+    ];
+    let _ = memory::sys_munmap(process, at, PAGE_SIZE);
+    if answers.iter().any(|(got, want)| got != want) {
+        return Err("mprotect did not answer as Linux does");
+    }
+
+    // gettimeofday writes a zeroed timezone, with or without a timeval.
+    let page = map_rw(process, PAGE_SIZE)?;
+    uaccess::copy_to_user(process.space(), page, &[0xFF; 8])
+        .map_err(|_| "could not fill the timezone")?;
+    let _ =
+        time::sys_gettimeofday(process, 0, page).map_err(|_| "gettimeofday refused a timezone")?;
+    let mut tz = [0xFF_u8; 8];
+    uaccess::copy_from_user(process.space(), page, &mut tz)
+        .map_err(|_| "could not read the timezone back")?;
+    let told = time::sys_clock_gettime(process, u64::from(CLOCK_TAI), page, time::TimeWidth::Wide);
+    let _ = memory::sys_munmap(process, page, PAGE_SIZE);
+    if tz != [0; 8] {
+        return Err("gettimeofday did not write a zeroed timezone");
+    }
+    if told.is_err() {
+        return Err("clock_gettime refused CLOCK_TAI");
     }
     Ok(())
 }
@@ -1413,16 +1476,7 @@ fn check_poll_reports_ready_invalid_and_skipped(process: &Process) -> Result<(),
         return Err("poll with nothing ready returned before its timeout");
     }
 
-    if poll::sys_ppoll(
-        process,
-        at,
-        1,
-        0,
-        at,
-        16,
-        crate::syscall::time::TimeWidth::Native,
-    ) != Err(Errno::EINVAL)
-    {
+    if poll::sys_ppoll(process, at, 1, 0, at, 16, time::TimeWidth::Native) != Err(Errno::EINVAL) {
         return Err("ppoll accepted a signal set of the wrong size");
     }
     let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
@@ -3883,7 +3937,7 @@ type FutexWake = fn(&Process, u64) -> Result<usize, Errno>;
 
 /// `futex` with six arguments and a native timespec.
 fn futex_call(process: &Process, a: [u64; 6]) -> Result<usize, Errno> {
-    futex::sys_futex(process, &a, crate::syscall::time::TimeWidth::Native)
+    futex::sys_futex(process, &a, time::TimeWidth::Native)
 }
 
 /// Write a native `struct timespec` at `at`.
@@ -4553,7 +4607,7 @@ fn read_the_clock_through_time(process: &Process, page: u64) -> Result<(), &'sta
         |at: u64| -> Result<u64, &'static str> { Ok(le_at(&read_user::<8>(process, at)?, 0, 8)) };
 
     answers(
-        time::sys_gettimeofday(process, page),
+        time::sys_gettimeofday(process, page, 0),
         0,
         "gettimeofday was refused",
     )?;

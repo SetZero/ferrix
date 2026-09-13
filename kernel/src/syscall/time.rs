@@ -26,8 +26,9 @@ use crate::syscall::uaccess::{self, WORD};
 /// Nanoseconds in a second.
 const NANOS: u64 = 1_000_000_000;
 
-/// `CLOCK_REALTIME_ALARM`, `CLOCK_BOOTTIME_ALARM` and `CLOCK_TAI`: clocks
-/// Linux has that this kernel reads none of. `linux/time.h`.
+/// `CLOCK_REALTIME_ALARM`, `CLOCK_BOOTTIME_ALARM` and `CLOCK_TAI`, from
+/// `linux/time.h`: clocks Linux has that no call here sets. Of the three only
+/// `CLOCK_TAI` can be read, in [`sys_clock_gettime`].
 const CLOCK_REALTIME_ALARM: u32 = 8;
 /// See [`CLOCK_REALTIME_ALARM`].
 const CLOCK_BOOTTIME_ALARM: u32 = 9;
@@ -136,8 +137,14 @@ pub(crate) fn dispatch(
 /// 1970, because nothing yet reads a real-time clock chip. That is a wrong
 /// answer rather than a missing one, and it is chosen deliberately: a program
 /// that gets `EINVAL` for `CLOCK_REALTIME` usually aborts, while one that gets
-/// 1970 usually prints a strange date and carries on. The CPU-time clocks are
-/// refused, because there is no accounting of CPU time per process to report.
+/// 1970 usually prints a strange date and carries on. `CLOCK_TAI` is real time
+/// plus the TAI offset, which is zero until something sets it, so it reads as
+/// the real-time clock does. The CPU-time clocks are refused, because there is
+/// no accounting of CPU time per process to report.
+///
+/// So are `CLOCK_REALTIME_ALARM` and `CLOCK_BOOTTIME_ALARM`, and that is
+/// Linux's answer rather than a gap: they read `EINVAL` there too on a machine
+/// with no wake-capable real-time clock registered, and this kernel has none.
 pub(crate) fn sys_clock_gettime(
     process: &Process,
     clock: u64,
@@ -146,7 +153,7 @@ pub(crate) fn sys_clock_gettime(
 ) -> Result<usize, Errno> {
     let clock = u32::try_from(clock).map_err(|_| Errno::EINVAL)?;
     let nanos = match clock {
-        CLOCK_REALTIME | CLOCK_REALTIME_COARSE => realtime_nanos(),
+        CLOCK_REALTIME | CLOCK_REALTIME_COARSE | CLOCK_TAI => realtime_nanos(),
         CLOCK_MONOTONIC | CLOCK_MONOTONIC_RAW | CLOCK_MONOTONIC_COARSE | CLOCK_BOOTTIME => {
             now_nanos()
         }
@@ -158,20 +165,23 @@ pub(crate) fn sys_clock_gettime(
 
 /// `gettimeofday`: the real-time clock, in microseconds.
 ///
-/// A null `tv` is legal and asks for nothing. The timezone argument is
-/// obsolete, and ignored, as Linux ignores it.
-pub(crate) fn sys_gettimeofday(process: &Process, tv: u64) -> Result<usize, Errno> {
-    if tv == 0 {
-        return Ok(0);
+/// A null `tv` or `tz` is legal and asks for nothing. The timezone is obsolete,
+/// but not ignored: Linux copies out its `struct timezone`, two `int`s that are
+/// zero until `settimeofday` sets them, and a program that passes one reads it.
+pub(crate) fn sys_gettimeofday(process: &Process, tv: u64, tz: u64) -> Result<usize, Errno> {
+    if tv != 0 {
+        let nanos = realtime_nanos();
+        write_pair(
+            process,
+            tv,
+            nanos / NANOS,
+            (nanos % NANOS) / 1_000,
+            TimeWidth::Native,
+        )?;
     }
-    let nanos = realtime_nanos();
-    write_pair(
-        process,
-        tv,
-        nanos / NANOS,
-        (nanos % NANOS) / 1_000,
-        TimeWidth::Native,
-    )?;
+    if tz != 0 {
+        uaccess::copy_to_user(process.space(), tz, &[0_u8; 8]).map_err(|_| Errno::EFAULT)?;
+    }
     Ok(0)
 }
 
