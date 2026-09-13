@@ -9,7 +9,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # develop is where sessions land (docs/BACKLOG.md), and main moves only to
+    # a develop commit verified whole, so both are gated.
+    branches: [main, develop]
   pull_request:
   workflow_dispatch:
 
