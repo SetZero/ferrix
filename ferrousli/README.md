@@ -30,6 +30,16 @@ rather than the host's. The harness links them against `crt1.o` and
 its output and how it ends. Each program is built at `-O0` and at `-O2`, with
 the stack protector on, as a distribution's compiler leaves it.
 
+Seven unit tests compare with the glibc the test binary links: `ctype.h`'s
+tables and functions, `wctype.h` over every code point against
+`src/wctype/glibc-differences.txt`, and `printf`'s output. Their data was
+recorded on the glibc named in `src/host_glibc.rs`. On any other they return
+early after one note on standard error, and every other test still runs.
+
+From the repository root, `cargo xtask check --ferrousli` runs Ferrix's local
+gate with ferrousli's added: the generated-ABI check, formatting, clippy, and
+the tests in the debug and release profiles. CI runs the same command.
+
 [CONVENTIONS.md](CONVENTIONS.md) has the rules every change here follows.
 
 `cargo build` leaves `target/debug/libferrousli.a`. `crt1.o` is built by

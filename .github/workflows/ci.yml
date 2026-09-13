@@ -250,6 +250,46 @@ jobs:
         run: cargo doc --workspace --exclude ferrix-kernel --exclude ferrix-boot --no-deps
 
   # ----------------------------------------------------------------
+  # ferrousli, the C library in Rust, is a cargo workspace of its own,
+  # so the `test` job's `--workspace` never reaches it. Since
+  # 2026-09-13 it is on the goal's path, and this job is its gate:
+  # `cargo xtask check --ferrousli`, the same command a landing runs,
+  # which adds ferrousli's generated-ABI check, fmt, clippy, and its
+  # tests in the debug and release profiles to the whole local gate.
+  #
+  # Seven of its unit tests compare with the glibc the test binary
+  # links and skip on any other version than the one their data was
+  # recorded on (ferrousli/src/host_glibc.rs); this runner's glibc
+  # differs, so they print a note and every other test runs.
+  # ----------------------------------------------------------------
+  ferrousli:
+    name: ferrousli
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, armv7a-none-eabi, x86_64-unknown-uefi, aarch64-unknown-uefi, armv7-unknown-linux-musleabi
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            ferrousli -> target
+
+      # `cargo xtask check` first asks whether the commit hooks are armed,
+      # which is local configuration a fresh checkout does not have.
+      - name: Arm the commit hooks
+        run: git config core.hooksPath .githooks
+
+      - name: cargo xtask check --ferrousli
+        run: cargo xtask check --ferrousli
+
+  # ----------------------------------------------------------------
   # The artefacts: a bootable image per architecture.
   # ----------------------------------------------------------------
   build:
