@@ -215,6 +215,13 @@ name = "ferrix-virtio"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-virtio-blk"
+version = "0.1.0"
+dependencies = [
+ "ferrix-virtio",
+]
+
+[[package]]
 name = "ferrix-vma"
 version = "0.1.0"
 

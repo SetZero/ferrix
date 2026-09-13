@@ -1,0 +1,14 @@
+[package]
+name = "ferrix-virtio-blk"
+description = "virtio-blk driver logic: bring-up, requests and completions over an abstract transport and DMA memory"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrix-virtio.workspace = true
+
+[lints]
+workspace = true

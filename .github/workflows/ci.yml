@@ -483,6 +483,14 @@ jobs:
       - name: Miri (native call wrappers)
         run: cargo +nightly miri test -p ferrix-native --lib
 
+      # The virtio-blk driver. Its tests run it against a fake device over a
+      # fake IOMMU, where every ring offset and device address the driver
+      # computes indexes a test buffer, and the model-based test drives
+      # thousands of submissions and completions through them; Miri checks
+      # each index against the buffer's real extent.
+      - name: Miri (virtio-blk driver)
+        run: cargo +nightly miri test -p ferrix-virtio-blk --lib
+
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.
   #
