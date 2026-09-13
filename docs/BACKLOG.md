@@ -117,7 +117,7 @@ alive.
 | ferrix-e5 (was ferrix-54) | The memory-management package below; reviewer of the VMO reverse map and the space.rs half of file-backed mmap |
 | ferrix-4f (was ferrix-b1) | `xtask flash` and `deploy`, `docs/stm32mp157-dk.md`, the Arm UART drivers and console receive |
 | ferrix-3c | The STM32MP157D-DK1 board itself: the serial link, OpenOCD, every hardware run, and filing what the board shows with the area that owns it |
-| ferrix-ce (was ferrix-53) | `ferrousli/`, beside the roadmap. Done: locales and wide characters; time zones, `strftime` and `strptime`; buffered stdio and `printf`; threads, mutexes, condition variables and keys, with `tests/c/thread/on_ferrix.c` ready as a static threaded program for `CLONE_THREAD`; `dirent.h` and `getopt`. In progress: `scanf`, `glob` and `regex`, thread cancellation and semaphores, the math library |
+| ferrix-ce (was ferrix-53) | `ferrousli/`, beside the roadmap. Done: locales and wide characters; time zones, `strftime` and `strptime`; buffered stdio and `printf`; threads, mutexes, condition variables and keys, with `tests/c/thread/on_ferrix.c` ready as a static threaded program for `CLONE_THREAD`; `dirent.h` and `getopt`; mounts, file system statistics and `mntent.h`. In progress: `scanf`, `glob` and `regex`, thread cancellation and semaphores, the math library |
 
 ---
 
@@ -272,6 +272,6 @@ with unlanded work, each committed and pushed, base and state as handed off:
 * A lead from stage 7's sweep tooling (`enosys-sweep`, `worktree-agent-aa3e651b1a5027598`, neither for landing): the single-processor `timeout -s KILL` hang did not reproduce in 7 runs on current main; but a sweep kernel on armv7a `--smp 1` fails stage 8's pipes check 4 of 4 with one frame leaked while plain test-boot passes, logs in that session's scratchpad `hang/`; owner stage 8 or mm.
 * Stage 9 (`ferrix-4b`): the interrupt wake (verified on fd4442e), process observers, `vmo_map` on the reverse map.
 * mm (`ferrix-e5`): x86-64 IST branch (afb3041, row green but for one FX-1001 hit that is stage 10's), mprotect invalidation with the COW and MAP_SHARED checks, Miri and fuzz branch (c660bc7).
-* ferrousli (`ferrix-ce`): area-1 wrappers and the stub file in progress; busybox links after them; 154 symbols were undefined at the first link.
+* ferrousli (`ferrix-ce`): 154 symbols were undefined at busybox's first link. Area 1's mounts, file system statistics and `mntent.h` are on develop; its other 57 wrappers (sockets and `inet_*`, SysV IPC, process and system calls) and the stub file are in progress; busybox links after them.
 * Known intermittent on `main`: FX-1001 on AArch64 (a device write reported outside its domain, once in three boots), owner stage 10, row above.
 * Open questions for the customer: none. The board is powered at the U-Boot prompt with 95884cd on the card.
