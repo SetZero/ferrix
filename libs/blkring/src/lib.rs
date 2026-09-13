@@ -19,16 +19,19 @@
 //! | Object | Created by | The other side holds it with | Purpose |
 //! |---|---|---|---|
 //! | Control channel | devmgr or the kernel | one endpoint each | setup, geometry, shutdown |
-//! | Ring VMO | driver | kernel: exactly `READ \| WRITE \| MAP` | header and both entry arrays |
-//! | Data VMO | driver, pinned | kernel: exactly `READ \| WRITE \| MAP` | payload, copied through |
-//! | Driver port | driver | kernel: exactly `WRITE` | submission doorbell |
+//! | Ring VMO | driver | kernel: exactly `READ \| WRITE \| MAP \| TRANSFER` | header and both entry arrays |
+//! | Data VMO | driver, pinned | kernel: exactly `READ \| WRITE \| MAP \| TRANSFER` | payload, copied through |
+//! | Driver port | driver | kernel: exactly `WRITE \| TRANSFER` | submission doorbell |
 //! | Kernel completion port | kernel | driver: exactly `WRITE` | completion doorbell |
 //!
 //! Rights at handoff are exact. The kernel refuses a HELLO whose handles carry
-//! more rights than these — a `DUPLICATE` or `TRANSFER` on a VMO would let a
-//! driver hand the kernel an object it could also hand to someone else — or
-//! fewer. [`control::Hello::validate`] decides it from the rights the glue read
-//! off the handles.
+//! more rights than these — a `DUPLICATE` on a VMO would let the kernel's
+//! handle be copied — or fewer. A handle a process sends carries `TRANSFER`,
+//! because only a transferable handle can be sent and a transfer keeps its
+//! rights; the completion port the kernel sends back does not, since the
+//! kernel places it in the driver's table itself.
+//! [`control::Hello::validate`] decides it from the rights the glue read off
+//! the handles.
 //!
 //! The kernel allocates regions of the data VMO: it picks each submission's
 //! `data_offset`, copies write payloads in before publishing, copies read

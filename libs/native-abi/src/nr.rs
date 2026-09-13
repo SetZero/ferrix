@@ -71,6 +71,9 @@ pub const IO_MAPPING_CREATE: usize = 0x1040;
 /// [`NativeCall::IoMappingMap`].
 pub const IO_MAPPING_MAP: usize = 0x1041;
 
+/// [`NativeCall::BlockRingCreate`].
+pub const BLOCK_RING_CREATE: usize = 0x1048;
+
 /// A native system call.
 ///
 /// `0x1030..=0x1037` is left for process creation, which is decided together
@@ -154,10 +157,15 @@ pub enum NativeCall {
     IoMappingCreate,
     /// `(mapping, address)` → address. Map an aperture. Needs `MAP`.
     IoMappingMap,
+    /// `(device)` → handle. Make the block ring a driver serves the device's
+    /// disk through (`docs/BLOCK-RING.md`): the kernel keeps one end of the
+    /// ring's control channel and answers with the other, on which the driver
+    /// sends HELLO. Needs `MANAGE` on the device, which has one ring.
+    BlockRingCreate,
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 25] = [
+pub const ALL: [NativeCall; 26] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -183,6 +191,7 @@ pub const ALL: [NativeCall; 25] = [
     NativeCall::InterruptAck,
     NativeCall::IoMappingCreate,
     NativeCall::IoMappingMap,
+    NativeCall::BlockRingCreate,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -223,6 +232,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         INTERRUPT_ACK => NativeCall::InterruptAck,
         IO_MAPPING_CREATE => NativeCall::IoMappingCreate,
         IO_MAPPING_MAP => NativeCall::IoMappingMap,
+        BLOCK_RING_CREATE => NativeCall::BlockRingCreate,
         _ => return None,
     };
     Some(call)
@@ -257,5 +267,6 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::InterruptAck => INTERRUPT_ACK,
         NativeCall::IoMappingCreate => IO_MAPPING_CREATE,
         NativeCall::IoMappingMap => IO_MAPPING_MAP,
+        NativeCall::BlockRingCreate => BLOCK_RING_CREATE,
     }
 }

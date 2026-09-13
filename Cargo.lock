@@ -102,6 +102,8 @@ name = "ferrix-kernel"
 version = "0.1.0"
 dependencies = [
  "ferrix-acpi",
+ "ferrix-blkring",
+ "ferrix-block",
  "ferrix-bootinfo",
  "ferrix-elf",
  "ferrix-fbtext",

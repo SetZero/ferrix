@@ -46,8 +46,9 @@ use crate::syscall::{self as linux, Outcome, SyscallArgs, native, uaccess};
 use crate::user::space::{Access, Destination, SpaceError};
 use ferrix_elf::Class;
 
-/// Where each check process keeps its buffers.
-const SCRATCH: u64 = 0x4000_0000;
+/// Where each check process keeps its buffers. Stage 10's ring check borrows
+/// the second page of it.
+pub(crate) const SCRATCH: u64 = 0x4000_0000;
 /// Two pages of it.
 const SCRATCH_LEN: u64 = 2 * PAGE_SIZE;
 /// Bytes being sent, and bytes being written into a VMO.
@@ -673,14 +674,14 @@ fn check_what_vmo_map_refuses(
 }
 
 /// One of the two processes.
-struct Side {
+pub(crate) struct Side {
     /// The process, over its own address space.
-    process: Arc<Process>,
+    pub(crate) process: Arc<Process>,
 }
 
 impl Side {
     /// A fresh process with a scratch region mapped.
-    fn new() -> Result<Side, &'static str> {
+    pub(crate) fn new() -> Result<Side, &'static str> {
         let process = process::new_for_check().map_err(|_| "could not make a process")?;
         let _ = process
             .space()
@@ -690,7 +691,7 @@ impl Side {
     }
 
     /// Make a native call with these registers.
-    fn call(&self, number: usize, args: &[u64]) -> Result<usize, Errno> {
+    pub(crate) fn call(&self, number: usize, args: &[u64]) -> Result<usize, Errno> {
         let mut registers = [0_u64; 6];
         for (slot, value) in registers.iter_mut().zip(args) {
             *slot = *value;
@@ -703,7 +704,7 @@ impl Side {
     }
 
     /// Make a call that returns a handle.
-    fn handle(
+    pub(crate) fn handle(
         &self,
         number: usize,
         args: &[u64],
@@ -714,13 +715,13 @@ impl Side {
     }
 
     /// Put bytes in this process's memory.
-    fn put(&self, at: u64, bytes: &[u8]) -> Result<(), &'static str> {
+    pub(crate) fn put(&self, at: u64, bytes: &[u8]) -> Result<(), &'static str> {
         uaccess::copy_to_user(self.process.space(), at, bytes)
             .map_err(|_| "could not stage user memory")
     }
 
     /// Read bytes back out of it.
-    fn get(&self, at: u64, len: usize) -> Result<Vec<u8>, &'static str> {
+    pub(crate) fn get(&self, at: u64, len: usize) -> Result<Vec<u8>, &'static str> {
         let mut out = vec![0_u8; len];
         uaccess::copy_from_user(self.process.space(), at, &mut out)
             .map_err(|_| "could not read user memory back")?;
@@ -728,7 +729,7 @@ impl Side {
     }
 
     /// A `u32` out of it.
-    fn get_u32(&self, at: u64) -> Result<u32, &'static str> {
+    pub(crate) fn get_u32(&self, at: u64) -> Result<u32, &'static str> {
         let bytes = self.get(at, 4)?;
         <[u8; 4]>::try_from(bytes.as_slice())
             .map(u32::from_ne_bytes)
@@ -755,13 +756,13 @@ impl Side {
     }
 
     /// Close whatever is left, as a process's exit will.
-    fn close_everything(&self) {
+    pub(crate) fn close_everything(&self) {
         object::dispose(self.process.with_handles(object::HandleTable::clear));
     }
 }
 
 /// A handle as a register.
-fn reg(handle: Handle) -> u64 {
+pub(crate) fn reg(handle: Handle) -> u64 {
     u64::from(handle.0)
 }
 
@@ -1683,7 +1684,7 @@ fn check_pin_refusals(
 }
 
 /// Give `side` a handle to `node`, as `devmgr` will give one to a driver.
-fn device_handle(side: &Side, node: &Arc<DeviceNode>) -> Result<Handle, &'static str> {
+pub(crate) fn device_handle(side: &Side, node: &Arc<DeviceNode>) -> Result<Handle, &'static str> {
     side.process
         .with_handles(|table| table.insert(Object::Device(Arc::clone(node)), Rights::DEVICE))
         .map_err(|_| "no room for a device handle")

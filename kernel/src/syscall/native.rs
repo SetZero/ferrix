@@ -46,6 +46,7 @@ use ferrix_objects::reach::Reach;
 use ferrix_objects::table::TableError;
 use ferrix_vma::VmaFlags;
 
+use crate::block_ring;
 use crate::device::DeviceNode;
 use crate::object::channel::{self, ChannelMessage, Endpoint, ReadError, WriteFailure};
 use crate::object::interrupt::{Interrupt, InterruptError};
@@ -145,6 +146,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::InterruptAck => interrupt_ack(process, handle(a[0])),
         NativeCall::InterruptBind => interrupt_bind(process, handle(a[0]), handle(a[1]), a[2]),
         NativeCall::IoMappingCreate => io_mapping_create(process, handle(a[0]), a[1]),
+        NativeCall::BlockRingCreate => block_ring_create(process, handle(a[0])),
         NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1]),
         NativeCall::VmoPin => vmo_pin(process, handle(a[0]), handle(a[1]), a[2], a[3], a[4]),
         NativeCall::VmoPinAddresses => vmo_pin_addresses(process, handle(a[0]), a[1], a[2]),
@@ -790,6 +792,26 @@ fn io_mapping_create(process: &Process, device: Handle, spec: u64) -> Result<usi
         IoMappingError::NotWholePages => status::INVALID_ARGS,
     })?;
     insert_new(process, Object::IoMapping(mapping), Rights::IO_MAPPING)
+}
+
+/// `block_ring_create`.
+///
+/// The device handle needs `MANAGE`, as everything that gives a driver the
+/// device does. `ALREADY_BOUND` for a device that has a ring, live or ended:
+/// nothing yet says its device was reset. `INVALID_ARGS` for a device that is
+/// not a PCI function, since HELLO names the disk by its PCI location.
+fn block_ring_create(process: &Process, device: Handle) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::MANAGE)?;
+    let driver_end = block_ring::create(&node).map_err(|why| match why {
+        block_ring::CreateError::InUse => status::ALREADY_BOUND,
+        block_ring::CreateError::NotPci => status::INVALID_ARGS,
+        block_ring::CreateError::NoMemory => status::NO_MEMORY,
+    })?;
+    insert_new(
+        process,
+        Object::Channel(driver_end),
+        block_ring::CONTROL_RIGHTS,
+    )
 }
 
 /// `vmo_pin`.

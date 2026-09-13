@@ -206,10 +206,14 @@ fn hello_handles_must_carry_exactly_the_specified_rights() {
     let hello = usable();
     assert!(hello.validate(&HELLO_RIGHTS).is_ok(), "exact rights");
     assert!(
-        !VMO_RIGHTS.contains(Rights::DUPLICATE) && !VMO_RIGHTS.contains(Rights::TRANSFER),
-        "a VMO handed to the kernel can be given to nobody else"
+        !VMO_RIGHTS.contains(Rights::DUPLICATE) && VMO_RIGHTS.contains(Rights::TRANSFER),
+        "a VMO handed to the kernel arrived by transfer and can be copied by nobody"
     );
-    assert_eq!(PORT_RIGHTS, Rights::WRITE, "a port is WRITE only");
+    assert_eq!(
+        PORT_RIGHTS,
+        Rights(Rights::WRITE.0 | Rights::TRANSFER.0),
+        "a port is WRITE, and the TRANSFER it arrived with"
+    );
     assert_eq!(
         READY_RIGHTS,
         [Rights::WRITE],

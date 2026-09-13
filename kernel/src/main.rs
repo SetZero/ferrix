@@ -21,6 +21,7 @@ extern crate alloc;
 mod acpi;
 mod arch;
 mod backtrace;
+mod block_ring;
 mod console;
 mod device;
 mod early;
@@ -269,6 +270,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // child, and an interrupt held from delivery to acknowledgement. After
     // `check_devices`, because before it there are no nodes to mint from.
     check_device_objects();
+    check_block_ring();
 
     // The rest of stage 2, deliberately last. Each of these needs something a
     // later part of boot brought up — the arena needs the heap, the sweep
@@ -661,6 +663,31 @@ fn check_device_objects() {
             report.slowest_wake / 1_000,
         );
     }
+}
+
+/// Stage 10: the block ring's control plane, driven from a process that is
+/// given a device, up to a published disk and back.
+///
+/// Halts rather than returning, as every other stage's check does. A machine
+/// with no PCI function passes and says so: a ring names its disk by a PCI
+/// location.
+fn check_block_ring() {
+    let report = match block_ring::check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE10_RING,
+            "stage 10 block ring self-check failed: {problem}"
+        ),
+    };
+    if let Some(why) = report.skipped {
+        println!("  ring     not checked: {why}");
+        return;
+    }
+    println!(
+        "  ring     {} calls and HELLOs refused as specified, {} disk published from an \
+         accepted HELLO and unpublished when its driver stopped or died, {} frames leaked",
+        report.refusals, report.published, report.leaked,
+    );
 }
 
 /// Stage 10: find every PCI function, size its BARs and walk its

@@ -4,8 +4,8 @@ Version 1. Written by ferrix-61 (stage 11, formerly ferrix-4d), the ring's first
 consumer; reviewed and approved with changes by ferrix-d9 (stage 10, formerly
 ferrix-8b), who owns the ring, `devmgr` and the driver; identity and naming
 decided by the product owner, ferrix-32. `libs/blkring` (`ferrix-blkring`)
-implements it, host-tested, under Miri and fuzzed. The kernel glue and the
-driver process are not built yet.
+implements it, host-tested, under Miri and fuzzed. `kernel/src/block_ring`
+is the kernel glue; the driver process is not built yet.
 
 ## 1. What this is, and what it is not
 
@@ -53,20 +53,24 @@ VMO allocation (§3.3) belongs to the ring glue, not the queue.
 | Object | Created by | The other side holds it with | Purpose |
 |---|---|---|---|
 | Control `Channel` | devmgr / kernel (§7) | — (one endpoint each) | Setup, geometry, shutdown |
-| Ring VMO | driver (`vmo_create`) | kernel: exactly `READ \| WRITE \| MAP` | Header + both entry arrays |
-| Data VMO | driver (`vmo_create`, then `VMO_PIN`) | kernel: exactly `READ \| WRITE \| MAP` | Payload, copied through |
-| Driver port | driver (`port_create`) | kernel: exactly `WRITE` | Submission doorbell; also the driver's own interrupt and control packets |
+| Ring VMO | driver (`vmo_create`) | kernel: exactly `READ \| WRITE \| MAP \| TRANSFER` | Header + both entry arrays |
+| Data VMO | driver (`vmo_create`, then `VMO_PIN`) | kernel: exactly `READ \| WRITE \| MAP \| TRANSFER` | Payload, copied through |
+| Driver port | driver (`port_create`) | kernel: exactly `WRITE \| TRANSFER` | Submission doorbell; also the driver's own interrupt and control packets |
 | Kernel completion port | kernel (a real `Port`) | driver: exactly `WRITE` | Completion doorbell |
 
 Rights only shrink (`rights.rs`), so each side hands the other exactly what it
 needs.
 
 **Rights at handoff are exact, and checked.** The driver sends the ring and
-data VMOs with `READ | WRITE | MAP` and **no `DUPLICATE` or `TRANSFER`**, and
-its port with `WRITE` only. The kernel **refuses HELLO** if any handle carries
-more rights than that: a driver must not be able to hand the kernel an object
-it could also have given to someone else. The kernel inserts the completion
-port for the driver with `WRITE` only.
+data VMOs with `READ | WRITE | MAP | TRANSFER` and **no `DUPLICATE`**, and its
+port with `WRITE | TRANSFER`. `TRANSFER` is there because it has to be:
+`channel_write` takes only a handle that carries it, and a transfer keeps a
+handle's rights, so every handle that arrives in a HELLO has it (the first
+kernel glue found the rule written without it, and no HELLO could pass). The
+kernel **refuses HELLO** if any handle carries more rights than that, or
+fewer: the kernel's handle to a driver's object must be one nobody can copy.
+The kernel inserts the completion port for the driver with `WRITE` only, since
+it places the handle in the driver's table itself rather than sending it.
 
 The ring VMO is not pinned: the device never sees it. Only the data VMO is.
 

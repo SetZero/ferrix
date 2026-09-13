@@ -57,6 +57,7 @@ Causes are listed most likely first.
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
 | [FX-1003](#fx-1003) | an IOMMU domain gave a device the wrong addresses |
+| [FX-1004](#fx-1004) | the block ring's control plane answered a driver wrongly |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -1063,6 +1064,37 @@ writes somewhere its driver did not choose.
 
 See: kernel/src/iommu.rs Domain and check_domains; kernel/src/device.rs
 DeviceNode::domain; docs/ARCHITECTURE.md section 7; docs/ROADMAP.md stage 10.
+
+<a id="fx-1004"></a>
+
+## FX-1004 — the block ring's control plane answered a driver wrongly
+
+A ring-3 block driver is given its device and asks the kernel for a ring with
+`block_ring_create`, then introduces its disk over the ring's control channel
+with HELLO, and the kernel answers READY with a completion port or REFUSED with
+the reason `docs/BLOCK-RING.md` fixes. `block_ring::check::run` drives that from
+a process the way a driver will, every call through the native dispatcher, and
+requires each refusal the protocol specifies, an accepted HELLO's disk to appear
+in the registry under the name and numbers HELLO's name gives it, and the disk
+to be gone once the driver's end of the channel closes. The kernel serves
+nothing here; a request on the ring is the ring-3 driver's check.
+
+1. `block_ring_create` accepted a handle without `MANAGE`, a handle to something
+   other than a device, or a device that already has a ring.
+2. The ring's task answered a HELLO with the wrong refusal, or none: the order
+   of checks in `block_ring::check_hello` and `take_up` no longer matches
+   BLOCK-RING.md section 6.2, or `ferrix-blkring`'s validation changed.
+3. An accepted HELLO published no disk, or one with another geometry or name:
+   the registration in `take_up`, or `DiskName::minor`, disagrees with section
+   6.1.
+4. The disk stayed published after the control channel closed: the ring's task
+   did not see `PEER_CLOSED`, or `Serving::finish` did not drop the
+   registration.
+5. The second round did not give every frame back: the ring's VMO holds, its
+   task's stack or the registry leak.
+
+See: kernel/src/block_ring/mod.rs; kernel/src/block_ring/check.rs;
+docs/BLOCK-RING.md; docs/ROADMAP.md stage 10.
 
 <a id="fx-9001"></a>
 

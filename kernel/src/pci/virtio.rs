@@ -716,6 +716,16 @@ fn probe_out_of_domain(
     loop {
         if let Some(fault) = domain.take_fault() {
             if fault.stream != stream || fault.page != PROBE_PAGE || !fault.write {
+                // Seen under a loaded host on x86-64 under KVM, once in a few
+                // boots, and not yet explained: say what the record held.
+                crate::console::println!(
+                    "  pci      the unit's record holds stream {:#x}, page {:#x}, {}; the probe                      is stream {:#x}, page {:#x}, a write",
+                    fault.stream,
+                    fault.page,
+                    if fault.write { "a write" } else { "a read" },
+                    stream,
+                    PROBE_PAGE,
+                );
                 return Ok(Err("the unit recorded a fault other than the probe's"));
             }
             break;

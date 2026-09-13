@@ -52,16 +52,17 @@ pub const QUEUES: u16 = 1;
 
 /// Exactly the rights the kernel holds a ring or data VMO with: no `DUPLICATE`,
 /// no `TRANSFER`.
-pub const VMO_RIGHTS: Rights = Rights(Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0);
+pub const VMO_RIGHTS: Rights =
+    Rights(Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0 | Rights::TRANSFER.0);
 
 /// Exactly the rights each side holds the other's port with.
-pub const PORT_RIGHTS: Rights = Rights::WRITE;
+pub const PORT_RIGHTS: Rights = Rights(Rights::WRITE.0 | Rights::TRANSFER.0);
 
 /// HELLO's handles, in order, with exactly the rights each must carry.
 pub const HELLO_RIGHTS: [Rights; 3] = [VMO_RIGHTS, VMO_RIGHTS, PORT_RIGHTS];
 
 /// READY's handle, with exactly the rights it must carry.
-pub const READY_RIGHTS: [Rights; 1] = [PORT_RIGHTS];
+pub const READY_RIGHTS: [Rights; 1] = [Rights::WRITE];
 
 /// Field offsets of HELLO.
 pub mod hello {

@@ -731,6 +731,36 @@ pub(crate) static STAGE10_PCI: Explanation = Explanation {
           docs/ROADMAP.md stage 10",
 };
 
+/// For `check_block_ring` in `main.rs`, when `block_ring::check::run` fails.
+pub(crate) static STAGE10_RING: Explanation = Explanation {
+    code: "FX-1004",
+    title: "the block ring's control plane answered a driver wrongly",
+    meaning: "A ring-3 block driver is given its device and asks the kernel for a ring with \
+              `block_ring_create`, then introduces its disk over the ring's control channel with \
+              HELLO, and the kernel answers READY with a completion port or REFUSED with the \
+              reason `docs/BLOCK-RING.md` fixes. `block_ring::check::run` drives that from a \
+              process the way a driver will, every call through the native dispatcher, and \
+              requires each refusal the protocol specifies, an accepted HELLO's disk to appear \
+              in the registry under the name and numbers HELLO's name gives it, and the disk to \
+              be gone once the driver's end of the channel closes. The kernel serves nothing \
+              here; a request on the ring is the ring-3 driver's check.",
+    causes: &[
+        "`block_ring_create` accepted a handle without `MANAGE`, a handle to something other \
+         than a device, or a device that already has a ring.",
+        "The ring's task answered a HELLO with the wrong refusal, or none: the order of checks \
+         in `block_ring::check_hello` and `take_up` no longer matches BLOCK-RING.md section 6.2, \
+         or `ferrix-blkring`'s validation changed.",
+        "An accepted HELLO published no disk, or one with another geometry or name: the \
+         registration in `take_up`, or `DiskName::minor`, disagrees with section 6.1.",
+        "The disk stayed published after the control channel closed: the ring's task did not \
+         see `PEER_CLOSED`, or `Serving::finish` did not drop the registration.",
+        "The second round did not give every frame back: the ring's VMO holds, its task's \
+         stack or the registry leak.",
+    ],
+    see: "kernel/src/block_ring/mod.rs; kernel/src/block_ring/check.rs; docs/BLOCK-RING.md; \
+          docs/ROADMAP.md stage 10",
+};
+
 /// For `check_iommu` in `main.rs`, when `iommu::check_domains` fails.
 pub(crate) static STAGE10_IOMMU: Explanation = Explanation {
     code: "FX-1003",
@@ -1189,6 +1219,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE10_PCI,
     &STAGE10_DEVICES,
     &STAGE10_IOMMU,
+    &STAGE10_RING,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,

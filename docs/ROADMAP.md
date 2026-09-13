@@ -2201,6 +2201,49 @@ faults for the write-back refused in 4-byte pieces; three x86-64 boots and one
 under KVM, the completion after the fault and no further fault, since VT-d
 keeps one record; ARMv7-A unprobed at four processors and at two.
 
+**Done — the block ring's kernel side, up to a published disk.**
+`kernel/src/block_ring` is the glue `docs/BLOCK-RING.md` §8 leaves to the
+kernel. A process holding a device with `MANAGE` asks for a ring with
+`block_ring_create` (0x1048) and is answered the driver's end of the ring's
+control channel; the kernel's end goes to a task of its own per ring, which
+waits for HELLO, checks it in §6.2's order — the crate's checks, then that
+`location` is the ring's own device, then the registry — and refuses or takes
+the ring up: it holds the ring and data VMOs, attaches the crate's
+`KernelSide` over the ring's pages, publishes the disk through stage 8's devfs
+registry under HELLO's name with the virtio-blk major and `index × 16`, and
+answers READY with its completion port. From then on it serves reads:
+`libs/block`'s queue in front of the ring, one submission per dispatch into a
+region of the data VMO the kernel allocates, the driver rung when it asked to
+be, completions taken off the ring and copied out once, readers woken. A read
+on a ring whose driver has gone answers `EIO` at once; the ring ends on
+STOPPED, on the channel closing or on corruption, and its registration goes
+with it. The kernel never serves a disk: it issues requests and copies
+payloads, and whatever answers is the process at the other end of the ring.
+
+* **One rule the first use found unwritable.** §2 said the HELLO handles carry
+  exactly `READ | WRITE | MAP`, with no `TRANSFER`; but `channel_write` takes
+  only a handle that carries `TRANSFER` and delivers it with its rights, so no
+  HELLO could ever have passed. The rule now says what arrives: `TRANSFER` on
+  every handle a process sends, `DUPLICATE` on none, and the completion port
+  the kernel places itself with `WRITE` alone.
+* **The check** drives the control plane from a process the way a driver
+  will, every call through the native dispatcher: a ring refused without
+  `MANAGE`, on a VMO and on a device that has one; a HELLO of another version,
+  one with unreduced handles and one for another location each refused with
+  its reason and the kernel's end closed; a HELLO as specified answered READY
+  with a `WRITE`-only port, `vda` at 254:0 in the registry with the geometry
+  HELLO gave, and gone once the driver says STOPPED, after which the next
+  round's ring finds the device free; all of it twice, the second round
+  giving every frame back; then once more with the driver closing the channel
+  instead,
+  which takes the disk but leaves the device bound, since nothing reset it.
+  No request is put on the ring: a sector read through it is the ring-3
+  driver's check, below.
+
+The run recorded when it landed: 13 calls and HELLOs refused as specified, 2
+disks published and unpublished, 0 frames leaked, in about 50 ms, on x86-64,
+AArch64 and ARMv7-A at four processors and at two.
+
 **Still to do, in the order stage 11 needs it.** Stage 11 is done on the host
 and waits only for a ring-3 virtio-blk driver reading sectors, so everything on
 that path comes first and trusting decoding-off BARs, which it does not need,
@@ -2221,7 +2264,10 @@ user-space runtime, all against the agreements recorded here.
     completion forever. So its image and data come from the initramfs, tmpfs,
     anonymous, ring or DMA VMOs, or are fully committed before any pivot onto
     btrfs, and `devmgr` enforces it rather than a comment.
-  * *The block ring's kernel side*, over stage 11's `ferrix-blkring`.
+  * *A sector read through the ring*, by a program on the native runtime that
+    serves a RAM-backed disk from its own process — the boot check's fake
+    driver, with the kernel reading through the registered disk — before any
+    real device is behind it.
   * *virtio-blk as a process*, reading sectors from the virtio-blk-pci test
     disk.
 
