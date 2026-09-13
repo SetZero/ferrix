@@ -890,15 +890,48 @@ resolved and a script's interpreter rather than the script, which is what
 glibc's static start-up reads back through `/proc/self/exe`; `AT_EXECFN` is the
 name `execve` was given.
 
+**Signals are delivered.** `kill`, `tkill` and `tgkill` send; a child's end
+sends its parent `SIGCHLD`; a write to a pipe with no reader raises `SIGPIPE`
+and still returns `EPIPE`; `alarm` and `ITIMER_REAL` raise `SIGALRM`. Delivery
+happens on every return to user mode, from a system call or a trap, into a
+handler on Linux's own frame for each architecture -- floating-point state
+included, `SA_ONSTACK`, `SA_NODEFER` and `SA_RESETHAND` honoured -- and
+`rt_sigreturn` restores it with flags and processor mode sanitised, x86-64
+returning through `IRETQ` because `SYSRET` cannot restore `rcx` and `r11`.
+Blocking calls return `EINTR` when a signal arrives, a default stop parks the
+process until `SIGCONT`, and a user-mode fault the fault path cannot resolve
+becomes `SIGSEGV`, `SIGILL`, `SIGBUS`, `SIGFPE` or `SIGTRAP` with Linux's codes
+rather than a kernel panic. The boot test runs a handler that changes a
+register through its frame on each architecture:
+
+      signals  a program's handler ran on its own frame, changed a saved register, returned through sigreturn, and the program exited with 77
+
+**The console is a terminal.** `fs/terminal.rs` holds the console's
+`struct termios` and a line discipline that reads it for every byte --
+canonical editing, echo, input and output mapping, `VMIN` and `VTIME` -- and
+`syscall/tty.rs` answers the terminal requests, job control's included, so
+busybox's `sh -i` gets a controlling terminal, turns job control on and does
+its own line editing without a doubled echo. `select`, `pselect6` and
+`pselect6_time64` answer from `poll`'s readiness and wait under the signal mask
+they are given, as `ppoll` does. Ctrl-C, Ctrl-\ and Ctrl-Z raise their signals
+on the foreground process group, and since nothing reads the console while a
+shell waits for a foreground program, the first read starts a `console` thread
+that drains the UART every twenty milliseconds; a console read returns `EINTR`
+when a signal is waiting. In the shell, `sleep 30` and `cat` are each ended by
+Ctrl-C with status 130 and the prompt back at once.
+
 **Left, and why it did not block the exit:**
 
-* **Signal delivery and `rt_sigreturn`**, and `SIGSEGV` from the fault path,
-  which is what rustc's stack-overflow guard needs. Owed with the first thing
-  that has to kill a program.
+* **What signals do not do yet.** `SA_RESTART` is not honoured, so an
+  interrupted call is always `EINTR`; there is no vDSO, so a handler needs
+  `SA_RESTORER`, which musl and glibc always set; only `ITIMER_REAL` arms.
+  `SIGCHLD`, stop and continue, `alarm`, `rt_sigsuspend`, the alternate stack
+  and the fault-to-signal path build but no boot check drives them yet.
 * **Threads**, which nothing single-threaded calls: `CLONE_VM` without
   `CLONE_VFORK`, and `CLONE_THREAD`, are `ENOSYS`.
-* **Three stand-ins, each written down where it lives.** The console's `read`
-  does a line discipline's job until stage 15 brings ttys; the real-time clocks
+* **Three stand-ins, each written down where it lives.** The console is the one
+  terminal, its line discipline polling a UART that has no receive interrupt,
+  until stage 15 brings ttys; the real-time clocks
   start at 1970 until something reads a clock chip, though `clock_settime`
   moves them; `getrandom` is xorshift seeded
   from a counter and says so.

@@ -207,8 +207,16 @@ package FerrixRoadmap {
              * sockets refused; mremap, execveat, unshare and setns; and
              * /proc/self/exe as the resolved file actually loaded.
              *
-             * Left: signal delivery and rt_sigreturn, threads, and the
-             * stand-ins for a tty, a clock chip and an entropy source. */
+             * Signals delivered on every return to user mode, on Linux's
+             * frames, with rt_sigreturn, EINTR, stop and continue, SIGPIPE,
+             * SIGALRM and faults as signals.
+             *
+             * The console a terminal: termios honoured by a line discipline,
+             * the terminal and job-control requests, select and pselect6, and
+             * Ctrl-C raised on the foreground group.
+             *
+             * Left: SA_RESTART, threads, and the stand-ins for a tty, a clock
+             * chip and an entropy source. */
     }
 
     #implemented requirement <'S8'> stage8Vfs : Stage {
