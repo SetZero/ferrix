@@ -7,12 +7,11 @@
 //!
 //! All of them are stage 9's, owned by ferrix-4b.
 //!
-//! * **Process creation**, `0x1030` and `0x1031`. The numbers live here, not in
-//!   `libs/native-abi`, because main's table only holds `0x1030..=0x1037` for
-//!   it. Its owner adds them with the handler, and a test below fails the day
-//!   one appears there, so this copy becomes a re-export. The argument lists
-//!   are provisional: the name's encoding, the rights needed and the statuses
-//!   are not decided.
+//! * **Process creation**, `0x1030` and `0x1031`. The numbers were copied here
+//!   while `libs/native-abi`'s table left `0x1030..=0x1037` free for them;
+//!   they are on the table now and re-exported from it. The argument lists
+//!   are the handler's: `(job, image_vmo, name_ptr, name_len)` and
+//!   `(process, bootstrap or 0)`.
 //! * **`vmo_map`**, `0x1024`, whose number is on main's table and whose handler
 //!   and `MAP_READ`/`MAP_WRITE` constants are not. The constants are copied here
 //!   until they land in `libs/native-abi`'s `types`.
@@ -27,18 +26,13 @@ use crate::job::Job;
 use crate::port::Port;
 use crate::vmo::Vmo;
 
-/// `process_create`: `(job, elf_vmo, name_ptr, name_len)` → process handle.
-///
-/// Provisional, and owned by stage 9 (ferrix-4b): the name's encoding, the
-/// rights needed and the statuses are not decided.
-pub const PROCESS_CREATE: usize = 0x1030;
+/// `process_create`: `(job, image_vmo, name_ptr, name_len)` → process handle.
+pub use ferrix_native_abi::nr::PROCESS_CREATE;
 
 /// `process_start`: `(process, bootstrap)`, the bootstrap a channel handle.
 /// It leaves the caller, becomes the new process's first handle, and its value
 /// arrives in the first argument register at `_start`, zero meaning none.
-///
-/// Provisional, and owned by stage 9 (ferrix-4b).
-pub const PROCESS_START: usize = 0x1031;
+pub use ferrix_native_abi::nr::PROCESS_START;
 
 object_handle!(
     /// A process, made by [`create_process`] and not necessarily started.

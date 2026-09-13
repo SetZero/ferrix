@@ -669,19 +669,19 @@ fn a_device_hands_out_interrupts_and_apertures() {
 }
 
 // ---------------------------------------------------------------------------
-// Calls not yet on main
+// Process creation, now on the table
 // ---------------------------------------------------------------------------
 
 #[test]
-fn pending_numbers_are_native_and_not_yet_in_the_table() {
-    for number in [pending::PROCESS_CREATE, pending::PROCESS_START] {
-        assert!(nr::is_native(number), "{number:#x}");
-        assert_eq!(
-            nr::decode(number),
-            None,
-            "{number:#x} is in libs/native-abi now: re-export it from there"
-        );
-    }
+fn process_creation_numbers_are_the_tables() {
+    assert_eq!(
+        nr::decode(pending::PROCESS_CREATE),
+        Some(nr::NativeCall::ProcessCreate)
+    );
+    assert_eq!(
+        nr::decode(pending::PROCESS_START),
+        Some(nr::NativeCall::ProcessStart)
+    );
 }
 
 #[test]
@@ -854,6 +854,8 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = job.kill();
     let _ = device.interrupt(0);
     let _ = device.block_ring();
+    let _ = pending::create_process(&job, &vmo, "x");
+    let _ = Process::from_owned(handle()).start(handle());
     let _ = interrupt.bind(&port, 0);
     let _ = interrupt.ack();
     let _ = device.io_mapping(IoMappingSpec::default());
