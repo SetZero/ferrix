@@ -3020,7 +3020,9 @@ mod paths {
     fn settle() {
         for _ in 0..SETTLE_ROUNDS {
             crate::sched::sleep_for(SETTLE_NANOS);
-            if crate::sched::reap() == 0 {
+            // As stage 6's settle: nothing left to reap, and no idle
+            // processor part-way through freeing one it already took.
+            if crate::sched::reap() == 0 && !crate::sched::reaping_anywhere() {
                 break;
             }
         }

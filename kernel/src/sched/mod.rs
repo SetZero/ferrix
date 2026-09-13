@@ -866,6 +866,18 @@ fn is_reaping(cpu: usize) -> bool {
         .is_some_and(|flag| flag.load(Ordering::Acquire))
 }
 
+/// Whether any processor's idle task is in the middle of freeing a stack.
+///
+/// For a check that is about to count frames: the zombie list being empty
+/// says nothing about a stack already taken off it and part-way through
+/// `vmap::free`, whose bookkeeping can take or return a heap page any moment
+/// now.
+pub(crate) fn reaping_anywhere() -> bool {
+    REAPING
+        .get()
+        .is_some_and(|flags| flags.iter().any(|flag| flag.load(Ordering::Acquire)))
+}
+
 /// Say whether this processor's idle task holds a stack it is freeing.
 fn set_reaping(cpu: usize, reaping: bool) {
     if let Some(flag) = REAPING.get().and_then(|flags| flags.get(cpu)) {

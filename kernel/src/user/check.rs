@@ -56,6 +56,15 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // heap keeps a page of each size class the first run touched, and the
     // held-page check is the first to touch some of them.
     hold_pages_through_everything()?;
+    // Then settle. Stage 5 has just finished a thousand tasks and a few
+    // dozen spinners, and the idle loop frees a finished task's stack
+    // whenever it next runs -- one at a time, since bb5a952 -- and every
+    // such free can take a heap page for the arena's bookkeeping or give one
+    // back. One landing inside the window below moved the free count by a
+    // frame, which this check read as a leak, one boot in a few dozen. So
+    // give the earlier tasks time to switch away, and reap until nothing is
+    // left, before the count that matters is taken.
+    settle();
     let before = mm::free_frames();
 
     check_reservation_is_lazy()?;
@@ -88,6 +97,9 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let after = mm::free_frames();
     let leaked = i64::try_from(before).unwrap_or(i64::MAX) - i64::try_from(after).unwrap_or(0);
     if leaked != 0 {
+        // The number and its sign: a count that fell is a leak, one that rose
+        // is something outside these checks freeing inside the window.
+        crate::console::println!("  objects  {leaked} frames not given back across the checks");
         return Err("the checks did not give back every frame they took");
     }
 
@@ -1139,6 +1151,27 @@ fn wait_until(mut ready: impl FnMut() -> bool, what: &'static str) -> Result<(),
         crate::sched::yield_now();
     }
     Ok(())
+}
+
+/// How long a finished task is given to switch away before it is reaped.
+const SETTLE_NANOS: u64 = 20_000_000;
+
+/// The most settle rounds before measuring anyway: a boot with tasks still
+/// finishing after this long has a problem the count will then name.
+const SETTLE_ROUNDS: usize = 10;
+
+/// Wait for tasks earlier checks started to finish, and reap them, so nothing
+/// they leave behind is freed inside a measured window.
+fn settle() {
+    for _ in 0..SETTLE_ROUNDS {
+        crate::sched::sleep_for(SETTLE_NANOS);
+        // Nothing left to reap, and nobody part-way through reaping one: an
+        // idle processor takes a stack off the list before it frees it, and
+        // that free is the one that moves the count.
+        if crate::sched::reap() == 0 && !crate::sched::reaping_anywhere() {
+            break;
+        }
+    }
 }
 
 /// Free every exited task's stack, until the arena is back where it started.
