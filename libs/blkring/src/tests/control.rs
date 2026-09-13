@@ -345,6 +345,7 @@ fn refusal_reasons_round_trip() {
         Refusal::Name,
         Refusal::NameInUse,
         Refusal::LocationInUse,
+        Refusal::WrongLocation,
     ];
     for (raw, refusal) in (1..).zip(all) {
         assert_eq!(refusal.raw(), raw, "{refusal:?} is numbered in order");
@@ -355,5 +356,5 @@ fn refusal_reasons_round_trip() {
         );
     }
     assert_eq!(Refusal::from_raw(0), None, "zero names nothing");
-    assert_eq!(Refusal::from_raw(10), None, "past the last");
+    assert_eq!(Refusal::from_raw(11), None, "past the last");
 }

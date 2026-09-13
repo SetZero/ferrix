@@ -122,6 +122,10 @@ pub enum Refusal {
     /// `location` names a device another accepted driver already serves.
     /// Decided by the kernel glue, which knows every accepted driver.
     LocationInUse = 9,
+    /// `location` is not the PCI address of the device node the ring was
+    /// created for. Decided by the kernel glue, which knows which node the ring
+    /// is bound to; checked after the name and before the registry checks.
+    WrongLocation = 10,
 }
 
 impl Refusal {
@@ -144,6 +148,7 @@ impl Refusal {
             7 => Some(Refusal::Name),
             8 => Some(Refusal::NameInUse),
             9 => Some(Refusal::LocationInUse),
+            10 => Some(Refusal::WrongLocation),
             _ => None,
         }
     }
@@ -161,6 +166,7 @@ impl fmt::Display for Refusal {
             Refusal::Name => "malformed disk name",
             Refusal::NameInUse => "the disk name is already published",
             Refusal::LocationInUse => "another driver already serves this device",
+            Refusal::WrongLocation => "the location is not the ring's own device",
         })
     }
 }
@@ -223,9 +229,10 @@ impl Hello {
     /// Every check the kernel makes on a HELLO on its own, given the rights of
     /// the handles that came with it, in the order §6.2 fixes: version, queues,
     /// rights, the device description, the name. The first failure is the
-    /// refusal sent. The registry checks — [`Refusal::NameInUse`] and
-    /// [`Refusal::LocationInUse`] — come last, in the kernel glue, on an
-    /// accepted HELLO.
+    /// refusal sent. The kernel glue's checks come after, on an accepted HELLO:
+    /// first that `location` is the ring's own device
+    /// ([`Refusal::WrongLocation`]), then the registry checks,
+    /// [`Refusal::NameInUse`] and [`Refusal::LocationInUse`].
     ///
     /// Rights must match [`HELLO_RIGHTS`] exactly, and there must be exactly
     /// three: more rights than specified is refused as firmly as fewer. The

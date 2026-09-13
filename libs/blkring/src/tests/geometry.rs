@@ -7,7 +7,7 @@ use crate::geometry::{
 
 #[test]
 fn a_device_description_is_checked() {
-    let new = |block, max, flags| Device::new(block, 100, max, DeviceFlags(flags), 4096);
+    let new = |block, max, flags| Device::new(block, 100, max, DeviceFlags(flags), 1 << 20);
     assert!(new(512, 1, 0).is_ok(), "the smallest block");
     assert!(new(65536, 1, 7).is_ok(), "the largest block, every flag");
     for block in [0, 511, 768, 1 << 17] {
@@ -19,6 +19,20 @@ fn a_device_description_is_checked() {
     }
     assert_eq!(new(512, 0, 0), Err(DeviceError::NoSectors), "no sectors");
     assert_eq!(new(512, 1, 8), Err(DeviceError::UnknownFlags), "flag 8");
+    let sized = |data| Device::new(512, 100, 8, DeviceFlags(0), data);
+    assert!(
+        sized(8 * 512).is_ok(),
+        "a data VMO holding exactly one request"
+    );
+    assert_eq!(
+        sized(8 * 512 - 1),
+        Err(DeviceError::DataTooSmall),
+        "one byte short of the largest request"
+    );
+    assert!(
+        Device::new(65536, 100, u32::MAX, DeviceFlags(0), u64::MAX).is_ok(),
+        "u32::MAX sectors of 64 KiB fit in a u64"
+    );
     let device = new(65536, 1, 0).expect("valid");
     assert_eq!(
         device.payload_len(u32::MAX),

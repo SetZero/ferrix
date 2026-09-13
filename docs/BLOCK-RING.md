@@ -140,7 +140,8 @@ data_offset + length)` of the data VMO.
 
 One VMO, created and pinned by the driver — it holds the device handle
 `VMO_PIN` needs and knows `max_sectors` — with its size announced in HELLO
-(§6.1). The kernel reaches its pages by mapping them or by `Vmo` read and
+(§6.1). It must hold at least one request of `max_sectors × block_size` bytes;
+a HELLO announcing less is refused as an unusable device (reason 6). The kernel reaches its pages by mapping them or by `Vmo` read and
 write; that is the kernel glue's choice, not the protocol's.
 
 **The kernel allocates regions of it.** It is the one issuing requests, so it
@@ -327,12 +328,15 @@ driver resets the device and exits. The kernel sends REFUSED for:
 header, rights and device refusals above): 7 `Name` — the name is not `vd` and
 1 to 3 lowercase letters followed only by NUL; 8 `NameInUse` — a node of that
 name is already published; 9 `LocationInUse` — another accepted driver already
-serves that PCI location. 7 is checked by `ferrix-blkring`'s pure validation;
-8 and 9 need the kernel's registry, so the ring glue reports them.
+serves that PCI location; 10 `WrongLocation` — `location` is not the PCI address
+of the device node the ring was created for. 7 is checked by `ferrix-blkring`'s
+pure validation; 10, 8 and 9 need what only the kernel knows — which node the
+ring is bound to, and the registry — so the ring glue reports them. 8 is what
+the devfs block registry's `NameInUse` refusal becomes.
 
 **When a HELLO has several faults**, the first found in this order is
-reported: version, queues, handle rights, device fields, name, then the
-registry checks. A driver fixing faults one at a time therefore sees them in
+reported: version, queues, handle rights, device fields, name, then the glue's
+checks: `location` is the ring's own device, then the registry. A driver fixing faults one at a time therefore sees them in
 a stable order.
 
 **Numbers.** The whole-disk minor is `index × 16`, and `vdzzz` has index
