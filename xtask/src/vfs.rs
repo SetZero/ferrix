@@ -339,7 +339,7 @@ pub(crate) struct Ran {
 
 /// A kernel line about command `N`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Marker {
+pub(crate) enum Marker {
     /// It is starting.
     Started,
     /// It has ended.
@@ -347,7 +347,7 @@ enum Marker {
 }
 
 /// Read a kernel line about a command, if `line` is one.
-fn marker(line: &str) -> Option<(usize, Marker)> {
+pub(crate) fn marker(line: &str) -> Option<(usize, Marker)> {
     let (_, rest) = line.split_once(COMMAND)?;
     let digits = rest
         .find(|c: char| !c.is_ascii_digit())

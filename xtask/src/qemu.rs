@@ -298,6 +298,44 @@ pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> 
     )))
 }
 
+/// Boot an image whose kernel runs a sweep's snippets, and write what the log
+/// shows to `sweep-report.txt` beside the serial log.
+///
+/// As with [`test_shell`], only what follows the boot marker counts.
+pub(crate) fn sweep(
+    arch: Arch,
+    image: &Path,
+    kernel: &Path,
+    args: &Args,
+    snippets: &[crate::sweep::Snippet],
+) -> Result<()> {
+    println!(
+        "  {arch}: running {} snippets under QEMU (timeout {}s)",
+        snippets.len(),
+        args.timeout
+    );
+    let watched = watch(arch, image, kernel, args, crate::vfs::DONE)?;
+    let after_boot = watched
+        .lines
+        .iter()
+        .position(|line| line.contains(SUCCESS_MARKER))
+        .and_then(|at| watched.lines.get(at..))
+        .unwrap_or_default();
+    let report = crate::sweep::report(snippets, after_boot);
+    let path = paths::build_dir(arch).join("sweep-report.txt");
+    std::fs::write(&path, &report)?;
+    println!("\n{report}\n  {arch}: report in {}", path.display());
+    let log = watched.log.display();
+    match watched.verdict {
+        Verdict::Reached => Ok(()),
+        Verdict::Panicked => Err(panicked(arch, &watched.log)),
+        Verdict::Silent => Err(Error::new(format!(
+            "{arch}: the snippets did not all finish within {}s.\n  Serial output is in {log}",
+            args.timeout
+        ))),
+    }
+}
+
 /// How a watched boot ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
