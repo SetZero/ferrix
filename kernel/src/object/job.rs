@@ -25,6 +25,9 @@ use alloc::vec::Vec;
 
 use ferrix_sync::SpinLock;
 
+use ferrix_native_abi::signals::Signals;
+
+use super::port::{Observer, PortError, register};
 use crate::sched::WaitQueue;
 use crate::syscall::process::{self, Process};
 
@@ -65,6 +68,8 @@ struct Members {
     children: Vec<Weak<Job>>,
     /// The processes directly inside this one.
     processes: Vec<Weak<Process>>,
+    /// Port registrations waiting for it to be killed.
+    observers: Vec<Observer>,
 }
 
 impl Job {
@@ -116,6 +121,23 @@ impl Job {
         Ok(())
     }
 
+    /// Queue a packet with `observer` when this job is killed, or at once if
+    /// it already has been.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::Full`] when the job already holds
+    /// [`super::port::MAX_OBSERVERS`] registrations.
+    pub(crate) fn observe(&self, observer: Observer) -> Result<(), PortError> {
+        let mut members = self.state.lock();
+        if members.killed {
+            drop(members);
+            observer.fire(Signals::TERMINATED);
+            return Ok(());
+        }
+        register(&mut members.observers, observer)
+    }
+
     /// Whether it has been killed.
     pub(crate) fn is_killed(&self) -> bool {
         self.state.lock().killed
@@ -140,14 +162,18 @@ impl Job {
         let mut pending = vec![Arc::clone(self)];
         let mut ended = 0;
         while let Some(job) = pending.pop() {
-            let (children, processes) = {
+            let (children, processes, observers) = {
                 let mut members = job.state.lock();
                 members.killed = true;
                 (
                     core::mem::take(&mut members.children),
                     core::mem::take(&mut members.processes),
+                    core::mem::take(&mut members.observers),
                 )
             };
+            for observer in observers {
+                observer.fire(Signals::TERMINATED);
+            }
             for member in processes.iter().filter_map(Weak::upgrade) {
                 if !member.is_terminated() {
                     ended += 1;

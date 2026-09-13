@@ -36,6 +36,7 @@ use ferrix_objects::message::{Limits, Message, MessageQueue, ReceiveError, SendE
 use ferrix_objects::reach::{Reach, reaches};
 use ferrix_sync::SpinLock;
 
+use super::port::{Observer, PortError, register, triggered};
 use super::{Object, Transfer, dispose};
 use crate::sched::WaitQueue;
 
@@ -107,6 +108,10 @@ pub(crate) struct Endpoint {
     /// Woken when this end's signals may have changed: a message arrived, the
     /// peer's queue gained room, or the peer closed.
     waiters: WaitQueue,
+    /// Port registrations waiting on this end's signals. Taken only inside
+    /// `inbox`'s lock, which is what serialises a registration against the
+    /// change it waits for.
+    observers: SpinLock<Vec<Observer>>,
 }
 
 impl Endpoint {
@@ -122,11 +127,13 @@ impl Endpoint {
                 peer: Weak::clone(first),
                 inbox: SpinLock::new(MessageQueue::new(LIMITS)),
                 waiters: WaitQueue::new(),
+                observers: SpinLock::new(Vec::new()),
             });
             let this = Endpoint {
                 peer: Arc::downgrade(&other),
                 inbox: SpinLock::new(MessageQueue::new(LIMITS)),
                 waiters: WaitQueue::new(),
+                observers: SpinLock::new(Vec::new()),
             };
             second = Some(other);
             this
@@ -152,7 +159,7 @@ impl Endpoint {
         take: impl FnOnce() -> Result<Vec<Transfer>, E>,
     ) -> Result<(), WriteFailure<E>> {
         let peer = self.peer.upgrade().ok_or(WriteFailure::PeerClosed)?;
-        let refused = {
+        let (refused, fired) = {
             let mut inbox = peer.inbox.lock();
             if !inbox.accepts(bytes.len(), handle_count) {
                 return Err(WriteFailure::TooBig);
@@ -161,7 +168,13 @@ impl Endpoint {
                 return Err(WriteFailure::Full);
             }
             let handles = take().map_err(WriteFailure::Take)?;
-            inbox.push(Message { bytes, handles }).err()
+            let refused = inbox.push(Message { bytes, handles }).err();
+            let fired = if refused.is_none() {
+                triggered(&mut peer.observers.lock(), Signals::READABLE)
+            } else {
+                Vec::new()
+            };
+            (refused, fired)
         };
         // Checked above under the same lock, so this is unreachable; if it
         // ever were reached, the handles are already out of the sender's
@@ -169,7 +182,10 @@ impl Endpoint {
         match refused {
             None => {
                 // After the queue lock is gone: a woken reader goes straight
-                // for it.
+                // for it, and a port's wake-up takes locks of its own.
+                for observer in fired {
+                    observer.fire(Signals::READABLE);
+                }
                 peer.waiters.wake_all();
                 Ok(())
             }
@@ -256,6 +272,37 @@ impl Endpoint {
         self.peer.strong_count() == 0
     }
 
+    /// Queue a packet with `observer` the next time a message is readable on
+    /// this end or its peer closes, or at once if either already holds.
+    ///
+    /// `READABLE` and `PEER_CLOSED` only. `WRITABLE` depends on the peer's
+    /// queue, and taking that lock while holding this end's would take the
+    /// two in the opposite order from the peer registering the other way
+    /// round; the caller refuses it before reaching here.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::Full`] when this end already holds
+    /// [`super::port::MAX_OBSERVERS`] registrations.
+    pub(crate) fn observe(&self, observer: Observer) -> Result<(), PortError> {
+        let inbox = self.inbox.lock();
+        let mut asserted = Signals::NONE;
+        if !inbox.is_empty() {
+            asserted = asserted | Signals::READABLE;
+        }
+        if self.peer_closed() {
+            asserted = asserted | Signals::PEER_CLOSED;
+        }
+        if observer.wants(asserted) {
+            drop(inbox);
+            observer.fire(asserted);
+            return Ok(());
+        }
+        let registered = register(&mut self.observers.lock(), observer);
+        drop(inbox);
+        registered
+    }
+
     /// The queue woken when this end's signals may have changed.
     pub(crate) fn waiters(&self) -> &WaitQueue {
         &self.waiters
@@ -322,7 +369,8 @@ fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Vec<Arc<Endpoint>> {
             | Object::Job(_)
             | Object::Device(_)
             | Object::Interrupt(_)
-            | Object::IoMapping(_) => None,
+            | Object::IoMapping(_)
+            | Object::Port(_) => None,
         })
         // Once each, and no more than the walk could use: an inbox can hold
         // two hundred and fifty-six messages of sixty-four handles, and
@@ -348,6 +396,15 @@ impl Drop for Endpoint {
     /// one level at a time.
     fn drop(&mut self) {
         if let Some(peer) = self.peer.upgrade() {
+            // Under the survivor's inbox lock, the lock its registrations are
+            // made under, so one made a moment ago is found here.
+            let fired = {
+                let _inbox = peer.inbox.lock();
+                triggered(&mut peer.observers.lock(), Signals::PEER_CLOSED)
+            };
+            for observer in fired {
+                observer.fire(Signals::PEER_CLOSED);
+            }
             peer.waiters.wake_all();
         }
         let unread = self.inbox.get_mut().drain();

@@ -24,8 +24,7 @@
 //!
 //! # What is not here yet
 //!
-//! Ports and asynchronous waits, binding an interrupt to a port, and mapping a
-//! VMO.
+//! Binding an interrupt to a port, and mapping a VMO.
 //! Their numbers decode, and answer `ENOSYS` until they exist.
 
 use alloc::sync::Arc;
@@ -39,7 +38,7 @@ use ferrix_native_abi::nr::{self, NativeCall};
 use ferrix_native_abi::rights::{Requested, Rights};
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
-use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, ReadActual};
+use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, PortPacket, ReadActual};
 use ferrix_objects::message::Message;
 use ferrix_objects::reach::Reach;
 use ferrix_objects::table::TableError;
@@ -49,6 +48,7 @@ use crate::object::channel::{self, ChannelMessage, Endpoint, ReadError, WriteFai
 use crate::object::interrupt::{Interrupt, InterruptError};
 use crate::object::io_mapping::{IoMapping, IoMappingError};
 use crate::object::job::{self, Job};
+use crate::object::port::{Observer, Port};
 use crate::object::{self, HandleTable, Object};
 use crate::syscall::SyscallArgs;
 use crate::syscall::process::Process;
@@ -142,6 +142,12 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::InterruptAck => interrupt_ack(process, handle(a[0])),
         NativeCall::IoMappingCreate => io_mapping_create(process, handle(a[0]), a[1]),
         NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1]),
+        NativeCall::PortCreate => insert_new(process, Object::Port(Port::new()), Rights::PORT),
+        NativeCall::PortQueue => port_queue(process, handle(a[0]), a[1]),
+        NativeCall::PortWait => port_wait(process, handle(a[0]), a[1], a[2]),
+        NativeCall::ObjectWaitAsync => {
+            object_wait_async(process, handle(a[0]), handle(a[1]), a[2], a[3])
+        }
         _ => Err(Errno::ENOSYS),
     }
 }
@@ -804,4 +810,135 @@ fn io_mapping_map(process: &Process, mapping: Handle, address: u64) -> Result<us
             | SpaceError::Backing(_) => status::INVALID_ARGS,
         })?;
     usize::try_from(mapped).map_err(|_| status::INVALID_ARGS)
+}
+
+/// The port a handle names, if it carries `needed`.
+fn port_in(process: &Process, port: Handle, needed: Rights) -> Result<Arc<Port>, Errno> {
+    process.with_handles(|table| {
+        let (object, rights) = table.get(port).map_err(table_error)?;
+        let Object::Port(port) = object else {
+            return Err(status::WRONG_TYPE);
+        };
+        if !rights.contains(needed) {
+            return Err(status::ACCESS_DENIED);
+        }
+        Ok(Arc::clone(port))
+    })
+}
+
+/// `port_queue`. The kind and signals the caller wrote are ignored: a program
+/// queues user packets, and may not forge a signal packet.
+fn port_queue(process: &Process, port: Handle, packet: u64) -> Result<usize, Errno> {
+    let port = port_in(process, port, Rights::WRITE)?;
+    let key = read_u64(process, packet)?;
+    let first = read_u64(process, packet.checked_add(16).ok_or(status::FAULT)?)?;
+    let second = read_u64(process, packet.checked_add(24).ok_or(status::FAULT)?)?;
+    port.queue_user(key, [first, second])
+        .map_err(|_| status::SHOULD_WAIT)?;
+    Ok(0)
+}
+
+/// `port_wait`.
+///
+/// A packet taken and then not delivered, because the caller's buffer
+/// faulted, is put back at the head of the queue. The wait also ends when the
+/// caller is killed, for the reason `object_wait_one` gives.
+fn port_wait(
+    process: &Process,
+    port: Handle,
+    deadline_at: u64,
+    packet_at: u64,
+) -> Result<usize, Errno> {
+    let port = port_in(process, port, Rights::READ)?;
+    let deadline = if deadline_at == 0 {
+        u64::MAX
+    } else {
+        read_u64(process, deadline_at)?
+    };
+    let packet = loop {
+        let _ = port
+            .waiters()
+            .wait_until_deadline(|| !port.is_empty() || process.is_terminated(), deadline);
+        if process.is_terminated() {
+            return Err(Errno::EINTR);
+        }
+        // Another waiter on the same port may have taken the packet that
+        // woke this one; that is a spurious wake-up, not a timeout.
+        if let Some(packet) = port.take() {
+            break packet;
+        }
+        if crate::timer::now_nanos() >= deadline {
+            return Err(status::TIMED_OUT);
+        }
+    };
+    if let Err(problem) = uaccess::copy_to_user(process.space(), packet_at, &packet_bytes(&packet))
+    {
+        port.put_back(packet);
+        return Err(fault(problem));
+    }
+    Ok(0)
+}
+
+/// A packet as the ABI lays it out: key, kind, signals, two data words.
+fn packet_bytes(packet: &PortPacket) -> [u8; 32] {
+    let [first, second] = packet.data;
+    let fields = packet
+        .key
+        .to_ne_bytes()
+        .into_iter()
+        .chain(packet.kind.to_ne_bytes())
+        .chain(packet.signals.to_ne_bytes())
+        .chain(first.to_ne_bytes())
+        .chain(second.to_ne_bytes());
+    let mut bytes = [0_u8; 32];
+    for (slot, byte) in bytes.iter_mut().zip(fields) {
+        *slot = byte;
+    }
+    bytes
+}
+
+/// `object_wait_async`.
+///
+/// Channels and jobs, whose signals change in task context under a lock the
+/// registration can share. An interrupt reaches a port by being bound to
+/// it, which is a call of its own; a VMO, a device node, an I/O mapping and a
+/// port have no signal that changes, and are refused rather than accepted
+/// into a registration that could never fire.
+fn object_wait_async(
+    process: &Process,
+    watched: Handle,
+    port: Handle,
+    signals: u64,
+    key_at: u64,
+) -> Result<usize, Errno> {
+    let wanted = Signals::from_register(signals).ok_or(status::INVALID_ARGS)?;
+    if wanted == Signals::NONE || wanted.intersects(Signals::WRITABLE) {
+        return Err(status::INVALID_ARGS);
+    }
+    let key = read_u64(process, key_at)?;
+    let port = port_in(process, port, Rights::WRITE)?;
+    let target = process.with_handles(|table| {
+        let (object, rights) = table.get(watched).map_err(table_error)?;
+        if !rights.contains(Rights::WAIT) {
+            return Err(status::ACCESS_DENIED);
+        }
+        Ok(object.clone())
+    })?;
+
+    let observer = Observer::new(&port, key, wanted);
+    let registered = match &target {
+        Object::Channel(endpoint) => Some(endpoint.observe(observer)),
+        Object::Job(job) => Some(job.observe(observer)),
+        Object::Vmo(_)
+        | Object::Port(_)
+        | Object::Device(_)
+        | Object::Interrupt(_)
+        | Object::IoMapping(_) => None,
+    };
+    object::dispose([target]);
+    match registered {
+        None => Err(status::WRONG_TYPE),
+        Some(Ok(())) => Ok(0),
+        Some(Err(_)) => Err(status::NO_MEMORY),
+    }
 }

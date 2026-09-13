@@ -24,7 +24,7 @@ use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
-use ferrix_native_abi::types::CHANNEL_MAX_BYTES;
+use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, PACKET_SIGNAL, PACKET_USER};
 use ferrix_sync::SpinLock;
 use ferrix_vma::VmaFlags;
 
@@ -67,6 +67,10 @@ const DEADLINE: u64 = SCRATCH + 0x320;
 const OBSERVED: u64 = SCRATCH + 0x328;
 /// An `IoMappingSpec`.
 const SPEC: u64 = SCRATCH + 0x330;
+/// A `PortPacket`.
+const PACKET_AT: u64 = SCRATCH + 0x340;
+/// A registration's key.
+const KEY: u64 = SCRATCH + 0x360;
 
 /// How long the waker sleeps before it writes.
 const WAKE_AFTER_NANOS: u64 = 20_000_000;
@@ -93,6 +97,8 @@ pub(crate) struct Report {
     pub(crate) leaked: i64,
     /// Waits woken by the thing they waited for, rather than their deadline.
     pub(crate) woken: u32,
+    /// Packets taken from a port, user and signal alike.
+    pub(crate) packets: u32,
     /// Processes ended by killing a job they were in.
     pub(crate) killed: u32,
     /// Messages two programs in user mode exchanged with each other.
@@ -110,6 +116,8 @@ struct Counter {
     refusals: u32,
     /// See [`Report::woken`].
     woken: u32,
+    /// See [`Report::packets`].
+    packets: u32,
     /// See [`Report::killed`].
     killed: u32,
     /// See [`Report::exchanged`].
@@ -145,6 +153,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_a_wait_is_woken_by_what_it_waits_for(&mut after)?;
     check_a_job_kill_takes_down_a_process_tree(&mut after)?;
     check_a_long_chain_of_jobs_is_freed_without_recursion()?;
+    check_a_port_wait_is_woken_by_a_message(&mut after)?;
     check_two_programs_talk_over_a_channel(&mut after)?;
 
     Ok(Report {
@@ -153,6 +162,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         refusals: counter.refusals + after.refusals,
         leaked,
         woken: after.woken,
+        packets: counter.packets + after.packets,
         killed: after.killed,
         exchanged: after.exchanged,
     })
@@ -191,6 +201,7 @@ fn check_two_processes() -> Result<Counter, &'static str> {
     check_a_refused_send_keeps_its_handles(&sender, near, &mut counter)?;
     check_a_cycle_of_channels_is_refused(&sender, &mut counter)?;
     check_an_endpoint_survives_a_bad_buffer(&sender, &mut counter)?;
+    check_ports(&sender, &mut counter)?;
     check_a_full_channel_says_wait(&sender, near, &receiver, far, &mut counter)?;
     check_a_closed_peer_frees_what_was_queued(&sender, near, &receiver, far, &mut counter)?;
     if sender.call(0x1030, &[]) != Err(Errno::ENOSYS) {
@@ -879,9 +890,32 @@ fn check_a_job_kill_takes_down_a_process_tree(counter: &mut Counter) -> Result<(
         process::start(&bystander).map_err(|_| "the bystander could not be started")?;
     crate::sched::sleep_for(KILL_AFTER_NANOS);
 
+    // A registration on the middle job, to be fired by the kill below.
+    let watching = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
+    side.put(KEY, &31_u64.to_ne_bytes())?;
+    let _ = side
+        .call(
+            nr::OBJECT_WAIT_ASYNC,
+            &[
+                reg(middle),
+                reg(watching),
+                u64::from(Signals::TERMINATED.0),
+                KEY,
+            ],
+        )
+        .map_err(|_| "object_wait_async on a job failed")?;
     let _ = side
         .call(nr::JOB_KILL, &[reg(middle)])
         .map_err(|_| "job_kill failed")?;
+    stage_deadline(&side, PATIENCE_NANOS)?;
+    let _ = side
+        .call(nr::PORT_WAIT, &[reg(watching), DEADLINE, PACKET_AT])
+        .map_err(|_| "killing a job did not fire the registration watching it")?;
+    let (key, kind, signals, _, _) = read_packet(&side)?;
+    if key != 31 || kind != PACKET_SIGNAL || !Signals(signals).intersects(Signals::TERMINATED) {
+        return Err("a killed job's signal packet did not say what fired it");
+    }
+    counter.packets += 1;
     ended_by_the_kill(&inner, &inner_task)?;
     ended_by_the_kill(&deepest, &deepest_task)?;
     ended_by_the_kill(&spinning, &spinning_task)?;
@@ -1373,5 +1407,239 @@ fn check_an_endpoint_survives_a_bad_buffer(
             .call(nr::HANDLE_CLOSE, &[reg(end)])
             .map_err(|_| "closing a channel end failed")?;
     }
+    Ok(())
+}
+
+/// Stage a user packet at [`PACKET_AT`].
+fn stage_packet(side: &Side, key: u64, data: [u64; 2]) -> Result<(), &'static str> {
+    let [first, second] = data;
+    side.put(PACKET_AT, &key.to_ne_bytes())?;
+    side.put(PACKET_AT + 16, &first.to_ne_bytes())?;
+    side.put(PACKET_AT + 24, &second.to_ne_bytes())
+}
+
+/// The packet at [`PACKET_AT`]: key, kind, signals, and the two data words.
+fn read_packet(side: &Side) -> Result<(u64, u32, u32, u64, u64), &'static str> {
+    let bytes = side.get(PACKET_AT, 32)?;
+    let word = |at: usize| {
+        bytes
+            .get(at..at + 8)
+            .and_then(|slice| <[u8; 8]>::try_from(slice).ok())
+            .map(u64::from_ne_bytes)
+            .ok_or("a short packet")
+    };
+    let half = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .and_then(|slice| <[u8; 4]>::try_from(slice).ok())
+            .map(u32::from_ne_bytes)
+            .ok_or("a short packet")
+    };
+    Ok((word(0)?, half(8)?, half(12)?, word(16)?, word(24)?))
+}
+
+/// Take a packet from `port` without waiting, into [`PACKET_AT`].
+fn take_now(side: &Side, port: Handle) -> Result<usize, Errno> {
+    let now = crate::timer::now_nanos();
+    side.put(DEADLINE, &now.to_ne_bytes())
+        .map_err(|_| Errno::EFAULT)?;
+    side.call(nr::PORT_WAIT, &[reg(port), DEADLINE, PACKET_AT])
+}
+
+/// A port gives back what a program queued, and a registration fires once:
+/// when its signal comes true, or at once if it already is, for a message
+/// arriving and for a peer closing. Refusals: a full port, an asynchronous
+/// wait for `WRITABLE`, a port watched through a port, and a registration
+/// through a port handle without `WRITE`.
+fn check_ports(side: &Side, counter: &mut Counter) -> Result<(), &'static str> {
+    let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
+    refused(
+        take_now(side, port),
+        status::TIMED_OUT,
+        "an empty port gave a packet",
+        counter,
+    )?;
+
+    stage_packet(side, 7, [0xA, 0xB])?;
+    let _ = side
+        .call(nr::PORT_QUEUE, &[reg(port), PACKET_AT])
+        .map_err(|_| "port_queue failed")?;
+    side.put(PACKET_AT, &[0; 32])?;
+    let _ = take_now(side, port).map_err(|_| "a queued packet was not there to take")?;
+    if read_packet(side)? != (7, PACKET_USER, 0, 0xA, 0xB) {
+        return Err("a user packet came back different from how it was queued");
+    }
+    counter.packets += 1;
+
+    let (near, far) = side.channel()?;
+    let readable = u64::from(Signals::READABLE.0);
+    side.put(KEY, &11_u64.to_ne_bytes())?;
+    let _ = side
+        .call(nr::OBJECT_WAIT_ASYNC, &[reg(far), reg(port), readable, KEY])
+        .map_err(|_| "object_wait_async on a channel failed")?;
+    refused(
+        take_now(side, port),
+        status::TIMED_OUT,
+        "a registration fired before its signal",
+        counter,
+    )?;
+    side.put(PAYLOAD, b"z")?;
+    let _ = side
+        .call(nr::CHANNEL_WRITE, &[reg(near), PAYLOAD, 1, HANDLES, 0])
+        .map_err(|_| "a write to a watched channel failed")?;
+    let _ = take_now(side, port)
+        .map_err(|_| "a message did not fire the registration waiting for it")?;
+    let (key, kind, signals, _, _) = read_packet(side)?;
+    if key != 11 || kind != PACKET_SIGNAL || !Signals(signals).intersects(Signals::READABLE) {
+        return Err("a signal packet did not say what fired it");
+    }
+    counter.packets += 1;
+    let _ = side
+        .call(nr::CHANNEL_WRITE, &[reg(near), PAYLOAD, 1, HANDLES, 0])
+        .map_err(|_| "a second write to a watched channel failed")?;
+    refused(
+        take_now(side, port),
+        status::TIMED_OUT,
+        "a one-shot registration fired twice",
+        counter,
+    )?;
+
+    // Already readable when registered: the packet is queued at once.
+    side.put(KEY, &12_u64.to_ne_bytes())?;
+    let _ = side
+        .call(nr::OBJECT_WAIT_ASYNC, &[reg(far), reg(port), readable, KEY])
+        .map_err(|_| "object_wait_async on a readable channel failed")?;
+    let _ =
+        take_now(side, port).map_err(|_| "a registration on a state already true did not fire")?;
+    if read_packet(side)?.0 != 12 {
+        return Err("the packet for an already-true state carried the wrong key");
+    }
+    counter.packets += 1;
+
+    side.put(KEY, &13_u64.to_ne_bytes())?;
+    let peer_closed = u64::from(Signals::PEER_CLOSED.0);
+    let _ = side
+        .call(
+            nr::OBJECT_WAIT_ASYNC,
+            &[reg(far), reg(port), peer_closed, KEY],
+        )
+        .map_err(|_| "object_wait_async for a closing peer failed")?;
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(near)])
+        .map_err(|_| "closing a watched channel's peer failed")?;
+    let _ = take_now(side, port)
+        .map_err(|_| "a closing peer did not fire the registration waiting for it")?;
+    let (key, _, signals, _, _) = read_packet(side)?;
+    if key != 13 || !Signals(signals).intersects(Signals::PEER_CLOSED) {
+        return Err("a peer-closed packet did not say so");
+    }
+    counter.packets += 1;
+
+    check_port_refusals(side, port, far, counter)?;
+    for end in [port, far] {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(end)])
+            .map_err(|_| "closing a port or channel end failed")?;
+    }
+    Ok(())
+}
+
+/// What a port refuses.
+fn check_port_refusals(
+    side: &Side,
+    port: Handle,
+    far: Handle,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    refused(
+        side.call(
+            nr::OBJECT_WAIT_ASYNC,
+            &[reg(far), reg(port), u64::from(Signals::WRITABLE.0), KEY],
+        ),
+        status::INVALID_ARGS,
+        "an asynchronous wait for WRITABLE was accepted",
+        counter,
+    )?;
+    refused(
+        side.call(
+            nr::OBJECT_WAIT_ASYNC,
+            &[reg(port), reg(port), u64::from(Signals::READABLE.0), KEY],
+        ),
+        status::WRONG_TYPE,
+        "a port was watched through a port",
+        counter,
+    )?;
+    let reader = side.handle(
+        nr::HANDLE_DUPLICATE,
+        &[reg(port), u64::from((Rights::READ | Rights::WAIT).0)],
+        "duplicating a port without WRITE failed",
+    )?;
+    refused(
+        side.call(
+            nr::OBJECT_WAIT_ASYNC,
+            &[reg(far), reg(reader), u64::from(Signals::READABLE.0), KEY],
+        ),
+        status::ACCESS_DENIED,
+        "a registration went through a port handle without WRITE",
+        counter,
+    )?;
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(reader)])
+        .map_err(|_| "closing a narrowed port failed")?;
+
+    stage_packet(side, 1, [0, 0])?;
+    for _ in 0..object::port::PORT_CAPACITY {
+        let _ = side
+            .call(nr::PORT_QUEUE, &[reg(port), PACKET_AT])
+            .map_err(|_| "filling a port failed before it was full")?;
+    }
+    refused(
+        side.call(nr::PORT_QUEUE, &[reg(port), PACKET_AT]),
+        status::SHOULD_WAIT,
+        "a full port took another user packet",
+        counter,
+    )
+}
+
+/// A `port_wait` with a two-minute deadline is woken by a message a kernel
+/// thread writes twenty milliseconds later, through the registration that
+/// message fires: the whole chain from a channel write to a woken port.
+fn check_a_port_wait_is_woken_by_a_message(counter: &mut Counter) -> Result<(), &'static str> {
+    let side = Side::new()?;
+    let (near, far) = side.channel()?;
+    let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
+    side.put(KEY, &21_u64.to_ne_bytes())?;
+    let _ = side
+        .call(
+            nr::OBJECT_WAIT_ASYNC,
+            &[reg(far), reg(port), u64::from(Signals::READABLE.0), KEY],
+        )
+        .map_err(|_| "object_wait_async failed")?;
+
+    *WAKER.lock() = Some((Arc::clone(&side.process), near));
+    let _waker = crate::sched::spawn(
+        "port waker",
+        write_after_a_delay,
+        0,
+        ferrix_sched::NICE_0_WEIGHT,
+    )
+    .map_err(|_| "could not start the waker")?;
+    let start = crate::timer::now_nanos();
+    stage_deadline(&side, PATIENCE_NANOS)?;
+    let woke = side.call(nr::PORT_WAIT, &[reg(port), DEADLINE, PACKET_AT]);
+    let waited = crate::timer::now_nanos().saturating_sub(start);
+    *WAKER.lock() = None;
+    if woke != Ok(0) {
+        return Err("a port wait was not woken by the message its registration watched");
+    }
+    if waited < WAKE_AFTER_NANOS / 2 {
+        return Err("a port wait returned before anything had been written");
+    }
+    if read_packet(&side)?.0 != 21 {
+        return Err("a woken port wait took the wrong packet");
+    }
+    counter.woken += 1;
+    counter.packets += 1;
+    side.close_everything();
     Ok(())
 }

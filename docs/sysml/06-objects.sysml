@@ -34,7 +34,7 @@ package FerrixObjects {
         action read;
     }
 
-    #planned part def Port :> KernelObject {
+    #implemented part def Port :> KernelObject {
         doc /* An event queue a thread waits on; how one driver thread
              * services many sources. */
         action wait;

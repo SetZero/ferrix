@@ -467,6 +467,11 @@ fn check_native_objects() {
         report.killed, report.woken,
     );
     println!(
+        "  ports    {} packets taken from ports, from programs and from registrations \
+         that fired",
+        report.packets,
+    );
+    println!(
         "  exit     two programs in user mode exchanged {} messages and a handle over a channel",
         report.exchanged,
     );

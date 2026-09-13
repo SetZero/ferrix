@@ -1172,6 +1172,25 @@ architectures.**
   every machine having checked nothing; it now runs after them and fails if a
   machine with an aperture or a vector mapped or held none.
 
+* **Ports.** `port_create`, `port_queue` and `port_wait`, and
+  `object_wait_async`, which asks for one packet on a port the next time a
+  channel end becomes readable or its peer closes, or a job is killed — at
+  once if that is already true. A registration is held by the object it
+  watches, under the lock that object takes to change the state it reports,
+  so a change cannot land between looking and registering; it fires once and
+  is gone. User packets stop at 1024 and are told to wait; a signal packet is
+  always queued, since refusing it would lose the event it was waiting for,
+  and registrations are capped at 64 per object instead. `WRITABLE` cannot be
+  waited for asynchronously: it depends on the peer's queue, whose lock an end
+  may not take while holding its own. The queue sits under an interrupt-safe
+  lock, so binding an interrupt to a port can queue from a handler. The check
+  round-trips a user packet, fires a registration by a message, once and only
+  once, fires one at once on a state already true and one on a closing peer,
+  fires one on a job kill, refuses a full port, a `WRITABLE` registration, a
+  port watched through a port and a registration without `WRITE`, and wakes a
+  two-minute `port_wait` by a message a kernel thread writes twenty
+  milliseconds later.
+
 **The exit criterion is met in the boot test**, on all three architectures.
 Two copies of `arch::USER_NATIVE_PROGRAM`, assembled per architecture, run
 as user-mode tasks of their own: one creates a VMO, writes a secret into it and
@@ -1188,8 +1207,7 @@ open for what stage 10 needs beyond the criterion.
 
 **Still to do.**
 
-* Ports and asynchronous waits (`object_wait_async`, `port_*`), binding an
-  `Interrupt` to a port, and `vmo_map`.
+* Binding an `Interrupt` to a port, and `vmo_map`.
 * **An interrupt wakes its waiter within five milliseconds, not at once.** A
   wait queue takes a plain lock, which an interrupt handler may not, so the
   handler only masks and marks and the waiter notices through its wait's

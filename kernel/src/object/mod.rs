@@ -25,6 +25,7 @@ pub(crate) mod check;
 pub(crate) mod interrupt;
 pub(crate) mod io_mapping;
 pub(crate) mod job;
+pub(crate) mod port;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -61,6 +62,8 @@ pub(crate) enum Object {
     Interrupt(Arc<interrupt::Interrupt>),
     /// A device aperture a driver may map.
     IoMapping(Arc<io_mapping::IoMapping>),
+    /// An event queue.
+    Port(Arc<port::Port>),
 }
 
 /// A queue nothing is woken on, for objects whose signals never change.
@@ -77,9 +80,12 @@ impl Object {
             Object::Vmo(_) => Signals::NONE,
             Object::Job(job) if job.is_killed() => Signals::TERMINATED,
             Object::Interrupt(interrupt) if interrupt.is_pending() => Signals::READABLE,
-            Object::Job(_) | Object::Device(_) | Object::Interrupt(_) | Object::IoMapping(_) => {
-                Signals::NONE
-            }
+            Object::Port(port) if !port.is_empty() => Signals::READABLE,
+            Object::Job(_)
+            | Object::Device(_)
+            | Object::Interrupt(_)
+            | Object::IoMapping(_)
+            | Object::Port(_) => Signals::NONE,
         }
     }
 
@@ -92,6 +98,7 @@ impl Object {
         match self {
             Object::Channel(endpoint) => endpoint.waiters(),
             Object::Job(job) => job.waiters(),
+            Object::Port(port) => port.waiters(),
             // An interrupt is quiet too, but not because its signals never
             // change: they change in an interrupt handler, which may not take
             // a wait queue's lock. A waiter notices through its recheck.

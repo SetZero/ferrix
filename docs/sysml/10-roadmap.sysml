@@ -238,8 +238,9 @@ package FerrixRoadmap {
              * job_kill that takes down a tree of running programs; device
              * handles, IoMapping and Interrupt minted from stage 10's device
              * nodes, with AddressSpace::map_device. Missing: ports and
-             * asynchronous waits, binding an interrupt to a port, an interrupt
-             * wake from interrupt context, and vmo_map. The exit criterion is
+             * binding an interrupt to a port, an interrupt wake from
+             * interrupt context, and vmo_map. Ports and object_wait_async are
+             * built. The exit criterion is
              * met in the boot test: two user-mode programs exchange a message
              * and a VMO handle over a channel, and a job kill ends every
              * program in the job and beneath it. */

@@ -93,14 +93,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1414 elements, 155 relations. Model digest `aeaed0cdd7403560`.
+13 files, 16 packages, 1414 elements, 155 relations. Model digest `6940603b0fa954bd`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 121 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#implemented` | 122 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
 | `#inProgress` | 11 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 8 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 101 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#planned` | 100 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -1718,8 +1718,8 @@ flowchart TB
   n9_FerrixObjects_Job -- "specializes" --> n0_FerrixObjects_KernelObject
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
-  class n0_FerrixObjects_KernelObject,n1_FerrixObjects_VmoObject,n2_FerrixObjects_AddressSpaceObject,n4_FerrixObjects_Port,n7_FerrixObjects_TaskObject,n8_FerrixObjects_Process planned
-  class n3_FerrixObjects_Channel,n5_FerrixObjects_Interrupt,n6_FerrixObjects_IoMapping,n9_FerrixObjects_Job implemented
+  class n0_FerrixObjects_KernelObject,n1_FerrixObjects_VmoObject,n2_FerrixObjects_AddressSpaceObject,n7_FerrixObjects_TaskObject,n8_FerrixObjects_Process planned
+  class n3_FerrixObjects_Channel,n4_FerrixObjects_Port,n5_FerrixObjects_Interrupt,n6_FerrixObjects_IoMapping,n9_FerrixObjects_Job implemented
 ```
 
 **Figure 12 — Kernel object and its subtypes.** 9 definitions specialize `KernelObject`; the hollow arrow points at what they have in common. [SVG](diagrams/ferrix-objects-kernel-object.svg) Source: `06-objects.sysml`.
@@ -1755,7 +1755,7 @@ Bidirectional datagram pipe carrying bytes and handles. The basis of driver IPC.
 
 #### Port
 
-`#planned`  ·  specialises `KernelObject`
+`#implemented`  ·  specialises `KernelObject`
 
 An event queue a thread waits on; how one driver thread services many sources.
 
@@ -2691,7 +2691,7 @@ Inode and dentry caches, the mount table, fd sharing rules, tmpfs, devfs, procfs
 
 Handle tables, Channel with handle passing, Port, Interrupt, IoMapping, Job; the 0x1000 syscalls. Exit: two processes exchange messages and a handle over a channel, and a Job kill takes down a process tree.
 
-Built: the byte-level half, in libs/native-abi and libs/objects, host-tested, fuzzed and under Miri; and in kernel/src/object and syscall/native, a handle table on every Process, the native dispatch, channels carrying handles and VMO create/read/write, self-checked between two processes in the boot test; signals on every object and object_wait_one; Job with job_create and a job_kill that takes down a tree of running programs; device handles, IoMapping and Interrupt minted from stage 10's device nodes, with AddressSpace::map_device. Missing: ports and asynchronous waits, binding an interrupt to a port, an interrupt wake from interrupt context, and vmo_map. The exit criterion is met in the boot test: two user-mode programs exchange a message and a VMO handle over a channel, and a job kill ends every program in the job and beneath it.
+Built: the byte-level half, in libs/native-abi and libs/objects, host-tested, fuzzed and under Miri; and in kernel/src/object and syscall/native, a handle table on every Process, the native dispatch, channels carrying handles and VMO create/read/write, self-checked between two processes in the boot test; signals on every object and object_wait_one; Job with job_create and a job_kill that takes down a tree of running programs; device handles, IoMapping and Interrupt minted from stage 10's device nodes, with AddressSpace::map_device. Missing: ports and binding an interrupt to a port, an interrupt wake from interrupt context, and vmo_map. Ports and object_wait_async are built. The exit criterion is met in the boot test: two user-mode programs exchange a message and a VMO handle over a channel, and a job kill ends every program in the job and beneath it.
 
 **Allocated to: **`ferrix.kernel.native`
 
