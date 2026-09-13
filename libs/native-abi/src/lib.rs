@@ -37,7 +37,7 @@
 //! A native call returns in the same register, with the same `-4095..=-1`
 //! convention, as a Linux one. [`status`] names the native failures and maps
 //! each to a distinct `errno`. The alternative, a second error space, would
-//! make `devmgr` — a musl program that also speaks this ABI — translate at
+//! make every musl program that also speaks this ABI translate at
 //! every call site, and would make musl's own `syscall()` wrapper report a
 //! native failure as a nonsense `errno`.
 

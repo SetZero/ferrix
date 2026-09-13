@@ -90,8 +90,9 @@ Two ABIs coexist:
   This is what device drivers, `devmgr` and anything else Ferrix-specific speaks.
   It is where the design opinions live.
 
-A process may use both. `devmgr` is a normal musl binary that happens to call
-native syscalls for the parts POSIX cannot express.
+A process may use both: a musl program can make native calls for the parts
+POSIX cannot express. `devmgr` and the ring-3 drivers are native programs,
+built on `user/rt`.
 
 ---
 

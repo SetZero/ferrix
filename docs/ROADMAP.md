@@ -1490,8 +1490,8 @@ and under Miri, and reached from the kernel by everything below.
   by a comment. No argument is wider than a register — anything that must be
   64 bits on ARMv7-A goes through a pointer — so no native call exists twice
   the way sixteen Linux calls do there. Failures are `errno`, each native
-  failure a distinct one, because `devmgr` is a musl program. Rights live on
-  handles and only shrink, decided in one function.
+  failure a distinct one, so a musl program making a native call reads an `errno`
+  it can name. Rights live on handles and only shrink, decided in one function.
 * `libs/objects` — the handle table and a channel's message queue. A handle is
   a slot and a generation, and a slot is retired rather than let its
   generation wrap, so a closed handle *never* names anything again: the
