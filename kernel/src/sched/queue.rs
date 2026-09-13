@@ -30,7 +30,7 @@ use alloc::sync::Arc;
 
 use ferrix_sched::{Config, CpuLoad, EntityState, Load, RunQueue, slice_for};
 
-use super::task::{RUNNABLE, Task, TaskId};
+use super::task::{BLOCKED, RUNNABLE, Task, TaskId};
 
 /// How much CPU a task asks for at a time.
 ///
@@ -195,6 +195,12 @@ impl CpuQueue {
             if key.0 > now {
                 let _ = self.sleepers.insert(key, task);
                 return;
+            }
+            // Only a task still blocked is woken. One already woken some other
+            // way is running or queued, and one that has exited must never run
+            // again; for either, the entry is stale and is dropped.
+            if task.state() != BLOCKED {
+                continue;
             }
             task.set_state(RUNNABLE);
             self.insert(&task);

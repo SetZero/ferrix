@@ -29,8 +29,9 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use ferrix_sched::{CpuSet, LOAD_SCALE, NICE_0_WEIGHT, weight_of_nice};
+use ferrix_sync::IrqControl;
 
-use super::task::Task;
+use super::task::{BLOCKED, Task};
 use super::{MIN_SLICE_NS, SLICE_NS, WaitQueue};
 use crate::smp::Topology;
 
@@ -173,6 +174,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     }
 
     one_task()?;
+    a_dead_task_is_not_filed_as_a_sleeper()?;
     mark!(0);
     sleeping(&mut report)?;
     mark!(1);
@@ -644,6 +646,64 @@ fn one_task() -> Result<(), &'static str> {
     reap_to(allocations, "one task")?;
     drop(task);
     Ok(())
+}
+
+/// How far out the woken task's abandoned deadline is: far enough that, if it
+/// is filed, the timer does not make the dead task runnable before this check
+/// has looked, which would be a crash rather than a sentence.
+const ABANDONED_SLEEP_NANOS: u64 = 3_600_000_000_000;
+
+/// A task woken between marking itself blocked and blocking, which then
+/// exits, is not filed as a sleeper under the deadline it never slept on.
+///
+/// The window every wait has: the task is blocked with a deadline set and has
+/// not reached `block` yet, and a waker on another processor gets there first.
+/// The task makes itself its own waker here, with interrupts masked, so the
+/// window is hit every time rather than once in a long while.
+fn a_dead_task_is_not_filed_as_a_sleeper() -> Result<(), &'static str> {
+    let allocations = crate::vmap::usage().allocations;
+    let here = super::current()
+        .ok_or("the checking task is not running")?
+        .cpu();
+    DONE.store(0, Ordering::Release);
+
+    // On this processor, so that once the task is seen dead the switch away
+    // from it, which is what files a sleeper, has already been made.
+    let task = super::spawn_on(
+        "check-woken",
+        woken_before_blocking,
+        0,
+        NICE_0_WEIGHT,
+        here,
+        CpuSet::of(here),
+    )?;
+    wait_for(
+        || DONE.load(Ordering::Acquire) >= 1 && task.is_dead(),
+        "a task woken before it blocked never exited",
+    )?;
+
+    // Unfiled before anything is reported, so a failure is a sentence and not
+    // a dead task the timer wakes an hour from now.
+    if super::unfile_sleeper(task.id) {
+        return Err("a dead task was filed as a sleeper under a deadline it abandoned");
+    }
+
+    reap_to(allocations, "a woken task")?;
+    drop(task);
+    Ok(())
+}
+
+/// Set a deadline and block, and be woken before blocking: what a waiter looks
+/// like when its waker wins the race to `block`. Then exit.
+fn woken_before_blocking(_argument: usize) {
+    if let Some(me) = super::current() {
+        let saved = <crate::arch::Irq as IrqControl>::disable();
+        me.set_sleep_deadline(crate::timer::now_nanos().saturating_add(ABANDONED_SLEEP_NANOS));
+        me.set_state(BLOCKED);
+        super::wake(&me);
+        <crate::arch::Irq as IrqControl>::restore(saved);
+    }
+    finish();
 }
 
 /// A sleep gives the processor up and comes back on time.

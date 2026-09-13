@@ -649,6 +649,9 @@ extern "C" fn task_start(_argument: usize) -> ! {
 /// End the running task.
 pub(crate) fn exit() -> ! {
     if let Some(task) = current() {
+        // Whatever sleep it once meant to take is over: a deadline left here
+        // is one `choose_next` would otherwise file the dead task under.
+        let _ = task.take_sleep_deadline();
         task.set_state(DEAD);
     }
     schedule();
@@ -741,6 +744,14 @@ pub(crate) fn wake(task: &Arc<Task>) {
         // early does not cancel the deadline it was filed under, and a stale
         // entry wakes it again out of its next sleep. See `remove_sleeper`.
         let _ = queue.remove_sleeper(task.id);
+        // **And the deadline itself, if it was never filed.** A task woken
+        // after marking itself blocked but before it reached `block` is still
+        // running, so `choose_next` never took its deadline, and nothing else
+        // would. It then sat on the task until the next time the task left
+        // its processor for any reason, exiting included, and filed it as a
+        // sleeper there: a dead task, made runnable by the timer on a stack
+        // the reaper was freeing.
+        let _ = task.take_sleep_deadline();
         task.set_state(RUNNABLE);
         if !task.is_queued() {
             queue.insert(task);
@@ -879,7 +890,11 @@ fn choose_next(lock: &'static SpinLock<CpuQueue>, cpu: usize) -> Option<(*mut u6
     let previous = queue.current.clone();
     if let Some(previous) = previous.as_ref().filter(|task| task.state() != RUNNABLE) {
         queue.detach_current();
-        if let Some(at) = previous.take_sleep_deadline() {
+        // Taken either way, filed only for a task that can wake: a dead task
+        // in the sleeper set is a dead task the timer makes runnable.
+        if let Some(at) = previous.take_sleep_deadline()
+            && !previous.is_dead()
+        {
             let _ = queue
                 .sleepers
                 .insert((at, previous.id), Arc::clone(previous));
@@ -1381,6 +1396,22 @@ pub(crate) fn summary() -> Summary {
     }
     <arch::Irq as IrqControl>::restore(saved);
     summary
+}
+
+/// Take task `id` out of every processor's sleeper set, and say whether any
+/// held it. For a check that has to find out whether something was filed
+/// there, and must not leave it there if it was.
+pub(crate) fn unfile_sleeper(id: TaskId) -> bool {
+    let Some(queues) = QUEUES.get() else {
+        return false;
+    };
+    let saved = <arch::Irq as IrqControl>::disable();
+    let mut found = false;
+    for lock in queues {
+        found |= lock.lock().remove_sleeper(id);
+    }
+    <arch::Irq as IrqControl>::restore(saved);
+    found
 }
 
 /// Check every run queue's own bookkeeping.

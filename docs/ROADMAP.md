@@ -589,6 +589,14 @@ check shown to fail without the fix:
   good, and records the answer for the invariant check. A kernel broken on
   purpose to leave dead tasks marked queued now ends stage 5 with "a dead task
   is still queued".
+* **A dead task could be put back on the run queue.** A task woken after
+  marking itself blocked, but before it reached `block`, kept its sleep
+  deadline, because only a switch away took it. When the task later exited,
+  that switch filed the dead task as a sleeper, and the timer made it runnable
+  on a stack the reaper was freeing. `wake` and `exit` now clear the deadline,
+  `choose_next` never files a dead task, and `wake_sleepers` wakes only tasks
+  still blocked. The check wakes a task in exactly that window and requires
+  that it not be filed as a sleeper after it exits.
 
 **Still missing against Linux**, none of it on stage 6's path: group scheduling
 and bandwidth control, which are stage 13; the real-time classes, which are
