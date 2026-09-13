@@ -116,6 +116,28 @@ pub(crate) fn flush_tlb() {
     }
 }
 
+/// Publish page table writes and invalidate the page at `page` on every
+/// core, for every `ASID`: `TLBIMVAAIS`, and `BPIALLIS` for the reason
+/// [`flush_tlb`] gives.
+///
+/// `page` is the page's address; the low twelve bits are ignored.
+pub(crate) fn flush_tlb_page(page: u32) {
+    // SAFETY: barriers and maintenance operations have no effect other than
+    // ordering and invalidation.
+    unsafe {
+        asm!(
+            "dsb ishst",
+            "mcr p15, 0, {page}, c8, c3, 3",
+            "mcr p15, 0, {zero}, c7, c1, 6",
+            "dsb ish",
+            "isb",
+            page = in(reg) page & !0xFFF,
+            zero = in(reg) 0u32,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
 /// Ask the platform to power the machine off, through whichever instruction
 /// the device tree says its PSCI firmware answers.
 ///

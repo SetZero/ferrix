@@ -21,6 +21,8 @@ Causes are listed most likely first.
 | [FX-0001](#fx-0001) | a processor never flushed its TLB for a shootdown |
 | [FX-0002](#fx-0002) | a processor never left a read-side section |
 | [FX-0003](#fx-0003) | a TLB shootdown never got its turn |
+| [FX-0004](#fx-0004) | an address space was switched on a processor that cannot name itself |
+| [FX-0005](#fx-0005) | a private region's object was mapped by more than one address space |
 | [FX-0101](#fx-0101) | the loader's hand-off is not what the kernel needs |
 | [FX-0201](#fx-0201) | the frame allocator could not be built |
 | [FX-0202](#fx-0202) | the kernel address arena could not be created |
@@ -42,6 +44,7 @@ Causes are listed most likely first.
 | [FX-0502](#fx-0502) | the scheduler failed its self-check |
 | [FX-0503](#fx-0503) | a task tried to block while holding a lock that disables preemption |
 | [FX-0601](#fx-0601) | the memory a process is built from failed its self-check |
+| [FX-0602](#fx-0602) | a page taken from a mapped object stayed reachable, or was not taken as it should be |
 | [FX-0701](#fx-0701) | the system call dispatch path failed its self-check |
 | [FX-0801](#fx-0801) | the root filesystem could not be built |
 | [FX-0802](#fx-0802) | the root filesystem failed its self-check |
@@ -125,6 +128,47 @@ stops instead of waiting forever.
    seconds, which is the host's fault and not the kernel's.
 
 See: kernel/src/smp.rs flush_tlb_everywhere; docs/ROADMAP.md stage 4.
+
+<a id="fx-0004"></a>
+
+## FX-0004 — an address space was switched on a processor that cannot name itself
+
+Every address space keeps the set of processors whose TLB may still hold its
+translations, and a TLB shootdown for the space reaches exactly those. A
+processor joins the set before it loads the space's root and leaves it after the
+root write that flushed it, by its logical number, read from its per-CPU record.
+With no record there is no number, and any guess would leave a processor that
+caches the space out of the set, so a later shootdown would free memory it can
+still reach. Nothing installs a user space before every processor has its
+record, so the kernel stops instead.
+
+1. Something installed or uninstalled a user address space before
+   `smp::discover` set the boot processor's record, or on a secondary before
+   `install_secondary_record`.
+2. The per-CPU register was overwritten, so `smp::this_cpu` no longer finds the
+   record.
+
+See: kernel/src/user/space.rs install; kernel/src/smp.rs this_cpu;
+docs/ROADMAP.md stage 6.
+
+<a id="fx-0005"></a>
+
+## FX-0005 — a private region's object was mapped by more than one address space
+
+An object backing a private region has exactly one mapper: `fork` gives the
+child an object of its own, and `vmo_map` maps objects shared. `mremap` relies
+on it when it moves a private region's pages to a fresh object, because it tells
+only its own address space to forget them. A second mapper would keep
+translations to pages that have left the object, and reach frames given back to
+the allocator, so the kernel stops before anything moves.
+
+1. Something attached a second address space to a private region's object,
+   bypassing `Vmo::attach`'s own check.
+2. A region's sharing flag changed after its object was attached, so an object
+   attached as shared now backs a private region.
+
+See: kernel/src/user/space.rs remap; kernel/src/user/vmo.rs attach;
+docs/ROADMAP.md stage 6.
 
 <a id="fx-0101"></a>
 
@@ -628,6 +672,37 @@ address. Across all of it the free frame count must end where it started.
 
 See: kernel/src/user/check.rs run; kernel/src/user/space.rs;
 kernel/src/user/vmo.rs; docs/ROADMAP.md stage 6.
+
+<a id="fx-0602"></a>
+
+## FX-0602 — a page taken from a mapped object stayed reachable, or was not taken as it should be
+
+`user::rmap_check::run` maps one shared anonymous object in two processes pinned
+to two processors and has them touch its page from user mode. The kernel then
+decommits the page, replaces it, and holds it for a device. After a decommit or
+a replace both address spaces' tables must have lost the translation, and the
+process on the other processor must fault in the new page: it must never read
+the poison the kernel wrote into the frame it gave back, and its write must
+never land there. A held page must keep its frame and its mappings through both.
+Across the measured run every frame must come back.
+
+1. A VMO change released a frame without asking every address space attached to
+   the object to forget its pages first (`Vmo::retire`,
+   `AddressSpace::forget_pages`), or an address space inserted an object id
+   without attaching to it.
+2. The scoped shootdown missed a processor holding a stale entry: a processor
+   joined an address space's set after loading its root, left before the root
+   write that flushed it, or answered a shootdown for a processor it was no
+   longer running on.
+3. The page-scoped invalidation is wrong for the architecture: `invlpg` not
+   reaching the entry, or `TLBI VAAE1IS` / `TLBIMVAAIS` given the wrong page
+   number.
+4. A decommit, replace or move touched a held page, or backed off after already
+   invalidating it.
+
+See: kernel/src/user/rmap_check.rs run; kernel/src/user/vmo.rs retire;
+kernel/src/user/space.rs forget_pages; kernel/src/smp.rs flush_tlb_pages;
+docs/ROADMAP.md stage 6.
 
 <a id="fx-0701"></a>
 

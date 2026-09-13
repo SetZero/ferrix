@@ -317,6 +317,12 @@ pub(crate) fn frame_state(frame: Frame) -> Option<ferrix_frame::State> {
     with_frames(|frames| frames.state(frame))?
 }
 
+/// Take exactly `frame`, if it is free: for a check that must get back the
+/// frame it just gave up. `None` if something else has it.
+pub(crate) fn claim_frame(frame: Frame) -> Option<Frame> {
+    with_frames(|frames| frames.claim(frame))?
+}
+
 /// Give back frames taken with [`allocate_frames`].
 pub(crate) fn deallocate_frames(frame: Frame, order: u8) {
     let _ = with_frames(|frames| frames.deallocate(frame, order));

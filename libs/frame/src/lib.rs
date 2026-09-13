@@ -477,6 +477,49 @@ impl<'a> Frames<'a> {
         self.allocate(0)
     }
 
+    /// Take exactly `frame`, if it is free, as a single allocated frame.
+    ///
+    /// For a check that has to get back the very frame it just gave up — to
+    /// fill it with a pattern and prove nothing still writes to it — which
+    /// [`Frames::allocate`] cannot promise: the freed frame may have merged
+    /// with its buddy, and the head of the smallest list may be some other
+    /// block. The free block holding `frame` is found by its head, taken off
+    /// its list, and split down with every half not holding `frame` put back.
+    ///
+    /// `None` if `frame` is not free or not this allocator's.
+    pub fn claim(&mut self, frame: Frame) -> Option<Frame> {
+        let (head, order) = (0..=MAX_ORDER).find_map(|order| {
+            let head = frame & !((1u64 << order) - 1);
+            self.entry(head)
+                .filter(|entry| entry.state == State::Free && entry.order == order)
+                .map(|_| (head, order))
+        })?;
+        self.unlink(head, order);
+
+        let (mut block, mut current) = (head, order);
+        while current > 0 {
+            current -= 1;
+            let half = 1u64 << current;
+            let upper = block + half;
+            let (keep, give) = if frame >= upper {
+                (upper, block)
+            } else {
+                (block, upper)
+            };
+            self.set_state_range(give, half, State::FreeTail);
+            self.push(give, current);
+            block = keep;
+        }
+
+        if let Some(entry) = self.entry_mut(frame) {
+            entry.state = State::Allocated;
+            entry.order = 0;
+            entry.refcount = 1;
+        }
+        self.free -= 1;
+        Some(frame)
+    }
+
     /// Give back a block taken with [`Frames::allocate`].
     ///
     /// `order` must be the order it was allocated with. Merges with the buddy

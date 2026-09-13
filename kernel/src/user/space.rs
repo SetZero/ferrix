@@ -21,21 +21,79 @@
 //!
 //! The lock is per address space rather than global: two processes faulting at
 //! once contend for nothing, which is the property a compiler workload needs.
+//!
+//! # Which processors may still hold this space's translations
+//!
+//! Every space keeps a set of processors, and the set means *may still have
+//! this space's translations in its TLB* — not *has the root loaded now*. The
+//! difference is the whole of what makes a shootdown to the set enough:
+//!
+//! * A processor **joins before** [`AddressSpace::install`] loads the root, so
+//!   no processor walks these tables and caches an entry while outside the
+//!   set.
+//! * It **leaves only after** the root write that took its translations out
+//!   of its TLB: [`AddressSpace::uninstall`]'s, or the `install` of the next
+//!   space. On x86-64 that is the `CR3` write — without `PCID` it drops every
+//!   entry not marked global, and no user mapping is ever global: every
+//!   `map_in` in this file passes `global: false`. On `AArch64` and ARMv7-A a
+//!   write to `TTBR0` drops nothing and `EPD0` stops walks rather than TLB
+//!   hits, so both `install_user_root` and `uninstall_user_root` invalidate
+//!   `ASID` zero, which every user translation carries and no kernel one does.
+//! * There is no lazy TLB. The scheduler uninstalls a space when it switches
+//!   to a kernel thread rather than leaving the root loaded, so a processor
+//!   running a kernel thread is in no space's set.
+//!
+//! # Taking a translation down
+//!
+//! Whoever takes a translation out of these tables — `munmap`, `mprotect`,
+//! `fork`'s write-protection, `mremap`, a copy-on-write fault, and a VMO taking a page
+//! away through [`AddressSpace::forget_pages`] — does it in one order:
+//!
+//! 1. under the lock, the entries come out of the tables;
+//! 2. still under the lock, and only after that, the set is read and the
+//!    shootdown counted pending;
+//! 3. with the lock let go, [`crate::smp::flush_tlb_pages`] reaches every
+//!    processor in the set and waits for each to answer;
+//! 4. only then is anything the translations reached given back.
+//!
+//! A processor that installs the space after step 2 walks tables the entries
+//! are already out of. And [`AddressSpace::with_page`] relies on the same
+//! order from the other side: it translates under this lock and copies before
+//! letting it go, which is safe because nothing a translation found under the
+//! lock reaches is released until a shootdown that began after the
+//! translation came down has returned.
+//!
+//! The pending count is for the one gap that order leaves. Between steps 2
+//! and 3 an entry is out of the tables and may still be in a TLB, and a VMO
+//! asking [`AddressSpace::forget_pages`] for pages in that state would find
+//! nothing to take down and release its frame at once. So while any shootdown
+//! of this space is pending, `forget_pages` asks for a whole flush of the set
+//! rather than trusting the tables — Linux's `mm_tlb_flush_pending`, for the
+//! same race.
+//!
+//! # Lock order
+//!
+//! This space's lock, then a VMO's mapper list, then the VMO's pages. No VMO
+//! lock is ever held while a space's lock is taken, no two spaces' locks are
+//! ever held together, and no shootdown waits under any of them.
 
 use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::fmt;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::sync::SpinLock;
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END, is_user_address};
 use ferrix_frame::Frame;
 use ferrix_paging::MapFlags;
+use ferrix_sched::CpuSet;
 use ferrix_vma::{Backing, PageRange, Unmapping, Vma, VmaFlags};
 
 use crate::arch;
 use crate::mm;
-use crate::user::vmo::{Vmo, VmoError};
+use crate::smp::{self, CpuMask, TlbPages};
+use crate::user::vmo::{Own, Retired, Sharing, Vmo, VmoError};
 
 /// The lowest address a program may map anything at: 64 KiB, the
 /// `vm.mmap_min_addr` Linux distributions ship.
@@ -106,7 +164,8 @@ impl Access {
 struct Inner {
     /// What is mapped where.
     map: ferrix_vma::AddressSpace,
-    /// The objects those regions name, by the id the region carries.
+    /// The objects those regions name, by the id the region carries. Every id
+    /// in here is attached to its object, and detached as it leaves.
     objects: BTreeMap<u64, Arc<Vmo>>,
     /// The next object id to hand out. Never zero, which `Backing` reserves
     /// for private memory with no named object.
@@ -118,6 +177,12 @@ struct Inner {
 pub(crate) struct AddressSpace {
     /// Physical frame of the root table.
     root: Frame,
+    /// This space, as the objects it maps record it.
+    me: Weak<AddressSpace>,
+    /// The processors whose TLB may still hold this space's translations.
+    cpus: CpuMask,
+    /// Shootdowns of this space counted under its lock and not yet returned.
+    flushes_pending: AtomicU64,
     inner: SpinLock<Inner>,
 }
 
@@ -143,8 +208,11 @@ impl AddressSpace {
             SpaceError::BadRange
         })?;
 
-        Ok(Arc::new(AddressSpace {
+        Ok(Arc::new_cyclic(|me| AddressSpace {
             root,
+            me: me.clone(),
+            cpus: CpuMask::new(),
+            flushes_pending: AtomicU64::new(0),
             inner: SpinLock::new(Inner {
                 map,
                 objects: BTreeMap::new(),
@@ -158,7 +226,8 @@ impl AddressSpace {
         self.root * PAGE_SIZE
     }
 
-    /// Install this address space on the processor that is running.
+    /// Install this address space on the processor that is running, in place
+    /// of `replacing` if that was installed there.
     ///
     /// Every page faulted in so far has been reachable only through the direct
     /// map, because the kernel was walking these tables in software. After
@@ -171,6 +240,11 @@ impl AddressSpace {
     /// and it has to be able to — a fault taken in user mode is handled by
     /// kernel code running in the address space that faulted.
     ///
+    /// The processor joins this space's set before the root is loaded, and
+    /// leaves `replacing`'s only after, for the reasons the module gives. A
+    /// `replacing` that was not in fact installed here costs nothing: the
+    /// root write just made has dropped whatever of it this TLB held.
+    ///
     /// # Safety
     ///
     /// Something must hold a reference to this address space for as long as it
@@ -178,35 +252,79 @@ impl AddressSpace {
     /// processor whose root register still names freed frames is walking
     /// memory the allocator has handed to somebody else.
     ///
-    /// The caller must also not be preempted into a context expecting a
-    /// different address space, which until the scheduler knows about address
-    /// spaces means masking interrupts across the window.
-    pub(crate) unsafe fn install(&self) {
+    /// Interrupts must be masked across the call, so that the processor that
+    /// joins is the one whose root is loaded, and the caller must not be
+    /// preempted into a context expecting a different address space.
+    pub(crate) unsafe fn install(&self, replacing: Option<&AddressSpace>) {
+        let cpu = this_logical_cpu();
+        self.cpus.join(cpu);
         // SAFETY: the root was made by `new`, so `prepare_user_root` has run
         // on it and the kernel is reachable through it on the architecture
         // that needs that; the caller guarantees it outlives the installation.
         unsafe { arch::install_user_root(self.root * PAGE_SIZE) };
+        if let Some(previous) = replacing
+            && !core::ptr::eq(previous, self)
+        {
+            previous.cpus.leave(cpu);
+        }
+    }
+
+    /// Leave this address space on the processor that is running.
+    ///
+    /// After this no user address translates here, which is the state a kernel
+    /// thread runs in. The processor leaves the set after the root write,
+    /// which on every architecture drops the user translations it had cached.
+    ///
+    /// # Safety
+    ///
+    /// Nothing on this processor may still need a user address, and interrupts
+    /// must be masked across the call.
+    pub(crate) unsafe fn uninstall(&self) {
+        let cpu = this_logical_cpu();
+        // SAFETY: the caller guarantees no user address is wanted, and the kernel
+        // is reachable without one on every architecture.
+        unsafe { arch::uninstall_user_root() };
+        self.cpus.leave(cpu);
     }
 }
 
-/// Leave whatever address space this processor was translating through.
+/// The logical number of the processor running this, for its bit in a set.
 ///
-/// After this no user address translates here, which is the state a kernel
-/// thread runs in.
-///
-/// # Safety
-///
-/// Nothing on this processor may still need a user address.
-pub(crate) unsafe fn uninstall() {
-    // SAFETY: the caller guarantees no user address is wanted, and the kernel
-    // is reachable without one on every architecture.
-    unsafe { arch::uninstall_user_root() };
+/// Stops the machine rather than guessing when there is no per-CPU record. A
+/// user space is installed only by the scheduler and by stage 6's checks, both
+/// long after every processor has its record, so a missing one is a kernel
+/// bug; and a default -- zero, say -- would put the wrong processor in the set
+/// and leave the right one out, which no later check would see.
+fn this_logical_cpu() -> usize {
+    match smp::this_cpu() {
+        Some(cpu) => cpu.logical,
+        None => {
+            crate::panic::fatal!(
+                crate::panic::catalog::SPACE_SET_WITHOUT_RECORD,
+                "an address space was installed or uninstalled on a processor with no per-CPU record"
+            );
+        }
+    }
+}
+
+/// How a region with `flags` maps its object.
+fn sharing_of(flags: VmaFlags) -> Sharing {
+    if flags.shared {
+        Sharing::Shared
+    } else {
+        Sharing::Private
+    }
 }
 
 impl AddressSpace {
     /// How many regions the map holds.
     pub(crate) fn region_count(&self) -> usize {
         self.inner.lock().map.region_count()
+    }
+
+    /// The object this space knows as `id`, if it has one.
+    pub(crate) fn object(&self, id: u64) -> Option<Arc<Vmo>> {
+        self.inner.lock().objects.get(&id).map(Arc::clone)
     }
 
     /// Map `len` bytes of fresh anonymous memory at `at`, and return the id of
@@ -243,6 +361,7 @@ impl AddressSpace {
             .map
             .insert(range, flags, Backing::Anonymous { id, offset: 0 })
             .map_err(|_| SpaceError::BadRange)?;
+        vmo.attach(self.me.clone(), id, sharing_of(flags));
         let _ = inner.objects.insert(id, vmo);
         Ok(id)
     }
@@ -265,8 +384,9 @@ impl AddressSpace {
     /// *writable* translations to the pages it has just agreed to share, and a
     /// write through one of those would never reach [`AddressSpace::fault`] at
     /// all — it would land in a page the child can read. So every region now
-    /// marked copy-on-write is unmapped in the parent, and the next access
-    /// re-faults and is reinstalled read-only because `cow` is set.
+    /// marked copy-on-write is unmapped in the parent, the processors in its
+    /// set are told, and the next access re-faults and is reinstalled
+    /// read-only because `cow` is set.
     ///
     /// Unmapping rather than write-protecting in place costs the parent one
     /// extra fault per page — a read that would have hit now faults once — and
@@ -274,15 +394,16 @@ impl AddressSpace {
     /// mapping, by design, and there is no `protect_in`. Adding one is the
     /// obvious improvement and changes nothing about what is correct here.
     ///
-    /// # What this does not yet do
+    /// # How the child is attached
     ///
-    /// Invalidate other processors' translations. Nothing runs in a user
-    /// address space yet, so there are none to invalidate; when threads arrive
-    /// this needs the shootdown [`crate::smp::flush_tlb_everywhere`] does for
-    /// the kernel's own tables, scoped to the processors running this space.
-    /// Until then a parent that had been installed somewhere would keep a
-    /// stale writable entry, which is the one thing between this and a working
-    /// `fork(2)`.
+    /// Every object the child names — the shared ones and the forked copies —
+    /// is attached to it right after the child's `Arc` is built, before the
+    /// child is returned. Not inside `Arc::new_cyclic`: a weak reference to a
+    /// space still being built does not upgrade, and an object pruning dead
+    /// entries in that window would drop the child's. Nothing is lost by
+    /// waiting: until it is returned the child's tables are empty and nothing
+    /// can fault into them, so an object that takes a page away meanwhile has
+    /// nothing in the child to forget.
     ///
     /// Device regions are shared, not copied: they own no frames, and
     /// `ferrix_vma`'s `needs_cow` never marks them copy-on-write, so a child
@@ -326,6 +447,7 @@ impl AddressSpace {
         // Only now the parent's map is marked and copied, and its writable
         // translations to the shared pages taken down.
         let map = inner.map.clone_for_fork();
+        let mut pages = TlbPages::new();
         for region in inner.map.iter() {
             if region.cow {
                 let _ = mm::unmap_in(
@@ -333,6 +455,7 @@ impl AddressSpace {
                     region.range.start(),
                     region.range.bytes(),
                 );
+                pages.add_range(region.range.start(), region.range.bytes());
             }
         }
 
@@ -340,16 +463,18 @@ impl AddressSpace {
         let next_id = inner.next_id;
 
         // The parent's writable translations to the shared pages are out of
-        // its tables, but may still be in some processor's TLB — and a write
-        // through one of those would reach a page the child can read, which is
-        // the whole thing fork just promised would not happen. Dropped here,
-        // where the lock is about to go out of scope, rather than inside the
-        // loop above: one invalidation covers every region.
+        // its tables, but may still be in the TLB of a processor in its set —
+        // and a write through one of those would reach a page the child can
+        // read, which is the whole thing fork just promised would not happen.
+        let cpus = self.begin_shootdown(&inner);
         drop(inner);
-        invalidate();
+        self.shoot(&cpus, &pages);
 
-        Ok(Arc::new(AddressSpace {
+        let child = Arc::new_cyclic(|me| AddressSpace {
             root,
+            me: me.clone(),
+            cpus: CpuMask::new(),
+            flushes_pending: AtomicU64::new(0),
             inner: SpinLock::new(Inner {
                 map,
                 objects,
@@ -360,7 +485,19 @@ impl AddressSpace {
                 // space's table.
                 next_id,
             }),
-        }))
+        });
+        {
+            let inner = child.inner.lock();
+            for (&id, vmo) in &inner.objects {
+                let sharing = if shared_object(&inner.map, id) {
+                    Sharing::Shared
+                } else {
+                    Sharing::Private
+                };
+                vmo.attach(Arc::downgrade(&child), id, sharing);
+            }
+        }
+        Ok(child)
     }
 
     /// Resolve a fault at `address`, and let the faulting instruction retry.
@@ -427,22 +564,34 @@ impl AddressSpace {
             // no copy: the other side has already copied it, or unmapped, or
             // exited, and copying would allocate a frame in order to duplicate
             // data this space is the sole owner of.
-            let frame = if mm::frame_references(shared) > 1 {
+            let (frame, retired) = if mm::frame_references(shared) > 1 {
                 let copy = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
                 mm::copy_frame(copy, shared);
-                // Replacing gives back this object's reference to the shared
-                // page, which is what leaves the other holder as the last one.
-                let _ = vmo.replace(index, copy);
-                copy
+                // Replacing takes the shared page out of this object; the
+                // reference is given back once no processor can reach it
+                // through this space or any other that maps the object.
+                match vmo.take_page(index, copy) {
+                    Some(retired) => (copy, Some(retired)),
+                    // Held since the count was read. A held page is this
+                    // object's alone, so the write goes to it, uncopied.
+                    None => {
+                        let _ = mm::release_frame(copy);
+                        (vmo.page(index).unwrap_or(shared), None)
+                    }
+                }
             } else {
-                shared
+                (shared, None)
             };
 
             // `map_in` refuses to overwrite a live mapping, deliberately, so
-            // the read-only entry comes down before the writable one goes in.
-            // The frames are the object's and are not freed by this.
-            let _ = mm::unmap_in(self.root * PAGE_SIZE, page, PAGE_SIZE);
-            mm::map_in(
+            // the read-only entry comes down before the writable one goes in
+            // -- and so does every other translation of this object page in
+            // this space, since the object no longer names the frame they
+            // reach.
+            let mut pages = TlbPages::new();
+            let _ = self.forget_in(&inner, id, &[(index, 1)], &mut pages);
+            pages.add(page);
+            let mapped = mm::map_in(
                 self.root * PAGE_SIZE,
                 page,
                 frame * PAGE_SIZE,
@@ -455,22 +604,35 @@ impl AddressSpace {
                     global: false,
                     device: false,
                 },
-            )
-            .map_err(|_| SpaceError::OutOfMemory)?;
+            );
 
             // A translation that existed a moment ago has just been replaced
-            // by a more permissive one, so every processor's cached copy of
-            // the old one has to go. **This is not optional and it is not a
-            // performance matter**: the entry that was there says read-only,
-            // and the instruction that faulted is about to retry its write.
-            // If it finds the stale entry it faults again, arrives here again,
+            // by a more permissive one, so every cached copy of the old one
+            // has to go. **This is not optional and it is not a performance
+            // matter**, twice over. The entry that was there says read-only,
+            // and the instruction that faulted is about to retry its write: if
+            // it finds the stale entry it faults again, arrives here again,
             // finds one holder and no copy to make, installs the same writable
-            // entry again, and retries into the same stale entry — forever.
-            // The symptom is a hang with no message, which is the hardest kind
-            // to attribute.
+            // entry again, and retries into the same stale entry — forever. And
+            // the entry reaches the shared frame, whose reference is about to
+            // be given back: a processor that kept it would be reading a page
+            // the allocator may hand to anyone.
+            //
+            // Set read after the takedown, under the lock; shootdown after the
+            // lock; the frame's reference only after the shootdown.
+            let cpus = self.begin_shootdown(&inner);
             drop(inner);
-            invalidate();
-            return Ok(());
+            match retired {
+                Some(retired) => vmo.retire(
+                    retired,
+                    Some(Own {
+                        space: self,
+                        shootdown: Some((cpus, pages)),
+                    }),
+                ),
+                None => self.shoot(&cpus, &pages),
+            }
+            return mapped.map_err(|_| SpaceError::OutOfMemory);
         }
 
         // Already present, and the fault was spurious: another processor
@@ -490,8 +652,6 @@ impl AddressSpace {
 
         // A copy-on-write region is installed read-only however writable the
         // region is, so that the *next* write faults here again and can copy.
-        // Until fork exists nothing sets `cow`, and this is what will make it
-        // work when it does.
         let writable = region.flags.write && !region.cow;
         let flags = MapFlags {
             read: true,
@@ -525,9 +685,12 @@ impl AddressSpace {
     /// a frame that has been given back and handed to somebody else. So the
     /// translation is taken again under the lock, and `touch` runs before the
     /// lock goes. Every way a frame this space names is given back -- `unmap`,
-    /// a copy-on-write replacement, `fork` re-sharing a page -- first takes its
-    /// translation down under this same lock, so a translation found under it
-    /// names a live frame until it is released.
+    /// a copy-on-write replacement, `fork` re-sharing a page, and a VMO
+    /// decommitting, replacing or moving a page through
+    /// [`AddressSpace::forget_pages`] -- first takes its translation down under
+    /// this same lock and releases the frame only after the shootdown that
+    /// follows, so a translation found under it names a live frame until the
+    /// lock goes.
     ///
     /// The page is faulted in again if what the lock finds does not do: gone
     /// since the fault, or, for a write, a copy-on-write page some other space
@@ -535,8 +698,9 @@ impl AddressSpace {
     /// always makes progress on its own, so the retry ends unless another
     /// thread keeps undoing it.
     ///
-    /// `touch` runs under a spin lock: it must not sleep, fault, or take this
-    /// space's lock. A copy between the direct map and a kernel buffer does
+    /// `touch` runs under a spin lock: it must not sleep, fault, take this
+    /// space's lock, or take a VMO's lock, which would invert the order the
+    /// module gives. A copy between the direct map and a kernel buffer does
     /// none of those.
     ///
     /// # Errors
@@ -579,46 +743,52 @@ impl AddressSpace {
     pub(crate) fn unmap(&self, at: u64, len: u64) -> Result<(), SpaceError> {
         let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
         // Three phases, and the order between them is the whole point:
-        // translations down, then every processor told, and only then the
-        // frames given back. It used to be one phase that freed the pages
-        // *before* it took their translations down, under a comment claiming
-        // it did the opposite — which is the bug `mm::unmap_kernel` documents
-        // at length: a frame handed to the allocator while another processor
-        // can still reach it through a cached translation is two owners of one
-        // page, and the symptom turns up in whichever of them writes second.
+        // translations down, then every processor that may have them told, and
+        // only then the frames given back. It used to be one phase that freed
+        // the pages *before* it took their translations down, under a comment
+        // claiming it did the opposite — which is the bug `mm::unmap_kernel`
+        // documents at length: a frame handed to the allocator while another
+        // processor can still reach it through a cached translation is two
+        // owners of one page, and the symptom turns up in whichever of them
+        // writes second.
         //
         // Phase one, under the lock: take the range out of the map and take
-        // its translations out of the tables. What was removed is remembered
-        // rather than acted on, because the acting has to happen after the
-        // invalidation and the invalidation may not hold a lock.
+        // its translations out of the tables, then read who may still have
+        // them. What was removed is remembered rather than acted on, because
+        // the acting has to happen after the shootdown and the shootdown may
+        // not hold a lock.
         let mut freeing: Vec<Freeing> = Vec::new();
-        {
+        let mut pages = TlbPages::new();
+        let cpus = {
             let mut inner = self.inner.lock();
             let removed = inner.map.remove(range).map_err(|_| SpaceError::BadRange)?;
-            self.take_down(&removed, &mut freeing);
-        }
+            self.take_down(&removed, &mut freeing, &mut pages);
+            self.begin_shootdown(&inner)
+        };
 
         // Phase two. Nothing can reach these pages through this address space
         // any more, on any processor.
-        invalidate();
+        self.shoot(&cpus, &pages);
 
         // Phase three: give the pages back, not just the mapping.
         self.give_back(freeing);
         Ok(())
     }
 
-    /// Take the translations for `removed` out of the tables, and note the
-    /// pages behind them in `freeing` for [`AddressSpace::give_back`].
+    /// Take the translations for `removed` out of the tables, note the pages
+    /// behind them in `freeing` for [`AddressSpace::give_back`], and the
+    /// addresses in `pages` for the shootdown.
     ///
     /// Phase one of an unmap, called with the lock held. Nothing is freed
     /// here, because nothing may be until every processor has been told.
-    fn take_down(&self, removed: &[Unmapping], freeing: &mut Vec<Freeing>) {
+    fn take_down(&self, removed: &[Unmapping], freeing: &mut Vec<Freeing>, pages: &mut TlbPages) {
         for unmapping in removed {
             let _ = mm::unmap_in(
                 self.root * PAGE_SIZE,
                 unmapping.range.start(),
                 unmapping.range.bytes(),
             );
+            pages.add_range(unmapping.range.start(), unmapping.range.bytes());
             if let Backing::Anonymous { id, offset } = unmapping.backing {
                 freeing.push(Freeing {
                     id,
@@ -632,28 +802,177 @@ impl AddressSpace {
     /// Give back the pages `freeing` names, and drop every object no region
     /// names any more.
     ///
-    /// Phase three of an unmap: after [`invalidate`], and taking the lock
-    /// itself. A process that unmaps half its heap expects the memory returned
-    /// now, not when the other half goes.
+    /// Phase three of an unmap: after the shootdown, taking the lock itself. A
+    /// process that unmaps half its heap expects the memory returned now, not
+    /// when the other half goes.
     ///
     /// Only if nothing else holds the object: a page of memory shared with
     /// another address space is not this unmapper's to take away, and a
-    /// strong count of one means this map is the only holder.
+    /// strong count of one means this map is the only holder. The pages come
+    /// out of the object under the lock, which is what the decision needs;
+    /// they are given back after it, through [`Vmo::retire`], which skips this
+    /// space — its translations are down and its shootdown has returned — and
+    /// so, with no other holder, has nobody to ask and no shootdown to send.
     fn give_back(&self, freeing: Vec<Freeing>) {
-        let mut inner = self.inner.lock();
-        for Freeing { id, first, pages } in freeing {
-            if let Some(vmo) = inner.objects.get(&id)
-                && Arc::strong_count(vmo) == 1
-            {
-                let _ = vmo.decommit_range(first, pages);
+        let mut retiring: Vec<(Arc<Vmo>, Retired)> = Vec::new();
+        {
+            let mut inner = self.inner.lock();
+            // Decided for every range before a reference is taken for any of
+            // them, because taking one moves the count the decision reads.
+            let sole: Vec<Freeing> = freeing
+                .into_iter()
+                .filter(|range| {
+                    inner
+                        .objects
+                        .get(&range.id)
+                        .is_some_and(|vmo| Arc::strong_count(vmo) == 1)
+                })
+                .collect();
+            retiring.extend(sole.into_iter().filter_map(|Freeing { id, first, pages }| {
+                let vmo = inner.objects.get(&id)?;
+                let retired = vmo.take_range(first, pages);
+                (!retired.is_empty()).then(|| (Arc::clone(vmo), retired))
+            }));
+
+            // An object nothing maps any more leaves the table, detached from
+            // this space, and is dropped here, which releases every page it
+            // committed. Split borrows: the predicate reads the map while the
+            // objects are being written.
+            let me: *const AddressSpace = self;
+            let Inner { map, objects, .. } = &mut *inner;
+            objects.retain(|&id, vmo| {
+                let named = still_named(map, id);
+                if !named {
+                    vmo.detach(me, id);
+                }
+                named
+            });
+        }
+        for (vmo, retired) in retiring {
+            vmo.retire(
+                retired,
+                Some(Own {
+                    space: self,
+                    shootdown: None,
+                }),
+            );
+        }
+    }
+
+    /// Take down every translation this space has of pages `first..first +
+    /// pages` of the object it knows as `object`, and say which processors
+    /// may still have them cached.
+    ///
+    /// What a VMO calls in phase two of taking a page away. The lock is taken
+    /// here; the regions naming the object are found in the map as it stands,
+    /// and exactly the addresses their offsets put those pages at are unmapped
+    /// and added to `flush`. The set is read after that, still under the lock.
+    ///
+    /// `None` when there was nothing to take down and no shootdown of this
+    /// space is pending. `Some` otherwise — with the empty set if no processor
+    /// has this space loaded, since the tables changed all the same — and then
+    /// the shootdown is counted pending, and the caller must call
+    /// [`AddressSpace::flushed`] once the shootdown for `flush` on that set
+    /// has returned. If one was already pending, `flush` is widened to the
+    /// whole TLB, for the reason the module gives.
+    ///
+    /// Must be called holding no spin lock: the caller holds a VMO's pages
+    /// lock never, and its mapper list not across this.
+    #[expect(
+        dead_code,
+        reason = "the one-run entry agreed with stage 9's vmo_map; `Vmo::retire` asks for every run at once through `forget_runs`"
+    )]
+    pub(crate) fn forget_pages(
+        &self,
+        object: u64,
+        first: u64,
+        pages: u64,
+        flush: &mut TlbPages,
+    ) -> Option<CpuSet> {
+        self.forget_runs(object, &[(first, pages)], flush)
+    }
+
+    /// [`AddressSpace::forget_pages`] for several runs of `(first, count)`
+    /// pages, under one lock.
+    pub(crate) fn forget_runs(
+        &self,
+        object: u64,
+        runs: &[(u64, u64)],
+        flush: &mut TlbPages,
+    ) -> Option<CpuSet> {
+        let inner = self.inner.lock();
+        let found = self.forget_in(&inner, object, runs, flush);
+        let pending = self.flushes_pending.load(Ordering::SeqCst) > 0;
+        if !found && !pending {
+            return None;
+        }
+        if pending {
+            flush.everything();
+        }
+        Some(self.begin_shootdown(&inner))
+    }
+
+    /// Unmap every address at which a region of `inner`'s map shows one of
+    /// `runs`' pages of object `object`, adding each to `flush`. Whether any
+    /// region named them.
+    ///
+    /// Called with the lock held; `inner` is what proves it.
+    fn forget_in(
+        &self,
+        inner: &Inner,
+        object: u64,
+        runs: &[(u64, u64)],
+        flush: &mut TlbPages,
+    ) -> bool {
+        let mut found = false;
+        for region in inner.map.iter() {
+            let offset = match region.backing {
+                Backing::Anonymous { id, offset } | Backing::File { id, offset }
+                    if id == object =>
+                {
+                    offset
+                }
+                _ => continue,
+            };
+            let region_first = offset / PAGE_SIZE;
+            let region_end = region_first.saturating_add(region.range.bytes() / PAGE_SIZE);
+            for &(first, count) in runs {
+                let start = first.max(region_first);
+                let end = first.saturating_add(count).min(region_end);
+                if start >= end {
+                    continue;
+                }
+                let address = region.range.start() + (start - region_first) * PAGE_SIZE;
+                let len = (end - start) * PAGE_SIZE;
+                let _ = mm::unmap_in(self.root * PAGE_SIZE, address, len);
+                flush.add_range(address, len);
+                found = true;
             }
         }
+        found
+    }
 
-        // An object nothing maps any more is dropped here, which releases
-        // every page it committed. Split borrows: the predicate reads the map
-        // while the objects are being written.
-        let Inner { map, objects, .. } = &mut *inner;
-        objects.retain(|id, _| still_named(map, *id));
+    /// Count a shootdown of this space pending, and read the processors it
+    /// must reach.
+    ///
+    /// Called with the lock held — `_locked` is the proof — and after the
+    /// translations it is for are out of the tables, never before.
+    fn begin_shootdown(&self, _locked: &Inner) -> CpuSet {
+        let _ = self.flushes_pending.fetch_add(1, Ordering::SeqCst);
+        self.cpus.snapshot()
+    }
+
+    /// A shootdown [`AddressSpace::begin_shootdown`] or
+    /// [`AddressSpace::forget_pages`] counted has returned.
+    pub(crate) fn flushed(&self) {
+        let _ = self.flushes_pending.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// Run this space's own shootdown, begun under the lock, now that the lock
+    /// is gone.
+    fn shoot(&self, cpus: &CpuSet, pages: &TlbPages) {
+        smp::flush_tlb_pages(cpus, pages);
+        self.flushed();
     }
 }
 
@@ -720,7 +1039,9 @@ impl AddressSpace {
     /// half or off a page boundary; [`SpaceError::BadRange`] for one that
     /// overlaps the old range, or a malformed length; and
     /// [`SpaceError::OutOfMemory`] when the region cannot grow where it is and
-    /// may not move, or there is no gap it fits.
+    /// may not move, or there is no gap it fits, or a private region that
+    /// would move holds a page a device holds -- moving it would give the
+    /// program a different frame from the device's at the same address.
     pub(crate) fn remap(
         &self,
         old: u64,
@@ -734,7 +1055,8 @@ impl AddressSpace {
         }
 
         let mut freeing: Vec<Freeing> = Vec::new();
-        let placed = {
+        let mut pages = TlbPages::new();
+        let (placed, cpus, moved) = {
             let mut inner = self.inner.lock();
 
             let region = *inner.map.find(old).ok_or(SpaceError::NotMapped(old))?;
@@ -750,27 +1072,8 @@ impl AddressSpace {
                 .ok_or(SpaceError::BadRange)?;
             let shared = region.flags.shared || shared_object(&inner.map, id);
 
-            let at = match destination {
-                Destination::Fixed(target) => {
-                    let target_range = user_range(target, new_len)
-                        .filter(|_| target.is_multiple_of(PAGE_SIZE))
-                        .ok_or(SpaceError::NotUserRange(target))?;
-                    if target_range.start() < old_range.end()
-                        && old_range.start() < target_range.end()
-                    {
-                        return Err(SpaceError::BadRange);
-                    }
-                    target
-                }
-                _ if new_len == old_len => return Ok(old),
-                _ if new_len < old_len => old,
-                _ if grows_in_place(&inner.map, old, old_len, new_len) => old,
-                Destination::Anywhere => inner
-                    .map
-                    .find_free(new_len, PAGE_SIZE, None)
-                    .filter(|&at| user_range(at, new_len).is_some())
-                    .ok_or(SpaceError::OutOfMemory)?,
-                Destination::InPlace => return Err(SpaceError::OutOfMemory),
+            let Some(at) = remap_target(&inner.map, destination, old_range, new_len)? else {
+                return Ok(old);
             };
             let new_range = PageRange::from_len(at, new_len).map_err(|_| SpaceError::BadRange)?;
 
@@ -782,23 +1085,114 @@ impl AddressSpace {
             }
             let vmo = Arc::clone(inner.objects.get(&id).ok_or(SpaceError::NotMapped(old))?);
 
+            // A private region's pages move to an object of their own, and the
+            // move goes first, before the map changes, because it is the last
+            // thing that can still be refused: a held page does not move.
+            let fresh = if shared {
+                None
+            } else {
+                // The pages leave an object only this space maps, so nobody
+                // else can hold a translation to them: always checked, before
+                // anything is moved or anyone told.
+                if vmo.mapper_count() != 1 {
+                    crate::panic::fatal!(
+                        crate::panic::catalog::PRIVATE_OBJECT_SHARED,
+                        "mremap found a VMO backing a private region with more than one mapper"
+                    );
+                }
+                let fresh = Vmo::new_anonymous(new_len / PAGE_SIZE);
+                let moved = fresh
+                    .adopt_pages(&vmo, first / PAGE_SIZE, old_len.min(new_len) / PAGE_SIZE)
+                    .map_err(|_| SpaceError::OutOfMemory)?;
+                Some((fresh, moved))
+            };
+
             // Everything that can be refused has been. Whatever a fixed
             // destination covers goes, as `MAP_FIXED` would take it; then the
             // old range leaves the map and the tables, but not its pages.
-            if let Destination::Fixed(_) = destination {
-                let removed = inner
-                    .map
-                    .remove(new_range)
-                    .map_err(|_| SpaceError::BadRange)?;
-                self.take_down(&removed, &mut freeing);
-            }
-            let _ = inner
-                .map
-                .remove(old_range)
-                .map_err(|_| SpaceError::BadRange)?;
-            let _ = mm::unmap_in(self.root * PAGE_SIZE, old, old_len);
+            let cleared = self.clear_for_remap(
+                &mut inner,
+                matches!(destination, Destination::Fixed(_)),
+                new_range,
+                old_range,
+                &mut freeing,
+                &mut pages,
+            );
 
-            let backing = if shared {
+            let resize = Resize {
+                id,
+                first,
+                old_len,
+                new_len,
+            };
+            let (backing, moved) =
+                self.remap_backing(&mut inner, &vmo, resize, cleared, fresh, &mut freeing);
+
+            let placed = backing.and_then(|backing| {
+                inner
+                    .map
+                    .insert_region(Vma {
+                        range: new_range,
+                        backing,
+                        ..region
+                    })
+                    .map(|()| at)
+                    .map_err(|_| SpaceError::BadRange)
+            });
+            let cpus = self.begin_shootdown(&inner);
+            (placed, cpus, moved.map(|retired| (vmo, retired)))
+        };
+
+        // The old translations are out of the tables but may still be in the
+        // TLB of a processor in the set, and so may whatever a fixed
+        // destination replaced.
+        self.shoot(&cpus, &pages);
+        // Any other space mapping the object the pages moved out of forgets
+        // them too, before the new object can give one back. And the reference
+        // to that object goes before `give_back`, which reads its count.
+        if let Some((from, retired)) = moved {
+            from.retire(
+                retired,
+                Some(Own {
+                    space: self,
+                    shootdown: None,
+                }),
+            );
+        }
+        self.give_back(freeing);
+        placed
+    }
+
+    /// The backing an `mremap`'s region gets, once `cleared` says whether its
+    /// old placement came out of the map and the tables, and what its pages
+    /// left behind in the old object if they moved.
+    ///
+    /// A shared region keeps its object, grown to cover it, and gives back the
+    /// tail a shrink cut off. A private region takes `fresh`, attached under a
+    /// new id. On a failure the moved frames go back into `vmo`: they never
+    /// changed, so the old translations to them were never wrong.
+    fn remap_backing(
+        &self,
+        inner: &mut Inner,
+        vmo: &Arc<Vmo>,
+        resize: Resize,
+        cleared: Result<(), SpaceError>,
+        fresh: Option<(Arc<Vmo>, Retired)>,
+        freeing: &mut Vec<Freeing>,
+    ) -> (Result<Backing, SpaceError>, Option<Retired>) {
+        let Resize {
+            id,
+            first,
+            old_len,
+            new_len,
+        } = resize;
+        match (cleared, fresh) {
+            (Err(why), Some((fresh, _moved))) => {
+                fresh.return_pages(vmo, first / PAGE_SIZE);
+                (Err(why), None)
+            }
+            (Err(why), None) => (Err(why), None),
+            (Ok(()), None) => {
                 vmo.grow_to((first + new_len) / PAGE_SIZE);
                 if new_len < old_len {
                     freeing.push(Freeing {
@@ -807,12 +1201,11 @@ impl AddressSpace {
                         pages: (old_len - new_len) / PAGE_SIZE,
                     });
                 }
-                Backing::Anonymous { id, offset: first }
-            } else {
+                (Ok(Backing::Anonymous { id, offset: first }), None)
+            }
+            (Ok(()), Some((fresh, retired))) => {
                 let fresh_id = inner.next_id;
                 inner.next_id = inner.next_id.saturating_add(1);
-                let fresh = Vmo::new_anonymous(new_len / PAGE_SIZE);
-                fresh.adopt_pages(&vmo, first / PAGE_SIZE, old_len.min(new_len) / PAGE_SIZE);
                 // Whatever did not move -- the tail a shrink cut off -- is
                 // still the old object's, and goes back with the rest.
                 freeing.push(Freeing {
@@ -820,32 +1213,90 @@ impl AddressSpace {
                     first: first / PAGE_SIZE,
                     pages: old_len / PAGE_SIZE,
                 });
+                fresh.attach(self.me.clone(), fresh_id, Sharing::Private);
                 let _ = inner.objects.insert(fresh_id, fresh);
-                Backing::Anonymous {
+                let backing = Backing::Anonymous {
                     id: fresh_id,
                     offset: 0,
-                }
-            };
-            // Back to the count the map alone holds, which `give_back` reads.
-            drop(vmo);
-
-            inner
-                .map
-                .insert_region(Vma {
-                    range: new_range,
-                    backing,
-                    ..region
-                })
-                .map(|()| at)
-                .map_err(|_| SpaceError::BadRange)
-        };
-
-        // The old translations are out of the tables but may still be in a
-        // processor's TLB, and so may whatever a fixed destination replaced.
-        invalidate();
-        self.give_back(freeing);
-        placed
+                };
+                (Ok(backing), Some(retired))
+            }
+        }
     }
+
+    /// Take out of the map and the tables what an `mremap` replaces: the
+    /// destination if it is `fixed`, then the old range.
+    ///
+    /// Called with the lock held. On an error the old range is still mapped,
+    /// in the map and the tables both.
+    fn clear_for_remap(
+        &self,
+        inner: &mut Inner,
+        fixed: bool,
+        new_range: PageRange,
+        old_range: PageRange,
+        freeing: &mut Vec<Freeing>,
+        pages: &mut TlbPages,
+    ) -> Result<(), SpaceError> {
+        if fixed {
+            let removed = inner
+                .map
+                .remove(new_range)
+                .map_err(|_| SpaceError::BadRange)?;
+            self.take_down(&removed, freeing, pages);
+        }
+        let _ = inner
+            .map
+            .remove(old_range)
+            .map_err(|_| SpaceError::BadRange)?;
+        let _ = mm::unmap_in(self.root * PAGE_SIZE, old_range.start(), old_range.bytes());
+        pages.add_range(old_range.start(), old_range.bytes());
+        Ok(())
+    }
+}
+
+/// Where an object an `mremap` moves pages within starts, and the two
+/// lengths.
+#[derive(Clone, Copy, Debug)]
+struct Resize {
+    /// The object the old range names.
+    id: u64,
+    /// Where in it the old range starts, in bytes.
+    first: u64,
+    /// The old length.
+    old_len: u64,
+    /// The new length.
+    new_len: u64,
+}
+
+/// Where an `mremap` of `old_range` to `new_len` bytes goes, or `None` if it
+/// stays exactly as it is.
+fn remap_target(
+    map: &ferrix_vma::AddressSpace,
+    destination: Destination,
+    old_range: PageRange,
+    new_len: u64,
+) -> Result<Option<u64>, SpaceError> {
+    let (old, old_len) = (old_range.start(), old_range.bytes());
+    Ok(Some(match destination {
+        Destination::Fixed(target) => {
+            let target_range = user_range(target, new_len)
+                .filter(|_| target.is_multiple_of(PAGE_SIZE))
+                .ok_or(SpaceError::NotUserRange(target))?;
+            if target_range.start() < old_range.end() && old_range.start() < target_range.end() {
+                return Err(SpaceError::BadRange);
+            }
+            target
+        }
+        _ if new_len == old_len => return Ok(None),
+        _ if new_len < old_len => old,
+        _ if grows_in_place(map, old, old_len, new_len) => old,
+        Destination::Anywhere => map
+            .find_free(new_len, PAGE_SIZE, None)
+            .filter(|&at| user_range(at, new_len).is_some())
+            .ok_or(SpaceError::OutOfMemory)?,
+        Destination::InPlace => return Err(SpaceError::OutOfMemory),
+    }))
 }
 
 /// `at..at + len` as a range, if it is a well-formed one inside the user half.
@@ -878,39 +1329,6 @@ fn named_elsewhere(map: &ferrix_vma::AddressSpace, id: u64, start: u64, end: u64
         }
         _ => false,
     })
-}
-
-/// Drop every processor's cached translations for this address space.
-///
-/// Called after a change that takes a translation down or makes it *less*
-/// permissive. Adding a translation where there was none needs nothing: a
-/// processor that faults on an absent page walks the tables and finds the new
-/// entry, because no architecture here caches the absence of one.
-///
-/// # Why this is the global flush, which the switch path must never use
-///
-/// `arch::flush_tlb` discards the kernel's global entries as well, and
-/// broadcasts. In the address-space switch path that would be simply wrong —
-/// the global entries are exactly what has to survive a root register write,
-/// and stage 4 has the writeup of the bug that comes from getting it wrong. It
-/// is right *here* for the opposite reason: a mapping change has to reach
-/// processors that are not this one, and this is the call that already knows
-/// how — broadcast in hardware on the Arm pair, by inter-processor interrupt on
-/// x86-64. [`crate::mm::unmap_kernel`] uses it for the kernel's own tables on
-/// the same argument.
-///
-/// It is coarser than it needs to be, in two ways worth naming because both
-/// are straightforward to fix and neither is a correctness question. It
-/// invalidates everything rather than the one page that changed, and it tells
-/// every processor rather than the ones with this space installed — which
-/// wants a `CpuSet` on the address space, maintained by
-/// [`AddressSpace::install`] and [`uninstall`]. Until a user thread exists
-/// there is nothing to measure the difference on.
-///
-/// Must not be called holding this address space's lock, for the reason
-/// [`crate::smp::flush_tlb_everywhere`] gives about locks in general.
-fn invalidate() {
-    crate::smp::flush_tlb_everywhere();
 }
 
 /// Whether a region with `flags` permits `access`.
@@ -958,22 +1376,6 @@ fn shared_object(map: &ferrix_vma::AddressSpace, id: u64) -> bool {
 // ---------------------------------------------------------------------------
 
 impl AddressSpace {
-    /// Reserve `len` bytes wherever they fit, and say where that was.
-    ///
-    /// `mmap` with a null address. The search and the insertion happen under
-    /// one lock, which is the whole reason this is a method rather than
-    /// `find_free` followed by [`AddressSpace::map_anonymous`]: two threads
-    /// calling `mmap` at once would otherwise be told about the same hole and
-    /// the second insertion would fail, or worse, succeed.
-    ///
-    /// `hint` is advisory. A program that passes a non-null address without
-    /// `MAP_FIXED` is asking, not telling, and Linux is free to answer
-    /// somewhere else — so a hint that does not fit is not an error.
-    ///
-    /// # Errors
-    ///
-    /// [`SpaceError::BadRange`] if the length is malformed, and
-    /// [`SpaceError::OutOfMemory`] if there is no hole big enough.
     /// Place `len` bytes of device memory, starting at physical address
     /// `physical`, in this space: at `at` if one is given, otherwise wherever
     /// it fits. Returns where it went.
@@ -1062,6 +1464,22 @@ impl AddressSpace {
         .map_err(|_| SpaceError::OutOfMemory)
     }
 
+    /// Reserve `len` bytes wherever they fit, and say where that was.
+    ///
+    /// `mmap` with a null address. The search and the insertion happen under
+    /// one lock, which is the whole reason this is a method rather than
+    /// `find_free` followed by [`AddressSpace::map_anonymous`]: two threads
+    /// calling `mmap` at once would otherwise be told about the same hole and
+    /// the second insertion would fail, or worse, succeed.
+    ///
+    /// `hint` is advisory. A program that passes a non-null address without
+    /// `MAP_FIXED` is asking, not telling, and Linux is free to answer
+    /// somewhere else — so a hint that does not fit is not an error.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::BadRange`] if the length is malformed, and
+    /// [`SpaceError::OutOfMemory`] if there is no hole big enough.
     pub(crate) fn map_anywhere(
         &self,
         hint: Option<u64>,
@@ -1090,6 +1508,7 @@ impl AddressSpace {
             .map
             .insert(range, flags, Backing::Anonymous { id, offset: 0 })
             .map_err(|_| SpaceError::BadRange)?;
+        vmo.attach(self.me.clone(), id, sharing_of(flags));
         let _ = inner.objects.insert(id, vmo);
         Ok(at)
     }
@@ -1120,16 +1539,28 @@ impl AddressSpace {
             return Err(SpaceError::NotUserRange(at));
         }
         let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
-        let mut inner = self.inner.lock();
+        let mut pages = TlbPages::new();
+        let cpus = {
+            let mut inner = self.inner.lock();
 
-        inner
-            .map
-            .protect(range, flags)
-            .map_err(|_| SpaceError::BadRange)?;
+            inner
+                .map
+                .protect(range, flags)
+                .map_err(|_| SpaceError::BadRange)?;
 
-        // Every page in the range re-faults and is reinstalled with the
-        // permissions the map now carries.
-        let _ = mm::unmap_in(self.root * PAGE_SIZE, range.start(), range.bytes());
+            // Every page in the range re-faults and is reinstalled with the
+            // permissions the map now carries.
+            let _ = mm::unmap_in(self.root * PAGE_SIZE, range.start(), range.bytes());
+            pages.add_range(range.start(), range.bytes());
+            self.begin_shootdown(&inner)
+        };
+
+        // A processor still holding one of the old entries could write through
+        // a page just made read-only. And a VMO taking one of these pages away
+        // meanwhile finds no translation to forget: the pending count this
+        // shootdown holds is what makes it flush the set anyway, rather than
+        // release a frame the old entry still reaches.
+        self.shoot(&cpus, &pages);
         Ok(())
     }
 
@@ -1162,8 +1593,13 @@ impl Drop for AddressSpace {
     /// its frames, and a frame released while a translation to it still exists
     /// is only safe because nothing is running in this address space — an
     /// `AddressSpace` is dropped when its last reference goes, and a running
-    /// thread is a reference.
+    /// thread is a reference — and because every processor that ran it left
+    /// its set only after the root write that dropped its translations.
+    ///
+    /// Every object is detached before it is let go, taking only its mapper
+    /// list: this runs with no lock of its own to hold.
     fn drop(&mut self) {
+        let me: *const AddressSpace = &raw const *self;
         let inner = self.inner.get_mut();
 
         for region in inner.map.iter() {
@@ -1172,6 +1608,9 @@ impl Drop for AddressSpace {
                 region.range.start(),
                 region.range.bytes(),
             );
+        }
+        for (&id, vmo) in &inner.objects {
+            vmo.detach(me, id);
         }
         inner.objects.clear();
 

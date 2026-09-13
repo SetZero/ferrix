@@ -6,5 +6,6 @@
 //! code it does not trust.
 
 pub(crate) mod check;
+pub(crate) mod rmap_check;
 pub(crate) mod space;
 pub(crate) mod vmo;

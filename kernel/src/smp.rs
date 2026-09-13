@@ -28,7 +28,8 @@ use alloc::vec::Vec;
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use ferrix_bootinfo::BootView;
+use ferrix_bootinfo::{BootView, PAGE_SIZE};
+use ferrix_sched::{CpuSet, MAX_CPUS};
 use ferrix_sync::{IrqControl, Once};
 
 use crate::sync::SpinLock;
@@ -612,15 +613,42 @@ pub(crate) fn flush_tlb_everywhere() {
         return;
     }
 
-    // Waiting for the turn is where a processor spins longest, so it looks for
-    // a panic's stop request as the wait for everyone does. And it gives up:
-    // every holder takes a new generation as soon as it has the turn, so a
-    // generation that moves is a holder that is alive, and one that stands
-    // still for longer than any holder may wait is a holder that stopped
-    // running with the turn in hand.
+    let _turn = take_turn();
+
+    // The flush at the top was on whichever processor this was then. The one
+    // it answers for has to be the one it is on now, which `service_tlb` sees
+    // is behind the generation just taken, and flushes.
+    let generation = TLB_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    as_this_cpu(service_tlb);
+    let _ = arch::send_ipi_to_others();
+
+    wait_for(
+        topology,
+        SHOOTDOWN_TIMEOUT_NANOS,
+        "flushed its TLB for a shootdown",
+        &crate::panic::catalog::SHOOTDOWN_TIMEOUT,
+        service_tlb,
+        PerCpu::is_online,
+        |cpu| cpu.tlb_seen.load(Ordering::SeqCst) >= generation,
+        || {
+            let _ = arch::send_ipi_to_others();
+        },
+    );
+    let _ = SHOOTDOWNS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Wait for the shootdown turn, and hold it until the guard drops.
+///
+/// Waiting for the turn is where a processor spins longest, so it looks for
+/// a panic's stop request as the wait for everyone does. And it gives up:
+/// every holder takes a new generation as soon as it has the turn, so a
+/// generation that moves is a holder that is alive, and one that stands
+/// still for longer than any holder may wait is a holder that stopped
+/// running with the turn in hand.
+fn take_turn() -> impl Sized {
     let mut seen = TLB_GENERATION.load(Ordering::SeqCst);
     let mut since = crate::timer::now_nanos();
-    let _turn = loop {
+    loop {
         if let Some(turn) = SHOOTING.try_lock() {
             break turn;
         }
@@ -639,48 +667,39 @@ pub(crate) fn flush_tlb_everywhere() {
             );
         }
         spin_loop();
-    };
-
-    // The flush at the top was on whichever processor this was then. The one
-    // it answers for has to be the one it is on now, which `service_tlb` sees
-    // is behind the generation just taken, and flushes.
-    let generation = TLB_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    as_this_cpu(service_tlb);
-    let _ = arch::send_ipi_to_others();
-
-    wait_for_everyone(
-        topology,
-        SHOOTDOWN_TIMEOUT_NANOS,
-        "flushed its TLB for a shootdown",
-        &crate::panic::catalog::SHOOTDOWN_TIMEOUT,
-        service_tlb,
-        |cpu| cpu.tlb_seen.load(Ordering::SeqCst) >= generation,
-    );
-    let _ = SHOOTDOWNS.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
-/// Wait until `done` holds for every online processor.
+/// Wait until `done` holds for every processor `waited` names.
 ///
-/// Shared by the two things that interrupt every other processor and wait for
-/// each to answer. While it waits it runs `answer` for the processor it is on,
-/// which answers other processors' shootdowns — two processors each waiting
-/// for the other would otherwise wait forever — and answers for this
-/// processor itself if the waiting task has moved to one the interrupt was not
-/// sent to. It re-sends its own interrupt every [`KICK_NANOS`]. After
-/// `timeout` it gives up on the machine: a processor that never answers is one
-/// whose TLB or whose read-side section nothing can vouch for any more, and
-/// carrying on would be carrying on regardless.
-fn wait_for_everyone(
+/// Shared by the things that interrupt other processors and wait for each to
+/// answer: every online processor for [`flush_tlb_everywhere`] and
+/// [`synchronize`], the online members of a set for [`flush_tlb_pages`].
+/// While it waits it runs `answer` for the processor it is on, which answers
+/// other processors' shootdowns — two processors each waiting for the other
+/// would otherwise wait forever — and answers for this processor itself if the
+/// waiting task has moved to one the interrupt was not sent to. It calls
+/// `kick` to re-send its interrupt every [`KICK_NANOS`]. After `timeout` it
+/// gives up on the machine: a processor that never answers is one whose TLB
+/// or whose read-side section nothing can vouch for any more, and carrying on
+/// would be carrying on regardless.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "three callers differ in exactly these; a struct would name each once more"
+)]
+fn wait_for(
     topology: &Topology,
     timeout: u64,
     what: &str,
     entry: &'static crate::panic::catalog::Explanation,
     answer: fn(&'static PerCpu),
+    waited: impl Fn(&PerCpu) -> bool,
     done: impl Fn(&PerCpu) -> bool,
+    kick: impl Fn(),
 ) {
     let started = crate::timer::now_nanos();
     let mut kicked = started;
-    for cpu in topology.cpus.iter().filter(|cpu| cpu.is_online()) {
+    for cpu in topology.cpus.iter().filter(|cpu| waited(cpu)) {
         while !done(cpu) {
             halt_if_stopping();
             as_this_cpu(answer);
@@ -689,7 +708,7 @@ fn wait_for_everyone(
                 crate::panic::fatal!(*entry, "processor {} never {what}", cpu.logical);
             }
             if now.saturating_sub(kicked) > KICK_NANOS {
-                let _ = arch::send_ipi_to_others();
+                kick();
                 kicked = now;
             }
             spin_loop();
@@ -699,15 +718,37 @@ fn wait_for_everyone(
 
 /// Flush this processor's TLB if a shootdown is waiting for it to.
 ///
-/// One flush answers every shootdown requested so far: each asks for the whole
-/// TLB, and a flush drops whatever any of them wanted dropped.
+/// A generation [`flush_tlb_everywhere`] took, or one taken by anything but
+/// [`flush_tlb_pages`], asks for the whole TLB. A generation `flush_tlb_pages`
+/// took asks only the processors in its set, and only for its pages; a
+/// processor outside the set answers it without flushing, because it held none
+/// of the set's spaces' translations when the set was read.
+///
+/// Only a processor exactly one generation behind trusts a scoped request. One
+/// further behind flushes everything: the requests it missed are gone, and
+/// rather than rest on an argument about which of them could have concerned
+/// it, it answers all of them the one way that is always enough.
 ///
 /// `me` must be the record of the processor running this, read with
 /// interrupts masked since: the interrupt handler, or [`as_this_cpu`].
 fn service_tlb(me: &PerCpu) {
     let wanted = TLB_GENERATION.load(Ordering::SeqCst);
-    if me.tlb_seen.load(Ordering::SeqCst) < wanted {
-        arch::flush_tlb();
+    let seen = me.tlb_seen.load(Ordering::SeqCst);
+    if seen < wanted {
+        let scoped = if seen.saturating_add(1) == wanted {
+            scoped_request(wanted, me.logical)
+        } else {
+            None
+        };
+        match scoped {
+            Some(pages) if pages.everything => arch::flush_tlb(),
+            Some(pages) => {
+                for &address in pages.addresses() {
+                    arch::flush_tlb_page(address);
+                }
+            }
+            None => arch::flush_tlb(),
+        }
         // A maximum rather than a store: an interrupt taken between the load
         // above and here may have recorded a later generation already, and
         // a store would take it back.
@@ -718,6 +759,379 @@ fn service_tlb(me: &PerCpu) {
 /// How many shootdowns have run.
 pub(crate) fn shootdowns() -> u64 {
     SHOOTDOWNS.load(Ordering::Relaxed)
+}
+
+// ---------------------------------------------------------------------------
+// Scoped shootdown: some pages, on the processors that may hold them
+// ---------------------------------------------------------------------------
+
+/// The most pages a scoped shootdown invalidates one at a time.
+///
+/// Past this it flushes the whole TLB instead: a flush costs a re-walk of
+/// whatever is used next, and a few dozen single invalidations cost about the
+/// same. Linux's `tlb_single_page_flush_ceiling` is 33 for the same reason.
+pub(crate) const PAGE_FLUSH_CEILING: usize = 33;
+
+/// Words of a [`CpuMask`]: one bit per processor a [`CpuSet`] can name.
+const CPU_WORDS: usize = MAX_CPUS.div_ceil(64);
+
+/// A set of processors that is joined and left without a lock.
+///
+/// What an address space keeps of the processors whose TLB may still hold its
+/// translations. A [`CpuSet`] is a value; this is the shared, changing thing a
+/// shootdown takes a [`CpuMask::snapshot`] of. Every operation is sequentially
+/// consistent, which is what the join-before-install and read-after-takedown
+/// argument in [`crate::user::space`] needs.
+#[derive(Debug)]
+pub(crate) struct CpuMask {
+    /// One bit per logical processor.
+    words: [AtomicU64; CPU_WORDS],
+}
+
+impl CpuMask {
+    /// No processors.
+    pub(crate) const fn new() -> CpuMask {
+        CpuMask {
+            words: [const { AtomicU64::new(0) }; CPU_WORDS],
+        }
+    }
+
+    /// Add processor `cpu`.
+    ///
+    /// A processor past [`MAX_CPUS`] cannot be named, and the scheduler refuses
+    /// to start on a machine that has one, so nothing runs a space there.
+    pub(crate) fn join(&self, cpu: usize) {
+        if let Some(word) = self.words.get(cpu / 64) {
+            let _ = word.fetch_or(1 << (cpu % 64), Ordering::SeqCst);
+        }
+    }
+
+    /// Remove processor `cpu`.
+    pub(crate) fn leave(&self, cpu: usize) {
+        if let Some(word) = self.words.get(cpu / 64) {
+            let _ = word.fetch_and(!(1 << (cpu % 64)), Ordering::SeqCst);
+        }
+    }
+
+    /// The processors in the set at the moment of reading.
+    pub(crate) fn snapshot(&self) -> CpuSet {
+        let mut set = CpuSet::empty();
+        for (index, word) in self.words.iter().enumerate() {
+            let bits = word.load(Ordering::SeqCst);
+            for bit in (0..64).filter(|bit| bits & (1 << bit) != 0) {
+                let _ = set.insert(index * 64 + bit);
+            }
+        }
+        set
+    }
+}
+
+/// Add every processor in `from` to `into`.
+pub(crate) fn add_cpus(into: &mut CpuSet, from: &CpuSet) {
+    for cpu in from.iter() {
+        let _ = into.insert(cpu);
+    }
+}
+
+/// The pages a shootdown asks to have invalidated: up to
+/// [`PAGE_FLUSH_CEILING`] of them, or everything.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TlbPages {
+    /// The page addresses, the first `count` of them meaningful.
+    pages: [u64; PAGE_FLUSH_CEILING],
+    /// How many of `pages` are.
+    count: usize,
+    /// More were asked for than fit, or the caller could not say which: the
+    /// whole TLB.
+    everything: bool,
+}
+
+impl TlbPages {
+    /// No pages.
+    pub(crate) const fn new() -> TlbPages {
+        TlbPages {
+            pages: [0; PAGE_FLUSH_CEILING],
+            count: 0,
+            everything: false,
+        }
+    }
+
+    /// Whether there is nothing to invalidate.
+    pub(crate) fn is_empty(&self) -> bool {
+        !self.everything && self.count == 0
+    }
+
+    /// Whether the whole TLB is asked for.
+    pub(crate) fn is_everything(&self) -> bool {
+        self.everything
+    }
+
+    /// The page addresses, unless the whole TLB is asked for.
+    pub(crate) fn addresses(&self) -> &[u64] {
+        self.pages.get(..self.count).unwrap_or(&[])
+    }
+
+    /// Ask for the whole TLB.
+    pub(crate) fn everything(&mut self) {
+        self.everything = true;
+    }
+
+    /// Ask for the page holding `address`.
+    pub(crate) fn add(&mut self, address: u64) {
+        if self.everything {
+            return;
+        }
+        let page = address & !(PAGE_SIZE - 1);
+        if self.addresses().contains(&page) {
+            return;
+        }
+        match self.pages.get_mut(self.count) {
+            Some(slot) => {
+                *slot = page;
+                self.count += 1;
+            }
+            None => self.everything = true,
+        }
+    }
+
+    /// Ask for every page of `len` bytes from `start`.
+    pub(crate) fn add_range(&mut self, start: u64, len: u64) {
+        let pages = len.div_ceil(PAGE_SIZE);
+        if pages > PAGE_FLUSH_CEILING as u64 {
+            self.everything = true;
+            return;
+        }
+        for index in 0..pages {
+            self.add(start.saturating_add(index * PAGE_SIZE));
+        }
+    }
+
+    /// Ask for everything `other` asks for as well.
+    pub(crate) fn add_all(&mut self, other: &TlbPages) {
+        if other.everything {
+            self.everything = true;
+        }
+        for &address in other.addresses() {
+            self.add(address);
+        }
+    }
+}
+
+/// The generation the request below belongs to, or zero while one is being
+/// written. Written by the holder of the turn, read by whoever answers.
+static SCOPED_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// The processors the current scoped request is for.
+static SCOPED_CPUS: [AtomicU64; CPU_WORDS] = [const { AtomicU64::new(0) }; CPU_WORDS];
+
+/// How many of [`SCOPED_PAGES`] the current request uses, or `u64::MAX` for
+/// the whole TLB.
+static SCOPED_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// The page addresses of the current scoped request.
+static SCOPED_PAGES: [AtomicU64; PAGE_FLUSH_CEILING] =
+    [const { AtomicU64::new(0) }; PAGE_FLUSH_CEILING];
+
+/// Scoped shootdowns that interrupted at least one processor.
+static SCOPED_SHOOTDOWNS: AtomicU64 = AtomicU64::new(0);
+
+/// Processors those shootdowns interrupted, in all.
+static SCOPED_TARGETS: AtomicU64 = AtomicU64::new(0);
+
+/// Scoped shootdowns that asked nobody: an empty set, one processor, or the
+/// Arm pair's hardware broadcast.
+static SCOPED_UNSENT: AtomicU64 = AtomicU64::new(0);
+
+/// What the scoped request of generation `wanted` asks of processor `cpu`,
+/// or `None` if that generation was not a scoped one, or its request was
+/// being rewritten under the read -- both of which the caller answers with a
+/// whole flush, which is always enough.
+///
+/// A seqlock without the counter: the writer zeroes [`SCOPED_GENERATION`],
+/// writes the request, and only then stores the generation, so a request read
+/// between two loads of an unchanged generation is that generation's whole.
+fn scoped_request(wanted: u64, cpu: usize) -> Option<TlbPages> {
+    if SCOPED_GENERATION.load(Ordering::SeqCst) != wanted {
+        return None;
+    }
+    let member = SCOPED_CPUS
+        .get(cpu / 64)
+        .is_some_and(|word| word.load(Ordering::SeqCst) & (1 << (cpu % 64)) != 0);
+    let mut pages = TlbPages::new();
+    if member {
+        let count = SCOPED_COUNT.load(Ordering::SeqCst);
+        match usize::try_from(count) {
+            Ok(count) if count <= PAGE_FLUSH_CEILING => {
+                for slot in SCOPED_PAGES.iter().take(count) {
+                    pages.add(slot.load(Ordering::SeqCst));
+                }
+            }
+            _ => pages.everything(),
+        }
+    }
+    (SCOPED_GENERATION.load(Ordering::SeqCst) == wanted).then_some(pages)
+}
+
+/// Invalidate `pages` on every processor in `cpus`, and return once each has.
+///
+/// The shootdown for a change to one address space's tables, scoped twice
+/// over: to the pages that changed, up to [`PAGE_FLUSH_CEILING`] of them, and
+/// to the processors whose TLB may still hold that space's translations. The
+/// caller has taken the translations down and read `cpus` afterwards, under
+/// the space's lock, and must not free what they reached until this returns
+/// -- `crate::user::space` says why that order is the whole of what makes it
+/// safe.
+///
+/// On x86-64 each processor in the set other than this one is interrupted by
+/// name and answers with `invlpg` per page; the processor this is running on,
+/// if it is in the set, answers for itself. The turn and the generations are
+/// [`flush_tlb_everywhere`]'s, so the two never run at once and a processor
+/// answering one never loses the other. An empty set, or nothing to
+/// invalidate, interrupts nobody.
+///
+/// On `AArch64` and ARMv7-A invalidation is broadcast in hardware, and this
+/// is a page-scoped broadcast (`TLBI VAAE1IS`, `TLBIMVAAIS`) to every core,
+/// whatever the set. Scoping it by processor as well needs `ASID`s, which the
+/// kernel does not allocate: every user translation is tagged with `ASID`
+/// zero, so there is no way to tell a core to drop one space's entries
+/// without telling it to drop every space's.
+///
+/// **Must not be called holding a spin lock**, for the reason
+/// [`flush_tlb_everywhere`] gives and one more: the wait spins, and a holder
+/// waiting on another processor's answer is a holder every waiter for the lock
+/// waits on too.
+pub(crate) fn flush_tlb_pages(cpus: &CpuSet, pages: &TlbPages) {
+    if pages.is_empty() {
+        return;
+    }
+    if arch::TLB_FLUSH_IS_BROADCAST {
+        if pages.is_everything() {
+            arch::flush_tlb();
+        } else {
+            for &address in pages.addresses() {
+                arch::flush_tlb_page(address);
+            }
+        }
+        let _ = SCOPED_UNSENT.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    if cpus.is_empty() {
+        let _ = SCOPED_UNSENT.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    // Before discovery, or with nobody else running, the only TLB that can
+    // hold anything is this one.
+    let Some(topology) = TOPOLOGY
+        .get()
+        .filter(|topology| this_cpu().is_some() && topology.online() > 1)
+    else {
+        flush_here(pages);
+        let _ = SCOPED_UNSENT.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+
+    let _turn = take_turn();
+
+    // Written before the generation that points at it, for the reason
+    // `scoped_request` gives. Nobody else writes it: that is what the turn is.
+    SCOPED_GENERATION.store(0, Ordering::SeqCst);
+    for (index, word) in SCOPED_CPUS.iter().enumerate() {
+        let bits = (0..64)
+            .filter(|bit| cpus.contains(index * 64 + bit))
+            .fold(0_u64, |bits, bit| bits | 1 << bit);
+        word.store(bits, Ordering::SeqCst);
+    }
+    // A list longer than the slots is the whole TLB, never a count past what
+    // was written: a reader trusting that count would read slots nobody filled
+    // for this generation, or skip pages it was asked for.
+    let addresses = pages.addresses();
+    let count = if pages.is_everything() || addresses.len() > SCOPED_PAGES.len() {
+        u64::MAX
+    } else {
+        for (slot, &address) in SCOPED_PAGES.iter().zip(addresses) {
+            slot.store(address, Ordering::SeqCst);
+        }
+        debug_assert!(
+            addresses.len() <= SCOPED_PAGES.len(),
+            "a scoped request counted more pages than it has slots"
+        );
+        addresses.len() as u64
+    };
+    SCOPED_COUNT.store(count, Ordering::SeqCst);
+    let generation = TLB_GENERATION.load(Ordering::SeqCst) + 1;
+    SCOPED_GENERATION.store(generation, Ordering::SeqCst);
+    TLB_GENERATION.store(generation, Ordering::SeqCst);
+
+    // For the processor this is on now, if it is in the set; `service_tlb`
+    // reads the request as any processor would.
+    as_this_cpu(service_tlb);
+
+    let member = |cpu: &PerCpu| cpu.is_online() && cpus.contains(cpu.logical);
+    let behind = |cpu: &PerCpu| cpu.tlb_seen.load(Ordering::SeqCst) < generation;
+    let send = || {
+        let mut sent = 0;
+        for cpu in topology
+            .cpus
+            .iter()
+            .filter(|cpu| member(cpu) && behind(cpu))
+        {
+            if arch::send_ipi_to(cpu.hardware_id).is_ok() {
+                sent += 1;
+            }
+        }
+        sent
+    };
+    let targets: u64 = send();
+
+    wait_for(
+        topology,
+        SHOOTDOWN_TIMEOUT_NANOS,
+        "invalidated its TLB for a scoped shootdown",
+        &crate::panic::catalog::SHOOTDOWN_TIMEOUT,
+        service_tlb,
+        member,
+        |cpu| !behind(cpu),
+        || {
+            let _ = send();
+        },
+    );
+    if targets == 0 {
+        let _ = SCOPED_UNSENT.fetch_add(1, Ordering::Relaxed);
+    } else {
+        let _ = SCOPED_SHOOTDOWNS.fetch_add(1, Ordering::Relaxed);
+        let _ = SCOPED_TARGETS.fetch_add(targets, Ordering::Relaxed);
+    }
+}
+
+/// Invalidate `pages` on this processor only.
+fn flush_here(pages: &TlbPages) {
+    if pages.is_everything() {
+        arch::flush_tlb();
+    } else {
+        for &address in pages.addresses() {
+            arch::flush_tlb_page(address);
+        }
+    }
+}
+
+/// What the scoped shootdowns have cost so far.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ScopedShootdowns {
+    /// Those that interrupted at least one processor.
+    pub(crate) sent: u64,
+    /// The processors those interrupted, in all.
+    pub(crate) processors: u64,
+    /// Those that interrupted nobody.
+    pub(crate) unsent: u64,
+}
+
+/// How many scoped shootdowns have run, and how many processors they cost.
+pub(crate) fn scoped_shootdowns() -> ScopedShootdowns {
+    ScopedShootdowns {
+        sent: SCOPED_SHOOTDOWNS.load(Ordering::Relaxed),
+        processors: SCOPED_TARGETS.load(Ordering::Relaxed),
+        unsent: SCOPED_UNSENT.load(Ordering::Relaxed),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -786,13 +1200,17 @@ pub(crate) fn synchronize() {
 
     if topology.online() > 1 {
         let _ = arch::send_ipi_to_others();
-        wait_for_everyone(
+        wait_for(
             topology,
             GRACE_TIMEOUT_NANOS,
             "left a read-side section for a grace period",
             &crate::panic::catalog::GRACE_PERIOD_TIMEOUT,
             answer_grace,
+            PerCpu::is_online,
             |cpu| cpu.gp_seen.load(Ordering::SeqCst) >= generation,
+            || {
+                let _ = arch::send_ipi_to_others();
+            },
         );
     }
     let _ = GRACE_PERIODS.fetch_add(1, Ordering::Relaxed);

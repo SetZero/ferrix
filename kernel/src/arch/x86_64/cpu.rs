@@ -141,6 +141,18 @@ pub(crate) fn flush_tlb_including_global() {
     }
 }
 
+/// Drop this processor's cached translation of the page holding `address`.
+///
+/// `invlpg`, which drops the entry whether or not it is global, and only on
+/// this processor.
+pub(crate) fn invalidate_page(address: u64) {
+    // SAFETY: `invlpg` names an address and reads nothing at it; its only
+    // effect is that the next use of the page re-walks the tables.
+    unsafe {
+        asm!("invlpg [{}]", in(reg) address, options(nostack, preserves_flags));
+    }
+}
+
 /// `RFLAGS.IF` — interrupts are unmasked.
 pub(crate) const RFLAGS_INTERRUPT: u64 = 1 << 9;
 

@@ -1306,10 +1306,10 @@ fn swap_address_space(
         // queue holds an `Arc` to it for as long as it is `current`, so the
         // tables outlive the installation. Interrupts are off and the run
         // queue lock is held, so nothing else can install a root here first.
-        (_, Some(after)) => unsafe { after.install() },
+        (before, Some(after)) => unsafe { after.install(before.map(|space| &**space)) },
         // SAFETY: the incoming task is a kernel thread and wants no user
         // address; the kernel is reachable without one on every architecture.
-        (Some(_), None) => unsafe { crate::user::space::uninstall() },
+        (Some(before), None) => unsafe { before.uninstall() },
     }
 }
 

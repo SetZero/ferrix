@@ -277,6 +277,16 @@ pub(crate) fn send_ipi_to_others() -> Result<(), &'static str> {
     issue(None, ICR_ALL_BUT_SELF | ICR_ASSERT | IPI_VECTOR as u32)
 }
 
+/// Interrupt processor `apic_id` alone on [`IPI_VECTOR`]: fixed delivery,
+/// physical destination.
+///
+/// What a scoped TLB shootdown sends, so that a processor that holds none of
+/// an address space's translations is not woken to say so. This processor
+/// may name itself; the interrupt is taken when it next unmasks.
+pub(crate) fn send_ipi_to(apic_id: u32) -> Result<(), &'static str> {
+    send(apic_id, ICR_ASSERT | IPI_VECTOR as u32)
+}
+
 /// Send `command` to the local APIC `apic_id` and wait for it to be accepted.
 fn send(apic_id: u32, command: u32) -> Result<(), &'static str> {
     if apic_id > 0xFF {

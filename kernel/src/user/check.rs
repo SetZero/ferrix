@@ -25,7 +25,7 @@ use ferrix_vma::VmaFlags;
 
 use crate::arch;
 use crate::mm;
-use crate::user::space::{self, Access, AddressSpace, SpaceError};
+use crate::user::space::{Access, AddressSpace, SpaceError};
 use crate::user::vmo::{Vmo, VmoError};
 
 /// What the checks measured, for the boot log.
@@ -619,7 +619,7 @@ fn check_the_processor_walks_an_installed_space() -> Result<u64, &'static str> {
         // SAFETY: nothing after this wants a user address — the next round
         // installs its own, and every read outside this loop goes through the
         // direct map.
-        unsafe { space::uninstall() };
+        unsafe { space.uninstall() };
 
         if walked.is_err() {
             break;
@@ -715,7 +715,7 @@ fn fault_and_write_installed(
     // SAFETY: `space` is borrowed across the whole window so its tables
     // outlive the installation, interrupts are masked, and it is uninstalled
     // below before anything else can want a user address.
-    unsafe { space.install() };
+    unsafe { space.install(None) };
 
     let through = at as *mut u64;
     // SAFETY: the caller faulted this page in read-only through `space`, which
@@ -731,7 +731,7 @@ fn fault_and_write_installed(
     }
 
     // SAFETY: nothing after this wants a user address.
-    unsafe { space::uninstall() };
+    unsafe { space.uninstall() };
     <arch::Irq as IrqControl>::restore(state);
 
     resolved.map_err(|_| "a write to a copy-on-write page was not resolved")
@@ -755,7 +755,7 @@ fn walk_through_installed(
     // SAFETY: `space` is borrowed for the whole of this call, so its tables
     // outlive the installation; the caller has masked interrupts and
     // uninstalls before going on.
-    unsafe { space.install() };
+    unsafe { space.install(None) };
 
     for index in 0..pages {
         let virt = base + index * PAGE_SIZE;

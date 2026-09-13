@@ -95,3 +95,11 @@ pub(crate) use x86_64::{
     SIGNAL_RED_ZONE, USER_SIGNAL_PROGRAM, UserContext, fault_signal, restore_signal_frame,
     setup_signal_frame,
 };
+// The scoped TLB shootdown: one page invalidated, one processor interrupted,
+// and the program that checks it from user mode.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::{USER_RMAP_PROGRAM, flush_tlb_page, send_ipi_to};
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::{USER_RMAP_PROGRAM, flush_tlb_page, send_ipi_to};
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::{USER_RMAP_PROGRAM, flush_tlb_page, send_ipi_to};

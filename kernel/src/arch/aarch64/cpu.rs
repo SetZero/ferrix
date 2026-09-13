@@ -70,6 +70,29 @@ pub(crate) fn flush_tlb() {
     }
 }
 
+/// Publish page table writes and invalidate the page holding `address` on
+/// every core, for every `ASID`.
+///
+/// `TLBI VAAE1IS` takes the page number, bits 55:12 of the address, in its
+/// low 44 bits. Every user translation carries `ASID` zero and every kernel
+/// one is global, and `VAAE1IS` drops both kinds for that page, so this is
+/// [`flush_tlb`] narrowed to one page and nothing else. The barriers are that
+/// function's, for its reasons.
+pub(crate) fn flush_tlb_page(address: u64) {
+    // SAFETY: barriers and TLB maintenance have no effect other than ordering
+    // and invalidation.
+    unsafe {
+        asm!(
+            "dsb ishst",
+            "tlbi vaae1is, {page}",
+            "dsb ish",
+            "isb",
+            page = in(reg) (address >> 12) & ((1 << 44) - 1),
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
 /// PSCI `SYSTEM_OFF`, in the 32-bit calling convention.
 const PSCI_SYSTEM_OFF: u64 = 0x8400_0008;
 

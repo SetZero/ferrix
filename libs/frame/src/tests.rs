@@ -811,3 +811,36 @@ fn a_tail_cannot_be_freed_as_a_block_of_its_own() {
     assert_eq!(frames.deallocate(block, 3), Ok(()));
     assert_eq!(frames.free_frames(), 32);
 }
+
+#[test]
+fn a_freed_frame_is_claimed_back_exactly_even_after_it_merged() {
+    let (mut entries, base, count) = arena(0x200, 32);
+    let mut frames = frames!(entries, base, count);
+
+    // Freed into a block of 32, so the plain allocator would hand out the
+    // block's head, not this.
+    let wanted = base + 13;
+    assert_eq!(frames.claim(wanted), Some(wanted));
+    assert_eq!(frames.state(wanted), Some(State::Allocated));
+    assert_eq!(frames.free_frames(), 31);
+    // Claimed once; a second claim of an allocated frame is refused.
+    assert_eq!(frames.claim(wanted), None);
+
+    // Everything else is still there, exactly once: all 31 come out, none of
+    // them the claimed frame.
+    let mut seen = Vec::new();
+    while let Some(frame) = frames.allocate(0) {
+        assert_ne!(frame, wanted);
+        assert!(!seen.contains(&frame));
+        seen.push(frame);
+    }
+    assert_eq!(seen.len(), 31);
+
+    // And it frees and merges like any frame.
+    for frame in seen {
+        assert_eq!(frames.deallocate(frame, 0), Ok(()));
+    }
+    assert_eq!(frames.deallocate(wanted, 0), Ok(()));
+    assert_eq!(frames.free_frames(), 32);
+    assert_eq!(frames.claim(base + 64), None);
+}

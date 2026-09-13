@@ -219,6 +219,11 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // ring-3 transition, is a debugging session nobody wants.
     check_syscalls();
 
+    // A VMO taking a page away from two processes running on two processors,
+    // seen from user mode. Stage 6's memory, but it needs programs that run,
+    // so after stage 7's check has shown they do.
+    check_reverse_map();
+
     // The one way into the kernel a program can bend from ring 3: on x86-64 a
     // trap flag it set survives into the kernel unless `SYSCALL` masks it.
     // After stage 7's check, which has shown a program runs at all.
@@ -551,6 +556,41 @@ fn check_syscalls() {
         "  futex    a changed word got EAGAIN and a timed wait ETIMEDOUT; a wake and a requeue \
          roused {} waiters, and a wake that roused nobody was caught",
         report.futex_woken,
+    );
+}
+
+/// Stage 6's reverse map: a shared object's page decommitted, replaced and
+/// held under two processes on two processors, which must never reach a frame
+/// the object gave back.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_reverse_map() {
+    let report = match user::rmap_check::run() {
+        Ok(Some(report)) => report,
+        Ok(None) => {
+            println!(
+                "  rmap     needs two processors and a program for {}",
+                arch::NAME
+            );
+            return;
+        }
+        Err(problem) => fatal!(
+            catalog::STAGE6_REVERSE_MAP,
+            "stage 6 reverse map self-check failed: {problem}"
+        ),
+    };
+    let (taken_on, other) = report.processors;
+    println!(
+        "  rmap     {} frames taken from two processes on processors {taken_on} and {other} and \
+         poisoned, never reached from user mode; a held page kept its mappings; scoped \
+         shootdowns {} sent to {} processors and {} needing no interrupt, against {} global; \
+         {} frames leaked",
+        report.taken,
+        report.scoped.sent,
+        report.scoped.processors,
+        report.scoped.unsent,
+        report.global,
+        report.leaked,
     );
 }
 
