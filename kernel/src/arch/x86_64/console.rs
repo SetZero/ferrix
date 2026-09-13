@@ -44,8 +44,9 @@ const DIVISOR: u16 = 1;
 /// Firmware has usually done this already, but "usually" is not a property to
 /// build a panic handler on.
 pub(crate) fn init() {
-    // Interrupts off: the kernel polls, because there is no interrupt
-    // controller yet and a panic must be able to print without one.
+    // Interrupts off: there is no interrupt controller yet, and a panic must be
+    // able to print without one. `enable_receive_interrupt` turns receive on
+    // once the I/O APIC routes the line.
     write_register(INTERRUPT_ENABLE, 0x00);
     write_register(LINE_CONTROL, DIVISOR_LATCH);
     write_register(DATA, DIVISOR as u8);
@@ -53,6 +54,21 @@ pub(crate) fn init() {
     write_register(LINE_CONTROL, EIGHT_N_ONE);
     write_register(FIFO_CONTROL, FIFO_ENABLE);
     write_register(MODEM_CONTROL, MODEM_READY);
+}
+
+/// The ISA interrupt COM1 raises.
+pub(crate) const ISA_IRQ: u8 = 4;
+
+/// Interrupt enable register: raise the port's line while received data waits.
+const RECEIVE_DATA_AVAILABLE: u8 = 1;
+
+/// Let the port raise its interrupt when a byte arrives.
+///
+/// Reading the byte clears it, which [`read_byte`] does. `MODEM_CONTROL`
+/// already sets `OUT2`, the bit that on a PC connects the 16550's interrupt
+/// output to the interrupt controller at all.
+pub(crate) fn enable_receive_interrupt() {
+    write_register(INTERRUPT_ENABLE, RECEIVE_DATA_AVAILABLE);
 }
 
 /// Write one of COM1's registers.
@@ -119,11 +135,10 @@ pub(crate) fn drain() {
 
 /// One received byte, if the port has one.
 ///
-/// Polled rather than interrupt-driven, for the same reason [`init`] leaves
-/// the port's interrupts off: the console has to work before there is an
-/// interrupt controller and during a panic, and a second path that only works
-/// afterwards is a second thing to get wrong. A program waiting on its
-/// keyboard costs a busy processor until the tty layer can put it to sleep.
+/// A plain read, for both paths: polled before the port's receive interrupt is
+/// installed and during a panic, which is why [`init`] leaves the port's
+/// interrupts off; and called from that interrupt once `console::input` has
+/// routed it, to empty the port into the receive ring.
 pub(crate) fn read_byte() -> Option<u8> {
     if read_register(LINE_STATUS) & DATA_READY == 0 {
         return None;

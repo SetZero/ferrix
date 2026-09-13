@@ -113,9 +113,9 @@ pub(crate) struct Checked {
 /// Install the console port's receive interrupt, if the machine has one this
 /// kernel can take, and return its number.
 ///
-/// `Ok(None)` when input stays polled: on x86-64, whose 16550 has no route
-/// through the I/O APIC yet, and on an Arm machine whose device tree names the
-/// port's interrupt in a shape `ferrix_fdt` does not follow.
+/// `Ok(None)` when input stays polled: on an x86-64 machine whose MADT gives
+/// COM1's line no I/O APIC input, and on an Arm machine whose device tree names
+/// the port's interrupt in a shape `ferrix_fdt` does not follow.
 ///
 /// Call with interrupts masked, before they are first enabled.
 ///

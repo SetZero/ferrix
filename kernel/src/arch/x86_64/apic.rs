@@ -18,7 +18,7 @@
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use ferrix_acpi::{Acpi, MadtEntry};
+use ferrix_acpi::{Acpi, IsaInterrupt, Madt, MadtEntry};
 use ferrix_sync::IrqControl;
 
 use super::clock;
@@ -116,6 +116,12 @@ const IOAPIC_VERSION_REGISTER: u32 = 0x01;
 const IOAPIC_REDIRECTION_BASE: u32 = 0x10;
 /// A redirection entry's low word: the input is masked.
 const IOAPIC_ENTRY_MASKED: u32 = 1 << 16;
+/// A redirection entry's low word: the input is asserted low.
+const IOAPIC_ENTRY_ACTIVE_LOW: u32 = 1 << 13;
+/// A redirection entry's low word: the input is level triggered.
+const IOAPIC_ENTRY_LEVEL: u32 = 1 << 15;
+/// Where a redirection entry's high word keeps the destination APIC identifier.
+const IOAPIC_DESTINATION_SHIFT: u32 = 24;
 /// Bytes of register window an I/O APIC occupies.
 const IOAPIC_WINDOW_BYTES: u64 = 0x20;
 
@@ -201,10 +207,11 @@ fn calibrate(regs: Mmio) -> Result<(), &'static str> {
 
 /// Mask every input on every I/O APIC firmware described.
 ///
-/// Not "configure": there is nothing to route yet. What this prevents is a
-/// line firmware left unmasked — the PIT's, classically — arriving at a vector
-/// chosen by whoever wrote the firmware.
-fn quiesce_io_apics(madt: &ferrix_acpi::Madt<'_>) -> Result<(), &'static str> {
+/// Not "configure": the inputs the kernel uses are routed one at a time later,
+/// by [`IoApicInput::route`]. What this prevents is a line firmware left
+/// unmasked — the PIT's, classically — arriving at a vector chosen by whoever
+/// wrote the firmware.
+fn quiesce_io_apics(madt: &Madt<'_>) -> Result<(), &'static str> {
     for entry in madt.entries() {
         let MadtEntry::IoApic(io_apic) = entry else {
             continue;
@@ -214,6 +221,84 @@ fn quiesce_io_apics(madt: &ferrix_acpi::Madt<'_>) -> Result<(), &'static str> {
         mask_all_inputs(Mmio::at(base));
     }
     Ok(())
+}
+
+/// One input of one I/O APIC, and how its line is signalled.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct IoApicInput {
+    /// The I/O APIC's register window, mapped.
+    regs: Mmio,
+    /// Which redirection entry: the GSI less the I/O APIC's base.
+    input: u32,
+    /// The entry's polarity and trigger bits.
+    signalling: u32,
+}
+
+impl IoApicInput {
+    /// The I/O APIC input ISA interrupt `irq` arrives on, as the MADT
+    /// describes it.
+    ///
+    /// # Errors
+    ///
+    /// No I/O APIC covers the interrupt's GSI, or its window cannot be mapped.
+    pub(crate) fn for_isa(madt: &Madt<'_>, irq: u8) -> Result<Self, &'static str> {
+        let IsaInterrupt {
+            gsi,
+            active_low,
+            level,
+        } = madt.isa_interrupt(irq);
+        // The I/O APIC with the highest base at or below the GSI; whether the
+        // GSI is inside it is its own version register's to say.
+        let io_apic = madt
+            .entries()
+            .filter_map(|entry| match entry {
+                MadtEntry::IoApic(io_apic) if io_apic.gsi_base <= gsi => Some(io_apic),
+                _ => None,
+            })
+            .max_by_key(|io_apic| io_apic.gsi_base)
+            .ok_or("no I/O APIC covers the interrupt")?;
+        let base = crate::vmap::map_device(u64::from(io_apic.address), IOAPIC_WINDOW_BYTES)
+            .map_err(|_| "could not map an I/O APIC")?;
+        let regs = Mmio::at(base);
+        let input = gsi - io_apic.gsi_base;
+        if input >= input_count(regs) {
+            return Err("no I/O APIC covers the interrupt");
+        }
+        let signalling = if active_low {
+            IOAPIC_ENTRY_ACTIVE_LOW
+        } else {
+            0
+        } | if level { IOAPIC_ENTRY_LEVEL } else { 0 };
+        Ok(IoApicInput {
+            regs,
+            input,
+            signalling,
+        })
+    }
+
+    /// Deliver this input to `vector` on this processor, fixed and physical.
+    ///
+    /// The high word first and the low word last, so an unmasked entry is
+    /// never live with a stale destination.
+    pub(crate) fn route(self, vector: u64, masked: bool) {
+        let low_register = IOAPIC_REDIRECTION_BASE + self.input * 2;
+        io_apic_write(
+            self.regs,
+            low_register + 1,
+            id() << IOAPIC_DESTINATION_SHIFT,
+        );
+        let mask = if masked { IOAPIC_ENTRY_MASKED } else { 0 };
+        io_apic_write(
+            self.regs,
+            low_register,
+            vector as u32 | self.signalling | mask,
+        );
+    }
+}
+
+/// How many redirection entries an I/O APIC has.
+fn input_count(regs: Mmio) -> u32 {
+    ((io_apic_read(regs, IOAPIC_VERSION_REGISTER) >> 16) & 0xFF).saturating_add(1)
 }
 
 /// Read one of an I/O APIC's indirect registers.
@@ -230,8 +315,7 @@ fn io_apic_write(regs: Mmio, register: u32, value: u32) {
 
 /// Mask every redirection entry this I/O APIC has.
 fn mask_all_inputs(regs: Mmio) {
-    let inputs = ((io_apic_read(regs, IOAPIC_VERSION_REGISTER) >> 16) & 0xFF).saturating_add(1);
-    for input in 0..inputs {
+    for input in 0..input_count(regs) {
         let low = IOAPIC_REDIRECTION_BASE.saturating_add(input.saturating_mul(2));
         io_apic_write(regs, low, IOAPIC_ENTRY_MASKED);
     }

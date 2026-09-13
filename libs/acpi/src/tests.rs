@@ -2351,3 +2351,60 @@ fn an_iort_shorter_than_its_header_is_refused() {
         "40 bytes"
     );
 }
+
+#[test]
+fn an_isa_interrupt_without_an_override_is_identity_edge_and_active_high() {
+    let bytes = madt(0xFEE0_0000, 0, &[io_apic_entry(0, 0xFEC0_0000, 0)]);
+    let parsed = Madt::parse(Table::parse(&bytes).unwrap()).unwrap();
+    assert_eq!(
+        parsed.isa_interrupt(4),
+        IsaInterrupt {
+            gsi: 4,
+            active_low: false,
+            level: false
+        },
+        "COM1 on a machine that redescribes nothing"
+    );
+}
+
+#[test]
+fn an_isa_interrupt_takes_its_own_override_and_only_its_own() {
+    let bytes = madt(
+        0xFEE0_0000,
+        0,
+        &[
+            io_apic_entry(0, 0xFEC0_0000, 0),
+            source_override_entry(0, 2, 0),
+            // Active low (0b11) and level triggered (0b11 << 2).
+            source_override_entry(4, 20, 0b1111),
+        ],
+    );
+    let parsed = Madt::parse(Table::parse(&bytes).unwrap()).unwrap();
+    assert_eq!(
+        parsed.isa_interrupt(4),
+        IsaInterrupt {
+            gsi: 20,
+            active_low: true,
+            level: true
+        }
+    );
+    assert_eq!(
+        parsed.isa_interrupt(0),
+        IsaInterrupt {
+            gsi: 2,
+            active_low: false,
+            level: false
+        },
+        "the timer's override moves it, and zero flags keep ISA's defaults"
+    );
+    assert_eq!(parsed.isa_interrupt(3).gsi, 3, "an IRQ nobody overrides");
+}
+
+#[test]
+fn the_q35_fixture_leaves_com1_where_isa_put_it() {
+    let memory = q35();
+    let rsdp = Rsdp::read(&memory, RSDP_ADDR).unwrap();
+    let acpi = Acpi::from_rsdp(&memory, &rsdp).unwrap();
+    let com1 = acpi.madt().unwrap().isa_interrupt(4);
+    assert_eq!((com1.gsi, com1.active_low, com1.level), (4, false, false));
+}

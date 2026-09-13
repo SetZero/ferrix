@@ -20,6 +20,7 @@ use ferrix_linux_abi::types::{self, OpenFlagBits};
 
 use crate::early::{EarlyError, EarlyMemory};
 use crate::irq::Report;
+use crate::sync::SpinLock;
 
 /// Name for log lines.
 pub(crate) const NAME: &str = "x86_64";
@@ -565,8 +566,8 @@ pub(crate) const USER_NATIVE_PROGRAM: &[u8] = &[
     0x0f, 0x05, 0xeb, 0xfe,
 ];
 
-/// One byte from the console, if one has arrived: through the receive ring's
-/// switch, which on this architecture always polls the port.
+/// One byte from the console, if one has arrived: from the receive ring once
+/// the port's interrupt is installed, straight from the port before then.
 pub(crate) fn read_console_byte() -> Option<u8> {
     crate::console::input::read_byte(console::read_byte)
 }
@@ -576,26 +577,37 @@ pub(crate) fn take_console_byte() -> Option<u8> {
     console::read_byte()
 }
 
-/// The interrupt the console port receives on: none yet.
+/// The I/O APIC input the console port was given, between
+/// [`console_receive_irq`] choosing it and [`enable_console_receive`] opening it.
+static CONSOLE_INPUT: SpinLock<Option<(apic::IoApicInput, u64)>> = SpinLock::new(None);
+
+/// The interrupt the console port receives on.
 ///
-/// COM1 raises ISA IRQ 4, but nothing routes an I/O APIC input to a vector —
-/// `apic::quiesce_io_apics` only masks them — so the 16550 stays polled until a
-/// redirection entry for its GSI is written.
-#[expect(
-    clippy::missing_const_for_fn,
-    reason = "another architecture's version of this reads the device tree"
-)]
-pub(crate) fn console_receive_irq(_view: &BootView<'_>) -> Option<u32> {
-    None
+/// COM1 raises ISA IRQ 4, which reaches an I/O APIC input wherever the MADT
+/// says. That input is given a device vector and routed to it masked, so
+/// nothing arrives before the generic layer has a handler; `None` — input stays
+/// polled — when the machine has no readable MADT, no I/O APIC covering the
+/// line, or no vector left.
+pub(crate) fn console_receive_irq(view: &BootView<'_>) -> Option<u32> {
+    let firmware = crate::acpi::Firmware::open(view).ok()?;
+    let madt = firmware.acpi().madt().ok()?;
+    let input = apic::IoApicInput::for_isa(&madt, console::ISA_IRQ).ok()?;
+    let vector = msi::allocate_vector()?;
+    input.route(vector, true);
+    *CONSOLE_INPUT.lock() = Some((input, vector));
+    Some((vector - trap::IRQ_BASE) as u32)
 }
 
-/// Enable the console port's receive interrupt. Never called here, since
-/// [`console_receive_irq`] names none.
-#[expect(
-    clippy::missing_const_for_fn,
-    reason = "another architecture's version of this programs the GIC"
-)]
-pub(crate) fn enable_console_receive(_irq: u32) {}
+/// Enable the console port's receive interrupt, at the I/O APIC and in the
+/// port. Routed to the calling processor, like the Arm ports' GIC line: a
+/// device interrupt goes to the core that enables it.
+pub(crate) fn enable_console_receive(_irq: u32) {
+    let Some((input, vector)) = *CONSOLE_INPUT.lock() else {
+        return;
+    };
+    input.route(vector, false);
+    console::enable_receive_interrupt();
+}
 
 /// `AT_HWCAP` and `AT_HWCAP2` for a program started on this machine.
 ///

@@ -34,11 +34,23 @@ static TAKEN: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn msi_allocate() -> Result<Msi, &'static str> {
     let destination =
         u8::try_from(apic::id()).map_err(|_| "this local APIC's identifier is too wide for MSI")?;
+    let vector = allocate_vector().ok_or("every MSI vector is allocated")?;
+    let message = local_apic_message(destination, vector as u8);
+    Ok(Msi {
+        number: (vector - trap::IRQ_BASE) as u32,
+        address: message.address,
+        data: message.data,
+    })
+}
+
+/// Take a device vector from the same sixty-four a message uses, for an
+/// interrupt that arrives some other way: an I/O APIC input.
+pub(crate) fn allocate_vector() -> Option<u64> {
     let index = loop {
         let taken = TAKEN.load(Ordering::Relaxed);
         let free = taken.trailing_ones();
         if free >= u64::BITS {
-            return Err("every MSI vector is allocated");
+            return None;
         }
         if TAKEN
             .compare_exchange(
@@ -52,11 +64,5 @@ pub(crate) fn msi_allocate() -> Result<Msi, &'static str> {
             break u64::from(free);
         }
     };
-    let vector = FIRST_VECTOR + index;
-    let message = local_apic_message(destination, vector as u8);
-    Ok(Msi {
-        number: (vector - trap::IRQ_BASE) as u32,
-        address: message.address,
-        data: message.data,
-    })
+    Some(FIRST_VECTOR + index)
 }

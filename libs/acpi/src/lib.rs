@@ -910,6 +910,17 @@ impl InterruptSourceOverride {
     }
 }
 
+/// Where an ISA interrupt arrives, and how it is signalled.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct IsaInterrupt {
+    /// The global system interrupt it arrives on.
+    pub gsi: u32,
+    /// Asserted low rather than high.
+    pub active_low: bool,
+    /// Level triggered rather than edge triggered.
+    pub level: bool,
+}
+
 /// A non-maskable interrupt wired to a local APIC input (MADT entry type 4).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LocalApicNmi {
@@ -1101,6 +1112,35 @@ pub struct Madt<'a> {
 }
 
 impl<'a> Madt<'a> {
+    /// Where ISA interrupt `irq` arrives.
+    ///
+    /// Identity mapped, edge triggered and active high unless an interrupt
+    /// source override says otherwise, because that is what the ISA bus
+    /// specifies and what an override's "bus default" means for it. A flags
+    /// pattern the specification reserves is read as the bus default too:
+    /// it names nothing better.
+    #[must_use]
+    pub fn isa_interrupt(&self, irq: u8) -> IsaInterrupt {
+        let found = self.entries().find_map(|entry| match entry {
+            MadtEntry::InterruptSourceOverride(iso) if iso.bus == 0 && iso.source == irq => {
+                Some(iso)
+            }
+            _ => None,
+        });
+        let Some(iso) = found else {
+            return IsaInterrupt {
+                gsi: u32::from(irq),
+                active_low: false,
+                level: false,
+            };
+        };
+        IsaInterrupt {
+            gsi: iso.gsi,
+            active_low: iso.polarity() == Polarity::ActiveLow,
+            level: iso.trigger_mode() == TriggerMode::Level,
+        }
+    }
+
     /// Interpret `table` as a MADT.
     pub fn parse(table: Table<'a>) -> Result<Self, AcpiError> {
         table.expect_signature(MADT_SIGNATURE)?;
