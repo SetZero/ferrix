@@ -139,14 +139,17 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // Twice, measured on the second, for the reason `syscall::check::run`
     // gives: the heap keeps a page of each size class the first run touched.
     let _warm = check_two_processes()?;
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let before = mm::free_frames();
     let counter = check_two_processes()?;
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
     // Checked, not only printed. The cycle check's own premise is that this
     // count is what fails if a refusal stops happening, and a count nothing
     // tested would boot green through exactly that.
     if leaked != 0 {
+        mm::print_frame_delta("native", leaked);
         return Err("the native object checks did not give every frame back");
     }
 

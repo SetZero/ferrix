@@ -69,8 +69,10 @@ pub(crate) fn run(built: &Built) -> Result<Report, &'static str> {
     // the heap keeps the last page of a size class it has used, and a single
     // run cannot tell that apart from a leak.
     let _warm = check_tmpfs_stores_pages()?;
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let before = mm::free_frames();
     let pages = check_tmpfs_stores_pages()?;
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
     // Checked, not only printed: a count nothing tests would boot green
@@ -349,6 +351,7 @@ pub(crate) fn run_calls() -> Result<CallsReport, &'static str> {
         .map_err(|_| "could not make a process for the file system calls")?;
     let _warm = check_the_calls(&process)?;
     let cached = fs::namespace().cached();
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let before = mm::free_frames();
     let bytes = check_the_calls(&process)?;
     // The run mounts a fresh procfs and devtmpfs and walks into them. A dentry
@@ -361,6 +364,7 @@ pub(crate) fn run_calls() -> Result<CallsReport, &'static str> {
         crate::console::println!("  pipes    dentry cache {cache_growth:+} across the second run");
         return Err("the pipe and filesystem call checks left dentries behind in the cache");
     }
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
     // Checked, not only printed: a count nothing tests would boot green

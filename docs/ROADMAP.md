@@ -816,6 +816,11 @@ so anything that touches ring 3 wants a KVM boot before it is called done.
   that permits nothing is refused rather than served a fresh zero page — the
   guard-page case, which nothing notices when it is wrong, because the mapping
   is more permissive than the map rather than less.
+* **Frame counts wait for the reaper, as a condition.** Every count in the
+  self-check is taken by `sched::wait_until_reaper_quiet`: no task exited and
+  not yet dropped by its reaper, nothing on the zombie list, no free in flight.
+  The time-based settle before it let a task that had exited, but was not yet
+  reaped, move the count ("running tasks in address spaces leaked frames").
 
 **Decisions worth not reversing silently.** No `ASID`s or `PCID`s: a full
 invalidation of user entries on switch is the correct baseline, and eliding it
@@ -1327,7 +1332,11 @@ the property the worst bug broke: after every input, the namespace is still a
 tree. After the stage was called done, the path check once failed under load
 with frames it had not leaked: the programs the syscall check had just run
 were reaped inside its measured window. It now waits for the reaper before its
-first count, and fails on a count that rises (e8c98da).
+first count, and fails on a count that rises (e8c98da). The pipe and
+filesystem call check later failed the same way (FX-0860), so every frame
+count in stages 6 to 9 now waits at both edges of its window until no exited
+task is left unreaped, a condition rather than a delay, and prints the signed
+difference when it fails.
 
 **Left for later stages.**
 

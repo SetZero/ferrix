@@ -130,14 +130,17 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // its address space and its task are held to the same count.
     let _warm = check_handlers(Output::Quiet)?;
     check_the_whole_number_space_is_total(&mut Counter::default())?;
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let before = mm::free_frames();
     let pages = check_handlers(Output::Show)?;
     check_the_whole_number_space_is_total(&mut counter)?;
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
     // Checked, not only printed: a count nothing tested would boot green
     // through the very leak it exists to show.
     if leaked != 0 {
+        mm::print_frame_delta("handlers", leaked);
         return Err("the handler checks did not give every frame back");
     }
     mark!(1);
@@ -3567,17 +3570,18 @@ mod paths {
     /// Run the checks twice and measure the second run, for the reason
     /// `check::run` gives: the first pays for size classes the heap keeps.
     pub(crate) fn run_paths() -> Result<PathReport, &'static str> {
-        // Settle first. `check_syscalls`, just before this, starts programs
-        // whose tasks exit, and the idle loop frees a finished task's stack
-        // and its process's address space whenever it next runs. One freed
-        // inside the measured window raises the free count, which this check
-        // read as a leak, and failed intermittently for it. So give those
-        // tasks time to switch away, and reap until nothing is left.
-        settle();
+        // The reaper first. `check_syscalls`, just before this, starts
+        // programs whose tasks exit, and the idle loop frees a finished task's
+        // stack and its process's address space whenever it next runs. One
+        // freed inside the measured window raises the free count, which this
+        // check read as a leak, and failed intermittently for it. So no count
+        // is taken with an exited task left unreaped.
         let _warm = check_path_calls()?;
         let cached = fs::namespace().cached();
+        crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
         let before = mm::free_frames();
         let mut report = check_path_calls()?;
+        crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
         report.leaked = i64::try_from(before).unwrap_or(i64::MAX)
             - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
         report.cache_growth = i64::try_from(fs::namespace().cached()).unwrap_or(i64::MAX)
@@ -3588,6 +3592,7 @@ mod paths {
         // dentries the first left in /tmp, which is why `LINK` lives there. A
         // run that grew it has stopped being repeatable, and is told apart
         // from a call that lost a frame.
+        mm::print_frame_delta("paths", report.leaked);
         if report.leaked < 0 {
             return Err(
                 "the free frame count rose across the path calls: something outside them freed frames in the window",
@@ -3600,26 +3605,6 @@ mod paths {
             return Err("the path calls did not give every frame back");
         }
         Ok(report)
-    }
-
-    /// How long a finished task is given to switch away before it is reaped.
-    const SETTLE_NANOS: u64 = 20_000_000;
-
-    /// The most settle rounds before measuring anyway: a boot with tasks still
-    /// finishing after this long has a problem the count will then name.
-    const SETTLE_ROUNDS: usize = 10;
-
-    /// Wait for tasks earlier checks started to finish, and reap them, so
-    /// nothing is freed inside the measured window.
-    fn settle() {
-        for _ in 0..SETTLE_ROUNDS {
-            crate::sched::sleep_for(SETTLE_NANOS);
-            // As stage 6's settle: nothing left to reap, and no idle
-            // processor part-way through freeing one it already took.
-            if crate::sched::reap() == 0 && !crate::sched::reaping_anywhere() {
-                break;
-            }
-        }
     }
 
     /// One run of every check, in a process of its own.

@@ -358,6 +358,21 @@ pub(crate) fn free_frames() -> u64 {
     with_frames(|frames| frames.free_frames()).unwrap_or(0)
 }
 
+/// Print which way a frame-count window moved, for a check about to fail on
+/// it. `leaked` is the count expected at the end less the count found there:
+/// above zero the check kept frames, below it something outside the window
+/// gave frames back while it was open, which is not the check's leak.
+pub(crate) fn print_frame_delta(check: &str, leaked: i64) {
+    if leaked > 0 {
+        crate::console::println!("  {check:<8} {leaked} frames not given back");
+    } else if leaked < 0 {
+        crate::console::println!(
+            "  {check:<8} {} frames came back from outside the window",
+            leaked.unsigned_abs()
+        );
+    }
+}
+
 /// Frames the allocator was given to manage: what `MemTotal` reports.
 pub(crate) fn managed_frames() -> u64 {
     with_frames(|frames| frames.managed_frames()).unwrap_or(0)

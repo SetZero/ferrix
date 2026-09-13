@@ -46,7 +46,7 @@ mod wait;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use ferrix_sched::{Balance, CpuSet, Domain, Mode, NICE_0_WEIGHT, Placement, check_partition};
 use ferrix_sync::{IrqControl, IrqSpinLock, Once, SpinLock};
@@ -214,6 +214,15 @@ static ZOMBIES: IrqSpinLock<Vec<Arc<Task>>, arch::Irq> = IrqSpinLock::new(Vec::n
 /// the task within milliseconds, and a check that went looking afterwards
 /// would find nothing to object to.
 static DEAD_STILL_QUEUED: AtomicU64 = AtomicU64::new(0);
+
+/// Tasks that have exited and whose reaper has not yet dropped them.
+///
+/// Raised in [`exit`] before the task is marked dead, so before anything can
+/// see it as not running, and lowered in [`reap_one`] and [`reap`] only once
+/// the reaper's reference is dropped. For [`wait_until_reaper_quiet`]: the
+/// zombie list misses a task that has exited and not yet switched away, and
+/// one an idle processor has taken off the list and not yet dropped.
+static EXITED_UNREAPED: AtomicUsize = AtomicUsize::new(0);
 
 /// Whether the scheduler is running.
 pub(crate) fn started() -> bool {
@@ -797,6 +806,9 @@ pub(crate) fn exit() -> ! {
         // Whatever sleep it once meant to take is over: a deadline left here
         // is one `choose_next` would otherwise file the dead task under.
         let _ = task.take_sleep_deadline();
+        // Counted before it is marked dead: a check waiting for the reaper
+        // must see this task from the moment nothing else sees it running.
+        let _ = EXITED_UNREAPED.fetch_add(1, Ordering::AcqRel);
         task.set_state(DEAD);
     }
     schedule();
@@ -993,6 +1005,43 @@ pub(crate) fn reaping_anywhere() -> bool {
     REAPING
         .get()
         .is_some_and(|flags| flags.iter().any(|flag| flag.load(Ordering::Acquire)))
+}
+
+/// How long a check counting frames waits for the reaper. Generous: stage 5
+/// ends having started a thousand tasks, and a loaded host is slow to reap.
+pub(crate) const REAPER_PATIENCE_NANOS: u64 = 20_000_000_000;
+
+/// Wait until every task that has exited has been reaped, reaping on this
+/// processor meanwhile. `Err` when `patience_nanos` pass first.
+///
+/// For a check counting free frames, at both edges of its window: a reaper
+/// freeing a stack or dropping a task inside the window moves the count
+/// either way. A condition rather than a delay, because a delay only makes
+/// the race rarer: no task exited and not yet dropped by its reaper, nothing
+/// on the zombie list, and no idle processor part-way through a free. What it
+/// does not wait for is a reference the caller holds to a task, a process or
+/// an address space: that is the caller's to drop, and to wait for.
+pub(crate) fn wait_until_reaper_quiet(patience_nanos: u64) -> Result<(), &'static str> {
+    let deadline = crate::timer::now_nanos().saturating_add(patience_nanos);
+    loop {
+        // Here as well as in the idle loops: a yield never picks this
+        // processor's idle task while the caller is runnable. Only when there
+        // is something to reap, since `reap` shoots down every processor even
+        // when there is not.
+        if !ZOMBIES.lock().is_empty() {
+            let _ = reap();
+        }
+        if EXITED_UNREAPED.load(Ordering::Acquire) == 0
+            && ZOMBIES.lock().is_empty()
+            && !reaping_anywhere()
+        {
+            return Ok(());
+        }
+        if crate::timer::now_nanos() >= deadline {
+            return Err("the reaper never went quiet before the frame count");
+        }
+        yield_now();
+    }
 }
 
 /// Say whether this processor's idle task holds a stack it is freeing.
@@ -1495,6 +1544,7 @@ fn reap_one() -> bool {
             // task gives back its address space and its process, and those
             // are no better held across a switch than the stack was.
             drop(task);
+            note_reaped(1);
             true
         }
         None => false,
@@ -1519,7 +1569,21 @@ pub(crate) fn reap() -> usize {
     // other processor a thousand times.
     let _ = unsafe { crate::vmap::free_stacks(&stacks) };
     drop(dead);
+    note_reaped(count);
     count
+}
+
+/// Take `count` tasks whose reaper has dropped them off [`EXITED_UNREAPED`].
+fn note_reaped(count: usize) {
+    let exited = EXITED_UNREAPED
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |exited| {
+            Some(exited.saturating_sub(count))
+        })
+        .unwrap_or_else(|exited| exited);
+    // Every dead task went through `exit`, which counted it, and is taken off
+    // the zombie list once. More reaped than exited is a way to die that
+    // skipped the count; saturated rather than wrapped, so no wait hangs on it.
+    debug_assert!(exited >= count, "more tasks reaped than exited");
 }
 
 /// Start measuring how far `tasks` stray from their shares.

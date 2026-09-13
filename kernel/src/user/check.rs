@@ -56,16 +56,13 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // heap keeps a page of each size class the first run touched, and the
     // held-page check is the first to touch some of them.
     hold_pages_through_everything()?;
-    // Then settle. Stage 5 has just finished a thousand tasks and a few
-    // dozen spinners, and the idle loop frees a finished task's stack
-    // whenever it next runs -- one at a time, since bb5a952 -- and every
-    // such free can take a heap page for the arena's bookkeeping or give one
-    // back. One landing inside the window below moved the free count by a
-    // frame, which this check read as a leak, one boot in a few dozen. So
-    // give the earlier tasks time to switch away, and reap until nothing is
-    // left, before the count that matters is taken.
-    settle();
-    let before = mm::free_frames();
+    // Then wait for the reaper. Stage 5 has just finished a thousand tasks
+    // and a few dozen spinners, and the idle loop frees a finished task's
+    // stack and drops the task whenever it next runs; every such free can
+    // take a heap page or give one back. One landing inside the window below
+    // moved the free count by a frame, which this check read as a leak. So
+    // every count in this file is taken with no exited task left unreaped.
+    let before = quiet_frames()?;
 
     check_reservation_is_lazy()?;
     check_a_committed_page_is_zeroed()?;
@@ -94,12 +91,10 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // must be exactly where it started. Signed, because a check that somehow
     // *gained* frames is as wrong as one that lost them and the number should
     // say which.
-    let after = mm::free_frames();
+    let after = quiet_frames()?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX) - i64::try_from(after).unwrap_or(0);
     if leaked != 0 {
-        // The number and its sign: a count that fell is a leak, one that rose
-        // is something outside these checks freeing inside the window.
-        crate::console::println!("  objects  {leaked} frames not given back across the checks");
+        mm::print_frame_delta("objects", leaked);
         return Err("the checks did not give back every frame they took");
     }
 
@@ -116,15 +111,13 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 
 /// A fresh object holds no frames at all.
 fn check_reservation_is_lazy() -> Result<(), &'static str> {
-    let before = mm::free_frames();
+    let before = quiet_frames()?;
     let vmo = Vmo::new_anonymous(1024);
 
     if vmo.committed() != 0 {
         return Err("a fresh object had pages committed");
     }
-    if mm::free_frames() != before {
-        return Err("reserving a thousand pages cost a frame");
-    }
+    expect_frames(before, "reserving a thousand pages cost a frame")?;
     if vmo.len_pages() != 1024 || vmo.len_bytes() != 1024 * PAGE_SIZE {
         return Err("an object's size in bytes disagrees with its size in pages");
     }
@@ -158,15 +151,13 @@ fn check_commit_is_idempotent() -> Result<(), &'static str> {
     let vmo = Vmo::new_anonymous(8);
     let first = vmo.commit(3).map_err(|_| "committing a page failed")?;
 
-    let between = mm::free_frames();
+    let between = quiet_frames()?;
     let second = vmo.commit(3).map_err(|_| "re-committing a page failed")?;
 
     if first != second {
         return Err("committing a page twice produced two different frames");
     }
-    if mm::free_frames() != between {
-        return Err("re-committing a page allocated a second frame");
-    }
+    expect_frames(between, "re-committing a page allocated a second frame")?;
     if vmo.page(3) != Some(first) {
         return Err("a committed page is not where the object says it is");
     }
@@ -195,7 +186,7 @@ fn check_out_of_range_is_refused() -> Result<(), &'static str> {
 /// check that would catch the whole class of bug the allocator's `StillShared`
 /// guard exists for.
 fn check_a_shared_page_survives_one_drop() -> Result<(), &'static str> {
-    let before = mm::free_frames();
+    let before = quiet_frames()?;
 
     let first = Vmo::new_anonymous(1);
     let frame = first.commit(0).map_err(|_| "committing a page failed")?;
@@ -209,17 +200,16 @@ fn check_a_shared_page_survives_one_drop() -> Result<(), &'static str> {
     if mm::frame_references(frame) != 1 {
         return Err("dropping one holder did not leave exactly one reference");
     }
-    if mm::free_frames() != before - 1 {
-        return Err("a page with a holder left was returned to the allocator");
-    }
+    expect_frames(
+        before - 1,
+        "a page with a holder left was returned to the allocator",
+    )?;
 
     // And the last holder gives it back.
     if !mm::release_frame(frame) {
         return Err("releasing the last reference did not free the frame");
     }
-    if mm::free_frames() != before {
-        return Err("the frame did not come back");
-    }
+    expect_frames(before, "the frame did not come back")?;
     Ok(())
 }
 
@@ -231,7 +221,7 @@ fn check_a_shared_page_survives_one_drop() -> Result<(), &'static str> {
 /// [`check_a_shared_page_survives_one_drop`], reached through the object
 /// rather than through the allocator.
 fn check_replacing_a_page_releases_the_old_one() -> Result<(), &'static str> {
-    let before = mm::free_frames();
+    let before = quiet_frames()?;
     let vmo = Vmo::new_anonymous(1);
     let original = vmo.commit(0).map_err(|_| "committing a page failed")?;
 
@@ -258,9 +248,10 @@ fn check_replacing_a_page_releases_the_old_one() -> Result<(), &'static str> {
         return Err("releasing the last reference to the original did not free it");
     }
     drop(vmo);
-    if mm::free_frames() != before {
-        return Err("replacing a page leaked either the original or the copy");
-    }
+    expect_frames(
+        before,
+        "replacing a page leaked either the original or the copy",
+    )?;
     Ok(())
 }
 
@@ -272,11 +263,9 @@ fn check_replacing_a_page_releases_the_old_one() -> Result<(), &'static str> {
 /// refused, a fork copies it rather than sharing it, and a write through the
 /// object lands on it.
 fn check_a_held_page_keeps_its_frame() -> Result<(), &'static str> {
-    let before = mm::free_frames();
+    let before = quiet_frames()?;
     hold_pages_through_everything()?;
-    if mm::free_frames() != before {
-        return Err("holding pages leaked a frame");
-    }
+    expect_frames(before, "holding pages leaked a frame")?;
     Ok(())
 }
 
@@ -360,7 +349,7 @@ fn hold_pages_through_everything() -> Result<(), &'static str> {
 
 /// A large reservation costs exactly the pages that are touched.
 fn check_only_what_is_touched_is_paid_for(reserved: u64) -> Result<usize, &'static str> {
-    let before = mm::free_frames();
+    let before = quiet_frames()?;
     let vmo = Vmo::new_anonymous(reserved);
 
     // Touch a scattered few, out of order, so a commit that quietly filled a
@@ -374,14 +363,16 @@ fn check_only_what_is_touched_is_paid_for(reserved: u64) -> Result<usize, &'stat
     if committed != touched.len() {
         return Err("committing scattered pages did not commit exactly those pages");
     }
-    if mm::free_frames() != before - committed as u64 {
-        return Err("a reservation cost more frames than the pages touched");
-    }
+    expect_frames(
+        before - committed as u64,
+        "a reservation cost more frames than the pages touched",
+    )?;
 
     drop(vmo);
-    if mm::free_frames() != before {
-        return Err("dropping an object did not give back every page it held");
-    }
+    expect_frames(
+        before,
+        "dropping an object did not give back every page it held",
+    )?;
     Ok(committed)
 }
 
@@ -488,7 +479,7 @@ fn check_a_read_of_an_inaccessible_region_is_refused() -> Result<(), &'static st
 /// Pages arrive on the fault that needs them, hold what is written through the
 /// space's own tables, and every frame goes back when the space is dropped.
 fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
-    let before = mm::free_frames();
+    let before = quiet_frames()?;
     let base = 0x4000_0000;
     let pages = 4;
 
@@ -498,9 +489,7 @@ fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
         .map_err(|_| "mapping failed")?;
 
     // A whole region mapped and not one frame spent on it yet.
-    if mm::free_frames() != before - 1 {
-        return Err("mapping a region cost more than the root table");
-    }
+    expect_frames(before - 1, "mapping a region cost more than the root table")?;
 
     // Fault them in out of order, so a handler that mapped a fixed address
     // rather than the faulting one would fail here.
@@ -531,21 +520,24 @@ fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
     }
 
     // Re-faulting a page already present must not cost a second frame.
-    let settled = mm::free_frames();
+    let settled = quiet_frames()?;
     space
         .fault(base, Access::WRITE)
         .map_err(|_| "re-faulting a present page failed")?;
-    if mm::free_frames() != settled {
-        return Err("re-faulting a present page allocated a second frame");
-    }
+    expect_frames(
+        settled,
+        "re-faulting a present page allocated a second frame",
+    )?;
 
     // Unmapping half the region gives back exactly those pages and leaves the
     // rest mapped, which is what `munmap` of part of a mapping has to do.
-    let before_unmap = mm::free_frames();
+    let before_unmap = quiet_frames()?;
     space
         .unmap(base, 2 * PAGE_SIZE)
         .map_err(|_| "unmapping part of a region failed")?;
-    if mm::free_frames() < before_unmap + 2 {
+    let unmapped = quiet_frames()?;
+    if unmapped < before_unmap + 2 {
+        mm::print_frame_delta("objects", frames_delta(before_unmap + 2, unmapped));
         return Err("unmapping two pages did not give back two frames");
     }
     if mm::translate_in(space.root_table(), base).is_some() {
@@ -556,9 +548,10 @@ fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
     }
 
     drop(space);
-    if mm::free_frames() != before {
-        return Err("dropping an address space did not give back every frame");
-    }
+    expect_frames(
+        before,
+        "dropping an address space did not give back every frame",
+    )?;
     Ok(pages)
 }
 
@@ -595,7 +588,7 @@ fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
 /// tables through the direct map rather than through `TTBR0` — but it is a
 /// real reordering and not an accident.
 fn check_the_processor_walks_an_installed_space() -> Result<u64, &'static str> {
-    let before = mm::free_frames();
+    let before = quiet_frames()?;
     let base = 0x5000_0000;
     let pages = 2;
 
@@ -640,9 +633,7 @@ fn check_the_processor_walks_an_installed_space() -> Result<u64, &'static str> {
     // one, which would be a fault with no handler; checked by the kernel still
     // working, which the rest of boot does at length.
     drop(space);
-    if mm::free_frames() != before {
-        return Err("installing an address space leaked frames");
-    }
+    expect_frames(before, "installing an address space leaked frames")?;
     Ok(pages)
 }
 
@@ -828,7 +819,7 @@ fn poke(phys: u64, value: u64) {
 /// child a private copy would leave two processes each waiting on a lock the
 /// other cannot see.
 fn check_a_shared_region_survives_fork_as_one_object() -> Result<(), &'static str> {
-    let before = mm::free_frames();
+    let before = quiet_frames()?;
     let base = 0x7000_0000;
 
     let parent = AddressSpace::new().map_err(|_| "could not make an address space")?;
@@ -877,9 +868,7 @@ fn check_a_shared_region_survives_fork_as_one_object() -> Result<(), &'static st
 
     drop(child);
     drop(parent);
-    if mm::free_frames() != before {
-        return Err("forking a shared region leaked frames");
-    }
+    expect_frames(before, "forking a shared region leaked frames")?;
     Ok(())
 }
 
@@ -898,7 +887,7 @@ fn check_a_shared_region_survives_fork_as_one_object() -> Result<(), &'static st
 /// and reaching different frames is a copy. The free count still has the last
 /// word on leaks, once everything is dropped.
 fn check_fork_shares_pages_and_a_write_copies_one() -> Result<u64, &'static str> {
-    let before = mm::free_frames();
+    let before = quiet_frames()?;
     let base = 0x6000_0000;
     let pages = 2;
 
@@ -999,9 +988,7 @@ fn check_fork_shares_pages_and_a_write_copies_one() -> Result<u64, &'static str>
     }
 
     drop(child);
-    if mm::free_frames() != before {
-        return Err("fork and copy-on-write leaked frames");
-    }
+    expect_frames(before, "fork and copy-on-write leaked frames")?;
     Ok(1)
 }
 
@@ -1072,7 +1059,7 @@ fn read_own_space(expected: usize) {
 /// failures and they look different, which is why the marker carries the task's
 /// index rather than being a single sentinel.
 fn check_two_tasks_keep_their_own_address_spaces() -> Result<u64, &'static str> {
-    let frames_before = mm::free_frames();
+    let frames_before = quiet_frames()?;
     let arena_before = crate::vmap::usage().allocations;
 
     SWAP_DONE.store(0, Ordering::Release);
@@ -1130,14 +1117,22 @@ fn check_two_tasks_keep_their_own_address_spaces() -> Result<u64, &'static str> 
     }
 
     // The tasks die holding the only other references to these spaces, so the
-    // stacks have to come back before the tables can.
+    // stacks have to come back before the tables can, and each task has to be
+    // dropped -- by its reaper, and here -- before a space's last reference
+    // is this check's.
     reap_until(arena_before)?;
+    crate::sched::wait_until_reaper_quiet(PATIENCE_NANOS)?;
     drop(tasks);
+    wait_until(
+        || spaces.iter().all(|space| Arc::strong_count(space) == 1),
+        "a finished task never let go of its address space",
+    )?;
     drop(spaces);
 
-    if mm::free_frames() != frames_before {
-        return Err("running tasks in address spaces leaked frames");
-    }
+    expect_frames(
+        frames_before,
+        "running tasks in address spaces leaked frames",
+    )?;
     Ok(right)
 }
 
@@ -1153,25 +1148,28 @@ fn wait_until(mut ready: impl FnMut() -> bool, what: &'static str) -> Result<(),
     Ok(())
 }
 
-/// How long a finished task is given to switch away before it is reaped.
-const SETTLE_NANOS: u64 = 20_000_000;
+/// The free frame count, taken once no exited task is left unreaped, so that
+/// no task an earlier check ended is freed between two counts.
+fn quiet_frames() -> Result<u64, &'static str> {
+    crate::sched::wait_until_reaper_quiet(PATIENCE_NANOS)?;
+    Ok(mm::free_frames())
+}
 
-/// The most settle rounds before measuring anyway: a boot with tasks still
-/// finishing after this long has a problem the count will then name.
-const SETTLE_ROUNDS: usize = 10;
-
-/// Wait for tasks earlier checks started to finish, and reap them, so nothing
-/// they leave behind is freed inside a measured window.
-fn settle() {
-    for _ in 0..SETTLE_ROUNDS {
-        crate::sched::sleep_for(SETTLE_NANOS);
-        // Nothing left to reap, and nobody part-way through reaping one: an
-        // idle processor takes a stack off the list before it frees it, and
-        // that free is the one that moves the count.
-        if crate::sched::reap() == 0 && !crate::sched::reaping_anywhere() {
-            break;
-        }
+/// Require the free frame count, taken as [`quiet_frames`] takes it, to be
+/// `expected`. Otherwise print by how much and which way, and fail with
+/// `what`.
+fn expect_frames(expected: u64, what: &'static str) -> Result<(), &'static str> {
+    let found = quiet_frames()?;
+    if found != expected {
+        mm::print_frame_delta("objects", frames_delta(expected, found));
+        return Err(what);
     }
+    Ok(())
+}
+
+/// `expected` less `found`, signed: above zero is frames kept.
+fn frames_delta(expected: u64, found: u64) -> i64 {
+    i64::try_from(expected).unwrap_or(i64::MAX) - i64::try_from(found).unwrap_or(i64::MAX)
 }
 
 /// Free every exited task's stack, until the arena is back where it started.
