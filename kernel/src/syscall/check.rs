@@ -577,6 +577,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_a_c_string_stops_at_its_nul(&process)?;
     check_mprotect_takes_write_away(&process)?;
     check_mremap_moves_the_contents_and_shrinks_in_place(&process)?;
+    check_mremap_below_mmap_min_addr_is_eperm(&process)?;
     check_brk_grows_and_shrinks(&process)?;
     check_set_tid_address_answers_with_a_thread_id(&process)?;
     check_uname_says_linux_to_a_script_and_ferrix_to_a_person(&process)?;
@@ -1091,6 +1092,65 @@ fn check_mremap_moves_the_contents_and_shrinks_in_place(
     }
 
     let _ = memory::sys_munmap(process, at, PAGE_SIZE * 3).map_err(|_| "munmap was refused")?;
+    Ok(())
+}
+
+/// `mremap` to a fixed address below `MMAP_MIN_ADDR` is `EPERM`, as `mmap` is
+/// -- but only once the call is otherwise sound, because Linux refuses it late.
+///
+/// `check_mremap_params` in `mm/mremap.c` answers `EINVAL` for a destination
+/// that overlaps the old range, then the old mapping is looked up (`EFAULT`),
+/// and only then does `get_unmapped_area` reach `security_mmap_addr` and
+/// `EPERM`. A refused call leaves the old mapping where it was.
+fn check_mremap_below_mmap_min_addr_is_eperm(process: &Process) -> Result<(), &'static str> {
+    const MOVE_TO: u32 = MREMAP_MAYMOVE | MREMAP_FIXED;
+    const MARK: &[u8] = b"still here";
+    let space = process.space();
+    let at = map_rw(process, PAGE_SIZE * 2)?;
+    uaccess::copy_to_user(space, at, MARK).map_err(|_| "could not write before mremap")?;
+    let _ =
+        memory::sys_munmap(process, at + PAGE_SIZE, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+
+    for target in [0, PAGE_SIZE, MMAP_MIN_ADDR - PAGE_SIZE] {
+        refuses(
+            memory::sys_mremap(process, at, PAGE_SIZE, PAGE_SIZE, MOVE_TO, target),
+            Errno::EPERM,
+            "mremap to a fixed address below mmap_min_addr was not refused with EPERM",
+        )?;
+    }
+    // Growing across the floor is the same address, so the same answer.
+    refuses(
+        memory::sys_mremap(
+            process,
+            at,
+            PAGE_SIZE,
+            PAGE_SIZE * 2,
+            MOVE_TO,
+            MMAP_MIN_ADDR - PAGE_SIZE,
+        ),
+        Errno::EPERM,
+        "mremap growing across mmap_min_addr was not refused with EPERM",
+    )?;
+    // An old range that is not mapped is found out first.
+    refuses(
+        memory::sys_mremap(process, at + PAGE_SIZE, PAGE_SIZE, PAGE_SIZE, MOVE_TO, 0),
+        Errno::EFAULT,
+        "mremap below mmap_min_addr from an unmapped range was not EFAULT",
+    )?;
+    // And a destination reaching over the old range before that.
+    refuses(
+        memory::sys_mremap(process, at, PAGE_SIZE, at + PAGE_SIZE, MOVE_TO, 0),
+        Errno::EINVAL,
+        "mremap below mmap_min_addr over its own old range was not EINVAL",
+    )?;
+
+    let mut mark = [0_u8; MARK.len()];
+    uaccess::copy_from_user(space, at, &mut mark)
+        .map_err(|_| "a refused mremap below mmap_min_addr unmapped the old range")?;
+    let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    if mark != MARK {
+        return Err("a refused mremap below mmap_min_addr changed the old range");
+    }
     Ok(())
 }
 

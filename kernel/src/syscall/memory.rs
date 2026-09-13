@@ -16,7 +16,7 @@
 //! offset counted in the wrong unit, a `PROT_NONE` that is silently turned
 //! into a readable page.
 
-use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED,
@@ -265,6 +265,11 @@ pub(crate) fn sys_mprotect(
 /// An old length of zero is `EINVAL` too. On Linux it asks for a second
 /// mapping of the same pages of a *shared* mapping, which nothing here can
 /// make yet; refusing is what Linux does for a private one.
+///
+/// A fixed destination is then `EINVAL` if unaligned, past the top of user
+/// space, or overlapping the old range; an old range that is not mapped is
+/// `EFAULT`; and only after both is a destination below `MMAP_MIN_ADDR`
+/// `EPERM`, where Linux's `get_unmapped_area` calls `security_mmap_addr`.
 pub(crate) fn sys_mremap(
     process: &Process,
     old_addr: u64,
@@ -290,6 +295,31 @@ pub(crate) fn sys_mremap(
     let destination = if flags & MREMAP_FIXED != 0 {
         if !new_addr.is_multiple_of(PAGE_SIZE) {
             return Err(Errno::EINVAL);
+        }
+        // `check_mremap_params` goes on to refuse a destination running past
+        // the top of user space, then one overlapping the old range: both
+        // `EINVAL`, and both before any mapping is looked at.
+        let new_end = new_addr
+            .checked_add(new_len)
+            .filter(|&end| end <= USER_VIRT_END)
+            .ok_or(Errno::EINVAL)?;
+        if new_addr < old_addr.saturating_add(old_len) && old_addr < new_end {
+            return Err(Errno::EINVAL);
+        }
+        // Below the floor is `EPERM`, as from `mmap`, but later in the call.
+        // Linux looks up the old mapping (`EFAULT`), unmaps the destination,
+        // and only then reaches `get_unmapped_area`, whose
+        // `security_mmap_addr` refuses the address. The old mapping is looked
+        // for first here too; the destination is left alone, so a refused
+        // call changes nothing.
+        if new_addr < MMAP_MIN_ADDR {
+            let old_end = old_addr.saturating_add(old_len);
+            let mapped = process
+                .space()
+                .regions()
+                .iter()
+                .any(|region| region.start <= old_addr && old_end <= region.end);
+            return Err(if mapped { Errno::EPERM } else { Errno::EFAULT });
         }
         Destination::Fixed(new_addr)
     } else if flags & MREMAP_MAYMOVE != 0 {

@@ -1035,7 +1035,10 @@ Linux checks and answers 0, having no page cache to fill.
 place, grows in place when the pages after are free, and otherwise moves --
 a private mapping's frames moved into a new object of the new length rather
 than copied, keeping protection and copy-on-write -- and refuses as Linux does,
-checked with a string across a page boundary surviving the move. `execveat`
+checked with a string across a page boundary surviving the move. A fixed
+destination below 64 KiB is `EPERM`, as from `mmap`, but only after the
+overlap (`EINVAL`) and unmapped-source (`EFAULT`) refusals Linux reaches
+first. `execveat`
 shares `execve`'s path, `AT_EMPTY_PATH` included. `unshare` answers what a
 process without namespaces can honestly answer, and `setns` refuses. A program
 is recorded as the absolute path of the file actually loaded, symlinks
