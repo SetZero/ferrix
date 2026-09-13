@@ -233,12 +233,26 @@ pub(crate) fn sys_openat(
     number(filled.map_err(|_unfilled| Errno::EBADF)?)
 }
 
+/// A descriptor on `file` has ended: closed, displaced by `dup2` or `dup3`,
+/// closed on exec, or closed by its process's exit.
+///
+/// **Every path that ends a descriptor calls this**, with the table's lock let
+/// go and before the file is dropped, so that what an ending means is said here
+/// once rather than known at each of those paths -- `close_range` and a
+/// descriptor passed over a socket will be more of them. Today it means the
+/// classic record locks `process` holds on the file go, as Linux's
+/// `locks_remove_posix` takes them on every close, whichever descriptor set
+/// them.
+pub(crate) fn closed(process: &Process, file: &OpenFile) {
+    crate::syscall::flock::closed(process, file);
+}
+
 /// `close`.
 pub(crate) fn sys_close(process: &Process, fd: i32) -> Result<usize, Errno> {
     // The guard is a temporary of this statement, so the description is
     // dropped below with the lock already released.
     let file = process.files().lock().remove(fd)?;
-    crate::syscall::flock::closed(process, &file);
+    closed(process, &file);
     drop(file);
     Ok(0)
 }
@@ -279,7 +293,7 @@ fn replace(process: &Process, old: i32, new: i32, cloexec: bool) -> Result<usize
     };
     // Released outside the lock: this may be the last reference.
     if let Some(file) = &displaced {
-        crate::syscall::flock::closed(process, file);
+        closed(process, file);
     }
     drop(displaced);
     number(new)

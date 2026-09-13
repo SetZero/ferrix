@@ -638,7 +638,7 @@ impl Process {
                     .collect()
             };
             for file in &closed {
-                crate::syscall::flock::closed(self, file);
+                crate::syscall::fd::closed(self, file);
             }
             drop(closed);
         }
