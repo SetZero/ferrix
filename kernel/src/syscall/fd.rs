@@ -214,8 +214,10 @@ pub(crate) fn sys_openat(
             &flags,
             mode & 0o7777 & !process.umask(),
         )
-        // A named pipe opens as a pipe end, and a device node as the device
-        // its number names; everything else is returned as it is.
+        // A read-only `/proc/sys` value opened for writing is refused, a
+        // named pipe opens as a pipe end, and a device node as the device its
+        // number names; everything else is returned as it is.
+        .and_then(fs::procfs::refuse_write_open)
         .and_then(fs::pipe::attach_fifo)
         .and_then(fs::devfs::attach_device);
     let file = match opened {

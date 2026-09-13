@@ -369,8 +369,10 @@ fn check_filesystems(view: &BootView<'_>) {
         pseudo.devices,
     );
     println!(
-        "  procfs   {} names listed and walked back to, {} maps lines parsed, {} of them named",
-        pseudo.listed, pseudo.maps_lines, pseudo.named,
+        "  procfs   {} names listed and walked back to, {} maps lines parsed, {} of them named; \
+         cwd and root read as getcwd; {} /proc/sys values read, a host name written there \
+         reached uname; partitions empty with no block devices",
+        pseudo.listed, pseudo.maps_lines, pseudo.named, pseudo.sysctl_values,
     );
     println!(
         "  procstat /proc/stat read twice {} ms apart: a cpu line for each of {} processors, \

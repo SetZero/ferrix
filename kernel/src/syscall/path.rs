@@ -485,7 +485,7 @@ fn set_cwd(process: &Process, place: Location) -> Result<usize, Errno> {
 /// too small is `ERANGE`, and a working directory that has been removed is
 /// `ENOENT`, because the path it used to have now names nothing, or something
 /// else.
-fn sys_getcwd(process: &Process, buf: u64, size: u64) -> Result<usize, Errno> {
+pub(crate) fn sys_getcwd(process: &Process, buf: u64, size: u64) -> Result<usize, Errno> {
     let ctx = context(process);
     if ctx.cwd.dentry.is_unhashed() {
         return Err(Errno::ENOENT);

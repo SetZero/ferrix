@@ -33,17 +33,30 @@
 //!
 //! The top level and a process's directory are both tables of [`Entry`]: a
 //! name, permission bits, and what the name is — a file rendered at open and
-//! optionally writable, a link rendered when read, or the descriptor
-//! directory. A new file is a row in [`TOP`] or [`PER_PROCESS`] and one
-//! function; nothing else here needs to learn about it.
+//! optionally writable, a link rendered when read, the descriptor directory,
+//! or a directory of more entries. A new file is a row in [`TOP`],
+//! [`PER_PROCESS`] or one of the `/proc/sys` tables and one function; nothing
+//! else here needs to learn about it.
+//!
+//! # `/proc/sys`
+//!
+//! A tree of fixed directories under [`TOP`], each value one line. It holds
+//! only the sysctls whose value something in the kernel already keeps — what
+//! `uname` reports, the pid registry's limit, the descriptor table's — and
+//! the host and domain names are written through the setters `sethostname`
+//! and `setdomainname` use. Any other value is refused for writing with
+//! `EACCES` when it is opened, by [`refuse_write_open`] on `openat`'s way
+//! out, and a write that reaches one anyway is refused with the same errno.
+//! That is where Linux's sysctls differ from the rest of its `/proc`.
 //!
 //! # Inode numbers
 //!
 //! Computed from what a node is, so the same file has the same number every
-//! time without a table of numbers to keep: the top level below 2³², and a
-//! process's files above it with the pid in the upper half. `find` and `du`
-//! treat two names with one number as one file, so the numbers are distinct;
-//! nothing else about them is promised, as nothing is on Linux.
+//! time without a table of numbers to keep: the top level and `/proc/sys`
+//! below 2³², by where they are in the tree, and a process's files above it
+//! with the pid in the upper half. `find` and `du` treat two names with one
+//! number as one file, so the numbers are distinct; nothing else about them
+//! is promised, as nothing is on Linux.
 
 pub(crate) mod check;
 mod render;
@@ -55,7 +68,8 @@ use core::any::Any;
 use core::fmt;
 
 use ferrix_vfs::{
-    DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, Result, StatFs, Timespec,
+    DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, OpenFile, Result, StatFs,
+    Timespec,
 };
 
 use crate::fs;
@@ -86,6 +100,15 @@ pub(crate) enum Content<T: 'static> {
     Link(fn(&T) -> Result<Vec<u8>>),
     /// `/proc/<pid>/fd`: a link per open descriptor.
     Descriptors,
+    /// A directory whose names are fixed, as the table's are: `/proc/sys` and
+    /// the directories under it. Only [`TOP`]'s tree may hold one; see
+    /// [`Tree`].
+    Directory {
+        /// What is in it.
+        entries: &'static [Entry<T>],
+        /// What a write to a file in it that takes none is refused with.
+        refusal: Errno,
+    },
 }
 
 /// One name in a table.
@@ -109,7 +132,7 @@ impl<T> Entry<T> {
         match self.content {
             Content::File { .. } => FileType::Regular,
             Content::Link(_) => FileType::Symlink,
-            Content::Descriptors => FileType::Directory,
+            Content::Descriptors | Content::Directory { .. } => FileType::Directory,
         }
     }
 }
@@ -122,6 +145,41 @@ const fn file<T>(name: &'static [u8], render: fn(&T) -> Result<Vec<u8>>) -> Entr
         content: Content::File {
             render,
             write: None,
+        },
+    }
+}
+
+/// A directory under `/proc/sys`.
+///
+/// A write to a file in it that takes none is `EACCES`, not the `EINVAL` of
+/// the rest of `/proc`: Linux checks a sysctl's mode bits in
+/// `proc_sys_permission`, for root as for anyone, rather than finding no
+/// handler when the write arrives. `openat` refuses the open through
+/// [`refuse_write_open`]; the refusal of the write itself is the backstop for
+/// an open made without it, such as the kernel's own through the namespace.
+const fn sysctl_directory(name: &'static [u8], entries: &'static [Entry<Kernel>]) -> Entry<Kernel> {
+    Entry {
+        name,
+        permissions: 0o555,
+        content: Content::Directory {
+            entries,
+            refusal: Errno::EACCES,
+        },
+    }
+}
+
+/// A value under `/proc/sys` that a program may set.
+const fn sysctl_setting(
+    name: &'static [u8],
+    render: fn(&Kernel) -> Result<Vec<u8>>,
+    write: WriteFn<Kernel>,
+) -> Entry<Kernel> {
+    Entry {
+        name,
+        permissions: 0o644,
+        content: Content::File {
+            render,
+            write: Some(write),
         },
     }
 }
@@ -149,7 +207,7 @@ fn sysrq_trigger(_: &Kernel, data: &[u8]) -> Result<usize> {
 }
 
 /// `/proc`, less the process directories that follow these in a listing.
-pub(crate) static TOP: [Entry<Kernel>; 9] = [
+pub(crate) static TOP: [Entry<Kernel>; 11] = [
     Entry {
         name: b"self",
         permissions: 0o777,
@@ -160,8 +218,10 @@ pub(crate) static TOP: [Entry<Kernel>; 9] = [
     file(b"meminfo", render::meminfo),
     file(b"mounts", render::mounts),
     file(b"stat", render::kstat),
+    file(b"partitions", render::partitions),
     file(b"uptime", render::uptime),
     file(b"version", render::version),
+    sysctl_directory(b"sys", &SYS),
     Entry {
         name: b"sysrq-trigger",
         permissions: 0o200,
@@ -172,8 +232,31 @@ pub(crate) static TOP: [Entry<Kernel>; 9] = [
     },
 ];
 
+/// `/proc/sys`: the sysctls this kernel has a source for, and no others. A
+/// value is added here when something in the kernel holds it, not before.
+static SYS: [Entry<Kernel>; 2] = [
+    sysctl_directory(b"fs", &SYS_FS),
+    sysctl_directory(b"kernel", &SYS_KERNEL),
+];
+
+/// `/proc/sys/fs`.
+static SYS_FS: [Entry<Kernel>; 2] = [
+    file(b"file-max", render::file_max),
+    file(b"nr_open", render::nr_open),
+];
+
+/// `/proc/sys/kernel`: what `uname` reports, and the pid limit.
+static SYS_KERNEL: [Entry<Kernel>; 6] = [
+    sysctl_setting(b"domainname", render::domainname, render::set_domainname),
+    sysctl_setting(b"hostname", render::hostname, render::set_hostname),
+    file(b"osrelease", render::osrelease),
+    file(b"ostype", render::ostype),
+    file(b"pid_max", render::pid_max),
+    file(b"version", render::sys_version),
+];
+
 /// `/proc/<pid>`.
-pub(crate) static PER_PROCESS: [Entry<Process>; 7] = [
+pub(crate) static PER_PROCESS: [Entry<Process>; 9] = [
     Entry {
         name: b"fd",
         permissions: 0o500,
@@ -185,11 +268,127 @@ pub(crate) static PER_PROCESS: [Entry<Process>; 7] = [
     file(b"stat", render::stat),
     file(b"maps", render::maps),
     Entry {
+        name: b"cwd",
+        permissions: 0o777,
+        content: Content::Link(render::cwd),
+    },
+    Entry {
         name: b"exe",
         permissions: 0o777,
         content: Content::Link(render::exe),
     },
+    Entry {
+        name: b"root",
+        permissions: 0o777,
+        content: Content::Link(render::root),
+    },
 ];
+
+/// Levels of [`TOP`]'s tree a [`Tree`] can name: a byte of its `u32` each.
+const TREE_LEVELS: u32 = 4;
+
+/// Entries a directory in [`TOP`]'s tree may hold: one byte's worth, less the
+/// zero that ends a [`Tree`].
+const TREE_WIDTH: usize = 255;
+
+/// Whether `table`, found `depth` levels down, and every directory in it fit
+/// what a [`Tree`] can name.
+const fn fits(table: &[Entry<Kernel>], depth: u32) -> bool {
+    if table.len() > TREE_WIDTH || depth > TREE_LEVELS {
+        return false;
+    }
+    let Some((first, rest)) = table.split_first() else {
+        return true;
+    };
+    let inside = match first.content {
+        Content::Directory { entries, .. } => fits(entries, depth + 1),
+        _ => true,
+    };
+    inside && fits(rest, depth)
+}
+
+/// Whether a table has no [`Content::Directory`]: a process's directory
+/// names its entries by index alone, so it cannot hold one.
+const fn flat<T>(table: &[Entry<T>]) -> bool {
+    match table.split_first() {
+        None => true,
+        Some((first, rest)) => !matches!(first.content, Content::Directory { .. }) && flat(rest),
+    }
+}
+
+const _: () = assert!(
+    fits(&TOP, 1),
+    "/proc's tree is deeper or wider than a Tree names"
+);
+const _: () = assert!(
+    flat(&PER_PROCESS),
+    "a process's directory cannot hold a directory"
+);
+
+/// Where an entry is in [`TOP`]'s tree: its index at each level plus one, a
+/// byte a level from the low end, so `/proc/<TOP[i]>` is `i + 1` and
+/// `/proc/sys/kernel` is `(sys + 1) | (kernel + 1) << 8`. Zero is `/proc`
+/// itself. No two entries share a value, because no byte of one is zero
+/// below its highest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Tree(u32);
+
+impl Tree {
+    /// `/proc`.
+    const ROOT: Tree = Tree(0);
+
+    /// Levels below `/proc`.
+    const fn depth(self) -> u32 {
+        (u32::BITS - self.0.leading_zeros()).div_ceil(8)
+    }
+
+    /// The `index`th entry of this directory, if a `Tree` can name it.
+    fn child(self, index: usize) -> Option<Tree> {
+        let depth = self.depth();
+        if depth >= TREE_LEVELS || index >= TREE_WIDTH {
+            return None;
+        }
+        let byte = u32::try_from(index).ok()?.checked_add(1)?;
+        Some(Tree(self.0 | byte << (8 * depth)))
+    }
+
+    /// The entries of the directory this names: [`TOP`] for the root.
+    fn entries(self) -> Option<&'static [Entry<Kernel>]> {
+        if self == Tree::ROOT {
+            return Some(&TOP);
+        }
+        match self.entry()?.0.content {
+            Content::Directory { entries, .. } => Some(entries),
+            _ => None,
+        }
+    }
+
+    /// The entry this names, and what a write to it is refused with if it
+    /// takes none: the refusal of the directory it is in.
+    fn entry(self) -> Option<(&'static Entry<Kernel>, Errno)> {
+        let mut table: &'static [Entry<Kernel>] = &TOP;
+        let mut refusal = Errno::EINVAL;
+        let mut rest = self.0;
+        loop {
+            let index = usize::try_from((rest & 0xff).checked_sub(1)?).ok()?;
+            let entry = table.get(index)?;
+            rest >>= 8;
+            if rest == 0 {
+                return Some((entry, refusal));
+            }
+            match entry.content {
+                Content::Directory {
+                    entries,
+                    refusal: inner,
+                } => {
+                    table = entries;
+                    refusal = inner;
+                }
+                _ => return None,
+            }
+        }
+    }
+}
 
 /// Where the process directories start in the root's cursor space: above
 /// every cursor [`TOP`] could use, so a listing resumed after the last table
@@ -261,8 +460,8 @@ impl FileSystem for Procfs {
 enum Place {
     /// `/proc`.
     Root,
-    /// `TOP[index]`.
-    Top(usize),
+    /// An entry in [`TOP`]'s tree: a top-level name, or one under `/proc/sys`.
+    Top(Tree),
     /// `/proc/<pid>`.
     Process(u32),
     /// `PER_PROCESS[index]` of the process.
@@ -277,10 +476,18 @@ impl Place {
         let pid = |pid: u32| u64::from(pid) << 32;
         match self {
             Place::Root => 1,
-            Place::Top(index) => (index as u64).saturating_add(2),
+            Place::Top(tree) => u64::from(tree.0).saturating_add(1),
             Place::Process(id) => pid(id) | 1,
             Place::Entry(id, index) => pid(id) | (0x100 + index as u64),
             Place::Descriptor(id, fd) => pid(id) | (0x1_0000 + u64::from(fd.unsigned_abs())),
+        }
+    }
+
+    /// What a write to this is refused with, if it is a file that takes none.
+    fn refusal(self) -> Errno {
+        match self {
+            Place::Top(tree) => tree.entry().map_or(Errno::EINVAL, |(_, refusal)| refusal),
+            _ => Errno::EINVAL,
         }
     }
 
@@ -289,7 +496,7 @@ impl Place {
         let of = |kind: FileType, permissions: u32| (kind, permissions);
         match self {
             Place::Root | Place::Process(_) => of(FileType::Directory, 0o555),
-            Place::Top(index) => TOP.get(index).map_or(of(FileType::Regular, 0), |entry| {
+            Place::Top(tree) => tree.entry().map_or(of(FileType::Regular, 0), |(entry, _)| {
                 of(entry.kind(), entry.permissions)
             }),
             Place::Entry(_, index) => PER_PROCESS
@@ -323,12 +530,14 @@ impl Node {
     /// Render this node's file, if it is one.
     fn snapshot(&self) -> Result<Option<Snapshot>> {
         let metadata = self.metadata();
+        let refusal = self.place.refusal();
         match self.place {
-            Place::Top(index) => match TOP.get(index).map(|entry| &entry.content) {
+            Place::Top(tree) => match tree.entry().map(|(entry, _)| &entry.content) {
                 Some(Content::File { render, write }) => Ok(Some(Snapshot {
                     metadata,
                     bytes: render(&())?,
                     write: write.map(|write| -> Writer { Box::new(move |data| write(&(), data)) }),
+                    refusal,
                 })),
                 _ => Ok(None),
             },
@@ -340,6 +549,7 @@ impl Node {
                         bytes: render(&process)?,
                         write: write
                             .map(|write| -> Writer { Box::new(move |data| write(&process, data)) }),
+                        refusal,
                     }))
                 }
                 _ => Ok(None),
@@ -351,7 +561,7 @@ impl Node {
     /// Whether this node is a file in a table that takes writes.
     fn writable(&self) -> bool {
         match self.place {
-            Place::Top(index) => TOP.get(index).is_some_and(Entry::takes_writes),
+            Place::Top(tree) => tree.entry().is_some_and(|(entry, _)| entry.takes_writes()),
             Place::Entry(_, index) => PER_PROCESS.get(index).is_some_and(Entry::takes_writes),
             _ => false,
         }
@@ -430,24 +640,30 @@ impl Inode for Node {
 
     /// Accepted and ignored on a file that takes writes, as Linux does for its
     /// `/proc` files: a shell's `>` opens with `O_TRUNC`, and a generated file
-    /// has no length of its own to cut. Refused on everything else.
+    /// has no length of its own to cut. Refused on everything else, with
+    /// `EACCES` under `/proc/sys`, where Linux refuses the open itself.
     fn set_len(&self, _len: u64) -> Result<()> {
         if self.writable() {
             Ok(())
         } else {
-            Err(Errno::EINVAL)
+            Err(self.place.refusal())
         }
     }
 
     fn lookup(&self, name: &[u8]) -> Result<Arc<dyn Inode>> {
         match self.place {
             Place::Root => {
-                if let Some(index) = TOP.iter().position(|entry| entry.name == name) {
-                    return Ok(self.at(Place::Top(index)));
+                if let Some(child) = named_in(Tree::ROOT, name) {
+                    return Ok(self.at(Place::Top(child)));
                 }
                 let pid = number(name).ok_or(Errno::ENOENT)?;
                 let _ = alive(pid)?;
                 Ok(self.at(Place::Process(pid)))
+            }
+            Place::Top(tree) => {
+                let _ = tree.entries().ok_or(Errno::ENOTDIR)?;
+                let child = named_in(tree, name).ok_or(Errno::ENOENT)?;
+                Ok(self.at(Place::Top(child)))
             }
             Place::Process(pid) => {
                 let _ = alive(pid)?;
@@ -472,9 +688,16 @@ impl Inode for Node {
     fn read_dir(&self, cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
         match self.place {
             Place::Root => list_root(cursor, emit),
+            Place::Top(tree) => {
+                let entries = tree.entries().ok_or(Errno::ENOTDIR)?;
+                let ino = |index| tree.child(index).map_or(0, |child| Place::Top(child).ino());
+                let _ = list_table(entries, cursor, ino, emit);
+                Ok(())
+            }
             Place::Process(pid) => {
                 let _ = alive(pid)?;
-                let _ = list_table(&PER_PROCESS, cursor, |index| Place::Entry(pid, index), emit);
+                let ino = |index| Place::Entry(pid, index).ino();
+                let _ = list_table(&PER_PROCESS, cursor, ino, emit);
                 Ok(())
             }
             _ => {
@@ -486,7 +709,7 @@ impl Inode for Node {
 
     fn read_link(&self) -> Result<Vec<u8>> {
         match self.place {
-            Place::Top(index) => match TOP.get(index).map(|entry| &entry.content) {
+            Place::Top(tree) => match tree.entry().map(|(entry, _)| &entry.content) {
                 Some(Content::Link(target)) => target(&()),
                 _ => Err(Errno::EINVAL),
             },
@@ -500,17 +723,28 @@ impl Inode for Node {
     }
 }
 
-/// Report a table's entries from `cursor` on.
+/// The entry called `name` in the directory `tree` names, if there is one
+/// and a [`Tree`] can name it.
+fn named_in(tree: Tree, name: &[u8]) -> Option<Tree> {
+    let index = tree
+        .entries()?
+        .iter()
+        .position(|entry| entry.name == name)?;
+    tree.child(index)
+}
+
+/// Report a table's entries from `cursor` on, each with the inode number
+/// `ino` gives its index.
 fn list_table<T>(
     table: &[Entry<T>],
     cursor: u64,
-    place: impl Fn(usize) -> Place,
+    ino: impl Fn(usize) -> u64,
     emit: &mut dyn FnMut(DirEntry<'_>) -> bool,
 ) -> bool {
     let first = usize::try_from(cursor.saturating_sub(FIRST_CURSOR)).unwrap_or(usize::MAX);
     for (index, entry) in table.iter().enumerate().skip(first) {
         let accepted = emit(DirEntry {
-            ino: place(index).ino(),
+            ino: ino(index),
             kind: entry.kind(),
             name: entry.name,
             next: FIRST_CURSOR.saturating_add(index as u64 + 1),
@@ -524,7 +758,12 @@ fn list_table<T>(
 
 /// `/proc`: the table, then a directory per live process in pid order.
 fn list_root(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
-    if cursor < PID_CURSORS && !list_table(&TOP, cursor, Place::Top, emit) {
+    let ino = |index| {
+        Tree::ROOT
+            .child(index)
+            .map_or(0, |child| Place::Top(child).ino())
+    };
+    if cursor < PID_CURSORS && !list_table(&TOP, cursor, ino, emit) {
         return Ok(());
     }
     let from = cursor.saturating_sub(PID_CURSORS);
@@ -629,6 +868,8 @@ struct Snapshot {
     bytes: Vec<u8>,
     /// Where writes go, for a file that takes them.
     write: Option<Writer>,
+    /// What a write is refused with, for a file that takes none.
+    refusal: Errno,
 }
 
 impl fmt::Debug for Snapshot {
@@ -667,10 +908,35 @@ impl Inode for Snapshot {
     }
 
     fn write_at(&self, offset: u64, data: &[u8], _append: bool) -> Result<(usize, u64)> {
-        let write = self.write.as_ref().ok_or(Errno::EINVAL)?;
+        let write = self.write.as_ref().ok_or(self.refusal)?;
         let count = write(data)?;
         Ok((count, offset.saturating_add(count as u64)))
     }
+}
+
+/// An open file `openat` made, refused with `EACCES` if it is a value under
+/// `/proc/sys` that takes no writes and was opened for writing.
+///
+/// Linux refuses that open in `proc_sys_permission`, whether the access mode
+/// is `O_WRONLY` or `O_RDWR`. [`Inode::open`] is not told the access mode, so
+/// the refusal is made here, where `openat` already looks at the open file it
+/// made; an open with `O_TRUNC` has already been refused by
+/// [`Inode::set_len`] with the same errno. Every other file is returned as it
+/// is.
+pub(crate) fn refuse_write_open(file: Arc<OpenFile>) -> Result<Arc<OpenFile>> {
+    if !file.writable() {
+        return Ok(file);
+    }
+    let Ok(node) = Arc::clone(file.inode()).into_any().downcast::<Node>() else {
+        return Ok(file);
+    };
+    let read_only_value = node.place.kind().0 == FileType::Regular
+        && node.place.refusal() == Errno::EACCES
+        && !node.writable();
+    if read_only_value {
+        return Err(Errno::EACCES);
+    }
+    Ok(file)
 }
 
 /// Mount a procfs on `/proc`, making the directory if the archive had none.

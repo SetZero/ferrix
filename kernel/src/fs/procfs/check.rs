@@ -22,6 +22,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_linux_abi::types::AT_FDCWD;
 use ferrix_procfs::kstat::{self, Parsed};
 use ferrix_procfs::maps;
 use ferrix_sync::SpinLock;
@@ -33,7 +34,8 @@ use crate::fs;
 use crate::sched;
 use crate::smp;
 use crate::syscall::process::{self, Process, Startup};
-use crate::syscall::registry;
+use crate::syscall::system::{self, RELEASE, SYSNAME, VERSION};
+use crate::syscall::{fd, path, registry, uaccess};
 
 /// What the checks measured, for the boot log.
 #[derive(Debug, Clone, Copy)]
@@ -52,6 +54,8 @@ pub(crate) struct Report {
     pub(crate) stat_ticks: u64,
     /// How far apart those reads were, in milliseconds.
     pub(crate) stat_apart_ms: u64,
+    /// Values under `/proc/sys` walked to and read.
+    pub(crate) sysctl_values: u32,
 }
 
 /// How far apart the two reads of `/proc/stat` are: five ticks at
@@ -92,8 +96,9 @@ const SETTLE_NANOS: u64 = 20_000_000;
 /// as far as reporting; what it found is in [`OUTCOME`].
 const REPORTED: i32 = 0;
 
-/// What the check task found: names listed, maps lines, named lines.
-type Found = Result<(u32, u32, u32), &'static str>;
+/// What the check task found: names listed, maps lines, named lines, and
+/// values read under `/proc/sys`.
+type Found = Result<(u32, u32, u32, u32), &'static str>;
 
 /// A directory's entries: name, kind and inode number.
 type Listing = Vec<(Vec<u8>, FileType, u64)>;
@@ -144,7 +149,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     sched::sleep_for(SETTLE_NANOS);
     let _ = sched::reap();
 
-    let (listed, maps_lines, named) = found??;
+    let (listed, maps_lines, named, sysctl_values) = found??;
     Ok(Report {
         devices,
         listed,
@@ -153,6 +158,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         stat_cpus,
         stat_ticks,
         stat_apart_ms: STAT_APART_NANOS / 1_000_000,
+        sysctl_values,
     })
 }
 
@@ -412,7 +418,228 @@ fn check_proc(process: &Arc<Process>, layout: &Layout) -> Found {
     if read_all(ns, &ctx, b"/proc/self/comm", 64)? != b"procfs-check\n" {
         return Err("/proc/self/comm is not the last component of that path");
     }
-    Ok((listed, lines, named))
+
+    // The heap is the check's user memory: `getcwd` and `uname` write into
+    // it as they would into a program's buffer.
+    let buffer = layout.heap.0;
+    check_cwd_and_root(ns, &ctx, process, &pid, buffer)?;
+    let values = check_sysctl(ns, &ctx, process, buffer)?;
+    if !read_all(ns, &ctx, b"/proc/partitions", 5)?.is_empty() {
+        return Err("/proc/partitions is not empty, with no block device to list");
+    }
+    Ok((listed, lines, named, values))
+}
+
+/// `/proc/<pid>/cwd` and `root`: the working directory reads as `getcwd`
+/// answers it, through `self` and through the pid, and the root as `/`.
+fn check_cwd_and_root(
+    ns: &Namespace,
+    ctx: &Context,
+    process: &Process,
+    pid: &[u8],
+    buffer: u64,
+) -> Result<(), &'static str> {
+    let dev = ns
+        .resolve(ctx, None, b"/dev", true)
+        .map_err(|_| "/dev cannot be walked to for the cwd check")?;
+    let old = core::mem::replace(&mut process.fs_context().lock().cwd, dev);
+    // Dropped with the lock released, as `chdir` drops it.
+    drop(old);
+
+    let len = path::sys_getcwd(process, buffer, 256).map_err(|_| "getcwd was refused")?;
+    let mut answer = vec![0_u8; len];
+    uaccess::copy_from_user(process.space(), buffer, &mut answer)
+        .map_err(|_| "getcwd's answer could not be read back")?;
+    if answer.pop() != Some(0) || answer != b"/dev" {
+        return Err("getcwd does not answer the directory the check moved to");
+    }
+    let by_pid = [b"/proc/".as_slice(), pid, b"/cwd".as_slice()].concat();
+    if ns.read_link(ctx, None, b"/proc/self/cwd") != Ok(answer.clone())
+        || ns.read_link(ctx, None, &by_pid) != Ok(answer)
+    {
+        return Err("/proc/<pid>/cwd is not the path getcwd answers");
+    }
+    if ns.read_link(ctx, None, b"/proc/self/root") != Ok(b"/".to_vec()) {
+        return Err("/proc/self/root is not /");
+    }
+    Ok(())
+}
+
+/// The host name's value under `/proc/sys`.
+const HOSTNAME: &[u8] = b"/proc/sys/kernel/hostname";
+
+/// `/proc/sys`: every value walked to is one line; those with a source
+/// elsewhere read as the source says; a read-only one refuses a write as
+/// Linux does; and a host name written to `kernel/hostname` is the one
+/// `uname` reports. The kernel is left as the check found it, whatever the
+/// check found: a name that was set is written back, and a name that was
+/// never set is forgotten again. Returns the values read.
+fn check_sysctl(
+    ns: &Namespace,
+    ctx: &Context,
+    process: &Process,
+    buffer: u64,
+) -> Result<u32, &'static str> {
+    let values = check_sysctl_values(ns, ctx)?;
+
+    let write_only = OpenFlags {
+        write: true,
+        ..OpenFlags::default()
+    };
+    let ostype = ns
+        .open(ctx, None, b"/proc/sys/kernel/ostype", &write_only, 0)
+        .map_err(|_| "/proc/sys/kernel/ostype did not open for writing")?;
+    if ostype.write(b"Ferrix\n") != Err(Errno::EACCES) {
+        return Err("a read-only /proc/sys value did not refuse a write with EACCES");
+    }
+    let truncating = OpenFlags {
+        truncate: true,
+        ..write_only
+    };
+    if ns
+        .open(ctx, None, b"/proc/sys/kernel/ostype", &truncating, 0)
+        .err()
+        != Some(Errno::EACCES)
+    {
+        return Err("a read-only /proc/sys value opened to be truncated");
+    }
+
+    check_sysctl_open_access(process, buffer)?;
+
+    let before = read_all(ns, ctx, HOSTNAME, 64)?;
+    let was_set = system::hostname_is_set();
+    let outcome = check_host_name_reaches_uname(ns, ctx, process, buffer);
+    let put_back = if was_set {
+        write_value(ns, ctx, HOSTNAME, &before)
+    } else {
+        system::forget_hostname();
+        Ok(())
+    };
+    let restored = put_back.and_then(|()| {
+        if read_all(ns, ctx, HOSTNAME, 64)? == before {
+            Ok(())
+        } else {
+            Err("the host name could not be put back through /proc/sys")
+        }
+    });
+    outcome?;
+    restored?;
+    Ok(values)
+}
+
+/// Walk `/proc/sys`, read every value, and hold the ones with a source
+/// elsewhere to it.
+fn check_sysctl_values(ns: &Namespace, ctx: &Context) -> Result<u32, &'static str> {
+    let mut pending: Vec<Vec<u8>> = vec![b"/proc/sys".to_vec()];
+    let mut values = 0_u32;
+    while let Some(dir) = pending.pop() {
+        for (name, kind, _) in list(ns, ctx, &dir)? {
+            let path = [dir.as_slice(), b"/", &name].concat();
+            match kind {
+                FileType::Directory => pending.push(path),
+                FileType::Regular => {
+                    let value = read_all(ns, ctx, &path, 3)?;
+                    let lines = value.iter().filter(|&&byte| byte == b'\n').count();
+                    if value.last() != Some(&b'\n') || lines != 1 {
+                        return Err("a /proc/sys value is not one line");
+                    }
+                    values += 1;
+                }
+                _ => return Err("/proc/sys holds something neither a directory nor a value"),
+            }
+            if values > LISTING_LIMIT {
+                return Err("walking /proc/sys does not end");
+            }
+        }
+    }
+
+    let line = |text: &dyn core::fmt::Display| alloc::format!("{text}\n").into_bytes();
+    let sourced: [(&[u8], Vec<u8>); 4] = [
+        (b"/proc/sys/kernel/ostype", line(&SYSNAME)),
+        (b"/proc/sys/kernel/osrelease", line(&RELEASE)),
+        (b"/proc/sys/kernel/version", line(&VERSION)),
+        (b"/proc/sys/kernel/pid_max", line(&registry::PID_MAX)),
+    ];
+    for (path, want) in sourced {
+        if read_all(ns, ctx, path, 64)? != want {
+            return Err("a /proc/sys value is not what uname or the pid registry says");
+        }
+    }
+    Ok(values)
+}
+
+/// `openat` refuses a read-only `/proc/sys` value for writing at the open,
+/// with `EACCES`, for `O_WRONLY`, `O_RDWR` and `O_TRUNC` alike, as Linux's
+/// `proc_sys_permission` does; and it still opens that value for reading and
+/// a writable one for writing. The namespace open above bypasses `openat`,
+/// which is how the write refusal behind this one is reached.
+fn check_sysctl_open_access(process: &Process, buffer: u64) -> Result<(), &'static str> {
+    const O_WRONLY: u32 = 0o1;
+    const O_RDWR: u32 = 0o2;
+    const O_TRUNC: u32 = 0o1000;
+    const OSTYPE: &[u8] = b"/proc/sys/kernel/ostype\0";
+    let open = |path: &[u8], flags: u32| {
+        uaccess::copy_to_user(process.space(), buffer, path)
+            .map_err(|_| "could not stage a /proc/sys path")
+            .map(|()| fd::sys_openat(process, AT_FDCWD, buffer, flags, 0))
+    };
+    for flags in [O_WRONLY, O_RDWR, O_WRONLY | O_TRUNC] {
+        if open(OSTYPE, flags)? != Err(Errno::EACCES) {
+            return Err("openat did not refuse a read-only /proc/sys value for writing");
+        }
+    }
+    let allowed: [(&[u8], u32); 2] = [(OSTYPE, 0), (b"/proc/sys/kernel/hostname\0", O_WRONLY)];
+    for (path, flags) in allowed {
+        let opened = open(path, flags)?.map_err(|_| "openat refused a /proc/sys open it allows")?;
+        let number = i32::try_from(opened).map_err(|_| "openat's descriptor is not an int")?;
+        let _ =
+            fd::sys_close(process, number).map_err(|_| "a /proc/sys descriptor did not close")?;
+    }
+    Ok(())
+}
+
+/// A name written to `kernel/hostname`, newline and all, is `uname`'s
+/// `nodename` without the newline, and reads back with it.
+fn check_host_name_reaches_uname(
+    ns: &Namespace,
+    ctx: &Context,
+    process: &Process,
+    buffer: u64,
+) -> Result<(), &'static str> {
+    write_value(ns, ctx, HOSTNAME, b"procfs-check\n")?;
+    let _ = system::sys_uname(process, buffer).map_err(|_| "uname was refused")?;
+    let mut uts = [0_u8; 130];
+    uaccess::copy_from_user(process.space(), buffer, &mut uts)
+        .map_err(|_| "uname's answer could not be read back")?;
+    if uts.get(65..78) != Some(b"procfs-check\0".as_slice()) {
+        return Err("uname's nodename is not the name written to /proc/sys/kernel/hostname");
+    }
+    if read_all(ns, ctx, HOSTNAME, 64)? != b"procfs-check\n" {
+        return Err("/proc/sys/kernel/hostname does not read back the name written to it");
+    }
+    Ok(())
+}
+
+/// Write `data` to a value under `/proc/sys`, as `echo … >` does: opened to
+/// truncate, and written whole.
+fn write_value(
+    ns: &Namespace,
+    ctx: &Context,
+    path: &[u8],
+    data: &[u8],
+) -> Result<(), &'static str> {
+    let flags = OpenFlags {
+        write: true,
+        truncate: true,
+        ..OpenFlags::default()
+    };
+    let file = ns
+        .open(ctx, None, path, &flags, 0)
+        .map_err(|_| "a writable /proc/sys value did not open for writing")?;
+    if file.write(data) != Ok(data.len()) {
+        return Err("a writable /proc/sys value did not take the whole write");
+    }
+    Ok(())
 }
 
 /// `/proc/<pid>/fd`: a descriptor's link names where it was opened, and says

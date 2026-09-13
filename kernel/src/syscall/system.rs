@@ -25,6 +25,8 @@
 //!
 //! [`Utsname::sysname`]: ferrix_linux_abi::types::Utsname::sysname
 
+use alloc::vec::Vec;
+
 use ferrix_bootinfo::{Arch, PAGE_SIZE, is_user_address};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
@@ -45,7 +47,10 @@ const FIELD: usize = 65;
 
 /// The longest name `sethostname` accepts: `__NEW_UTS_LEN`, a field less its
 /// terminator.
-const NAME_MAX: usize = FIELD - 1;
+pub(crate) const NAME_MAX: usize = FIELD - 1;
+
+/// The system's name, `uname -s`; see the module documentation for why.
+pub(crate) const SYSNAME: &str = "Linux";
 
 /// The kernel release.
 ///
@@ -68,6 +73,69 @@ static NODENAME: SpinLock<Option<SetName>> = SpinLock::new(None);
 /// The NIS domain name, once something has set one. `None` reads as
 /// `(none)`, which is what Linux reports before anything sets it.
 static DOMAINNAME: SpinLock<Option<SetName>> = SpinLock::new(None);
+
+/// The host name before anything sets one.
+const HOSTNAME_DEFAULT: &str = "ferrix";
+
+/// The domain name before anything sets one.
+const DOMAINNAME_DEFAULT: &str = "(none)";
+
+/// The name `slot` holds, or `default` if nothing has set it: its bytes,
+/// NUL-padded, and how many of them there are.
+fn name_in(slot: &SpinLock<Option<SetName>>, default: &str) -> SetName {
+    let set = *slot.lock();
+    set.unwrap_or_else(|| {
+        let mut bytes = [0_u8; NAME_MAX];
+        for (slot, byte) in bytes.iter_mut().zip(default.bytes()) {
+            *slot = byte;
+        }
+        (bytes, default.len())
+    })
+}
+
+/// A name as `uname` reports it, without the padding.
+fn name_bytes(slot: &SpinLock<Option<SetName>>, default: &str) -> Vec<u8> {
+    let (bytes, len) = name_in(slot, default);
+    bytes.get(..len).unwrap_or_default().to_vec()
+}
+
+/// Store `name` in `slot`, if it fits: at most [`NAME_MAX`] bytes, or
+/// `EINVAL`.
+fn set_name(slot: &SpinLock<Option<SetName>>, name: &[u8]) -> Result<(), Errno> {
+    let mut bytes = [0_u8; NAME_MAX];
+    bytes
+        .get_mut(..name.len())
+        .ok_or(Errno::EINVAL)?
+        .copy_from_slice(name);
+    *slot.lock() = Some((bytes, name.len()));
+    Ok(())
+}
+
+/// Whether something has set the host name, rather than it reading as the
+/// default.
+pub(crate) fn hostname_is_set() -> bool {
+    NODENAME.lock().is_some()
+}
+
+/// The host name `uname` reports as `nodename`.
+pub(crate) fn hostname() -> Vec<u8> {
+    name_bytes(&NODENAME, HOSTNAME_DEFAULT)
+}
+
+/// The domain name `uname` reports as `domainname`.
+pub(crate) fn domainname() -> Vec<u8> {
+    name_bytes(&DOMAINNAME, DOMAINNAME_DEFAULT)
+}
+
+/// Set the host name, as `sethostname` does once it has read the name.
+pub(crate) fn set_hostname(name: &[u8]) -> Result<(), Errno> {
+    set_name(&NODENAME, name)
+}
+
+/// Set the domain name, as `setdomainname` does once it has read the name.
+pub(crate) fn set_domainname(name: &[u8]) -> Result<(), Errno> {
+    set_name(&DOMAINNAME, name)
+}
 
 /// Answer `call` if it is one of this module's.
 pub(crate) fn dispatch(
@@ -97,21 +165,10 @@ pub(crate) fn sys_uname(process: &Process, at: u64) -> Result<usize, Errno> {
         Arch::AArch64 => "aarch64",
         Arch::Armv7a => "armv7l",
     };
-    let nodename = *NODENAME.lock();
-    let domainname = *DOMAINNAME.lock();
-    let text = |set: Option<SetName>, default: &'static str| -> ([u8; NAME_MAX], usize) {
-        set.unwrap_or_else(|| {
-            let mut bytes = [0_u8; NAME_MAX];
-            for (slot, byte) in bytes.iter_mut().zip(default.bytes()) {
-                *slot = byte;
-            }
-            (bytes, default.len())
-        })
-    };
-    let (node, node_len) = text(nodename, "ferrix");
-    let (domain, domain_len) = text(domainname, "(none)");
+    let (node, node_len) = name_in(&NODENAME, HOSTNAME_DEFAULT);
+    let (domain, domain_len) = name_in(&DOMAINNAME, DOMAINNAME_DEFAULT);
     let fields: [&[u8]; 6] = [
-        b"Linux",
+        SYSNAME.as_bytes(),
         node.get(..node_len).unwrap_or_default(),
         RELEASE.as_bytes(),
         VERSION.as_bytes(),
@@ -148,15 +205,15 @@ fn read_name(process: &Process, at: u64, len: i32) -> Result<SetName, Errno> {
 
 /// `sethostname`: at most 64 bytes, or `EINVAL`.
 pub(crate) fn sys_sethostname(process: &Process, at: u64, len: i32) -> Result<usize, Errno> {
-    let name = read_name(process, at, len)?;
-    *NODENAME.lock() = Some(name);
+    let (bytes, len) = read_name(process, at, len)?;
+    set_hostname(bytes.get(..len).ok_or(Errno::EINVAL)?)?;
     Ok(0)
 }
 
 /// `setdomainname`: as `sethostname`, for the other field.
 pub(crate) fn sys_setdomainname(process: &Process, at: u64, len: i32) -> Result<usize, Errno> {
-    let name = read_name(process, at, len)?;
-    *DOMAINNAME.lock() = Some(name);
+    let (bytes, len) = read_name(process, at, len)?;
+    set_domainname(bytes.get(..len).ok_or(Errno::EINVAL)?)?;
     Ok(0)
 }
 

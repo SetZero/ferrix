@@ -15,8 +15,11 @@ use ferrix_procfs::kstat::{self, CpuTimes, Kstat};
 use ferrix_procfs::maps::{self, Mapping, Width};
 use ferrix_procfs::meminfo::{self, Meminfo};
 use ferrix_procfs::mounts::{self, Mount};
+use ferrix_procfs::partitions;
 use ferrix_procfs::stat::{self, Stat};
 use ferrix_procfs::status::{self, State, Status};
+use ferrix_procfs::sysctl;
+use ferrix_vfs::fd::MAX_LIMIT;
 use ferrix_vfs::{Errno, Location, Result};
 
 use super::Kernel;
@@ -27,7 +30,8 @@ use crate::mm;
 use crate::sched;
 use crate::smp;
 use crate::syscall::process::{self, Process};
-use crate::syscall::system::{RELEASE, VERSION};
+use crate::syscall::registry::PID_MAX;
+use crate::syscall::system::{self, NAME_MAX, RELEASE, SYSNAME, VERSION};
 use crate::syscall::time;
 use crate::user::space::Region;
 
@@ -297,6 +301,91 @@ pub(super) fn version(_: &Kernel) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// `/proc/partitions`: empty, as Linux's is with no block device, because
+/// there is none until stage 11 gives the kernel one.
+pub(super) fn partitions(_: &Kernel) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    partitions::render(&mut out, &[]);
+    Ok(out)
+}
+
+// -- /proc/sys ------------------------------------------------------------------
+
+/// A string value.
+fn string(value: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    sysctl::string(&mut out, value);
+    out
+}
+
+/// A number value.
+fn number(value: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    sysctl::number(&mut out, value);
+    out
+}
+
+/// `kernel/ostype`: `uname -s`.
+pub(super) fn ostype(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(string(SYSNAME.as_bytes()))
+}
+
+/// `kernel/osrelease`: `uname -r`.
+pub(super) fn osrelease(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(string(RELEASE.as_bytes()))
+}
+
+/// `kernel/version`: `uname -v`.
+pub(super) fn sys_version(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(string(VERSION.as_bytes()))
+}
+
+/// `kernel/hostname`: `uname -n`.
+pub(super) fn hostname(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(string(&system::hostname()))
+}
+
+/// `kernel/domainname`: the domain name `uname` reports.
+pub(super) fn domainname(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(string(&system::domainname()))
+}
+
+/// A write to `kernel/hostname`: `proc_dostring`'s, so `echo name >` stores
+/// `name`, and a name past `__NEW_UTS_LEN` is cut there rather than refused,
+/// which is where the sysctl and `sethostname` differ on Linux too. The
+/// write is taken as from the start of the value, whatever the offset.
+pub(super) fn set_hostname(_: &Kernel, data: &[u8]) -> Result<usize> {
+    system::set_hostname(sysctl::stored(data, NAME_MAX))?;
+    Ok(data.len())
+}
+
+/// A write to `kernel/domainname`, as [`set_hostname`].
+pub(super) fn set_domainname(_: &Kernel, data: &[u8]) -> Result<usize> {
+    system::set_domainname(sysctl::stored(data, NAME_MAX))?;
+    Ok(data.len())
+}
+
+/// `kernel/pid_max`: one past the highest pid the registry hands out.
+pub(super) fn pid_max(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(number(u64::from(PID_MAX)))
+}
+
+/// `fs/nr_open`: the most `RLIMIT_NOFILE` may be raised to.
+pub(super) fn nr_open(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(number(u64::from(MAX_LIMIT)))
+}
+
+/// `fs/file-max`: `LONG_MAX`, which is no limit.
+///
+/// Linux's limit on files open across the system, which it sizes from memory
+/// at boot and checks when a file is opened. Nothing here counts files open
+/// across the system, so nothing limits them, and the value that says so is
+/// the largest the sysctl accepts: `LONG_MAX` of the kernel's word, the number
+/// systemd writes into it to mean unlimited.
+pub(super) fn file_max(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(number(isize::MAX.unsigned_abs() as u64))
+}
+
 // -- A process ----------------------------------------------------------------
 
 /// `/proc/<pid>/cmdline`: each argument followed by a NUL.
@@ -337,11 +426,37 @@ pub(super) fn descriptor(process: &Process, fd: i32) -> Result<Vec<u8>> {
         .map(Arc::clone)
         .map_err(|_| Errno::ENOENT)?;
     let root = process.fs_context().lock().root.clone();
-    let mut path = fs::namespace().path_of(file.location(), &root);
-    if file.location().dentry.is_unhashed() {
+    Ok(located(file.location(), &root))
+}
+
+/// `/proc/<pid>/cwd`: the working directory, as `getcwd` would give it —
+/// with ` (deleted)` after a directory since removed, where `getcwd` answers
+/// `ENOENT` instead, as Linux's link and system call differ too.
+pub(super) fn cwd(process: &Process) -> Result<Vec<u8>> {
+    let (cwd, root) = {
+        let context = process.fs_context().lock();
+        (context.cwd.clone(), context.root.clone())
+    };
+    Ok(located(&cwd, &root))
+}
+
+/// `/proc/<pid>/root`: the process's root, from itself, which is `/`.
+pub(super) fn root(process: &Process) -> Result<Vec<u8>> {
+    let root = process.fs_context().lock().root.clone();
+    Ok(located(&root, &root))
+}
+
+/// Where `at` is, from `root`, marked ` (deleted)` if its name is gone.
+///
+/// The locations are clones taken under the process's lock and used with it
+/// released: the path walks parent dentries, and the last reference to a
+/// location may release a chain of them.
+fn located(at: &Location, root: &Location) -> Vec<u8> {
+    let mut path = fs::namespace().path_of(at, root);
+    if at.dentry.is_unhashed() {
         path.extend_from_slice(b" (deleted)");
     }
-    Ok(path)
+    path
 }
 
 /// `/proc/<pid>/maps`.
