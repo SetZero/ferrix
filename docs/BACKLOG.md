@@ -26,12 +26,25 @@ These add to `docs/CONVENTIONS.md`, which still governs commits.
 | Anything the image contains: `kernel/`, `boot/`, a kernel-side crate in `libs/`, `xtask` | `cargo xtask check`, then `test-boot` on x86_64, aarch64, armv7a at four processors and armv7a at `--smp 2` |
 | User mode, page tables, TLB, SMP or the scheduler | The row above, and x86_64 under `--accel kvm` |
 
-Then fast-forward `main` only if it is still the commit rebased onto. If it
-moved: when the commits that moved it touch none of the files the change
-touches and nothing in `kernel/`, `boot/` or a kernel-side crate, re-run
-`cargo xtask check` and the `armv7a --smp 2` boot and land; otherwise run the
-row again. A boot that fails is a result to read, not a reason to retry: there
-is no known flake, and every stage 5 failure prints its own diagnosis.
+Then fast-forward `main` only if it is still the commit rebased onto.
+
+**The landing queue.** Image changes queue; documentation, ferrousli and
+host-only `libs/` landings do not. A session whose image change has passed
+its row tells the product owner "ready to land" with the base it verified
+on; the product owner answers with its place in the queue and says "go" when
+the landing before it has fast-forwarded. Nobody fast-forwards an image
+change without a go, and a go lapses after 30 minutes. This exists because
+on 2026-09-13 a 25-minute row kept losing to a `main` that moved every ten
+minutes, and one branch passed on seven bases without landing.
+
+**Re-verifying after `main` moved.** When the commits that moved it touch
+none of the files the change touches, re-run `cargo xtask check` and two
+boots, `armv7a --smp 2` and x86_64 under `--accel kvm`, then land. When the
+files overlap, or the change is cross-cutting (locks, the scheduler, the
+trap or system-call entry, memory management), run the whole row again; the
+product owner may ask for the whole row in any case. A boot that fails is a
+result to read, not a reason to retry: only the stage 5 EEVDF-bound message
+was ever a known flake, and it is fixed.
 
 **Worktrees.** One landing, one worktree. `git worktree remove` it once its
 branch is on `main`. Check `df -h /` before a landing; after a failed commit
@@ -71,12 +84,13 @@ alive.
 | ferrix-32 (was ferrix-24) | Product owner: priorities, decisions, this file, milestones, cross-cutting debt |
 | ferrix-a5 (was ferrix-91) | Stage 7: processes, signals, threads, tty, futex, time; the user entry path |
 | ferrix-e6 (was ferrix-c2) | Stage 8: VFS, tmpfs, devfs, procfs, pipes, the fd and path calls; file-backed `mmap` |
-| ferrix-d9 (stage 9's session did not return from the restart) | Stage 9: native ABI, objects, `vmo_map`, native process creation, process observers |
+| ferrix-4b (was ferrix-2a) | Stage 9: native ABI, objects, `vmo_map`, native process creation, process observers |
 | ferrix-d9 (was ferrix-8b) | Stage 10: PCI, IOMMU domains, `devmgr`, the block ring, virtio-blk in ring 3 |
 | ferrix-61 (was ferrix-4d) | Stage 11: `libs/btrfs`, `libs/block`, the kernel mount; the native user-space runtime |
 | ferrix-34 (was ferrix-b9) | Scheduler: stage 5 flakes, lock convoys, wake latency, boot-time performance |
 | ferrix-e5 (was ferrix-54) | The memory-management package below; reviewer of the VMO reverse map and the space.rs half of file-backed mmap |
-| ferrix-4f (was ferrix-b1) | The STM32MP157D-DK1 board, `xtask flash`, `docs/stm32mp157-dk.md`, the Arm UART drivers |
+| ferrix-4f (was ferrix-b1) | `xtask flash` and `deploy`, `docs/stm32mp157-dk.md`, the Arm UART drivers and console receive |
+| ferrix-3c | The STM32MP157D-DK1 board itself: the serial link, OpenOCD, every hardware run, and filing what the board shows with the area that owns it |
 | ferrix-ce (was ferrix-53) | `ferrousli/`, beside the roadmap |
 
 ---
@@ -94,7 +108,7 @@ nobody has it yet.
 | Threads: `clone(CLONE_VM\|CLONE_THREAD\|CLONE_SETTLS)` and everything a thread implies | ferrix-a5 | `rustc` is threaded; the largest missing piece on the roadmap. Exit test: a static musl Rust `std::thread` program under `test-shell` on all three architectures |
 | File-backed `mmap`: a file mapping maps the inode's own VMO pages, shared and private, with faults served from them | ferrix-e6 | `mmap` with a descriptor answers `ENODEV` today; `rustc` and the linker map rlibs. Same interface as the btrfs page cache |
 | Ring-3 virtio-blk reading sectors: `VMO_PIN`, `devmgr`, the ring, the driver | ferrix-d9, with ferrix-61 | Stage 11's mount and exit wait on it; the customer declined a kernel-side disk path |
-| `vmo_map` and native process creation | ferrix-d9, space.rs half reviewed by ferrix-e5 | `devmgr` cannot start a driver without them |
+| `vmo_map` and native process creation | ferrix-4b, space.rs half reviewed by ferrix-e5 | `devmgr` cannot start a driver without them |
 | Stage 11's kernel mount, through the VFS, with file data in the inode's VMO | ferrix-61 | The read-only sysroot |
 
 ### P1 — required before a stage is called done
@@ -106,7 +120,7 @@ nobody has it yet.
 | Trusting a BAR firmware placed but did not enable | ferrix-d9 | 10 |
 | btrfs: honour the default subvolume; verify data checksums from the csum tree; parse `INODE_EXTREF`; a bounded metadata node cache | ferrix-61 | 11 |
 | btrfs: CI Miri step for `libs/btrfs` and `libs/block` under 15 minutes, whole-image tests ignored under Miri | ferrix-61 | 11 |
-| Process observers, so a port can watch a process end | ferrix-d9, reviewed by ferrix-a5 | 9, for `devmgr` |
+| Process observers, so a port can watch a process end | ferrix-4b, reviewed by ferrix-a5 | 9, for `devmgr` |
 | An interrupt wakes its port waiter at once, not at the 5 ms recheck | ferrix-34 | 9, on the virtio-blk latency path |
 | `mprotect` leaves stale translations: `AddressSpace::protect` must invalidate, shown by a user-mode check | ferrix-e5 | 6 |
 | A user-mode copy-on-write write check, and a `MAP_SHARED` write check | ferrix-e5 | 6 |
@@ -117,7 +131,7 @@ nobody has it yet.
 | An "applets" group in `test-vfs`, separate from the exit criterion | ferrix-e6 | 8 |
 | FX-0601 "reserving a thousand pages cost a frame", about one x86-64 boot in three under KVM: a reap landing inside stage 6's frame-count window; the check must settle first, as the path check does | ferrix-34 | 6 |
 | A regression check that exited programs give every frame back once reaped (the leak 0510a8a fixed) | ferrix-a5 | 7 |
-| The first hardware run of stages 6–9 on the DK1: the full boot marker and `test-shell` at two processors, recorded as a hardware column in the roadmap's ARMv7-A section. Needs the board powered, and a shell also needs console receive (next row) | ferrix-4f | ARMv7-A |
+| The first hardware run of stages 6–9 on the DK1: the full boot marker and `test-shell` at two processors, recorded as a hardware column in the roadmap's ARMv7-A section. Needs the board powered, and a shell also needs console receive (next row) | ferrix-3c | ARMv7-A |
 | Console receive by interrupt on the PL011 and the STM32 USART, retiring the 20 ms polling thread | ferrix-4f, with ferrix-a5 | 7, 15 |
 | ARMv7-A with 2 GiB does not boot: the loader must allocate below the direct map's ceiling, and RAM beyond it is reported unused rather than fatal | ferrix-4f | ARMv7-A |
 
