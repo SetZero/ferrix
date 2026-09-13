@@ -516,18 +516,22 @@ pub(crate) unsafe fn init() {
     // SAFETY: a mask of flag bits.
     unsafe { cpu::write_msr(IA32_FMASK, FMASK) };
 
-    // `swapgs` exchanges the two, so the kernel's base has to be parked in the
-    // shadow copy for the *first* swap to find it. Read rather than assumed:
-    // `set_cpu_local` put it in `GS_BASE` already.
-    // SAFETY: reading the base this processor installed for itself.
-    let kernel_gs = unsafe { cpu::read_msr(IA32_GS_BASE) };
-    // SAFETY: parking the kernel's own per-CPU address in the shadow MSR.
-    unsafe { cpu::write_msr(IA32_KERNEL_GS_BASE, kernel_gs) };
+    // While the kernel runs, `GS_BASE` holds its per-CPU record -- which
+    // `set_cpu_local` has just put there -- and the shadow holds the
+    // program's. The first `swapgs` on a processor is always on the way *out*
+    // to ring 3, so what the shadow holds now is the `GS` base every program
+    // starts with: zero, as on Linux.
+    //
+    // It used to be the kernel's record, parked "for the first swap to find".
+    // Both halves then held the same address, so every program ran with the
+    // per-CPU record as its `GS` base -- `mov %gs:0` in ring 3 faulted with it
+    // as the address -- and nothing could tell a wrong `swapgs` from a right
+    // one. The paranoid entry's rule, that no program's `GS` base is an
+    // upper-half address, rests on this.
+    // SAFETY: the shadow MSR exists on every 64-bit x86, and zero is a
+    // canonical address that no kernel code reaches through.
+    unsafe { cpu::write_msr(IA32_KERNEL_GS_BASE, 0) };
 }
-
-/// `IA32_GS_BASE`, duplicated from `mod.rs` rather than re-exported because
-/// this file is the other half of the `swapgs` contract and should say so.
-const IA32_GS_BASE: u32 = 0xC000_0101;
 
 /// Set the thread pointer a program reads through `FS`.
 ///
