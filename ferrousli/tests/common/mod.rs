@@ -30,6 +30,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -135,9 +136,15 @@ fn flat(name: &str) -> String {
 }
 
 /// Compiles `case` at optimisation level `opt`, and returns the program.
+///
+/// Every build gets a name of its own. Tests run in parallel, and two of them
+/// running one program with different arguments would otherwise write the same
+/// file while the other is executing it.
 pub(crate) fn build(case: &Case, opt: &str) -> PathBuf {
+    static BUILDS: AtomicUsize = AtomicUsize::new(0);
     let source = manifest().join("tests/c").join(format!("{}.c", case.name));
-    let out = scratch().join(format!("{}{opt}", flat(case.name)));
+    let serial = BUILDS.fetch_add(1, Ordering::Relaxed);
+    let out = scratch().join(format!("{}{opt}-{serial}", flat(case.name)));
     let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
     let output = Command::new(cc)
         .args([
@@ -244,7 +251,7 @@ pub(crate) fn check(case: &Case) {
     for opt in ["-O0", "-O2"] {
         let program = build(case, opt);
         let label = format!("{}{opt}", case.name);
-        let dir = scratch().join(format!("{}{opt}.dir", flat(case.name)));
+        let dir = program.with_extension("dir");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the program's directory");
 
