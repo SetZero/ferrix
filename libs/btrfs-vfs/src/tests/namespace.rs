@@ -60,7 +60,7 @@ fn mount_at_mnt(ns: &Namespace, ctx: &Context, name: &str) {
     let at = ns.resolve(ctx, None, b"/mnt", true).unwrap();
     let (_, packed) = IMAGES.iter().find(|(n, _)| *n == name).unwrap();
     let _mount = ns
-        .mount(Btrfs::mount(Image::new(packed), 42).unwrap(), &at)
+        .mount(Btrfs::mount(Image::new(packed), 42, heap()).unwrap(), &at)
         .unwrap();
 }
 

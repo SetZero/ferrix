@@ -15,12 +15,22 @@
 //! # Mounting what exists
 //!
 //! `mount` makes a new filesystem on a directory: a `tmpfs`, a `proc` or a
-//! `devtmpfs`, the three an init script mounts first. Each `proc` mount is a
-//! new procfs instance over the one kernel, so every one of them shows the
-//! same processes, as on Linux; each `devtmpfs` mount is a new devfs over the
-//! one device table. Mounting on a directory that is already a mount's root
-//! stacks the new one on top, so `mount -t proc proc /proc` over the boot's
-//! `/proc` works, and unmounting it uncovers the old one.
+//! `devtmpfs`, the three an init script mounts first, or a `btrfs` on a disk.
+//! Each `proc` mount is a new procfs instance over the one kernel, so every
+//! one of them shows the same processes, as on Linux; each `devtmpfs` mount
+//! is a new devfs over the one device table. Mounting on a directory that is
+//! already a mount's root stacks the new one on top, so `mount -t proc proc
+//! /proc` over the boot's `/proc` works, and unmounting it uncovers the old
+//! one.
+//!
+//! `btrfs` is the one type with a source: the path of a block node in `/dev`,
+//! whose number names a disk a ring-3 driver registered. The source is
+//! resolved last, after the target and the flags, as Linux resolves it inside
+//! the filesystem's own mount; a source that is not a block node is
+//! `ENOTBLK`, and a number no disk answers to is `ENXIO`. Stage 11's btrfs
+//! reads and does not write, so a mount of it must ask for `MS_RDONLY` and
+//! is `EROFS` otherwise, the answer a program gets from a read-only medium
+//! rather than a lie it would find out about later.
 //!
 //! The types that do not exist yet -- `sysfs`, `devpts`, `cgroup2` and every
 //! other -- are `ENODEV`, Linux's answer for a type the kernel was built
@@ -63,16 +73,17 @@ use crate::syscall::path::{self, Target};
 use crate::syscall::process::Process;
 use crate::syscall::{fd, pipe, uaccess};
 
-/// The `mount` flags that ask to change a mount rather than make one, or for
-/// a guarantee nothing here enforces. See the module documentation.
+/// The `mount` flags that ask to change a mount rather than make one. See the
+/// module documentation.
 ///
-/// `MS_RDONLY` is here rather than ignored: a program that mounts read-only
-/// relies on writes failing, and a mount that silently accepted them would be
-/// wrong much later and far from here. The other per-mount flags -- `nosuid`,
+/// `MS_RDONLY` is judged per filesystem rather than here: a program that
+/// mounts read-only relies on writes failing, so the memory filesystems, which
+/// cannot refuse a write, refuse the flag with `EINVAL`, while btrfs, which
+/// cannot accept one, requires it. The other per-mount flags -- `nosuid`,
 /// `nodev`, `noexec`, the access-time ones, `MS_SILENT` -- are accepted,
 /// because there is nothing yet for any of them to switch off.
 const REFUSED_MOUNT_FLAGS: u32 =
-    MS_RDONLY | MS_REMOUNT | MS_BIND | MS_MOVE | MS_UNBINDABLE | MS_PRIVATE | MS_SLAVE | MS_SHARED;
+    MS_REMOUNT | MS_BIND | MS_MOVE | MS_UNBINDABLE | MS_PRIVATE | MS_SLAVE | MS_SHARED;
 
 /// The calls this module answers, or `None` for one it does not.
 pub(crate) fn dispatch(
@@ -109,7 +120,7 @@ pub(crate) fn dispatch(
             super::wide(a, 3),
         ),
         Syscall::Chroot => sys_chroot(process, a[0]),
-        Syscall::Mount => sys_mount(process, a[1], a[2], super::truncate(a[3])),
+        Syscall::Mount => sys_mount(process, a[0], a[1], a[2], super::truncate(a[3])),
         Syscall::Umount2 => sys_umount2(process, a[0], super::truncate(a[1])),
         // `pivot_root` moves the root mount aside and puts another in its
         // place. The namespace's root is fixed at its creation and has no
@@ -332,30 +343,53 @@ pub(crate) fn sys_chroot(process: &Process, at: u64) -> Result<usize, Errno> {
     Ok(0)
 }
 
-/// The filesystem a `mount` type names, new.
+/// The filesystem a `mount` type names, new: on nothing for the memory
+/// filesystems, on the disk `source` names for btrfs.
 ///
 /// The names are the ones Linux registers, and the ones `/proc/filesystems`
 /// lists. `sysfs`, `devpts` and `cgroup2` join this match when they exist;
 /// until then they fall to `ENODEV` with every name Linux would not know
 /// either.
-fn filesystem_named(name: &[u8]) -> Result<Arc<dyn FileSystem>, Errno> {
+fn filesystem_named(
+    process: &Process,
+    name: &[u8],
+    source: u64,
+    read_only: bool,
+) -> Result<Arc<dyn FileSystem>, Errno> {
     match name {
+        b"tmpfs" | b"proc" | b"devtmpfs" if read_only => Err(Errno::EINVAL),
         b"tmpfs" => Ok(fs::new_tmpfs()),
         b"proc" => Ok(Arc::new(Procfs::new())),
         b"devtmpfs" => Ok(Arc::new(Devfs::new())),
+        b"btrfs" => {
+            if source == 0 {
+                return Err(Errno::EINVAL);
+            }
+            let node = path::target(process, AT_FDCWD, source, 0)?;
+            let meta = node.location().inode()?.metadata();
+            if meta.kind != FileType::BlockDevice {
+                return Err(Errno::ENOTBLK);
+            }
+            if !read_only {
+                return Err(Errno::EROFS);
+            }
+            fs::btrfs::mount(meta.rdev)
+        }
         _ => Err(Errno::ENODEV),
     }
 }
 
 /// `mount(source, target, type, flags, data)`, for the one kind of mount there
-/// is: a new filesystem on a directory. The source and the options string
-/// mean nothing to any filesystem here and are not read; see the module
-/// documentation.
+/// is: a new filesystem on a directory. The options string means nothing to
+/// any filesystem here and is not read, and the source only to btrfs; see the
+/// module documentation.
 ///
 /// In Linux's order: the type is copied in before the target is looked up,
-/// the flags are judged after, and the type is only looked for last.
+/// the flags are judged after, and the type is only looked for last, with
+/// the source resolved inside it.
 pub(crate) fn sys_mount(
     process: &Process,
+    source: u64,
     target: u64,
     kind: u64,
     flags: u32,
@@ -378,7 +412,8 @@ pub(crate) fn sys_mount(
     if flags & REFUSED_MOUNT_FLAGS != 0 {
         return Err(Errno::EINVAL);
     }
-    let filesystem = filesystem_named(&kind.ok_or(Errno::EINVAL)?)?;
+    let read_only = flags & MS_RDONLY != 0;
+    let filesystem = filesystem_named(process, &kind.ok_or(Errno::EINVAL)?, source, read_only)?;
     let _ = fs::namespace().mount(filesystem, &place)?;
     Ok(0)
 }

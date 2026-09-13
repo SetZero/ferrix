@@ -2438,16 +2438,27 @@ logic `cargo test`, Miri and a fuzzer can reach.
   the same lock next, so that two reads racing on one description get
   different bytes again once the offset's spin lock stops covering the I/O.
 
+* **The kernel mount.** `mount -t btrfs /dev/vda /mnt` names a block node;
+  the kernel takes its number to devfs's registry, wraps the `BlockDevice` it
+  finds as the volume's `Device` (whole sectors on one side, byte offsets on
+  the other, a bounce buffer only for a read that is not sector-aligned), and
+  mounts read-only: a mount without `MS_RDONLY` is `EROFS`, so nothing is told
+  it has a writable btrfs before stage 12. The mount keeps one inode object per
+  inode, found by number, so two names for a file share one page cache; a
+  regular file's data lives in the pages the kernel's VMO storage lends it,
+  filled from the volume in runs by a `PageSource` that reads with no lock
+  held, zero-fills past the end, and on a damaged sector keeps the pages before
+  it and answers `EIO` for the bad one alone. `/proc/filesystems` lists
+  `btrfs` as the one type needing a device. Tested through the trait and the
+  namespace on the host with heap pages; the same code runs over the kernel's.
+
 **Still to do.**
 
-* **The kernel mount**, which needs a block device: stage 10's virtio-blk driver
-  and ring protocol, with `libs/block` between it and `libs/btrfs-vfs`. Then
-  the exit criterion, in QEMU. It waits for the ring-3 driver itself: a
-  kernel-side virtio-blk read path to run the exit sooner was considered and
-  declined, because §7 of the architecture puts drivers in ring 3 and a harness
-  in ring 0 would be the first exception to it. What the driver still needs
-  beyond stage 10's own list is stage 9's `vmo_map` with bus addresses and
-  native process creation.
+* **The exit criterion, in QEMU:** a real image on a second virtio-blk disk,
+  served by stage 10's ring-3 driver through the block ring, mounted and read
+  back byte for byte in `test-vfs`, and a mapping of a file seeing the pages
+  `read` fills once file `mmap` lands. It waits for the driver process itself,
+  which stage 11 writes on its runtime and its virtio-blk library.
 * Device numbers are passed through as btrfs stores them, not yet checked
   against how Linux reports them.
 * A file's hole is tested only by construction: `mkfs.btrfs --rootdir` writes a

@@ -112,6 +112,8 @@ dependencies = [
  "ferrix-blkring",
  "ferrix-block",
  "ferrix-bootinfo",
+ "ferrix-btrfs",
+ "ferrix-btrfs-vfs",
  "ferrix-elf",
  "ferrix-fbtext",
  "ferrix-fdt",

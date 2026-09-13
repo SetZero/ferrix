@@ -32,11 +32,26 @@
 //! extent's bytes never change, so a cached extent stays correct whichever
 //! inode reads it next.
 //!
-//! # Inodes are built at lookup
+//! # One inode object per inode
 //!
-//! An inode object is made from its `INODE_ITEM` when a lookup finds it, and
-//! its metadata is fixed from then on, which is right for a volume nothing
-//! writes. The VFS's dentry cache is what keeps it alive between lookups.
+//! An inode object is made from its `INODE_ITEM` when a lookup first finds it,
+//! and its metadata is fixed from then on, which is right for a volume nothing
+//! writes. The mount keeps a weak reference to every live one, keyed by inode
+//! number, so a second name for the same file — a hard link, or `..` back to
+//! a directory — finds the object that exists rather than a twin with a page
+//! cache of its own. The VFS's dentry cache is what keeps an object alive
+//! between lookups; when the last reference goes, the object takes its map
+//! entry with it.
+//!
+//! # File data lives in the page cache
+//!
+//! A regular file's bytes are read through the [`Pages`] the mount's
+//! [`Storage`] lends it, made over a [`PageSource`] that reads runs of pages
+//! from the volume with no lock held: in the kernel, the inode's VMO, so that
+//! a mapping of the file and a `read` of it see the same pages. The source
+//! fills zeros past the file's end. A page whose data fails its checksum is an
+//! error and never a zeroed page: the leading pages of a run that did verify
+//! are kept, and the bad one answers `EIO` on its own, at every read.
 //!
 //! # What is not crossed
 //!
@@ -52,7 +67,8 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use alloc::sync::Arc;
+use alloc::collections::BTreeMap;
+use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::any::Any;
@@ -68,6 +84,7 @@ use ferrix_btrfs::items::{self, InodeItem};
 use ferrix_btrfs::tree::MAX_NODE_SIZE;
 use ferrix_btrfs::volume::{Device, Volume};
 use ferrix_sync::SpinLock;
+use ferrix_vfs::tmpfs::{PAGE_SIZE, PageSource, Pages, Storage};
 use ferrix_vfs::{
     DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, Result,
     SetAttributes, StatFs, Timespec,
@@ -170,6 +187,11 @@ struct Shared<D> {
     device: Cached<D>,
     dev_no: u64,
     pool: SpinLock<Vec<Scratch>>,
+    /// Where a regular file's page cache comes from.
+    storage: Arc<dyn Storage>,
+    /// Every live inode object, by inode number; see the crate documentation.
+    /// Held to look one up or to record one, never across a read.
+    nodes: SpinLock<BTreeMap<u64, Weak<Node<D>>>>,
 }
 
 impl<D: BlockHandle> Shared<D> {
@@ -214,17 +236,23 @@ pub struct Btrfs<D> {
 }
 
 impl<D: BlockHandle> Btrfs<D> {
-    /// Mount the volume on `device`, reporting `dev_no` as every inode's device.
+    /// Mount the volume on `device`, reporting `dev_no` as every inode's
+    /// device, with file data kept in pages from `storage`.
     ///
     /// `EINVAL` when the device does not hold a btrfs volume this reader will
     /// read, and `EIO` when it does but cannot be read.
-    pub fn mount(device: D, dev_no: u64) -> Result<Arc<Btrfs<D>>> {
-        Self::mount_with(device, dev_no, cache::ENTRIES)
+    pub fn mount(device: D, dev_no: u64, storage: Arc<dyn Storage>) -> Result<Arc<Btrfs<D>>> {
+        Self::mount_with(device, dev_no, storage, cache::ENTRIES)
     }
 
     /// [`Btrfs::mount`] with a metadata cache of `entries` reads, so a test can
     /// make one small enough that every walk evicts.
-    fn mount_with(device: D, dev_no: u64, entries: usize) -> Result<Arc<Btrfs<D>>> {
+    fn mount_with(
+        device: D,
+        dev_no: u64,
+        storage: Arc<dyn Storage>,
+        entries: usize,
+    ) -> Result<Arc<Btrfs<D>>> {
         let device = Cached::new(device, Arc::new(NodeCache::new(entries)));
         let mut reader = device.clone();
         let chunks = vec![ChunkMapEntry::EMPTY; MAX_CHUNKS].into_boxed_slice();
@@ -235,8 +263,10 @@ impl<D: BlockHandle> Btrfs<D> {
             device,
             dev_no,
             pool: SpinLock::new(vec![scratch]),
+            storage,
+            nodes: SpinLock::new(BTreeMap::new()),
         });
-        let root = Node::load(&shared, shared.volume.root_dir())?;
+        let root = Node::get(&shared, shared.volume.root_dir())?;
         if root.meta.kind != FileType::Directory {
             return Err(Errno::EIO);
         }
@@ -297,9 +327,32 @@ impl<D: BlockHandle> FileSystem for Btrfs<D> {
 struct Node<D> {
     shared: Arc<Shared<D>>,
     meta: Metadata,
+    /// A regular file's page cache, made at its first read; see the crate
+    /// documentation. The lock is held to look or to set, never across a read.
+    pages: SpinLock<Option<Arc<dyn Pages>>>,
 }
 
 impl<D: BlockHandle> Node<D> {
+    /// The inode object for `ino`: the one alive already, or one built from
+    /// its `INODE_ITEM` and recorded.
+    ///
+    /// The map's lock is not held across the load, which reads the volume; so
+    /// two first lookups can both build one, and the second to record it
+    /// keeps the first's and drops its own, whose `Drop` then finds another
+    /// object's entry in the map and leaves it.
+    fn get(shared: &Arc<Shared<D>>, ino: u64) -> Result<Arc<Node<D>>> {
+        if let Some(alive) = shared.nodes.lock().get(&ino).and_then(Weak::upgrade) {
+            return Ok(alive);
+        }
+        let built = Node::load(shared, ino)?;
+        let mut nodes = shared.nodes.lock();
+        if let Some(alive) = nodes.get(&ino).and_then(Weak::upgrade) {
+            return Ok(alive);
+        }
+        let _ = nodes.insert(ino, Arc::downgrade(&built));
+        Ok(built)
+    }
+
     /// Build the inode object for `ino` from its `INODE_ITEM`.
     fn load(shared: &Arc<Shared<D>>, ino: u64) -> Result<Arc<Node<D>>> {
         let item = shared
@@ -310,7 +363,27 @@ impl<D: BlockHandle> Node<D> {
         Ok(Arc::new(Node {
             shared: Arc::clone(shared),
             meta,
+            pages: SpinLock::new(None),
         }))
+    }
+
+    /// This regular file's page cache, made over a source at the first call.
+    ///
+    /// The store is made with the lock released, and set only if still
+    /// absent, so two first readers cannot leave two caches; the loser's
+    /// store is dropped unread.
+    fn pages(&self) -> Result<Arc<dyn Pages>> {
+        if let Some(pages) = self.pages.lock().as_ref() {
+            return Ok(Arc::clone(pages));
+        }
+        let source: Arc<dyn PageSource> = Arc::new(FileSource {
+            shared: Arc::clone(&self.shared),
+            ino: self.meta.ino,
+            size: self.meta.size,
+        });
+        let made: Arc<dyn Pages> = Arc::from(self.shared.storage.allocate_with(source)?);
+        let mut slot = self.pages.lock();
+        Ok(Arc::clone(slot.get_or_insert(made)))
     }
 
     fn require_dir(&self) -> Result<()> {
@@ -329,12 +402,102 @@ impl<D: BlockHandle> Node<D> {
     }
 }
 
+impl<D> Drop for Node<D> {
+    /// Take this object's entry out of the mount's map — and only this
+    /// object's: a lookup that lost the race in [`Node::get`] drops a twin
+    /// whose entry was never recorded, and must not remove the winner's.
+    fn drop(&mut self) {
+        let mut nodes = self.shared.nodes.lock();
+        let mine = nodes
+            .get(&self.meta.ino)
+            .is_some_and(|weak| core::ptr::addr_eq(weak.as_ptr(), self));
+        if mine {
+            let _ = nodes.remove(&self.meta.ino);
+        }
+    }
+}
+
 impl<D> fmt::Debug for Node<D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Node")
             .field("ino", &self.meta.ino)
             .field("kind", &self.meta.kind)
             .finish_non_exhaustive()
+    }
+}
+
+/// A regular file as a [`PageSource`]: what fills its page cache.
+struct FileSource<D> {
+    shared: Arc<Shared<D>>,
+    ino: u64,
+    /// The file's size when its inode was read, which on a read-only volume
+    /// is its size for good.
+    size: u64,
+}
+
+impl<D> fmt::Debug for FileSource<D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileSource")
+            .field("ino", &self.ino)
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<D: BlockHandle> FileSource<D> {
+    /// Fill `out` with the file's bytes from `offset`, zeros past its end.
+    fn read_run(&self, offset: u64, out: &mut [u8]) -> Result<()> {
+        let ino = self.ino;
+        let got = self.shared.with(|sub, device, scratch| {
+            sub.read(
+                device,
+                ino,
+                offset,
+                out,
+                &mut scratch.node,
+                &mut scratch.read,
+            )
+        })?;
+        out.get_mut(got..).unwrap_or_default().fill(0);
+        Ok(())
+    }
+}
+
+impl<D: BlockHandle> PageSource for FileSource<D> {
+    /// One read for the whole run, which is how a compressed extent is read
+    /// anyway. If that read fails — a sector's checksum, the disk — the run
+    /// is read again a page at a time, and the pages before the first failure
+    /// are what is filled: cached, as they verified, while the failing page
+    /// is asked for again on its own and answers the error itself.
+    fn fill_range(&self, first: u64, pages: &mut [&mut [u8]]) -> Result<usize> {
+        if pages.is_empty() {
+            return Err(Errno::EINVAL);
+        }
+        let offset = first.checked_mul(PAGE_SIZE).ok_or(Errno::EIO)?;
+        if offset >= self.size {
+            for page in pages.iter_mut() {
+                page.fill(0);
+            }
+            return Ok(pages.len());
+        }
+        let page = usize::try_from(PAGE_SIZE).map_err(|_| Errno::EIO)?;
+        let mut run = vec![0u8; page.saturating_mul(pages.len())];
+        if self.read_run(offset, &mut run).is_ok() {
+            for (target, filled) in pages.iter_mut().zip(run.chunks_exact(page)) {
+                target.copy_from_slice(filled);
+            }
+            return Ok(pages.len());
+        }
+        let mut filled = 0;
+        for (i, target) in pages.iter_mut().enumerate() {
+            let at = offset.saturating_add(PAGE_SIZE.saturating_mul(i as u64));
+            match self.read_run(at, target) {
+                Ok(()) => filled += 1,
+                Err(error) if filled == 0 => return Err(error),
+                Err(_) => break,
+            }
+        }
+        Ok(filled)
     }
 }
 
@@ -352,21 +515,20 @@ impl<D: BlockHandle> Inode for Node<D> {
         Err(Errno::EROFS)
     }
 
+    /// Through the page cache, with no lock of this object held: the
+    /// [`Pages`] may block on the volume, and so may a direct read.
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
         if self.meta.kind != FileType::Regular {
             return Err(Errno::EINVAL);
         }
-        let ino = self.meta.ino;
-        self.shared.with(|sub, device, scratch| {
-            sub.read(
-                device,
-                ino,
-                offset,
-                buf,
-                &mut scratch.node,
-                &mut scratch.read,
-            )
-        })
+        let size = self.meta.size;
+        if offset >= size || buf.is_empty() {
+            return Ok(0);
+        }
+        let len = usize::try_from(size - offset).map_or(buf.len(), |rest| rest.min(buf.len()));
+        let out = buf.get_mut(..len).unwrap_or_default();
+        self.pages()?.read(offset, out)?;
+        Ok(len)
     }
 
     fn write_at(&self, offset: u64, data: &[u8], append: bool) -> Result<(usize, u64)> {
@@ -386,7 +548,7 @@ impl<D: BlockHandle> Inode for Node<D> {
             .shared
             .with(|sub, device, scratch| sub.lookup(device, dir, name, &mut scratch.node))?;
         match found.map(|entry| entry.target) {
-            Some(Target::Inode(ino)) => Ok(Node::load(&self.shared, ino)? as Arc<dyn Inode>),
+            Some(Target::Inode(ino)) => Ok(Node::get(&self.shared, ino)? as Arc<dyn Inode>),
             Some(Target::Subvolume(_)) | None => Err(Errno::ENOENT),
         }
     }

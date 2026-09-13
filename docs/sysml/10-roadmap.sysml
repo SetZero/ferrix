@@ -313,8 +313,10 @@ package FerrixRoadmap {
              * Built, host-side: the btrfs read path in libs/btrfs (mount
              * bootstrap, lookup, readdir, read, zlib/LZO/zstd), reading four
              * real mkfs.btrfs images back exactly; the mount over stage 8's
-             * traits in libs/btrfs-vfs; the block queue in libs/block. Next:
-             * the kernel mount, which needs stage 10's block driver. */
+             * traits in libs/btrfs-vfs; the block queue in libs/block. In the
+             * kernel: mount -t btrfs on a registered block device, read-only,
+             * file data in the inode's VMO pages. Next: the exit, which
+             * needs stage 10's ring-3 block driver. */
     }
 
     #planned requirement <'SN'> stageNetworking : Stage {

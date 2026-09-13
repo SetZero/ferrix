@@ -94,7 +94,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1426 elements, 157 relations. Model digest `d3e96c72d83f4ca7`.
+13 files, 16 packages, 1426 elements, 157 relations. Model digest `1043c7aeb4c0950c`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -2726,7 +2726,7 @@ Built: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri; 
 
 Block core, then btrfs stage A. Exit: an image made by real mkfs.btrfs is mounted and a file tree read out byte-for-byte matching what the host wrote.
 
-Built, host-side: the btrfs read path in libs/btrfs (mount bootstrap, lookup, readdir, read, zlib/LZO/zstd), reading four real mkfs.btrfs images back exactly; the mount over stage 8's traits in libs/btrfs-vfs; the block queue in libs/block. Next: the kernel mount, which needs stage 10's block driver.
+Built, host-side: the btrfs read path in libs/btrfs (mount bootstrap, lookup, readdir, read, zlib/LZO/zstd), reading four real mkfs.btrfs images back exactly; the mount over stage 8's traits in libs/btrfs-vfs; the block queue in libs/block. In the kernel: mount -t btrfs on a registered block device, read-only, file data in the inode's VMO pages. Next: the exit, which needs stage 10's ring-3 block driver.
 
 **Allocated to: **`ferrix.kernel.blockCore`
 

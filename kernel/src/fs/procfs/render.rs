@@ -109,8 +109,13 @@ pub(super) fn cpuinfo(_: &Kernel) -> Result<Vec<u8>> {
 /// deciding what to mount on a list the kernel does not keep.
 pub(super) fn filesystems(_: &Kernel) -> Result<Vec<u8>> {
     let mut out = Vec::new();
-    for name in [&b"tmpfs"[..], b"proc", b"devtmpfs"] {
-        filesystems::render(&mut out, &Filesystem { name, nodev: true });
+    for (name, nodev) in [
+        (&b"tmpfs"[..], true),
+        (b"proc", true),
+        (b"devtmpfs", true),
+        (b"btrfs", false),
+    ] {
+        filesystems::render(&mut out, &Filesystem { name, nodev });
     }
     Ok(out)
 }

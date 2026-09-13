@@ -13,8 +13,14 @@ use std::string::String;
 use std::thread;
 
 use ferrix_btrfs::crc32c;
+use ferrix_vfs::tmpfs::HeapStorage;
 
 use super::*;
+
+/// Heap pages, as the kernel's VMO pages stand in on the host.
+fn heap() -> Arc<dyn Storage> {
+    Arc::new(HeapStorage::new(1 << 30))
+}
 use ferrix_btrfs::volume::ReadKind;
 
 mod namespace;
@@ -114,7 +120,7 @@ fn manifest() -> BTreeMap<Vec<u8>, Expected> {
 
 fn mount(name: &str) -> Arc<Btrfs<Image>> {
     let (_, packed) = IMAGES.iter().find(|(n, _)| *n == name).unwrap();
-    Btrfs::mount(Image::new(packed), 42).unwrap()
+    Btrfs::mount(Image::new(packed), 42, heap()).unwrap()
 }
 
 fn resolve(fs: &Btrfs<Image>, path: &[u8]) -> Arc<dyn Inode> {
@@ -316,7 +322,7 @@ fn the_wrong_kind_of_object_is_refused_as_linux_would() {
 fn a_device_without_btrfs_is_refused_with_einval() {
     let blank = Image(Arc::new(BTreeMap::new()));
     assert_eq!(
-        Btrfs::mount(blank, 1).err(),
+        Btrfs::mount(blank, 1, heap()).err(),
         Some(Errno::EINVAL),
         "no superblock magic"
     );
@@ -376,7 +382,7 @@ fn statfs_reports_btrfs_and_the_volume_size() {
 #[test]
 fn the_mount_shows_the_default_subvolume_not_the_top_level_tree() {
     let packed = include_bytes!("../../btrfs/testdata/default-subvol.img.packed");
-    let fs = Btrfs::mount(Image::new(packed), 42).unwrap();
+    let fs = Btrfs::mount(Image::new(packed), 42, heap()).unwrap();
     assert_eq!(
         read_all(&resolve(&fs, b"marker")),
         b"in the default subvolume\n"
@@ -442,7 +448,7 @@ fn resolve_in<D: BlockHandle>(fs: &Btrfs<D>, path: &[u8]) -> Arc<dyn Inode> {
 #[test]
 fn a_second_walk_to_a_file_reads_no_metadata_from_the_device() {
     let device = Counting::new(IMAGES[0].1);
-    let fs = Btrfs::mount(device.clone(), 42).unwrap();
+    let fs = Btrfs::mount(device.clone(), 42, heap()).unwrap();
     let path = b"dir03/sub0/file07.txt";
     let _ = resolve_in(&fs, path).metadata();
     let (metadata, _) = device.counts();
@@ -456,9 +462,9 @@ fn a_second_walk_to_a_file_reads_no_metadata_from_the_device() {
 }
 
 #[test]
-fn file_data_is_read_from_the_device_every_time() {
+fn file_data_is_read_from_the_device_once_and_then_from_the_page_cache() {
     let device = Counting::new(IMAGES[0].1);
-    let fs = Btrfs::mount(device.clone(), 42).unwrap();
+    let fs = Btrfs::mount(device.clone(), 42, heap()).unwrap();
     let file = resolve_in(&fs, b"random.bin");
     let start = device.counts().1;
     let first = read_all(&file);
@@ -469,10 +475,7 @@ fn file_data_is_read_from_the_device_every_time() {
         once > 0,
         "an uncompressed file's data comes from the device"
     );
-    assert_eq!(
-        twice, once,
-        "and is read again, not cached: file data belongs in the page cache"
-    );
+    assert_eq!(twice, 0, "and never again: the page cache holds it");
     assert_eq!(first, second, "both reads return the same bytes");
 }
 
@@ -482,7 +485,7 @@ fn file_data_is_read_from_the_device_every_time() {
     ignore = "reads every file of a real image; plain cargo test covers it"
 )]
 fn a_cache_too_small_for_one_walk_still_reads_every_file_back() {
-    let fs = Btrfs::mount_with(Image::new(IMAGES[0].1), 42, 2).unwrap();
+    let fs = Btrfs::mount_with(Image::new(IMAGES[0].1), 42, heap(), 2).unwrap();
     for (path, expected) in manifest() {
         if expected.kind != "file" {
             continue;
@@ -513,4 +516,157 @@ fn the_node_cache_is_bounded_and_gives_a_hit_entry_a_second_chance() {
     );
     assert!(cache.get(3, 4).is_some(), "the new entry is held");
     assert!(cache.get(1, 8).is_none(), "a read of another length misses");
+}
+
+// -- One inode object per inode, and the page cache over the source ---------
+
+#[test]
+fn two_walks_to_one_file_share_one_inode_object() {
+    let fs = mount("none");
+    let path = b"dir03/sub0/file07.txt";
+    let first = resolve(&fs, path);
+    let second = resolve(&fs, path);
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "a second lookup finds the object that exists, not a twin"
+    );
+    assert_eq!(
+        fs.shared.nodes.lock().len(),
+        2,
+        "the root and the file are alive; the directories walked through are not"
+    );
+}
+
+#[test]
+fn a_dropped_inode_object_takes_its_map_entry_with_it() {
+    let fs = mount("none");
+    let file = resolve(&fs, b"random.bin");
+    let ino = file.metadata().ino;
+    assert!(fs.shared.nodes.lock().contains_key(&ino));
+    drop(file);
+    assert!(
+        !fs.shared.nodes.lock().contains_key(&ino),
+        "the last reference removes the entry"
+    );
+    assert_eq!(fs.shared.nodes.lock().len(), 1, "only the root is left");
+    let again = resolve(&fs, b"random.bin");
+    assert_eq!(
+        again.metadata().ino,
+        ino,
+        "and a new lookup builds it again"
+    );
+}
+
+/// An image whose data reads are logged as `(physical, len)`, and in which
+/// one byte can be corrupted, so a test can find a file's sector and break it.
+#[derive(Clone)]
+struct Breakable {
+    image: Image,
+    reads: Arc<SpinLock<Vec<(u64, usize)>>>,
+    broken: Arc<SpinLock<Option<u64>>>,
+}
+
+impl Breakable {
+    fn new(packed: &[u8]) -> Breakable {
+        Breakable {
+            image: Image::new(packed),
+            reads: Arc::new(SpinLock::new(Vec::new())),
+            broken: Arc::new(SpinLock::new(None)),
+        }
+    }
+}
+
+impl Device for Breakable {
+    fn read_at(
+        &mut self,
+        physical: u64,
+        buf: &mut [u8],
+        kind: ReadKind,
+    ) -> core::result::Result<(), BtrfsError> {
+        self.image.read_at(physical, buf, kind)?;
+        if kind == ReadKind::Data {
+            self.reads.lock().push((physical, buf.len()));
+        }
+        if let Some(at) = *self.broken.lock()
+            && at >= physical
+            && at < physical + buf.len() as u64
+        {
+            buf[(at - physical) as usize] ^= 0x10;
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_damaged_sector_fails_its_own_page_and_the_pages_before_it_are_kept() {
+    // Find where the file's data lives: the first data read of a fresh mount.
+    let device = Breakable::new(IMAGES[0].1);
+    let fs = Btrfs::mount(device.clone(), 42, heap()).unwrap();
+    let file = resolve_in(&fs, b"random.bin");
+    let mut pages = vec![0u8; 3 * BLOCK];
+    assert_eq!(file.read_at(0, &mut pages), Ok(3 * BLOCK));
+    let page = pages[..BLOCK].to_vec();
+    // The volume reads a regular extent's sectors in one read, so the file's
+    // second sector is one block into the first data read.
+    let second = {
+        let reads = device.reads.lock();
+        let (physical, len) = reads[0];
+        assert!(len >= 3 * BLOCK, "the run read several sectors: {reads:?}");
+        physical + BLOCK as u64
+    };
+    drop(file);
+    drop(fs);
+
+    // Break that sector, and mount afresh.
+    let device = Breakable::new(IMAGES[0].1);
+    *device.broken.lock() = Some(second + 100);
+    let fs = Btrfs::mount(device.clone(), 42, heap()).unwrap();
+    let file = resolve_in(&fs, b"random.bin");
+    let mut first = vec![0u8; BLOCK];
+    assert_eq!(
+        file.read_at(0, &mut first),
+        Ok(BLOCK),
+        "the page before the damage reads: the run failed, the page verified"
+    );
+    assert_eq!(first, page, "with the bytes the undamaged image has");
+    let mut second = vec![0u8; BLOCK];
+    assert_eq!(
+        file.read_at(BLOCK as u64, &mut second),
+        Err(Errno::EIO),
+        "the damaged page is an error, never zeros"
+    );
+    assert_eq!(
+        file.read_at(BLOCK as u64 + 50, &mut second[..10]),
+        Err(Errno::EIO),
+        "and stays one on the next read"
+    );
+    let reads_before = device.reads.lock().len();
+    assert_eq!(file.read_at(0, &mut first), Ok(BLOCK));
+    assert_eq!(
+        device.reads.lock().len(),
+        reads_before,
+        "the good page is served from the cache"
+    );
+}
+
+#[test]
+fn a_read_past_the_end_is_empty_and_the_last_page_is_zero_padded() {
+    let fs = mount("none");
+    let manifest = manifest();
+    let (path, expected) = manifest
+        .iter()
+        .find(|(_, e)| e.kind == "file" && e.size % BLOCK as u64 != 0 && e.size > 0)
+        .expect("a file whose size is not a whole number of pages");
+    let file = resolve(&fs, path);
+    let mut buf = vec![0xAAu8; 16];
+    assert_eq!(file.read_at(expected.size, &mut buf), Ok(0), "at the end");
+    assert_eq!(
+        file.read_at(expected.size + 100, &mut buf),
+        Ok(0),
+        "past it"
+    );
+    let tail = expected.size % BLOCK as u64;
+    let mut last = vec![0xAAu8; BLOCK];
+    let got = file.read_at(expected.size - tail, &mut last).unwrap();
+    assert_eq!(got as u64, tail, "a read is clamped to the file's size");
 }
