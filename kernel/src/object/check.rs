@@ -171,17 +171,17 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let _warm = check_two_processes()?;
     check_a_vmo_maps_as_shared_memory(&mut Counter::default())?;
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let before = mm::free_frames();
+    let window = mm::FrameWindow::open();
     let mut counter = check_two_processes()?;
     check_a_vmo_maps_as_shared_memory(&mut counter)?;
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let leaked = i64::try_from(before).unwrap_or(i64::MAX)
-        - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+    let leaked = window.kept();
     // Checked, not only printed. The cycle check's own premise is that this
     // count is what fails if a refusal stops happening, and a count nothing
     // tested would boot green through exactly that.
     if leaked != 0 {
         mm::print_frame_delta("native", leaked);
+        window.report("native");
         return Err("the native object checks did not give every frame back");
     }
 

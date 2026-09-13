@@ -139,16 +139,16 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let _warm = check_handlers(Output::Quiet)?;
     check_the_whole_number_space_is_total(&mut Counter::default())?;
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let before = mm::free_frames();
+    let window = mm::FrameWindow::open();
     let pages = check_handlers(Output::Show)?;
     check_the_whole_number_space_is_total(&mut counter)?;
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let leaked = i64::try_from(before).unwrap_or(i64::MAX)
-        - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+    let leaked = window.kept();
     // Checked, not only printed: a count nothing tested would boot green
     // through the very leak it exists to show.
     if leaked != 0 {
         mm::print_frame_delta("handlers", leaked);
+        window.report("handlers");
         return Err("the handler checks did not give every frame back");
     }
     mark!(1);
@@ -3772,11 +3772,10 @@ mod paths {
         let _warm = check_path_calls()?;
         let cached = fs::namespace().cached();
         crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-        let before = mm::free_frames();
+        let window = mm::FrameWindow::open();
         let mut report = check_path_calls()?;
         crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-        report.leaked = i64::try_from(before).unwrap_or(i64::MAX)
-            - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+        report.leaked = window.kept();
         report.cache_growth = i64::try_from(fs::namespace().cached()).unwrap_or(i64::MAX)
             - i64::try_from(cached).unwrap_or(i64::MAX);
         // Checked, not only printed. The dentry cache is the one thing that
@@ -3786,6 +3785,9 @@ mod paths {
         // run that grew it has stopped being repeatable, and is told apart
         // from a call that lost a frame.
         mm::print_frame_delta("paths", report.leaked);
+        if report.leaked != 0 {
+            window.report("paths");
+        }
         if report.leaked < 0 {
             return Err(
                 "the free frame count rose across the path calls: something outside them freed frames in the window",
@@ -4700,29 +4702,29 @@ fn check_ended_programs_give_their_frames_back() -> Result<Option<(u32, u32)>, &
 /// frames still out in every one are taken to be kept.
 const RECLAIM_WINDOWS: u32 = 4;
 
-/// The free frame count once it is back to `before`, or as it stands after
+/// The held frame count ([`mm::held_frames`]) once it is back to `before`, or as it stands after
 /// [`RECLAIM_ROUNDS`] looks, reaping between them.
 fn free_frames_back_to(before: u64) -> u64 {
-    let mut after = mm::free_frames();
+    let mut after = mm::held_frames();
     for _ in 0..RECLAIM_ROUNDS {
         if after == before {
             break;
         }
         crate::sched::sleep_for(RECLAIM_SETTLE_NANOS);
         let _ = crate::sched::reap();
-        after = mm::free_frames();
+        after = mm::held_frames();
     }
     after
 }
 
-/// The free frame count once the reaper has nothing left to do: no ended task
+/// The held frame count ([`mm::held_frames`]) once the reaper has nothing left to do: no ended task
 /// was found on a look, and the count did not move since the one before.
 fn settled_free_frames() -> u64 {
-    let mut last = mm::free_frames();
+    let mut last = mm::held_frames();
     for _ in 0..RECLAIM_ROUNDS {
         crate::sched::sleep_for(RECLAIM_SETTLE_NANOS);
         let reaped = crate::sched::reap();
-        let now = mm::free_frames();
+        let now = mm::held_frames();
         if reaped == 0 && now == last {
             return now;
         }

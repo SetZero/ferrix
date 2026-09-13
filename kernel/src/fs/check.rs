@@ -75,17 +75,17 @@ pub(crate) fn run(built: &Built) -> Result<Report, &'static str> {
     // run cannot tell that apart from a leak.
     let _warm = check_page_stores()?;
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let before = mm::free_frames();
+    let window = mm::FrameWindow::open();
     let (pages, filled) = check_page_stores()?;
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let leaked = i64::try_from(before).unwrap_or(i64::MAX)
-        - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+    let leaked = window.kept();
     // Checked, not only printed: a count nothing tests would boot green
     // through the very leak it exists to show. The number and its sign are
     // printed first: a count that fell is frames the check kept, one that
     // rose is something outside it freeing inside the window.
     if leaked != 0 {
         crate::console::println!("  tmpfs    {leaked} frames across the second run");
+        window.report("tmpfs");
         return Err(if leaked > 0 {
             "the tmpfs check kept frames it did not give back"
         } else {
@@ -544,7 +544,7 @@ pub(crate) fn run_calls() -> Result<CallsReport, &'static str> {
     let _warm = check_the_calls(&process)?;
     let cached = fs::namespace().cached();
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let before = mm::free_frames();
+    let window = mm::FrameWindow::open();
     let bytes = check_the_calls(&process)?;
     // The run mounts a fresh procfs and devtmpfs and walks into them. A dentry
     // of either that outlives its unmount is heap the frame count only notices
@@ -557,13 +557,13 @@ pub(crate) fn run_calls() -> Result<CallsReport, &'static str> {
         return Err("the pipe and filesystem call checks left dentries behind in the cache");
     }
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let leaked = i64::try_from(before).unwrap_or(i64::MAX)
-        - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+    let leaked = window.kept();
     // Checked, not only printed: a count nothing tests would boot green
     // through the very leak it exists to show. The number and its sign are
     // printed first, so the report says which of the two it was.
     if leaked != 0 {
         crate::console::println!("  pipes    {leaked} frames across the second run");
+        window.report("pipes");
     }
     if leaked < 0 {
         return Err(

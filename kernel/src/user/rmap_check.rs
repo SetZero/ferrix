@@ -130,7 +130,7 @@ pub(crate) fn run() -> Result<Option<Report>, &'static str> {
     let _ = run_pinned()?;
 
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let before = mm::free_frames();
+    let window = mm::FrameWindow::open();
     let scoped_before = smp::scoped_shootdowns();
     let global_before = smp::shootdowns();
 
@@ -143,9 +143,9 @@ pub(crate) fn run() -> Result<Option<Report>, &'static str> {
     };
     report.global -= global_before;
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let after = mm::free_frames();
-    report.leaked = i64::try_from(before).unwrap_or(i64::MAX) - i64::try_from(after).unwrap_or(0);
+    report.leaked = window.kept();
     if report.leaked != 0 {
+        window.report("rmap");
         crate::console::println!(
             "  rmap     {} frames not given back across the check",
             report.leaked

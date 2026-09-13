@@ -25,6 +25,7 @@ use ferrix_vma::VmaFlags;
 
 use crate::arch;
 use crate::mm;
+use crate::sync::SpinLock;
 use crate::user::space::{Access, AddressSpace, SpaceError};
 use crate::user::vmo::{Vmo, VmoError};
 
@@ -56,6 +57,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // heap keeps a page of each size class the first run touched, and the
     // held-page check is the first to touch some of them.
     hold_pages_through_everything()?;
+    check_a_frame_window_sees_a_kept_page_and_a_large_buffer()?;
     // Then wait for the reaper. Stage 5 has just finished a thousand tasks
     // and a few dozen spinners, and the idle loop frees a finished task's
     // stack and drops the task whenever it next runs; every such free can
@@ -63,6 +65,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // moved the free count by a frame, which this check read as a leak. So
     // every count in this file is taken with no exited task left unreaped.
     let before = quiet_frames()?;
+    let window = last_window();
 
     check_reservation_is_lazy()?;
     check_a_committed_page_is_zeroed()?;
@@ -95,6 +98,9 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let leaked = i64::try_from(before).unwrap_or(i64::MAX) - i64::try_from(after).unwrap_or(0);
     if leaked != 0 {
         mm::print_frame_delta("objects", leaked);
+        if let Some(window) = window {
+            window.report("objects");
+        }
         return Err("the checks did not give back every frame they took");
     }
 
@@ -532,12 +538,16 @@ fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
     // Unmapping half the region gives back exactly those pages and leaves the
     // rest mapped, which is what `munmap` of part of a mapping has to do.
     let before_unmap = quiet_frames()?;
+    let unmap_window = last_window();
     space
         .unmap(base, 2 * PAGE_SIZE)
         .map_err(|_| "unmapping part of a region failed")?;
     let unmapped = quiet_frames()?;
     if unmapped < before_unmap + 2 {
         mm::print_frame_delta("objects", frames_delta(before_unmap + 2, unmapped));
+        if let Some(window) = unmap_window {
+            window.report("objects");
+        }
         return Err("unmapping two pages did not give back two frames");
     }
     if mm::translate_in(space.root_table(), base).is_some() {
@@ -1148,20 +1158,40 @@ fn wait_until(mut ready: impl FnMut() -> bool, what: &'static str) -> Result<(),
     Ok(())
 }
 
-/// The free frame count, taken once no exited task is left unreaped, so that
-/// no task an earlier check ended is freed between two counts.
+/// The window the latest [`quiet_frames`] opened, for [`expect_frames`] to
+/// report the routes against when a count is wrong.
+static LAST_WINDOW: SpinLock<Option<mm::FrameWindow>> = SpinLock::new(None);
+
+/// The held frame count -- free frames and the heap's slab pages together,
+/// as [`mm::FrameWindow`] counts them -- taken once no exited task is left
+/// unreaped, so that no task an earlier check ended is freed between two
+/// counts, and no slab page a size class takes or gives back reads as a
+/// frame. Opens the window [`expect_frames`] reports against.
 fn quiet_frames() -> Result<u64, &'static str> {
     crate::sched::wait_until_reaper_quiet(PATIENCE_NANOS)?;
-    Ok(mm::free_frames())
+    let window = mm::FrameWindow::open();
+    *LAST_WINDOW.lock() = Some(window);
+    Ok(window.held())
 }
 
-/// Require the free frame count, taken as [`quiet_frames`] takes it, to be
-/// `expected`. Otherwise print by how much and which way, and fail with
-/// `what`.
+/// The window the latest [`quiet_frames`] opened, kept by a count that spans
+/// helpers which open windows of their own, so its mismatch can still report
+/// how every route moved since it began.
+fn last_window() -> Option<mm::FrameWindow> {
+    *LAST_WINDOW.lock()
+}
+
+/// Require the held frame count, taken as [`quiet_frames`] takes it, to be
+/// `expected`. Otherwise print by how much and which way, and how every
+/// route moved since the latest count, and fail with `what`.
 fn expect_frames(expected: u64, what: &'static str) -> Result<(), &'static str> {
-    let found = quiet_frames()?;
+    crate::sched::wait_until_reaper_quiet(PATIENCE_NANOS)?;
+    let found = mm::held_frames();
     if found != expected {
         mm::print_frame_delta("objects", frames_delta(expected, found));
+        if let Some(window) = *LAST_WINDOW.lock() {
+            window.report("objects");
+        }
         return Err(what);
     }
     Ok(())
@@ -1194,3 +1224,40 @@ fn reap_until(allocations: usize) -> Result<(), &'static str> {
 /// How long any of the waits above will wait. Generous: this runs after stage
 /// 5, which has already shown that a thousand threads take real time.
 const PATIENCE_NANOS: u64 = 20_000_000_000;
+
+/// The frame window's negative control: netting out the heap's slab pages must
+/// not net out a frame, or a large heap allocation, that is really kept.
+///
+/// A page committed to an object and a large heap buffer are held across a
+/// window, and it must count them; given back, it must count nothing. A
+/// window that absorbed either would pass every check it guards through the
+/// very leak those checks exist to catch, and look exactly like a fixed flake.
+/// Checked with [`mm::FrameWindow::kept`] rather than `expect`, so a boot that
+/// passes prints nothing; the thresholds are one-sided, because another
+/// processor's task may give frames back meanwhile but a slab page never
+/// counts either way.
+fn check_a_frame_window_sees_a_kept_page_and_a_large_buffer() -> Result<(), &'static str> {
+    let page = usize::try_from(PAGE_SIZE).map_err(|_| "the page size does not fit")?;
+    crate::sched::wait_until_reaper_quiet(PATIENCE_NANOS)?;
+    let window = mm::FrameWindow::open();
+
+    let vmo = Vmo::new_anonymous(1);
+    let _ = vmo
+        .commit(0)
+        .map_err(|_| "no frame for the frame window's negative control")?;
+    if window.kept() < 1 {
+        return Err("a frame window did not count a page committed and kept across it");
+    }
+    let buffer: Vec<u8> = Vec::with_capacity(4 * page);
+    if window.kept() < 5 {
+        return Err("a frame window did not count a large heap buffer kept across it");
+    }
+
+    drop(buffer);
+    drop(vmo);
+    crate::sched::wait_until_reaper_quiet(PATIENCE_NANOS)?;
+    if window.kept() > 0 {
+        return Err("a frame window still counted a page and a buffer that were given back");
+    }
+    Ok(())
+}

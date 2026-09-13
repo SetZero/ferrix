@@ -296,7 +296,9 @@ fn insert_region(frames: &mut Frames<'static>, region: &MemRegion, hole: u64, ho
 
 /// Take `2^order` contiguous frames.
 pub(crate) fn allocate_frames(order: u8) -> Option<Frame> {
-    with_frames(|frames| frames.allocate(order))?
+    let frame = with_frames(|frames| frames.allocate(order))??;
+    count(Route::Allocated, 1 << order);
+    Some(frame)
 }
 
 /// Take `2^order` contiguous frames lying wholly below frame `limit`.
@@ -325,6 +327,7 @@ pub(crate) fn claim_frame(frame: Frame) -> Option<Frame> {
 
 /// Give back frames taken with [`allocate_frames`].
 pub(crate) fn deallocate_frames(frame: Frame, order: u8) {
+    count(Route::Freed, 1 << order);
     let _ = with_frames(|frames| frames.deallocate(frame, order));
 }
 
@@ -347,8 +350,13 @@ pub(crate) fn share_frame(frame: Frame) -> Option<u32> {
 pub(crate) fn release_frame(frame: Frame) -> bool {
     // Qualified: `Released` is already `ferrix_paging`'s in this module, and
     // the two mean different things -- a page table given back versus a frame.
-    with_frames(|frames| matches!(frames.release(frame), Ok(ferrix_frame::Released::Freed)))
-        .unwrap_or(false)
+    let freed =
+        with_frames(|frames| matches!(frames.release(frame), Ok(ferrix_frame::Released::Freed)))
+            .unwrap_or(false);
+    if freed {
+        count(Route::Released, 1);
+    }
+    freed
 }
 
 /// How many references there are to a frame.
@@ -411,10 +419,12 @@ struct KernelPages;
 unsafe impl Backing for KernelPages {
     fn allocate_pages(&mut self, order: u8) -> Option<u64> {
         let frame = allocate_frames(order)?;
+        count(Route::HeapTaken, 1 << order);
         Some(physmap(frame * PAGE_SIZE))
     }
 
     fn deallocate_pages(&mut self, address: u64, order: u8) {
+        count(Route::HeapReturned, 1 << order);
         deallocate_frames(unmap(address) / PAGE_SIZE, order);
     }
 
@@ -670,6 +680,7 @@ pub(crate) fn unmap_in(root: u64, virt: u64, len: u64) -> Result<(), ferrix_pagi
         len.next_multiple_of(PAGE_SIZE),
         |freed| {
             if let Released::Table { phys } = freed {
+                count(Route::UserTables, 1);
                 deallocate_frames(phys.0 / PAGE_SIZE, 0);
             }
         },
@@ -822,6 +833,7 @@ pub(crate) fn unmap_kernel_all(
         released(frame, order);
     }
     for &frame in tables.iter() {
+        count(Route::KernelTables, 1);
         deallocate_frames(frame, 0);
     }
     removed
@@ -1135,6 +1147,216 @@ pub(crate) fn copy_frame(destination: Frame, source: Frame) {
             physmap(source * PAGE_SIZE) as *const u8,
             physmap(destination * PAGE_SIZE) as *mut u8,
             PAGE_SIZE as usize,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Frame windows for the self-checks
+// ---------------------------------------------------------------------------
+
+/// A way frames reach or leave the allocator, counted for [`FrameWindow`]'s
+/// report.
+#[derive(Clone, Copy, Debug)]
+enum Route {
+    /// Taken with [`allocate_frames`].
+    Allocated,
+    /// Given back with [`deallocate_frames`].
+    Freed,
+    /// Freed by [`release_frame`] dropping the last reference.
+    Released,
+    /// Taken by the heap for a slab or a large allocation. A window nets out
+    /// only the slab pages, so a move here does not by itself explain a miss:
+    /// the report's large-page line says how much of it was large.
+    HeapTaken,
+    /// Given back by the heap, slab or large alike.
+    HeapReturned,
+    /// A user page table given back by [`unmap_in`].
+    UserTables,
+    /// A kernel page table given back by a kernel unmap.
+    KernelTables,
+}
+
+/// How many [`Route`]s there are.
+const ROUTES: usize = 7;
+
+/// Frames through each route since boot. Relaxed and lock-free: they are read
+/// only by a check that is about to report, and a count a moment stale says
+/// the same thing about which route moved.
+static ROUTE_COUNTS: [AtomicU64; ROUTES] = [const { AtomicU64::new(0) }; ROUTES];
+
+/// Count `frames` through `route`.
+fn count(route: Route, frames: u64) {
+    if let Some(counter) = ROUTE_COUNTS.get(route as usize) {
+        let _ = counter.fetch_add(frames, Ordering::Relaxed);
+    }
+}
+
+/// What a frame window holds at one moment: the free frames and the heap's
+/// slab pages together, the heap's live bytes and large pages, and every
+/// route's count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Held {
+    frames: u64,
+    heap_bytes: usize,
+    large_pages: usize,
+    routes: [u64; ROUTES],
+}
+
+impl Held {
+    /// Taken once two reads in a row agree on the frames, so that nothing
+    /// freed between reading the free count and the slab count skews the
+    /// pair. Only the frames must agree: the heap's bytes move whenever any
+    /// processor allocates, console output included, and only feed the
+    /// report, so they come from the read that settled the frames.
+    ///
+    /// A count moves only while other tasks allocate or free -- a draining
+    /// reaper, the console thread, a delivery firer -- so after a few quick
+    /// re-reads it sleeps between reads rather than holding its processor from
+    /// them. Every window is taken in task context after the reaper wait, where
+    /// sleeping is allowed; before the scheduler runs it keeps spinning, so a
+    /// window opened that early still works. The quick re-reads come first
+    /// because the common case settles at once, and a sleep would add a
+    /// millisecond to every window. Bounded by the reaper's patience, since a busy
+    /// machine may never be still; a count that never settled says so, so a
+    /// mismatch from that cause names itself.
+    fn now() -> Held {
+        let read = || {
+            let (slab_pages, large_pages, heap_bytes) = with_heap(|heap| {
+                (
+                    heap.slab_pages(),
+                    heap.large_pages(),
+                    heap.allocated_bytes(),
+                )
+            });
+            Held {
+                frames: free_frames().saturating_add(slab_pages as u64),
+                heap_bytes,
+                large_pages,
+                routes: core::array::from_fn(|i| {
+                    ROUTE_COUNTS
+                        .get(i)
+                        .map_or(0, |counter| counter.load(Ordering::Relaxed))
+                }),
+            }
+        };
+        let deadline =
+            crate::timer::now_nanos().saturating_add(crate::sched::REAPER_PATIENCE_NANOS);
+        /// Quick re-reads before the reads start sleeping.
+        const SPINS: u32 = 8;
+        /// How long a read sleeps once the quick re-reads have not settled.
+        const SETTLE_NANOS: u64 = 1_000_000;
+        let mut last = read();
+        let mut reads = 0_u32;
+        loop {
+            if reads < SPINS || !crate::sched::started() {
+                core::hint::spin_loop();
+                reads += 1;
+            } else {
+                crate::sched::sleep_for(SETTLE_NANOS);
+            }
+            let next = read();
+            if next.frames == last.frames {
+                return next;
+            }
+            if crate::timer::now_nanos() >= deadline {
+                crate::console::println!(
+                    "  frame window: the count never settled, last read {} frames then {}",
+                    last.frames,
+                    next.frames,
+                );
+                return next;
+            }
+            last = next;
+        }
+    }
+}
+
+/// The free frames and the heap's slab pages together, read until stable:
+/// what a [`FrameWindow`] holds constant, for a check that compares its own
+/// counts.
+pub(crate) fn held_frames() -> u64 {
+    Held::now().frames
+}
+
+/// A self-check's window over the frames, opened after the reaper is quiet
+/// and closed the same way.
+///
+/// What it holds constant is the free frames and the heap's slab pages taken
+/// together. A slab page the heap takes or gives back inside the window moves
+/// one frame between the two and changes nothing, so the first touch of a size
+/// class, or a slab another task drains, no longer reads as a check's leak or
+/// as a frame from outside. A large heap allocation stays in the frame count,
+/// so a leaked stack, ring or buffer is still a failure.
+///
+/// So it proves frames and large allocations, and never small objects: a leak
+/// of those is invisible to it by construction, because the slab pages such
+/// objects force are exactly what it nets out. A check whose point is that a
+/// small object is torn down proves that directly, with a `Weak` that must fail
+/// to upgrade once the window closes. The heap's live bytes are kept too, and
+/// every report prints how they moved, as a clue rather than a verdict: other
+/// processors allocate meanwhile.
+///
+/// Every report on a mismatch prints how each [`Route`] moved, so a failure
+/// names the way the frame went.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FrameWindow {
+    opened: Held,
+}
+
+impl FrameWindow {
+    /// Open a window on the frames as they stand.
+    pub(crate) fn open() -> FrameWindow {
+        FrameWindow {
+            opened: Held::now(),
+        }
+    }
+
+    /// What the window held when it opened, as [`held_frames`] counts.
+    pub(crate) fn held(&self) -> u64 {
+        self.opened.frames
+    }
+
+    /// Print what the window held at open and holds now, and how the heap
+    /// and each route moved between: for a check about to fail on its count.
+    pub(crate) fn report(&self, check: &str) {
+        self.report_at(check, &Held::now());
+    }
+
+    /// Frames kept since the window opened: above zero the check kept them,
+    /// below zero something gave frames back inside the window.
+    pub(crate) fn kept(&self) -> i64 {
+        let now = Held::now();
+        i64::try_from(self.opened.frames).unwrap_or(i64::MAX)
+            - i64::try_from(now.frames).unwrap_or(i64::MAX)
+    }
+
+    /// Print how the heap and each route moved since the window opened.
+    fn report_at(&self, check: &str, now: &Held) {
+        let routes = |route: Route| {
+            let at = |held: &Held| held.routes.get(route as usize).copied().unwrap_or(0);
+            at(now).wrapping_sub(at(&self.opened))
+        };
+        let bytes = i64::try_from(now.heap_bytes).unwrap_or(i64::MAX)
+            - i64::try_from(self.opened.heap_bytes).unwrap_or(i64::MAX);
+        let large = i64::try_from(now.large_pages).unwrap_or(i64::MAX)
+            - i64::try_from(self.opened.large_pages).unwrap_or(i64::MAX);
+        crate::console::println!(
+            "  {check:<8} held at open {} frames and {} heap bytes, now {} and {}",
+            self.opened.frames,
+            self.opened.heap_bytes,
+            now.frames,
+            now.heap_bytes,
+        );
+        crate::console::println!(
+            "  {check:<8} heap {bytes:+} bytes, {large:+} large pages; frames allocated {}, freed {}, released {}, heap taken {}, heap returned {}, user tables {}, kernel tables {}",
+            routes(Route::Allocated),
+            routes(Route::Freed),
+            routes(Route::Released),
+            routes(Route::HeapTaken),
+            routes(Route::HeapReturned),
+            routes(Route::UserTables),
+            routes(Route::KernelTables),
         );
     }
 }

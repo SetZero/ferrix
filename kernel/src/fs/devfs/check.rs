@@ -173,7 +173,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let _warm = check_once(&process)?;
     let cached = fs::namespace().cached();
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let before = mm::free_frames();
+    let window = mm::FrameWindow::open();
     let sectors = check_once(&process)?;
     // devfs does not cache lookups, so walking to a disk that comes and goes
     // must not leave a dentry for it behind.
@@ -184,10 +184,10 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         return Err("the block registry check left dentries behind in the cache");
     }
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
-    let leaked = i64::try_from(before).unwrap_or(i64::MAX)
-        - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+    let leaked = window.kept();
     if leaked != 0 {
         crate::console::println!("  devfs    {leaked} frames across the second run");
+        window.report("devfs");
     }
     if leaked < 0 {
         return Err(

@@ -137,14 +137,14 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let mut warm = Counter::default();
     round(&node, &mut warm, Ending::Stopped)?;
     settle()?;
-    let before = mm::free_frames();
+    let window = mm::FrameWindow::open();
     let mut counter = Counter::default();
     round(&node, &mut counter, Ending::Stopped)?;
     settle()?;
-    let leaked = i64::try_from(before).unwrap_or(i64::MAX)
-        - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+    let leaked = window.kept();
     if leaked != 0 {
         mm::print_frame_delta("ring", leaked);
+        window.report("ring");
         return Err("the block ring check did not give every frame back");
     }
     // Outside the window: this one leaves the device bound for good.
