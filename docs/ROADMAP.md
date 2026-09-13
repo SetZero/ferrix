@@ -771,8 +771,12 @@ handler below directly.
   found that a string containing a NUL built a well-formed image which read back
   as a different, shorter string.
 * **Dispatch.** `kernel/src/syscall/`: `SyscallArgs`, `Outcome` and `dispatch`,
-  reached through `arch::decode_syscall`, and total — every number in `0..=600`
-  answered with poisoned argument registers in the boot test.
+  reached through `arch::decode_syscall`, and total. The boot test puts every
+  number in `0..=600` except `exit`, `exit_group`, `pause` and `alarm` through
+  `dispatch`, with poisoned argument registers, from a task of a check process,
+  so each call reaches its handler rather than a missing-process `ESRCH`. It
+  fails if a call asks to enter user mode, ends or blocks that process, or
+  leaves a frame behind.
 * **The copy layer and the loader.** `copy_from_user` and `copy_to_user` resolve
   through the `AddressSpace` and its fault path rather than dereferencing, and
   refuse a kernel address before any length arithmetic. The ELF loader maps

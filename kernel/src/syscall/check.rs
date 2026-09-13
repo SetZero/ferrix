@@ -18,6 +18,7 @@
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use ferrix_bootinfo::{KERNEL_HALF_BASE, PAGE_SIZE};
 use ferrix_linux_abi::errno::Errno;
@@ -82,7 +83,6 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_identity_answers(&mut counter)?;
     let pids = crate::syscall::registry::check()?;
     check_an_unknown_number_is_enosys(&mut counter)?;
-    check_the_whole_number_space_is_total(&mut counter)?;
     check_errors_encode_as_negative(&mut counter)?;
     check_a_call_needing_a_process_says_so(&mut counter)?;
 
@@ -103,9 +103,15 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // loader checks landed and survived every attempt to find it in the
     // address space -- map, commit and drop in isolation was clean, and so was
     // building the image in isolation.
+    //
+    // The number sweep is inside the window with the handler checks, run once
+    // for warm-up and once measured on the same terms, so that its process,
+    // its address space and its task are held to the same count.
     let _warm = check_handlers(Output::Quiet)?;
+    check_the_whole_number_space_is_total(&mut Counter::default())?;
     let before = mm::free_frames();
     let pages = check_handlers(Output::Show)?;
+    check_the_whole_number_space_is_total(&mut counter)?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
     // Checked, not only printed: a count nothing tested would boot green
@@ -260,22 +266,188 @@ fn check_an_unknown_number_is_enosys(counter: &mut Counter) -> Result<(), &'stat
     Ok(())
 }
 
-/// Every number in the plausible range is answered rather than trapped.
+/// Every number in the plausible range is answered by its handler rather than
+/// trapped.
 ///
 /// The sweep is the point: a `match` that decoded a number into a handler
 /// which then read an argument it was not given would fault here, on a kernel
 /// stack, with the scheduler running — which is a much better place to find it
 /// than under a user program.
+///
+/// **From inside a process.** With no process, `dispatch` answers almost every
+/// call `ESRCH` before it looks at an argument. A sweep from the boot task
+/// therefore reached no handler, and it passed whatever the handlers did with
+/// a poisoned register. So the sweep runs on a task of a check process, where
+/// [`process::current`] finds that process, and each call gets as far into its
+/// handler as its arguments let it.
+///
+/// **Skipped: `exit`, `exit_group`, `pause` and `alarm`, and nothing else.**
+/// Ending the task is what the first two are for. `pause` takes no argument to
+/// poison and waits for a signal nothing will send. `alarm` has no value to
+/// refuse: any number arms a timer, and arming one starts the `itimers` thread,
+/// which outlives the call and would be counted against the frame window.
+/// Every other call is swept,
+/// including the ones that could end or block a process given the right
+/// arguments, because poisoned arguments must be refused before either can
+/// happen:
+///
+/// * `fork`, `vfork`, `clone` and `clone3` are refused, because a kernel caller
+///   has no saved registers for a child to resume from;
+/// * `execve` and `execveat` are refused at the path or the descriptor, which
+///   comes before the point of no return;
+/// * `wait4` and `waitid` refuse the option bits, and the process has no child
+///   to wait for anyway;
+/// * `nanosleep` refuses the request pointer, `clock_nanosleep` the clock, and
+///   `futex` the command;
+/// * `reboot` refuses the magic numbers;
+/// * `kill`, `tkill` and `tgkill` refuse the signal number or the thread id,
+///   and `rt_sigsuspend` and `rt_sigtimedwait` the signal set's size;
+/// * `poll` and `ppoll` refuse the descriptor count or the timeout pointer, and
+///   `read` and the other descriptor calls a descriptor no table has.
+///
+/// If a handler blocks or ends the process on poisoned arguments, the check
+/// fails rather than hangs: the process's exit status says which, and a
+/// deadline covers a call that never returns. A call added later that would
+/// block or end the process on these arguments belongs in the skip list with
+/// its reason.
+///
+/// [`run`] calls this inside its frame-count window, so the process and its
+/// task have to give back every frame. That is why each sweep waits until the
+/// task is reaped before returning.
 fn check_the_whole_number_space_is_total(counter: &mut Counter) -> Result<(), &'static str> {
+    let swept = sweep_in_a_process()?;
+    counter.dispatched = counter.dispatched.saturating_add(swept.dispatched);
+    counter.answered = counter.answered.saturating_add(swept.answered);
+    Ok(())
+}
+
+/// What one sweep put through `dispatch`, and how much of it was answered.
+struct Swept {
+    dispatched: u32,
+    answered: u32,
+}
+
+/// How the sweep's task ends its process: every number answered.
+const SWEEP_DONE: i32 = 83;
+/// A call asked to enter user mode.
+const SWEEP_ENTERED: i32 = 84;
+/// The task did not find itself in the sweep's process.
+const SWEEP_UNSEEN: i32 = 85;
+/// `brk`, which needs a process, was refused for want of one.
+const SWEEP_REFUSED: i32 = 86;
+
+/// The pid of the process the sweep's task should find itself in.
+static SWEEP_PID: AtomicU32 = AtomicU32::new(0);
+/// Calls the sweep's task put through `dispatch`.
+static SWEEP_DISPATCHED: AtomicU32 = AtomicU32::new(0);
+/// How many of them answered with a value rather than an error.
+static SWEEP_ANSWERED: AtomicU32 = AtomicU32::new(0);
+
+/// Run one sweep on a task of a fresh check process, and wait until the task,
+/// the process and its address space are gone.
+fn sweep_in_a_process() -> Result<Swept, &'static str> {
+    let arena = crate::vmap::usage().allocations;
+    SWEEP_DISPATCHED.store(0, Ordering::Release);
+    SWEEP_ANSWERED.store(0, Ordering::Release);
+
+    let process = process::new_for_check().map_err(|_| "could not make a process for the sweep")?;
+    SWEEP_PID.store(process.pid(), Ordering::Release);
+    let task = crate::sched::spawn_user("sweep", sweep, Arc::clone(&process), None, None)
+        .map_err(|_| "could not start the sweep's task")?;
+
+    let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+    match process.wait_for_exit(deadline) {
+        Some(SWEEP_DONE) => {}
+        Some(SWEEP_ENTERED) => {
+            return Err("a system call in the ordinary range asked to enter user mode");
+        }
+        Some(SWEEP_UNSEEN) => {
+            return Err("the sweep's task was not in its process, so it reached no handler");
+        }
+        Some(SWEEP_REFUSED) => return Err("brk was refused with ESRCH from inside a process"),
+        Some(_) => return Err("a system call with poisoned arguments ended its process"),
+        None => return Err("a system call with poisoned arguments never returned"),
+    }
+
+    // The task holds the process, and through it the address space, until the
+    // scheduler has reaped it. Waited for by the task itself: the arena's count
+    // alone comes back as soon as *some* earlier check's task is reaped.
+    let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+    loop {
+        let _ = crate::sched::reap();
+        if task.is_dead()
+            && Arc::strong_count(&task) == 1
+            && crate::vmap::usage().allocations <= arena
+        {
+            break;
+        }
+        if crate::timer::now_nanos() >= deadline {
+            return Err("the sweep's task never gave its stack back");
+        }
+        crate::sched::yield_now();
+    }
+    drop(task);
+    drop(process);
+
+    Ok(Swept {
+        dispatched: SWEEP_DISPATCHED.load(Ordering::Acquire),
+        answered: SWEEP_ANSWERED.load(Ordering::Acquire),
+    })
+}
+
+/// The sweep's task: sweep, then end the process with how it went.
+fn sweep(_argument: usize) {
+    process::exit_current(sweep_every_number());
+}
+
+/// Put every number in `0..=600` through `dispatch` with poisoned arguments,
+/// from inside the sweep's process, and answer one of the `SWEEP_` statuses.
+fn sweep_every_number() -> i32 {
+    // Dropped before the first call. A call that ended the task would
+    // otherwise strand this reference on its stack, and the process with it.
+    let Some(pid) = process::current().map(|process| process.pid()) else {
+        return SWEEP_UNSEEN;
+    };
+    if pid != SWEEP_PID.load(Ordering::Acquire) {
+        return SWEEP_UNSEEN;
+    }
+
     // Deliberately non-zero and not a valid pointer: a handler that decided to
     // dereference an argument should fault rather than quietly succeed.
     let poison = [0xAAAA_AAAA_AAAA_AAA0_u64; 6];
+    let brk = number_for(ferrix_linux_abi::nr::Syscall::Brk);
+    let esrch = Errno::ESRCH.as_return_value();
     for number in 0..=600 {
-        let Outcome::Return(_) = counter.call_with(number, poison) else {
-            return Err("a system call in the ordinary range asked to enter user mode");
+        if matches!(
+            arch::decode_syscall(number),
+            Some(
+                ferrix_linux_abi::nr::Syscall::Exit
+                    | ferrix_linux_abi::nr::Syscall::ExitGroup
+                    | ferrix_linux_abi::nr::Syscall::Pause
+                    | ferrix_linux_abi::nr::Syscall::Alarm
+            )
+        ) {
+            continue;
+        }
+        let outcome = dispatch(
+            &SyscallArgs {
+                number,
+                args: poison,
+            },
+            None,
+        );
+        let _ = SWEEP_DISPATCHED.fetch_add(1, Ordering::Relaxed);
+        let Outcome::Return(value) = outcome else {
+            return SWEEP_ENTERED;
         };
+        if value >= 0 {
+            let _ = SWEEP_ANSWERED.fetch_add(1, Ordering::Relaxed);
+        }
+        if Some(number) == brk && value == esrch {
+            return SWEEP_REFUSED;
+        }
     }
-    Ok(())
+    SWEEP_DONE
 }
 
 /// A refusal lands in the range Linux reserves for one.
