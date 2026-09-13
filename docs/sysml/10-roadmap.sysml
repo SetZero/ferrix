@@ -266,9 +266,9 @@ package FerrixRoadmap {
              * in the native ABI. */
     }
 
-    #inProgress requirement <'S10'> stage10UserspaceDrivers : Stage {
+    #implemented requirement <'S10'> stage10UserspaceDrivers : Stage {
         attribute :>> number = 10;
-        attribute :>> status = StageStatus::InProgress;
+        attribute :>> status = StageStatus::Done;
         attribute :>> size = "month";
         doc /* Enumeration, IOMMU domains, devmgr, the shared-ring block
              * protocol, virtio-blk as a user process. Exit: a sector read
@@ -294,12 +294,17 @@ package FerrixRoadmap {
              * node has, which the entropy check's DMA goes through; VT-d
              * programmed at boot on x86-64 and the SMMUv3 under ACPI on
              * AArch64, with translated domains. VMO_PIN pinning VMO pages into
-             * a device's domain. The block ring's protocol (ferrix-blkring) and
-             * virtio-blk's protocol and driver logic as host-tested libraries,
-             * used by nothing yet. Next, in the order stage 11 needs: devmgr,
-             * the ring's kernel side and virtio-blk in ring 3, the ring-3
-             * driver reading sectors on x86-64 and AArch64 (ARMv7-A in degraded
-             * trusted mode); trusting decoding-off BARs last. */
+             * a device's domain; the out-of-domain write faulted on x86-64
+             * and AArch64. The block ring (ferrix-blkring, BLOCK-RING.md)
+             * with its kernel side, block_ring_create and a disk in the devfs
+             * registry from an accepted HELLO; the kernel half of devmgr
+             * (device_info, device_quiesce, START, bus mastering at the first
+             * pin; DEVMGR.md). Exit met: /sbin/blk, the virtio-blk driver in
+             * ring 3, started from the boot check with START, reads sectors
+             * through the ring with VT-d and the SMMUv3 translating, ARMv7-A
+             * in degraded trusted mode. Still owed after the exit: devmgr
+             * the program with the quiesce-after-death fix, and trusting
+             * decoding-off BARs. */
     }
 
     #inProgress requirement <'S11'> stage11BtrfsRead : Stage {

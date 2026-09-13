@@ -19,11 +19,11 @@ longer". This is a long program of work: stages 1–8 are a conventional kernel
 bring-up, 9–14 are the parts this design chose to do properly, and 15–17 are the
 goal. Nobody should read the table as a schedule.
 
-**Where it stands:** stages 0–9 are done and in the boot test on all three
-architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-9`.
+**Where it stands:** stages 0–10 are done and in the boot test on all three
+architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-10`.
 ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4 — and has run on
-hardware: an STM32MP157D-DK1 at two cores reached the same marker and ran
-stage 7's script at `fd4442e`. Stage 7's exit is
+hardware: an STM32MP157D-DK1 at two cores reached `FERRIX-BOOT-OK stages
+1-9` and ran stage 7's script at `fd4442e`. Stage 7's exit is
 somebody else's static musl busybox running a script on every architecture,
 checked by `cargo xtask test-shell` rather than the boot test because it needs
 a binary the repository does not carry. Since the exit, a program can
@@ -37,12 +37,12 @@ own for the reason stage 7's is. Stage 9's exit runs in the boot test itself:
 two programs in user mode exchange messages and a handle over a channel, and a
 job kill takes down a process tree, with ports, interrupts delivered to them
 and device memory a driver can map built on the same objects.
-Stage 10 has begun where the continuous rule says a stage should, with PCI
-configuration space in `libs/pci`,
-and its first kernel code — PCI enumeration, device nodes with MSI-X vectors a
-driver can be given, a device driven by DMA and answering by MSI-X from the
-boot check, where each device's IOMMU is, and VT-d on x86-64 and the `SMMUv3`
-on AArch64 translating — is in the boot test.
+Stage 10's exit runs in the boot test itself: a virtio-blk driver in ring 3,
+started from the boot check with the START it will get from `devmgr`, reads
+sectors through the block ring with VT-d on x86-64 and the `SMMUv3` on AArch64
+translating, and a deliberate out-of-domain write faulted on both; ARMv7-A runs
+it in degraded trusted mode, as decided. What the stage still owes — `devmgr`
+the program, trusting decoding-off BARs — is after the exit in its section.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -1752,7 +1752,7 @@ a `Job` kill takes down a process tree.
 
 ---
 
-## Stage 10 — Userspace drivers  ·  *month*
+## Stage 10 — Userspace drivers ✅
 
 ACPI and device-tree enumeration in the kernel; IOMMU domains (VT-d, AMD-Vi,
 SMMUv3); `devmgr`; the shared-ring block protocol; and the first driver —
@@ -2337,37 +2337,51 @@ The run recorded when it landed: 19 calls and HELLOs refused as specified, 2
 disks published and unpublished, 0 frames leaked, on x86-64, AArch64 and
 ARMv7-A at four processors and at two.
 
-**Still to do, in the order stage 11 needs it.** Stage 11 is done on the host
-and waits only for a ring-3 virtio-blk driver reading sectors, so everything on
-that path comes first and trusting decoding-off BARs, which it does not need,
-comes last. Stage 9 writes `Vmo::hold`, `vmo_map` and native process creation;
-stage 11 has written the ring protocol's crate, virtio-blk's device protocol and
-the driver's logic as a library (above), and is writing the native user-space
-runtime, all against the agreements recorded here.
+**Done — the exit: a sector read through a driver in ring 3, with the IOMMU
+on.** `/sbin/blk`, stage 11's virtio-blk driver on the native runtime
+(`user/blk`, over `libs/virtio-blk` and `libs/blkserve`), is started from the
+boot check by a kernel-driven parent with the START `devmgr` will send
+(`docs/BLOCK-RING.md` §6.4, from `block_ring::start_for`): the device with
+`MANAGE`, and the driver's end of the ring's control channel. It maps the
+transport's blocks through `IoMapping`s, claims its MSI-X entry through an
+`Interrupt`, pins its data VMO into the device's domain — which is where bus
+mastering goes on — brings the device to `DRIVER_OK`, sends HELLO, and serves;
+the kernel reads sectors through the registered disk, `vda`, and compares them
+with what `xtask` wrote into the test disk. On x86-64 that DMA goes through
+VT-d translating and on AArch64 through the `SMMUv3`, and the deliberate
+out-of-domain write faulted on both earlier in the same boot; on ARMv7-A the
+driver runs in degraded trusted mode, as the exit criterion decided. The
+disk is `virtio-blk-pci` on every machine, because under ACPI QEMU describes
+its virtio-mmio devices only in AML. The marker moves to `FERRIX-BOOT-OK
+stages 1-10`; what the stage still owes is below, after the exit, each with a
+row in `docs/BACKLOG.md`.
 
-* **Everything that runs in ring 3.** Stage 9's device handles, `Interrupt`
-  and `IoMapping`, and `VMO_PIN` (above), are on main. Still to come, in this
-  order:
-  * *`devmgr`, the program*, on the native runtime: given every device node
-    at boot, it finds the virtio-blk function, makes its ring, starts the
-    driver with START through `process_create` and `process_start`, watches
-    it through a process observer, and on its death quiesces the device before
-    anything of it is reused. Its kernel half is above.
-  * *No driver faults on the disk it serves.* A driver serving a disk that
-    faulted on a file mapping of that same disk would wait on its own
-    completion forever. So its image and data come from the initramfs, tmpfs,
-    anonymous, ring or DMA VMOs, or are fully committed before any pivot onto
-    btrfs, and `devmgr` enforces it rather than a comment.
-  * *A sector read through the ring*, by a program on the native runtime that
-    serves a RAM-backed disk from its own process — the boot check's fake
-    driver, with the kernel reading through the registered disk — before any
-    real device is behind it.
-  * *virtio-blk as a process*, reading sectors from the virtio-blk-pci test
-    disk.
+The run recorded when it landed: `/sbin/blk serves vda (131072 sectors)
+through the block ring; 21 sectors read back through the registry as xtask
+wrote them`, on x86-64 through VT-d, on AArch64 through the `SMMUv3`, and on
+ARMv7-A in degraded trusted mode, at four processors and at two.
 
-  The disk has to be `virtio-blk-pci` on AArch64: under ACPI, QEMU describes
-  the virtio-mmio devices only in the DSDT, which is AML, which Ferrix will
-  not interpret.
+**Still to do, after the exit.** Stage 11 has its driver; what is left of
+stage 10 is what makes that a system rather than a check.
+
+* **`devmgr`, the program** (`docs/DEVMGR.md`), on the native runtime: given
+  every device node and every driver image at boot, it finds the virtio-blk
+  function, makes its ring, starts the driver with START through
+  `process_create` and `process_start` in a job of its own, watches it through
+  a process observer, and on its death quiesces the device before anything of
+  it is reused. Until it lands, the boot check's parent starts the driver; its
+  kernel half is above. Two things go with it:
+  * *The quiesce after a death.* `TERMINATED` fires when a driver's handles
+    close, which queues the closed channel for the ring's task but does not
+    wait for it, so a quiesce the instant after can find the device still
+    served and be refused. The fix — a quiesce on a served device whose
+    driver's end has closed waits, bounded, for the ring to let go, and only a
+    driver still holding its end is refused — is written and verified on a
+    branch and lands with `devmgr`, its first caller.
+  * *No driver faults on the disk it serves*, which under `docs/DEVMGR.md` §5
+    holds by construction: a driver's image is an anonymous VMO the kernel
+    filled from the initramfs, and a native program maps VMOs, never files.
+    The pivot onto btrfs must keep it so.
 * **Trusting a BAR firmware placed but did not enable**, so a device no
   firmware driver used — as virtio-rng on AArch64 was until its legacy
   interface was turned off — can still be given to a ring-3 driver. Worked
