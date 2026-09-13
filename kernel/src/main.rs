@@ -764,11 +764,12 @@ fn finish_memory(view: &BootView<'_>) -> Result<(), &'static str> {
     // since `_start`.
     unsafe { arch::drop_identity_map(view) };
 
-    // And nothing in the lower half resolves any more, which is the claim
-    // "higher-half" actually makes. Address zero specifically: a null
-    // dereference in kernel code must fault rather than find the first page of
-    // physical memory, which under the identity map it would have.
-    if mm::translate(0).is_some() {
+    // And nothing the identity map translated translates any more, which is
+    // the claim "higher-half" actually makes. Asked of the architecture, not
+    // of a walk of the kernel's tables: on the Arm pair the identity map is
+    // the `TTBR0` regime, which that walk never reaches, so it would find
+    // nothing whether the map had gone or not.
+    if arch::identity_map_live(view) {
         return Err("the identity map outlived the call that dropped it");
     }
 

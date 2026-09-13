@@ -151,6 +151,17 @@ pub(crate) const fn identity_root(_view: &BootView<'_>) -> Option<u64> {
     None
 }
 
+/// True while anything the loader identity mapped still translates.
+///
+/// One tree translates both halves here, so a walk of it from software is the
+/// hardware's answer. Two addresses: zero, because a null dereference in
+/// kernel code must fault rather than find the first page of physical memory,
+/// and the kernel's own physical address, which the identity map covered with
+/// the rest of RAM.
+pub(crate) fn identity_map_live(view: &BootView<'_>) -> bool {
+    crate::mm::translate(0).is_some() || crate::mm::translate(view.raw().kernel_phys).is_some()
+}
+
 /// `CR0.WP`: ring 0 obeys a read-only page table entry only while it is set.
 const CR0_WP: u64 = 1 << 16;
 

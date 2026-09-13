@@ -456,6 +456,24 @@ pub(crate) fn identity_root(view: &BootView<'_>) -> Option<u64> {
 /// Set once [`drop_identity_map`] has run.
 static IDENTITY_DROPPED: AtomicBool = AtomicBool::new(false);
 
+/// True while anything the loader identity mapped still translates.
+///
+/// Read from the hardware for AArch64's reason: the identity map is the
+/// `TTBR0` regime, which a walk of the kernel's tables never reaches. Live if
+/// walks through `TTBR0` are enabled, or if the register still holds the
+/// loader's root. And on a machine whose RAM is above the split, live while
+/// the loader's own image still translates in the kernel's tree, where that
+/// part of the identity map had to go.
+pub(crate) fn identity_map_live(view: &BootView<'_>) -> bool {
+    let loader_root = view.raw().ttbr0_phys;
+    let regime = cpu::read_ttbcr() & cpu::TTBCR_EPD0 == 0
+        || (loader_root != 0 && cpu::read_ttbr0() & cpu::TTBR_ADDRESS == loader_root);
+    let alias = view
+        .loader_alias()
+        .is_some_and(|(base, _)| crate::mm::translate(base).is_some());
+    regime || alias
+}
+
 /// True if the kernel faults when it writes through a read-only mapping.
 ///
 /// Always, at PL1: the access permissions in a long descriptor bind the

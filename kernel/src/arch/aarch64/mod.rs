@@ -444,6 +444,19 @@ pub(crate) fn identity_root(view: &BootView<'_>) -> Option<u64> {
 /// Set once [`drop_identity_map`] has run.
 static IDENTITY_DROPPED: AtomicBool = AtomicBool::new(false);
 
+/// True while anything the loader identity mapped still translates.
+///
+/// Read from the hardware, because nothing in software can answer: the
+/// identity map is the `TTBR0_EL1` regime, and a walk of the kernel's tables
+/// never reaches it. Live if walks through `TTBR0_EL1` are enabled, or if the
+/// register still holds the loader's root, which clearing `EPD0` for a user
+/// process would bring straight back.
+pub(crate) fn identity_map_live(view: &BootView<'_>) -> bool {
+    let loader_root = view.raw().ttbr0_phys;
+    cpu::read_tcr() & cpu::TCR_EPD0 == 0
+        || (loader_root != 0 && cpu::read_ttbr0() & cpu::TTBR_ADDRESS == loader_root)
+}
+
 /// True if the kernel faults when it writes through a read-only mapping.
 ///
 /// Always, at EL1: the access permissions in a descriptor bind the kernel, and

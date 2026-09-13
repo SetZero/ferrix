@@ -137,8 +137,12 @@ entries, all verified to hold what was put in them.
   sweep cannot pass while it is live — the loader mapped itself writable *and*
   executable, and correctly so, since it was executing out of pages it was
   still relocating — so the map goes first and the sweep runs after. The kernel
-  then proves the map is gone by translating the physical address it used to
-  run at and requiring nothing back.
+  then proves the map is gone by asking the architecture: on x86-64 by walking
+  the one tree for address zero and the kernel's physical address, and on the
+  Arm pair by reading `EPD0` and `TTBR0` back from the processor, because
+  there the identity map is a regime of its own that no walk of the kernel's
+  tables reaches, and a walk would have found nothing whether it had gone or
+  not.
 * The loader's own memory and the ACPI-reclaim regions are handed to the buddy
   allocator once nothing points into them, which on a 512 MiB QEMU machine is
   3 MiB on x86-64 and 2 MiB on AArch64 — small in absolute terms and the

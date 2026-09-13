@@ -524,6 +524,26 @@ pub(crate) fn read_ttbcr() -> u32 {
     value
 }
 
+/// `TTBR0` in the long-descriptor format: the root address in bits 39 to 0,
+/// the `ASID` in bits 55 to 48. A 64-bit register, read as an `mrrc` pair.
+pub(crate) fn read_ttbr0() -> u64 {
+    let low: u32;
+    let high: u32;
+    // SAFETY: reading `TTBR0` has no side effects.
+    unsafe {
+        asm!(
+            "mrrc p15, 0, {low}, {high}, c2",
+            low = out(reg) low,
+            high = out(reg) high,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    (u64::from(high) << 32) | u64::from(low)
+}
+
+/// The table address bits of a long-descriptor `TTBR0` value.
+pub(crate) const TTBR_ADDRESS: u64 = 0x0000_00FF_FFFF_FFFF;
+
 /// `SCTLR`: the MMU, the caches, where the vectors are.
 pub(crate) fn read_sctlr() -> u32 {
     let value: u32;

@@ -187,6 +187,20 @@ pub(crate) fn read_tcr() -> u64 {
     value
 }
 
+/// The lower half's translation table base: the root address in bits 47 to 1,
+/// the `ASID` above it.
+pub(crate) fn read_ttbr0() -> u64 {
+    let value: u64;
+    // SAFETY: reading `TTBR0_EL1` has no side effects.
+    unsafe {
+        asm!("mrs {}, ttbr0_el1", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// The table address bits of a `TTBR0_EL1` value.
+pub(crate) const TTBR_ADDRESS: u64 = 0x0000_FFFF_FFFF_FFFE;
+
 /// System control: the MMU, the caches, alignment checking.
 pub(crate) fn read_sctlr() -> u64 {
     let value: u64;
