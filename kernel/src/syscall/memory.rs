@@ -242,6 +242,9 @@ pub(crate) fn sys_mprotect(
             // A range that is not wholly mapped, or runs out of the user half,
             // is `ENOMEM` from `mprotect`, not `EINVAL`.
             SpaceError::NotUserRange(_) | SpaceError::BadRange => Errno::ENOMEM,
+            // A region `vmo_map` made, whose protection its handle's rights
+            // decided: Linux's answer for a mapping the caller may not change.
+            SpaceError::Refused(_) => Errno::EACCES,
             other => refused(other),
         })?;
     Ok(0)

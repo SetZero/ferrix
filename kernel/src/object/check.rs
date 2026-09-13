@@ -26,7 +26,9 @@ use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
-use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, PACKET_INTERRUPT, PACKET_SIGNAL, PACKET_USER};
+use ferrix_native_abi::types::{
+    CHANNEL_MAX_BYTES, MAP_READ, MAP_WRITE, PACKET_INTERRUPT, PACKET_SIGNAL, PACKET_USER,
+};
 use ferrix_vma::VmaFlags;
 
 use crate::arch;
@@ -41,7 +43,7 @@ use crate::syscall::check::spinner;
 use crate::syscall::image;
 use crate::syscall::process::{self, Process, ProcessRef};
 use crate::syscall::{self as linux, Outcome, SyscallArgs, native, uaccess};
-use crate::user::space::Access;
+use crate::user::space::{Access, Destination, SpaceError};
 use ferrix_elf::Class;
 
 /// Where each check process keeps its buffers.
@@ -74,6 +76,8 @@ const PACKET_AT: u64 = SCRATCH + 0x340;
 const KEY: u64 = SCRATCH + 0x360;
 /// A pin's device addresses.
 const PINNED_AT: u64 = SCRATCH + 0x370;
+/// Where the mapping check maps its VMO: clear of the scratch region.
+const MAPPED: u64 = 0x5000_0000;
 
 /// How long the waker sleeps before it writes.
 const WAKE_AFTER_NANOS: u64 = 20_000_000;
@@ -153,9 +157,11 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // Twice, measured on the second, for the reason `syscall::check::run`
     // gives: the heap keeps a page of each size class the first run touched.
     let _warm = check_two_processes()?;
+    check_a_vmo_maps_as_shared_memory(&mut Counter::default())?;
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let before = mm::free_frames();
-    let counter = check_two_processes()?;
+    let mut counter = check_two_processes()?;
+    check_a_vmo_maps_as_shared_memory(&mut counter)?;
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
@@ -454,6 +460,214 @@ fn check_a_port_hears_a_process_end(
             .map_err(|_| "closing a handle the process check made failed")?;
     }
     Ok(())
+}
+
+/// A mapped VMO is the VMO.
+///
+/// Bytes written into the object are there through the mapping, and bytes
+/// written through the mapping are there in the object; a forked space sees
+/// the same pages rather than copies; and the mapping outlives the handle it
+/// was made with. A protection needs the rights behind it, `mprotect` and
+/// `mremap` may not change what `vmo_map` made, and a mapping with no
+/// protection, a write-only one, one past the object's end, one that is not
+/// whole pages, or one over another mapping is refused.
+fn check_a_vmo_maps_as_shared_memory(counter: &mut Counter) -> Result<(), &'static str> {
+    let side = Side::new()?;
+    let vmo = side.handle(nr::VMO_CREATE, &[2 * PAGE_SIZE], "vmo_create failed")?;
+    side.put_offset(PAGE_SIZE + 0x10)?;
+    side.put(PAYLOAD, SECRET)?;
+    let _ = side
+        .call(nr::VMO_WRITE, &[reg(vmo), PAYLOAD, len(SECRET), OFFSET])
+        .map_err(|_| "vmo_write failed")?;
+
+    let both = u64::from(MAP_READ | MAP_WRITE);
+    side.put_offset(PAGE_SIZE)?;
+    let mapped = side
+        .call(nr::VMO_MAP, &[reg(vmo), MAPPED, PAGE_SIZE, both, OFFSET])
+        .map_err(|_| "mapping a VMO failed")?;
+    if u64::try_from(mapped) != Ok(MAPPED) {
+        return Err("a VMO was mapped somewhere other than where it was asked to go");
+    }
+    if side.get(MAPPED + 0x10, SECRET.len())? != SECRET {
+        return Err("bytes written into a VMO are not there through its mapping");
+    }
+    side.put(MAPPED + 0x40, PING)?;
+    side.put_offset(PAGE_SIZE + 0x40)?;
+    let _ = side
+        .call(nr::VMO_READ, &[reg(vmo), INBOX, len(PING), OFFSET])
+        .map_err(|_| "vmo_read failed")?;
+    if side.get(INBOX, PING.len())? != PING {
+        return Err("bytes written through a mapping are not in the VMO");
+    }
+
+    // Shared, so a forked space reaches the same pages, not copies of them.
+    let child = side
+        .process
+        .space()
+        .fork()
+        .map_err(|_| "forking a space with a mapped VMO failed")?;
+    uaccess::copy_to_user(&child, MAPPED + 0x80, b"fork")
+        .map_err(|_| "a forked space could not write through its mapping")?;
+    if side.get(MAPPED + 0x80, 4)? != b"fork" {
+        return Err("a write through a forked mapping did not reach the VMO");
+    }
+    drop(child);
+
+    let [narrow, no_map] = check_vmo_map_needs_its_rights(&side, vmo, counter)?;
+    let [end, other_end] = check_what_vmo_map_refuses(&side, vmo, counter)?;
+
+    for handle in [vmo, narrow, no_map, end, other_end] {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(handle)])
+            .map_err(|_| "closing a handle the mapping check made failed")?;
+    }
+    if side.get(MAPPED + 0x10, SECRET.len())? != SECRET {
+        return Err("a mapping lost its VMO when the handle it was made with closed");
+    }
+    side.close_everything();
+    Ok(())
+}
+
+/// A `vmo_map` protection needs the rights behind it, and `mprotect` and
+/// `mremap` may not change a region `vmo_map` made. Returns the two narrowed
+/// handles, for the caller to close.
+fn check_vmo_map_needs_its_rights(
+    side: &Side,
+    vmo: Handle,
+    counter: &mut Counter,
+) -> Result<[Handle; 2], &'static str> {
+    let both = u64::from(MAP_READ | MAP_WRITE);
+    side.put_offset(0)?;
+    let read_only = u64::from((Rights::MAP | Rights::READ).0);
+    let narrow = side.handle(
+        nr::HANDLE_DUPLICATE,
+        &[reg(vmo), read_only],
+        "duplicating a VMO without WRITE failed",
+    )?;
+    let elsewhere = MAPPED + 4 * PAGE_SIZE;
+    refused(
+        side.call(
+            nr::VMO_MAP,
+            &[reg(narrow), elsewhere, PAGE_SIZE, both, OFFSET],
+        ),
+        status::ACCESS_DENIED,
+        "a handle without WRITE mapped a VMO writable",
+        counter,
+    )?;
+    let _ = side
+        .call(
+            nr::VMO_MAP,
+            &[
+                reg(narrow),
+                elsewhere,
+                PAGE_SIZE,
+                u64::from(MAP_READ),
+                OFFSET,
+            ],
+        )
+        .map_err(|_| "a handle without WRITE could not map a VMO read-only")?;
+
+    // The Linux calls may not reshape what vmo_map made: mprotect would hand
+    // the mapping a right the handle did not carry, and mremap would grow the
+    // VMO behind it.
+    let space = side.process.space();
+    if !matches!(
+        space.protect(elsewhere, PAGE_SIZE, VmaFlags::READ_WRITE),
+        Err(SpaceError::Refused(_))
+    ) {
+        return Err("mprotect made a read-only vmo_map region writable");
+    }
+    if !matches!(
+        space.remap(elsewhere, PAGE_SIZE, 2 * PAGE_SIZE, Destination::Anywhere),
+        Err(SpaceError::Refused(_))
+    ) {
+        return Err("mremap resized a region vmo_map made");
+    }
+    counter.refusals += 2;
+    let no_map = u64::from((Rights::READ | Rights::WRITE).0);
+    let no_map = side.handle(
+        nr::HANDLE_DUPLICATE,
+        &[reg(vmo), no_map],
+        "duplicating a VMO without MAP failed",
+    )?;
+    refused(
+        side.call(
+            nr::VMO_MAP,
+            &[reg(no_map), 0, PAGE_SIZE, u64::from(MAP_READ), OFFSET],
+        ),
+        status::ACCESS_DENIED,
+        "a handle without MAP mapped a VMO",
+        counter,
+    )?;
+    Ok([narrow, no_map])
+}
+
+/// What `vmo_map` refuses whatever the handle carries: another kind of object,
+/// a protection that is not read or read-write, part of a page, a range over
+/// another mapping, past the object's end or from inside a page. Returns the
+/// channel it made, for the caller to close.
+fn check_what_vmo_map_refuses(
+    side: &Side,
+    vmo: Handle,
+    counter: &mut Counter,
+) -> Result<[Handle; 2], &'static str> {
+    let both = u64::from(MAP_READ | MAP_WRITE);
+    let (end, other_end) = side.channel()?;
+    let spare = MAPPED + 8 * PAGE_SIZE;
+    refused(
+        side.call(nr::VMO_MAP, &[reg(end), spare, PAGE_SIZE, both, OFFSET]),
+        status::WRONG_TYPE,
+        "a channel was mapped as a VMO",
+        counter,
+    )?;
+
+    // Mappings that cannot be made.
+    for (protection, what) in [
+        (0, "a mapping with no protection was made"),
+        (u64::from(MAP_WRITE), "a write-only mapping was made"),
+        (
+            both | 0x100,
+            "a protection with an unknown bit was accepted",
+        ),
+    ] {
+        refused(
+            side.call(
+                nr::VMO_MAP,
+                &[reg(vmo), spare, PAGE_SIZE, protection, OFFSET],
+            ),
+            status::INVALID_ARGS,
+            what,
+            counter,
+        )?;
+    }
+    refused(
+        side.call(nr::VMO_MAP, &[reg(vmo), spare, PAGE_SIZE / 2, both, OFFSET]),
+        status::INVALID_ARGS,
+        "a mapping of part of a page was made",
+        counter,
+    )?;
+    refused(
+        side.call(nr::VMO_MAP, &[reg(vmo), MAPPED, PAGE_SIZE, both, OFFSET]),
+        status::INVALID_ARGS,
+        "a mapping over another mapping was made",
+        counter,
+    )?;
+    side.put_offset(PAGE_SIZE)?;
+    refused(
+        side.call(nr::VMO_MAP, &[reg(vmo), spare, 2 * PAGE_SIZE, both, OFFSET]),
+        status::INVALID_ARGS,
+        "a mapping past the end of its VMO was made",
+        counter,
+    )?;
+    side.put_offset(0x10)?;
+    refused(
+        side.call(nr::VMO_MAP, &[reg(vmo), spare, PAGE_SIZE, both, OFFSET]),
+        status::INVALID_ARGS,
+        "a mapping from inside a page was made",
+        counter,
+    )?;
+
+    Ok([end, other_end])
 }
 
 /// One of the two processes.

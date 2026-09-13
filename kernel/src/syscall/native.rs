@@ -38,10 +38,13 @@ use ferrix_native_abi::nr::{self, NativeCall};
 use ferrix_native_abi::rights::{Requested, Rights};
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
-use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, PortPacket, ReadActual};
+use ferrix_native_abi::types::{
+    CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, MAP_READ, MAP_WRITE, PortPacket, ReadActual,
+};
 use ferrix_objects::message::Message;
 use ferrix_objects::reach::Reach;
 use ferrix_objects::table::TableError;
+use ferrix_vma::VmaFlags;
 
 use crate::device::DeviceNode;
 use crate::object::channel::{self, ChannelMessage, Endpoint, ReadError, WriteFailure};
@@ -151,7 +154,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::ObjectWaitAsync => {
             object_wait_async(process, handle(a[0]), handle(a[1]), a[2], a[3])
         }
-        _ => Err(Errno::ENOSYS),
+        NativeCall::VmoMap => vmo_map(process, handle(a[0]), a[1], a[2], a[3], a[4]),
     }
 }
 
@@ -889,15 +892,58 @@ fn io_mapping_map(process: &Process, mapping: Handle, address: u64) -> Result<us
     let at = (address != 0).then_some(address);
     let mapped = mapping
         .map_into(process.space(), at)
-        .map_err(|why| match why {
-            SpaceError::OutOfMemory => status::NO_MEMORY,
-            SpaceError::Refused(_) => status::ACCESS_DENIED,
-            SpaceError::NotUserRange(_)
-            | SpaceError::BadRange
-            | SpaceError::NotMapped(_)
-            | SpaceError::Backing(_) => status::INVALID_ARGS,
-        })?;
+        .map_err(space_status)?;
     usize::try_from(mapped).map_err(|_| status::INVALID_ARGS)
+}
+
+/// `vmo_map`.
+///
+/// Always shared; [`crate::user::space::AddressSpace::map_object`] says why.
+/// The protection needs the rights that grant it, so a read-only handle maps
+/// read-only or not at all. Every mapping reads, because none of the
+/// processors Ferrix runs on can make a user page writable and not readable.
+fn vmo_map(
+    process: &Process,
+    vmo: Handle,
+    address: u64,
+    length: u64,
+    protection: u64,
+    offset_at: u64,
+) -> Result<usize, Errno> {
+    let write = match u32::try_from(protection) {
+        Ok(MAP_READ) => false,
+        Ok(bits) if bits == MAP_READ | MAP_WRITE => true,
+        _ => return Err(status::INVALID_ARGS),
+    };
+    let needed = if write {
+        Rights::MAP | Rights::READ | Rights::WRITE
+    } else {
+        Rights::MAP | Rights::READ
+    };
+    let vmo = process.with_handles(|table| vmo_in(table, vmo, needed))?;
+    let offset = read_u64(process, offset_at)?;
+    let flags = VmaFlags {
+        write,
+        ..VmaFlags::READ
+    };
+    let at = (address != 0).then_some(address);
+    let mapped = process
+        .space()
+        .map_object(at, length, vmo, offset, flags)
+        .map_err(space_status)?;
+    usize::try_from(mapped).map_err(|_| status::INVALID_ARGS)
+}
+
+/// The status an address space's refusal travels as.
+fn space_status(why: SpaceError) -> Errno {
+    match why {
+        SpaceError::OutOfMemory => status::NO_MEMORY,
+        SpaceError::Refused(_) => status::ACCESS_DENIED,
+        SpaceError::NotUserRange(_)
+        | SpaceError::BadRange
+        | SpaceError::NotMapped(_)
+        | SpaceError::Backing(_) => status::INVALID_ARGS,
+    }
 }
 
 /// The port a handle names, if it carries `needed`.
