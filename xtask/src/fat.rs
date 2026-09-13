@@ -459,9 +459,20 @@ fn directory_entry(name: &[u8; 11], attr: u8, first_cluster: u32, size: u32) -> 
 }
 
 /// Assemble the bootable image for `arch` from a built loader and kernel, with
-/// the initramfs every image carries.
-pub(crate) fn write_image(arch: Arch, loader: &Path, kernel: &Path) -> Result<PathBuf> {
-    write_image_with(arch, loader, kernel, &crate::initramfs::build(None)?)
+/// the initramfs every image carries: the tree's native programs, and no
+/// `--init` program.
+pub(crate) fn write_image(
+    arch: Arch,
+    loader: &Path,
+    kernel: &Path,
+    natives: &[crate::native::Built],
+) -> Result<PathBuf> {
+    write_image_with(
+        arch,
+        loader,
+        kernel,
+        &crate::initramfs::build(None, natives)?,
+    )
 }
 
 /// [`write_image`], carrying `initramfs` instead: the same archive with a

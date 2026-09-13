@@ -20,6 +20,7 @@
 
 use std::path::Path;
 
+use crate::native;
 use crate::{Error, Result};
 
 /// Every timestamp in the archive: 2026-01-01 00:00:00 UTC, the same instant
@@ -198,20 +199,20 @@ pub(crate) const APPLETS: &[&str] = &[
     "whoami", "whois", "xargs", "xxd", "xz", "xzcat", "yes", "zcat", "zcip",
 ];
 
-/// The archive every image carries, with `program` at `/bin/busybox` when one
-/// is given.
-pub(crate) fn build(program: Option<&Path>) -> Result<Vec<u8>> {
+/// The archive every image carries: the tree's native programs in `/sbin`,
+/// and `program` at `/bin/busybox` when one is given.
+pub(crate) fn build(program: Option<&Path>, natives: &[native::Built]) -> Result<Vec<u8>> {
     let program = program
         .map(|path| {
             std::fs::read(path)
                 .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
         })
         .transpose()?;
-    build_with(program.as_deref())
+    build_with(program.as_deref(), natives)
 }
 
 /// [`build`], with the program's bytes rather than its path.
-fn build_with(program: Option<&[u8]>) -> Result<Vec<u8>> {
+fn build_with(program: Option<&[u8]>, natives: &[native::Built]) -> Result<Vec<u8>> {
     let mut archive = Newc::new();
     archive.directory(".", 0o755)?;
     for (name, permissions) in [
@@ -228,6 +229,15 @@ fn build_with(program: Option<&[u8]>) -> Result<Vec<u8>> {
     let link = format!("{MARKER_PATH}.link");
     archive.hard_linked(&[MARKER_PATH, &link], 0o644, MARKER)?;
     archive.symlink(&format!("{MARKER_PATH}.symlink"), "initramfs")?;
+    // Only when there are any, so an archive without them is the bytes it was
+    // before native programs existed.
+    if !natives.is_empty() {
+        archive.directory(native::DIRECTORY, 0o755)?;
+        for built in natives {
+            let path = format!("{}/{}", native::DIRECTORY, built.name);
+            archive.file(&path, 0o755, &built.bytes)?;
+        }
+    }
     if let Some(program) = program {
         // Who uid 0 is, for the applets that ask by name -- `whoami`, `id`,
         // `ls -l`. Only beside a program, so the archive without one stays
@@ -248,18 +258,18 @@ mod tests {
 
     #[test]
     fn the_archive_is_the_same_bytes_every_time() {
-        assert_eq!(build(None).unwrap(), build(None).unwrap());
+        assert_eq!(build(None, &[]).unwrap(), build(None, &[]).unwrap());
         let program: &[u8] = b"\x7fELF not really";
         assert_eq!(
-            build_with(Some(program)).unwrap(),
-            build_with(Some(program)).unwrap()
+            build_with(Some(program), &[]).unwrap(),
+            build_with(Some(program), &[]).unwrap()
         );
     }
 
     #[test]
     fn a_program_goes_in_bin_with_its_applets_beside_it() {
         let program: &[u8] = b"\x7fELF not really";
-        let bytes = build_with(Some(program)).unwrap();
+        let bytes = build_with(Some(program), &[]).unwrap();
         let archive = ferrix_cpio::Archive::new(&bytes);
         assert_eq!(archive.find(PROGRAM_PATH).unwrap().unwrap().data, program);
         for applet in APPLETS {
@@ -286,7 +296,7 @@ mod tests {
 
     #[test]
     fn without_a_program_bin_is_empty() {
-        let bytes = build(None).unwrap();
+        let bytes = build(None, &[]).unwrap();
         let archive = ferrix_cpio::Archive::new(&bytes);
         assert!(archive.find(PROGRAM_PATH).unwrap().is_none());
         assert!(
@@ -294,6 +304,29 @@ mod tests {
                 .entries()
                 .all(|entry| !entry.unwrap().name.starts_with("bin/")),
             "without --init there is nothing in /bin"
+        );
+    }
+
+    #[test]
+    fn native_programs_go_in_sbin_and_only_when_there_are_some() {
+        let natives = [native::Built {
+            name: "channel-echo",
+            bytes: b"\x7fELF native".to_vec(),
+        }];
+        let bytes = build_with(None, &natives).unwrap();
+        let archive = ferrix_cpio::Archive::new(&bytes);
+        let entry = archive.find("sbin/channel-echo").unwrap().unwrap();
+        assert_eq!(entry.data, b"\x7fELF native");
+        assert!(
+            archive.find("sbin").unwrap().is_some(),
+            "its directory is made"
+        );
+        assert!(
+            build(None, &[])
+                .unwrap()
+                .windows(4)
+                .all(|window| window != b"sbin"),
+            "an archive without native programs has no /sbin"
         );
     }
 
@@ -323,7 +356,7 @@ mod tests {
 
     #[test]
     fn the_archive_reads_back_with_the_kernels_own_reader() {
-        let bytes = build(None).unwrap();
+        let bytes = build(None, &[]).unwrap();
         let archive = ferrix_cpio::Archive::new(&bytes);
         let names: Vec<&str> = archive.entries().map(|entry| entry.unwrap().name).collect();
         assert_eq!(names.first(), Some(&"."));

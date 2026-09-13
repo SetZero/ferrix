@@ -39,6 +39,40 @@ pub(crate) fn build_kernel(arch: Arch, release: bool) -> Result<PathBuf> {
     artifact(arch.kernel_target(), release, "ferrix-kernel")
 }
 
+/// Build `binary`, a native program in `package`, for `arch` into
+/// `target_dir`, and return the ELF.
+///
+/// For the kernel's own target, which is what the kernel's ELF loader takes:
+/// freestanding, soft float, and statically relocated by `.cargo/config.toml`.
+/// The target directory is a parameter so that a test can build into one of
+/// its own and never wait on the lock of the build running it.
+pub(crate) fn build_native(
+    arch: Arch,
+    release: bool,
+    package: &str,
+    binary: &str,
+    target_dir: &Path,
+) -> Result<PathBuf> {
+    build(
+        package,
+        arch.kernel_target(),
+        release,
+        &[("CARGO_TARGET_DIR", target_dir.as_os_str())],
+    )?;
+    let profile = if release { "release" } else { "debug" };
+    let path = target_dir
+        .join(arch.kernel_target())
+        .join(profile)
+        .join(binary);
+    if !path.is_file() {
+        return Err(Error::new(format!(
+            "cargo reported success but {} does not exist",
+            path.display()
+        )));
+    }
+    Ok(path)
+}
+
 /// Compile the kernel with `init` built in, told to run `script` with `sh -c`.
 ///
 /// Set on the child rather than taken from this process's environment, so the

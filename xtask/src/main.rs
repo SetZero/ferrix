@@ -38,6 +38,7 @@ mod check;
 mod fat;
 mod flash;
 mod initramfs;
+mod native;
 mod paths;
 mod pe;
 mod qemu;
@@ -173,7 +174,8 @@ fn run() -> Result<()> {
                 let loader = cargo::build_loader(arch, args.release)?;
                 let kernel =
                     cargo::build_kernel_with_init(arch, args.release, &program, shell::SCRIPT)?;
-                let image = fat::write_image(arch, &loader, &kernel)?;
+                let natives = native::build(arch, args.release)?;
+                let image = fat::write_image(arch, &loader, &kernel, &natives)?;
                 qemu::test_shell(arch, &image, &kernel, &args)?;
             }
             Ok(())
@@ -223,7 +225,8 @@ fn test_vfs(args: &Args) -> Result<()> {
         let list = paths::build_dir(arch).join("init-commands");
         vfs::write_if_changed(&list, &commands)?;
         let kernel = cargo::build_kernel_with_commands(arch, args.release, &list)?;
-        let initramfs = initramfs::build(Some(&program))?;
+        let natives = native::build(arch, args.release)?;
+        let initramfs = initramfs::build(Some(&program), &natives)?;
         let image = fat::write_image_with(arch, &loader, &kernel, &initramfs)?;
         if let Err(error) = qemu::test_vfs(arch, &image, &kernel, args) {
             eprintln!("\n  {error}");
@@ -250,16 +253,18 @@ fn test_vfs(args: &Args) -> Result<()> {
 /// kernel is built with it to start `sh -i`, and the initramfs carries it at
 /// `/bin/busybox` with a link beside it for every applet, so that the shell's
 /// `PATH=/bin` finds `ls` where a person types it. Without one the image is
-/// the one it always was.
+/// the one it always was. Either way the initramfs carries the tree's native
+/// programs in `/sbin`, built and checked for `arch` first.
 fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
+    let natives = native::build(arch, args.release)?;
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
-        let image = fat::write_image(arch, &loader, &kernel)?;
+        let image = fat::write_image(arch, &loader, &kernel, &natives)?;
         return Ok((image, kernel));
     };
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
-    let initramfs = initramfs::build(Some(&program))?;
+    let initramfs = initramfs::build(Some(&program), &natives)?;
     let image = fat::write_image_with(arch, &loader, &kernel, &initramfs)?;
     Ok((image, kernel))
 }
@@ -269,15 +274,17 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
 ///
 /// Given a program the kernel starts `sh -i` and the archive carries busybox,
 /// exactly as [`build_image`] arranges for QEMU, so a card boots to the shell
-/// an image does. Without one the files are the ones they always were.
+/// an image does. Without one the files are the ones they always were. Either
+/// way the archive carries the tree's native programs, as an image's does.
 fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u8>)> {
+    let natives = native::build(arch, args.release)?;
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
-        return Ok((loader, kernel, initramfs::build(None)?));
+        return Ok((loader, kernel, initramfs::build(None, &natives)?));
     };
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
-    Ok((loader, kernel, initramfs::build(Some(&program))?))
+    Ok((loader, kernel, initramfs::build(Some(&program), &natives)?))
 }
 
 /// The program `init` names for `arch`, with `{arch}` replaced by its name,
