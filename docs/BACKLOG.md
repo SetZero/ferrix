@@ -167,6 +167,8 @@ nobody has it yet.
 
 | Item | Owner | Stage |
 |---|---|---|
+| POSIX.1-2024 interface sweep: from musl's implementation of every mandatory POSIX.1-2024 function, the list of Linux system calls (and flags) they need; the stage 7 sweep tooling runs each on all three architectures and files every `ENOSYS`, `EINVAL` on a mandatory flag, or wrong result with the area that owns it, as rows here. Sockets and threads are known and excluded | os-b6, after its five branches | 7, 8 |
+| `AF_UNIX` sockets: `socket`, `socketpair`, `bind`, `listen`, `accept`, `connect`, `send*`/`recv*` with `SCM_RIGHTS`, `shutdown`, `getsockopt` for what busybox and POSIX need; no net core, no `AF_INET` | open — the first free session after the stage 8 chain lands | 7 |
 | Trusting a BAR firmware placed but did not enable | ferrix-d9 | 10 |
 | btrfs: CI Miri step for `libs/btrfs` and `libs/block` under 15 minutes, whole-image tests ignored under Miri | ferrix-61 | 11 |
 | A two-last-threads exit check that provably races: spin-meet on two processors, with its negative control -- the old last-thread decision put back -- failing by name. Today's check passes that control too, so it shows only that such a process ends with its first thread's status (from stage 9's review of threads commit 4). 1 point | threads (os-9f) | 7 |
@@ -187,6 +189,7 @@ nobody has it yet.
 | `getrandom` seeded from virtio-rng into a real generator; a real-time clock read from the RTC and `/dev/rtc` | open |
 | The debt the roadmap names: fuzz targets for `virtio`, `linux-abi` | open |
 | The host-test table in the roadmap generated from `cargo test --list` with a gate, instead of counted by hand | ferrix-24 |
+| The POSIX measure: musl's libc-test functional and conformance programs built static against musl and against ferrousli, run under `test-shell` on all three architectures, with the pass count in the roadmap's host-test table and every failure filed with its owner | os-7c, with os-9f once threads run | 
 | Zero-copy block reads: pin the page-cache pages themselves as the block ring's buffers, removing the data-VMO and scratch copies of stage 11's first read path (ARCHITECTURE §3) | ferrix-61, after stage 11's kernel mount |
 | ferrousli's busybox beyond the gates' applets: the 30 stubs in `ferrousli/src/stubs.rs` (regex for `grep` and `sed` patterns busybox does not handle itself, the math functions `awk` calls, name resolution with interface and Ethernet lookups), each ending the program when an applet reaches it; and `crypt`'s traditional DES and `$2*$` blowfish hashes, which return `"*"` | open |
 
@@ -216,6 +219,19 @@ Dated, newest first. A decision here is final until the customer says otherwise.
   it. This carries out the customer's 2026-09-13 order below once the binary
   passed both, at 5e9b0b6 with no stub reached.
 
+* **2026-09-13 (customer)** POSIX.1-2024 compatibility is a goal, on the
+  condition that it never breaks Linux compatibility. Ferrix takes POSIX
+  through its libc over the Linux ABI (ARCHITECTURE §2), so the goal costs
+  the kernel nothing new in kind: every mandatory POSIX.1-2024 interface is a
+  Linux system call the kernel must answer as Linux does, and the libc side is
+  ferrousli's. Where POSIX and Linux differ, Linux wins. Rows: threads (P0),
+  the POSIX interface sweep and `AF_UNIX` sockets (P1), libc-test as the
+  measure (P2). `AF_INET` stays with the networking stage.
+* **2026-09-13 (customer)** Ferrousli is to replace the musl and glibc
+  busyboxes as the userland Ferrix is measured with, as fast as it can be
+  done: once its busybox passes `test-shell` it becomes the primary binary of
+  that gate, with musl and glibc kept as the compatibility checks. Static musl
+  stays the goal path to `rustc`, whose `std` targets it.
 * **2026-09-13 (PO)** `vmo_map` refuses executable mappings in its first
   landing, and the roadmap records that under stage 9's "Left for later
   stages", not as done: an EXECUTE right on the VMO handle comes with
