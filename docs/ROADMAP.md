@@ -1266,7 +1266,7 @@ the code that should meet a fuzzer before it meets ring 0.
   on Linux before 3.14, until a sleeping lock the kernel lends the crate
   serialises them.
 * **tmpfs**, whose file contents are not a byte vector but a page store the
-  kernel supplies — a VMO there — so that `mmap` of a tmpfs file can later map
+  kernel supplies — a VMO there — so that a shared `mmap` of a tmpfs file maps
   the file's own pages. The same store is the page cache of a filesystem on a
   disk: made over a `PageSource`, it fills runs of at most 32 missing pages
   with no lock held, keeps only those still missing, and forgets the source's
@@ -1408,6 +1408,29 @@ from a process of its own, twice:
 
 ```
   pipes    18020 bytes through a pipe, a FIFO and sendfile; statfs, truncate and fallocate answered; proc and devtmpfs mounted, read and unmounted; 0 frames leaked
+```
+
+**Done — a file mapped shared.** `mmap` of a file maps the file's own VMO
+pages, the ones `read` copies out of. So a write through the mapping is what
+the next `read` returns, and a write to the file is what the mapping shows.
+An inode offers what can be mapped through `Inode::mapping`: tmpfs its page
+store's VMO, btrfs the same. `mmap` refuses in Linux's order: `EBADF` for a
+descriptor that names nothing or only a path; `EACCES` for a file not open for
+reading, or a writable shared mapping of one not open for writing; `ENODEV` for
+an inode with nothing to map. `MAP_FIXED` clears its range only once every
+check has passed. The mapping keeps its open file, so the file lives as long as
+the mapping, as Linux's `vm_file`, and `/proc/<pid>/maps` names the region by
+its path, offset, device and inode. A page wholly past the file's end is never
+committed. The filesystem tells the store the file's length, after an extend
+and before a cut, and a fault reads that bound under the VMO's lock. A touch
+past the end is `SIGBUS` from user mode and `EFAULT` from a system call.
+`msync` checks what Linux checks and writes nothing back, because the pages
+are the file's and nothing here has a disk to flush. A private file mapping is
+still `ENODEV`, until it can copy on write into an object of its own. The boot
+check maps a file under `/tmp` from a process of its own, twice:
+
+```
+  mmap     12339 bytes written through a shared file mapping and read back from the file, and the other way; refusals, msync and /proc maps answered; a truncation took 3 pages away from the mapping; 0 frames leaked
 ```
 
 **The exit test, and how far it gets.** `cargo xtask test-vfs --init PATH`
