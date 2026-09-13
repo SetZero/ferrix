@@ -35,7 +35,8 @@ own for the reason stage 7's is. Stage 9's exit runs in the boot test itself:
 two programs in user mode exchange messages and a handle over a channel, and a
 job kill takes down a process tree, with ports, interrupts delivered to them
 and device memory a driver can map built on the same objects.
-Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
+Stage 10 has begun where the continuous rule says a stage should, with PCI
+configuration space in `libs/pci`,
 and its first kernel code — PCI enumeration, device nodes with MSI-X vectors a
 driver can be given, and a device driven by DMA and answering by MSI-X from the
 boot check — is in the boot test.
