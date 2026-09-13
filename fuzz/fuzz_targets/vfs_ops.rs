@@ -19,6 +19,14 @@
 //! * **Records round-trip.** What the `getdents64` packer writes, a reader
 //!   that knows only the layout reads back as the same entries.
 //! * **A write reads back.** Bytes written at an offset read back at it.
+//! * **`..` in a listing is where `..` walks to.** The listing's inode number
+//!   for `..` is the one `dir/..` resolves to, across mounts too. It carried
+//!   the directory's own number until a review found it.
+//! * **The tree is a tree.** After every operation, walking down from the
+//!   root by listings reaches no directory twice, every name reports
+//!   `path_of` as the path it was listed under, and every dentry's parents
+//!   end. A rename that moves a directory into its own subtree breaks the
+//!   first, and a dentry left with a stale parent breaks the second.
 //!
 //! Paths are built from a tiny alphabet — three names, `.`, `..`, and a link
 //! — so that operations collide with each other constantly rather than
@@ -26,13 +34,14 @@
 
 #![no_main]
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use ferrix_vfs::dirent::{DirentWriter, records};
 use ferrix_vfs::tmpfs::{HeapStorage, Tmpfs};
 use ferrix_vfs::{
-    Clock, Context, FileSystem, Namespace, OpenFlags, RenameMode, Timespec, Whence,
+    Clock, Context, FileSystem, FileType, Namespace, OpenFlags, RenameMode, Timespec, Whence,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -126,7 +135,15 @@ fn listing_agrees(ns: &Namespace, ctx: &Context, dir: &[u8]) {
         emitted.extend(batch);
     }
     for (ino, name) in emitted {
-        if name == b"." || name == b".." {
+        if name == b".." {
+            let mut up = dir.to_vec();
+            up.extend_from_slice(b"/..");
+            let parent = ns.resolve(ctx, None, &up, true).expect("a listed directory has ..");
+            let stat = ns.stat(&parent).expect("a directory's parent stats");
+            assert_eq!(stat.metadata.ino, ino, "a listing's .. is not where .. walks to");
+            continue;
+        }
+        if name == b"." {
             continue;
         }
         let mut path = dir.to_vec();
@@ -144,6 +161,59 @@ fn listing_agrees(ns: &Namespace, ctx: &Context, dir: &[u8]) {
         }
         let stat = ns.stat(&at).expect("a resolved name stats");
         assert_eq!(stat.metadata.ino, ino, "a listed name resolved elsewhere");
+    }
+}
+
+/// The tree is a tree: see the module documentation.
+///
+/// Walks down from the root by listing each directory and resolving each name
+/// in it without following links, so a symbolic link cannot make a loop of
+/// its own. A directory is known by its device and inode number, which a
+/// directory has one of: no hard links to one exist.
+fn tree_is_a_tree(ns: &Namespace, ctx: &Context) {
+    let flags = OpenFlags {
+        read: true,
+        directory: true,
+        ..OpenFlags::default()
+    };
+    let mut seen = HashSet::new();
+    let mut pending = vec![b"/".to_vec()];
+    while let Some(path) = pending.pop() {
+        let at = ns.resolve(ctx, None, &path, false).expect("a listed name resolves");
+        assert_eq!(
+            ns.path_of(&at, &ctx.root),
+            path,
+            "a name does not know where it is"
+        );
+        let mut dentry = Some(Arc::clone(&at.dentry));
+        for _ in 0..=64 {
+            let Some(here) = dentry else { break };
+            dentry = here.parent();
+        }
+        assert!(dentry.is_none(), "a dentry is its own ancestor");
+
+        let stat = ns.stat(&at).expect("a resolved name stats");
+        if stat.metadata.kind != FileType::Directory {
+            continue;
+        }
+        assert!(
+            seen.insert((stat.dev, stat.metadata.ino)),
+            "a directory is inside itself: reached again at {}",
+            String::from_utf8_lossy(&path)
+        );
+        let file = ns.open(ctx, None, &path, &flags, 0).expect("a directory opens");
+        file.read_dir(&mut |entry| {
+            if entry.name != b"." && entry.name != b".." {
+                let mut child = path.clone();
+                if child != b"/" {
+                    child.push(b'/');
+                }
+                child.extend_from_slice(entry.name);
+                pending.push(child);
+            }
+            true
+        })
+        .expect("a directory lists");
     }
 }
 
@@ -231,6 +301,7 @@ fuzz_target!(|data: &[u8]| {
             }
             _ => listing_agrees(&ns, &ctx, &path),
         }
+        tree_is_a_tree(&ns, &ctx);
     }
     listing_agrees(&ns, &ctx, b"/");
     listing_agrees(&ns, &ctx, b"/mnt");
