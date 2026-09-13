@@ -6,10 +6,8 @@
  * and exits with argc. Any other status names the check that failed.
  */
 
-typedef unsigned long size_t;
-
-char *getenv(const char *name);
-int puts(const char *s);
+#include <stdio.h>
+#include <stdlib.h>
 
 static int constructed;
 

@@ -2,6 +2,9 @@
 //!
 //! These return the kernel's value unchanged, where `-4095..=-1` is `-errno`.
 //! [`crate::errno`] turns that into C's convention of `-1` plus `errno`.
+//!
+//! On x86-64 the number goes in rax and the arguments in rdi, rsi, rdx, r10,
+//! r8 and r9. `syscall` itself overwrites rcx and r11.
 
 use core::arch::asm;
 use core::ffi::c_int;
@@ -12,8 +15,67 @@ pub mod nr {
     pub const READ: usize = 0;
     /// `write`.
     pub const WRITE: usize = 1;
+    /// `mmap`.
+    pub const MMAP: usize = 9;
+    /// `rt_sigaction`.
+    pub const RT_SIGACTION: usize = 13;
+    /// `rt_sigprocmask`.
+    pub const RT_SIGPROCMASK: usize = 14;
+    /// `getpid`.
+    pub const GETPID: usize = 39;
+    /// `arch_prctl`: sets the `%fs` base, among other things.
+    pub const ARCH_PRCTL: usize = 158;
+    /// `gettid`.
+    pub const GETTID: usize = 186;
     /// `exit_group`: ends every thread in the process.
     pub const EXIT_GROUP: usize = 231;
+    /// `tgkill`.
+    pub const TGKILL: usize = 234;
+}
+
+/// Makes a system call with no arguments.
+///
+/// # Safety
+///
+/// The call must be sound to make.
+#[inline]
+pub unsafe fn syscall0(number: usize) -> isize {
+    let ret: usize;
+    // SAFETY: the caller vouches for the call. Every register `syscall`
+    // clobbers is declared.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") number => ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    ret.cast_signed()
+}
+
+/// Makes a system call with two arguments.
+///
+/// # Safety
+///
+/// As [`syscall3`].
+#[inline]
+pub unsafe fn syscall2(number: usize, a0: usize, a1: usize) -> isize {
+    let ret: usize;
+    // SAFETY: as in `syscall0`.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") number => ret,
+            in("rdi") a0,
+            in("rsi") a1,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    ret.cast_signed()
 }
 
 /// Makes a system call with three arguments.
@@ -26,8 +88,7 @@ pub mod nr {
 #[inline]
 pub unsafe fn syscall3(number: usize, a0: usize, a1: usize, a2: usize) -> isize {
     let ret: usize;
-    // SAFETY: the caller vouches for the call and its arguments. `syscall`
-    // clobbers only rax, rcx and r11, which are all declared.
+    // SAFETY: as in `syscall0`.
     unsafe {
         asm!(
             "syscall",
@@ -35,6 +96,66 @@ pub unsafe fn syscall3(number: usize, a0: usize, a1: usize, a2: usize) -> isize 
             in("rdi") a0,
             in("rsi") a1,
             in("rdx") a2,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    ret.cast_signed()
+}
+
+/// Makes a system call with four arguments.
+///
+/// # Safety
+///
+/// As [`syscall3`].
+#[inline]
+pub unsafe fn syscall4(number: usize, a0: usize, a1: usize, a2: usize, a3: usize) -> isize {
+    let ret: usize;
+    // SAFETY: as in `syscall0`.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") number => ret,
+            in("rdi") a0,
+            in("rsi") a1,
+            in("rdx") a2,
+            in("r10") a3,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    ret.cast_signed()
+}
+
+/// Makes a system call with six arguments.
+///
+/// # Safety
+///
+/// As [`syscall3`].
+#[inline]
+pub unsafe fn syscall6(
+    number: usize,
+    a0: usize,
+    a1: usize,
+    a2: usize,
+    a3: usize,
+    a4: usize,
+    a5: usize,
+) -> isize {
+    let ret: usize;
+    // SAFETY: as in `syscall0`.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") number => ret,
+            in("rdi") a0,
+            in("rsi") a1,
+            in("rdx") a2,
+            in("r10") a3,
+            in("r8") a4,
+            in("r9") a5,
             lateout("rcx") _,
             lateout("r11") _,
             options(nostack),

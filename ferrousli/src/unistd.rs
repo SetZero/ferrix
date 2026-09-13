@@ -3,7 +3,7 @@
 use core::ffi::{c_int, c_void};
 
 use crate::syscall::{self, nr};
-use crate::{errno, stdlib};
+use crate::{errno, exit};
 
 /// Reads up to `count` bytes from `fd` into `buf`.
 ///
@@ -34,5 +34,5 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
 /// Ends the process with `status` at once. POSIX's name for `_Exit`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn _exit(status: c_int) -> ! {
-    stdlib::_Exit(status)
+    exit::_Exit(status)
 }

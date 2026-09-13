@@ -1,6 +1,6 @@
 /* The smallest program: one line out, exit status zero. */
 
-int puts(const char *s);
+#include <stdio.h>
 
 int main(void)
 {

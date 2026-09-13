@@ -1,10 +1,11 @@
-//! `stdlib.h`: `exit`, `_Exit` and `getenv`, and `environ` beside them.
+//! `stdlib.h`: `getenv`, and `environ` beside it.
+//!
+//! `exit`, `_Exit` and `atexit` are in [`crate::exit`], and `abort` is in
+//! [`crate::signal`].
 
-use core::ffi::{CStr, c_char, c_int};
+use core::ffi::{CStr, c_char};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, Ordering};
-
-use crate::syscall;
 
 /// `environ`, the process's environment, as `NAME=value` strings ending in a
 /// null.
@@ -14,22 +15,6 @@ use crate::syscall;
 #[cfg_attr(not(test), unsafe(no_mangle))]
 #[allow(non_upper_case_globals, reason = "C names it")]
 pub static environ: AtomicPtr<*mut c_char> = AtomicPtr::new(null_mut());
-
-/// Ends the process with `status`.
-///
-/// Nothing registered with `atexit` runs yet, `.fini_array` is not walked, and
-/// there is no buffered output to flush.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-pub extern "C" fn exit(status: c_int) -> ! {
-    _Exit(status)
-}
-
-/// Ends the process with `status` at once.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-#[allow(non_snake_case, reason = "C names it")]
-pub extern "C" fn _Exit(status: c_int) -> ! {
-    syscall::exit_group(status)
-}
 
 /// The value of the environment variable `name`, or null.
 ///

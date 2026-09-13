@@ -28,13 +28,18 @@
 #[cfg(not(target_arch = "x86_64"))]
 compile_error!("ferrousli supports only x86-64 so far");
 
+pub mod auxv;
 pub mod errno;
+pub mod exit;
+pub mod lock;
+pub mod signal;
 #[cfg(not(test))]
 pub mod start;
 pub mod stdio;
 pub mod stdlib;
 pub mod string;
 pub mod syscall;
+pub mod thread;
 pub mod unistd;
 
 /// A panic inside the library has nothing to unwind into, because every frame

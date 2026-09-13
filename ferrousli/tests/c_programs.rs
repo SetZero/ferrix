@@ -5,24 +5,57 @@
 //! `libferrousli.a`, and nothing from the host's libc, exercises the entry
 //! path, the exported names and the calling convention.
 //!
-//! Each program is built at `-O0` and at `-O2`, because the optimiser turns
-//! loops and assignments into calls to `memcpy` and `memset` that the source
-//! never made.
+//! The programs are compiled against `include/`, not the host's headers. Each
+//! is built at `-O0` and at `-O2`, because the optimiser turns loops and
+//! assignments into calls to `memcpy` and `memset` that the source never made.
+//! The stack protector is on, as a distribution's compiler leaves it.
 
 #![allow(clippy::expect_used, reason = "a test reports failure by panicking")]
 
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-/// One program, how it is run, and what it must do.
+/// `SIGABRT`.
+const SIGABRT: i32 = 6;
+
+/// How a program must end.
+#[derive(Debug, Clone, Copy)]
+enum Ending {
+    /// It exits with this status.
+    Code(i32),
+    /// It is killed by this signal.
+    Signal(i32),
+}
+
+/// One program, how it is built and run, and what it must do.
 struct Case {
     /// The source file in `tests/c`, without `.c`.
     name: &'static str,
+    /// Compiler flags beyond the usual ones.
+    cflags: &'static [&'static str],
     args: &'static [&'static str],
     env: &'static [(&'static str, &'static str)],
     stdout: &'static str,
-    status: i32,
+    stderr: &'static str,
+    ending: Ending,
+}
+
+impl Case {
+    /// A program built with the usual flags and run with no arguments and no
+    /// environment, which prints nothing and exits zero.
+    const fn named(name: &'static str) -> Self {
+        Self {
+            name,
+            cflags: &[],
+            args: &[],
+            env: &[],
+            stdout: "",
+            stderr: "",
+            ending: Ending::Code(0),
+        }
+    }
 }
 
 /// `libferrousli.a`, built once for every test in this file.
@@ -61,24 +94,27 @@ fn library() -> &'static Path {
     })
 }
 
-fn build(name: &str, opt: &str) -> PathBuf {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/c")
-        .join(format!("{name}.c"));
-    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}{opt}"));
+fn build(case: &Case, opt: &str) -> PathBuf {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = manifest.join("tests/c").join(format!("{}.c", case.name));
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}{opt}", case.name));
     let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
     let output = Command::new(cc)
         .args([
+            "-std=c11",
+            "-Wall",
+            "-Werror",
             "-static",
             "-no-pie",
             "-nostdlib",
             "-nostdinc",
-            // The canary lives at %fs:0x28, and there is no thread pointer to
-            // put it behind yet.
-            "-fno-stack-protector",
-            opt,
-            "-o",
+            "-isystem",
         ])
+        .arg(manifest.join("include"))
+        .arg("-fstack-protector-strong")
+        .arg(opt)
+        .args(case.cflags)
+        .arg("-o")
         .arg(&out)
         .arg(env!("FERROUSLI_CRT1"))
         .arg(&source)
@@ -87,7 +123,8 @@ fn build(name: &str, opt: &str) -> PathBuf {
         .expect("run the C compiler");
     assert!(
         output.status.success(),
-        "{name}{opt} did not build:\n{}",
+        "{}{opt} did not build:\n{}",
+        case.name,
         String::from_utf8_lossy(&output.stderr)
     );
     out
@@ -95,69 +132,114 @@ fn build(name: &str, opt: &str) -> PathBuf {
 
 fn check(case: &Case) {
     for opt in ["-O0", "-O2"] {
-        let program = build(case.name, opt);
+        let program = build(case, opt);
         let output = Command::new(&program)
             .args(case.args)
             .env_clear()
             .envs(case.env.iter().copied())
             .output()
             .expect("run the program");
+        let label = format!("{}{opt}", case.name);
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
             case.stdout,
-            "{}{opt}: standard output",
-            case.name
+            "{label}: standard output"
         );
-        // A program killed by a signal has no exit code, and shows as `None`.
         assert_eq!(
-            output.status.code(),
-            Some(case.status),
-            "{}{opt}: exit status",
-            case.name
+            String::from_utf8_lossy(&output.stderr),
+            case.stderr,
+            "{label}: standard error"
         );
+        match case.ending {
+            Ending::Code(code) => assert_eq!(
+                output.status.code(),
+                Some(code),
+                "{label}: exit status (killed by signal {:?})",
+                output.status.signal()
+            ),
+            Ending::Signal(signal) => assert_eq!(
+                output.status.signal(),
+                Some(signal),
+                "{label}: signal (exited with {:?})",
+                output.status.code()
+            ),
+        }
     }
 }
 
 #[test]
 fn hello() {
     check(&Case {
-        name: "hello",
-        args: &[],
-        env: &[],
         stdout: "hello, world\n",
-        status: 0,
+        ..Case::named("hello")
     });
 }
 
 #[test]
 fn arguments_environment_and_constructors_reach_main() {
     check(&Case {
-        name: "startup",
         args: &["one", "two words"],
         env: &[("FERROUSLI_TEST", "a value")],
         stdout: "one\ntwo words\na value\n",
-        status: 3,
+        ending: Ending::Code(3),
+        ..Case::named("startup")
     });
 }
 
 #[test]
 fn string_and_memory_functions() {
-    check(&Case {
-        name: "strings",
-        args: &[],
-        env: &[],
-        stdout: "",
-        status: 0,
-    });
+    check(&Case::named("strings"));
 }
 
 #[test]
 fn a_failed_call_sets_errno() {
+    check(&Case::named("errno"));
+}
+
+#[test]
+fn thread_local_storage_in_the_static_block() {
+    check(&Case::named("tls"));
+}
+
+#[test]
+fn thread_local_storage_too_large_for_the_static_block() {
+    check(&Case::named("tls_large"));
+}
+
+#[test]
+fn exit_runs_handlers_newest_first_then_destructors() {
     check(&Case {
-        name: "errno",
-        args: &[],
-        env: &[],
-        stdout: "",
-        status: 0,
+        stdout: "main\nsecond\nfirst\ndestructor\n",
+        ending: Ending::Code(7),
+        ..Case::named("exit_handlers")
+    });
+}
+
+#[test]
+fn the_auxiliary_vector_reaches_getauxval() {
+    check(&Case::named("auxv"));
+}
+
+#[test]
+fn the_stack_protector_has_a_canary_and_catches_a_smashed_stack() {
+    const ALL: &[&str] = &["-fstack-protector-all"];
+    check(&Case {
+        cflags: ALL,
+        ..Case::named("canary")
+    });
+    check(&Case {
+        cflags: ALL,
+        args: &["smash"],
+        stderr: "*** stack smashing detected ***: terminated\n",
+        ending: Ending::Signal(SIGABRT),
+        ..Case::named("canary")
+    });
+}
+
+#[test]
+fn abort_ends_the_process_with_sigabrt() {
+    check(&Case {
+        ending: Ending::Signal(SIGABRT),
+        ..Case::named("abort")
     });
 }

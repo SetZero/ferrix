@@ -1,31 +1,48 @@
 //! `errno`, and the decoding of a system call's return value into it.
 //!
-//! There is one `errno` for the whole process, because there are no threads
-//! yet. When threads arrive it moves into the thread control block, and
-//! [`__errno_location`] is already the only way C reaches it, as in glibc and
-//! musl, so no program has to change.
+//! Each thread's `errno` lives in its control block, and [`__errno_location`]
+//! finds it through the thread pointer. C reaches `errno` only through that
+//! function, as with glibc and musl. In unit tests the thread pointer belongs
+//! to the host's C library, so a Rust thread-local stands in.
 
 use core::ffi::c_int;
-use core::sync::atomic::{AtomicI32, Ordering};
 
+/// `ENOENT`: no such file, or no such entry.
+pub const ENOENT: c_int = 2;
 /// `EINTR`: interrupted by a signal before anything happened.
 pub const EINTR: c_int = 4;
 /// `EBADF`: not an open file descriptor.
 pub const EBADF: c_int = 9;
+/// `ENOMEM`: out of memory.
+pub const ENOMEM: c_int = 12;
+/// `EINVAL`: an invalid argument.
+pub const EINVAL: c_int = 22;
 
-/// The process's `errno`. Atomic only so that it can be a safe `static`; C
-/// writes it through the pointer without ordering anyway.
-static ERRNO: AtomicI32 = AtomicI32::new(0);
-
-/// Where `errno` lives. `<errno.h>` defines `errno` as `*__errno_location()`.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-pub extern "C" fn __errno_location() -> *mut c_int {
-    ERRNO.as_ptr()
+#[cfg(test)]
+std::thread_local! {
+    static ERRNO: core::cell::Cell<c_int> = const { core::cell::Cell::new(0) };
 }
 
-/// Sets `errno`.
+/// Where the calling thread's `errno` lives. `<errno.h>` defines `errno` as
+/// `*__errno_location()`.
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+pub extern "C" fn __errno_location() -> *mut c_int {
+    crate::thread::errno_location()
+}
+
+/// Where the calling thread's `errno` lives: in unit tests, a Rust
+/// thread-local.
+#[cfg(test)]
+pub extern "C" fn __errno_location() -> *mut c_int {
+    ERRNO.with(core::cell::Cell::as_ptr)
+}
+
+/// Sets the calling thread's `errno`.
 pub fn set(value: c_int) {
-    ERRNO.store(value, Ordering::Relaxed);
+    // SAFETY: the pointer is the calling thread's `errno`, which lives as
+    // long as the thread.
+    unsafe { __errno_location().write(value) }
 }
 
 /// Splits a raw system call return into the value or the error number.
@@ -65,7 +82,7 @@ mod tests {
     #[test]
     fn a_failed_call_returns_minus_one_and_sets_errno() {
         assert_eq!(from_syscall(-(EBADF as isize)), -1);
-        // SAFETY: the pointer is to a live static.
+        // SAFETY: the pointer is this thread's `errno`.
         assert_eq!(unsafe { __errno_location().read() }, EBADF);
     }
 }
