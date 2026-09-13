@@ -15,7 +15,7 @@ use core::ffi::{c_char, c_int, c_long, c_uchar, c_uint, c_void};
 use core::mem::size_of;
 use core::ptr::null_mut;
 
-use crate::fcntl::{AT_FDCWD, AT_REMOVEDIR, F_GETFD};
+use crate::fcntl::{AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_NOFOLLOW, F_GETFD};
 use crate::syscall::{self, nr};
 use crate::{errno, exit};
 
@@ -607,6 +607,72 @@ pub extern "C" fn ftruncate64(fd: c_int, len: i64) -> c_int {
 pub unsafe extern "C" fn truncate64(path: *const c_char, len: i64) -> c_int {
     // SAFETY: the caller's contract is `truncate`'s.
     unsafe { truncate(path, len) }
+}
+
+/// Makes `path`'s owner `uid` and its group `gid`, leaving either as it is if
+/// it is -1, and following a final symbolic link.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn chown(path: *const c_char, uid: c_uint, gid: c_uint) -> c_int {
+    // SAFETY: the caller passes a NUL-terminated string.
+    unsafe { fchownat(AT_FDCWD, path, uid, gid, 0) }
+}
+
+/// `chown`, for a final symbolic link itself.
+///
+/// # Safety
+///
+/// As `chown`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn lchown(path: *const c_char, uid: c_uint, gid: c_uint) -> c_int {
+    // SAFETY: the caller passes a NUL-terminated string.
+    unsafe { fchownat(AT_FDCWD, path, uid, gid, AT_SYMLINK_NOFOLLOW) }
+}
+
+/// `chown`, for the file `fd` refers to.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn fchown(fd: c_int, uid: c_uint, gid: c_uint) -> c_int {
+    // SAFETY: `fchown` reads no memory.
+    let ret = unsafe { syscall::syscall3(nr::FCHOWN, fd as usize, uid as usize, gid as usize) };
+    errno::from_syscall(ret) as c_int
+}
+
+/// `chown`, for `path` relative to the directory `dirfd`, with
+/// `AT_SYMLINK_NOFOLLOW` and `AT_EMPTY_PATH` in `flags`.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn fchownat(
+    dirfd: c_int,
+    path: *const c_char,
+    uid: c_uint,
+    gid: c_uint,
+    flags: c_int,
+) -> c_int {
+    // SAFETY: the kernel only reads `path`.
+    let ret = unsafe {
+        syscall::syscall6(
+            nr::FCHOWNAT,
+            dirfd as usize,
+            path.addr(),
+            uid as usize,
+            gid as usize,
+            flags as usize,
+            0,
+        )
+    };
+    errno::from_syscall(ret) as c_int
+}
+
+/// The host's id. Like musl's, it is 0: there is no `/etc/hostid` to read.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn gethostid() -> c_long {
+    0
 }
 
 #[cfg(test)]

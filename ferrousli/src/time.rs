@@ -43,12 +43,15 @@ pub struct Timeval {
 const _: () = assert!(size_of::<Timeval>() == 16);
 const _: () = assert!(offset_of!(Timeval, tv_usec) == 8);
 
-/// The kernel's `struct __kernel_old_itimerval`, which `setitimer` takes.
+/// C's `struct itimerval`, which is the kernel's `struct
+/// __kernel_old_itimerval`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-struct Itimerval {
-    interval: Timeval,
-    value: Timeval,
+pub struct Itimerval {
+    /// The period after the first expiry, or zero for a single expiry.
+    pub interval: Timeval,
+    /// The time left to the next expiry, or zero if the timer is off.
+    pub value: Timeval,
 }
 
 const _: () = assert!(size_of::<Itimerval>() == 32);
@@ -322,6 +325,88 @@ pub const fn split(value: i64, per_second: i64, scale: c_long) -> Timespec {
 /// Whether `ts` is a valid relative or absolute time.
 pub const fn is_valid(ts: &Timespec) -> bool {
     ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < NANOS
+}
+
+/// Sets interval timer `which` to `*new`, storing its old setting in `*old`
+/// if that is not null.
+///
+/// # Safety
+///
+/// `new` must be valid for a read of a `struct itimerval`, and `old` null or
+/// valid for a write of one.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn setitimer(
+    which: c_int,
+    new: *const Itimerval,
+    old: *mut Itimerval,
+) -> c_int {
+    // SAFETY: the kernel reads `new` and writes `old`, which the caller vouches
+    // for.
+    let ret = unsafe { syscall::syscall3(nr::SETITIMER, which as usize, new.addr(), old.addr()) };
+    errno::from_syscall(ret) as c_int
+}
+
+/// Stores interval timer `which`'s setting in `*value`.
+///
+/// # Safety
+///
+/// `value` must be valid for a write of a `struct itimerval`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn getitimer(which: c_int, value: *mut Itimerval) -> c_int {
+    // SAFETY: the kernel writes `value`, which the caller vouches for.
+    let ret = unsafe { syscall::syscall2(nr::GETITIMER, which as usize, value.addr()) };
+    errno::from_syscall(ret) as c_int
+}
+
+/// Sets the real-time clock to `*tv`. As in musl, the time zone is ignored, a
+/// null `tv` sets nothing and succeeds, and microseconds outside `0..1000000`
+/// fail with `EINVAL` before the kernel is asked.
+///
+/// # Safety
+///
+/// `tv` must be null or valid for a read of a `struct timeval`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn settimeofday(tv: *const Timeval, _tz: *const c_void) -> c_int {
+    if tv.is_null() {
+        return 0;
+    }
+    // SAFETY: the caller passes a valid `struct timeval`.
+    let tv = unsafe { tv.read() };
+    if !(0..1_000_000).contains(&tv.tv_usec) {
+        errno::set(errno::EINVAL);
+        return -1;
+    }
+    let ts = Timespec {
+        tv_sec: tv.tv_sec,
+        tv_nsec: tv.tv_usec * 1000,
+    };
+    // SAFETY: `ts` is a live local.
+    unsafe { clock_settime(CLOCK_REALTIME, &raw const ts) }
+}
+
+/// Reads clock `clock`'s discipline into `*tx`, adjusting it first as the
+/// modes in `*tx` ask, and returns the clock's state.
+///
+/// # Safety
+///
+/// `tx` must be valid for a read and a write of a `struct timex`, whose layout
+/// on x86-64 is the kernel's.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn clock_adjtime(clock: c_int, tx: *mut c_void) -> c_int {
+    // SAFETY: the kernel reads and writes `*tx`, which the caller vouches for.
+    let ret = unsafe { syscall::syscall2(nr::CLOCK_ADJTIME, clock as usize, tx.addr()) };
+    errno::from_syscall(ret) as c_int
+}
+
+/// `clock_adjtime` on the real-time clock.
+///
+/// # Safety
+///
+/// As `clock_adjtime`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn adjtimex(tx: *mut c_void) -> c_int {
+    // SAFETY: the caller's promises are `clock_adjtime`'s.
+    unsafe { clock_adjtime(CLOCK_REALTIME, tx) }
 }
 
 #[cfg(test)]

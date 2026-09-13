@@ -357,6 +357,47 @@ pub extern "C" fn getpgrp() -> c_int {
     getpgid(0)
 }
 
+/// Stores the real, effective and saved user ids.
+///
+/// # Safety
+///
+/// Each pointer must be valid for a write of a `uid_t`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn getresuid(
+    ruid: *mut c_uint,
+    euid: *mut c_uint,
+    suid: *mut c_uint,
+) -> c_int {
+    // SAFETY: the kernel writes a `uid_t` through each pointer, which the
+    // caller vouches for.
+    let ret = unsafe { syscall::syscall3(nr::GETRESUID, ruid.addr(), euid.addr(), suid.addr()) };
+    errno::from_syscall(ret) as c_int
+}
+
+/// Stores the real, effective and saved group ids.
+///
+/// # Safety
+///
+/// Each pointer must be valid for a write of a `gid_t`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn getresgid(
+    rgid: *mut c_uint,
+    egid: *mut c_uint,
+    sgid: *mut c_uint,
+) -> c_int {
+    // SAFETY: the kernel writes a `gid_t` through each pointer, which the
+    // caller vouches for.
+    let ret = unsafe { syscall::syscall3(nr::GETRESGID, rgid.addr(), egid.addr(), sgid.addr()) };
+    errno::from_syscall(ret) as c_int
+}
+
+/// Moves the calling process into a new process group named after it:
+/// `setpgid(0, 0)`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn setpgrp() -> c_int {
+    setpgid(0, 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

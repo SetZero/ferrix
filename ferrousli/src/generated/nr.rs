@@ -338,3 +338,93 @@ pub const SWAPOFF: usize = 168;
 pub const SYNCFS: usize = 306;
 /// `readahead`.
 pub const READAHEAD: usize = 187;
+/// `socket`.
+pub const SOCKET: usize = 41;
+/// `connect`.
+pub const CONNECT: usize = 42;
+/// `accept`.
+pub const ACCEPT: usize = 43;
+/// `accept4`.
+pub const ACCEPT4: usize = 288;
+/// `sendto`.
+pub const SENDTO: usize = 44;
+/// `recvfrom`.
+pub const RECVFROM: usize = 45;
+/// `sendmsg`.
+pub const SENDMSG: usize = 46;
+/// `recvmsg`.
+pub const RECVMSG: usize = 47;
+/// `shutdown`.
+pub const SHUTDOWN: usize = 48;
+/// `bind`.
+pub const BIND: usize = 49;
+/// `listen`.
+pub const LISTEN: usize = 50;
+/// `getsockname`.
+pub const GETSOCKNAME: usize = 51;
+/// `getpeername`.
+pub const GETPEERNAME: usize = 52;
+/// `socketpair`.
+pub const SOCKETPAIR: usize = 53;
+/// `setsockopt`.
+pub const SETSOCKOPT: usize = 54;
+/// `getsockopt`.
+pub const GETSOCKOPT: usize = 55;
+/// `sendfile`.
+pub const SENDFILE: usize = 40;
+/// `shmget`.
+pub const SHMGET: usize = 29;
+/// `shmat`.
+pub const SHMAT: usize = 30;
+/// `shmctl`.
+pub const SHMCTL: usize = 31;
+/// `shmdt`.
+pub const SHMDT: usize = 67;
+/// `semget`.
+pub const SEMGET: usize = 64;
+/// `semop`.
+pub const SEMOP: usize = 65;
+/// `semctl`.
+pub const SEMCTL: usize = 66;
+/// `semtimedop`.
+pub const SEMTIMEDOP: usize = 220;
+/// `msgget`.
+pub const MSGGET: usize = 68;
+/// `msgsnd`.
+pub const MSGSND: usize = 69;
+/// `msgrcv`.
+pub const MSGRCV: usize = 70;
+/// `msgctl`.
+pub const MSGCTL: usize = 71;
+/// `capget`.
+pub const CAPGET: usize = 125;
+/// `capset`.
+pub const CAPSET: usize = 126;
+/// `personality`.
+pub const PERSONALITY: usize = 135;
+/// `setns`.
+pub const SETNS: usize = 308;
+/// `unshare`.
+pub const UNSHARE: usize = 272;
+/// `sethostname`.
+pub const SETHOSTNAME: usize = 170;
+/// `setdomainname`.
+pub const SETDOMAINNAME: usize = 171;
+/// `reboot`.
+pub const REBOOT: usize = 169;
+/// `syslog`.
+pub const SYSLOG: usize = 103;
+/// `clock_adjtime`.
+pub const CLOCK_ADJTIME: usize = 305;
+/// `settimeofday`.
+pub const SETTIMEOFDAY: usize = 164;
+/// `inotify_init1`.
+pub const INOTIFY_INIT1: usize = 294;
+/// `inotify_add_watch`.
+pub const INOTIFY_ADD_WATCH: usize = 254;
+/// `inotify_rm_watch`.
+pub const INOTIFY_RM_WATCH: usize = 255;
+/// `getresuid`.
+pub const GETRESUID: usize = 118;
+/// `getresgid`.
+pub const GETRESGID: usize = 120;

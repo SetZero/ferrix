@@ -96,6 +96,30 @@ pub unsafe extern "C" fn gethostname(name: *mut c_char, len: usize) -> c_int {
     }
 }
 
+/// Sets the host name to the `len` bytes at `name`.
+///
+/// # Safety
+///
+/// `name` must be valid for reads of `len` bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn sethostname(name: *const c_char, len: usize) -> c_int {
+    // SAFETY: the kernel reads at most `len` bytes from `name`.
+    let ret = unsafe { syscall::syscall2(nr::SETHOSTNAME, name.addr(), len) };
+    errno::from_syscall(ret) as c_int
+}
+
+/// Sets the NIS domain name to the `len` bytes at `name`.
+///
+/// # Safety
+///
+/// `name` must be valid for reads of `len` bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn setdomainname(name: *const c_char, len: usize) -> c_int {
+    // SAFETY: the kernel reads at most `len` bytes from `name`.
+    let ret = unsafe { syscall::syscall2(nr::SETDOMAINNAME, name.addr(), len) };
+    errno::from_syscall(ret) as c_int
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

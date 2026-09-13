@@ -12,7 +12,7 @@ use core::ptr::null;
 use crate::errno;
 use crate::fcntl::{AT_FDCWD, AT_SYMLINK_NOFOLLOW};
 use crate::syscall::{self, nr};
-use crate::time::Timespec;
+use crate::time::{Timespec, Timeval};
 
 /// `S_IFIFO`, from `linux/stat.h`.
 const S_IFIFO: c_uint = 0o010_000;
@@ -433,4 +433,36 @@ pub unsafe extern "C" fn __fxstatat(
 ) -> c_int {
     // SAFETY: the caller's contract is `fstatat`'s.
     unsafe { fstatat(dirfd, path, buf, flags) }
+}
+
+/// Sets `path`'s access and modification times to `times[0]` and `times[1]`,
+/// given in microseconds, or both to now if `times` is null. As in musl,
+/// microseconds outside `0..1000000` fail with `EINVAL`.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string, and `times` null or valid for a
+/// read of two `struct timeval`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn utimes(path: *const c_char, times: *const Timeval) -> c_int {
+    if times.is_null() {
+        // SAFETY: the caller passes a NUL-terminated string.
+        return unsafe { utimensat(AT_FDCWD, path, null(), 0) };
+    }
+    // SAFETY: the caller passes two `struct timeval`.
+    let given = unsafe { times.cast::<[Timeval; 2]>().read() };
+    let mut specs = [Timespec::default(); 2];
+    for (spec, tv) in specs.iter_mut().zip(given) {
+        if !(0..1_000_000).contains(&tv.tv_usec) {
+            errno::set(errno::EINVAL);
+            return -1;
+        }
+        *spec = Timespec {
+            tv_sec: tv.tv_sec,
+            tv_nsec: tv.tv_usec * 1000,
+        };
+    }
+    // SAFETY: the caller passes a NUL-terminated string, and `specs` is a live
+    // local.
+    unsafe { utimensat(AT_FDCWD, path, specs.as_ptr(), 0) }
 }

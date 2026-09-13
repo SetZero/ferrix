@@ -45,8 +45,11 @@ pub mod getopt;
 pub mod growable;
 #[cfg(test)]
 mod host_glibc;
+pub mod inet;
 pub mod ioctl;
+pub mod ipc;
 pub mod key;
+pub mod linux;
 pub mod locale;
 pub mod lock;
 pub mod malloc;
@@ -66,12 +69,14 @@ pub mod rename;
 pub mod resource;
 pub mod rwlock;
 pub mod scan;
+pub mod sched;
 pub mod select;
 #[cfg(not(test))]
 pub mod setjmp;
 pub mod sigaction;
 pub mod signal;
 pub mod sigset;
+pub mod socket;
 #[cfg(not(test))]
 pub mod start;
 pub mod stat;
@@ -85,6 +90,7 @@ pub mod strings;
 pub mod strptime;
 pub mod strtod;
 pub mod strtol;
+pub mod stubs;
 pub mod syscall;
 pub mod sysconf;
 pub mod thread;

@@ -65,6 +65,12 @@ this library does not have yet. Ferrix's `cargo xtask test-shell --init` and
 `test-vfs` are to run the installed binary, beside Alpine's musl build and the
 glibc one.
 
+busybox also calls functions from the three areas allowed to wait: pattern
+matching, a few math functions, and name resolution. Until each is written,
+the library defines a stub that writes that the function is not implemented
+yet and aborts: 31 functions in `src/stubs.rs`. That list only shrinks, and
+the busybox Ferrix is tested with must reach none of them.
+
 ## Headers
 
 `include/` holds musl 1.2.5's headers, unmodified. See
@@ -85,12 +91,15 @@ x86-64, static programs linked at a fixed address.
 | `locale.h`, `langinfo.h` | `setlocale`, `localeconv`, `newlocale`, `duplocale`, `freelocale`, `uselocale`, `nl_langinfo`; musl's C and C.UTF-8 locales, any other name behaving as UTF-8 | message catalogues, glibc's `locale_t` layout |
 | Multibyte and wide characters | UTF-8 conversion in `stdlib.h`, `wchar.h` and `uchar.h`, strict as musl's; `wctype.h`'s classes, case mappings and `wcwidth` from musl's Unicode 12.1 tables, with every difference from glibc recorded; `wchar.h`'s string and memory functions | wide stdio, `wcstol` and `wcstod`, `iconv` |
 | Error text | `strerror`, `strerror_l`, `strerror_r` (XSI), `__xpg_strerror_r`, `strsignal` | glibc's GNU `strerror_r` |
-| `unistd.h` | files, directories and links, `pipe` and `dup`, identities, `fork` on `clone`, `execve`, `execv`, `execvp`, `sleep`, `alarm`, `sysconf`, `isatty`, `syscall` | the `execl` family, `getcwd(NULL, 0)`, `set*id` across threads |
+| `unistd.h` | files, directories and links, `pipe` and `dup`, identities, `fork` on `clone`, `execve`, `execv`, `execvp`, `sleep`, `alarm`, `sysconf`, `isatty`, `syscall`; `chown` and its `l`, `f` and `at` forms, `utimes`, `gethostid` | the `execl` family, `getcwd(NULL, 0)`, `set*id` across threads |
 | `fcntl.h`, `sys/stat.h`, `sys/mman.h` | every function, with glibc's `*64` and `__xstat` names | |
 | Mounts and file systems | `mount`, `umount`, `umount2`, `pivot_root`, `chroot`, `swapon`, `swapoff`, `sync`, `syncfs`, `readahead`; `statfs`, `statvfs` and their `f` forms, with glibc's `64` names; `mntent.h`'s `setmntent`, `getmntent`, `getmntent_r`, `endmntent` and `hasmntopt`, with octal escapes | `addmntent` |
-| Clocks | `time`, `clock_gettime` and the rest, `gettimeofday`, `nanosleep`, `clock`, `times` | the vDSO |
+| Sockets and addresses | `socket`, `socketpair`, `bind`, `connect`, `listen`, `accept`, `accept4`, `getsockname`, `getpeername`, `getsockopt`, `setsockopt`, `shutdown`, `send`, `sendto`, `sendmsg`, `recv`, `recvfrom`, `recvmsg`; `inet_aton`, `inet_addr`, `inet_ntoa`, `inet_ntop`, `inet_pton`, the byte order functions, `if_nametoindex` | name resolution, `getifaddrs`, `if_nameindex` |
+| System V IPC | shared memory, semaphores and message queues, every function | `ftok` |
+| Linux's own calls | `prctl`, `capget`, `capset`, `personality`, `setns`, `unshare`, `reboot`, `klogctl`, `inotify_init`, `inotify_init1`, `inotify_add_watch`, `inotify_rm_watch`, `sendfile`, `sysinfo`, `flock`; `sched_yield`, `sched_getaffinity`, `sched_setaffinity`, `CPU_COUNT` | `epoll`, `eventfd`, `signalfd`, `timerfd` |
+| Clocks | `time`, `clock_gettime` and the rest, `gettimeofday`, `settimeofday`, `nanosleep`, `clock`, `times`, `setitimer`, `getitimer`, `adjtimex`, `clock_adjtime` | the vDSO |
 | Calendar time | `gmtime`, `localtime`, `mktime`, `timegm`, `difftime`, `asctime` and `ctime`, with their `_r` forms, over the whole 64-bit `time_t`; `tzset`, `tzname`, `timezone` and `daylight`, from POSIX `TZ` strings or validated TZif files; `strftime`, `strftime_l`, `strptime` | `getdate`, `wcsftime`, leap seconds |
-| Processes and I/O | the `wait` family, `getrlimit` family, `uname`, `poll`, `select`, `getrandom`, `ioctl`, vector I/O, `rename` | |
+| Processes and I/O | the `wait` family, `getrlimit` family, `uname`, `sethostname`, `setdomainname`, `getresuid`, `getresgid`, `setpgrp`, `poll`, `select`, `getrandom`, `ioctl`, vector I/O, `rename` | |
 | `stdio.h` | `FILE` streams, fully, line or not buffered, each with a recursive lock; `fopen`, `fdopen`, `freopen`, `fmemopen`, `open_memstream`, `fopencookie`; reading, writing, seeking and the `_unlocked` forms; the `printf` family with glibc's `__*printf_chk` names, exact for `double` and x87 `long double`; streams flushed at `exit` | `scanf`, `popen`, wide-character streams, `tmpnam`, `gets` |
 | `signal.h` | `sigaction`, `signal`, sets and masks, `sigpending`, `sigsuspend`, `sigtimedwait`, `sigqueue`, `kill`, `sigaltstack`, `raise`, `abort`, `pthread_kill` | `psignal` |
 | `setjmp.h` | `setjmp`, `longjmp`, `sigsetjmp`, `siglongjmp`, glibc's `__sigsetjmp` and `__longjmp_chk`, with saved pointers mangled | |
