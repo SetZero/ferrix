@@ -1,55 +1,45 @@
-//! `stdio.h`, as far as it goes without buffering: `puts`.
+//! `stdio.h`: buffered streams, and the `printf` family.
 //!
-//! `puts` writes straight to the descriptor. Buffered `FILE` streams come
-//! with `printf`, and `puts` moves onto them then.
+//! * [`file`] holds the `FILE` structure, its buffering and the three standard
+//!   streams, and the list of open streams that `fflush(NULL)` and `exit`
+//!   walk.
+//! * [`open`] opens and closes streams on descriptors, and removes files.
+//! * [`memory`] makes streams over memory and over a program's own functions:
+//!   `open_memstream`, `fmemopen` and `fopencookie`.
+//! * [`io`] reads, writes and positions streams, and sets their buffering and
+//!   locks.
+//! * [`printf`] formats, [`float`] converts floating point exactly, and
+//!   [`fortify`] has glibc's checked entry points.
+//!
+//! # No glibc `FILE` layout
+//!
+//! `FILE` is opaque: musl's header declares `struct _IO_FILE` without members,
+//! and programs compiled against it reach a stream only through functions.
+//! glibc's header instead exposes its structure, and binaries built against
+//! it, particularly old ones, read and write its fields directly through
+//! macros such as `getc_unlocked` and `_IO_putc_unlocked`. Ferrousli's `FILE`
+//! does not have that layout, so such a binary cannot use these streams. That
+//! is out of scope until a glibc-compatible loader needs it.
+//!
+//! # Not here yet
+//!
+//! The `scanf` family, `popen` and `pclose`, wide-character streams, `fgetln`,
+//! `gets`, `tmpnam`, `tempnam`, `ctermid` and `cuserid`. `rename` and
+//! `renameat` are with the other file system calls.
 
-use core::ffi::{c_char, c_int};
-use core::slice;
+pub mod file;
+pub mod float;
+pub mod fortify;
+pub mod io;
+pub mod lock;
+pub mod memory;
+pub mod open;
+pub mod printf;
+mod sys;
+#[cfg(test)]
+mod tests;
 
-use crate::syscall::{self, nr};
-use crate::{errno, string};
+pub use file::{File, exit_flush};
 
 /// `EOF`, the error return of the character and line functions.
-pub const EOF: c_int = -1;
-
-/// Standard output's descriptor.
-const STDOUT: c_int = 1;
-
-/// Writes `s` and a newline to standard output.
-///
-/// # Safety
-///
-/// `s` must be a NUL-terminated string.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn puts(s: *const c_char) -> c_int {
-    // SAFETY: the caller passes a NUL-terminated string.
-    let len = unsafe { string::strlen(s) };
-    // SAFETY: `strlen` just found `len` readable bytes before the NUL.
-    let text = unsafe { slice::from_raw_parts(s.cast::<u8>(), len) };
-    match write_all(STDOUT, text).and_then(|()| write_all(STDOUT, b"\n")) {
-        Ok(()) => 0,
-        Err(()) => EOF,
-    }
-}
-
-/// Writes all of `bytes`, retrying short writes and interruptions. On failure
-/// `errno` says why.
-fn write_all(fd: c_int, mut bytes: &[u8]) -> Result<(), ()> {
-    while !bytes.is_empty() {
-        // SAFETY: `bytes` is a live slice, and the kernel only reads it.
-        let ret = unsafe {
-            syscall::syscall3(nr::WRITE, fd as usize, bytes.as_ptr().addr(), bytes.len())
-        };
-        match errno::decode(ret) {
-            // A write that makes no progress would loop forever.
-            Ok(0) => return Err(()),
-            Ok(written) => bytes = bytes.get(written..).unwrap_or_default(),
-            Err(errno::EINTR) => {}
-            Err(error) => {
-                errno::set(error);
-                return Err(());
-            }
-        }
-    }
-    Ok(())
-}
+pub const EOF: core::ffi::c_int = -1;

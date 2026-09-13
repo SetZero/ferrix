@@ -163,7 +163,8 @@ pub fn run_handlers() {
 /// Ends the process with `status`, after running the exit handlers and the
 /// program's destructors.
 ///
-/// Buffered output is not flushed yet, because there is none.
+/// Every stream's buffered output is flushed last, after the destructors, as
+/// musl does, so that output a destructor writes still appears.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn exit(status: c_int) -> ! {
     run_handlers();
@@ -173,6 +174,7 @@ pub extern "C" fn exit(status: c_int) -> ! {
     unsafe {
         crate::start::run_fini();
     }
+    crate::stdio::exit_flush();
     _Exit(status)
 }
 
