@@ -1676,6 +1676,37 @@ tree out of it that byte-for-byte matches what the host wrote.
 
 ---
 
+## Networking — sockets, a net core, virtio-net  ·  *month*
+
+Placed after stage 11 without a number of its own, the way *ARMv7-A* sits
+after stage 4. The net core was named in `docs/ARCHITECTURE.md` and left
+unstaged, because nothing on the path to `rustc` needs it. Then a sweep of
+busybox's applets over stage 8's root showed how much of a real userland does:
+`ifconfig`, `route`, `netstat`, `ip`, `wget`, and everything that talks over a
+local socket, fail today, because stage 7 refuses every socket call.
+
+The net core sits beside the block core. It provides sockets in the Linux
+ABI: `AF_UNIX` stream and datagram with descriptor passing, `AF_INET` and
+`AF_INET6` TCP and UDP, and the `AF_NETLINK` route family that `ip` configures
+interfaces through. Those run over interfaces, routes and a loopback device.
+virtio-net is the first driver. It runs in user mode on stage 10's device
+objects and speaks to the core over a channel, with its buffers in VMOs, as
+virtio-blk speaks to the block core. `/proc/net` (`dev`, `route`, `tcp`, `udp`,
+`unix`) comes with it, rendered in `libs/procfs` like the rest of `/proc`.
+
+The byte-level halves are `libs/` code, host-tested and fuzzed before the
+kernel calls them, for the reason the continuous rule gives: a packet is bytes
+someone else chose. They are header parsing, the TCP state machine with its
+retransmission and congestion arithmetic, and netlink message encoding.
+
+**Exit:** under QEMU's user-mode network, busybox configures `eth0` with `ip`,
+and `route` and `netstat` report through `/proc/net`. `wget` fetches a file
+from a server on the host that byte-for-byte matches what it served, and `nc`
+carries a stream over loopback and over an `AF_UNIX` socket. All of it runs in
+a test of its own, for the reason stage 7's exit is one.
+
+---
+
 ## Stage 12 — btrfs, write  ·  *longer*
 
 Copy-on-write allocation through the extent tree, delayed refs, transaction

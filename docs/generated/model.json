@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "9b6c4c0cc3c93cacac78756a980c5711f986d7433ad2e46879c5c6785c062456",
+  "digest": "87ee84e39b15e1820da1bca6520c713f14635353c14a6a41fd4498050338c16b",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -57,15 +57,15 @@
   ],
   "summary": {
     "packages": 16,
-    "elements": 1414,
+    "elements": 1418,
     "maturity": {
       "implemented": 125,
       "inProgress": 9,
       "writtenAhead": 8,
-      "planned": 99
+      "planned": 100
     },
     "deferred": 22,
-    "relations": 155,
+    "relations": 157,
     "figures": 19,
     "unparsed": 0
   },
@@ -13433,7 +13433,7 @@
           "kind": "part",
           "definition": true,
           "maturity": "planned",
-          "doc": "Named in the shape of the system; not on the path to rustc and unstaged. virtio-net would be its first driver.",
+          "doc": "Not on the path to rustc; staged after stage 11 as the networking stage (docs/ROADMAP.md, Networking): sockets, AF_NETLINK route, interfaces, loopback and /proc/net, with virtio-net as its first driver, in user mode.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 31
@@ -13448,7 +13448,7 @@
           "stage": 8,
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 40
+            "line": 42
           },
           "children": [
             {
@@ -13462,7 +13462,7 @@
               "doc": "The page cache is the inode's VMO; a mapped file and a read file are the same pages.",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 42
+                "line": 44
               }
             }
           ]
@@ -13476,7 +13476,7 @@
           "stage": 8,
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 48
+            "line": 50
           },
           "children": [
             {
@@ -13486,7 +13486,7 @@
               "type": "String",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 50
+                "line": 52
               }
             },
             {
@@ -13501,7 +13501,7 @@
               "doc": "Absent for a negative entry, which is what makes a failed lookup cheap the second time.",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 51
+                "line": 53
               }
             }
           ]
@@ -13515,7 +13515,7 @@
           "stage": 8,
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 57
+            "line": 59
           },
           "children": [
             {
@@ -13528,7 +13528,7 @@
               "type": "Dentry",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 59
+                "line": 61
               }
             },
             {
@@ -13541,7 +13541,7 @@
               "type": "Filesystem",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 60
+                "line": 62
               }
             }
           ]
@@ -13556,7 +13556,7 @@
           "doc": "rustc opens tens of thousands of files during a build; this is a performance requirement. Inode cache, dentry cache with negative entries, mount table per mount namespace, fd tables with their sharing rules.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 63
+            "line": 65
           },
           "children": [
             {
@@ -13567,7 +13567,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 69
+                "line": 71
               }
             },
             {
@@ -13578,7 +13578,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 70
+                "line": 72
               }
             },
             {
@@ -13589,7 +13589,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 71
+                "line": 73
               }
             },
             {
@@ -13598,7 +13598,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 72
+                "line": 74
               }
             },
             {
@@ -13607,7 +13607,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 73
+                "line": 75
               }
             },
             {
@@ -13616,7 +13616,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 74
+                "line": 76
               }
             },
             {
@@ -13625,7 +13625,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 75
+                "line": 77
               }
             },
             {
@@ -13634,7 +13634,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 76
+                "line": 78
               }
             }
           ]
@@ -13649,7 +13649,7 @@
           "doc": "Unified with VMOs: not a separate cache but the set of file VMOs, subject to reclaim's LRU.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 79
+            "line": 81
           },
           "children": [
             {
@@ -13663,7 +13663,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 83
+                "line": 85
               }
             }
           ]
@@ -13679,7 +13679,7 @@
           "maturity": "planned",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 90
+            "line": 92
           },
           "children": [
             {
@@ -13688,7 +13688,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 91
+                "line": 93
               }
             },
             {
@@ -13697,7 +13697,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 92
+                "line": 94
               }
             },
             {
@@ -13706,7 +13706,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 93
+                "line": 95
               }
             },
             {
@@ -13715,7 +13715,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 94
+                "line": 96
               }
             }
           ]
@@ -13730,7 +13730,7 @@
           "stage": 8,
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 97
+            "line": 99
           }
         },
         {
@@ -13743,7 +13743,7 @@
           "stage": 8,
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 98
+            "line": 100
           }
         },
         {
@@ -13757,7 +13757,7 @@
           "doc": "self/maps, self/exe, self/fd backed by the real VM and fd table; cpuinfo, meminfo.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 99
+            "line": 101
           }
         },
         {
@@ -13769,7 +13769,7 @@
           "maturity": "planned",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 104
+            "line": 106
           }
         },
         {
@@ -13782,7 +13782,7 @@
           "stage": 13,
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 105
+            "line": 107
           }
         },
         {
@@ -13795,7 +13795,7 @@
           "doc": "libs/cpio: the \"newc\" reader. Borrows, copies nothing, allocates nothing, rejects unsafe paths. Unpacked into tmpfs.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 107
+            "line": 109
           }
         },
         {
@@ -13808,7 +13808,7 @@
           "doc": "libs/btrfs: superblock, sys chunk array and chunk map (logical to physical), B-tree nodes and leaves, item payloads (inode, inode ref, dir, extent data), crc32c. Pure functions over bytes, forbid(unsafe_code); no device, no cache, no transactions. Fuzzed against images mkfs.btrfs produced.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 113
+            "line": 115
           }
         },
         {
@@ -13822,7 +13822,7 @@
           "doc": "The real filesystem, read and write, single device, no RAID 5/6. The largest single piece of work in the project.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 122
+            "line": 124
           },
           "children": [
             {
@@ -13832,7 +13832,7 @@
               "type": "BtrfsParsing",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 126
+                "line": 128
               }
             },
             {
@@ -13842,7 +13842,7 @@
               "type": "BtrfsRead",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 127
+                "line": 129
               }
             },
             {
@@ -13852,7 +13852,7 @@
               "type": "BtrfsWrite",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 128
+                "line": 130
               }
             },
             {
@@ -13862,7 +13862,7 @@
               "type": "BtrfsSubvolumes",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 129
+                "line": 131
               }
             }
           ]
@@ -13877,7 +13877,7 @@
           "doc": "Stage A: superblock, chunk tree, root tree, fs trees, extent data inline and regular, directory and inode items, crc32c verification, zstd/zlib/lzo. Enough to mount what mkfs.btrfs produced and read a sysroot out of it.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 132
+            "line": 134
           }
         },
         {
@@ -13890,7 +13890,7 @@
           "doc": "Stage B: copy-on-write allocation through the extent tree, delayed refs, transaction commit against both superblock copies with the right flush/FUA ordering, the free-space tree, the log tree and its replay.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 140
+            "line": 142
           },
           "children": [
             {
@@ -13899,7 +13899,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 146
+                "line": 148
               }
             },
             {
@@ -13908,7 +13908,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 147
+                "line": 149
               }
             },
             {
@@ -13917,7 +13917,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 148
+                "line": 150
               }
             }
           ]
@@ -13931,7 +13931,7 @@
           "doc": "Stage C: subvolumes and snapshots, then the rest.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 151
+            "line": 153
           }
         },
         {
@@ -13942,7 +13942,7 @@
           "maturity": "planned",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 155
+            "line": 157
           },
           "children": [
             {
@@ -13952,7 +13952,7 @@
               "type": "Tmpfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 156
+                "line": 158
               }
             },
             {
@@ -13962,7 +13962,7 @@
               "type": "Devfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 157
+                "line": 159
               }
             },
             {
@@ -13972,7 +13972,7 @@
               "type": "Procfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 158
+                "line": 160
               }
             },
             {
@@ -13982,7 +13982,7 @@
               "type": "Sysfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 159
+                "line": 161
               }
             },
             {
@@ -13992,7 +13992,7 @@
               "type": "Cgroupfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 160
+                "line": 162
               }
             },
             {
@@ -14002,7 +14002,7 @@
               "type": "Btrfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 161
+                "line": 163
               }
             },
             {
@@ -14012,7 +14012,7 @@
               "type": "InitramfsUnpack",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 162
+                "line": 164
               }
             }
           ]
@@ -14870,13 +14870,13 @@
           ]
         },
         {
-          "name": "stage12BtrfsWrite",
-          "qualifiedName": "FerrixRoadmap::stage12BtrfsWrite",
+          "name": "stageNetworking",
+          "qualifiedName": "FerrixRoadmap::stageNetworking",
           "kind": "requirement",
-          "shortName": "S12",
+          "shortName": "SN",
           "type": "Stage",
           "maturity": "planned",
-          "doc": "btrfs stage B. Exit, strict: Ferrix writes a tree and host btrfs check finds nothing; then the power-fail test — kill QEMU at a random point inside a transaction, remount, replay, check again — over hundreds of seeds.",
+          "doc": "Placed after stage 11 without a number of its own, as the ARMv7-A port sits after stage 4. The net core: AF_UNIX, AF_INET and AF_INET6 sockets, the AF_NETLINK route family, interfaces, routes and loopback; virtio-net as a userspace driver on stage 10's device objects; /proc/net; parsers and the TCP state machine in libs/, fuzzed. Exit: under QEMU user networking, busybox configures eth0 with ip, route and netstat report through /proc/net, wget fetches a file byte-for-byte, and nc carries a stream over loopback and an AF_UNIX socket.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 288
@@ -14884,10 +14884,10 @@
           "children": [
             {
               "name": "",
-              "qualifiedName": "FerrixRoadmap::stage12BtrfsWrite",
+              "qualifiedName": "FerrixRoadmap::stageNetworking",
               "kind": "attribute",
               "redefines": "number",
-              "value": "12",
+              "value": "11",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
                 "line": 289
@@ -14895,7 +14895,7 @@
             },
             {
               "name": "",
-              "qualifiedName": "FerrixRoadmap::stage12BtrfsWrite",
+              "qualifiedName": "FerrixRoadmap::stageNetworking",
               "kind": "attribute",
               "redefines": "status",
               "value": "StageStatus::Planned",
@@ -14906,13 +14906,61 @@
             },
             {
               "name": "",
+              "qualifiedName": "FerrixRoadmap::stageNetworking",
+              "kind": "attribute",
+              "redefines": "size",
+              "value": "\"month\"",
+              "source": {
+                "file": "docs/sysml/10-roadmap.sysml",
+                "line": 291
+              }
+            }
+          ]
+        },
+        {
+          "name": "stage12BtrfsWrite",
+          "qualifiedName": "FerrixRoadmap::stage12BtrfsWrite",
+          "kind": "requirement",
+          "shortName": "S12",
+          "type": "Stage",
+          "maturity": "planned",
+          "doc": "btrfs stage B. Exit, strict: Ferrix writes a tree and host btrfs check finds nothing; then the power-fail test — kill QEMU at a random point inside a transaction, remount, replay, check again — over hundreds of seeds.",
+          "source": {
+            "file": "docs/sysml/10-roadmap.sysml",
+            "line": 303
+          },
+          "children": [
+            {
+              "name": "",
+              "qualifiedName": "FerrixRoadmap::stage12BtrfsWrite",
+              "kind": "attribute",
+              "redefines": "number",
+              "value": "12",
+              "source": {
+                "file": "docs/sysml/10-roadmap.sysml",
+                "line": 304
+              }
+            },
+            {
+              "name": "",
+              "qualifiedName": "FerrixRoadmap::stage12BtrfsWrite",
+              "kind": "attribute",
+              "redefines": "status",
+              "value": "StageStatus::Planned",
+              "source": {
+                "file": "docs/sysml/10-roadmap.sysml",
+                "line": 305
+              }
+            },
+            {
+              "name": "",
               "qualifiedName": "FerrixRoadmap::stage12BtrfsWrite",
               "kind": "attribute",
               "redefines": "size",
               "value": "\"longer\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 291
+                "line": 306
               }
             }
           ]
@@ -14927,7 +14975,7 @@
           "doc": "All eight namespaces, the unified cgroup hierarchy with cpu, memory, io and pids, cgroupfs, classic-BPF seccomp with the interpreter in libs/. Exit: an unprivileged user namespace runs pid 1 under a memory limit that triggers scoped reclaim and a scoped OOM kill, with a seccomp filter blocking a syscall.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 298
+            "line": 313
           },
           "children": [
             {
@@ -14938,7 +14986,7 @@
               "value": "13",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 299
+                "line": 314
               }
             },
             {
@@ -14949,7 +14997,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 300
+                "line": 315
               }
             },
             {
@@ -14960,7 +15008,7 @@
               "value": "\"month\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 301
+                "line": 316
               }
             }
           ]
@@ -14975,7 +15023,7 @@
           "doc": "SoftRt and HardRt: FIFO/RR, threaded interrupts, PI mutexes, EDF with CBS admission, the runtime mode switch with its quiescence protocol. Exit: a cyclictest-shaped boot test on a HardRt domain while a Throughput domain is saturated, maximum wake-up latency inside the stated bound; plus an admission test that refuses an unschedulable set.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 309
+            "line": 324
           },
           "children": [
             {
@@ -14986,7 +15034,7 @@
               "value": "14",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 310
+                "line": 325
               }
             },
             {
@@ -14997,7 +15045,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 311
+                "line": 326
               }
             },
             {
@@ -15008,7 +15056,7 @@
               "value": "\"month\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 312
+                "line": 327
               }
             }
           ]
@@ -15023,7 +15071,7 @@
           "doc": "Static musl busybox as /bin, a working init, job control, ttys, pipes. Exit: an interactive shell over serial a person can use.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 321
+            "line": 336
           },
           "children": [
             {
@@ -15034,7 +15082,7 @@
               "value": "15",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 322
+                "line": 337
               }
             },
             {
@@ -15045,7 +15093,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 323
+                "line": 338
               }
             },
             {
@@ -15056,7 +15104,7 @@
               "value": "\"week\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 324
+                "line": 339
               }
             }
           ]
@@ -15071,7 +15119,7 @@
           "doc": "The remaining syscall surface, the memory scale, the spawn path for rust-lld, a sysroot on btrfs. Exit: rustc hello.rs && ./hello on Ferrix, in CI.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 329
+            "line": 344
           },
           "children": [
             {
@@ -15082,7 +15130,7 @@
               "value": "16",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 330
+                "line": 345
               }
             },
             {
@@ -15093,7 +15141,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 331
+                "line": 346
               }
             },
             {
@@ -15104,7 +15152,7 @@
               "value": "\"the goal\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 332
+                "line": 347
               }
             }
           ]
@@ -15119,7 +15167,7 @@
           "doc": "Build Ferrix on Ferrix; the image the hosted compiler produces boots and passes every test above.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 338
+            "line": 353
           },
           "children": [
             {
@@ -15130,7 +15178,7 @@
               "value": "17",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 339
+                "line": 354
               }
             },
             {
@@ -15141,7 +15189,7 @@
               "value": "StageStatus::Planned",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 340
+                "line": 355
               }
             },
             {
@@ -15152,7 +15200,7 @@
               "value": "\"longer\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 341
+                "line": 356
               }
             }
           ]
@@ -15167,7 +15215,7 @@
           "doc": "fuzz/ has two targets, elf_parse and frame_alloc. Every written-ahead crate parses bytes from outside the system and is owed a target before its consuming stage starts.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 368
+            "line": 384
           }
         },
         {
@@ -15180,7 +15228,7 @@
           "doc": "CI runs Miri over libs/elf and libs/bootinfo only; frame, heap and paging run in the kernel today and are owed a step ahead of every crate in the written-ahead table.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 373
+            "line": 389
           }
         },
         {
@@ -15190,7 +15238,7 @@
           "type": "BootTest",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 423
+            "line": 440
           },
           "children": [
             {
@@ -15201,7 +15249,7 @@
               "value": "IsaFamily::X86_64",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 424
+                "line": 441
               }
             },
             {
@@ -15210,7 +15258,7 @@
               "kind": "objective",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 425
+                "line": 442
               }
             }
           ]
@@ -15222,7 +15270,7 @@
           "type": "BootTest",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 433
+            "line": 450
           },
           "children": [
             {
@@ -15233,7 +15281,7 @@
               "value": "IsaFamily::AArch64",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 434
+                "line": 451
               }
             },
             {
@@ -15242,7 +15290,7 @@
               "kind": "objective",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 435
+                "line": 452
               }
             }
           ]
@@ -15254,7 +15302,7 @@
           "type": "BootTest",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 443
+            "line": 460
           },
           "children": [
             {
@@ -15265,7 +15313,7 @@
               "value": "IsaFamily::Armv7a",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 444
+                "line": 461
               }
             },
             {
@@ -15274,7 +15322,7 @@
               "kind": "objective",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 445
+                "line": 462
               }
             }
           ]
@@ -15287,7 +15335,7 @@
           "doc": "cargo xtask deploy --arch armv7a: flash two files onto the card's bootfs, watch the ST-LINK serial port for the marker. Manual today; the automated form is deferred above.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 455
+            "line": 472
           },
           "children": [
             {
@@ -15297,7 +15345,7 @@
               "type": "Ferrix",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 459
+                "line": 476
               }
             },
             {
@@ -15306,7 +15354,7 @@
               "kind": "objective",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 460
+                "line": 477
               }
             }
           ]
@@ -15320,7 +15368,7 @@
           "doc": "The acceptance test itself: rustc hello.rs && ./hello inside the boot test.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
-            "line": 463
+            "line": 480
           },
           "children": [
             {
@@ -15330,7 +15378,7 @@
               "type": "Ferrix",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 466
+                "line": 483
               }
             },
             {
@@ -15339,7 +15387,7 @@
               "kind": "objective",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
-                "line": 467
+                "line": 484
               }
             }
           ]
@@ -16858,7 +16906,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 350
+      "line": 365
     },
     {
       "kind": "dependency",
@@ -16868,7 +16916,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 351
+      "line": 366
     },
     {
       "kind": "dependency",
@@ -16878,7 +16926,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 352
+      "line": 367
     },
     {
       "kind": "dependency",
@@ -16888,7 +16936,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 353
+      "line": 368
     },
     {
       "kind": "dependency",
@@ -16898,7 +16946,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 354
+      "line": 369
     },
     {
       "kind": "dependency",
@@ -16909,7 +16957,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 355
+      "line": 370
     },
     {
       "kind": "dependency",
@@ -16919,7 +16967,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 356
+      "line": 371
     },
     {
       "kind": "dependency",
@@ -16929,7 +16977,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 357
+      "line": 372
     },
     {
       "kind": "dependency",
@@ -16939,7 +16987,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 358
+      "line": 373
     },
     {
       "kind": "dependency",
@@ -16949,7 +16997,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 359
+      "line": 374
     },
     {
       "kind": "dependency",
@@ -16959,7 +17007,18 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 360
+      "line": 375
+    },
+    {
+      "kind": "dependency",
+      "source": "stageNetworking",
+      "targets": [
+        "stage11BtrfsRead",
+        "stage10UserspaceDrivers"
+      ],
+      "origin": "FerrixRoadmap",
+      "file": "docs/sysml/10-roadmap.sysml",
+      "line": 376
     },
     {
       "kind": "dependency",
@@ -16969,7 +17028,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 361
+      "line": 377
     },
     {
       "kind": "dependency",
@@ -16979,7 +17038,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 362
+      "line": 378
     },
     {
       "kind": "dependency",
@@ -16990,7 +17049,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 363
+      "line": 379
     },
     {
       "kind": "dependency",
@@ -17000,7 +17059,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 364
+      "line": 380
     },
     {
       "kind": "dependency",
@@ -17010,7 +17069,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 365
+      "line": 381
     },
     {
       "kind": "dependency",
@@ -17020,7 +17079,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 366
+      "line": 382
     },
     {
       "kind": "satisfy",
@@ -17030,7 +17089,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 383
+      "line": 399
     },
     {
       "kind": "satisfy",
@@ -17040,7 +17099,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 384
+      "line": 400
     },
     {
       "kind": "satisfy",
@@ -17050,7 +17109,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 385
+      "line": 401
     },
     {
       "kind": "satisfy",
@@ -17060,7 +17119,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 386
+      "line": 402
     },
     {
       "kind": "satisfy",
@@ -17070,7 +17129,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 387
+      "line": 403
     },
     {
       "kind": "satisfy",
@@ -17080,7 +17139,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 388
+      "line": 404
     },
     {
       "kind": "satisfy",
@@ -17090,7 +17149,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 389
+      "line": 405
     },
     {
       "kind": "satisfy",
@@ -17100,7 +17159,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 390
+      "line": 406
     },
     {
       "kind": "satisfy",
@@ -17110,7 +17169,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 391
+      "line": 407
     },
     {
       "kind": "satisfy",
@@ -17120,7 +17179,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 392
+      "line": 408
     },
     {
       "kind": "allocate",
@@ -17130,7 +17189,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 394
+      "line": 410
     },
     {
       "kind": "allocate",
@@ -17140,7 +17199,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 395
+      "line": 411
     },
     {
       "kind": "allocate",
@@ -17150,7 +17209,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 396
+      "line": 412
     },
     {
       "kind": "allocate",
@@ -17160,7 +17219,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 397
+      "line": 413
     },
     {
       "kind": "allocate",
@@ -17170,7 +17229,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 398
+      "line": 414
     },
     {
       "kind": "allocate",
@@ -17180,7 +17239,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 399
+      "line": 415
     },
     {
       "kind": "allocate",
@@ -17190,7 +17249,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 400
+      "line": 416
     },
     {
       "kind": "allocate",
@@ -17200,7 +17259,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 401
+      "line": 417
     },
     {
       "kind": "allocate",
@@ -17210,7 +17269,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 402
+      "line": 418
     },
     {
       "kind": "allocate",
@@ -17220,7 +17279,17 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 403
+      "line": 419
+    },
+    {
+      "kind": "allocate",
+      "source": "stageNetworking",
+      "targets": [
+        "ferrix.kernel.netCore"
+      ],
+      "origin": "FerrixRoadmap",
+      "file": "docs/sysml/10-roadmap.sysml",
+      "line": 420
     },
     {
       "kind": "allocate",
@@ -17230,7 +17299,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 404
+      "line": 421
     },
     {
       "kind": "allocate",
@@ -17240,7 +17309,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 405
+      "line": 422
     },
     {
       "kind": "allocate",
@@ -17250,7 +17319,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 406
+      "line": 423
     },
     {
       "kind": "allocate",
@@ -17260,7 +17329,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 407
+      "line": 424
     },
     {
       "kind": "allocate",
@@ -17270,7 +17339,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 408
+      "line": 425
     },
     {
       "kind": "allocate",
@@ -17280,7 +17349,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 409
+      "line": 426
     },
     {
       "kind": "dependency",
@@ -17290,7 +17359,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 412
+      "line": 429
     },
     {
       "kind": "dependency",
@@ -17300,7 +17369,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 413
+      "line": 430
     },
     {
       "kind": "dependency",
@@ -17311,7 +17380,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 414
+      "line": 431
     },
     {
       "kind": "dependency",
@@ -17322,7 +17391,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 415
+      "line": 432
     },
     {
       "kind": "dependency",
@@ -17332,7 +17401,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 416
+      "line": 433
     },
     {
       "kind": "dependency",
@@ -17342,7 +17411,7 @@
       ],
       "origin": "FerrixRoadmap",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 417
+      "line": 434
     },
     {
       "kind": "verify",
@@ -17352,7 +17421,7 @@
       ],
       "origin": "FerrixRoadmap::bootX86",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 426
+      "line": 443
     },
     {
       "kind": "verify",
@@ -17362,7 +17431,7 @@
       ],
       "origin": "FerrixRoadmap::bootX86",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 427
+      "line": 444
     },
     {
       "kind": "verify",
@@ -17372,7 +17441,7 @@
       ],
       "origin": "FerrixRoadmap::bootX86",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 428
+      "line": 445
     },
     {
       "kind": "verify",
@@ -17381,88 +17450,88 @@
         "stage4Smp"
       ],
       "origin": "FerrixRoadmap::bootX86",
-      "file": "docs/sysml/10-roadmap.sysml",
-      "line": 429
-    },
-    {
-      "kind": "verify",
-      "source": "FerrixRoadmap::bootX86",
-      "targets": [
-        "stage5Scheduler"
-      ],
-      "origin": "FerrixRoadmap::bootX86",
-      "file": "docs/sysml/10-roadmap.sysml",
-      "line": 430
-    },
-    {
-      "kind": "verify",
-      "source": "FerrixRoadmap::bootAArch64",
-      "targets": [
-        "stage1Boot"
-      ],
-      "origin": "FerrixRoadmap::bootAArch64",
-      "file": "docs/sysml/10-roadmap.sysml",
-      "line": 436
-    },
-    {
-      "kind": "verify",
-      "source": "FerrixRoadmap::bootAArch64",
-      "targets": [
-        "stage2Memory"
-      ],
-      "origin": "FerrixRoadmap::bootAArch64",
-      "file": "docs/sysml/10-roadmap.sysml",
-      "line": 437
-    },
-    {
-      "kind": "verify",
-      "source": "FerrixRoadmap::bootAArch64",
-      "targets": [
-        "stage3TrapsInterruptsTime"
-      ],
-      "origin": "FerrixRoadmap::bootAArch64",
-      "file": "docs/sysml/10-roadmap.sysml",
-      "line": 438
-    },
-    {
-      "kind": "verify",
-      "source": "FerrixRoadmap::bootAArch64",
-      "targets": [
-        "stage4Smp"
-      ],
-      "origin": "FerrixRoadmap::bootAArch64",
-      "file": "docs/sysml/10-roadmap.sysml",
-      "line": 439
-    },
-    {
-      "kind": "verify",
-      "source": "FerrixRoadmap::bootAArch64",
-      "targets": [
-        "stage5Scheduler"
-      ],
-      "origin": "FerrixRoadmap::bootAArch64",
-      "file": "docs/sysml/10-roadmap.sysml",
-      "line": 440
-    },
-    {
-      "kind": "verify",
-      "source": "FerrixRoadmap::bootArmv7a",
-      "targets": [
-        "stage1Boot"
-      ],
-      "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
       "line": 446
     },
     {
       "kind": "verify",
+      "source": "FerrixRoadmap::bootX86",
+      "targets": [
+        "stage5Scheduler"
+      ],
+      "origin": "FerrixRoadmap::bootX86",
+      "file": "docs/sysml/10-roadmap.sysml",
+      "line": 447
+    },
+    {
+      "kind": "verify",
+      "source": "FerrixRoadmap::bootAArch64",
+      "targets": [
+        "stage1Boot"
+      ],
+      "origin": "FerrixRoadmap::bootAArch64",
+      "file": "docs/sysml/10-roadmap.sysml",
+      "line": 453
+    },
+    {
+      "kind": "verify",
+      "source": "FerrixRoadmap::bootAArch64",
+      "targets": [
+        "stage2Memory"
+      ],
+      "origin": "FerrixRoadmap::bootAArch64",
+      "file": "docs/sysml/10-roadmap.sysml",
+      "line": 454
+    },
+    {
+      "kind": "verify",
+      "source": "FerrixRoadmap::bootAArch64",
+      "targets": [
+        "stage3TrapsInterruptsTime"
+      ],
+      "origin": "FerrixRoadmap::bootAArch64",
+      "file": "docs/sysml/10-roadmap.sysml",
+      "line": 455
+    },
+    {
+      "kind": "verify",
+      "source": "FerrixRoadmap::bootAArch64",
+      "targets": [
+        "stage4Smp"
+      ],
+      "origin": "FerrixRoadmap::bootAArch64",
+      "file": "docs/sysml/10-roadmap.sysml",
+      "line": 456
+    },
+    {
+      "kind": "verify",
+      "source": "FerrixRoadmap::bootAArch64",
+      "targets": [
+        "stage5Scheduler"
+      ],
+      "origin": "FerrixRoadmap::bootAArch64",
+      "file": "docs/sysml/10-roadmap.sysml",
+      "line": 457
+    },
+    {
+      "kind": "verify",
+      "source": "FerrixRoadmap::bootArmv7a",
+      "targets": [
+        "stage1Boot"
+      ],
+      "origin": "FerrixRoadmap::bootArmv7a",
+      "file": "docs/sysml/10-roadmap.sysml",
+      "line": 463
+    },
+    {
+      "kind": "verify",
       "source": "FerrixRoadmap::bootArmv7a",
       "targets": [
         "stage2Memory"
       ],
       "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 447
+      "line": 464
     },
     {
       "kind": "verify",
@@ -17472,7 +17541,7 @@
       ],
       "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 448
+      "line": 465
     },
     {
       "kind": "verify",
@@ -17482,7 +17551,7 @@
       ],
       "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 449
+      "line": 466
     },
     {
       "kind": "verify",
@@ -17492,7 +17561,7 @@
       ],
       "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 450
+      "line": 467
     },
     {
       "kind": "verify",
@@ -17502,7 +17571,7 @@
       ],
       "origin": "FerrixRoadmap::bootArmv7a",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 451
+      "line": 468
     },
     {
       "kind": "verify",
@@ -17512,7 +17581,7 @@
       ],
       "origin": "FerrixRoadmap::BoardBoot",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 460
+      "line": 477
     },
     {
       "kind": "verify",
@@ -17522,7 +17591,7 @@
       ],
       "origin": "FerrixRoadmap::RustcTest",
       "file": "docs/sysml/10-roadmap.sysml",
-      "line": 467
+      "line": 484
     },
     {
       "kind": "import",
@@ -20114,6 +20183,13 @@
           "maturity": "planned"
         },
         {
+          "id": "FerrixRoadmap::stageNetworking",
+          "label": "SN  Stage networking",
+          "kind": "requirement",
+          "sublabel": "Planned · month",
+          "maturity": "planned"
+        },
+        {
           "id": "FerrixRoadmap::stage12BtrfsWrite",
           "label": "S12  Stage 12 btrfs write",
           "kind": "requirement",
@@ -20226,6 +20302,18 @@
         {
           "from": "FerrixRoadmap::stage10UserspaceDrivers",
           "to": "FerrixRoadmap::stage11BtrfsRead",
+          "kind": "dependency",
+          "label": ""
+        },
+        {
+          "from": "FerrixRoadmap::stage11BtrfsRead",
+          "to": "FerrixRoadmap::stageNetworking",
+          "kind": "dependency",
+          "label": ""
+        },
+        {
+          "from": "FerrixRoadmap::stage10UserspaceDrivers",
+          "to": "FerrixRoadmap::stageNetworking",
           "kind": "dependency",
           "label": ""
         },
@@ -20646,6 +20734,19 @@
           "maturity": "planned"
         },
         {
+          "id": "FerrixRoadmap::stageNetworking",
+          "label": "SN  Stage networking",
+          "kind": "requirement",
+          "maturity": "planned"
+        },
+        {
+          "id": "FerrixStructure::Kernel::netCore",
+          "label": "netCore",
+          "kind": "box",
+          "sublabel": "ferrix.kernel.netCore",
+          "maturity": "planned"
+        },
+        {
           "id": "FerrixRoadmap::stage13Isolation",
           "label": "S13  Stage 13 isolation",
           "kind": "requirement",
@@ -20822,6 +20923,12 @@
         {
           "from": "FerrixRoadmap::stage11BtrfsRead",
           "to": "FerrixStructure::Kernel::blockCore",
+          "kind": "allocate",
+          "label": "allocate"
+        },
+        {
+          "from": "FerrixRoadmap::stageNetworking",
+          "to": "FerrixStructure::Kernel::netCore",
           "kind": "allocate",
           "label": "allocate"
         },

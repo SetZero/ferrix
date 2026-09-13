@@ -52,6 +52,7 @@ _Generated from docs/sysml/. Every element carries the maturity keyword the mode
   - [S9 — Stage 9 native ABI](#s9-stage-9-native-abi)
   - [S10 — Stage 10 userspace drivers](#s10-stage-10-userspace-drivers)
   - [S11 — Stage 11 btrfs read](#s11-stage-11-btrfs-read)
+  - [SN — Stage networking](#sn-stage-networking)
   - [S12 — Stage 12 btrfs write](#s12-stage-12-btrfs-write)
   - [S13 — Stage 13 isolation](#s13-stage-13-isolation)
   - [S14 — Stage 14 real time](#s14-stage-14-real-time)
@@ -93,14 +94,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1414 elements, 155 relations. Model digest `9b6c4c0cc3c93cac`.
+13 files, 16 packages, 1418 elements, 157 relations. Model digest `87ee84e39b15e182`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
 | `#implemented` | 125 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
 | `#inProgress` | 9 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 8 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 99 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#planned` | 100 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -2249,7 +2250,7 @@ Request queues, merging, an I/O scheduler with per-cgroup bandwidth, and the rin
 
 `#planned`
 
-Named in the shape of the system; not on the path to rustc and unstaged. virtio-net would be its first driver.
+Not on the path to rustc; staged after stage 11 as the networking stage (docs/ROADMAP.md, Networking): sockets, AF_NETLINK route, interfaces, loopback and /proc/net, with virtio-net as its first driver, in user mode.
 
 #### Inode
 
@@ -2516,12 +2517,13 @@ flowchart TB
   n10_FerrixRoadmap_stage9NativeAbi["S9  Stage 9 native ABI<br>Done · week"]
   n11_FerrixRoadmap_stage10UserspaceDrivers["S10  Stage 10 userspace drivers<br>InProgress · month"]
   n12_FerrixRoadmap_stage11BtrfsRead["S11  Stage 11 btrfs read<br>Planned · month"]
-  n13_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>Planned · longer"]
-  n14_FerrixRoadmap_stage13Isolation["S13  Stage 13 isolation<br>Planned · month"]
-  n15_FerrixRoadmap_stage14RealTime["S14  Stage 14 real time<br>Planned · month"]
-  n16_FerrixRoadmap_stage15Userland["S15  Stage 15 userland<br>Planned · week"]
-  n17_FerrixRoadmap_stage16Rustc["S16  Stage 16 rustc<br>Planned · the goal"]
-  n18_FerrixRoadmap_stage17SelfHosting["S17  Stage 17 self hosting<br>Planned · longer"]
+  n13_FerrixRoadmap_stageNetworking["SN  Stage networking<br>Planned · month"]
+  n14_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>Planned · longer"]
+  n15_FerrixRoadmap_stage13Isolation["S13  Stage 13 isolation<br>Planned · month"]
+  n16_FerrixRoadmap_stage14RealTime["S14  Stage 14 real time<br>Planned · month"]
+  n17_FerrixRoadmap_stage15Userland["S15  Stage 15 userland<br>Planned · week"]
+  n18_FerrixRoadmap_stage16Rustc["S16  Stage 16 rustc<br>Planned · the goal"]
+  n19_FerrixRoadmap_stage17SelfHosting["S17  Stage 17 self hosting<br>Planned · longer"]
   n0_FerrixRoadmap_stage0Foundation -. "depends on" .-> n1_FerrixRoadmap_stage1Boot
   n1_FerrixRoadmap_stage1Boot -. "depends on" .-> n2_FerrixRoadmap_stage2Memory
   n2_FerrixRoadmap_stage2Memory -. "depends on" .-> n3_FerrixRoadmap_stage3TrapsInterruptsTime
@@ -2534,19 +2536,21 @@ flowchart TB
   n9_FerrixRoadmap_stage8Vfs -. "depends on" .-> n10_FerrixRoadmap_stage9NativeAbi
   n10_FerrixRoadmap_stage9NativeAbi -. "depends on" .-> n11_FerrixRoadmap_stage10UserspaceDrivers
   n11_FerrixRoadmap_stage10UserspaceDrivers -. "depends on" .-> n12_FerrixRoadmap_stage11BtrfsRead
-  n12_FerrixRoadmap_stage11BtrfsRead -. "depends on" .-> n13_FerrixRoadmap_stage12BtrfsWrite
-  n13_FerrixRoadmap_stage12BtrfsWrite -. "depends on" .-> n14_FerrixRoadmap_stage13Isolation
-  n14_FerrixRoadmap_stage13Isolation -. "depends on" .-> n15_FerrixRoadmap_stage14RealTime
-  n4_FerrixRoadmap_stage4Smp -. "depends on" .-> n15_FerrixRoadmap_stage14RealTime
-  n15_FerrixRoadmap_stage14RealTime -. "depends on" .-> n16_FerrixRoadmap_stage15Userland
-  n16_FerrixRoadmap_stage15Userland -. "depends on" .-> n17_FerrixRoadmap_stage16Rustc
-  n17_FerrixRoadmap_stage16Rustc -. "depends on" .-> n18_FerrixRoadmap_stage17SelfHosting
+  n12_FerrixRoadmap_stage11BtrfsRead -. "depends on" .-> n13_FerrixRoadmap_stageNetworking
+  n11_FerrixRoadmap_stage10UserspaceDrivers -. "depends on" .-> n13_FerrixRoadmap_stageNetworking
+  n12_FerrixRoadmap_stage11BtrfsRead -. "depends on" .-> n14_FerrixRoadmap_stage12BtrfsWrite
+  n14_FerrixRoadmap_stage12BtrfsWrite -. "depends on" .-> n15_FerrixRoadmap_stage13Isolation
+  n15_FerrixRoadmap_stage13Isolation -. "depends on" .-> n16_FerrixRoadmap_stage14RealTime
+  n4_FerrixRoadmap_stage4Smp -. "depends on" .-> n16_FerrixRoadmap_stage14RealTime
+  n16_FerrixRoadmap_stage14RealTime -. "depends on" .-> n17_FerrixRoadmap_stage15Userland
+  n17_FerrixRoadmap_stage15Userland -. "depends on" .-> n18_FerrixRoadmap_stage16Rustc
+  n18_FerrixRoadmap_stage16Rustc -. "depends on" .-> n19_FerrixRoadmap_stage17SelfHosting
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi,n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi implemented
   class n11_FerrixRoadmap_stage10UserspaceDrivers inProgress
-  class n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stage12BtrfsWrite,n14_FerrixRoadmap_stage13Isolation,n15_FerrixRoadmap_stage14RealTime,n16_FerrixRoadmap_stage15Userland,n17_FerrixRoadmap_stage16Rustc,n18_FerrixRoadmap_stage17SelfHosting planned
+  class n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stageNetworking,n14_FerrixRoadmap_stage12BtrfsWrite,n15_FerrixRoadmap_stage13Isolation,n16_FerrixRoadmap_stage14RealTime,n17_FerrixRoadmap_stage15Userland,n18_FerrixRoadmap_stage16Rustc,n19_FerrixRoadmap_stage17SelfHosting planned
 ```
 
 **Figure 16 — The roadmap, stage by stage.** An arrow points from a stage to the stage it unblocks. The two stages with a second arrow into them are the ones that need more than their predecessor. [SVG](diagrams/roadmap-stages.svg) Source: `10-roadmap.sysml`.
@@ -2566,6 +2570,7 @@ flowchart TB
 | `S9` | 9 | Stage 9 native ABI | Done | week | `#implemented` |
 | `S10` | 10 | Stage 10 userspace drivers | InProgress | month | `#inProgress` |
 | `S11` | 11 | Stage 11 btrfs read | Planned | month | `#planned` |
+| `SN` | 11 | Stage networking | Planned | month | `#planned` |
 | `S12` | 12 | Stage 12 btrfs write | Planned | longer | `#planned` |
 | `S13` | 13 | Stage 13 isolation | Planned | month | `#planned` |
 | `S14` | 14 | Stage 14 real time | Planned | month | `#planned` |
@@ -2717,6 +2722,14 @@ Block core, then btrfs stage A. Exit: an image made by real mkfs.btrfs is mounte
 
 **Allocated to: **`ferrix.kernel.blockCore`
 
+### SN — Stage networking
+
+**Planned**  ·  size month  ·  `#planned`
+
+Placed after stage 11 without a number of its own, as the ARMv7-A port sits after stage 4. The net core: AF_UNIX, AF_INET and AF_INET6 sockets, the AF_NETLINK route family, interfaces, routes and loopback; virtio-net as a userspace driver on stage 10's device objects; /proc/net; parsers and the TCP state machine in libs/, fuzzed. Exit: under QEMU user networking, busybox configures eth0 with ip, route and netstat report through /proc/net, wget fetches a file byte-for-byte, and nc carries a stream over loopback and an AF_UNIX socket.
+
+**Allocated to: **`ferrix.kernel.netCore`
+
 ### S12 — Stage 12 btrfs write
 
 **Planned**  ·  size longer  ·  `#planned`
@@ -2776,6 +2789,7 @@ Every stage ends in something that runs, and nothing is stubbed that a later sta
 - `stage9NativeAbi` depends on `stage8Vfs`
 - `stage10UserspaceDrivers` depends on `stage9NativeAbi`
 - `stage11BtrfsRead` depends on `stage10UserspaceDrivers`
+- `stageNetworking` depends on `stage11BtrfsRead` and `stage10UserspaceDrivers`
 - `stage12BtrfsWrite` depends on `stage11BtrfsRead`
 - `stage13Isolation` depends on `stage12BtrfsWrite`
 - `stage14RealTime` depends on `stage13Isolation` and `stage4Smp`
@@ -2935,15 +2949,17 @@ flowchart LR
   n29_FerrixStructure_Machine_iommu["iommu<br>ferrix.kernel.iommu"]
   n30_FerrixRoadmap_stage11BtrfsRead["S11  Stage 11 btrfs read"]
   n31_FerrixStructure_Kernel_blockCore["blockCore<br>ferrix.kernel.blockCore"]
-  n32_FerrixRoadmap_stage13Isolation["S13  Stage 13 isolation"]
-  n33_FerrixStructure_Kernel_namespaces["namespaces<br>ferrix.kernel.namespaces"]
-  n34_FerrixStructure_Kernel_cgroups["cgroups<br>ferrix.kernel.cgroups"]
-  n35_FerrixStructure_Kernel_seccomp["seccomp<br>ferrix.kernel.seccomp"]
-  n36_FerrixRoadmap_stage14RealTime["S14  Stage 14 real time"]
-  n37_FerrixRoadmap_stage15Userland["S15  Stage 15 userland"]
-  n38_FerrixStructure_Ferrix_userland["userland<br>ferrix.userland"]
-  n39_FerrixRoadmap_stage16Rustc["S16  Stage 16 rustc"]
-  n40_FerrixStructure_Userland_rustc["rustc<br>ferrix.userland.rustc"]
+  n32_FerrixRoadmap_stageNetworking["SN  Stage networking"]
+  n33_FerrixStructure_Kernel_netCore["netCore<br>ferrix.kernel.netCore"]
+  n34_FerrixRoadmap_stage13Isolation["S13  Stage 13 isolation"]
+  n35_FerrixStructure_Kernel_namespaces["namespaces<br>ferrix.kernel.namespaces"]
+  n36_FerrixStructure_Kernel_cgroups["cgroups<br>ferrix.kernel.cgroups"]
+  n37_FerrixStructure_Kernel_seccomp["seccomp<br>ferrix.kernel.seccomp"]
+  n38_FerrixRoadmap_stage14RealTime["S14  Stage 14 real time"]
+  n39_FerrixRoadmap_stage15Userland["S15  Stage 15 userland"]
+  n40_FerrixStructure_Ferrix_userland["userland<br>ferrix.userland"]
+  n41_FerrixRoadmap_stage16Rustc["S16  Stage 16 rustc"]
+  n42_FerrixStructure_Userland_rustc["rustc<br>ferrix.userland.rustc"]
   n0_FerrixRoadmap_stage1Boot -. "satisfy" .-> n1_FerrixStructure_Ferrix_loader
   n2_FerrixRoadmap_stage2Memory -. "satisfy" .-> n3_FerrixStructure_Kernel_mm
   n2_FerrixRoadmap_stage2Memory -. "satisfy" .-> n4_FerrixStructure_Kernel_vmap
@@ -2964,18 +2980,19 @@ flowchart LR
   n27_FerrixRoadmap_stage10UserspaceDrivers -. "allocate" .-> n28_FerrixStructure_Machine_devices
   n27_FerrixRoadmap_stage10UserspaceDrivers -. "allocate" .-> n29_FerrixStructure_Machine_iommu
   n30_FerrixRoadmap_stage11BtrfsRead -. "allocate" .-> n31_FerrixStructure_Kernel_blockCore
-  n32_FerrixRoadmap_stage13Isolation -. "allocate" .-> n33_FerrixStructure_Kernel_namespaces
-  n32_FerrixRoadmap_stage13Isolation -. "allocate" .-> n34_FerrixStructure_Kernel_cgroups
-  n32_FerrixRoadmap_stage13Isolation -. "allocate" .-> n35_FerrixStructure_Kernel_seccomp
-  n36_FerrixRoadmap_stage14RealTime -. "allocate" .-> n14_FerrixStructure_Kernel_sched
-  n37_FerrixRoadmap_stage15Userland -. "allocate" .-> n38_FerrixStructure_Ferrix_userland
-  n39_FerrixRoadmap_stage16Rustc -. "allocate" .-> n40_FerrixStructure_Userland_rustc
+  n32_FerrixRoadmap_stageNetworking -. "allocate" .-> n33_FerrixStructure_Kernel_netCore
+  n34_FerrixRoadmap_stage13Isolation -. "allocate" .-> n35_FerrixStructure_Kernel_namespaces
+  n34_FerrixRoadmap_stage13Isolation -. "allocate" .-> n36_FerrixStructure_Kernel_cgroups
+  n34_FerrixRoadmap_stage13Isolation -. "allocate" .-> n37_FerrixStructure_Kernel_seccomp
+  n38_FerrixRoadmap_stage14RealTime -. "allocate" .-> n14_FerrixStructure_Kernel_sched
+  n39_FerrixRoadmap_stage15Userland -. "allocate" .-> n40_FerrixStructure_Ferrix_userland
+  n41_FerrixRoadmap_stage16Rustc -. "allocate" .-> n42_FerrixStructure_Userland_rustc
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   class n0_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixStructure_Kernel_mm,n4_FerrixStructure_Kernel_vmap,n5_FerrixRoadmap_stage3TrapsInterruptsTime,n6_FerrixStructure_Kernel_trap,n7_FerrixStructure_Kernel_irq,n8_FerrixStructure_Kernel_timer,n9_FerrixRoadmap_stage4Smp,n10_FerrixStructure_Kernel_smp,n11_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_stage5Scheduler,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_tasks,n16_FerrixRoadmap_stage6UserMode,n18_FerrixRoadmap_stage7LinuxAbi,n22_FerrixRoadmap_stage8Vfs,n25_FerrixRoadmap_stage9NativeAbi implemented
   class n17_FerrixStructure_Kernel_vm,n19_FerrixStructure_Kernel_syscalls,n20_FerrixStructure_Kernel_signals,n27_FerrixRoadmap_stage10UserspaceDrivers inProgress
-  class n21_FerrixStructure_Kernel_futex,n23_FerrixStructure_Kernel_vfs,n24_FerrixStructure_Kernel_filesystems,n26_FerrixStructure_Kernel_native,n30_FerrixRoadmap_stage11BtrfsRead,n31_FerrixStructure_Kernel_blockCore,n32_FerrixRoadmap_stage13Isolation,n33_FerrixStructure_Kernel_namespaces,n34_FerrixStructure_Kernel_cgroups,n35_FerrixStructure_Kernel_seccomp,n36_FerrixRoadmap_stage14RealTime,n37_FerrixRoadmap_stage15Userland,n38_FerrixStructure_Ferrix_userland,n39_FerrixRoadmap_stage16Rustc planned
+  class n21_FerrixStructure_Kernel_futex,n23_FerrixStructure_Kernel_vfs,n24_FerrixStructure_Kernel_filesystems,n26_FerrixStructure_Kernel_native,n30_FerrixRoadmap_stage11BtrfsRead,n31_FerrixStructure_Kernel_blockCore,n32_FerrixRoadmap_stageNetworking,n33_FerrixStructure_Kernel_netCore,n34_FerrixRoadmap_stage13Isolation,n35_FerrixStructure_Kernel_namespaces,n36_FerrixStructure_Kernel_cgroups,n37_FerrixStructure_Kernel_seccomp,n38_FerrixRoadmap_stage14RealTime,n39_FerrixRoadmap_stage15Userland,n40_FerrixStructure_Ferrix_userland,n41_FerrixRoadmap_stage16Rustc planned
 ```
 
 **Figure 18 — Stages and the parts that answer them.** Each line carries the word the model wrote: `satisfy` where the part exists, `allocate` where it is one the stage still owes. [SVG](diagrams/stages-and-parts.svg) Source: `10-roadmap.sysml`.
@@ -3051,6 +3068,7 @@ flowchart LR
 | `stage10UserspaceDrivers` | `ferrix.kernel.devices` |
 | `stage10UserspaceDrivers` | `ferrix.kernel.iommu` |
 | `stage11BtrfsRead` | `ferrix.kernel.blockCore` |
+| `stageNetworking` | `ferrix.kernel.netCore` |
 | `stage13Isolation` | `ferrix.kernel.namespaces` |
 | `stage13Isolation` | `ferrix.kernel.cgroups` |
 | `stage13Isolation` | `ferrix.kernel.seccomp` |
@@ -3058,7 +3076,7 @@ flowchart LR
 | `stage15Userland` | `ferrix.userland` |
 | `stage16Rustc` | `ferrix.userland.rustc` |
 
-16 edges — each reads “requirement is allocated to element”.
+17 edges — each reads “requirement is allocated to element”.
 
 ### Verified by
 
@@ -3142,6 +3160,7 @@ flowchart LR
 | `S9` | `stage9NativeAbi` | `allocate` and `dependency` | — | `#implemented` |
 | `S10` | `stage10UserspaceDrivers` | `allocate` and `dependency` | — | `#inProgress` |
 | `S11` | `stage11BtrfsRead` | `allocate` and `dependency` | — | `#planned` |
+| `SN` | `stageNetworking` | `allocate` | — | `#planned` |
 | `S12` | `stage12BtrfsWrite` | `dependency` | — | `#planned` |
 | `S13` | `stage13Isolation` | `allocate` and `dependency` | — | `#planned` |
 | `S14` | `stage14RealTime` | `allocate` and `dependency` | — | `#planned` |
@@ -3354,9 +3373,9 @@ Every diagram in this document, drawn from the model by scripts/sysml/diagrams.p
 | 13 | Driver bootstrap | 8 nodes, 7 edges | `08-drivers.sysml` | [ferrix-drivers-driver-bootstrap.svg](diagrams/ferrix-drivers-driver-bootstrap.svg) |
 | 14 | Filesystem and its subtypes | 7 nodes, 6 edges | `09-storage.sysml` | [ferrix-storage-filesystem.svg](diagrams/ferrix-storage-filesystem.svg) |
 | 15 | The crate graph | 25 nodes, 15 edges | `02-structure.sysml` | [crate-dependencies.svg](diagrams/crate-dependencies.svg) |
-| 16 | The roadmap, stage by stage | 19 nodes, 19 edges | `10-roadmap.sysml` | [roadmap-stages.svg](diagrams/roadmap-stages.svg) |
+| 16 | The roadmap, stage by stage | 20 nodes, 21 edges | `10-roadmap.sysml` | [roadmap-stages.svg](diagrams/roadmap-stages.svg) |
 | 17 | The gates and the rules they uphold | 16 nodes, 10 edges | `11-assurance.sysml` | [gates-and-rules.svg](diagrams/gates-and-rules.svg) |
-| 18 | Stages and the parts that answer them | 41 nodes, 26 edges | `10-roadmap.sysml` | [stages-and-parts.svg](diagrams/stages-and-parts.svg) |
+| 18 | Stages and the parts that answer them | 43 nodes, 27 edges | `10-roadmap.sysml` | [stages-and-parts.svg](diagrams/stages-and-parts.svg) |
 | 19 | The boot tests and the stages they verify | 12 nodes, 18 edges | `10-roadmap.sysml` | [tests-and-stages.svg](diagrams/tests-and-stages.svg) |
 
 19 figures.

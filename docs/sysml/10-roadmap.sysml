@@ -285,6 +285,21 @@ package FerrixRoadmap {
              * matching what the host wrote. */
     }
 
+    #planned requirement <'SN'> stageNetworking : Stage {
+        attribute :>> number = 11;
+        attribute :>> status = StageStatus::Planned;
+        attribute :>> size = "month";
+        doc /* Placed after stage 11 without a number of its own, as the
+             * ARMv7-A port sits after stage 4. The net core: AF_UNIX, AF_INET
+             * and AF_INET6 sockets, the AF_NETLINK route family, interfaces,
+             * routes and loopback; virtio-net as a userspace driver on stage
+             * 10's device objects; /proc/net; parsers and the TCP state
+             * machine in libs/, fuzzed. Exit: under QEMU user networking,
+             * busybox configures eth0 with ip, route and netstat report
+             * through /proc/net, wget fetches a file byte-for-byte, and nc
+             * carries a stream over loopback and an AF_UNIX socket. */
+    }
+
     #planned requirement <'S12'> stage12BtrfsWrite : Stage {
         attribute :>> number = 12;
         attribute :>> status = StageStatus::Planned;
@@ -358,6 +373,7 @@ package FerrixRoadmap {
     dependency from stage9NativeAbi to stage8Vfs;
     dependency from stage10UserspaceDrivers to stage9NativeAbi;
     dependency from stage11BtrfsRead to stage10UserspaceDrivers;
+    dependency from stageNetworking to stage11BtrfsRead, stage10UserspaceDrivers;
     dependency from stage12BtrfsWrite to stage11BtrfsRead;
     dependency from stage13Isolation to stage12BtrfsWrite;
     dependency from stage14RealTime to stage13Isolation, stage4Smp;
@@ -401,6 +417,7 @@ package FerrixRoadmap {
     allocate stage10UserspaceDrivers to ferrix.kernel.devices;
     allocate stage10UserspaceDrivers to ferrix.kernel.iommu;
     allocate stage11BtrfsRead to ferrix.kernel.blockCore;
+    allocate stageNetworking to ferrix.kernel.netCore;
     allocate stage13Isolation to ferrix.kernel.namespaces;
     allocate stage13Isolation to ferrix.kernel.cgroups;
     allocate stage13Isolation to ferrix.kernel.seccomp;
