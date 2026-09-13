@@ -8,6 +8,7 @@
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask check     [--fast] [--ferrousli]
+//! cargo xtask busybox   [--arch x86_64]
 //! cargo xtask flash     [--arch armv7a] [--to MOUNT]
 //! cargo xtask watch-serial            [--port DEVICE] [--timeout SECONDS]
 //! cargo xtask deploy    [--arch armv7a] [--to MOUNT] [--port DEVICE]
@@ -22,6 +23,9 @@
 //! variable — build it into the kernel, which starts `sh -i` on the console,
 //! and put it in the initramfs at `/bin/busybox` with every applet linked
 //! beside it, so that the shell finds `ls` on its `PATH=/bin`.
+//!
+//! `busybox` builds busybox against ferrousli, in WSL on Windows, and installs
+//! it for `--init ferrousli`, which names that binary instead of a path.
 
 // AUDIT: this is a command-line build tool. Its output *is* stdout and stderr,
 // and routing it through a logging facade would make `cargo xtask build` read
@@ -33,6 +37,7 @@
 )]
 
 mod args;
+mod busybox;
 mod cargo;
 mod check;
 mod fat;
@@ -99,6 +104,7 @@ COMMANDS:
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     check         Run every quality gate (fmt, clippy, layering, audits)
     model-doc     Regenerate docs/generated/ from the SysML model
+    busybox       Build busybox against ferrousli (x86_64, in WSL on Windows) for --init ferrousli
     flash         Copy the loader and kernel onto a board's boot partition
     watch-serial  Watch a real serial port for the kernel's boot report
     deploy        flash, then watch-serial: one command for a board
@@ -115,8 +121,9 @@ OPTIONS:
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --to <MOUNT>                         flash: the card's mounted boot partition
     --port <DEVICE>                      watch-serial: e.g. /dev/ttyACM0
-    --init <PATH>                        The busybox; {arch} is replaced. build, run, flash, deploy: [or FERRIX_INIT]
-                                         start `sh -i`, with the applets linked in /bin
+    --init <PATH|ferrousli>              The busybox; {arch} is replaced. build, run, flash, deploy: [or FERRIX_INIT]
+                                         start `sh -i`, with the applets linked in /bin.
+                                         `ferrousli`: the x86_64 busybox `cargo xtask busybox` installed
     -h, --help                           This message
 ";
 
@@ -184,6 +191,7 @@ fn run() -> Result<()> {
         "test-vfs" => test_vfs(&args),
         "check" => check::run(&args),
         "model-doc" => check::model_doc(),
+        "busybox" => busybox::build(args.single_arch()?).map(|_| ()),
         "flash" => {
             let arch = args.single_arch()?;
             let (loader, kernel, initramfs) = build_board_files(arch, &args)?;
@@ -290,7 +298,13 @@ fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u
 
 /// The program `init` names for `arch`, with `{arch}` replaced by its name,
 /// refused unless it is a file.
+///
+/// `ferrousli` is not a path: it names the busybox `cargo xtask busybox`
+/// installed, and is refused if there is none.
 fn program_for(init: &str, arch: Arch) -> Result<PathBuf> {
+    if init == busybox::INIT_NAME {
+        return busybox::program(arch);
+    }
     let program = PathBuf::from(init.replace("{arch}", arch.name()));
     if !program.is_file() {
         return Err(Error::new(format!(

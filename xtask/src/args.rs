@@ -42,6 +42,7 @@ pub(crate) struct Args {
     /// `--init`, the program `test-shell` and `test-vfs` build in, and that
     /// `build` and `run` put in the kernel and at `/bin/busybox`. `{arch}` in it
     /// is replaced by each architecture's name, so one path serves `--arch all`.
+    /// `ferrousli` names the busybox built against ferrousli, in `busybox.rs`.
     pub(crate) init: Option<String>,
 }
 
