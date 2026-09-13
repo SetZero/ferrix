@@ -584,6 +584,10 @@ fn the_available_index_counts_chains_not_slots() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "70,000 round trips to wrap the ring indices; plain cargo test covers the wrap"
+)]
 fn wraps_past_sixty_five_thousand() {
     let (layout, memory, mut driver, mut device) = queue_pair(4);
 
@@ -625,6 +629,10 @@ fn wraps_past_sixty_five_thousand() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "33,000 rounds of two chains to wrap the ring indices; plain cargo test covers the wrap"
+)]
 fn wraps_with_chains_in_flight() {
     let (_, _, mut driver, mut device) = queue_pair(4);
 

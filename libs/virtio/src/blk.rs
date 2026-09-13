@@ -13,10 +13,11 @@
 //!
 //! # Device addresses are not physical addresses
 //!
-//! A ring-3 driver gets its DMA memory from `dma_pin`, which returns one
-//! device address per page: what the device's DMA engine dereferences, through
-//! an IOMMU domain, and which need not equal the page's physical address nor
-//! follow the previous page's. So nothing here takes "the address of the
+//! A ring-3 driver gets its DMA memory by pinning VMO pages with `VMO_PIN`
+//! (0x1025), whose address query (0x1026) returns one device address per page
+//! of the pinned range: what the device's DMA engine dereferences, through an
+//! IOMMU domain, with no relation to the page's physical address a driver may
+//! assume, and not necessarily following the previous page's. So nothing here takes "the address of the
 //! buffer". A [`Data`] names a byte range of a pinned region together with the
 //! address array, and [`plan`] gives the device one descriptor per page,
 //! joining two pages into one descriptor only where their device addresses
