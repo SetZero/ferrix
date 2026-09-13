@@ -65,7 +65,7 @@ x86-64, static programs linked at a fixed address.
 | Clocks | `time`, `clock_gettime` and the rest, `gettimeofday`, `nanosleep`, `clock`, `times` | the vDSO |
 | Calendar time | `gmtime`, `localtime`, `mktime`, `timegm`, `difftime`, `asctime` and `ctime`, with their `_r` forms, over the whole 64-bit `time_t`; `tzset`, `tzname`, `timezone` and `daylight`, from POSIX `TZ` strings or validated TZif files; `strftime`, `strftime_l`, `strptime` | `getdate`, `wcsftime`, leap seconds |
 | Processes and I/O | the `wait` family, `getrlimit` family, `uname`, `poll`, `select`, `getrandom`, `ioctl`, vector I/O, `rename` | |
-| `stdio.h` | `puts`, unbuffered | `FILE`, `printf`, `scanf` |
+| `stdio.h` | `FILE` streams, fully, line or not buffered, each with a recursive lock; `fopen`, `fdopen`, `freopen`, `fmemopen`, `open_memstream`, `fopencookie`; reading, writing, seeking and the `_unlocked` forms; the `printf` family with glibc's `__*printf_chk` names, exact for `double` and x87 `long double`; streams flushed at `exit` | `scanf`, `popen`, wide-character streams, `tmpnam`, `gets` |
 | `signal.h` | `sigaction`, `signal`, sets and masks, `sigpending`, `sigsuspend`, `sigtimedwait`, `sigqueue`, `kill`, `sigaltstack`, `raise`, `abort` | `psignal`, `pthread_kill` |
 | `setjmp.h` | `setjmp`, `longjmp`, `sigsetjmp`, `siglongjmp`, glibc's `__sigsetjmp` and `__longjmp_chk`, with saved pointers mangled | |
 | `errno.h` | `__errno_location`, per thread | |
@@ -74,8 +74,8 @@ x86-64, static programs linked at a fixed address.
 
 ## Next
 
-1. In progress: **buffered stdio, `printf` and `scanf`**, **`dirent`,
-   `getopt`, `glob` and `regex`**, **threads**, and **the math library**.
+1. In progress: **`scanf`**, **`dirent`, `getopt`, `glob` and `regex`**,
+   **threads**, and **the math library**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
 3. **`long double` math and `complex.h`.**
