@@ -195,6 +195,8 @@ nobody has it yet.
 | ASIDs and PCIDs, so a switch stops invalidating every user entry | open, after threads |
 | `getrandom` seeded from virtio-rng into a real generator; a real-time clock read from the RTC and `/dev/rtc` | open |
 | The debt the roadmap names: fuzz targets for `virtio`, `linux-abi` | open |
+| The debt the roadmap names: Miri for `frame`, `heap`, `paging`; fuzz targets for `cpio`, `fdt`, `acpi`, `virtio`, `linux-abi` | ferrix-e5 (the first three crates and `cpio`, `fdt`, `acpi`) |
+| Every gate's log names the tree it ran on: `xtask` prints `HEAD`, the branch and whether the tree was clean as the first line of every `check`, `test-boot`, `test-shell` and `test-vfs` log, so a row's evidence pins its commit by itself rather than by the runner's word (asked for by a review of the frame-window evidence, 2026-09-13) | open, cross-cutting |
 | The host-test table in the roadmap generated from `cargo test --list` with a gate, instead of counted by hand | ferrix-24 |
 | The POSIX measure: musl's libc-test functional and conformance programs built static against musl and against ferrousli, run under `test-shell` on all three architectures, with the pass count in the roadmap's host-test table and every failure filed with its owner | os-7c, with os-9f once threads run | 
 | `futex.rs` holds `TABLE` across `read_word`, a read fault; safe only while a read fault never invalidates and frame allocation has no reclaim. Stage 13's reclaim makes it a bug: read the word before taking the table, or retry after. From the 2026-09-13 spin-lock audit | os-a6, before stage 13's reclaim |
