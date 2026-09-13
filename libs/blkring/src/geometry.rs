@@ -67,6 +67,9 @@ pub enum DeviceError {
     NoSectors,
     /// A flag bit v1 does not define is set.
     UnknownFlags,
+    /// The data VMO cannot hold one request of `max_sectors` sectors, so the
+    /// largest request the driver announced would have nowhere to go.
+    DataTooSmall,
 }
 
 impl fmt::Display for DeviceError {
@@ -75,6 +78,7 @@ impl fmt::Display for DeviceError {
             DeviceError::BlockSize => "the block size is not a power of two in 512..=65536",
             DeviceError::NoSectors => "max_sectors is zero",
             DeviceError::UnknownFlags => "the device flags have unknown bits",
+            DeviceError::DataTooSmall => "the data VMO cannot hold one max_sectors request",
         })
     }
 }
@@ -114,6 +118,11 @@ impl Device {
         }
         if flags.0 & !DeviceFlags::KNOWN.0 != 0 {
             return Err(DeviceError::UnknownFlags);
+        }
+        // Both factors are `u32`, so their product fits in a `u64`.
+        let largest_request = max_sectors as u64 * block_size as u64;
+        if data_vmo_size < largest_request {
+            return Err(DeviceError::DataTooSmall);
         }
         Ok(Self {
             block_size,

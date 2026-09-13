@@ -171,7 +171,9 @@ fn device(input: &mut Input<'_>) -> Device {
     let capacity = 1 + u64::from(input.u32());
     let max_sectors = 1 + u32::from(input.byte() % 64);
     let flags = DeviceFlags(u32::from(input.byte() % 8));
-    let data_vmo_size = (1 + u64::from(input.u16())) * 512;
+    // At least one request of `max_sectors`, as `Device::new` requires, plus up
+    // to 64 MiB more.
+    let data_vmo_size = u64::from(max_sectors) * u64::from(block_size) + u64::from(input.u16()) * 1024;
     Device::new(block_size, capacity, max_sectors, flags, data_vmo_size).expect("valid by construction")
 }
 
