@@ -230,7 +230,8 @@ impl<S> Clone for Subvolume<'_, S> {
 impl<S> Copy for Subvolume<'_, S> {}
 
 impl<S: ChunkStorage> Volume<S> {
-    /// The subvolume mounted by default: the top-level fs tree.
+    /// The subvolume mounted by default: the one the root tree names, or the
+    /// top-level fs tree when it names none.
     #[must_use]
     pub const fn default_subvolume(&self) -> Subvolume<'_, S> {
         Subvolume {
@@ -501,7 +502,11 @@ fn expanded_len(ram_bytes: u64) -> Result<usize, BtrfsError> {
 /// same comparison. An entry whose name does not hash to its key is one no
 /// lookup of its own name can reach, so it was not put there by btrfs; it is
 /// reported as damage rather than skipped as a miss.
-fn entry_named(payload: &[u8], key: &BtrfsKey, name: &[u8]) -> Result<Option<Entry>, BtrfsError> {
+pub(crate) fn entry_named(
+    payload: &[u8],
+    key: &BtrfsKey,
+    name: &[u8],
+) -> Result<Option<Entry>, BtrfsError> {
     let mut found = None;
     for entry in DirItemIter::new(payload, DIR_ITEM_KEY) {
         let entry = entry?;

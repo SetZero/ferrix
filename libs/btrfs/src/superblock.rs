@@ -454,7 +454,9 @@ impl<'a> Superblock<'a> {
         self.field64(120)
     }
 
-    /// Object id of the root directory, normally `FS_TREE_OBJECTID`.
+    /// Object id of the root tree's directory, normally
+    /// [`crate::items::ROOT_TREE_DIR_OBJECTID`]: where the entry naming the
+    /// default subvolume is filed.
     #[must_use]
     pub fn root_dir_objectid(&self) -> u64 {
         self.field64(128)

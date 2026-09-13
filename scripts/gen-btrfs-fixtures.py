@@ -28,8 +28,16 @@ A 128 MiB image is almost entirely zeros, so each is stored as its non-zero
 4 KiB blocks: repeated records of a little-endian u64 offset followed by
 4096 bytes. That brings each image to a few hundred KiB.
 
+`default-subvol.img.packed` is a separate, small image whose default
+subvolume is not the top-level tree (`mkfs.btrfs -u default:sub`): the top
+level holds `top-level-only`, and the subvolume `sub` holds `marker` and
+`nested/file`. Its contents are fixed text, listed in the tests themselves.
+
 Usage:
-    python3 scripts/gen-btrfs-fixtures.py
+    python3 scripts/gen-btrfs-fixtures.py [--only NAME ...]
+
+`--only` rebuilds just the named images (`none`, `zlib`, `lzo`, `zstd`,
+`default-subvol`), leaving the others' committed bytes alone.
 """
 
 from __future__ import annotations
@@ -44,6 +52,7 @@ import tempfile
 
 OUTPUT = pathlib.Path("libs/btrfs/testdata")
 VARIANTS = ("none", "zlib", "lzo", "zstd")
+DEFAULT_SUBVOL = "default-subvol"
 IMAGE_SIZE = 128 * 1024 * 1024
 BLOCK = 4096
 FS_UUID = "0f3c3a5e-1111-4222-8333-444455556666"
@@ -140,6 +149,23 @@ def make_image(source: pathlib.Path, image: pathlib.Path, variant: str) -> None:
     subprocess.run(command + [str(image)], check=True)
 
 
+def build_default_subvol_tree(root: pathlib.Path) -> None:
+    (root / "top-level-only").write_bytes(b"only in the top-level tree\n")
+    (root / "sub" / "nested").mkdir(parents=True)
+    (root / "sub" / "marker").write_bytes(b"in the default subvolume\n")
+    (root / "sub" / "nested" / "file").write_bytes(b"nested in the default subvolume\n")
+
+
+def make_default_subvol_image(source: pathlib.Path, image: pathlib.Path) -> None:
+    with open(image, "wb") as f:
+        f.truncate(IMAGE_SIZE)
+    subprocess.run([
+        "mkfs.btrfs", "-q", "-m", "single", "-d", "single", "--nodesize", str(BLOCK),
+        "-U", FS_UUID, "--device-uuid", DEVICE_UUID, "--rootdir", str(source),
+        "-u", "default:sub", str(image),
+    ], check=True)
+
+
 def fs_tree_level(image: pathlib.Path) -> int:
     dump = subprocess.run(
         ["btrfs", "inspect-internal", "dump-tree", "-t", "fs", str(image)],
@@ -168,6 +194,12 @@ def main() -> int:
     if shutil.which("mkfs.btrfs") is None:
         print("mkfs.btrfs is not installed (btrfs-progs)", file=sys.stderr)
         return 1
+    names = VARIANTS + (DEFAULT_SUBVOL,)
+    only = sys.argv[2:] if sys.argv[1:2] == ["--only"] else list(names)
+    if len(sys.argv) > 1 and sys.argv[1] != "--only" or not only or set(only) - set(names):
+        print(f"usage: {sys.argv[0]} [--only NAME ...], NAME in {', '.join(names)}",
+              file=sys.stderr)
+        return 2
     os.chdir(repository_root())
     OUTPUT.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as scratch:
@@ -177,7 +209,7 @@ def main() -> int:
         subprocess.run(["find", str(source), "-exec", "touch", "-h", "-d", TIMESTAMP, "{}", "+"],
                        check=True)
         (OUTPUT / "manifest.txt").write_bytes(manifest(source))
-        for variant in VARIANTS:
+        for variant in (v for v in VARIANTS if v in only):
             image = pathlib.Path(scratch) / f"{variant}.img"
             make_image(source, image, variant)
             level = fs_tree_level(image)
@@ -193,6 +225,21 @@ def main() -> int:
             (OUTPUT / f"{variant}.img.packed").write_bytes(packed)
             print(f"{variant}: fs tree level {level}, {len(packed) // (BLOCK + 8)} blocks, "
                   f"{len(packed)} bytes")
+        if DEFAULT_SUBVOL in only:
+            source = pathlib.Path(scratch) / "subvol-tree"
+            source.mkdir()
+            build_default_subvol_tree(source)
+            subprocess.run(["find", str(source), "-exec", "touch", "-h", "-d", TIMESTAMP, "{}", "+"],
+                           check=True)
+            image = pathlib.Path(scratch) / f"{DEFAULT_SUBVOL}.img"
+            make_default_subvol_image(source, image)
+            packed = pack(image)
+            if len(packed) > BUDGET:
+                print(f"{DEFAULT_SUBVOL}: packed image is {len(packed)} bytes, over {BUDGET}",
+                      file=sys.stderr)
+                return 1
+            (OUTPUT / f"{DEFAULT_SUBVOL}.img.packed").write_bytes(packed)
+            print(f"{DEFAULT_SUBVOL}: {len(packed) // (BLOCK + 8)} blocks, {len(packed)} bytes")
     return 0
 
 

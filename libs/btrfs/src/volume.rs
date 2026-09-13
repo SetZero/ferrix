@@ -43,7 +43,11 @@
 use core::ops::ControlFlow;
 
 use crate::chunk::{ChunkItem, ChunkMap, ChunkStorage, FIRST_CHUNK_TREE_OBJECTID};
-use crate::items::{CHUNK_ITEM_KEY, FS_TREE_OBJECTID, ROOT_ITEM_KEY, RootItem};
+use crate::fs::{Target, entry_named};
+use crate::items::{
+    CHUNK_ITEM_KEY, DIR_ITEM_KEY, FIRST_FREE_OBJECTID, FS_TREE_OBJECTID, ROOT_ITEM_KEY, RootItem,
+    name_hash,
+};
 use crate::superblock::{IncompatFlags, PRIMARY_OFFSET, SUPERBLOCK_SIZE, Superblock};
 use crate::tree::{BtrfsKey, Item, Node, NodeHeader};
 use crate::{BtrfsError, truncated};
@@ -120,6 +124,7 @@ pub struct Volume<S> {
     chunk_tree: TreeRoot,
     root_tree: TreeRoot,
     fs_tree: TreeRoot,
+    subvolume: u64,
     root_dir: u64,
     total_bytes: u64,
     bytes_used: u64,
@@ -174,12 +179,15 @@ impl<S: ChunkStorage> Volume<S> {
                 level: 0,
                 generation: 0,
             },
+            subvolume: FS_TREE_OBJECTID,
             root_dir: 0,
             total_bytes: sb.total_bytes(),
             bytes_used: sb.bytes_used(),
         };
         volume.load_chunk_tree(device, node)?;
-        let root = volume.find_root(device, FS_TREE_OBJECTID, node)?;
+        let subvolume = volume.default_subvolume_id(device, sb.root_dir_objectid(), node)?;
+        let root = volume.find_root(device, subvolume, node)?;
+        volume.subvolume = subvolume;
         volume.fs_tree = TreeRoot {
             bytenr: root.bytenr,
             level: root.level,
@@ -223,6 +231,13 @@ impl<S: ChunkStorage> Volume<S> {
     #[must_use]
     pub const fn fs_tree(&self) -> TreeRoot {
         self.fs_tree
+    }
+
+    /// Tree id of the default subvolume: [`FS_TREE_OBJECTID`] unless the root
+    /// tree's `default` entry names another.
+    #[must_use]
+    pub const fn subvolume_id(&self) -> u64 {
+        self.subvolume
     }
 
     /// Inode number of the default subvolume's root directory.
@@ -417,6 +432,42 @@ impl<S: ChunkStorage> Volume<S> {
         }
     }
 
+    /// Tree id of the default subvolume, found as Linux's
+    /// `get_default_subvol_objectid` finds it: the entry named `default` in
+    /// the root tree's directory `root_dir`, or the top-level tree when there
+    /// is no such entry.
+    ///
+    /// `btrfs subvolume set-default` and `mkfs.btrfs -u default:` both write
+    /// that entry, and a reader that ignored it would show the top-level tree
+    /// where Linux mounts the subvolume. The entry must point at a subvolume
+    /// root whose id an fs tree can have; anything else was not written by
+    /// btrfs, and is reported as damage rather than mounted.
+    fn default_subvolume_id<D: Device>(
+        &self,
+        device: &mut D,
+        root_dir: u64,
+        node: &mut [u8],
+    ) -> Result<u64, BtrfsError> {
+        let key = BtrfsKey::new(root_dir, DIR_ITEM_KEY, name_hash(DEFAULT_ENTRY));
+        let found = self.walk(device, self.root_tree, key, node, |_, item| {
+            if item.key != key {
+                return Ok(ControlFlow::Break(None));
+            }
+            Ok(ControlFlow::Break(entry_named(
+                item.data,
+                &key,
+                DEFAULT_ENTRY,
+            )?))
+        })?;
+        match found.flatten().map(|entry| entry.target) {
+            None => Ok(FS_TREE_OBJECTID),
+            Some(Target::Subvolume(id)) if is_fs_tree(id) => Ok(id),
+            Some(_) => Err(BtrfsError::BadItem {
+                item_type: DIR_ITEM_KEY,
+            }),
+        }
+    }
+
     /// The `ROOT_ITEM` of tree `objectid` in the root tree.
     fn find_root<D: Device>(
         &self,
@@ -433,6 +484,16 @@ impl<S: ChunkStorage> Volume<S> {
         })?;
         found.flatten().ok_or(BtrfsError::MissingRoot(objectid))
     }
+}
+
+/// The name of the root tree's entry for the default subvolume.
+const DEFAULT_ENTRY: &[u8] = b"default";
+
+/// Whether `id` is one an fs tree can have: Linux's `is_fstree`. The top-level
+/// tree, or an id from [`FIRST_FREE_OBJECTID`] up whose top 16 bits are clear,
+/// because ids with those bits set are qgroup levels, not trees.
+const fn is_fs_tree(id: u64) -> bool {
+    id == FS_TREE_OBJECTID || (id >= FIRST_FREE_OBJECTID && id >> 48 == 0)
 }
 
 /// Check a chunk against the volume's sector size, then map it.

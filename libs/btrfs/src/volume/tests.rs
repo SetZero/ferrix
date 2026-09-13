@@ -380,3 +380,135 @@ fn predecessor_steps_through_every_field() {
         "nothing is below the minimum"
     );
 }
+
+/// A small image whose default subvolume is not the top-level tree, from
+/// `mkfs.btrfs -u default:sub`. The top level holds `top-level-only`; the
+/// subvolume holds `marker` and `nested/file`.
+const DEFAULT_SUBVOL: &[u8] = include_bytes!("../../testdata/default-subvol.img.packed");
+
+/// Physical offset of the `default` entry in the root tree the superblock
+/// points at.
+///
+/// Found in the live leaf only, reached by seeking its key: the image also
+/// holds older copies of that leaf, left behind by copy-on-write, and an edit
+/// to one of those changes nothing.
+fn default_entry(device: &mut PackedDevice) -> u64 {
+    use crate::items::{DIR_ITEM_HEADER_SIZE, ROOT_TREE_DIR_OBJECTID};
+    let mut chunks = [ChunkMapEntry::EMPTY; 16];
+    let mut node = vec![0u8; 65536];
+    let volume = Volume::open(device, &mut chunks, &mut node).unwrap();
+    let key = BtrfsKey::new(ROOT_TREE_DIR_OBJECTID, DIR_ITEM_KEY, name_hash(b"default"));
+    let leaf = volume
+        .seek(device, volume.root_tree, &key, &mut node)
+        .unwrap();
+    let (_, physical) = volume.chunks().map(leaf.node.header().bytenr).unwrap();
+    let block = &device.blocks[&physical];
+    // `..=`: a leaf fills from its end, so the first item's name can end on
+    // the block's last byte, which is where this image's does.
+    let found: Vec<u64> = (DIR_ITEM_HEADER_SIZE..=BLOCK - 7)
+        .map(|at| at - DIR_ITEM_HEADER_SIZE)
+        .filter(|&start| {
+            &block[start + DIR_ITEM_HEADER_SIZE..start + DIR_ITEM_HEADER_SIZE + 7] == b"default"
+                && block[start + 27..start + 29] == 7u16.to_le_bytes()
+                && block[start + 8] == ROOT_ITEM_KEY
+        })
+        .map(|start| physical + start as u64)
+        .collect();
+    assert_eq!(found.len(), 1, "the live leaf holds one default entry");
+    found[0]
+}
+
+/// The default subvolume of the image after `patch` edits its live `default`
+/// entry and the leaf is checksummed again.
+fn open_with_default_entry(patch: impl FnOnce(&mut PackedDevice, u64)) -> Result<u64, BtrfsError> {
+    let mut device = PackedDevice::new(DEFAULT_SUBVOL);
+    let entry = default_entry(&mut device);
+    patch(&mut device, entry);
+    device.reseal(entry - entry % BLOCK as u64);
+    let mut chunks = [ChunkMapEntry::EMPTY; 16];
+    let mut node = vec![0u8; 65536];
+    Volume::open(&mut device, &mut chunks, &mut node).map(|volume| volume.subvolume_id())
+}
+
+#[test]
+fn a_volume_made_without_a_default_mounts_the_top_level_tree() {
+    with_volume(IMAGES[0].1, |_, volume, _| {
+        assert_eq!(
+            volume.subvolume_id(),
+            FS_TREE_OBJECTID,
+            "mkfs.btrfs points the default entry at the top-level tree"
+        );
+    });
+}
+
+#[test]
+fn the_subvolume_the_root_tree_names_is_the_one_mounted() {
+    with_volume(DEFAULT_SUBVOL, |device, volume, node| {
+        assert_eq!(
+            volume.subvolume_id(),
+            FIRST_FREE_OBJECTID,
+            "mkfs.btrfs gives its first subvolume the first free id"
+        );
+        let sub = volume.default_subvolume();
+        let marker = sub.lookup(device, sub.root_dir(), b"marker", node).unwrap();
+        assert!(
+            matches!(marker.map(|entry| entry.target), Some(Target::Inode(_))),
+            "the subvolume's own file is at its root: {marker:?}"
+        );
+        assert_eq!(
+            sub.lookup(device, sub.root_dir(), b"top-level-only", node)
+                .unwrap(),
+            None,
+            "the top-level tree's file is not in the default subvolume"
+        );
+    });
+}
+
+#[test]
+fn without_a_default_entry_the_top_level_tree_is_mounted() {
+    let mut device = PackedDevice::new(DEFAULT_SUBVOL);
+    // Point the superblock at a root tree directory that does not exist, so
+    // no `default` entry is found, and checksum the superblock again.
+    device.write(PRIMARY_OFFSET + 128, &1006u64.to_le_bytes());
+    device.reseal(PRIMARY_OFFSET);
+    let mut chunks = [ChunkMapEntry::EMPTY; 16];
+    let mut node = vec![0u8; 65536];
+    let volume = Volume::open(&mut device, &mut chunks, &mut node).unwrap();
+    assert_eq!(
+        volume.subvolume_id(),
+        FS_TREE_OBJECTID,
+        "as Linux does, a volume with no default entry mounts the top level"
+    );
+    let sub = volume.default_subvolume();
+    assert!(
+        sub.lookup(&mut device, sub.root_dir(), b"top-level-only", &mut node)
+            .unwrap()
+            .is_some(),
+        "the top-level tree's file is at the root"
+    );
+}
+
+#[test]
+fn a_default_entry_that_names_no_subvolume_is_refused() {
+    assert_eq!(
+        open_with_default_entry(|_, _| {}),
+        Ok(FIRST_FREE_OBJECTID),
+        "resealed but unedited, the entry still names the subvolume"
+    );
+    assert_eq!(
+        open_with_default_entry(|device, entry| device.write(entry + 8, &[INODE_ITEM_KEY])),
+        Err(BtrfsError::BadItem {
+            item_type: DIR_ITEM_KEY
+        }),
+        "a default entry naming an inode rather than a subvolume root is damage"
+    );
+    assert_eq!(
+        open_with_default_entry(|device, entry| {
+            device.write(entry, &crate::items::ROOT_TREE_OBJECTID.to_le_bytes());
+        }),
+        Err(BtrfsError::BadItem {
+            item_type: DIR_ITEM_KEY
+        }),
+        "a default entry naming the root tree, which is no fs tree, is damage"
+    );
+}

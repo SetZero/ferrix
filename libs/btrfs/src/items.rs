@@ -53,8 +53,12 @@ pub const EXTENT_TREE_OBJECTID: u64 = 2;
 pub const CHUNK_TREE_OBJECTID: u64 = 3;
 /// The device tree: which parts of each device are in use.
 pub const DEV_TREE_OBJECTID: u64 = 4;
-/// The top-level subvolume, the one mounted by default.
+/// The top-level subvolume: the one mounted unless the root tree names another
+/// as the default.
 pub const FS_TREE_OBJECTID: u64 = 5;
+/// The root tree's one directory. Its `default` entry names the default
+/// subvolume.
+pub const ROOT_TREE_DIR_OBJECTID: u64 = 6;
 /// The checksum tree.
 pub const CSUM_TREE_OBJECTID: u64 = 7;
 /// The first object id a file may use; everything below is reserved.

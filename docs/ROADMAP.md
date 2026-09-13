@@ -1943,20 +1943,24 @@ stages 8 to 10 are under way, because everything short of the kernel mount is
 logic `cargo test`, Miri and a fuzzer can reach.
 
 * `libs/btrfs` — the read path, allocating nothing and forbidding `unsafe`.
-  `volume.rs` mounts: superblock, system chunk array, chunk tree, root tree,
-  default fs tree. It holds one node buffer rather than a path, re-descending
-  from the root to reach the next leaf, and checks every node against the
-  level, generation and fsid its parent promised. `fs.rs` answers what a VFS
-  asks: stat data, lookup by name hash, `readdir` from a resumable
+  `volume.rs` mounts: superblock, system chunk array, chunk tree, root tree, and
+  the default subvolume's fs tree — the one the root tree's `default` entry
+  names, as Linux's `get_default_subvol_objectid` finds it, or the top-level
+  tree when there is no entry. It holds one node buffer rather than a path,
+  re-descending from the root to reach the next leaf, and checks every node
+  against the level, generation and fsid its parent promised. `fs.rs` answers
+  what a VFS asks: stat data, lookup by name hash, `readdir` from a resumable
   `DIR_INDEX` cursor, and `read`, which zero-fills and copies extents over the
   top so every kind of hole reads the same way. `compress/` holds zlib, LZO and
   zstd decoders, each written for btrfs's framing of its format.
 * **Real images.** `scripts/gen-btrfs-fixtures.py` builds four images with real
   `mkfs.btrfs` — uncompressed, zlib, LZO and zstd, with 4 KiB nodes so the fs
   tree is deeper than a leaf — packed to their non-zero blocks, beside a
-  manifest of every path's size and CRC-32C. All four read back exactly. Each
-  decoder is also checked against an independent implementation:
-  `miniz_oxide`, `lzokay-native` and `ruzstd`.
+  manifest of every path's size and CRC-32C. All four read back exactly. A
+  fifth, small image is made with `mkfs.btrfs -u default:sub`, so its default
+  subvolume is not the top-level tree; it mounts the subvolume, and its
+  top-level file is not visible. Each decoder is also checked against an
+  independent implementation: `miniz_oxide`, `lzokay-native` and `ruzstd`.
 * `libs/btrfs-vfs` — the mount: stage 8's `FileSystem` and `Inode` over the
   read path, read-only, holding no lock across I/O. Tested through the trait,
   and through `Namespace` at `/mnt` on a tmpfs root.

@@ -366,3 +366,21 @@ fn statfs_reports_btrfs_and_the_volume_size() {
     );
     assert_eq!(stat.name_max, 255, "btrfs's name limit");
 }
+
+#[test]
+fn the_mount_shows_the_default_subvolume_not_the_top_level_tree() {
+    let packed = include_bytes!("../../btrfs/testdata/default-subvol.img.packed");
+    let fs = Btrfs::mount(Image::new(packed), 42).unwrap();
+    assert_eq!(
+        read_all(&resolve(&fs, b"marker")),
+        b"in the default subvolume\n"
+    );
+    assert_eq!(
+        read_all(&resolve(&fs, b"nested/file")),
+        b"nested in the default subvolume\n"
+    );
+    assert!(
+        matches!(fs.root().lookup(b"top-level-only"), Err(Errno::ENOENT)),
+        "Linux mounts the default subvolume, so the top-level tree's file is not visible"
+    );
+}
