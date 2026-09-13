@@ -185,8 +185,20 @@ pub(crate) fn load_executable(
     env: &[&[u8]],
     random: [u8; ferrix_ustack::RANDOM_BYTES],
 ) -> Result<Arc<Process>, ExecError> {
+    load_as(Process::new, program, args, env, random)
+}
+
+/// [`load_executable`], making the process with `make`: [`Process::new`], or
+/// [`Process::new_init`] for init's.
+fn load_as(
+    make: fn(Arc<AddressSpace>) -> Process,
+    program: Executable<'_>,
+    args: &[&[u8]],
+    env: &[&[u8]],
+    random: [u8; ferrix_ustack::RANDOM_BYTES],
+) -> Result<Arc<Process>, ExecError> {
     let space = AddressSpace::new().map_err(ExecError::Space)?;
-    let process = Process::new(Arc::clone(&space));
+    let process = make(Arc::clone(&space));
     let startup = populate(&space, &process, program, args, env, random)?;
     process.set_startup(startup);
     Ok(registry::register(process))
@@ -347,7 +359,50 @@ pub(crate) fn run_executable(
     env: &[&[u8]],
     random: [u8; ferrix_ustack::RANDOM_BYTES],
 ) -> Result<i32, ExecError> {
-    let process = load_executable(program, args, env, random)?;
+    run_as(Process::new, program, args, env, random)
+}
+
+/// How many times [`run_init`] looks for pid 1 to come free, and how long it
+/// sleeps between looks: a second in all.
+const INIT_PID_WAITS: u32 = 200;
+/// See [`INIT_PID_WAITS`].
+const INIT_PID_WAIT_NANOS: u64 = 5_000_000;
+
+/// [`run_executable`], as init: the process gets pid 1, as the first user
+/// process does on Linux.
+///
+/// A list of commands runs its programs one after another, each as init in
+/// turn, and the last one's pid can still be held for a moment by its task on
+/// the way to being reaped. That is waited out, briefly, before settling for
+/// another pid, which only a process that outlived its program would force.
+///
+/// # Errors
+///
+/// [`ExecError`].
+pub(crate) fn run_init(
+    program: Executable<'_>,
+    args: &[&[u8]],
+    env: &[&[u8]],
+    random: [u8; ferrix_ustack::RANDOM_BYTES],
+) -> Result<i32, ExecError> {
+    for _ in 0..INIT_PID_WAITS {
+        if registry::is_free(registry::INIT_PID) {
+            break;
+        }
+        crate::sched::sleep_for(INIT_PID_WAIT_NANOS);
+    }
+    run_as(Process::new_init, program, args, env, random)
+}
+
+/// Load `program` with [`load_as`], run it, and wait for it to end.
+fn run_as(
+    make: fn(Arc<AddressSpace>) -> Process,
+    program: Executable<'_>,
+    args: &[&[u8]],
+    env: &[&[u8]],
+    random: [u8; ferrix_ustack::RANDOM_BYTES],
+) -> Result<i32, ExecError> {
+    let process = load_as(make, program, args, env, random)?;
     let _task = process::start(&process).map_err(ExecError::Start)?;
     process
         .wait_for_exit(u64::MAX)

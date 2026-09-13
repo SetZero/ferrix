@@ -39,6 +39,12 @@ pub(crate) const PID_MAX: u32 = 32_768;
 /// numbers below it stay with whatever started at boot.
 const RESERVED: u32 = 300;
 
+/// The pid Linux gives the first user process, which programs rely on: a shell
+/// running as init reports `$$` as 1, its children see 1 as their parent, and
+/// busybox's `init` refuses to run as anything else. [`allocate`] never hands
+/// it out; [`allocate_init`] does.
+pub(crate) const INIT_PID: u32 = 1;
+
 /// The table.
 #[derive(Debug)]
 struct Registry {
@@ -52,7 +58,8 @@ struct Registry {
 /// The one table: pids are global until stage 13's pid namespaces.
 static REGISTRY: SpinLock<Registry> = SpinLock::new(Registry {
     live: BTreeMap::new(),
-    last: 0,
+    // So the first ordinary pid is 2: 1 is init's.
+    last: INIT_PID,
 });
 
 /// Choose and reserve a pid, or `None` if every one is in use.
@@ -73,6 +80,22 @@ pub(crate) fn allocate() -> Option<u32> {
         }
     }
     None
+}
+
+/// Reserve [`INIT_PID`] for the process init starts, or `None` if a process
+/// still holds it.
+pub(crate) fn allocate_init() -> Option<u32> {
+    let mut guard = REGISTRY.lock();
+    if let Entry::Vacant(slot) = guard.live.entry(INIT_PID) {
+        let _ = slot.insert(Weak::new());
+        return Some(INIT_PID);
+    }
+    None
+}
+
+/// Whether no process, live or on its way out, holds `pid`.
+pub(crate) fn is_free(pid: u32) -> bool {
+    !REGISTRY.lock().live.contains_key(&pid)
 }
 
 /// Share a process and make it findable by its pid.
@@ -143,6 +166,25 @@ pub(crate) fn check() -> Result<u32, &'static str> {
     let third = make()?;
     if third.pid() == one || third.pid() == two {
         return Err("a pid was handed out again straight after it was given back");
+    }
+    if [one, two, third.pid()].contains(&INIT_PID) {
+        return Err("an ordinary process was given init's pid");
+    }
+
+    // Init's pid, which nothing but init takes. Boot checks run before init
+    // starts, so it is free here; taken and given straight back.
+    if !is_free(INIT_PID) {
+        return Err("init's pid was taken before init started");
+    }
+    if allocate_init() != Some(INIT_PID) {
+        return Err("init was not given pid 1 while it was free");
+    }
+    if allocate_init().is_some() {
+        return Err("init's pid was handed out twice");
+    }
+    release(INIT_PID);
+    if !is_free(INIT_PID) {
+        return Err("init's pid was not given back");
     }
     Ok(3)
 }

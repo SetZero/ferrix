@@ -102,7 +102,7 @@ pub(crate) fn run() {
         exe: BUILT_IN_EXE,
         exec_fn: name,
     };
-    let status = exec::run_executable(
+    let status = exec::run_init(
         program,
         args,
         &[b"PATH=/bin", b"HOME=/", b"TERM=dumb", b"PS1=ferrix# "],
@@ -159,7 +159,7 @@ fn start(program: &[u8], exe: &[u8], argv: &[&[u8]]) -> Result<i32, exec::ExecEr
         exe,
         exec_fn: PROGRAM.as_bytes(),
     };
-    exec::run_executable(executable, argv, ENVIRONMENT, random_bytes())
+    exec::run_init(executable, argv, ENVIRONMENT, random_bytes())
 }
 
 /// The commands in a list `kernel/build.rs` embedded: each argument ends in a

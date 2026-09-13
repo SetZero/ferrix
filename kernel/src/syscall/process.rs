@@ -207,7 +207,21 @@ struct Heap {
 impl Process {
     /// A process over an address space, with no heap yet.
     pub(crate) fn new(space: Arc<AddressSpace>) -> Process {
-        let pid = registry::allocate().unwrap_or(0);
+        Process::with_pid(space, registry::allocate().unwrap_or(0))
+    }
+
+    /// [`Process::new`], for the process init starts: pid 1 when no other
+    /// process holds it, any other pid when one does.
+    pub(crate) fn new_init(space: Arc<AddressSpace>) -> Process {
+        let pid = registry::allocate_init()
+            .or_else(registry::allocate)
+            .unwrap_or(0);
+        Process::with_pid(space, pid)
+    }
+
+    /// A process over an address space, numbered `pid`, which the caller has
+    /// reserved in the registry.
+    fn with_pid(space: Arc<AddressSpace>, pid: u32) -> Process {
         Process {
             space,
             pid,
