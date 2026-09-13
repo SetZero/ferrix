@@ -8,7 +8,7 @@ use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use ferrix_linux_abi::errno::Errno;
-use ferrix_sync::SpinLock;
+use ferrix_sync::{Parker, SleepLock, SpinLock};
 
 use crate::Result;
 use crate::dentry::Dentry;
@@ -177,7 +177,15 @@ pub struct Namespace {
     /// invalidated by another rename moving a directory underneath it.
     /// Linux's `s_vfs_rename_mutex`, one per namespace rather than per
     /// filesystem because renames across filesystems are refused anyway.
-    rename_lock: SpinLock<()>,
+    ///
+    /// A sleeping lock, because it is held across both of the rename's path
+    /// walks, and a walk into a filesystem that does I/O -- btrfs -- may wait
+    /// for a disk. The kernel lends the wait through the namespace's
+    /// [`Parker`]; on the host it spins.
+    rename_lock: SleepLock<()>,
+    /// Where a lock that sleeps waits: lent by the kernel, and handed on to
+    /// every lock this namespace and its open files make.
+    parker: Arc<dyn Parker>,
     cache: SpinLock<VecDeque<Arc<Dentry>>>,
     cache_limit: usize,
 }
@@ -192,15 +200,21 @@ impl fmt::Debug for Namespace {
 }
 
 impl Namespace {
-    /// A namespace whose root is `fs`.
+    /// A namespace whose root is `fs`, whose sleeping locks wait as `parker`
+    /// says: the kernel's wait queues, or [`ferrix_sync::SpinParker`] on the
+    /// host.
     #[must_use]
-    pub fn new(fs: Arc<dyn FileSystem>) -> Namespace {
-        Namespace::with_cache(fs, DEFAULT_CACHE)
+    pub fn new(fs: Arc<dyn FileSystem>, parker: Arc<dyn Parker>) -> Namespace {
+        Namespace::with_cache(fs, DEFAULT_CACHE, parker)
     }
 
     /// As [`Namespace::new`], keeping at most `cache_limit` unused dentries.
     #[must_use]
-    pub fn with_cache(fs: Arc<dyn FileSystem>, cache_limit: usize) -> Namespace {
+    pub fn with_cache(
+        fs: Arc<dyn FileSystem>,
+        cache_limit: usize,
+        parker: Arc<dyn Parker>,
+    ) -> Namespace {
         let root = Arc::new(Mount {
             id: 1,
             root: Dentry::root(fs.root()),
@@ -211,10 +225,17 @@ impl Namespace {
             root,
             mounts: SpinLock::new(BTreeMap::new()),
             next_mount: AtomicU64::new(2),
-            rename_lock: SpinLock::new(()),
+            rename_lock: SleepLock::new((), parker.as_ref()),
             cache: SpinLock::new(VecDeque::new()),
             cache_limit,
+            parker,
         }
+    }
+
+    /// Where this namespace's sleeping locks wait.
+    #[must_use]
+    pub fn parker(&self) -> &Arc<dyn Parker> {
+        &self.parker
     }
 
     /// The root of the tree.

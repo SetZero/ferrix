@@ -12,6 +12,7 @@ extern crate std;
 
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use ferrix_sync::SpinParker;
 use ferrix_vfs::dirent::DirentWriter;
 use ferrix_vfs::tmpfs::{HeapStorage, Tmpfs};
 use ferrix_vfs::{Clock, Context, Namespace, OpenFlags, RenameMode};
@@ -48,7 +49,7 @@ fn unmounted() -> (Namespace, Context) {
         Arc::new(HeapStorage::new(1 << 20)),
         0o755,
     );
-    let ns = Namespace::new(root);
+    let ns = Namespace::new(root, Arc::new(SpinParker));
     let ctx = ns.context();
     ns.mkdir(&ctx, None, b"/mnt", 0o755).unwrap();
     (ns, ctx)

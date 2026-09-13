@@ -6,6 +6,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicI64, Ordering};
 
+use ferrix_sync::SpinParker;
+
 use crate::dirent::{DirentWriter, records};
 use crate::fd::FdTable;
 use crate::initramfs::{self, makedev};
@@ -39,7 +41,7 @@ fn tmpfs(device: u64) -> Arc<dyn FileSystem> {
 }
 
 fn fresh() -> (Namespace, Context) {
-    let ns = Namespace::new(tmpfs(1));
+    let ns = Namespace::new(tmpfs(1), Arc::new(SpinParker));
     let ctx = ns.context();
     (ns, ctx)
 }
@@ -675,7 +677,7 @@ fn a_cached_miss_does_not_hide_a_later_create() {
 
 #[test]
 fn the_cache_is_bounded() {
-    let ns = Namespace::with_cache(tmpfs(1), 8);
+    let ns = Namespace::with_cache(tmpfs(1), 8, Arc::new(SpinParker));
     let ctx = ns.context();
     for i in 0..100 {
         let _ = ns.resolve(&ctx, None, alloc::format!("/miss-{i}").as_bytes(), true);
@@ -1689,7 +1691,7 @@ fn meddling(cache: usize) -> (Arc<Namespace>, Arc<Hooks>) {
         inner: tmpfs(1).root(),
         hooks: Arc::clone(&hooks),
     });
-    let ns = Namespace::with_cache(Arc::new(MeddlingFs(root)), cache);
+    let ns = Namespace::with_cache(Arc::new(MeddlingFs(root)), cache, Arc::new(SpinParker));
     (Arc::new(ns), hooks)
 }
 
@@ -1748,7 +1750,7 @@ fn a_lookup_that_loses_a_race_does_not_let_a_directory_move_inside_itself() {
 fn a_directory_has_one_dentry_while_its_parent_churns() {
     extern crate std;
 
-    let ns = Arc::new(Namespace::with_cache(tmpfs(1), 0));
+    let ns = Arc::new(Namespace::with_cache(tmpfs(1), 0, Arc::new(SpinParker)));
     let ctx = ns.context();
     ns.mkdir(&ctx, None, b"/A", 0o755).unwrap();
     ns.mkdir(&ctx, None, b"/A/X", 0o755).unwrap();

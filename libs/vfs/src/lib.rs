@@ -39,8 +39,8 @@
 //! reported faithfully, so adding the check later is a function call on the
 //! walk rather than a change to what is stored.
 //!
-//! **A sleeping lock.** Every lock here is a spin lock, and tmpfs never
-//! sleeps, but an [`Inode`] implementation may block: stage 11's btrfs waits
+//! **A sleeping lock.** Every lock here but one is a spin lock, and tmpfs
+//! never sleeps, but an [`Inode`] implementation may block: stage 11's btrfs waits
 //! on disk I/O inside `read_at`, `lookup` and `read_dir`. So the locks held
 //! across a call into an inode are named exactly:
 //!
@@ -52,8 +52,12 @@
 //!   takes them to look at the cache and releases them before a `lookup`.
 //! * **The namespace's rename lock**, across a `rename`'s two walks and the
 //!   filesystem's `rename`. This is the one exception: the walks call
-//!   `lookup`, so a filesystem whose lookups sleep would sleep holding it
-//!   during a rename. It wants a sleeping lock the kernel lends this crate.
+//!   `lookup`, so a filesystem whose lookups sleep sleeps holding it during
+//!   a rename. It is therefore the one lock here that is not a spin lock, a
+//!   [`ferrix_sync::SleepLock`]: the kernel lends it a wait queue through
+//!   the [`ferrix_sync::Parker`] a [`Namespace`] is built with, so a walk
+//!   that waits for a disk sleeps and so does whoever is queued for the
+//!   lock. On the host the parker spins.
 //!
 //! A filesystem's own locks are its own business, except that it must not
 //! hold a spin lock across I/O either.

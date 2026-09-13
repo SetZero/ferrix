@@ -47,6 +47,8 @@
 //! * [`Once`] — run an initialiser exactly once, for globals set up at boot.
 //! * [`RwSpinLock`] — many readers or one writer, writer-preferring.
 //! * [`SpinLockedCell`] — a global that is filled in at boot and read after.
+//! * [`SleepLock`] — mutual exclusion whose waiters sleep, on a [`Parking`] the
+//!   kernel lends through a [`Parker`]; the one lock a holder may block under.
 //!
 //! ```
 //! use ferrix_sync::SpinLock;
@@ -59,16 +61,19 @@
 
 #![no_std]
 
+extern crate alloc;
+
 #[cfg(test)]
 mod tests;
 
+use alloc::boxed::Box;
 use core::cell::UnsafeCell;
 use core::fmt;
 use core::hint::spin_loop;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 // ---------------------------------------------------------------------------
 // SpinLock
@@ -1475,5 +1480,315 @@ impl<T> SpinLockedCell<T> {
     /// Borrows the value directly, if there is one.
     pub fn get_mut(&mut self) -> Option<&mut T> {
         self.inner.get_mut().as_mut()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SleepLock
+// ---------------------------------------------------------------------------
+
+/// Where a caller waits for a [`SleepLock`] somebody else holds, and how the
+/// holder tells it to look again.
+///
+/// This crate cannot see the scheduler, so the lock that sleeps is built over
+/// this trait and the kernel lends the implementation: a wait queue, whose
+/// `park_until` blocks the running task and whose `unpark_all` wakes every
+/// task on it. The kernel's is the only implementation that sleeps.
+/// [`SpinParker`] lends one that spins, for host tests and for a kernel whose
+/// scheduler is not running yet.
+///
+/// # The contract
+///
+/// * `park_until(ready)` returns once `ready` has answered `true`. It may also
+///   return before that — a spurious wake, a periodic recheck — because the
+///   lock loops, and an early return costs one more look and nothing else.
+/// * `ready` runs with the lock not held, and on every wake, spurious ones
+///   included; it reads one atomic and nothing else, so an implementation
+///   may call it from wherever it checks its condition, including under a
+///   lock of its own.
+/// * An implementation looks at `ready` after it has made itself findable by
+///   `unpark_all`, so that an unpark arriving between the caller's last look
+///   and its sleep is not lost. The kernel's wait queue is built around
+///   exactly that order. The lock's side of the same argument is that its
+///   release stores the flag with `SeqCst` before it calls `unpark_all`, and
+///   `ready` loads it with `SeqCst`: a Dekker between the flag and the
+///   parking's own list, so that neither side's look can move above its own
+///   publication, whatever the parking's list is guarded by.
+/// * `may_park` is called on every acquisition, contended or not, before the
+///   lock is tried. The kernel's implementation checks there that the caller
+///   is somewhere a task may block at all — preemption on, interrupts on —
+///   because the rule is only otherwise enforced when the lock is contended,
+///   and a holder that takes one under a spin lock would pass every quiet
+///   boot and fail the first busy one.
+pub trait Parking: Send + Sync {
+    /// Block the caller until `ready` answers `true`, or until something
+    /// else wakes it; the caller looks again either way.
+    fn park_until(&self, ready: &mut dyn FnMut() -> bool);
+    /// Wake everything parked here, so that each looks again.
+    fn unpark_all(&self);
+    /// Called before every attempt at the lock: the place to check that the
+    /// caller may block, as the kernel's implementation does. The default
+    /// checks nothing, which is right wherever a thread may always block.
+    fn may_park(&self) {}
+}
+
+/// Hands out a [`Parking`] to each [`SleepLock`] made with it.
+///
+/// One per lock rather than one shared, so a release wakes the waiters of
+/// that lock and no other's.
+pub trait Parker: Send + Sync + fmt::Debug {
+    /// A fresh parking with nobody on it.
+    fn new_parking(&self) -> Box<dyn Parking>;
+}
+
+/// The [`Parker`] whose waiters spin.
+///
+/// For host tests, where a spinning thread is one the OS preempts, and for a
+/// kernel before its scheduler runs, when there is nothing to switch to. Not
+/// for a running kernel: a task spinning for a sleeping lock's holder keeps
+/// its processor while the holder waits for one.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SpinParker;
+
+impl Parker for SpinParker {
+    fn new_parking(&self) -> Box<dyn Parking> {
+        Box::new(SpinParking)
+    }
+}
+
+/// [`SpinParker`]'s parking: `park_until` spins on `ready`, and there is
+/// nobody asleep for `unpark_all` to wake.
+struct SpinParking;
+
+impl Parking for SpinParking {
+    fn park_until(&self, ready: &mut dyn FnMut() -> bool) {
+        while !ready() {
+            spin_loop();
+        }
+    }
+
+    fn unpark_all(&self) {}
+}
+
+/// A mutual-exclusion lock whose waiters sleep rather than spin.
+///
+/// For a critical section that may block: a rename whose path walks read a
+/// directory off a disk, a file read that waits for its pages. A spin lock
+/// held across such a wait stalls every other CPU that wants it for as long as
+/// the disk takes, and a [`PreemptSpinLock`]'s holder is forbidden to block at
+/// all. This lock hands its waiters to the [`Parking`] its [`Parker`] lent, so
+/// they sleep until the holder lets go, and the holder may sleep for as long
+/// as its work takes.
+///
+/// It is not a ticket lock: after a release, whoever's exchange wins next takes
+/// the lock, and a waiter woken from its sleep competes with a caller arriving
+/// just then. Linux's `mutex` is the same. The waits it serialises are long
+/// and rare — one rename at a time per namespace — where a spin lock's
+/// arrival-order guarantee bought nothing and its spinning cost a processor.
+///
+/// **Rules.** Never take one from an interrupt handler. Never take one while
+/// holding any spin lock, or anywhere else preemption is off: the kernel's
+/// scheduler stops the machine if a task blocks with the count raised
+/// (FX-0503), and the uncontended case merely gets away with it. The guard is
+/// `!Send`, as a spin lock's is.
+///
+/// ```
+/// use ferrix_sync::{SleepLock, SpinParker};
+///
+/// let lock = SleepLock::new(0_u32, &SpinParker);
+/// *lock.lock() += 1;
+/// assert_eq!(*lock.lock(), 1);
+/// ```
+pub struct SleepLock<T: ?Sized> {
+    /// Whether somebody holds the lock.
+    locked: AtomicBool,
+    /// Where the waiters sleep, and how a release wakes them.
+    parking: Box<dyn Parking>,
+    /// The protected data, reachable only through a guard.
+    data: UnsafeCell<T>,
+}
+
+// SAFETY: as for `SpinLock`: sending the lock sends the data it owns, which
+// `T: Send` permits; the flag is an atomic and the parking is `Send + Sync` by
+// its bound.
+unsafe impl<T: ?Sized + Send> Send for SleepLock<T> {}
+
+// SAFETY: as for `SpinLock`: a shared lock hands the data to one thread at a
+// time, the one whose exchange won, so sharing it asks only `T: Send`.
+unsafe impl<T: ?Sized + Send> Sync for SleepLock<T> {}
+
+impl<T> SleepLock<T> {
+    /// A lock in the unlocked state, whose waiters sleep where `parker` says.
+    ///
+    /// Not `const`, because the parking is lent at run time. A lock that has
+    /// to be a `static` is a spin lock; a kernel that makes one of these
+    /// before its scheduler runs gives it a parker that spins.
+    #[must_use]
+    pub fn new(value: T, parker: &dyn Parker) -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+            parking: parker.new_parking(),
+            data: UnsafeCell::new(value),
+        }
+    }
+
+    /// Consumes the lock and returns the protected value.
+    ///
+    /// Taking the lock by value proves no guard is outstanding.
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.data.into_inner()
+    }
+}
+
+impl<T: ?Sized> SleepLock<T> {
+    /// Takes the lock, sleeping while somebody else holds it.
+    #[must_use = "the lock is released as soon as the guard is dropped"]
+    pub fn lock(&self) -> SleepLockGuard<'_, T> {
+        self.parking.may_park();
+        while !self.try_acquire() {
+            // SeqCst, not Relaxed, although this look only decides whether to
+            // try the exchange again: it is the waiter's half of the Dekker
+            // with `release`. The parking publishes the waiter (on its list,
+            // marked blocked) and then makes this last look; the releaser
+            // stores the flag and then looks at the list. With both the
+            // store and this load sequentially consistent, neither look can
+            // be reordered above its own publication, so one of the two
+            // sides always sees the other: the waiter sees the lock free, or
+            // the releaser sees the waiter and wakes it.
+            self.parking
+                .park_until(&mut || !self.locked.load(Ordering::SeqCst));
+        }
+        SleepLockGuard {
+            lock: self,
+            not_send: PhantomData,
+        }
+    }
+
+    /// Takes the lock if it is free right now, and gives up otherwise.
+    ///
+    /// Asks the parking's `may_park` first all the same: the rule about
+    /// where a sleeping lock may be taken does not depend on whether this
+    /// attempt would have slept.
+    #[must_use = "the lock is released as soon as the guard is dropped"]
+    pub fn try_lock(&self) -> Option<SleepLockGuard<'_, T>> {
+        self.parking.may_park();
+        self.try_acquire().then(|| SleepLockGuard {
+            lock: self,
+            not_send: PhantomData,
+        })
+    }
+
+    /// One attempt at the lock, leaving the release to the caller.
+    fn try_acquire(&self) -> bool {
+        // Acquire on success: this is the exchange that makes the lock ours,
+        // so it pairs with the previous holder's releasing store and makes
+        // that holder's writes to the data visible before ours. Relaxed on
+        // failure: a failed attempt reads no protected data.
+        self.locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+    }
+
+    /// Reports whether the lock was held at some instant during the call.
+    ///
+    /// A statistic, not a decision, as [`SpinLock::is_locked`] is.
+    #[must_use]
+    pub fn is_locked(&self) -> bool {
+        // Relaxed: the answer is stale by the time it is returned.
+        self.locked.load(Ordering::Relaxed)
+    }
+
+    /// Borrows the protected data directly.
+    ///
+    /// Safe, and free: `&mut self` is itself proof that no guard exists.
+    pub fn get_mut(&mut self) -> &mut T {
+        self.data.get_mut()
+    }
+
+    /// Releases the lock without consuming a guard.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be the current holder of this lock and must not touch
+    /// the protected data afterwards.
+    unsafe fn release(&self) {
+        // SeqCst: it is a release, so that everything written under the lock
+        // is visible to the next holder, whose acquiring exchange pairs with
+        // it; and it is the releaser's half of the Dekker with `lock`. This
+        // store has to be ordered before `unpark_all`'s look at the parking's
+        // list, and the waiter's load of this flag after its publication on
+        // that list, or a release could slip between a waiter's last look and
+        // its sleep. Sequential consistency on both sides is what forbids
+        // that, and it costs nothing measurable on a lock taken to sleep.
+        self.locked.store(false, Ordering::SeqCst);
+        // After the store, so that a waiter woken here finds the lock free.
+        self.parking.unpark_all();
+    }
+}
+
+impl<T: ?Sized + fmt::Debug> fmt::Debug for SleepLock<T> {
+    /// Formats the lock without ever waiting for it, as [`SpinLock`] does.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.try_lock() {
+            Some(guard) => f.debug_struct("SleepLock").field("data", &&*guard).finish(),
+            None => f.write_str("SleepLock { data: <locked> }"),
+        }
+    }
+}
+
+/// Proof that its holder is inside a [`SleepLock`]'s critical section.
+///
+/// The lock is released when this is dropped. Unlike a spin lock's guard it
+/// may be held across a sleep; it is `!Send` for the reason
+/// [`SpinLockGuard`] gives.
+pub struct SleepLockGuard<'a, T: ?Sized> {
+    /// The lock to release on drop, and the data to hand out until then.
+    lock: &'a SleepLock<T>,
+    /// Makes the guard `!Send`.
+    not_send: PhantomData<*const ()>,
+}
+
+// SAFETY: a shared reference to a guard reaches the data only through `Deref`,
+// so sharing one across threads shares `&T`, which is what `T: Sync` allows.
+unsafe impl<T: ?Sized + Sync> Sync for SleepLockGuard<'_, T> {}
+
+impl<T: ?Sized> Deref for SleepLockGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: this guard exists only while its thread holds the lock, and
+        // the lock admits one holder at a time, so no other reference to the
+        // data can exist for the life of this borrow.
+        unsafe { &*self.lock.data.get() }
+    }
+}
+
+impl<T: ?Sized> DerefMut for SleepLockGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: as for `deref`, with `&mut self` additionally proving this
+        // is the only borrow taken through the guard itself.
+        unsafe { &mut *self.lock.data.get() }
+    }
+}
+
+impl<T: ?Sized> Drop for SleepLockGuard<'_, T> {
+    fn drop(&mut self) {
+        // SAFETY: an acquisition handed this guard to this thread, it is
+        // being consumed here so no further access can happen through it,
+        // and a guard is dropped exactly once.
+        unsafe { self.lock.release() };
+    }
+}
+
+impl<T: ?Sized + fmt::Debug> fmt::Debug for SleepLockGuard<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl<T: ?Sized + fmt::Display> fmt::Display for SleepLockGuard<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&**self, f)
     }
 }

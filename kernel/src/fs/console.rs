@@ -101,7 +101,9 @@ fn detached() -> Location {
                 device: fs::anonymous_device(),
             });
             // No cache: there is exactly one dentry, and the mount holds it.
-            Namespace::with_cache(alone, 0)
+            // Its rename lock is never contended -- nothing can be renamed
+            // here -- but it is made the way every namespace's is.
+            Namespace::with_cache(alone, 0, Arc::new(crate::sync::SchedParker))
         })
         .root()
 }

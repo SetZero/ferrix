@@ -13,6 +13,7 @@
 extern crate std;
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::boxed::Box;
 use std::format;
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -21,8 +22,8 @@ use std::vec;
 use std::vec::Vec;
 
 use super::{
-    IrqControl, IrqSpinLock, Once, PreemptControl, PreemptSpinLock, RwSpinLock, SpinLock,
-    SpinLockedCell,
+    IrqControl, IrqSpinLock, Once, Parker, Parking, PreemptControl, PreemptSpinLock, RwSpinLock,
+    SleepLock, SpinLock, SpinLockedCell, SpinParker,
 };
 
 // ---------------------------------------------------------------------------
@@ -621,4 +622,202 @@ fn a_locked_cell_is_shared_safely() {
         Some(THREADS * 1000),
         "an increment was lost through the cell"
     );
+}
+
+// ---------------------------------------------------------------------------
+// SleepLock
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_sleep_lock_guards_its_data_like_a_spin_lock() {
+    let lock = SleepLock::new(1_u32, &SpinParker);
+    *lock.lock() += 41;
+    assert_eq!(
+        *lock.lock(),
+        42,
+        "the write through the guard must have stuck"
+    );
+    let guard = lock.lock();
+    assert!(lock.is_locked(), "a held lock reports itself held");
+    assert!(
+        lock.try_lock().is_none(),
+        "a held lock must refuse a second holder"
+    );
+    drop(guard);
+    assert!(!lock.is_locked(), "and free once the guard drops");
+    assert!(
+        lock.try_lock().is_some(),
+        "and must accept one once released"
+    );
+    assert_eq!(lock.into_inner(), 42);
+}
+
+#[test]
+fn a_sleep_lock_debugs_without_waiting() {
+    let lock = SleepLock::new(7_u8, &SpinParker);
+    assert_eq!(format!("{lock:?}"), "SleepLock { data: 7 }");
+    let guard = lock.lock();
+    assert_eq!(
+        format!("{lock:?}"),
+        "SleepLock { data: <locked> }",
+        "formatting a held lock must neither wait nor deadlock"
+    );
+    assert_eq!(format!("{guard:?}"), "7");
+    assert_eq!(format!("{guard}"), "7");
+}
+
+#[test]
+fn eight_threads_agree_on_a_sleep_locked_count() {
+    const THREADS: usize = 8;
+    const PER_THREAD: usize = 2_000;
+    let lock = Arc::new(SleepLock::new(0_usize, &SpinParker));
+    let start = Arc::new(Barrier::new(THREADS));
+    let handles: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let lock = Arc::clone(&lock);
+            let start = Arc::clone(&start);
+            thread::spawn(move || {
+                let _ = start.wait();
+                for _ in 0..PER_THREAD {
+                    *lock.lock() += 1;
+                }
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().expect("a counting thread panicked");
+    }
+    assert_eq!(*lock.lock(), THREADS * PER_THREAD);
+}
+
+/// A parker built on the host's condition variable: what the kernel's wait
+/// queue does, on `std`, and counting how often a waiter actually slept.
+#[derive(Debug, Default)]
+struct CondvarParker {
+    parks: Arc<AtomicUsize>,
+    asked: Arc<AtomicUsize>,
+}
+
+/// One lock's waiters. `generation` is the mutex the condition variable
+/// waits on; it is taken around the last look at `ready` and around every
+/// notify, which is the ordering the `Parking` contract asks for.
+struct CondvarParking {
+    generation: std::sync::Mutex<()>,
+    woken: std::sync::Condvar,
+    parks: Arc<AtomicUsize>,
+    /// How often the lock asked whether its caller may park.
+    asked: Arc<AtomicUsize>,
+}
+
+impl Parker for CondvarParker {
+    fn new_parking(&self) -> Box<dyn Parking> {
+        Box::new(CondvarParking {
+            generation: std::sync::Mutex::new(()),
+            woken: std::sync::Condvar::new(),
+            parks: Arc::clone(&self.parks),
+            asked: Arc::clone(&self.asked),
+        })
+    }
+}
+
+impl Parking for CondvarParking {
+    fn park_until(&self, ready: &mut dyn FnMut() -> bool) {
+        let mut held = self.generation.lock().expect("no poison");
+        while !ready() {
+            let _ = self.parks.fetch_add(1, Ordering::Relaxed);
+            held = self.woken.wait(held).expect("no poison");
+        }
+    }
+
+    fn unpark_all(&self) {
+        let _held = self.generation.lock().expect("no poison");
+        self.woken.notify_all();
+    }
+
+    fn may_park(&self) {
+        let _ = self.asked.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn every_attempt_at_a_sleep_lock_asks_whether_it_may_park() {
+    let parker = CondvarParker::default();
+    let lock = SleepLock::new((), &parker);
+    let held = lock.lock();
+    assert_eq!(parker.asked.load(Ordering::Relaxed), 1, "lock asks");
+    assert!(lock.try_lock().is_none());
+    assert_eq!(
+        parker.asked.load(Ordering::Relaxed),
+        2,
+        "try_lock asks too, whether or not it would have slept"
+    );
+    drop(held);
+    assert!(lock.try_lock().is_some());
+    assert_eq!(parker.asked.load(Ordering::Relaxed), 3);
+    assert_eq!(parker.parks.load(Ordering::Relaxed), 0, "nothing slept");
+}
+
+#[test]
+fn a_waiter_sleeps_on_the_parking_and_the_release_wakes_it() {
+    let parker = CondvarParker::default();
+    let lock = Arc::new(SleepLock::new(0_u32, &parker));
+    let holder = lock.lock();
+    let got_it = Arc::new(AtomicBool::new(false));
+    let waiter = {
+        let lock = Arc::clone(&lock);
+        let got_it = Arc::clone(&got_it);
+        thread::spawn(move || {
+            let mut guard = lock.lock();
+            got_it.store(true, Ordering::SeqCst);
+            *guard += 1;
+        })
+    };
+    // Generous: the waiter has to be scheduled, fail its exchange and sleep.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while parker.parks.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
+        thread::yield_now();
+    }
+    assert!(
+        parker.parks.load(Ordering::Relaxed) > 0,
+        "a waiter for a held sleep lock must park, not spin"
+    );
+    assert!(
+        !got_it.load(Ordering::SeqCst),
+        "and must not have taken the lock while it was held"
+    );
+    drop(holder);
+    waiter.join().expect("the waiter panicked");
+    assert!(
+        got_it.load(Ordering::SeqCst),
+        "the release must wake the waiter"
+    );
+    assert_eq!(*lock.lock(), 1);
+}
+
+#[test]
+fn sleeping_waiters_all_get_their_turn() {
+    const THREADS: usize = 6;
+    const PER_THREAD: usize = 200;
+    let parker = CondvarParker::default();
+    let lock = Arc::new(SleepLock::new(0_usize, &parker));
+    let start = Arc::new(Barrier::new(THREADS));
+    let handles: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let lock = Arc::clone(&lock);
+            let start = Arc::clone(&start);
+            thread::spawn(move || {
+                let _ = start.wait();
+                for _ in 0..PER_THREAD {
+                    let mut guard = lock.lock();
+                    *guard += 1;
+                    // Hold it long enough that the others have to sleep.
+                    thread::yield_now();
+                }
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().expect("a counting thread panicked");
+    }
+    assert_eq!(*lock.lock(), THREADS * PER_THREAD);
 }

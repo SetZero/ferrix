@@ -204,3 +204,35 @@ impl WaitQueue {
         }
     }
 }
+
+/// A wait queue is what the kernel lends a `ferrix_sync::SleepLock` to sleep
+/// on, through `sync::SchedParker`.
+///
+/// `park_until` is `wait_until_deadline` with no deadline worth the name: the
+/// lock's release wakes the queue, and the 5 ms recheck only costs a waiter
+/// one more look at the flag. The lock loops on every return, so the early
+/// returns the recheck makes are the "spurious wakes" the `Parking` contract
+/// allows. The order that closes the lost wake-up -- on the queue and marked
+/// blocked before the last look at `ready` -- is the one above, and it is
+/// what the contract asks of a parking.
+impl ferrix_sync::Parking for WaitQueue {
+    fn park_until(&self, ready: &mut dyn FnMut() -> bool) {
+        let _ = self.wait_until_deadline(ready, u64::MAX);
+    }
+
+    fn unpark_all(&self) {
+        self.wake_all();
+    }
+
+    /// The rule for a sleeping lock — never with a spin lock held or
+    /// preemption otherwise off, never with interrupts masked — checked on
+    /// every acquisition. Blocking under the count is FX-0503 in `block`,
+    /// but only a contended lock ever blocks; this catches the holder that
+    /// took one under a spin lock and got away with it on a quiet boot.
+    fn may_park(&self) {
+        debug_assert!(
+            !super::started() || super::may_block(),
+            "a sleeping lock was taken where a task may not block: preemption off, interrupts masked, or no task"
+        );
+    }
+}

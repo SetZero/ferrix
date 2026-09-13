@@ -62,7 +62,7 @@ const NANOS: u64 = 1_000_000_000;
 
 /// The namespace, built empty on first use if [`init`] has not run yet.
 pub(crate) fn namespace() -> &'static Namespace {
-    NAMESPACE.call_once(|| Namespace::new(new_tmpfs()))
+    NAMESPACE.call_once(|| Namespace::new(new_tmpfs(), Arc::new(crate::sync::SchedParker)))
 }
 
 /// A device number no other filesystem has: `st_dev` for an in-memory one.

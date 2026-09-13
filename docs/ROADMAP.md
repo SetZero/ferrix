@@ -2428,6 +2428,15 @@ logic `cargo test`, Miri and a fuzzer can reach.
   and so is a directory name a VFS could not hand to a program — empty, `.`,
   `..`, or containing `/` or NUL. All four images and three more `mkfs.btrfs`
   images from the review still read back.
+* **A lock a walk may sleep under.** The namespace's rename lock is held
+  across a rename's two path walks, and a walk into btrfs waits for a disk;
+  it was a spin lock, so the first such wait would have stalled every CPU
+  queued for it. It is now `ferrix_sync::SleepLock`, a lock whose waiters
+  sleep on a `Parking` the kernel lends — a `sched::WaitQueue` per lock,
+  through `sync::SchedParker` — and which spins on the host. It is the one
+  lock in `libs/vfs` a holder may block under. The open file's offset takes
+  the same lock next, so that two reads racing on one description get
+  different bytes again once the offset's spin lock stops covering the I/O.
 
 **Still to do.**
 
