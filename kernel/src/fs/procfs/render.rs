@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use ferrix_bootinfo::{Arch, PAGE_SIZE};
+use ferrix_procfs::kstat::{self, CpuTimes, Kstat};
 use ferrix_procfs::maps::{self, Mapping, Width};
 use ferrix_procfs::meminfo::{self, Meminfo};
 use ferrix_procfs::mounts::{self, Mount};
@@ -21,7 +22,9 @@ use ferrix_vfs::{Errno, Location, Result};
 use super::Kernel;
 use crate::arch;
 use crate::fs;
+use crate::irq;
 use crate::mm;
+use crate::sched;
 use crate::smp;
 use crate::syscall::process::{self, Process};
 use crate::syscall::system::{RELEASE, VERSION};
@@ -159,23 +162,127 @@ pub(super) fn mounts(_: &Kernel) -> Result<Vec<u8>> {
 }
 
 /// `/proc/uptime`: seconds on the counter, and the idle time summed over
-/// processors.
-///
-/// The second number is zero because no processor's idle time is accounted
-/// yet. It is the one field here that is knowingly short of the truth; it is
-/// kept because the file has two fields and `uptime` reads the first.
+/// processors, which is what the `idle` field of the `cpuN` lines in
+/// `/proc/stat` adds up to.
 pub(super) fn uptime(_: &Kernel) -> Result<Vec<u8>> {
     let nanos = time::now_nanos();
+    let idle = online_times()
+        .iter()
+        .fold(0_u64, |sum, (_, time)| sum.saturating_add(time.idle_ns));
     let mut out = Vec::new();
     put(
         &mut out,
         format_args!(
-            "{}.{:02} 0.00\n",
+            "{}.{:02} {}.{:02}\n",
             nanos / NANOS,
-            (nanos % NANOS) / (NANOS / 100)
+            (nanos % NANOS) / (NANOS / 100),
+            idle / NANOS,
+            (idle % NANOS) / (NANOS / 100)
         ),
     );
     Ok(out)
+}
+
+/// Each online processor's time, by logical number.
+///
+/// With no topology there is one processor, the boot processor, which is
+/// what [`online_cpus`] says too.
+fn online_times() -> Vec<(u32, sched::CpuTime)> {
+    let topology = smp::topology();
+    sched::cpu_times()
+        .into_iter()
+        .enumerate()
+        .filter(|(logical, _)| {
+            topology.map_or(*logical == 0, |topology| {
+                topology
+                    .cpus()
+                    .get(*logical)
+                    .is_some_and(smp::PerCpu::is_online)
+            })
+        })
+        .map(|(logical, time)| (u32::try_from(logical).unwrap_or(u32::MAX), time))
+        .collect()
+}
+
+/// `/proc/stat`.
+///
+/// # Where each number comes from
+///
+/// * **The processor lines.** A run queue counts the nanoseconds it charged
+///   while a task was running and while its idle task was, and the time since
+///   its last charge goes to whichever it is doing now, so a line never goes
+///   backwards between two reads — `top` and `mpstat` divide by the
+///   difference. The kernel has no split between a task's user and kernel
+///   time: a task is charged when the scheduler looks, not on each crossing.
+///   So all busy time is reported as `user`, the side most of it is on for a
+///   program, and `system` is zero; calling it all `system` would be the
+///   same guess the other way, and splitting it by some ratio would be a
+///   number with no source. `nice` is zero because nothing sets a nice value
+///   yet, `iowait` because nothing waits on a block device, `irq` and
+///   `softirq` because interrupt time is charged to what it interrupted, and
+///   `steal` and the guest times because this kernel runs no guests. The
+///   `cpu` line sums nanoseconds before converting, as Linux does, so it can
+///   be a tick or so more than its `cpuN` lines added up.
+/// * **`intr`**: every interrupt the controller handed to [`irq::dispatch`],
+///   claimed or not, timer and inter-processor interrupts included. No count
+///   is kept per number, so the list after the total is empty.
+/// * **`ctxt`**: switches every run queue has made, idle task included.
+/// * **`btime`**: the wall clock less the counter, in whole seconds. That is
+///   zero until something sets the clock, and moves when it is set, as
+///   Linux's does.
+/// * **`processes`**: tasks made since boot.
+/// * **`procs_running`**: tasks on the run queues, each running one included
+///   and the idle tasks not.
+/// * **`procs_blocked`**: zero. Linux counts tasks waiting on block I/O here,
+///   and nothing does.
+/// * **`softirq`**: zeros, as there are no softirqs.
+pub(super) fn kstat(_: &Kernel) -> Result<Vec<u8>> {
+    let tick = NANOS / CLOCK_TICKS;
+    let times = online_times();
+    let (mut busy, mut idle) = (0_u64, 0_u64);
+    let mut cpus = Vec::with_capacity(times.len());
+    for (logical, time) in &times {
+        busy = busy.saturating_add(time.busy_ns);
+        idle = idle.saturating_add(time.idle_ns);
+        cpus.push((
+            *logical,
+            cpu_times(time.busy_ns / tick, time.idle_ns / tick),
+        ));
+    }
+    // Every queue, not only the online processors': a queue whose processor
+    // never joined has made no switch and holds no task.
+    let all = sched::cpu_times();
+    let switches = all
+        .iter()
+        .fold(0_u64, |sum, time| sum.saturating_add(time.switches));
+    let running = all
+        .iter()
+        .fold(0_u64, |sum, time| sum.saturating_add(time.runnable as u64));
+    let stat = Kstat {
+        total: cpu_times(busy / tick, idle / tick),
+        cpus: &cpus,
+        interrupts: irq::delivered().saturating_add(irq::unclaimed()),
+        per_interrupt: &[],
+        context_switches: switches,
+        boot_time: u64::try_from(time::realtime_offset()).unwrap_or(0) / NANOS,
+        processes: sched::tasks_made(),
+        running,
+        blocked: 0,
+        softirqs: 0,
+        per_softirq: [0; kstat::SOFTIRQS],
+    };
+    let mut out = Vec::new();
+    kstat::render(&mut out, &stat);
+    Ok(out)
+}
+
+/// A processor line: busy ticks as `user`, idle as `idle`; see [`kstat`].
+fn cpu_times(user: u64, idle: u64) -> CpuTimes {
+    CpuTimes {
+        user,
+        idle,
+        ..CpuTimes::default()
+    }
 }
 
 /// `/proc/version`: the release and version `uname` reports, in the sentence

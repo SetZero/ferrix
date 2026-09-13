@@ -1614,3 +1614,47 @@ pub(crate) fn cpu_report(cpu: usize) -> Option<CpuReport> {
     <arch::Irq as IrqControl>::restore(saved);
     Some(report)
 }
+
+/// How one processor has spent its time since it joined the scheduler.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CpuTime {
+    /// Nanoseconds running a task other than the idle task.
+    pub(crate) busy_ns: u64,
+    /// Nanoseconds running the idle task.
+    pub(crate) idle_ns: u64,
+    /// Context switches.
+    pub(crate) switches: u64,
+    /// Tasks runnable on it, the running one included.
+    pub(crate) runnable: usize,
+}
+
+/// Every processor's [`CpuTime`], by logical number, each read up to the
+/// moment its lock was taken and without charging any task for it: a reader
+/// of `/proc/stat` changes nothing the scheduler decides with.
+pub(crate) fn cpu_times() -> Vec<CpuTime> {
+    let Some(queues) = QUEUES.get() else {
+        return Vec::new();
+    };
+    // Room for every queue before any lock is taken, so nothing under one
+    // allocates.
+    let mut times = Vec::with_capacity(queues.len());
+    let saved = <arch::Irq as IrqControl>::disable();
+    for lock in queues {
+        let queue = lock.lock();
+        let (busy_ns, idle_ns) = queue.time_spent(crate::timer::now_nanos());
+        times.push(CpuTime {
+            busy_ns,
+            idle_ns,
+            switches: queue.stats.switches,
+            runnable: queue.len(),
+        });
+    }
+    <arch::Irq as IrqControl>::restore(saved);
+    times
+}
+
+/// Tasks made since boot, the boot task and every processor's idle task
+/// among them, as Linux's `total_forks` counts its idle tasks.
+pub(crate) fn tasks_made() -> u64 {
+    NEXT_ID.load(Ordering::Relaxed).saturating_sub(1)
+}

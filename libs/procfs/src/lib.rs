@@ -22,6 +22,8 @@
 //! * [`meminfo`] — `/proc/meminfo`.
 //! * [`status`] — `/proc/<pid>/status`, and the CPU mask and list formats.
 //! * [`stat`] — `/proc/<pid>/stat`, fifty-two fields on one line.
+//! * [`kstat`] — `/proc/stat`, each processor's time and the kernel's
+//!   counters, and the parser the kernel's boot check reads it back with.
 //! * [`mounts`] — `/proc/mounts`, with the octal escapes a mount point with a
 //!   space in it needs.
 
@@ -30,6 +32,7 @@
 
 extern crate alloc;
 
+pub mod kstat;
 pub mod maps;
 pub mod meminfo;
 pub mod mounts;

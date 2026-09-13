@@ -8,6 +8,7 @@
 
 use alloc::vec::Vec;
 
+use crate::kstat::{self, CpuTimes, Kstat};
 use crate::maps::{self, Mapping, Width};
 use crate::meminfo::{self, Meminfo};
 use crate::mounts::{self, Mount};
@@ -405,4 +406,143 @@ fn a_mounts_line_is_what_linux_printed_and_escapes_what_would_split_it() {
         "tmpfs /mnt/a\\040b\\134c\\011d\\012e tmpfs rw 0 0\n",
         "escapes"
     );
+}
+
+/// A host's `/proc/stat` with `cpu2` to `cpu23` left out, and the interrupt
+/// counts after the thirty-eighth: every line kept is as printed, and the
+/// `intr` line is what Linux prints for a machine with that many interrupts.
+const HOST_KSTAT: &str = "cpu  9076855 270647 1436233 94650326 308715 0 31227 0 169401 437\n\
+cpu0 425646 12091 77968 3850347 14446 0 12100 0 11352 6\n\
+cpu1 657376 15596 82034 3625601 13139 0 3049 0 5940 3\n\
+intr 1540466352 127 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 3291 1 1 1 1 0 0 0 1\n\
+ctxt 3405985925\n\
+btime 1789246016\n\
+processes 2384717\n\
+procs_running 6\n\
+procs_blocked 0\n\
+softirq 256823522 47856483 13436684 9923 12532756 236740 0 353061 83875241 911 98521723\n";
+
+/// The host's per-interrupt counts, as numbers.
+fn host_interrupts() -> Vec<u64> {
+    HOST_KSTAT
+        .lines()
+        .find_map(|line| line.strip_prefix("intr "))
+        .unwrap_or("")
+        .split(' ')
+        .skip(1)
+        .map(|word| word.parse().unwrap_or(u64::MAX))
+        .collect()
+}
+
+fn host_cpus() -> [(u32, CpuTimes); 2] {
+    [
+        (
+            0,
+            CpuTimes::from_fields([425646, 12091, 77968, 3850347, 14446, 0, 12100, 0, 11352, 6]),
+        ),
+        (
+            1,
+            CpuTimes::from_fields([657376, 15596, 82034, 3625601, 13139, 0, 3049, 0, 5940, 3]),
+        ),
+    ]
+}
+
+fn a_host_kstat<'a>(cpus: &'a [(u32, CpuTimes)], interrupts: &'a [u64]) -> Kstat<'a> {
+    Kstat {
+        total: CpuTimes::from_fields([
+            9076855, 270647, 1436233, 94650326, 308715, 0, 31227, 0, 169401, 437,
+        ]),
+        cpus,
+        interrupts: 1540466352,
+        per_interrupt: interrupts,
+        context_switches: 3405985925,
+        boot_time: 1789246016,
+        processes: 2384717,
+        running: 6,
+        blocked: 0,
+        softirqs: 256823522,
+        per_softirq: [
+            47856483, 13436684, 9923, 12532756, 236740, 0, 353061, 83875241, 911, 98521723,
+        ],
+    }
+}
+
+#[test]
+fn kstat_is_byte_for_byte_what_linux_printed() {
+    let cpus = host_cpus();
+    let interrupts = host_interrupts();
+    assert_eq!(interrupts.len(), 38, "the fixture's interrupt counts");
+    let out = rendered(|out| kstat::render(out, &a_host_kstat(&cpus, &interrupts)));
+    assert_eq!(show(&out), HOST_KSTAT);
+}
+
+#[test]
+fn kstat_reads_back_as_what_it_was_given() {
+    let cpus = host_cpus();
+    let parsed = kstat::parse(HOST_KSTAT.as_bytes());
+    let parsed = parsed.as_ref();
+    assert_eq!(parsed.map(|p| p.cpus.as_slice()), Some(cpus.as_slice()));
+    assert_eq!(parsed.map(|p| p.total.idle), Some(94650326));
+    assert_eq!(parsed.map(|p| p.interrupts), Some(1540466352));
+    assert_eq!(parsed.map(|p| p.context_switches), Some(3405985925));
+    assert_eq!(parsed.map(|p| p.boot_time), Some(1789246016));
+    assert_eq!(parsed.map(|p| p.processes), Some(2384717));
+    assert_eq!(parsed.map(|p| p.running), Some(6));
+    assert_eq!(parsed.map(|p| p.blocked), Some(0));
+
+    // With no per-interrupt counts, which is what a kernel that keeps none
+    // prints: the total alone, and still a file that reads back.
+    let bare = Kstat {
+        per_interrupt: &[],
+        per_softirq: [0; kstat::SOFTIRQS],
+        softirqs: 0,
+        ..a_host_kstat(&cpus, &[])
+    };
+    let out = show(&rendered(|out| kstat::render(out, &bare)));
+    assert!(
+        out.contains("\nintr 1540466352\nctxt 3405985925\n"),
+        "{out}"
+    );
+    assert!(out.ends_with("\nsoftirq 0 0 0 0 0 0 0 0 0 0 0\n"), "{out}");
+    assert_eq!(
+        kstat::parse(out.as_bytes()).map(|p| p.interrupts),
+        Some(1540466352)
+    );
+}
+
+#[test]
+fn the_kstat_parser_refuses_what_the_renderer_cannot_produce() {
+    let refused = [
+        (
+            "one space after cpu",
+            HOST_KSTAT.replacen("cpu  ", "cpu ", 1),
+        ),
+        (
+            "nine values",
+            HOST_KSTAT.replacen(" 11352 6\n", " 11352\n", 1),
+        ),
+        (
+            "eleven values",
+            HOST_KSTAT.replacen(" 11352 6\n", " 11352 6 7\n", 1),
+        ),
+        ("a repeated label", HOST_KSTAT.replacen("ctxt", "btime", 1)),
+        ("an unknown label", HOST_KSTAT.replacen("ctxt", "cxtt", 1)),
+        (
+            "no softirq line",
+            HOST_KSTAT.replacen("softirq", "procs_blocked", 1),
+        ),
+        (
+            "a word for a number",
+            HOST_KSTAT.replacen("processes 2384717", "processes many", 1),
+        ),
+        (
+            "a counter with two",
+            HOST_KSTAT.replacen("ctxt 3405985925", "ctxt 3405 985925", 1),
+        ),
+        ("no total", HOST_KSTAT.replacen("cpu  ", "cpu9 ", 1)),
+    ];
+    for (why, text) in refused {
+        assert_ne!(text, HOST_KSTAT, "{why}: the fixture did not change");
+        assert_eq!(kstat::parse(text.as_bytes()), None, "{why}");
+    }
 }

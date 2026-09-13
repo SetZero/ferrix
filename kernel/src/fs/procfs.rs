@@ -149,7 +149,7 @@ fn sysrq_trigger(_: &Kernel, data: &[u8]) -> Result<usize> {
 }
 
 /// `/proc`, less the process directories that follow these in a listing.
-pub(crate) static TOP: [Entry<Kernel>; 8] = [
+pub(crate) static TOP: [Entry<Kernel>; 9] = [
     Entry {
         name: b"self",
         permissions: 0o777,
@@ -159,6 +159,7 @@ pub(crate) static TOP: [Entry<Kernel>; 8] = [
     file(b"filesystems", render::filesystems),
     file(b"meminfo", render::meminfo),
     file(b"mounts", render::mounts),
+    file(b"stat", render::kstat),
     file(b"uptime", render::uptime),
     file(b"version", render::version),
     Entry {

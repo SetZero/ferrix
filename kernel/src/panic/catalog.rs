@@ -805,8 +805,11 @@ pub(crate) static STAGE8_PSEUDO_FILESYSTEMS: Explanation = Explanation {
               the listing said, /proc/self/fd to name a descriptor's path and say it was \
               deleted once it is gone, and /proc/self/maps, read a few bytes at a time while \
               the map changes, to be one line per region as it was at open, with the heap and \
-              stack named. Programs read these files by fixed columns, so a kernel that fails \
-              here hands them wrong numbers without an error.",
+              stack named. It also reads /proc/stat twice across a short sleep and requires \
+              it to parse back with a cpuN line per online processor, the cpu line to be their \
+              sum, no processor to have counted more time than has passed, and no counter to \
+              have gone backwards while the total advanced. Programs read these files by fixed \
+              columns, so a kernel that fails here hands them wrong numbers without an error.",
     causes: &[
         "A directory's lookup and its listing disagree about a name or an inode number, so a \
          recursive listing cannot walk back to what it listed.",
@@ -815,9 +818,12 @@ pub(crate) static STAGE8_PSEUDO_FILESYSTEMS: Explanation = Explanation {
         "Reads of an open /proc file did not go to the snapshot taken at open, so a map that \
          changed mid-read shows up with extra lines.",
         "A /dev node carries the wrong major or minor number, or reaches the wrong device.",
+        "A run queue's busy or idle count dropped the time since its last charge, or charged \
+         one interval twice, so /proc/stat's times go backwards or outrun the clock.",
     ],
     see: "kernel/src/fs/procfs/check.rs run; kernel/src/fs/procfs.rs; kernel/src/fs/devfs.rs; \
-          libs/procfs/src/maps.rs; docs/ROADMAP.md stage 8",
+          libs/procfs/src/maps.rs; libs/procfs/src/kstat.rs; kernel/src/sched/queue.rs \
+          time_spent; docs/ROADMAP.md stage 8",
 };
 
 /// For `sysrq_trigger` in `fs/procfs.rs`, when a program writes `c` to

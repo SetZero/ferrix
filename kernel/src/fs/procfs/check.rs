@@ -22,6 +22,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_procfs::kstat::{self, Parsed};
 use ferrix_procfs::maps;
 use ferrix_sync::SpinLock;
 use ferrix_vfs::initramfs::makedev;
@@ -30,6 +31,7 @@ use ferrix_vma::VmaFlags;
 
 use crate::fs;
 use crate::sched;
+use crate::smp;
 use crate::syscall::process::{self, Process, Startup};
 use crate::syscall::registry;
 
@@ -44,7 +46,20 @@ pub(crate) struct Report {
     pub(crate) maps_lines: u32,
     /// Of those, the ones naming `[heap]` or `[stack]`.
     pub(crate) named: u32,
+    /// `cpuN` lines in `/proc/stat`, one per online processor.
+    pub(crate) stat_cpus: u32,
+    /// Clock ticks `/proc/stat`'s `cpu` line advanced between its two reads.
+    pub(crate) stat_ticks: u64,
+    /// How far apart those reads were, in milliseconds.
+    pub(crate) stat_apart_ms: u64,
 }
+
+/// How far apart the two reads of `/proc/stat` are: five ticks at
+/// `USER_HZ`, so that even a processor idle throughout counts some of it.
+const STAT_APART_NANOS: u64 = 50_000_000;
+
+/// Nanoseconds in a clock tick at `USER_HZ`.
+const TICK_NANOS: u64 = 10_000_000;
 
 /// Every node in `/dev`, with the number Linux gives it.
 const NUMBERS: [(&[u8], u32, u32); 7] = [
@@ -94,6 +109,8 @@ static LAYOUT: SpinLock<Option<Layout>> = SpinLock::new(None);
 /// Run them. `Err` names the first thing that was not true.
 pub(crate) fn run() -> Result<Report, &'static str> {
     let devices = check_devices()?;
+    // In the boot task: `/proc/stat` describes the machine, not the reader.
+    let (stat_cpus, stat_ticks) = check_stat(fs::namespace())?;
 
     let process = process::new_for_check().map_err(|_| "no address space for the /proc check")?;
     if process.pid() == 0 || registry::find(process.pid()).is_none() {
@@ -133,6 +150,9 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         listed,
         maps_lines,
         named,
+        stat_cpus,
+        stat_ticks,
+        stat_apart_ms: STAT_APART_NANOS / 1_000_000,
     })
 }
 
@@ -218,6 +238,105 @@ fn check_devices() -> Result<u32, &'static str> {
         }
     }
     Ok(NUMBERS.len() as u32)
+}
+
+/// `/proc/stat`, read twice across a sleep: each read parses back, has a
+/// `cpuN` line for every online processor and no other, a `cpu` line that is
+/// their sum, and no processor that has counted more time than has passed
+/// since boot; and between the reads no counter went backwards and the total
+/// advanced — `top` divides by that difference. Returns the processor lines
+/// and how many ticks the total advanced.
+fn check_stat(ns: &Namespace) -> Result<(u32, u64), &'static str> {
+    let ctx = ns.context();
+    let read = || -> Result<Parsed, &'static str> {
+        let text = read_all(ns, &ctx, b"/proc/stat", 64)?;
+        kstat::parse(&text).ok_or("/proc/stat does not parse back")
+    };
+    let before = read()?;
+    sched::sleep_for(STAT_APART_NANOS);
+    let after = read()?;
+    let uptime_ticks = crate::timer::now_nanos() / TICK_NANOS;
+
+    let online: Vec<u32> = smp::topology().map_or_else(
+        || vec![0],
+        |topology| {
+            topology
+                .cpus()
+                .iter()
+                .filter(|cpu| cpu.is_online())
+                .map(|cpu| u32::try_from(cpu.logical).unwrap_or(u32::MAX))
+                .collect()
+        },
+    );
+    for parsed in [&before, &after] {
+        if !parsed
+            .cpus
+            .iter()
+            .map(|(cpu, _)| *cpu)
+            .eq(online.iter().copied())
+        {
+            return Err("/proc/stat does not have one cpuN line per online processor");
+        }
+        let mut sums = [0_u64; 10];
+        for (_, times) in &parsed.cpus {
+            for (sum, field) in sums.iter_mut().zip(times.fields()) {
+                *sum = sum.saturating_add(field);
+            }
+        }
+        // Summed in nanoseconds and then converted, so each field may be up
+        // to a tick a processor more than its lines added up.
+        let slack = parsed.cpus.len() as u64;
+        if parsed
+            .total
+            .fields()
+            .iter()
+            .zip(sums)
+            .any(|(&total, sum)| total < sum || total > sum.saturating_add(slack))
+        {
+            return Err("/proc/stat's cpu line is not the sum of its cpuN lines");
+        }
+        if parsed
+            .cpus
+            .iter()
+            .any(|(_, times)| times.ticks() > uptime_ticks.saturating_add(1))
+        {
+            return Err("a processor in /proc/stat has counted more time than has passed");
+        }
+        if parsed.running == 0 {
+            return Err("/proc/stat counts no task running, though its reader is one");
+        }
+    }
+
+    let went_back = before
+        .cpus
+        .iter()
+        .zip(&after.cpus)
+        .map(|((_, first), (_, second))| (*first, *second))
+        .chain([(before.total, after.total)])
+        .any(|(first, second)| {
+            first
+                .fields()
+                .iter()
+                .zip(second.fields())
+                .any(|(&first, second)| first > second)
+        });
+    if went_back {
+        return Err("a processor's time in /proc/stat went backwards between two reads");
+    }
+    if after.interrupts < before.interrupts
+        || after.context_switches < before.context_switches
+        || after.processes < before.processes
+    {
+        return Err("a counter in /proc/stat went backwards between two reads");
+    }
+    let advanced = after.total.ticks().saturating_sub(before.total.ticks());
+    if advanced == 0 {
+        return Err("/proc/stat's time did not advance across a sleep");
+    }
+    Ok((
+        u32::try_from(after.cpus.len()).unwrap_or(u32::MAX),
+        advanced,
+    ))
 }
 
 /// What the check process's address space was given.

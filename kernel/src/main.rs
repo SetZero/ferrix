@@ -372,6 +372,11 @@ fn check_filesystems(view: &BootView<'_>) {
         "  procfs   {} names listed and walked back to, {} maps lines parsed, {} of them named",
         pseudo.listed, pseudo.maps_lines, pseudo.named,
     );
+    println!(
+        "  procstat /proc/stat read twice {} ms apart: a cpu line for each of {} processors, \
+         {} ticks advanced, no counter went backwards",
+        pseudo.stat_apart_ms, pseudo.stat_cpus, pseudo.stat_ticks,
+    );
 }
 
 /// Stage 8: the system calls that take a path, against the real namespace.

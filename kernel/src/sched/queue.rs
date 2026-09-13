@@ -81,6 +81,10 @@ pub(crate) struct Stats {
     /// an eligible entity with an earlier deadline was passed over. Zero on a
     /// queue whose tree is right; see [`CpuQueue::note_pick`].
     pub(crate) wrong_picks: u64,
+    /// Nanoseconds charged while a task other than the idle task was running.
+    pub(crate) busy_ns: u64,
+    /// Nanoseconds charged while the idle task was.
+    pub(crate) idle_ns: u64,
 }
 
 /// How many recent picks a queue remembers while a window is open.
@@ -259,6 +263,11 @@ impl CpuQueue {
         if delta == 0 {
             return;
         }
+        if self.fair.current().is_some() {
+            self.stats.busy_ns += delta;
+        } else {
+            self.stats.idle_ns += delta;
+        }
         let Some(remaining) = self.fair.remaining_ns() else {
             return;
         };
@@ -271,6 +280,25 @@ impl CpuQueue {
         }
         if self.stats.measuring {
             self.measure();
+        }
+    }
+
+    /// Busy and idle nanoseconds up to `now`, charging nothing.
+    ///
+    /// The time since the last charge is added to whichever of the two
+    /// [`Self::account`] would charge it to, so neither goes backwards between
+    /// two reads however the charges fall between them. A queue whose
+    /// processor has not joined the scheduler has nothing running, and
+    /// counts nothing.
+    pub(crate) fn time_spent(&self, now: u64) -> (u64, u64) {
+        if self.current.is_none() {
+            return (self.stats.busy_ns, self.stats.idle_ns);
+        }
+        let since = now.saturating_sub(self.exec_start);
+        if self.fair.current().is_some() {
+            (self.stats.busy_ns.saturating_add(since), self.stats.idle_ns)
+        } else {
+            (self.stats.busy_ns, self.stats.idle_ns.saturating_add(since))
         }
     }
 
