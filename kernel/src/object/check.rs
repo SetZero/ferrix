@@ -85,15 +85,15 @@ const WAKE_AFTER_NANOS: u64 = 20_000_000;
 const PATIENCE_NANOS: u64 = 120_000_000_000;
 /// How long the spinning programs run before a job is killed under them.
 const KILL_AFTER_NANOS: u64 = 20_000_000;
-/// How many deliveries the wake check times through each kind of wait.
+/// How many deliveries the wake check makes through each kind of wait.
 const WAKE_ROUNDS: u32 = 8;
-/// A wake slower than this is slow.
-const FAST_WAKE_NANOS: u64 = 2_000_000;
 /// How much later each round of the wake check delivers than the one before:
 /// the wait's five-millisecond recheck period, divided by [`WAKE_ROUNDS`].
 const WAKE_STAGGER_NANOS: u64 = 625_000;
-/// Slow rounds of one kind the wake check forgives, for a busy host.
-const SLOW_WAKES_FORGIVEN: u32 = 2;
+/// Rounds of one kind the wake check needs ended by the delivery's wake: a
+/// majority, because a wait whose task was slow to block can find its
+/// interrupt already pending and never sleep.
+const WOKEN_ROUNDS_REQUIRED: u32 = WAKE_ROUNDS / 2 + 1;
 
 /// What travels in the VMO, to show the handle that arrives names it.
 const SECRET: &[u8] = b"carried by a handle";
@@ -144,6 +144,8 @@ struct Counter {
     interrupts: u32,
     /// See [`DeviceReport::pinned`].
     pinned: u32,
+    /// See [`DeviceReport::delivered`].
+    delivered: u32,
     /// See [`DeviceReport::wakes`].
     wakes: u32,
     /// See [`DeviceReport::slowest_wake`].
@@ -1469,9 +1471,13 @@ pub(crate) struct DeviceReport {
     pub(crate) pinned: u32,
     /// Calls refused with exactly the status they had to be refused with.
     pub(crate) refusals: u32,
-    /// Interrupt deliveries timed from delivery to the woken wait's return.
+    /// Interrupt deliveries made to a waiting task.
+    pub(crate) delivered: u32,
+    /// Those whose wait the delivery's wake ended, rather than its recheck.
     pub(crate) wakes: u32,
-    /// The slowest of those, in nanoseconds.
+    /// The longest any delivery took to become a returned wait, in
+    /// nanoseconds: the host's latency as much as the kernel's, so reported
+    /// and never judged.
     pub(crate) slowest_wake: u64,
 }
 
@@ -1514,6 +1520,7 @@ pub(crate) fn run_devices() -> Result<DeviceReport, &'static str> {
         interrupts: counter.interrupts,
         pinned: counter.pinned,
         refusals: counter.refusals,
+        delivered: counter.delivered,
         wakes: counter.wakes,
         slowest_wake: counter.slowest_wake,
     })
@@ -2330,20 +2337,24 @@ fn fire_after_a_delay(extra: usize) {
 /// port it is bound to, rather than leaving either to find it at its wait's
 /// recheck.
 ///
-/// [`WAKE_ROUNDS`] deliveries each way, from another thread after a delay,
-/// timed from the delivery to the wait's return. A round slower than
-/// [`FAST_WAKE_NANOS`] is slow, and more than [`SLOW_WAKES_FORGIVEN`] slow
-/// rounds of one kind fail: a woken task can still wait out the slice of
-/// whatever runs on its processor.
+/// [`WAKE_ROUNDS`] deliveries each way, from another thread after a delay. A
+/// round counts when its wait was ended by a wake: `wake_all` took the waiting
+/// task off the queue, which the queue counts, rather than leaving it listed
+/// for the recheck timer to find. At least [`WOKEN_ROUNDS_REQUIRED`] of each
+/// kind have to count, and with the wakes taken out of the delivery none do.
 ///
-/// # Staggered, or the recheck passes for a wake
+/// The check used to time the rounds instead, and failed whenever more than
+/// two took over two milliseconds from delivery to return. Under a busy host
+/// or KVM that is how long a halted processor can take to run again, so it
+/// failed on the host rather than on the wake (`FX-0901`). The slowest time is
+/// still reported, and nothing judges it.
+///
+/// # Staggered
 ///
 /// A wait rechecks five milliseconds after it started, and so on, and the
-/// firer starts with it. A delay that is a whole number of recheck periods
-/// would put every delivery just before a recheck, and a wait nobody woke would
-/// come back at once. So each round delivers [`WAKE_STAGGER_NANOS`] later than
-/// the last, spreading the deliveries across the period: a wait left to its
-/// recheck is slow in about five rounds of eight.
+/// firer starts with it. Each round delivers [`WAKE_STAGGER_NANOS`] later than
+/// the last, so that the deliveries fall across the recheck period rather than
+/// all just before one.
 ///
 /// Called with the interrupt acknowledged, and leaves it acknowledged, bound to
 /// a port that is closed.
@@ -2370,8 +2381,17 @@ fn check_an_interrupt_wakes_its_waiter(
         ),
         (false, "an interrupt's waiter was not woken by the delivery"),
     ] {
-        let mut slow = 0;
+        let watched = side
+            .process
+            .with_handles(|table| {
+                table
+                    .get(if through_port { port } else { interrupt })
+                    .map(|(object, _)| object.clone())
+            })
+            .map_err(|_| "the wake check's handle named nothing")?;
+        let mut woken = 0;
         for round in 0..WAKE_ROUNDS {
+            let ended_by_a_wake = watched.waiters().waits_ended_by_a_wake();
             let extra = u64::from(round).saturating_mul(WAKE_STAGGER_NANOS);
             let _firer = crate::sched::spawn(
                 "interrupt firer",
@@ -2394,16 +2414,19 @@ fn check_an_interrupt_wakes_its_waiter(
             if woke != Ok(0) {
                 return Err("a wait on an interrupt about to be delivered failed");
             }
-            if latency > FAST_WAKE_NANOS {
-                slow += 1;
+            if watched.waiters().waits_ended_by_a_wake() != ended_by_a_wake {
+                woken += 1;
             }
-            counter.wakes += 1;
+            counter.delivered += 1;
             counter.slowest_wake = counter.slowest_wake.max(latency);
             let _ = side
                 .call(nr::INTERRUPT_ACK, &[reg(interrupt)])
                 .map_err(|_| "acknowledging a timed delivery failed")?;
         }
-        if slow > SLOW_WAKES_FORGIVEN {
+        // Let go of here: a reference to the interrupt is a claim on its line.
+        object::dispose([watched]);
+        counter.wakes += woken;
+        if woken < WOKEN_ROUNDS_REQUIRED {
             return Err(not_woken);
         }
     }

@@ -18,6 +18,7 @@
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use ferrix_sync::IrqSpinLock;
 
@@ -64,6 +65,14 @@ pub(crate) struct WaitQueue {
     /// interrupts on is exposed to the same thing once it is contended; this
     /// is the one the scheduler's own check contends.
     waiters: IrqSpinLock<Vec<Arc<Task>>, arch::Irq>,
+    /// Waits on this queue that a wake ended: `wake_all` took the task off the
+    /// list, and the wait found what it was waiting for when it ran again.
+    ///
+    /// For the checks, which need to tell a wake from the recheck without
+    /// timing either. A task the recheck timer wakes is still on the list when
+    /// it runs; one a waker woke is not, however long the processor took to
+    /// run it -- so the count is a fact about the waker, not about the host.
+    woken: AtomicU32,
 }
 
 impl WaitQueue {
@@ -71,6 +80,7 @@ impl WaitQueue {
     pub(crate) const fn new() -> WaitQueue {
         WaitQueue {
             waiters: IrqSpinLock::new(Vec::new()),
+            woken: AtomicU32::new(0),
         }
     }
 
@@ -99,8 +109,14 @@ impl WaitQueue {
         mut ready: impl FnMut() -> bool,
         deadline: u64,
     ) -> bool {
+        // Whether the last sleep ended because a waker took this task off the
+        // list, for the count `waits_ended_by_a_wake` reports.
+        let mut drained = false;
         loop {
             if ready() {
+                if drained {
+                    let _ = self.woken.fetch_add(1, Ordering::Relaxed);
+                }
                 return true;
             }
             if crate::timer::now_nanos() >= deadline {
@@ -147,7 +163,7 @@ impl WaitQueue {
             if ready() {
                 task.set_state(RUNNABLE);
                 let _ = task.take_sleep_deadline();
-                self.unqueue(task.id);
+                let _ = self.unqueue(task.id);
                 return true;
             }
             super::block();
@@ -163,13 +179,21 @@ impl WaitQueue {
             // this queue for. `wake_all` drains the list, so this only matters
             // for the paths that leave without being drained: the recheck
             // timer, and the condition coming true.
-            self.unqueue(task.id);
+            drained = !self.unqueue(task.id);
         }
     }
 
-    /// Take `id` off the waiter list, if it is on it.
-    fn unqueue(&self, id: super::TaskId) {
-        self.waiters.lock().retain(|waiter| waiter.id != id);
+    /// Take `id` off the waiter list, and say whether it was on it.
+    fn unqueue(&self, id: super::TaskId) -> bool {
+        let mut waiters = self.waiters.lock();
+        let listed = waiters.len();
+        waiters.retain(|waiter| waiter.id != id);
+        waiters.len() != listed
+    }
+
+    /// How many waits on this queue a wake has ended: see the field.
+    pub(crate) fn waits_ended_by_a_wake(&self) -> u32 {
+        self.woken.load(Ordering::Relaxed)
     }
 
     /// Wake everything waiting.

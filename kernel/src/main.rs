@@ -652,10 +652,12 @@ fn check_device_objects() {
          device and found at their device addresses, {} refusals as specified",
         report.mapped, report.interrupts, report.pinned, report.refusals,
     );
-    if report.wakes > 0 {
+    if report.delivered > 0 {
         println!(
-            "  wake     {} interrupt deliveries woke their waiters, the slowest after {} us",
+            "  wake     {} of {} interrupt deliveries ended their wait by waking it, the slowest \
+             returning after {} us",
             report.wakes,
+            report.delivered,
             report.slowest_wake / 1_000,
         );
     }

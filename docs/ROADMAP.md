@@ -1637,11 +1637,16 @@ lets go of them, and wakes whoever waits on the interrupt and on the port.
 Since `0cda8de` made a wait queue's lock interrupt-safe, `WaitQueue::wake_all`
 may be called from a handler as it is: every lock it takes is taken with
 interrupts masked, it allocates nothing, and it leaves the reschedule to the
-way out of the interrupt or to an IPI. The device check times sixteen
+way out of the interrupt or to an IPI. The device check makes sixteen
 deliveries from another thread, eight waited on through the interrupt and
-eight through its port, staggered across the five-millisecond recheck period
-so that the recheck cannot pass for a wake, and fails if more than two of
-either take over 2 ms; left to the recheck, about five of eight would.
+eight through its port, staggered across the five-millisecond recheck period,
+and requires a majority of each kind to have ended their wait by waking it:
+the wait queue counts a wait whose task a wake took off its list, which a task
+the recheck timer woke is still on, however long its processor took to run
+it. With the wakes taken out of the delivery, none does. It used to time the
+rounds against 2 ms instead, and failed under a busy host or KVM, where a
+halted processor can take that long to run again (`FX-0901`); the slowest
+time is still printed.
 
 **Done — a port hears that a process has ended.** A handle to a process
 names its `Exit`: its status, the signal that ended it, the queue woken when it
