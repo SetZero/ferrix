@@ -120,6 +120,8 @@ pub struct Volume<S> {
     root_tree: TreeRoot,
     fs_tree: TreeRoot,
     root_dir: u64,
+    total_bytes: u64,
+    bytes_used: u64,
 }
 
 impl<S: ChunkStorage> Volume<S> {
@@ -166,6 +168,8 @@ impl<S: ChunkStorage> Volume<S> {
                 generation: 0,
             },
             root_dir: 0,
+            total_bytes: sb.total_bytes(),
+            bytes_used: sb.bytes_used(),
         };
         volume.load_chunk_tree(device, node)?;
         let root = volume.find_root(device, FS_TREE_OBJECTID, node)?;
@@ -218,6 +222,18 @@ impl<S: ChunkStorage> Volume<S> {
     #[must_use]
     pub const fn root_dir(&self) -> u64 {
         self.root_dir
+    }
+
+    /// The volume's size in bytes, as the superblock records it.
+    #[must_use]
+    pub const fn total_bytes(&self) -> u64 {
+        self.total_bytes
+    }
+
+    /// Bytes allocated to data and metadata, as the superblock records it.
+    #[must_use]
+    pub const fn bytes_used(&self) -> u64 {
+        self.bytes_used
     }
 
     /// The logical-to-physical map, as loaded from the chunk tree.

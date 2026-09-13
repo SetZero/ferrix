@@ -328,3 +328,21 @@ fn concurrent_readers_of_one_compressed_file_each_get_its_bytes() {
         );
     }
 }
+
+#[test]
+fn statfs_reports_btrfs_and_the_volume_size() {
+    let fs = mount("none");
+    let stat = fs.statfs();
+    assert_eq!(stat.magic, BTRFS_SUPER_MAGIC, "the magic programs test for");
+    assert_eq!(stat.block_size, 4096, "counts are in sectors");
+    assert_eq!(
+        stat.blocks * 4096,
+        128 * 1024 * 1024,
+        "the generator makes a 128 MiB image"
+    );
+    assert!(
+        stat.blocks_free > 0 && stat.blocks_free < stat.blocks,
+        "some of the volume is used and some is not"
+    );
+    assert_eq!(stat.name_max, 255, "btrfs's name limit");
+}

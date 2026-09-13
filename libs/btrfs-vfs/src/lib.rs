@@ -67,7 +67,7 @@ use ferrix_btrfs::volume::{Device, Volume};
 use ferrix_sync::SpinLock;
 use ferrix_vfs::{
     DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, Result,
-    SetAttributes, Timespec,
+    SetAttributes, StatFs, Timespec,
 };
 
 /// How many chunks a mounted volume may have.
@@ -82,6 +82,13 @@ const POOLED: usize = 4;
 
 /// The longest symlink target Linux will store: `PATH_MAX` less its NUL.
 const MAX_LINK: u64 = 4095;
+
+/// `f_type` for btrfs, which programs compare against to learn what they are
+/// running on.
+pub const BTRFS_SUPER_MAGIC: u64 = 0x9123_683E;
+
+/// The longest name a btrfs directory entry may have.
+const NAME_MAX: u64 = 255;
 
 /// What a mount reads through: a [`Device`] handle that can be cloned for
 /// each operation and shared across threads.
@@ -234,6 +241,29 @@ impl<D: BlockHandle> FileSystem for Btrfs<D> {
 
     fn device(&self) -> u64 {
         self.shared.dev_no
+    }
+
+    /// Sizes from the superblock, in sectors.
+    ///
+    /// Linux derives free space from each block group's space info, which
+    /// would mean walking the extent tree at every `statfs`; total less used,
+    /// as the superblock records them, is an approximation of that figure,
+    /// and on a read-only mount nothing can spend it. btrfs has no inode
+    /// table, so, as on Linux, the inode counts are zero.
+    fn statfs(&self) -> StatFs {
+        let volume = &self.shared.volume;
+        let block_size = u64::from(volume.sectorsize());
+        let free = volume.total_bytes().saturating_sub(volume.bytes_used()) / block_size;
+        StatFs {
+            magic: BTRFS_SUPER_MAGIC,
+            block_size,
+            blocks: volume.total_bytes() / block_size,
+            blocks_free: free,
+            blocks_available: free,
+            files: 0,
+            files_free: 0,
+            name_max: NAME_MAX,
+        }
     }
 }
 
