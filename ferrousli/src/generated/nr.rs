@@ -296,3 +296,29 @@ pub const SETRESUID: usize = 117;
 pub const SETRESGID: usize = 119;
 /// `fchmodat2`.
 pub const FCHMODAT2: usize = 452;
+/// `set_robust_list`.
+pub const SET_ROBUST_LIST: usize = 273;
+/// `get_robust_list`.
+pub const GET_ROBUST_LIST: usize = 274;
+/// `sched_setparam`.
+pub const SCHED_SETPARAM: usize = 142;
+/// `sched_getparam`.
+pub const SCHED_GETPARAM: usize = 143;
+/// `sched_setscheduler`.
+pub const SCHED_SETSCHEDULER: usize = 144;
+/// `sched_getscheduler`.
+pub const SCHED_GETSCHEDULER: usize = 145;
+/// `sched_get_priority_max`.
+pub const SCHED_GET_PRIORITY_MAX: usize = 146;
+/// `sched_get_priority_min`.
+pub const SCHED_GET_PRIORITY_MIN: usize = 147;
+/// `sched_rr_get_interval`.
+pub const SCHED_RR_GET_INTERVAL: usize = 148;
+/// `sched_setaffinity`.
+pub const SCHED_SETAFFINITY: usize = 203;
+/// `getcpu`.
+pub const GETCPU: usize = 309;
+/// `prctl`.
+pub const PRCTL: usize = 157;
+/// `rt_tgsigqueueinfo`.
+pub const RT_TGSIGQUEUEINFO: usize = 297;

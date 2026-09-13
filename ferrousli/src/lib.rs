@@ -36,6 +36,7 @@ pub mod errno;
 pub mod exit;
 pub mod fcntl;
 pub mod float;
+pub mod futex;
 pub mod ioctl;
 pub mod locale;
 pub mod lock;
