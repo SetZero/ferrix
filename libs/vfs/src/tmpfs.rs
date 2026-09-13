@@ -116,6 +116,20 @@ pub trait Pages: Send + Sync + fmt::Debug {
     /// source could fill.
     fn committed_bytes(&self) -> u64;
 
+    /// The file is now `len` bytes long.
+    ///
+    /// Called under the inode's lock whenever the length changes: after a
+    /// write or a grow has extended the file, and before
+    /// [`Pages::discard_from`] when it is cut. A store whose pages can be
+    /// mapped bounds a mapping's faults by it, so a page wholly past the end
+    /// is refused rather than committed, as Linux answers such a fault with
+    /// `SIGBUS`. Lowered before the discard, a fault racing a truncation sees
+    /// the new length before the pages go. The default ignores it, which is
+    /// right for a store nothing maps.
+    fn resize(&self, len: u64) {
+        let _ = len;
+    }
+
     /// The object a mapping of the file maps: in the kernel, the file's VMO.
     ///
     /// `None`, the default, for a store nothing can map, which the heap store
@@ -1061,7 +1075,10 @@ impl Inode for Node {
                     return Err(Errno::EFBIG);
                 }
                 pages.write(start, data)?;
-                *len = (*len).max(end);
+                if end > *len {
+                    *len = end;
+                    pages.resize(end);
+                }
                 end
             }
             Body::Dir(_) => return Err(Errno::EISDIR),
@@ -1079,6 +1096,9 @@ impl Inode for Node {
         let mut state = self.state.lock();
         match &mut state.body {
             Body::File { pages, len } => {
+                // The store hears the new length first, so a mapping's fault
+                // past the cut is refused before the cut pages go.
+                pages.resize(new_len);
                 if new_len < *len {
                     pages.discard_from(new_len);
                 }
@@ -1103,12 +1123,22 @@ impl Inode for Node {
             Body::File { len, .. } if *len >= new_len => return Ok(()),
             // Nothing to clear: a shrink zeroes what it cuts off, so the bytes
             // this uncovers already read as zeros.
-            Body::File { len, .. } => *len = new_len,
+            Body::File { pages, len } => {
+                *len = new_len;
+                pages.resize(new_len);
+            }
             Body::Dir(_) => return Err(Errno::EISDIR),
             _ => return Err(Errno::EINVAL),
         }
         state.touch(now);
         Ok(())
+    }
+
+    fn mapping(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        match &self.state.lock().body {
+            Body::File { pages, .. } => pages.object(),
+            _ => None,
+        }
     }
 
     fn lookup(&self, name: &[u8]) -> Result<Arc<dyn Inode>> {

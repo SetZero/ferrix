@@ -30,6 +30,7 @@ pub(crate) mod btrfs_check;
 pub(crate) mod check;
 pub(crate) mod console;
 pub(crate) mod devfs;
+pub(crate) mod mmap_check;
 mod pages;
 pub(crate) mod pipe;
 pub(crate) mod procfs;

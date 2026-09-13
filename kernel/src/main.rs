@@ -376,6 +376,20 @@ fn check_filesystems(view: &BootView<'_>) {
         calls.bytes, calls.leaked,
     );
 
+    let mapped = match fs::mmap_check::run() {
+        Ok(mapped) => mapped,
+        Err(problem) => fatal!(
+            catalog::STAGE8_FILE_MAPPINGS,
+            "stage 8 file mapping self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  mmap     {} bytes written through a shared file mapping and read back from the \
+         file, and the other way; refusals, msync and /proc maps answered; a truncation \
+         took {} pages away from the mapping; {} frames leaked",
+        mapped.bytes, mapped.cut, mapped.leaked,
+    );
+
     let pseudo = match fs::procfs::check::run() {
         Ok(pseudo) => pseudo,
         Err(problem) => fatal!(

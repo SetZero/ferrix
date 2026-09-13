@@ -1200,7 +1200,8 @@ fn space_status(why: SpaceError) -> Errno {
         SpaceError::NotUserRange(_)
         | SpaceError::BadRange
         | SpaceError::NotMapped(_)
-        | SpaceError::Backing(_) => status::INVALID_ARGS,
+        | SpaceError::Backing(_)
+        | SpaceError::PastEnd(_) => status::INVALID_ARGS,
     }
 }
 

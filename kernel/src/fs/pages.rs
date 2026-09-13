@@ -337,6 +337,12 @@ impl Pages for VmoPages {
         (self.vmo.committed() as u64).saturating_mul(PAGE_SIZE)
     }
 
+    /// Bound a mapping's faults by the file's new length, before any page a
+    /// cut discards goes.
+    fn resize(&self, len: u64) {
+        self.vmo.set_file_len(len);
+    }
+
     /// The VMO itself, which a mapping of the file maps.
     fn object(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         Some(Arc::clone(&self.vmo) as Arc<dyn Any + Send + Sync>)

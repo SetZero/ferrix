@@ -1134,6 +1134,36 @@ pub(crate) static STAGE8_PIPES_AND_FILESYSTEM_CALLS: Explanation = Explanation {
           docs/ROADMAP.md stage 8",
 };
 
+/// For `check_filesystems` in `main.rs`, when the shared file mapping check
+/// fails.
+pub(crate) static STAGE8_FILE_MAPPINGS: Explanation = Explanation {
+    code: "FX-0870",
+    title: "a shared file mapping failed its self-check",
+    meaning: "`fs::mmap_check::run` builds a process, creates a file under /tmp and maps it \
+              shared. The mapping must show the file's bytes and zeros for the rest of its \
+              last page; a write through the mapping must be what the file reads back, and a \
+              write to the file what the mapping shows, because both are the file's own VMO \
+              pages. mmap must refuse a descriptor that names nothing with EBADF, a directory \
+              with ENODEV, a writable shared mapping of a file opened read-only with EACCES, \
+              and a private file mapping with ENODEV. msync must answer a whole mapping and \
+              refuse bad flags and an unmapped range as Linux does, and /proc/<pid>/maps must \
+              name the mapping by its file. A truncation must take the pages past the new end \
+              away from the mapping, and a grow must show zeros there. The whole run is done \
+              twice and must leave no frame behind.",
+    causes: &[
+        "A file's VMO is not attached as a mapper of the space, so a truncation's retirement \
+         never takes the mapping's translations down and a page past the end stays readable.",
+        "`VmoPages::resize` is not called before `discard_from`, so a fault racing the cut \
+         commits a page past the new end.",
+        "`sys_mmap` checks the descriptor's access after it clears a MAP_FIXED range, or maps \
+         a file whose inode has no mapping object.",
+        "`give_back` decommits a file mapping's pages on munmap, which takes them away from \
+         the file itself.",
+    ],
+    see: "kernel/src/fs/mmap_check.rs; kernel/src/syscall/memory.rs sys_mmap, sys_msync; \
+          kernel/src/user/space.rs map_file, fault; kernel/src/fs/pages.rs; docs/ROADMAP.md stage 8",
+};
+
 /// For `handle_page_fault` in `trap.rs`, the `unhandled page fault` report.
 pub(crate) static UNHANDLED_PAGE_FAULT: Explanation = Explanation {
     code: "FX-9001",
@@ -1264,6 +1294,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_PSEUDO_FILESYSTEMS,
     &SYSRQ_CRASH,
     &STAGE8_PIPES_AND_FILESYSTEM_CALLS,
+    &STAGE8_FILE_MAPPINGS,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,

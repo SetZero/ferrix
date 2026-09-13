@@ -16,16 +16,22 @@
 //! offset counted in the wrong unit, a `PROT_NONE` that is silently turned
 //! into a readable page.
 
+use alloc::sync::Arc;
+use core::any::Any;
+
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED,
-    MREMAP_MAYMOVE, PROT_EXEC, PROT_GROWSDOWN, PROT_GROWSUP, PROT_READ, PROT_SEM, PROT_WRITE,
+    MREMAP_MAYMOVE, MS_ASYNC, MS_INVALIDATE, MS_SYNC, PROT_EXEC, PROT_GROWSDOWN, PROT_GROWSUP,
+    PROT_READ, PROT_SEM, PROT_WRITE,
 };
 use ferrix_vma::VmaFlags;
 
+use crate::syscall::fd;
 use crate::syscall::process::Process;
-use crate::user::space::{Destination, MMAP_MIN_ADDR, SpaceError};
+use crate::user::space::{Destination, FilePlace, MMAP_MIN_ADDR, SpaceError};
+use crate::user::vmo::Vmo;
 
 /// What `mmap`'s sixth argument is counted in.
 ///
@@ -65,7 +71,9 @@ fn refused(error: SpaceError) -> Errno {
     match error {
         SpaceError::OutOfMemory | SpaceError::Backing(_) => Errno::ENOMEM,
         SpaceError::NotUserRange(_) | SpaceError::BadRange => Errno::EINVAL,
-        SpaceError::NotMapped(_) | SpaceError::Refused(_) => Errno::EFAULT,
+        // A copy into a file mapping past the file's end is EFAULT from a
+        // system call, where the same touch from user mode is SIGBUS.
+        SpaceError::NotMapped(_) | SpaceError::Refused(_) | SpaceError::PastEnd(_) => Errno::EFAULT,
     }
 }
 
@@ -108,10 +116,11 @@ pub(crate) struct MmapRequest {
 
 /// `mmap` and `mmap2`.
 ///
-/// Anonymous memory only. A file-backed mapping needs the VFS, which is stage
-/// 8; asking for one is `ENODEV` rather than a mapping of zeroes, because
-/// zeroes where a file's contents should be is the kind of wrong that shows up
-/// a long way from here.
+/// Anonymous memory, and a file mapped shared: the region shows the file's own
+/// pages, the ones `read` copies out of, so a write through either is seen
+/// through the other. A private file mapping is `ENODEV` until it can copy
+/// into an object of its own on first write, rather than a mapping that writes
+/// to the file behind the program's back.
 pub(crate) fn sys_mmap(process: &Process, request: &MmapRequest) -> Result<usize, Errno> {
     let &MmapRequest {
         addr,
@@ -125,9 +134,6 @@ pub(crate) fn sys_mmap(process: &Process, request: &MmapRequest) -> Result<usize
     let mut vma = protection(prot)?;
     let len = pages_for(len)?;
 
-    if flags & MAP_ANONYMOUS == 0 {
-        return Err(Errno::ENODEV);
-    }
     // Exactly one of SHARED and PRIVATE, which is what Linux requires.
     let shared = flags & MAP_SHARED != 0;
     if shared == (flags & MAP_PRIVATE != 0) {
@@ -135,13 +141,9 @@ pub(crate) fn sys_mmap(process: &Process, request: &MmapRequest) -> Result<usize
     }
     vma.shared = shared;
 
-    // Linux ignores an anonymous mapping's descriptor, and its offset once the
-    // offset is whole pages, so a program passing a real fd with
-    // `MAP_ANONYMOUS` gets zeroes there and must get them here. What Linux does
-    // refuse is refused: a byte offset that is not a page boundary, which the
-    // entry point checks before it looks at any flag, and an offset whose
-    // pages would wrap.
-    let _ = fd;
+    // What Linux refuses of any offset is refused: a byte offset that is not
+    // a page boundary, which the entry point checks before it looks at any
+    // flag, and an offset whose pages would wrap.
     let page_offset = match unit {
         OffsetUnit::Bytes if !offset.is_multiple_of(PAGE_SIZE) => return Err(Errno::EINVAL),
         OffsetUnit::Bytes => offset / PAGE_SIZE,
@@ -153,18 +155,43 @@ pub(crate) fn sys_mmap(process: &Process, request: &MmapRequest) -> Result<usize
         return Err(Errno::EOVERFLOW);
     }
 
-    let fixed = flags & (MAP_FIXED | MAP_FIXED_NOREPLACE) != 0;
-    if !fixed {
-        // A non-null address without MAP_FIXED is a hint, and a hint that does
-        // not fit is answered elsewhere rather than refused.
-        let hint = (addr != 0).then_some(addr);
-        return process
+    if flags & MAP_ANONYMOUS == 0 {
+        let offset = (page_offset as u64)
+            .checked_mul(PAGE_SIZE)
+            .ok_or(Errno::EOVERFLOW)?;
+        return map_file(process, fd, addr, len, flags, vma, offset);
+    }
+
+    // Linux ignores an anonymous mapping's descriptor, and its offset once the
+    // offset is whole pages, so a program passing a real fd with
+    // `MAP_ANONYMOUS` gets zeroes there and must get them here.
+    let _ = fd;
+    match place(process, addr, len, flags)? {
+        FilePlace::Anywhere(hint) => process
             .space()
             .map_anywhere(hint, len, vma)
             .map(usize_of)
-            .map_err(refused);
+            .map_err(refused),
+        FilePlace::Fixed(at) => process
+            .space()
+            .map_anonymous(at, len, vma)
+            .map(|_| usize_of(at))
+            .map_err(refused),
     }
+}
 
+/// Where a mapping of `len` bytes asked for at `addr` with `flags` goes, with
+/// the range already cleared for plain `MAP_FIXED`.
+///
+/// Called once everything else about the call has been checked, because the
+/// clearing is the one step that changes the address space: a call refused
+/// after it would have unmapped what the program had there for nothing.
+fn place(process: &Process, addr: u64, len: u64, flags: u32) -> Result<FilePlace, Errno> {
+    if flags & (MAP_FIXED | MAP_FIXED_NOREPLACE) == 0 {
+        // A non-null address without MAP_FIXED is a hint, and a hint that does
+        // not fit is answered elsewhere rather than refused.
+        return Ok(FilePlace::Anywhere((addr != 0).then_some(addr)));
+    }
     if !addr.is_multiple_of(PAGE_SIZE) {
         return Err(Errno::EINVAL);
     }
@@ -182,11 +209,98 @@ pub(crate) fn sys_mmap(process: &Process, request: &MmapRequest) -> Result<usize
         // error here, because the program asked for the result, not the steps.
         let _ = process.space().unmap(addr, len);
     }
+    Ok(FilePlace::Fixed(addr))
+}
+
+/// `mmap` of the file `fd` names, from byte `offset`.
+///
+/// The refusals come in Linux's order: a descriptor that names nothing, or
+/// only a path, is `EBADF`; one not open for reading is `EACCES`, and so is a
+/// shared writable mapping of one not open for writing; a file with no pages
+/// to map -- a directory, a pipe, a device, a generated `/proc` file -- is
+/// `ENODEV`. `O_APPEND` refuses nothing: Linux refuses only an inode marked
+/// append-only, which no filesystem here can mark.
+fn map_file(
+    process: &Process,
+    descriptor: i64,
+    addr: u64,
+    len: u64,
+    flags: u32,
+    vma: VmaFlags,
+    offset: u64,
+) -> Result<usize, Errno> {
+    let file = fd::file(process, fd::arg(descriptor as u64)).map_err(|_| Errno::EBADF)?;
+    if file.is_path() {
+        return Err(Errno::EBADF);
+    }
+    if !file.readable() || (vma.shared && vma.write && !file.writable()) {
+        return Err(Errno::EACCES);
+    }
+    let vmo = file
+        .inode()
+        .mapping()
+        .and_then(|object| object.downcast::<Vmo>().ok())
+        .ok_or(Errno::ENODEV)?;
+    if !vma.shared {
+        return Err(Errno::ENODEV);
+    }
+    let at = place(process, addr, len, flags)?;
     process
         .space()
-        .map_anonymous(addr, len, vma)
-        .map(|_| usize_of(addr))
+        .map_file(
+            at,
+            len,
+            vma,
+            vmo,
+            offset,
+            file as Arc<dyn Any + Send + Sync>,
+        )
+        .map(usize_of)
         .map_err(refused)
+}
+
+/// `msync`.
+///
+/// Nothing is written back, because nothing needs to be: a shared file
+/// mapping's pages are the file's own pages, so a `read` already sees every
+/// write, and neither tmpfs nor a read-only btrfs has a disk to flush them
+/// to. What is left is what Linux checks, in its order: unknown flags,
+/// `MS_ASYNC` with `MS_SYNC`, and an address off a page boundary are
+/// `EINVAL`; a range that wraps, or is not wholly mapped, is `ENOMEM`.
+pub(crate) fn sys_msync(
+    process: &Process,
+    addr: u64,
+    len: u64,
+    flags: u32,
+) -> Result<usize, Errno> {
+    if flags & !(MS_ASYNC | MS_INVALIDATE | MS_SYNC) != 0
+        || (flags & MS_ASYNC != 0 && flags & MS_SYNC != 0)
+        || !addr.is_multiple_of(PAGE_SIZE)
+    {
+        return Err(Errno::EINVAL);
+    }
+    let len = len
+        .checked_add(PAGE_SIZE - 1)
+        .map(|len| len & !(PAGE_SIZE - 1))
+        .ok_or(Errno::ENOMEM)?;
+    let end = addr.checked_add(len).ok_or(Errno::ENOMEM)?;
+    let mut covered = addr;
+    for region in process.space().regions() {
+        if covered >= end {
+            break;
+        }
+        if region.end <= covered {
+            continue;
+        }
+        if region.start > covered {
+            return Err(Errno::ENOMEM);
+        }
+        covered = region.end;
+    }
+    if covered < end {
+        return Err(Errno::ENOMEM);
+    }
+    Ok(0)
 }
 
 /// `munmap`.

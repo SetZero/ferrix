@@ -123,6 +123,13 @@ pub(crate) struct Vmo {
     /// The object's size in pages. Set at creation and only ever raised, by
     /// [`Vmo::grow_to`]: an index that was inside the object stays inside it.
     len: AtomicU64,
+    /// How many pages from the start a fault through a file mapping may
+    /// commit: those not wholly past the end of the file this object holds, as
+    /// its filesystem last said. [`u64::MAX`] for an object that is not a
+    /// file's. Stored before a truncation takes pages away and read under the
+    /// pages lock by [`Vmo::commit_within`], which is what keeps a fault from
+    /// committing a page the truncation has already passed.
+    bound: AtomicU64,
     /// The address spaces that name this object, each with the id it names
     /// it by. Taken after a space's lock and before `pages`, never around
     /// either.
@@ -226,6 +233,7 @@ impl Vmo {
         Arc::new(Vmo {
             pages: SpinLock::new(Pages::default()),
             len: AtomicU64::new(pages),
+            bound: AtomicU64::new(u64::MAX),
             mappers: SpinLock::new(Vec::new()),
         })
     }
@@ -372,6 +380,7 @@ impl Vmo {
                 held: BTreeMap::new(),
             }),
             len: AtomicU64::new(self.len_pages()),
+            bound: AtomicU64::new(self.bound.load(Ordering::SeqCst)),
             mappers: SpinLock::new(Vec::new()),
         }))
     }
@@ -423,6 +432,49 @@ impl Vmo {
         }
         let _ = pages.frames.insert(index, frame);
         true
+    }
+
+    /// The file this object holds is now `len` bytes long: a fault through a
+    /// mapping of it may commit no page wholly past that.
+    ///
+    /// The filesystem calls it under its inode lock, after a write or grow
+    /// extends the file, and *before* it takes a truncated file's pages away,
+    /// so a fault racing the truncation sees the new end first.
+    pub(crate) fn set_file_len(&self, len: u64) {
+        self.bound.store(len.div_ceil(PAGE_SIZE), Ordering::SeqCst);
+    }
+
+    /// [`Vmo::commit`] for a fault through a file mapping: `None`, committing
+    /// nothing, for a page wholly past the end of the file, which is the
+    /// fault Linux answers with `SIGBUS`.
+    ///
+    /// The end is read under the pages lock. A truncation stores its new end
+    /// before it takes that lock to take pages away, so either this sees the
+    /// new end and refuses, or it commits first and the truncation's
+    /// retirement then takes the page back out of every space that maps it,
+    /// the faulting one included, once that space's lock is free.
+    ///
+    /// # Errors
+    ///
+    /// As [`Vmo::commit`].
+    pub(crate) fn commit_within(&self, index: u64) -> Result<Option<Frame>, VmoError> {
+        let len = self.len_pages();
+        if index >= len {
+            return Err(VmoError::OutOfRange { index, pages: len });
+        }
+
+        let mut pages = self.pages.lock();
+        if index >= self.bound.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        if let Some(&frame) = pages.frames.get(&index) {
+            return Ok(Some(frame));
+        }
+
+        let frame = mm::allocate_frames(0).ok_or(VmoError::OutOfMemory)?;
+        mm::zero_frame(frame);
+        let _ = pages.frames.insert(index, frame);
+        Ok(Some(frame))
     }
 
     /// Copy `out.len()` bytes out of page `index`, starting `offset` into it.
