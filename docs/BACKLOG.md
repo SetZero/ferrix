@@ -240,11 +240,13 @@ Dated, newest first. A decision here is final until the customer says otherwise.
 
 ## Waiting on the customer
 
-* A reset button press per DK1 run: the ST-LINK's voltage sense and SWD are
-  blind under this firmware, so the host cannot reset the board. Stages 1–9
-  and `test-shell`'s script ran on it at `fd4442e`; the rerun after the UART
-  drain fix, and the interactive shell once console receive lands, each need
-  one more press.
+* A USB-C unplug and replug per DK1 run: every run ends in PSCI `SYSTEM_OFF`,
+  after which the reset button does nothing, and the ST-LINK's voltage sense
+  and SWD are blind under this firmware, so the host cannot restart the board
+  either. Stages 1–9 and `test-shell`'s script ran on it at `fd4442e`; typing
+  and the UART drain were proven on it with `uart-rx`. The tag rerun on main,
+  and the paste test of interrupt-driven receive, each need one more power
+  cycle.
 * The root filesystem: 1.7 TB of the 1.9 TB is outside Ferrix. The sessions
   can only keep their own build output down.
 * Pushes to `origin`: local `main` is 60 commits ahead, and the last CI runs
