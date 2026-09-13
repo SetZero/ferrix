@@ -20,6 +20,7 @@ members = [
     "libs/cpio",
     "libs/linux-abi",
     "libs/native-abi",
+    "libs/native",
     "libs/objects",
     "libs/sync",
     "libs/ustack",
@@ -69,6 +70,7 @@ ferrix-btrfs-vfs = { path = "libs/btrfs-vfs" }
 ferrix-cpio = { path = "libs/cpio" }
 ferrix-linux-abi = { path = "libs/linux-abi" }
 ferrix-native-abi = { path = "libs/native-abi" }
+ferrix-native = { path = "libs/native" }
 ferrix-objects = { path = "libs/objects" }
 ferrix-sync = { path = "libs/sync" }
 ferrix-ustack = { path = "libs/ustack" }

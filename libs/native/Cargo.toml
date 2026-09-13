@@ -1,0 +1,15 @@
+[package]
+name = "ferrix-native"
+description = "Typed, safe wrappers over every Ferrix native system call, written against a raw call trait"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ferrix-linux-abi.workspace = true
+ferrix-native-abi.workspace = true
+
+[lints]
+workspace = true
