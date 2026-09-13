@@ -1,0 +1,174 @@
+//! `sys/resource.h`: resource limits, usage and scheduling priority.
+
+use core::ffi::{c_int, c_long, c_uint};
+use core::mem::{offset_of, size_of};
+use core::ptr::null;
+
+use crate::errno;
+use crate::syscall::{self, nr};
+use crate::time::Timeval;
+
+/// C's `struct rlimit`. `rlim_t` is 64 bits, as in the kernel's `struct
+/// rlimit64` from `linux/resource.h`, which `prlimit64` reads and writes, and
+/// `RLIM_INFINITY` is all ones in both.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Rlimit {
+    /// The soft limit.
+    pub rlim_cur: u64,
+    /// The hard limit.
+    pub rlim_max: u64,
+}
+
+const _: () = assert!(size_of::<Rlimit>() == 16);
+
+/// C's `struct rusage`.
+///
+/// Its first 144 bytes are the kernel's `struct rusage` from
+/// `linux/resource.h`: two `struct __kernel_old_timeval` and fourteen longs.
+/// musl adds sixteen reserved longs, which the kernel never writes. glibc's
+/// has no reserved tail, and is the kernel's prefix.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Rusage {
+    /// User CPU time.
+    pub ru_utime: Timeval,
+    /// System CPU time.
+    pub ru_stime: Timeval,
+    /// Linux's counters: `ru_maxrss` through `ru_nivcsw`.
+    pub counters: [c_long; 14],
+    /// Room for more, which musl reserves.
+    pub __reserved: [c_long; 16],
+}
+
+const _: () = assert!(offset_of!(Rusage, counters) == 32);
+// Where the kernel's structure ends.
+const _: () = assert!(offset_of!(Rusage, __reserved) == 144);
+const _: () = assert!(size_of::<Rusage>() == 272);
+
+/// `RLIM_INFINITY`: no limit.
+pub const RLIM_INFINITY: u64 = u64::MAX;
+/// `RLIMIT_NPROC`, from `asm-generic/resource.h`.
+pub const RLIMIT_NPROC: c_int = 6;
+/// `RLIMIT_NOFILE`, from `asm-generic/resource.h`.
+pub const RLIMIT_NOFILE: c_int = 7;
+
+/// The kernel's nice value from `getpriority`'s result, which is `20 - nice`
+/// so that it is never negative.
+const NICE_BIAS: c_int = 20;
+
+/// Replaces and reads the limit `resource` of process `pid`, or of the
+/// calling process if it is zero. Either pointer may be null.
+///
+/// # Safety
+///
+/// `new` must be null or valid for a read, and `old` null or valid for a
+/// write, of a `struct rlimit`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn prlimit(
+    pid: c_int,
+    resource: c_int,
+    new: *const Rlimit,
+    old: *mut Rlimit,
+) -> c_int {
+    // SAFETY: the kernel reads `new` and writes `old`, as the caller vouches.
+    let ret = unsafe {
+        syscall::syscall4(
+            nr::PRLIMIT64,
+            pid as usize,
+            resource as usize,
+            new.addr(),
+            old.addr(),
+        )
+    };
+    errno::from_syscall(ret) as c_int
+}
+
+/// Reads the calling process's limit `resource` into `*limit`.
+///
+/// # Safety
+///
+/// `limit` must be valid for a write of a `struct rlimit`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn getrlimit(resource: c_int, limit: *mut Rlimit) -> c_int {
+    // SAFETY: the caller's contract is `prlimit`'s, with nothing to read.
+    unsafe { prlimit(0, resource, null(), limit) }
+}
+
+/// Sets the calling process's limit `resource` to `*limit`.
+///
+/// # Safety
+///
+/// `limit` must be valid for a read of a `struct rlimit`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn setrlimit(resource: c_int, limit: *const Rlimit) -> c_int {
+    // SAFETY: the caller's contract is `prlimit`'s, with nothing to write.
+    unsafe { prlimit(0, resource, limit, core::ptr::null_mut()) }
+}
+
+/// Reads the resource usage of `who` into `*usage`.
+///
+/// # Safety
+///
+/// `usage` must be valid for a write of a `struct rusage`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn getrusage(who: c_int, usage: *mut Rusage) -> c_int {
+    // SAFETY: the kernel writes its prefix of `usage`, as the caller vouches.
+    let ret = unsafe { syscall::syscall2(nr::GETRUSAGE, who as usize, usage.addr()) };
+    errno::from_syscall(ret) as c_int
+}
+
+/// The nice value of `who`, of kind `which`.
+///
+/// A nice value can be -1, so a caller that must tell it from failure clears
+/// `errno` first.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn getpriority(which: c_int, who: c_uint) -> c_int {
+    // SAFETY: `getpriority` reads no memory.
+    let ret = unsafe { syscall::syscall2(nr::GETPRIORITY, which as usize, who as usize) };
+    match errno::decode(ret) {
+        Ok(biased) => NICE_BIAS - biased as c_int,
+        Err(error) => {
+            errno::set(error);
+            -1
+        }
+    }
+}
+
+/// Sets the nice value of `who`, of kind `which`, to `priority`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn setpriority(which: c_int, who: c_uint, priority: c_int) -> c_int {
+    // SAFETY: `setpriority` reads no memory.
+    let ret = unsafe {
+        syscall::syscall3(
+            nr::SETPRIORITY,
+            which as usize,
+            who as usize,
+            priority as usize,
+        )
+    };
+    errno::from_syscall(ret) as c_int
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_open_file_limit_reads_back() {
+        let mut limit = Rlimit::default();
+        // SAFETY: `limit` is a live local.
+        assert_eq!(unsafe { getrlimit(RLIMIT_NOFILE, &raw mut limit) }, 0);
+        assert!(limit.rlim_cur <= limit.rlim_max);
+        // SAFETY: as above.
+        assert_eq!(unsafe { getrlimit(-1, &raw mut limit) }, -1);
+        // SAFETY: the pointer is this thread's errno.
+        assert_eq!(unsafe { errno::__errno_location().read() }, errno::EINVAL);
+    }
+
+    #[test]
+    fn the_nice_value_is_unbiased() {
+        let nice = getpriority(0, 0);
+        assert!((-20..=19).contains(&nice));
+    }
+}

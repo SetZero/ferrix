@@ -64,6 +64,7 @@ pub struct Thread {
 const _: () = assert!(offset_of!(Thread, stack_guard) == 0x28);
 const _: () = assert!(offset_of!(Thread, split_stack_limit) == 0x70);
 const _: () = assert!(offset_of!(Thread, errno) == 0x80);
+const _: () = assert!(offset_of!(Thread, tid) == 0x84);
 
 /// The least alignment of a thread pointer. glibc aligns its control block to
 /// 64 bytes so that the loader can keep vector register state there.
@@ -324,6 +325,21 @@ pub fn current() -> *mut Thread {
         );
     }
     with_exposed_provenance_mut(tp)
+}
+
+/// Records the calling thread's id in its control block again.
+///
+/// The child of `fork` is a new thread whose control block is a copy of its
+/// parent's, and holds the parent's id until this runs.
+pub fn refresh_tid() {
+    // SAFETY: `gettid` takes no arguments.
+    let tid = unsafe { syscall::syscall0(nr::GETTID) } as c_int;
+    let at = current()
+        .wrapping_byte_add(offset_of!(Thread, tid))
+        .cast::<c_int>();
+    // SAFETY: after `init_main` the thread pointer is this thread's control
+    // block, and only this thread writes its id.
+    unsafe { at.write(tid) };
 }
 
 /// The calling thread's `errno`.

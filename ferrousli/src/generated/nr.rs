@@ -266,3 +266,33 @@ pub const STATX: usize = 332;
 pub const CLONE3: usize = 435;
 /// `faccessat2`.
 pub const FACCESSAT2: usize = 439;
+/// `fadvise64`.
+pub const FADVISE64: usize = 221;
+/// `fallocate`.
+pub const FALLOCATE: usize = 285;
+/// `mlock`.
+pub const MLOCK: usize = 149;
+/// `munlock`.
+pub const MUNLOCK: usize = 150;
+/// `mlockall`.
+pub const MLOCKALL: usize = 151;
+/// `munlockall`.
+pub const MUNLOCKALL: usize = 152;
+/// `getpriority`.
+pub const GETPRIORITY: usize = 140;
+/// `setpriority`.
+pub const SETPRIORITY: usize = 141;
+/// `waitid`.
+pub const WAITID: usize = 247;
+/// `preadv`.
+pub const PREADV: usize = 295;
+/// `pwritev`.
+pub const PWRITEV: usize = 296;
+/// `mknodat`.
+pub const MKNODAT: usize = 259;
+/// `setresuid`.
+pub const SETRESUID: usize = 117;
+/// `setresgid`.
+pub const SETRESGID: usize = 119;
+/// `fchmodat2`.
+pub const FCHMODAT2: usize = 452;

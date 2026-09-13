@@ -33,8 +33,17 @@ pub mod ctype;
 pub mod env;
 pub mod errno;
 pub mod exit;
+pub mod fcntl;
+pub mod ioctl;
 pub mod lock;
 pub mod malloc;
+pub mod mman;
+pub mod poll;
+pub mod process;
+pub mod random;
+pub mod rename;
+pub mod resource;
+pub mod select;
 #[cfg(not(test))]
 pub mod setjmp;
 pub mod sigaction;
@@ -42,14 +51,20 @@ pub mod signal;
 pub mod sigset;
 #[cfg(not(test))]
 pub mod start;
+pub mod stat;
 pub mod stdio;
 pub mod stdlib;
 pub mod strerror;
 pub mod string;
 pub mod strings;
 pub mod syscall;
+pub mod sysconf;
 pub mod thread;
+pub mod time;
+pub mod uio;
 pub mod unistd;
+pub mod utsname;
+pub mod wait;
 
 /// A panic inside the library has nothing to unwind into, because every frame
 /// above it is C. Trapping stops the program at the fault, where a debugger or
