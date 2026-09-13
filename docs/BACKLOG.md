@@ -23,26 +23,28 @@ These add to `docs/CONVENTIONS.md`, which still governs commits.
 |---|---|
 | Only `docs/`, or only `ferrousli/` | `cargo xtask check`; for ferrousli also `cargo test` in `ferrousli/` |
 | `libs/` only, and no crate the kernel builds | `cargo xtask check`, and one boot: `test-boot --arch armv7a --smp 2` |
-| Anything the image contains: `kernel/`, `boot/`, a kernel-side crate in `libs/`, `xtask` | `cargo xtask check`, then `test-boot` on x86_64, aarch64, armv7a at four processors and armv7a at `--smp 2`; then `test-shell` on x86_64 with the musl busybox *and* the host's glibc busybox (`/usr/bin/busybox`), and `test-vfs` on x86_64 |
+| Anything the image contains: `kernel/`, `boot/`, a kernel-side crate in `libs/`, `xtask` | `cargo xtask check`, then `test-boot` on x86_64, aarch64, armv7a at four processors and armv7a at `--smp 2`; a stage 7 or 8 change also runs `test-shell` on x86_64 with the musl busybox *and* the host's glibc busybox (`/usr/bin/busybox`), and `test-vfs` on x86_64. The whole of that, plus KVM, is what moves `main` |
 | User mode, page tables, TLB, SMP or the scheduler | The row above, and x86_64 under `--accel kvm` |
 
-Then fast-forward `main` only if it is still the commit rebased onto.
+Then fast-forward `develop` only if it is still the commit rebased onto.
 
-**After the fast-forward,** the lander boots `main` itself once on x86_64
+**After the fast-forward,** the lander boots `develop` itself once on x86_64
 under `--accel kvm` and reports the hash together with that result, so a bad
-merge is seen by the one who made it and not by the customer.
+merge is seen by the one who made it.
 
-**`stable`.** The customer boots `main` and expects it to work; when it does
-not, fixing it outranks every other row. Because a stalled host can still
-fool a check on `main`, the product owner also keeps the branch `stable`:
-it moves, fast-forward only, to the newest `main` that has passed the whole
-matrix from a clean worktree (four boots, KVM, `test-shell` with both
-busyboxes, `test-vfs`, on the product owner's own host run), at least every
-two hours while landings happen. `git checkout stable` is always a working
-tree; `main` is meant to be, and a failure there is fixed forward or reverted
-within the hour.
+**Two branches.** Sessions land on `develop`, which may be unstable. `main`
+moves only by the product owner, fast-forward, to a `develop` commit that has
+passed the whole matrix from a clean worktree on the product owner's own run:
+the four boots, x86_64 under KVM, `test-shell` with the musl and the glibc
+busybox, and `test-vfs`; at least every two hours while `develop` moves. So
+`main` is always a working tree by construction, and a failure the customer
+finds on it is fixed forward on `develop` and re-verified before `main`
+moves again. Tags go on `main`. A landing on `develop` from a worktree is
+`git push <root> <branch>:develop`, which refuses anything but a
+fast-forward; the root checkout keeps `main` checked out and never lands
+`develop` through its index.
 
-**The landing queue.** Image changes queue; documentation, ferrousli and
+**The landing queue.** Image changes on `develop` queue; documentation, ferrousli and
 host-only `libs/` landings do not. A session whose image change has passed
 its row tells the product owner "ready to land" with the base it verified
 on; the product owner answers with its place in the queue and says "go" when
@@ -191,6 +193,8 @@ nobody has it yet.
 
 Dated, newest first. A decision here is final until the customer says otherwise.
 
+* **2026-09-13 (customer)** `develop` is the landing branch and may be unstable;
+  `main` moves only to a verified `develop` commit. Set up at 8342362.
 * **2026-09-13 (customer)** Order of everything: first a working `main`, second
   ferrousli on the build with busybox rebuilt against it, third being surer
   that `main` is stable before it moves. This supersedes the earlier
