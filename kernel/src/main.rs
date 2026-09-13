@@ -512,6 +512,12 @@ fn check_syscalls() {
     if let Some(status) = report.forked {
         println!("  fork     a program forked, waited for its child, and exited with {status}");
     }
+    if let Some((runs, window)) = report.reclaimed {
+        println!(
+            "  exits    {runs} programs that forked and exited gave every frame back once \
+             reaped, in window {window}"
+        );
+    }
     if let Some(status) = report.signalled {
         println!(
             "  signals  a program's handler ran on its own frame, changed a saved register, \

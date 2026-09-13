@@ -199,7 +199,8 @@ package FerrixRoadmap {
              * on Process, and two programs taking turns in the boot test;
              * then fork, vfork and clone without threads, execve, wait4 and
              * waitid, and the process-group and session calls, with a forking
-             * and an exec'ing program in the boot test; futex waits, wakes and
+             * and an exec'ing program in the boot test, and the forking one's
+             * frames required back once its tasks are reaped; futex waits, wakes and
              * requeues, and clone3 through the same path as clone;
              * descriptors closed when a process ends; and the edge calls
              * busybox makes -- prctl, limits, priorities, credentials, sleeps,

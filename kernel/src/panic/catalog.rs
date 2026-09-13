@@ -813,6 +813,10 @@ pub(crate) static STAGE7_SYSCALLS: Explanation = Explanation {
          a program never preempted shows that too, from its start and its first write; nor is \
          every switch away while runnable, since a lock released inside a system call with a \
          reschedule pending switches too.",
+        "A program's task, process or address space outlives it: a reference to one is left \
+         on a frame that never returns, in a table nothing empties, or in a cycle, so the \
+         frames of programs that exited never come back (the `give every frame back` \
+         messages).",
     ],
     see: "kernel/src/syscall/check.rs run; kernel/src/syscall/mod.rs dispatch; libs/linux-abi; \
           docs/ROADMAP.md stage 7",

@@ -1033,6 +1033,7 @@ session calls work on all three architectures, with two programs of their own
 in the boot test:
 
       fork     a program forked, waited for its child, and exited with 24
+      exits    4 programs that forked and exited gave every frame back once reaped, in window 1
       execve   a program became another and exited with 42; with the file gone it got errno 2
 
 A child resumes from a copy of its parent's saved registers (`arch::UserRegs`,
@@ -1050,6 +1051,18 @@ driver its bootstrap handle. A Linux program's is zero. The boot test starts a
 two-instruction program that exits with that register:
 
       argument a program started with an argument found it on entry and exited with 57
+
+Until 0510a8a every program leaked its task, its process and its address
+space: `task_start` held the task's own reference across an entry that never
+returns, and none of the checks that run programs counted frames, because an
+unreaped task looks like a leak. Under busybox it showed as `free` rising by
+about a megabyte for every process that exited, and a long session ending in
+`Out of memory`. The `exits` line is the check that would have caught it: the
+forking program runs four times to warm up, then four times in each of up to
+four windows, and in one of them the free frame count must come back exactly
+once the reaper has settled. One window is not enough, because what lives
+across programs grows with how the processors happened to interleave; a leak
+keeps frames in every window.
 
 **`futex` and `clone3`.** `futex` waits, wakes and requeues, plain and with a
 bitset, keyed by address space and user address, with the word compared under

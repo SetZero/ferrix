@@ -64,6 +64,9 @@ pub(crate) struct Report {
     pub(crate) killed: Option<i32>,
     /// What a program that forks and waits exited with: 24 when right.
     pub(crate) forked: Option<i32>,
+    /// How many runs of that program gave back every frame once reaped, and in
+    /// which measured window they first did.
+    pub(crate) reclaimed: Option<(u32, u32)>,
     /// What a program that signals itself exited with once its handler had
     /// run and returned: 77 when right.
     pub(crate) signalled: Option<i32>,
@@ -156,6 +159,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     mark!(4);
     let forked = check_a_forked_child_is_waited_for()?;
     mark!(5);
+    let reclaimed = check_ended_programs_give_their_frames_back()?;
     let signalled = check_a_handler_runs_and_returns()?;
     mark!(6);
     check_an_ended_process_closes_its_descriptors()?;
@@ -176,6 +180,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         concurrent,
         killed,
         forked,
+        reclaimed,
         signalled,
         execed,
         started_with,
@@ -4503,6 +4508,107 @@ fn check_a_forked_child_is_waited_for() -> Result<Option<i32>, &'static str> {
         99 => Err("wait4 reported a child other than the one fork made"),
         _ => Err("a program that forks and waits did not see its child exit with 23"),
     }
+}
+
+/// Runs of the forking program measured by
+/// [`check_ended_programs_give_their_frames_back`].
+const RECLAIM_RUNS: u32 = 4;
+
+/// How long each look for the reaper to have finished waits first.
+const RECLAIM_SETTLE_NANOS: u64 = 20_000_000;
+
+/// The most looks before frames still out are taken to be kept: two seconds.
+const RECLAIM_ROUNDS: u32 = 100;
+
+/// Programs that fork, wait for their child and exit give back every frame
+/// they used -- the parent's and the child's tables and pages, and their kernel
+/// stacks -- once their tasks are reaped.
+///
+/// No check that runs a program counted frames, because a task not yet reaped
+/// looks exactly like a leak. So nothing noticed that every program leaked
+/// everything: `task_start` held the task's own reference across an entry that
+/// never returns (fixed in 0510a8a), which kept the task, and through it the
+/// process and its address space, forever. Under busybox it showed as `free`
+/// rising by about a megabyte for every process that exited, and a long
+/// session ending in `Out of memory`.
+///
+/// Measured the way that makes a reaped task count: the program runs
+/// [`RECLAIM_RUNS`] times before any window, for the reason [`run`] gives, and
+/// the reaper is settled before each first count, so that nothing an earlier
+/// run started is freed inside the window. The second count is waited for
+/// rather than read once, because an ended task is freed only after its
+/// processor has switched away from it and a reaper has run, which is shortly
+/// after `exec::run` returns, not before.
+///
+/// **Up to [`RECLAIM_WINDOWS`] windows, and one that comes back exactly is
+/// enough.** What lives across programs -- the reaper's list, the run queues
+/// and their sleeper sets, the pid table, the heap's size-class pages -- grows
+/// to a size that depends on how the processors interleaved. On x86-64 and on
+/// ARMv7-A a first window has ended one frame short with no process left in
+/// the pid table and every kernel stack back in the arena, and the next window
+/// has come back exactly. A leak is not like that: every program that leaks
+/// keeps at least its page tables, in every window.
+fn check_ended_programs_give_their_frames_back() -> Result<Option<(u32, u32)>, &'static str> {
+    if arch::USER_FORK_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    for _ in 0..RECLAIM_RUNS {
+        let _warm = check_a_forked_child_is_waited_for()?;
+    }
+    let mut rose = false;
+    for window in 1..=RECLAIM_WINDOWS {
+        let before = settled_free_frames();
+        for _ in 0..RECLAIM_RUNS {
+            let _ = check_a_forked_child_is_waited_for()?;
+        }
+        let after = free_frames_back_to(before);
+        if after == before {
+            return Ok(Some((RECLAIM_RUNS, window)));
+        }
+        rose |= after > before;
+    }
+    if rose {
+        return Err(
+            "the free frame count rose across programs that forked and exited: something \
+             outside them freed frames in the window",
+        );
+    }
+    Err("programs that forked and exited did not give every frame back once reaped")
+}
+
+/// Windows [`check_ended_programs_give_their_frames_back`] measures before
+/// frames still out in every one are taken to be kept.
+const RECLAIM_WINDOWS: u32 = 4;
+
+/// The free frame count once it is back to `before`, or as it stands after
+/// [`RECLAIM_ROUNDS`] looks, reaping between them.
+fn free_frames_back_to(before: u64) -> u64 {
+    let mut after = mm::free_frames();
+    for _ in 0..RECLAIM_ROUNDS {
+        if after == before {
+            break;
+        }
+        crate::sched::sleep_for(RECLAIM_SETTLE_NANOS);
+        let _ = crate::sched::reap();
+        after = mm::free_frames();
+    }
+    after
+}
+
+/// The free frame count once the reaper has nothing left to do: no ended task
+/// was found on a look, and the count did not move since the one before.
+fn settled_free_frames() -> u64 {
+    let mut last = mm::free_frames();
+    for _ in 0..RECLAIM_ROUNDS {
+        crate::sched::sleep_for(RECLAIM_SETTLE_NANOS);
+        let reaped = crate::sched::reap();
+        let now = mm::free_frames();
+        if reaped == 0 && now == last {
+            return now;
+        }
+        last = now;
+    }
+    last
 }
 
 /// What [`arch::USER_SIGNAL_PROGRAM`] exits with when everything is right.

@@ -150,7 +150,6 @@ nobody has it yet.
 | A user-mode copy-on-write write check, and a `MAP_SHARED` write check | ferrix-e5 | 6 |
 | `SA_RESTART`; boot checks that drive `SIGCHLD`, stop and continue, `alarm`, `sigaltstack` and fault-to-signal | ferrix-a5 | 7; `rustc` needs `SIGSEGV` on the alternate stack |
 | Pid 1 for init and orphans reparented to it | ferrix-a5 | 7, 15 |
-| A regression check that exited programs give every frame back once reaped (the leak 0510a8a fixed) | ferrix-a5 | 7 |
 | Retire the 20 ms console polling. Receive by interrupt into a 4 KiB ring has landed on the PL011 and the STM32 USART (through ST's EXTI on the DK1), with `console::input::{waiters, has_input}` for the console thread to wait on. Left: the console thread and readers waiting on it instead of sleeping (ferrix-a5, in `fs/terminal.rs`), and an I/O APIC route for the 16550's GSI so x86-64 stops polling too | ferrix-4f, with ferrix-a5 | 7, 15 |
 | ARMv7-A with 2 GiB does not boot: the loader must allocate below the direct map's ceiling, and RAM beyond it is reported unused rather than fatal | ferrix-4f | ARMv7-A |
 

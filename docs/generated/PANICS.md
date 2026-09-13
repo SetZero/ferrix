@@ -658,6 +658,10 @@ would pass every host test and answer a program's `write` with a different call.
    never preempted shows that too, from its start and its first write; nor is
    every switch away while runnable, since a lock released inside a system call
    with a reschedule pending switches too.
+5. A program's task, process or address space outlives it: a reference to one is
+   left on a frame that never returns, in a table nothing empties, or in a
+   cycle, so the frames of programs that exited never come back (the `give every
+   frame back` messages).
 
 See: kernel/src/syscall/check.rs run; kernel/src/syscall/mod.rs dispatch;
 libs/linux-abi; docs/ROADMAP.md stage 7.
