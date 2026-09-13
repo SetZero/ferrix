@@ -4,7 +4,7 @@ use core::ptr;
 
 use ferrix_bootinfo::{
     IdentityPlan, IdentityTree, KERNEL_VIRT_BASE, LAYOUT, MemKind, MemRegion, PAGE_SIZE,
-    PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END, direct_map_address, physmap_origin,
+    PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END, direct_map_address, direct_map_runs, physmap_origin,
 };
 use ferrix_elf::{Elf, PF_W, PF_X, Segment};
 use ferrix_paging::{MapFlags, Mapper, PhysAddr, PhysMem, VirtAddr};
@@ -178,7 +178,7 @@ fn copy_segment(elf: &Elf<'_>, segment: &Segment, base: u64, virt_base: u64) -> 
     Ok(())
 }
 
-/// The part of physical memory the direct map covers.
+/// The part of physical memory the direct map spans.
 ///
 /// From the lowest RAM address, rounded down to [`PHYSMAP_ALIGN`], to the
 /// highest, rounded up — and no further than the direct map's region of the
@@ -187,6 +187,10 @@ fn copy_segment(elf: &Elf<'_>, segment: &Segment, base: u64, virt_base: u64) -> 
 /// map at all: QEMU's Arm `virt` machines have nothing but flash and device
 /// registers below 1 GiB, and mapping that as cacheable memory was never right
 /// on AArch64 either.
+///
+/// For the same reason, only what the memory map describes as memory is mapped
+/// inside the span, and a hole between RAM banks is not; see
+/// [`direct_map_runs`].
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DirectMap {
     /// The physical address at [`PHYSMAP_BASE`].
@@ -257,11 +261,14 @@ pub(crate) struct AddressSpace {
 /// memory, and the kernel image at the address it was linked for. The boot
 /// stack and the boot info need no mapping of their own — they are in RAM, so
 /// the direct map already covers them.
+///
+/// `map` is the memory map `direct` was measured from, and says which parts of
+/// that span are memory at all.
 pub(crate) fn build_address_space(
     memory: &mut LoaderMemory,
     elf: &Elf<'_>,
     image: &KernelImage,
-    direct: DirectMap,
+    (direct, map): (DirectMap, &MemoryMap),
     loader: (u64, u64),
 ) -> Result<AddressSpace> {
     let kernel_root = memory
@@ -291,17 +298,23 @@ pub(crate) fn build_address_space(
         )
         .map_err(BootError::plain)?;
     map_identity(&kernel, &identity, memory, plan)?;
-    kernel
-        .map_range(
-            memory,
-            VirtAddr(PHYSMAP_BASE),
-            PhysAddr(direct.origin),
-            direct.len,
-            // Never executable: nothing is ever run through the direct map, and
-            // it covers every byte of RAM including the kernel's own text.
-            MapFlags::KERNEL_DATA,
-        )
-        .map_err(|_| BootError::plain("could not build the direct map"))?;
+    // Run by run, so that a device window or a hole between RAM banks is not
+    // mapped as memory; `direct_map_runs` says why that matters.
+    let regions = map.entries().map(|descriptor| describe(&descriptor));
+    for (base, len) in direct_map_runs(regions, direct.origin, direct.len) {
+        kernel
+            .map_range(
+                memory,
+                VirtAddr(direct.address(base)),
+                PhysAddr(base),
+                len,
+                // Never executable: nothing is ever run through the direct
+                // map, and it covers every byte of RAM including the kernel's
+                // own text.
+                MapFlags::KERNEL_DATA,
+            )
+            .map_err(|_| BootError::plain("could not build the direct map"))?;
+    }
 
     for segment in elf.loadable() {
         map_segment(&kernel, memory, &segment, image)?;

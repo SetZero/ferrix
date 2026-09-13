@@ -121,7 +121,8 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     // A first look at the memory map, only to learn where RAM is. The map
     // fetched here is stale the moment anything else is allocated, which is
     // why the one handed to the kernel is fetched again below.
-    let direct = DirectMap::of(&services.memory_map(map_buffer)?)?;
+    let first_look = services.memory_map(map_buffer)?;
+    let direct = DirectMap::of(&first_look)?;
     println!(
         "  direct map of {:#x}..{:#x}, kernel at {:#x}",
         direct.origin,
@@ -146,8 +147,16 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     }
 
     let loader = services.image_range()?;
-    let space =
-        load::build_address_space(&mut memory, &kernel.elf()?, &kernel.image, direct, loader)?;
+    let space = load::build_address_space(
+        &mut memory,
+        &kernel.elf()?,
+        &kernel.image,
+        // Still the map `direct` was measured from: nothing has been
+        // allocated since, and the buffer is not fetched into again until
+        // the final map is taken below.
+        (direct, &first_look),
+        loader,
+    )?;
     println!(
         "  {} page tables, roots {:#x}/{:#x}",
         memory.tables_used(),

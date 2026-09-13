@@ -91,7 +91,7 @@ pub(crate) struct MemoryMap {
 
 impl MemoryMap {
     /// Walk the descriptors, using firmware's stride rather than ours.
-    pub(crate) fn entries(&self) -> impl Iterator<Item = MemoryDescriptor> + '_ {
+    pub(crate) fn entries(&self) -> impl Iterator<Item = MemoryDescriptor> + Clone + '_ {
         // `checked_div` rather than a guard: a zero stride would mean
         // firmware reported no descriptor size, and dividing by it is the one
         // way this loop could fault.

@@ -281,6 +281,85 @@ pub const fn direct_map_address(physmap_phys: u64, phys: u64) -> u64 {
     PHYSMAP_BASE + (phys - physmap_phys)
 }
 
+/// The runs of physical memory a direct map spanning `len` bytes from
+/// `origin` actually translates: everything the memory map describes, other
+/// than device registers, merged where regions touch, in ascending order.
+///
+/// The span runs from the lowest RAM to the highest, and between RAM banks it
+/// can hold device registers, or nothing at all. A mapping over those is
+/// normal, cacheable memory to the processor, which on the Arm pair licenses
+/// it to read ahead and speculate into registers that have side effects. So
+/// what the memory map does not describe as memory stays unmapped.
+///
+/// Reserved regions are memory, and kept: firmware tables live in them on
+/// some machines, and the kernel reads ACPI through the direct map.
+///
+/// `regions` may be in any order — firmware's map is not sorted until the
+/// loader copies it — which is why it is cloned and rescanned rather than
+/// walked once. A map is a few hundred regions at most.
+pub fn direct_map_runs<I>(regions: I, origin: u64, len: u64) -> DirectMapRuns<I>
+where
+    I: Iterator<Item = MemRegion> + Clone,
+{
+    DirectMapRuns {
+        regions,
+        cursor: origin,
+        end: origin.saturating_add(len),
+    }
+}
+
+/// The iterator [`direct_map_runs`] returns, yielding `(base, len)` pairs.
+#[derive(Clone, Debug)]
+pub struct DirectMapRuns<I> {
+    regions: I,
+    /// Everything below this has been yielded or skipped.
+    cursor: u64,
+    /// One past the last address the direct map spans.
+    end: u64,
+}
+
+impl<I> Iterator for DirectMapRuns<I>
+where
+    I: Iterator<Item = MemRegion> + Clone,
+{
+    type Item = (u64, u64);
+
+    fn next(&mut self) -> Option<(u64, u64)> {
+        let cursor = self.cursor;
+        let mapped = |region: &MemRegion| region.kind != MemKind::Mmio && region.len != 0;
+
+        // The lowest described address at or above the cursor. A region that
+        // straddles the cursor starts the run at the cursor itself.
+        let start = self
+            .regions
+            .clone()
+            .filter(|region| mapped(region) && region.end() > cursor)
+            .map(|region| region.base.max(cursor))
+            .min()?;
+        if start >= self.end {
+            self.cursor = self.end;
+            return None;
+        }
+
+        // Grow the run while some region begins inside it, or exactly at its
+        // end, and reaches further.
+        let mut run_end = start;
+        while let Some(further) = self
+            .regions
+            .clone()
+            .filter(|region| mapped(region) && region.base <= run_end && region.end() > run_end)
+            .map(|region| region.end())
+            .max()
+        {
+            run_end = further;
+        }
+
+        let run_end = run_end.min(self.end);
+        self.cursor = run_end;
+        Some((start, run_end - start))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The loader's identity map
 // ---------------------------------------------------------------------------
@@ -630,8 +709,10 @@ pub struct BootInfo {
     /// address, rounded down to [`PHYSMAP_ALIGN`]. Nothing below it is in the
     /// direct map.
     pub physmap_phys: u64,
-    /// Bytes of physical address space the direct map covers, from
-    /// `physmap_phys` up.
+    /// Bytes of physical address space the direct map spans, from
+    /// `physmap_phys` up. Inside the span, only what the memory map describes
+    /// as memory is mapped: device registers and undescribed holes between RAM
+    /// banks are not. See [`direct_map_runs`].
     pub physmap_len: u64,
 
     /// Physical address the kernel image was loaded at.
@@ -1411,6 +1492,61 @@ mod tests {
         assert!(region.contains(0x3FFF));
         assert!(!region.contains(0x4000), "end is exclusive");
         assert!(!region.contains(0xFFF));
+    }
+
+    extern crate std;
+    use std::vec::Vec;
+
+    fn region(base: u64, len: u64, kind: MemKind) -> MemRegion {
+        MemRegion {
+            base,
+            len,
+            kind,
+            reserved: 0,
+        }
+    }
+
+    #[test]
+    fn the_direct_map_leaves_device_registers_and_holes_unmapped() {
+        // Two RAM banks with a device window and a hole between them, a
+        // firmware reservation touching the second bank, and the whole map
+        // out of order, as firmware is allowed to report it.
+        let map = [
+            region(0x6010_0000, 0x0FF0_0000, MemKind::Usable),
+            region(0x5000_0000, 0x1000, MemKind::Mmio),
+            region(0x4000_0000, 0x0800_0000, MemKind::Usable),
+            region(0x6000_0000, 0x10_0000, MemKind::Reserved),
+            region(0x4800_0000, 0x0800_0000, MemKind::Loader),
+        ];
+        let runs = |regions: &[MemRegion], origin, len| {
+            direct_map_runs(regions.iter().copied(), origin, len).collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            runs(&map, 0x4000_0000, 0x3000_0000),
+            [(0x4000_0000, 0x1000_0000), (0x6000_0000, 0x1000_0000)],
+            "the device window and the hole above it are not memory"
+        );
+
+        let mut reversed = map;
+        reversed.reverse();
+        assert_eq!(
+            runs(&reversed, 0x4000_0000, 0x3000_0000),
+            runs(&map, 0x4000_0000, 0x3000_0000),
+            "the order firmware reports regions in changes nothing"
+        );
+
+        assert_eq!(
+            runs(&map, 0x4000_0000, 0x2800_0000),
+            [(0x4000_0000, 0x1000_0000), (0x6000_0000, 0x0800_0000)],
+            "nothing past the end of the span is mapped"
+        );
+        assert_eq!(
+            runs(&map, 0x4400_0000, 0x0C00_0000),
+            [(0x4400_0000, 0x0C00_0000)],
+            "a region straddling the origin is mapped from the origin"
+        );
+        assert!(runs(&[region(0x5000_0000, 0x1000, MemKind::Mmio)], 0, u64::MAX).is_empty());
     }
 
     #[test]
