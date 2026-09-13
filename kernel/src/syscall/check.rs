@@ -102,6 +102,11 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let pages = check_handlers(Output::Show)?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+    // Checked, not only printed: a count nothing tested would boot green
+    // through the very leak it exists to show.
+    if leaked != 0 {
+        return Err("the handler checks did not give every frame back");
+    }
 
     let user_status = check_a_program_runs_in_user_mode()?;
     let concurrent = check_two_programs_take_turns_on_one_processor()?;
@@ -2082,6 +2087,18 @@ mod paths {
             - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
         report.cache_growth = i64::try_from(fs::namespace().cached()).unwrap_or(i64::MAX)
             - i64::try_from(cached).unwrap_or(i64::MAX);
+        // Checked, not only printed. The dentry cache is the one thing that
+        // may keep memory across runs, and it is not subtracted, because by
+        // construction it does not grow here: the second run finds the
+        // dentries the first left in /tmp, which is why `LINK` lives there. A
+        // run that grew it has stopped being repeatable, and is told apart
+        // from a call that lost a frame.
+        if report.leaked != 0 && report.cache_growth != 0 {
+            return Err("the path calls kept frames, and the dentry cache grew across the run");
+        }
+        if report.leaked != 0 {
+            return Err("the path calls did not give every frame back");
+        }
         Ok(report)
     }
 
