@@ -340,6 +340,7 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
             time::sys_clock_gettime(process, a[0], a[1], time::TimeWidth::Wide)
         }
         Syscall::Gettimeofday => time::sys_gettimeofday(process, a[0]),
+        Syscall::Time => time::sys_time(process, a[0]),
         Syscall::Getrandom => time::sys_getrandom(process, a[0], a[1], a[2]),
         Syscall::Uname => system::sys_uname(process, a[0]),
         Syscall::Poll => poll::sys_poll(process, a[0], a[1], a[2] as i32),

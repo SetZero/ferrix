@@ -175,6 +175,21 @@ pub(crate) fn sys_gettimeofday(process: &Process, tv: u64) -> Result<usize, Errn
     Ok(0)
 }
 
+/// `time`: the real-time clock in whole seconds, as `gettimeofday` reads it.
+///
+/// The seconds are the return value and, through a non-null `tloc`, also
+/// written as a native-word `time_t`; a write that faults is `EFAULT` rather
+/// than the seconds, which is `kernel/time/time.c`'s order. Reachable only on
+/// x86-64, the one table with a number for it.
+pub(crate) fn sys_time(process: &Process, tloc: u64) -> Result<usize, Errno> {
+    let seconds = realtime_nanos() / NANOS;
+    let answer = usize::try_from(seconds).map_err(|_| Errno::EOVERFLOW)?;
+    if tloc != 0 {
+        uaccess::put_word(process.space(), tloc, seconds)?;
+    }
+    Ok(answer)
+}
+
 /// Write two fields, at the width the call's structure has.
 pub(crate) fn write_pair(
     process: &Process,

@@ -356,6 +356,8 @@ pub mod x86_64 {
     pub const GETTID: usize = 186;
     /// Send a signal to a thread by thread identifier.
     pub const TKILL: usize = 200;
+    /// Read the wall clock in whole seconds, older still than `gettimeofday`.
+    pub const TIME: usize = 201;
     /// Wait on, or wake, a futex; the primitive under every musl lock.
     pub const FUTEX: usize = 202;
     /// Set a thread's processor affinity mask.
@@ -1623,6 +1625,10 @@ pub enum Syscall {
     Alarm,
     /// Read the wall clock, the obsolete predecessor of `clock_gettime`.
     Gettimeofday,
+    /// Read the wall clock in whole seconds. x86-64 only: the generic table
+    /// never had it and ARM's EABI dropped it, but a static glibc on x86-64
+    /// still calls it.
+    Time,
     /// Return the calling process's identifier.
     Getpid,
     /// Return the parent process's identifier.
@@ -2133,6 +2139,7 @@ fn x86_64_threads_and_time(nr: usize) -> Option<Syscall> {
         x86_64::UMOUNT2 => Syscall::Umount2,
         x86_64::GETTID => Syscall::Gettid,
         x86_64::TKILL => Syscall::Tkill,
+        x86_64::TIME => Syscall::Time,
         x86_64::FUTEX => Syscall::Futex,
         x86_64::SCHED_SETAFFINITY => Syscall::SchedSetaffinity,
         x86_64::SCHED_GETAFFINITY => Syscall::SchedGetaffinity,

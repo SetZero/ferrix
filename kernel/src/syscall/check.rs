@@ -3256,6 +3256,7 @@ fn check_what_an_applet_asks_of_the_system(process: &Process) -> Result<(), &'st
         .and_then(|()| check_setting_the_clock_moves_only_realtime(process, page))
         .and_then(|()| check_a_host_name_reaches_uname(process, page))
         .and_then(|()| check_sockets_are_refused_honestly(process));
+    let outcome = outcome.and_then(|()| check_time_is_the_realtime_seconds(process, page));
     let _ = memory::sys_munmap(process, page, PAGE_SIZE);
     outcome
 }
@@ -3691,6 +3692,54 @@ fn set_the_clock_and_read_it_back(process: &Process, page: u64) -> Result<(), &'
         time::sys_clock_settime(process, CLOCK_MONOTONIC as i32, page, TimeWidth::Native),
         Errno::EINVAL,
         "CLOCK_MONOTONIC could be set",
+    )
+}
+
+/// `time` answers `gettimeofday`'s seconds, writes the same seconds through a
+/// pointer, and is `EFAULT` through an unmapped one. The clock is set to 2001
+/// first, so an answer of zero cannot pass for a clock read near the epoch,
+/// and put back afterwards whatever happened. Skipped where this build's table
+/// has no number for `time`, which is every table but x86-64's.
+fn check_time_is_the_realtime_seconds(process: &Process, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::time;
+    use ferrix_linux_abi::nr::{Syscall, x86_64};
+    const SEPTEMBER_2001_NANOS: i64 = 1_000_000_000_000_000_000;
+    if arch::decode_syscall(x86_64::TIME) != Some(Syscall::Time) {
+        return Ok(());
+    }
+    let saved = time::realtime_offset();
+    time::restore_realtime_offset(saved.saturating_add(SEPTEMBER_2001_NANOS));
+    let outcome = read_the_clock_through_time(process, page);
+    time::restore_realtime_offset(saved);
+    outcome
+}
+
+/// The body of [`check_time_is_the_realtime_seconds`], which puts the clock
+/// back whatever this returns.
+fn read_the_clock_through_time(process: &Process, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::time;
+    let seconds_at =
+        |at: u64| -> Result<u64, &'static str> { Ok(le_at(&read_user::<8>(process, at)?, 0, 8)) };
+
+    answers(
+        time::sys_gettimeofday(process, page),
+        0,
+        "gettimeofday was refused",
+    )?;
+    let before = seconds_at(page)?;
+    let returned = time::sys_time(process, 0).map_err(|_| "time(NULL) was refused")? as u64;
+    if !(before..=before + 1).contains(&returned) {
+        return Err("time(NULL) is not gettimeofday's seconds");
+    }
+    poison_user(process, page + 16, 8)?;
+    let written = time::sys_time(process, page + 16).map_err(|_| "time(page) was refused")? as u64;
+    if seconds_at(page + 16)? != written || !(returned..=returned + 1).contains(&written) {
+        return Err("time did not write the seconds it returned");
+    }
+    refuses(
+        time::sys_time(process, TEST_BASE + 0x10_0000),
+        Errno::EFAULT,
+        "time through an unmapped address was not EFAULT",
     )
 }
 

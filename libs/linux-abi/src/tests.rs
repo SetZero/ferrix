@@ -47,6 +47,7 @@ const X86_64_ONLY: &[Syscall] = &[
     Syscall::EpollWait,
     Syscall::Getpgrp,
     Syscall::Alarm,
+    Syscall::Time,
     Syscall::Select,
     Syscall::Pause,
 ];
@@ -1282,6 +1283,18 @@ fn aarch64_has_no_path_only_calls() {
     );
 }
 
+/// `time` is 201 on x86-64 (`asm/unistd_64.h`) and absent from the other two
+/// tables: the generic one never had it, and ARM's is in `unistd-oabi.h` only,
+/// so EABI number 13 is not it.
+#[test]
+fn time_has_an_x86_64_number_only() {
+    assert_eq!(x86_64::TIME, 201, "time is 201 on x86-64");
+    assert_eq!(from_x86_64(201), Some(Syscall::Time));
+    assert!(!mapped(from_aarch64).contains(&Syscall::Time));
+    assert!(!mapped_arm().contains(&Syscall::Time));
+    assert_eq!(from_arm(13), None, "EABI has no call at OABI's time number");
+}
+
 #[test]
 fn x86_64_only_calls_are_the_expected_ones() {
     let only_on_x86: HashSet<Syscall> = mapped(from_x86_64)
@@ -1464,8 +1477,8 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        222,
-        "the x86-64 table maps 222 calls"
+        223,
+        "the x86-64 table maps 223 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
