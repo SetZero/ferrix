@@ -186,6 +186,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     one_task()?;
     a_dead_task_is_not_filed_as_a_sleeper()?;
     made_runnable_here_runs_without_another_interrupt()?;
+    a_timer_during_an_empty_reap_is_not_lost(topology)?;
     mark!(0);
     sleeping(&mut report)?;
     mark!(1);
@@ -805,6 +806,77 @@ fn made_runnable_here_runs_without_another_interrupt() -> Result<(), &'static st
     reap_to(allocations, "local wake-ups")?;
     drop((spawned, parked));
     Ok(())
+}
+
+/// How long the sleeper in [`a_timer_during_an_empty_reap_is_not_lost`] sleeps.
+const EMPTY_REAP_SLEEP_NANOS: u64 = 10_000_000;
+
+/// How long that check waits for the sleeper to come back: well past the
+/// sleep and the idle task's longest hold, and short of the boot's patience.
+const EMPTY_REAP_PATIENCE_NANOS: u64 = 3_000_000_000;
+
+/// A sleeper whose timer fires while its processor's idle task is looking for
+/// exited tasks, and finding none, still wakes.
+///
+/// The idle task sets `REAPING` before it looks, and an interrupt exit inside
+/// that window leaves its reschedule for later. The timer's handler has
+/// disarmed its one-shot by then, so if the idle loop halts instead of making
+/// that decision, the sleeper is filed under a deadline that has passed and no
+/// timer is armed to say so. On one processor that is every sleeping program
+/// asleep for good, which is how it was found. The window is a few
+/// instructions wide, so the idle task is told to hold it open until the exit
+/// has been skipped, and the check requires that it was.
+///
+/// Only with a second processor, where the checker can wait: on one, a lost
+/// wake-up would lose the checker too, and the boot would say nothing. The
+/// idle loop has no path that depends on how many processors there are, so
+/// what this shows on two holds on one.
+fn a_timer_during_an_empty_reap_is_not_lost(topology: &Topology) -> Result<(), &'static str> {
+    let online = topology.online();
+    if online < 2 {
+        return Ok(());
+    }
+    let allocations = crate::vmap::usage().allocations;
+    let here = super::current()
+        .ok_or("the checking task is not running")?
+        .cpu();
+    let there = (here + 1) % online;
+    let held = super::EMPTY_REAPS_HELD.load(Ordering::Acquire);
+    RAN.store(0, Ordering::Release);
+    DONE.store(0, Ordering::Release);
+
+    let sleeper = super::spawn_on(
+        "check-reap-sleeper",
+        sleep_through_an_empty_reap,
+        there,
+        NICE_0_WEIGHT,
+        there,
+        CpuSet::of(there),
+    )?;
+    let deadline = crate::timer::now_nanos().saturating_add(EMPTY_REAP_PATIENCE_NANOS);
+    let woke = FINISHED.wait_until_deadline(|| DONE.load(Ordering::Acquire) >= 1, deadline);
+    // Not left armed for some later look, whatever happened.
+    super::HOLD_EMPTY_REAP.store(0, Ordering::Release);
+    if !woke {
+        return Err(
+            "a sleeper whose timer fired while the idle task found nothing to reap never woke",
+        );
+    }
+    if super::EMPTY_REAPS_HELD.load(Ordering::Acquire) == held {
+        return Err("the idle task never held an empty look open across a sleeper's timer");
+    }
+
+    reap_to(allocations, "a sleeper woken during an empty reap")?;
+    drop(sleeper);
+    Ok(())
+}
+
+/// Ask this processor's idle task to hold its next empty look open, sleep so
+/// that it runs, and count the run once the sleep is over.
+fn sleep_through_an_empty_reap(cpu: usize) {
+    super::HOLD_EMPTY_REAP.store(cpu as u64 + 1, Ordering::Release);
+    super::sleep_for(EMPTY_REAP_SLEEP_NANOS);
+    count_a_run(0);
 }
 
 /// Spin, with interrupts on and without yielding, until `ready` or

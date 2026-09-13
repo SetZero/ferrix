@@ -448,14 +448,25 @@ fn idle_loop() -> ! {
     let cpu = this_cpu();
     loop {
         let reaped = reap_one();
-        // An interrupt that arrived while the stack was held was not allowed
-        // to switch this task out. Make the decision it asked for now, through
+        // An interrupt that arrived while `REAPING` was set was not allowed to
+        // switch this task out. Make the decision it asked for now, through
         // `schedule` and not through the look at the queue below: a sleeper
         // whose timer fired meanwhile is in the sleeper set, not the fair
         // class, and only `choose_next` moves it across and re-arms the timer.
         // Halting here instead left it asleep until some other interrupt
         // happened to arrive.
-        if reaped && cpu.is_some_and(take_resched) {
+        //
+        // **Whether or not a stack was found.** `REAPING` is set before the
+        // list is looked at, so a look that finds it empty has the same window,
+        // and by the time the exit is skipped the timer's handler has already
+        // disarmed the one-shot that fired. This was once asked only after a
+        // stack had been freed, and a sleeper's timer that fired during an
+        // empty look left the idle task halting with the decision owed and no
+        // timer armed. With a second processor, its interrupts came along
+        // sooner or later; on one, nothing ever did. That was
+        // `timeout -s KILL 1 sleep 5` never returning on a single-processor
+        // ARMv7-A machine, with every sleeping program on it asleep for good.
+        if cpu.is_some_and(take_resched) {
             schedule();
             continue;
         }
@@ -1475,6 +1486,9 @@ fn reap_one() -> bool {
     // answer an interrupt, and they may be waiting for this lock to file a
     // zombie of their own, with interrupts masked in turn.
     let task = ZOMBIES.lock().pop();
+    if task.is_none() {
+        hold_empty_look(cpu);
+    }
     let reaped = match task {
         Some(task) => {
             if let Some(stack) = task.stack() {
@@ -1493,6 +1507,49 @@ fn reap_one() -> bool {
     set_reaping(cpu, false);
     preempt_enable();
     reaped
+}
+
+/// Which processor's idle task should hold its next empty look for exited
+/// tasks open, as that processor's number plus one, or zero for none.
+///
+/// For `check::a_timer_during_an_empty_reap_is_not_lost`, which needs a timer
+/// to fire inside that window every time rather than once in a long while.
+/// Cleared by the look that honours it.
+static HOLD_EMPTY_REAP: AtomicU64 = AtomicU64::new(0);
+
+/// Empty looks held open until an interrupt exit had been skipped inside them.
+/// What says the check above hit the window it is about.
+static EMPTY_REAPS_HELD: AtomicU64 = AtomicU64::new(0);
+
+/// The longest [`hold_empty_look`] holds a look open, so that a check whose
+/// timer never comes costs a second rather than the idle task.
+const EMPTY_REAP_HOLD_LIMIT_NANOS: u64 = 1_000_000_000;
+
+/// If the check asked `cpu` to, keep this empty look open, with [`REAPING`]
+/// set and interrupts on, until an interrupt exit has been skipped because of
+/// it: until a reschedule request is left pending. One atomic read otherwise.
+fn hold_empty_look(cpu: usize) {
+    let mine = cpu as u64 + 1;
+    if HOLD_EMPTY_REAP.load(Ordering::Acquire) != mine {
+        return;
+    }
+    let until = crate::timer::now_nanos().saturating_add(EMPTY_REAP_HOLD_LIMIT_NANOS);
+    while !resched_pending(cpu) && crate::timer::now_nanos() < until {
+        core::hint::spin_loop();
+    }
+    if resched_pending(cpu) {
+        let _ = EMPTY_REAPS_HELD.fetch_add(1, Ordering::Relaxed);
+    }
+    let _ = HOLD_EMPTY_REAP.compare_exchange(mine, 0, Ordering::AcqRel, Ordering::Acquire);
+}
+
+/// Whether an interrupt asked `cpu` to reschedule and nothing has acted on it
+/// yet. Reads the request without taking it.
+fn resched_pending(cpu: usize) -> bool {
+    NEED_RESCHED
+        .get()
+        .and_then(|flags| flags.get(cpu))
+        .is_some_and(|flag| flag.load(Ordering::Acquire))
 }
 
 /// Free the stacks of tasks that have exited, and return how many.
