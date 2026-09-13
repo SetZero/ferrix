@@ -1999,12 +1999,13 @@ translated domain, is asked to write into a page its domain does not map, and
 its unit must record the fault: VT-d's fault recording register on x86-64,
 cleared before the probe because QEMU keeps one record and drops a second fault
 from the same device, and the `SMMUv3`'s event queue on AArch64. The record
-must name the device's own stream, the probe's page and a write. QEMU's virtio
-device marks itself broken when a descriptor will not map and completes
-nothing, so the answer is the unit's record; a completion that says the device
-did write there stops the boot, as DMA its domain should have prevented.
-`xtask test-boot` requires the fault on x86-64 and AArch64 and does not ask
-ARMv7-A, as the exit criterion says.
+must name the device's own stream, the probe's page and a write. The answer is
+the unit's record, not the device's completion: QEMU's virtio device completes
+the request anyway, through a bounce buffer whose write-back the unit refuses
+a second time (the item below, where this was learned), so a completion stops
+the boot only when no fault is recorded for the probe's page by the deadline
+— DMA its domain should have prevented. `xtask test-boot` requires the fault
+on x86-64 and AArch64 and does not ask ARMv7-A, as the exit criterion says.
 
 The run recorded when it landed: 1 out-of-domain write faulted on x86-64 and on
 AArch64; ARMv7-A's untranslated domain was not probed.
@@ -2037,6 +2038,29 @@ crate reports it releasable before that. It is pure logic, tested on the host,
 under Miri, and by a fuzz target that plays one side of the ring against an
 honest other. **No kernel crate or process uses it yet:** the ring's kernel side
 and the driver process are still to do, below.
+
+**Done — the probe's answer is the unit's record, never the completion.** Once
+in a few AArch64 boots the probe halted the machine with FX-1001, "the device
+wrote into a page its domain does not map". It had not. QEMU's DMA map of an
+address the IOMMU refuses does not fail: `address_space_map` hands the device a
+bounce buffer, the device fills it and completes the request with the length it
+was given, and the write-back at unmap is refused a second time and dropped —
+read in QEMU 9.2's `system/physmem.c`, not remembered. So the unit records the
+fault first and the device pushes a completion an instant later, every time, on
+VT-d and on the `SMMUv3` alike. The check read the event queue, then the used
+ring, and lost whenever the push landed between the two reads. A completion is
+now held until the deadline and fails the boot only if no fault for the probe
+page has been recorded by then; after the fault the probe waits a moment for
+the completion, and the boot log says whether the device completed the faulted
+write, whether the completion was seen before the fault, and how many further
+faults were recorded for it — the dropped write-back is one — so every boot
+shows the mechanism rather than the one that lost the race.
+
+The run recorded when it landed: nine AArch64 boots in a row, each faulting
+the write and then completing it, 64 bytes never delivered, with 16 further
+faults for the write-back refused in 4-byte pieces; three x86-64 boots and one
+under KVM, the completion after the fault and no further fault, since VT-d
+keeps one record; ARMv7-A unprobed at four processors and at two.
 
 **Still to do, in the order stage 11 needs it.** Stage 11 is done on the host
 and waits only for a ring-3 virtio-blk driver reading sectors, so everything on

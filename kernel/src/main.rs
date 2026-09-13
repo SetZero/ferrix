@@ -650,6 +650,19 @@ fn check_pci(view: &BootView<'_>) -> (Vec<device::DeviceNode>, device::Reserved)
     if let Some(why) = report.out_of_domain_skip {
         println!("  pci      an out-of-domain write was not shown to fault: {why}");
     }
+    if let Some(completed) = report.out_of_domain_completed {
+        println!(
+            "  pci      the device completed the faulted write anyway: {} bytes that never \
+             reached the page, seen {} the fault, {} further faults recorded for it",
+            completed.written,
+            if completed.before_fault {
+                "before"
+            } else {
+                "after"
+            },
+            completed.further_faults,
+        );
+    }
     if let Some(why) = report.entropy_polled {
         println!("  pci      an entropy request was polled, not interrupted: {why}");
     }

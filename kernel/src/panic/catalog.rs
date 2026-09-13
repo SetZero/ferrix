@@ -650,8 +650,10 @@ pub(crate) static STAGE10_PCI: Explanation = Explanation {
          reported instead, because on a hypervisor somebody else configured that is not a fault \
          in the kernel.",
         "The out-of-domain probe saw the device complete a write into a page its IOMMU domain \
-         does not map: the unit let through DMA it should have faulted, or the domain maps more \
-         than was pinned into it.",
+         does not map, and the unit recorded no fault for it within the deadline: the unit let \
+         through DMA it should have faulted, or the domain maps more than was pinned into it. A \
+         completion alone is not this — QEMU's device completes a refused write through a bounce \
+         buffer it then drops, and the unit's record is the answer.",
     ],
     see: "kernel/src/pci.rs check; libs/pci; libs/acpi Mcfg; libs/fdt ecam_hosts; \
           docs/ROADMAP.md stage 10",

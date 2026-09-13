@@ -301,6 +301,10 @@ pub(crate) struct Report {
     pub(crate) entropy_polled: Option<&'static str>,
     /// Writes outside a device's translated domain that its unit faulted.
     pub(crate) out_of_domain_faulted: usize,
+    /// The completion the device reported for the last faulted write anyway,
+    /// if it did: a fact about the device model, printed so a boot log shows
+    /// it (`virtio::Faulted`).
+    pub(crate) out_of_domain_completed: Option<virtio::Completed>,
     /// Why the last out-of-domain write was not shown to fault, if one was not.
     pub(crate) out_of_domain_skip: Option<&'static str>,
 }
@@ -388,6 +392,7 @@ pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>, Res
         entropy_by_interrupt: 0,
         entropy_polled: None,
         out_of_domain_faulted: 0,
+        out_of_domain_completed: None,
         out_of_domain_skip: None,
     };
     let mut nodes = Vec::new();
@@ -526,7 +531,11 @@ fn check_function(
                         Some(why) => report.entropy_polled = Some(why),
                     }
                     match out_of_domain {
-                        Some(Ok(())) => report.out_of_domain_faulted += 1,
+                        Some(Ok(faulted)) => {
+                            report.out_of_domain_faulted += 1;
+                            report.out_of_domain_completed =
+                                faulted.completed.or(report.out_of_domain_completed);
+                        }
                         Some(Err(why)) => report.out_of_domain_skip = Some(why),
                         None => {}
                     }

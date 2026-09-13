@@ -98,10 +98,39 @@ pub(super) enum Entropy {
         /// On a translated domain, whether a write outside it faulted: `Ok`
         /// when the unit recorded it, otherwise why it was not shown. `None`
         /// when no unit translates the device.
-        out_of_domain: Option<Result<(), &'static str>>,
+        out_of_domain: Option<Result<Faulted, &'static str>>,
     },
     /// The device refused or stalled, for this reason, and was left alone.
     Skipped(&'static str),
+}
+
+/// A write outside the domain, which the unit recorded as a fault.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Faulted {
+    /// The completion the device reported for it anyway, if it did.
+    ///
+    /// QEMU's does. Its DMA map of an address the IOMMU refuses does not
+    /// fail: `address_space_map` hands the device a bounce buffer, the device
+    /// fills it and completes the request with the length it was given, and
+    /// the write-back on unmap is refused a second time and dropped. Nothing
+    /// reaches the page, which is what the unit's record says and what the
+    /// check requires; the completion is a fact about the device model.
+    pub(crate) completed: Option<Completed>,
+}
+
+/// A completion the device reported for a write its unit faulted.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Completed {
+    /// The length the device said it wrote.
+    pub(crate) written: u32,
+    /// Whether the check saw the completion before it saw the fault. The unit
+    /// records the fault first, but the check reads the two from different
+    /// places, so it can read the used ring after the device's push and the
+    /// event queue from before it.
+    pub(crate) before_fault: bool,
+    /// Faults for the probe page recorded after the first: the dropped
+    /// write-back is one.
+    pub(crate) further_faults: u32,
 }
 
 /// One register block from a BAR, mapped for as long as this lives.
@@ -639,27 +668,35 @@ fn drive(
 /// check pins only its own two frames.
 const PROBE_PAGE: u64 = 0x1000;
 
+/// How long, after the unit has recorded the fault, the probe waits to see
+/// whether the device completes the request anyway. QEMU's device does so in
+/// the same breath as the fault; a device that does not costs the boot this.
+const COMPLETION_GRACE_NANOS: u64 = 20_000_000;
+
 /// Ask the device to write where its domain maps nothing, and require its
 /// unit to fault it: the stage 10 exit criterion's deliberate out-of-domain
 /// DMA.
 ///
 /// The unit's fault record is cleared first, because VT-d has a single record
-/// and drops a second fault from the same device while it is full. QEMU's
-/// virtio device marks itself broken when a descriptor will not map and
-/// completes nothing, so the answer is the unit's record rather than a
-/// completion; the caller resets the device either way.
+/// and drops a second fault from the same device while it is full. The answer
+/// is the unit's record, not the device's completion: QEMU's device completes
+/// the request with the length it was given even though its write was refused
+/// (see [`Faulted`]), so a completion is held until the deadline and counts
+/// against the domain only if no fault is recorded by then. The caller resets
+/// the device either way.
 ///
 /// # Errors
 ///
-/// A completion saying the device wrote into the page: DMA its domain should
-/// have stopped. A probe that could not be made, or a unit that recorded
-/// nothing, is a reason in the `Ok` rather than a failed boot.
+/// A completion saying the device wrote into the page, with no fault recorded
+/// for it: DMA its domain should have stopped. A probe that could not be made,
+/// or a unit that recorded nothing, is a reason in the `Ok` rather than a
+/// failed boot.
 fn probe_out_of_domain(
     queue: &mut SplitQueue<Rings>,
     notify: &Block,
     doorbell: u64,
     domain: &iommu::Domain,
-) -> Result<Result<(), &'static str>, Failure> {
+) -> Result<Result<Faulted, &'static str>, Failure> {
     let Some(stream) = domain.stream() else {
         return Ok(Err("the domain names no stream"));
     };
@@ -675,25 +712,66 @@ fn probe_out_of_domain(
     }
     notify.registers.write16(doorbell, 0);
     let deadline = timer::now_nanos().saturating_add(DEADLINE_NANOS);
+    let mut completed = None;
     loop {
         if let Some(fault) = domain.take_fault() {
             if fault.stream != stream || fault.page != PROBE_PAGE || !fault.write {
                 return Ok(Err("the unit recorded a fault other than the probe's"));
             }
-            return Ok(Ok(()));
+            break;
         }
-        if let Some(completion) = queue.take_used()?
+        if completed.is_none()
+            && let Some(completion) = queue.take_used()?
             && completion.written > 0
         {
-            return Err(Failure::Entropy(
-                "the device wrote into a page its domain does not map",
-            ));
+            completed = Some(Completed {
+                written: completion.written,
+                before_fault: true,
+                further_faults: 0,
+            });
         }
         if timer::now_nanos() > deadline {
-            return Ok(Err(
-                "the unit recorded no fault for a write outside the domain",
-            ));
+            return if completed.is_some() {
+                Err(Failure::Entropy(
+                    "the device wrote into a page its domain does not map, and its unit \
+                     recorded no fault",
+                ))
+            } else {
+                Ok(Err(
+                    "the unit recorded no fault for a write outside the domain",
+                ))
+            };
         }
         core::hint::spin_loop();
     }
+    if completed.is_none() {
+        let grace = timer::now_nanos().saturating_add(COMPLETION_GRACE_NANOS);
+        while timer::now_nanos() <= grace {
+            if let Some(completion) = queue.take_used()?
+                && completion.written > 0
+            {
+                completed = Some(Completed {
+                    written: completion.written,
+                    before_fault: false,
+                    further_faults: 0,
+                });
+                break;
+            }
+            core::hint::spin_loop();
+        }
+    }
+    if let Some(completed) = completed.as_mut() {
+        // Bounded, as `clear_faults` is: a device faulting without end cannot
+        // keep the boot here.
+        for _ in 0..256 {
+            match domain.take_fault() {
+                Some(fault) if fault.stream == stream && fault.page == PROBE_PAGE => {
+                    completed.further_faults += 1;
+                }
+                Some(_) => {}
+                None => break,
+            }
+        }
+    }
+    Ok(Ok(Faulted { completed }))
 }
