@@ -174,7 +174,14 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
             "hostname: restored",
         ],
     ),
-    (8, &[]),
+    (
+        8,
+        &[
+            "major minor  #blocks  name",
+            "",
+            " 254        0      65536 vda",
+        ],
+    ),
     (9, &[]),
     (
         10,
