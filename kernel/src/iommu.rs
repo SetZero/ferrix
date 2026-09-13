@@ -523,6 +523,10 @@ impl Domain {
         } = &self.translation
         {
             let _held = changing.lock();
+            // A failure part-way leaves the pages before it unmapped but not
+            // yet flushed, and the pages after it still mapped: the domain
+            // then holds a partial pin for good, and the caller keeps every
+            // frame of it.
             if pinned
                 .addresses
                 .iter()

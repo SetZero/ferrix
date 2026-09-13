@@ -1094,6 +1094,7 @@ fn check_a_pin_gives_a_device_exactly_its_pages(counter: &mut Counter) -> Result
         &[reg(handle), reg(vmo), 0, 2 * PAGE_SIZE, 0],
         "vmo_pin of a VMO for its own device failed",
     )?;
+    check_a_pin_stays_where_it_was_made(&side, pin, counter)?;
     let pages = side
         .call(nr::VMO_PIN_ADDRESSES, &[reg(pin), PINNED_AT, 2])
         .map_err(|_| "vmo_pin_addresses failed")?;
@@ -1146,6 +1147,30 @@ fn check_a_pin_gives_a_device_exactly_its_pages(counter: &mut Counter) -> Result
     counter.pinned += 2;
     side.close_everything();
     Ok(())
+}
+
+/// Require a pin to stay in the process that made it: a channel write carrying
+/// it and a duplicate of it are both refused, because its rights carry neither
+/// `TRANSFER` nor `DUPLICATE`.
+fn check_a_pin_stays_where_it_was_made(
+    side: &Side,
+    pin: Handle,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let (near, _far) = side.channel()?;
+    side.put_handles(&[pin])?;
+    refused(
+        side.call(nr::CHANNEL_WRITE, &[reg(near), PAYLOAD, 0, HANDLES, 1]),
+        status::ACCESS_DENIED,
+        "a pin was sent over a channel",
+        counter,
+    )?;
+    refused(
+        side.call(nr::HANDLE_DUPLICATE, &[reg(pin), u64::from(Rights::READ.0)]),
+        status::ACCESS_DENIED,
+        "a pin was duplicated",
+        counter,
+    )
 }
 
 /// Require `vmo_pin` to refuse, with exactly the status the rules give, a

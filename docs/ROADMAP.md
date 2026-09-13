@@ -1928,6 +1928,11 @@ agreements recorded here.
     and the command and event queues.
   * *The `GICv2m` doorbell mapped into every Arm domain.* QEMU sends a
     device's MSI writes through the SMMU, where VT-d exempts them.
+  * *VT-d's IOTLB flush waiting with interrupts on.* It busy-waits today
+    inside two `IrqSpinLock`s, up to 100 ms with interrupts masked, on exactly
+    the path virtio-blk will take: wait outside the lock behind a
+    command-in-progress flag, or move to queued invalidation — never a plain
+    `SpinLock` held across the wait.
   * *`SMMUv3` domains* built from those tables, behind `Domain::pin` and
     `unpin`, which translate through VT-d today.
   * *The deliberate out-of-domain fault*, from the boot check's virtio-rng
