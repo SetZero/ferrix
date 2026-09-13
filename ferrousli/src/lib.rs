@@ -37,6 +37,7 @@ pub mod exit;
 pub mod fcntl;
 pub mod float;
 pub mod ioctl;
+pub mod locale;
 pub mod lock;
 pub mod malloc;
 pub mod mman;

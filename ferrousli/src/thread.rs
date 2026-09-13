@@ -29,6 +29,7 @@ use core::ptr::{null, null_mut, with_exposed_provenance, with_exposed_provenance
 
 use crate::auxv;
 use crate::errno;
+use crate::locale::Locale;
 use crate::string;
 use crate::syscall::{self, nr};
 
@@ -59,6 +60,9 @@ pub struct Thread {
     errno: c_int,
     /// 0x84: the kernel's id for this thread.
     tid: c_int,
+    /// 0x88: the locale `uselocale` gave this thread, or null while it follows
+    /// the global locale.
+    locale: *mut Locale,
 }
 
 const _: () = assert!(offset_of!(Thread, stack_guard) == 0x28);
@@ -298,6 +302,7 @@ pub unsafe fn init_main() {
             glibc_0x78: 0,
             errno: 0,
             tid,
+            locale: null_mut(),
         });
     }
 
@@ -347,6 +352,13 @@ pub fn errno_location() -> *mut c_int {
     current()
         .wrapping_byte_add(offset_of!(Thread, errno))
         .cast::<c_int>()
+}
+
+/// Where the calling thread keeps its `uselocale` locale.
+pub fn locale_location() -> *mut *mut Locale {
+    current()
+        .wrapping_byte_add(offset_of!(Thread, locale))
+        .cast::<*mut Locale>()
 }
 
 #[cfg(test)]

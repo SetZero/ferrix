@@ -11,6 +11,7 @@
 use core::ffi::{CStr, c_char, c_int};
 
 use crate::errno as e;
+use crate::locale::Locale;
 
 /// The message for 0 and for any number without one of its own.
 const UNKNOWN_ERROR: &CStr = c"No error information";
@@ -187,6 +188,14 @@ fn error_message(error: c_int) -> &'static CStr {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn strerror(error: c_int) -> *mut c_char {
     error_message(error).as_ptr().cast_mut()
+}
+
+/// [`strerror`] in the locale `locale`. There are no message catalogues, so
+/// every locale's messages are the C locale's.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn strerror_l(error: c_int, locale: *mut Locale) -> *mut c_char {
+    let _ = locale;
+    strerror(error)
 }
 
 /// Copies the message for `error` into `buf`, which holds `len` bytes: the

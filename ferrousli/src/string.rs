@@ -49,6 +49,7 @@ use core::mem::MaybeUninit;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
+use crate::locale::Locale;
 use crate::strings::strncasecmp;
 
 /// A machine word's size, the step of the word-at-a-time loops.
@@ -200,6 +201,23 @@ pub unsafe extern "C" fn strcoll(a: *const c_char, b: *const c_char) -> c_int {
     unsafe { strcmp(a, b) }
 }
 
+/// [`strcoll`] in the locale `locale`. Every locale collates by byte value, as
+/// in musl, so the locale does not change the order.
+///
+/// # Safety
+///
+/// Both must be NUL-terminated strings.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strcoll_l(
+    a: *const c_char,
+    b: *const c_char,
+    locale: *mut Locale,
+) -> c_int {
+    let _ = locale;
+    // SAFETY: the same contract as `strcmp`.
+    unsafe { strcmp(a, b) }
+}
+
 /// Transforms `src` into a string whose [`strcmp`] order is `src`'s
 /// [`strcoll`] order, writing it to `dest` if it fits in `n` bytes with its
 /// NUL. Returns the transformed length. In the C locale the transformation is
@@ -218,6 +236,23 @@ pub unsafe extern "C" fn strxfrm(dest: *mut c_char, src: *const c_char, n: usize
         let _ = unsafe { memcpy(dest.cast(), src.cast(), len + 1) };
     }
     len
+}
+
+/// [`strxfrm`] in the locale `locale`, which does not change the result.
+///
+/// # Safety
+///
+/// As [`strxfrm`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strxfrm_l(
+    dest: *mut c_char,
+    src: *const c_char,
+    n: usize,
+    locale: *mut Locale,
+) -> usize {
+    let _ = locale;
+    // SAFETY: the caller's contract is `strxfrm`'s.
+    unsafe { strxfrm(dest, src, n) }
 }
 
 /// Copies `n` bytes from `src` to `dest`, which must not overlap.

@@ -14,8 +14,20 @@
 //! 255. The class bits and the values below 0 and above 127 are glibc's, and a
 //! unit test compares every entry with the host glibc's. musl exports the same
 //! three functions.
+//!
+//! Those tables stay the C locale's under UTF-8 too, as in musl: a byte of
+//! 0x80 or above is part of a multibyte character, not a character, and has
+//! no class in any locale. Programs classify characters beyond ASCII with the
+//! wide functions in [`crate::wctype`].
+//!
+//! # The `_l` forms
+//!
+//! Each function has a form taking a `locale_t`, which it ignores, since the
+//! classes of a byte are the same in every locale.
 
 use core::ffi::c_int;
+
+use crate::locale::Locale;
 
 /// Where index 0 sits in a table that starts at -128.
 const OFFSET: usize = 128;
@@ -301,6 +313,37 @@ pub extern "C" fn toupper(c: c_int) -> c_int {
         Ok(byte) => c_int::from(byte.to_ascii_uppercase()),
         Err(_) => c,
     }
+}
+
+/// Declares `_l` forms of the functions above that ignore their locale.
+macro_rules! locale_ignored {
+    ($($name:ident => $plain:ident,)*) => {
+        $(
+            #[doc = concat!("[`", stringify!($plain), "`], which is the same in every locale.")]
+            #[cfg_attr(not(test), unsafe(no_mangle))]
+            pub extern "C" fn $name(c: c_int, locale: *mut Locale) -> c_int {
+                let _ = locale;
+                $plain(c)
+            }
+        )*
+    };
+}
+
+locale_ignored! {
+    isalnum_l => isalnum,
+    isalpha_l => isalpha,
+    isblank_l => isblank,
+    iscntrl_l => iscntrl,
+    isdigit_l => isdigit,
+    isgraph_l => isgraph,
+    islower_l => islower,
+    isprint_l => isprint,
+    ispunct_l => ispunct,
+    isspace_l => isspace,
+    isupper_l => isupper,
+    isxdigit_l => isxdigit,
+    tolower_l => tolower,
+    toupper_l => toupper,
 }
 
 /// Whether `c` is a 7-bit value.
