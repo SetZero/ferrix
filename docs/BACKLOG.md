@@ -127,8 +127,6 @@ nobody has it yet.
 |---|---|
 | Scoped user TLB shootdown: one page, only the processors running the space; part of the VMO reverse map | ferrix-e6, reviewed by ferrix-e5 |
 | The cost of the 20 µs one-shot armed on every wake onto the caller's processor, measured on pipe and futex paths | ferrix-34 |
-| Boot time: stage 3's tick count at 250 ms, a per-check cost line, an idle mask so a spawn stops broadcasting, one shootdown per reap batch | ferrix-34 |
-| Timestamps in xtask's serial logs | ferrix-34 |
 | Per-CPU frame and heap caches, deferred since stage 2 | open, once a workload can measure them |
 | ASIDs and PCIDs, so a switch stops invalidating every user entry | open, after threads |
 | x86-64 kernel-mode NMI, #DB and #MC on IST stacks with a paranoid entry | ferrix-e5 |

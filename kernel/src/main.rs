@@ -516,6 +516,18 @@ fn check_syscalls() {
              returned through sigreturn, and the program exited with {status}"
         );
     }
+    println!(
+        "  cost     ms per check: numbers={} handlers={} user={} procs={} kill={} fork={} signals={} execve={} futex={}",
+        report.spent_ms[0],
+        report.spent_ms[1],
+        report.spent_ms[2],
+        report.spent_ms[3],
+        report.spent_ms[4],
+        report.spent_ms[5],
+        report.spent_ms[6],
+        report.spent_ms[7],
+        report.spent_ms[8],
+    );
     if let Some((found, missing)) = report.execed {
         println!(
             "  execve   a program became another and exited with {found}; with the file gone \
@@ -1136,7 +1148,7 @@ const fn megahertz(hz: u64) -> (u64, u64) {
     (hz / 1_000_000, (hz % 1_000_000) / 1000)
 }
 
-/// The rest of stage 3's exit criterion: arm a timer, count a thousand ticks,
+/// The rest of stage 3's exit criterion: arm a timer, count the ticks,
 /// and require the rate to be the one that was asked for.
 ///
 /// The measurement is what makes this a test rather than a demonstration. A
@@ -1151,8 +1163,16 @@ const fn megahertz(hz: u64) -> (u64, u64) {
 /// at would be arithmetic, not a measurement: it could not fail.
 fn timer_check() -> Result<u64, &'static str> {
     /// Ticks to count.
-    const TICKS: u64 = 1000;
-    /// The interval to ask for, so a thousand ticks is about a second.
+    ///
+    /// A quarter of a second's worth. It was a thousand, a full second, and
+    /// the tolerance below never needed it: three architectures report within
+    /// two parts in a thousand, and the check is about whether the clock and
+    /// the timer agree on a second, which they agree on just as well over a
+    /// quarter of one. A second per boot per architecture, run dozens of
+    /// times a day, was the boot test's single largest fixed cost.
+    const TICKS: u64 = 250;
+    /// The interval to ask for: a millisecond, so the rate under test is the
+    /// kilohertz every architecture's timer is expected to keep.
     const INTERVAL_NANOS: u64 = 1_000_000;
     /// How far the measured rate may sit from the requested one.
     ///
@@ -1184,11 +1204,11 @@ fn timer_check() -> Result<u64, &'static str> {
         arch::wait_for_interrupt();
         spins = spins.saturating_add(1);
         // `wait_for_interrupt` can return without one having arrived, so this
-        // counts iterations rather than trusting it. Far more than a thousand
-        // ticks could need, and far less than the boot test's timeout.
+        // counts iterations rather than trusting it. Far more than the ticks
+        // could need, and far less than the boot test's timeout.
         if spins > 10_000_000 {
             timer::stop();
-            return Err("the timer stopped arriving before a thousand ticks");
+            return Err("the timer stopped arriving before the ticks were counted");
         }
     }
 
@@ -1196,7 +1216,7 @@ fn timer_check() -> Result<u64, &'static str> {
     timer::stop();
 
     if elapsed == 0 {
-        return Err("a thousand ticks took no measurable time");
+        return Err("the ticks took no measurable time");
     }
     if irq::unclaimed() != 0 {
         return Err("an interrupt arrived that nothing had registered for");

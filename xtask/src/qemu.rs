@@ -327,7 +327,12 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
 
     let log_path = paths::build_dir(arch).join("serial.log");
     let mut log = std::fs::File::create(&log_path)?;
-    let deadline = Instant::now() + Duration::from_secs(args.timeout);
+    // Every line is stamped with the seconds since QEMU was started, on the
+    // screen and in the log. A boot that stops says *where* it stopped either
+    // way; only a stamp says whether it was slow getting there or hung, which
+    // on a loaded host are two different problems with the same last line.
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(args.timeout);
     let mut lines = Vec::new();
     let mut verdict = Verdict::Silent;
 
@@ -337,8 +342,9 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
         };
         match receiver.recv_timeout(remaining) {
             Ok(line) => {
-                println!("    | {line}");
-                writeln!(log, "{line}")?;
+                let at = started.elapsed().as_secs_f64();
+                println!("  {at:6.2} | {line}");
+                writeln!(log, "{at:6.2} | {line}")?;
                 if line.contains(until) {
                     verdict = Verdict::Reached;
                 } else if line.contains(PANIC_MARKER) {
@@ -391,8 +397,8 @@ pub(crate) fn take_panic_report(
         let line = symbols
             .and_then(|symbols| symbols.annotate(&line))
             .unwrap_or(line);
-        println!("    | {line}");
-        writeln!(log, "{line}")?;
+        println!("       | {line}");
+        writeln!(log, "       | {line}")?;
         if line.contains(SUCCESS_MARKER) || line.contains(PANIC_MARKER) {
             // Another processor's report, or something worse; either way the
             // first one is what failed the boot, and waiting for more of them

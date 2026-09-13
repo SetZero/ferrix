@@ -267,12 +267,11 @@ docs/ROADMAP.md stage 3.
 ## FX-0302 — the timer interrupt did not arrive as programmed
 
 `timer_check` proves time works before anything is built on it. A one-shot timer
-must fire exactly once; then a periodic timer must deliver a thousand ticks,
-every interrupt must reach a registered handler, and the rate measured against
-the counter must be within 25 percent of the 1000 Hz asked for. A scheduler
-slice, a sleep and every later timeout is this rate multiplied by something, so
-a timer that is silent, repeats, or runs at the wrong rate makes all of them
-wrong.
+must fire exactly once; then a periodic timer must deliver its ticks, every
+interrupt must reach a registered handler, and the rate measured against the
+counter must be within 25 percent of the 1000 Hz asked for. A scheduler slice, a
+sleep and every later timeout is this rate multiplied by something, so a timer
+that is silent, repeats, or runs at the wrong rate makes all of them wrong.
 
 1. The timer's interrupt is not reaching the processor: firmware named the wrong
    interrupt for the virtual timer (the GTDT on AArch64, the device tree on
@@ -285,8 +284,8 @@ wrong.
    itself wrong, so it was programmed from a wrong frequency; the line printed
    before the panic gives the measured rate, and a rate that is too high points
    here.
-4. The host running an emulator was too loaded to deliver a thousand interrupts
-   in a second, so the measured rate is low.
+4. The host running an emulator was too loaded to deliver the ticks at a
+   kilohertz, so the measured rate is low.
 5. An interrupt arrived on a line nothing registered for: a device firmware left
    enabled, or a controller programmed to deliver somewhere unexpected.
 

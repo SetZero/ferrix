@@ -174,6 +174,30 @@ static IN_SCHEDULER: AtomicU64 = AtomicU64::new(0);
 /// The next task identifier. Never reused.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// One bit per processor whose idle task is looking for work or asleep.
+///
+/// Read by [`wake_idle_processors`], so that a spawn does not interrupt
+/// every processor on the machine when none of them is idle: a thousand
+/// spawns in a row used to be three thousand interrupts taken by processors
+/// that were busy running the previous spawns. The bit is set *before* the
+/// idle loop looks for work and the spawn looks at the mask only *after* it
+/// has queued the task, each behind a full fence, so either the idle
+/// processor's look finds the task or the spawn finds the bit -- the same
+/// argument as a sleeping reader against a signalling writer.
+static IDLE: AtomicU64 = AtomicU64::new(0);
+
+/// Note that `cpu`'s idle task is, or has stopped, looking.
+fn set_idle(cpu: Option<usize>, idle: bool) {
+    let Some(bit) = cpu.filter(|cpu| *cpu < 64).map(|cpu| 1u64 << cpu) else {
+        return;
+    };
+    if idle {
+        let _ = IDLE.fetch_or(bit, Ordering::SeqCst);
+    } else {
+        let _ = IDLE.fetch_and(!bit, Ordering::SeqCst);
+    }
+}
+
 /// Tasks that have exited, waiting for their stacks to be freed.
 ///
 /// Not freed where they exit: a task cannot unmap the stack it is standing
@@ -435,7 +459,13 @@ fn idle_loop() -> ! {
             schedule();
             continue;
         }
+
+        // Idle to the rest of the machine from here: before the look, so
+        // that a spawn made after the look sees the bit and sends the
+        // interrupt the halt below is waiting for. See `IDLE`.
+        set_idle(cpu, true);
         if steal_work() {
+            set_idle(cpu, false);
             schedule();
             continue;
         }
@@ -444,6 +474,7 @@ fn idle_loop() -> ! {
         // wakes the wait rather than being taken just before it.
         arch::disable_interrupts();
         if has_work() {
+            set_idle(cpu, false);
             arch::enable_interrupts();
             schedule();
         } else if reaped {
@@ -452,6 +483,7 @@ fn idle_loop() -> ! {
             arch::enable_interrupts();
         } else {
             arch::wait_for_work();
+            set_idle(cpu, false);
         }
     }
 }
@@ -723,7 +755,12 @@ fn spawn_task(
 /// reschedule. This one carries no request at all: the interrupt exists only
 /// to return an idle processor to the top of its loop, where it looks.
 fn wake_idle_processors() {
-    let _ = arch::send_ipi_to_others();
+    // The fence orders the caller's enqueue before this read of the mask,
+    // against the idle loop's setting of its bit before its look: see `IDLE`.
+    core::sync::atomic::fence(Ordering::SeqCst);
+    if IDLE.load(Ordering::SeqCst) != 0 {
+        let _ = arch::send_ipi_to_others();
+    }
 }
 
 /// Where every task begins.
@@ -1465,14 +1502,14 @@ fn reap_one() -> bool {
 pub(crate) fn reap() -> usize {
     let dead = core::mem::take(&mut *ZOMBIES.lock());
     let count = dead.len();
-    for task in dead {
-        if let Some(stack) = task.stack() {
-            // SAFETY: the task is dead and on no queue, and the processor
-            // that switched away from it has finished doing so — which is
-            // what put it here. Nothing is running on this stack.
-            let _ = unsafe { crate::vmap::free_stack(stack) };
-        }
-    }
+    let stacks: Vec<crate::vmap::Stack> = dead.iter().filter_map(|task| task.stack()).collect();
+    // SAFETY: every task is dead and on no queue, and the processor that
+    // switched away from it has finished doing so — which is what put it
+    // here. Nothing is running on any of these stacks. All of them under
+    // one shootdown: freeing a thousand one at a time interrupted every
+    // other processor a thousand times.
+    let _ = unsafe { crate::vmap::free_stacks(&stacks) };
+    drop(dead);
     count
 }
 

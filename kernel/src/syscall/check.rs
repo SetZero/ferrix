@@ -74,11 +74,30 @@ pub(crate) struct Report {
     pub(crate) pids: u32,
     /// Futex waiters a wake or a requeue roused: 2 when right.
     pub(crate) futex_woken: usize,
+    /// Guest milliseconds each group of checks took, in order: the dispatch
+    /// table, the handler checks with their leak window, and then each of the
+    /// program checks.
+    pub(crate) spent_ms: [u64; 9],
 }
 
 /// Run them. `Err` names the first thing that was not true.
 pub(crate) fn run() -> Result<Report, &'static str> {
     let mut counter = Counter::default();
+    // Guest milliseconds per group, printed at the end as stage 5 prints its
+    // own: these checks are the boot's largest single stretch, two seconds of
+    // a five-second boot under `tcg`, and a cost nobody can see is one nobody
+    // will act on.
+    let mut spent = [0u64; 9];
+    let mut at = crate::timer::now_nanos();
+    macro_rules! mark {
+        ($index:expr) => {{
+            let now = crate::timer::now_nanos();
+            if let Some(slot) = spent.get_mut($index) {
+                *slot = now.saturating_sub(at) / 1_000_000;
+            }
+            at = now;
+        }};
+    }
 
     let getpid_number = check_the_right_table_was_compiled_in(&mut counter)?;
     check_identity_answers(&mut counter)?;
@@ -86,6 +105,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_an_unknown_number_is_enosys(&mut counter)?;
     check_errors_encode_as_negative(&mut counter)?;
     check_a_call_needing_a_process_says_so(&mut counter)?;
+    mark!(0);
 
     // Everything the handler checks allocate must come back. Measured around
     // the whole group rather than per check, so a leak anywhere in it shows.
@@ -120,15 +140,24 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     if leaked != 0 {
         return Err("the handler checks did not give every frame back");
     }
+    mark!(1);
 
     let user_status = check_a_program_runs_in_user_mode()?;
+    mark!(2);
     let concurrent = check_two_programs_take_turns_on_one_processor()?;
+    mark!(3);
     let killed = check_a_program_is_killed_from_outside()?;
+    mark!(4);
     let forked = check_a_forked_child_is_waited_for()?;
+    mark!(5);
     let signalled = check_a_handler_runs_and_returns()?;
+    mark!(6);
     check_an_ended_process_closes_its_descriptors()?;
     let execed = check_execve_replaces_the_program()?;
+    mark!(7);
     let futex_woken = check_futexes()?;
+    mark!(8);
+    let _ = at;
 
     Ok(Report {
         dispatched: counter.dispatched,
@@ -144,6 +173,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         execed,
         pids,
         futex_woken,
+        spent_ms: spent,
     })
 }
 
@@ -4171,9 +4201,16 @@ const FUTEX_WORD: u32 = 0x0F07_E100;
 const FUTEX_SHORT_NANOS: u64 = 20_000_000;
 
 /// How long the waiter a wake is meant for will sleep, in seconds. Far longer
-/// than a working wake takes to arrive; the whole of what the negative
-/// control, which never rouses it, costs a boot.
+/// than a working wake takes to arrive, even on a host that stalls the
+/// machine for a while, and never actually waited out: the wake comes first.
 const FUTEX_LONG_SECONDS: u64 = 2;
+
+/// How long the negative control's waiter sleeps, which it does in full: no
+/// wake is coming, and the check requires it to time out. Far longer than the
+/// millisecond it takes to reach the table, where it must be found before it
+/// is forgotten; far shorter than the two seconds it used to be, which were
+/// the boot's single most expensive check and proved nothing extra.
+const FUTEX_FORGOTTEN_NANOS: u64 = 200_000_000;
 
 /// How long the check waits for its waiter to start waiting, or to return.
 const FUTEX_PATIENCE_NANOS: u64 = 30_000_000_000;
@@ -4273,60 +4310,86 @@ fn check_futexes() -> Result<usize, &'static str> {
         return Err("FUTEX_CMP_REQUEUE on a word that had changed did not answer EAGAIN");
     }
 
-    let mut woken = wait_then_wake(&process, word, timeout, |process, word| {
-        futex_call(
-            process,
-            [word, u64::from(FUTEX_WAKE | FUTEX_PRIVATE_FLAG), 1, 0, 0, 0],
-        )
-    })?;
+    let mut woken = wait_then_wake(
+        &process,
+        word,
+        timeout,
+        (FUTEX_LONG_SECONDS, 0),
+        |process, word| {
+            futex_call(
+                process,
+                [word, u64::from(FUTEX_WAKE | FUTEX_PRIVATE_FLAG), 1, 0, 0, 0],
+            )
+        },
+    )?;
     // Moved to the next word, then woken there: the requeue must have taken
     // it, since nothing else wakes the second word.
-    woken += wait_then_wake(&process, word, timeout, |process, word| {
-        let requeue = u64::from(FUTEX_CMP_REQUEUE | FUTEX_PRIVATE_FLAG);
-        let moved = futex_call(
-            process,
-            [word, requeue, 0, 1, word + 4, u64::from(FUTEX_WORD)],
-        )?;
-        if moved != 1 || futex::waiters_on(process, word) != 0 {
-            return Ok(0);
-        }
-        futex_call(
-            process,
-            [
-                word + 4,
-                u64::from(FUTEX_WAKE | FUTEX_PRIVATE_FLAG),
-                1,
-                0,
-                0,
-                0,
-            ],
-        )
-    })?;
+    woken += wait_then_wake(
+        &process,
+        word,
+        timeout,
+        (FUTEX_LONG_SECONDS, 0),
+        |process, word| {
+            let requeue = u64::from(FUTEX_CMP_REQUEUE | FUTEX_PRIVATE_FLAG);
+            let moved = futex_call(
+                process,
+                [word, requeue, 0, 1, word + 4, u64::from(FUTEX_WORD)],
+            )?;
+            if moved != 1 || futex::waiters_on(process, word) != 0 {
+                return Ok(0);
+            }
+            futex_call(
+                process,
+                [
+                    word + 4,
+                    u64::from(FUTEX_WAKE | FUTEX_PRIVATE_FLAG),
+                    1,
+                    0,
+                    0,
+                    0,
+                ],
+            )
+        },
+    )?;
 
-    match wait_then_wake(&process, word, timeout, |process, word| {
-        Ok(futex::forget_waiters(process, word, 1))
-    }) {
-        Err(problem) if problem == SLEPT_THROUGH_WAKE => {}
-        Err(_) => {
-            return Err("the futex check failed a wake that roused nobody, for another reason");
-        }
-        Ok(_) => return Err("the futex check passed a wake that never roused its waiter"),
-    }
+    a_forgotten_waiter_is_caught(&process, word, timeout)?;
 
     let _ = memory::sys_munmap(&process, page, PAGE_SIZE).map_err(|_| "munmap was refused")?;
     Ok(woken)
 }
 
-/// Start a task sleeping in `FUTEX_WAIT` on `word`, wait until it is on the
-/// table, `wake` it, and require it back with zero and the wake to have
-/// counted it. Answers one.
+/// The negative control: a wake that counts a waiter but never rouses it
+/// must be reported as exactly that, by the same path the positive checks
+/// use. The waiter sleeps its whole, short, timeout.
+fn a_forgotten_waiter_is_caught(
+    process: &Arc<Process>,
+    word: u64,
+    timeout: u64,
+) -> Result<(), &'static str> {
+    match wait_then_wake(
+        process,
+        word,
+        timeout,
+        (0, FUTEX_FORGOTTEN_NANOS),
+        |process, word| Ok(futex::forget_waiters(process, word, 1)),
+    ) {
+        Err(problem) if problem == SLEPT_THROUGH_WAKE => Ok(()),
+        Err(_) => Err("the futex check failed a wake that roused nobody, for another reason"),
+        Ok(_) => Err("the futex check passed a wake that never roused its waiter"),
+    }
+}
+
+/// Start a task sleeping in `FUTEX_WAIT` on `word` for `sleep` (seconds,
+/// nanoseconds), wait until it is on the table, `wake` it, and require it
+/// back with zero and the wake to have counted it. Answers one.
 fn wait_then_wake(
     process: &Arc<Process>,
     word: u64,
     timeout: u64,
+    sleep: (u64, u64),
     wake: FutexWake,
 ) -> Result<usize, &'static str> {
-    write_timespec(process, timeout, FUTEX_LONG_SECONDS, 0)?;
+    write_timespec(process, timeout, sleep.0, sleep.1)?;
     *FUTEX_ANSWER.lock() = None;
     *FUTEX_SUBJECT.lock() = Some((Arc::clone(process), word, timeout));
     let waiter = crate::sched::spawn("futex-waiter", futex_waiter, 0, ferrix_sched::NICE_0_WEIGHT)?;

@@ -257,7 +257,7 @@ pub(crate) static STAGE3_TIMER: Explanation = Explanation {
     code: "FX-0302",
     title: "the timer interrupt did not arrive as programmed",
     meaning: "`timer_check` proves time works before anything is built on it. A one-shot \
-              timer must fire exactly once; then a periodic timer must deliver a thousand \
+              timer must fire exactly once; then a periodic timer must deliver its \
               ticks, every interrupt must reach a registered handler, and the rate measured \
               against the counter must be within 25 percent of the 1000 Hz asked for. A \
               scheduler slice, a sleep and every later timeout is this rate multiplied by \
@@ -273,8 +273,8 @@ pub(crate) static STAGE3_TIMER: Explanation = Explanation {
         "On x86-64 the local APIC timer was calibrated against a counter that was itself \
          wrong, so it was programmed from a wrong frequency; the line printed before the \
          panic gives the measured rate, and a rate that is too high points here.",
-        "The host running an emulator was too loaded to deliver a thousand interrupts in a \
-         second, so the measured rate is low.",
+        "The host running an emulator was too loaded to deliver the ticks at a kilohertz, \
+         so the measured rate is low.",
         "An interrupt arrived on a line nothing registered for: a device firmware left \
          enabled, or a controller programmed to deliver somewhere unexpected.",
     ],

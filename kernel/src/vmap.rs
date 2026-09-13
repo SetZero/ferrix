@@ -569,3 +569,48 @@ pub(crate) fn allocate_stack() -> Result<Stack, VmapError> {
 pub(crate) unsafe fn free_stack(stack: Stack) -> Result<(), VmapError> {
     free(stack.base)
 }
+
+/// Give several kernel stacks back under one shootdown.
+///
+/// What [`free_stack`] does for each, with the invalidation every processor
+/// has to answer done once for all of them: see [`mm::unmap_kernel_all`].
+///
+/// # Safety
+///
+/// As [`free_stack`], for every one of them.
+pub(crate) unsafe fn free_stacks(stacks: &[Stack]) -> Result<(), VmapError> {
+    // Out of the live set first, all of them, so the addresses stay reserved
+    // until the unmapping below has finished: see `claim`.
+    let mut ranges = Vec::with_capacity(stacks.len());
+    let mut spans = Vec::with_capacity(stacks.len());
+    let mut first_error = None;
+    for stack in stacks {
+        match claim(stack.base) {
+            Ok(allocation) => {
+                // A stack is anonymous memory; a device window is never a
+                // stack, and the frames behind one must not go to the buddy
+                // allocator. Freed on its own if one ever turns up here.
+                if matches!(allocation.kind, Kind::Device { .. }) {
+                    let _ = mm::unmap_kernel(stack.base, allocation.len, |_, _| {});
+                } else {
+                    ranges.push((stack.base, allocation.len));
+                }
+                spans.push(allocation.span);
+            }
+            Err(error) => first_error = first_error.or(Some(error)),
+        }
+    }
+    let removed = mm::unmap_kernel_all(&ranges, mm::deallocate_frames);
+    // The spans go back whether or not the unmapping succeeded: an address
+    // nobody can reuse is a leak, and the mapper's error is reported either
+    // way.
+    for span in spans {
+        if let Err(error) = release_span(span) {
+            first_error = first_error.or(Some(error));
+        }
+    }
+    if let Err(error) = removed {
+        first_error = first_error.or(Some(VmapError::MapFailed(error)));
+    }
+    first_error.map_or(Ok(()), Err)
+}

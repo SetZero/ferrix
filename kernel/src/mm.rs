@@ -714,34 +714,64 @@ fn with_tables<T>(body: impl FnOnce(Mapper<crate::arch::PageEncoding>) -> T) -> 
 pub(crate) fn unmap_kernel(
     virt: u64,
     len: u64,
+    released: impl FnMut(Frame, u8),
+) -> Result<u64, ferrix_paging::MapError> {
+    unmap_kernel_all(&[(virt, len)], released)
+}
+
+/// Remove several kernel mappings, each `(virt, len)`, under one shootdown.
+///
+/// The same order as [`unmap_kernel`] -- unmap, invalidate everywhere, and
+/// only then free -- for all of them at once. A shootdown interrupts every
+/// other processor and waits for each to answer, and it costs the same
+/// whether one page or a thousand was unmapped before it. Freeing a thousand
+/// exited tasks' stacks one at a time was a thousand shootdowns; this is one.
+///
+/// Returns the bytes removed in all. On an error part-way, whatever was
+/// unmapped before it is still invalidated and freed, and the error is
+/// returned afterwards.
+pub(crate) fn unmap_kernel_all(
+    ranges: &[(u64, u64)],
     mut released: impl FnMut(Frame, u8),
 ) -> Result<u64, ferrix_paging::MapError> {
     let mut pages: Deferred<(Frame, u8), 32> = Deferred::new((0, 0));
     let mut tables: Deferred<Frame, 8> = Deferred::new(0);
 
-    let removed = with_tables(|mapper| {
-        mapper.unmap_range(
-            &mut KernelPhysMem,
-            VirtAddr(virt),
-            len.next_multiple_of(PAGE_SIZE),
-            |freed| match freed {
-                Released::Page { phys, level } => {
-                    // Levels run root-to-leaf and orders run small-to-large,
-                    // so the conversion is a subtraction rather than a table:
-                    // a level-3 leaf is order 0 and a 2 MiB block is order 9.
-                    let order = (ferrix_paging::Level::PAGE.depth() - level.depth()) * 9;
-                    pages.push((phys.0 / PAGE_SIZE, order));
-                }
-                // A page table the mapper allocated through `KernelPhysMem`,
-                // which took it from the buddy allocator. It goes straight
-                // back there rather than to the caller: the caller asked to
-                // unmap a range and has no idea a table existed, and telling
-                // it about one would make every `released` closure in the
-                // tree have to know.
-                Released::Table { phys } => tables.push(phys.0 / PAGE_SIZE),
-            },
-        )
-    });
+    let mut removed = Ok(0u64);
+    for &(virt, len) in ranges {
+        let this = with_tables(|mapper| {
+            mapper.unmap_range(
+                &mut KernelPhysMem,
+                VirtAddr(virt),
+                len.next_multiple_of(PAGE_SIZE),
+                |freed| match freed {
+                    Released::Page { phys, level } => {
+                        // Levels run root-to-leaf and orders run
+                        // small-to-large, so the conversion is a subtraction
+                        // rather than a table: a level-3 leaf is order 0 and
+                        // a 2 MiB block is order 9.
+                        let order = (ferrix_paging::Level::PAGE.depth() - level.depth()) * 9;
+                        pages.push((phys.0 / PAGE_SIZE, order));
+                    }
+                    // A page table the mapper allocated through
+                    // `KernelPhysMem`, which took it from the buddy
+                    // allocator. It goes straight back there rather than to
+                    // the caller: the caller asked to unmap a range and has
+                    // no idea a table existed, and telling it about one would
+                    // make every `released` closure in the tree have to know.
+                    Released::Table { phys } => tables.push(phys.0 / PAGE_SIZE),
+                },
+            )
+        });
+        match (this, &mut removed) {
+            (Ok(bytes), Ok(total)) => *total = total.saturating_add(bytes),
+            (Err(error), removed) if removed.is_ok() => *removed = Err(error),
+            _ => {}
+        }
+        if removed.is_err() {
+            break;
+        }
+    }
 
     // Whatever was removed before an error is just as unmapped, and just as
     // cached in somebody's TLB, as it would have been after a success.

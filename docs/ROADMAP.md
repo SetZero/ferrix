@@ -248,12 +248,14 @@ between a program and an operating system.
   all — it compares against an absolute instant — and stage 5's tickless
   scheduler wants one-shot anyway. Periodic is a re-arm inside the handler.
 
-**Exit criterion met, and in the boot test on all three architectures.** A
-thousand timer interrupts are counted, and the time they took is measured
-with the *counter* rather than by multiplying the tick count by the rate they
-were programmed at — which would be arithmetic that cannot fail rather than a
-measurement. Against a requested 1000 Hz, all three now report 998 to 999. It
-is a measurement, so it moves.
+**Exit criterion met, and in the boot test on all three architectures.** The
+timer interrupts are counted — 250 of them, a quarter of a second at the
+kilohertz asked for; it was a thousand, and a second per boot per
+architecture bought nothing the quarter does not — and the time they took is
+measured with the *counter* rather than by multiplying the tick count by the
+rate they were programmed at, which would be arithmetic that cannot fail
+rather than a measurement. Against a requested 1000 Hz, all three report 998
+to 999. It is a measurement, so it moves.
 
 It used to report 969 to 992, and the shortfall was written up here as one
 interrupt entry and exit per period under an emulator. That was the wrong
@@ -982,6 +984,13 @@ from only on `ENOSYS`. A process that ends clears its `clear_child_tid` word and
 wakes whoever waits on it. The boot test catches a wake that rouses nobody:
 
       futex    a changed word got EAGAIN and a timed wait ETIMEDOUT; a wake and a requeue roused 2 waiters, and a wake that roused nobody was caught
+
+**What the checks cost.** Stage 7 prints a `cost` line, guest milliseconds
+per group of checks, as stage 5 does. It found the boot's single most
+expensive check the day it was added: the futex negative control let its
+forgotten waiter sleep out a two-second timeout on every boot, proving
+nothing a 200 ms one does not. The whole stage now costs about 450 ms under
+`tcg`, of which the handler checks and the two spinning programs are most.
 
 A process's descriptors close when it ends, as Linux's exit closes them, not
 when its parent reaps it: otherwise a pipe's write end outlives the program
