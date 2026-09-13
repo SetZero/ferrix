@@ -41,6 +41,7 @@ pub mod locale;
 pub mod lock;
 pub mod malloc;
 pub mod mman;
+pub mod multibyte;
 pub mod poll;
 pub mod process;
 pub mod qsort;

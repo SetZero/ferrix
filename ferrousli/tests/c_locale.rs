@@ -1,4 +1,5 @@
-//! The C programs that exercise `locale.h` and `langinfo.h`.
+//! The C programs that exercise `locale.h` and `langinfo.h`, and the
+//! multibyte and wide character conversions.
 //!
 //! Each is built with `-fno-builtin`, so the compiler cannot answer a call on
 //! constant arguments itself, and every check reaches the library. Several are
@@ -67,4 +68,24 @@ fn an_empty_name_reads_lc_all_then_the_categorys_variable_then_lang() {
     );
     environment(&[("LANG", "../x")], "C.UTF-8;C;C;C;C;C", "4");
     environment(&[("LANG", "C"), ("LC_NUMERIC", "C.UTF-8")], "C", "1");
+}
+
+#[test]
+fn newlocale_duplocale_freelocale_and_uselocale() {
+    check(&locale("locale/newlocale"));
+}
+
+#[test]
+fn multibyte_conversions_in_c_and_utf8() {
+    check(&locale("locale/multibyte"));
+}
+
+#[test]
+fn char16_and_char32_conversions() {
+    check(&locale("locale/uchar"));
+}
+
+#[test]
+fn libc_test_mbc() {
+    check(&locale("locale/mbc"));
 }
