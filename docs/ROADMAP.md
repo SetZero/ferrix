@@ -1076,7 +1076,9 @@ process without namespaces can honestly answer, and `setns` refuses. A program
 is recorded as the absolute path of the file actually loaded, symlinks
 resolved and a script's interpreter rather than the script, which is what
 glibc's static start-up reads back through `/proc/self/exe`; `AT_EXECFN` is the
-name `execve` was given.
+name `execve` was given. The shell init starts from its built-in
+image, which has no file of its own, is named `/bin/busybox`, so the host's
+static glibc busybox starts as init too.
 
 **Signals are delivered.** `kill`, `tkill` and `tgkill` send; a child's end
 sends its parent `SIGCHLD`; a write to a pipe with no reader raises `SIGPIPE`
