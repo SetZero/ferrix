@@ -506,6 +506,10 @@ fn everywhere(topology: &Topology, report: &mut Report) -> Result<(), &'static s
 /// has.
 static MIGRANT_STARTED_ON: AtomicUsize = AtomicUsize::new(0);
 
+/// Set once the check holds the turn, which is what the migrating task waits
+/// for before it asks for a shootdown of its own.
+static MIGRANT_GO: AtomicBool = AtomicBool::new(false);
+
 /// Set once the migrating task's shootdown has returned.
 static MIGRANT_DONE: AtomicBool = AtomicBool::new(false);
 
@@ -523,10 +527,18 @@ const MIGRATION_PATIENCE_NANOS: u64 = 10_000_000_000;
 /// counting answers.
 const MIGRATION_SETTLE_NANOS: u64 = 50_000_000;
 
-/// Record where this started, then run a shootdown, which waits for its turn.
+/// Record where this started, wait for the check to hold the turn, then run
+/// a shootdown, which waits for that turn.
+///
+/// The wait is a spin, like the wait for the turn it turns into: a runnable
+/// task on a busy processor, worth stealing, and answering shootdowns once
+/// it is in `take_turn`.
 fn migrant(_argument: usize) {
     if let Some(me) = super::this_cpu() {
         MIGRANT_STARTED_ON.store(me.logical + 1, Ordering::Release);
+    }
+    while !MIGRANT_GO.load(Ordering::Acquire) {
+        core::hint::spin_loop();
     }
     super::flush_tlb_everywhere();
     MIGRANT_DONE.store(true, Ordering::Release);
@@ -613,12 +625,18 @@ pub(crate) fn migrating_shootdown(
     let first = (here + 1) % topology.count();
 
     MIGRANT_STARTED_ON.store(0, Ordering::Release);
+    MIGRANT_GO.store(false, Ordering::Release);
     MIGRANT_DONE.store(false, Ordering::Release);
     HOG_STOP.store(false, Ordering::Release);
     HOG_DONE.store(false, Ordering::Release);
     let arena_before = vmap::usage().allocations;
 
-    let turn = SHOOTING.lock();
+    // Both tasks are made before the turn is taken, not under it: a spawn
+    // that fails part-way frees the stack it had, and that is a shootdown,
+    // which may not be asked for under the turn -- it would wait for itself
+    // until the timeout, and `smp` now refuses it outright. The migrant
+    // waits on `MIGRANT_GO` until the turn is held, so its own shootdown
+    // still queues behind this one.
     let migrant_task = crate::sched::spawn_on(
         "shootdown-migrant",
         migrant,
@@ -641,6 +659,8 @@ pub(crate) fn migrating_shootdown(
         left,
         CpuSet::of(left),
     )?;
+    let turn = SHOOTING.lock();
+    MIGRANT_GO.store(true, Ordering::Release);
 
     // Wake the idle processors until one of them takes the waiting task.
     let deadline = crate::timer::now_nanos().saturating_add(MIGRATION_PATIENCE_NANOS);

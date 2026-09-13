@@ -499,21 +499,39 @@ impl Process {
             {
                 return heap.brk;
             }
-        } else if page_end < heap.mapped_to {
-            // Shrinking. Give the pages back now rather than at exit: a
-            // program that frees half its heap expects the memory returned.
-            let len = heap.mapped_to - page_end;
-            if self.space.unmap(page_end, len).is_err() {
-                return heap.brk;
-            }
         }
 
+        let old_mapped_to = heap.mapped_to;
         let heap = Heap {
             start: heap.start,
             brk: want,
             mapped_to: page_end,
         };
         state.heap = Some(heap);
+        drop(state);
+
+        if page_end < old_mapped_to {
+            // Shrinking. Give the pages back now rather than at exit: a
+            // program that frees half its heap expects the memory returned.
+            //
+            // **After the state is written and its lock gone.** An unmap
+            // waits for every other processor to drop its translations, and
+            // `state` is the lock a signal or a `kill` from another processor
+            // spins on; a shootdown may not be asked for under a lock that
+            // disables preemption, and `smp` checks that it is not. The
+            // range is this heap's own, page-aligned and non-empty, so the
+            // unmap cannot be refused, and nothing else names it: a second
+            // caller that grows the heap meanwhile finds the pages still
+            // mapped and is refused, and one that shrinks it further takes
+            // a range below this one. Unreachable until threads share a
+            // process; then one case is worth knowing: a fork by another
+            // thread inside this window clones the still-mapped tail into a
+            // child whose heap already says it ends here, so that child's
+            // heap can never grow over the tail and the tail lives until it
+            // exits. Harmless, and a `brk` lock that may sleep would close
+            // it.
+            let _ = self.space.unmap(page_end, old_mapped_to - page_end);
+        }
         heap.brk
     }
 }

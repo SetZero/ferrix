@@ -102,6 +102,18 @@ static PREEMPT_OFF: Once<Vec<AtomicU32>> = Once::new();
 static PREEMPT_SITE: Once<Vec<core::sync::atomic::AtomicPtr<core::panic::Location<'static>>>> =
     Once::new();
 
+/// How much of each processor's count a *lock* raised, as against a
+/// [`preempt_disable`] made by hand.
+///
+/// A shootdown waits for every other processor, so it may not run under a
+/// lock another processor could be spinning on with preemption off -- and
+/// [`crate::smp::flush_tlb_everywhere`] asserts that it does not, by asking
+/// this. The count alone cannot answer: the reaper raises it by hand around
+/// freeing a stack, and that free is a shootdown, by design. So the two are
+/// told apart here rather than by the last site recorded above, which a lock
+/// taken inside a by-hand window would overwrite.
+static LOCKS_HELD: Once<Vec<AtomicU32>> = Once::new();
+
 /// The kernel's half of `ferrix_sync::PreemptControl`: this processor's
 /// entry in [`PREEMPT_OFF`].
 pub(crate) struct Preempt;
@@ -113,11 +125,11 @@ pub(crate) struct Preempt;
 unsafe impl ferrix_sync::PreemptControl for Preempt {
     #[track_caller]
     fn disable() {
-        preempt_disable_at(core::panic::Location::caller());
+        preempt_disable_at(core::panic::Location::caller(), true);
     }
 
     fn enable() {
-        preempt_enable();
+        preempt_enable_from(true);
     }
 }
 
@@ -125,10 +137,11 @@ unsafe impl ferrix_sync::PreemptControl for Preempt {
 /// [`preempt_enable`].
 #[track_caller]
 pub(crate) fn preempt_disable() {
-    preempt_disable_at(core::panic::Location::caller());
+    preempt_disable_at(core::panic::Location::caller(), false);
 }
 
-/// [`preempt_disable`], remembering `site` as the reason.
+/// [`preempt_disable`], remembering `site` as the reason, and whether a lock
+/// is the reason, for [`LOCKS_HELD`].
 ///
 /// **Which processor, and the increment, under masked interrupts.** The
 /// count is what keeps a task on its processor, and until it is raised the
@@ -141,7 +154,7 @@ pub(crate) fn preempt_disable() {
 /// typically one exiting -- stopped the machine for a lock it never held.
 /// Both hits were on the processor that had just run the job check's kill
 /// interrupts, which is where preemptions of user tasks come thickest.
-fn preempt_disable_at(site: &'static core::panic::Location<'static>) {
+fn preempt_disable_at(site: &'static core::panic::Location<'static>, by_lock: bool) {
     let saved = <arch::Irq as IrqControl>::disable();
     if let Some(cpu) = this_cpu()
         && let Some(count) = PREEMPT_OFF.get().and_then(|counts| counts.get(cpu))
@@ -149,6 +162,9 @@ fn preempt_disable_at(site: &'static core::panic::Location<'static>) {
         let _ = count.fetch_add(1, Ordering::AcqRel);
         if let Some(slot) = PREEMPT_SITE.get().and_then(|sites| sites.get(cpu)) {
             slot.store(core::ptr::from_ref(site).cast_mut(), Ordering::Release);
+        }
+        if by_lock && let Some(held) = LOCKS_HELD.get().and_then(|counts| counts.get(cpu)) {
+            let _ = held.fetch_add(1, Ordering::AcqRel);
         }
     }
     <arch::Irq as IrqControl>::restore(saved);
@@ -170,14 +186,29 @@ fn preempt_disable_at(site: &'static core::panic::Location<'static>) {
 /// and forgotten, which turned one lost increment into FX-0503 on an
 /// innocent task some time later.
 pub(crate) fn preempt_enable() {
+    preempt_enable_from(false);
+}
+
+/// [`preempt_enable`], saying whether a lock's guard is what is being
+/// released, for [`LOCKS_HELD`].
+fn preempt_enable_from(by_lock: bool) {
     let saved = <arch::Irq as IrqControl>::disable();
     let (cpu, was) = match this_cpu().and_then(|cpu| Some((cpu, PREEMPT_OFF.get()?.get(cpu)?))) {
-        Some((cpu, count)) => (
-            cpu,
-            count.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                count.checked_sub(1)
-            }),
-        ),
+        Some((cpu, count)) => {
+            if by_lock && let Some(held) = LOCKS_HELD.get().and_then(|counts| counts.get(cpu)) {
+                // Saturating rather than checked: the count below is what
+                // catches an enable without a disable, and names the site.
+                let _ = held.fetch_update(Ordering::AcqRel, Ordering::Acquire, |held| {
+                    Some(held.saturating_sub(1))
+                });
+            }
+            (
+                cpu,
+                count.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                    count.checked_sub(1)
+                }),
+            )
+        }
         None => {
             <arch::Irq as IrqControl>::restore(saved);
             return;
@@ -206,7 +237,7 @@ pub(crate) fn preempt_enable() {
 }
 
 /// The file and line that last raised `cpu`'s count, if any is recorded.
-fn preempt_site(cpu: usize) -> Option<&'static core::panic::Location<'static>> {
+pub(crate) fn preempt_site(cpu: usize) -> Option<&'static core::panic::Location<'static>> {
     let pointer = PREEMPT_SITE.get()?.get(cpu)?.load(Ordering::Acquire);
     // SAFETY: only `preempt_disable_at` stores here, and only a pointer to a
     // `'static` location the compiler handed it.
@@ -217,6 +248,16 @@ fn preempt_site(cpu: usize) -> Option<&'static core::panic::Location<'static>> {
 /// for a check to print beside a result that preemption would explain.
 pub(crate) fn preemption_held(cpu: usize) -> u32 {
     preempt_count(cpu)
+}
+
+/// How many locks that disable preemption `cpu`'s running context holds,
+/// not counting a [`preempt_disable`] made by hand: what a shootdown may not
+/// be asked for under. See [`LOCKS_HELD`].
+pub(crate) fn locks_held(cpu: usize) -> u32 {
+    LOCKS_HELD
+        .get()
+        .and_then(|counts| counts.get(cpu))
+        .map_or(0, |count| count.load(Ordering::Acquire))
 }
 
 /// How many reasons `cpu`'s running context has not to be switched out.
@@ -394,6 +435,7 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
     let _ = NEED_RESCHED.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
     let _ = REAPING.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
     let _ = PREEMPT_OFF.call_once(|| (0..online).map(|_| AtomicU32::new(0)).collect());
+    let _ = LOCKS_HELD.call_once(|| (0..online).map(|_| AtomicU32::new(0)).collect());
     let _ = PREEMPT_SITE.call_once(|| {
         (0..online)
             .map(|_| core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()))
@@ -541,6 +583,13 @@ pub(crate) fn enter_idle() -> ! {
 /// [`reap_one`] for the boot that showed why.
 fn idle_loop() -> ! {
     let cpu = this_cpu();
+    // A secondary arrives here with interrupts masked, from the look-and-wait
+    // step of `smp::secondary_main` that handed it over, and the first thing
+    // below is a reap, which frees a stack, which is a shootdown that waits
+    // for every other processor: that must run with interrupts on, as
+    // `reap_one` says and `smp` checks. The halt path enables them in any
+    // case; enabling here makes the first pass like every later one.
+    arch::enable_interrupts();
     loop {
         let reaped = reap_one();
         // An interrupt that arrived while the stack was held was not allowed

@@ -727,6 +727,28 @@ by the first boot rather than by a convoy on a loaded host. The run queues'
 own locks stay plain, being taken with interrupts masked and handed across a
 switch.
 
+**And no shootdown is asked for under one.** A shootdown waits for every
+other processor to answer an interrupt, and a holder that asks for one keeps
+its lock, contended, with preemption off, for the round trip; a holder with
+interrupts masked cannot be answered at all. An audit of every lock in the
+kernel on 2026-09-13 found no holder that blocks, and three that shot down:
+a shrinking `brk` under the process's state lock, the alarm clock's spawn
+under its running flag, and the migration check's spawns under the turn
+itself, whose failure path would have waited for the turn it held. Each now
+lets go first. The rule enforces itself: the scheduler counts, beside the
+preemption count, how much of it *locks* raised, and both flushes assert
+that count zero before they take the turn, naming the lock's site when it is
+not, and interrupts on wherever they are about to wait for another
+processor. A flush that waits for nobody else is exempt on purpose: stage 6's
+checks fault with interrupts masked to keep a space installed, and a
+copy-on-write fault there retires a page through a shootdown whose set names
+only that processor; the first row of this landing found exactly that. The
+same row found a real one: a secondary processor enters the idle loop with
+the interrupts its hand-over masked, and its first reap frees a stack, a
+global flush that waits for every processor; the idle loop now enables
+interrupts once at entry. The reaper's own by-hand raise around freeing a
+stack, which is a shootdown by design, is not a lock and passes.
+
 **A queue insert charges the running task first.** `CpuQueue::insert`
 placed a newcomer before charging the task already running, so a task alone
 on a tickless processor -- charged only at its next decision, with an

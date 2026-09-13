@@ -231,12 +231,24 @@ static ALARMS: WaitQueue = WaitQueue::new();
 /// Tell the `itimers` thread a deadline changed, starting it if it is not
 /// running.
 fn alarms_changed() {
-    let mut running = CLOCK_RUNNING.lock();
-    ALARMS_CHANGED.store(true, Ordering::Release);
-    if !*running {
-        *running = sched::spawn("itimers", run_alarm_clock, 0, ferrix_sched::NICE_0_WEIGHT).is_ok();
+    let start = {
+        let mut running = CLOCK_RUNNING.lock();
+        ALARMS_CHANGED.store(true, Ordering::Release);
+        // Claimed under the lock, spawned outside it: making a thread frees a
+        // half-made stack if it fails, and that is a shootdown, which may not
+        // be asked for under a lock that disables preemption. A caller in
+        // between sees the clock as running and only wakes it, which is
+        // right whether the spawn is still on its way or has just succeeded.
+        let start = !*running;
+        *running = true;
+        start
+    };
+    if start && sched::spawn("itimers", run_alarm_clock, 0, ferrix_sched::NICE_0_WEIGHT).is_err() {
+        // Nothing runs, and whoever arrived meanwhile was told it did: the
+        // next `setitimer` tries again, as it always did after a failed
+        // spawn. Only out of memory reaches here.
+        *CLOCK_RUNNING.lock() = false;
     }
-    drop(running);
     ALARMS.wake_all();
 }
 

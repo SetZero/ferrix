@@ -601,6 +601,7 @@ const KICK_NANOS: u64 = 10_000_000;
 /// other processors' shootdowns, so two running at once do not deadlock on
 /// each other.
 pub(crate) fn flush_tlb_everywhere() {
+    shootdown_requested();
     arch::flush_tlb();
     if arch::TLB_FLUSH_IS_BROADCAST {
         return;
@@ -612,6 +613,7 @@ pub(crate) fn flush_tlb_everywhere() {
     if topology.online() <= 1 {
         return;
     }
+    shootdown_waits_for_others();
 
     let _turn = take_turn();
 
@@ -635,6 +637,57 @@ pub(crate) fn flush_tlb_everywhere() {
         },
     );
     let _ = SHOOTDOWNS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// The first rule every shootdown is asked under, checked where it is asked:
+/// no lock that disables preemption is held.
+///
+/// A shootdown waits for every other processor to answer an interrupt. A
+/// processor spinning for a lock this one holds answers it too, because it
+/// spins with interrupts on -- so holding a preemption-disabling lock here
+/// does not deadlock. It does hold that lock, contended, with preemption
+/// off, for an interrupt round trip, which is what the audit of 2026-09-13
+/// found `brk`, the alarm clock and `channel_read` doing. Checked on every
+/// architecture, the broadcast pair included, so a mistake on one is found
+/// by every boot rather than by the x86-64 row alone. The reaper's by-hand
+/// [`crate::sched::preempt_disable`] around freeing a stack is not a lock
+/// and passes; `sched::locks_held` counts locks only.
+fn shootdown_requested() {
+    if let Some(cpu) = this_cpu() {
+        let held = crate::sched::locks_held(cpu.logical);
+        let site = crate::sched::preempt_site(cpu.logical);
+        debug_assert!(
+            held == 0,
+            "a shootdown was requested on processor {} holding {held} lock(s) that disable \
+             preemption, the last taken at {}:{}",
+            cpu.logical,
+            site.map_or("?", |site| site.file()),
+            site.map_or(0, core::panic::Location::line),
+        );
+    }
+}
+
+/// The second rule, checked only where a shootdown is about to wait for
+/// another processor: interrupts are on.
+///
+/// A processor that must answer this shootdown does so from an interrupt,
+/// and a lock this one took with interrupts masked is one that processor may
+/// be spinning on with interrupts masked in turn: it could never answer, and
+/// this one would wait until the timeout stops the machine. A shootdown that
+/// waits for nobody else is exempt on purpose: stage 6's checks fault a page
+/// with interrupts masked, to keep a space installed on one processor while
+/// they look at it, and a copy-on-write fault there retires the page it
+/// displaced through a scoped shootdown whose set names only that
+/// processor. Such a flush still takes the turn, but the wait for the turn
+/// answers other processors' shootdowns as it spins, and once it holds the
+/// turn it answers for itself and waits for no one. Only once tasks run:
+/// the boot processor flushes with interrupts masked while it reclaims boot
+/// memory, and nobody is waiting on it then.
+fn shootdown_waits_for_others() {
+    debug_assert!(
+        !crate::sched::started() || arch::interrupts_enabled(),
+        "a shootdown was requested with interrupts masked, which no other processor could answer"
+    );
 }
 
 /// Wait for the shootdown turn, and hold it until the guard drops.
@@ -1001,6 +1054,7 @@ fn scoped_request(wanted: u64, cpu: usize) -> Option<TlbPages> {
 /// waiting on another processor's answer is a holder every waiter for the lock
 /// waits on too.
 pub(crate) fn flush_tlb_pages(cpus: &CpuSet, pages: &TlbPages) {
+    shootdown_requested();
     if pages.is_empty() {
         return;
     }
@@ -1029,6 +1083,14 @@ pub(crate) fn flush_tlb_pages(cpus: &CpuSet, pages: &TlbPages) {
         let _ = SCOPED_UNSENT.fetch_add(1, Ordering::Relaxed);
         return;
     };
+    let me = this_cpu().map(|cpu| cpu.logical);
+    if topology
+        .cpus
+        .iter()
+        .any(|cpu| cpu.is_online() && cpus.contains(cpu.logical) && Some(cpu.logical) != me)
+    {
+        shootdown_waits_for_others();
+    }
 
     let _turn = take_turn();
 
