@@ -127,7 +127,6 @@ nobody has it yet.
 | `SA_RESTART`; boot checks that drive `SIGCHLD`, stop and continue, `alarm`, `sigaltstack` and fault-to-signal | ferrix-a5 | 7; `rustc` needs `SIGSEGV` on the alternate stack |
 | Pid 1 for init and orphans reparented to it | ferrix-a5 | 7, 15 |
 | `fcntl` record locks, `flock` | ferrix-a5 | 7 |
-| `mount -t proc` and `devtmpfs` | ferrix-e6 | 8 |
 | FX-0601 "reserving a thousand pages cost a frame", about one x86-64 boot in three under KVM: a reap landing inside stage 6's frame-count window; the check must settle first, as the path check does | ferrix-34 | 6 |
 | A regression check that exited programs give every frame back once reaped (the leak 0510a8a fixed) | ferrix-a5 | 7 |
 | The first hardware run of stages 6–9 on the DK1: the full boot marker and `test-shell` at two processors, recorded as a hardware column in the roadmap's ARMv7-A section. Needs a reset press by the customer per run; the interactive shell also needs console receive (next row), the script test does not | ferrix-3c | ARMv7-A |

@@ -1167,7 +1167,9 @@ refusing them made Ubuntu's static busybox decide it had no terminal, so its
 `stty -a`, `tty`, `login` and `less` failed where Alpine's worked.
 
 **Done — `/dev` and `/proc`.** devfs holds `null`, `zero`, `full`, `random`,
-`urandom`, `tty` and `console`, numbered as Linux numbers them. A device node
+`urandom`, `tty` and `console`, numbered as Linux numbers them. It calls itself
+`devtmpfs` in `/proc/mounts` and `/proc/filesystems`, the name init scripts and
+service managers look for; Linux has had no `devfs` since 2.6.18. A device node
 made anywhere else — by `mknod` on tmpfs, or unpacked from the initramfs —
 opens as the devfs device with its number, and keeps its own inode for `stat`,
 as `/dev/tty` does; a number devfs lacks is `ENXIO`, and so is every block
@@ -1210,13 +1212,13 @@ node stands for, from a table keyed by device and inode number that `openat`
 consults for a FIFO node. `statfs` and `fstatfs` answer in the word size's
 layout, and ARMv7-A's packed `statfs64` takes musl's 88 as well as the kernel's
 84. Then `sync`, `syncfs`, `fsync` and `fdatasync`; `truncate`, `truncate64`
-and `fallocate`; `chroot`; `mount -t tmpfs` and `umount2`; the
+and `fallocate`; `chroot`; `mount` of `tmpfs`, `proc` and `devtmpfs` — each a fresh instance, stacked over whatever the target showed — and `umount2`; the
 extended-attribute calls, which report none; and `sendfile`, which busybox's
 `cat` tries before it falls back to `read`. The boot check drives the handlers
 from a process of its own, twice:
 
 ```
-  pipes    18020 bytes through a pipe, a FIFO and sendfile; statfs, truncate and fallocate answered; 0 frames leaked
+  pipes    18020 bytes through a pipe, a FIFO and sendfile; statfs, truncate and fallocate answered; proc and devtmpfs mounted, read and unmounted; 0 frames leaked
 ```
 
 **The exit test, and how far it gets.** `cargo xtask test-vfs --init PATH`
@@ -1270,10 +1272,6 @@ first count, and fails on a count that rises (e8c98da).
 
 **Left for later stages.**
 
-* `proc` and `devtmpfs` as `mount` types, which are `ENODEV` until they are
-  registered in `syscall/fsctl.rs`. (`SIGPIPE` on a write to a pipe with no
-  reader, the other thing left here, came with stage 7's signal delivery in
-  0e9591e.)
 * `/proc/loadavg`, which `top`'s load average line reads, and
   `/proc/diskstats`, which `iostat` needs past its processor report and which
   has nothing to count before stage 11's block core.
