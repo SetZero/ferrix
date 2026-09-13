@@ -98,6 +98,8 @@ impl<S: Syscall> Device<S> {
     ///
     /// [`Error::BadState`] while a driver still serves the device through a
     /// ring, or if the device's configuration space could not be reached;
+    /// [`Error::TimedOut`] when the driver is gone but its ring has not ended
+    /// within the kernel's patience, which is worth asking again;
     /// [`Error::AccessDenied`] without `MANAGE`.
     pub fn quiesce(&self) -> Result<(), Error> {
         decode_unit(

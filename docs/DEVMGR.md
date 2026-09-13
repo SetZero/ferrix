@@ -138,7 +138,15 @@ one. Nothing has reset the device, and until something does the kernel
 refuses a new ring for it (`ALREADY_BOUND`). `devmgr`:
 
 1. calls `device_quiesce` (0x104A) on the device — bus mastering off, so the
-   device reaches nothing, and the ring's claim released;
+   device reaches nothing, and the ring's claim released. `TERMINATED` fires
+   when the driver's handles close, which queues `PEER_CLOSED` for the ring's
+   task but does not wait for it, so the quiesce may arrive before the ring
+   has ended: the kernel then waits, bounded, for the ring to let the device
+   go, since the driver's end of the channel is provably closed. Only a
+   driver still holding its end gets `BAD_STATE`, which `devmgr` never
+   retries; a ring that has not let go within the kernel's patience answers
+   `TIMED_OUT`, which `devmgr` retries until it succeeds, since the device
+   must not stay on;
 2. writes on the bootstrap channel a DIED message, which the kernel prints:
 
 ```

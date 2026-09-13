@@ -1036,12 +1036,21 @@ fn info_bytes(info: &DeviceInfo) -> [u8; DEVICE_INFO_BYTES] {
 /// The driver is gone and the device must reach nothing: bus mastering off,
 /// then the block ring's claim on the device released for the next driver.
 /// `BAD_STATE` while a driver still serves the device through a ring, or if
-/// the device's configuration space could not be reached.
+/// the device's configuration space could not be reached; `TIMED_OUT` when
+/// the driver is gone but its ring has not ended within the patience.
 fn device_quiesce(process: &Process, device: Handle) -> Result<usize, Errno> {
     let node = device_in(process, device, Rights::MANAGE)?;
-    if block_ring::is_served(&node) {
-        return Err(status::BAD_STATE);
-    }
+    // A dead driver's ring may not have noticed the death yet: wait for it,
+    // as long as the driver's end of its channel is closed.
+    block_ring::wait_until_unserved(&node, &|| process.is_terminated()).map_err(|why| {
+        match why {
+            // A driver still holds its end: refused for good.
+            block_ring::StillServed::ByADriver => status::BAD_STATE,
+            // The driver is gone but the ring has not let go in time: worth
+            // asking again, and devmgr does.
+            block_ring::StillServed::Waiting => status::TIMED_OUT,
+        }
+    })?;
     node.disable_dma().map_err(|_| status::BAD_STATE)?;
     block_ring::release_claim(&node);
     Ok(0)

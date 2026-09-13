@@ -23,7 +23,9 @@
 //! * the second round of all that gives every frame back;
 //! * a driver that closes the channel without STOPPED takes its disk with it
 //!   too, but leaves the device bound until `device_quiesce`, which turns the
-//!   device off and frees it for the next ring;
+//!   device off and frees it for the next ring — asked after the ring has
+//!   ended, and asked the instant the driver is gone, repeatedly, since the
+//!   quiesce then has to wait for the ring's task to notice;
 //! * `device_info` describes the device as enumeration found it, every virtio
 //!   block it names inside an aperture, and the START the kernel would build
 //!   from it agrees; `device_quiesce` is refused without `MANAGE` and while a
@@ -79,6 +81,10 @@ const INFO: u64 = HERE + 0x600;
 /// How long the check waits for the ring's task to answer, or to notice the
 /// channel closed and unpublish the disk.
 const PATIENCE_NANOS: u64 = 10_000_000_000;
+
+/// Whether a death round quiesces the instant the driver's end closes, as
+/// `devmgr` does on `TERMINATED`, rather than after the ring has ended.
+static QUIESCE_AT_ONCE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// The disk the accepted HELLO describes: eight sectors of 512 bytes, one per
 /// request, through a one-page data VMO.
@@ -147,8 +153,16 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         window.report("ring");
         return Err("the block ring check did not give every frame back");
     }
-    // Outside the window: this one leaves the device bound for good.
+    // Outside the window: the deaths, each settled before the next so the
+    // ring made after the quiesce has let the device go again.
     round(&node, &mut counter, Ending::DriverDied)?;
+    for _ in 0..3 {
+        settle()?;
+        QUIESCE_AT_ONCE.store(true, core::sync::atomic::Ordering::Relaxed);
+        let outcome = round(&node, &mut counter, Ending::DriverDied);
+        QUIESCE_AT_ONCE.store(false, core::sync::atomic::Ordering::Relaxed);
+        outcome?;
+    }
     Ok(Report {
         refusals: counter.refusals,
         published: counter.published,
@@ -319,6 +333,15 @@ fn end(
     let _ = side
         .call(nr::HANDLE_CLOSE, &[reg(control)])
         .map_err(|_| "closing the control channel failed")?;
+    let at_once =
+        ending == Ending::DriverDied && QUIESCE_AT_ONCE.load(core::sync::atomic::Ordering::Relaxed);
+    if at_once {
+        // As devmgr does on TERMINATED: before the ring's task has had a
+        // chance to see the closed channel. The quiesce waits for it.
+        let _ = side
+            .call(nr::DEVICE_QUIESCE, &[reg(device)])
+            .map_err(|_| "quiescing the instant a driver died failed")?;
+    }
     let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
     while devfs::block_device(rdev).is_some() {
         if timer::now_nanos() > deadline {
@@ -328,21 +351,20 @@ fn end(
     }
     counter.published += 1;
     if ending == Ending::DriverDied {
-        // Nothing reset the device: no ring until devmgr quiesces it, and
-        // one again after.
-        refused(
-            side.call(nr::BLOCK_RING_CREATE, &[reg(device)]),
-            status::ALREADY_BOUND,
-            "a device whose driver died without a reset was given a new ring",
-            counter,
-        )?;
-        let _ = side
-            .call(nr::DEVICE_QUIESCE, &[reg(device)])
-            .map_err(|_| "quiescing a device whose driver died failed")?;
-        let again = ring(side, device)?;
-        let _ = side
-            .call(nr::HANDLE_CLOSE, &[reg(again)])
-            .map_err(|_| "closing the ring made after a quiesce failed")?;
+        if !at_once {
+            // Nothing reset the device: no ring until devmgr quiesces it.
+            refused(
+                side.call(nr::BLOCK_RING_CREATE, &[reg(device)]),
+                status::ALREADY_BOUND,
+                "a device whose driver died without a reset was given a new ring",
+                counter,
+            )?;
+            let _ = side
+                .call(nr::DEVICE_QUIESCE, &[reg(device)])
+                .map_err(|_| "quiescing a device whose driver died failed")?;
+        }
+        // And one again after; its task ends with the round's handles.
+        let _ = ring(side, device)?;
         return Ok(());
     }
     // STOPPED said the device was reset: the next round's first ring shows

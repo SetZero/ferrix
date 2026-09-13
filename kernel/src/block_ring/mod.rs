@@ -115,8 +115,10 @@ struct Claim {
     id: usize,
     /// The device.
     device: Arc<DeviceNode>,
-    /// The location its accepted driver serves, while one does.
-    served: Option<Location>,
+    /// The location its accepted driver serves and the kernel's end of the
+    /// control channel it serves through, while one does. The end says
+    /// whether the driver still holds its own: `PEER_CLOSED` once it is gone.
+    served: Option<(Location, Arc<Endpoint>)>,
 }
 
 /// What a ring's task starts from.
@@ -138,6 +140,14 @@ static CLAIMS: SpinLock<Vec<Claim>> = SpinLock::new(Vec::new());
 
 /// Rings made and not yet taken up by their task.
 static STARTING: SpinLock<Vec<Start>> = SpinLock::new(Vec::new());
+
+/// Woken whenever a ring stops serving its device, for a quiesce waiting on
+/// the ring's task to notice the driver is gone.
+static SERVED: WaitQueue = WaitQueue::new();
+
+/// How long a quiesce waits for a dead driver's ring to end. The ring's task
+/// wakes for the closed channel at once, or at its 50 ms recheck.
+const QUIESCE_PATIENCE_NANOS: u64 = 5_000_000_000;
 
 /// Every ring's task, so that a check counting frames can wait for the ones
 /// that have ended to have stopped; the dead are pruned as the living join.
@@ -242,12 +252,66 @@ pub(crate) fn start_for(node: &DeviceNode, name: DiskName) -> Option<StartMessag
     })
 }
 
-/// Whether a driver serves `node`'s disk through a ring right now.
-pub(crate) fn is_served(node: &Arc<DeviceNode>) -> bool {
-    CLAIMS
-        .lock()
-        .iter()
-        .any(|claim| Arc::ptr_eq(&claim.device, node) && claim.served.is_some())
+/// Why `node` cannot be quiesced.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StillServed {
+    /// A driver holds its end of the ring's control channel: it is alive
+    /// and serving, and quiescing under it is refused.
+    ByADriver,
+    /// The driver is gone but the ring's task has not ended within the
+    /// patience, or the caller was terminated meanwhile.
+    Waiting,
+}
+
+/// Wait until no driver serves `node`'s disk through a ring, for a quiesce.
+///
+/// A driver's death fires its watchers' `TERMINATED` when its handles close,
+/// which queues `PEER_CLOSED` for the ring's task but does not wait for that
+/// task to take it: `devmgr`'s quiesce can arrive first. So a device served
+/// through a control channel whose driver's end has closed is waited for,
+/// bounded, until the ring ends and lets the device go; only a driver that
+/// still holds its end refuses the quiesce. `cancelled` ends the wait early
+/// for a caller that is being terminated.
+///
+/// # Errors
+///
+/// [`StillServed`].
+pub(crate) fn wait_until_unserved(
+    node: &Arc<DeviceNode>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), StillServed> {
+    let deadline = timer::now_nanos().saturating_add(QUIESCE_PATIENCE_NANOS);
+    let served_by = |node: &Arc<DeviceNode>| {
+        CLAIMS
+            .lock()
+            .iter()
+            .find(|claim| Arc::ptr_eq(&claim.device, node))
+            .and_then(|claim| {
+                claim
+                    .served
+                    .as_ref()
+                    .map(|(_, control)| Arc::clone(control))
+            })
+    };
+    loop {
+        let Some(control) = served_by(node) else {
+            return Ok(());
+        };
+        if !control.signals().intersects(Signals::PEER_CLOSED) {
+            return Err(StillServed::ByADriver);
+        }
+        let ended = SERVED.wait_until_deadline(
+            || {
+                served_by(node)
+                    .is_none_or(|control| !control.signals().intersects(Signals::PEER_CLOSED))
+                    || cancelled()
+            },
+            deadline,
+        );
+        if !ended || cancelled() {
+            return Err(StillServed::Waiting);
+        }
+    }
 }
 
 /// Release `node`'s ring claim: `devmgr` has quiesced the device, so the next
@@ -283,19 +347,24 @@ fn unclaim(id: usize) {
     CLAIMS.lock().retain(|claim| claim.id != id);
 }
 
-/// Note that ring `id`'s driver serves `location`, or no longer serves one.
-fn set_served(id: usize, location: Option<Location>) {
+/// Note that ring `id`'s driver serves `location` through `control`, or no
+/// longer serves anything; a quiesce waiting for the latter is woken.
+fn set_served(id: usize, served: Option<(Location, Arc<Endpoint>)>) {
     if let Some(claim) = CLAIMS.lock().iter_mut().find(|claim| claim.id == id) {
-        claim.served = location;
+        claim.served = served;
     }
+    SERVED.wake_all();
 }
 
 /// Whether a ring other than `id` has an accepted driver serving `location`.
 fn served_elsewhere(id: usize, location: Location) -> bool {
-    CLAIMS
-        .lock()
-        .iter()
-        .any(|claim| claim.id != id && claim.served == Some(location))
+    CLAIMS.lock().iter().any(|claim| {
+        claim.id != id
+            && claim
+                .served
+                .as_ref()
+                .is_some_and(|(served, _)| *served == location)
+    })
 }
 
 /// A ring's task.
@@ -491,7 +560,7 @@ fn take_up<'s>(
     }
     // Served from before READY goes out, not after: the driver may act on
     // READY, and devmgr may ask after the device, the instant it is sent.
-    set_served(start.id, Some(start.location));
+    set_served(start.id, Some((start.location, Arc::clone(&start.control))));
     let ready = Message::Ready.encode().as_bytes().to_vec();
     let handed = (Object::Port(Arc::clone(&kernel_port)), Rights::WRITE);
     if start
