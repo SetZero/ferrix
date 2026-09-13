@@ -16,6 +16,11 @@
 //! [`HeapStorage`] is the same interface over heap pages, for the host tests
 //! and the fuzzer.
 //!
+//! The same [`Pages`] is the page cache of a filesystem on a disk: a store
+//! made over a [`PageSource`] fills a page from the file the first time it is
+//! needed. tmpfs itself never asks for one, because it has nowhere else for a
+//! page to come from.
+//!
 //! # Locking
 //!
 //! One spin lock per inode, holding everything about it. An operation that
@@ -56,8 +61,15 @@ use crate::path::PATH_MAX;
 /// The block size tmpfs reports.
 pub const BLOCK_SIZE: u32 = 4096;
 
-/// The page size [`HeapPages`] stores in.
-const HEAP_PAGE: u64 = 4096;
+/// The size of a page in every [`Pages`] store, and of each page a
+/// [`PageSource`] fills.
+pub const PAGE_SIZE: u64 = 4096;
+
+/// [`PAGE_SIZE`] as a length.
+const PAGE_BYTES: usize = PAGE_SIZE as usize;
+
+/// The most pages [`HeapPages`] asks its source for in one call.
+pub(crate) const MAX_FILL_RUN: usize = 32;
 
 /// `TMPFS_MAGIC`, from `include/uapi/linux/magic.h`.
 pub const TMPFS_MAGIC: u64 = 0x0102_1994;
@@ -65,33 +77,97 @@ pub const TMPFS_MAGIC: u64 = 0x0102_1994;
 /// What Linux's tmpfs counts each directory entry as, for a directory's size.
 const DIRENT_SIZE: u64 = 20;
 
-/// A regular file's contents: a sparse array of bytes.
+/// A regular file's contents: a sparse array of bytes, and the file's page
+/// cache.
 ///
 /// The file's length is tmpfs's to keep; this only holds bytes. Reading a
-/// range nothing was written to yields zeros.
+/// range nothing was written to yields zeros, or, for a store made over a
+/// [`PageSource`], what the source fills it with.
 pub trait Pages: Send + Sync + fmt::Debug {
     /// Fill `buf` from `offset`.
     ///
+    /// A store over a source asks it for the pages it does not hold, and so
+    /// may block: whoever calls this must hold no spin lock across it.
+    ///
     /// # Errors
     ///
-    /// `EIO` if the store cannot produce a page it holds.
+    /// `EIO` if the store cannot produce a page it holds, and whatever the
+    /// source answers for one it does not.
     fn read(&self, offset: u64, buf: &mut [u8]) -> Result<()>;
 
     /// Store `data` at `offset`.
     ///
+    /// A store over a source fills a page from it before a write that covers
+    /// only part of the page, so the page's other bytes stay the file's.
+    ///
     /// # Errors
     ///
-    /// `ENOSPC` or `ENOMEM` if memory ran out, with nothing stored past the
-    /// point of failure being relied on.
+    /// `ENOSPC` or `ENOMEM` if memory ran out, and what the source answers,
+    /// with nothing stored past the point of failure being relied on.
     fn write(&self, offset: u64, data: &[u8]) -> Result<()>;
 
     /// Forget everything from `offset` on, so that it reads as zeros if the
     /// file grows again: whole pages are released and the tail of a partial
-    /// one is cleared.
+    /// one is cleared. For a store over a source, the source's bytes from
+    /// `offset` on are forgotten too.
     fn discard_from(&self, offset: u64);
 
-    /// Memory actually committed, in bytes.
+    /// Memory actually committed, in bytes: the pages held, and not what a
+    /// source could fill.
     fn committed_bytes(&self) -> u64;
+
+    /// The object a mapping of the file maps: in the kernel, the file's VMO.
+    ///
+    /// `None`, the default, for a store nothing can map, which the heap store
+    /// is.
+    fn object(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        None
+    }
+}
+
+/// Where a file's pages come from when the cache does not have them.
+///
+/// The page cache is the inode's [`Pages`], on tmpfs and btrfs alike, and a
+/// file-backed `mmap` and a `read` share its pages. A store made by
+/// [`Storage::allocate_with`] asks its source for a page the first time
+/// something reads it, or writes part of it, and keeps what it is given.
+///
+/// # Ranges, not pages
+///
+/// A compressed extent decompresses whole, so a source asked for one page of
+/// it has done the work for all of its pages. [`PageSource::fill_range`]
+/// lets it hand them all over, and lets it stop early at an extent boundary.
+///
+/// # Reclaim
+///
+/// Nothing evicts a cached page yet. When eviction arrives, a frame
+/// allocation made inside a fill must not wait on writeback through the same
+/// queue the fill is waiting on, or a fill that needs memory waits on itself.
+pub trait PageSource: Send + Sync + fmt::Debug {
+    /// Fill `pages` — each exactly [`PAGE_SIZE`] bytes — with the file's pages
+    /// starting at page `first`. Returns how many leading pages were filled,
+    /// at least 1 on `Ok`; may fill fewer than asked (btrfs stops at an extent
+    /// boundary, since a compressed extent decompresses whole). Bytes past the
+    /// file's end are zeros. Called with no spin lock held; may block on I/O.
+    /// A checksum failure is `Err(EIO)`, never a zeroed page.
+    ///
+    /// # Errors
+    ///
+    /// `EIO` for pages that cannot be read or do not verify.
+    fn fill_range(&self, first: u64, pages: &mut [&mut [u8]]) -> Result<usize>;
+
+    /// One page. Provided over [`PageSource::fill_range`].
+    ///
+    /// # Errors
+    ///
+    /// As `fill_range`, and `EIO` for a source that says it filled anything
+    /// but the one page.
+    fn fill(&self, index: u64, page: &mut [u8]) -> Result<()> {
+        match self.fill_range(index, &mut [page])? {
+            1 => Ok(()),
+            _ => Err(Errno::EIO),
+        }
+    }
 }
 
 /// Where new files get their [`Pages`].
@@ -102,6 +178,18 @@ pub trait Storage: Send + Sync + fmt::Debug {
     ///
     /// `ENOMEM`.
     fn allocate(&self) -> Result<Box<dyn Pages>>;
+
+    /// A store for a file whose pages come from `source` until something
+    /// writes them.
+    ///
+    /// # Errors
+    ///
+    /// `ENODEV` by default: a store that cannot yet fill from a source.
+    /// `ENOMEM` from one that can.
+    fn allocate_with(&self, source: Arc<dyn PageSource>) -> Result<Box<dyn Pages>> {
+        let _ = source;
+        Err(Errno::ENODEV)
+    }
 
     /// The largest a file may grow, which is `EFBIG` past.
     fn max_file_size(&self) -> u64;
@@ -132,79 +220,256 @@ impl Storage for HeapStorage {
         Ok(Box::new(HeapPages::default()))
     }
 
+    fn allocate_with(&self, source: Arc<dyn PageSource>) -> Result<Box<dyn Pages>> {
+        Ok(Box::new(HeapPages::with_source(source)))
+    }
+
     fn max_file_size(&self) -> u64 {
         self.max_file_size
     }
 }
 
-/// [`Pages`] on the heap, a page at a time.
+/// [`Pages`] on the heap, a page at a time, and optionally over a
+/// [`PageSource`].
+///
+/// # Filling
+///
+/// A read that reaches a page it does not hold asks the source for a run of
+/// consecutive missing pages from that one, at most 32 and no further than the
+/// read goes. The buffers are allocated first and the source
+/// is called with this store's lock released; afterwards only the pages still
+/// missing are kept, so a page that a racing fill or a write put in meanwhile
+/// wins. A fill that fails, claims no page, or claims more than it was asked
+/// for keeps nothing and is `EIO` (or the source's own error).
+///
+/// The store's own lock is never held across the source, but a caller that
+/// holds a spin lock across [`Pages::read`] still breaks the source's promise.
+/// tmpfs does hold its inode lock across it, which is why tmpfs never asks for
+/// a store over a source.
+///
+/// # Truncation
+///
+/// A source knows the file as it was, not as it has been cut. So the store
+/// keeps a bound, `sourced_below`: the source is asked only for pages that
+/// start below it, and bytes of a filled page at or past it are cleared before
+/// the page is kept. It starts past every offset, and [`Pages::discard_from`]
+/// lowers it and nothing raises it, so a file truncated and grown again reads
+/// zeros past the cut, whenever the page is next filled. The bound is checked
+/// when a fill is kept, under the lock, so a fill that raced a truncation is
+/// cut back too.
 #[derive(Debug, Default)]
 pub struct HeapPages {
-    pages: SpinLock<BTreeMap<u64, Box<[u8]>>>,
+    heap: SpinLock<Heap>,
+    source: Option<Arc<dyn PageSource>>,
 }
 
-/// Visit each page-sized piece of `[offset, offset + len)`: its page index,
-/// the offset within the page, and the offset within the caller's buffer.
-fn pieces(
-    offset: u64,
-    len: usize,
-    mut visit: impl FnMut(u64, usize, core::ops::Range<usize>) -> Result<()>,
-) -> Result<()> {
-    let mut done = 0_usize;
-    while done < len {
-        let at = offset.checked_add(done as u64).ok_or(Errno::EFBIG)?;
-        let within = usize::try_from(at % HEAP_PAGE).map_err(|_| Errno::EIO)?;
-        let take = (HEAP_PAGE as usize - within).min(len - done);
-        visit(at / HEAP_PAGE, within, done..done + take)?;
-        done += take;
+#[derive(Debug)]
+struct Heap {
+    pages: BTreeMap<u64, Box<[u8]>>,
+    /// Bytes from here on are not the source's; see [`HeapPages`].
+    sourced_below: u64,
+}
+
+impl Default for Heap {
+    fn default() -> Heap {
+        Heap {
+            pages: BTreeMap::new(),
+            sourced_below: u64::MAX,
+        }
     }
-    Ok(())
+}
+
+/// The page-sized piece of `[offset, offset + len)` that begins `done` bytes
+/// in: its page index, the offset within the page, and its length.
+fn piece(offset: u64, done: usize, len: usize) -> Result<(u64, usize, usize)> {
+    let at = offset.checked_add(done as u64).ok_or(Errno::EFBIG)?;
+    let within = usize::try_from(at % PAGE_SIZE).map_err(|_| Errno::EIO)?;
+    Ok((
+        at / PAGE_SIZE,
+        within,
+        (PAGE_BYTES - within).min(len - done),
+    ))
+}
+
+fn zeroed_page() -> Box<[u8]> {
+    alloc::vec![0_u8; PAGE_BYTES].into_boxed_slice()
+}
+
+impl Heap {
+    /// Whether page `index`, if not held, would be the source's to fill.
+    fn sourced(&self, index: u64) -> bool {
+        index
+            .checked_mul(PAGE_SIZE)
+            .is_some_and(|start| start < self.sourced_below)
+    }
+
+    /// How many pages to ask for from `first`, a page that is missing and
+    /// sourced: the run of such pages up to `last`, at most [`MAX_FILL_RUN`].
+    fn run(&self, first: u64, last: u64) -> usize {
+        let mut count = 1;
+        while count < MAX_FILL_RUN {
+            let Some(index) = first.checked_add(count as u64) else {
+                break;
+            };
+            if index > last || self.pages.contains_key(&index) || !self.sourced(index) {
+                break;
+            }
+            count += 1;
+        }
+        count
+    }
+
+    /// Copy what is held into `buf` from `done` on, advancing `done`, until a
+    /// page the source should fill: then the run to ask for.
+    fn read_held(
+        &self,
+        offset: u64,
+        buf: &mut [u8],
+        done: &mut usize,
+        sourced: bool,
+    ) -> Result<Option<(u64, usize)>> {
+        let len = buf.len();
+        while *done < len {
+            let (index, within, take) = piece(offset, *done, len)?;
+            let out = buf.get_mut(*done..*done + take).ok_or(Errno::EIO)?;
+            match self.pages.get(&index) {
+                Some(page) => {
+                    out.copy_from_slice(page.get(within..within + take).ok_or(Errno::EIO)?);
+                }
+                None if sourced && self.sourced(index) => {
+                    let (last, _, _) = piece(offset, len - 1, len)?;
+                    return Ok(Some((index, self.run(index, last))));
+                }
+                None => out.fill(0),
+            }
+            *done += take;
+        }
+        Ok(None)
+    }
+
+    /// Store `data` from `done` on, advancing `done`, until a page that is
+    /// missing, sourced and only partly written: then that page's index.
+    fn write_held(
+        &mut self,
+        offset: u64,
+        data: &[u8],
+        done: &mut usize,
+        sourced: bool,
+    ) -> Result<Option<u64>> {
+        let len = data.len();
+        while *done < len {
+            let (index, within, take) = piece(offset, *done, len)?;
+            if !self.pages.contains_key(&index) {
+                if sourced && take < PAGE_BYTES && self.sourced(index) {
+                    return Ok(Some(index));
+                }
+                let _ = self.pages.insert(index, zeroed_page());
+            }
+            let page = self.pages.get_mut(&index).ok_or(Errno::EIO)?;
+            let slot = page.get_mut(within..within + take).ok_or(Errno::EIO)?;
+            slot.copy_from_slice(data.get(*done..*done + take).ok_or(Errno::EIO)?);
+            *done += take;
+        }
+        Ok(None)
+    }
+
+    /// Keep each page a fill from `first` returned that is still missing and
+    /// still sourced, with its bytes at or past the bound cleared.
+    fn keep_filled(&mut self, first: u64, filled: Vec<Box<[u8]>>) {
+        for (index, mut page) in (first..).zip(filled) {
+            if self.pages.contains_key(&index) || !self.sourced(index) {
+                continue;
+            }
+            let start = index.saturating_mul(PAGE_SIZE);
+            if let Ok(valid) = usize::try_from(self.sourced_below - start)
+                && let Some(past) = page.get_mut(valid..)
+            {
+                past.fill(0);
+            }
+            let _ = self.pages.insert(index, page);
+        }
+    }
+}
+
+impl HeapPages {
+    /// An empty store whose pages come from `source` until written.
+    #[must_use]
+    pub fn with_source(source: Arc<dyn PageSource>) -> HeapPages {
+        HeapPages {
+            heap: SpinLock::new(Heap::default()),
+            source: Some(source),
+        }
+    }
+
+    /// Ask the source for `count` pages from `first`, into buffers allocated
+    /// before the call, with no lock held. Answers the pages it filled.
+    fn fetch(&self, first: u64, count: usize) -> Result<Vec<Box<[u8]>>> {
+        let source = self.source.as_deref().ok_or(Errno::EIO)?;
+        let mut filled: Vec<Box<[u8]>> = (0..count).map(|_| zeroed_page()).collect();
+        let got = {
+            let mut pages: Vec<&mut [u8]> = filled.iter_mut().map(|page| &mut **page).collect();
+            source.fill_range(first, &mut pages)?
+        };
+        if got == 0 || got > count {
+            return Err(Errno::EIO);
+        }
+        filled.truncate(got);
+        Ok(filled)
+    }
 }
 
 impl Pages for HeapPages {
     fn read(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
-        let pages = self.pages.lock();
-        pieces(offset, buf.len(), |index, within, range| {
-            let len = range.len();
-            let out = buf.get_mut(range).ok_or(Errno::EIO)?;
-            match pages.get(&index) {
-                Some(page) => {
-                    out.copy_from_slice(page.get(within..within + len).ok_or(Errno::EIO)?);
-                }
-                None => out.fill(0),
-            }
-            Ok(())
-        })
-    }
-
-    fn write(&self, offset: u64, data: &[u8]) -> Result<()> {
-        let mut pages = self.pages.lock();
-        pieces(offset, data.len(), |index, within, range| {
-            let len = range.len();
-            let page = pages
-                .entry(index)
-                .or_insert_with(|| alloc::vec![0_u8; HEAP_PAGE as usize].into_boxed_slice());
-            let slot = page.get_mut(within..within + len).ok_or(Errno::EIO)?;
-            slot.copy_from_slice(data.get(range).ok_or(Errno::EIO)?);
-            Ok(())
-        })
-    }
-
-    fn discard_from(&self, offset: u64) {
-        let mut pages = self.pages.lock();
-        let first_whole = offset.div_ceil(HEAP_PAGE);
-        drop(pages.split_off(&first_whole));
-        let within = (offset % HEAP_PAGE) as usize;
-        if within != 0
-            && let Some(page) = pages.get_mut(&(offset / HEAP_PAGE))
-            && let Some(tail) = page.get_mut(within..)
-        {
-            tail.fill(0);
+        let sourced = self.source.is_some();
+        let mut done = 0;
+        loop {
+            let missing = self
+                .heap
+                .lock()
+                .read_held(offset, buf, &mut done, sourced)?;
+            let Some((first, count)) = missing else {
+                return Ok(());
+            };
+            let filled = self.fetch(first, count)?;
+            self.heap.lock().keep_filled(first, filled);
         }
     }
 
+    fn write(&self, offset: u64, data: &[u8]) -> Result<()> {
+        let sourced = self.source.is_some();
+        let mut done = 0;
+        loop {
+            let missing = self
+                .heap
+                .lock()
+                .write_held(offset, data, &mut done, sourced)?;
+            let Some(index) = missing else {
+                return Ok(());
+            };
+            let filled = self.fetch(index, 1)?;
+            self.heap.lock().keep_filled(index, filled);
+        }
+    }
+
+    fn discard_from(&self, offset: u64) {
+        let released = {
+            let mut heap = self.heap.lock();
+            heap.sourced_below = heap.sourced_below.min(offset);
+            let released = heap.pages.split_off(&offset.div_ceil(PAGE_SIZE));
+            let within = (offset % PAGE_SIZE) as usize;
+            if within != 0
+                && let Some(page) = heap.pages.get_mut(&(offset / PAGE_SIZE))
+                && let Some(tail) = page.get_mut(within..)
+            {
+                tail.fill(0);
+            }
+            released
+        };
+        drop(released);
+    }
+
     fn committed_bytes(&self) -> u64 {
-        (self.pages.lock().len() as u64).saturating_mul(HEAP_PAGE)
+        (self.heap.lock().pages.len() as u64).saturating_mul(PAGE_SIZE)
     }
 }
 

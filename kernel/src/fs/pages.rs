@@ -22,6 +22,7 @@
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use core::any::Any;
 use core::ops::Range;
 
 use ferrix_bootinfo::PAGE_SIZE;
@@ -39,6 +40,10 @@ use crate::user::vmo::{Vmo, VmoError};
 pub(crate) const MAX_FILE_SIZE: u64 = 1 << 40;
 
 /// Hands tmpfs a VMO per file.
+///
+/// It keeps [`Storage::allocate_with`]'s default, so a filesystem asking it
+/// for pages over a source is told `ENODEV`: the VMO learns to fill from a
+/// source in the file-mmap landing.
 #[derive(Debug)]
 pub(crate) struct VmoStorage;
 
@@ -164,5 +169,10 @@ impl Pages for VmoPages {
 
     fn committed_bytes(&self) -> u64 {
         (self.vmo.committed() as u64).saturating_mul(PAGE_SIZE)
+    }
+
+    /// The VMO itself, which a mapping of the file maps.
+    fn object(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        Some(Arc::clone(&self.vmo) as Arc<dyn Any + Send + Sync>)
     }
 }

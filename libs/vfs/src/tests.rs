@@ -2109,3 +2109,286 @@ fn an_append_writes_at_the_end_and_leaves_the_offset_there() {
     assert_eq!(appending.read_at(0, &mut all), Ok(9));
     assert_eq!(&all[..9], b"12345xyz!");
 }
+
+// -- The page cache over a source -------------------------------------------
+
+use crate::tmpfs::{HeapPages, MAX_FILL_RUN, PAGE_SIZE, PageSource, Pages, Storage};
+
+const PAGE: usize = PAGE_SIZE as usize;
+
+/// The byte a [`Pattern`] source serves at `offset` into the file: different
+/// across a page and from one page to the next.
+fn pattern_at(offset: u64) -> u8 {
+    let page = offset / PAGE_SIZE;
+    let within = offset % PAGE_SIZE;
+    (page.wrapping_mul(131).wrapping_add(within) % 251) as u8
+}
+
+/// What a [`Pattern`] source serves for `len` bytes at `offset`.
+fn pattern(offset: u64, len: usize) -> Vec<u8> {
+    (offset..offset + len as u64).map(pattern_at).collect()
+}
+
+/// A source serving [`pattern_at`], which remembers every call and can be
+/// told to fill short, fail, or lie about what it filled.
+#[derive(Debug, Default)]
+struct Pattern {
+    /// `(first, pages asked for)`, a call at a time.
+    asked: ferrix_sync::SpinLock<Vec<(u64, usize)>>,
+    /// Fill at most this many pages a call; zero for as many as asked.
+    most: AtomicUsize,
+    /// Fail every call with `EIO` while set.
+    failing: AtomicBool,
+    /// Claim this many pages were filled, whatever was.
+    claim: ferrix_sync::SpinLock<Option<usize>>,
+}
+
+impl Pattern {
+    fn asked(&self) -> Vec<(u64, usize)> {
+        self.asked.lock().clone()
+    }
+}
+
+impl PageSource for Pattern {
+    fn fill_range(&self, first: u64, pages: &mut [&mut [u8]]) -> Result<usize, Errno> {
+        self.asked.lock().push((first, pages.len()));
+        if self.failing.load(Ordering::Relaxed) {
+            return Err(Errno::EIO);
+        }
+        let most = self.most.load(Ordering::Relaxed);
+        let fill = if most == 0 {
+            pages.len()
+        } else {
+            most.min(pages.len())
+        };
+        // Every page handed over must be a page long; a different error
+        // number than the tests expect makes a wrong-sized buffer fail them.
+        if pages.iter().any(|page| page.len() != PAGE) {
+            return Err(Errno::EINVAL);
+        }
+        for (index, page) in (first..).zip(pages.iter_mut().take(fill)) {
+            page.copy_from_slice(&pattern(index * PAGE_SIZE, PAGE));
+        }
+        Ok(self.claim.lock().unwrap_or(fill))
+    }
+}
+
+fn over(source: &Arc<Pattern>) -> HeapPages {
+    HeapPages::with_source(Arc::clone(source) as Arc<dyn PageSource>)
+}
+
+#[test]
+fn a_long_read_asks_the_source_in_runs_of_at_most_32_pages() {
+    let source = Arc::new(Pattern::default());
+    let pages = over(&source);
+    assert_eq!(pages.committed_bytes(), 0, "nothing is held before a read");
+    let mut buf = vec![0_u8; 40 * PAGE];
+    pages.read(0, &mut buf).unwrap();
+    assert!(
+        buf == pattern(0, 40 * PAGE),
+        "a filled read has the source's bytes"
+    );
+    assert_eq!(MAX_FILL_RUN, 32);
+    assert_eq!(source.asked(), [(0, 32), (32, 8)]);
+    assert_eq!(pages.committed_bytes(), 40 * PAGE_SIZE);
+    pages.read(0, &mut buf).unwrap();
+    assert_eq!(source.asked().len(), 2, "held pages were asked for again");
+}
+
+#[test]
+fn a_fill_short_of_the_run_is_asked_again_for_the_rest() {
+    let source = Arc::new(Pattern::default());
+    source.most.store(3, Ordering::Relaxed);
+    let pages = over(&source);
+    let len = 8 * PAGE - 200;
+    let mut buf = vec![0_u8; len];
+    pages.read(100, &mut buf).unwrap();
+    assert!(
+        buf == pattern(100, len),
+        "short fills put bytes in the wrong place"
+    );
+    assert_eq!(source.asked(), [(0, 8), (3, 5), (6, 2)]);
+    assert_eq!(pages.committed_bytes(), 8 * PAGE_SIZE);
+}
+
+#[test]
+fn a_failed_fill_keeps_nothing_and_a_later_read_succeeds() {
+    let source = Arc::new(Pattern::default());
+    source.failing.store(true, Ordering::Relaxed);
+    let pages = over(&source);
+    let mut buf = vec![0_u8; 2 * PAGE];
+    assert_eq!(pages.read(PAGE_SIZE, &mut buf), Err(Errno::EIO));
+    assert_eq!(pages.committed_bytes(), 0, "a failed fill kept pages");
+    source.failing.store(false, Ordering::Relaxed);
+    assert_eq!(pages.read(PAGE_SIZE, &mut buf), Ok(()));
+    assert!(buf == pattern(PAGE_SIZE, 2 * PAGE));
+}
+
+#[test]
+fn a_source_claiming_no_page_or_too_many_is_an_error() {
+    for claim in [0, 3] {
+        let source = Arc::new(Pattern::default());
+        *source.claim.lock() = Some(claim);
+        let pages = over(&source);
+        let mut buf = vec![0_u8; 2 * PAGE];
+        assert_eq!(
+            pages.read(0, &mut buf),
+            Err(Errno::EIO),
+            "a claim of {claim}"
+        );
+        assert_eq!(pages.committed_bytes(), 0, "a claim of {claim} kept pages");
+        assert_eq!(pages.write(10, b"x"), Err(Errno::EIO), "a claim of {claim}");
+        assert_eq!(pages.committed_bytes(), 0, "a claim of {claim} kept pages");
+    }
+}
+
+#[test]
+fn a_partial_write_keeps_the_sources_other_bytes() {
+    let source = Arc::new(Pattern::default());
+    let pages = over(&source);
+    pages.write(PAGE_SIZE + 10, b"hello").unwrap();
+    assert_eq!(source.asked(), [(1, 1)]);
+    let mut page = vec![0_u8; PAGE];
+    pages.read(PAGE_SIZE, &mut page).unwrap();
+    let mut expected = pattern(PAGE_SIZE, PAGE);
+    expected[10..15].copy_from_slice(b"hello");
+    assert!(
+        page == expected,
+        "a partial write lost the page's other bytes"
+    );
+    assert_eq!(source.asked().len(), 1, "a written page was filled again");
+
+    // A write across the boundary of two missing pages fills each.
+    pages.write(3 * PAGE_SIZE - 2, b"abcd").unwrap();
+    assert_eq!(source.asked(), [(1, 1), (2, 1), (3, 1)]);
+}
+
+#[test]
+fn a_whole_page_write_does_not_ask_the_source() {
+    let source = Arc::new(Pattern::default());
+    let pages = over(&source);
+    pages.write(3 * PAGE_SIZE, &vec![0xaa; PAGE]).unwrap();
+    let mut page = vec![0_u8; PAGE];
+    pages.read(3 * PAGE_SIZE, &mut page).unwrap();
+    assert!(page.iter().all(|&byte| byte == 0xaa));
+    assert!(
+        source.asked().is_empty(),
+        "a whole-page write asked the source"
+    );
+}
+
+#[test]
+fn a_truncated_file_reads_zeros_past_the_cut_when_it_grows() {
+    // The cut falls in a page nothing has read.
+    let source = Arc::new(Pattern::default());
+    let pages = over(&source);
+    let cut = PAGE_SIZE + 100;
+    pages.discard_from(cut);
+    let mut buf = vec![0_u8; 3 * PAGE];
+    pages.read(0, &mut buf).unwrap();
+    let mut expected = pattern(0, 3 * PAGE);
+    expected[cut as usize..].fill(0);
+    assert!(buf == expected, "the source's bytes past a cut came back");
+    assert_eq!(
+        source.asked(),
+        [(0, 2)],
+        "a page wholly past the cut was asked for"
+    );
+
+    // The cut falls in a page already held, and a partial write lands past it.
+    let source = Arc::new(Pattern::default());
+    let pages = over(&source);
+    pages.read(0, &mut buf).unwrap();
+    let cut = 2 * PAGE_SIZE + 50;
+    pages.discard_from(cut);
+    pages.write(5 * PAGE_SIZE + 1, b"z").unwrap();
+    let mut grown = vec![0_u8; 6 * PAGE];
+    pages.read(0, &mut grown).unwrap();
+    let mut expected = pattern(0, 6 * PAGE);
+    expected[cut as usize..].fill(0);
+    expected[5 * PAGE + 1] = b'z';
+    assert!(grown == expected, "the source's bytes past a cut came back");
+    assert_eq!(
+        source.asked(),
+        [(0, 3)],
+        "pages past the cut were asked for"
+    );
+}
+
+#[test]
+fn fill_asks_fill_range_for_the_one_page() {
+    let source = Pattern::default();
+    let mut page = vec![0_u8; PAGE];
+    source.fill(5, &mut page).unwrap();
+    assert!(page == pattern(5 * PAGE_SIZE, PAGE));
+    assert_eq!(source.asked(), [(5, 1)]);
+    *source.claim.lock() = Some(2);
+    assert_eq!(source.fill(6, &mut page), Err(Errno::EIO));
+    *source.claim.lock() = None;
+    source.failing.store(true, Ordering::Relaxed);
+    assert_eq!(source.fill(7, &mut page), Err(Errno::EIO));
+}
+
+/// A store that cannot fill from a source.
+#[derive(Debug)]
+struct Unsourced;
+
+impl Storage for Unsourced {
+    fn allocate(&self) -> Result<alloc::boxed::Box<dyn Pages>, Errno> {
+        HeapStorage::new(1 << 20).allocate()
+    }
+    fn max_file_size(&self) -> u64 {
+        1 << 20
+    }
+}
+
+#[test]
+fn a_store_fills_from_a_source_only_where_it_can() {
+    let source = Arc::new(Pattern::default()) as Arc<dyn PageSource>;
+    assert_eq!(
+        Unsourced.allocate_with(Arc::clone(&source)).err(),
+        Some(Errno::ENODEV)
+    );
+    let heap = HeapStorage::new(1 << 20);
+    let pages = heap.allocate_with(source).unwrap();
+    let mut buf = [0_u8; 16];
+    pages.read(PAGE_SIZE - 8, &mut buf).unwrap();
+    assert_eq!(buf.to_vec(), pattern(PAGE_SIZE - 8, 16));
+    assert!(pages.object().is_none(), "a heap store has nothing to map");
+    assert!(heap.allocate().unwrap().object().is_none());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "threads under Miri take minutes, and the tests above are deterministic"
+)]
+fn two_readers_of_the_same_missing_pages_both_see_the_sources_bytes() {
+    extern crate std;
+
+    let source = Arc::new(Pattern::default());
+    source.most.store(5, Ordering::Relaxed);
+    for _ in 0..20 {
+        let pages = Arc::new(over(&source));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let readers: Vec<_> = (0..2)
+            .map(|_| {
+                let pages = Arc::clone(&pages);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let mut buf = vec![0_u8; 40 * PAGE];
+                    let _ = barrier.wait();
+                    pages.read(3, &mut buf).unwrap();
+                    buf == pattern(3, 40 * PAGE)
+                })
+            })
+            .collect();
+        for reader in readers {
+            assert!(
+                reader.join().unwrap(),
+                "a racing reader saw the wrong bytes"
+            );
+        }
+        assert_eq!(pages.committed_bytes(), 41 * PAGE_SIZE);
+    }
+}
