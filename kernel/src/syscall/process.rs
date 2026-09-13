@@ -102,6 +102,9 @@ pub(crate) struct Process {
     state: SpinLock<State>,
     /// Where its first task enters user mode. Set once, by `exec::load`.
     startup: SpinLock<Option<Startup>>,
+    /// Set by the first start, so a process runs one program's task and a
+    /// second start is refused rather than running a second task in it.
+    start_claimed: AtomicBool,
     /// Set by whichever of `exit_group` and `kill` gets there first.
     ending: AtomicBool,
     /// How it ended, and who is waiting to hear. Apart from the process,
@@ -216,6 +219,7 @@ impl Process {
             fs: Arc::new(SpinLock::new(fs::namespace().context())),
             state: SpinLock::new(State::default()),
             startup: SpinLock::new(None),
+            start_claimed: AtomicBool::new(false),
             ending: AtomicBool::new(false),
             exit: Arc::new(Exit::new()),
             tasks: SpinLock::new(Vec::new()),
@@ -1073,8 +1077,8 @@ pub(crate) use super::exec::load;
 ///
 /// # Errors
 ///
-/// If no program was loaded into it, or the scheduler has no stack for its
-/// task.
+/// If no program was loaded into it, if it has already been started, or if the
+/// scheduler has no stack for its task.
 pub(crate) fn start(process: &Arc<Process>) -> Result<Arc<Task>, &'static str> {
     start_on(process, None)
 }
@@ -1091,9 +1095,24 @@ pub(crate) fn start_on(
     if process.startup().is_none() {
         return Err("the process has no program loaded");
     }
-    let task = sched::spawn_user("user", run_program, Arc::clone(process), cpu, None)?;
+    claim_start(process)?;
+    let task = sched::spawn_user("user", run_program, Arc::clone(process), cpu, None)
+        .inspect_err(|_| process.start_claimed.store(false, Ordering::Release))?;
     process.tasks.lock().push(Arc::downgrade(&task));
     Ok(task)
+}
+
+/// Mark `process` started, or refuse if something already has.
+///
+/// Atomic, because two starts can race: a native `process_start` called twice
+/// at once must run one task, not two in the same process. A start whose task
+/// could not be spawned clears the mark again, so it can be retried.
+fn claim_start(process: &Process) -> Result<(), &'static str> {
+    process
+        .start_claimed
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map(|_| ())
+        .map_err(|_| "the process has already started")
 }
 
 /// Run a fork child: `child` resumes from the registers [`Process::set_resume`]
@@ -1107,7 +1126,9 @@ pub(crate) fn start_forked(
     child: &Arc<Process>,
     state: crate::arch::UserState,
 ) -> Result<Arc<Task>, &'static str> {
-    let task = sched::spawn_user("user", run_program, Arc::clone(child), None, Some(state))?;
+    claim_start(child)?;
+    let task = sched::spawn_user("user", run_program, Arc::clone(child), None, Some(state))
+        .inspect_err(|_| child.start_claimed.store(false, Ordering::Release))?;
     child.tasks.lock().push(Arc::downgrade(&task));
     Ok(task)
 }

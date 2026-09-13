@@ -5782,6 +5782,9 @@ fn check_a_program_is_handed_its_start_argument() -> Result<Option<i32>, &'stati
     });
     let _task = process::start(&program)
         .map_err(|_| "a program handed a start argument could not be started")?;
+    if process::start(&program).is_ok() {
+        return Err("a process that had already started was started a second time");
+    }
     let status = program
         .wait_for_exit(u64::MAX)
         .ok_or("a program handed a start argument never reported how it ended")?;
