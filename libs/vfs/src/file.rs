@@ -8,6 +8,26 @@
 //! the first. Two separate `open`s of the same file do not share one. The
 //! close-on-exec flag, by contrast, belongs to the descriptor, and lives in
 //! [`crate::fd::FdTable`].
+//!
+//! # No lock of the description is held across I/O
+//!
+//! The offset and the status flags are spin locks, and a filesystem that
+//! reads a disk sleeps. So every operation here copies what it needs out from
+//! under the lock, calls the [`Inode`] with nothing held, and takes the lock
+//! again to store the result: `read` and `write` read the offset, do the I/O
+//! at it, and set the offset to where that I/O ended.
+//!
+//! Two reads racing on one description may therefore start at the same offset
+//! and get the same bytes, and the offset ends where the last one to finish
+//! put it. That is what Linux did for every file before 3.14 added
+//! `f_pos_lock`, and still does for a stream. The alternative is a "busy"
+//! flag and a wait on the description, and this crate has nothing to wait
+//! with: waiting is the kernel's (see [`crate::pipe`]). A program that shares
+//! a descriptor between threads and wants ordered reads has `pread`.
+//!
+//! An `O_APPEND` write stays atomic without the offset lock, because the
+//! filesystem decides where the end is under its own lock and returns the
+//! offset just past what it wrote.
 
 use alloc::sync::Arc;
 use core::fmt;
@@ -90,7 +110,8 @@ pub struct OpenFile {
     write: bool,
     path_only: bool,
     status: SpinLock<Status>,
-    /// The file position, or a directory's cursor.
+    /// The file position, or a directory's cursor. Never held across a call
+    /// into `io` or `inode`; see the module documentation.
     offset: SpinLock<u64>,
 }
 
@@ -250,6 +271,17 @@ impl OpenFile {
         *self.offset.lock()
     }
 
+    fn set_offset(&self, offset: u64) {
+        *self.offset.lock() = offset;
+    }
+
+    /// Whether the offset lock is held right now, for a test's fake inode to
+    /// ask from inside a call.
+    #[cfg(test)]
+    pub(crate) fn offset_lock_held(&self) -> bool {
+        self.offset.try_lock().is_none()
+    }
+
     fn check_io(&self, allowed: bool) -> Result<()> {
         if self.path_only || !allowed {
             return Err(Errno::EBADF);
@@ -261,6 +293,10 @@ impl OpenFile {
     }
 
     /// `read`: from the current offset, advancing it.
+    ///
+    /// The offset is read, the read done with no lock held, and the offset set
+    /// past what it got; see the module documentation for what two concurrent
+    /// reads of one description see.
     ///
     /// # Errors
     ///
@@ -274,9 +310,9 @@ impl OpenFile {
             // wait behind it for a lock that guards nothing.
             return self.io.read_stream(buf, self.status().nonblock);
         }
-        let mut offset = self.offset.lock();
-        let count = self.io.read_at(*offset, buf)?;
-        *offset = offset.saturating_add(count as u64);
+        let at = self.offset();
+        let count = self.io.read_at(at, buf)?;
+        self.set_offset(at.saturating_add(count as u64));
         Ok(count)
     }
 
@@ -303,10 +339,12 @@ impl OpenFile {
         if self.io.is_stream() {
             return self.io.write_stream(data, self.status().nonblock);
         }
-        let append = self.status.lock().append;
-        let mut offset = self.offset.lock();
-        let (count, end) = self.io.write_at(*offset, data, append)?;
-        *offset = end;
+        let append = self.status().append;
+        let at = self.offset();
+        // Under `O_APPEND` the filesystem ignores `at` and returns the end it
+        // wrote to, found under its own lock.
+        let (count, end) = self.io.write_at(at, data, append)?;
+        self.set_offset(end);
         Ok(count)
     }
 
@@ -324,7 +362,7 @@ impl OpenFile {
         if self.io.is_stream() {
             return Err(Errno::ESPIPE);
         }
-        let append = self.status.lock().append;
+        let append = self.status().append;
         self.io
             .write_at(offset, data, append)
             .map(|(count, _)| count)
@@ -405,6 +443,10 @@ impl OpenFile {
     /// `.` and `..` come first, from the VFS, because only the VFS knows what
     /// a mounted directory's parent is.
     ///
+    /// The cursor is copied out and stored back as each step finishes, never
+    /// held across the filesystem's `read_dir` or a `metadata`, for the same
+    /// reason as [`OpenFile::read`].
+    ///
     /// # Errors
     ///
     /// `ENOTDIR` for anything but a directory.
@@ -415,8 +457,8 @@ impl OpenFile {
         if self.kind != FileType::Directory {
             return Err(Errno::ENOTDIR);
         }
-        let mut cursor = self.offset.lock();
-        if *cursor == 0 {
+        let mut cursor = self.offset();
+        if cursor == 0 {
             let dot = DirEntry {
                 ino: self.inode.metadata().ino,
                 kind: FileType::Directory,
@@ -426,9 +468,10 @@ impl OpenFile {
             if !emit(dot) {
                 return Ok(());
             }
-            *cursor = 1;
+            cursor = 1;
+            self.set_offset(cursor);
         }
-        if *cursor == 1 {
+        if cursor == 1 {
             let parent = self.location.parent();
             let ino = parent
                 .inode()
@@ -442,10 +485,11 @@ impl OpenFile {
             if !emit(dotdot) {
                 return Ok(());
             }
-            *cursor = FIRST_CURSOR;
+            cursor = FIRST_CURSOR;
+            self.set_offset(cursor);
         }
-        let mut reached = *cursor;
-        self.io.read_dir(*cursor, &mut |entry| {
+        let mut reached = cursor;
+        self.io.read_dir(cursor, &mut |entry| {
             if emit(entry) {
                 reached = entry.next;
                 true
@@ -453,7 +497,7 @@ impl OpenFile {
                 false
             }
         })?;
-        *cursor = reached;
+        self.set_offset(reached);
         Ok(())
     }
 }

@@ -39,10 +39,24 @@
 //! reported faithfully, so adding the check later is a function call on the
 //! walk rather than a change to what is stored.
 //!
-//! **Blocking.** Every lock here is a spin lock and no filesystem in this
-//! crate sleeps. A filesystem that does I/O — stage 11's btrfs — must not hold
-//! one of these across it, which the [`Inode`] contract says and the path walk
-//! respects: it never holds a dentry lock while calling into a filesystem.
+//! **A sleeping lock.** Every lock here is a spin lock, and tmpfs never
+//! sleeps, but an [`Inode`] implementation may block: stage 11's btrfs waits
+//! on disk I/O inside `read_at`, `lookup` and `read_dir`. So the locks held
+//! across a call into an inode are named exactly:
+//!
+//! * **None of an open file description's.** [`OpenFile`] copies the offset or
+//!   the status flags out, calls the inode with neither held, and stores the
+//!   result afterwards, which is why two `read`s racing on one description
+//!   can get the same bytes (see `file.rs`).
+//! * **No dentry lock and no mount-table or dentry-cache lock.** The path walk
+//!   takes them to look at the cache and releases them before a `lookup`.
+//! * **The namespace's rename lock**, across a `rename`'s two walks and the
+//!   filesystem's `rename`. This is the one exception: the walks call
+//!   `lookup`, so a filesystem whose lookups sleep would sleep holding it
+//!   during a rename. It wants a sleeping lock the kernel lends this crate.
+//!
+//! A filesystem's own locks are its own business, except that it must not
+//! hold a spin lock across I/O either.
 
 #![no_std]
 #![forbid(unsafe_code)]

@@ -1907,3 +1907,205 @@ fn a_directory_replaced_by_rename_is_freed_even_after_misses_inside_it() {
         "cached misses inside a replaced directory kept it alive"
     );
 }
+
+// -- The description's locks across I/O -------------------------------------
+
+use core::sync::atomic::AtomicUsize;
+
+/// A regular file that notes whether any call into it found its open file's
+/// offset lock held, as a btrfs read sleeping on the disk would.
+struct Watched {
+    file: ferrix_sync::SpinLock<alloc::sync::Weak<OpenFile>>,
+    bytes: ferrix_sync::SpinLock<Vec<u8>>,
+    /// The most one read returns; zero for no limit.
+    short: usize,
+    calls: AtomicUsize,
+    held: AtomicBool,
+}
+
+impl core::fmt::Debug for Watched {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Watched").finish_non_exhaustive()
+    }
+}
+
+impl Watched {
+    fn new(bytes: &[u8], short: usize) -> Arc<Watched> {
+        Arc::new(Watched {
+            file: ferrix_sync::SpinLock::new(alloc::sync::Weak::new()),
+            bytes: ferrix_sync::SpinLock::new(bytes.to_vec()),
+            short,
+            calls: AtomicUsize::new(0),
+            held: AtomicBool::new(false),
+        })
+    }
+
+    /// The open file whose lock the calls look at.
+    fn attach(&self, file: &Arc<OpenFile>) {
+        *self.file.lock() = Arc::downgrade(file);
+    }
+
+    fn called(&self) {
+        let _ = self.calls.fetch_add(1, Ordering::Relaxed);
+        let file = self.file.lock().upgrade();
+        if file.is_some_and(|file| file.offset_lock_held()) {
+            self.held.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+impl crate::Inode for Watched {
+    fn metadata(&self) -> crate::Metadata {
+        crate::Metadata {
+            kind: FileType::Regular,
+            size: self.bytes.lock().len() as u64,
+            ..stream_metadata()
+        }
+    }
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Errno> {
+        self.called();
+        let bytes = self.bytes.lock();
+        let start = usize::try_from(offset).map_err(|_| Errno::EINVAL)?;
+        let Some(rest) = bytes.get(start..) else {
+            return Ok(0);
+        };
+        let limit = if self.short == 0 {
+            usize::MAX
+        } else {
+            self.short
+        };
+        let take = rest.len().min(buf.len()).min(limit);
+        buf[..take].copy_from_slice(&rest[..take]);
+        Ok(take)
+    }
+    fn write_at(&self, offset: u64, data: &[u8], append: bool) -> Result<(usize, u64), Errno> {
+        self.called();
+        let mut bytes = self.bytes.lock();
+        let start = if append {
+            bytes.len()
+        } else {
+            usize::try_from(offset).map_err(|_| Errno::EINVAL)?
+        };
+        let end = start + data.len();
+        if bytes.len() < end {
+            bytes.resize(end, 0);
+        }
+        bytes[start..end].copy_from_slice(data);
+        Ok((data.len(), end as u64))
+    }
+    fn read_dir(
+        &self,
+        cursor: u64,
+        emit: &mut dyn FnMut(crate::DirEntry<'_>) -> bool,
+    ) -> Result<(), Errno> {
+        self.called();
+        if cursor == crate::FIRST_CURSOR {
+            let _ = emit(crate::DirEntry {
+                ino: 9,
+                kind: FileType::Regular,
+                name: b"x",
+                next: cursor + 1,
+            });
+        }
+        Ok(())
+    }
+}
+
+const APPEND_CREATE: OpenFlags = OpenFlags {
+    append: true,
+    ..RW_CREATE
+};
+
+#[test]
+fn no_description_lock_is_held_across_a_call_into_the_file() {
+    let (ns, ctx) = fresh();
+    let plain = ns.open(&ctx, None, b"/f", &RW_CREATE, 0o644).unwrap();
+    let appending = ns.open(&ctx, None, b"/f", &APPEND_CREATE, 0o644).unwrap();
+    ns.mkdir(&ctx, None, b"/d", 0o755).unwrap();
+    let dir = ns.open(&ctx, None, b"/d", &DIRECTORY, 0).unwrap();
+
+    let watched = Watched::new(b"", 0);
+    for opened in [&plain, &appending, &dir] {
+        let file = opened.with_io(Arc::clone(&watched) as Arc<dyn crate::Inode>);
+        watched.attach(&file);
+        if file.kind() == FileType::Directory {
+            let mut listed = 0;
+            file.read_dir(&mut |_| {
+                listed += 1;
+                true
+            })
+            .unwrap();
+            assert_eq!(listed, 3, "., .. and the one entry");
+        } else {
+            assert_eq!(file.write(b"hello"), Ok(5));
+            assert_eq!(file.seek(0, Whence::Set), Ok(0));
+            let mut buf = [0_u8; 5];
+            assert_eq!(file.read(&mut buf), Ok(5));
+        }
+    }
+    assert_eq!(watched.calls.load(Ordering::Relaxed), 5);
+    assert!(
+        !watched.held.load(Ordering::Relaxed),
+        "a file was called into with its description's offset lock held"
+    );
+}
+
+#[test]
+fn sequential_reads_advance_the_offset_by_what_each_got() {
+    let (ns, ctx) = fresh();
+    let file = ns.open(&ctx, None, b"/f", &RW_CREATE, 0o644).unwrap();
+    assert_eq!(file.write(b"abcdefghij"), Ok(10));
+    assert_eq!(file.seek(0, Whence::Set), Ok(0));
+    let mut buf = [0_u8; 4];
+    assert_eq!(file.read(&mut buf), Ok(4));
+    assert_eq!(&buf, b"abcd");
+    assert_eq!(file.offset(), 4);
+    assert_eq!(file.read(&mut buf), Ok(4));
+    assert_eq!(&buf, b"efgh");
+    assert_eq!(file.offset(), 8);
+    assert_eq!(file.read(&mut buf), Ok(2));
+    assert_eq!(&buf[..2], b"ij");
+    assert_eq!(file.offset(), 10);
+    assert_eq!(file.read(&mut buf), Ok(0), "end of file");
+    assert_eq!(file.offset(), 10);
+}
+
+#[test]
+fn a_short_read_advances_the_offset_by_the_bytes_it_got() {
+    let (ns, ctx) = fresh();
+    let opened = ns.open(&ctx, None, b"/f", &RW_CREATE, 0o644).unwrap();
+    let file = opened.with_io(Watched::new(b"0123456789", 3) as Arc<dyn crate::Inode>);
+    let mut buf = [0_u8; 8];
+    assert_eq!(file.read(&mut buf), Ok(3));
+    assert_eq!(&buf[..3], b"012");
+    assert_eq!(file.offset(), 3);
+    assert_eq!(file.read(&mut buf), Ok(3));
+    assert_eq!(
+        &buf[..3],
+        b"345",
+        "the second read began where the first stopped"
+    );
+    assert_eq!(file.offset(), 6);
+}
+
+#[test]
+fn an_append_writes_at_the_end_and_leaves_the_offset_there() {
+    let (ns, ctx) = fresh();
+    let plain = ns.open(&ctx, None, b"/log", &RW_CREATE, 0o644).unwrap();
+    let appending = ns.open(&ctx, None, b"/log", &APPEND_CREATE, 0o644).unwrap();
+    assert_eq!(plain.write(b"12345"), Ok(5));
+    assert_eq!(appending.write(b"ab"), Ok(2));
+    assert_eq!(appending.offset(), 7);
+    // The other description overwrites from its own offset and lengthens the
+    // file; the append follows the end, wherever its own offset was put.
+    assert_eq!(plain.write(b"xyz"), Ok(3));
+    assert_eq!(appending.seek(0, Whence::Set), Ok(0));
+    assert_eq!(appending.write(b"!"), Ok(1));
+    assert_eq!(appending.offset(), 9);
+    let mut all = [0_u8; 16];
+    assert_eq!(appending.read_at(0, &mut all), Ok(9));
+    assert_eq!(&all[..9], b"12345xyz!");
+}

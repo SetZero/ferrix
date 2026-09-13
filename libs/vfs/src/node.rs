@@ -285,10 +285,11 @@ pub trait FileSystem: Send + Sync + fmt::Debug {
 ///
 /// # The contract
 ///
-/// * No operation may sleep while holding a lock the VFS can see, because
-///   there is none: the VFS never calls into an inode with a dentry lock held.
-///   A filesystem's own locks are its own business, and a filesystem that does
-///   I/O must not hold a spin lock across it.
+/// * An operation may block. The VFS holds none of an open file description's
+///   locks and no dentry lock across a call; the one VFS lock held across
+///   calls is the namespace's rename lock, during `rename`, as the crate
+///   documentation says. A filesystem's own locks are its own business, and a
+///   filesystem that does I/O must not hold a spin lock across it.
 /// * A name passed in is already validated: not empty, not `.` or `..`, no
 ///   `/`, no NUL, no longer than [`crate::path::NAME_MAX`].
 /// * Errors are the ones Linux would return for the same operation.
