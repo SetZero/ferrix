@@ -42,6 +42,8 @@ use crate::syscall::{fd, path, registry, uaccess};
 pub(crate) struct Report {
     /// Device nodes whose numbers were checked against Linux's.
     pub(crate) devices: u32,
+    /// What the block registry's check measured.
+    pub(crate) blocks: fs::devfs::check::Report,
     /// Names under `/proc` listed and walked back to, recursively.
     pub(crate) listed: u32,
     /// Lines of `/proc/self/maps` parsed.
@@ -114,6 +116,7 @@ static LAYOUT: SpinLock<Option<Layout>> = SpinLock::new(None);
 /// Run them. `Err` names the first thing that was not true.
 pub(crate) fn run() -> Result<Report, &'static str> {
     let devices = check_devices()?;
+    let blocks = fs::devfs::check::run()?;
     // In the boot task: `/proc/stat` describes the machine, not the reader.
     let (stat_cpus, stat_ticks) = check_stat(fs::namespace())?;
 
@@ -152,6 +155,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let (listed, maps_lines, named, sysctl_values) = found??;
     Ok(Report {
         devices,
+        blocks,
         listed,
         maps_lines,
         named,

@@ -969,7 +969,14 @@ pub(crate) static STAGE8_PSEUDO_FILESYSTEMS: Explanation = Explanation {
     title: "/dev or /proc failed its self-check",
     meaning: "`fs::procfs::check::run` opens the memory devices through the namespace and \
               requires each to do what it is for and to carry the number Linux gives it. It \
-              then runs a task in a process of its own and requires /proc/self to name that \
+              registers a small in-memory disk and, by system call number, requires /dev to \
+              list it after the character nodes without repeating or skipping a name across a \
+              registration, stat to report a block device with its number and size, open to \
+              be ENXIO while O_PATH opens, block_device to find it by number and read its \
+              sectors, /proc/partitions to hold exactly its row, a clashing name or number to \
+              be refused, and, once the registration is dropped, the node, the lookup and the \
+              row to be gone while the held device answers EIO; twice, with no frame and no \
+              cached dentry left behind by the second run. It then runs a task in a process of its own and requires /proc/self to name that \
               process, every name a recursive listing of /proc reports to lead back to what \
               the listing said, /proc/self/fd to name a descriptor's path and say it was \
               deleted once it is gone, and /proc/self/maps, read a few bytes at a time while \
@@ -987,11 +994,15 @@ pub(crate) static STAGE8_PSEUDO_FILESYSTEMS: Explanation = Explanation {
         "Reads of an open /proc file did not go to the snapshot taken at open, so a map that \
          changed mid-read shows up with extra lines.",
         "A /dev node carries the wrong major or minor number, or reaches the wrong device.",
+        "devfs cached a lookup in /dev, so a disk registered after a miss stays invisible, or \
+         a listing's cursor for a static node moved when a disk was registered or dropped.",
+        "A dropped `BlockRegistration` left its disk in the registry, or the registry's lock \
+         was held across a device read.",
         "A run queue's busy or idle count dropped the time since its last charge, or charged \
          one interval twice, so /proc/stat's times go backwards or outrun the clock.",
     ],
     see: "kernel/src/fs/procfs/check.rs run; kernel/src/fs/procfs.rs; kernel/src/fs/devfs.rs; \
-          libs/procfs/src/maps.rs; libs/procfs/src/kstat.rs; kernel/src/sched/queue.rs \
+          kernel/src/fs/devfs/check.rs; kernel/src/fs/block.rs; libs/procfs/src/maps.rs; libs/procfs/src/kstat.rs; kernel/src/sched/queue.rs \
           time_spent; docs/ROADMAP.md stage 8",
 };
 

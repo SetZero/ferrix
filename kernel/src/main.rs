@@ -381,8 +381,14 @@ fn check_filesystems(view: &BootView<'_>) {
     };
     println!(
         "  devfs    {} nodes numbered as Linux numbers them; zero, null, full and urandom \
-         do what they are for",
+         do what they are for; a disk registered as {}:{} listed, stat'ed, refused open and \
+         found by number, {} sectors read, gone from /dev and /proc/partitions with its \
+         registration; {} frames leaked",
         pseudo.devices,
+        pseudo.blocks.major,
+        pseudo.blocks.minor,
+        pseudo.blocks.sectors,
+        pseudo.blocks.leaked,
     );
     println!(
         "  procfs   {} names listed and walked back to, {} maps lines parsed, {} of them named; \

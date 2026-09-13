@@ -16,7 +16,7 @@ use ferrix_procfs::kstat::{self, CpuTimes, Kstat};
 use ferrix_procfs::maps::{self, Mapping, Width};
 use ferrix_procfs::meminfo::{self, Meminfo};
 use ferrix_procfs::mounts::{self, Mount};
-use ferrix_procfs::partitions;
+use ferrix_procfs::partitions::{self, Partition};
 use ferrix_procfs::stat::{self, Stat};
 use ferrix_procfs::status::{self, State, Status};
 use ferrix_procfs::sysctl;
@@ -26,6 +26,7 @@ use ferrix_vfs::{Errno, Location, Result};
 use super::Kernel;
 use crate::arch;
 use crate::fs;
+use crate::fs::{block, devfs};
 use crate::irq;
 use crate::mm;
 use crate::sched;
@@ -310,11 +311,31 @@ pub(super) fn version(_: &Kernel) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// `/proc/partitions`: empty, as Linux's is with no block device, because
-/// there is none until stage 11 gives the kernel one.
+/// `/proc/partitions`: a row per disk registered in `/dev`, in registration
+/// order, its size in 1 KiB blocks as Linux counts them — sectors times the
+/// sector size over 1024 — and empty, header too, with none. Partitions of a
+/// disk are not rows yet: nothing here reads a partition table.
 pub(super) fn partitions(_: &Kernel) -> Result<Vec<u8>> {
+    let mut disks: Vec<(Vec<u8>, u32, u32, u64)> = Vec::new();
+    devfs::for_each_block(|name, major, minor, device| {
+        disks.push((
+            name.to_vec(),
+            major,
+            minor,
+            block::size_in_bytes(device) / 1024,
+        ));
+    });
+    let rows: Vec<Partition<'_>> = disks
+        .iter()
+        .map(|(name, major, minor, blocks)| Partition {
+            major: *major,
+            minor: *minor,
+            blocks: *blocks,
+            name,
+        })
+        .collect();
     let mut out = Vec::new();
-    partitions::render(&mut out, &[]);
+    partitions::render(&mut out, &rows);
     Ok(out)
 }
 

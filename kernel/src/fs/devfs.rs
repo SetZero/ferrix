@@ -1,12 +1,12 @@
 //! devfs: the device nodes every program expects to find in `/dev`.
 //!
-//! A fixed table, not a directory nodes can be created in. What is in `/dev`
-//! is the kernel's statement of which devices exist, and until drivers come
-//! and go — stage 10's — that statement is a constant: the three memory
-//! devices a C library and a shell reach for, the two random devices, and the
-//! console under both of its names. Here the node *is* the device, which is
-//! why this is a filesystem of its own rather than a tmpfs with nodes unpacked
-//! into it.
+//! A fixed table, not a directory nodes can be created in, and after it the
+//! disks drivers have registered. What is in `/dev` is the kernel's statement
+//! of which devices exist: the three memory devices a C library and a shell
+//! reach for, the two random devices, the console under both of its names —
+//! and, as block drivers come and go, their disks. Here the node *is* the
+//! device, which is why this is a filesystem of its own rather than a tmpfs
+//! with nodes unpacked into it.
 //!
 //! # Nodes elsewhere
 //!
@@ -16,7 +16,7 @@
 //! `/tmp/null` made as `c 1 3` is `/dev/null` to every read and write, and its
 //! own inode to `stat`. A number the table does not have is `ENXIO` on open,
 //! which is Linux's answer for a character number no driver registered; so is
-//! every block device, until stage 11 gives block numbers a driver to reach.
+//! every block device node, including the ones this filesystem lists.
 //!
 //! # Numbers
 //!
@@ -26,6 +26,47 @@
 //! compare them: `ttyname` walks `/dev` matching `st_rdev`, and a careful
 //! daemon checks that what it was handed as `/dev/null` is 1:3 before writing
 //! to it. A node with the right name and the wrong number is a wrong answer.
+//!
+//! # Block devices
+//!
+//! Stage 11 mounts a btrfs volume from a disk a ring-3 driver serves, and
+//! `mount(2)` names that disk by its node here. The node does not open —
+//! `ENXIO`, as Linux answers for a block number with no driver behind it — so
+//! a mount resolves the node's `st_rdev` with [`block_device`] instead, and
+//! reads through the [`BlockDevice`] that returns. The kernel's driver glue
+//! calls [`register_block`] when a driver says hello, with the name devmgr
+//! chose and numbers derived from it; this registry numbers nothing itself.
+//! Block numbers are a namespace of their own: a disk at 1:3 is not
+//! `/dev/null`.
+//!
+//! The registration is a value, and dropping it takes the node, the name and
+//! the number away again. A mount that took the device's `Arc` keeps the
+//! device, whose reads fail with `EIO` once it has gone away.
+//!
+//! Three properties a program can see, and how they are kept:
+//!
+//! - **Listings stay stable across a registration.** The first
+//!   [`DEVICES`]`.len()` cursors after the VFS's dot entries are the static
+//!   nodes by index, and no registration moves them. The cursors past those
+//!   name disks by their registration serial — a number every registration
+//!   takes one higher than the last — not by where the disk is in the list.
+//!   Disks are listed in serial order, so a listing resumed at a cursor lists
+//!   exactly the disks with a serial at least that high that are registered
+//!   then: a registration or a drop between two `getdents64` calls neither
+//!   repeats nor skips a static node, nor any disk registered throughout.
+//! - **Inode numbers are never reused.** A disk's is 2³² plus its serial, far
+//!   above the static nodes' index-plus-two. A serial is never handed out
+//!   twice, so a name looked up, or opened with `O_PATH`, before its disk went
+//!   away can never share a number with a disk registered after — `find` and
+//!   `du` take two names with one number to be one file.
+//! - **A name registered after a miss is found.** Names here now come and go
+//!   behind the VFS's back, so the directory answers
+//!   [`Inode::caches_lookups`] with `false`, as procfs does, and every walk
+//!   asks the table. Invalidating instead would need the registry to reach
+//!   every devtmpfs mount's dentries, which `libs/vfs` offers no way to do; and
+//!   what not caching costs here is small: a scan of seven names and a short
+//!   locked list, and no mount point inside `/dev`, where nothing can be
+//!   created to mount on anyway.
 //!
 //! # Why it says it is devtmpfs
 //!
@@ -51,7 +92,10 @@
 //! that means nothing; refusing is the answer every character device here can
 //! give alike, including the console, which cannot seek on Linux either.
 
+pub(crate) mod check;
+
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::any::Any;
 
 use ferrix_vfs::initramfs::makedev;
@@ -61,7 +105,9 @@ use ferrix_vfs::{
 };
 
 use crate::fs;
+use crate::fs::block::{self, BlockDevice};
 use crate::fs::console::console_inode;
+use crate::sync::SpinLock;
 use crate::syscall::time;
 
 /// What a node does with reads and writes.
@@ -99,7 +145,7 @@ struct Device {
     behaviour: Behaviour,
 }
 
-/// Everything in `/dev`, in the order a listing reports it.
+/// Every character node in `/dev`, in the order a listing reports it.
 static DEVICES: [Device; 7] = [
     Device {
         name: b"null",
@@ -155,6 +201,23 @@ static DEVICES: [Device; 7] = [
 /// The root directory's inode number. A device's is its index plus two.
 const ROOT_INO: u64 = 1;
 
+/// The longest name a disk may be registered under.
+const BLOCK_NAME_MAX: usize = 32;
+
+/// Every block node's permission bits: read and write for root and the disk
+/// group, as a Linux `/dev` gives its disks.
+const BLOCK_PERMISSIONS: u32 = 0o660;
+
+/// A disk's inode number is this plus its registration serial.
+const BLOCK_INO_BASE: u64 = 1 << 32;
+
+/// The directory cursor that lists the disks from serial 0: the one after
+/// the last static node's.
+const BLOCK_CURSOR_BASE: u64 = FIRST_CURSOR + DEVICES.len() as u64;
+
+/// The units `st_blocks` counts in, whatever the sector size.
+const STAT_BLOCK: u64 = 512;
+
 /// A devfs instance.
 #[derive(Debug)]
 pub(crate) struct Devfs {
@@ -191,6 +254,232 @@ impl FileSystem for Devfs {
     }
 }
 
+// -- The block registry ---------------------------------------------------------
+
+/// One registered disk.
+#[derive(Debug, Clone)]
+struct Disk {
+    /// Which registration it is: one higher than the one before, never reused.
+    serial: u64,
+    /// Its name in `/dev`, the first `name_len` bytes of this.
+    name: [u8; BLOCK_NAME_MAX],
+    /// How long the name is.
+    name_len: usize,
+    /// Its device number's major half.
+    major: u32,
+    /// And minor half.
+    minor: u32,
+    /// The disk.
+    device: Arc<dyn BlockDevice>,
+}
+
+impl Disk {
+    /// Its name in `/dev`.
+    fn name(&self) -> &[u8] {
+        self.name.get(..self.name_len).unwrap_or_default()
+    }
+
+    /// What a node for it reports, as the disk answers now. Asks the device,
+    /// so it is called on a copy taken out of the registry, never under its
+    /// lock.
+    fn node(&self) -> BlockNode {
+        BlockNode {
+            serial: self.serial,
+            major: self.major,
+            minor: self.minor,
+            size: block::size_in_bytes(self.device.as_ref()),
+            sector_size: self.device.sector_size(),
+        }
+    }
+}
+
+/// The disks, in registration order, and the serial the next one takes.
+#[derive(Debug)]
+struct Registry {
+    /// The serial the next registration is given.
+    next_serial: u64,
+    /// Every registered disk, serials ascending.
+    disks: Vec<Disk>,
+}
+
+/// Every disk `/dev` lists, for every devtmpfs mounted anywhere.
+static BLOCKS: SpinLock<Registry> = SpinLock::new(Registry {
+    next_serial: 0,
+    disks: Vec::new(),
+});
+
+/// Why [`register_block`] refused, in the order it checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlockRefused {
+    /// The name is not 1 to 32 bytes of lowercase letters and digits.
+    InvalidName,
+    /// A node in `/dev` already has the name: a disk, or a character device.
+    NameInUse,
+    /// A registered disk already has the number.
+    NumberInUse,
+}
+
+/// A disk's place in `/dev`, held for as long as the node should exist.
+///
+/// Not `Clone`, so exactly one drop unpublishes.
+#[derive(Debug)]
+#[must_use = "dropping the registration takes the node out of /dev at once"]
+pub(crate) struct BlockRegistration {
+    /// The number registered, major half.
+    major: u32,
+    /// And minor half.
+    minor: u32,
+    /// Which registration this is, so that the drop removes this one and no
+    /// other.
+    serial: u64,
+}
+
+impl BlockRegistration {
+    /// The device number the disk was registered with.
+    pub(crate) fn rdev(&self) -> u64 {
+        makedev(self.major, self.minor)
+    }
+}
+
+impl Drop for BlockRegistration {
+    /// Unpublish the node and free the name and the number. The registry's
+    /// reference to the device is dropped after the lock is released, since
+    /// it may be the last one.
+    fn drop(&mut self) {
+        let removed = {
+            let mut registry = BLOCKS.lock();
+            registry
+                .disks
+                .iter()
+                .position(|disk| disk.serial == self.serial)
+                .map(|at| registry.disks.remove(at))
+        };
+        drop(removed);
+    }
+}
+
+/// Publish a block device node until the returned registration is dropped.
+/// `major`/`minor` are derived by the caller from the name; mode is 0660.
+///
+/// `major` and `minor` are derived by the caller (the kernel's driver glue)
+/// from the name devmgr chose; this registry does not number disks.
+///
+/// # Errors
+///
+/// In this order: [`BlockRefused::InvalidName`] for a name that is not 1 to
+/// 32 bytes of lowercase letters and digits, [`BlockRefused::NameInUse`] for
+/// a name any node in `/dev` has, and [`BlockRefused::NumberInUse`] for a
+/// number another registered disk has.
+pub(crate) fn register_block(
+    name: &[u8],
+    major: u32,
+    minor: u32,
+    device: Arc<dyn BlockDevice>,
+) -> core::result::Result<BlockRegistration, BlockRefused> {
+    let valid = !name.is_empty()
+        && name
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
+    let mut stored = [0_u8; BLOCK_NAME_MAX];
+    match stored.get_mut(..name.len()) {
+        Some(slot) if valid => slot.copy_from_slice(name),
+        _ => return Err(BlockRefused::InvalidName),
+    }
+    if DEVICES.iter().any(|static_node| static_node.name == name) {
+        return Err(BlockRefused::NameInUse);
+    }
+    let mut registry = BLOCKS.lock();
+    if registry.disks.iter().any(|disk| disk.name() == name) {
+        return Err(BlockRefused::NameInUse);
+    }
+    if registry
+        .disks
+        .iter()
+        .any(|disk| disk.major == major && disk.minor == minor)
+    {
+        return Err(BlockRefused::NumberInUse);
+    }
+    // Saturating, not wrapping: 2^64 registrations is out of reach, and
+    // a serial is never handed out below one already given.
+    let serial = registry.next_serial;
+    registry.next_serial = serial.saturating_add(1);
+    registry.disks.push(Disk {
+        serial,
+        name: stored,
+        name_len: name.len(),
+        major,
+        minor,
+        device,
+    });
+    Ok(BlockRegistration {
+        major,
+        minor,
+        serial,
+    })
+}
+
+/// The registered disk whose number is `rdev`, for a mount to read through.
+///
+/// The `Arc` is cloned out, so the registry's lock is not held across any
+/// read, and it keeps the device for as long as it is held, registered or not.
+pub(crate) fn block_device(rdev: u64) -> Option<Arc<dyn BlockDevice>> {
+    BLOCKS
+        .lock()
+        .disks
+        .iter()
+        .find(|disk| makedev(disk.major, disk.minor) == rdev)
+        .map(|disk| Arc::clone(&disk.device))
+}
+
+/// Visit every registered disk, in registration order, with its name,
+/// numbers and device. The disks are copied out first, so `visit` runs with
+/// no lock held and may ask the device anything.
+pub(crate) fn for_each_block(mut visit: impl FnMut(&[u8], u32, u32, &dyn BlockDevice)) {
+    for disk in disks_from(0) {
+        visit(disk.name(), disk.major, disk.minor, disk.device.as_ref());
+    }
+}
+
+/// The registered disks with a serial of at least `serial`, copied out.
+fn disks_from(serial: u64) -> Vec<Disk> {
+    BLOCKS
+        .lock()
+        .disks
+        .iter()
+        .filter(|disk| disk.serial >= serial)
+        .cloned()
+        .collect()
+}
+
+/// The registered disk called `name`, copied out.
+fn disk_named(name: &[u8]) -> Option<Disk> {
+    BLOCKS
+        .lock()
+        .disks
+        .iter()
+        .find(|disk| disk.name() == name)
+        .cloned()
+}
+
+// -- Nodes ----------------------------------------------------------------------
+
+/// What a block node knows of its disk, taken when the name was looked up:
+/// enough to answer `stat` after the disk has gone, and nothing that keeps
+/// the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BlockNode {
+    /// The registration's serial.
+    serial: u64,
+    /// The number's major half.
+    major: u32,
+    /// And minor half.
+    minor: u32,
+    /// Sectors times the sector size, in bytes.
+    size: u64,
+    /// Bytes in a sector.
+    sector_size: u32,
+}
+
 /// Which object a node is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Place {
@@ -198,6 +487,8 @@ enum Place {
     Root,
     /// `DEVICES[index]`.
     Device(usize),
+    /// A registered disk.
+    Block(BlockNode),
 }
 
 /// A devfs inode.
@@ -210,11 +501,12 @@ struct Node {
 }
 
 impl Node {
-    /// The device this node is, or `None` for the directory.
+    /// The character device this node is, or `None` for the directory and a
+    /// disk.
     fn device(&self) -> Option<&'static Device> {
         match self.place {
-            Place::Root => None,
             Place::Device(index) => DEVICES.get(index),
+            Place::Root | Place::Block(_) => None,
         }
     }
 }
@@ -224,32 +516,49 @@ fn ino_of(index: usize) -> u64 {
     (index as u64).saturating_add(ROOT_INO + 1)
 }
 
+/// A disk's inode number.
+fn block_ino(serial: u64) -> u64 {
+    BLOCK_INO_BASE.saturating_add(serial)
+}
+
 impl Inode for Node {
     fn metadata(&self) -> Metadata {
-        let (ino, kind, permissions, nlink, rdev) = match (self.place, self.device()) {
-            (Place::Device(index), Some(device)) => (
-                ino_of(index),
-                FileType::CharDevice,
-                device.permissions,
-                1,
-                makedev(device.major, device.minor),
-            ),
-            _ => (ROOT_INO, FileType::Directory, 0o755, 2, 0),
-        };
-        Metadata {
-            ino,
-            kind,
-            permissions,
-            nlink,
+        let directory = Metadata {
+            ino: ROOT_INO,
+            kind: FileType::Directory,
+            permissions: 0o755,
+            nlink: 2,
             uid: 0,
             gid: 0,
             size: 0,
-            rdev,
+            rdev: 0,
             blocks: 0,
             block_size: 4096,
             atime: self.made,
             mtime: self.made,
             ctime: self.made,
+        };
+        match (self.place, self.device()) {
+            (Place::Device(index), Some(device)) => Metadata {
+                ino: ino_of(index),
+                kind: FileType::CharDevice,
+                permissions: device.permissions,
+                nlink: 1,
+                rdev: makedev(device.major, device.minor),
+                ..directory
+            },
+            (Place::Block(disk), _) => Metadata {
+                ino: block_ino(disk.serial),
+                kind: FileType::BlockDevice,
+                permissions: BLOCK_PERMISSIONS,
+                nlink: 1,
+                size: disk.size,
+                rdev: makedev(disk.major, disk.minor),
+                blocks: disk.size.div_ceil(STAT_BLOCK),
+                block_size: disk.sector_size,
+                ..directory
+            },
+            _ => directory,
         }
     }
 
@@ -258,13 +567,24 @@ impl Inode for Node {
     }
 
     fn is_stream(&self) -> bool {
-        self.device().is_some()
+        self.place != Place::Root
+    }
+
+    /// Disks are registered and dropped without the VFS being told, so a miss
+    /// must not be remembered; the module's documentation says why this
+    /// rather than invalidating.
+    fn caches_lookups(&self) -> bool {
+        false
     }
 
     /// The console's own inode takes the reads and writes, so that whatever
     /// the console layer keys on — its object — is what an open of either
-    /// name reaches, while `stat` still reports this node's number.
+    /// name reaches, while `stat` still reports this node's number. A disk's
+    /// node does not open: a mount reaches the disk by number.
     fn open(&self) -> Result<Option<Arc<dyn Inode>>> {
+        if let Place::Block(_) = self.place {
+            return Err(Errno::ENXIO);
+        }
         Ok(self
             .device()
             .filter(|device| device.behaviour == Behaviour::Console)
@@ -272,6 +592,9 @@ impl Inode for Node {
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
+        if let Place::Block(_) = self.place {
+            return Err(Errno::ENXIO);
+        }
         let device = self.device().ok_or(Errno::EISDIR)?;
         match device.behaviour {
             Behaviour::Null => Ok(0),
@@ -288,6 +611,9 @@ impl Inode for Node {
     }
 
     fn write_at(&self, offset: u64, data: &[u8], append: bool) -> Result<(usize, u64)> {
+        if let Place::Block(_) = self.place {
+            return Err(Errno::ENXIO);
+        }
         let device = self.device().ok_or(Errno::EISDIR)?;
         match device.behaviour {
             Behaviour::Null | Behaviour::Zero | Behaviour::Random => Ok((data.len(), offset)),
@@ -299,32 +625,54 @@ impl Inode for Node {
     }
 
     fn lookup(&self, name: &[u8]) -> Result<Arc<dyn Inode>> {
-        if self.device().is_some() {
+        if self.place != Place::Root {
             return Err(Errno::ENOTDIR);
         }
-        let index = DEVICES
-            .iter()
-            .position(|device| device.name == name)
-            .ok_or(Errno::ENOENT)?;
-        Ok(node(index, self.made))
+        if let Some(index) = DEVICES.iter().position(|device| device.name == name) {
+            return Ok(node(index, self.made));
+        }
+        let disk = disk_named(name).ok_or(Errno::ENOENT)?;
+        Ok(Arc::new(Node {
+            place: Place::Block(disk.node()),
+            made: self.made,
+        }))
     }
 
+    /// The static nodes by index, then the disks by serial; the module's
+    /// documentation says why that keeps a listing in pieces stable.
     fn read_dir(&self, cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
-        if self.device().is_some() {
+        if self.place != Place::Root {
             return Err(Errno::ENOTDIR);
         }
-        let first = usize::try_from(cursor.saturating_sub(FIRST_CURSOR)).unwrap_or(usize::MAX);
-        for (index, device) in DEVICES.iter().enumerate().skip(first) {
-            let ino = if device.behaviour == Behaviour::ConsoleItself {
-                console_inode().metadata().ino
-            } else {
-                ino_of(index)
-            };
+        if cursor < BLOCK_CURSOR_BASE {
+            let first = usize::try_from(cursor.saturating_sub(FIRST_CURSOR)).unwrap_or(usize::MAX);
+            for (index, device) in DEVICES.iter().enumerate().skip(first) {
+                let ino = if device.behaviour == Behaviour::ConsoleItself {
+                    console_inode().metadata().ino
+                } else {
+                    ino_of(index)
+                };
+                let entry = DirEntry {
+                    ino,
+                    kind: FileType::CharDevice,
+                    name: device.name,
+                    next: FIRST_CURSOR.saturating_add(index as u64 + 1),
+                };
+                if !emit(entry) {
+                    return Ok(());
+                }
+            }
+        }
+        // Copied out, so `emit` — which may copy to a program's memory and
+        // sleep on a fault — runs with the registry unlocked.
+        for disk in disks_from(cursor.saturating_sub(BLOCK_CURSOR_BASE)) {
             let entry = DirEntry {
-                ino,
-                kind: FileType::CharDevice,
-                name: device.name,
-                next: FIRST_CURSOR.saturating_add(index as u64 + 1),
+                ino: block_ino(disk.serial),
+                kind: FileType::BlockDevice,
+                name: disk.name(),
+                next: BLOCK_CURSOR_BASE
+                    .saturating_add(disk.serial)
+                    .saturating_add(1),
             };
             if !emit(entry) {
                 break;
@@ -382,7 +730,8 @@ pub(crate) fn open_char_device(rdev: u64) -> Result<Arc<dyn Inode>> {
 /// # Errors
 ///
 /// `ENXIO` for a character number no device here has, and for every block
-/// device: nothing answers block numbers before stage 11's block core.
+/// device, registered or not: a mount reaches a disk through
+/// [`block_device`], and nothing reads a block node's descriptor yet.
 pub(crate) fn attach_device(file: Arc<OpenFile>) -> Result<Arc<OpenFile>> {
     if file.is_path() {
         return Ok(file);

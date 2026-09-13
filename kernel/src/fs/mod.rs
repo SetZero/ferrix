@@ -24,6 +24,7 @@
 //! tree and gets `ENOENT` — a real answer — rather than a kernel that has to
 //! decide what to do about a filesystem that does not exist.
 
+pub(crate) mod block;
 pub(crate) mod check;
 pub(crate) mod console;
 pub(crate) mod devfs;
