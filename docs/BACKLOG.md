@@ -42,6 +42,16 @@ every session's gates failed at once; 70 worktrees held 108 GB of build output.
 **Agents.** Gates and boots in the foreground, never `run_in_background`; one
 architecture per tool call; the brief says so.
 
+**Milestones.** The customer tests from `main`, so testable progress is tagged
+there rather than waiting for a stage to end. The product owner verifies a
+candidate from a clean worktree (`test-boot` on all three architectures and
+armv7a at `--smp 2`, `test-shell` and `test-vfs` with the static busybox),
+then tags it: `stage-N` for a stage's exit, `stage-N.k-<slug>` for a testable
+step after it, annotated, with the tag message saying what to test and how.
+Owners say in one line what a person can test when such a landing is on
+`main`. Tags are local until the customer pushes; the customer is told in a
+line or two and nothing stops for it.
+
 **Calling a stage done.** The exit criterion as written, on all three
 architectures, and the marker moves in the same commit. A criterion met in a
 weaker form is written down as such in the stage's section.
@@ -153,6 +163,18 @@ Dated, newest first. A decision here is final until the customer says otherwise.
 * **2026-09-13** Stage 11's read stage refuses a volume with a log tree, with a
   clear message; log replay is stage 12's. The default subvolume, data
   checksums and a node cache are required before stage 11 is done.
+* **2026-09-13** The page-cache interface, agreed between stages 8 and 11: a
+  `PageSource` in `libs/vfs` with `fill_range(first, pages)` filling at least
+  one page, stopping at an extent boundary, zeros past the file's size, called
+  under no lock and allowed to block; a checksum failure is `EIO`, never a
+  zeroed page; the kernel VMO allocates first, fills with no lock held and
+  inserts only if the page is still absent; `read` reports `EIO` and a fault
+  `SIGBUS`. Eviction and writeback are stage 12's. Order: the VMO reverse
+  map, then `PageSource` with tmpfs over it, then file-backed `mmap`.
+* **2026-09-13** A ring-3 driver serving a disk must never fault on a file
+  mapping of that disk, or it waits on its own completion: its image and data
+  come from initramfs, tmpfs, anonymous or ring VMOs, or are committed before
+  any pivot onto btrfs. Stage 10's `devmgr` enforces it.
 * **2026-09-13** The page cache is the inode's VMO, on tmpfs and on btrfs
   alike, and file-backed `mmap` and `read` share its pages. One interface,
   agreed between the stage 8 and stage 11 owners before either writes it.
