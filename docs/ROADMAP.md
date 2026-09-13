@@ -1167,13 +1167,20 @@ handler on Linux's own frame for each architecture -- floating-point state
 included, `SA_ONSTACK`, `SA_NODEFER` and `SA_RESETHAND` honoured -- and
 `rt_sigreturn` restores it with flags and processor mode sanitised, x86-64
 returning through `IRETQ` because `SYSRET` cannot restore `rcx` and `r11`.
-Blocking calls return `EINTR` when a signal arrives, a default stop parks the
-process until `SIGCONT`, and a user-mode fault the fault path cannot resolve
-becomes `SIGSEGV`, `SIGILL`, `SIGBUS`, `SIGFPE` or `SIGTRAP` with Linux's codes
-rather than a kernel panic. The boot test runs a handler that changes a
-register through its frame on each architecture:
+An interrupted blocking call is restarted when a handler with `SA_RESTART`
+runs or when no handler runs, and is `EINTR` otherwise, exactly as Linux's
+`arch_do_signal_or_restart` decides: reads, writes, `wait4`, pipe waits and
+futex waits restart, `poll`, `select` and `pselect6` never do, and `nanosleep`
+and `clock_nanosleep` resume through `restart_syscall` with the time left. A
+default stop parks the process until `SIGCONT`, and a user-mode fault the fault
+path cannot resolve becomes `SIGSEGV`, `SIGILL`, `SIGBUS`, `SIGFPE` or
+`SIGTRAP` with Linux's codes rather than a kernel panic. The boot test runs a
+handler that changes a register through its frame on each architecture, and a
+`sigpaths` check drives the delivery decisions around it, each against a
+negative control:
 
       signals  a program's handler ran on its own frame, changed a saved register, returned through sigreturn, and the program exited with 77
+      sigpaths SIGCHLD reached a handler and wait4 still reaped; a stop and continue were reported; an alarm raised SIGALRM; SA_ONSTACK chose the alternate stack; a blocked fault was forced; SA_RESTART restarts, poll and a flagless handler do not
 
 **The console is a terminal.** `fs/terminal.rs` holds the console's
 `struct termios` and a line discipline that reads it for every byte --
@@ -1193,11 +1200,14 @@ Ctrl-C with status 130 and the prompt back at once.
 
 **Left, and why it did not block the exit:**
 
-* **What signals do not do yet.** `SA_RESTART` is not honoured, so an
-  interrupted call is always `EINTR`; there is no vDSO, so a handler needs
-  `SA_RESTORER`, which musl and glibc always set; only `ITIMER_REAL` arms.
-  `SIGCHLD`, stop and continue, `alarm`, `rt_sigsuspend`, the alternate stack
-  and the fault-to-signal path build but no boot check drives them yet.
+* **What signals do not do yet.** There is no vDSO, so a handler needs
+  `SA_RESTORER`, which musl and glibc always set; only `ITIMER_REAL` arms, not
+  `ITIMER_VIRTUAL` or `ITIMER_PROF`. `SA_RESTART`, `SIGCHLD` to a handler with
+  `wait4` still reaping, job-control stop and continue, `alarm`/`ITIMER_REAL`,
+  the alternate stack and the fault-to-signal path are now driven by the
+  `sigpaths` boot check; the fault-to-signal catch and an `SA_RESTART`
+  interrupted read are proven at the kernel's decision, not yet end-to-end by a
+  hand-assembled faulting or interrupted-read user program.
 * **Threads**, which nothing single-threaded calls: `CLONE_VM` without
   `CLONE_VFORK`, and `CLONE_THREAD`, are `ENOSYS`.
 * **Three stand-ins, each written down where it lives.** The console is the one

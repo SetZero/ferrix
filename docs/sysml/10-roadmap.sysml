@@ -209,15 +209,24 @@ package FerrixRoadmap {
              * /proc/self/exe as the resolved file actually loaded.
              *
              * Signals delivered on every return to user mode, on Linux's
-             * frames, with rt_sigreturn, EINTR, stop and continue, SIGPIPE,
-             * SIGALRM and faults as signals.
+             * frames, with rt_sigreturn, stop and continue, SIGPIPE, SIGALRM
+             * and faults as signals; an interrupted call restarted under
+             * SA_RESTART or with no handler and EINTR otherwise, poll never
+             * restarting and nanosleep resuming through restart_syscall, as
+             * arch_do_signal_or_restart decides. A sigpaths boot check drives
+             * the delivery decisions -- SIGCHLD to a handler with wait4 still
+             * reaping, stop and continue, the alarm, the alternate stack, the
+             * forced fault, and the SA_RESTART truth table -- each with a
+             * negative control.
              *
              * The console a terminal: termios honoured by a line discipline,
              * the terminal and job-control requests, select and pselect6, and
              * Ctrl-C raised on the foreground group.
              *
-             * Left: SA_RESTART, threads, and the stand-ins for a tty, a clock
-             * chip and an entropy source. */
+             * Left: threads, and the stand-ins for a tty, a clock chip and an
+             * entropy source. The fault-to-signal catch and an SA_RESTART
+             * interrupted read are proven at the kernel's decision, not yet
+             * end-to-end by a user program. */
     }
 
     #implemented requirement <'S8'> stage8Vfs : Stage {
