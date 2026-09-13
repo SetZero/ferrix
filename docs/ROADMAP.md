@@ -597,6 +597,16 @@ check shown to fail without the fix:
   `choose_next` never files a dead task, and `wake_sleepers` wakes only tasks
   still blocked. The check wakes a task in exactly that window and requires
   that it not be filed as a sleeper after it exits.
+* **A timer interrupt part-way into a wait lost the task.** `wait_until_deadline`
+  marked the task blocked before it set its deadline or joined the waiter
+  list, with interrupts on. A switch in between took the task off its run
+  queue with no deadline to file it under and no waker able to find it, and
+  the machine hung silently. The comment that excused it said every holder of
+  the waiter lock masks interrupts; none does. The deadline and the waiter
+  entry now come first and `BLOCKED` last, and the way out is the reverse.
+  No boot check can hit the window on demand, so it was shown with a
+  two-millisecond spin added inside it, locally: the old order hangs stage 5,
+  and the new order boots clean with the same spin.
 
 **Still missing against Linux**, none of it on stage 6's path: group scheduling
 and bandwidth control, which are stage 13; the real-time classes, which are

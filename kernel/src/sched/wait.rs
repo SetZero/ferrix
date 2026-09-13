@@ -8,8 +8,8 @@
 //! on the queue yet, that wake-up finds nobody, and the sleeper waits for an
 //! event that has already happened.
 //!
-//! The order here is the one that closes it. A waiter marks itself blocked
-//! and joins the queue *before* it looks at the condition the last time. A
+//! The order here is the one that closes it. A waiter joins the queue and
+//! marks itself blocked *before* it looks at the condition the last time. A
 //! waker takes the same lock, so it either sees the waiter — and wakes it —
 //! or it made the condition true before the waiter's final look, which then
 //! sees it. Marking itself runnable again is enough to cancel the block,
@@ -32,8 +32,10 @@ const RECHECK_NANOS: u64 = 5_000_000;
 #[derive(Debug)]
 pub(crate) struct WaitQueue {
     /// Who is waiting. A plain lock: nothing takes it from an interrupt
-    /// handler, and every holder masks interrupts for the few instructions it
-    /// is held.
+    /// handler. Holders do **not** mask interrupts, so a holder can be
+    /// switched out with it held, and nothing here relies on otherwise: the
+    /// wait's correctness rests on the order in `wait_until_deadline`, not
+    /// on the lock.
     waiters: SpinLock<Vec<Arc<Task>>>,
 }
 
@@ -99,20 +101,32 @@ impl WaitQueue {
             let slice = crate::timer::now_nanos().saturating_add(RECHECK_NANOS);
             let wake_at = if slice < deadline { slice } else { deadline };
 
-            task.set_state(BLOCKED);
+            // **Findable at every instant, which fixes the order.** Interrupts
+            // are on here, and any interrupt exit may switch this task out. A
+            // switch that finds it `BLOCKED` takes it off the run queue and
+            // files it as a sleeper only if it has a deadline. So `BLOCKED` is
+            // set last, once the deadline and the waiter entry both exist.
+            // Set first, a switch between the lines lost the task: blocked,
+            // no deadline to wake it, on no list a waker reads.
             task.set_sleep_deadline(wake_at);
             self.waiters.lock().push(Arc::clone(&task));
+            task.set_state(BLOCKED);
 
             // The last look, now that both a waker and the timer could find
             // us. Cancelling the sleep as well as the block, so a deadline
-            // this task never used cannot wake it out of some later wait.
+            // this task never used cannot wake it out of some later wait, and
+            // in the reverse order for the same reason: runnable first, so a
+            // switch in between leaves the task where it is.
             if ready() {
-                self.unqueue(task.id);
-                let _ = task.take_sleep_deadline();
                 task.set_state(RUNNABLE);
+                let _ = task.take_sleep_deadline();
+                self.unqueue(task.id);
                 return true;
             }
             super::block();
+            // Running again, so not filed anywhere: whatever deadline is left
+            // belongs to no sleep and must not reach the next switch.
+            let _ = task.take_sleep_deadline();
 
             // **Off the queue on the way out, however we left.** A waiter that
             // returns while still listed is woken by the *next* `wake_all`,
