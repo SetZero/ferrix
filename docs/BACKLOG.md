@@ -121,17 +121,31 @@ alive.
 
 | Session | Area |
 |---|---|
-| ferrix-32 (was ferrix-24) | Product owner: priorities, decisions, this file, milestones, cross-cutting debt |
-| ferrix-a5 (was ferrix-91) | Stage 7: processes, signals, threads, tty, futex, time; the user entry path |
-| ferrix-e6 (was ferrix-c2) | Stage 8: VFS, tmpfs, devfs, procfs, pipes, the fd and path calls; file-backed `mmap` |
-| ferrix-4b (was ferrix-2a) | Stage 9: native ABI, objects, `vmo_map`, native process creation, process observers |
-| ferrix-d9 (was ferrix-8b) | Stage 10: PCI, IOMMU domains, `devmgr`, the block ring, virtio-blk in ring 3 |
-| ferrix-61 (was ferrix-4d) | Stage 11: `libs/btrfs`, `libs/block`, the kernel mount; the native user-space runtime |
-| ferrix-34 (was ferrix-b9) | Scheduler: stage 5 flakes, lock convoys, wake latency, boot-time performance |
-| ferrix-e5 (was ferrix-54) | The memory-management package below; reviewer of the VMO reverse map and the space.rs half of file-backed mmap |
-| ferrix-4f (was ferrix-b1) | `xtask flash` and `deploy`, `docs/stm32mp157-dk.md`, the Arm UART drivers and console receive |
-| ferrix-3c | The STM32MP157D-DK1 board itself: the serial link, OpenOCD, every hardware run, and filing what the board shows with the area that owns it |
-| ferrix-ce (was ferrix-53) | `ferrousli/`, beside the roadmap. Done: locales and wide characters; time zones, `strftime` and `strptime`; buffered stdio and `printf`; threads, mutexes, condition variables and keys, with `tests/c/thread/on_ferrix.c` ready as a static threaded program for `CLONE_THREAD`; `dirent.h` and `getopt`; mounts, file system statistics and `mntent.h`; sockets and the address conversions, System V IPC, and Linux's own process and system calls; `termios.h`; `system`, `popen`, temporary files, `realpath`, the `execl` family and `daemon`; the user, group and shadow databases; `syslog.h`, and `utmpx.h` with musl's empty records; the `scanf` family. In progress: `glob` and `regex`, thread cancellation and semaphores, the math library |
+| os-23 (was ferrix-32, ferrix-24) | Product owner: priorities, decisions, this file, milestones, cross-cutting debt |
+| os-b6 (was ferrix-a5, ferrix-91) | Stage 7, its branches: processes, signals, tty, futex, time; the user entry path; pid 1 |
+| os-9f (new) | Stage 7, threads: `clone(CLONE_THREAD)` and everything a thread implies; the `fs/terminal.rs` switch to `console::input` |
+| os-c4 (was ferrix-e6, ferrix-c2) | Stage 8: VFS, tmpfs, devfs, procfs, pipes, the fd and path calls; file-backed `mmap` and the VMO reverse map |
+| os-94 (was ferrix-4b, ferrix-2a) | Stage 9: native ABI, objects, `vmo_map`, native process creation, process observers |
+| os-5b (was ferrix-d9, ferrix-8b) | Stage 10: PCI, IOMMU domains, `devmgr`, the block ring, virtio-blk in ring 3; FX-1001 |
+| os-96 (was ferrix-61, ferrix-4d) | Stage 11: `libs/btrfs`, `libs/block`, the kernel mount; the virtio-blk library, the native user-space runtime, the QEMU test disk |
+| os-a6 (was ferrix-e5, ferrix-54) | The memory-management package below; reviewer of the VMO reverse map and the space.rs halves of `vmo_map` and file-backed mmap; the scheduler rows (was ferrix-34), since no scheduler session was spawned |
+| os-87 (was ferrix-3c, and ferrix-4f's area) | The STM32MP157D-DK1 board: the serial link, OpenOCD, every hardware run, filing what the board shows with the area that owns it; `xtask flash` and `deploy`, `docs/stm32mp157-dk.md`, the Arm UART drivers, the x86-64 console interrupt route |
+| os-7c (was ferrix-ce, ferrix-53) | `ferrousli/`, on the roadmap by the P0 row below. Done: locales and wide characters; time zones, `strftime` and `strptime`; buffered stdio and `printf`; threads, mutexes, condition variables and keys, with `tests/c/thread/on_ferrix.c` ready as a static threaded program for `CLONE_THREAD`; `dirent.h` and `getopt`; mounts, file system statistics and `mntent.h`; sockets and the address conversions, System V IPC, and Linux's own process and system calls; `termios.h`; `system`, `popen`, temporary files, `realpath`, the `execl` family and `daemon`; the user, group and shadow databases; `syslog.h`, and `utmpx.h` with musl's empty records; the `scanf` family. In progress: termios (area 2); then pwd/grp/shadow, crypt, utmpx and syslog (area 3) and scanf, popen, mkstemp, realpath (area 4), split across sessions when they exist; the wrappers and stubs busybox links against; `scanf`, `glob` and `regex`, thread cancellation and semaphores, the math library |
+
+The fleet restarted on the customer's Windows machine on the evening of
+2026-09-13. `cargo` builds there, but every boot, the KVM row, `test-shell`,
+`test-vfs`, Miri, fuzz and the board run on the Linux host over `ssh`, in a
+worktree of the session's own; a branch reaches that host only through
+`origin`, and pushes are the customer's to authorise, asked in the session
+that needs one.
+
+**`develop` is `origin/develop` and nothing else.** With two machines there
+is one landing branch, the one on `origin`: a landing is
+`git push origin <branch>:develop`, which refuses anything but a
+fast-forward, made with the customer's word for the push. A local `develop`
+on either machine is a mirror to fetch, never a branch to land into; the
+Windows root checkout keeps `main` checked out and never lands `develop`
+through its index, and nazuna's checkout is the same.
 
 ---
 
@@ -202,6 +216,15 @@ Dated, newest first. A decision here is final until the customer says otherwise.
   it. This carries out the customer's 2026-09-13 order below once the binary
   passed both, at 5e9b0b6 with no stub reached.
 
+* **2026-09-13 (PO)** `vmo_map` refuses executable mappings in its first
+  landing, and the roadmap records that under stage 9's "Left for later
+  stages", not as done: an EXECUTE right on the VMO handle comes with
+  `process_create`'s native loader, its first consumer.
+* **2026-09-13 (PO)** The DK1 reset follow-ups, as specified: the loader reads
+  `bootargs` from a `CMDLINE.TXT` on the ESP so `ferrix.onexit=reset` survives
+  a reset without U-Boot's `saveenv`; `test-boot --reset` boots with that option
+  and requires QEMU to show a reset, not a power-off. Both go into
+  `docs/stm32mp157-dk.md` with the landing.
 * **2026-09-13 (customer)** `develop` is the landing branch and may be unstable;
   `main` moves only to a verified `develop` commit. Set up at 8342362.
 * **2026-09-13 (customer)** Order of everything: first a working `main`, second

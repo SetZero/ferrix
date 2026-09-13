@@ -191,7 +191,7 @@ def render(entries: list[dict], names: list[str]) -> str:
     lines = [
         "# Ferrix — panic codes",
         "",
-        f"> Generated from {SOURCE} by scripts/gen-panic-catalog.py. Do not edit: "
+        f"> Generated from {SOURCE.as_posix()} by scripts/gen-panic-catalog.py. Do not edit: "
         f"change the catalog and regenerate with `{COMMAND}`.",
         "",
         wrap(
