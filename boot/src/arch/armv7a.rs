@@ -269,12 +269,25 @@ pub(crate) unsafe fn enter_kernel(handoff: Handoff) -> ! {
     // `r6`, `r7`, `r9` and `r11` are the registers the compiler reserves on
     // this architecture, so none of them is an operand.
     //
+    // Before the branch, the instruction cache and the branch predictor are
+    // discarded: a trampoline page was just written as data, and the block's
+    // own invalidation runs only after its first instructions have already
+    // been fetched — through whatever the cache held for that page. This is
+    // the sequence the Arm architecture requires after writing instructions,
+    // and on the in-place path it is merely redundant. `lr` carries the value
+    // the two writes ignore; nothing returns through it.
+    //
     // SAFETY: the caller's contract is exactly the set of conditions that make
     // the switch sound. Interrupts and aborts are masked before the branch,
     // because firmware's handlers stopped existing at `exit_boot_services`.
     unsafe {
         asm!(
             "cpsid aif",
+            "mov lr, #0",
+            "mcr p15, 0, lr, c7, c5, 0",
+            "mcr p15, 0, lr, c7, c5, 6",
+            "dsb",
+            "isb",
             "bx r12",
             // The AAPCS argument register: the kernel entry takes the boot
             // info pointer as its only argument.

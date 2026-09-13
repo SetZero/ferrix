@@ -320,6 +320,9 @@ pub(crate) fn place_switch(
         ptr::copy_nonoverlapping(code.as_ptr(), page.address as *mut u8, code.len());
     }
     Ok(Switch {
+        // Mapped by `map_identity` like any identity plan: normal memory,
+        // readable, writable and executable, as the loader's own image would
+        // have been, and dropped with the rest of the separate tree.
         identity: IdentityPlan {
             tree: IdentityTree::Separate,
             base: page.address,

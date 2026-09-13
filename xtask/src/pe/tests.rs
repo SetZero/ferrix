@@ -596,3 +596,8 @@ fn a_switch_block_larger_than_a_page_or_empty_is_refused() {
     );
     assert!(switch_violation(0x2000, 0x2000, &[]).is_some());
 }
+
+#[test]
+fn a_switch_block_off_an_instruction_boundary_is_refused() {
+    assert!(switch_violation(0x2002, 0x20B2, &[]).is_some());
+}

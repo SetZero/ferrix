@@ -264,6 +264,11 @@ fn switch_violation(start: u64, end: u64, sites: &[u64]) -> Option<String> {
             "the switch block {start:#x}..{end:#x} is empty or reversed"
         ));
     }
+    if !start.is_multiple_of(4) {
+        return Some(format!(
+            "the switch block starts at {start:#x}, not on an instruction boundary"
+        ));
+    }
     if end - start > SWITCH_PAGE {
         return Some(format!(
             "the switch block is {} bytes, more than the one page a trampoline holds",
