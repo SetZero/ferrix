@@ -50,6 +50,7 @@ use ferrix_sync::{IrqSpinLock, Once};
 use crate::device::{DeviceNode, Location};
 use crate::{acpi, arch, fdt, mm, println};
 
+mod smmuv3;
 mod vtd;
 
 /// Bytes of a VT-d unit's registers kept from drivers: the first page, which
@@ -390,6 +391,73 @@ enum Translation {
         /// Held across a pin's or an unpin's changes to the tables.
         changing: IrqSpinLock<(), arch::Irq>,
     },
+    /// An `SMMUv3`.
+    SmmuV3 {
+        /// The unit.
+        unit: &'static smmuv3::Unit,
+        /// The domain on it.
+        attached: smmuv3::Attached,
+        /// Held across a pin's or an unpin's changes to the tables.
+        changing: IrqSpinLock<(), arch::Irq>,
+    },
+}
+
+impl Translation {
+    /// The lock a translated domain holds across a pin's or an unpin's
+    /// changes, or `None` for an untranslated one.
+    fn changing(&self) -> Option<&IrqSpinLock<(), arch::Irq>> {
+        match self {
+            Translation::None => None,
+            Translation::VtD { changing, .. } | Translation::SmmuV3 { changing, .. } => {
+                Some(changing)
+            }
+        }
+    }
+
+    /// Map the page at `phys` at `iova`.
+    fn map(&self, iova: u64, phys: u64, flags: MapFlags) -> Result<(), MapError> {
+        match self {
+            Translation::None => Ok(()),
+            Translation::VtD { unit, attached, .. } => unit.map(attached, iova, phys, flags),
+            Translation::SmmuV3 { unit, attached, .. } => unit.map(attached, iova, phys, flags),
+        }
+    }
+
+    /// Take the page at `iova` out of the tables.
+    fn unmap(&self, iova: u64) -> Result<(), MapError> {
+        match self {
+            Translation::None => Ok(()),
+            Translation::VtD { unit, attached, .. } => unit.unmap(attached, iova),
+            Translation::SmmuV3 { unit, attached, .. } => unit.unmap(attached, iova),
+        }
+    }
+
+    /// Make the unit forget what it cached, after an unmap or a map.
+    fn flush(&self, after_map: bool) -> Result<(), &'static str> {
+        match self {
+            Translation::None => Ok(()),
+            Translation::VtD { unit, attached, .. } => unit.flush(attached, after_map),
+            Translation::SmmuV3 { unit, attached, .. } => unit.flush(attached, after_map),
+        }
+    }
+
+    /// Where an access to `iova` lands.
+    fn resolve(&self, iova: u64) -> Option<u64> {
+        match self {
+            Translation::None => Some(iova),
+            Translation::VtD { unit, attached, .. } => unit.resolve(attached, iova),
+            Translation::SmmuV3 { unit, attached, .. } => unit.resolve(attached, iova),
+        }
+    }
+
+    /// Detach the domain from its unit and give back its tables.
+    fn detach(&self) -> Result<(), &'static str> {
+        match self {
+            Translation::None => Ok(()),
+            Translation::VtD { unit, attached, .. } => unit.detach(*attached),
+            Translation::SmmuV3 { unit, attached, .. } => unit.detach(*attached),
+        }
+    }
 }
 
 /// Pages pinned into one domain, and each one's device address.
@@ -445,10 +513,7 @@ impl Domain {
     /// unit would fault it. An untranslated domain lands every access where it
     /// points.
     pub(crate) fn resolve(&self, address: u64) -> Option<u64> {
-        match &self.translation {
-            Translation::None => Some(address),
-            Translation::VtD { unit, attached, .. } => unit.resolve(attached, address),
-        }
+        self.translation.resolve(address)
     }
 
     /// Pages pinned and not yet unpinned.
@@ -474,17 +539,12 @@ impl Domain {
             .iter()
             .map(|frame| frame.checked_mul(PAGE_SIZE).ok_or(DomainError::OutOfRange))
             .collect::<Result<Vec<u64>, DomainError>>()?;
-        if let Translation::VtD {
-            unit,
-            attached,
-            changing,
-        } = &self.translation
-        {
+        if let Some(changing) = self.translation.changing() {
             if addresses.iter().any(|&phys| phys >> TRANSLATED_BITS != 0) {
                 return Err(DomainError::OutOfRange);
             }
             let _held = changing.lock();
-            map_all(unit, attached, &addresses, flags)?;
+            map_all(&self.translation, &addresses, flags)?;
         } else if !DEGRADED.swap(true, Ordering::Relaxed) {
             println!(
                 "  iommu    degraded trusted mode: no IOMMU domain is programmed, so device \
@@ -516,12 +576,7 @@ impl Domain {
         if pinned.domain != self.id {
             return Err((DomainError::Foreign, pinned));
         }
-        if let Translation::VtD {
-            unit,
-            attached,
-            changing,
-        } = &self.translation
-        {
+        if let Some(changing) = self.translation.changing() {
             let _held = changing.lock();
             // A failure part-way leaves the pages before it unmapped but not
             // yet flushed, and the pages after it still mapped: the domain
@@ -530,12 +585,12 @@ impl Domain {
             if pinned
                 .addresses
                 .iter()
-                .any(|&iova| unit.unmap(attached, iova).is_err())
+                .any(|&iova| self.translation.unmap(iova).is_err())
             {
                 return Err((DomainError::Tables, pinned));
             }
             // Only once the unit has forgotten the pages may their frames go.
-            if let Err(why) = unit.flush(attached, false) {
+            if let Err(why) = self.translation.flush(false) {
                 return Err((DomainError::Unit(why), pinned));
             }
         }
@@ -546,28 +601,27 @@ impl Domain {
     }
 }
 
-/// Map every page in `addresses` at its own address in `attached`'s tables,
-/// or none of them.
+/// Map every page in `addresses` at its own address in `translation`'s
+/// tables, or none of them.
 fn map_all(
-    unit: &vtd::Unit,
-    attached: &vtd::Attached,
+    translation: &Translation,
     addresses: &[u64],
     flags: MapFlags,
 ) -> Result<(), DomainError> {
     for (done, &phys) in addresses.iter().enumerate() {
-        let Err(error) = unit.map(attached, phys, phys, flags) else {
+        let Err(error) = translation.map(phys, phys, flags) else {
             continue;
         };
         for &mapped in addresses.iter().take(done) {
-            let _ = unit.unmap(attached, mapped);
+            let _ = translation.unmap(mapped);
         }
-        let _ = unit.flush(attached, false);
+        let _ = translation.flush(false);
         return Err(match error {
             MapError::AlreadyMapped(_) => DomainError::AlreadyPinned,
             _ => DomainError::Tables,
         });
     }
-    unit.flush(attached, true).map_err(DomainError::Unit)
+    translation.flush(true).map_err(DomainError::Unit)
 }
 
 impl Drop for Domain {
@@ -575,10 +629,8 @@ impl Drop for Domain {
     /// into it: the device may still be using those, so its tables and context
     /// entry stay.
     fn drop(&mut self) {
-        if let Translation::VtD { unit, attached, .. } = &self.translation
-            && self.pinned.load(Ordering::Relaxed) == 0
-        {
-            let _ = unit.detach(*attached);
+        if self.translated() && self.pinned.load(Ordering::Relaxed) == 0 {
+            let _ = self.translation.detach();
         }
     }
 }
@@ -594,6 +646,26 @@ struct Programmed {
     vtd: Vec<vtd::Unit>,
     /// The functions the DMAR's endpoint scopes name, with their unit's index.
     behind: Vec<(Address, usize)>,
+    /// `SMMUv3`s translating.
+    smmu: Vec<smmuv3::Unit>,
+    /// The requester IDs IORT root complexes send to them.
+    streams: Vec<StreamMap>,
+}
+
+/// A range of requester IDs on one segment that an IORT root complex sends to
+/// a programmed `SMMUv3`, and the stream IDs they arrive as.
+#[derive(Clone, Copy, Debug)]
+struct StreamMap {
+    /// The segment.
+    segment: u16,
+    /// The first requester ID.
+    first: u32,
+    /// How many.
+    count: u64,
+    /// The stream ID the first arrives as.
+    stream: u32,
+    /// The unit, as an index into `smmu`.
+    unit: usize,
 }
 
 /// What [`bring_up`] turned on.
@@ -604,6 +676,8 @@ static PROGRAMMED: Once<Programmed> = Once::new();
 pub(crate) struct BringUp {
     /// VT-d units now translating.
     pub(crate) vtd: usize,
+    /// `SMMUv3`s now translating.
+    pub(crate) smmu_v3: usize,
     /// Units left alone.
     pub(crate) refused: usize,
     /// Why the last of them was.
@@ -619,33 +693,97 @@ pub(crate) struct BringUp {
 pub(crate) fn bring_up(view: &BootView<'_>) -> BringUp {
     let mut report = BringUp::default();
     let mut programmed = Programmed::default();
-    if let Ok(firmware) = acpi::Firmware::open(view)
-        && let Ok(table) = firmware.acpi().dmar()
-    {
-        for structure in table.structures() {
-            let Structure::Drhd(unit) = structure else {
-                continue;
-            };
-            let opened = vtd::Unit::open(unit.register_base)
-                .and_then(|opened| opened.enable().map(|()| opened));
-            match opened {
-                Ok(opened) => {
-                    let index = programmed.vtd.len();
-                    programmed
-                        .behind
-                        .extend(endpoints(&unit).map(|address| (address, index)));
-                    programmed.vtd.push(opened);
-                    report.vtd += 1;
-                }
-                Err(why) => {
-                    report.refused += 1;
-                    report.why = Some(why);
-                }
-            }
+    if let Ok(firmware) = acpi::Firmware::open(view) {
+        let tables = firmware.acpi();
+        if let Ok(table) = tables.dmar() {
+            bring_up_vtd(&table, &mut programmed, &mut report);
+        }
+        if let Ok(table) = tables.iort() {
+            bring_up_smmu(&table, &mut programmed, &mut report);
         }
     }
     let _ = PROGRAMMED.call_once(|| programmed);
     report
+}
+
+/// Program every VT-d unit the DMAR describes, and record the functions its
+/// endpoint scopes name.
+fn bring_up_vtd(table: &dmar::Dmar<'_>, programmed: &mut Programmed, report: &mut BringUp) {
+    for structure in table.structures() {
+        let Structure::Drhd(unit) = structure else {
+            continue;
+        };
+        let opened =
+            vtd::Unit::open(unit.register_base).and_then(|opened| opened.enable().map(|()| opened));
+        match opened {
+            Ok(opened) => {
+                let index = programmed.vtd.len();
+                programmed
+                    .behind
+                    .extend(endpoints(&unit).map(|address| (address, index)));
+                programmed.vtd.push(opened);
+                report.vtd += 1;
+            }
+            Err(why) => {
+                report.refused += 1;
+                report.why = Some(why);
+            }
+        }
+    }
+}
+
+/// Program every `SMMUv3` the IORT describes, and record which requester IDs
+/// each root complex sends to one, and as which streams.
+///
+/// Only under ACPI. On ARMv7-A the device tree's SMMU is left alone: U-Boot
+/// keeps its virtio devices from offering the platform's DMA translation, so
+/// they would bypass it anyway, which the stage 10 exit criterion states as
+/// degraded trusted mode.
+fn bring_up_smmu(table: &iort::Iort<'_>, programmed: &mut Programmed, report: &mut BringUp) {
+    let doorbell = arch::msi_doorbell();
+    let mut offsets: Vec<(u32, usize)> = Vec::new();
+    for node in table.nodes() {
+        let Some(smmu) = node.smmu_v3() else {
+            continue;
+        };
+        let opened = smmuv3::Unit::open(smmu.base_address, doorbell)
+            .and_then(|opened| opened.enable().map(|()| opened));
+        match opened {
+            Ok(opened) => {
+                offsets.push((node.offset, programmed.smmu.len()));
+                programmed.smmu.push(opened);
+                report.smmu_v3 += 1;
+            }
+            Err(why) => {
+                report.refused += 1;
+                report.why = Some(why);
+            }
+        }
+    }
+    for node in table.nodes() {
+        let Some(complex) = node.root_complex() else {
+            continue;
+        };
+        let Ok(segment) = u16::try_from(complex.segment) else {
+            continue;
+        };
+        programmed.streams.extend(
+            node.id_mappings()
+                .filter(|mapping| !mapping.is_single())
+                .filter_map(|mapping| {
+                    let &(_, unit) = offsets
+                        .iter()
+                        .find(|(offset, _)| *offset == mapping.output_reference)?;
+                    Some(StreamMap {
+                        segment,
+                        first: mapping.input_base,
+                        count: mapping.count,
+                        stream: mapping.output_base,
+                        unit,
+                    })
+                }),
+        );
+    }
 }
 
 /// The functions a DRHD's single-hop endpoint scopes name.
@@ -657,31 +795,63 @@ fn endpoints<'a>(unit: &dmar::Drhd<'a>) -> impl Iterator<Item = Address> + 'a {
         .filter_map(move |(bus, device, function)| Address::new(segment, bus, device, function))
 }
 
-/// The domain `function`'s DMA goes through: one on the VT-d unit the DMAR
-/// puts it behind, when that unit is translating, and an untranslated one
-/// otherwise.
+/// The domain `function`'s DMA goes through: one on the VT-d unit the DMAR puts
+/// it behind, or on the `SMMUv3` an IORT root complex sends it to, when that
+/// unit is translating, and an untranslated one otherwise.
 pub(crate) fn domain_for(function: Address) -> Domain {
-    let unit = PROGRAMMED.get().and_then(|programmed| {
-        let &(_, index) = programmed
-            .behind
-            .iter()
-            .find(|(address, _)| *address == function)?;
-        programmed.vtd.get(index)
-    });
-    let Some(unit) = unit else {
+    let Some(programmed) = PROGRAMMED.get() else {
         return Domain::untranslated();
     };
-    match unit.attach(function) {
-        Ok(attached) => Domain::with(Translation::VtD {
+    let translation = if let Some(unit) = vtd_unit_for(programmed, function) {
+        unit.attach(function).map(|attached| Translation::VtD {
             unit,
             attached,
             changing: IrqSpinLock::new(()),
-        }),
+        })
+    } else if let Some((unit, stream)) = smmu_stream_for(programmed, function) {
+        unit.attach(stream).map(|attached| Translation::SmmuV3 {
+            unit,
+            attached,
+            changing: IrqSpinLock::new(()),
+        })
+    } else {
+        return Domain::untranslated();
+    };
+    match translation {
+        Ok(translation) => Domain::with(translation),
         Err(why) => {
             println!("  iommu    pci {function} gets no translated domain: {why}");
             Domain::untranslated()
         }
     }
+}
+
+/// The VT-d unit the DMAR puts `function` behind, if it is translating.
+fn vtd_unit_for(programmed: &'static Programmed, function: Address) -> Option<&'static vtd::Unit> {
+    let &(_, index) = programmed
+        .behind
+        .iter()
+        .find(|(address, _)| *address == function)?;
+    programmed.vtd.get(index)
+}
+
+/// The translating `SMMUv3` an IORT root complex sends `function` to, and the
+/// stream it arrives as.
+fn smmu_stream_for(
+    programmed: &'static Programmed,
+    function: Address,
+) -> Option<(&'static smmuv3::Unit, u32)> {
+    let requester = u32::from(function.requester_id());
+    programmed.streams.iter().find_map(|map| {
+        let offset = requester.checked_sub(map.first)?;
+        if map.segment != function.segment() || u64::from(offset) >= map.count {
+            return None;
+        }
+        Some((
+            programmed.smmu.get(map.unit)?,
+            map.stream.checked_add(offset)?,
+        ))
+    })
 }
 
 /// What the domain check found.

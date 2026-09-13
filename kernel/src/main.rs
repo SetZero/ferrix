@@ -242,8 +242,8 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // be given back first.
     let iommu = iommu::bring_up(view);
     println!(
-        "  iommu    {} VT-d units translating, {} left alone",
-        iommu.vtd, iommu.refused
+        "  iommu    {} VT-d units and {} SMMUv3s translating, {} left alone",
+        iommu.vtd, iommu.smmu_v3, iommu.refused
     );
     if let Some(why) = iommu.why {
         println!("  iommu    a unit was left alone: {why}");

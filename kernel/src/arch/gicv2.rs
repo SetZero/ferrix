@@ -377,6 +377,16 @@ pub(crate) fn init_msi_frame(phys: u64, spis: Option<(u32, u32)>) -> Result<(), 
     Ok(())
 }
 
+/// The physical address of the `GICv2m` frame's page, which a device's MSI
+/// writes land in, if the machine has one.
+///
+/// An IOMMU that translates a device's MSI writes, as an `SMMUv3` does, must map
+/// this page into every domain or the device's interrupts stop.
+pub(crate) fn msi_doorbell() -> Option<u64> {
+    let frame = V2M_FRAME.load(Ordering::Relaxed);
+    (frame != 0).then_some(frame & !0xFFF)
+}
+
 /// Take an SPI from the `GICv2m` frame, make it edge-triggered, enable it, and
 /// say what a device writes to raise it.
 ///

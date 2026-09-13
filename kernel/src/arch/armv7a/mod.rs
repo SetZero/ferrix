@@ -731,6 +731,11 @@ pub(crate) fn msi_allocate() -> Result<crate::irq::Msi, &'static str> {
     gicv2::msi_allocate()
 }
 
+/// The page a device's MSI writes land in, which an IOMMU domain must map.
+pub(crate) fn msi_doorbell() -> Option<u64> {
+    gicv2::msi_doorbell()
+}
+
 /// Stop interrupt `number` being delivered until [`unmask_interrupt`] lets
 /// it through again.
 ///

@@ -660,6 +660,13 @@ pub(crate) fn interrupts_enabled() -> bool {
 pub(crate) use apic::{ipi_irq, send_ipi_to_others};
 pub(crate) use msi::msi_allocate;
 
+/// The page a device's MSI writes land in, which an IOMMU that translates them
+/// must map into every domain. None here: VT-d leaves the local APIC's message
+/// range untranslated.
+pub(crate) fn msi_doorbell() -> Option<u64> {
+    None
+}
+
 /// How `ferrix_sync`'s interrupt-masking lock masks interrupts here.
 #[derive(Debug)]
 pub(crate) struct Irq;
