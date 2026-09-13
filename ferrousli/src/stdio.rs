@@ -35,6 +35,7 @@ pub mod lock;
 pub mod memory;
 pub mod open;
 pub mod printf;
+pub mod scanf;
 mod sys;
 #[cfg(test)]
 mod tests;

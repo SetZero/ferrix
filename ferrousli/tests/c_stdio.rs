@@ -163,3 +163,8 @@ fn standard_input_standard_error_and_perror() {
         ..stdio("stdio/stdin")
     });
 }
+
+#[test]
+fn scanf_reads_numbers_strings_and_sets_from_strings_and_streams() {
+    check(&stdio("stdio/scanf"));
+}
