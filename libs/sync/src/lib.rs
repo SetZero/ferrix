@@ -30,10 +30,19 @@
 //!   in opposite orders is the classic cycle, and no primitive can see it.
 //! * **Keep critical sections short and never sleep inside one.** A CPU that
 //!   holds a spin lock while blocked stops every other CPU that wants it.
+//! * **A holder that can be switched out convoys everyone.** A ticket lock
+//!   hands itself to whoever is next in line whether or not that context is
+//!   running. A holder preempted for the few instructions it holds the lock
+//!   stalls every waiter until it runs again, and waiters preempted while
+//!   holding *tickets* pass the stall on, each hand-off costing a full round
+//!   of the run queue. That is why a kernel with preemption takes plain
+//!   [`SpinLock`] only where the holder cannot be switched out, and
+//!   [`PreemptSpinLock`] everywhere a task with interrupts on contends.
 //!
 //! # What is here
 //!
 //! * [`SpinLock`] — mutual exclusion, first come first served.
+//! * [`PreemptSpinLock`] — the same, with the holder kept on its CPU.
 //! * [`IrqSpinLock`] — the same, with interrupts masked for the duration.
 //! * [`Once`] — run an initialiser exactly once, for globals set up at boot.
 //! * [`RwSpinLock`] — many readers or one writer, writer-preferring.
@@ -380,6 +389,194 @@ impl<T: ?Sized + fmt::Debug> fmt::Debug for SpinLockGuard<'_, T> {
 }
 
 impl<T: ?Sized + fmt::Display> fmt::Display for SpinLockGuard<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&**self, f)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PreemptSpinLock
+// ---------------------------------------------------------------------------
+
+/// How to keep the running task on its CPU for a while.
+///
+/// This crate cannot see the scheduler, so [`PreemptSpinLock`] is
+/// parameterised over this trait and the kernel supplies the two halves: a
+/// per-CPU count that `disable` raises and `enable` lowers, which the
+/// scheduler's interrupt-exit hook reads before switching a task out.
+///
+/// Calls nest: each `disable` is matched by one `enable`, and the task stays
+/// where it is until the last one.
+///
+/// # Safety
+///
+/// `disable` must actually keep the calling context from being switched out
+/// until the matching `enable`, and both must be safe to call from any
+/// context a lock may be taken in — before the scheduler exists, with
+/// interrupts masked, inside a handler. An implementation that only pretends
+/// leaves every [`PreemptSpinLock`] open to the convoy the type exists to
+/// prevent.
+pub unsafe trait PreemptControl {
+    /// Keep the running task on this CPU until the matching `enable`.
+    fn disable();
+    /// Let it be switched out again, once every `disable` is matched.
+    fn enable();
+}
+
+/// A [`SpinLock`] whose holder cannot be switched out while it holds it.
+///
+/// The lock for data that tasks share and no interrupt handler touches: a
+/// process's tables, a channel's queue, a filesystem's state. It masks nothing
+/// — an interrupt still arrives and is still handled — it only keeps the
+/// holding task on its CPU until the guard drops, so the lock is held for
+/// exactly the instructions it covers and nobody waits on a task that is not
+/// running.
+///
+/// **Never block while holding one.** Sleeping with the count raised would
+/// keep whatever ran next from being preempted, and the count would be
+/// lowered on whatever CPU the sleeper woke on; the kernel's scheduler
+/// treats a switch with the count raised as a bug and stops.
+pub struct PreemptSpinLock<T: ?Sized, P: PreemptControl> {
+    /// Names the preemption-control implementation without storing anything.
+    control: PhantomData<fn() -> P>,
+    /// The ticket lock underneath.
+    inner: SpinLock<T>,
+}
+
+impl<T, P: PreemptControl> PreemptSpinLock<T, P> {
+    /// Creates a lock in the unlocked state.
+    #[must_use]
+    pub const fn new(value: T) -> Self {
+        Self {
+            control: PhantomData,
+            inner: SpinLock::new(value),
+        }
+    }
+
+    /// Consumes the lock and returns the protected value.
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.inner.into_inner()
+    }
+}
+
+impl<T: ?Sized, P: PreemptControl> PreemptSpinLock<T, P> {
+    /// Keeps this task on its CPU and then takes the lock, in that order.
+    ///
+    /// The order matters for the waiters too: a task spinning for its ticket
+    /// with preemption on could be switched out holding the ticket, which is
+    /// the second half of the convoy.
+    #[must_use = "the task stays on its CPU until the guard is dropped"]
+    pub fn lock(&self) -> PreemptSpinLockGuard<'_, T, P> {
+        P::disable();
+        self.inner.acquire();
+        PreemptSpinLockGuard {
+            lock: self,
+            not_send: PhantomData,
+        }
+    }
+
+    /// Takes the lock if it is free right now, and gives up otherwise,
+    /// leaving preemption as it found it.
+    #[must_use = "the task stays on its CPU until the guard is dropped"]
+    pub fn try_lock(&self) -> Option<PreemptSpinLockGuard<'_, T, P>> {
+        P::disable();
+        if self.inner.try_acquire() {
+            Some(PreemptSpinLockGuard {
+                lock: self,
+                not_send: PhantomData,
+            })
+        } else {
+            P::enable();
+            None
+        }
+    }
+
+    /// Reports whether the lock was held at some instant during the call.
+    #[must_use]
+    pub fn is_locked(&self) -> bool {
+        self.inner.is_locked()
+    }
+
+    /// Borrows the protected data directly, with no lock.
+    pub fn get_mut(&mut self) -> &mut T {
+        self.inner.get_mut()
+    }
+}
+
+impl<T: ?Sized + fmt::Debug, P: PreemptControl> fmt::Debug for PreemptSpinLock<T, P> {
+    /// Formats the lock without waiting for it.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.inner.try_lock() {
+            Some(guard) => f
+                .debug_struct("PreemptSpinLock")
+                .field("data", &&*guard)
+                .finish(),
+            None => f.write_str("PreemptSpinLock { data: <locked> }"),
+        }
+    }
+}
+
+impl<T: Default, P: PreemptControl> Default for PreemptSpinLock<T, P> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+/// Proof that its holder is inside a [`PreemptSpinLock`]'s critical section,
+/// on a CPU it will not be switched out of.
+///
+/// Dropping it releases the lock and *then* lets the task be preempted, so
+/// that a switch cannot land between the two with the lock still held.
+pub struct PreemptSpinLockGuard<'a, T: ?Sized, P: PreemptControl> {
+    /// The lock to release on drop, and the data to hand out until then.
+    lock: &'a PreemptSpinLock<T, P>,
+    /// Makes the guard `!Send`: the count is per-CPU and is lowered where it
+    /// was raised.
+    not_send: PhantomData<*const ()>,
+}
+
+// SAFETY: a shared reference to a guard reaches the data only through `Deref`,
+// so sharing one across threads shares `&T`, which is what `T: Sync` allows.
+unsafe impl<T: ?Sized + Sync, P: PreemptControl> Sync for PreemptSpinLockGuard<'_, T, P> {}
+
+impl<T: ?Sized, P: PreemptControl> Deref for PreemptSpinLockGuard<'_, T, P> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: this guard exists only while its task holds the inner lock,
+        // which serves one ticket at a time, so no other reference to the data
+        // can exist for the life of this borrow.
+        unsafe { &*self.lock.inner.data.get() }
+    }
+}
+
+impl<T: ?Sized, P: PreemptControl> DerefMut for PreemptSpinLockGuard<'_, T, P> {
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: as for `deref`, with `&mut self` additionally proving this is
+        // the only borrow taken through the guard itself.
+        unsafe { &mut *self.lock.inner.data.get() }
+    }
+}
+
+impl<T: ?Sized, P: PreemptControl> Drop for PreemptSpinLockGuard<'_, T, P> {
+    fn drop(&mut self) {
+        // SAFETY: an acquisition handed this guard to this task, it is being
+        // consumed here so no further access can happen through it, and a guard
+        // is dropped exactly once.
+        unsafe { self.lock.inner.release() };
+        // Only now, with the lock free, may the task be switched out.
+        P::enable();
+    }
+}
+
+impl<T: ?Sized + fmt::Debug, P: PreemptControl> fmt::Debug for PreemptSpinLockGuard<'_, T, P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl<T: ?Sized + fmt::Display, P: PreemptControl> fmt::Display for PreemptSpinLockGuard<'_, T, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&**self, f)
     }

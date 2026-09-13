@@ -678,6 +678,20 @@ not the checker, and a per-pick trace found them:
   violation. The window now levels every lag when it opens, and its bound is
   a slice plus the sum of the overruns that processor served inside it.
 
+**Preemption is disabled under every task-context spin lock.** The convoy
+above was one lock; the kernel had forty more plain ticket locks taken from
+tasks with interrupts on, each exposed to the same thing once contended.
+Masking interrupts for all of them is the wrong tool, so the scheduler keeps
+a per-processor preemption count, raised and lowered by the kernel's
+`sync::SpinLock` (a `ferrix_sync::PreemptSpinLock`) for as long as it is
+held and while it spins for its ticket, and read on the way out of every
+interrupt: a pending reschedule waits until the count is zero, then is made.
+A holder must not block, and the scheduler enforces it -- a switch with the
+count raised stops the machine (FX-0503) -- so a holder that sleeps is found
+by the first boot rather than by a convoy on a loaded host. The run queues'
+own locks stay plain, being taken with interrupts masked and handed across a
+switch.
+
 **Still missing against Linux**, none of it on stage 6's path: group scheduling
 and bandwidth control, which are stage 13; the real-time classes, which are
 stage 14; and NUMA and capacity awareness, which need a topology this kernel

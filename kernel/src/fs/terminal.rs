@@ -45,13 +45,13 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use crate::sync::SpinLock;
 use ferrix_linux_abi::types::{
     B115200, BAUD_RATES, BOTHER, CBAUD, CLOCAL, CREAD, CS8, ECHO, ECHOCTL, ECHOE, ECHOK, ECHOKE,
     ECHONL, IBSHIFT, ICANON, ICRNL, IEXTEN, IGNCR, INLCR, ISIG, ISTRIP, IXON, NCCS, NOFLSH, ONLCR,
     OPOST, SIGINT, SIGQUIT, SIGTSTP, TERMIOS_BYTES, TERMIOS2_BYTES, VEOF, VEOL, VEOL2, VERASE,
     VINTR, VKILL, VMIN, VQUIT, VSUSP, VTIME, VWERASE,
 };
-use ferrix_sync::SpinLock;
 use ferrix_vfs::{Errno, Readiness};
 
 use crate::arch;

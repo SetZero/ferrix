@@ -30,8 +30,8 @@ Then fast-forward `main` only if it is still the commit rebased onto. If it
 moved: when the commits that moved it touch none of the files the change
 touches and nothing in `kernel/`, `boot/` or a kernel-side crate, re-run
 `cargo xtask check` and the `armv7a --smp 2` boot and land; otherwise run the
-row again. A boot that fails is a result to read, not a reason to retry: only
-the stage 5 EEVDF-bound message is a known flake, and its log is kept.
+row again. A boot that fails is a result to read, not a reason to retry: there
+is no known flake, and every stage 5 failure prints its own diagnosis.
 
 **Worktrees.** One landing, one worktree. `git worktree remove` it once its
 branch is on `main`. Check `df -h /` before a landing; after a failed commit
@@ -115,7 +115,6 @@ nobody has it yet.
 | `fcntl` record locks, `flock` | ferrix-a5 | 7 |
 | `mount -t proc` and `devtmpfs` | ferrix-e6 | 8 |
 | An "applets" group in `test-vfs`, separate from the exit criterion | ferrix-e6 | 8 |
-| The EEVDF fairness flake, root-caused; then a preemption count so no plain spin lock taken with interrupts on can convoy | ferrix-34 | 5 |
 | FX-0601 "reserving a thousand pages cost a frame", about one x86-64 boot in three under KVM: a reap landing inside stage 6's frame-count window; the check must settle first, as the path check does | ferrix-34 | 6 |
 | A regression check that exited programs give every frame back once reaped (the leak 0510a8a fixed) | ferrix-a5 | 7 |
 | The first hardware run of stages 6–9 on the DK1: the full boot marker and `test-shell` at two processors, recorded as a hardware column in the roadmap's ARMv7-A section. Needs the board powered, and a shell also needs console receive (next row) | ferrix-4f | ARMv7-A |

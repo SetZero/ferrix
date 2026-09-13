@@ -36,6 +36,7 @@ mod panic;
 mod pci;
 mod sched;
 mod smp;
+mod sync;
 mod syscall;
 mod timer;
 mod trap;

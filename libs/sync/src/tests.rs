@@ -20,7 +20,10 @@ use std::time::{Duration, Instant};
 use std::vec;
 use std::vec::Vec;
 
-use super::{IrqControl, IrqSpinLock, Once, RwSpinLock, SpinLock, SpinLockedCell};
+use super::{
+    IrqControl, IrqSpinLock, Once, PreemptControl, PreemptSpinLock, RwSpinLock, SpinLock,
+    SpinLockedCell,
+};
 
 // ---------------------------------------------------------------------------
 // SpinLock, single-threaded
@@ -462,6 +465,57 @@ unsafe impl IrqControl for RecordingIrq {
             "restore must return to the depth its own disable reported"
         );
     }
+}
+
+/// A preemption count that records every change, so a test can see that the
+/// lock raised it before spinning and lowered it after releasing.
+struct RecordingPreempt;
+
+static PREEMPT_DEPTH: AtomicUsize = AtomicUsize::new(0);
+static PREEMPT_DISABLES: AtomicUsize = AtomicUsize::new(0);
+
+// SAFETY: a test double; nothing here schedules, so "kept on its CPU" is
+// vacuously true, and the count is what the test inspects.
+unsafe impl PreemptControl for RecordingPreempt {
+    fn disable() {
+        let _ = PREEMPT_DEPTH.fetch_add(1, Ordering::SeqCst);
+        let _ = PREEMPT_DISABLES.fetch_add(1, Ordering::SeqCst);
+    }
+    fn enable() {
+        let _ = PREEMPT_DEPTH.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_preempt_lock_keeps_the_task_for_exactly_the_time_it_is_held() {
+    static LOCK: PreemptSpinLock<u32, RecordingPreempt> = PreemptSpinLock::new(0);
+    let disables = PREEMPT_DISABLES.load(Ordering::SeqCst);
+    {
+        let mut guard = LOCK.lock();
+        *guard += 1;
+        assert!(
+            PREEMPT_DEPTH.load(Ordering::SeqCst) >= 1,
+            "the count is raised while the lock is held"
+        );
+        assert!(LOCK.is_locked(), "and the lock is held");
+    }
+    assert!(!LOCK.is_locked(), "released on drop");
+    assert_eq!(
+        PREEMPT_DISABLES.load(Ordering::SeqCst),
+        disables + 1,
+        "one disable per acquisition"
+    );
+    // A refused try_lock leaves the count where it found it.
+    let held = LOCK.lock();
+    let depth = PREEMPT_DEPTH.load(Ordering::SeqCst);
+    assert!(LOCK.try_lock().is_none(), "refused while held");
+    assert_eq!(
+        PREEMPT_DEPTH.load(Ordering::SeqCst),
+        depth,
+        "and the count is untouched"
+    );
+    drop(held);
+    assert_eq!(*LOCK.lock(), 1, "the data survived");
 }
 
 #[test]

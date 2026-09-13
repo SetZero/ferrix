@@ -23,7 +23,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use ferrix_sync::SpinLock;
+use crate::sync::SpinLock;
 
 use ferrix_native_abi::signals::Signals;
 

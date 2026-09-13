@@ -31,9 +31,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use crate::sync::SpinLock;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
-use ferrix_sync::SpinLock;
 
 use crate::device::DeviceNode;
 use crate::sched::WaitQueue;

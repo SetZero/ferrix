@@ -56,7 +56,9 @@ use core::any::Any;
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use ferrix_sync::{Once, SpinLock};
+use ferrix_sync::Once;
+
+use crate::sync::SpinLock;
 use ferrix_vfs::path::NAME_MAX;
 use ferrix_vfs::pipe::{PIPE_CAPACITY, PIPEFS_MAGIC, PipeBuffer, ReadOutcome, WriteOutcome};
 use ferrix_vfs::{

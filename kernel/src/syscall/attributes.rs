@@ -39,9 +39,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::Deref;
 
+use crate::sync::SpinLock;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
-use ferrix_sync::SpinLock;
 
 use crate::syscall::credentials::CAP_LAST_CAP;
 use crate::syscall::process::Process;

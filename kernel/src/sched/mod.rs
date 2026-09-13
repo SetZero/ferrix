@@ -46,7 +46,7 @@ mod wait;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use ferrix_sched::{Balance, CpuSet, Domain, Mode, NICE_0_WEIGHT, Placement, check_partition};
 use ferrix_sync::{IrqControl, IrqSpinLock, Once, SpinLock};
@@ -70,10 +70,90 @@ static QUEUES: Once<Vec<SpinLock<CpuQueue>>> = Once::new();
 static NEED_RESCHED: Once<Vec<AtomicBool>> = Once::new();
 
 /// One flag per processor, set while its idle task holds an exited task's
-/// stack it is about to free. While it is set, [`preempt_on_irq_exit`] leaves
-/// the decision above unmade rather than switching the idle task out with the
-/// stack still on its hands. See [`reap_one`].
+/// stack it is about to free. Read by the checks that count frames, which
+/// must not measure while a free is in flight: see [`reaping_anywhere`].
 static REAPING: Once<Vec<AtomicBool>> = Once::new();
+
+/// One count per processor of how many reasons the running context has not
+/// to be switched out. While it is above zero, [`preempt_on_irq_exit`] leaves
+/// a pending reschedule unmade, and it is made when the count comes back to
+/// zero.
+///
+/// Raised by every [`crate::sync::SpinLock`] for as long as it is held, and
+/// by the idle task while it frees a stack. The lock is the reason it exists:
+/// a ticket lock hands itself to whoever is next in line whether or not that
+/// context is running, so a holder switched out for the few instructions it
+/// holds the lock stalls every waiter for a round of the run queue, and
+/// waiters switched out holding tickets pass the stall on. The thousand-task
+/// check spent fifty seconds that way on a queue lock that was plain; with
+/// the count, a holder is never switched out and the lock is held for the
+/// instructions it covers and no longer.
+///
+/// **A context with the count raised must not block.** The count belongs to
+/// the processor, and a task that slept with it raised would leave the
+/// processor unable to preempt whatever ran next, then lower the count on
+/// whichever processor woke it. `schedule` stops the machine if it is asked
+/// to switch with the count raised, so the boot test finds any such holder.
+static PREEMPT_OFF: Once<Vec<AtomicU32>> = Once::new();
+
+/// The kernel's half of `ferrix_sync::PreemptControl`: this processor's
+/// entry in [`PREEMPT_OFF`].
+pub(crate) struct Preempt;
+
+// SAFETY: `disable` raises this processor's count and `preempt_on_irq_exit`
+// switches nothing while it is raised; `enable` lowers it and makes the
+// decision that was deferred. Both are no-ops before the scheduler has a
+// count or a processor has a number, when nothing can be switched out.
+unsafe impl ferrix_sync::PreemptControl for Preempt {
+    fn disable() {
+        preempt_disable();
+    }
+
+    fn enable() {
+        preempt_enable();
+    }
+}
+
+/// Keep the running context on this processor until the matching
+/// [`preempt_enable`].
+pub(crate) fn preempt_disable() {
+    if let Some(count) = this_cpu().and_then(|cpu| PREEMPT_OFF.get()?.get(cpu)) {
+        let _ = count.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+/// Undo one [`preempt_disable`], and if that was the last, make the decision
+/// an interrupt asked for meanwhile.
+///
+/// Only with interrupts on: a lock dropped inside a masked section, such as
+/// under an `IrqSpinLock`, leaves the decision to the interrupt exit that
+/// masked section will end with. And only once the scheduler runs.
+pub(crate) fn preempt_enable() {
+    let Some(cpu) = this_cpu() else {
+        return;
+    };
+    let Some(count) = PREEMPT_OFF.get().and_then(|counts| counts.get(cpu)) else {
+        return;
+    };
+    // Never below zero: a lock taken before the count existed and dropped
+    // after it would otherwise leave this processor unpreemptible for good.
+    let was = count
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            count.checked_sub(1)
+        })
+        .unwrap_or(0);
+    if was == 1 && started() && arch::interrupts_enabled() && take_resched(cpu) {
+        schedule();
+    }
+}
+
+/// How many reasons `cpu`'s running context has not to be switched out.
+fn preempt_count(cpu: usize) -> u32 {
+    PREEMPT_OFF
+        .get()
+        .and_then(|counts| counts.get(cpu))
+        .map_or(0, |count| count.load(Ordering::Acquire))
+}
 
 /// The machine's one scheduling domain, until stage 14 makes more.
 static DOMAIN: Once<Domain> = Once::new();
@@ -199,6 +279,7 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
     let _ = QUEUES.call_once(|| queues);
     let _ = NEED_RESCHED.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
     let _ = REAPING.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
+    let _ = PREEMPT_OFF.call_once(|| (0..online).map(|_| AtomicU32::new(0)).collect());
     let _ = NEXT_BALANCE.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
 
     adopt_boot_task()?;
@@ -837,12 +918,10 @@ pub(crate) fn preempt_on_irq_exit() {
     // reschedule to do.
     balance();
 
-    // **Not while the idle task holds a stack it is freeing.** The flag is
-    // left set, so the decision is made at the next interrupt exit — and the
-    // idle loop looks at its queue itself before it takes another stack, so
-    // whatever was woken onto this processor runs as soon as this one is
-    // free. See `reap_one`.
-    if is_reaping(cpu) {
+    // **Not while the running context has asked to stay.** The flag is left
+    // set, so the decision is made when the count comes back to zero, in
+    // `preempt_enable`, or at the next interrupt exit. See `PREEMPT_OFF`.
+    if preempt_count(cpu) > 0 {
         return;
     }
     if take_resched(cpu) {
@@ -856,14 +935,6 @@ fn take_resched(cpu: usize) -> bool {
         .get()
         .and_then(|flags| flags.get(cpu))
         .is_some_and(|flag| flag.swap(false, Ordering::AcqRel))
-}
-
-/// Whether `cpu`'s idle task is in the middle of freeing a stack.
-fn is_reaping(cpu: usize) -> bool {
-    REAPING
-        .get()
-        .and_then(|flags| flags.get(cpu))
-        .is_some_and(|flag| flag.load(Ordering::Acquire))
 }
 
 /// Whether any processor's idle task is in the middle of freeing a stack.
@@ -888,6 +959,17 @@ fn set_reaping(cpu: usize, reaping: bool) {
 /// Give the processor to whatever should have it now.
 fn schedule() {
     let saved = <arch::Irq as IrqControl>::disable();
+    // A switch with the count raised is a holder of a preemption-disabling
+    // lock going to sleep, which the count cannot survive: see `PREEMPT_OFF`.
+    if let Some(cpu) = this_cpu()
+        && preempt_count(cpu) > 0
+    {
+        crate::panic::fatal!(
+            crate::panic::catalog::SCHEDULE_WITH_PREEMPTION_HELD,
+            "a task blocked or yielded while holding a lock that disables preemption ({} held)",
+            preempt_count(cpu)
+        );
+    }
     pick_and_switch();
     <arch::Irq as IrqControl>::restore(saved);
 }
@@ -1346,7 +1428,9 @@ fn reap_one() -> bool {
         return false;
     };
     // Set before the stack is taken, not after: between the two is an
-    // interrupt exit like any other.
+    // interrupt exit like any other. The count is what keeps this task on
+    // its processor; the flag is for the checks that count frames.
+    preempt_disable();
     set_reaping(cpu, true);
     // A statement of its own, so the list's lock — which masks interrupts —
     // is released here and not at the end of the `match`, where a scrutinee's
@@ -1370,6 +1454,7 @@ fn reap_one() -> bool {
         None => false,
     };
     set_reaping(cpu, false);
+    preempt_enable();
     reaped
 }
 

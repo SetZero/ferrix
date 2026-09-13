@@ -29,7 +29,9 @@ use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use ferrix_bootinfo::BootView;
-use ferrix_sync::{IrqControl, Once, SpinLock};
+use ferrix_sync::{IrqControl, Once};
+
+use crate::sync::SpinLock;
 
 use crate::arch;
 

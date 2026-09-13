@@ -39,6 +39,7 @@ Causes are listed most likely first.
 | [FX-0407](#fx-0407) | the processors failed to work together |
 | [FX-0501](#fx-0501) | the scheduler could not be started |
 | [FX-0502](#fx-0502) | the scheduler failed its self-check |
+| [FX-0503](#fx-0503) | a task tried to block while holding a lock that disables preemption |
 | [FX-0601](#fx-0601) | the memory a process is built from failed its self-check |
 | [FX-0701](#fx-0701) | the system call dispatch path failed its self-check |
 | [FX-0801](#fx-0801) | the root filesystem could not be built |
@@ -551,6 +552,30 @@ user process included, is scheduled by the code this measures.
 
 See: kernel/src/sched/check.rs run; kernel/src/sched/mod.rs; docs/ROADMAP.md
 stage 5.
+
+<a id="fx-0503"></a>
+
+## FX-0503 — a task tried to block while holding a lock that disables preemption
+
+The kernel's `sync::SpinLock` keeps its holder on its processor by raising a
+per-processor count that the scheduler will not switch a task out under. The
+count belongs to the processor: a task that blocked, yielded or slept with it
+raised would leave that processor unable to preempt whatever ran next, and would
+lower the count on whichever processor it woke on. So `schedule` stops the
+machine instead, and the message says how many such locks were held.
+
+1. A path takes a `sync::SpinLock` and, with the guard still alive, calls
+   something that blocks: a wait queue, `sleep_for`, `yield_now`, a pipe or
+   channel wait. The guard has to be dropped before the wait and the data
+   re-read after it.
+2. A guard was stored somewhere that outlives the critical section -- in a
+   struct, or returned from a function -- and dropped much later.
+3. The count was raised on one processor and the task moved before lowering it,
+   which cannot happen while it is raised unless something switched the task out
+   by another route than `schedule`.
+
+See: kernel/src/sync.rs; kernel/src/sched/mod.rs PREEMPT_OFF;
+libs/sync/src/lib.rs PreemptSpinLock.
 
 <a id="fx-0601"></a>
 

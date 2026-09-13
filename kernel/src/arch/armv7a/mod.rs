@@ -650,6 +650,12 @@ pub(crate) fn wait_for_work() {
     cpu::wait_then_enable_interrupts();
 }
 
+/// Whether this processor is taking interrupts right now.
+pub(crate) fn interrupts_enabled() -> bool {
+    // Bit 7 of CPSR is the I bit, set when IRQs are masked.
+    cpu::read_cpsr() & (1 << 7) == 0
+}
+
 /// The interrupt number inter-processor interrupts arrive on.
 pub(crate) const fn ipi_irq() -> u32 {
     gicv2::IPI_SGI

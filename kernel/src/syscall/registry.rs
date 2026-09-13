@@ -28,7 +28,7 @@ use alloc::collections::btree_map::Entry;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 
-use ferrix_sync::SpinLock;
+use crate::sync::SpinLock;
 
 use crate::syscall::process::{self, Process};
 

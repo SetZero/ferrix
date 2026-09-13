@@ -651,6 +651,12 @@ pub(crate) fn wait_for_work() {
     cpu::enable_interrupts_and_halt();
 }
 
+/// Whether this processor is taking interrupts right now.
+pub(crate) fn interrupts_enabled() -> bool {
+    // Bit 9 of RFLAGS is IF.
+    cpu::read_rflags() & (1 << 9) != 0
+}
+
 pub(crate) use apic::{ipi_irq, send_ipi_to_others};
 pub(crate) use msi::msi_allocate;
 

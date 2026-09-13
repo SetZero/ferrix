@@ -520,6 +520,31 @@ pub(crate) static SCHEDULER_BRING_UP: Explanation = Explanation {
           docs/ROADMAP.md stage 5",
 };
 
+/// For `sched::schedule`, when asked to switch with the preemption count
+/// raised.
+pub(crate) static SCHEDULE_WITH_PREEMPTION_HELD: Explanation = Explanation {
+    code: "FX-0503",
+    title: "a task tried to block while holding a lock that disables preemption",
+    meaning: "The kernel's `sync::SpinLock` keeps its holder on its processor by raising a \
+              per-processor count that the scheduler will not switch a task out under. The \
+              count belongs to the processor: a task that blocked, yielded or slept with it \
+              raised would leave that processor unable to preempt whatever ran next, and \
+              would lower the count on whichever processor it woke on. So `schedule` stops \
+              the machine instead, and the message says how many such locks were held.",
+    causes: &[
+        "A path takes a `sync::SpinLock` and, with the guard still alive, calls something \
+         that blocks: a wait queue, `sleep_for`, `yield_now`, a pipe or channel wait. The \
+         guard has to be dropped before the wait and the data re-read after it.",
+        "A guard was stored somewhere that outlives the critical section -- in a struct, or \
+         returned from a function -- and dropped much later.",
+        "The count was raised on one processor and the task moved before lowering it, which \
+         cannot happen while it is raised unless something switched the task out by another \
+         route than `schedule`.",
+    ],
+    see: "kernel/src/sync.rs; kernel/src/sched/mod.rs PREEMPT_OFF; libs/sync/src/lib.rs \
+          PreemptSpinLock",
+};
+
 /// For `start_scheduler` in `main.rs`, when `sched::run_checks` fails.
 pub(crate) static STAGE5_SCHEDULER: Explanation = Explanation {
     code: "FX-0502",
@@ -1010,6 +1035,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE4_SMP,
     &SCHEDULER_BRING_UP,
     &STAGE5_SCHEDULER,
+    &SCHEDULE_WITH_PREEMPTION_HELD,
     &STAGE6_USER_MEMORY,
     &STAGE7_SYSCALLS,
     &STAGE8_ROOT,

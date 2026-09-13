@@ -4184,12 +4184,12 @@ const SLEPT_THROUGH_WAKE: &str = "a futex waiter the wake counted slept on to it
 
 /// What the waiting task waits on -- the process, the word, the timeout --
 /// taken by the task when it starts.
-static FUTEX_SUBJECT: ferrix_sync::SpinLock<Option<(Arc<Process>, u64, u64)>> =
-    ferrix_sync::SpinLock::new(None);
+static FUTEX_SUBJECT: crate::sync::SpinLock<Option<(Arc<Process>, u64, u64)>> =
+    crate::sync::SpinLock::new(None);
 
 /// What the waiting task's `FUTEX_WAIT` answered.
-static FUTEX_ANSWER: ferrix_sync::SpinLock<Option<Result<usize, Errno>>> =
-    ferrix_sync::SpinLock::new(None);
+static FUTEX_ANSWER: crate::sync::SpinLock<Option<Result<usize, Errno>>> =
+    crate::sync::SpinLock::new(None);
 
 /// Woken when it has answered.
 static FUTEX_ANSWERED: WaitQueue = WaitQueue::new();

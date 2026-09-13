@@ -21,11 +21,11 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::types::AT_FDCWD;
 use ferrix_procfs::kstat::{self, Parsed};
 use ferrix_procfs::maps;
-use ferrix_sync::SpinLock;
 use ferrix_vfs::initramfs::makedev;
 use ferrix_vfs::{Context, Errno, FileType, Namespace, OpenFile, OpenFlags, Whence};
 use ferrix_vma::VmaFlags;

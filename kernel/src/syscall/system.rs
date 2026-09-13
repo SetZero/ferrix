@@ -30,7 +30,9 @@ use alloc::vec::Vec;
 use ferrix_bootinfo::{Arch, PAGE_SIZE, is_user_address};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
-use ferrix_sync::{IrqControl, SpinLock};
+use ferrix_sync::IrqControl;
+
+use crate::sync::SpinLock;
 
 use crate::arch;
 use crate::console::println;

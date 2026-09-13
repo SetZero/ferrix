@@ -576,6 +576,12 @@ pub(crate) fn wait_for_work() {
     cpu::wait_then_enable_interrupts();
 }
 
+/// Whether this processor is taking interrupts right now.
+pub(crate) fn interrupts_enabled() -> bool {
+    // Bit 7 of DAIF is the IRQ mask, set when masked.
+    cpu::read_daif() & (1 << 7) == 0
+}
+
 /// The interrupt number inter-processor interrupts arrive on.
 pub(crate) const fn ipi_irq() -> u32 {
     gicv2::IPI_SGI

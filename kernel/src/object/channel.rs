@@ -30,11 +30,11 @@ use alloc::collections::BTreeSet;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 
+use crate::sync::SpinLock;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES};
 use ferrix_objects::message::{Limits, Message, MessageQueue, ReceiveError, SendError};
 use ferrix_objects::reach::{Reach, reaches};
-use ferrix_sync::SpinLock;
 
 use super::port::{Observer, PortError, register, triggered};
 use super::{Object, Transfer, dispose};

@@ -27,9 +27,9 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_frame::Frame;
-use ferrix_sync::SpinLock;
 
 use crate::mm;
 

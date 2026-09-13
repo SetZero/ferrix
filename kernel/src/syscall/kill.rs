@@ -31,10 +31,10 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use crate::sync::SpinLock;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{NSIG, SIGALRM, SIGCHLD};
-use ferrix_sync::SpinLock;
 
 use crate::sched::{self, WaitQueue};
 use crate::syscall::deliver;

@@ -36,9 +36,9 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
+use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::errno::Errno;
-use ferrix_sync::SpinLock;
 use ferrix_vfs::fd::FdTable;
 use ferrix_vfs::{Context, OpenFile};
 use ferrix_vma::VmaFlags;

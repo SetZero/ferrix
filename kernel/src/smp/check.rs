@@ -12,7 +12,9 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_paging::MapFlags;
 use ferrix_sched::{CpuSet, NICE_0_WEIGHT};
-use ferrix_sync::{Once, SpinLock};
+use ferrix_sync::Once;
+
+use crate::sync::SpinLock;
 
 use super::{PerCpu, SHOOTING, TLB_GENERATION, Topology, run_everywhere};
 use crate::{arch, mm, vmap};

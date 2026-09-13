@@ -17,6 +17,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_native_abi::handle::Handle;
@@ -25,7 +26,6 @@ use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, PACKET_INTERRUPT, PACKET_SIGNAL, PACKET_USER};
-use ferrix_sync::SpinLock;
 use ferrix_vma::VmaFlags;
 
 use crate::arch;
