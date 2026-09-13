@@ -1102,9 +1102,11 @@ fn describe_shares(topology: &Topology, spinners: &[Arc<Task>], bound: u64) {
     for cpu in 0..topology.online() {
         if let Some(report) = super::cpu_report(cpu) {
             crate::console::println!(
-                "  fair     cpu {cpu} measured worst lag {} us, worst overrun {} us",
+                "  fair     cpu {cpu} measured worst lag {} us, worst overrun {} us, {} picks, {} against the scan",
                 report.worst_lag / 1000,
                 report.worst_overrun / 1000,
+                report.picks,
+                report.wrong_picks,
             );
         }
         let group: Vec<&Arc<Task>> = spinners
@@ -1126,8 +1128,9 @@ fn describe_shares(topology: &Topology, spinners: &[Arc<Task>], bound: u64) {
                 .checked_div(weights)
                 .unwrap_or(0);
             crate::console::println!(
-                "  fair     {} weight {} on cpu {} had {} us of {} us due, bound {} us, {} switches",
+                "  fair     {} #{} weight {} on cpu {} had {} us of {} us due, bound {} us, {} switches",
                 task.name,
+                task.id,
                 task.entity_state().weight,
                 cpu,
                 had / 1000,
@@ -1136,6 +1139,7 @@ fn describe_shares(topology: &Topology, spinners: &[Arc<Task>], bound: u64) {
                 task.switches(),
             );
         }
+        super::print_picks(cpu);
     }
 }
 

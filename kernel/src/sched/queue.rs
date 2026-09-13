@@ -75,6 +75,53 @@ pub(crate) struct Stats {
     pub(crate) worst_lag: u64,
     /// Whether that window is open.
     pub(crate) measuring: bool,
+    /// Picks made while it was open.
+    pub(crate) picks: u64,
+    /// Of those, picks that a scan of the queue would have made differently:
+    /// an eligible entity with an earlier deadline was passed over. Zero on a
+    /// queue whose tree is right; see [`CpuQueue::note_pick`].
+    pub(crate) wrong_picks: u64,
+}
+
+/// How many recent picks a queue remembers while a window is open.
+pub(crate) const TRACE_PICKS: usize = 12;
+
+/// How many entities one remembered pick records.
+pub(crate) const TRACE_ENTITIES: usize = 5;
+
+/// One entity as a pick saw it.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Seen {
+    /// Its identifier.
+    pub(crate) id: TaskId,
+    /// Its virtual runtime.
+    pub(crate) vruntime: u64,
+    /// Its deadline.
+    pub(crate) deadline: u64,
+    /// Its lag: non-negative is eligible.
+    pub(crate) lag: i64,
+}
+
+/// One scheduling decision, remembered for a fairness failure to explain.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Pick {
+    /// When.
+    pub(crate) at: u64,
+    /// What the fair class chose.
+    pub(crate) picked: TaskId,
+    /// What a scan would have chosen.
+    pub(crate) scanned: TaskId,
+    /// The queue's virtual time.
+    pub(crate) avg: u64,
+    /// Every entity, running one first.
+    pub(crate) seen: [Seen; TRACE_ENTITIES],
+    /// How many of `seen` are filled.
+    pub(crate) count: usize,
+}
+
+/// Whether `a` is before `b` in wrapping virtual time.
+const fn before(a: u64, b: u64) -> bool {
+    (a.wrapping_sub(b) as i64) < 0
 }
 
 /// One CPU's queue.
@@ -105,6 +152,10 @@ pub(crate) struct CpuQueue {
     pub(crate) exec_start: u64,
     /// What this CPU's scheduling has done.
     pub(crate) stats: Stats,
+    /// The last few picks, while a window is open.
+    pub(crate) trace: [Pick; TRACE_PICKS],
+    /// Where the next one goes.
+    pub(crate) trace_next: usize,
 }
 
 impl CpuQueue {
@@ -124,7 +175,75 @@ impl CpuQueue {
             load_updated: 0,
             exec_start: 0,
             stats: Stats::default(),
+            trace: [Pick::default(); TRACE_PICKS],
+            trace_next: 0,
         })
+    }
+
+    /// Check the pick just made against a scan of the queue, and remember it.
+    ///
+    /// Only while a window is open, and only because the fairness check has
+    /// failed with one of three pinned spinners skipped for tens of
+    /// milliseconds while its peers alternated — the shape of an augmented
+    /// tree whose minima are stale, which is a bug Linux's `pick_eevdf` has
+    /// had more than once. The tree's own invariants are checked at the end
+    /// of stage 5 and hold; this asks the question at the moment it matters,
+    /// on every decision, against the definition: the eligible entity with
+    /// the earliest deadline, or the earliest deadline outright when none is
+    /// eligible. A disagreement is counted, and the last decisions are kept
+    /// so that a failure prints what every entity looked like when it was
+    /// passed over.
+    pub(crate) fn note_pick(&mut self, now: u64) {
+        let Some(picked) = self.fair.current_id() else {
+            return;
+        };
+        let mut pick = Pick {
+            at: now,
+            picked,
+            scanned: picked,
+            avg: self.fair.avg_vruntime(),
+            seen: [Seen::default(); TRACE_ENTITIES],
+            count: 0,
+        };
+        let mut best_eligible: Option<Seen> = None;
+        let mut best_any: Option<Seen> = None;
+        self.fair.for_each(|view| {
+            let seen = Seen {
+                id: view.id,
+                vruntime: view.vruntime,
+                deadline: view.deadline,
+                lag: view.lag,
+            };
+            if let Some(slot) = pick.seen.get_mut(pick.count) {
+                *slot = seen;
+                pick.count += 1;
+            }
+            if best_any.is_none_or(|best| before(seen.deadline, best.deadline)) {
+                best_any = Some(seen);
+            }
+            if seen.lag >= 0
+                && best_eligible.is_none_or(|best| before(seen.deadline, best.deadline))
+            {
+                best_eligible = Some(seen);
+            }
+        });
+        if let Some(best) = best_eligible.or(best_any) {
+            pick.scanned = best.id;
+            if best.id != picked {
+                self.stats.wrong_picks += 1;
+            }
+        }
+        self.stats.picks += 1;
+        if let Some(slot) = self.trace.get_mut(self.trace_next) {
+            *slot = pick;
+        }
+        self.trace_next = (self.trace_next + 1) % TRACE_PICKS;
+    }
+
+    /// The remembered picks, oldest first.
+    pub(crate) fn picks(&self) -> impl Iterator<Item = &Pick> {
+        let (newer, older) = self.trace.split_at(self.trace_next);
+        older.iter().chain(newer.iter()).filter(|pick| pick.at != 0)
     }
 
     /// Charge the running task for the time since it was last charged.

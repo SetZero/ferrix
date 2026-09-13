@@ -927,6 +927,9 @@ fn choose_next(lock: &'static SpinLock<CpuQueue>, cpu: usize) -> Option<(*mut u6
     }
 
     let next = queue.pick_next();
+    if queue.stats.measuring {
+        queue.note_pick(now);
+    }
     let switching = match (previous.as_ref(), next.as_ref()) {
         (Some(previous), Some(next)) => !Arc::ptr_eq(previous, next),
         (None, Some(_)) => true,
@@ -1401,6 +1404,10 @@ pub(crate) fn open_window(tasks: &[Arc<Task>]) {
         queue.stats.measuring = true;
         queue.stats.worst_lag = 0;
         queue.stats.worst_overrun = 0;
+        queue.stats.picks = 0;
+        queue.stats.wrong_picks = 0;
+        queue.trace = [queue::Pick::default(); queue::TRACE_PICKS];
+        queue.trace_next = 0;
         for task in tasks.iter().filter(|task| task.cpu() == cpu) {
             task.open_window();
         }
@@ -1540,6 +1547,34 @@ pub(crate) fn report_queues() {
     <arch::Irq as IrqControl>::restore(saved);
 }
 
+/// Print the picks `cpu` remembered from the last window, oldest first.
+pub(crate) fn print_picks(cpu: usize) {
+    let Some(lock) = queue_of(cpu) else {
+        return;
+    };
+    let saved = <arch::Irq as IrqControl>::disable();
+    let picks: Vec<queue::Pick> = lock.lock().picks().copied().collect();
+    <arch::Irq as IrqControl>::restore(saved);
+    for pick in picks {
+        crate::console::println!(
+            "  pick     cpu {cpu} at {} us: chose #{}, scan says #{}, avg v {}",
+            pick.at / 1000,
+            pick.picked,
+            pick.scanned,
+            pick.avg,
+        );
+        for seen in pick.seen.iter().take(pick.count) {
+            crate::console::println!(
+                "  pick       #{} v {} deadline {} lag {}",
+                seen.id,
+                seen.vruntime,
+                seen.deadline,
+                seen.lag,
+            );
+        }
+    }
+}
+
 /// One processor's run queue, for a check or the boot log.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CpuReport {
@@ -1553,6 +1588,10 @@ pub(crate) struct CpuReport {
     pub(crate) worst_lag: u64,
     /// The worst overrun it has served.
     pub(crate) worst_overrun: u64,
+    /// Picks made while the last window was open.
+    pub(crate) picks: u64,
+    /// Of those, picks a scan of the queue disagreed with.
+    pub(crate) wrong_picks: u64,
 }
 
 /// Read `cpu`'s queue, bringing its load average up to date first.
@@ -1568,6 +1607,8 @@ pub(crate) fn cpu_report(cpu: usize) -> Option<CpuReport> {
             queued: queue.len(),
             worst_lag: queue.stats.worst_lag,
             worst_overrun: queue.stats.worst_overrun,
+            picks: queue.stats.picks,
+            wrong_picks: queue.stats.wrong_picks,
         }
     };
     <arch::Irq as IrqControl>::restore(saved);
