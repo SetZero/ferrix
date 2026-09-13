@@ -175,7 +175,11 @@ struct Inner {
     /// For an id a file mapping names, the open file it was mapped through:
     /// what keeps the file alive for as long as the mapping is, as Linux's
     /// `vm_file` does, and what `/proc/<pid>/maps` names the region by. It
-    /// leaves with its id's object.
+    /// leaves with its id's object, and `give_back` drops it only after the
+    /// lock. A space's last reference, though, can go in the reaper's
+    /// preemption window or in a retirement's drop of the spaces it forgot, and
+    /// the space drops its files there. So an open file's `Drop`, and its
+    /// inode's, must take no lock that can sleep and ask for no shootdown.
     files: BTreeMap<u64, Arc<dyn Any + Send + Sync>>,
     /// The next object id to hand out. Never zero, which `Backing` reserves
     /// for private memory with no named object.
