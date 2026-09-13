@@ -213,6 +213,12 @@ fn preempt_site(cpu: usize) -> Option<&'static core::panic::Location<'static>> {
     unsafe { pointer.cast_const().as_ref() }
 }
 
+/// How many locks that disable preemption `cpu`'s running context holds,
+/// for a check to print beside a result that preemption would explain.
+pub(crate) fn preemption_held(cpu: usize) -> u32 {
+    preempt_count(cpu)
+}
+
 /// How many reasons `cpu`'s running context has not to be switched out.
 fn preempt_count(cpu: usize) -> u32 {
     PREEMPT_OFF
@@ -1033,7 +1039,12 @@ pub(crate) fn timer_expired() {
 }
 
 /// Make the decision an interrupt asked for, on the way out of it.
-pub(crate) fn preempt_on_irq_exit() {
+///
+/// `from_user` says whether the interrupt arrived in user mode. A task this
+/// switches out while it is still runnable was then preempted *as a user
+/// program*, in the middle of its own code, which is the one kind of
+/// preemption the turn-taking check counts: see `Task::preemptions`.
+pub(crate) fn preempt_on_irq_exit(from_user: bool) {
     if !started() {
         return;
     }
@@ -1054,7 +1065,7 @@ pub(crate) fn preempt_on_irq_exit() {
         return;
     }
     if take_resched(cpu) {
-        schedule();
+        schedule_from(from_user);
     }
 }
 
@@ -1124,6 +1135,13 @@ fn set_reaping(cpu: usize, reaping: bool) {
 
 /// Give the processor to whatever should have it now.
 fn schedule() {
+    schedule_from(false);
+}
+
+/// `schedule`, saying whether the decision was forced on a user program by
+/// an interrupt that arrived in user mode -- the case a task counts as a
+/// preemption if it is switched out still runnable.
+fn schedule_from(interrupted_user: bool) {
     let saved = <arch::Irq as IrqControl>::disable();
     // A switch with the count raised is a holder of a preemption-disabling
     // lock going to sleep, which the count cannot survive: see `PREEMPT_OFF`.
@@ -1140,20 +1158,20 @@ fn schedule() {
             site.map_or(0, core::panic::Location::line),
         );
     }
-    pick_and_switch();
+    pick_and_switch(interrupted_user);
     <arch::Irq as IrqControl>::restore(saved);
 }
 
 /// With interrupts masked: decide, and switch if the decision changed
 /// anything. Returns possibly much later, and possibly on another processor.
-fn pick_and_switch() {
+fn pick_and_switch(interrupted_user: bool) {
     let Some(cpu) = this_cpu() else {
         return;
     };
     let Some(lock) = queue_of(cpu) else {
         return;
     };
-    let Some((save, resume)) = choose_next(lock, cpu) else {
+    let Some((save, resume)) = choose_next(lock, cpu, interrupted_user) else {
         return;
     };
     // SAFETY: `save` is this context's own slot and `resume` a stack pointer
@@ -1167,7 +1185,11 @@ fn pick_and_switch() {
 /// Choose what runs next, leaving the queue's lock held and returning where
 /// to save this context and what to resume — or releasing the lock and
 /// returning `None` when nothing has to change.
-fn choose_next(lock: &'static SpinLock<CpuQueue>, cpu: usize) -> Option<(*mut u64, u64)> {
+fn choose_next(
+    lock: &'static SpinLock<CpuQueue>,
+    cpu: usize,
+    interrupted_user: bool,
+) -> Option<(*mut u64, u64)> {
     // SAFETY: released below when nothing is switched, and otherwise by the
     // context this switches to, in `finish_switch`.
     let queue = unsafe { lock.lock_manually() };
@@ -1210,6 +1232,13 @@ fn choose_next(lock: &'static SpinLock<CpuQueue>, cpu: usize) -> Option<(*mut u6
 
     let (previous, next) = (previous?, next?);
     queue.stats.switches += 1;
+    // Still runnable, cut off in its own code by an interrupt, and yet
+    // leaving: a preemption of a user program, the one thing a check about
+    // taking turns can count. Not a switch made on the way out of a system
+    // call, which is the program's own doing.
+    if interrupted_user && previous.state() == RUNNABLE {
+        previous.note_preemption();
+    }
     queue.previous = Some(Arc::clone(&previous));
     queue.current = Some(Arc::clone(&next));
     queue.exec_start = now;

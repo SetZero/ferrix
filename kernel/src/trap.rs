@@ -120,7 +120,7 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
             // the handler would leave an interrupt in service for as long as
             // the next task ran, and a controller still servicing one delivers
             // nothing further.
-            crate::sched::preempt_on_irq_exit();
+            crate::sched::preempt_on_irq_exit(frame.came_from_user());
         }
         // On x86-64 a system call never arrives here: `SYSCALL` has an entry of
         // its own. On both Arm architectures `svc` is an exception like any

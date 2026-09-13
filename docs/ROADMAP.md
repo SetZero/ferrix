@@ -726,6 +726,23 @@ by the first boot rather than by a convoy on a loaded host. The run queues'
 own locks stay plain, being taken with interrupts masked and handed across a
 switch.
 
+**A queue insert charges the running task first.** `CpuQueue::insert`
+placed a newcomer before charging the task already running, so a task alone
+on a tickless processor -- charged only at its next decision, with an
+`exec_start` a hundred milliseconds old -- had all of that billed after the
+newcomer was counted, and the newcomer came out owed half of it, past the
+placement clamp. Stage 7's first spinner arrived owed 59 ms and ran its
+whole loop before the checker could start the second. `insert` and `release`
+now charge first, as Linux's `enqueue_entity` calls `update_curr` before it
+places; found by stage 7's session with a trace ring, 598 of 600 looped
+iterations under KVM. And the check that caught it measures preemption now
+-- each program switched out still runnable at the exit of an interrupt that
+arrived in its user code, twice -- rather than being switched to twice,
+which a program never preempted shows too, or switched away at all, which a
+lock released inside its one write with a reschedule pending also does; it
+gets three attempts, since a host stall charged to one program as service
+lets the other run its whole loop, and prints what each attempt saw.
+
 **Still missing against Linux**, none of it on stage 6's path: group scheduling
 and bandwidth control, which are stage 13; the real-time classes, which are
 stage 14; and NUMA and capacity awareness, which need a topology this kernel

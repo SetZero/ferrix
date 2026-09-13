@@ -625,6 +625,16 @@ would pass every host test and answer a program's `write` with a different call.
    encodes as -38.
 3. A handler added to the dispatch table returns `Outcome::Enter` for an
    ordinary call or answers a credential call with something other than root.
+4. Two spinning programs on one processor were never both preempted twice in
+   three attempts, a preemption being a switch out of a still-runnable program
+   at the exit of an interrupt that arrived in user mode. One attempt can be the
+   host: a stall while one program runs is charged to it as service, and the
+   scheduler then lets the other run its whole loop. Each attempt prints both
+   preemption and switch counts, the processor's worst overrun and its
+   preemption-lock count. Being switched to twice is not evidence: a program
+   never preempted shows that too, from its start and its first write; nor is
+   every switch away while runnable, since a lock released inside a system call
+   with a reschedule pending switches too.
 
 See: kernel/src/syscall/check.rs run; kernel/src/syscall/mod.rs dispatch;
 libs/linux-abi; docs/ROADMAP.md stage 7.
