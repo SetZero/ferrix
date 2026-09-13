@@ -163,13 +163,24 @@ pub(crate) fn write(arguments: fmt::Arguments<'_>) {
 /// When stage 15 brings ttys, this moves there and this function stops
 /// translating.
 pub(crate) fn write_bytes(bytes: &[u8]) {
+    emit(bytes, true);
+}
+
+/// Write raw bytes to the console exactly as they are: a terminal whose
+/// program turned `ONLCR` or `OPOST` off. See `crate::fs::terminal`.
+pub(crate) fn write_raw(bytes: &[u8]) {
+    emit(bytes, false);
+}
+
+/// Put `bytes` on the port under its lock, a bare newline as CRLF if asked.
+fn emit(bytes: &[u8], crlf: bool) {
     if !READY.load(Ordering::Acquire) {
         return;
     }
     let mut port = PORT.lock();
     let _ = port.write_str("");
     for &byte in bytes {
-        if byte == b'\n' {
+        if crlf && byte == b'\n' {
             crate::arch::console::write_byte(b'\r');
         }
         crate::arch::console::write_byte(byte);

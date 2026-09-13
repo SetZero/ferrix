@@ -1295,8 +1295,122 @@ pub const FD_CLOEXEC: u32 = 1;
 /// use: x86-64 and AArch64 include it unchanged, and ARMv7-A's own header adds
 /// only `FIOQSIZE` before including it.
 pub const TCGETS: u32 = 0x5401;
+/// Change a terminal's settings now.
+pub const TCSETS: u32 = 0x5402;
+/// Change a terminal's settings once written output has drained.
+pub const TCSETSW: u32 = 0x5403;
+/// Change a terminal's settings after draining output and discarding input.
+pub const TCSETSF: u32 = 0x5404;
+/// Suspend or restart output: `tcflow`.
+pub const TCXONC: u32 = 0x540A;
+/// Discard queued input, output or both: `tcflush`.
+pub const TCFLSH: u32 = 0x540B;
+/// Make the terminal the caller's controlling terminal.
+pub const TIOCSCTTY: u32 = 0x540E;
+/// Read the terminal's foreground process group: `tcgetpgrp`.
+pub const TIOCGPGRP: u32 = 0x540F;
+/// Set the terminal's foreground process group: `tcsetpgrp`.
+pub const TIOCSPGRP: u32 = 0x5410;
 /// Read a terminal's size in rows and columns, `struct winsize`.
 pub const TIOCGWINSZ: u32 = 0x5413;
+/// Set a terminal's size.
+pub const TIOCSWINSZ: u32 = 0x5414;
+/// How many bytes a read would return without waiting.
+pub const FIONREAD: u32 = 0x541B;
+/// The same request as [`FIONREAD`], under its terminal name.
+pub const TIOCINQ: u32 = FIONREAD;
+/// Give up the controlling terminal.
+pub const TIOCNOTTY: u32 = 0x5422;
+/// Read the session the terminal controls: `tcgetsid`.
+pub const TIOCGSID: u32 = 0x5429;
+
+/// Bytes in the kernel's `struct termios` on all three architectures: four
+/// `unsigned int` flag words, `c_line`, and `NCCS` (19) control characters.
+///
+/// Not the C library's `struct termios`, which glibc makes 60 bytes with 32
+/// control characters and two speeds: the library translates. x86-64, AArch64
+/// and ARMv7-A all take it from `asm-generic/termbits.h`.
+pub const TERMIOS_BYTES: usize = 36;
+/// Control characters in the kernel's `struct termios`.
+pub const NCCS: usize = 19;
+
+/// `c_cc` index: the character that raises `SIGINT`.
+pub const VINTR: usize = 0;
+/// `c_cc` index: the character that raises `SIGQUIT`.
+pub const VQUIT: usize = 1;
+/// `c_cc` index: erase the character before the cursor.
+pub const VERASE: usize = 2;
+/// `c_cc` index: erase the whole line.
+pub const VKILL: usize = 3;
+/// `c_cc` index: end of file, or end of a line without a newline.
+pub const VEOF: usize = 4;
+/// `c_cc` index: a non-canonical read's timeout, in tenths of a second.
+pub const VTIME: usize = 5;
+/// `c_cc` index: how many bytes a non-canonical read waits for.
+pub const VMIN: usize = 6;
+/// `c_cc` index: the character that raises `SIGTSTP`.
+pub const VSUSP: usize = 10;
+/// `c_cc` index: an extra end-of-line character.
+pub const VEOL: usize = 11;
+/// `c_cc` index: erase the word before the cursor.
+pub const VWERASE: usize = 14;
+/// `c_cc` index: a second extra end-of-line character.
+pub const VEOL2: usize = 16;
+
+/// `c_iflag`: strip the eighth bit.
+pub const ISTRIP: u32 = 0x020;
+/// `c_iflag`: map newline to carriage return on input.
+pub const INLCR: u32 = 0x040;
+/// `c_iflag`: discard carriage returns on input.
+pub const IGNCR: u32 = 0x080;
+/// `c_iflag`: map carriage return to newline on input.
+pub const ICRNL: u32 = 0x100;
+/// `c_iflag`: XON/XOFF output flow control.
+pub const IXON: u32 = 0x400;
+
+/// `c_oflag`: process output at all.
+pub const OPOST: u32 = 0x01;
+/// `c_oflag`: map newline to carriage return and newline on output.
+pub const ONLCR: u32 = 0x04;
+
+/// `c_cflag`: 115200 baud.
+pub const B115200: u32 = 0x1002;
+/// `c_cflag`: eight bits a character.
+pub const CS8: u32 = 0x30;
+/// `c_cflag`: the receiver is enabled.
+pub const CREAD: u32 = 0x80;
+/// `c_cflag`: ignore modem control lines.
+pub const CLOCAL: u32 = 0x800;
+
+/// `c_lflag`: the interrupt, quit and suspend characters raise signals.
+pub const ISIG: u32 = 0x00001;
+/// `c_lflag`: canonical mode, a line at a time with editing.
+pub const ICANON: u32 = 0x00002;
+/// `c_lflag`: echo input.
+pub const ECHO: u32 = 0x00008;
+/// `c_lflag`: echo an erase as backspace, space, backspace.
+pub const ECHOE: u32 = 0x00010;
+/// `c_lflag`: echo a newline after a line kill.
+pub const ECHOK: u32 = 0x00020;
+/// `c_lflag`: echo a newline even when `ECHO` is off.
+pub const ECHONL: u32 = 0x00040;
+/// `c_lflag`: keep queued input when a signal character arrives.
+pub const NOFLSH: u32 = 0x00080;
+/// `c_lflag`: echo control characters as `^X`.
+pub const ECHOCTL: u32 = 0x00200;
+/// `c_lflag`: erase a killed line character by character.
+pub const ECHOKE: u32 = 0x00800;
+/// `c_lflag`: the extended characters, `VWERASE` and `VEOL2` among them.
+pub const IEXTEN: u32 = 0x08000;
+
+/// `TCFLSH`: discard received input not yet read.
+pub const TCIFLUSH: u64 = 0;
+/// `TCFLSH`: discard written output not yet sent.
+pub const TCOFLUSH: u64 = 1;
+/// `TCFLSH`: both.
+pub const TCIOFLUSH: u64 = 2;
+/// `TCXONC`: the largest action, `TCION`.
+pub const TCION: u64 = 3;
 
 // ---------------------------------------------------------------------------
 // Miscellaneous flags

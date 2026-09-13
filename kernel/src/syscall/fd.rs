@@ -407,7 +407,10 @@ pub(crate) fn sys_ioctl(
     arg: u64,
 ) -> Result<usize, Errno> {
     let file = file(process, fd)?;
-    if Arc::ptr_eq(file.inode(), &console::console_inode()) {
+    // By what reads and writes reach, not by what `fstat` reports: `/dev/tty`
+    // is a devfs node of its own that opens the console, and busybox's shell
+    // asks its job-control questions through it.
+    if Arc::ptr_eq(file.io(), &console::console_inode()) {
         return tty::ioctl(process, &file, request, arg);
     }
     Err(Errno::ENOTTY)

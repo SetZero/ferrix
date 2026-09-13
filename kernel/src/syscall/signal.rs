@@ -295,6 +295,13 @@ impl Signals {
             .is_some_and(|action| action.flags & SA_NOCLDSTOP != 0)
     }
 
+    /// Replace the blocked mask with `mask`, returning the mask it replaced:
+    /// what `ppoll` and `pselect6` wait under, and put back afterwards.
+    /// `SIGKILL` and `SIGSTOP` are never blocked, whatever `mask` says.
+    pub(crate) fn replace_blocked(&mut self, mask: u64) -> u64 {
+        core::mem::replace(&mut self.blocked, mask & !UNBLOCKABLE)
+    }
+
     /// What `execve` does to them: every handler goes back to the default,
     /// because the new program has none of the old one's code to run; a signal
     /// that was ignored stays ignored, which is how `nohup` works; the blocked

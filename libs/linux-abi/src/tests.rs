@@ -1020,6 +1020,24 @@ fn both_open_flag_tables_are_four_distinct_bits_clear_of_the_shared_flags() {
 fn terminal_ioctls_match_the_generic_header() {
     assert_eq!(types::TCGETS, 0x5401, "TCGETS is 'T' 0x01");
     assert_eq!(types::TIOCGWINSZ, 0x5413, "TIOCGWINSZ is 'T' 0x13");
+    assert_eq!(types::TCSETSF, 0x5404, "TCSETSF is 'T' 0x04");
+    assert_eq!(types::TCFLSH, 0x540B, "TCFLSH is 'T' 0x0B");
+    assert_eq!(types::TIOCSPGRP, 0x5410, "TIOCSPGRP is 'T' 0x10");
+    assert_eq!(types::FIONREAD, 0x541B, "FIONREAD is 'T' 0x1B");
+    assert_eq!(types::TIOCINQ, types::FIONREAD, "TIOCINQ is FIONREAD");
+    assert_eq!(types::TIOCNOTTY, 0x5422, "TIOCNOTTY is 'T' 0x22");
+    assert_eq!(types::TIOCGSID, 0x5429, "TIOCGSID is 'T' 0x29");
+}
+
+#[test]
+fn termios_matches_the_generic_termbits_header() {
+    // Four `tcflag_t`, `c_line`, `c_cc[NCCS]`: no padding, since every field
+    // after the flags is a byte.
+    assert_eq!(types::TERMIOS_BYTES, 4 * 4 + 1 + types::NCCS);
+    assert_eq!(types::NCCS, 19, "NCCS is 19 in asm-generic/termbits.h");
+    assert_eq!((types::VMIN, types::VTIME, types::VEOL2), (6, 5, 16));
+    assert_eq!((types::ICANON, types::ECHO, types::IEXTEN), (2, 8, 0x8000));
+    assert_eq!((types::ICRNL, types::OPOST, types::ONLCR), (0x100, 1, 4));
 }
 
 #[test]

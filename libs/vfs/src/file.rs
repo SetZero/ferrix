@@ -178,6 +178,15 @@ impl OpenFile {
         &self.inode
     }
 
+    /// What reads and writes go to: the inode itself, or what its
+    /// [`Inode::open`] or [`OpenFile::with_io`] put in its place. `/dev/tty`
+    /// is a node of its own to `fstat` and the console to everything else,
+    /// which is how the kernel tells that an `ioctl` is for the terminal.
+    #[must_use]
+    pub fn io(&self) -> &Arc<dyn Inode> {
+        &self.io
+    }
+
     /// What kind of object it is.
     #[must_use]
     pub fn kind(&self) -> FileType {

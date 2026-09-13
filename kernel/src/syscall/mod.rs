@@ -368,6 +368,15 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::PpollTime64 => {
             poll::sys_ppoll(process, a[0], a[1], a[2], a[3], a[4], time::TimeWidth::Wide)
         }
+        Syscall::Select => poll::sys_select(process, a[0] as i32, [a[1], a[2], a[3]], a[4]),
+        Syscall::Pselect6 | Syscall::Pselect6Time64 => {
+            let width = if call == Syscall::Pselect6 {
+                time::TimeWidth::Native
+            } else {
+                time::TimeWidth::Wide
+            };
+            poll::sys_pselect6(process, a[0] as i32, [a[1], a[2], a[3]], a[4], a[5], width)
+        }
         Syscall::Wait4 => family::sys_wait4(process, a[0] as i32, a[1], truncate(a[2]), a[3]),
         Syscall::Waitid => family::sys_waitid(
             process,

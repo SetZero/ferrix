@@ -25,7 +25,7 @@ use ferrix_linux_abi::types::{
     AT_FDCWD, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
     MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED, MREMAP_MAYMOVE, O_APPEND,
     O_CLOEXEC, O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_TRUNC, PROT_READ, PROT_WRITE, SEEK_CUR,
-    SEEK_END, SEEK_SET, TCGETS,
+    SEEK_END, SEEK_SET, TCGETS, TIOCGWINSZ,
 };
 
 use crate::arch;
@@ -359,6 +359,9 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_set_tid_address_answers_with_a_thread_id(&process)?;
     check_uname_says_linux_to_a_script_and_ferrix_to_a_person(&process)?;
     check_poll_reports_ready_invalid_and_skipped(&process)?;
+    check_select_answers_with_the_sets_that_are_ready(&process)?;
+    check_the_line_discipline_follows_its_settings()?;
+    check_the_console_answers_as_a_terminal(&process)?;
     check_a_signal_disposition_reads_back_as_it_was_set(&process)?;
     check_the_blocked_mask_follows_how(&process)?;
     check_kill_finds_its_targets_and_refuses_what_it_should(&process)?;
@@ -1201,6 +1204,467 @@ fn check_poll_reports_ready_invalid_and_skipped(process: &Process) -> Result<(),
     Ok(())
 }
 
+/// Where on its page the `select` check stages each argument.
+const SELECT_WRITE: u64 = 256;
+/// See [`SELECT_WRITE`].
+const SELECT_EXCEPT: u64 = 512;
+/// See [`SELECT_WRITE`].
+const SELECT_TIME: u64 = 768;
+/// See [`SELECT_WRITE`].
+const SELECT_MASK: u64 = 800;
+/// See [`SELECT_WRITE`].
+const SELECT_PACK: u64 = 816;
+/// See [`SELECT_WRITE`].
+const SELECT_OLD_MASK: u64 = 840;
+
+/// `select` and `pselect6` answer from the same readiness as `poll`, as
+/// bitmaps: the console's descriptors are writable and never exceptional, a
+/// set bit on a closed descriptor is `EBADF`, bits past `nfds` are neither
+/// asked about nor left set, a timeout is waited out and written back, and
+/// `pselect6`'s signal mask is checked for size and put back afterwards.
+fn check_select_answers_with_the_sets_that_are_ready(
+    process: &Process,
+) -> Result<(), &'static str> {
+    let page = map_rw(process, PAGE_SIZE)?;
+    let outcome = select_answers(process, page).and_then(|()| pselect_answers(process, page));
+    let _ = memory::sys_munmap(process, page, PAGE_SIZE);
+    outcome
+}
+
+/// See [`check_select_answers_with_the_sets_that_are_ready`].
+fn select_answers(process: &Process, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::poll;
+
+    let stage = |offset: u64, bytes: &[u8]| {
+        uaccess::copy_to_user(process.space(), page + offset, bytes)
+            .map_err(|_| "could not stage a select argument")
+    };
+    let byte_at = |offset: u64| {
+        let mut byte = [0_u8; 1];
+        uaccess::copy_from_user(process.space(), page + offset, &mut byte)
+            .map_err(|_| "could not read a select answer back")?;
+        Ok::<u8, &'static str>(u8::from_le_bytes(byte))
+    };
+    let word = size_of::<usize>();
+    let (write_set, except_set) = (page + SELECT_WRITE, page + SELECT_EXCEPT);
+
+    // Descriptors 1 and 2 asked about for writing, 1 for exceptions, with a
+    // zero timeout: two bits come back, and the exception set comes back
+    // empty.
+    stage(SELECT_WRITE, &[0b110])?;
+    stage(SELECT_EXCEPT, &[0b010])?;
+    stage(SELECT_TIME, &word_pair(0, 0))?;
+    if poll::sys_select(process, 3, [0, write_set, except_set], page + SELECT_TIME) != Ok(2) {
+        return Err("select did not count the console's two writable descriptors");
+    }
+    if byte_at(SELECT_WRITE)? != 0b110 || byte_at(SELECT_EXCEPT)? != 0 {
+        return Err("select did not write back exactly the bits that were ready");
+    }
+
+    // A bit past `nfds` inside the last word read is not asked about, and is
+    // cleared in the answer.
+    stage(SELECT_WRITE, &[0b010, 0, 0b1_0000])?;
+    if poll::sys_select(process, 2, [0, write_set, 0], page + SELECT_TIME) != Ok(1) {
+        return Err("select looked at a descriptor past nfds");
+    }
+    if byte_at(SELECT_WRITE + 2)? != 0 {
+        return Err("select left a bit set past nfds");
+    }
+
+    // Descriptor 40 is not open.
+    stage(SELECT_WRITE, &[0b010, 0, 0, 0, 0, 0b1])?;
+    if poll::sys_select(process, 41, [0, write_set, 0], page + SELECT_TIME) != Err(Errno::EBADF) {
+        return Err("select did not refuse a closed descriptor with EBADF");
+    }
+    if poll::sys_select(process, -1, [0, 0, 0], 0) != Err(Errno::EINVAL) {
+        return Err("select accepted a negative nfds");
+    }
+    stage(SELECT_TIME, &word_pair(0, usize::MAX))?;
+    if poll::sys_select(process, 0, [0, 0, 0], page + SELECT_TIME) != Err(Errno::EINVAL) {
+        return Err("select accepted a negative microsecond count");
+    }
+
+    // Nothing asked: the timeout is waited out, and the time left, none, is
+    // written back.
+    stage(SELECT_TIME, &word_pair(0, 10_000))?;
+    let before = crate::timer::now_nanos();
+    if poll::sys_select(process, 0, [0, 0, 0], page + SELECT_TIME) != Ok(0) {
+        return Err("select with nothing to wait for did not time out with zero");
+    }
+    if crate::timer::now_nanos().saturating_sub(before) < 10_000_000 {
+        return Err("select returned before its timeout");
+    }
+    let mut left = [0_u8; 16];
+    uaccess::copy_from_user(process.space(), page + SELECT_TIME, &mut left)
+        .map_err(|_| "could not read the time left back")?;
+    if left.iter().take(word * 2).any(|&byte| byte != 0) {
+        return Err("select did not write back that no time was left");
+    }
+
+    Ok(())
+}
+
+/// See [`check_select_answers_with_the_sets_that_are_ready`]: `pselect6`'s
+/// mask.
+fn pselect_answers(process: &Process, page: u64) -> Result<(), &'static str> {
+    use crate::syscall::poll;
+    use crate::syscall::time::TimeWidth;
+
+    let stage = |offset: u64, bytes: &[u8]| {
+        uaccess::copy_to_user(process.space(), page + offset, bytes)
+            .map_err(|_| "could not stage a pselect6 argument")
+    };
+    let write_set = page + SELECT_WRITE;
+    // `pselect6`'s mask: a set of the wrong size is refused, a null set's size
+    // is not looked at, and a mask waited under is put back.
+    let mask = 1_u64 << 9;
+    stage(SELECT_MASK, &mask.to_le_bytes())?;
+    stage(SELECT_WRITE, &[0b110])?;
+    stage(SELECT_TIME, &word_pair(0, 0))?;
+    let pselect = |nfds: i32, set: usize, size: usize| {
+        let pack = word_pair(set, size);
+        stage(SELECT_PACK, &pack)?;
+        Ok::<_, &'static str>(poll::sys_pselect6(
+            process,
+            nfds,
+            [0, write_set, 0],
+            page + SELECT_TIME,
+            page + SELECT_PACK,
+            TimeWidth::Native,
+        ))
+    };
+    let mask_at = usize::try_from(page + SELECT_MASK).map_err(|_| "an impossible address")?;
+    if pselect(3, mask_at, 16)? != Err(Errno::EINVAL) {
+        return Err("pselect6 accepted a signal set of the wrong size");
+    }
+    if pselect(3, 0, 16)? != Ok(2) {
+        return Err("pselect6 looked at the size of a signal set it was not given");
+    }
+    let blocked = |process: &Process| {
+        let _ = signal::sys_rt_sigprocmask(process, 0, 0, page + SELECT_OLD_MASK, 8)
+            .map_err(|_| "rt_sigprocmask could not report the mask")?;
+        let mut bytes = [0_u8; 8];
+        uaccess::copy_from_user(process.space(), page + SELECT_OLD_MASK, &mut bytes)
+            .map_err(|_| "could not read the mask back")?;
+        Ok::<u64, &'static str>(u64::from_le_bytes(bytes))
+    };
+    let before = blocked(process)?;
+    stage(SELECT_WRITE, &[0b110])?;
+    if pselect(3, mask_at, 8)? != Ok(2) {
+        return Err("pselect6 refused a well-formed signal mask");
+    }
+    if blocked(process)? != before {
+        return Err("pselect6 did not put the caller's signal mask back");
+    }
+    Ok(())
+}
+
+/// Two native words, little-endian, in the first bytes of sixteen: a
+/// `timeval`, a native `timespec`, or `pselect6`'s set-and-size pair.
+fn word_pair(first: usize, second: usize) -> [u8; 16] {
+    let mut bytes = [0_u8; 16];
+    for (slot, byte) in bytes
+        .iter_mut()
+        .zip(first.to_le_bytes().into_iter().chain(second.to_le_bytes()))
+    {
+        *slot = byte;
+    }
+    bytes
+}
+
+/// The line discipline, driven directly: the default settings edit and echo a
+/// line as the console always has, end of file and a line without a newline
+/// both come through `VEOF`, raw mode neither waits for a line nor echoes, and
+/// the interrupt character is a signal that takes the half-typed line with it.
+fn check_the_line_discipline_follows_its_settings() -> Result<(), &'static str> {
+    use crate::fs::terminal::{Discipline, Termios};
+    use ferrix_linux_abi::types::{ECHO, ICANON, SIGINT};
+
+    let mut discipline = Discipline::new();
+    let mut echo = Vec::new();
+    let mut buf = [0_u8; 8];
+    let feed = |discipline: &mut Discipline, bytes: &[u8], echo: &mut Vec<u8>| {
+        bytes
+            .iter()
+            .filter_map(|&byte| discipline.receive(byte, echo))
+            .last()
+    };
+
+    if feed(&mut discipline, b"ab\x7fc\r", &mut echo).is_some() {
+        return Err("an ordinary keystroke raised a signal");
+    }
+    if echo != b"ab\x08 \x08c\n" {
+        return Err("the default settings did not echo and erase as the console always has");
+    }
+    if discipline.take(&mut buf) != Some(3) || buf.get(..3) != Some(b"ac\n".as_slice()) {
+        return Err("a canonical line did not read back as it was edited");
+    }
+    let _ = feed(&mut discipline, b"x", &mut echo);
+    if discipline.readable() {
+        return Err("half a line was readable in canonical mode");
+    }
+    let _ = feed(&mut discipline, b"\x04", &mut echo);
+    if discipline.take(&mut buf) != Some(1) || buf.first() != Some(&b'x') {
+        return Err("VEOF did not end a line without a newline");
+    }
+    let _ = feed(&mut discipline, b"\x04", &mut echo);
+    if discipline.take(&mut buf) != Some(0) || discipline.take(&mut buf).is_some() {
+        return Err("VEOF on an empty line was not one end of file");
+    }
+
+    let raw = Termios {
+        lflag: Termios::DEFAULT.lflag & !(ICANON | ECHO),
+        ..Termios::DEFAULT
+    };
+    discipline.set_termios(raw);
+    echo.clear();
+    let _ = feed(&mut discipline, b"q", &mut echo);
+    if !echo.is_empty() {
+        return Err("a keystroke was echoed with ECHO off");
+    }
+    if discipline.take(&mut buf) != Some(1) || buf.first() != Some(&b'q') {
+        return Err("a keystroke in raw mode was not readable at once");
+    }
+
+    discipline.set_termios(Termios::DEFAULT);
+    echo.clear();
+    if feed(&mut discipline, b"z\x03", &mut echo) != Some(SIGINT) {
+        return Err("the interrupt character did not raise SIGINT");
+    }
+    if echo != b"z^C" {
+        return Err("the interrupt character was not echoed as ^C");
+    }
+    let _ = feed(&mut discipline, b"\r", &mut echo);
+    if discipline.take(&mut buf) != Some(1) {
+        return Err("the interrupt character did not discard the line being typed");
+    }
+    Ok(())
+}
+
+/// Where on its page the terminal check stages each argument.
+const TTY_TERMIOS: u64 = 0;
+/// See [`TTY_TERMIOS`].
+const TTY_INT: u64 = 64;
+/// See [`TTY_TERMIOS`].
+const TTY_PATH: u64 = 128;
+
+/// The console answers the terminal requests an interactive shell makes:
+/// settings that read back as they were set, a size, and job control for a
+/// session leader -- and leaves the terminal as it found it.
+fn check_the_console_answers_as_a_terminal(process: &Process) -> Result<(), &'static str> {
+    use crate::fs::terminal;
+
+    let page = map_rw(process, PAGE_SIZE)?;
+    let saved = terminal::with(|terminal| {
+        (
+            terminal.discipline.termios(),
+            terminal.winsize,
+            terminal.session,
+            terminal.foreground,
+        )
+    });
+    let outcome = terminal_settings_answer(process, page)
+        .and_then(|()| terminal_job_control_answers(process, page))
+        .and_then(|()| terminal_answers_through_dev_tty(process, page));
+    terminal::with(|terminal| {
+        let (termios, winsize, session, foreground) = saved;
+        terminal.discipline.set_termios(termios);
+        terminal.winsize = winsize;
+        terminal.session = session;
+        terminal.foreground = foreground;
+    });
+    let _ = memory::sys_munmap(process, page, PAGE_SIZE);
+    outcome
+}
+
+/// See [`check_the_console_answers_as_a_terminal`]: the same questions through
+/// `/dev/tty`, a devfs node of its own that opens the console -- which is the
+/// descriptor busybox's shell asks for the foreground group on, and which was
+/// once refused because `fstat` names a different inode than the console.
+fn terminal_answers_through_dev_tty(process: &Process, page: u64) -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::TIOCGPGRP;
+
+    uaccess::copy_to_user(process.space(), page + TTY_PATH, b"/dev/tty\0")
+        .map_err(|_| "could not stage /dev/tty")?;
+    let tty = fd::sys_openat(process, AT_FDCWD, page + TTY_PATH, O_RDWR, 0)
+        .map_err(|_| "/dev/tty did not open")?;
+    let tty = i32::try_from(tty).map_err(|_| "an impossible descriptor")?;
+    let outcome = answers(
+        fd::sys_ioctl(process, tty, TCGETS, page + TTY_TERMIOS),
+        0,
+        "TCGETS through /dev/tty was refused",
+    )
+    .and_then(|()| {
+        answers(
+            fd::sys_ioctl(process, tty, TIOCGPGRP, page + TTY_INT),
+            0,
+            "TIOCGPGRP through /dev/tty was refused to a session leader",
+        )
+    });
+    let _ = fd::sys_close(process, tty);
+    outcome
+}
+
+/// See [`check_the_console_answers_as_a_terminal`].
+fn terminal_settings_answer(process: &Process, page: u64) -> Result<(), &'static str> {
+    use crate::fs::terminal::{Termios, Winsize};
+    use ferrix_linux_abi::types::{
+        ECHO, ICANON, ICRNL, ISIG, ONLCR, OPOST, TCFLSH, TCSETSF, TCSETSW, TCXONC, TERMIOS_BYTES,
+        VERASE, VMIN,
+    };
+
+    let read_termios = || {
+        let mut bytes = [0_u8; TERMIOS_BYTES];
+        uaccess::copy_from_user(process.space(), page + TTY_TERMIOS, &mut bytes)
+            .map_err(|_| "could not read a termios back")?;
+        Ok::<_, &'static str>(Termios::from_bytes(&bytes))
+    };
+    answers(
+        fd::sys_ioctl(process, 0, TCGETS, page + TTY_TERMIOS),
+        0,
+        "TCGETS on the console was refused",
+    )?;
+    let settings = read_termios()?;
+    let local = ICANON | ECHO | ISIG;
+    if settings.lflag & local != local
+        || settings.iflag & ICRNL == 0
+        || settings.oflag & (OPOST | ONLCR) != OPOST | ONLCR
+        || settings.cc(VMIN) != 1
+        || settings.cc(VERASE) != 0x7F
+    {
+        return Err("the console's settings were not a canonical, echoing terminal's");
+    }
+
+    // Raw mode, as `sh -i` sets it, reads back as set; then the original.
+    let raw = Termios {
+        lflag: settings.lflag & !(ICANON | ECHO),
+        ..settings
+    };
+    uaccess::copy_to_user(process.space(), page + TTY_TERMIOS, &raw.to_bytes())
+        .map_err(|_| "could not stage a termios")?;
+    answers(
+        fd::sys_ioctl(process, 0, TCSETSW, page + TTY_TERMIOS),
+        0,
+        "TCSETSW on the console was refused",
+    )?;
+    answers(
+        fd::sys_ioctl(process, 1, TCGETS, page + TTY_TERMIOS),
+        0,
+        "TCGETS on the console was refused",
+    )?;
+    if read_termios()? != raw {
+        return Err("TCGETS did not report what TCSETSW set");
+    }
+    uaccess::copy_to_user(process.space(), page + TTY_TERMIOS, &settings.to_bytes())
+        .map_err(|_| "could not stage a termios")?;
+    answers(
+        fd::sys_ioctl(process, 0, TCSETSF, page + TTY_TERMIOS),
+        0,
+        "TCSETSF on the console was refused",
+    )?;
+
+    answers(
+        fd::sys_ioctl(process, 1, TIOCGWINSZ, page + TTY_TERMIOS),
+        0,
+        "TIOCGWINSZ on the console was refused",
+    )?;
+    let mut size = [0_u8; 8];
+    uaccess::copy_from_user(process.space(), page + TTY_TERMIOS, &mut size)
+        .map_err(|_| "could not read a winsize back")?;
+    if Winsize::from_bytes(size) != Winsize::DEFAULT {
+        return Err("the console did not report 24 rows of 80 columns");
+    }
+    refuses(
+        fd::sys_ioctl(process, 1, TIOCGWINSZ, 0),
+        Errno::EFAULT,
+        "a terminal's answer was written to address zero",
+    )?;
+    refuses(
+        fd::sys_ioctl(process, 0, TCFLSH, 7),
+        Errno::EINVAL,
+        "TCFLSH accepted a queue that does not exist",
+    )?;
+    answers(
+        fd::sys_ioctl(process, 0, TCXONC, 1),
+        0,
+        "TCXONC refused to restart output",
+    )?;
+    refuses(
+        fd::sys_ioctl(process, 0, 0x5480, 0),
+        Errno::ENOTTY,
+        "an unknown terminal request was not ENOTTY",
+    )
+}
+
+/// See [`check_the_console_answers_as_a_terminal`].
+fn terminal_job_control_answers(process: &Process, page: u64) -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::{FIONREAD, TIOCGPGRP, TIOCGSID, TIOCNOTTY, TIOCSCTTY, TIOCSPGRP};
+
+    let at = page + TTY_INT;
+    let read_int = || {
+        let mut bytes = [0_u8; 4];
+        uaccess::copy_from_user(process.space(), at, &mut bytes)
+            .map_err(|_| "could not read an int back")?;
+        Ok::<u32, &'static str>(u32::from_le_bytes(bytes))
+    };
+    let stage_int = |value: i32| {
+        uaccess::copy_to_user(process.space(), at, &value.to_le_bytes())
+            .map_err(|_| "could not stage an int")
+    };
+
+    // The check's process leads its own session, so the free console becomes
+    // its controlling terminal when it asks.
+    answers(
+        fd::sys_ioctl(process, 0, TIOCGPGRP, at),
+        0,
+        "TIOCGPGRP was refused to a session leader",
+    )?;
+    if read_int()? != process.pgid() {
+        return Err("the console's foreground group was not its session leader's");
+    }
+    answers(
+        fd::sys_ioctl(process, 0, TIOCGSID, at),
+        0,
+        "TIOCGSID was refused",
+    )?;
+    if read_int()? != process.sid() {
+        return Err("the console did not report its session");
+    }
+    answers(
+        fd::sys_ioctl(process, 0, TIOCSCTTY, 0),
+        0,
+        "TIOCSCTTY was refused for the terminal the session already has",
+    )?;
+    stage_int(i32::try_from(process.pgid()).map_err(|_| "an impossible group")?)?;
+    answers(
+        fd::sys_ioctl(process, 0, TIOCSPGRP, at),
+        0,
+        "TIOCSPGRP was refused the caller's own group",
+    )?;
+    stage_int(-1)?;
+    refuses(
+        fd::sys_ioctl(process, 0, TIOCSPGRP, at),
+        Errno::EINVAL,
+        "TIOCSPGRP accepted a negative group",
+    )?;
+    stage_int(0x7FFF_FFF0)?;
+    refuses(
+        fd::sys_ioctl(process, 0, TIOCSPGRP, at),
+        Errno::ESRCH,
+        "TIOCSPGRP accepted a group nobody is in",
+    )?;
+    answers(
+        fd::sys_ioctl(process, 0, FIONREAD, at),
+        0,
+        "FIONREAD was refused",
+    )?;
+    answers(
+        fd::sys_ioctl(process, 0, TIOCNOTTY, 0),
+        0,
+        "TIOCNOTTY was refused to the session holding the terminal",
+    )
+}
+
 /// Map `len` bytes of read/write anonymous memory, wherever it fits.
 fn map_rw(process: &Process, len: u64) -> Result<u64, &'static str> {
     let at = memory::sys_mmap(
@@ -1564,11 +2028,6 @@ fn check_a_new_process_has_the_console(process: &Process) -> Result<(), &'static
         "the console could be sought, as if it were a file",
     )?;
     refuses(
-        fd::sys_ioctl(process, 1, TCGETS, 0),
-        Errno::ENOTTY,
-        "an ioctl on the console was not ENOTTY",
-    )?;
-    refuses(
         fd::sys_ioctl(process, 99, TCGETS, 0),
         Errno::EBADF,
         "an ioctl on a closed descriptor was not EBADF",
@@ -1845,6 +2304,16 @@ fn check_descriptors_are_refused_by_kind(process: &Process, page: u64) -> Result
     let relative = fd::sys_openat(process, tmp, page + AT_NAME, O_RDONLY, 0)
         .map_err(|_| "a name relative to a directory descriptor did not open")?;
     let relative = i32::try_from(relative).map_err(|_| "an impossible descriptor")?;
+    refuses(
+        fd::sys_ioctl(process, relative, TCGETS, page + AT_RESULT),
+        Errno::ENOTTY,
+        "a regular file answered TCGETS, as if it were a terminal",
+    )?;
+    refuses(
+        fd::sys_ioctl(process, relative, TIOCGWINSZ, page + AT_RESULT),
+        Errno::ENOTTY,
+        "a regular file answered TIOCGWINSZ, as if it were a terminal",
+    )?;
     refuses(
         file::sys_write(process, relative, page + AT_DATA, 1),
         Errno::EBADF,

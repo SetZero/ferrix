@@ -30,6 +30,7 @@ pub(crate) mod devfs;
 mod pages;
 pub(crate) mod pipe;
 pub(crate) mod procfs;
+pub(crate) mod terminal;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
