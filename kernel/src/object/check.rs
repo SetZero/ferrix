@@ -24,7 +24,7 @@ use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
-use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, PACKET_SIGNAL, PACKET_USER};
+use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, PACKET_INTERRUPT, PACKET_SIGNAL, PACKET_USER};
 use ferrix_sync::SpinLock;
 use ferrix_vma::VmaFlags;
 
@@ -1244,6 +1244,8 @@ fn check_an_interrupt_is_held_until_acknowledged(
         counter,
     )?;
 
+    check_a_bound_interrupt_reaches_its_port(&side, first, vector.number(), counter)?;
+
     let _ = side
         .call(nr::HANDLE_CLOSE, &[reg(first)])
         .map_err(|_| "closing an interrupt failed")?;
@@ -1641,5 +1643,66 @@ fn check_a_port_wait_is_woken_by_a_message(counter: &mut Counter) -> Result<(), 
     counter.woken += 1;
     counter.packets += 1;
     side.close_everything();
+    Ok(())
+}
+
+/// A bound interrupt queues one packet on its port per quiet-to-pending
+/// transition: a second binding is refused, two deliveries before an
+/// acknowledgement queue one packet carrying the key, the interrupt kind and
+/// when it fired, and a delivery after the acknowledgement queues another.
+///
+/// Called with the interrupt freshly acknowledged, so it starts quiet, and
+/// leaves it acknowledged.
+fn check_a_bound_interrupt_reaches_its_port(
+    side: &Side,
+    interrupt: Handle,
+    number: u32,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
+    side.put(KEY, &41_u64.to_ne_bytes())?;
+    let _ = side
+        .call(nr::INTERRUPT_BIND, &[reg(interrupt), reg(port), KEY])
+        .map_err(|_| "interrupt_bind failed")?;
+    refused(
+        side.call(nr::INTERRUPT_BIND, &[reg(interrupt), reg(port), KEY]),
+        status::ALREADY_BOUND,
+        "an interrupt was bound to a second port",
+        counter,
+    )?;
+
+    interrupt::on_interrupt(number);
+    interrupt::on_interrupt(number);
+    stage_deadline(side, PATIENCE_NANOS)?;
+    let _ = side
+        .call(nr::PORT_WAIT, &[reg(port), DEADLINE, PACKET_AT])
+        .map_err(|_| "a bound interrupt did not reach its port")?;
+    let (key, kind, _, fired_at, _) = read_packet(side)?;
+    if key != 41 || kind != PACKET_INTERRUPT || fired_at == 0 {
+        return Err("an interrupt packet did not carry its key, its kind and when it fired");
+    }
+    counter.packets += 1;
+    refused(
+        take_now(side, port),
+        status::TIMED_OUT,
+        "an interrupt delivered twice before its acknowledgement queued two packets",
+        counter,
+    )?;
+
+    let _ = side
+        .call(nr::INTERRUPT_ACK, &[reg(interrupt)])
+        .map_err(|_| "acknowledging a bound interrupt failed")?;
+    interrupt::on_interrupt(number);
+    stage_deadline(side, PATIENCE_NANOS)?;
+    let _ = side
+        .call(nr::PORT_WAIT, &[reg(port), DEADLINE, PACKET_AT])
+        .map_err(|_| "an acknowledged interrupt did not reach its port again")?;
+    counter.packets += 1;
+    let _ = side
+        .call(nr::INTERRUPT_ACK, &[reg(interrupt)])
+        .map_err(|_| "acknowledging the second delivery failed")?;
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(port)])
+        .map_err(|_| "closing an interrupt's port failed")?;
     Ok(())
 }

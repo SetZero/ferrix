@@ -748,8 +748,9 @@ pending from delivery to acknowledgement. Two programs in user mode must
 exchange a message and a VMO handle over a channel and both exit 0. A port must
 give back what was queued, a registration must fire once when its signal comes
 true or at once if it already is, and a port wait must be woken by the message a
-registration watched. A kernel failing any of these would give userspace drivers
-a capability system that confines nothing.
+registration watched. A bound interrupt must queue exactly one packet on its
+port per delivery before acknowledgement. A kernel failing any of these would
+give userspace drivers a capability system that confines nothing.
 
 1. The handle table in `libs/objects` or the rights rule in `libs/native-abi`
    changed, so a closed handle resolves again or a duplicate gains a right.

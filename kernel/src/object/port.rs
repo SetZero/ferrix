@@ -35,7 +35,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 
 use ferrix_native_abi::signals::Signals;
-use ferrix_native_abi::types::{PACKET_SIGNAL, PACKET_USER, PortPacket};
+use ferrix_native_abi::types::{PACKET_INTERRUPT, PACKET_SIGNAL, PACKET_USER, PortPacket};
 use ferrix_sync::IrqSpinLock;
 
 use crate::arch;
@@ -102,6 +102,40 @@ impl Port {
             kind: PACKET_SIGNAL,
             signals: asserted.0,
             data: [0; 2],
+        });
+        self.waiters.wake_all();
+    }
+
+    /// Queue a bound interrupt's packet, from its interrupt handler.
+    ///
+    /// Touches only this queue's interrupt-safe lock and allocates nothing: a
+    /// queue already at its reserved capacity drops the packet, and the
+    /// interrupt stays pending, which a wait on the interrupt itself still
+    /// sees. Wakes no waiter, because a wait queue's lock may not be taken in
+    /// an interrupt handler; a waiter notices through its recheck. Returns
+    /// whether the packet was queued.
+    pub(crate) fn queue_from_interrupt(&self, key: u64, fired_at: u64) -> bool {
+        let mut queue = self.queue.lock();
+        if queue.len() >= queue.capacity() {
+            return false;
+        }
+        queue.push_back(PortPacket {
+            key,
+            kind: PACKET_INTERRUPT,
+            signals: 0,
+            data: [fired_at, 0],
+        });
+        true
+    }
+
+    /// Queue a bound interrupt's packet from task context, for an interrupt
+    /// that was already pending when it was bound.
+    pub(crate) fn queue_interrupt(&self, key: u64, fired_at: u64) {
+        self.queue.lock().push_back(PortPacket {
+            key,
+            kind: PACKET_INTERRUPT,
+            signals: 0,
+            data: [fired_at, 0],
         });
         self.waiters.wake_all();
     }

@@ -34,6 +34,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_sync::IrqSpinLock;
 
+use super::port::Port;
 use crate::arch;
 use crate::device::Vector;
 use crate::irq;
@@ -52,6 +53,17 @@ pub(crate) enum InterruptError {
     Taken,
     /// The interrupt controller cannot mask this line.
     NotMaskable,
+    /// The interrupt is already bound to a port someone still holds.
+    AlreadyBound,
+}
+
+/// Where a bound interrupt's packets go.
+#[derive(Debug)]
+struct Binding {
+    /// The port. Weak, so a binding does not keep a port nobody holds alive.
+    port: Weak<Port>,
+    /// The key its packets carry.
+    key: u64,
 }
 
 /// A device interrupt a driver holds.
@@ -62,6 +74,13 @@ pub(crate) struct Interrupt {
     /// Fired and not yet acknowledged. Set only by the handler, cleared only
     /// by an acknowledgement.
     pending: AtomicBool,
+    /// The port it is bound to, if any.
+    ///
+    /// The handler takes this lock before it marks the interrupt pending, and
+    /// [`Interrupt::bind`] takes it to bind and to look at pending. That
+    /// serialises the two: a delivery and a bind racing on two processors
+    /// produce exactly one packet between them, never none and never two.
+    binding: IrqSpinLock<Option<Binding>, arch::Irq>,
 }
 
 impl Interrupt {
@@ -85,6 +104,7 @@ impl Interrupt {
         let interrupt = Arc::new(Interrupt {
             vector,
             pending: AtomicBool::new(false),
+            binding: IrqSpinLock::new(None),
         });
 
         {
@@ -124,6 +144,51 @@ impl Interrupt {
             return Err(InterruptError::NotMaskable);
         }
         Ok(interrupt)
+    }
+
+    /// Deliver it to `port` as packets carrying `key`: one each time it goes
+    /// from quiet to pending, so a device that fires twice before its driver
+    /// acknowledges produces one packet, not a queue of them. If it is already
+    /// pending when bound, its packet is queued at once.
+    ///
+    /// # Errors
+    ///
+    /// [`InterruptError::AlreadyBound`] if it is bound to a port anyone still
+    /// holds.
+    pub(crate) fn bind(&self, port: &Arc<Port>, key: u64) -> Result<(), InterruptError> {
+        let pending = {
+            let mut binding = self.binding.lock();
+            if binding
+                .as_ref()
+                .is_some_and(|bound| bound.port.strong_count() > 0)
+            {
+                return Err(InterruptError::AlreadyBound);
+            }
+            *binding = Some(Binding {
+                port: Arc::downgrade(port),
+                key,
+            });
+            self.is_pending()
+        };
+        if pending {
+            port.queue_interrupt(key, crate::timer::now_nanos());
+        }
+        Ok(())
+    }
+
+    /// Mark it pending, and queue its packet if it is bound and was quiet.
+    /// From its interrupt handler: atomics and interrupt-safe locks only.
+    fn fire(&self) {
+        let binding = self.binding.lock();
+        if self.pending.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let Some(bound) = binding.as_ref() else {
+            return;
+        };
+        if let Some(port) = bound.port.upgrade() {
+            let _ = port.queue_from_interrupt(bound.key, crate::timer::now_nanos());
+        }
     }
 
     /// Whether it has fired and not been acknowledged.
@@ -171,7 +236,8 @@ impl Drop for Interrupt {
 
 /// The kernel's handler for every line an `Interrupt` has claimed.
 ///
-/// Mask and mark, and nothing else: see the module documentation for
+/// Mask, mark, and queue a bound interrupt's packet, and nothing else: see
+/// the module documentation for
 /// what an interrupt handler may not do. The reference taken to the object is
 /// dropped after the table's lock is released, because if it was the last one
 /// the object's own drop takes that lock.
@@ -179,6 +245,6 @@ pub(crate) fn on_interrupt(number: u32) {
     let _ = arch::mask_interrupt(number);
     let target = BOUND.lock().get(&number).and_then(Weak::upgrade);
     if let Some(interrupt) = target {
-        interrupt.pending.store(true, Ordering::Release);
+        interrupt.fire();
     }
 }

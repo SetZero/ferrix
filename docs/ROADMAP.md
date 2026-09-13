@@ -1201,6 +1201,17 @@ architectures.**
   two-minute `port_wait` by a message a kernel thread writes twenty
   milliseconds later.
 
+* **Interrupts reach ports.** `interrupt_bind` delivers an `Interrupt` to a
+  port as packets carrying a key and the time it fired, one each time it goes
+  from quiet to pending, so a device that fires twice before its driver
+  acknowledges produces one packet. The handler queues it itself, under the
+  port's interrupt-safe lock and without allocating, and takes the binding's
+  lock before marking the interrupt pending, which serialises it against a
+  bind racing on another processor: exactly one packet between them. The
+  check, where a machine has a device vector, binds one, refuses a second
+  binding, requires two deliveries before acknowledgement to queue one packet
+  with its key, kind and time, and one more after acknowledging.
+
 **The exit criterion is met in the boot test**, on all three architectures.
 Two copies of `arch::USER_NATIVE_PROGRAM`, assembled per architecture, run
 as user-mode tasks of their own: one creates a VMO, writes a secret into it and
@@ -1217,7 +1228,7 @@ open for what stage 10 needs beyond the criterion.
 
 **Still to do.**
 
-* Binding an `Interrupt` to a port, and `vmo_map`.
+* `vmo_map`.
 * **An interrupt wakes its waiter within five milliseconds, not at once.** A
   wait queue takes a plain lock, which an interrupt handler may not, so the
   handler only masks and marks and the waiter notices through its wait's

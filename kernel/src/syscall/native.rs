@@ -24,7 +24,7 @@
 //!
 //! # What is not here yet
 //!
-//! Binding an interrupt to a port, and mapping a VMO.
+//! Mapping a VMO.
 //! Their numbers decode, and answer `ENOSYS` until they exist.
 
 use alloc::sync::Arc;
@@ -140,6 +140,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::JobKill => job_kill(process, handle(a[0])),
         NativeCall::InterruptCreate => interrupt_create(process, handle(a[0]), a[1]),
         NativeCall::InterruptAck => interrupt_ack(process, handle(a[0])),
+        NativeCall::InterruptBind => interrupt_bind(process, handle(a[0]), handle(a[1]), a[2]),
         NativeCall::IoMappingCreate => io_mapping_create(process, handle(a[0]), a[1]),
         NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1]),
         NativeCall::PortCreate => insert_new(process, Object::Port(Port::new()), Rights::PORT),
@@ -747,7 +748,7 @@ fn interrupt_create(process: &Process, device: Handle, index: u64) -> Result<usi
         .and_then(|index| node.vector(index))
         .ok_or(status::INVALID_ARGS)?;
     let interrupt = Interrupt::new(vector).map_err(|why| match why {
-        InterruptError::Taken => status::ALREADY_BOUND,
+        InterruptError::Taken | InterruptError::AlreadyBound => status::ALREADY_BOUND,
         InterruptError::NotMaskable => status::INVALID_ARGS,
     })?;
     insert_new(process, Object::Interrupt(interrupt), Rights::INTERRUPT)
@@ -941,4 +942,40 @@ fn object_wait_async(
         Some(Ok(())) => Ok(0),
         Some(Err(_)) => Err(status::NO_MEMORY),
     }
+}
+
+/// The interrupt a handle names, if it carries `needed`.
+fn interrupt_in(
+    process: &Process,
+    interrupt: Handle,
+    needed: Rights,
+) -> Result<Arc<Interrupt>, Errno> {
+    process.with_handles(|table| {
+        let (object, rights) = table.get(interrupt).map_err(table_error)?;
+        let Object::Interrupt(interrupt) = object else {
+            return Err(status::WRONG_TYPE);
+        };
+        if !rights.contains(needed) {
+            return Err(status::ACCESS_DENIED);
+        }
+        Ok(Arc::clone(interrupt))
+    })
+}
+
+/// `interrupt_bind`.
+fn interrupt_bind(
+    process: &Process,
+    interrupt: Handle,
+    port: Handle,
+    key_at: u64,
+) -> Result<usize, Errno> {
+    let key = read_u64(process, key_at)?;
+    let port = port_in(process, port, Rights::WRITE)?;
+    let interrupt = interrupt_in(process, interrupt, Rights::MANAGE)?;
+    let bound = interrupt.bind(&port, key).map_err(|why| match why {
+        InterruptError::AlreadyBound | InterruptError::Taken => status::ALREADY_BOUND,
+        InterruptError::NotMaskable => status::INVALID_ARGS,
+    });
+    object::dispose([Object::Interrupt(interrupt)]);
+    bound.map(|()| 0)
 }

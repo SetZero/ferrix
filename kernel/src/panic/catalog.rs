@@ -644,7 +644,8 @@ pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
               and both exit 0. A \
               port must give back what was queued, a registration must fire once when its \
               signal comes true or at once if it already is, and a port wait must be woken \
-              by the message a registration watched. A \
+              by the message a registration watched. A bound interrupt must queue exactly one \
+              packet on its port per delivery before acknowledgement. A \
               kernel failing any of these would give userspace drivers a capability system that \
               confines nothing.",
     causes: &[
