@@ -22,7 +22,7 @@
 //! The lock is per address space rather than global: two processes faulting at
 //! once contend for nothing, which is the property a compiler workload needs.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
@@ -111,6 +111,10 @@ struct Inner {
     /// The next object id to hand out. Never zero, which `Backing` reserves
     /// for private memory with no named object.
     next_id: u64,
+    /// The objects `vmo_map` put here, which the Linux calls that reshape a
+    /// region -- `mremap`, `mprotect` -- may not touch: a native VMO's size
+    /// and the rights its protection stands for belong to its handle.
+    native: BTreeSet<u64>,
 }
 
 /// One process's address space.
@@ -149,6 +153,7 @@ impl AddressSpace {
                 map,
                 objects: BTreeMap::new(),
                 next_id: 1,
+                native: BTreeSet::new(),
             }),
         }))
     }
@@ -336,8 +341,10 @@ impl AddressSpace {
             }
         }
 
-        // Read before the lock goes, because the child inherits it.
+        // Read before the lock goes, because the child inherits them. A
+        // native object is shared, so the child names the same one.
         let next_id = inner.next_id;
+        let native = inner.native.clone();
 
         // The parent's writable translations to the shared pages are out of
         // its tables, but may still be in some processor's TLB — and a write
@@ -359,6 +366,7 @@ impl AddressSpace {
                 // which is fine: an id is only ever looked up in its own
                 // space's table.
                 next_id,
+                native,
             }),
         }))
     }
@@ -652,8 +660,14 @@ impl AddressSpace {
         // An object nothing maps any more is dropped here, which releases
         // every page it committed. Split borrows: the predicate reads the map
         // while the objects are being written.
-        let Inner { map, objects, .. } = &mut *inner;
+        let Inner {
+            map,
+            objects,
+            native,
+            ..
+        } = &mut *inner;
         objects.retain(|id, _| still_named(map, *id));
+        native.retain(|id| objects.contains_key(id));
     }
 }
 
@@ -715,7 +729,8 @@ impl AddressSpace {
     /// # Errors
     ///
     /// [`SpaceError::NotMapped`] if the old range is not wholly inside one
-    /// region; [`SpaceError::Refused`] if that region is not anonymous memory;
+    /// region; [`SpaceError::Refused`] if that region is not anonymous memory,
+    /// or is a VMO `vmo_map` put there;
     /// [`SpaceError::NotUserRange`] for a fixed destination outside the user
     /// half or off a page boundary; [`SpaceError::BadRange`] for one that
     /// overlaps the old range, or a malformed length; and
@@ -744,6 +759,9 @@ impl AddressSpace {
             let Backing::Anonymous { id, offset } = region.backing else {
                 return Err(SpaceError::Refused(old));
             };
+            if inner.native.contains(&id) {
+                return Err(SpaceError::Refused(old));
+            }
             // Where in the object the old range starts, in bytes.
             let first = offset
                 .checked_add(old - region.range.start())
@@ -1034,6 +1052,75 @@ impl AddressSpace {
         Ok(at)
     }
 
+    /// Map `len` bytes of `vmo`, from byte `offset`, at `at` or wherever there
+    /// is room: what `vmo_map` does.
+    ///
+    /// Shared, always. The region names the object itself, not a copy of it,
+    /// so a write through it is a write every handle and every other mapping
+    /// of the object sees, and `fork` shares the object rather than marking
+    /// the region copy-on-write. The region keeps the object alive, so the
+    /// mapping outlives the handle it was made with. Nothing is committed
+    /// here: pages arrive on first touch, as the object's own, and an unmap
+    /// gives them back only if nothing else holds the object. `mremap` and
+    /// `mprotect` refuse the region: the object's size is its handle's to
+    /// set, and the protection stands for rights the handle carried.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::Refused`] for an executable mapping;
+    /// [`SpaceError::BadRange`] for a length or offset that is not whole
+    /// pages, a range past the object's end, or one that overlaps a mapping;
+    /// [`SpaceError::NotUserRange`] outside the user half; and
+    /// [`SpaceError::OutOfMemory`] if no free range is long enough.
+    pub(crate) fn map_object(
+        &self,
+        at: Option<u64>,
+        len: u64,
+        vmo: Arc<Vmo>,
+        offset: u64,
+        flags: VmaFlags,
+    ) -> Result<u64, SpaceError> {
+        if flags.execute {
+            return Err(SpaceError::Refused(at.unwrap_or(0)));
+        }
+        if len == 0
+            || !len.is_multiple_of(PAGE_SIZE)
+            || !offset.is_multiple_of(PAGE_SIZE)
+            || offset
+                .checked_add(len)
+                .is_none_or(|end| end > vmo.len_bytes())
+        {
+            return Err(SpaceError::BadRange);
+        }
+        let mut inner = self.inner.lock();
+        let at = match at {
+            Some(at) => at,
+            None => inner
+                .map
+                .find_free(len, PAGE_SIZE, None)
+                .ok_or(SpaceError::OutOfMemory)?,
+        };
+        if !is_user_address(at) || at.checked_add(len).is_none_or(|end| end > USER_VIRT_END) {
+            return Err(SpaceError::NotUserRange(at));
+        }
+        let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
+        let flags = VmaFlags {
+            execute: false,
+            shared: true,
+            grows_down: false,
+            ..flags
+        };
+        let id = inner.next_id;
+        inner.next_id = inner.next_id.saturating_add(1);
+        inner
+            .map
+            .insert(range, flags, Backing::Anonymous { id, offset })
+            .map_err(|_| SpaceError::BadRange)?;
+        let _ = inner.objects.insert(id, vmo);
+        let _ = inner.native.insert(id);
+        Ok(at)
+    }
+
     /// Translate one page of a device region to the device's own page.
     ///
     /// Called with the address space's lock held, as the anonymous path maps,
@@ -1114,13 +1201,24 @@ impl AddressSpace {
     /// # Errors
     ///
     /// [`SpaceError::BadRange`] if the range is malformed, or is not wholly
-    /// mapped.
+    /// mapped; [`SpaceError::Refused`] if it reaches a region `vmo_map` made,
+    /// whose protection is its handle's to grant.
     pub(crate) fn protect(&self, at: u64, len: u64, flags: VmaFlags) -> Result<(), SpaceError> {
         if !is_user_address(at) || at.checked_add(len).is_none_or(|end| end > USER_VIRT_END) {
             return Err(SpaceError::NotUserRange(at));
         }
         let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
         let mut inner = self.inner.lock();
+
+        let Inner { map, native, .. } = &*inner;
+        let reaches_native = map.iter().any(|region| {
+            region.range.start() < range.end()
+                && range.start() < region.range.end()
+                && matches!(region.backing, Backing::Anonymous { id, .. } if native.contains(&id))
+        });
+        if reaches_native {
+            return Err(SpaceError::Refused(at));
+        }
 
         inner
             .map

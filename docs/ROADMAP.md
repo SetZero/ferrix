@@ -1365,13 +1365,24 @@ a system call could resume with another program's user stack pointer; stage
 7's `144b0cc` fixed it. The job check found that a kill never reached a
 program spinning alone on its processor; `301aec4` fixed that.
 
+**Done — `vmo_map`, and what a DMA pin needs from a VMO.** A VMO maps into
+the calling process a whole number of pages at a time, and shared: a write
+through the mapping is a write to the VMO, a fork reaches the same pages
+rather than copies, and the mapping keeps the object alive once the handle it
+was made with is closed. A mapping always reads, writes only when asked and
+when the handle carries `WRITE`, and never executes. `mremap` and `mprotect`
+refuse a region `vmo_map` made: the first would grow the VMO through the Linux
+path, and the second would give a mapping a right its handle did not carry.
+The object check maps a VMO, reads and writes it both ways, forks the space,
+closes the handle, and is refused twelve ways.
+
+`Vmo::hold` keeps a page on the frame a device was given for as long as a pin
+holds it. Decommitting skips the page, a copy-on-write replace is refused, and
+a fork copies it instead of sharing it; a stage 6 self-check walks a held page
+through each of those and through nested holds.
+
 **Left for later stages**, none of it on the exit criterion's path:
 
-* `vmo_map`. What a DMA pin needs from the VMO under it is in: `Vmo::hold`
-  keeps a page on the frame a device was given for as long as a pin holds it.
-  Decommitting skips the page, a copy-on-write replace is refused, and a fork
-  copies it instead of sharing it; a stage 6 self-check walks a held page
-  through each of those and through nested holds.
 * **An interrupt wakes its waiter within five milliseconds, not at once.** A
   wait queue takes a plain lock, which an interrupt handler may not, so the
   handler only masks and marks and the waiter notices through its wait's

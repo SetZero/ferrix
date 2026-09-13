@@ -117,8 +117,12 @@ pub enum NativeCall {
     VmoWrite,
     /// `(vmo, size: *u64)`. The VMO's size in bytes.
     VmoGetSize,
-    /// `(vmo, address, length, protection, offset: *u64)` → address. Map a
-    /// VMO. Needs `MAP`, and `READ`/`WRITE` for the protection asked for.
+    /// `(vmo, address, length, protection, offset: *u64)` → address. Map
+    /// `length` bytes of a VMO from `offset`, both whole pages, at `address`,
+    /// or wherever there is room if it is zero. Shared: a write through the
+    /// mapping is a write to the VMO. `protection` is `MAP_READ`, or
+    /// `MAP_READ | MAP_WRITE`; nothing maps a VMO executable. Needs `MAP`,
+    /// and `READ`/`WRITE` for the protection asked for.
     VmoMap,
     /// `(parent)` → handle. Make a job inside `parent`. Needs `MANAGE`.
     JobCreate,

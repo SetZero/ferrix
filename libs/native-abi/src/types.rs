@@ -41,6 +41,11 @@ pub const PACKET_SIGNAL: u32 = 1;
 /// A packet a bound interrupt produced.
 pub const PACKET_INTERRUPT: u32 = 2;
 
+/// `vmo_map`'s protection: the mapping may be read. Every mapping asks for it.
+pub const MAP_READ: u32 = 1 << 0;
+/// `vmo_map`'s protection: the mapping may also be written.
+pub const MAP_WRITE: u32 = 1 << 1;
+
 /// What a `channel_read` found.
 ///
 /// Written on success, and on `BUFFER_TOO_SMALL` too, when it is how the
