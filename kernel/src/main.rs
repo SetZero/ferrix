@@ -259,7 +259,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
         );
     }
 
-    println!("{SUCCESS_MARKER} stages 1-8");
+    println!("{SUCCESS_MARKER} stages 1-9");
 
     // After the marker, on purpose: see `init`. Returns at once when no program
     // was built in.

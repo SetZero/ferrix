@@ -24,7 +24,7 @@ package FerrixObjects {
 
     // Vmo and ProcessAddressSpace are defined in FerrixMemory; they are two of
     // the nine.
-    #planned part def VmoObject :> KernelObject, Vmo;
+    #implemented part def VmoObject :> KernelObject, Vmo;
     #planned part def AddressSpaceObject :> KernelObject, ProcessAddressSpace;
 
     #implemented part def Channel :> KernelObject {
@@ -200,7 +200,7 @@ package FerrixObjects {
     // The native ABI, stage 9
     // -----------------------------------------------------------------------
 
-    #inProgress part def NativeAbi {
+    #implemented part def NativeAbi {
         @stage { number = 9; }
         doc /* Syscall numbers from 0x1000. Handle-table operations, channel
              * send/receive with handle passing, port wait, interrupt bind,

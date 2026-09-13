@@ -19,8 +19,8 @@ longer". This is a long program of work: stages 1–8 are a conventional kernel
 bring-up, 9–14 are the parts this design chose to do properly, and 15–17 are the
 goal. Nobody should read the table as a schedule.
 
-**Where it stands:** stages 0–8 are done and in the boot test on all three
-architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-8`.
+**Where it stands:** stages 0–9 are done and in the boot test on all three
+architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-9`.
 ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4. Stage 7's exit is
 somebody else's static musl busybox running a script on every architecture,
 checked by `cargo xtask test-shell` rather than the boot test because it needs
@@ -31,10 +31,10 @@ unpacked from an initramfs, every process's descriptor table, the calls that
 take a path, pipes, `/dev` and `/proc` — and its exit, `cargo xtask test-vfs`
 running `ls -R /proc`, `cat /proc/self/maps` and one shell script whose applets
 are forked programs, passes on all three architectures; it is a test of its
-own for the reason stage 7's is. Stage 9 has begun where the continuous rule
-says a stage should, with its byte-level half, the handle table, in
-`libs/objects`, and its first kernel objects — handle tables, channels carrying
-handles, VMOs — are in the boot test.
+own for the reason stage 7's is. Stage 9's exit runs in the boot test itself:
+two programs in user mode exchange messages and a handle over a channel, and a
+job kill takes down a process tree, with ports, interrupts delivered to them
+and device memory a driver can map built on the same objects.
 Stage 10 has begun the same way, with PCI configuration space in `libs/pci`,
 and its first kernel code — PCI enumeration, device nodes with MSI-X vectors a
 driver can be given, and a device driven by DMA and answering by MSI-X from the
@@ -1188,14 +1188,14 @@ manipulates files under tmpfs, all under the boot test.
 
 ---
 
-## Stage 9 — The native ABI: handles, channels, ports, VMOs  ·  *week*
+## Stage 9 — The native ABI: handles, channels, ports, VMOs ✅
 
 Handle tables, `Channel` with handle passing, `Port` event queues, `Interrupt`
 objects, `IoMapping`, and `Job`. The syscalls in the `0x1000` range. This is
 what stage 10 is written against.
 
 **Done — the ABI written down, and the table under it.** Host-tested, fuzzed
-and under Miri; not yet reached from the kernel.
+and under Miri, and reached from the kernel by everything below.
 
 * `libs/native-abi` — the numbers, handle values, rights, signals, error names
   and `repr(C)` layouts. One number table on every architecture, in
@@ -1330,10 +1330,9 @@ it, blocked in a native wait or spinning alone on a processor, and none above
 it. The exit test found, on four-processor ARMv7-A, that a program blocked in
 a system call could resume with another program's user stack pointer; stage
 7's `144b0cc` fixed it. The job check found that a kill never reached a
-program spinning alone on its processor; `301aec4` fixed that. The stage stays
-open for what stage 10 needs beyond the criterion.
+program spinning alone on its processor; `301aec4` fixed that.
 
-**Still to do.**
+**Left for later stages**, none of it on the exit criterion's path:
 
 * `vmo_map`.
 * **An interrupt wakes its waiter within five milliseconds, not at once.** A
@@ -1765,11 +1764,11 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory, and the PCI transport's status protocol, feature negotiation and queue activation. Reached at 10 by the boot check's virtio-rng driver. | 62 |
 | `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport, MSI-X messages and the pages of a BAR a driver must not be given. Has its fuzz target and its Miri step already. | 52 |
 | `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
-| `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one; and the reachability walk a send makes before it queues an endpoint. Has its fuzz target and its Miri step. | 22 |
+| `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one; and the reachability walk a send makes before it queues an endpoint. Has its fuzz target and its Miri step. | 24 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **696 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **698 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

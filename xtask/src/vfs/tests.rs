@@ -6,7 +6,7 @@ fn owned(lines: &[&str]) -> Vec<String> {
 
 /// The log a kernel that passes every command would write.
 fn passing_log() -> Vec<String> {
-    let mut log = owned(&["FERRIX-BOOT-OK stages 1-8"]);
+    let mut log = owned(&["FERRIX-BOOT-OK stages 1-9"]);
     for (index, command) in COMMANDS.iter().enumerate() {
         log.push(format!("  init     command {index}: {}", command.argv[0]));
         match command.expect {
@@ -111,7 +111,7 @@ fn kernel_lines_about_commands_are_read() {
 #[test]
 fn a_log_splits_into_each_commands_output_and_unanswered_calls() {
     let log = owned(&[
-        "FERRIX-BOOT-OK stages 1-8",
+        "FERRIX-BOOT-OK stages 1-9",
         "  init     /bin/busybox is 857 KiB, running 2 commands",
         "  init     command 0: ls -R /proc",
         "  syscall  Getdents64 (number 217) answered ENOSYS",

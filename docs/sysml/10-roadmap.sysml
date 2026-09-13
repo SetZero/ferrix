@@ -36,7 +36,7 @@ package FerrixRoadmap {
              * invalidation is reachable. */
         subject os : Ferrix;
         attribute arch : IsaFamily;
-        attribute marker : String = "FERRIX-BOOT-OK stages 1-8";
+        attribute marker : String = "FERRIX-BOOT-OK stages 1-9";
     }
 
     // -----------------------------------------------------------------------
@@ -228,9 +228,9 @@ package FerrixRoadmap {
              * cat /proc/self/maps, a script manipulating files under tmpfs. */
     }
 
-    #inProgress requirement <'S9'> stage9NativeAbi : Stage {
+    #implemented requirement <'S9'> stage9NativeAbi : Stage {
         attribute :>> number = 9;
-        attribute :>> status = StageStatus::InProgress;
+        attribute :>> status = StageStatus::Done;
         attribute :>> size = "week";
         doc /* Handle tables, Channel with handle passing, Port, Interrupt,
              * IoMapping, Job; the 0x1000 syscalls. Exit: two processes
@@ -239,18 +239,15 @@ package FerrixRoadmap {
              *
              * Built: the byte-level half, in libs/native-abi and libs/objects,
              * host-tested, fuzzed and under Miri; and in kernel/src/object and
-             * syscall/native, a handle table on every Process, the native
-             * dispatch, channels carrying handles and VMO create/read/write,
-             * self-checked between two processes in the boot test; signals on
-             * every object and object_wait_one; Job with job_create and a
-             * job_kill that takes down a tree of running programs; device
-             * handles, IoMapping and Interrupt minted from stage 10's device
-             * nodes, with AddressSpace::map_device. Missing: ports and
-             * an interrupt wake from interrupt context, and vmo_map. Ports,
-             * object_wait_async and interrupt_bind are built. The exit criterion is
-             * met in the boot test: two user-mode programs exchange a message
-             * and a VMO handle over a channel, and a job kill ends every
-             * program in the job and beneath it. */
+             * syscall/native, handle tables on every Process, channels carrying
+             * handles, VMOs, signals and object_wait_one, Job, ports with
+             * object_wait_async, and IoMapping and Interrupt minted from stage
+             * 10's device nodes, with interrupts delivered to ports. The exit
+             * criterion runs in the boot test: two user-mode programs exchange
+             * a message and a VMO handle over a channel, and a job kill ends
+             * every program in the job and beneath it. Left for later: an
+             * interrupt-safe wake, vmo_map, sub-page apertures, and process
+             * creation in the native ABI. */
     }
 
     #inProgress requirement <'S10'> stage10UserspaceDrivers : Stage {
