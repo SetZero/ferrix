@@ -833,6 +833,9 @@ package FerrixStructure {
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 45;
             @stage { number = 8; }
+            doc /* The newc reader the initramfs is unpacked with. The
+                 * cpio_parse fuzz target writes every archive it walks to a
+                 * trailer back out and requires it to read back identical. */
         }
         #writtenAhead part vfs : LibraryCrate {
             attribute :>> path = "libs/vfs";

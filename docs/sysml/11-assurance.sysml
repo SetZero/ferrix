@@ -102,7 +102,7 @@ package FerrixAssurance {
              * ignored. */
     }
     #implemented verification fuzz : Gate {
-        attribute :>> command = "cargo fuzz run elf_parse; cargo fuzz run frame_alloc; cargo fuzz run ustack_build";
+        attribute :>> command = "cargo fuzz run <target>, for every target cargo fuzz list names";
         doc /* Replays the committed corpus first, searches second: an input
              * that crashed once fails again in seconds. ustack_build asserts a
              * round trip rather than the absence of a crash -- whatever the

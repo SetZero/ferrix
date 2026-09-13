@@ -14,6 +14,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+ferrix-cpio = { path = "../libs/cpio" }
 ferrix-elf = { path = "../libs/elf" }
 ferrix-frame = { path = "../libs/frame" }
 ferrix-ustack = { path = "../libs/ustack" }
@@ -89,6 +90,13 @@ name = "blkring"
 path = "fuzz_targets/blkring.rs"
 name = "virtio_blk"
 path = "fuzz_targets/virtio_blk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cpio_parse"
+path = "fuzz_targets/cpio_parse.rs"
 test = false
 doc = false
 bench = false

@@ -190,6 +190,15 @@ CI replays the committed corpus first and searches second. The replay is what
 makes it a regression test: an input that crashed once fails again in seconds,
 rather than waiting for the fuzzer to rediscover it inside a timebox.
 
+Not panicking is the floor a target starts from, never the property it
+checks. A parser's target asserts that every slice it hands back lies inside
+the input, that every walk ends within a bound the input's length sets, and
+that the parser agrees with something independent of it: a second walk
+written from the format's specification, or a round trip through a writer.
+The seeds are small and real — the archive the boot image carries, what a
+foreign tool wrote — and each is committed with the script that made it, under
+`scripts/seed-*-fuzz-corpus.py`.
+
 ## The boot test
 
 The gate that answers the question the others cannot. Everything else checks the

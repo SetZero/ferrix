@@ -2800,7 +2800,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
 | `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts, and which identification register fields grant each Arm `AT_HWCAP` bit. Constants and pure functions of them. Three number tables, one of them 32-bit. | 78 |
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
-| `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. | 45 |
+| `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. Has its fuzz target. | 45 |
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 59 |
 | `libs/procfs` | Reached at 8 — the text of `/proc`: the `maps` line padded to its name column at both pointer widths, `meminfo`, `status`, `stat` and `mounts`, pinned byte for byte against lines a real Linux printed, and the `maps` parser the kernel's boot check reads its own output back with. No fuzz target: it arranges the kernel's own numbers rather than parsing a stranger's bytes. | 14 |
 | `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory, and the PCI transport's status protocol, feature negotiation and queue activation. Reached at 10 by the boot check's virtio-rng driver. | 62 |
@@ -2814,12 +2814,21 @@ loader's), `frame`, `heap`, `paging` — that is **706 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has six:
-`elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`, `vfs_ops` and `pci_walk`. Every crate in the table above
-parses bytes that came from outside the system — a disk, a firmware table, an
-archive a stranger built — which is precisely the population the rule was
-written for. The fuzz targets are owed, and are owed *before* the consuming
-stage starts, not when it ships.
+asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has nine:
+`elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`, `vfs_ops`,
+`pci_walk`, `btrfs_read`, `block_queue` and `cpio_parse`. Every crate in the
+table above parses bytes that came from outside the system — a disk, a firmware
+table, an archive a stranger built — which is precisely the population the rule
+was written for. The fuzz targets still owed — `fdt`, `acpi`, `virtio` and
+`linux-abi` — are owed *before* the consuming stage starts, not when it ships.
+
+`cpio_parse` asserts more than the absence of a panic: that every name and
+data slice lies inside the archive exactly where the format puts it, that the
+summary agrees with the walk and `find` with the first entry of a name, that a
+prefix of an archive never reads a different entry, and that any archive
+walked to its trailer, written out again from what the reader reported, reads
+back identical. Its seeds include the archive every boot image carries, byte
+for byte, and two that GNU cpio wrote.
 
 `ustack_build` is what the rule looks like when it is followed rather than
 recorded as debt: written before a line of stage 7 kernel code existed, and it
