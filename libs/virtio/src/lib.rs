@@ -76,6 +76,7 @@
 
 use core::fmt;
 
+pub mod blk;
 pub mod pci;
 
 /// Largest queue size a split virtqueue may have, from virtio 1.2 §2.7.
