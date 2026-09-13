@@ -78,6 +78,7 @@ pub mod tz;
 pub mod uio;
 pub mod unistd;
 pub mod utsname;
+pub mod va;
 pub mod wait;
 pub mod wchar;
 pub mod wctype;
