@@ -167,22 +167,30 @@ pub(crate) fn load_executable(
     Ok(registry::register(process))
 }
 
-/// Load `image` into `space`, which must be empty, and build its startup stack:
-/// what a new process and `execve` share.
+/// An ELF image loaded into an empty address space, with its stack region
+/// reserved: what a Linux program and a native process both start from.
+#[derive(Debug)]
+pub(crate) struct Image {
+    /// Where the loader put it: the entry point, the program headers, and the
+    /// end of its highest segment, above which the heap may grow.
+    pub(crate) loaded: load::Loaded,
+    /// The top of the reserved stack region, aligned as the ABI requires. A
+    /// program with nothing on its stack starts with its stack pointer here.
+    pub(crate) stack_top: u64,
+}
+
+/// Load `image` into `space`, which must be empty, and reserve its stack region
+/// with a guard either side.
+///
+/// No startup image is built: [`populate`] adds Linux's -- arguments,
+/// environment and auxiliary vector -- and a native process starts with
+/// nothing on its stack, so it takes [`Image::stack_top`] as it is.
 ///
 /// # Errors
 ///
 /// [`ExecError`].
-fn populate(
-    space: &AddressSpace,
-    process: &Process,
-    program: Executable<'_>,
-    args: &[&[u8]],
-    env: &[&[u8]],
-    random: [u8; ferrix_ustack::RANDOM_BYTES],
-) -> Result<Startup, ExecError> {
-    let loaded = load::load(space, program.image).map_err(ExecError::Load)?;
-    process.set_heap_base(loaded.end);
+pub(crate) fn load_into(space: &AddressSpace, image: &[u8]) -> Result<Image, ExecError> {
+    let loaded = load::load(space, image).map_err(ExecError::Load)?;
 
     // The stack region. Reserved whole; paid for a page at a time.
     let top = stack_top();
@@ -203,6 +211,30 @@ fn populate(
             .map_anonymous(guard_low, STACK_GUARD, VmaFlags::NONE)
             .map_err(ExecError::Space)?;
     }
+    Ok(Image {
+        loaded,
+        stack_top: top,
+    })
+}
+
+/// Load `image` into `space`, which must be empty, with [`load_into`], and
+/// build Linux's startup stack: what a new process and `execve` share.
+///
+/// # Errors
+///
+/// [`ExecError`].
+fn populate(
+    space: &AddressSpace,
+    process: &Process,
+    program: Executable<'_>,
+    args: &[&[u8]],
+    env: &[&[u8]],
+    random: [u8; ferrix_ustack::RANDOM_BYTES],
+) -> Result<Startup, ExecError> {
+    let image = load_into(space, program.image)?;
+    let loaded = &image.loaded;
+    let top = image.stack_top;
+    process.set_heap_base(loaded.end);
 
     // Build the startup image in kernel memory, then copy it in. It cannot be
     // built in place: `libs/ustack` needs a `&mut [u8]` and the only way to
