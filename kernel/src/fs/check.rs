@@ -15,8 +15,10 @@
 //! devtmpfs` go in by syscall number, as an init script's do, and are read
 //! through, listed in `/proc/mounts` and unmounted again.
 
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::nr::Syscall;
@@ -26,9 +28,10 @@ use ferrix_linux_abi::types::{
     O_CREAT, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, PROT_READ, PROT_WRITE, SEEK_CUR,
 };
 use ferrix_vfs::pipe::PIPEFS_MAGIC;
-use ferrix_vfs::tmpfs::TMPFS_MAGIC;
+use ferrix_vfs::tmpfs::{PageSource, Pages, Storage, TMPFS_MAGIC};
 use ferrix_vfs::{Errno, FileType, Namespace, NewNode, OpenFlags, RenameMode};
 
+use crate::fs::pages::VmoStorage;
 use crate::fs::{self, Report as Built};
 use crate::mm;
 use crate::syscall::check as syscall_check;
@@ -49,6 +52,8 @@ pub(crate) struct Report {
     pub(crate) initramfs_verified: bool,
     /// Pages a file under `/tmp` committed while the check wrote it.
     pub(crate) pages: u64,
+    /// Pages a store over a page source filled from it.
+    pub(crate) filled: u64,
     /// Frames the tmpfs check cost once the file was gone. Zero, or the page
     /// store is leaking.
     pub(crate) leaked: i64,
@@ -68,10 +73,10 @@ pub(crate) fn run(built: &Built) -> Result<Report, &'static str> {
     // Twice, measured on the second, for the reason `syscall::check` gives:
     // the heap keeps the last page of a size class it has used, and a single
     // run cannot tell that apart from a leak.
-    let _warm = check_tmpfs_stores_pages()?;
+    let _warm = check_page_stores()?;
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let before = mm::free_frames();
-    let pages = check_tmpfs_stores_pages()?;
+    let (pages, filled) = check_page_stores()?;
     crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
@@ -91,6 +96,7 @@ pub(crate) fn run(built: &Built) -> Result<Report, &'static str> {
     Ok(Report {
         initramfs_verified,
         pages,
+        filled,
         leaked,
     })
 }
@@ -251,6 +257,185 @@ fn check_tmpfs_stores_pages() -> Result<u64, &'static str> {
         .map_err(|_| "a tmpfs file would not unlink")?;
     drop(file);
     Ok(pages)
+}
+
+/// Both page stores the kernel hands a filesystem: tmpfs's, and one over a
+/// page source. Returns the pages the tmpfs file committed and the pages the
+/// source filled.
+fn check_page_stores() -> Result<(u64, u64), &'static str> {
+    let pages = check_tmpfs_stores_pages()?;
+    let filled = check_a_store_fills_from_its_source()?;
+    Ok((pages, filled))
+}
+
+/// A byte of what [`CheckSource`] fills page `index` with, at `at` within it.
+fn source_byte(index: u64, at: usize) -> u8 {
+    (index as u8).wrapping_mul(37) ^ (at as u8)
+}
+
+/// A page source over nothing, for the check: page `index` holds
+/// [`source_byte`], and it can be told to answer short, fail or lie.
+#[derive(Debug)]
+struct CheckSource {
+    /// How many times it has been asked.
+    calls: AtomicUsize,
+    /// The most pages it fills in one call; zero for as many as asked.
+    most: AtomicUsize,
+    /// A call starting at this page fails with `EIO`.
+    fail_at: AtomicU64,
+    /// Whether it claims one page more than it was asked for.
+    lie: AtomicBool,
+}
+
+impl PageSource for CheckSource {
+    fn fill_range(&self, first: u64, pages: &mut [&mut [u8]]) -> ferrix_vfs::Result<usize> {
+        let _ = self.calls.fetch_add(1, Ordering::Relaxed);
+        if first == self.fail_at.load(Ordering::Relaxed) {
+            return Err(Errno::EIO);
+        }
+        let most = self.most.load(Ordering::Relaxed);
+        let count = if most == 0 {
+            pages.len()
+        } else {
+            pages.len().min(most)
+        };
+        for (index, page) in (first..).zip(pages.iter_mut()).take(count) {
+            for (at, byte) in page.iter_mut().enumerate() {
+                *byte = source_byte(index, at);
+            }
+        }
+        if self.lie.load(Ordering::Relaxed) {
+            return Ok(pages.len() + 1);
+        }
+        Ok(count)
+    }
+}
+
+/// Whether `buf`, read from byte `offset` of a store over a [`CheckSource`],
+/// holds the source's bytes.
+fn holds_source_bytes(buf: &[u8], offset: u64) -> bool {
+    buf.iter().zip(offset..).all(|(&byte, at)| {
+        usize::try_from(at % PAGE_SIZE)
+            .is_ok_and(|within| byte == source_byte(at / PAGE_SIZE, within))
+    })
+}
+
+/// A store over a page source fills what a read reaches in runs of at most 32
+/// pages and keeps them, fills a page a write covers only in part before the
+/// write, and fills in pieces from a source that answers short. Then
+/// [`check_a_store_distrusts_and_cuts_its_source`]. Returns the pages filled.
+fn check_a_store_fills_from_its_source() -> Result<u64, &'static str> {
+    let page = usize::try_from(PAGE_SIZE).map_err(|_| "the page size does not fit")?;
+    let source = Arc::new(CheckSource {
+        calls: AtomicUsize::new(0),
+        most: AtomicUsize::new(0),
+        fail_at: AtomicU64::new(u64::MAX),
+        lie: AtomicBool::new(false),
+    });
+    let store = VmoStorage
+        .allocate_with(Arc::clone(&source) as Arc<dyn PageSource>)
+        .map_err(|_| "a store over a page source was refused")?;
+    let calls = || source.calls.load(Ordering::Relaxed);
+
+    // From the middle of page 0 to 100 bytes into page 40: 41 pages, which
+    // is one fill of 32 and one of 9.
+    let offset = PAGE_SIZE / 2;
+    let mut buf = vec![0_u8; 40 * page + 100];
+    store
+        .read(offset, &mut buf)
+        .map_err(|_| "a read of a store over a page source failed")?;
+    if !holds_source_bytes(&buf, offset) {
+        return Err("a store over a page source read back something other than the source's bytes");
+    }
+    if calls() != 2 || store.committed_bytes() != 41 * PAGE_SIZE {
+        return Err("a read did not fill its pages from the source in runs of at most 32");
+    }
+    store
+        .read(offset, &mut buf)
+        .map_err(|_| "a second read of a store over a page source failed")?;
+    if calls() != 2 {
+        return Err("a store asked its source again for pages it already holds");
+    }
+
+    // A write into the middle of page 50 keeps the page's other bytes.
+    let written = b"written over the source";
+    store
+        .write(50 * PAGE_SIZE + 10, written)
+        .map_err(|_| "a write into a store over a page source failed")?;
+    let mut one = vec![0_u8; page];
+    store
+        .read(50 * PAGE_SIZE, &mut one)
+        .map_err(|_| "a read of a partly written page failed")?;
+    let around = one
+        .get(..10)
+        .is_some_and(|head| holds_source_bytes(head, 50 * PAGE_SIZE))
+        && one.get(10 + written.len()..).is_some_and(|tail| {
+            holds_source_bytes(tail, 50 * PAGE_SIZE + 10 + written.len() as u64)
+        });
+    if calls() != 3 || one.get(10..10 + written.len()) != Some(&written[..]) || !around {
+        return Err(
+            "a write covering part of a page did not fill the rest of it from the source first",
+        );
+    }
+
+    // A source that answers at most 3 pages a call: 10 pages in 4 calls.
+    source.most.store(3, Ordering::Relaxed);
+    let mut ten = vec![0_u8; 10 * page];
+    store
+        .read(60 * PAGE_SIZE, &mut ten)
+        .map_err(|_| "a read from a source that answers short failed")?;
+    source.most.store(0, Ordering::Relaxed);
+    if calls() != 7 || !holds_source_bytes(&ten, 60 * PAGE_SIZE) {
+        return Err("a store did not keep going after a source answered short");
+    }
+
+    let filled = store.committed_bytes() / PAGE_SIZE;
+    check_a_store_distrusts_and_cuts_its_source(store.as_ref(), &source)?;
+    Ok(filled)
+}
+
+/// A fill that fails or claims more than it was asked for keeps nothing, and a
+/// cut keeps the part of its page before it, reads zeros past it, and never
+/// asks the source for what it cut.
+fn check_a_store_distrusts_and_cuts_its_source(
+    store: &dyn Pages,
+    source: &CheckSource,
+) -> Result<(), &'static str> {
+    let page = usize::try_from(PAGE_SIZE).map_err(|_| "the page size does not fit")?;
+    let mut one = vec![0_u8; page];
+    let held = store.committed_bytes();
+
+    source.fail_at.store(80, Ordering::Relaxed);
+    let failed = store.read(80 * PAGE_SIZE, &mut one);
+    source.fail_at.store(u64::MAX, Ordering::Relaxed);
+    source.lie.store(true, Ordering::Relaxed);
+    let lied = store.read(90 * PAGE_SIZE, &mut one);
+    source.lie.store(false, Ordering::Relaxed);
+    if failed != Err(Errno::EIO) || lied != Err(Errno::EIO) || store.committed_bytes() != held {
+        return Err("a fill that failed or claimed too much was not EIO, or kept pages");
+    }
+
+    // Cut 7 bytes into page 20: page 20 keeps those, page 25 was held and
+    // goes, and neither asks the source again.
+    store.discard_from(20 * PAGE_SIZE + 7);
+    let calls = source.calls.load(Ordering::Relaxed);
+    store
+        .read(20 * PAGE_SIZE, &mut one)
+        .map_err(|_| "a read of a cut page failed")?;
+    let cut_kept = one
+        .get(..7)
+        .is_some_and(|head| holds_source_bytes(head, 20 * PAGE_SIZE))
+        && one
+            .get(7..)
+            .is_some_and(|tail| tail.iter().all(|&b| b == 0));
+    store
+        .read(25 * PAGE_SIZE, &mut one)
+        .map_err(|_| "a read past a cut failed")?;
+    let past_zero = one.iter().all(|&b| b == 0);
+    if !cut_kept || !past_zero || source.calls.load(Ordering::Relaxed) != calls {
+        return Err("a cut store did not read zeros past the cut without asking its source");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

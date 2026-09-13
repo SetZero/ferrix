@@ -6,30 +6,43 @@
 //! future `mmap` of the same file maps, so a page is never held twice and a
 //! write through one is seen through the other.
 //!
+//! The same store is the page cache of a filesystem on a disk. Made over a
+//! [`PageSource`] by [`Storage::allocate_with`], it fills a page from the file
+//! the first time a read reaches it, as `libs/vfs`'s `HeapPages` does and its
+//! host tests pin: runs of at most [`MAX_FILL_RUN`] missing pages, frames
+//! allocated and zeroed before the source is called with no lock held, only
+//! the pages still absent kept, and a fill that fails or claims more than it
+//! was asked for keeping nothing.
+//!
 //! # Sized for the largest file, paid for by the page
 //!
 //! Each file's VMO is created at [`MAX_FILE_SIZE`], which costs nothing: the
 //! page list is sparse and a page with no frame is simply absent. The file's
-//! real length is tmpfs's to keep, not the object's.
+//! real length is the filesystem's to keep, not the object's.
 //!
 //! # Who serialises what
 //!
-//! Nothing here takes a lock beyond the VMO's own. tmpfs holds the inode's
-//! lock across every call, so a read cannot find a frame that a concurrent
-//! truncate is in the middle of releasing. When `mmap` of a tmpfs file
-//! arrives, a mapping will reach the same VMO without that lock, and the
-//! release path will need the same care a copy-on-write fault already takes.
+//! A read copies each page under the VMO's own lock, so a truncation cannot
+//! release a frame part-way through the copy: a filesystem on a disk holds no
+//! lock of its own across a read, because the read may wait for the disk.
+//! Writes and truncations still copy into and clear frames directly, which is
+//! safe only while the filesystem serialises them against each other: tmpfs
+//! holds the inode's lock across both, and a disk filesystem writes nothing
+//! before stage 12. A file mapping will reach the same VMO without either, and
+//! the release path takes the care a copy-on-write fault already takes.
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::any::Any;
-use core::ops::Range;
 
 use ferrix_bootinfo::PAGE_SIZE;
-use ferrix_vfs::tmpfs::{Pages, Storage};
+use ferrix_frame::Frame;
+use ferrix_vfs::tmpfs::{PageSource, Pages, Storage};
 use ferrix_vfs::{Errno, Result};
 
 use crate::mm;
+use crate::sync::SpinLock;
 use crate::user::vmo::{Vmo, VmoError};
 
 /// The largest a tmpfs file may grow: one tebibyte.
@@ -39,19 +52,26 @@ use crate::user::vmo::{Vmo, VmoError};
 /// architectures.
 pub(crate) const MAX_FILE_SIZE: u64 = 1 << 40;
 
-/// Hands tmpfs a VMO per file.
-///
-/// It keeps [`Storage::allocate_with`]'s default, so a filesystem asking it
-/// for pages over a source is told `ENODEV`: the VMO learns to fill from a
-/// source in the file-mmap landing.
+/// The most pages a store asks its source for in one call: the run `libs/vfs`'s
+/// `HeapPages` asks for, so that a read and a fault ask a filesystem the same
+/// way. A compressed btrfs extent is at most 128 KiB, which is 32 pages.
+pub(crate) const MAX_FILL_RUN: usize = 32;
+
+/// [`PAGE_SIZE`] as a length.
+const PAGE_BYTES: usize = PAGE_SIZE as usize;
+
+/// Hands a filesystem a VMO per file: empty for tmpfs, over a [`PageSource`]
+/// for a filesystem whose files live on a disk.
 #[derive(Debug)]
 pub(crate) struct VmoStorage;
 
 impl Storage for VmoStorage {
     fn allocate(&self) -> Result<Box<dyn Pages>> {
-        Ok(Box::new(VmoPages {
-            vmo: Vmo::new_anonymous(MAX_FILE_SIZE / PAGE_SIZE),
-        }))
+        Ok(Box::new(VmoPages::new(None)))
+    }
+
+    fn allocate_with(&self, source: Arc<dyn PageSource>) -> Result<Box<dyn Pages>> {
+        Ok(Box::new(VmoPages::new(Some(source))))
     }
 
     fn max_file_size(&self) -> u64 {
@@ -77,65 +97,205 @@ impl Storage for VmoStorage {
 #[derive(Debug)]
 pub(crate) struct VmoPages {
     vmo: Arc<Vmo>,
+    /// Where a page the VMO does not hold comes from; `None` for tmpfs, whose
+    /// missing pages are zeros.
+    source: Option<Arc<dyn PageSource>>,
+    /// Bytes from here on are not the source's: a source knows the file as it
+    /// was, not as it has been cut. Starts past every offset;
+    /// [`Pages::discard_from`] lowers it and nothing raises it, so a file cut
+    /// and grown again reads zeros past the cut. A fill is kept under this
+    /// lock, which a truncation takes to lower it before it takes pages away,
+    /// so a fill that raced the truncation is either cut back here or taken
+    /// away there.
+    sourced_below: SpinLock<u64>,
 }
 
-/// Visit each page-sized piece of `len` bytes at `offset`: its page index, the
-/// offset within the page, and the range within the caller's buffer.
-fn pieces(
-    offset: u64,
-    len: usize,
-    mut visit: impl FnMut(u64, usize, Range<usize>) -> Result<()>,
-) -> Result<()> {
-    let page = usize::try_from(PAGE_SIZE).map_err(|_| Errno::EIO)?;
-    let mut done = 0_usize;
-    while done < len {
-        let at = offset.checked_add(done as u64).ok_or(Errno::EFBIG)?;
-        let within = usize::try_from(at % PAGE_SIZE).map_err(|_| Errno::EIO)?;
-        let take = (page - within).min(len - done);
-        visit(at / PAGE_SIZE, within, done..done + take)?;
-        done += take;
-    }
-    Ok(())
+/// The page-sized piece of `[offset, offset + len)` that begins `done` bytes
+/// in: its page index, the offset within the page, and its length.
+fn piece(offset: u64, done: usize, len: usize) -> Result<(u64, usize, usize)> {
+    let at = offset.checked_add(done as u64).ok_or(Errno::EFBIG)?;
+    let within = usize::try_from(at % PAGE_SIZE).map_err(|_| Errno::EIO)?;
+    Ok((
+        at / PAGE_SIZE,
+        within,
+        (PAGE_BYTES - within).min(len - done),
+    ))
 }
 
 /// The direct-map address of byte `within` of `frame`.
-fn byte_of(frame: u64, within: usize) -> u64 {
+fn byte_of(frame: Frame, within: usize) -> u64 {
     mm::direct_map(frame * PAGE_SIZE) + within as u64
+}
+
+/// What a program is told when the object refuses: a page past the largest
+/// file is `EFBIG`, and memory running out under a write is what Linux's tmpfs
+/// says, `ENOSPC`.
+fn refused(error: VmoError) -> Errno {
+    match error {
+        VmoError::OutOfRange { .. } => Errno::EFBIG,
+        VmoError::OutOfMemory => Errno::ENOSPC,
+    }
+}
+
+/// Give back frames no page kept.
+fn release_all(frames: impl IntoIterator<Item = Frame>) {
+    for frame in frames {
+        let _ = mm::release_frame(frame);
+    }
+}
+
+impl VmoPages {
+    fn new(source: Option<Arc<dyn PageSource>>) -> VmoPages {
+        VmoPages {
+            vmo: Vmo::new_anonymous(MAX_FILE_SIZE / PAGE_SIZE),
+            source,
+            sourced_below: SpinLock::new(u64::MAX),
+        }
+    }
+
+    /// Whether page `index`, if the VMO does not hold it, is the source's to
+    /// fill.
+    fn sourced(&self, index: u64) -> bool {
+        self.source.is_some()
+            && index
+                .checked_mul(PAGE_SIZE)
+                .is_some_and(|start| start < *self.sourced_below.lock())
+    }
+
+    /// Page `index` is absent and its source's to fill.
+    fn wants_fill(&self, index: u64) -> bool {
+        self.vmo.page(index).is_none() && self.sourced(index)
+    }
+
+    /// How many pages to ask for from `first`, which wants filling: the run of
+    /// such pages no further than `last`, at most [`MAX_FILL_RUN`].
+    fn run(&self, first: u64, last: u64) -> usize {
+        let mut count = 1;
+        while count < MAX_FILL_RUN {
+            match first.checked_add(count as u64) {
+                Some(index) if index <= last && self.wants_fill(index) => count += 1,
+                _ => break,
+            }
+        }
+        count
+    }
+
+    /// Fill `count` pages from `first` from the source, and keep each one the
+    /// VMO still lacks and the file still has.
+    ///
+    /// The frames are allocated and zeroed first, and the source called with
+    /// no lock held, since it may wait for a disk. A source that fails, or
+    /// claims no page or more than it was asked for, keeps nothing.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` for frames, `EIO` for a source that lied, and the source's own
+    /// error, which for a page that does not verify is `EIO`.
+    fn fill(&self, first: u64, count: usize) -> Result<()> {
+        let source = self.source.as_deref().ok_or(Errno::EIO)?;
+        let mut frames: Vec<Frame> = Vec::new();
+        frames.try_reserve_exact(count).map_err(|_| Errno::ENOMEM)?;
+        for _ in 0..count {
+            let Some(frame) = mm::allocate_frames(0) else {
+                release_all(frames);
+                return Err(Errno::ENOMEM);
+            };
+            // Zeroed, so a source that writes less than a page hands no
+            // earlier owner's bytes to whoever reads it.
+            mm::zero_frame(frame);
+            frames.push(frame);
+        }
+
+        let filled = {
+            let mut pages: Vec<&mut [u8]> = Vec::new();
+            if pages.try_reserve_exact(count).is_err() {
+                release_all(frames);
+                return Err(Errno::ENOMEM);
+            }
+            for &frame in &frames {
+                // SAFETY: each frame was just allocated here and is in no
+                // object yet, so these are the only references to its bytes;
+                // the direct map covers all of RAM, and each slice is exactly
+                // one page. They end with this block, before the frames are
+                // inserted or released.
+                pages.push(unsafe {
+                    core::slice::from_raw_parts_mut(byte_of(frame, 0) as *mut u8, PAGE_BYTES)
+                });
+            }
+            source.fill_range(first, &mut pages)
+        };
+        let got = match filled {
+            Ok(got) if (1..=count).contains(&got) => got,
+            Ok(_) => {
+                release_all(frames);
+                return Err(Errno::EIO);
+            }
+            Err(error) => {
+                release_all(frames);
+                return Err(error);
+            }
+        };
+
+        let bound = self.sourced_below.lock();
+        for (index, frame) in (first..).zip(frames) {
+            let start = index.saturating_mul(PAGE_SIZE);
+            let keep = index < first.saturating_add(got as u64) && start < *bound;
+            if keep
+                && let Ok(valid) = usize::try_from(*bound - start)
+                && valid < PAGE_BYTES
+            {
+                // SAFETY: as above, the frame is still this call's alone.
+                unsafe {
+                    core::ptr::write_bytes(byte_of(frame, valid) as *mut u8, 0, PAGE_BYTES - valid);
+                }
+            }
+            if !(keep && self.vmo.insert_absent(index, frame)) {
+                let _ = mm::release_frame(frame);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Pages for VmoPages {
     fn read(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
-        pieces(offset, buf.len(), |index, within, range| {
-            let out = buf.get_mut(range).ok_or(Errno::EIO)?;
-            match self.vmo.page(index) {
-                // SAFETY: the frame is committed in this object, tmpfs holds
-                // the inode lock so nothing releases it meanwhile, and `out`
-                // fits in the page because `pieces` stops at its end. `out`
-                // is kernel memory the source cannot overlap.
-                Some(frame) => unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        byte_of(frame, within) as *const u8,
-                        out.as_mut_ptr(),
-                        out.len(),
-                    );
-                },
-                None => out.fill(0),
+        let len = buf.len();
+        let mut done = 0;
+        while done < len {
+            let (index, within, take) = piece(offset, done, len)?;
+            if self.wants_fill(index) {
+                let (last, _, _) = piece(offset, len - 1, len)?;
+                self.fill(index, self.run(index, last))?;
             }
-            Ok(())
-        })
+            // Under the object's lock: a page a truncation took away since
+            // the fill reads as the zeros the file now has there.
+            let out = buf.get_mut(done..done + take).ok_or(Errno::EIO)?;
+            self.vmo
+                .read_page(index, within, out)
+                .map_err(|_| Errno::EIO)?;
+            done += take;
+        }
+        Ok(())
     }
 
     fn write(&self, offset: u64, data: &[u8]) -> Result<()> {
-        pieces(offset, data.len(), |index, within, range| {
-            let bytes = data.get(range).ok_or(Errno::EIO)?;
-            let frame = self.vmo.commit(index).map_err(|error| match error {
-                VmoError::OutOfRange { .. } => Errno::EFBIG,
-                // What Linux's tmpfs says when memory runs out under it.
-                VmoError::OutOfMemory => Errno::ENOSPC,
-            })?;
-            // SAFETY: as `read`, and the frame was zeroed when committed, so
-            // the bytes around the ones written are zeros rather than an old
-            // owner's data.
+        let len = data.len();
+        let mut done = 0;
+        while done < len {
+            let (index, within, take) = piece(offset, done, len)?;
+            // A page this write covers only partly keeps the file's other
+            // bytes, so it comes from the source first.
+            if take < PAGE_BYTES && self.wants_fill(index) {
+                self.fill(index, 1)?;
+            }
+            let bytes = data.get(done..done + take).ok_or(Errno::EIO)?;
+            let frame = self.vmo.commit(index).map_err(refused)?;
+            // SAFETY: the frame is committed in this object; the filesystem
+            // serialises writes against truncation (see the module), so
+            // nothing releases it meanwhile; `bytes` fits in the page because
+            // `piece` stops at its end, and is kernel memory the page cannot
+            // overlap. A frame committed fresh was zeroed, so the bytes around
+            // the ones written are zeros rather than an old owner's data.
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     bytes.as_ptr(),
@@ -143,11 +303,19 @@ impl Pages for VmoPages {
                     bytes.len(),
                 );
             }
-            Ok(())
-        })
+            done += take;
+        }
+        Ok(())
     }
 
     fn discard_from(&self, offset: u64) {
+        // The bound first, under the lock a fill is kept under, then the
+        // pages: a fill that kept a page past the cut before this is taken
+        // away below, and one after it keeps nothing past the cut.
+        {
+            let mut bound = self.sourced_below.lock();
+            *bound = (*bound).min(offset);
+        }
         let _ = self.vmo.decommit_from(offset.div_ceil(PAGE_SIZE));
         let Ok(within) = usize::try_from(offset % PAGE_SIZE) else {
             return;
@@ -156,13 +324,11 @@ impl Pages for VmoPages {
             return;
         }
         if let Some(frame) = self.vmo.page(offset / PAGE_SIZE) {
-            let Ok(page) = usize::try_from(PAGE_SIZE) else {
-                return;
-            };
-            // SAFETY: the frame is committed in this object and tmpfs holds
-            // the inode lock; the range runs from `within` to the page's end.
+            // SAFETY: the frame is committed in this object and the filesystem
+            // serialises truncation against writes (see the module); the range
+            // runs from `within` to the page's end.
             unsafe {
-                core::ptr::write_bytes(byte_of(frame, within) as *mut u8, 0, page - within);
+                core::ptr::write_bytes(byte_of(frame, within) as *mut u8, 0, PAGE_BYTES - within);
             }
         }
     }

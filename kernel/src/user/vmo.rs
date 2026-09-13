@@ -405,6 +405,26 @@ impl Vmo {
         Ok(frame)
     }
 
+    /// Put `frame`, filled by the caller, in page `index` if that page is
+    /// inside the object and holds nothing yet. Whether it went in.
+    ///
+    /// What a page cache filled from a disk does once the fill returns: the
+    /// fill ran with no lock held, so a write or a racing fill may have put a
+    /// page there meanwhile, and that one wins. A frame that did not go in is
+    /// still the caller's, to release. Nobody can have mapped a page that was
+    /// absent, so nothing is taken down.
+    pub(crate) fn insert_absent(&self, index: u64, frame: Frame) -> bool {
+        if index >= self.len_pages() {
+            return false;
+        }
+        let mut pages = self.pages.lock();
+        if pages.frames.contains_key(&index) {
+            return false;
+        }
+        let _ = pages.frames.insert(index, frame);
+        true
+    }
+
     /// Copy `out.len()` bytes out of page `index`, starting `offset` into it.
     ///
     /// A page never committed reads as zeros and stays uncommitted: reading a

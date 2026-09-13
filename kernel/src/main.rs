@@ -355,8 +355,9 @@ fn check_filesystems(view: &BootView<'_>) {
         _ => println!("  initrd   none handed over; the root is an empty tmpfs"),
     }
     println!(
-        "  tmpfs    {} pages written through a VMO and read back, {} frames leaked",
-        report.pages, report.leaked,
+        "  tmpfs    {} pages written through a VMO and read back, {} filled from a page \
+         source in runs and cut, {} frames leaked",
+        report.pages, report.filled, report.leaked,
     );
 
     let calls = match fs::check::run_calls() {
