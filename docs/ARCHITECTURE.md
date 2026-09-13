@@ -328,6 +328,7 @@ test that a CoW filesystem actually has to pass.
 | Byte-level logic: ELF, cpio, btrfs item parsing, seccomp BPF, page-table arithmetic, allocators | `libs/` | `cargo test`, Miri, fuzzers |
 | Loader | `boot/` | QEMU boot test |
 | Kernel | `kernel/` | QEMU boot test, in-kernel test harness |
+| Ring-3 programs: the native runtime, `devmgr`, drivers, test programs | `user/` | Built and linted with clippy per kernel target; xtask checks each program's ELF shape; run under the QEMU boot test or `test-shell` once native process creation lands |
 | Host tooling | `xtask/` | `cargo test` |
 
 The split is not cosmetic. Nothing in `kernel/` can be run by `cargo test`,

@@ -8,6 +8,10 @@
 #      reason it exists -- it is the code `cargo test`, Miri and the fuzzers can
 #      reach -- so it must depend on neither the kernel nor the loader, and must
 #      contain no `#[cfg(target_arch)]`.
+#   2a. `user/*` is ring-3 programs: the native runtime, devmgr, drivers. A
+#      program may use `libs/*` and never the kernel or the loader, and neither
+#      of those may link a program. Its `target_arch` conditionals live under
+#      its own `src/arch/`.
 #   3. Architecture code is reached through the `crate::arch` facade and never
 #      by name. Generic kernel code that says `arch::x86_64::` compiles on one
 #      machine and breaks the other, and the break is discovered by whoever
@@ -97,6 +101,27 @@ forbid ferrix-sched    "scheduler logic" "ferrix-kernel|ferrix-boot"
 forbid ferrix-pci      "PCI configuration space" "ferrix-kernel|ferrix-boot"
 forbid ferrix-block    "block core" "ferrix-kernel|ferrix-boot"
 forbid ferrix-btrfs    "btrfs read path" "ferrix-kernel|ferrix-boot"
+
+# ---------------------------------------------------------------------------
+# 2a. Ring-3 programs sit beside the kernel, never in it.
+#
+# A crate under `user/` -- the native runtime, devmgr, a driver -- runs in user
+# mode. It may use any `libs/` crate, `libs/native-abi` above all, and nothing
+# of the kernel or the loader, whose code cannot run there. Neither of those may
+# link a `user/` crate either: that would be ring-3 code in ring 0. The names
+# come from each manifest's `[package]`, so a new program is covered without an
+# edit here.
+# ---------------------------------------------------------------------------
+user_crates=$(find user -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort \
+    | xargs -r sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"$/\1/p' \
+    | paste -sd '|' - || true)
+if [[ -n "$user_crates" ]]; then
+    for crate in ${user_crates//|/ }; do
+        forbid "$crate" "ring-3 program" "ferrix-kernel|ferrix-boot"
+    done
+    forbid ferrix-kernel "kernel"      "$user_crates"
+    forbid ferrix-boot   "UEFI loader" "$user_crates"
+fi
 forbid ferrix-btrfs-vfs "btrfs mount" "ferrix-kernel|ferrix-boot"
 forbid ferrix-blkring  "block ring protocol" "ferrix-kernel|ferrix-boot"
 
