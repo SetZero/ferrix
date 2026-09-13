@@ -72,11 +72,11 @@ use ferrix_linux_abi::types::{
     F_SETLKW, F_SETLKW64, F_UNLCK, F_WRLCK, LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN, SEEK_CUR, SEEK_END,
     SEEK_SET,
 };
-use ferrix_sync::SpinLock;
 use ferrix_vfs::fd::FdTable;
 use ferrix_vfs::{OpenFile, Whence};
 
 use crate::sched::WaitQueue;
+use crate::sync::SpinLock;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
 use crate::syscall::uaccess;

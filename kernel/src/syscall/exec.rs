@@ -497,7 +497,7 @@ fn execve_at(
     // parent, asleep since the fork, may run again.
     let closed = process.files().lock().take_cloexec();
     for file in &closed {
-        crate::syscall::fd::closed(process, file);
+        fd::closed(process, file);
     }
     drop(closed);
     process.mark_execed();
