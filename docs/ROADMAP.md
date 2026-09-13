@@ -1270,9 +1270,13 @@ the code that should meet a fuzzer before it meets ring 0.
   the file's own pages. The same store is the page cache of a filesystem on a
   disk: made over a `PageSource`, it fills runs of at most 32 missing pages
   with no lock held, keeps only those still missing, and forgets the source's
-  bytes past a truncation. The host tests pin that before the kernel's VMO
-  learns to fill. Directory cursors are never reused, so `rm -rf` reading a
-  directory it is emptying sees every entry exactly once.
+  bytes past a truncation. The host tests pin that, and the kernel's own VMO
+  store fills the same way: frames allocated and zeroed before the source is
+  called, a fill that fails or claims too much keeping nothing, and each page
+  read under the VMO's lock so that a disk filesystem, which holds no lock
+  across a read, cannot race a truncation into a freed frame. Directory
+  cursors are never reused, so `rm -rf` reading a directory it is emptying
+  sees every entry exactly once.
 * **initramfs unpacking** through the same calls a program makes, hard links
   and device nodes included, and **the `getdents64` packer**, whose names start
   at byte 19 rather than at the structure's size of 24.
@@ -1290,11 +1294,17 @@ contents are VMO pages, created at a tebibyte and paid for by the page, so the
 object `read` copies out of is the one `mmap` of the file will map. The boot
 check reads the archive's marker back through its hard link and its symbolic
 link, then writes a file across pages under `/tmp`, truncates into it, grows it
-and removes it:
+and removes it. Then it reads 41 pages of a store over a page source that
+fills over nothing, and requires two fills, of 32 and 9. A second read must
+not ask again, and a write into the middle of a page must fill the page's
+other bytes first. A source that answers three pages at a time must still
+fill every page asked for, and a source that fails or claims too much must
+be `EIO` and keep nothing. Last, a cut keeps the bytes before it, reads
+zeros past it, and never asks the source for what it cut:
 
 ```
   initrd   2 KiB unpacked: 6 directories, 2 files, 1 hard links, 1 symbolic links, 0 refused, verified true
-  tmpfs    4 pages written through a VMO and read back, 0 frames leaked
+  tmpfs    4 pages written through a VMO and read back, 52 filled from a page source in runs and cut, 0 frames leaked
 ```
 
 **Done — the calls that take a path.** `kernel/src/syscall/path.rs` and
