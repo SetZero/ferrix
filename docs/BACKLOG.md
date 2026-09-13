@@ -52,6 +52,16 @@ read `git log -1 --stat` before the next step, because a failed commit leaves
 its files staged for the next one. On 2026-09-13 the root filesystem filled and
 every session's gates failed at once; 70 worktrees held 108 GB of build output.
 
+**The host is shared.** One cargo build, clippy run or QEMU boot at a time
+per session, agents included: a session with agents serialises them. Miri and
+fuzz runs one at a time machine-wide, and never while a boot matrix runs
+anywhere. No worktree under `/tmp`: it is a 30 GB tmpfs, so a build tree
+there lives in RAM; the scratchpad is for logs and patches only. Run `free -g`
+before a boot matrix and wait while available memory is under 12 GB. On
+2026-09-13 the host reached 47 of 59 GB used with swap full, and the customer
+reported it close to stalling: three worktrees on the tmpfs held 9 GB of build
+output, and ten sessions were building and booting at once.
+
 **Agents.** Gates and boots in the foreground, never `run_in_background`; one
 architecture per tool call; the brief says so.
 
