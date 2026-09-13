@@ -24,6 +24,7 @@ ferrix-vfs = { path = "../libs/vfs" }
 ferrix-pci = { path = "../libs/pci" }
 ferrix-btrfs = { path = "../libs/btrfs" }
 ferrix-block = { path = "../libs/block", features = ["model"] }
+ferrix-blkring = { path = "../libs/blkring" }
 
 [[bin]]
 name = "elf_parse"
@@ -77,6 +78,13 @@ bench = false
 [[bin]]
 name = "block_queue"
 path = "fuzz_targets/block_queue.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "blkring"
+path = "fuzz_targets/blkring.rs"
 test = false
 doc = false
 bench = false
