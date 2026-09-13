@@ -144,6 +144,7 @@ nobody has it yet.
 | Item | Owner | Stage |
 |---|---|---|
 | Trusting a BAR firmware placed but did not enable | ferrix-d9 | 10 |
+| `device_quiesce` right after a driver's `TERMINATED` can answer `BAD_STATE`: the ring's task clears the served mark only once it has taken the closed channel's packet, and nothing orders that before the watcher's packet, so a dead driver's device could keep bus mastering on (os-94's review of b6a3254). Fix, verified on branch `stage10-quiesce` (705f106: a quiesce on a served device whose driver's end has closed waits, bounded, for the ring to end; only a driver still holding its end is refused; the check quiesces the instant the driver is gone, three times over), lands with devmgr the program, its first caller | os-5b | 10 |
 | btrfs: CI Miri step for `libs/btrfs` and `libs/block` under 15 minutes, whole-image tests ignored under Miri | ferrix-61 | 11 |
 | A user-mode copy-on-write write check, and a `MAP_SHARED` write check | ferrix-e5 | 6 |
 | End-to-end user programs for what the `sigpaths` check proves at the kernel's decision: a `SIGSEGV` caught on the alternate stack, and a read interrupted by a handler and restarted under `SA_RESTART` (`SA_RESTART` and the driven signal paths have landed) | ferrix-a5 | 7; `rustc` needs `SIGSEGV` on the alternate stack |
