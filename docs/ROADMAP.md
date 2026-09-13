@@ -1663,6 +1663,25 @@ signal, as the way back to user mode already did, and the object check runs a
 program that writes through a null pointer on every architecture and requires
 `128 + SIGSEGV`, the `TERMINATED` packet, and the process freed.
 
+**Done — `vmo_map`, and what a DMA pin needs from a VMO.** A VMO maps into
+the calling process a whole number of pages at a time, and shared: a write
+through the mapping is a write to the VMO, a fork reaches the same pages
+rather than copies, and the mapping keeps the object alive once the handle it
+was made with is closed. A mapping always reads, writes only when asked and
+when the handle carries `WRITE`, and never executes. The region is attached to
+the object on the reverse map before it is recorded, so a VMO that takes a page
+away forgets it in the mapping space before its frame goes back. `mremap` and
+`mprotect` refuse a region `vmo_map` made -- the first would grow the VMO
+through the Linux path, and the second, answering `EACCES`, would give a
+mapping a right its handle did not carry -- and an object mapped twice counts
+once in the resident set. The object check maps a VMO, reads and writes it
+both ways, forks the space, closes the handle, and is refused twelve ways.
+
+`Vmo::hold` keeps a page on the frame a device was given for as long as a pin
+holds it. Decommitting skips the page, a copy-on-write replace is refused, and
+a fork copies it instead of sharing it; a stage 6 self-check walks a held page
+through each of those and through nested holds.
+
 **Left for later stages**, none of it on the exit criterion's path:
 
 * **No native handle to a Linux mapping's object or a file's VMO until
@@ -1673,11 +1692,10 @@ program that writes through a null pointer on every architecture and requires
   mapper, which an assertion at `Vmo::attach` and in `mremap`'s adopt path
   checks. `vmo_map` cannot break it: a VMO handle comes only from
   `vmo_create`, and native regions refuse `mremap`.
-* `vmo_map`. What a DMA pin needs from the VMO under it is in: `Vmo::hold`
-  keeps a page on the frame a device was given for as long as a pin holds it.
-  Decommitting skips the page, a copy-on-write replace is refused, and a fork
-  copies it instead of sharing it; a stage 6 self-check walks a held page
-  through each of those and through nested holds.
+* **An `EXECUTE` right on a VMO handle**, with the native loader that is its
+  first consumer. `vmo_map` refuses an executable mapping for now, by the
+  product owner's decision of 2026-09-13; `process_create` reads a program's
+  image out of its VMO into anonymous memory, so nothing needs one yet.
 * Sub-page apertures, which need each access trapped. (An `Interrupt` on
   x86-64, masked in the device's own MSI-X table, came with stage 10's PCI
   vectors.)
