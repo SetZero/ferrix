@@ -52,6 +52,10 @@ pub(crate) struct Report {
 
 /// Run them. `Err` names the first thing that was not true.
 pub(crate) fn run() -> Result<Report, &'static str> {
+    // Once before the window, for the reason `object::check::run` gives: the
+    // heap keeps a page of each size class the first run touched, and the
+    // held-page check is the first to touch some of them.
+    hold_pages_through_everything()?;
     let before = mm::free_frames();
 
     check_reservation_is_lazy()?;
@@ -60,6 +64,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_out_of_range_is_refused()?;
     check_a_shared_page_survives_one_drop()?;
     check_replacing_a_page_releases_the_old_one()?;
+    check_a_held_page_keeps_its_frame()?;
 
     let reserved = 2048;
     let committed = check_only_what_is_touched_is_paid_for(reserved)?;
@@ -243,6 +248,100 @@ fn check_replacing_a_page_releases_the_old_one() -> Result<(), &'static str> {
     drop(vmo);
     if mm::free_frames() != before {
         return Err("replacing a page leaked either the original or the copy");
+    }
+    Ok(())
+}
+
+/// A held page keeps its frame through everything that would otherwise take
+/// it away or swap it, and is ordinary again once the last hold goes.
+///
+/// What a device is given an address for. The frame it writes has to stay the
+/// one the object names: decommitting skips it, a copy-on-write replace is
+/// refused, a fork copies it rather than sharing it, and a write through the
+/// object lands on it.
+fn check_a_held_page_keeps_its_frame() -> Result<(), &'static str> {
+    let before = mm::free_frames();
+    hold_pages_through_everything()?;
+    if mm::free_frames() != before {
+        return Err("holding pages leaked a frame");
+    }
+    Ok(())
+}
+
+/// What [`check_a_held_page_keeps_its_frame`] measures.
+fn hold_pages_through_everything() -> Result<(), &'static str> {
+    let vmo = Vmo::new_anonymous(4);
+    vmo.write_page(1, 0, b"held")
+        .map_err(|_| "writing a page failed")?;
+
+    // A fork leaves page 1 shared, so holding it has to copy it first.
+    let sibling = vmo.fork().map_err(|_| "forking an object failed")?;
+    let shared = vmo.page(1).ok_or("a written page has no frame")?;
+
+    let held = vmo.hold(1, 2).map_err(|_| "holding two pages failed")?;
+    let &[one, two] = held.frames() else {
+        return Err("a hold of two pages did not report two frames");
+    };
+    if vmo.page(1) != Some(one) || vmo.page(2) != Some(two) {
+        return Err("a hold reported frames the object does not name");
+    }
+    if one == shared || mm::frame_references(one) != 1 || sibling.page(1) != Some(shared) {
+        return Err("holding a page a fork left shared did not copy it");
+    }
+    let mut read = [0; 4];
+    vmo.read_page(1, 0, &mut read)
+        .map_err(|_| "reading a held page failed")?;
+    if &read != b"held" {
+        return Err("holding a page lost what the page held");
+    }
+    drop(sibling);
+
+    if vmo.decommit_range(0, 4) != 0 || vmo.decommit_from(0) != 0 || vmo.committed() != 2 {
+        return Err("decommitting took a held page away");
+    }
+    let copy = mm::allocate_frames(0).ok_or("no frame for a replace")?;
+    if vmo.replace(1, copy).is_some() || vmo.page(1) != Some(one) {
+        return Err("a copy-on-write replace swapped a held page");
+    }
+    if !mm::release_frame(copy) {
+        return Err("a refused replace did not leave its frame with the caller");
+    }
+
+    let forked = vmo
+        .fork()
+        .map_err(|_| "forking an object with held pages failed")?;
+    if forked.page(1) == Some(one) || mm::frame_references(one) != 1 {
+        return Err("a fork shared a held page rather than copying it");
+    }
+    forked
+        .read_page(1, 0, &mut read)
+        .map_err(|_| "reading a fork's copy of a held page failed")?;
+    if &read != b"held" {
+        return Err("a fork's copy of a held page lost what the page held");
+    }
+    drop(forked);
+
+    vmo.write_page(1, 0, b"more")
+        .map_err(|_| "writing a held page failed")?;
+    if vmo.page(1) != Some(one) {
+        return Err("a write moved a held page to another frame");
+    }
+
+    // Holds nest: a page stays held until the last hold on it goes.
+    let again = vmo
+        .hold(2, 1)
+        .map_err(|_| "holding a held page again failed")?;
+    drop(held);
+    if vmo.decommit_range(0, 4) != 1 || vmo.page(2) != Some(two) {
+        return Err("dropping one of two holds let a page still held go");
+    }
+    drop(again);
+    if vmo.decommit_range(0, 4) != 1 || vmo.committed() != 0 {
+        return Err("dropping the last hold did not let its page go");
+    }
+
+    if vmo.hold(3, 2).is_ok() || vmo.hold(0, 0).is_ok() {
+        return Err("a hold past the end, or of no pages, was accepted");
     }
     Ok(())
 }

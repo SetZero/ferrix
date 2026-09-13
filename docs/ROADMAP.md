@@ -1361,7 +1361,11 @@ program spinning alone on its processor; `301aec4` fixed that.
 
 **Left for later stages**, none of it on the exit criterion's path:
 
-* `vmo_map`.
+* `vmo_map`. What a DMA pin needs from the VMO under it is in: `Vmo::hold`
+  keeps a page on the frame a device was given for as long as a pin holds it.
+  Decommitting skips the page, a copy-on-write replace is refused, and a fork
+  copies it instead of sharing it; a stage 6 self-check walks a held page
+  through each of those and through nested holds.
 * **An interrupt wakes its waiter within five milliseconds, not at once.** A
   wait queue takes a plain lock, which an interrupt handler may not, so the
   handler only masks and marks and the waiter notices through its wait's

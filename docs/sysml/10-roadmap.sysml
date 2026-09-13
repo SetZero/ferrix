@@ -247,7 +247,8 @@ package FerrixRoadmap {
              * a message and a VMO handle over a channel, and a job kill ends
              * every program in the job and beneath it. Left for later: an
              * interrupt-safe wake, vmo_map, sub-page apertures, and process
-             * creation in the native ABI. */
+             * creation in the native ABI. Vmo::hold, which keeps a page a DMA pin
+             * holds on its frame, is in. */
     }
 
     #inProgress requirement <'S10'> stage10UserspaceDrivers : Stage {
