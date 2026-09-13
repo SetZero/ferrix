@@ -1883,6 +1883,15 @@ logic `cargo test`, Miri and a fuzzer can reach.
 * The `btrfs_read` fuzz target starts each run from a real image and applies
   the input as edits, re-checksumming what it edited, so a hostile image that
   checksums correctly reaches the walker and the extent arithmetic.
+* **What Linux's tree-checker refuses, refused here too.** A review against
+  it found consistency checks the parsers lacked. The parsers now mirror
+  `check_leaf` (payloads packed back to back), `check_dir_item` (names, types
+  and the name hash), `check_extent_data_item` (extents inside their disk
+  extent, none overlapping the last), `btrfs_check_chunk_valid`, and the size
+  and root checks of `btrfs_validate_super`. Chunks that overlap are refused,
+  and so is a directory name a VFS could not hand to a program — empty, `.`,
+  `..`, or containing `/` or NUL. All four images and three more `mkfs.btrfs`
+  images from the review still read back.
 
 **Still to do.**
 

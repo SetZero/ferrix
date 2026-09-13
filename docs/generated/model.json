@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "1cdccc87f540512452e81e542b77a7ae8bd69fec2102bac587d30ab58cadc356",
+  "digest": "5bb72c1abef4b77c9ca04358128e4dba549633657cb993deff216b71f433f616",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -4475,7 +4475,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::btrfs",
                   "kind": "attribute",
                   "redefines": "hostTests",
-                  "value": "137",
+                  "value": "158",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 900
@@ -4523,7 +4523,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::btrfsVfs",
                   "kind": "attribute",
                   "redefines": "hostTests",
-                  "value": "14",
+                  "value": "15",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 910

@@ -897,7 +897,7 @@ package FerrixStructure {
         #writtenAhead part btrfs : LibraryCrate {
             attribute :>> path = "libs/btrfs";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 137;
+            attribute :>> hostTests = 158;
             @stage { number = 11; }
             doc /* The btrfs read path, allocating nothing: parsing, mount
                  * bootstrap, lookup, readdir and read, and zlib, LZO and zstd
@@ -907,7 +907,7 @@ package FerrixStructure {
         #writtenAhead part btrfsVfs : LibraryCrate {
             attribute :>> path = "libs/btrfs-vfs";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 14;
+            attribute :>> hostTests = 15;
             @stage { number = 11; }
             doc /* btrfs mounted into the VFS: FileSystem and Inode over the
                  * read path, read-only, holding no lock across I/O. */
