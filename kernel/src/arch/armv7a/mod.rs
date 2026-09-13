@@ -266,6 +266,18 @@ pub(crate) const USER_EXEC_PROGRAM: &[u8] = &[
     0x63, 0x2d, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74, 0x00,
 ];
 
+/// None: nothing a program can set changes how it enters the kernel.
+///
+/// x86-64 needs a program that sets its trap flag and makes a call, because a
+/// flag left set would single-step the kernel's first instruction. The `CPSR`
+/// bits a USR-mode program can change hold no single-step bit at all; stepping
+/// on this architecture is a debug register's mismatch breakpoint, which USR
+/// mode cannot program.
+pub(crate) const USER_STEP_PROGRAM: &[u8] = &[];
+
+/// What [`USER_STEP_PROGRAM`] would exit with; unused while it is empty.
+pub(crate) const USER_STEP_STATUS: i32 = 0;
+
 /// A program that spins, then writes a tagged line and exits with a status it
 /// reads out of its own image.
 ///

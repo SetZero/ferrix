@@ -215,6 +215,11 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // ring-3 transition, is a debugging session nobody wants.
     check_syscalls();
 
+    // The one way into the kernel a program can bend from ring 3: on x86-64 a
+    // trap flag it set survives into the kernel unless `SYSCALL` masks it.
+    // After stage 7's check, which has shown a program runs at all.
+    check_trap_flag_entry();
+
     // Stage 8's path calls, through the same dispatch table. After stage 7's
     // check because they share its table and its copy layer, and after the
     // root was built because they work under /tmp.
@@ -382,6 +387,58 @@ fn check_path_calls() {
         "  paths    {} path calls under /tmp, {} names listed in {} getdents64 calls, \
          {} frames leaked, dentry cache {:+}",
         report.calls, report.listed, report.listing_calls, report.leaked, report.cache_growth,
+    );
+}
+
+/// A program that makes a system call with its trap flag set has the call
+/// served, instead of stopping the kernel.
+///
+/// Only x86-64 has a flag a program can set that changes how the kernel is
+/// entered, and the architecture says so by giving a program here and an empty
+/// one elsewhere. Without `TF` in `SYSCALL`'s flag mask, the call single-steps
+/// the kernel's first instruction and this halts with a debug exception. The
+/// call is `exit_group`, whose status is the proof it was served; one that
+/// returned would trap in ring 3 instead, for the reason the program's
+/// documentation gives.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_trap_flag_entry() {
+    if arch::USER_STEP_PROGRAM.is_empty() {
+        println!(
+            "  step     nothing a program sets changes how it enters the kernel on {}",
+            arch::NAME
+        );
+        return;
+    }
+
+    let class = if usize::BITS == 64 {
+        ferrix_elf::Class::Elf64
+    } else {
+        ferrix_elf::Class::Elf32
+    };
+    let file = syscall::image::build_with(
+        class,
+        arch::ARCH.elf_machine(),
+        syscall::image::Shape::Good,
+        arch::USER_STEP_PROGRAM,
+    );
+    let Ok(status) =
+        syscall::exec::run(&file, &[b"/step"], &[], [0x5a; ferrix_ustack::RANDOM_BYTES])
+    else {
+        fatal!(
+            catalog::STAGE7_SYSCALLS,
+            "stage 7 self-check failed: the trap flag program could not be started"
+        );
+    };
+    if status != arch::USER_STEP_STATUS {
+        fatal!(
+            catalog::STAGE7_SYSCALLS,
+            "stage 7 self-check failed: a program that called exit_group with its trap flag \
+             set did not exit with the status it asked for"
+        );
+    }
+    println!(
+        "  step     a program made a system call with its trap flag set and exited with {status}"
     );
 }
 

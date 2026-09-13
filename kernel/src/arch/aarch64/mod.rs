@@ -230,6 +230,17 @@ pub(crate) const USER_SIGNAL_PROGRAM: &[u8] = &[
     0x00, 0x00, 0x00, 0x14,
 ];
 
+/// None: nothing a program can set changes how it enters the kernel.
+///
+/// x86-64 needs a program that sets its trap flag and makes a call, because a
+/// flag left set would single-step the kernel's first instruction. The nearest
+/// thing here, `PSTATE.SS`, is armed only through `MDSCR_EL1` and the
+/// `SPSR_EL1` an exception return loads, and EL0 can write neither.
+pub(crate) const USER_STEP_PROGRAM: &[u8] = &[];
+
+/// What [`USER_STEP_PROGRAM`] would exit with; unused while it is empty.
+pub(crate) const USER_STEP_STATUS: i32 = 0;
+
 /// A program that `execve`s `/exec-target` and, if that returns, exits with
 /// the error number: the target's own status when it exists, 2 (`ENOENT`) when
 /// it does not.

@@ -320,6 +320,44 @@ pub(crate) const USER_EXEC_PROGRAM: &[u8] = &[
     0x05, 0x0f, 0x0b, 0x2f, 0x65, 0x78, 0x65, 0x63, 0x2d, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74, 0x00,
 ];
 
+/// A program that sets its trap flag and makes a system call: `exit_group`,
+/// with a status nothing else produces.
+///
+/// For the check that `SYSCALL` masks the trap flag. If it did not, the
+/// processor would single-step the first instruction of the trampoline, in
+/// ring 0 and still on the program's stack, and the `#DB` would stop the
+/// kernel before the call was served. `popfq` setting the flag does not trap
+/// after itself, only after the instruction that follows it, which is why the
+/// call comes directly after it.
+///
+/// **The call is one that does not return.** `SYSRET` gives the program its
+/// flags back, trap flag included, and the processor then traps in ring 3 at
+/// the return address before running anything there. That trap raises
+/// `SIGTRAP`, which by default ends the program -- a status of its own, and not
+/// the one this check wants to read. `exit_group`'s status says only that the
+/// call made with the flag set was served.
+///
+/// ```text
+///   movl $231, %eax ; movl $231, %edi
+///   pushfq ; orq $0x100, (%rsp) ; popfq   ; the trap flag, from here on
+///   syscall                               ; exit_group(231), single-stepped
+///   ud2
+/// ```
+///
+/// Assembled by hand and checked with `objdump -D -b binary -mi386:x86-64`.
+pub(crate) const USER_STEP_PROGRAM: &[u8] = &[
+    0xb8, 0xe7, 0x00, 0x00, 0x00, // movl $231, %eax
+    0xbf, 0xe7, 0x00, 0x00, 0x00, // movl $231, %edi
+    0x9c, // pushfq
+    0x48, 0x81, 0x0c, 0x24, 0x00, 0x01, 0x00, 0x00, // orq $0x100, (%rsp)
+    0x9d, // popfq
+    0x0f, 0x05, // syscall
+    0x0f, 0x0b, // ud2
+];
+
+/// The status [`USER_STEP_PROGRAM`] exits with.
+pub(crate) const USER_STEP_STATUS: i32 = 231;
+
 /// A program that spins, then writes a tagged line and exits with a status it
 /// reads out of its own image.
 ///

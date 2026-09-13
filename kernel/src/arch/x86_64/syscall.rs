@@ -60,13 +60,44 @@ const EFER_SCE: u64 = 1;
 
 /// Flags cleared on entry to the kernel.
 ///
-/// `IF` is the one that matters: without it here, the kernel would run the
-/// first instructions of every system call with interrupts still enabled on a
-/// stack it has not switched to yet. `DF` matters because the System V ABI lets a
+/// `IF` matters because without it the kernel would run the first
+/// instructions of every system call with interrupts still enabled on a stack
+/// it has not switched to yet. `TF` matters for the same reason and is worse:
+/// a program may set it with `popfq`, and the processor decides whether to
+/// single-step after `SYSCALL` from the flags the instruction leaves behind. Left
+/// set, `#DB` is raised on the trampoline's first instruction, in ring 0,
+/// before `swapgs` and before the stack switch -- so the processor pushes the
+/// exception frame onto whatever `RSP` the program chose, a kernel address
+/// included, and the kernel stops. `DF` matters because the System V ABI lets a
 /// program leave the direction flag set and every `rep movs` in the kernel
-/// assumes it is clear. `AC` is cleared so that a future `SMAP` cannot be left
-/// open by the caller.
-const FMASK: u64 = (1 << 9) | (1 << 10) | (1 << 18);
+/// assumes it is clear. `NT` and `RF` are cleared because neither describes
+/// the kernel's own state: `NT` marks a nested task, and `RF` suppresses an
+/// instruction breakpoint on whatever instruction runs next. `AC` is cleared
+/// so that a future `SMAP` cannot be left open by the caller. Linux masks all
+/// of these and a few arithmetic flags besides, which are harmless either way.
+///
+/// The program's own flags are untouched: `SYSCALL` saved them in `R11` before
+/// masking, and `SYSRET` puts them back, trap flag and all. A program that
+/// returns from a call with the trap flag set then takes `#DB` in ring 3 at its
+/// return address, before running anything there, and that is its own
+/// business: the trap raises `SIGTRAP`, which by default ends the program, not
+/// the kernel. Linux returns through `IRET` whenever the flag is set, so that a
+/// single-stepping debugger sees one instruction run first; that belongs with
+/// `ptrace`, not here.
+const FMASK: u64 = RFLAGS_TF | RFLAGS_IF | RFLAGS_DF | RFLAGS_NT | RFLAGS_RF | RFLAGS_AC;
+
+/// `RFLAGS.TF`: trap after each instruction.
+const RFLAGS_TF: u64 = 1 << 8;
+/// `RFLAGS.IF`: interrupts enabled.
+const RFLAGS_IF: u64 = 1 << 9;
+/// `RFLAGS.DF`: string operations count down.
+const RFLAGS_DF: u64 = 1 << 10;
+/// `RFLAGS.NT`: nested task.
+const RFLAGS_NT: u64 = 1 << 14;
+/// `RFLAGS.RF`: resume without an instruction breakpoint.
+const RFLAGS_RF: u64 = 1 << 16;
+/// `RFLAGS.AC`: alignment check, and `SMAP`'s override.
+const RFLAGS_AC: u64 = 1 << 18;
 
 // The trampoline reaches the per-CPU record from assembly, so these offsets
 // are part of the contract between this file and `crate::smp`. Asserting them
