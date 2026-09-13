@@ -33,6 +33,7 @@ pub mod arith;
 pub mod auxv;
 pub mod cancel;
 pub mod cond;
+pub mod crypt;
 pub mod ctype;
 pub mod dirent;
 pub mod env;
