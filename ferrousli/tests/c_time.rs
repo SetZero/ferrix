@@ -1,5 +1,5 @@
-//! The C programs that exercise `time.h` beyond the clocks: calendar time
-//! and time zones, and `sys/times.h`.
+//! The C programs that exercise `time.h` beyond the clocks: calendar time,
+//! time zones, `strftime`, `strptime`, and `sys/times.h`.
 //!
 //! The zone tests read the host's `/usr/share/zoneinfo`. Their expected values
 //! are written into the programs, not taken from the host at run time.
@@ -124,6 +124,19 @@ fn a_damaged_zone_file_gives_utc() {
     check(&Case {
         env: &[("TZDIR", ZONES)],
         ..Case::named("time/corrupt")
+    });
+}
+
+#[test]
+fn strftime_converts_every_field() {
+    check(&Case::named("time/strftime"));
+}
+
+#[test]
+fn strptime_parses_and_round_trips() {
+    check(&Case {
+        env: &[("TZ", "UTC0")],
+        ..Case::named("time/strptime")
     });
 }
 
