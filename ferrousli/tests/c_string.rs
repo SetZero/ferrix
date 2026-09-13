@@ -75,3 +75,8 @@ fn ctype_functions_and_glibcs_tables() {
 fn strerror_strerror_r_and_strsignal() {
     check(&string("string/strerror"));
 }
+
+#[test]
+fn strdup_and_strndup_copy_into_fresh_memory() {
+    check(&string("string/dup"));
+}

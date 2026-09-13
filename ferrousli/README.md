@@ -53,25 +53,29 @@ x86-64, static programs linked at a fixed address.
 |---|---|---|
 | Startup | `_start`, `__libc_start_main`, `environ`, the auxiliary vector, `.preinit_array` and `.init_array` | position-independent static programs |
 | Threads | the main thread's control block in glibc's layout, static TLS, the stack protector's canary | `pthread_*` |
-| `stdlib.h` | `exit`, `_Exit`, `atexit`, `abort`, `getenv` | `malloc`, conversions, sorting, the rest |
-| `string.h` | `strlen`, `strcmp`, `strncmp`, `memcpy`, `memmove`, `memset`, `memcmp`, `bcmp` | the rest |
+| Memory | the `malloc` family, on `mmap`, with size classes and integrity checks | returning empty regions to the kernel |
+| `stdlib.h` | `exit`, `_Exit`, `atexit` without a limit, `abort`, `getenv`, `setenv`, `unsetenv`, `putenv`, `clearenv` | conversions, sorting, random numbers |
+| `string.h`, `strings.h` | everything but the allocating functions; word-at-a-time scans; two-way `strstr` and `memmem` | `strdup`, `strndup`, the `_l` forms |
+| `ctype.h` | the C locale, and glibc's `__ctype_b_loc` tables | the `_l` forms |
+| Error text | `strerror`, `strerror_r` (XSI), `__xpg_strerror_r`, `strsignal` | glibc's GNU `strerror_r` |
 | `unistd.h` | `read`, `write`, `_exit` | the rest |
-| `stdio.h` | `puts`, unbuffered | `FILE`, `printf` |
-| `signal.h` | `raise` | `sigaction`, signal masks |
+| `stdio.h` | `puts`, unbuffered | `FILE`, `printf`, `scanf` |
+| `signal.h` | `sigaction`, `signal`, sets and masks, `sigpending`, `sigsuspend`, `sigtimedwait`, `sigqueue`, `kill`, `sigaltstack`, `raise`, `abort` | `psignal`, `pthread_kill` |
+| `setjmp.h` | `setjmp`, `longjmp`, `sigsetjmp`, `siglongjmp`, glibc's `__sigsetjmp` and `__longjmp_chk`, with saved pointers mangled | |
 | `errno.h` | `__errno_location`, per thread | |
 | `sys/auxv.h` | `getauxval` | |
 | C++ runtime | `__cxa_atexit`, and `__cxa_finalize` for a static program | |
 
-`atexit` holds 32 handlers, the POSIX minimum, until there is `malloc`.
-
 ## Next
 
-1. **`malloc`.**
-2. **The rest of `string.h` and `ctype.h`, and `stdlib.h`'s conversions.**
-3. **Buffered stdio and `printf`.**
-4. **libc-test**, musl's conformance suite, as the measure of progress, and a
+1. **`stdlib.h`'s conversions, sorting and random numbers**, and **the file,
+   process, time and memory system calls**.
+2. **Buffered stdio, `printf` and `scanf`**, **time zones and `strftime`**,
+   **locales and wide characters**, and **`dirent`, `getopt`, `glob` and
+   `regex`**.
+3. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
-5. **The file, process, time and memory system calls.**
-6. **Threads.**
-7. **AArch64 and ARMv7**, the other two architectures Ferrix runs.
-8. **Dynamic linking**: a loader, then glibc's symbol versions.
+4. **Threads.**
+5. **The math library.**
+6. **AArch64 and ARMv7**, the other two architectures Ferrix runs.
+7. **Dynamic linking**: a loader, then glibc's symbol versions.

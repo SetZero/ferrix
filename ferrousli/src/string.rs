@@ -1314,6 +1314,56 @@ pub unsafe extern "C" fn swab(src: *const c_void, dest: *mut c_void, n: isize) {
     }
 }
 
+/// A copy of the string `s`, in memory from `malloc`. Null, with `errno` set
+/// to `ENOMEM`, if there is no memory for it.
+///
+/// # Safety
+///
+/// `s` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strdup(s: *const c_char) -> *mut c_char {
+    // SAFETY: the caller passes a NUL-terminated string.
+    let len = unsafe { strlen(s) };
+    // SAFETY: `strlen` found `len` readable bytes before the NUL.
+    unsafe { copy_out(s, len) }
+}
+
+/// A copy of at most `n` bytes of `s`, always NUL-terminated, in memory from
+/// `malloc`. Null, with `errno` set to `ENOMEM`, if there is no memory for it.
+///
+/// # Safety
+///
+/// `s` must be NUL-terminated or readable for `n` bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strndup(s: *const c_char, n: usize) -> *mut c_char {
+    // SAFETY: the caller's contract is `strnlen`'s.
+    let len = unsafe { strnlen(s, n) };
+    // SAFETY: `strnlen` found `len` readable bytes.
+    unsafe { copy_out(s, len) }
+}
+
+/// `len` bytes of `s` followed by a NUL, in memory from `malloc`.
+///
+/// # Safety
+///
+/// `s` must be readable for `len` bytes.
+unsafe fn copy_out(s: *const c_char, len: usize) -> *mut c_char {
+    let Some(size) = len.checked_add(1) else {
+        crate::errno::set(crate::errno::ENOMEM);
+        return null_mut();
+    };
+    let copy = crate::malloc::malloc(size).cast::<c_char>();
+    if copy.is_null() {
+        return copy;
+    }
+    // SAFETY: the copy holds `len + 1` bytes, the source `len`, and they are
+    // different allocations.
+    let _ = unsafe { memcpy(copy.cast(), s.cast(), len) };
+    // SAFETY: as above.
+    unsafe { copy.wrapping_add(len).write(0) };
+    copy
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
