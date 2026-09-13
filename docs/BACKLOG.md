@@ -143,7 +143,6 @@ nobody has it yet.
 
 | Item | Owner | Stage |
 |---|---|---|
-| Translated `SMMUv3` domains, and the out-of-domain fault on x86-64 and AArch64 (VT-d translates since this landing; ARMv7-A is stated as degraded trusted mode in the exit criterion) | ferrix-d9 | 10 |
 | Reset on driver death, designed in the ring spec before the driver lands | ferrix-d9 | 10 |
 | Trusting a BAR firmware placed but did not enable | ferrix-d9 | 10 |
 | btrfs: verify data checksums from the csum tree; parse `INODE_EXTREF`; a bounded metadata node cache | ferrix-61 | 11 |

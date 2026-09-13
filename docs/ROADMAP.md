@@ -41,8 +41,8 @@ Stage 10 has begun where the continuous rule says a stage should, with PCI
 configuration space in `libs/pci`,
 and its first kernel code — PCI enumeration, device nodes with MSI-X vectors a
 driver can be given, a device driven by DMA and answering by MSI-X from the
-boot check, where each device's IOMMU is, and VT-d translating on x86-64 — is
-in the boot test.
+boot check, where each device's IOMMU is, and VT-d on x86-64 and the `SMMUv3`
+on AArch64 translating — is in the boot test.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -1892,6 +1892,54 @@ of the pages together.
 The run recorded when it landed: 2 VMO pages pinned and found at their device
 addresses on every machine, through a translated domain on x86-64.
 
+**Done — the `SMMUv3` translating under ACPI, and a function behind it given a
+translated domain.** On AArch64 the kernel programs every `SMMUv3` the IORT
+describes before PCI enumeration, so a function an IORT root complex sends to
+one reaches only what its stage-2 domain maps, and one with no domain reaches
+nothing. `kernel/src/iommu/smmuv3.rs` drives the unit, checked against QEMU's
+`smmuv3.c` and `smmuv3-internal.h`: a linear stream table of 256 entries, every
+entry valid and aborting until a domain is attached; stage 2 per attached
+stream, with its own VMID, a 39-bit walk from level 1 over 4 KiB pages, 40
+bits of output and faults recorded; the command queue for `CFGI_STE`,
+`TLBI_S12_VMALL` and `SYNC`, polled; and the event queue on.
+
+* **Every domain maps the MSI doorbell.** QEMU sends a device's MSI writes
+  through its stream, where VT-d exempts them, so each `SMMUv3` domain maps
+  the `GICv2m` frame's page at its own address, from `arch::msi_doorbell`.
+  The entropy check's MSI-X completion now arrives through it.
+* **One enum for both units.** A translated domain's map, unmap, flush,
+  resolve and detach go through `Translation`, so `Domain::pin`, `unpin` and
+  the domain check are the same code for VT-d and the `SMMUv3`.
+* **One bug, and QEMU found it.** A stream table entry is sixteen 32-bit
+  words; the first version wrote the stage-2 walk as if they were 64-bit, and
+  QEMU stopped the machine the moment it read an entry whose `S2AA64` was
+  zero.
+* **Not on ARMv7-A.** Its device-tree SMMU is left alone: U-Boot keeps the
+  32-bit machine's virtio devices from offering the platform's translation,
+  so they would bypass it anyway — the exit criterion's degraded trusted mode.
+
+The run recorded when it landed: on AArch64, 1 `SMMUv3` translating, the
+entropy check's 64 bytes and its MSI-X completion through a translated domain,
+2 pages pinned and unpinned through a translated domain, and 17 refusals in the
+pin check, the refusal of a second pin into a translated domain among them.
+x86-64 and ARMv7-A are as before.
+
+**Done — a deliberate out-of-domain write, faulted on both 64-bit machines.**
+The boot check's entropy device, once its request has completed through a
+translated domain, is asked to write into a page its domain does not map, and
+its unit must record the fault: VT-d's fault recording register on x86-64,
+cleared before the probe because QEMU keeps one record and drops a second fault
+from the same device, and the `SMMUv3`'s event queue on AArch64. The record
+must name the device's own stream, the probe's page and a write. QEMU's virtio
+device marks itself broken when a descriptor will not map and completes
+nothing, so the answer is the unit's record; a completion that says the device
+did write there stops the boot, as DMA its domain should have prevented.
+`xtask test-boot` requires the fault on x86-64 and AArch64 and does not ask
+ARMv7-A, as the exit criterion says.
+
+The run recorded when it landed: 1 out-of-domain write faulted on x86-64 and on
+AArch64; ARMv7-A's untranslated domain was not probed.
+
 **Still to do, in the order stage 11 needs it.** Stage 11 is done on the host
 and waits only for a ring-3 virtio-blk driver reading sectors, so everything on
 that path comes first and trusting decoding-off BARs, which it does not need,
@@ -1922,22 +1970,11 @@ agreements recorded here.
 * **IOMMU domains.** Where the units are, and which stream each function
   arrives as, is found (above), and the tables are in `libs/paging`. Still
   missing:
-  * *VT-d's fault record read and cleared*, for the out-of-domain check; the
-    unit and its translated domains are done (above).
-  * *An `SMMUv3` driver*: a linear stream table, stage 2 with fault recording,
-    and the command and event queues.
-  * *The `GICv2m` doorbell mapped into every Arm domain.* QEMU sends a
-    device's MSI writes through the SMMU, where VT-d exempts them.
-  * *VT-d's IOTLB flush waiting with interrupts on.* It busy-waits today
-    inside two `IrqSpinLock`s, up to 100 ms with interrupts masked, on exactly
-    the path virtio-blk will take: wait outside the lock behind a
-    command-in-progress flag, or move to queued invalidation — never a plain
-    `SpinLock` held across the wait.
-  * *`SMMUv3` domains* built from those tables, behind `Domain::pin` and
-    `unpin`, which translate through VT-d today.
-  * *The deliberate out-of-domain fault*, from the boot check's virtio-rng
-    harness, on x86-64 and AArch64. ARMv7-A needs a device U-Boot does not
-    probe.
+  * *Both units' invalidations waiting with interrupts on.* VT-d's IOTLB
+    flush and the `SMMUv3`'s `SYNC` busy-wait today inside `IrqSpinLock`s, up
+    to 100 ms with interrupts masked, on exactly the path virtio-blk will take:
+    wait outside the lock behind a command-in-progress flag, or move VT-d to
+    queued invalidation — never a plain `SpinLock` held across the wait.
 * **Trusting a BAR firmware placed but did not enable**, so a device no
   firmware driver used — as virtio-rng on AArch64 was until its legacy
   interface was turned off — can still be given to a ring-3 driver. Worked
