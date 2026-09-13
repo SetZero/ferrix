@@ -313,28 +313,68 @@ fn wait_until_online(cpu: &PerCpu) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The record at `address`, if it is one of the processors' records.
+fn record_at(address: u64) -> Option<&'static PerCpu> {
+    TOPOLOGY
+        .get()
+        .and_then(|topology| topology.cpus.iter().find(|cpu| cpu.this == address))
+}
+
+/// Make `record` this secondary processor's own, before anything on it can
+/// ask [`this_cpu`].
+///
+/// Each architecture's start path calls this before it runs anything that
+/// allocates. Allocation is the danger, not ordinary code: an arena
+/// allocation that fails part way unmaps what it mapped, which runs a
+/// shootdown, which reads [`this_cpu`] -- and [`LOCAL_READY`], the flag that
+/// says the read is safe, is global and was set by the boot processor long
+/// before. On a processor whose register still holds what reset left, that
+/// read follows garbage.
+///
+/// `record` is checked against the processor list first, for the reason
+/// [`secondary_main`] gives.
+pub(crate) fn install_secondary_record(record: u64) {
+    let Some(expected) = record_at(record) else {
+        crate::panic::fatal!(
+            crate::panic::catalog::SECONDARY_NO_RECORD,
+            "a secondary processor arrived with no record of its own"
+        );
+    };
+    // SAFETY: `expected` is a record in the leaked slice, and it is this
+    // processor's own: `start_secondaries` passed its address to the start of
+    // exactly this processor and no other.
+    unsafe { arch::set_cpu_local(expected.this) };
+}
+
 /// Where every secondary processor arrives from its architecture's start
 /// path: in the upper half, on its own stack, with its trap vectors and its
-/// interrupt controller up and every interrupt masked.
+/// interrupt controller up, its per-CPU record installed, and every interrupt
+/// masked.
 ///
 /// `record` is the address [`start_secondaries`] handed the architecture for
 /// this processor, and is checked rather than trusted: it crossed a start
 /// sequence written in assembly to get here.
+///
+/// The architecture must already have installed it, with
+/// [`install_secondary_record`], and this requires that it did.
 pub(crate) fn secondary_main(record: u64) -> ! {
-    let expected = TOPOLOGY
-        .get()
-        .and_then(|topology| topology.cpus.iter().find(|cpu| cpu.this == record));
-    let Some(expected) = expected else {
+    let Some(expected) = record_at(record) else {
         crate::panic::fatal!(
             crate::panic::catalog::SECONDARY_NO_RECORD,
             "a secondary processor arrived with no record of its own"
         );
     };
 
-    // SAFETY: `expected` is a record in the leaked slice, and it is this
-    // processor's own: `start_secondaries` passed its address to the start of
-    // exactly this processor and no other.
-    unsafe { arch::set_cpu_local(expected.this) };
+    // Read from the register, not through it: a start path that skipped the
+    // install has whatever reset left there, and following that is the bug
+    // this is looking for.
+    if arch::cpu_local_register() != expected.this {
+        crate::panic::fatal!(
+            crate::panic::catalog::SECONDARY_RECORD_MISMATCH,
+            "secondary processor {}: arrived without its per-CPU record installed",
+            expected.logical
+        );
+    }
     if let Err(problem) = check_this_cpu(expected) {
         crate::panic::fatal!(
             crate::panic::catalog::SECONDARY_RECORD_MISMATCH,

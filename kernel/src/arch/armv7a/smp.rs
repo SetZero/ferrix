@@ -546,5 +546,6 @@ extern "C" fn secondary_start(record: u32) -> ! {
     unsafe { super::trap::init() };
     gicv2::init_this_cpu();
     note_coherency();
+    crate::smp::install_secondary_record(u64::from(record));
     crate::smp::secondary_main(u64::from(record))
 }

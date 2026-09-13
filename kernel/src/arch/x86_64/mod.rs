@@ -82,9 +82,10 @@ pub(crate) unsafe fn set_cpu_local(address: u64) {
     // of them, and the first system call it made on one that skipped this
     // would take `#UD`. It used to run lazily before each program, when a
     // program never left the processor it started on.
-    // SAFETY: this processor's GDT is loaded (by `init_traps` on the boot
-    // processor and `init_secondary` on the others, both before this) and its
-    // per-CPU record is installed in `GS` above.
+    // SAFETY: this processor's per-CPU record is installed in `GS` above. On
+    // a secondary this runs before `init_secondary` loads its own GDT, which is
+    // fine: the MSRs only record the selectors, and nothing uses them until a
+    // program's first `SYSCALL`, long after that GDT is in place.
     unsafe { syscall::init() };
 }
 

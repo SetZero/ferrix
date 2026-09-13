@@ -382,6 +382,15 @@ extern "C" fn secondary_start(record: u64) -> ! {
     //
     // SAFETY: the boot processor filled the table in `init_traps`.
     unsafe { super::trap::load_on_this_cpu() };
+
+    // The per-CPU record before anything that allocates. `init_secondary`
+    // takes a stack from the vmap arena, and an arena allocation that fails
+    // part way unmaps what it mapped, which runs a shootdown, which reads
+    // `this_cpu`. The flag that says that read is safe is global, set long ago
+    // by the boot processor, so without this it would follow `GS` as reset left
+    // it: a load from address zero, which the identity map still covers.
+    crate::smp::install_secondary_record(record);
+
     // SAFETY: once, on this processor, with interrupts masked.
     if let Err(problem) = unsafe { super::gdt::init_secondary() } {
         crate::panic::fatal!(

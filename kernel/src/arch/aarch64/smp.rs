@@ -351,5 +351,6 @@ extern "C" fn secondary_start(record: u64) -> ! {
     // exception masked.
     unsafe { super::trap::init() };
     super::gicv2::init_this_cpu();
+    crate::smp::install_secondary_record(record);
     crate::smp::secondary_main(record)
 }

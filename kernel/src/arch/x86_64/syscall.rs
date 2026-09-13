@@ -484,8 +484,9 @@ fn arch_prctl(code: u64, value: u64) -> isize {
 ///
 /// # Safety
 ///
-/// Must run once per processor, after its GDT is loaded and after its per-CPU
-/// record is installed in `GS`.
+/// Must run on each processor after its per-CPU record is installed in `GS`,
+/// and before any program makes a system call there. The GDT the selectors
+/// name need not be loaded yet, only by the time that call is made.
 pub(crate) unsafe fn init() {
     // SAFETY: `IA32_EFER` exists on every 64-bit x86; setting SCE only enables
     // an instruction that faults until `LSTAR` is set, two lines below.
