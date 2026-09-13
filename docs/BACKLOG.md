@@ -23,10 +23,24 @@ These add to `docs/CONVENTIONS.md`, which still governs commits.
 |---|---|
 | Only `docs/`, or only `ferrousli/` | `cargo xtask check`; for ferrousli also `cargo test` in `ferrousli/` |
 | `libs/` only, and no crate the kernel builds | `cargo xtask check`, and one boot: `test-boot --arch armv7a --smp 2` |
-| Anything the image contains: `kernel/`, `boot/`, a kernel-side crate in `libs/`, `xtask` | `cargo xtask check`, then `test-boot` on x86_64, aarch64, armv7a at four processors and armv7a at `--smp 2` |
+| Anything the image contains: `kernel/`, `boot/`, a kernel-side crate in `libs/`, `xtask` | `cargo xtask check`, then `test-boot` on x86_64, aarch64, armv7a at four processors and armv7a at `--smp 2`; then `test-shell` on x86_64 with the musl busybox *and* the host's glibc busybox (`/usr/bin/busybox`), and `test-vfs` on x86_64 |
 | User mode, page tables, TLB, SMP or the scheduler | The row above, and x86_64 under `--accel kvm` |
 
 Then fast-forward `main` only if it is still the commit rebased onto.
+
+**After the fast-forward,** the lander boots `main` itself once on x86_64
+under `--accel kvm` and reports the hash together with that result, so a bad
+merge is seen by the one who made it and not by the customer.
+
+**`stable`.** The customer boots `main` and expects it to work; when it does
+not, fixing it outranks every other row. Because a stalled host can still
+fool a check on `main`, the product owner also keeps the branch `stable`:
+it moves, fast-forward only, to the newest `main` that has passed the whole
+matrix from a clean worktree (four boots, KVM, `test-shell` with both
+busyboxes, `test-vfs`, on the product owner's own host run), at least every
+two hours while landings happen. `git checkout stable` is always a working
+tree; `main` is meant to be, and a failure there is fixed forward or reverted
+within the hour.
 
 **The landing queue.** Image changes queue; documentation, ferrousli and
 host-only `libs/` landings do not. A session whose image change has passed
@@ -121,6 +135,8 @@ nobody has it yet.
 | `vmo_map` and native process creation | ferrix-4b, space.rs half reviewed by ferrix-e5 | `devmgr` cannot start a driver without them |
 | Stage 11's kernel mount, through the VFS, with file data in the inode's VMO | ferrix-61 | The read-only sysroot |
 
+| ferrousli on the build path: `cargo xtask check` builds and tests `ferrousli/`; a script under `ferrousli/tools` builds busybox from a pinned source tarball against ferrousli as a static x86-64 program (musl headers, `crt1.o`, `libferrousli.a`, no other libc); `test-shell` runs it beside the musl and glibc busyboxes, and it becomes the third binary every stage 7 landing must pass | ferrix-ce, with ferrix-a5 for what the kernel owes it | The customer's call on 2026-09-13: ferrousli stops being beside the roadmap; a busybox built on it is the userland Ferrix is measured with |
+
 ### P1 — required before a stage is called done
 
 | Item | Owner | Stage |
@@ -174,6 +190,12 @@ nobody has it yet.
 ## Decisions
 
 Dated, newest first. A decision here is final until the customer says otherwise.
+
+* **2026-09-13 (customer)** Order of everything: first a working `main`, second
+  ferrousli on the build with busybox rebuilt against it, third being surer
+  that `main` is stable before it moves. This supersedes the earlier
+  decision that ferrousli sits beside the roadmap: it now has a P0 row and
+  its busybox is a `test-shell` target.
 
 * **2026-09-13** Ferrousli is beside the roadmap, not on it: the goal's path is
   static musl, and ferrousli counts toward no stage. A landing touching only
