@@ -24,8 +24,8 @@
 //!
 //! # What is not here yet
 //!
-//! Mapping a VMO.
-//! Their numbers decode, and answer `ENOSYS` until they exist.
+//! The calls that act on a process beyond making and starting it, in
+//! `0x1032..=0x1037`. Those numbers do not decode yet, and answer `ENOSYS`.
 
 use alloc::sync::Arc;
 use alloc::vec;
@@ -55,7 +55,9 @@ use crate::object::job::{self, Job};
 use crate::object::port::{Observer, Port};
 use crate::object::{self, HandleTable, Object};
 use crate::syscall::SyscallArgs;
-use crate::syscall::process::Process;
+use crate::syscall::exec;
+use crate::syscall::load::LoadError;
+use crate::syscall::process::{self, Process, ProcessRef};
 use crate::syscall::uaccess::{self, UserError};
 use crate::user::space::SpaceError;
 use crate::user::vmo::{Vmo, VmoError};
@@ -142,6 +144,16 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::ObjectWaitOne => object_wait_one(process, handle(a[0]), a[1], a[2], a[3]),
         NativeCall::JobCreate => job_create(process, handle(a[0])),
         NativeCall::JobKill => job_kill(process, handle(a[0])),
+        NativeCall::ProcessCreate => process_create(
+            process,
+            handle(a[0]),
+            handle(a[1]),
+            Buffer {
+                at: a[2],
+                count: a[3],
+            },
+        ),
+        NativeCall::ProcessStart => process_start(process, handle(a[0]), handle(a[1])),
         NativeCall::InterruptCreate => interrupt_create(process, handle(a[0]), a[1]),
         NativeCall::InterruptAck => interrupt_ack(process, handle(a[0])),
         NativeCall::InterruptBind => interrupt_bind(process, handle(a[0]), handle(a[1]), a[2]),
@@ -728,6 +740,169 @@ fn job_kill(process: &Process, job: Handle) -> Result<usize, Errno> {
     let job = job_in(process, job, Rights::MANAGE)?;
     let _ended = job.kill(job::KILLED_STATUS);
     Ok(0)
+}
+
+/// The largest ELF image `process_create` reads out of a VMO: sixteen
+/// mebibytes, copied into the kernel's own memory before it is loaded.
+const MAX_IMAGE_BYTES: u64 = 16 << 20;
+
+/// `process_create`.
+///
+/// The image is read out of the VMO into kernel memory and loaded from there,
+/// so the new process's code is ordinary memory of its own and no VMO is ever
+/// mapped executable. The process is in `job` before the caller hears of it,
+/// so a kill of the job reaches a process that was never started.
+fn process_create(
+    process: &Process,
+    job: Handle,
+    image: Handle,
+    name: Buffer,
+) -> Result<usize, Errno> {
+    let job = job_in(process, job, Rights::MANAGE)?;
+    let vmo = process.with_handles(|table| vmo_in(table, image, Rights::READ))?;
+    let name_len = usize::try_from(name.count)
+        .ok()
+        .filter(|&count| count <= nr::PROCESS_NAME_MAX)
+        .ok_or(status::INVALID_ARGS)?;
+    let name = copy_in(process, name.at, name_len)?;
+    let image = image_bytes(&vmo)?;
+    let child = exec::load_native(&image, &name).map_err(load_status)?;
+    drop(image);
+    if job.adopt(&child).is_err() {
+        // A killed job takes nothing new. What was made is ended here, in the
+        // caller's task, where a kill may run.
+        process::kill(&child, job::KILLED_STATUS);
+        return Err(status::BAD_STATE);
+    }
+    insert_new(
+        process,
+        Object::Process(ProcessRef::created(&child)),
+        Rights::PROCESS,
+    )
+}
+
+/// Every byte of a VMO, for `process_create` to load.
+fn image_bytes(vmo: &Vmo) -> Result<Vec<u8>, Errno> {
+    let len = vmo.len_bytes();
+    if len > MAX_IMAGE_BYTES {
+        return Err(status::TOO_BIG);
+    }
+    let len = usize::try_from(len).map_err(|_| status::TOO_BIG)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(len)
+        .map_err(|_| status::NO_MEMORY)?;
+    bytes.resize(len, 0);
+    for (index, page) in bytes.chunks_mut(PAGE_SIZE as usize).enumerate() {
+        vmo.read_page(index as u64, 0, page).map_err(vmo_error)?;
+    }
+    Ok(bytes)
+}
+
+/// The status a failed native load travels as: a fault in the image is the
+/// caller's mistake, running out of memory is not.
+fn load_status(error: exec::ExecError) -> Errno {
+    match error {
+        exec::ExecError::Load(LoadError::Space(SpaceError::OutOfMemory) | LoadError::Copy(_))
+        | exec::ExecError::Space(_)
+        | exec::ExecError::Startup
+        | exec::ExecError::Start(_) => status::NO_MEMORY,
+        exec::ExecError::Load(_) => status::INVALID_ARGS,
+    }
+}
+
+/// `process_start`.
+///
+/// In the order that makes a race harmless:
+/// 1. The start is claimed first, so a second start is refused before it has
+///    moved anything.
+/// 2. The bootstrap is moved next, under both tables, so it is in exactly one
+///    of them throughout.
+/// 3. Only then is the task spawned, with the bootstrap's value in its first
+///    argument register.
+///
+/// A process that ended before the claim is refused by the claim. One killed
+/// between the claim and the move has a closed table that refuses the handle,
+/// which then never leaves the caller. The `Control` held here keeps a last
+/// handle closed meanwhile from killing the process under a start that is
+/// about to succeed.
+fn process_start(process: &Process, target: Handle, bootstrap: Handle) -> Result<usize, Errno> {
+    let control = process.with_handles(|table| {
+        let (object, rights) = table.get(target).map_err(table_error)?;
+        let Object::Process(child) = object else {
+            return Err(status::WRONG_TYPE);
+        };
+        if !rights.contains(Rights::MANAGE) {
+            return Err(status::ACCESS_DENIED);
+        }
+        child.control().map(Arc::clone).ok_or(status::BAD_STATE)
+    })?;
+    let child = control.process().ok_or(status::BAD_STATE)?;
+    let claim = process::claim_start(&child).map_err(|_| status::BAD_STATE)?;
+    let placed = if bootstrap == Handle::default() {
+        None
+    } else {
+        Some(move_handle(process, &child, bootstrap)?)
+    };
+    let argument = placed.map_or(0, |handle| u64::from(handle.0));
+    if claim.start(None, argument).is_err() {
+        // Only a task that could not be made reaches here, and the claim has
+        // been given back. The bootstrap goes back to the caller, under a new
+        // value if its old one was taken meanwhile; if even that is refused it
+        // stays in the child's table and goes when the child is ended.
+        //
+        // This move takes the child's table first and the caller's second,
+        // the reverse of the move in. That is safe only because the child has
+        // no task to take its own table's lock, and any second start is
+        // refused at the claim before it reaches either table.
+        if let Some(placed) = placed {
+            let _ = move_handle(&child, process, placed);
+        }
+        return Err(status::NO_MEMORY);
+    }
+    control.started();
+    Ok(0)
+}
+
+/// Move `handle` out of `from`'s table into `to`'s, and answer its value there.
+///
+/// Both tables are held for the move, `from`'s first, so the object is in
+/// exactly one of them at every moment. A refusal checked before the move
+/// leaves the handle where it was, under the value it had. The one refusal
+/// found after it, an insert into `to` that fails although room was checked,
+/// puts the object back into `from` under whatever value that insert gives,
+/// or frees it if even that fails. Moving into a child whose start is claimed,
+/// whose task has not run, cannot meet the same two locks taken the other way
+/// round. Needs `TRANSFER`.
+fn move_handle(from: &Process, to: &Process, handle: Handle) -> Result<Handle, Errno> {
+    let outcome = from.with_handles(|source| {
+        let (_, rights) = source.get(handle).map_err(table_error)?;
+        if !rights.contains(Rights::TRANSFER) {
+            return Err(status::ACCESS_DENIED);
+        }
+        to.with_handles(|target| {
+            if target.is_closed() {
+                return Err(status::BAD_STATE);
+            }
+            if target.room() == 0 {
+                return Err(status::NO_HANDLES);
+            }
+            let (object, rights) = source.remove(handle).map_err(table_error)?;
+            // Room was there under this same lock, so the insert takes it; a
+            // refusal anyway puts the object back rather than dropping it here.
+            Ok(target
+                .insert(object, rights)
+                .map_err(|object| source.insert(object, rights)))
+        })
+    })?;
+    match outcome {
+        Ok(placed) => Ok(placed),
+        Err(Ok(_)) => Err(status::NO_HANDLES),
+        Err(Err(object)) => {
+            object::dispose([object]);
+            Err(status::NO_HANDLES)
+        }
+    }
 }
 
 /// The device node a handle names, if it carries `needed`.

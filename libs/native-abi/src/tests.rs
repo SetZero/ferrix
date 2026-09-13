@@ -67,8 +67,10 @@ fn pinning_sits_in_the_vmo_block() {
 }
 
 #[test]
-fn process_creation_block_is_left_free() {
-    for number in 0x1030..=0x1037 {
+fn process_creation_opens_its_block() {
+    assert_eq!(nr::decode(0x1030), Some(NativeCall::ProcessCreate));
+    assert_eq!(nr::decode(0x1031), Some(NativeCall::ProcessStart));
+    for number in 0x1032..=0x1037 {
         assert_eq!(nr::decode(number), None, "{number:#x} was assigned");
     }
     assert_eq!(

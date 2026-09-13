@@ -59,6 +59,11 @@ pub const JOB_CREATE: usize = 0x1028;
 /// [`NativeCall::JobKill`].
 pub const JOB_KILL: usize = 0x1029;
 
+/// [`NativeCall::ProcessCreate`].
+pub const PROCESS_CREATE: usize = 0x1030;
+/// [`NativeCall::ProcessStart`].
+pub const PROCESS_START: usize = 0x1031;
+
 /// [`NativeCall::InterruptCreate`].
 pub const INTERRUPT_CREATE: usize = 0x1038;
 /// [`NativeCall::InterruptBind`].
@@ -73,11 +78,13 @@ pub const IO_MAPPING_MAP: usize = 0x1041;
 
 /// [`NativeCall::BlockRingCreate`].
 pub const BLOCK_RING_CREATE: usize = 0x1048;
+/// The largest name [`NativeCall::ProcessCreate`] takes, in bytes.
+pub const PROCESS_NAME_MAX: usize = 32;
 
 /// A native system call.
 ///
-/// `0x1030..=0x1037` is left for process creation, which is decided together
-/// with the scheduler work that makes a process a task.
+/// `0x1032..=0x1037` is left for the calls that act on a process beyond
+/// making and starting it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NativeCall {
     /// `(handle)`. Close a handle. The object lives on if anything else holds it.
@@ -146,6 +153,21 @@ pub enum NativeCall {
     /// `(job)`. End every process in the job and every job inside it. Needs
     /// `MANAGE`.
     JobKill,
+    /// `(job, image, name, name_len)` → handle. Make a process in `job` from
+    /// the ELF image the VMO holds, not yet running: the image is read out of
+    /// the VMO and loaded as the process's own memory, with nothing on its
+    /// stack. `name`, at most [`PROCESS_NAME_MAX`] bytes, is what it is listed
+    /// as. The handle carries [`crate::rights::Rights::PROCESS`]; closing the
+    /// last one to a process nobody started ends it. Needs `MANAGE` on the job
+    /// and `READ` on the VMO.
+    ProcessCreate,
+    /// `(process, bootstrap)`. Start a process made by `process_create`,
+    /// moving `bootstrap` into its table and entering it with that handle's
+    /// value in its first argument register; zero starts it with no handle and
+    /// zero there. Refused with `BAD_STATE` for a process already started or
+    /// already ended, and the bootstrap then stays with the caller. Needs
+    /// `MANAGE` on the process and `TRANSFER` on the bootstrap.
+    ProcessStart,
     /// `(resource, vector)` → handle. Claim a hardware interrupt.
     InterruptCreate,
     /// `(interrupt, port, key: *u64)`. Deliver the interrupt to a port as
@@ -165,7 +187,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 26] = [
+pub const ALL: [NativeCall; 28] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -186,6 +208,8 @@ pub const ALL: [NativeCall; 26] = [
     NativeCall::VmoPinAddresses,
     NativeCall::JobCreate,
     NativeCall::JobKill,
+    NativeCall::ProcessCreate,
+    NativeCall::ProcessStart,
     NativeCall::InterruptCreate,
     NativeCall::InterruptBind,
     NativeCall::InterruptAck,
@@ -227,6 +251,8 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         VMO_PIN_ADDRESSES => NativeCall::VmoPinAddresses,
         JOB_CREATE => NativeCall::JobCreate,
         JOB_KILL => NativeCall::JobKill,
+        PROCESS_CREATE => NativeCall::ProcessCreate,
+        PROCESS_START => NativeCall::ProcessStart,
         INTERRUPT_CREATE => NativeCall::InterruptCreate,
         INTERRUPT_BIND => NativeCall::InterruptBind,
         INTERRUPT_ACK => NativeCall::InterruptAck,
@@ -262,6 +288,8 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::VmoPinAddresses => VMO_PIN_ADDRESSES,
         NativeCall::JobCreate => JOB_CREATE,
         NativeCall::JobKill => JOB_KILL,
+        NativeCall::ProcessCreate => PROCESS_CREATE,
+        NativeCall::ProcessStart => PROCESS_START,
         NativeCall::InterruptCreate => INTERRUPT_CREATE,
         NativeCall::InterruptBind => INTERRUPT_BIND,
         NativeCall::InterruptAck => INTERRUPT_ACK,

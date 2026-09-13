@@ -1100,26 +1100,121 @@ impl Exit {
 
 /// What a handle to a process holds.
 ///
-/// Its [`Exit`], and not the process: see there. The calls that act on a
-/// process, which come with native process creation, will add a weak way back
-/// to it.
+/// Its [`Exit`], and not the process: see there. A handle `process_create`
+/// made also holds the process's [`Control`], shared by every duplicate of
+/// that handle: the weak way back to the process that `process_start` needs.
 #[derive(Debug, Clone)]
 pub(crate) struct ProcessRef {
     /// How it ended.
     exit: Arc<Exit>,
+    /// The way back to it, for a process made through the native ABI.
+    control: Option<Arc<Control>>,
+}
+
+/// The way from a created process's handles back to the process.
+///
+/// Weak, so that a handle kept past the end keeps nothing of the process but
+/// its [`Exit`]. Strong only until it starts: nothing else holds a process no
+/// task runs, so its handles have to, and a start hands that reference over to
+/// the process's task.
+#[derive(Debug)]
+pub(crate) struct Control {
+    /// The process, while anything else holds it.
+    process: Weak<Process>,
+    /// The only strong reference to a process nobody has started.
+    unstarted: SpinLock<Option<Arc<Process>>>,
 }
 
 impl ProcessRef {
-    /// A handle's view of `process`.
+    /// A handle's view of `process`, with no way back to it.
     pub(crate) fn new(process: &Process) -> ProcessRef {
         ProcessRef {
             exit: Arc::clone(&process.exit),
+            control: None,
+        }
+    }
+
+    /// A handle to `process`, made and not yet started, which holds it until a
+    /// start takes it over or the last such handle is closed.
+    pub(crate) fn created(process: &Arc<Process>) -> ProcessRef {
+        ProcessRef {
+            exit: Arc::clone(&process.exit),
+            control: Some(Arc::new(Control {
+                process: Arc::downgrade(process),
+                unstarted: SpinLock::new(Some(Arc::clone(process))),
+            })),
         }
     }
 
     /// How it ended, and who is waiting to hear.
     pub(crate) fn exit(&self) -> &Exit {
         &self.exit
+    }
+
+    /// Its exit status, once it has terminated.
+    pub(crate) fn exit_status(&self) -> Option<i32> {
+        self.exit
+            .is_terminated()
+            .then(|| self.exit.status.load(Ordering::Acquire))
+    }
+
+    /// The way back to the process, if this handle was made with one.
+    pub(crate) fn control(&self) -> Option<&Arc<Control>> {
+        self.control.as_ref()
+    }
+}
+
+impl Control {
+    /// The process, if it still exists.
+    ///
+    /// Never asked on a wait path: a wait needs only the [`Exit`], and a
+    /// process that has gone answers `None` here, not a panic.
+    pub(crate) fn process(&self) -> Option<Arc<Process>> {
+        self.process.upgrade()
+    }
+
+    /// Let go of the reference that kept it before it started, now that its
+    /// task holds it.
+    pub(crate) fn started(&self) {
+        let held = self.unstarted.lock().take();
+        drop(held);
+    }
+}
+
+impl Drop for Control {
+    /// End a process nobody started, once no handle is left that could start
+    /// it.
+    ///
+    /// Such a process is held only here. Letting go of it without ending it
+    /// would free it without [`Process::end`], so no status would be recorded
+    /// and its watchers would never hear. So it is killed first, and `end`
+    /// runs.
+    ///
+    /// # Where this runs
+    ///
+    /// Only where a handle object is dropped. Every such drop goes through
+    /// `object::dispose`, and every caller of that is in task context with
+    /// interrupts on:
+    /// - a native call's handler;
+    /// - a channel's own drop or refusal, reached only inside such a drain;
+    /// - [`Process::end`] closing a handle table, which since the fault-kill
+    ///   fix never runs with interrupts masked.
+    ///
+    /// A drain running on another processor is that processor's calling task,
+    /// not an interrupt. The idle reaper, which the rule "never kill in Drop"
+    /// is about, drops only processes whose `end` has already emptied their
+    /// table, so it never holds a `Control`. The assertion is the tripwire, as
+    /// `Exit::close`'s is. The reference is taken out of the lock before the
+    /// kill, so `end` runs under nothing of this lock's.
+    fn drop(&mut self) {
+        let unstarted = self.unstarted.lock().take();
+        if let Some(process) = unstarted {
+            debug_assert!(
+                crate::arch::interrupts_enabled(),
+                "an unstarted process's last handle was dropped with interrupts off"
+            );
+            kill(&process, object::job::KILLED_STATUS);
+        }
     }
 }
 

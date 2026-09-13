@@ -635,6 +635,11 @@ fn check_native_objects() {
         "  exit     two programs in user mode exchanged {} messages and a handle over a channel",
         report.exchanged,
     );
+    println!(
+        "  spawn    {} programs made from a VMO and started through a handle, their ends heard; \
+         {} never started, ended with their last handle",
+        report.spawned, report.abandoned,
+    );
 }
 
 /// Stage 9: interrupts and I/O mappings, minted from stage 10's device nodes.

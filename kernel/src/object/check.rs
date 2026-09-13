@@ -120,6 +120,11 @@ pub(crate) struct Report {
     pub(crate) killed: u32,
     /// Messages two programs in user mode exchanged with each other.
     pub(crate) exchanged: u32,
+    /// Programs a process made from a VMO and started through a handle, whose
+    /// ends it heard through that handle.
+    pub(crate) spawned: u32,
+    /// Processes nobody started, ended when their last handle went.
+    pub(crate) abandoned: u32,
 }
 
 /// Counts what happened, so the report is a measurement and not a claim.
@@ -139,6 +144,10 @@ struct Counter {
     killed: u32,
     /// See [`Report::exchanged`].
     exchanged: u32,
+    /// See [`Report::spawned`].
+    spawned: u32,
+    /// See [`Report::abandoned`].
+    abandoned: u32,
     /// See [`Report::mapped`].
     mapped: u32,
     /// See [`Report::interrupts`].
@@ -186,6 +195,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_a_port_wait_is_woken_by_a_message(&mut after)?;
     check_two_programs_talk_over_a_channel(&mut after)?;
     check_a_program_ended_by_its_fault_is_heard_and_freed(&mut after)?;
+    check_a_process_starts_another(&mut after)?;
 
     Ok(Report {
         messages: counter.messages,
@@ -196,7 +206,420 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         packets: counter.packets + after.packets,
         killed: after.killed,
         exchanged: after.exchanged,
+        spawned: after.spawned,
+        abandoned: after.abandoned,
     })
+}
+
+/// Where the process-creation check stages a child's image: apart from the
+/// scratch region, whose first page holds staged values an image would
+/// overwrite.
+const IMAGE_AT: u64 = 0x5000_0000;
+
+/// The name every child of the process-creation check is made with.
+const SPAWN_NAME: &[u8] = b"spawned";
+
+/// A process makes another from a VMO, starts it through its handle with a
+/// bootstrap handle, and hears it end through a port. The ways that must not
+/// work do not.
+///
+/// The starter is a check process whose calls go through the real native
+/// dispatch, which is what `devmgr` will make them through. The child is a
+/// real program in user mode on every architecture that exits with its first
+/// argument register. So its status is the value its bootstrap handle has in
+/// its own table, and a child started with no bootstrap exits 0.
+///
+/// What must not happen:
+/// - a start without `MANAGE`, or a second start;
+/// - a start of a child whose job was killed first, which must also leave the
+///   bootstrap with the starter under the same value;
+/// - an unstarted child outliving its only handle: closed, it ends the child,
+///   whose watch fires, and once the reaper is quiet nothing holds it;
+/// - an unstarted child outliving a channel message carrying its handle: the
+///   channel closed with the message unread ends it too.
+fn check_a_process_starts_another(counter: &mut Counter) -> Result<(), &'static str> {
+    if arch::USER_ARGUMENT_PROGRAM.is_empty() {
+        return Ok(());
+    }
+    let side = Side::new()?;
+    let spawner = Spawner::new(&side)?;
+    check_what_process_create_refuses(&spawner, counter)?;
+    check_a_child_finds_its_bootstrap(&spawner, counter)?;
+    check_a_killed_child_is_not_started(&spawner, counter)?;
+    check_an_unstarted_child_ends_with_its_handles(&spawner, counter)?;
+    side.close_everything();
+    Ok(())
+}
+
+/// A check process set up to make children: a job, a VMO holding the child's
+/// image, its name staged, and a port to hear them end on.
+struct Spawner<'a> {
+    /// The process making the calls.
+    side: &'a Side,
+    /// A root job, with every right a job carries.
+    root: Handle,
+    /// The VMO holding a child's ELF image.
+    image: Handle,
+    /// Where watches on children fire.
+    port: Handle,
+}
+
+impl<'a> Spawner<'a> {
+    /// Build the image of `arch::USER_ARGUMENT_PROGRAM`, write it into a VMO
+    /// through `vmo_write`, and give `side` a job and a port.
+    fn new(side: &'a Side) -> Result<Spawner<'a>, &'static str> {
+        let root = side
+            .process
+            .with_handles(|table| table.insert(Object::Job(Job::new_root()), Rights::JOB))
+            .map_err(|_| "no room for the starter's job")?;
+        let class = if size_of::<usize>() == 8 {
+            Class::Elf64
+        } else {
+            Class::Elf32
+        };
+        let file = image::build_with(
+            class,
+            arch::ARCH.elf_machine(),
+            image::Shape::Good,
+            arch::USER_ARGUMENT_PROGRAM,
+        );
+        let _ = side
+            .process
+            .space()
+            .map_anonymous(
+                IMAGE_AT,
+                len(&file).div_ceil(PAGE_SIZE) * PAGE_SIZE,
+                VmaFlags::READ_WRITE,
+            )
+            .map_err(|_| "could not map room for a child's image")?;
+        side.put(IMAGE_AT, &file)?;
+        let image = side.handle(
+            nr::VMO_CREATE,
+            &[len(&file)],
+            "vmo_create for a child's image failed",
+        )?;
+        side.put_offset(0)?;
+        let _ = side
+            .call(nr::VMO_WRITE, &[reg(image), IMAGE_AT, len(&file), OFFSET])
+            .map_err(|_| "writing a child's image into a VMO failed")?;
+        side.put(INBOX, SPAWN_NAME)?;
+        let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
+        Ok(Spawner {
+            side,
+            root,
+            image,
+            port,
+        })
+    }
+
+    /// `process_create` in `job` from `vmo`, with the staged name cut to
+    /// `name_len`.
+    fn create(&self, job: Handle, vmo: Handle, name_len: u64) -> Result<usize, Errno> {
+        self.side
+            .call(nr::PROCESS_CREATE, &[reg(job), reg(vmo), INBOX, name_len])
+    }
+
+    /// A child made in `job` from the real image.
+    fn made(&self, job: Handle, what: &'static str) -> Result<Handle, &'static str> {
+        let value = self
+            .create(job, self.image, len(SPAWN_NAME))
+            .map_err(|_| what)?;
+        u32::try_from(value).map(Handle).map_err(|_| what)
+    }
+
+    /// Watch `target` for `TERMINATED` on the port, with `key`.
+    fn watch(&self, target: Handle, key: u64, what: &'static str) -> Result<(), &'static str> {
+        self.side.put(KEY, &key.to_ne_bytes())?;
+        self.side
+            .call(
+                nr::OBJECT_WAIT_ASYNC,
+                &[
+                    reg(target),
+                    reg(self.port),
+                    u64::from(Signals::TERMINATED.0),
+                    KEY,
+                ],
+            )
+            .map(|_| ())
+            .map_err(|_| what)
+    }
+
+    /// Wait for the watch with `key` to fire, and count its packet.
+    fn heard(
+        &self,
+        key: u64,
+        what: &'static str,
+        counter: &mut Counter,
+    ) -> Result<(), &'static str> {
+        stage_deadline(self.side, PATIENCE_NANOS)?;
+        let _ = self
+            .side
+            .call(nr::PORT_WAIT, &[reg(self.port), DEADLINE, PACKET_AT])
+            .map_err(|_| what)?;
+        let (fired, kind, signals, _, _) = read_packet(self.side)?;
+        if fired != key
+            || kind != PACKET_SIGNAL
+            || !Signals(signals).intersects(Signals::TERMINATED)
+        {
+            return Err(what);
+        }
+        counter.packets += 1;
+        Ok(())
+    }
+
+    /// The exit status of the process `handle` names, once it has one.
+    fn status_of(&self, handle: Handle) -> Option<i32> {
+        self.side
+            .process
+            .with_handles(|table| match table.get(handle) {
+                Ok((Object::Process(child), _)) => child.exit_status(),
+                _ => None,
+            })
+    }
+
+    /// A second handle to `handle` carrying only `rights`.
+    fn narrowed(
+        &self,
+        handle: Handle,
+        rights: Rights,
+        what: &'static str,
+    ) -> Result<Handle, &'static str> {
+        self.side.handle(
+            nr::HANDLE_DUPLICATE,
+            &[reg(handle), u64::from(rights.0)],
+            what,
+        )
+    }
+}
+
+/// `process_create` needs `MANAGE` on the job and `READ` on the image, a job
+/// where the job goes, a name within the limit, and an ELF image in the VMO.
+fn check_what_process_create_refuses(
+    spawner: &Spawner<'_>,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let Spawner {
+        side, root, image, ..
+    } = *spawner;
+    let name_len = len(SPAWN_NAME);
+    let blind_job = spawner.narrowed(
+        root,
+        Rights::WAIT,
+        "duplicating a job without MANAGE failed",
+    )?;
+    refused(
+        spawner.create(blind_job, image, name_len),
+        status::ACCESS_DENIED,
+        "process_create without MANAGE on the job was not refused",
+        counter,
+    )?;
+    let unreadable = spawner.narrowed(
+        image,
+        Rights::WRITE,
+        "duplicating a VMO without READ failed",
+    )?;
+    refused(
+        spawner.create(root, unreadable, name_len),
+        status::ACCESS_DENIED,
+        "process_create from a VMO it may not read was not refused",
+        counter,
+    )?;
+    refused(
+        spawner.create(image, image, name_len),
+        status::WRONG_TYPE,
+        "process_create in a VMO instead of a job was not refused",
+        counter,
+    )?;
+    refused(
+        spawner.create(
+            root,
+            image,
+            u64::try_from(nr::PROCESS_NAME_MAX + 1).unwrap_or(u64::MAX),
+        ),
+        status::INVALID_ARGS,
+        "a process name over the limit was taken",
+        counter,
+    )?;
+    let blank = side.handle(nr::VMO_CREATE, &[PAGE_SIZE], "vmo_create failed")?;
+    refused(
+        spawner.create(root, blank, name_len),
+        status::INVALID_ARGS,
+        "a VMO holding no ELF image was loaded as one",
+        counter,
+    )
+}
+
+/// A child started with a channel end finds the end's value in its first
+/// argument register, the end leaves the starter and closes with the child,
+/// and a child started with no bootstrap finds zero. A start without
+/// `MANAGE`, and a second start, are refused.
+fn check_a_child_finds_its_bootstrap(
+    spawner: &Spawner<'_>,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let side = spawner.side;
+    let child = spawner.made(spawner.root, "process_create of a real image failed")?;
+    spawner.watch(child, 71, "watching a made process failed")?;
+    let (near, far) = side.channel()?;
+    let manage_less = spawner.narrowed(
+        child,
+        Rights::WAIT,
+        "duplicating a process handle without MANAGE failed",
+    )?;
+    refused(
+        side.call(nr::PROCESS_START, &[reg(manage_less), reg(far)]),
+        status::ACCESS_DENIED,
+        "process_start without MANAGE was not refused",
+        counter,
+    )?;
+    let _ = side
+        .call(nr::PROCESS_START, &[reg(child), reg(far)])
+        .map_err(|_| "process_start of a made process failed")?;
+    refused(
+        side.call(nr::HANDLE_CLOSE, &[reg(far)]),
+        status::BAD_HANDLE,
+        "a started process's bootstrap stayed in its starter's table",
+        counter,
+    )?;
+    refused(
+        side.call(nr::PROCESS_START, &[reg(child), 0]),
+        status::BAD_STATE,
+        "a process was started twice",
+        counter,
+    )?;
+    spawner.heard(
+        71,
+        "a started process's end did not fire the watch on its handle",
+        counter,
+    )?;
+    if spawner.status_of(child) != i32::try_from(BOOTSTRAP.0).ok() {
+        crate::console::println!(
+            "  spawn    a started process ended with {:?}, not its bootstrap's value {}",
+            spawner.status_of(child),
+            BOOTSTRAP.0
+        );
+        return Err("a started process did not find its bootstrap handle's value on entry");
+    }
+    // The end that was moved went with the child's table, not the starter's.
+    stage_deadline(side, PATIENCE_NANOS)?;
+    let _ = side
+        .call(
+            nr::OBJECT_WAIT_ONE,
+            &[
+                reg(near),
+                u64::from(Signals::PEER_CLOSED.0),
+                DEADLINE,
+                OBSERVED,
+            ],
+        )
+        .map_err(|_| "the bootstrap end did not close with the process it was moved into")?;
+    counter.spawned += 1;
+
+    let bare = spawner.made(spawner.root, "process_create of a second child failed")?;
+    spawner.watch(bare, 72, "watching a second made process failed")?;
+    let _ = side
+        .call(nr::PROCESS_START, &[reg(bare), 0])
+        .map_err(|_| "process_start with no bootstrap failed")?;
+    spawner.heard(
+        72,
+        "a process started with no bootstrap was not heard to end",
+        counter,
+    )?;
+    if spawner.status_of(bare) != Some(0) {
+        return Err("a process started with no bootstrap did not find zero on entry");
+    }
+    counter.spawned += 1;
+    Ok(())
+}
+
+/// A child whose job is killed before its start is refused the start, and the
+/// bootstrap stays with the starter under the value it had; the killed job
+/// takes no new process.
+fn check_a_killed_child_is_not_started(
+    spawner: &Spawner<'_>,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let side = spawner.side;
+    let doomed_job = side.handle(nr::JOB_CREATE, &[reg(spawner.root)], "job_create failed")?;
+    let doomed = spawner.made(doomed_job, "process_create in a live job failed")?;
+    let (_kept_near, kept_far) = side.channel()?;
+    let _ = side
+        .call(nr::JOB_KILL, &[reg(doomed_job)])
+        .map_err(|_| "killing a job with an unstarted process in it failed")?;
+    refused(
+        side.call(nr::PROCESS_START, &[reg(doomed), reg(kept_far)]),
+        status::BAD_STATE,
+        "a process killed before its start was started",
+        counter,
+    )?;
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(kept_far)])
+        .map_err(|_| "a refused start took its bootstrap from the starter")?;
+    refused(
+        spawner.create(doomed_job, spawner.image, len(SPAWN_NAME)),
+        status::BAD_STATE,
+        "a killed job took a new process",
+        counter,
+    )
+}
+
+/// A child nobody started ends when the last handle to it goes: closed, it is
+/// heard and, once the reaper is quiet, freed; carried in a message nobody
+/// read, it ends when the channel is closed.
+fn check_an_unstarted_child_ends_with_its_handles(
+    spawner: &Spawner<'_>,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let side = spawner.side;
+    let orphan = spawner.made(spawner.root, "process_create of a child to abandon failed")?;
+    let alive = side
+        .process
+        .with_handles(|table| match table.get(orphan) {
+            Ok((Object::Process(child), _)) => child
+                .control()
+                .and_then(|control| control.process())
+                .map(|process| Arc::downgrade(&process)),
+            _ => None,
+        })
+        .ok_or("a made process's handle has no way back to it")?;
+    spawner.watch(orphan, 73, "watching an unstarted process failed")?;
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(orphan)])
+        .map_err(|_| "closing an unstarted process's handle failed")?;
+    spawner.heard(
+        73,
+        "closing an unstarted process's only handle did not end it",
+        counter,
+    )?;
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    while alive.strong_count() > 0 {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("an unstarted process outlived its only handle");
+        }
+        crate::sched::sleep_for(1_000_000);
+    }
+    counter.abandoned += 1;
+
+    let carried = spawner.made(spawner.root, "process_create of a child to send failed")?;
+    spawner.watch(carried, 74, "watching an unstarted process to send failed")?;
+    let (from, to) = side.channel()?;
+    side.put_handles(&[carried])?;
+    let _ = side
+        .call(nr::CHANNEL_WRITE, &[reg(from), PAYLOAD, 0, HANDLES, 1])
+        .map_err(|_| "sending an unstarted process's handle failed")?;
+    for end in [from, to] {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(end)])
+            .map_err(|_| "closing a channel carrying a process handle failed")?;
+    }
+    spawner.heard(
+        74,
+        "an unstarted process whose handle died unread in a channel did not end",
+        counter,
+    )?;
+    counter.abandoned += 1;
+    Ok(())
 }
 
 /// A program that dies of its own fault is ended by it, heard by whoever
@@ -335,7 +758,7 @@ fn check_two_processes() -> Result<Counter, &'static str> {
     check_a_port_hears_a_process_end(&sender, &mut counter)?;
     check_a_full_channel_says_wait(&sender, near, &receiver, far, &mut counter)?;
     check_a_closed_peer_frees_what_was_queued(&sender, near, &receiver, far, &mut counter)?;
-    if sender.call(0x1030, &[]) != Err(Errno::ENOSYS) {
+    if sender.call(0x1032, &[]) != Err(Errno::ENOSYS) {
         return Err("a gap in the native range was not ENOSYS");
     }
 

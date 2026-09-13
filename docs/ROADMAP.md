@@ -1656,8 +1656,7 @@ the process owned. `object_wait_async` on the handle queues a `TERMINATED`
 packet once the process has ended and closed its handles and descriptors, at
 once for one that already has, and the handle's own `TERMINATED` signal asserts
 at the same point. So `devmgr` hears of a driver's death only after the
-driver's pins have been given back or kept. Until `process_create` hands them
-out, only the object check makes process handles. It watches a process through
+driver's pins have been given back or kept. The object check watches a process through
 a port and directly, sees a channel the process held close before the packet
 arrives, and sees the process freed while the handle is still open. A program
 that dies of its own fault is heard the same way: the kill a user-mode fault
@@ -1687,6 +1686,38 @@ holds it. Decommitting skips the page, a copy-on-write replace is refused, and
 a fork copies it instead of sharing it; a stage 6 self-check walks a held page
 through each of those and through nested holds.
 
+**Done — a process makes and starts another.** `process_create(job, image,
+name, name_len)` reads an ELF image out of a VMO into kernel memory and loads
+it with nothing on its stack. The child's code is therefore ordinary memory of
+its own, and no VMO is ever mapped executable. The child is placed, not yet
+running, in the job, and the caller gets a handle to it.
+
+`process_start(process, bootstrap)` works in three steps, so that a race
+between two starts, or a start and a kill, is harmless:
+1. It claims the start, so a second start is refused before it has moved
+   anything.
+2. It moves the bootstrap handle into the child's table under both tables'
+   locks.
+3. It enters the program with that handle's value in its first argument
+   register.
+
+A process that has already started or ended is `BAD_STATE`, and the bootstrap
+then stays with the caller.
+
+The handle holds the process weakly. The one strong reference to a child
+nobody started lives in what its handles share, and the start hands it over to
+the task. Closing the last handle to an unstarted child kills it, so it ends
+with a status and its watchers hear. That drop runs only inside
+`object::dispose`, whose callers are all tasks with interrupts on, and it
+asserts so.
+
+The object check drives both calls through the native dispatch from a check
+process. The child is a real program on every architecture that exits with its
+first argument register, so its status is the bootstrap's value as the child
+saw it. The check also covers the refusals; a child killed before its start; an
+unstarted child's handle dropped with the channel message carrying it; and one
+whose only handle is closed, which must be heard and freed.
+
 **Left for later stages**, none of it on the exit criterion's path:
 
 * **No native handle to a Linux mapping's object or a file's VMO until
@@ -1704,7 +1735,8 @@ through each of those and through nested holds.
 * Sub-page apertures, which need each access trapped. (An `Interrupt` on
   x86-64, masked in the device's own MSI-X table, came with stage 10's PCI
   vectors.)
-* Process creation in the native ABI. `0x1030..=0x1037` is held for it.
+* The calls that act on a process beyond making and starting it.
+  `0x1032..=0x1037` is held for them.
 
 **Exit:** two user processes exchange messages and a handle over a channel, and
 a `Job` kill takes down a process tree.
