@@ -29,6 +29,11 @@ failures fixed.
 - ferrousli is on the build path: `cargo xtask check --ferrousli` runs its
   gates, CI runs them, and busybox builds against it from pinned sources (the
   link still wants 154 functions).
+- Verified on the STM32MP157D-DK1 on 2026-09-13, 21:25–21:31, flashed by hand
+  from Windows (U-Boot `ums`, the three files checked by hash): stages 1–9,
+  the console receiving by interrupt 84, `test-shell`'s script typed line by
+  line, a 1000-character paste arriving whole, and the final line draining
+  whole before power-off.
 - Known limits: no threads, no file-backed `mmap`, no ring-3 disk driver yet;
   the interrupt-driven console and reboot-to-U-Boot are on `develop`.
 

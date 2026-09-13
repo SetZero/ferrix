@@ -317,13 +317,11 @@ Dated, newest first. A decision here is final until the customer says otherwise.
 
 ## Waiting on the customer
 
-* A USB-C unplug and replug per DK1 run: every run ends in PSCI `SYSTEM_OFF`,
-  after which the reset button does nothing, and the ST-LINK's voltage sense
-  and SWD are blind under this firmware, so the host cannot restart the board
-  either. Stages 1–9 and `test-shell`'s script ran on it at `fd4442e`; typing
-  and the UART drain were proven on it with `uart-rx`. The tag rerun on main,
-  and the paste test of interrupt-driven receive, each need one more power
-  cycle.
+* The DK1's link is the ST-LINK on the Windows machine (COM8) since the
+  evening of 2026-09-13; the stage-9.1 tag, the paste test and
+  `board-reset-3c`'s proof B all passed on it. With `ferrix.onexit=reset`
+  the board returns to U-Boot by itself, so a run no longer costs a USB-C
+  replug; only a hang still does.
 * The root filesystem: 1.7 TB of the 1.9 TB is outside Ferrix. The sessions
   can only keep their own build output down.
 * Pushes to `origin`: local `main` is 60 commits ahead, and the last CI runs
