@@ -1007,9 +1007,10 @@ program would have:
 * `brk(0)` answered the top of the user half, because the heap was placed above
   the highest mapping and the highest mapping is the stack. The first `mmap`
   then landed in the page deliberately left unmapped above the stack.
-* `uname` reports `sysname` as `Linux`, not `Ferrix`, because the programs that
-  ask are choosing a code path. The identity goes in `nodename` and `release`:
-  `Linux ferrix 6.1.0-ferrix`.
+* `uname` reported `sysname` as `Linux`, because the programs that ask are
+  choosing a code path. On 2026-09-13 the project's owner chose `Ferrix`
+  instead: `Ferrix ferrix 6.1.0-ferrix`, with the release still a Linux
+  version. A build that maps `uname -s` to a target is told which to use.
 * ARMv7-A entered a Thumb-2 program in ARM state. An odd entry point is Thumb
   by the interworking convention, and Alpine's busybox enters at `0x1d1f9`.
 * Neither Arm kernel let user mode use the FPU. ARMv7-A's busybox is hard-float,

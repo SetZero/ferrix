@@ -201,7 +201,7 @@ pub(crate) const APPLETS: &[Command] = &[
     Command {
         argv: &["sysctl", "kernel.ostype"],
         status: 0,
-        expect: Expect::Lines(&["kernel.ostype = Linux"]),
+        expect: Expect::Lines(&["kernel.ostype = Ferrix"]),
     },
     Command {
         argv: &["sysctl", "kernel.pid_max"],

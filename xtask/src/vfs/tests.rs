@@ -163,7 +163,7 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
         4,
         &["sysctl: error setting key 'kernel.ostype': Permission denied"],
     ),
-    (5, &["kernel.ostype = Linux"]),
+    (5, &["kernel.ostype = Ferrix"]),
     (6, &["kernel.pid_max = 32768"]),
     (
         7,

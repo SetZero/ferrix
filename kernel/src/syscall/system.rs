@@ -1,27 +1,32 @@
 //! What the system calls itself, what it has, and how it stops.
 //!
-//! # Why `sysname` says `Linux`
+//! # Why `sysname` says `Ferrix`
 //!
-//! Because a program that asks is deciding what to do, not printing a label.
-//! `uname -s` is what configure scripts branch on, what a libc checks before
-//! using a system call it thinks is new enough, and what build systems use to
-//! choose a code path. Answering `Ferrix` would send every one of them down
-//! the path nobody has tested — and Ferrix's whole claim is that the Linux
-//! system call interface *is* its interface, not an emulation of somebody
-//! else's. `libs/linux-abi` says the same thing at [`Utsname::sysname`].
+//! The system names itself. `uname -s` reads `Ferrix`, chosen by the owner of
+//! the project on 2026-09-13 over the earlier answer, `Linux`.
 //!
-//! The identity goes where it does no harm and is still visible: `nodename`,
-//! `release` and `version`. `uname -a` reads
+//! That earlier answer had a reason, and it is the cost of this one: a program
+//! that asks is often deciding what to do rather than printing a label.
+//! Configure scripts (`config.guess`), build systems and bootstrap scripts
+//! (rustc's `bootstrap.py`) map `uname -s` to a target, and may refuse a name
+//! they do not know or take a path nobody has tested. The system call
+//! interface is still Linux's, and the rest of the identity still says so:
+//! `release` is a Linux version and `machine` the Linux architecture name, so
+//! a program that reads those, or `/proc/version`, sees a Linux kernel. When a
+//! build that Ferrix has to run branches on the name, it is told which target
+//! to use rather than left to guess -- the fix goes there, not back here.
+//! `libs/linux-abi` says the same thing at [`Utsname::sysname`].
+//!
+//! `uname -a` reads
 //!
 //! ```text
-//! Linux ferrix 6.1.0-ferrix #1 Ferrix 0.1.0 x86_64 GNU/Linux
+//! Ferrix ferrix 6.1.0-ferrix #1 Ferrix 0.1.0 x86_64 GNU/Linux
 //! ```
 //!
-//! which tells a person exactly what they are running while telling a script
-//! what it needs to hear. `nodename` and `domainname` are the two a program
-//! may change, with `sethostname` and `setdomainname`, and `uname` reports
-//! whatever they were last set to. They are system-wide, as they are on Linux
-//! outside a UTS namespace.
+//! `nodename` and `domainname` are the two a program may change, with
+//! `sethostname` and `setdomainname`, and `uname` reports whatever they were
+//! last set to. They are system-wide, as they are on Linux outside a UTS
+//! namespace.
 //!
 //! [`Utsname::sysname`]: ferrix_linux_abi::types::Utsname::sysname
 
@@ -52,7 +57,7 @@ const FIELD: usize = 65;
 pub(crate) const NAME_MAX: usize = FIELD - 1;
 
 /// The system's name, `uname -s`; see the module documentation for why.
-pub(crate) const SYSNAME: &str = "Linux";
+pub(crate) const SYSNAME: &str = "Ferrix";
 
 /// The kernel release.
 ///

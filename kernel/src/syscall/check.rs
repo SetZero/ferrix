@@ -693,7 +693,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_mremap_below_mmap_min_addr_is_eperm(&process)?;
     check_brk_grows_and_shrinks(&process)?;
     check_set_tid_address_answers_with_a_thread_id(&process)?;
-    check_uname_says_linux_to_a_script_and_ferrix_to_a_person(&process)?;
+    check_uname_names_the_system(&process)?;
     check_poll_reports_ready_invalid_and_skipped(&process)?;
     check_select_answers_with_the_sets_that_are_ready(&process)?;
     check_the_line_discipline_follows_its_settings()?;
@@ -1318,16 +1318,15 @@ fn check_set_tid_address_answers_with_a_thread_id(process: &Process) -> Result<(
 }
 
 /// `uname` fills all six fields, NUL-terminates each within its 65 bytes, and
-/// says `Linux` where a script looks and `ferrix` where a person does.
+/// names the system `Ferrix` and the host `ferrix`, with a Linux release and
+/// machine name.
 ///
 /// The buffer is poisoned first. The structure is fixed-width and a reader
 /// stops at the first NUL, so a handler that wrote the strings and left the
 /// padding alone would pass a check on an all-zero page and hand a real
 /// program whatever the page held before -- which is usually zero and
 /// occasionally not.
-fn check_uname_says_linux_to_a_script_and_ferrix_to_a_person(
-    process: &Process,
-) -> Result<(), &'static str> {
+fn check_uname_names_the_system(process: &Process) -> Result<(), &'static str> {
     const FIELD: usize = 65;
     const SIZE: usize = FIELD * 6;
 
@@ -1361,8 +1360,8 @@ fn check_uname_says_linux_to_a_script_and_ferrix_to_a_person(
     }
     let [sysname, nodename, release, _version, machine, _domainname] = fields;
 
-    if sysname != b"Linux" {
-        return Err("uname did not say Linux, which is what a configure script asks");
+    if sysname != b"Ferrix" {
+        return Err("uname did not name the system Ferrix");
     }
     if nodename != b"ferrix" {
         return Err("uname did not say ferrix where a person looks");

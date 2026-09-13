@@ -600,8 +600,8 @@ pub const DT_SOCK: u8 = 12;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Utsname {
-    /// Operating system name, which Ferrix reports as `Linux` so that build
-    /// systems and `libc` probes take the path they were tested on.
+    /// Operating system name, which Ferrix reports as `Ferrix`. Build systems
+    /// that map it to a target have to be told which one to use.
     pub sysname: [u8; 65],
     /// Host name.
     pub nodename: [u8; 65],
