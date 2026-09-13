@@ -32,6 +32,7 @@ pub mod auxv;
 pub mod errno;
 pub mod exit;
 pub mod lock;
+pub mod malloc;
 pub mod signal;
 #[cfg(not(test))]
 pub mod start;
