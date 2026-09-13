@@ -29,6 +29,7 @@
 compile_error!("ferrousli supports only x86-64 so far");
 
 pub mod auxv;
+pub mod env;
 pub mod errno;
 pub mod exit;
 pub mod lock;

@@ -4,31 +4,56 @@
 //! `__cxa_atexit`, newest first; the program's `.fini_array`, last entry first;
 //! then `_Exit`. musl uses the same order, and in glibc the effect is the same,
 //! because glibc registers the `.fini_array` walk as the first handler.
+//!
+//! The first 32 handlers go into static slots, so that registering them never
+//! allocates and cannot fail. The rest go into an array from `malloc`. The
+//! static slots fill first and empty last, so the array holds entries only
+//! while every slot is full, and taking the newest entry from the array
+//! before the slots keeps the order newest first.
 
 use core::ffi::{c_int, c_void};
-use core::mem::transmute;
+use core::mem::{size_of, transmute};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use crate::lock::SpinLock;
+use crate::malloc::realloc;
 use crate::syscall;
 
 /// A handler as `__cxa_atexit` takes it.
 type Callback = unsafe extern "C" fn(*mut c_void);
 
-/// How many handlers can be registered. POSIX requires at least 32. Until
-/// there is `malloc` there is room for exactly that many.
+/// How many handlers fit without allocating: the 32 POSIX requires.
 const CAPACITY: usize = 32;
+
+/// A handler beyond the static slots.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct Entry {
+    /// A [`Callback`], stored as a data pointer.
+    func: *mut (),
+    arg: *mut c_void,
+}
 
 static LOCK: SpinLock = SpinLock::new();
 /// Each entry is a [`Callback`], stored as a data pointer.
 static FUNCS: [AtomicPtr<()>; CAPACITY] = [const { AtomicPtr::new(null_mut()) }; CAPACITY];
 static ARGS: [AtomicPtr<c_void>; CAPACITY] = [const { AtomicPtr::new(null_mut()) }; CAPACITY];
-/// How many entries are registered and not yet run.
+/// How many static slots are registered and not yet run.
 static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// The handlers beyond the static slots, in an array from `malloc`.
+static EXTRA: AtomicPtr<Entry> = AtomicPtr::new(null_mut());
+/// How many entries `EXTRA` holds.
+static EXTRA_LEN: AtomicUsize = AtomicUsize::new(0);
+/// How many entries `EXTRA` has room for.
+static EXTRA_CAP: AtomicUsize = AtomicUsize::new(0);
 
 /// Registers `func` to be called with `arg` at exit. `dso` names the module
 /// that registered it. With one module in a static program, it is not needed.
+///
+/// Fails, returning -1, only when a handler beyond the 32 static slots cannot
+/// be given memory.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn __cxa_atexit(
     func: Option<Callback>,
@@ -38,14 +63,49 @@ pub extern "C" fn __cxa_atexit(
     let Some(func) = func else {
         return -1;
     };
+    // Registration is rare, so growing the array while holding the lock, and
+    // making anyone else waiting spin through `malloc`'s system call, is an
+    // acceptable price for keeping the order simple.
     let _guard = LOCK.lock();
     let count = COUNT.load(Ordering::Relaxed);
-    let (Some(func_slot), Some(arg_slot)) = (FUNCS.get(count), ARGS.get(count)) else {
-        return -1;
-    };
-    func_slot.store(func as *mut (), Ordering::Relaxed);
-    arg_slot.store(arg, Ordering::Relaxed);
-    COUNT.store(count + 1, Ordering::Relaxed);
+    if let (Some(func_slot), Some(arg_slot)) = (FUNCS.get(count), ARGS.get(count)) {
+        func_slot.store(func as *mut (), Ordering::Relaxed);
+        arg_slot.store(arg, Ordering::Relaxed);
+        COUNT.store(count + 1, Ordering::Relaxed);
+        return 0;
+    }
+    push_extra(Entry {
+        func: func as *mut (),
+        arg,
+    })
+}
+
+/// Appends `entry` to the array beyond the static slots, growing it if full.
+/// The lock must be held.
+fn push_extra(entry: Entry) -> c_int {
+    let len = EXTRA_LEN.load(Ordering::Relaxed);
+    let cap = EXTRA_CAP.load(Ordering::Relaxed);
+    let mut array = EXTRA.load(Ordering::Relaxed);
+    if len == cap {
+        let Some(new_cap) = cap.checked_mul(2).map(|doubled| doubled.max(CAPACITY)) else {
+            return -1;
+        };
+        let Some(bytes) = new_cap.checked_mul(size_of::<Entry>()) else {
+            return -1;
+        };
+        // SAFETY: the array is null or came from `malloc`, and only the lock's
+        // holder uses it.
+        let grown = unsafe { realloc(array.cast(), bytes) }.cast::<Entry>();
+        if grown.is_null() {
+            return -1;
+        }
+        array = grown;
+        EXTRA.store(grown, Ordering::Relaxed);
+        EXTRA_CAP.store(new_cap, Ordering::Relaxed);
+    }
+    // SAFETY: the array has room for `len + 1` entries.
+    unsafe { array.wrapping_add(len).write(entry) };
+    EXTRA_LEN.store(len + 1, Ordering::Relaxed);
     0
 }
 
@@ -71,23 +131,28 @@ unsafe extern "C" fn call_plain(arg: *mut c_void) {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn __cxa_finalize(_dso: *mut c_void) {}
 
+/// Takes the newest registered handler off its list, if there is one.
+fn take_newest() -> Option<(*mut (), *mut c_void)> {
+    let _guard = LOCK.lock();
+    if let Some(last) = EXTRA_LEN.load(Ordering::Relaxed).checked_sub(1) {
+        EXTRA_LEN.store(last, Ordering::Relaxed);
+        // SAFETY: the array holds `last + 1` entries.
+        let entry = unsafe { EXTRA.load(Ordering::Relaxed).wrapping_add(last).read() };
+        return Some((entry.func, entry.arg));
+    }
+    let last = COUNT.load(Ordering::Relaxed).checked_sub(1)?;
+    COUNT.store(last, Ordering::Relaxed);
+    let (Some(func), Some(arg)) = (FUNCS.get(last), ARGS.get(last)) else {
+        return None;
+    };
+    Some((func.load(Ordering::Relaxed), arg.load(Ordering::Relaxed)))
+}
+
 /// Runs every registered handler, newest first. A handler may register another,
 /// which runs next, so the lock is not held while one runs.
 pub fn run_handlers() {
-    loop {
-        let (func, arg) = {
-            let _guard = LOCK.lock();
-            let Some(last) = COUNT.load(Ordering::Relaxed).checked_sub(1) else {
-                return;
-            };
-            COUNT.store(last, Ordering::Relaxed);
-            let (Some(func), Some(arg)) = (FUNCS.get(last), ARGS.get(last)) else {
-                return;
-            };
-            (func.load(Ordering::Relaxed), arg.load(Ordering::Relaxed))
-        };
-        // SAFETY: only `__cxa_atexit` stores into `FUNCS`, and only a
-        // `Callback`.
+    while let Some((func, arg)) = take_newest() {
+        // SAFETY: only `__cxa_atexit` stores handlers, and only `Callback`s.
         let func = unsafe { transmute::<*mut (), Callback>(func) };
         // SAFETY: the program registered it to be called at exit, with this
         // argument.
@@ -121,20 +186,19 @@ pub extern "C" fn _Exit(status: c_int) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::sync::atomic::AtomicU32;
+    use std::sync::Mutex;
 
-    static CALLS: AtomicU32 = AtomicU32::new(0);
+    static CALLS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
     unsafe extern "C" fn record(arg: *mut c_void) {
-        // Shift in each argument, so the order of calls shows in the value.
-        let _ = CALLS.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
-            Some(calls * 10 + arg.addr() as u32)
-        });
+        if let Ok(mut calls) = CALLS.lock() {
+            calls.push(arg.addr());
+        }
     }
 
     #[test]
-    fn handlers_run_newest_first_and_only_once() {
-        for arg in 1..=3_usize {
+    fn handlers_beyond_the_static_slots_run_newest_first_and_only_once() {
+        for arg in 1..=40_usize {
             assert_eq!(
                 __cxa_atexit(
                     Some(record),
@@ -146,6 +210,7 @@ mod tests {
         }
         run_handlers();
         run_handlers();
-        assert_eq!(CALLS.load(Ordering::Relaxed), 321);
+        let calls = CALLS.lock().map(|calls| calls.clone()).unwrap_or_default();
+        assert_eq!(calls, (1..=40).rev().collect::<Vec<_>>());
     }
 }

@@ -85,6 +85,22 @@ fn abort_ends_the_process_with_sigabrt() {
 }
 
 #[test]
+fn setenv_unsetenv_putenv_and_clearenv_change_the_environment() {
+    check(&Case {
+        env: &[("KEEP", "1")],
+        ..Case::named("env")
+    });
+}
+
+#[test]
+fn exit_runs_more_handlers_than_posix_requires() {
+    check(&Case {
+        stdout: "ok\n",
+        ..Case::named("atexit_many")
+    });
+}
+
+#[test]
 fn check_h_reports_a_failed_check_on_standard_error() {
     check(&Case {
         stderr: "check_failure.c:9: check failed: 1 + 1 == 3\n",
