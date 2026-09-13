@@ -58,7 +58,7 @@ const ENVIRONMENT: &[&[u8]] = &[b"PATH=/bin", b"HOME=/", b"TERM=dumb"];
 /// How many unanswered calls each command may report. Enough to name the
 /// first few missing calls; few enough that a program retrying one forever
 /// does not bury the rest of the log.
-const UNANSWERED_LINES: u32 = 16;
+const UNANSWERED_LINES: u32 = 400;
 
 /// The longest argument printed as itself. A script is longer, and a line of
 /// the log is not the place to read it.
