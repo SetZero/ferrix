@@ -1594,6 +1594,19 @@ architectures.**
   check, where a machine has a device vector, binds one, refuses a second
   binding, requires two deliveries before acknowledgement to queue one packet
   with its key, kind and time, and one more after acknowledging.
+  A line is free the moment its holder's last handle closes, which is what a
+  restarted driver needs. It was free only when the last reference to the
+  object went, and under load that was later twice over: a delivery preempted
+  on another processor still held the object, and a close queued it behind
+  another processor's drain of disposed objects, so the check's immediate
+  re-claim failed about once in three busy boots (`FX-0901`). A delivery now
+  holds only the line's pending mark, binding and waiters, never the claim;
+  finding a line and masking it, and giving one up and masking it, are single
+  steps under the table's lock, so a stale delivery cannot mask a line its new
+  holder unmasked; and a close drops the objects that contain no others where
+  it stands. The check re-claims a line with a delivery for its old holder in
+  flight, requires that delivery not to reach the new holder, and re-claims it
+  again as though another processor were draining.
 
 **The exit criterion is met in the boot test**, on all three architectures.
 Two copies of `arch::USER_NATIVE_PROGRAM`, assembled per architecture, run

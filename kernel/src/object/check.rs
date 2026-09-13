@@ -1664,6 +1664,13 @@ fn check_an_interrupt_is_held_until_acknowledged(
     check_a_bound_interrupt_reaches_its_port(&side, first, vector.number(), counter)?;
     check_an_interrupt_wakes_its_waiter(&side, first, vector.number(), counter)?;
 
+    // Let go of with a delivery in flight: what a handler holds between finding
+    // the line and waking its waiters. The line is free the moment its last
+    // handle closes, and the delivery finishes against state nobody can reach
+    // any more. When the claim lasted as long as anything held the object, a
+    // delivery preempted on another processor made this re-claim fail.
+    let in_flight = interrupt::take_delivery(vector.number())
+        .ok_or("a claimed line had no delivery to take")?;
     let _ = side
         .call(nr::HANDLE_CLOSE, &[reg(first)])
         .map_err(|_| "closing an interrupt failed")?;
@@ -1672,9 +1679,32 @@ fn check_an_interrupt_is_held_until_acknowledged(
         &[reg(handle), 0],
         "a line its holder had let go of could not be claimed again",
     )?;
-    let _ = side
-        .call(nr::HANDLE_CLOSE, &[reg(again)])
-        .map_err(|_| "closing a reclaimed interrupt failed")?;
+    in_flight.fire();
+    stage_deadline(&side, 0)?;
+    refused(
+        side.call(
+            nr::OBJECT_WAIT_ONE,
+            &[reg(again), readable, DEADLINE, OBSERVED],
+        ),
+        status::TIMED_OUT,
+        "a delivery in flight for a line's old holder reached its new one",
+        counter,
+    )?;
+
+    // And let go of while another processor drains disposed objects, which a
+    // close used to queue its object behind.
+    let _ = object::as_if_draining_elsewhere(|| {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(again)])
+            .map_err(|_| "closing a reclaimed interrupt failed")?;
+        let third = side.handle(
+            nr::INTERRUPT_CREATE,
+            &[reg(handle), 0],
+            "a line let go of while another processor drained could not be claimed again",
+        )?;
+        side.call(nr::HANDLE_CLOSE, &[reg(third)])
+            .map_err(|_| "closing a twice-reclaimed interrupt failed")
+    })?;
     counter.interrupts += 1;
     side.close_everything();
     Ok(())

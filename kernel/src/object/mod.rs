@@ -146,16 +146,28 @@ static DISPOSING: AtomicBool = AtomicBool::new(false);
 
 /// Drop `objects`, and everything they contain, without recursing.
 ///
-/// If another drop is already draining — this one was reached from inside an
-/// object's `Drop` — the objects are left for that loop and this returns at
-/// once, which is what bounds the depth at one. On another processor the
-/// same thing happens, and the clear-then-recheck at the bottom is what stops
-/// an object queued just as the drainer finished from being stranded.
+/// An object that holds no other object is dropped here, at once: its drop
+/// cannot reach another, so it cannot recurse, and a close of one has to have
+/// let go of what it held by the time it returns -- an interrupt's line, which
+/// a restarted driver claims again straight away. The rest are queued.
+///
+/// If another drop is already draining the queue — this one was reached from
+/// inside an object's `Drop` — the queued objects are left for that loop and
+/// this returns at once, which is what bounds the depth at one. On another
+/// processor the same thing happens, and the clear-then-recheck at the bottom
+/// is what stops an object queued just as the drainer finished from being
+/// stranded.
 ///
 /// Call it with no lock held that an object's drop might need: a channel's
 /// queue, a process's handle table.
 pub(crate) fn dispose(objects: impl IntoIterator<Item = Object>) {
-    ORPHANS.lock().extend(objects);
+    for object in objects {
+        if object.drops_at_once() {
+            drop(object);
+        } else {
+            ORPHANS.lock().push(object);
+        }
+    }
     loop {
         if DISPOSING
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -177,4 +189,44 @@ pub(crate) fn dispose(objects: impl IntoIterator<Item = Object>) {
             return;
         }
     }
+}
+
+impl Object {
+    /// Whether [`dispose`] drops it where it is rather than queueing it.
+    ///
+    /// Those whose drop reaches no other object: it cannot recurse, and a
+    /// close has let go of what they held by the time it returns. A channel
+    /// end holds the messages queued for it and a job its processes, which
+    /// is what the queue is for. A process handle holds only how the process
+    /// ended, but is queued as well: the end of a process is the heaviest
+    /// teardown in the kernel, and nothing waits on its handle's close.
+    fn drops_at_once(&self) -> bool {
+        match self {
+            Object::Vmo(_)
+            | Object::Device(_)
+            | Object::Interrupt(_)
+            | Object::IoMapping(_)
+            | Object::Pin(_)
+            | Object::Port(_) => true,
+            Object::Channel(_) | Object::Job(_) | Object::Process(_) => false,
+        }
+    }
+}
+
+/// Run `f` as though another context were draining disposed objects -- what a
+/// close sees while another processor disposes -- for the checks.
+///
+/// Waits for a real drain to finish first, so that the mark is this call's to
+/// set and to clear, and drains afterwards whatever `f` left queued.
+pub(crate) fn as_if_draining_elsewhere<R>(f: impl FnOnce() -> R) -> R {
+    while DISPOSING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+    let result = f();
+    DISPOSING.store(false, Ordering::Release);
+    dispose([]);
+    result
 }
