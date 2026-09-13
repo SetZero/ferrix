@@ -8,6 +8,8 @@ use core::sync::atomic::{AtomicI64, Ordering};
 
 use ferrix_sync::SpinParker;
 
+extern crate std;
+
 use crate::dirent::{DirentWriter, records};
 use crate::fd::FdTable;
 use crate::initramfs::{self, makedev};
@@ -1339,7 +1341,12 @@ const READ_WRITE: OpenFlags = OpenFlags {
 #[test]
 fn a_stream_is_told_whether_its_open_file_may_wait() {
     let recorder = Arc::new(Recorder::default());
-    let at = Location::detached(Arc::new(Pipes), recorder.clone(), b"pipe:[7]");
+    let at = Location::detached(
+        Arc::new(Pipes),
+        recorder.clone(),
+        b"pipe:[7]",
+        Arc::new(SpinParker),
+    );
     let file = OpenFile::new(at, &READ_WRITE).unwrap();
     let mut buf = [0_u8; 4];
     assert_eq!(file.read(&mut buf), Ok(4));
@@ -1361,7 +1368,12 @@ fn a_stream_is_told_whether_its_open_file_may_wait() {
 
     // A stream that knows nothing of the flag keeps working through the
     // defaults, which is what leaves the console unchanged.
-    let at = Location::detached(Arc::new(Pipes), Arc::new(Positioned), b"console");
+    let at = Location::detached(
+        Arc::new(Pipes),
+        Arc::new(Positioned),
+        b"console",
+        Arc::new(SpinParker),
+    );
     let console = OpenFile::new(at, &READ_WRITE).unwrap();
     console.set_status(Status {
         append: false,
@@ -1375,7 +1387,12 @@ fn a_stream_is_told_whether_its_open_file_may_wait() {
 #[test]
 fn a_detached_location_opens_and_names_itself_without_a_tree() {
     let (ns, ctx) = fresh();
-    let at = Location::detached(Arc::new(Pipes), Arc::new(Recorder::default()), b"pipe:[7]");
+    let at = Location::detached(
+        Arc::new(Pipes),
+        Arc::new(Recorder::default()),
+        b"pipe:[7]",
+        Arc::new(SpinParker),
+    );
     assert!(at.is_detached() && !ctx.root.is_detached());
     assert_eq!(ns.path_of(&at, &ctx.root), b"pipe:[7]");
     assert_eq!(
@@ -1915,7 +1932,9 @@ fn a_directory_replaced_by_rename_is_freed_even_after_misses_inside_it() {
 use core::sync::atomic::AtomicUsize;
 
 /// A regular file that notes whether any call into it found its open file's
-/// offset lock held, as a btrfs read sleeping on the disk would.
+/// offset lock held, which a positioned read or write must and `pread` must
+/// not, and whether any found a spin lock of the description held, which
+/// nothing may, since a btrfs read sleeps on the disk in there.
 struct Watched {
     file: ferrix_sync::SpinLock<alloc::sync::Weak<OpenFile>>,
     bytes: ferrix_sync::SpinLock<Vec<u8>>,
@@ -1923,6 +1942,10 @@ struct Watched {
     short: usize,
     calls: AtomicUsize,
     held: AtomicBool,
+    /// Whether every call so far found the offset lock held.
+    always_held: AtomicBool,
+    /// Whether any call found the status lock held.
+    status_held: AtomicBool,
 }
 
 impl core::fmt::Debug for Watched {
@@ -1939,6 +1962,8 @@ impl Watched {
             short,
             calls: AtomicUsize::new(0),
             held: AtomicBool::new(false),
+            always_held: AtomicBool::new(true),
+            status_held: AtomicBool::new(false),
         })
     }
 
@@ -1949,9 +1974,16 @@ impl Watched {
 
     fn called(&self) {
         let _ = self.calls.fetch_add(1, Ordering::Relaxed);
-        let file = self.file.lock().upgrade();
-        if file.is_some_and(|file| file.offset_lock_held()) {
+        let Some(file) = self.file.lock().upgrade() else {
+            return;
+        };
+        if file.offset_lock_held() {
             self.held.store(true, Ordering::Relaxed);
+        } else {
+            self.always_held.store(false, Ordering::Relaxed);
+        }
+        if file.status_lock_held() {
+            self.status_held.store(true, Ordering::Relaxed);
         }
     }
 }
@@ -2022,7 +2054,7 @@ const APPEND_CREATE: OpenFlags = OpenFlags {
 };
 
 #[test]
-fn no_description_lock_is_held_across_a_call_into_the_file() {
+fn the_offset_lock_is_held_across_a_positioned_call_and_no_spin_lock_is() {
     let (ns, ctx) = fresh();
     let plain = ns.open(&ctx, None, b"/f", &RW_CREATE, 0o644).unwrap();
     let appending = ns.open(&ctx, None, b"/f", &APPEND_CREATE, 0o644).unwrap();
@@ -2050,9 +2082,73 @@ fn no_description_lock_is_held_across_a_call_into_the_file() {
     }
     assert_eq!(watched.calls.load(Ordering::Relaxed), 5);
     assert!(
-        !watched.held.load(Ordering::Relaxed),
-        "a file was called into with its description's offset lock held"
+        watched.always_held.load(Ordering::Relaxed),
+        "a positioned read, write or listing must hold the offset across the call"
     );
+    assert!(
+        !watched.status_held.load(Ordering::Relaxed),
+        "a file was called into with its description's status spin lock held"
+    );
+}
+
+#[test]
+fn pread_and_pwrite_leave_the_offset_lock_alone() {
+    let (ns, ctx) = fresh();
+    let opened = ns.open(&ctx, None, b"/f", &RW_CREATE, 0o644).unwrap();
+    let watched = Watched::new(b"0123456789", 0);
+    let file = opened.with_io(Arc::clone(&watched) as Arc<dyn crate::Inode>);
+    watched.attach(&file);
+    let mut buf = [0_u8; 4];
+    assert_eq!(file.read_at(2, &mut buf), Ok(4));
+    assert_eq!(&buf, b"2345");
+    assert_eq!(file.write_at(0, b"ab"), Ok(2));
+    assert_eq!(watched.calls.load(Ordering::Relaxed), 2);
+    assert!(
+        !watched.held.load(Ordering::Relaxed),
+        "pread and pwrite position themselves and take no lock"
+    );
+    assert_eq!(file.offset(), 0, "and leave the position alone");
+}
+
+#[test]
+fn reads_racing_on_one_description_get_consecutive_bytes() {
+    const BYTES: usize = 128;
+    const READERS: usize = 4;
+    let (ns, ctx) = fresh();
+    let file = ns.open(&ctx, None, b"/f", &RW_CREATE, 0o644).unwrap();
+    let all: Vec<u8> = (0..BYTES as u8).collect();
+    assert_eq!(file.write(&all), Ok(BYTES));
+    assert_eq!(file.seek(0, Whence::Set), Ok(0));
+    let start = Arc::new(std::sync::Barrier::new(READERS));
+    let handles: Vec<_> = (0..READERS)
+        .map(|_| {
+            let file = Arc::clone(&file);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                let _ = start.wait();
+                let mut got = Vec::new();
+                loop {
+                    let mut byte = [0_u8; 1];
+                    match file.read(&mut byte) {
+                        Ok(1) => got.push(byte[0]),
+                        Ok(_) => break,
+                        Err(e) => panic!("read failed: {e:?}"),
+                    }
+                }
+                got
+            })
+        })
+        .collect();
+    let mut seen: Vec<u8> = handles
+        .into_iter()
+        .flat_map(|handle| handle.join().expect("a reader panicked"))
+        .collect();
+    seen.sort_unstable();
+    assert_eq!(
+        seen, all,
+        "every byte read exactly once: the offset was held across each read"
+    );
+    assert_eq!(file.offset(), BYTES as u64);
 }
 
 #[test]

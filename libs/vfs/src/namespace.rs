@@ -31,6 +31,10 @@ pub struct Mount {
     root: Arc<Dentry>,
     /// The mount it is on and the dentry it covers; `None` for the root.
     parent: Option<(Arc<Mount>, Arc<Dentry>)>,
+    /// Where a sleeping lock made for something on this mount waits: the
+    /// namespace's, so that an open file reaches it through its location
+    /// and nothing that opens a file has to be told.
+    parker: Arc<dyn Parker>,
 }
 
 impl Mount {
@@ -56,6 +60,12 @@ impl Mount {
     #[must_use]
     pub fn parent(&self) -> Option<&(Arc<Mount>, Arc<Dentry>)> {
         self.parent.as_ref()
+    }
+
+    /// Where a sleeping lock for something on this mount waits.
+    #[must_use]
+    pub fn parker(&self) -> &Arc<dyn Parker> {
+        &self.parker
     }
 }
 
@@ -112,15 +122,22 @@ impl Location {
     /// in no namespace's table, so no walk can reach it, `..` from it stays
     /// where it is, and nothing can be mounted on it.
     /// [`Namespace::path_of`] reports it as `name` alone, which is how Linux
-    /// reports `pipe:[1234]`.
+    /// reports `pipe:[1234]`. `parker` is where the open file's sleeping
+    /// lock waits; a stream never takes it, but every description has one.
     #[must_use]
-    pub fn detached(fs: Arc<dyn FileSystem>, inode: Arc<dyn Inode>, name: &[u8]) -> Location {
+    pub fn detached(
+        fs: Arc<dyn FileSystem>,
+        inode: Arc<dyn Inode>,
+        name: &[u8],
+        parker: Arc<dyn Parker>,
+    ) -> Location {
         let dentry = Dentry::named_root(Box::from(name), inode);
         let mount = Arc::new(Mount {
             id: DETACHED_MOUNT,
             fs,
             root: Arc::clone(&dentry),
             parent: None,
+            parker,
         });
         Location { mount, dentry }
     }
@@ -220,6 +237,7 @@ impl Namespace {
             root: Dentry::root(fs.root()),
             fs,
             parent: None,
+            parker: Arc::clone(&parker),
         });
         Namespace {
             root,
@@ -232,7 +250,7 @@ impl Namespace {
         }
     }
 
-    /// Where this namespace's sleeping locks wait.
+    /// Where this namespace's sleeping locks wait, and every mount's in it.
     #[must_use]
     pub fn parker(&self) -> &Arc<dyn Parker> {
         &self.parker
@@ -801,6 +819,7 @@ impl Namespace {
             root: Dentry::root(fs.root()),
             fs,
             parent: Some((Arc::clone(&at.mount), Arc::clone(&at.dentry))),
+            parker: Arc::clone(&self.parker),
         });
         let _ = mounts.insert(key, Arc::clone(&mount));
         at.dentry.add_mount();

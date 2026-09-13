@@ -9,31 +9,34 @@
 //! close-on-exec flag, by contrast, belongs to the descriptor, and lives in
 //! [`crate::fd::FdTable`].
 //!
-//! # No lock of the description is held across I/O
+//! # The offset is held across I/O, and it is a lock that sleeps
 //!
-//! The offset and the status flags are spin locks, and a filesystem that
-//! reads a disk sleeps. So every operation here copies what it needs out from
-//! under the lock, calls the [`Inode`] with nothing held, and takes the lock
-//! again to store the result: `read` and `write` read the offset, do the I/O
-//! at it, and set the offset to where that I/O ended.
+//! A filesystem that reads a disk sleeps, so no spin lock of the description
+//! is held across a call into the [`Inode`]: the status flags are read out
+//! from under theirs first. The offset is different. `read`, `write` and a
+//! directory listing take it and hold it across the I/O, so that two reads
+//! racing on one description get consecutive bytes rather than the same
+//! ones, and the offset ends where the last I/O ended, in order. That is
+//! Linux's `f_pos_lock`, since 3.14. It can be held across a sleep because
+//! it is a [`ferrix_sync::SleepLock`], whose waiters sleep on what the
+//! kernel lent the mount the file was opened on (see [`crate::Mount::parker`]);
+//! on the host they spin.
 //!
-//! Two reads racing on one description may therefore start at the same offset
-//! and get the same bytes, and the offset ends where the last one to finish
-//! put it. That is what Linux did for every file before 3.14 added
-//! `f_pos_lock`, and still does for a stream. The alternative is a "busy"
-//! flag and a wait on the description, and this crate has nothing to wait
-//! with: waiting is the kernel's (see [`crate::pipe`]). A program that shares
-//! a descriptor between threads and wants ordered reads has `pread`.
+//! A stream never takes it: a read may wait for another program, and a
+//! second reader of the same pipe must not wait behind it for a lock that
+//! guards nothing. `pread` and `pwrite` never take it either, since they
+//! leave the position alone, so a program that shares a descriptor between
+//! threads and wants no ordering at all has those.
 //!
-//! An `O_APPEND` write stays atomic without the offset lock, because the
-//! filesystem decides where the end is under its own lock and returns the
-//! offset just past what it wrote.
+//! An `O_APPEND` write is atomic by the filesystem's doing, not the lock's:
+//! it decides where the end is under its own lock and returns the offset
+//! just past what it wrote, and a `pwrite` under `O_APPEND` appends too.
 
 use alloc::sync::Arc;
 use core::fmt;
 
 use ferrix_linux_abi::errno::Errno;
-use ferrix_sync::SpinLock;
+use ferrix_sync::{SleepLock, SpinLock};
 
 use crate::Result;
 use crate::namespace::Location;
@@ -110,9 +113,9 @@ pub struct OpenFile {
     write: bool,
     path_only: bool,
     status: SpinLock<Status>,
-    /// The file position, or a directory's cursor. Never held across a call
-    /// into `io` or `inode`; see the module documentation.
-    offset: SpinLock<u64>,
+    /// The file position, or a directory's cursor. Held across the I/O it
+    /// positions, which may sleep; see the module documentation.
+    offset: SleepLock<u64>,
 }
 
 impl fmt::Debug for OpenFile {
@@ -146,6 +149,7 @@ impl OpenFile {
         } else {
             inode.open()?.unwrap_or_else(|| Arc::clone(&inode))
         };
+        let offset = SleepLock::new(0, location.mount.parker().as_ref());
         Ok(Arc::new(OpenFile {
             location,
             inode,
@@ -158,7 +162,7 @@ impl OpenFile {
                 append: flags.append,
                 nonblock: flags.nonblock,
             }),
-            offset: SpinLock::new(0),
+            offset,
         }))
     }
 
@@ -183,7 +187,7 @@ impl OpenFile {
             write: self.write,
             path_only: self.path_only,
             status: SpinLock::new(self.status()),
-            offset: SpinLock::new(0),
+            offset: SleepLock::new(0, self.location.mount.parker().as_ref()),
         })
     }
 
@@ -265,21 +269,25 @@ impl OpenFile {
         *self.status.lock() = status;
     }
 
-    /// The current offset.
+    /// The current offset. Waits for an I/O in progress on this description
+    /// to finish, as `lseek(fd, 0, SEEK_CUR)` does on Linux.
     #[must_use]
     pub fn offset(&self) -> u64 {
         *self.offset.lock()
-    }
-
-    fn set_offset(&self, offset: u64) {
-        *self.offset.lock() = offset;
     }
 
     /// Whether the offset lock is held right now, for a test's fake inode to
     /// ask from inside a call.
     #[cfg(test)]
     pub(crate) fn offset_lock_held(&self) -> bool {
-        self.offset.try_lock().is_none()
+        self.offset.is_locked()
+    }
+
+    /// Whether the status spin lock is held right now, for the same fake:
+    /// it never may be across a call.
+    #[cfg(test)]
+    pub(crate) fn status_lock_held(&self) -> bool {
+        self.status.is_locked()
     }
 
     fn check_io(&self, allowed: bool) -> Result<()> {
@@ -294,9 +302,8 @@ impl OpenFile {
 
     /// `read`: from the current offset, advancing it.
     ///
-    /// The offset is read, the read done with no lock held, and the offset set
-    /// past what it got; see the module documentation for what two concurrent
-    /// reads of one description see.
+    /// The offset is held across the read, so two reads racing on one
+    /// description get consecutive bytes; see the module documentation.
     ///
     /// # Errors
     ///
@@ -310,9 +317,9 @@ impl OpenFile {
             // wait behind it for a lock that guards nothing.
             return self.io.read_stream(buf, self.status().nonblock);
         }
-        let at = self.offset();
-        let count = self.io.read_at(at, buf)?;
-        self.set_offset(at.saturating_add(count as u64));
+        let mut position = self.offset.lock();
+        let count = self.io.read_at(*position, buf)?;
+        *position = position.saturating_add(count as u64);
         Ok(count)
     }
 
@@ -340,11 +347,11 @@ impl OpenFile {
             return self.io.write_stream(data, self.status().nonblock);
         }
         let append = self.status().append;
-        let at = self.offset();
-        // Under `O_APPEND` the filesystem ignores `at` and returns the end it
-        // wrote to, found under its own lock.
-        let (count, end) = self.io.write_at(at, data, append)?;
-        self.set_offset(end);
+        let mut position = self.offset.lock();
+        // Under `O_APPEND` the filesystem ignores the position and returns
+        // the end it wrote to, found under its own lock.
+        let (count, end) = self.io.write_at(*position, data, append)?;
+        *position = end;
         Ok(count)
     }
 
@@ -457,7 +464,10 @@ impl OpenFile {
         if self.kind != FileType::Directory {
             return Err(Errno::ENOTDIR);
         }
-        let mut cursor = self.offset();
+        // Held across the listing, dots included: a listing in pieces that
+        // raced another on the same description would repeat or skip names.
+        let mut position = self.offset.lock();
+        let mut cursor = *position;
         if cursor == 0 {
             let dot = DirEntry {
                 ino: self.inode.metadata().ino,
@@ -469,7 +479,7 @@ impl OpenFile {
                 return Ok(());
             }
             cursor = 1;
-            self.set_offset(cursor);
+            *position = cursor;
         }
         if cursor == 1 {
             let parent = self.location.parent();
@@ -486,7 +496,7 @@ impl OpenFile {
                 return Ok(());
             }
             cursor = FIRST_CURSOR;
-            self.set_offset(cursor);
+            *position = cursor;
         }
         let mut reached = cursor;
         self.io.read_dir(cursor, &mut |entry| {
@@ -497,7 +507,7 @@ impl OpenFile {
                 false
             }
         })?;
-        self.set_offset(reached);
+        *position = reached;
         Ok(())
     }
 }

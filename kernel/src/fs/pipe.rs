@@ -440,7 +440,8 @@ fn open_end(end: Arc<End>, name: &[u8], nonblock: bool) -> Result<Arc<OpenFile>,
         ..OpenFlags::default()
     };
     let pipefs: Arc<PipeFs> = Arc::clone(pipefs());
-    OpenFile::new(Location::detached(pipefs, end, name), &flags)
+    let parker = Arc::clone(super::namespace().parker());
+    OpenFile::new(Location::detached(pipefs, end, name, parker), &flags)
 }
 
 // ---------------------------------------------------------------------------

@@ -1269,11 +1269,13 @@ the code that should meet a fuzzer before it meets ring 0.
   more of the same type.
 * **Open file descriptions and descriptor tables**, kept apart the way Linux
   keeps them: `dup` and `fork` share an offset, separate `open`s do not, and
-  close-on-exec belongs to the number. No lock of a description is held
+  close-on-exec belongs to the number. No spin lock of a description is held
   across a call into its inode, because stage 11's btrfs waits on the disk
-  there. So two reads racing on one description may get the same bytes, as
-  on Linux before 3.14, until a sleeping lock the kernel lends the crate
-  serialises them.
+  there; the offset is held across the read, write or listing it positions,
+  as Linux's `f_pos_lock` is since 3.14, because it is a lock that sleeps
+  (`ferrix_sync::SleepLock`, lent a wait queue by the kernel through the
+  mount the file was opened on), so two reads racing on one description get
+  consecutive bytes. A stream, `pread` and `pwrite` never take it.
 * **tmpfs**, whose file contents are not a byte vector but a page store the
   kernel supplies — a VMO there — so that `mmap` of a tmpfs file can later map
   the file's own pages. The same store is the page cache of a filesystem on a
@@ -2495,10 +2497,12 @@ logic `cargo test`, Miri and a fuzzer can reach.
   it was a spin lock, so the first such wait would have stalled every CPU
   queued for it. It is now `ferrix_sync::SleepLock`, a lock whose waiters
   sleep on a `Parking` the kernel lends — a `sched::WaitQueue` per lock,
-  through `sync::SchedParker` — and which spins on the host. It is the one
-  lock in `libs/vfs` a holder may block under. The open file's offset takes
-  the same lock next, so that two reads racing on one description get
-  different bytes again once the offset's spin lock stops covering the I/O.
+  through `sync::SchedParker` — and which spins on the host. The open file's
+  offset is the same kind of lock, held across the read, write or directory
+  listing it positions, so two reads racing on one description get
+  consecutive bytes, as under Linux's `f_pos_lock`; a stream, `pread` and
+  `pwrite` never take it. An uncontended release never touches the wait
+  queue, since the offset is taken on every read.
 
 * **The kernel mount.** `mount -t btrfs /dev/vda /mnt` names a block node;
   the kernel takes its number to devfs's registry, wraps the `BlockDevice` it

@@ -696,6 +696,7 @@ fn eight_threads_agree_on_a_sleep_locked_count() {
 struct CondvarParker {
     parks: Arc<AtomicUsize>,
     asked: Arc<AtomicUsize>,
+    unparks: Arc<AtomicUsize>,
 }
 
 /// One lock's waiters. `generation` is the mutex the condition variable
@@ -707,6 +708,8 @@ struct CondvarParking {
     parks: Arc<AtomicUsize>,
     /// How often the lock asked whether its caller may park.
     asked: Arc<AtomicUsize>,
+    /// How often a release woke the parking.
+    unparks: Arc<AtomicUsize>,
 }
 
 impl Parker for CondvarParker {
@@ -716,6 +719,7 @@ impl Parker for CondvarParker {
             woken: std::sync::Condvar::new(),
             parks: Arc::clone(&self.parks),
             asked: Arc::clone(&self.asked),
+            unparks: Arc::clone(&self.unparks),
         })
     }
 }
@@ -730,6 +734,7 @@ impl Parking for CondvarParking {
     }
 
     fn unpark_all(&self) {
+        let _ = self.unparks.fetch_add(1, Ordering::Relaxed);
         let _held = self.generation.lock().expect("no poison");
         self.woken.notify_all();
     }
@@ -791,7 +796,27 @@ fn a_waiter_sleeps_on_the_parking_and_the_release_wakes_it() {
         got_it.load(Ordering::SeqCst),
         "the release must wake the waiter"
     );
+    assert!(
+        parker.unparks.load(Ordering::Relaxed) > 0,
+        "a release with a waiter announced must wake the parking"
+    );
     assert_eq!(*lock.lock(), 1);
+}
+
+#[test]
+fn an_uncontended_release_never_touches_the_parking() {
+    let parker = CondvarParker::default();
+    let lock = SleepLock::new(0_u32, &parker);
+    for _ in 0..100 {
+        *lock.lock() += 1;
+    }
+    assert_eq!(*lock.lock(), 100);
+    assert_eq!(parker.parks.load(Ordering::Relaxed), 0, "nobody slept");
+    assert_eq!(
+        parker.unparks.load(Ordering::Relaxed),
+        0,
+        "a release that finds no waiter announced skips the parking"
+    );
 }
 
 #[test]

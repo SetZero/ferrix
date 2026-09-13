@@ -1602,6 +1602,11 @@ impl Parking for SpinParking {
 pub struct SleepLock<T: ?Sized> {
     /// Whether somebody holds the lock.
     locked: AtomicBool,
+    /// How many callers are between announcing that they will park and
+    /// coming back from the parking. A release that finds none skips the
+    /// parking altogether, which for a lock taken on every `read` is the
+    /// difference between one atomic and a masked-interrupt lock per call.
+    waiters: AtomicUsize,
     /// Where the waiters sleep, and how a release wakes them.
     parking: Box<dyn Parking>,
     /// The protected data, reachable only through a guard.
@@ -1627,6 +1632,7 @@ impl<T> SleepLock<T> {
     pub fn new(value: T, parker: &dyn Parker) -> Self {
         Self {
             locked: AtomicBool::new(false),
+            waiters: AtomicUsize::new(0),
             parking: parker.new_parking(),
             data: UnsafeCell::new(value),
         }
@@ -1647,17 +1653,26 @@ impl<T: ?Sized> SleepLock<T> {
     pub fn lock(&self) -> SleepLockGuard<'_, T> {
         self.parking.may_park();
         while !self.try_acquire() {
-            // SeqCst, not Relaxed, although this look only decides whether to
-            // try the exchange again: it is the waiter's half of the Dekker
-            // with `release`. The parking publishes the waiter (on its list,
-            // marked blocked) and then makes this last look; the releaser
-            // stores the flag and then looks at the list. With both the
-            // store and this load sequentially consistent, neither look can
-            // be reordered above its own publication, so one of the two
-            // sides always sees the other: the waiter sees the lock free, or
-            // the releaser sees the waiter and wakes it.
+            // The waiter's half of two Dekkers with `release`, both on the
+            // same rule: publish first, look second, sequentially consistent
+            // on both sides, so that neither side's look can be reordered
+            // above its own publication and one of the two always sees the
+            // other. First the count: this increment is the publication the
+            // releaser's look at `waiters` pairs with, so a release that
+            // finds the count zero happened before this increment, and the
+            // look at the flag below then finds the lock free. Then the
+            // parking's own list: the parking publishes the waiter (on its
+            // list, marked blocked) before the closure's last look, and the
+            // releaser stores the flag before it looks at the list, so the
+            // waiter sees the lock free or the releaser sees the waiter. That
+            // one holds even without the flag's ordering: a wake that missed
+            // the waiter ran its critical section on the list's lock before
+            // the waiter's push, so the flag store happens-before the last
+            // look through that lock's own release and acquire.
+            let _ = self.waiters.fetch_add(1, Ordering::SeqCst);
             self.parking
                 .park_until(&mut || !self.locked.load(Ordering::SeqCst));
+            let _ = self.waiters.fetch_sub(1, Ordering::SeqCst);
         }
         SleepLockGuard {
             lock: self,
@@ -1722,8 +1737,15 @@ impl<T: ?Sized> SleepLock<T> {
         // its sleep. Sequential consistency on both sides is what forbids
         // that, and it costs nothing measurable on a lock taken to sleep.
         self.locked.store(false, Ordering::SeqCst);
-        // After the store, so that a waiter woken here finds the lock free.
-        self.parking.unpark_all();
+        // After the store, so that a waiter woken here finds the lock free;
+        // and only if somebody announced a wait, which is the other half of
+        // the Dekker on `waiters`: a waiter that incremented after this look
+        // loads the flag after this store and does not sleep. An uncontended
+        // release, the common case for a lock taken on every `read`, never
+        // touches the parking at all.
+        if self.waiters.load(Ordering::SeqCst) != 0 {
+            self.parking.unpark_all();
+        }
     }
 }
 
