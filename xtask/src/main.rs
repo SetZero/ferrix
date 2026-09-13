@@ -45,6 +45,7 @@ mod qemu;
 mod serial;
 mod shell;
 mod symbolize;
+mod test_disk;
 mod vfs;
 
 use std::path::PathBuf;

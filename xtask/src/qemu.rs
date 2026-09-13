@@ -15,6 +15,7 @@ use crate::args::Args;
 use crate::cargo;
 use crate::paths::{self, Arch, Firmware};
 use crate::symbolize::Symbolizer;
+use crate::test_disk;
 use crate::{Error, Result};
 
 /// What the kernel prints when it has finished its self-checks.
@@ -552,7 +553,22 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
                 "-device",
                 "intel-iommu,intremap=off",
             ]);
-            let _ = command.args(["-drive", &format!("format=raw,file={}", display(image))]);
+            // The image on the first port of q35's AHCI controller, where a
+            // bare `-drive` puts it, spelled out only to give it `bootindex`.
+            // Without one OVMF tries the virtio test disk first, because its
+            // slot comes before the controller's, and says so:
+            //
+            //     BdsDxe: failed to load Boot0002 "UEFI Misc Device" from
+            //     PciRoot(0x0)/Pci(0x3,0x0): Not Found
+            //
+            // which is harmless and the kind of noise that trains people to
+            // skim the boot log.
+            let _ = command.args([
+                "-drive",
+                &format!("format=raw,file={},if=none,id=disk", display(image)),
+                "-device",
+                "ide-hd,drive=disk,bus=ide.0,bootindex=0",
+            ]);
         }
         Arch::AArch64 | Arch::Armv7a => {
             // The same `virt` machine for both: a GICv2, a PL011 at the same
@@ -604,6 +620,7 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
         "virtio-rng-pci,disable-legacy=on,iommu_platform=on"
     };
     let _ = command.args(["-device", rng]);
+    attach_test_disk(&mut command, arch)?;
 
     match &firmware {
         Firmware::Pflash { code, vars } => {
@@ -625,6 +642,43 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
     }
 
     Ok(command)
+}
+
+/// Attach the test disk as a second virtio device on PCI: a block device, for
+/// stage 10's ring-3 driver to read sectors from.
+///
+/// `test_disk` says what each sector holds, and writes the image on demand, so
+/// nothing has to run before QEMU does; the layout goes to this command's
+/// output, since the serial log holds only what the guest printed. Read-only,
+/// because a driver test that could write would change what the next one reads.
+///
+/// Added after the entropy device, so that one keeps its slot, and with the
+/// same flags for the same reasons: DMA through the IOMMU, except on ARMv7-A,
+/// where U-Boot resets when a device offers `VIRTIO_F_ACCESS_PLATFORM`. No
+/// `bootindex`: the first sector holds no partition table and no filesystem,
+/// so firmware that looks at the disk finds nothing to boot and goes on to the
+/// image.
+fn attach_test_disk(command: &mut Command, arch: Arch) -> Result<()> {
+    let disk = test_disk::ensure()?;
+    println!(
+        "  {arch}: test disk {} as virtio-blk-pci: {}",
+        display(&disk),
+        test_disk::describe()
+    );
+    let _ = command.args([
+        "-drive",
+        &format!(
+            "file={},if=none,format=raw,id=testdisk,readonly=on",
+            display(&disk)
+        ),
+    ]);
+    let device = if arch == Arch::Armv7a {
+        "virtio-blk-pci,drive=testdisk,disable-legacy=on"
+    } else {
+        "virtio-blk-pci,drive=testdisk,disable-legacy=on,iommu_platform=on"
+    };
+    let _ = command.args(["-device", device]);
+    Ok(())
 }
 
 /// The hardware accelerator this host's QEMU would use, if it has one.
