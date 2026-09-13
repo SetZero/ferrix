@@ -1568,8 +1568,31 @@ fn frames_hammer() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Frame 0 is neither managed nor free, and cannot be allocated, on every
+/// architecture.
+///
+/// Physical address 0 must never be a frame: it means "none" in places -- a
+/// GIC base, the loader's root checks -- and Linux never hands out page 0
+/// either. The assertion is the same on all three architectures, whatever
+/// their RAM looks like. On x86-64 it is load-bearing, because OVMF reports
+/// 0x0-0x9FFFF as conventional memory: without `mm`'s exclusion frame 0 was an
+/// ordinary free frame, and under KVM it became an address space's root
+/// (FX-0601). On the Arm machines RAM starts above zero, so frame 0 is outside
+/// the allocator's array as well as excluded.
+fn check_frame_zero_is_never_managed() -> Result<(), &'static str> {
+    if mm::frame_state(0).is_some_and(|state| state != ferrix_frame::State::Reserved) {
+        return Err("frame 0 is managed by the frame allocator");
+    }
+    if let Some(frame) = mm::allocate_frames_below(0, 1) {
+        mm::deallocate_frames(frame, 0);
+        return Err("frame 0 was handed out");
+    }
+    Ok(())
+}
+
 /// Check the frame allocator hands out distinct, aligned blocks.
 fn check_frames() -> Result<(), &'static str> {
+    check_frame_zero_is_never_managed()?;
     let first = mm::allocate_frames(0).ok_or("no frame available")?;
     let second = mm::allocate_frames(0).ok_or("only one frame available")?;
     if first == second {

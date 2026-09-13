@@ -253,14 +253,29 @@ fn place_page_array(base: u64, entries: usize) -> &'static mut [PageEntry] {
     unsafe { core::slice::from_raw_parts_mut(virt, entries) }
 }
 
-/// Hand one usable region to the allocator, skipping the page array.
+/// The lowest frame the allocator is ever given.
+///
+/// Frame 0 stays `Reserved` on every architecture, because physical address 0
+/// must never be a frame: it means "none" in places -- a GIC base, the
+/// loader's root checks -- and Linux never hands out page 0 either. The rule
+/// is the same wherever RAM starts. OVMF reports 0x0-0x9FFFF as conventional
+/// memory, so before it frame 0 was a free frame on x86-64 from stage 2 on,
+/// handed out whenever the buddy allocator split that low block: under KVM,
+/// as the root of an address space (FX-0601).
+const FIRST_MANAGED_FRAME: Frame = 1;
+
+/// Hand one usable region to the allocator, skipping the page array and
+/// anything below [`FIRST_MANAGED_FRAME`].
 fn insert_region(frames: &mut Frames<'static>, region: &MemRegion, hole: u64, hole_end: u64) {
-    let start = region.base;
+    let start = region.base.max(FIRST_MANAGED_FRAME * PAGE_SIZE);
     let end = region.end();
+    if end <= start {
+        return;
+    }
 
     // The common case: the region has nothing to do with the array.
     if end <= hole || start >= hole_end {
-        frames.insert_free(start / PAGE_SIZE, region.len / PAGE_SIZE);
+        frames.insert_free(start / PAGE_SIZE, (end - start) / PAGE_SIZE);
         return;
     }
 
@@ -294,6 +309,12 @@ pub(crate) fn allocate_frames(order: u8) -> Option<Frame> {
 )]
 pub(crate) fn allocate_frames_below(order: u8, limit: Frame) -> Option<Frame> {
     with_frames(|frames| frames.allocate_below(order, limit))?
+}
+
+/// What the allocator records for `frame`, or `None` if its array does not
+/// cover the frame or the allocator is not up.
+pub(crate) fn frame_state(frame: Frame) -> Option<ferrix_frame::State> {
+    with_frames(|frames| frames.state(frame))?
 }
 
 /// Give back frames taken with [`allocate_frames`].
@@ -1011,8 +1032,11 @@ pub(crate) unsafe fn reclaim_boot_memory(view: &BootView<'_>) -> Reclaimed {
             // the allocator a frame it has no record of would be a write past
             // the end of that array. `Frames::insert_free` clamps, but saying
             // so here is what makes the clamp a decision rather than luck.
-            let first = region.base / PAGE_SIZE;
-            let count = region.len / PAGE_SIZE;
+            // And nothing below `FIRST_MANAGED_FRAME`, should a loader or
+            // ACPI region start at zero.
+            let base = region.base / PAGE_SIZE;
+            let first = base.max(FIRST_MANAGED_FRAME);
+            let count = (region.len / PAGE_SIZE).saturating_sub(first - base);
             if count == 0 || first < frames.base() || first >= frames.end() {
                 continue;
             }

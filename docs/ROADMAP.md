@@ -120,6 +120,12 @@ touch `CR3` or `TTBR1` do not.
   with the carved part excluded. Inside, because the array is zeroed through
   the direct map, and on ARMv7-A that map holds 1.25 GiB: a board with more
   RAM whose longest region lay above it would have zeroed the kernel image.
+* Physical address 0 is never a frame, on any architecture: frame 0 is never
+  given to the allocator, at bring-up or when boot memory is reclaimed, and
+  the boot check requires it to be neither managed, free nor allocatable on
+  all three. OVMF calls 0x0-0x9FFFF conventional memory, so on x86-64 frame 0
+  was an ordinary free frame, and under KVM it once became an address space's
+  root (FX-0601).
 
 **Exit criterion met, and in the boot test on both architectures:** 4096 blocks
 of assorted orders allocated and freed in an order that forces coalescing, with
