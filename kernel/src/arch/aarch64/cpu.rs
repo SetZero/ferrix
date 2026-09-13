@@ -106,12 +106,36 @@ const PSCI_SYSTEM_OFF: u64 = 0x8400_0008;
 /// stage 3 installs a vector table there is nothing to take it. Ordering it
 /// last means the worst case is an untidy shutdown rather than a lost result.
 pub(crate) fn psci_system_off() {
-    // SAFETY: `hvc` with x0 = SYSTEM_OFF either powers the machine off or
-    // returns an error in x0. Both are fine; the caller halts either way.
+    psci_system(PSCI_SYSTEM_OFF);
+}
+
+/// PSCI `SYSTEM_RESET`, in the 32-bit calling convention.
+const PSCI_SYSTEM_RESET: u64 = 0x8400_0009;
+
+/// Ask the platform to reset the machine.
+///
+/// Returns if firmware does not implement `SYSTEM_RESET`, which is why the
+/// caller powers off afterwards. Made late for the reason
+/// [`psci_system_off`] gives.
+///
+/// Through `hvc` only, as `SYSTEM_OFF` is. A board whose firmware is reached
+/// by `smc` takes an undefined-instruction exception here rather than an
+/// error, and reset is now the path a board run ends on, so a conduit read
+/// from the tables — as `smp` already does for `CPU_ON` — is owed before one.
+pub(crate) fn psci_system_reset() {
+    psci_system(PSCI_SYSTEM_RESET);
+}
+
+/// One of PSCI's whole-system calls, which take no arguments and either do not
+/// return or return an error in `x0`.
+fn psci_system(function: u64) {
+    // SAFETY: `hvc` with x0 = SYSTEM_OFF or SYSTEM_RESET either does what it
+    // names or returns an error in x0. Both are fine; the callers carry on
+    // either way.
     unsafe {
         asm!(
             "hvc #0",
-            in("x0") PSCI_SYSTEM_OFF,
+            in("x0") function,
             lateout("x0") _,
             lateout("x1") _,
             lateout("x2") _,

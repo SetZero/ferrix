@@ -35,6 +35,7 @@ mod mmio;
 mod object;
 mod panic;
 mod pci;
+mod power;
 mod sched;
 mod smp;
 mod sync;
@@ -160,7 +161,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
             "could not bring up interrupts: {problem}"
         ),
     };
-    report_clocks(&clocks);
+    report_clocks_and_power(view, &clocks);
 
     if let Err(problem) = timer::init() {
         fatal!(
@@ -289,7 +290,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // After the marker, on purpose: see `init`. Returns at once when no program
     // was built in.
     init::run();
-    arch::shutdown()
+    power::finish()
 }
 
 /// Stage 6: the memory objects, the frames they must give back, and the
@@ -1244,6 +1245,14 @@ fn check_one_shot(interval_nanos: u64) -> Result<(), &'static str> {
 fn spin_nanos(nanos: u64) {
     let until = timer::now_nanos().saturating_add(nanos);
     while timer::now_nanos() < until {}
+}
+
+/// Report the clocks interrupt bring-up measured, then read what the end of
+/// boot is to do: `power::init` says so on the console, and says it after the
+/// clocks, as it always has.
+fn report_clocks_and_power(view: &BootView<'_>, clocks: &irq::Report) {
+    report_clocks(clocks);
+    power::init(view);
 }
 
 /// Print what interrupt and time bring-up found.

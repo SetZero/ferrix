@@ -272,7 +272,12 @@ fn fadt() -> Vec<u8> {
     put_u8(&mut body, 91, 4); // PM_TMR_LEN
     put_u8(&mut body, 108, 0x32); // CENTURY
     put_u16(&mut body, 109, 0b11); // IAPC_BOOT_ARCH
-    put_u32(&mut body, 112, 1 << 8); // Flags: TMR_VAL_EXT
+    put_u32(&mut body, 112, (1 << 8) | (1 << 10)); // Flags: TMR_VAL_EXT, RESET_REG_SUP
+    put_u8(&mut body, 116, GenericAddress::SYSTEM_IO); // RESET_REG: the PC's reset control
+    put_u8(&mut body, 117, 8);
+    put_u8(&mut body, 119, 1);
+    put_u64(&mut body, 120, 0xCF9);
+    put_u8(&mut body, 128, 0x06); // RESET_VALUE: a full reset
     put_u64(&mut body, 140, 0x0000_0000_7FFF_5000); // X_DSDT
     put_u8(&mut body, 208, GenericAddress::SYSTEM_IO); // X_PM_TMR_BLK
     put_u8(&mut body, 209, 32);
@@ -1379,6 +1384,46 @@ fn the_fadt_prefers_the_sixty_four_bit_dsdt_pointer() {
         fadt.dsdt_address(),
         Some(0x1234_5000),
         "a zero X_DSDT falls back to the 32-bit field"
+    );
+}
+
+#[test]
+fn decodes_the_fadt_reset_register_only_when_firmware_supports_it() {
+    let memory = q35();
+    let rsdp = Rsdp::read(&memory, RSDP_ADDR).unwrap();
+    let acpi = Acpi::from_rsdp(&memory, &rsdp).unwrap();
+    let (register, value) = acpi.fadt().unwrap().reset().expect("RESET_REG_SUP is set");
+    assert_eq!(
+        register.address_space_id,
+        GenericAddress::SYSTEM_IO,
+        "a PC's reset control is an I/O port"
+    );
+    assert_eq!(register.address, 0xCF9, "the reset control register");
+    assert_eq!(value, 0x06, "the value that asks for a full reset");
+
+    // The same register without the flag: firmware has not promised it works.
+    let mut body = vec![0u8; FADT_LEN - SDT_HEADER_LEN];
+    put_u8(&mut body, 116, GenericAddress::SYSTEM_IO);
+    put_u8(&mut body, 117, 8);
+    put_u64(&mut body, 120, 0xCF9);
+    put_u8(&mut body, 128, 0x06);
+    let bytes = TableBuilder::new(FADT_SIGNATURE).raw(&body).build();
+    let fadt = Fadt::parse(Table::parse(&bytes).unwrap()).unwrap();
+    assert!(
+        fadt.reset_register().is_some(),
+        "the field is there to read"
+    );
+    assert_eq!(fadt.reset(), None, "but RESET_REG_SUP is clear");
+
+    // The flag without a register: a zeroed structure is no register.
+    let mut body = vec![0u8; FADT_LEN - SDT_HEADER_LEN];
+    put_u32(&mut body, 112, 1 << 10);
+    let bytes = TableBuilder::new(FADT_SIGNATURE).raw(&body).build();
+    let fadt = Fadt::parse(Table::parse(&bytes).unwrap()).unwrap();
+    assert_eq!(
+        fadt.reset(),
+        None,
+        "a zeroed register is none, whatever the flag says"
     );
 }
 

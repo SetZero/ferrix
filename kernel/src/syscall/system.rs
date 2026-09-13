@@ -417,11 +417,10 @@ mod command {
 /// Power-off and halt both call the architecture's `shutdown`, which is the
 /// kernel's own way of stopping and powers the machine off where it can --
 /// halting without powering off would leave a QEMU run waiting forever for a
-/// machine that has nothing more to say. **Restart also shuts down**, because
-/// the architecture facade has no reset: that is the one answer here that is
-/// not what the call asked for, and it is the one that fails safe, since a
-/// machine that was asked to come back and did not is noticed, and a kernel
-/// that pretended to reset and carried on running is not. The Ctrl-Alt-Del
+/// machine that has nothing more to say. Restart calls the architecture's
+/// `reset`, which powers off instead where firmware cannot reset: a machine
+/// that was asked to come back and did not is noticed, and a kernel that
+/// pretended to reset and carried on running is not. The Ctrl-Alt-Del
 /// switches are accepted; there is no keyboard to send the combination.
 ///
 /// The line printed first is the one Linux prints, so a log reads the same.
@@ -448,16 +447,16 @@ pub(crate) fn sys_reboot(
             arch::shutdown()
         }
         command::RESTART => {
-            println!("reboot: Restarting system (no reset on this machine; powering off)");
-            arch::shutdown()
+            println!("reboot: Restarting system");
+            arch::reset()
         }
         command::RESTART2 => {
             // The command string is read, so a bad pointer is still EFAULT,
             // and then has nothing to be given to.
             let mut byte = [0_u8; 1];
             uaccess::copy_from_user(process.space(), arg, &mut byte).map_err(|_| Errno::EFAULT)?;
-            println!("reboot: Restarting system with command (no reset; powering off)");
-            arch::shutdown()
+            println!("reboot: Restarting system with command");
+            arch::reset()
         }
         _ => Err(Errno::EINVAL),
     }
