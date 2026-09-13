@@ -254,7 +254,6 @@ row and the btrfs node cache. All branches and tags are on origin. Branches
 with unlanded work, each committed and pushed, base and state as handed off:
 
 * `board-reset-3c` (95884cd): `arch::reset`, `reboot` resets, `ferrix.onexit=reset`; both reviews in, board proof A passed; needs a rebase over ec549f2's `arch/mod.rs` export lists, the row, proof B (`exit 7` under the option; no press needed). Then the CMDLINE.TXT follow-up and `test-boot --reset`.
-* `worktree-agent-a2d52ca1305875553` (a67f795): devfs block-device registry; full row passed on ec549f2; needs the stage 11 owner's trait review and a go.
 * `stage10-ring` (32d29fb, WIP, never compiled): the block ring's kernel side; rebase onto c9677b7, drop the picked commits, wire the module and the native call, use the registry, write `user/blkring-check` on the runtime, full row.
 * `worktree-agent-a16ff91583057388b` (24da536): virtio-blk library; Miri and fuzz passed; needs rebase and the full row.
 * `worktree-agent-a102cb3140653d102` (f540994): native user-space runtime and `user/`; needs rebase and the full row.

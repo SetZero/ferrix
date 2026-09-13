@@ -1342,8 +1342,17 @@ refusing them made Ubuntu's static busybox decide it had no terminal, so its
 service managers look for; Linux has had no `devfs` since 2.6.18. A device node
 made anywhere else — by `mknod` on tmpfs, or unpacked from the initramfs —
 opens as the devfs device with its number, and keeps its own inode for `stat`,
-as `/dev/tty` does; a number devfs lacks is `ENXIO`, and so is every block
-node until stage 11. The path check makes four such nodes by syscall number,
+as `/dev/tty` does; a number devfs lacks is `ENXIO`. Disks are registered, not
+built in: a driver's kernel side hands `devfs::register_block` a name, a number
+and a `fs::block::BlockDevice`, and while the returned registration lives the
+disk is a block node in `/dev` and a row in `/proc/partitions`, and
+`devfs::block_device` finds it by number for a mount. Dropping the
+registration takes all three away, and a device still held after that answers
+every read with `EIO`. Opening a block node is `ENXIO` until reads through a
+descriptor come, and its `stat` reports no size, as Linux's does. The block
+check registers an in-memory disk, lists it in pieces while a second one
+arrives, reads its sectors back by number, and checks each refusal and the
+drop. The path check makes four such nodes by syscall number,
 writes through the null one, reads zeros from the zero one, and checks the
 refusals. procfs renders
 every file at open, so a program reading `maps` in small pieces sees one
@@ -1367,7 +1376,7 @@ is empty, as Linux prints it with no block devices. With them, `pwdx`,
 process now has a pid from a registry that finds a live process by it.
 
 ```
-  devfs    7 nodes numbered as Linux numbers them; zero, null, full and urandom do what they are for
+  devfs    7 nodes numbered as Linux numbers them; zero, null, full and urandom do what they are for; a disk registered as 254:250 listed, stat'ed, refused open and found by number, 2 sectors read, gone from /dev and /proc/partitions with its registration; 0 frames leaked
   procfs   36 names listed and walked back to, 4 maps lines parsed, 2 of them named; cwd and root read as getcwd; 8 /proc/sys values read, a host name written there reached uname; partitions empty with no block devices
   procstat /proc/stat read twice 50 ms apart: a cpu line for each of 4 processors, 21 ticks advanced, no counter went backwards
 ```
