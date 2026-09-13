@@ -1,0 +1,20 @@
+[package]
+name = "ferrix-qr"
+description = "QR code encoder, ported from Linux's drm_panic_qr.rs, for drawing a panic report"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+
+# Test-only, and neither ships: an independent decoder to round-trip every
+# symbol through, and a second encoder to compare module-for-module against, so
+# a single misdrawn module cannot hide behind the decoder's error correction.
+[dev-dependencies]
+rqrr = { version = "0.11", default-features = false }
+qrcode = { version = "0.14", default-features = false }
+
+[lints]
+workspace = true

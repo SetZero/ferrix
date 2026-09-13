@@ -14,6 +14,7 @@ members = [
     "libs/heap",
     "libs/btrfs",
     "libs/cpio",
+    "libs/qr",
     "libs/linux-abi",
     "libs/sync",
     "libs/ustack",
@@ -53,6 +54,7 @@ ferrix-frame = { path = "libs/frame" }
 ferrix-heap = { path = "libs/heap" }
 ferrix-btrfs = { path = "libs/btrfs" }
 ferrix-cpio = { path = "libs/cpio" }
+ferrix-qr = { path = "libs/qr" }
 ferrix-linux-abi = { path = "libs/linux-abi" }
 ferrix-sync = { path = "libs/sync" }
 ferrix-ustack = { path = "libs/ustack" }
