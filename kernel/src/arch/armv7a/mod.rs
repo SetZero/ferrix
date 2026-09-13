@@ -558,12 +558,18 @@ pub(crate) fn frame_pointer() -> u64 {
     u64::from(cpu::frame_pointer())
 }
 
-/// Stop the machine.
+/// Stop the machine, once the console has sent its last line.
 pub(crate) fn shutdown() -> ! {
+    console::drain();
     if let Some(conduit) = psci_conduit() {
         cpu::psci_system_off(conduit);
     }
     halt()
+}
+
+/// Wait until the console port has sent everything written to it.
+pub(crate) fn drain_console() {
+    console::drain();
 }
 
 /// Stop this CPU permanently.

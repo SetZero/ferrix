@@ -7,13 +7,14 @@ than 512 MiB, which puts their RAM's identity range on top of the direct map;
 `Layout::plan_identity_map` returns an error naming the collision rather than
 guessing, so those boards need a trampoline page that is not written yet.
 
-**What has run on hardware.** An STM32MP157D-DK1 has booted Ferrix through
-stage 5, on 2026-09-12 at `6df0925`, with the firmware described in step 1.
-Stages 6 onwards, and any program in user mode, have not yet run on the board:
-`main` reports `FERRIX-BOOT-OK stages 1-9` under QEMU, which has no STM32MP1
-model, so the board is still the first execution of everything after stage 5.
-What *has* been checked is listed under
-[What is actually verified](#what-is-actually-verified).
+**What has run on hardware.** An STM32MP157D-DK1, with the firmware described
+in step 1, has booted Ferrix through stage 5 (2026-09-12, `6df0925`) and then
+through stage 9 at both processors, reporting `FERRIX-BOOT-OK stages 1-9`,
+with busybox started as init running `test-shell`'s script (2026-09-13,
+`fd4442e`). That run also found that the last line before power-off was cut
+off; the console now drains before shutting down, which has not yet been seen
+on the board. Typing into a shell there has not been tried. What *has* been
+checked is listed under [What is actually verified](#what-is-actually-verified).
 
 ## TL;DR
 
@@ -126,7 +127,9 @@ Two settings in there each cost a day to find:
   runs. Every boot is then cut off at about 30 s with no panic and no output,
   which reads exactly like a hang. Rebuilding OP-TEE without its IWDG driver
   does **not** fix it. The consequence of turning it off is the one to remember:
-  a Ferrix that panics stays halted until the board is reset.
+  a Ferrix that panics stays halted until someone presses the board's reset
+  button, and one that powered the board off needs its USB-C power unplugged
+  and plugged in again.
 
 ### The card
 
@@ -208,7 +211,9 @@ STM32MP> ums 0 mmc 0
 ```
 
 The desktop mounts `bootfs`; run `cargo xtask flash --arch armv7a --to <that
-mount>`, then Ctrl-C at the U-Boot console to end mass-storage mode.
+mount>`, then Ctrl-C at the U-Boot console to end mass-storage mode. On the
+DK1 the card appears as a USB disk the size of the card, with the USB-C cable
+to the host.
 
 ## 3. Tell U-Boot to boot it
 
@@ -248,6 +253,13 @@ STM32MP> saveenv
 ```
 
 ### Resetting the board from the host
+
+**After Ferrix powers the board off, reset does nothing.** Every `test-shell`
+run, and any exit of the shell, ends in PSCI `SYSTEM_OFF`. From there the reset
+button brings nothing back, as seen on the DK1 with the serial port watched
+throughout; unplugging the USB-C power and plugging it in again does. The
+button restarts only a board that is still powered: running, or halted after a
+panic.
 
 The ST-LINK drives the processor's reset line, so a board that has halted —
 which with the watchdog off is every board after a panic — can be restarted
@@ -389,6 +401,9 @@ tasks onto one queue reads many times slower there than on the board.
 | Claim | How |
 |---|---|
 | Stages 1-5 run on an STM32MP157D-DK1 | booted at `6df0925` on 2026-09-12, mainline firmware above |
+| Stages 1-9 run on the same board, at two processors | booted at `fd4442e` on 2026-09-13: `FERRIX-BOOT-OK stages 1-9` |
+| Busybox runs as init on the board | `test-shell`'s script at `fd4442e`, its output on the console up to the cut last line |
+| `ums 0 mmc 0` exposes the card to the host | on the board, 2026-09-13 |
 | Both processors come up and share work | the same boot: `2 online`, `1000 threads ... on 2 processors (0b11)` |
 | `${fdtcontroladdr}` is the tree to pass; `${fdt_addr_r}` fails | on the board |
 | Both boot switches ON boots the SD card; the prompt is `STM32MP>` | on the board |
@@ -403,10 +418,10 @@ tasks onto one queue reads many times slower there than on the board.
 | `flash` refuses wrong destinations | unit tests, and tried against `/boot/efi` |
 | OpenOCD reads 0 V from an unpowered board | on the board, powered off |
 
-Not verified: stages 6 onwards on the board; a busybox shell on the board,
-which also cannot read input until the Arm UART drivers receive; the OpenOCD
-reset against a powered board; and `console=`, `nosmp` and `noactlr` *as
-selections* — their parsing has host tests, but the paths they choose are only
+Not verified: typing into a shell on the board, since console receive has so
+far been seen only under QEMU; the console drain before power-off, on the
+board; the OpenOCD reset against a powered board; and `console=`, `nosmp` and
+`noactlr` *as selections* — their parsing has host tests, but the paths they choose are only
 reachable on hardware, which is the point of them.
 
 The upstream firmware facts behind this were checked against mainline TF-A,

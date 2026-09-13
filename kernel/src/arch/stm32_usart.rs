@@ -110,6 +110,34 @@ pub(crate) fn write_byte(byte: u8) {
     write(TDR, u32::from(byte));
 }
 
+/// Wait until everything written has left the port, for a caller about to
+/// power off or stop.
+///
+/// [`write_byte`] waits only for room for the next byte, so the last line of a
+/// report is still in the FIFO and the shift register when it returns. On a
+/// board that is harmless until the next instruction removes power: PSCI
+/// `SYSTEM_OFF` straight after the final line cut it off mid-word on a DK1,
+/// which QEMU, whose port sends instantly, never shows. Bounded, like the
+/// write: a port that never reports itself done costs a moment, not the stop.
+pub(crate) fn drain() {
+    /// `ISR`: the last byte has left the shift register and the FIFO is empty.
+    const ISR_TC: u32 = 1 << 6;
+    /// About half a second of polling on a Cortex-A7; the FIFO and shift
+    /// register empty in under two milliseconds at 115200 baud.
+    const DRAIN_LIMIT: u32 = 10_000_000;
+
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return;
+    }
+    for _ in 0..DRAIN_LIMIT {
+        if read(ISR) & ISR_TC != 0 {
+            return;
+        }
+        core::hint::spin_loop();
+    }
+}
+
 /// One received byte, if the port has one waiting.
 ///
 /// An overrun is cleared whenever it is seen. The byte it reports is already

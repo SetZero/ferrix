@@ -156,7 +156,6 @@ nobody has it yet.
 | Pid 1 for init and orphans reparented to it | ferrix-a5 | 7, 15 |
 | FX-0601 "reserving a thousand pages cost a frame", about one x86-64 boot in three under KVM: a reap landing inside stage 6's frame-count window; the check must settle first, as the path check does | ferrix-34 | 6 |
 | A regression check that exited programs give every frame back once reaped (the leak 0510a8a fixed) | ferrix-a5 | 7 |
-| The last console line before power-off is lost on the DK1: `stm32_usart` waits for TXE, never TC, so `arch::shutdown`'s PSCI `SYSTEM_OFF` cut "the shell exited with 7" mid-byte on 2026-09-13. Drain the transmitter (TC; the PL011's `FR.BUSY`) on the shutdown path of every UART; then the board reruns `test-shell`'s script and expects that line byte for byte | ferrix-4f | ARMv7-A |
 | Console receive by interrupt on the PL011 and the STM32 USART (and the 16550), with a bounded ring the terminal drains, retiring the 20 ms polling thread. Polled receive on both Arm drivers has landed, so a shell reads typing on every architecture; the interrupt step closes the row | ferrix-4f, with ferrix-a5 | 7, 15 |
 | ARMv7-A with 2 GiB does not boot: the loader must allocate below the direct map's ceiling, and RAM beyond it is reported unused rather than fatal | ferrix-4f | ARMv7-A |
 

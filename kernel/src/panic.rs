@@ -126,6 +126,7 @@ pub(crate) fn begin_report() -> bool {
 /// report already under way has everything else.
 pub(crate) fn abridged() -> ! {
     println!("  stopped   during another report, so this one is abridged");
+    arch::drain_console();
     arch::halt()
 }
 
@@ -152,6 +153,9 @@ pub(crate) fn conclude(entry: Option<&Explanation>) -> ! {
     if let Some(entry) = entry {
         report_explanation(entry);
     }
+    // Every line written is not every line sent: let the port finish, so the
+    // report is whole on the wire before anything else can go wrong.
+    arch::drain_console();
     // Last, and after every line has gone to the serial port: the screen is
     // drawn from what the console printed, and drawing is the step most
     // likely to fault on a machine in this state.
