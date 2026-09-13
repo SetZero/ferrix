@@ -1947,6 +1947,16 @@ page-table arithmetic and the allocators as the reason the job exists — so
 `frame`, `heap` and `paging`, all running in the kernel today, are owed a Miri
 step too, and ahead of every crate in the table.
 
+**`ferrousli/` is beside this roadmap, not on it.** It is a C library for
+Linux written in Rust, modelled on musl and aimed in time at glibc's binary
+interface. It is its own cargo workspace, depends on no Ferrix crate, and
+reaches the kernel only through Linux system calls, so it is built and tested
+on the host, outside the gates this file describes. The goal's path is static
+musl programs, and ferrousli counts toward no stage. What it gives the kernel
+is one more foreign libc whose system calls are all known: its test programs
+boot as Ferrix's first process with `cargo xtask test-shell --init`. Its own
+status is in [ferrousli/README.md](../ferrousli/README.md).
+
 ---
 
 ## Continuously, from stage 1
