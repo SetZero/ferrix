@@ -107,7 +107,29 @@ fn width() -> Width {
     }
 }
 
-/// Load `image` into a new process, ready to run and not yet running.
+/// A program to load, and the two names it goes by.
+///
+/// Two, because Linux keeps them apart and programs read both: `exe` is the
+/// file that was actually loaded, absolute and with every symbolic link
+/// resolved, which `/proc/<pid>/exe` reports and glibc's static startup
+/// asserts is absolute; `exec_fn` is the filename the program was asked for
+/// by, exactly as given, which `AT_EXECFN` points at. For a `#!` script the
+/// first is the interpreter and the second the script.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Executable<'a> {
+    /// The ELF image.
+    pub(crate) image: &'a [u8],
+    /// The absolute path of the file the image was read from.
+    pub(crate) exe: &'a [u8],
+    /// The filename it was asked for by.
+    pub(crate) exec_fn: &'a [u8],
+}
+
+/// Load `image`, which came from no file, into a new process, ready to run
+/// and not yet running.
+///
+/// With no file there is no path, so both names are the first argument, which
+/// is what the boot checks have always been recorded as.
 ///
 /// # Errors
 ///
@@ -118,9 +140,29 @@ pub(crate) fn load(
     env: &[&[u8]],
     random: [u8; ferrix_ustack::RANDOM_BYTES],
 ) -> Result<Arc<Process>, ExecError> {
+    let name = args.first().copied().unwrap_or(b"");
+    let program = Executable {
+        image,
+        exe: name,
+        exec_fn: name,
+    };
+    load_executable(program, args, env, random)
+}
+
+/// Load `program` into a new process, ready to run and not yet running.
+///
+/// # Errors
+///
+/// [`ExecError`].
+pub(crate) fn load_executable(
+    program: Executable<'_>,
+    args: &[&[u8]],
+    env: &[&[u8]],
+    random: [u8; ferrix_ustack::RANDOM_BYTES],
+) -> Result<Arc<Process>, ExecError> {
     let space = AddressSpace::new().map_err(ExecError::Space)?;
     let process = Process::new(Arc::clone(&space));
-    let startup = populate(&space, &process, image, args, env, random)?;
+    let startup = populate(&space, &process, program, args, env, random)?;
     process.set_startup(startup);
     Ok(registry::register(process))
 }
@@ -134,12 +176,12 @@ pub(crate) fn load(
 fn populate(
     space: &AddressSpace,
     process: &Process,
-    image: &[u8],
+    program: Executable<'_>,
     args: &[&[u8]],
     env: &[&[u8]],
     random: [u8; ferrix_ustack::RANDOM_BYTES],
 ) -> Result<Startup, ExecError> {
-    let loaded = load::load(space, image).map_err(ExecError::Load)?;
+    let loaded = load::load(space, program.image).map_err(ExecError::Load)?;
     process.set_heap_base(loaded.end);
 
     // The stack region. Reserved whole; paid for a page at a time.
@@ -182,7 +224,7 @@ fn populate(
         (AT_SECURE, 0),
         (AT_CLKTCK, 100),
     ];
-    let exec_fn = args.first().copied().unwrap_or(b"");
+    let exec_fn = program.exec_fn;
     let spec = Spec {
         args,
         env,
@@ -195,7 +237,7 @@ fn populate(
     let startup = ferrix_ustack::build(&spec, top, &mut scratch).map_err(|_| ExecError::Startup)?;
     uaccess::copy_to_user(space, base, &scratch).map_err(|_| ExecError::Startup)?;
 
-    process.record_exec(exec_fn, args);
+    process.record_exec(program.exe, args);
     Ok(Startup {
         entry: loaded.entry,
         stack: startup.sp,
@@ -217,7 +259,27 @@ pub(crate) fn run(
     env: &[&[u8]],
     random: [u8; ferrix_ustack::RANDOM_BYTES],
 ) -> Result<i32, ExecError> {
-    let process = load(image, args, env, random)?;
+    let name = args.first().copied().unwrap_or(b"");
+    let program = Executable {
+        image,
+        exe: name,
+        exec_fn: name,
+    };
+    run_executable(program, args, env, random)
+}
+
+/// [`run`], for a program read from a file and named by it.
+///
+/// # Errors
+///
+/// [`ExecError`].
+pub(crate) fn run_executable(
+    program: Executable<'_>,
+    args: &[&[u8]],
+    env: &[&[u8]],
+    random: [u8; ferrix_ustack::RANDOM_BYTES],
+) -> Result<i32, ExecError> {
+    let process = load_executable(program, args, env, random)?;
     let _task = process::start(&process).map_err(ExecError::Start)?;
     process
         .wait_for_exit(u64::MAX)
@@ -315,10 +377,12 @@ fn execve_at(
     // The caller's own root and working directory, so a relative path after
     // `cd` resolves from there. Cloned out: never walk with the lock held.
     let context = process.fs_context().lock().clone();
-    let mut image = if path_bytes.is_empty() {
-        let image = read_descriptor(&fd::file(process, dirfd)?)?;
+    let (mut image, mut exe) = if path_bytes.is_empty() {
+        let file = fd::file(process, dirfd)?;
+        let image = read_descriptor(&file)?;
+        let exe = crate::fs::namespace().path_of(file.location(), &context.root);
         path_bytes = descriptor_path(dirfd, &[]);
-        image
+        (image, exe)
     } else {
         let start = fd::start_for(process, dirfd, &path_bytes)?;
         if flags & AT_SYMLINK_NOFOLLOW != 0 {
@@ -328,16 +392,19 @@ fn execve_at(
                 return Err(Errno::ELOOP.into());
             }
         }
-        let image = crate::fs::read_file(&context, start.as_ref(), &path_bytes)?;
-        // What a script's interpreter is handed as the script's name: the
-        // path itself when it means the same thing from anywhere, and a name
-        // through the directory descriptor when it does not, as Linux's
-        // `do_execveat_common` builds it.
+        let (image, exe) = crate::fs::read_program(&context, start.as_ref(), &path_bytes)?;
+        // What a script's interpreter is handed as the script's name, and
+        // what `AT_EXECFN` names: the path itself when it means the same
+        // thing from anywhere, and a name through the directory descriptor
+        // when it does not, as Linux's `do_execveat_common` builds it.
         if start.is_some() {
             path_bytes = descriptor_path(dirfd, &path_bytes);
         }
-        image
+        (image, exe)
     };
+    // The filename as asked for, which a script keeps: `AT_EXECFN` is the
+    // script's name even though the interpreter is what runs.
+    let exec_fn = path_bytes.clone();
 
     // A script names its interpreter on its first line, which runs with the
     // script's path in place of its own first argument -- what Linux's
@@ -353,7 +420,8 @@ fn execve_at(
         replaced.push(path_bytes);
         replaced.extend(args.into_iter().skip(1));
         args = replaced;
-        image = crate::fs::read_file(&context, None, &interpreter)?;
+        // The interpreter is the file actually loaded, so it is the exe.
+        (image, exe) = crate::fs::read_program(&context, None, &interpreter)?;
         if image.starts_with(b"#!") {
             return Err(Errno::ENOEXEC.into());
         }
@@ -366,10 +434,15 @@ fn execve_at(
     // The point of no return.
     empty_user_half(space).map_err(|_| ExecveError::Lost)?;
     process.reset_for_exec();
+    let program = Executable {
+        image: &image,
+        exe: &exe,
+        exec_fn: &exec_fn,
+    };
     let startup = populate(
         space,
         process,
-        &image,
+        program,
         &arg_slices,
         &env_slices,
         random_bytes(),

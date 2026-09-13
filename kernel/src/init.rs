@@ -104,8 +104,8 @@ pub(crate) fn run() {
 fn run_commands(list: &[u8]) {
     let commands = parse(list);
     let ctx = fs::namespace().context();
-    let program = match fs::read_file(&ctx, None, PROGRAM.as_bytes()) {
-        Ok(program) => program,
+    let (program, exe) = match fs::read_program(&ctx, None, PROGRAM.as_bytes()) {
+        Ok(read) => read,
         Err(errno) => {
             println!("  init     {PROGRAM} could not be read: errno {}", errno.0);
             return;
@@ -119,7 +119,7 @@ fn run_commands(list: &[u8]) {
     for (index, argv) in commands.iter().enumerate() {
         println!("  init     command {index}: {}", Argv(argv));
         syscall::report_unanswered(UNANSWERED_LINES);
-        match start(&program, argv) {
+        match start(&program, &exe, argv) {
             Ok(status) => println!("  init     command {index} exited with {status}"),
             Err(problem) => {
                 println!("  init     command {index} could not be started: {problem:?}");
@@ -134,8 +134,18 @@ fn run_commands(list: &[u8]) {
 ///
 /// The one place that knows how a program is started, so that the loop above
 /// does not change when that does.
-fn start(program: &[u8], argv: &[&[u8]]) -> Result<i32, exec::ExecError> {
-    exec::run(program, argv, ENVIRONMENT, random_bytes())
+///
+/// `exe` is where the program was read from, resolved, which is what
+/// `/proc/self/exe` must say: the name as written in [`PROGRAM`] may pass
+/// through a symbolic link, and glibc's static startup asserts the link it
+/// reads back is absolute.
+fn start(program: &[u8], exe: &[u8], argv: &[&[u8]]) -> Result<i32, exec::ExecError> {
+    let executable = exec::Executable {
+        image: program,
+        exe,
+        exec_fn: PROGRAM.as_bytes(),
+    };
+    exec::run_executable(executable, argv, ENVIRONMENT, random_bytes())
 }
 
 /// The commands in a list `kernel/build.rs` embedded: each argument ends in a

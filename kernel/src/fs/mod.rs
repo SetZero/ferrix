@@ -116,9 +116,36 @@ pub(crate) fn read_file(
     start: Option<&Location>,
     path: &[u8],
 ) -> Result<Vec<u8>, Errno> {
+    let at = namespace().resolve(ctx, start, path, true)?;
+    read_location(at)
+}
+
+/// [`read_file`] for a program: its contents, and the absolute path of the
+/// file they were read from, symbolic links resolved.
+///
+/// The path is what `/proc/<pid>/exe` reports, and glibc's static startup
+/// reads it back and asserts it is absolute. Taken from the location that was
+/// read rather than by resolving the string again, so the two cannot name
+/// different files if the tree changes in between.
+///
+/// # Errors
+///
+/// As [`read_file`].
+pub(crate) fn read_program(
+    ctx: &Context,
+    start: Option<&Location>,
+    path: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), Errno> {
     let ns = namespace();
     let at = ns.resolve(ctx, start, path, true)?;
-    let metadata = ns.stat(&at)?.metadata;
+    let exe = ns.path_of(&at, &ctx.root);
+    Ok((read_location(at)?, exe))
+}
+
+/// The whole of the regular file at `at`: the half of [`read_file`] after the
+/// walk, with every one of its refusals.
+fn read_location(at: Location) -> Result<Vec<u8>, Errno> {
+    let metadata = namespace().stat(&at)?.metadata;
     match metadata.kind {
         FileType::Regular => {}
         FileType::Directory => return Err(Errno::EISDIR),

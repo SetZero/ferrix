@@ -2840,11 +2840,21 @@ fn check_a_forked_child_is_waited_for() -> Result<Option<i32>, &'static str> {
     }
 }
 
-/// Where [`arch::USER_EXEC_PROGRAM`] looks for its target.
+/// Where [`arch::USER_EXEC_PROGRAM`] looks for its target: a symbolic link,
+/// in this check, to [`EXEC_REAL`].
 const EXEC_TARGET: &[u8] = b"/exec-target";
+
+/// The file [`EXEC_TARGET`] links to, which is the one actually run.
+const EXEC_REAL: &[u8] = b"/exec-target-real";
 
 /// A program `execve`s another by path and takes on its status; with the file
 /// gone, the same program gets `ENOENT` back and exits with it.
+///
+/// The path it asks for is a symbolic link, and the process must end up
+/// recorded as the file the link names, absolute -- what `/proc/self/exe`
+/// reports, and what glibc's static startup asserts is absolute. The program
+/// passes the link's own name as `argv[0]`, so recording that instead fails
+/// here.
 fn check_execve_replaces_the_program() -> Result<Option<(i32, i32)>, &'static str> {
     use ferrix_vfs::OpenFlags;
 
@@ -2871,21 +2881,35 @@ fn check_execve_replaces_the_program() -> Result<Option<(i32, i32)>, &'static st
         nonblock: false,
     };
     let file = ns
-        .open(&ctx, None, EXEC_TARGET, &create, 0o755)
+        .open(&ctx, None, EXEC_REAL, &create, 0o755)
         .map_err(|_| "could not create the program execve is to run")?;
     if file.write(&target) != Ok(target.len()) {
         return Err("could not write the program execve is to run");
     }
     drop(file);
+    ns.symlink(&ctx, None, EXEC_TARGET, EXEC_REAL)
+        .map_err(|_| "could not link to the program execve is to run")?;
 
-    let found = exec::run(
+    // Loaded and waited for by hand rather than through `exec::run`, to keep
+    // the process and read what it was recorded as after it has ended.
+    let execing = exec::load(
         &caller,
         &[b"/exec-caller"],
         &[],
         [0x5a; ferrix_ustack::RANDOM_BYTES],
     )
-    .map_err(|_| "a program that calls execve could not be started")?;
+    .map_err(|_| "a program that calls execve could not be loaded")?;
+    let task =
+        process::start(&execing).map_err(|_| "a program that calls execve could not be started")?;
+    let found = execing
+        .wait_for_exit(u64::MAX)
+        .ok_or("a program that calls execve never reported how it ended")?;
+    drop(task);
+    let recorded = execing.exe();
+    drop(execing);
     ns.unlink(&ctx, None, EXEC_TARGET)
+        .map_err(|_| "could not remove the link execve ran through")?;
+    ns.unlink(&ctx, None, EXEC_REAL)
         .map_err(|_| "could not remove the program execve ran")?;
     let missing = exec::run(
         &caller,
@@ -2897,6 +2921,11 @@ fn check_execve_replaces_the_program() -> Result<Option<(i32, i32)>, &'static st
 
     if found != arch::USER_TEST_STATUS {
         return Err("a program that called execve did not end with the new program's status");
+    }
+    if recorded != EXEC_REAL {
+        return Err(
+            "execve through a symbolic link did not record the absolute path of the file it ran",
+        );
     }
     if missing != Errno::ENOENT.0 as i32 {
         return Err("execve of a path that does not exist did not return ENOENT");
