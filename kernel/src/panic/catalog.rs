@@ -88,6 +88,30 @@ pub(crate) static GRACE_PERIOD_TIMEOUT: Explanation = Explanation {
           docs/ROADMAP.md stage 4",
 };
 
+/// For `flush_tlb_everywhere` in `smp.rs`, when the shootdown turn is never
+/// released.
+pub(crate) static SHOOTDOWN_TURN_TIMEOUT: Explanation = Explanation {
+    code: "FX-0003",
+    title: "a TLB shootdown never got its turn",
+    meaning: "On x86-64 one processor at a time runs a TLB shootdown, and \
+              `flush_tlb_everywhere` waits for the turn while answering the shootdowns ahead of \
+              it. Every holder takes a new generation as soon as it has the turn, and gives up \
+              on the machine after a second of waiting for the other processors, so a \
+              generation that stands still for four seconds while the turn is held means its \
+              holder is no longer running. Nothing would ever release the turn, and the memory \
+              this processor's caller is about to free could never be made safe, so the kernel \
+              stops instead of waiting forever.",
+    causes: &[
+        "The task holding the turn was preempted while holding it and has not run since, \
+         because its processor stopped taking interrupts or never gives it a slice.",
+        "The processor holding the turn is halted or hung with interrupts masked, part-way \
+         through its own shootdown.",
+        "A host so overcommitted that a virtual processor went unscheduled for seconds, which \
+         is the host's fault and not the kernel's.",
+    ],
+    see: "kernel/src/smp.rs flush_tlb_everywhere; docs/ROADMAP.md stage 4",
+};
+
 /// For `kmain` in `main.rs`, when `self_check` fails.
 pub(crate) static STAGE1_HANDOFF: Explanation = Explanation {
     code: "FX-0101",
@@ -932,6 +956,7 @@ pub(crate) static UNEXPECTED_EXCEPTION: Explanation = Explanation {
 pub(crate) static ALL: &[&Explanation] = &[
     &SHOOTDOWN_TIMEOUT,
     &GRACE_PERIOD_TIMEOUT,
+    &SHOOTDOWN_TURN_TIMEOUT,
     &STAGE1_HANDOFF,
     &MEMORY_BRING_UP,
     &VMAP_ARENA_BRING_UP,

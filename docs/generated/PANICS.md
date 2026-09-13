@@ -20,6 +20,7 @@ Causes are listed most likely first.
 | --- | --- |
 | [FX-0001](#fx-0001) | a processor never flushed its TLB for a shootdown |
 | [FX-0002](#fx-0002) | a processor never left a read-side section |
+| [FX-0003](#fx-0003) | a TLB shootdown never got its turn |
 | [FX-0101](#fx-0101) | the loader's hand-off is not what the kernel needs |
 | [FX-0201](#fx-0201) | the frame allocator could not be built |
 | [FX-0202](#fx-0202) | the kernel address arena could not be created |
@@ -98,6 +99,29 @@ that is in use.
 
 See: kernel/src/smp.rs synchronize; kernel/src/smp.rs read_section;
 docs/ROADMAP.md stage 4.
+
+<a id="fx-0003"></a>
+
+## FX-0003 — a TLB shootdown never got its turn
+
+On x86-64 one processor at a time runs a TLB shootdown, and
+`flush_tlb_everywhere` waits for the turn while answering the shootdowns ahead
+of it. Every holder takes a new generation as soon as it has the turn, and gives
+up on the machine after a second of waiting for the other processors, so a
+generation that stands still for four seconds while the turn is held means its
+holder is no longer running. Nothing would ever release the turn, and the memory
+this processor's caller is about to free could never be made safe, so the kernel
+stops instead of waiting forever.
+
+1. The task holding the turn was preempted while holding it and has not run
+   since, because its processor stopped taking interrupts or never gives it a
+   slice.
+2. The processor holding the turn is halted or hung with interrupts masked,
+   part-way through its own shootdown.
+3. A host so overcommitted that a virtual processor went unscheduled for
+   seconds, which is the host's fault and not the kernel's.
+
+See: kernel/src/smp.rs flush_tlb_everywhere; docs/ROADMAP.md stage 4.
 
 <a id="fx-0101"></a>
 

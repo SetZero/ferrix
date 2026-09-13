@@ -527,6 +527,15 @@ static SHOOTDOWNS: AtomicU64 = AtomicU64::new(0);
 /// How long a shootdown waits for every processor before calling it fatal.
 const SHOOTDOWN_TIMEOUT_NANOS: u64 = 1_000_000_000;
 
+/// How long the shootdown generation may stand still while a processor waits
+/// for its turn before the holder is taken to have stopped.
+///
+/// A holder gives up on the machine after [`SHOOTDOWN_TIMEOUT_NANOS`] of its
+/// own waiting, so anything past that is a holder not running at all. Four
+/// times it, because a holder preempted on a host with more virtual
+/// processors than real ones can lose whole seconds without being stuck.
+const TURN_TIMEOUT_NANOS: u64 = 4 * SHOOTDOWN_TIMEOUT_NANOS;
+
 /// How often a processor waiting on all the others re-sends its interrupt.
 ///
 /// Belt and braces. The handshake in [`secondary_main`] already covers the
@@ -561,11 +570,32 @@ pub(crate) fn flush_tlb_everywhere() {
         return;
     }
 
+    // Waiting for the turn is where a processor spins longest, so it looks for
+    // a panic's stop request as the wait for everyone does. And it gives up:
+    // every holder takes a new generation as soon as it has the turn, so a
+    // generation that moves is a holder that is alive, and one that stands
+    // still for longer than any holder may wait is a holder that stopped
+    // running with the turn in hand.
+    let mut seen = TLB_GENERATION.load(Ordering::SeqCst);
+    let mut since = crate::timer::now_nanos();
     let _turn = loop {
         if let Some(turn) = SHOOTING.try_lock() {
             break turn;
         }
+        halt_if_stopping();
         as_this_cpu(service_tlb);
+        let generation = TLB_GENERATION.load(Ordering::SeqCst);
+        let now = crate::timer::now_nanos();
+        if generation != seen {
+            seen = generation;
+            since = now;
+        } else if now.saturating_sub(since) > TURN_TIMEOUT_NANOS {
+            crate::panic::fatal!(
+                crate::panic::catalog::SHOOTDOWN_TURN_TIMEOUT,
+                "no shootdown started for {} ms while this processor waited for its turn",
+                TURN_TIMEOUT_NANOS / 1_000_000
+            );
+        }
         spin_loop();
     };
 
