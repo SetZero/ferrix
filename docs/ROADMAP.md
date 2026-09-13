@@ -1076,8 +1076,8 @@ and removes it:
 ```
 
 **Done — the calls that take a path.** `kernel/src/syscall/path.rs` and
-`stat.rs`: `mkdirat`, `mknodat` (regular files, pipes and socket names; device
-nodes are `EPERM` until devfs owns the numbers), `unlinkat`, `renameat2` with
+`stat.rs`: `mkdirat`, `mknodat` (regular files, pipes, socket names, and
+character and block device nodes), `unlinkat`, `renameat2` with
 `RENAME_NOREPLACE`, `symlinkat`, `linkat`, `readlinkat`, `chdir`, `fchdir`,
 `getcwd`, `faccessat` and `faccessat2`, `chmod`, `chown`, `utimensat`, `umask`,
 `getdents64`, and the stat family with `statx` — each with its pre-`*at` form
@@ -1091,7 +1091,7 @@ every architecture. The umask is per process, 0o022 to start, and applies to
 96-byte pieces, and runs twice:
 
 ```
-  paths    145 path calls under /tmp, 42 names listed in 12 getdents64 calls, 0 frames leaked, dentry cache +0
+  paths    170 path calls under /tmp, 42 names listed in 12 getdents64 calls, 4 device nodes opened by number, 0 frames leaked, dentry cache +0
 ```
 
 **Done — descriptors, and the console as a file.** Every process has a
@@ -1112,7 +1112,13 @@ terminal that honours `ICANON` and `ECHO` (bc8c64b, 6de8907), `TCGETS`,
 `TCSETS`, `TIOCGWINSZ` and the job-control requests are answered.
 
 **Done — `/dev` and `/proc`.** devfs holds `null`, `zero`, `full`, `random`,
-`urandom`, `tty` and `console`, numbered as Linux numbers them. procfs renders
+`urandom`, `tty` and `console`, numbered as Linux numbers them. A device node
+made anywhere else — by `mknod` on tmpfs, or unpacked from the initramfs —
+opens as the devfs device with its number, and keeps its own inode for `stat`,
+as `/dev/tty` does; a number devfs lacks is `ENXIO`, and so is every block
+node until stage 11. The path check makes four such nodes by syscall number,
+writes through the null one, reads zeros from the zero one, and checks the
+refusals. procfs renders
 every file at open, so a program reading `maps` in small pieces sees one
 snapshot, and its directories opt out of the dentry cache, so a pid looked up
 before its process existed is not remembered as missing. `/proc/self` links to
