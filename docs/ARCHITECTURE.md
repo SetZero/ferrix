@@ -259,7 +259,8 @@ device tree (ARMv7-A, and AArch64 firmware that offers one) and privileged
 access. It does not drive devices.
 
 For each device found, the kernel creates a device node and hands `devmgr` a
-handle. `devmgr` matches a driver, spawns it in its own `Job`, and gives it:
+handle (`docs/DEVMGR.md` is the protocol). `devmgr` matches a driver, spawns
+it in its own `Job`, and gives it:
 
 * an `IoMapping` for each BAR or MMIO window, and nothing outside it,
 * an `Interrupt` object per vector, bound to a `Port`,
