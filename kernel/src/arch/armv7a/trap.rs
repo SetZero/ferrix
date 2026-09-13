@@ -259,8 +259,10 @@ ferrix_enter_user:
     str   r0, [sp]
     str   r2, [sp, #4]
 
-    // Nothing of the kernel's survives into USR mode.
-    mov   r0, #0
+    // Nothing of the kernel's survives into USR mode, but the one value a
+    // program may be handed on entry: zero for a Linux program, a native
+    // process's bootstrap handle. From r3, before the clearing below reaches it.
+    mov   r0, r3
     mov   r1, #0
     mov   r2, #0
     mov   r3, #0
@@ -298,7 +300,7 @@ const CPSR_THUMB: u32 = 1 << 5;
 
 unsafe extern "C" {
     /// Enter USR mode at `entry` on `stack` with `cpsr`.
-    fn ferrix_enter_user(entry: u32, stack: u32, cpsr: u32) -> !;
+    fn ferrix_enter_user(entry: u32, stack: u32, cpsr: u32, argument: u32) -> !;
     /// Resume USR mode from a saved frame.
     fn ferrix_resume_user(frame: *const TrapFrame) -> !;
 }
@@ -382,13 +384,14 @@ pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
     unsafe { ferrix_resume_user(core::ptr::from_ref(&regs.0)) }
 }
 
-/// Enter USR mode for the first time, at `entry` on `stack`. Does not return.
+/// Enter USR mode for the first time, at `entry` on `stack`, with `argument`'s
+/// low half in r0. Does not return.
 ///
 /// # Safety
 ///
 /// Must be called by a user task, on its own kernel stack, with its address
 /// space installed; `entry` and `stack` must be addresses inside that space.
-pub(crate) unsafe fn enter_user(entry: u64, stack: u64) -> ! {
+pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64) -> ! {
     // A user address on this processor is below 4 GiB by construction: the
     // loader and the stack builder produced these inside a 32-bit user half.
     let entry = entry as u32;
@@ -398,7 +401,7 @@ pub(crate) unsafe fn enter_user(entry: u64, stack: u64) -> ! {
         (entry & !1, USER_CPSR | CPSR_THUMB)
     };
     // SAFETY: the caller's guarantee is the assembly's contract.
-    unsafe { ferrix_enter_user(entry, stack as u32, cpsr) }
+    unsafe { ferrix_enter_user(entry, stack as u32, cpsr, argument as u32) }
 }
 
 /// Service a system call made from USR mode with `svc #0`.

@@ -386,6 +386,7 @@ fn lay_out(process: &Process) -> Result<Layout, &'static str> {
     process.set_startup(Startup {
         entry: IMAGE,
         stack: top - 64,
+        argument: 0,
     });
     process.record_exec(b"/sbin/procfs-check", &[b"procfs-check", b"--self-test"]);
     Ok(Layout {

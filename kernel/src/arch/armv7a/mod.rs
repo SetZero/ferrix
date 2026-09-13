@@ -166,6 +166,18 @@ pub(crate) const USER_TEST_PROGRAM: &[u8] = &[
 /// The status [`USER_TEST_PROGRAM`] exits with.
 pub(crate) const USER_TEST_STATUS: i32 = 42;
 
+/// A program that exits with whatever its first argument register held when it
+/// entered user mode: the start argument a native process's bootstrap handle
+/// arrives in.
+///
+/// ```text
+///   mov r7, #248  ; exit_group
+///   svc #0        ; with r0, the start argument, as the status
+/// ```
+///
+/// Two instructions, checked against the host's disassembler.
+pub(crate) const USER_ARGUMENT_PROGRAM: &[u8] = &[0xf8, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef];
+
 /// A program that forks, has its child exit with 23, waits for it, and exits
 /// with the child's exit code plus one: 24 when `fork`, the child's copy of
 /// its parent's registers and `wait4`'s status word are all right, 99 when

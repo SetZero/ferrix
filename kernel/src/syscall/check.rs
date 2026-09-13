@@ -70,6 +70,9 @@ pub(crate) struct Report {
     /// What a program exited with that `execve`d a program which exists, then
     /// one that does not: 42 and 2 when right.
     pub(crate) execed: Option<(i32, i32)>,
+    /// What a program exited with that was started with 57 as its start
+    /// argument and exits with its first argument register: 57 when right.
+    pub(crate) started_with: Option<i32>,
     /// Processes the pid registry numbered, found, listed and let go.
     pub(crate) pids: u32,
     /// Futex waiters a wake or a requeue roused: 2 when right.
@@ -158,6 +161,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_an_ended_process_closes_its_descriptors()?;
     let execed = check_execve_replaces_the_program()?;
     mark!(7);
+    let started_with = check_a_program_is_handed_its_start_argument()?;
     let futex_woken = check_futexes()?;
     mark!(8);
     let _ = at;
@@ -174,6 +178,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         forked,
         signalled,
         execed,
+        started_with,
         pids,
         futex_woken,
         spent_ms: spent,
@@ -5737,4 +5742,51 @@ fn check_an_ended_process_closes_its_descriptors() -> Result<(), &'static str> {
         return Err("a process that ended kept its descriptors open until it was let go");
     }
     Ok(())
+}
+
+/// The start argument [`check_a_program_is_handed_its_start_argument`] passes.
+const START_ARGUMENT: u64 = 57;
+/// What the program must exit with when the argument arrived.
+const START_STATUS: i32 = 57;
+
+/// A program started with an argument finds it in its first argument register.
+///
+/// Every general register is cleared on entry so nothing of the kernel's leaks
+/// into user mode, and the one exception is this value: zero for a Linux
+/// program, a native process's bootstrap handle. The program exits with the
+/// register as its status, so an entry path that cleared it after loading it,
+/// or loaded the wrong register, exits with 0 or garbage instead.
+fn check_a_program_is_handed_its_start_argument() -> Result<Option<i32>, &'static str> {
+    if arch::USER_ARGUMENT_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_ARGUMENT_PROGRAM,
+    );
+    let program = exec::load(
+        &file,
+        &[b"/argument"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program to hand a start argument to could not be loaded")?;
+    let startup = program
+        .startup()
+        .ok_or("a loaded program had no startup to add an argument to")?;
+    program.set_startup(process::Startup {
+        argument: START_ARGUMENT,
+        ..startup
+    });
+    let _task = process::start(&program)
+        .map_err(|_| "a program handed a start argument could not be started")?;
+    let status = program
+        .wait_for_exit(u64::MAX)
+        .ok_or("a program handed a start argument never reported how it ended")?;
+    if status != START_STATUS {
+        return Err("a program did not find its start argument in its first argument register");
+    }
+    Ok(Some(status))
 }

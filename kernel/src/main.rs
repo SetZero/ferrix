@@ -536,6 +536,11 @@ fn check_syscalls() {
              it got errno {missing}"
         );
     }
+    if let Some(status) = report.started_with {
+        println!(
+            "  argument a program started with an argument found it on entry and exited with {status}"
+        );
+    }
     println!(
         "  futex    a changed word got EAGAIN and a timed wait ETIMEDOUT; a wake and a requeue \
          roused {} waiters, and a wake that roused nobody was caught",

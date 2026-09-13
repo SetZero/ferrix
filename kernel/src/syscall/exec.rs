@@ -283,6 +283,7 @@ fn populate(
     Ok(Startup {
         entry: loaded.entry,
         stack: startup.sp,
+        argument: 0,
     })
 }
 

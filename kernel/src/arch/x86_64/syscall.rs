@@ -233,13 +233,17 @@ ferrix_enter_user:
     // ordinary preemption. Bit 1 is reserved and always set.
     movq $0x202, %r11
 
+    // The one value a program may be handed on entry, in the first argument
+    // register: zero for a Linux program, a native process's bootstrap handle.
+    // Taken from RDX before the clearing below reaches it.
+    movq %rdx, %rdi
+
     // Nothing of the kernel's may survive into ring 3. A register left holding
     // a kernel pointer is an information leak that no test will ever notice.
     xorq %rax, %rax
     xorq %rbx, %rbx
     xorq %rdx, %rdx
     xorq %rsi, %rsi
-    xorq %rdi, %rdi
     xorq %rbp, %rbp
     xorq %r8, %r8
     xorq %r9, %r9
@@ -287,7 +291,7 @@ unsafe extern "C" {
     /// The `LSTAR` entry point, defined in the block above.
     fn ferrix_syscall_stub();
     /// Enter ring 3 at `entry` on `stack`.
-    fn ferrix_enter_user(entry: u64, stack: u64) -> !;
+    fn ferrix_enter_user(entry: u64, stack: u64, argument: u64) -> !;
     /// Resume ring 3 from a saved system call frame.
     fn ferrix_resume_user(frame: *const SyscallFrame) -> !;
 }
@@ -571,14 +575,15 @@ pub(crate) unsafe fn set_entry_stack(top: u64) {
     unsafe { gdt::set_privilege_stack(top) };
 }
 
-/// Enter ring 3 for the first time, at `entry` on `stack`. Does not return.
+/// Enter ring 3 for the first time, at `entry` on `stack`, with `argument` in
+/// RDI. Does not return.
 ///
 /// # Safety
 ///
 /// Must be called by a user task, on its own kernel stack, with its address
 /// space installed and its entry stack set; `entry` and `stack` must be
 /// addresses inside that space.
-pub(crate) unsafe fn enter_user(entry: u64, stack: u64) -> ! {
+pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64) -> ! {
     // SAFETY: the caller's guarantee is the assembly's contract.
-    unsafe { ferrix_enter_user(entry, stack) }
+    unsafe { ferrix_enter_user(entry, stack, argument) }
 }

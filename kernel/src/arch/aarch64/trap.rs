@@ -212,8 +212,10 @@ ferrix_enter_user:
     mov  x10, #{user_spsr}
     msr  spsr_el1, x10
 
-    // Nothing of the kernel's survives into EL0.
-    mov  x0, xzr
+    // Nothing of the kernel's survives into EL0, but the one value a program
+    // may be handed on entry: zero for a Linux program, a native process's
+    // bootstrap handle. From x2, before the clearing below reaches it.
+    mov  x0, x2
     mov  x1, xzr
     mov  x2, xzr
     mov  x3, xzr
@@ -262,7 +264,7 @@ pub(super) const USER_SPSR: u64 = (1 << 9) | (1 << 8) | (1 << 6);
 
 unsafe extern "C" {
     /// Enter EL0 at `entry` on `stack`.
-    fn ferrix_enter_user(entry: u64, stack: u64) -> !;
+    fn ferrix_enter_user(entry: u64, stack: u64, argument: u64) -> !;
     /// Resume EL0 from a saved frame.
     fn ferrix_resume_user(frame: *const TrapFrame) -> !;
 }
@@ -353,15 +355,16 @@ pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
     unsafe { ferrix_resume_user(core::ptr::from_ref(&regs.0)) }
 }
 
-/// Enter EL0 for the first time, at `entry` on `stack`. Does not return.
+/// Enter EL0 for the first time, at `entry` on `stack`, with `argument` in x0.
+/// Does not return.
 ///
 /// # Safety
 ///
 /// Must be called by a user task, on its own kernel stack, with its address
 /// space installed; `entry` and `stack` must be addresses inside that space.
-pub(crate) unsafe fn enter_user(entry: u64, stack: u64) -> ! {
+pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64) -> ! {
     // SAFETY: the caller's guarantee is the assembly's contract.
-    unsafe { ferrix_enter_user(entry, stack) }
+    unsafe { ferrix_enter_user(entry, stack, argument) }
 }
 
 /// Service a system call made from EL0 with `svc #0`.

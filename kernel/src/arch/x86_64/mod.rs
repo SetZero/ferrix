@@ -236,6 +236,18 @@ pub(crate) const USER_TEST_PROGRAM: &[u8] = &[
 /// The status [`USER_TEST_PROGRAM`] exits with.
 pub(crate) const USER_TEST_STATUS: i32 = 42;
 
+/// A program that exits with whatever its first argument register held when it
+/// entered user mode: the start argument a native process's bootstrap handle
+/// arrives in.
+///
+/// ```text
+///   movl $231, %eax   ; exit_group
+///   syscall           ; with RDI, the start argument, as the status
+/// ```
+///
+/// Two instructions, checked against the host's disassembler.
+pub(crate) const USER_ARGUMENT_PROGRAM: &[u8] = &[0xb8, 0xe7, 0x00, 0x00, 0x00, 0x0f, 0x05];
+
 /// A program that forks, has its child exit with 23, waits for it, and exits
 /// with the child's exit code plus one: 24 when `fork`, the child's copy of
 /// its parent's registers and `wait4`'s status word are all right, 99 when
@@ -517,15 +529,16 @@ pub(crate) fn user_hwcaps() -> (u64, u64) {
     (u64::from(core::arch::x86_64::__cpuid(1).edx), 0)
 }
 
-/// Enter ring 3 for the first time, at `entry` on `stack`. Does not return.
+/// Enter ring 3 for the first time, at `entry` on `stack`, with `argument` in
+/// the first argument register. Does not return.
 ///
 /// # Safety
 ///
 /// Must be called by a user task, on its own kernel stack, with its address
 /// space installed; `entry` and `stack` must be addresses within it.
-pub(crate) unsafe fn enter_user(entry: u64, stack: u64) -> ! {
+pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64) -> ! {
     // SAFETY: the caller's guarantee, passed straight through.
-    unsafe { syscall::enter_user(entry, stack) }
+    unsafe { syscall::enter_user(entry, stack, argument) }
 }
 
 /// Service a system call that arrived through the trap vector.

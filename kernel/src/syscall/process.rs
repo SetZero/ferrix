@@ -159,6 +159,10 @@ pub(crate) struct Startup {
     pub(crate) entry: u64,
     /// Its initial stack pointer, with the startup image above it.
     pub(crate) stack: u64,
+    /// What its first argument register holds on entry: zero for a Linux
+    /// program, whose startup image is on its stack, and a native process's
+    /// bootstrap handle.
+    pub(crate) argument: u64,
 }
 
 /// The parts of a process the lock protects.
@@ -1186,7 +1190,12 @@ fn run_program(_argument: usize) {
     }
     let startup = process.startup();
     drop(process);
-    let Some(Startup { entry, stack }) = startup else {
+    let Some(Startup {
+        entry,
+        stack,
+        argument,
+    }) = startup
+    else {
         return;
     };
     // SAFETY: this task was spawned in the process's address space, which the
@@ -1194,7 +1203,7 @@ fn run_program(_argument: usize) {
     // state and entry stack; `entry` and `stack` came from the loader and the
     // stack builder, both inside that space. Nothing owned is left on this
     // frame to leak: the process reference was dropped above.
-    unsafe { crate::arch::enter_user(entry, stack) }
+    unsafe { crate::arch::enter_user(entry, stack, argument) }
 }
 
 /// Make a process over a fresh address space, for the self-checks.
