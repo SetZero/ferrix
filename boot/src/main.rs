@@ -156,6 +156,7 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
         // the final map is taken below.
         (direct, &first_look),
         loader,
+        firmware_rsdp(&services),
     )?;
     println!(
         "  {} page tables, roots {:#x}/{:#x}",
@@ -341,6 +342,17 @@ struct Carried {
     initrd: Option<(Allocation, u64)>,
 }
 
+/// Where firmware's ACPI root system description pointer is, or zero.
+///
+/// Asked twice, by the direct map and by the boot info, and answered the same
+/// both times: the configuration table does not change under boot services.
+fn firmware_rsdp(services: &Services) -> u64 {
+    services
+        .configuration_table(&ACPI_20_GUID)
+        .or_else(|| services.configuration_table(&ACPI_10_GUID))
+        .unwrap_or(0)
+}
+
 /// Fill in everything about the boot info that firmware can still be asked.
 fn write_boot_info(
     services: &Services,
@@ -381,10 +393,7 @@ fn write_boot_info(
         framebuffer: services.framebuffer().unwrap_or(Framebuffer::NONE),
         initrd_phys: initrd.map_or(0, |(file, _)| file.address),
         initrd_len: initrd.map_or(0, |(_, len)| len),
-        rsdp: services
-            .configuration_table(&ACPI_20_GUID)
-            .or_else(|| services.configuration_table(&ACPI_10_GUID))
-            .unwrap_or(0),
+        rsdp: firmware_rsdp(services),
         dtb: device_tree.map_or(0, |(copy, _)| copy.address),
         dtb_len: device_tree.map_or(0, |(_, len)| len),
         uefi_system_table: services.system_table() as u64,

@@ -5,6 +5,7 @@ use core::ptr;
 use ferrix_bootinfo::{
     IdentityPlan, IdentityTree, KERNEL_VIRT_BASE, LAYOUT, MemKind, MemRegion, PAGE_SIZE,
     PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END, direct_map_address, direct_map_runs, physmap_origin,
+    rsdp_region,
 };
 use ferrix_elf::{Elf, PF_W, PF_X, Segment};
 use ferrix_paging::{MapFlags, Mapper, PhysAddr, PhysMem, VirtAddr};
@@ -263,13 +264,15 @@ pub(crate) struct AddressSpace {
 /// the direct map already covers them.
 ///
 /// `map` is the memory map `direct` was measured from, and says which parts of
-/// that span are memory at all.
+/// that span are memory at all. `rsdp` is firmware's root table pointer, or
+/// zero, whose pages are mapped whatever `map` says; see [`rsdp_region`].
 pub(crate) fn build_address_space(
     memory: &mut LoaderMemory,
     elf: &Elf<'_>,
     image: &KernelImage,
     (direct, map): (DirectMap, &MemoryMap),
     loader: (u64, u64),
+    rsdp: u64,
 ) -> Result<AddressSpace> {
     let kernel_root = memory
         .allocate_table()
@@ -300,7 +303,12 @@ pub(crate) fn build_address_space(
     map_identity(&kernel, &identity, memory, plan)?;
     // Run by run, so that a device window or a hole between RAM banks is not
     // mapped as memory; `direct_map_runs` says why that matters.
-    let regions = map.entries().map(|descriptor| describe(&descriptor));
+    // And the RSDP's pages, which the kernel reads first and which firmware
+    // on a PC may leave out of the map.
+    let regions = map
+        .entries()
+        .map(|descriptor| describe(&descriptor))
+        .chain(rsdp_region(rsdp));
     for (base, len) in direct_map_runs(regions, direct.origin, direct.len) {
         kernel
             .map_range(

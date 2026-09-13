@@ -308,6 +308,37 @@ where
     }
 }
 
+/// Bytes of an ACPI 2.0 root system description pointer, the longer of its
+/// two forms; the 1.0 form is the first 20 of them.
+pub const RSDP_LEN: u64 = 36;
+
+/// The whole pages holding an RSDP at `rsdp`, as a region the direct map has
+/// to translate whatever the memory map says, or `None` when there is none.
+///
+/// The RSDP is the one firmware table the kernel is handed a pointer to
+/// rather than finds inside another table, and on a PC it is often in the
+/// legacy BIOS area between `0xE0000` and `0xFFFFF`, which a UEFI memory map
+/// is free not to describe. The tables it leads to are required to live in
+/// described ACPI or reserved memory; it is not. Chained onto the regions
+/// given to [`direct_map_runs`], it is mapped whether or not firmware
+/// described it, and merged with the region around it when firmware did.
+#[must_use]
+pub fn rsdp_region(rsdp: u64) -> Option<MemRegion> {
+    if rsdp == 0 {
+        return None;
+    }
+    let base = rsdp & !(PAGE_SIZE - 1);
+    let end = rsdp
+        .checked_add(RSDP_LEN)?
+        .checked_next_multiple_of(PAGE_SIZE)?;
+    Some(MemRegion {
+        base,
+        len: end - base,
+        kind: MemKind::Reserved,
+        reserved: 0,
+    })
+}
+
 /// The iterator [`direct_map_runs`] returns, yielding `(base, len)` pairs.
 #[derive(Clone, Debug)]
 pub struct DirectMapRuns<I> {
@@ -1547,6 +1578,50 @@ mod tests {
             "a region straddling the origin is mapped from the origin"
         );
         assert!(runs(&[region(0x5000_0000, 0x1000, MemKind::Mmio)], 0, u64::MAX).is_empty());
+    }
+
+    #[test]
+    fn the_rsdp_is_mapped_even_where_the_memory_map_leaves_a_hole() {
+        // A PC whose map describes nothing across the legacy BIOS area, where
+        // firmware put the RSDP.
+        let map = [
+            region(0, 0xA_0000, MemKind::Usable),
+            region(0x10_0000, 0x3FF0_0000, MemKind::Usable),
+        ];
+        let rsdp = rsdp_region(0xF_5B00).unwrap();
+        assert_eq!((rsdp.base, rsdp.len), (0xF_5000, 0x1000));
+        assert_eq!(
+            direct_map_runs(map.iter().copied().chain(Some(rsdp)), 0, 0x4000_0000)
+                .collect::<Vec<_>>(),
+            [(0, 0xA_0000), (0xF_5000, 0x1000), (0x10_0000, 0x3FF0_0000)],
+            "the RSDP's page is mapped and the rest of the hole is not"
+        );
+        assert_eq!(
+            direct_map_runs(map.iter().copied(), 0, 0x4000_0000).collect::<Vec<_>>(),
+            [(0, 0xA_0000), (0x10_0000, 0x3FF0_0000)],
+            "without it, the hole would take the RSDP with it"
+        );
+
+        let straddling = rsdp_region(0xF_5FFC).unwrap();
+        assert_eq!(
+            (straddling.base, straddling.len),
+            (0xF_5000, 0x2000),
+            "an RSDP across a page boundary needs both pages"
+        );
+
+        let described = [region(0, 0x4000_0000, MemKind::Usable)];
+        assert_eq!(
+            direct_map_runs(
+                described.iter().copied().chain(rsdp_region(0xF_5B00)),
+                0,
+                0x4000_0000
+            )
+            .collect::<Vec<_>>(),
+            [(0, 0x4000_0000)],
+            "an RSDP firmware described is merged, not mapped twice"
+        );
+
+        assert!(rsdp_region(0).is_none(), "no RSDP, nothing to map");
     }
 
     #[test]

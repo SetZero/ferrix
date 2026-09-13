@@ -10,14 +10,18 @@
 //!
 //! * an address outside the direct map is `None` rather than a wild read, and
 //! * a length that would run past the end of the direct map is `None` too,
-//!   even though the address itself is fine.
+//!   even though the address itself is fine, and
+//! * so is a range inside the direct map's span that it does not translate:
+//!   the loader maps only what the memory map describes, and the RSDP's
+//!   pages, so a table firmware put anywhere else would otherwise be a page
+//!   fault rather than an error.
 //!
 //! Firmware is not an attacker, but it is software somebody else wrote and
 //! shipped years ago, and the RSDP is the one pointer the kernel is handed
 //! without having computed it.
 
 use ferrix_acpi::{Acpi, AcpiError, RootKind, Rsdp, Tables};
-use ferrix_bootinfo::BootView;
+use ferrix_bootinfo::{BootView, PAGE_SIZE};
 
 /// Physical memory, as the table parser is allowed to see it.
 #[derive(Clone, Copy, Debug)]
@@ -41,11 +45,22 @@ impl Tables for DirectMap {
         }
         let at = self.base.checked_add(offset)?;
 
+        // Inside the span is not the same as mapped. The loader maps only what
+        // firmware's memory map describes, plus the RSDP's pages; a table
+        // anywhere else is a hole, and reading it is an error for the parser
+        // to report rather than a fault for the kernel to die of.
+        let stop = at.checked_add(len as u64)?;
+        let mut page = at & !(PAGE_SIZE - 1);
+        while page < stop {
+            let _mapped_to = crate::mm::translate(page)?;
+            page = page.checked_add(PAGE_SIZE)?;
+        }
+
         // SAFETY: the range is inside the direct map, checked immediately
-        // above against both of its ends, and the direct map is a live read-only
-        // alias of physical memory for the whole life of the system. The
-        // lifetime is tied to `&self`, and `DirectMap` outlives every table
-        // reference taken from it.
+        // above against both of its ends, every page of it translates, and the
+        // direct map is a live read-only alias of physical memory for the
+        // whole life of the system. The lifetime is tied to `&self`, and
+        // `DirectMap` outlives every table reference taken from it.
         Some(unsafe { core::slice::from_raw_parts(at as *const u8, len) })
     }
 }
