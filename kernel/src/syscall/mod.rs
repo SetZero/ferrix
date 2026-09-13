@@ -204,6 +204,16 @@ pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Out
     if answer == Err(Errno::ENOSYS) {
         unanswered(Some(call), args.number);
     }
+    // A blocking call interrupted by a signal returns a restart code, never
+    // seen by the program: record the call so the way back to user mode can
+    // restart it or turn it into `EINTR`. The number and first argument are
+    // captured from the entry registers here, because the return register is
+    // about to overwrite one of them. See `deliver::return_to_user`.
+    if let (Err(error), Some(process)) = (answer, process.as_ref())
+        && error.is_restart()
+    {
+        process.with_signals(|signals| signals.mark_restart(args.number as u64, args.args[0]));
+    }
     Outcome::Return(errno::encode(answer))
 }
 

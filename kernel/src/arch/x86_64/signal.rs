@@ -118,6 +118,41 @@ impl UserContext {
         self.0.rsp
     }
 
+    /// The value in the return register, read as a signed result: what a
+    /// system call left there, which the restart logic inspects for a
+    /// kernel-internal restart code.
+    pub(crate) const fn syscall_result(&self) -> isize {
+        self.0.rax as isize
+    }
+
+    /// Overwrite the return register with `value`: how the restart logic turns
+    /// a restart code into `EINTR` for a call that will not be restarted.
+    pub(crate) const fn set_syscall_result(&mut self, value: isize) {
+        self.0.rax = value as u64;
+    }
+
+    /// Rewind so the interrupted `syscall` re-executes when the program
+    /// resumes, as Linux's `arch_do_signal_or_restart` does. The two-byte
+    /// `syscall` opcode sits at `RIP - 2`, and `RAX` carried both the number
+    /// and the result, so it is restored to the number the call is re-entered
+    /// with -- `restart_syscall`'s number for a `restart_block` resume, the
+    /// original number otherwise. The System V argument registers were never
+    /// clobbered, so `orig_arg0` is not needed here.
+    pub(crate) const fn rewind_syscall(
+        &mut self,
+        orig_nr: u64,
+        orig_arg0: u64,
+        restart_block: bool,
+    ) {
+        let _ = orig_arg0;
+        self.0.rax = if restart_block {
+            ferrix_linux_abi::nr::x86_64::RESTART_SYSCALL as u64
+        } else {
+            orig_nr
+        };
+        self.0.rip = self.0.rip.wrapping_sub(2);
+    }
+
     /// The registers a system call saved. `SYSCALL` put the return address in
     /// `RCX` and the flags in `R11`, so those two are also what the program
     /// holds in them when it resumes.

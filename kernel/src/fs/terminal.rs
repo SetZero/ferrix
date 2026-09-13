@@ -723,7 +723,11 @@ pub(crate) fn read(buf: &mut [u8], nonblock: bool) -> Result<usize, Errno> {
                 return Ok(0);
             }
             if process.signal_pending() {
-                return Err(Errno::EINTR);
+                // A restart code, not `EINTR`: a terminal read restarts under
+                // `SA_RESTART`, which is what lets a shell's line read survive
+                // a `SIGWINCH` or a `SIGCHLD` its handler took. The way back
+                // turns it into `EINTR` for a handler without the flag.
+                return Err(Errno::ERESTARTSYS);
             }
         }
         crate::sched::sleep_for(POLL_NANOS);

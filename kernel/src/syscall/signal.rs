@@ -237,6 +237,37 @@ pub(crate) enum Posted {
     Pending,
 }
 
+/// A system call to restart because a signal interrupted it, captured when the
+/// call returned a restart code.
+///
+/// The number and first argument are kept because the return register
+/// overwrites one or the other of them: the number on x86-64, whose `RAX` is
+/// both, and the first argument on the two Arm architectures, whose `x0`/`r0`
+/// is both. The way back to user mode puts back whichever its architecture
+/// clobbered before rewinding the program counter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Restart {
+    /// The call's number, in the architecture's own table.
+    pub(crate) nr: u64,
+    /// The value in its first argument register when it was made.
+    pub(crate) arg0: u64,
+}
+
+/// A sleep to resume through `restart_syscall`: what `nanosleep` and
+/// `clock_nanosleep` leave behind when a signal interrupts them with time
+/// still to run, so the resume waits out the time left rather than starting
+/// the whole sleep again. Linux keeps this in `current->restart_block`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RestartBlock {
+    /// The absolute deadline on the counter the sleep runs to.
+    pub(crate) deadline: u64,
+    /// Where the time left is written if the resume is interrupted again, or
+    /// zero for an absolute sleep, which never reports a remainder.
+    pub(crate) rem: u64,
+    /// The width of the `timespec` at `rem`.
+    pub(crate) width: crate::syscall::time::TimeWidth,
+}
+
 /// A signal taken off the pending set, with everything delivery needs.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Taken {
@@ -275,6 +306,11 @@ pub(crate) struct Signals {
     saved_mask: Option<u64>,
     /// `ITIMER_REAL`.
     alarm: Alarm,
+    /// The call to restart, set when a blocking call returned a restart code
+    /// and consumed on the way back to user mode.
+    restart: Option<Restart>,
+    /// A sleep to resume through `restart_syscall`.
+    restart_block: Option<RestartBlock>,
 }
 
 impl Signals {
@@ -325,6 +361,32 @@ impl Signals {
         self.origins.fill(Origin::Kernel);
         self.saved_mask = None;
         self.alarm = Alarm::default();
+        self.restart = None;
+        self.restart_block = None;
+    }
+
+    /// Record that the running call is to be restarted if a signal it is about
+    /// to meet allows it: its number and first argument, kept because the
+    /// return register overwrites one of them. Set by dispatch when a blocking
+    /// call returns a restart code.
+    pub(crate) const fn mark_restart(&mut self, nr: u64, arg0: u64) {
+        self.restart = Some(Restart { nr, arg0 });
+    }
+
+    /// Take the call to restart, if one was marked. Consumed once, on the way
+    /// back to user mode, so a later trap cannot act on a stale one.
+    pub(crate) const fn take_restart(&mut self) -> Option<Restart> {
+        self.restart.take()
+    }
+
+    /// Leave a sleep to resume through `restart_syscall`.
+    pub(crate) const fn set_restart_block(&mut self, block: RestartBlock) {
+        self.restart_block = Some(block);
+    }
+
+    /// Take the sleep left for `restart_syscall` to resume.
+    pub(crate) const fn take_restart_block(&mut self) -> Option<RestartBlock> {
+        self.restart_block.take()
     }
 
     /// Pending signals nothing blocks: what delivery has to act on.
@@ -587,6 +649,8 @@ impl Default for Signals {
             origins: vec![Origin::Kernel; NSIG as usize].into_boxed_slice(),
             saved_mask: None,
             alarm: Alarm::default(),
+            restart: None,
+            restart_block: None,
         }
     }
 }

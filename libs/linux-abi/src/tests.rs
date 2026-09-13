@@ -58,6 +58,11 @@ const X86_64_ONLY: &[Syscall] = &[
 /// typo in either copy shows up here as a failure rather than as a call
 /// dispatched to the wrong handler.
 const SHARED: &[(usize, usize, Syscall)] = &[
+    (
+        x86_64::RESTART_SYSCALL,
+        aarch64::RESTART_SYSCALL,
+        Syscall::RestartSyscall,
+    ),
     (x86_64::READ, aarch64::READ, Syscall::Read),
     (x86_64::WRITE, aarch64::WRITE, Syscall::Write),
     (x86_64::CLOSE, aarch64::CLOSE, Syscall::Close),
@@ -1596,13 +1601,13 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        233,
-        "the x86-64 table maps 233 calls"
+        234,
+        "the x86-64 table maps 234 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        206,
-        "the AArch64 table maps 206 calls"
+        207,
+        "the AArch64 table maps 207 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -1651,6 +1656,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     // number is written out rather than taken from `nr::arm` so that a
     // wrong constant fails here instead of dispatching a call to the
     // wrong handler.
+    (0, Syscall::RestartSyscall),             // restart_syscall
     (1, Syscall::Exit),                       // exit
     (2, Syscall::Fork),                       // fork
     (3, Syscall::Read),                       // read
@@ -2084,7 +2090,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 248, "the ARMv7-A table maps 248 calls");
+    assert_eq!(mapped_arm().len(), 249, "the ARMv7-A table maps 249 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in

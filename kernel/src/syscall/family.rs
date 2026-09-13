@@ -420,7 +420,9 @@ fn wait_for_child(
             return Ok(None);
         }
         if process.signal_pending() {
-            return Err(Errno::EINTR);
+            // A restart code, not `EINTR`: `wait4` restarts under `SA_RESTART`.
+            // The way back turns it into `EINTR` when the handler lacks it.
+            return Err(Errno::ERESTARTSYS);
         }
         let _ = process.child_exited().wait_until_deadline(
             || {

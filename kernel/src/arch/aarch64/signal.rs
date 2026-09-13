@@ -81,6 +81,40 @@ impl UserContext {
     pub(crate) const fn stack_pointer(&self) -> u64 {
         self.0.sp
     }
+
+    /// The value in the return register (`x0`), read as a signed result: what
+    /// a system call left there, which the restart logic inspects for a
+    /// kernel-internal restart code.
+    pub(crate) const fn syscall_result(&self) -> isize {
+        self.0.x[0] as isize
+    }
+
+    /// Overwrite the return register (`x0`) with `value`: how the restart
+    /// logic turns a restart code into `EINTR` for a call that will not be
+    /// restarted.
+    pub(crate) const fn set_syscall_result(&mut self, value: isize) {
+        self.0.x[0] = value as u64;
+    }
+
+    /// Rewind so the interrupted `svc #0` re-executes when the program
+    /// resumes, as Linux's `arch_do_signal_or_restart` does. The instruction
+    /// sits at `PC - 4`, and `x0` carried both the first argument and the
+    /// result, so it is restored to `orig_arg0`. `x8`, the number, was never
+    /// clobbered, so only a `restart_block` resume touches it -- to point the
+    /// call at `restart_syscall`.
+    pub(crate) const fn rewind_syscall(
+        &mut self,
+        orig_nr: u64,
+        orig_arg0: u64,
+        restart_block: bool,
+    ) {
+        let _ = orig_nr;
+        self.0.x[0] = orig_arg0;
+        if restart_block {
+            self.0.x[8] = ferrix_linux_abi::nr::aarch64::RESTART_SYSCALL as u64;
+        }
+        self.0.elr = self.0.elr.wrapping_sub(4);
+    }
 }
 
 /// Write `request`'s frame and point `context` at the handler: `x0` the

@@ -189,7 +189,10 @@ impl End {
             FOREVER,
         );
         if killed(caller.as_ref()) {
-            return Err(Errno::EINTR);
+            // A restart code, not `EINTR`: a pipe read restarts under
+            // `SA_RESTART`. A read that already moved bytes returns the count
+            // instead (see `partial`); only one that moved none is restarted.
+            return Err(Errno::ERESTARTSYS);
         }
         Ok(())
     }
@@ -205,7 +208,8 @@ impl End {
             FOREVER,
         );
         if killed(caller.as_ref()) {
-            return Err(Errno::EINTR);
+            // A restart code, not `EINTR`, for the same reason a read gives one.
+            return Err(Errno::ERESTARTSYS);
         }
         Ok(())
     }
@@ -524,7 +528,9 @@ fn wait_for_partner(pipe: &Pipe, reader: bool) -> Result<(), Errno> {
         FOREVER,
     );
     if killed(caller.as_ref()) {
-        return Err(Errno::EINTR);
+        // A restart code, not `EINTR`: opening a FIFO restarts under
+        // `SA_RESTART`, as Linux's `fifo_open` does.
+        return Err(Errno::ERESTARTSYS);
     }
     Ok(())
 }

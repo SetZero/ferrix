@@ -80,6 +80,9 @@ pub mod x86_64 {
     pub const RT_SIGPROCMASK: usize = 14;
     /// Return from a signal handler, restoring the interrupted context.
     pub const RT_SIGRETURN: usize = 15;
+    /// Resume a system call interrupted by a signal handler. The kernel points
+    /// a restarted call's number register here; no program issues it itself.
+    pub const RESTART_SYSCALL: usize = 219;
     /// Device-specific control operation on a file descriptor.
     pub const IOCTL: usize = 16;
     /// Read at an explicit offset, leaving the file position alone.
@@ -730,6 +733,9 @@ pub mod aarch64 {
     pub const RT_SIGQUEUEINFO: usize = 138;
     /// Return from a signal handler, restoring the interrupted context.
     pub const RT_SIGRETURN: usize = 139;
+    /// Resume a system call interrupted by a signal handler. The kernel points
+    /// a restarted call's number register here; no program issues it itself.
+    pub const RESTART_SYSCALL: usize = 128;
     /// Set the nice value of a process, process group or user.
     pub const SETPRIORITY: usize = 140;
     /// Read the nice value of a process, process group or user.
@@ -973,6 +979,10 @@ pub mod aarch64 {
 /// registers or points at a wider structure. musl calls the replacement
 /// every time, so those are the numbers a real binary arrives with.
 pub mod arm {
+    /// Resume a system call interrupted by a signal handler. The kernel points
+    /// a restarted call's number register (`r7`) here; no program issues it
+    /// itself. `__NR_SYSCALL_BASE` is zero on the EABI, so this is bare zero.
+    pub const RESTART_SYSCALL: usize = 0;
     /// Terminate the calling thread.
     pub const EXIT: usize = 1;
     /// Create a child process sharing nothing.
@@ -1610,6 +1620,12 @@ pub enum Syscall {
     RtSigprocmask,
     /// Return from a signal handler, restoring the interrupted context.
     RtSigreturn,
+    /// Resume a system call the kernel interrupted to run a handler. The kernel
+    /// rewrites the interrupted call's number register to this and rewinds the
+    /// program counter, so the call re-enters here rather than as itself; no
+    /// program ever issues it. What Linux's `restart_block` drives, for the
+    /// calls that resume with a remaining time rather than from the top.
+    RestartSyscall,
     /// Return from a handler installed without `SA_SIGINFO`, whose frame has
     /// no `siginfo`. ARMv7-A only: musl and glibc both point a plain handler's
     /// restorer at it there, where the 64-bit machines have only the `rt` form.
@@ -2138,6 +2154,7 @@ fn x86_64_file_and_process(nr: usize) -> Option<Syscall> {
         x86_64::RT_SIGACTION => Syscall::RtSigaction,
         x86_64::RT_SIGPROCMASK => Syscall::RtSigprocmask,
         x86_64::RT_SIGRETURN => Syscall::RtSigreturn,
+        x86_64::RESTART_SYSCALL => Syscall::RestartSyscall,
         x86_64::IOCTL => Syscall::Ioctl,
         x86_64::PREAD64 => Syscall::Pread64,
         x86_64::PWRITE64 => Syscall::Pwrite64,
@@ -2540,6 +2557,7 @@ fn aarch64_signals_and_ids(nr: usize) -> Option<Syscall> {
         aarch64::RT_SIGACTION => Syscall::RtSigaction,
         aarch64::RT_SIGPROCMASK => Syscall::RtSigprocmask,
         aarch64::RT_SIGRETURN => Syscall::RtSigreturn,
+        aarch64::RESTART_SYSCALL => Syscall::RestartSyscall,
         aarch64::SETGID => Syscall::Setgid,
         aarch64::SETUID => Syscall::Setuid,
         aarch64::GETRESUID => Syscall::Getresuid,
@@ -2754,6 +2772,7 @@ pub fn from_arm(nr: usize) -> Option<Syscall> {
 /// table -- process lifetime, descriptors and paths.
 fn arm_early(nr: usize) -> Option<Syscall> {
     let call = match nr {
+        arm::RESTART_SYSCALL => Syscall::RestartSyscall,
         arm::EXIT => Syscall::Exit,
         arm::FORK => Syscall::Fork,
         arm::READ => Syscall::Read,

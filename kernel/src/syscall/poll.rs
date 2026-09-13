@@ -360,9 +360,12 @@ fn wait_for(
         if ready > 0 || expired {
             return Ok(ready);
         }
-        // Ended, or a signal to deliver: `EINTR`, and the signal on the way out.
+        // Ended, or a signal to deliver. `poll`, `select` and `pselect6` are
+        // the calls that do not restart under `SA_RESTART`: `ERESTARTNOHAND`
+        // becomes `EINTR` the moment a handler runs, and restarts only when
+        // none does (a stop and continue). Linux does exactly this.
         if process.signal_pending() {
-            return Err(Errno::EINTR);
+            return Err(Errno::ERESTARTNOHAND);
         }
         let slice = now().saturating_add(SLICE_NANOS);
         sched::sleep_until(deadline.map_or(slice, |at| at.min(slice)));

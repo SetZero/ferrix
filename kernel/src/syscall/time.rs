@@ -21,6 +21,7 @@ use crate::arch;
 use crate::sched;
 use crate::syscall::attributes::int;
 use crate::syscall::process::Process;
+use crate::syscall::signal::RestartBlock;
 use crate::syscall::uaccess::{self, WORD};
 
 /// Nanoseconds in a second.
@@ -106,6 +107,7 @@ pub(crate) fn dispatch(
 ) -> Option<Result<usize, Errno>> {
     use TimeWidth::{Native, Wide};
     let answer = match call {
+        Syscall::RestartSyscall => sys_restart_syscall(process),
         Syscall::Nanosleep => sys_nanosleep(process, a[0], a[1]),
         Syscall::ClockNanosleep => {
             sys_clock_nanosleep(process, int(a[0]), a[1], [a[2], a[3]], Native)
@@ -268,13 +270,17 @@ fn nanos_of(seconds: i64, nanos: i64) -> Result<u64, Errno> {
     Ok(seconds.saturating_mul(NANOS).saturating_add(nanos))
 }
 
-/// Block until the counter reaches `deadline`, or until the process is ended.
+/// Block until the counter reaches `deadline`, the process is ended, or a
+/// signal is deliverable.
 ///
-/// Ended is the only interruption there is: signals that could interrupt a
-/// sleep are another piece of work's. A kill wakes the task (see
-/// `process::kill`), and this loop is what turns the wake-up into `EINTR`
-/// rather than back into sleep. On `EINTR` the time left is written to `rem`
-/// if the caller gave one, as `nanosleep` promises.
+/// A kill wakes the task (see `process::kill`) and ends the sleep with `EINTR`,
+/// its time left written to `rem` if the caller gave one, as `nanosleep`
+/// promises. A catchable signal ends it too, but through the `restart_block`
+/// codes rather than `EINTR`: `nanosleep` and `clock_nanosleep` are meant to
+/// resume with the time left when no handler runs (`restart_syscall`, driven
+/// from `deliver::return_to_user`), or to return `EINTR` when one does. The
+/// absolute deadline is what a resume waits to, so the time left is exact
+/// however many times it is interrupted.
 fn sleep_until(
     process: &Process,
     deadline: u64,
@@ -283,6 +289,9 @@ fn sleep_until(
 ) -> Result<usize, Errno> {
     loop {
         let now = crate::timer::now_nanos();
+        if now >= deadline {
+            return Ok(0);
+        }
         if process.is_terminated() {
             if rem != 0 {
                 let left = deadline.saturating_sub(now);
@@ -290,11 +299,36 @@ fn sleep_until(
             }
             return Err(Errno::EINTR);
         }
-        if now >= deadline {
-            return Ok(0);
+        if process.signal_pending() {
+            // A catchable signal: report the time left and leave a
+            // `restart_block`, so a no-handler resume waits out only that.
+            if rem != 0 {
+                let left = deadline.saturating_sub(now);
+                write_pair(process, rem, left / NANOS, left % NANOS, width)?;
+            }
+            process.with_signals(|signals| {
+                signals.set_restart_block(RestartBlock {
+                    deadline,
+                    rem,
+                    width,
+                });
+            });
+            return Err(Errno::ERESTART_RESTARTBLOCK);
         }
         sched::sleep_until(deadline);
     }
+}
+
+/// `restart_syscall`: resume the sleep a `restart_block` left behind, waiting
+/// out the time that was left rather than a fresh duration. The kernel points
+/// an interrupted `nanosleep` or `clock_nanosleep` at this call when no handler
+/// ran; no program issues it. With nothing to resume it is `EINTR`, as Linux's
+/// `do_no_restart_syscall` answers.
+pub(crate) fn sys_restart_syscall(process: &Process) -> Result<usize, Errno> {
+    let Some(block) = process.with_signals(super::signal::Signals::take_restart_block) else {
+        return Err(Errno::EINTR);
+    };
+    sleep_until(process, block.deadline, block.rem, block.width)
 }
 
 /// `nanosleep`: a relative sleep, in a native-width `timespec` (ARMv7-A has no

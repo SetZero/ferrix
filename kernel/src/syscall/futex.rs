@@ -262,7 +262,10 @@ fn wait(
     if sleeper.woken.load(Ordering::Acquire) {
         Ok(0)
     } else if process.signal_pending() {
-        Err(Errno::EINTR)
+        // A restart code, not `EINTR`: a futex wait restarts under
+        // `SA_RESTART`, which is how glibc's and musl's condition variables
+        // survive a handled signal. The way back settles it.
+        Err(Errno::ERESTARTSYS)
     } else {
         Err(Errno::ETIMEDOUT)
     }

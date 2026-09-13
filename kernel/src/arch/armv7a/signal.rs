@@ -116,6 +116,41 @@ impl UserContext {
     pub(crate) fn stack_pointer(&self) -> u64 {
         u64::from(self.sp)
     }
+
+    /// The value in the return register (`r0`), read as a signed result: what
+    /// a system call left there, which the restart logic inspects for a
+    /// kernel-internal restart code. Sign-extended from 32 bits, so `-512`
+    /// reads as `-512` and not as a large positive.
+    pub(crate) fn syscall_result(&self) -> isize {
+        self.frame.r[0] as i32 as isize
+    }
+
+    /// Overwrite the return register (`r0`) with `value`: how the restart
+    /// logic turns a restart code into `EINTR` for a call that will not be
+    /// restarted.
+    pub(crate) fn set_syscall_result(&mut self, value: isize) {
+        self.frame.r[0] = value as u32;
+    }
+
+    /// Rewind so the interrupted `svc #0` re-executes when the program
+    /// resumes, as Linux's `do_signal` does. The instruction sits at `PC - 4`
+    /// in ARM state and `PC - 2` in Thumb, and `r0` carried both the first
+    /// argument and the result, so it is restored to `orig_arg0`. `r7`, the
+    /// number, was never clobbered, so only a `restart_block` resume touches
+    /// it -- to point the call at `restart_syscall`.
+    pub(crate) fn rewind_syscall(&mut self, orig_nr: u64, orig_arg0: u64, restart_block: bool) {
+        let _ = orig_nr;
+        self.frame.r[0] = orig_arg0 as u32;
+        if restart_block {
+            self.frame.r[7] = ferrix_linux_abi::nr::arm::RESTART_SYSCALL as u32;
+        }
+        let back = if self.frame.cpsr & CPSR_THUMB != 0 {
+            2
+        } else {
+            4
+        };
+        self.frame.pc = self.frame.pc.wrapping_sub(back);
+    }
 }
 
 /// Write `request`'s frame -- `rt_sigframe` for an `SA_SIGINFO` handler,

@@ -150,6 +150,42 @@ impl Errno {
     /// Operation now in progress.
     pub const EINPROGRESS: Self = Self(115);
 
+    // The signal-restart codes. Linux keeps these in `include/linux/errno.h`,
+    // above the numbers a program can see, precisely because they never reach
+    // one: a blocking call returns one of them when a signal interrupts it, and
+    // the way back to user mode turns it into a restart of the call or into
+    // `EINTR`, depending on the handler, before the program is resumed. Nothing
+    // here ever writes one to a `copy_to_user` or leaves one in the return
+    // register of a program that runs. See `crate::syscall::deliver`.
+
+    /// Restart the call if a handler with `SA_RESTART` runs, or if none does;
+    /// `EINTR` otherwise. What an ordinary blocking read, write, `wait4`, pipe
+    /// or futex wait returns.
+    pub const ERESTARTSYS: Self = Self(512);
+    /// Restart the call whether a handler runs or not: the call had no visible
+    /// effect to interrupt.
+    pub const ERESTARTNOINTR: Self = Self(513);
+    /// Restart the call only if no handler runs; `EINTR` if one does. What
+    /// `poll`, `select` and `pselect6` return.
+    pub const ERESTARTNOHAND: Self = Self(514);
+    /// Restart through `restart_syscall`, which resumes with the time left
+    /// rather than from the top; `EINTR` if a handler runs. What `nanosleep`
+    /// and `clock_nanosleep` return.
+    pub const ERESTART_RESTARTBLOCK: Self = Self(516);
+
+    /// Whether this is one of the kernel-internal restart codes above, which
+    /// must never be encoded into a running program's return register.
+    #[must_use]
+    pub const fn is_restart(self) -> bool {
+        matches!(
+            self,
+            Self::ERESTARTSYS
+                | Self::ERESTARTNOINTR
+                | Self::ERESTARTNOHAND
+                | Self::ERESTART_RESTARTBLOCK
+        )
+    }
+
     /// The value this error takes in the system call return register.
     ///
     /// The whole convention in one expression. The cast cannot lose data and

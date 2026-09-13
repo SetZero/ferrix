@@ -23,29 +23,48 @@
 //! the mask while it runs, the stack it runs on, and what happens when the
 //! frame cannot be written.
 //!
-//! # Interrupted calls
+//! # Interrupted calls, and `SA_RESTART`
 //!
 //! A call that waits -- `wait4`, `poll`, a pipe, `pause`, `rt_sigsuspend` --
-//! also stops waiting when a signal is deliverable, and returns `EINTR`; the
-//! signal is then delivered on the way out. `SA_RESTART` is not honoured: an
-//! interrupted call returns `EINTR` whether the handler asked to have it
-//! restarted or not. musl, glibc and busybox all retry on `EINTR` where they
-//! care to, which is why this is survivable, and it is noted rather than
-//! hidden.
+//! also stops waiting when a signal is deliverable. What it returns is not
+//! `EINTR` but one of the kernel-internal restart codes ([`Errno::is_restart`]),
+//! which never reaches the program: this module turns each into a restart of
+//! the interrupted call or into `EINTR`, exactly as Linux's
+//! `arch_do_signal_or_restart` does, before the program is resumed.
+//!
+//! The rule, per code:
+//!
+//! * `ERESTARTSYS` (a read, write, `wait4`, pipe or futex wait): the call
+//!   restarts if a handler with `SA_RESTART` runs, or if no handler runs at
+//!   all; otherwise `EINTR`.
+//! * `ERESTARTNOHAND` (`poll`, `select`, `pselect6`): `EINTR` if a handler
+//!   runs, restart if none does. So a handler -- the usual interrupter --
+//!   always sees `EINTR` from these.
+//! * `ERESTARTNOINTR`: always restarts.
+//! * `ERESTART_RESTARTBLOCK` (`nanosleep`, `clock_nanosleep`): `EINTR` if a
+//!   handler runs; otherwise the call is re-entered as `restart_syscall`,
+//!   which waits out the time left rather than the whole sleep again.
+//!
+//! Restarting means rewinding the saved program counter to the call's own
+//! instruction and putting back the argument register the return value
+//! clobbered, so that resuming re-executes the call. The rewind differs per
+//! architecture and lives in each `arch::UserContext`; the decision is here.
+//! It is made before any handler frame is built, so the frame saves the
+//! resolved resume point and `rt_sigreturn` returns straight into it.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::is_user_address;
 use ferrix_linux_abi::errno::Errno;
-use ferrix_linux_abi::types::{SIG_DFL, SIG_IGN, SIGSEGV};
+use ferrix_linux_abi::types::{SA_RESTART, SIG_DFL, SIG_IGN, SIGSEGV};
 
 use crate::arch;
 use crate::console::println;
 use crate::sched;
 use crate::syscall::process::{self, Process};
 use crate::syscall::signal::{
-    self, DefaultAction, Origin, Posted, SIGSET_SIZE, Taken, UNBLOCKABLE,
+    self, DefaultAction, Origin, Posted, Restart, SIGSET_SIZE, Taken, UNBLOCKABLE,
 };
 use crate::syscall::time::TimeWidth;
 use crate::syscall::uaccess;
@@ -229,6 +248,17 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
         return;
     };
     arch::enable_interrupts();
+
+    // A blocking call interrupted by a signal returns a restart code in the
+    // return register. Resolve it against the signal about to be delivered,
+    // the way Linux does on the syscall exit path. `take_restart` answers
+    // `Some` only just after such a call, and takes it once so a later trap
+    // cannot act on a stale one; the register is checked too, so a way back
+    // that is not a syscall return -- a tick, a fault -- is never rewound.
+    let mut restart = process
+        .with_signals(signal::Signals::take_restart)
+        .zip(RestartKind::of(context.syscall_result()));
+
     for _ in 0..DELIVERY_ROUNDS {
         if process.is_terminated() {
             break;
@@ -243,7 +273,22 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
         let Some(taken) = process.with_signals(signal::Signals::take_next) else {
             break;
         };
+        // The first signal that runs a handler settles the restart: only a
+        // handler can turn one into `EINTR`. A default action -- a stop, an
+        // ignore -- leaves it pending, so a stop then continue restarts
+        // transparently and a later handler still gets to decide.
+        if let Some((ctx, kind)) = restart
+            && runs_a_handler(&taken)
+        {
+            resolve_restart(context, &ctx, kind, taken.action.flags);
+            restart = None;
+        }
         act(&process, context, &taken);
+    }
+    // No handler ran -- a stop, an ignore, or nothing was left to deliver --
+    // so the call restarts transparently.
+    if let Some((ctx, kind)) = restart {
+        restart_call(context, &ctx, kind);
     }
     process.with_signals(signal::Signals::restore_saved_mask);
     arch::disable_interrupts();
@@ -252,6 +297,71 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
         drop(process);
         sched::exit();
     }
+}
+
+/// Which restart code a system call left in the return register, if any. The
+/// kernel-internal codes are the only errors above what a program can see, so
+/// a value outside them -- an ordinary result, or the live register of a way
+/// back that is not a syscall return -- is `None` and starts no restart.
+#[derive(Debug, Clone, Copy)]
+enum RestartKind {
+    /// `ERESTARTSYS`: restart under `SA_RESTART`, or with no handler.
+    Sys,
+    /// `ERESTARTNOINTR`: always restart.
+    NoIntr,
+    /// `ERESTARTNOHAND`: restart only with no handler.
+    NoHand,
+    /// `ERESTART_RESTARTBLOCK`: resume through `restart_syscall`.
+    RestartBlock,
+}
+
+impl RestartKind {
+    /// The code a return value of `value` carries, if it is a restart code.
+    fn of(value: isize) -> Option<RestartKind> {
+        if value == Errno::ERESTARTSYS.as_return_value() {
+            Some(RestartKind::Sys)
+        } else if value == Errno::ERESTARTNOINTR.as_return_value() {
+            Some(RestartKind::NoIntr)
+        } else if value == Errno::ERESTARTNOHAND.as_return_value() {
+            Some(RestartKind::NoHand)
+        } else if value == Errno::ERESTART_RESTARTBLOCK.as_return_value() {
+            Some(RestartKind::RestartBlock)
+        } else {
+            None
+        }
+    }
+}
+
+/// Whether `taken` runs a handler of the program's own, as opposed to a
+/// default action or being ignored -- the only case that can turn a restart
+/// into `EINTR`.
+fn runs_a_handler(taken: &Taken) -> bool {
+    !matches!(taken.action.handler, SIG_DFL | SIG_IGN)
+}
+
+/// Settle a restart against a handler that is about to run: restart the call
+/// if the code and the handler's `SA_RESTART` flag allow it, and otherwise
+/// leave `EINTR` in the return register, at the call's own resume point.
+fn resolve_restart(context: &mut arch::UserContext, ctx: &Restart, kind: RestartKind, flags: u64) {
+    let restart = match kind {
+        RestartKind::NoIntr => true,
+        RestartKind::Sys => flags & SA_RESTART != 0,
+        RestartKind::NoHand | RestartKind::RestartBlock => false,
+    };
+    if restart {
+        restart_call(context, ctx, kind);
+    } else {
+        context.set_syscall_result(Errno::EINTR.as_return_value());
+    }
+}
+
+/// Rewind the saved registers so the interrupted call re-executes: back to its
+/// own instruction, with the clobbered argument register restored. A
+/// `restart_block` call is re-entered as `restart_syscall` instead of itself,
+/// so it waits out only the time left.
+fn restart_call(context: &mut arch::UserContext, ctx: &Restart, kind: RestartKind) {
+    let restart_block = matches!(kind, RestartKind::RestartBlock);
+    context.rewind_syscall(ctx.nr, ctx.arg0, restart_block);
 }
 
 /// Do what `taken` asks: nothing, the default action, or its handler.
