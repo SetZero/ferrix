@@ -248,3 +248,30 @@ Dated, newest first. A decision here is final until the customer says otherwise.
   can only keep their own build output down.
 * Pushes to `origin`: local `main` is 60 commits ahead, and the last CI runs
   there failed in the Ubuntu test job before today's landings.
+
+---
+
+## Wind-down of 2026-09-13, about 17:00
+
+Every session was asked to stop, commit and hand off. `main` is ec549f2,
+verified whole (five boots, KVM, both busyboxes, test-vfs) and tagged
+`stage-9.1-console-and-iommu`; `develop` is ahead of it by the stage 4
+contended-count rounds (9f6a590, full row plus KVM by its owner), the FX-1001
+row and the btrfs node cache. All branches and tags are on origin. Branches
+with unlanded work, each committed and pushed, base and state as handed off:
+
+* `board-reset-3c` (95884cd): `arch::reset`, `reboot` resets, `ferrix.onexit=reset`; both reviews in, board proof A passed; needs a rebase over ec549f2's `arch/mod.rs` export lists, the row, proof B (`exit 7` under the option; no press needed). Then the CMDLINE.TXT follow-up and `test-boot --reset`.
+* `worktree-agent-a658b7811c6e2577d`: VMO reverse map with scoped shootdown; d5b515c passed the full row and review, two unbuilt WIP commits on top (review fixes, `protect` shootdown); needs squash, full row with KVM, re-review by the mm owner, then the stage 9 bullet.
+* `worktree-agent-a74d4fa11607fe5ad`: `libs/vfs` `PageSource` and the offset-lock fix; passed on c979d03; needs rebase, light row, go. Follow-up: a sleeping lock for `Namespace::rename` before stage 11's kernel mount.
+* `worktree-agent-a2d52ca1305875553` (a67f795): devfs block-device registry; full row passed on ec549f2; needs the stage 11 owner's trait review and a go.
+* `stage10-ring` (32d29fb, WIP, never compiled): the block ring's kernel side; rebase onto c9677b7, drop the picked commits, wire the module and the native call, use the registry, write `user/blkring-check` on the runtime, full row.
+* `worktree-agent-a16ff91583057388b` (24da536): virtio-blk library; Miri and fuzz passed; needs rebase and the full row.
+* `worktree-agent-a102cb3140653d102` (f540994): native user-space runtime and `user/`; needs rebase and the full row.
+* `worktree-agent-a317dadb0a679f86d` (5e5037a): the QEMU test disk; full row passed on a39ffe1; needs rebase and a go.
+* `stage11-kernel-mount-design` (101dcd2): the approved design, draft 5, parked as a document.
+* Stage 7 (`ferrix-a5`): the start argument, leak check, pid 1 with orphan reparenting, SA_RESTART checks, the terminal switch to `console::input`, then threads; state per its own handoff.
+* Stage 9 (`ferrix-4b`): the interrupt wake (verified on fd4442e), process observers, `vmo_map` on the reverse map.
+* mm (`ferrix-e5`): x86-64 IST branch (afb3041, row green but for one FX-1001 hit that is stage 10's), mprotect invalidation with the COW and MAP_SHARED checks, Miri and fuzz branch (c660bc7).
+* ferrousli (`ferrix-ce`): area-1 wrappers and the stub file in progress; busybox links after them; 154 symbols were undefined at the first link.
+* Known intermittent on `main`: FX-1001 on AArch64 (a device write reported outside its domain, once in three boots), owner stage 10, row above.
+* Open questions for the customer: none. The board is powered at the U-Boot prompt with 95884cd on the card.
