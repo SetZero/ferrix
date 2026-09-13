@@ -537,9 +537,12 @@ pub(crate) static SCHEDULE_WITH_PREEMPTION_HELD: Explanation = Explanation {
          guard has to be dropped before the wait and the data re-read after it.",
         "A guard was stored somewhere that outlives the critical section -- in a struct, or \
          returned from a function -- and dropped much later.",
-        "The count was raised on one processor and the task moved before lowering it, which \
-         cannot happen while it is raised unless something switched the task out by another \
-         route than `schedule`.",
+        "The count was raised on one processor and lowered on another. Before the read of \
+         the processor's number and the increment were done under masked interrupts, a \
+         preemption between them let the task be stolen, the increment landed on the \
+         processor it had left, and the next task to decide there stopped for a lock it never \
+         held; the message names the file and line that last raised the count. An enable \
+         that finds nothing to lower now stops the machine itself, naming the same site.",
     ],
     see: "kernel/src/sync.rs; kernel/src/sched/mod.rs PREEMPT_OFF; libs/sync/src/lib.rs \
           PreemptSpinLock",
