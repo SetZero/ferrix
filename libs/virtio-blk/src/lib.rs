@@ -138,14 +138,17 @@ pub trait Transport: CommonConfig + DeviceConfig {
 /// Pinned memory, as the device addresses of its pages.
 ///
 /// The addresses are the ones the pin's address query (native call 0x1026)
-/// wrote after `VMO_PIN` (0x1025) pinned the range into the device's domain —
-/// never physical addresses. Under a translating IOMMU, such as VT-d on
-/// x86-64, the device reaches only what its domain maps, so a physical
-/// address that happens to work in an untranslated domain faults there.
+/// wrote after `VMO_PIN` (0x1025) pinned the range into the device's domain.
+/// The driver must not assume any relation between them and physical
+/// addresses: under a translating IOMMU, VT-d on x86-64 or the `SMMUv3` on
+/// AArch64, the device reaches only what its domain maps, and where the kernel
+/// maps a page is the kernel's choice.
 pub trait DevicePages {
-    /// The device address of each page, in order, as the pin's address query
-    /// returned them: [`PAGE_SIZE`] bytes each, and not necessarily
-    /// consecutive.
+    /// The device address of page `i` of the pinned range, for every page in
+    /// order, as the pin's address query returned them: [`PAGE_SIZE`] bytes
+    /// each, and not necessarily consecutive. Offsets into the region, such as
+    /// a request's `data_offset`, count from the start of the pinned range, not
+    /// from the start of the VMO it was pinned from.
     fn device_pages(&self) -> &[u64];
 }
 
