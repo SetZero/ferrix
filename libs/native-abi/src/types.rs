@@ -54,6 +54,10 @@ pub struct ReadActual {
     pub handles: u32,
 }
 
+/// `vmo_pin`'s option: the device may read the pinned pages but not write
+/// them.
+pub const PIN_READ_ONLY: u64 = 1;
+
 /// The aperture an `io_mapping_create` claims.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(C)]

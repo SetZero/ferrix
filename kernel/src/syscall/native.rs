@@ -143,6 +143,8 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::InterruptBind => interrupt_bind(process, handle(a[0]), handle(a[1]), a[2]),
         NativeCall::IoMappingCreate => io_mapping_create(process, handle(a[0]), a[1]),
         NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1]),
+        NativeCall::VmoPin => vmo_pin(process, handle(a[0]), handle(a[1]), a[2], a[3], a[4]),
+        NativeCall::VmoPinAddresses => vmo_pin_addresses(process, handle(a[0]), a[1], a[2]),
         NativeCall::PortCreate => insert_new(process, Object::Port(Port::new()), Rights::PORT),
         NativeCall::PortQueue => port_queue(process, handle(a[0]), a[1]),
         NativeCall::PortWait => port_wait(process, handle(a[0]), a[1], a[2]),
@@ -787,6 +789,91 @@ fn io_mapping_create(process: &Process, device: Handle, spec: u64) -> Result<usi
     insert_new(process, Object::IoMapping(mapping), Rights::IO_MAPPING)
 }
 
+/// `vmo_pin`.
+///
+/// Whole pages of the VMO, held and pinned into the device's domain. The device
+/// handle needs `MANAGE`, as minting its interrupts and mappings does. The VMO
+/// needs `READ`, and `WRITE` unless the pin is read-only, since a device
+/// writing a page is a write through the VMO.
+fn vmo_pin(
+    process: &Process,
+    device: Handle,
+    vmo: Handle,
+    offset: u64,
+    length: u64,
+    options: u64,
+) -> Result<usize, Errno> {
+    let page = PAGE_SIZE;
+    let known = ferrix_native_abi::types::PIN_READ_ONLY;
+    if options & !known != 0
+        || length == 0
+        || !offset.is_multiple_of(page)
+        || !length.is_multiple_of(page)
+    {
+        return Err(status::INVALID_ARGS);
+    }
+    let read_only = options & known != 0;
+    let node = device_in(process, device, Rights::MANAGE)?;
+    let vmo = process.with_handles(|table| {
+        if !read_only {
+            let _ = vmo_in(table, vmo, Rights::WRITE)?;
+        }
+        vmo_in(table, vmo, Rights::READ)
+    })?;
+    let held = vmo.hold(offset / page, length / page).map_err(vmo_error)?;
+    let flags = if read_only {
+        ferrix_paging::MapFlags::DMA_READ_ONLY
+    } else {
+        ferrix_paging::MapFlags::DMA
+    };
+    let pin = object::pin::Pin::new(node.domain(), held, flags).map_err(|why| {
+        use crate::iommu::DomainError;
+        match why {
+            DomainError::Empty => status::INVALID_ARGS,
+            DomainError::OutOfRange | DomainError::Tables => status::NO_MEMORY,
+            DomainError::AlreadyPinned => status::ALREADY_BOUND,
+            DomainError::Foreign | DomainError::Unit(_) => status::BAD_STATE,
+        }
+    })?;
+    insert_new(process, Object::Pin(Arc::new(pin)), Rights::PIN)
+}
+
+/// `vmo_pin_addresses`. Writes up to `capacity` device addresses, and answers
+/// how many pages the pin holds.
+fn vmo_pin_addresses(
+    process: &Process,
+    pin: Handle,
+    at: u64,
+    capacity: u64,
+) -> Result<usize, Errno> {
+    let pin = process.with_handles(|table| {
+        let (object, rights) = table.get(pin).map_err(table_error)?;
+        let Object::Pin(pin) = object else {
+            return Err(status::WRONG_TYPE);
+        };
+        if !rights.contains(Rights::READ) {
+            return Err(status::ACCESS_DENIED);
+        }
+        Ok(Arc::clone(pin))
+    })?;
+    let addresses = pin.addresses();
+    let count =
+        usize::try_from(capacity).map_or(addresses.len(), |capacity| capacity.min(addresses.len()));
+    let bytes: Vec<u8> = addresses
+        .iter()
+        .take(count)
+        .flat_map(|address| address.to_ne_bytes())
+        .collect();
+    let written = if bytes.is_empty() {
+        Ok(())
+    } else {
+        uaccess::copy_to_user(process.space(), at, &bytes).map_err(fault)
+    };
+    let pages = addresses.len();
+    object::dispose([Object::Pin(pin)]);
+    written.map(|()| pages)
+}
+
 /// `io_mapping_map`. A zero address means wherever it fits.
 fn io_mapping_map(process: &Process, mapping: Handle, address: u64) -> Result<usize, Errno> {
     let mapping = process.with_handles(|table| {
@@ -934,7 +1021,8 @@ fn object_wait_async(
         | Object::Port(_)
         | Object::Device(_)
         | Object::Interrupt(_)
-        | Object::IoMapping(_) => None,
+        | Object::IoMapping(_)
+        | Object::Pin(_) => None,
     };
     object::dispose([target]);
     match registered {

@@ -55,6 +55,17 @@ fn nothing_outside_the_range_decodes() {
 }
 
 #[test]
+fn pinning_sits_in_the_vmo_block() {
+    assert_eq!(nr::decode(0x1025), Some(NativeCall::VmoPin));
+    assert_eq!(nr::decode(0x1026), Some(NativeCall::VmoPinAddresses));
+    assert_eq!(nr::decode(0x1027), None, "0x1027 stays free");
+    assert!(
+        !Rights::PIN.contains(Rights::TRANSFER),
+        "a pin stays with the driver that made it"
+    );
+}
+
+#[test]
 fn process_creation_block_is_left_free() {
     for number in 0x1030..=0x1037 {
         assert_eq!(nr::decode(number), None, "{number:#x} was assigned");

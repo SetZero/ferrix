@@ -71,6 +71,8 @@ const SPEC: u64 = SCRATCH + 0x330;
 const PACKET_AT: u64 = SCRATCH + 0x340;
 /// A registration's key.
 const KEY: u64 = SCRATCH + 0x360;
+/// A pin's device addresses.
+const PINNED_AT: u64 = SCRATCH + 0x370;
 
 /// How long the waker sleeps before it writes.
 const WAKE_AFTER_NANOS: u64 = 20_000_000;
@@ -126,6 +128,8 @@ struct Counter {
     mapped: u32,
     /// See [`Report::interrupts`].
     interrupts: u32,
+    /// See [`DeviceReport::pinned`].
+    pinned: u32,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -1008,6 +1012,8 @@ pub(crate) struct DeviceReport {
     pub(crate) mapped: u32,
     /// Interrupts delivered to an object, waited on and acknowledged.
     pub(crate) interrupts: u32,
+    /// VMO pages pinned for a device and found at their device addresses.
+    pub(crate) pinned: u32,
     /// Calls refused with exactly the status they had to be refused with.
     pub(crate) refusals: u32,
 }
@@ -1025,6 +1031,7 @@ pub(crate) fn run_devices() -> Result<DeviceReport, &'static str> {
     let mut counter = Counter::default();
     check_a_device_gives_exactly_its_own_memory(&mut counter)?;
     check_an_interrupt_is_held_until_acknowledged(&mut counter)?;
+    check_a_pin_gives_a_device_exactly_its_pages(&mut counter)?;
     let has_whole_page = device::devices().iter().any(|node| {
         node.apertures()
             .iter()
@@ -1039,11 +1046,149 @@ pub(crate) fn run_devices() -> Result<DeviceReport, &'static str> {
     if has_vector && counter.interrupts == 0 {
         return Err("a machine with a device vector held no interrupt");
     }
+    let has_pci = device::devices()
+        .iter()
+        .any(|node| matches!(node.location(), device::Location::Pci(_)));
+    if has_pci && counter.pinned == 0 {
+        return Err("a machine with a PCI function pinned no page for it");
+    }
     Ok(DeviceReport {
         mapped: counter.mapped,
         interrupts: counter.interrupts,
+        pinned: counter.pinned,
         refusals: counter.refusals,
     })
+}
+
+/// A device is given exactly the VMO pages pinned for it, at the addresses its
+/// domain chose, holding what the VMO holds, and a pin is refused whatever the
+/// rules refuse.
+///
+/// On a translated domain the pages must also be unreachable once the pin is
+/// closed. On an untranslated one they stay held, which the console says.
+fn check_a_pin_gives_a_device_exactly_its_pages(counter: &mut Counter) -> Result<(), &'static str> {
+    let Some(node) = device::devices()
+        .iter()
+        .find(|node| matches!(node.location(), device::Location::Pci(_)))
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let side = Side::new()?;
+    let handle = device_handle(&side, &node)?;
+    let vmo = side.handle(
+        nr::VMO_CREATE,
+        &[2 * PAGE_SIZE],
+        "vmo_create for a pin failed",
+    )?;
+
+    check_pin_refusals(&side, handle, vmo, counter)?;
+
+    side.put(PAYLOAD, SECRET)?;
+    side.put_offset(PAGE_SIZE)?;
+    let _ = side
+        .call(nr::VMO_WRITE, &[reg(vmo), PAYLOAD, len(SECRET), OFFSET])
+        .map_err(|_| "vmo_write before a pin failed")?;
+    let pin = side.handle(
+        nr::VMO_PIN,
+        &[reg(handle), reg(vmo), 0, 2 * PAGE_SIZE, 0],
+        "vmo_pin of a VMO for its own device failed",
+    )?;
+    let pages = side
+        .call(nr::VMO_PIN_ADDRESSES, &[reg(pin), PINNED_AT, 2])
+        .map_err(|_| "vmo_pin_addresses failed")?;
+    if pages != 2 {
+        return Err("a pin of two pages said it held another number");
+    }
+    let bytes = side.get(PINNED_AT, 16)?;
+    let addresses: Vec<u64> = bytes
+        .chunks_exact(8)
+        .filter_map(|word| <[u8; 8]>::try_from(word).ok())
+        .map(u64::from_ne_bytes)
+        .collect();
+    let domain = node.domain();
+    let Some(second) = addresses
+        .get(1)
+        .and_then(|&address| domain.resolve(address))
+    else {
+        return Err("a pinned page's device address led nowhere");
+    };
+    // SAFETY: `second` is the frame holding the VMO's second page, held by the
+    // pin for as long as this runs, and the direct map covers every frame; the
+    // read is shorter than a page.
+    let seen =
+        unsafe { core::slice::from_raw_parts(mm::direct_map(second) as *const u8, SECRET.len()) };
+    if seen != SECRET {
+        return Err("a pinned page's device address held something other than the VMO's page");
+    }
+    if domain.translated() {
+        refused(
+            side.call(
+                nr::VMO_PIN,
+                &[reg(handle), reg(vmo), PAGE_SIZE, PAGE_SIZE, 0],
+            ),
+            status::ALREADY_BOUND,
+            "a page already pinned into a translated domain was pinned again",
+            counter,
+        )?;
+    }
+
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(pin)])
+        .map_err(|_| "closing a pin failed")?;
+    if domain.translated()
+        && addresses
+            .iter()
+            .any(|&address| domain.resolve(address).is_some())
+    {
+        return Err("a closed pin's pages were still reachable through its domain");
+    }
+    counter.pinned += 2;
+    side.close_everything();
+    Ok(())
+}
+
+/// Require `vmo_pin` to refuse, with exactly the status the rules give, a
+/// range off a page boundary, one past the VMO's end, an unknown option, an
+/// empty range, and a writable pin through a read-only VMO handle.
+fn check_pin_refusals(
+    side: &Side,
+    handle: Handle,
+    vmo: Handle,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    for (args, what) in [
+        ([1, PAGE_SIZE, 0], "a pin not on a page boundary was taken"),
+        (
+            [0, 3 * PAGE_SIZE, 0],
+            "a pin past the end of its VMO was taken",
+        ),
+        ([0, PAGE_SIZE, 2], "a pin with an unknown option was taken"),
+        ([0, 0, 0], "an empty pin was taken"),
+    ] {
+        let [offset, length, options] = args;
+        refused(
+            side.call(
+                nr::VMO_PIN,
+                &[reg(handle), reg(vmo), offset, length, options],
+            ),
+            status::INVALID_ARGS,
+            what,
+            counter,
+        )?;
+    }
+    let reader = side.handle(
+        nr::HANDLE_DUPLICATE,
+        &[reg(vmo), u64::from(Rights::READ.0)],
+        "handle_duplicate of a VMO failed",
+    )?;
+    refused(
+        side.call(nr::VMO_PIN, &[reg(handle), reg(reader), 0, PAGE_SIZE, 0]),
+        status::ACCESS_DENIED,
+        "a writable pin was taken through a read-only VMO handle",
+        counter,
+    )?;
+    Ok(())
 }
 
 /// Give `side` a handle to `node`, as `devmgr` will give one to a driver.

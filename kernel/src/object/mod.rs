@@ -25,6 +25,7 @@ pub(crate) mod check;
 pub(crate) mod interrupt;
 pub(crate) mod io_mapping;
 pub(crate) mod job;
+pub(crate) mod pin;
 pub(crate) mod port;
 
 use alloc::sync::Arc;
@@ -62,6 +63,8 @@ pub(crate) enum Object {
     Interrupt(Arc<interrupt::Interrupt>),
     /// A device aperture a driver may map.
     IoMapping(Arc<io_mapping::IoMapping>),
+    /// Pages of a VMO a device may reach.
+    Pin(Arc<pin::Pin>),
     /// An event queue.
     Port(Arc<port::Port>),
 }
@@ -85,6 +88,7 @@ impl Object {
             | Object::Device(_)
             | Object::Interrupt(_)
             | Object::IoMapping(_)
+            | Object::Pin(_)
             | Object::Port(_) => Signals::NONE,
         }
     }
@@ -102,9 +106,11 @@ impl Object {
             // An interrupt is quiet too, but not because its signals never
             // change: they change in an interrupt handler, which may not take
             // a wait queue's lock. A waiter notices through its recheck.
-            Object::Vmo(_) | Object::Device(_) | Object::Interrupt(_) | Object::IoMapping(_) => {
-                &QUIET
-            }
+            Object::Vmo(_)
+            | Object::Device(_)
+            | Object::Interrupt(_)
+            | Object::IoMapping(_)
+            | Object::Pin(_) => &QUIET,
         }
     }
 }

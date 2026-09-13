@@ -370,6 +370,7 @@ fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Vec<Arc<Endpoint>> {
             | Object::Device(_)
             | Object::Interrupt(_)
             | Object::IoMapping(_)
+            | Object::Pin(_)
             | Object::Port(_) => None,
         })
         // Once each, and no more than the walk could use: an inbox can hold

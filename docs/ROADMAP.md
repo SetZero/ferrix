@@ -1806,6 +1806,30 @@ entropy check's 64 bytes and its MSI-X completion through a translated domain,
 and 2 pages pinned and unpinned through a translated domain with 2 refusals.
 AArch64 and ARMv7-A still say degraded trusted mode.
 
+**Done — pinning VMO pages for a device.** `VMO_PIN` (0x1025) pins whole
+pages of a VMO into a device's IOMMU domain, and `VMO_PIN_ADDRESSES` (0x1026)
+says at which addresses the device reaches them: the DMA grant
+`docs/ARCHITECTURE.md` §7 gives a driver. Stage 9's `Vmo::hold` keeps the pages
+where they are, and the pin handle — which carries `READ` and nothing else, so
+it stays with the driver that made it — owns the hold and the domain's record
+of the pages together.
+
+* **Given back in order.** Closing a pin unpins it from the domain and makes
+  the unit forget the pages before the holds are released. On an untranslated
+  domain the device can still reach the frames, and nothing resets a device
+  yet, so they stay held and the console says so the first time.
+* **The rules.** The device handle needs `MANAGE`; the VMO needs `READ`, and
+  `WRITE` unless the pin is `PIN_READ_ONLY`. A range off a page boundary,
+  empty, past the VMO's end or with an unknown option is `INVALID_ARGS`; a
+  page already pinned into a translated domain is `ALREADY_BOUND`.
+* **The check,** among stage 9's device objects, pins two pages for a PCI
+  function, and requires every refusal, the second page's device address to
+  lead to the frame holding what was written through the VMO, and — on a
+  translated domain — both pages unreachable once the pin is closed.
+
+The run recorded when it landed: 2 VMO pages pinned and found at their device
+addresses on every machine, through a translated domain on x86-64.
+
 **Still to do, in the order stage 11 needs it.** Stage 11 is done on the host
 and waits only for a ring-3 virtio-blk driver reading sectors, so everything on
 that path comes first and trusting decoding-off BARs, which it does not need,
@@ -1815,13 +1839,24 @@ the ring protocol's crate and the native user-space runtime, all against the
 agreements recorded here.
 
 * **Everything that runs in ring 3.** Stage 9's device handles, `Interrupt`
-  and `IoMapping` are built on `device.rs`'s tokens and are on main. Still to
-  come, in this order: `VMO_PIN` and its address query over `Domain` and
-  stage 9's `Vmo::hold`; a virtio-blk-pci test disk; a minimal `devmgr` that
-  hands the disk's device node to a driver process; the block ring's kernel
-  side; and virtio-blk as a process, reading sectors. The disk has to be
-  `virtio-blk-pci` on AArch64: under ACPI, QEMU describes the virtio-mmio
-  devices only in the DSDT, which is AML, which Ferrix will not interpret.
+  and `IoMapping`, and `VMO_PIN` (above), are on main. Still to come, in this
+  order:
+  * *A minimal `devmgr`* that hands the disk's device node to a driver process,
+    once stage 9's native process creation is on main. It watches each driver
+    through stage 9's process observers and, when a driver's job ends, resets
+    its device before any frame pinned for it is freed.
+  * *No driver faults on the disk it serves.* A driver serving a disk that
+    faulted on a file mapping of that same disk would wait on its own
+    completion forever. So its image and data come from the initramfs, tmpfs,
+    anonymous, ring or DMA VMOs, or are fully committed before any pivot onto
+    btrfs, and `devmgr` enforces it rather than a comment.
+  * *The block ring's kernel side*, over stage 11's `ferrix-blkring`.
+  * *virtio-blk as a process*, reading sectors from the virtio-blk-pci test
+    disk.
+
+  The disk has to be `virtio-blk-pci` on AArch64: under ACPI, QEMU describes
+  the virtio-mmio devices only in the DSDT, which is AML, which Ferrix will
+  not interpret.
 * **IOMMU domains.** Where the units are, and which stream each function
   arrives as, is found (above), and the tables are in `libs/paging`. Still
   missing:

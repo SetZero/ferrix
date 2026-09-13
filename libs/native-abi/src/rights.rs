@@ -77,6 +77,13 @@ impl Rights {
     /// No [`Rights::DUPLICATE`], for the reason [`Rights::INTERRUPT`] has
     /// none: a device's registers have one driver.
     pub const IO_MAPPING: Rights = Rights(Rights::TRANSFER.0 | Rights::MAP.0);
+    /// What a new pin carries.
+    ///
+    /// [`Rights::READ`] to ask for its device addresses, and nothing else. No
+    /// [`Rights::TRANSFER`]: a pin is the driver's promise that its device may
+    /// reach those pages, and it is kept, or given back by closing it, where it
+    /// was made.
+    pub const PIN: Rights = Rights(Rights::READ.0);
 
     /// Whether every right in `other` is also in `self`.
     #[must_use]

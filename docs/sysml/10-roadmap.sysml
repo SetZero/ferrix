@@ -277,8 +277,9 @@ package FerrixRoadmap {
              * DMA sent through it on x86-64 and AArch64, and VT-d and stage-2
              * table encodings in libs/paging; an iommu::Domain every device
              * node has, which the entropy check's DMA goes through; VT-d
-             * programmed at boot on x86-64, with translated domains. Next, in the order stage 11
-             * needs: VMO_PIN, devmgr, the block ring and virtio-blk in ring 3,
+             * programmed at boot on x86-64, with translated domains. VMO_PIN pinning VMO pages into a device's
+             * domain. Next, in the order stage 11
+             * needs: devmgr, the block ring and virtio-blk in ring 3,
              * SMMUv3 domains and the out-of-domain fault on x86-64 and
              * AArch64 (ARMv7-A in degraded trusted mode); trusting
              * decoding-off BARs last. */

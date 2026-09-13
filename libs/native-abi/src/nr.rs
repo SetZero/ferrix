@@ -49,6 +49,10 @@ pub const VMO_WRITE: usize = 0x1022;
 pub const VMO_GET_SIZE: usize = 0x1023;
 /// [`NativeCall::VmoMap`].
 pub const VMO_MAP: usize = 0x1024;
+/// [`NativeCall::VmoPin`].
+pub const VMO_PIN: usize = 0x1025;
+/// [`NativeCall::VmoPinAddresses`].
+pub const VMO_PIN_ADDRESSES: usize = 0x1026;
 
 /// [`NativeCall::JobCreate`].
 pub const JOB_CREATE: usize = 0x1028;
@@ -120,6 +124,16 @@ pub enum NativeCall {
     /// `(vmo, address, length, protection, offset: *u64)` → address. Map a
     /// VMO. Needs `MAP`, and `READ`/`WRITE` for the protection asked for.
     VmoMap,
+    /// `(device, vmo, offset, length, options)` → handle. Pin a range of a VMO
+    /// into the device's IOMMU domain, so the device may reach it, and hold
+    /// its pages until the handle is closed. The range is whole pages, and
+    /// `options` is [`crate::types::PIN_READ_ONLY`] or zero. Needs `MANAGE` on
+    /// the device, `READ` on the VMO, and `WRITE` unless read-only.
+    VmoPin,
+    /// `(pin, addresses: *u64, capacity)` → pages. Write each pinned page's
+    /// device address, in page order, up to `capacity`; the answer is how many
+    /// pages the pin holds, whatever fits. Needs `READ`.
+    VmoPinAddresses,
     /// `(parent)` → handle. Make a job inside `parent`. Needs `MANAGE`.
     JobCreate,
     /// `(job)`. End every process in the job and every job inside it. Needs
@@ -139,7 +153,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 23] = [
+pub const ALL: [NativeCall; 25] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -156,6 +170,8 @@ pub const ALL: [NativeCall; 23] = [
     NativeCall::VmoWrite,
     NativeCall::VmoGetSize,
     NativeCall::VmoMap,
+    NativeCall::VmoPin,
+    NativeCall::VmoPinAddresses,
     NativeCall::JobCreate,
     NativeCall::JobKill,
     NativeCall::InterruptCreate,
@@ -194,6 +210,8 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         VMO_WRITE => NativeCall::VmoWrite,
         VMO_GET_SIZE => NativeCall::VmoGetSize,
         VMO_MAP => NativeCall::VmoMap,
+        VMO_PIN => NativeCall::VmoPin,
+        VMO_PIN_ADDRESSES => NativeCall::VmoPinAddresses,
         JOB_CREATE => NativeCall::JobCreate,
         JOB_KILL => NativeCall::JobKill,
         INTERRUPT_CREATE => NativeCall::InterruptCreate,
@@ -226,6 +244,8 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::VmoWrite => VMO_WRITE,
         NativeCall::VmoGetSize => VMO_GET_SIZE,
         NativeCall::VmoMap => VMO_MAP,
+        NativeCall::VmoPin => VMO_PIN,
+        NativeCall::VmoPinAddresses => VMO_PIN_ADDRESSES,
         NativeCall::JobCreate => JOB_CREATE,
         NativeCall::JobKill => JOB_KILL,
         NativeCall::InterruptCreate => INTERRUPT_CREATE,
