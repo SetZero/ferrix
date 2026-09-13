@@ -69,6 +69,11 @@ pub(crate) fn run(built: &Built) -> Result<Report, &'static str> {
     let pages = check_tmpfs_stores_pages()?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+    // Checked, not only printed: a count nothing tests would boot green
+    // through the very leak it exists to show.
+    if leaked != 0 {
+        return Err("the tmpfs check did not give every frame back");
+    }
 
     Ok(Report {
         initramfs_verified,
@@ -294,6 +299,11 @@ pub(crate) fn run_calls() -> Result<CallsReport, &'static str> {
     let bytes = check_the_calls(&process)?;
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
+    // Checked, not only printed: a count nothing tests would boot green
+    // through the very leak it exists to show.
+    if leaked != 0 {
+        return Err("the pipe and filesystem call checks did not give every frame back");
+    }
     Ok(CallsReport { bytes, leaked })
 }
 
