@@ -1105,9 +1105,10 @@ tree.
 
 **Left for later stages.**
 
-* `SIGPIPE` on a write to a pipe with no reader, which is `EPIPE` alone until a
-  signal can be delivered; and `proc` and `devtmpfs` as `mount` types, which
-  are `ENODEV` until they are registered in `syscall/fsctl.rs`.
+* `proc` and `devtmpfs` as `mount` types, which are `ENODEV` until they are
+  registered in `syscall/fsctl.rs`. (`SIGPIPE` on a write to a pipe with no
+  reader, the other thing left here, came with stage 7's signal delivery in
+  0e9591e.)
 
 **Exit:** `busybox ls -R /proc`, `cat /proc/self/maps` and a shell script that
 manipulates files under tmpfs, all under the boot test.
