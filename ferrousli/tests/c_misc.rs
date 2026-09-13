@@ -1,8 +1,9 @@
 //! The C programs that exercise the POSIX utilities built from logic over the
-//! rest of the library: `dirent.h` and `getopt`.
+//! rest of the library: `dirent.h`, `getopt`, `libgen.h`, `search.h`,
+//! `fnmatch.h` and `glob.h`.
 //!
-//! The getopt programs' expected traces and error reports were generated once
-//! from the host glibc.
+//! Several are adapted from libc-test, and say so. The getopt programs'
+//! expected traces and error reports were generated once from the host glibc.
 //!
 //! The harness is in `tests/common`.
 
@@ -41,4 +42,44 @@ fn getopt_long_matches_abbreviates_and_reports_errors_as_glibc_does() {
                  prog: option requires an argument -- 'W'\n",
         ..Case::named("misc/getopt_long")
     });
+}
+
+#[test]
+fn basename_takes_the_last_component() {
+    check(&Case::named("misc/basename"));
+}
+
+#[test]
+fn dirname_drops_the_last_component() {
+    check(&Case::named("misc/dirname"));
+}
+
+#[test]
+fn hsearch_finds_and_enters_and_its_table_grows() {
+    check(&Case::named("misc/search_hsearch"));
+}
+
+#[test]
+fn insque_and_remque_link_and_unlink() {
+    check(&Case::named("misc/search_insque"));
+}
+
+#[test]
+fn lsearch_appends_what_lfind_does_not_find() {
+    check(&Case::named("misc/search_lsearch"));
+}
+
+#[test]
+fn the_tsearch_tree_finds_deletes_walks_and_stays_balanced() {
+    check(&Case::named("misc/search_tsearch"));
+}
+
+#[test]
+fn fnmatch_matches_wildcards_brackets_and_paths() {
+    check(&Case::named("misc/fnmatch"));
+}
+
+#[test]
+fn glob_finds_marks_sorts_appends_and_reports_errors() {
+    check(&Case::named("misc/glob"));
 }
