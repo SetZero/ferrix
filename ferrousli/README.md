@@ -62,7 +62,8 @@ x86-64, static programs linked at a fixed address.
 | Error text | `strerror`, `strerror_l`, `strerror_r` (XSI), `__xpg_strerror_r`, `strsignal` | glibc's GNU `strerror_r` |
 | `unistd.h` | files, directories and links, `pipe` and `dup`, identities, `fork` on `clone`, `execve`, `execv`, `execvp`, `sleep`, `alarm`, `sysconf`, `isatty`, `syscall` | the `execl` family, `getcwd(NULL, 0)`, `set*id` across threads |
 | `fcntl.h`, `sys/stat.h`, `sys/mman.h` | every function, with glibc's `*64` and `__xstat` names | |
-| Clocks | `time`, `clock_gettime` and the rest, `gettimeofday`, `nanosleep` | the vDSO |
+| Clocks | `time`, `clock_gettime` and the rest, `gettimeofday`, `nanosleep`, `clock`, `times` | the vDSO |
+| Calendar time | `gmtime`, `localtime`, `mktime`, `timegm`, `difftime`, `asctime` and `ctime`, with their `_r` forms, over the whole 64-bit `time_t`; `tzset`, `tzname`, `timezone` and `daylight`, from POSIX `TZ` strings or validated TZif files; `strftime`, `strftime_l`, `strptime` | `getdate`, `wcsftime`, leap seconds |
 | Processes and I/O | the `wait` family, `getrlimit` family, `uname`, `poll`, `select`, `getrandom`, `ioctl`, vector I/O, `rename` | |
 | `stdio.h` | `puts`, unbuffered | `FILE`, `printf`, `scanf` |
 | `signal.h` | `sigaction`, `signal`, sets and masks, `sigpending`, `sigsuspend`, `sigtimedwait`, `sigqueue`, `kill`, `sigaltstack`, `raise`, `abort` | `psignal`, `pthread_kill` |
@@ -73,9 +74,8 @@ x86-64, static programs linked at a fixed address.
 
 ## Next
 
-1. In progress: **buffered stdio, `printf` and `scanf`**, **time zones and
-   `strftime`**, **`dirent`, `getopt`, `glob` and `regex`**, **threads**, and
-   **the math library**.
+1. In progress: **buffered stdio, `printf` and `scanf`**, **`dirent`,
+   `getopt`, `glob` and `regex`**, **threads**, and **the math library**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
 3. **`long double` math and `complex.h`.**
