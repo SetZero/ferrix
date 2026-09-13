@@ -132,6 +132,22 @@
 //! `queues != 1`, a ring header [`KernelSide::attach`] rejects, or handles with
 //! the wrong rights.
 //!
+//! HELLO also says which disk it is: its PCI location, its `GET_ID` serial, and
+//! the node name devmgr chose, `vd` and one to three lowercase letters. The
+//! kernel refuses a malformed name itself ([`Refusal::Name`]), and its glue
+//! refuses a name already published or a location already served
+//! ([`Refusal::NameInUse`], [`Refusal::LocationInUse`]), which only it can
+//! know. The kernel, not the driver, chooses the device numbers — a driver that
+//! picked its own minor could collide with another's — so the minor is
+//! [`identity::disk_index`] × 16, as Linux numbers virtio disks ([`identity`]),
+//! which needs minors of at least 19 bits; the kernel's are 20.
+//!
+//! The kernel checks a HELLO in a fixed order and sends the first refusal:
+//! version ([`Refusal::Version`], 1), queues (2), rights (4), the device
+//! description (6), the name (7), and last the registry — a name already
+//! published (8) or a location already served (9). A malformed message is 5,
+//! and a ring header [`KernelSide::attach`] rejects is 3.
+//!
 //! STOP asks the driver to stop taking submissions, finish or fail what it
 //! holds, reset its device and answer STOPPED. Only then does the kernel unmap
 //! the VMOs and fail whatever is still outstanding. A driver that dies is an
@@ -167,6 +183,7 @@ pub mod bell;
 pub mod control;
 pub mod driver;
 pub mod geometry;
+pub mod identity;
 pub mod kernel;
 pub mod layout;
 mod ring;
@@ -178,9 +195,10 @@ extern crate std;
 mod tests;
 
 pub use bell::{BELL_COMPLETE, BELL_SUBMIT, Doorbell, Rung, Wait};
-pub use control::{Hello, Message, MessageError, Refusal};
+pub use control::{Accepted, Hello, Message, MessageError, Refusal};
 pub use driver::{CompleteError, Consumed, DriverSide};
 pub use geometry::{Device, DeviceError, DeviceFlags, InvalidSubmission};
+pub use identity::{DiskName, Identity, Location, disk_index};
 pub use kernel::{AttachError, Completed, Drain, KernelSide, Slot, SubmitError};
 pub use layout::{HeaderError, Op, RingLayout, Status, Submission};
 

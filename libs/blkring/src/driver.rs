@@ -13,6 +13,7 @@ use core::fmt;
 use crate::bell::{BELL_COMPLETE, Doorbell, Wait};
 use crate::control::Hello;
 use crate::geometry::{Device, InvalidSubmission, check_submission};
+use crate::identity::Identity;
 use crate::layout::{
     HeaderError, RawCompletion, RawSubmission, RingLayout, Status, Submission, header, write_header,
 };
@@ -111,10 +112,11 @@ impl<M: RingMemory> DriverSide<M> {
         })
     }
 
-    /// The HELLO describing this ring's device.
+    /// The HELLO describing this ring's device, as the disk `identity` names:
+    /// its PCI location, its `GET_ID` serial and the name devmgr chose.
     #[must_use]
-    pub const fn hello(&self) -> Hello {
-        Hello::for_device(&self.device)
+    pub const fn hello(&self, identity: &Identity) -> Hello {
+        Hello::new(&self.device, identity)
     }
 
     /// The ring's layout.

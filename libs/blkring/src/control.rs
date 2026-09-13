@@ -6,10 +6,11 @@
 //! [`Hello::validate`].
 //!
 //! ```text
-//! HELLO    driver -> kernel, 40 bytes, handles [ring VMO, data VMO, driver port]
+//! HELLO    driver -> kernel, 72 bytes, handles [ring VMO, data VMO, driver port]
 //!   0 type 1   4 length   8 version u16   10 queues u16   12 block_size u32
 //!   16 capacity u64   24 max_sectors u32   28 device_flags u32
-//!   32 data_vmo_size u64
+//!   32 data_vmo_size u64   40 location u32   44 serial [u8; 20]
+//!   64 name [u8; 8]
 //! READY    kernel -> driver, 8 bytes, handles [kernel completion port]
 //! REFUSED  kernel -> driver, 12 bytes, no handles
 //!   8 reason u32, a Refusal
@@ -22,6 +23,7 @@ use core::fmt;
 use ferrix_native_abi::rights::Rights;
 
 use crate::geometry::{Device, DeviceFlags};
+use crate::identity::{DiskName, Identity, Location, NAME_BYTES, SERIAL_BYTES};
 use crate::layout::VERSION;
 
 /// HELLO's message type.
@@ -39,7 +41,7 @@ pub const STOPPED: u32 = 5;
 /// STOP and STOPPED.
 pub const HEADER_BYTES: usize = 8;
 /// Bytes of HELLO.
-pub const HELLO_BYTES: usize = 40;
+pub const HELLO_BYTES: usize = 72;
 /// Bytes of REFUSED.
 pub const REFUSED_BYTES: usize = 12;
 /// Bytes of the longest message.
@@ -81,6 +83,12 @@ pub mod hello {
     pub const DEVICE_FLAGS: usize = 28;
     /// `data_vmo_size`, `u64`.
     pub const DATA_VMO_SIZE: usize = 32;
+    /// `location`, `u32`: the PCI address.
+    pub const LOCATION: usize = 40;
+    /// `serial`, 20 bytes.
+    pub const SERIAL: usize = 44;
+    /// `name`, 8 bytes, NUL-padded.
+    pub const NAME: usize = 64;
 }
 
 /// Field offsets of REFUSED beyond the common header.
@@ -106,6 +114,14 @@ pub enum Refusal {
     Malformed = 5,
     /// The device description is not one the kernel can use.
     Device = 6,
+    /// `name` is not `vd` and one to three lowercase letters, NUL-padded.
+    Name = 7,
+    /// `name` names a node the kernel already published. Decided by the
+    /// kernel glue, which knows every published node.
+    NameInUse = 8,
+    /// `location` names a device another accepted driver already serves.
+    /// Decided by the kernel glue, which knows every accepted driver.
+    LocationInUse = 9,
 }
 
 impl Refusal {
@@ -125,6 +141,9 @@ impl Refusal {
             4 => Some(Refusal::Rights),
             5 => Some(Refusal::Malformed),
             6 => Some(Refusal::Device),
+            7 => Some(Refusal::Name),
+            8 => Some(Refusal::NameInUse),
+            9 => Some(Refusal::LocationInUse),
             _ => None,
         }
     }
@@ -139,6 +158,9 @@ impl fmt::Display for Refusal {
             Refusal::Rights => "a handle has the wrong rights",
             Refusal::Malformed => "malformed HELLO",
             Refusal::Device => "unusable device description",
+            Refusal::Name => "malformed disk name",
+            Refusal::NameInUse => "the disk name is already published",
+            Refusal::LocationInUse => "another driver already serves this device",
         })
     }
 }
@@ -160,12 +182,30 @@ pub struct Hello {
     pub device_flags: u32,
     /// Bytes in the data VMO.
     pub data_vmo_size: u64,
+    /// [`Location`], as a word.
+    pub location: u32,
+    /// virtio-blk `GET_ID` bytes; all zero if the device did not answer.
+    pub serial: [u8; SERIAL_BYTES],
+    /// The node name, NUL-padded; [`DiskName`] checks it.
+    pub name: [u8; NAME_BYTES],
+}
+
+/// What an accepted HELLO describes: the device and the disk.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Accepted {
+    /// The device's geometry, for [`crate::KernelSide::attach`].
+    pub device: Device,
+    /// Which disk it is. The glue still refuses a name already published or a
+    /// location already served ([`Refusal::NameInUse`],
+    /// [`Refusal::LocationInUse`]), and numbers the node from
+    /// [`DiskName::minor`].
+    pub identity: Identity,
 }
 
 impl Hello {
-    /// The v1 HELLO for `device`.
+    /// The v1 HELLO for `device`, the disk `identity` names.
     #[must_use]
-    pub const fn for_device(device: &Device) -> Self {
+    pub const fn new(device: &Device, identity: &Identity) -> Self {
         Self {
             version: VERSION,
             queues: QUEUES,
@@ -174,21 +214,29 @@ impl Hello {
             max_sectors: device.max_sectors(),
             device_flags: device.flags().0,
             data_vmo_size: device.data_vmo_size(),
+            location: identity.location.0,
+            serial: identity.serial,
+            name: *identity.name.as_bytes(),
         }
     }
 
-    /// Every check the kernel makes on a HELLO before it looks at the ring,
-    /// given the rights of the handles that came with it, in order.
+    /// Every check the kernel makes on a HELLO on its own, given the rights of
+    /// the handles that came with it, in the order §6.2 fixes: version, queues,
+    /// rights, the device description, the name. The first failure is the
+    /// refusal sent. The registry checks — [`Refusal::NameInUse`] and
+    /// [`Refusal::LocationInUse`] — come last, in the kernel glue, on an
+    /// accepted HELLO.
     ///
     /// Rights must match [`HELLO_RIGHTS`] exactly, and there must be exactly
     /// three: more rights than specified is refused as firmly as fewer. The
-    /// glue must also check the handles' object types, which only it can see.
-    /// The ring header is checked afterwards, by [`crate::KernelSide::attach`].
+    /// glue must also check the handles' object types, which only it can see,
+    /// and whether the name or location is already taken. The ring header is
+    /// checked afterwards, by [`crate::KernelSide::attach`].
     ///
     /// # Errors
     ///
     /// The [`Refusal`] to send.
-    pub fn validate(&self, handle_rights: &[Rights]) -> Result<Device, Refusal> {
+    pub fn validate(&self, handle_rights: &[Rights]) -> Result<Accepted, Refusal> {
         if self.version != VERSION {
             return Err(Refusal::Version);
         }
@@ -198,14 +246,23 @@ impl Hello {
         if handle_rights != HELLO_RIGHTS {
             return Err(Refusal::Rights);
         }
-        Device::new(
+        let device = Device::new(
             self.block_size,
             self.capacity,
             self.max_sectors,
             DeviceFlags(self.device_flags),
             self.data_vmo_size,
         )
-        .map_err(|_| Refusal::Device)
+        .map_err(|_| Refusal::Device)?;
+        let name = DiskName::new(self.name).ok_or(Refusal::Name)?;
+        Ok(Accepted {
+            device,
+            identity: Identity {
+                location: Location(self.location),
+                serial: self.serial,
+                name,
+            },
+        })
     }
 }
 
@@ -297,29 +354,7 @@ impl Message {
         let mut bytes = [0; MAX_BYTES];
         let (kind, len) = match self {
             Message::Hello(hello) => {
-                put(&mut bytes, hello::VERSION, &hello.version.to_le_bytes());
-                put(&mut bytes, hello::QUEUES, &hello.queues.to_le_bytes());
-                put(
-                    &mut bytes,
-                    hello::BLOCK_SIZE,
-                    &hello.block_size.to_le_bytes(),
-                );
-                put(&mut bytes, hello::CAPACITY, &hello.capacity.to_le_bytes());
-                put(
-                    &mut bytes,
-                    hello::MAX_SECTORS,
-                    &hello.max_sectors.to_le_bytes(),
-                );
-                put(
-                    &mut bytes,
-                    hello::DEVICE_FLAGS,
-                    &hello.device_flags.to_le_bytes(),
-                );
-                put(
-                    &mut bytes,
-                    hello::DATA_VMO_SIZE,
-                    &hello.data_vmo_size.to_le_bytes(),
-                );
+                encode_hello(&mut bytes, hello);
                 (HELLO, HELLO_BYTES)
             }
             Message::Ready => (READY, HEADER_BYTES),
@@ -367,6 +402,28 @@ impl Message {
     }
 }
 
+/// HELLO's fields, after the type and length.
+fn encode_hello(bytes: &mut [u8], hello: &Hello) {
+    put(bytes, hello::VERSION, &hello.version.to_le_bytes());
+    put(bytes, hello::QUEUES, &hello.queues.to_le_bytes());
+    put(bytes, hello::BLOCK_SIZE, &hello.block_size.to_le_bytes());
+    put(bytes, hello::CAPACITY, &hello.capacity.to_le_bytes());
+    put(bytes, hello::MAX_SECTORS, &hello.max_sectors.to_le_bytes());
+    put(
+        bytes,
+        hello::DEVICE_FLAGS,
+        &hello.device_flags.to_le_bytes(),
+    );
+    put(
+        bytes,
+        hello::DATA_VMO_SIZE,
+        &hello.data_vmo_size.to_le_bytes(),
+    );
+    put(bytes, hello::LOCATION, &hello.location.to_le_bytes());
+    put(bytes, hello::SERIAL, &hello.serial);
+    put(bytes, hello::NAME, &hello.name);
+}
+
 /// The body of a message whose type and length have been checked.
 fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
     Some(match kind {
@@ -378,6 +435,9 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
             max_sectors: u32_at(bytes, hello::MAX_SECTORS)?,
             device_flags: u32_at(bytes, hello::DEVICE_FLAGS)?,
             data_vmo_size: u64_at(bytes, hello::DATA_VMO_SIZE)?,
+            location: u32_at(bytes, hello::LOCATION)?,
+            serial: array_at(bytes, hello::SERIAL)?,
+            name: array_at(bytes, hello::NAME)?,
         }),
         READY => Message::Ready,
         REFUSED => Message::Refused(u32_at(bytes, refused::REASON)?),

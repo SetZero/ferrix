@@ -10,6 +10,7 @@ mod control;
 mod driver;
 mod geometry;
 mod handshake;
+mod identity;
 mod kernel;
 mod layout;
 mod lifecycle;

@@ -7,6 +7,7 @@ use std::vec::Vec;
 use crate::RingMemory;
 use crate::driver::DriverSide;
 use crate::geometry::{Device, DeviceFlags};
+use crate::identity::{DiskName, Identity, Location};
 use crate::kernel::{KernelSide, Slot};
 use crate::layout::{COMPLETION_BYTES, RingLayout, SUBMISSION_BYTES, Submission, header};
 
@@ -24,6 +25,15 @@ pub(super) fn device() -> Device {
         1 << 24,
     )
     .expect("the fixture device is valid")
+}
+
+/// The fixture disk: `vda` at 0000:00:03.0, with a serial.
+pub(super) fn identity() -> Identity {
+    Identity {
+        location: Location::new(0, 0, 3 << 3),
+        serial: *b"ferrix-test-disk\0\0\0\0",
+        name: DiskName::for_index(0).expect("vda"),
+    }
 }
 
 /// A one-sector read of sector `id * 8` into a region of its own.
