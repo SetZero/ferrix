@@ -784,13 +784,53 @@ impl AddressSpace {
             let Some(physical) = mm::translate_in(self.root * PAGE_SIZE, address) else {
                 continue;
             };
-            if access.write && region.cow && mm::frame_references(physical / PAGE_SIZE) > 1 {
+            if access.write && !writable_in_place(&region, physical) {
                 continue;
             }
             let answer = touch(mm::direct_map(physical));
             drop(inner);
             return Ok(answer);
         }
+    }
+
+    /// [`AddressSpace::with_page`] without the fault: `touch` runs only if the
+    /// page is already there to be used as `access` asks, and `Ok(None)` says
+    /// it would first have had to be faulted in -- not present yet, or, for a
+    /// write, a copy-on-write page some other space still holds.
+    ///
+    /// For a caller holding a lock. Resolving a fault can copy a page and wait
+    /// for every processor to drop the translation it replaced, and no lock may
+    /// be held across that wait. This takes only the space's own lock, for as
+    /// long as `touch` runs, and never waits for anything; the caller lets go
+    /// of its lock, faults the page in, and asks again.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::NotMapped`] if no region covers the address, and
+    /// [`SpaceError::Refused`] if the region does not permit the access.
+    pub(crate) fn with_present_page<R>(
+        &self,
+        address: u64,
+        access: Access,
+        touch: impl FnOnce(u64) -> R,
+    ) -> Result<Option<R>, SpaceError> {
+        let inner = self.inner.lock();
+        let region = *inner
+            .map
+            .find(address)
+            .ok_or(SpaceError::NotMapped(address))?;
+        if !permits(region.flags, access) {
+            return Err(SpaceError::Refused(address));
+        }
+        let Some(physical) = mm::translate_in(self.root * PAGE_SIZE, address) else {
+            return Ok(None);
+        };
+        if access.write && !writable_in_place(&region, physical) {
+            return Ok(None);
+        }
+        let answer = touch(mm::direct_map(physical));
+        drop(inner);
+        Ok(Some(answer))
     }
 
     /// Unmap `len` bytes at `at`, giving back the pages and the tables.
@@ -1417,6 +1457,18 @@ fn named_elsewhere(map: &ferrix_vma::AddressSpace, id: u64, start: u64, end: u64
 }
 
 /// Whether a region with `flags` permits `access`.
+/// Whether a write may land in place on `physical`, the frame `region`
+/// translates the page to, rather than on the copy a fault would make first.
+///
+/// Not when the region is copy-on-write and some other space still holds the
+/// frame. One predicate, asked by both [`AddressSpace::with_page`] and
+/// [`AddressSpace::with_present_page`], because the rule will grow -- a file
+/// page of a private mapping will need its shadow copy too -- and two copies of
+/// it would drift apart.
+fn writable_in_place(region: &Vma, physical: u64) -> bool {
+    !(region.cow && mm::frame_references(physical / PAGE_SIZE) > 1)
+}
+
 fn permits(flags: VmaFlags, access: Access) -> bool {
     if access.write && !flags.write {
         return false;

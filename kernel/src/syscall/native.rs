@@ -378,23 +378,124 @@ fn channel_read(
     // A message carrying endpoints is taken only under the topology lock, and
     // the lock is held until it is delivered or put back: see
     // `Endpoint::read`. Everything else is read without it, so bulk traffic
-    // never waits on it. At most twice round.
+    // never waits on it.
+    //
+    // And under the lock nothing may fault. Resolving a fault can copy a
+    // copy-on-write page and then wait for every processor to drop the
+    // translation it replaced, which no lock may be held across -- and a
+    // reader's buffer is still shared copy-on-write after a `fork` until it is
+    // first written. So a message delivered holding the lock is copied only
+    // into pages already there to be written; when a buffer is not, the
+    // message goes back, the lock goes, the buffers are faulted in, and the
+    // read starts again. That ends unless another thread keeps undoing the
+    // fault, as `AddressSpace::with_page`'s retry does.
     let mut topology = None;
-    let message = loop {
-        match endpoint.read(byte_capacity, handle_capacity, topology.is_some()) {
-            Ok(message) => break message,
-            Err(ReadError::NeedsTopology) => topology = Some(object::TOPOLOGY.lock()),
+    loop {
+        let message = match endpoint.read(byte_capacity, handle_capacity, topology.is_some()) {
+            Ok(message) => message,
+            Err(ReadError::NeedsTopology) => {
+                // Faulted in once before the lock, so that the usual message
+                // -- small, into buffers the program has written -- is
+                // delivered on the first round. Only as far as the end of the
+                // byte buffer's first page, because the capacity can be far
+                // larger than the message and faulting it all in would commit
+                // memory nothing asked for. Best effort: a buffer this cannot
+                // fault in is answered for when the message is delivered.
+                let space = process.space();
+                let first_page = usize::try_from(PAGE_SIZE - bytes.at % PAGE_SIZE).unwrap_or(0);
+                let _ = uaccess::fault_in_for_write(space, bytes.at, byte_capacity.min(first_page));
+                let _ = uaccess::fault_in_for_write(
+                    space,
+                    handles.at,
+                    handle_capacity.saturating_mul(size_of::<u32>()),
+                );
+                let _ = uaccess::fault_in_for_write(space, actual, size_of::<ReadActual>());
+                topology = Some(object::TOPOLOGY.lock());
+                continue;
+            }
             Err(ReadError::TooSmall { bytes, handles }) => {
+                // Nothing was taken, so nothing needs the lock to go back.
+                drop(topology);
                 report_actual(process, actual, bytes, handles)?;
                 return Err(status::BUFFER_TOO_SMALL);
             }
             Err(ReadError::Empty) => return Err(status::SHOULD_WAIT),
             Err(ReadError::PeerClosed) => return Err(status::PEER_CLOSED),
+        };
+        let through = if topology.is_some() {
+            UserCopy::Present
+        } else {
+            UserCopy::Faulting
+        };
+        let byte_count = message.bytes.len();
+        let handle_count = message.handles.len();
+        let at = Destination {
+            bytes: bytes.at,
+            handles: handles.at,
+            actual,
+        };
+        match deliver(process, &endpoint, message, at, through) {
+            Ok(()) => return Ok(0),
+            Err(Undelivered::Refused(why)) => return Err(why),
+            Err(Undelivered::WouldFault) => {
+                let _ = FAULTED_ROUNDS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                drop(topology.take());
+                let space = process.space();
+                uaccess::fault_in_for_write(space, bytes.at, byte_count).map_err(fault)?;
+                uaccess::fault_in_for_write(
+                    space,
+                    handles.at,
+                    handle_count.saturating_mul(size_of::<u32>()),
+                )
+                .map_err(fault)?;
+                uaccess::fault_in_for_write(space, actual, size_of::<ReadActual>())
+                    .map_err(fault)?;
+            }
         }
-    };
-    let delivered = deliver(process, &endpoint, message, bytes.at, handles.at, actual);
-    drop(topology);
-    delivered
+    }
+}
+
+/// Deliveries under the topology lock that met a buffer page they could not
+/// write in place, and went round again with the lock let go: counted for the
+/// boot check, which has to see that path taken rather than assume it.
+static FAULTED_ROUNDS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// How many times a `channel_read` has gone round again to fault a buffer in
+/// with the topology lock let go: see [`FAULTED_ROUNDS`].
+pub(crate) fn faulted_rounds() -> u64 {
+    FAULTED_ROUNDS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Where in the reader's memory a delivery goes.
+#[derive(Debug, Clone, Copy)]
+struct Destination {
+    /// The message's bytes.
+    bytes: u64,
+    /// The new handles' values.
+    handles: u64,
+    /// The [`ReadActual`] saying how much of each arrived.
+    actual: u64,
+}
+
+/// How a delivery may reach the reader's memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UserCopy {
+    /// Faulting pages in as it goes, holding no lock.
+    Faulting,
+    /// Only through pages already there to be written, holding the topology
+    /// lock.
+    Present,
+}
+
+/// Why a message was not delivered. It has been put back, unless another
+/// thread of the reader closed one of its new handles first.
+#[derive(Debug)]
+enum Undelivered {
+    /// With this status for the program.
+    Refused(Errno),
+    /// A buffer page would first have had to be faulted in, which
+    /// [`UserCopy::Present`] may not do.
+    WouldFault,
 }
 
 /// Put a message's handles in the reader's table and its bytes in the
@@ -407,10 +508,9 @@ fn deliver(
     process: &Process,
     endpoint: &Endpoint,
     message: ChannelMessage,
-    bytes_at: u64,
-    handles_at: u64,
-    actual: u64,
-) -> Result<usize, Errno> {
+    at: Destination,
+    through: UserCopy,
+) -> Result<(), Undelivered> {
     let Message {
         bytes: data,
         handles: transfers,
@@ -422,12 +522,20 @@ fn deliver(
                 bytes: data,
                 handles: transfers,
             });
-            return Err(status::NO_HANDLES);
+            return Err(Undelivered::Refused(status::NO_HANDLES));
         }
     };
 
-    let copied = copy_out(process, &data, bytes_at, &values, handles_at)
-        .and_then(|()| report_actual(process, actual, data.len(), values.len()));
+    let copied = put_user(process, at.bytes, &data, through)
+        .and_then(|()| put_user(process, at.handles, &handle_bytes(&values), through))
+        .and_then(|()| {
+            put_user(
+                process,
+                at.actual,
+                &actual_bytes(data.len(), values.len()),
+                through,
+            )
+        });
     if let Err(problem) = copied {
         // Taken back and requeued, so a bad buffer loses nothing. If another
         // thread of this process has already closed one of the new handles,
@@ -441,35 +549,36 @@ fn deliver(
         }
         return Err(problem);
     }
-    Ok(0)
-}
-
-/// A message's bytes and handle values, into the reader's buffers.
-fn copy_out(
-    process: &Process,
-    data: &[u8],
-    bytes_at: u64,
-    values: &[Handle],
-    handles_at: u64,
-) -> Result<(), Errno> {
-    if !data.is_empty() {
-        uaccess::copy_to_user(process.space(), bytes_at, data).map_err(fault)?;
-    }
-    if !values.is_empty() {
-        uaccess::copy_to_user(process.space(), handles_at, &handle_bytes(values)).map_err(fault)?;
-    }
     Ok(())
 }
 
-/// Write a [`ReadActual`] to `at`.
-fn report_actual(process: &Process, at: u64, bytes: usize, handles: usize) -> Result<(), Errno> {
+/// Copy `data` to `at` in the reader's memory, as `through` allows.
+fn put_user(process: &Process, at: u64, data: &[u8], through: UserCopy) -> Result<(), Undelivered> {
+    match through {
+        UserCopy::Faulting => uaccess::copy_to_user(process.space(), at, data)
+            .map_err(|why| Undelivered::Refused(fault(why))),
+        UserCopy::Present => match uaccess::copy_to_user_present(process.space(), at, data) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(Undelivered::WouldFault),
+            Err(why) => Err(Undelivered::Refused(fault(why))),
+        },
+    }
+}
+
+/// A [`ReadActual`], as the bytes a program reads.
+fn actual_bytes(bytes: usize, handles: usize) -> [u8; 8] {
     let actual = ReadActual {
         bytes: u32::try_from(bytes).unwrap_or(u32::MAX),
         handles: u32::try_from(handles).unwrap_or(u32::MAX),
     };
     let [b0, b1, b2, b3] = actual.bytes.to_ne_bytes();
     let [h0, h1, h2, h3] = actual.handles.to_ne_bytes();
-    uaccess::copy_to_user(process.space(), at, &[b0, b1, b2, b3, h0, h1, h2, h3]).map_err(fault)
+    [b0, b1, b2, b3, h0, h1, h2, h3]
+}
+
+/// Write a [`ReadActual`] to `at`.
+fn report_actual(process: &Process, at: u64, bytes: usize, handles: usize) -> Result<(), Errno> {
+    uaccess::copy_to_user(process.space(), at, &actual_bytes(bytes, handles)).map_err(fault)
 }
 
 /// The channel endpoint a handle names, if it carries `needed`.

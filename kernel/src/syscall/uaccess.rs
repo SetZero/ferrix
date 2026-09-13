@@ -171,6 +171,51 @@ pub(crate) fn copy_from_user(
 /// resolved, which matches Linux: `write` and its kin report the count they
 /// managed, and a caller that needs all-or-nothing must check the range first.
 pub(crate) fn copy_to_user(space: &AddressSpace, to: u64, data: &[u8]) -> Result<(), UserError> {
+    let copied = copy_to_user_through(space, to, data, Through::Faulting)?;
+    debug_assert!(copied, "a copy that faults pages in stopped short");
+    Ok(())
+}
+
+/// Copy `data` into the program's memory at `to` only through pages already
+/// there to be written, and answer `false` at the first that is not.
+///
+/// For a copy made holding a lock. [`copy_to_user`] faults each page in, and
+/// resolving a fault can copy a copy-on-write page and then wait for every
+/// processor to drop the translation it replaced, which nothing may do holding
+/// a lock. This never faults: a page not present yet, or one still shared
+/// copy-on-write, stops the copy with what came before it already copied, and
+/// the caller lets go of its lock, faults the range in with
+/// [`fault_in_for_write`], and tries again.
+///
+/// # Errors
+///
+/// [`UserError`], for a range that is not the program's or a page it may not
+/// write.
+pub(crate) fn copy_to_user_present(
+    space: &AddressSpace,
+    to: u64,
+    data: &[u8],
+) -> Result<bool, UserError> {
+    copy_to_user_through(space, to, data, Through::Present)
+}
+
+/// How a copy into user memory reaches each page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Through {
+    /// Faulting it in first, as [`copy_to_user`] does.
+    Faulting,
+    /// Only if it is already there, as [`copy_to_user_present`] does.
+    Present,
+}
+
+/// The copy both [`copy_to_user`] and [`copy_to_user_present`] make: `false`
+/// if a page `through` may not fault in stopped it.
+fn copy_to_user_through(
+    space: &AddressSpace,
+    to: u64,
+    data: &[u8],
+    through: Through,
+) -> Result<bool, UserError> {
     let len = u64::try_from(data.len()).map_err(|_| UserError::Overflow)?;
     check_range(to, len)?;
 
@@ -181,19 +226,57 @@ pub(crate) fn copy_to_user(space: &AddressSpace, to: u64, data: &[u8]) -> Result
             .ok_or(UserError::Overflow)?;
         let chunk = chunk_len(at, data.len() - done)?;
         // `Access::WRITE`, which is what copies a copy-on-write page before
-        // the kernel writes into it. Resolving with `READ` here would have the
-        // kernel writing into a page the parent can still see.
+        // the kernel writes into it -- or, without faulting, refuses one still
+        // shared. Resolving with `READ` here would have the kernel writing into
+        // a page the parent can still see.
         let source = data.get(done..done + chunk).ok_or(UserError::Overflow)?;
-        resolve(space, at, Access::WRITE, |target| {
-            // SAFETY: `resolve` faulted the page in for writing, translated it
-            // through the space's own tables and runs this with the page held,
+        let write = |target: u64| {
+            // SAFETY: both ways here -- `resolve`, having faulted the page in
+            // for writing, and `with_present_page`, having found it present and
+            // writable and not shared copy-on-write -- translated it through
+            // the space's own tables and run this with the space's lock held,
             // so `target` is the direct-map address of a frame this space may
             // write and that stays live for the write; `chunk` was clamped to
             // the remainder of that page. The direct map is writable for RAM.
             let bytes = unsafe { core::slice::from_raw_parts_mut(target as *mut u8, chunk) };
             bytes.copy_from_slice(source);
-        })?;
+        };
+        match through {
+            Through::Faulting => resolve(space, at, Access::WRITE, write)?,
+            Through::Present => {
+                if !is_user_address(at) {
+                    return Err(UserError::NotUserRange);
+                }
+                if space.with_present_page(at, Access::WRITE, write)?.is_none() {
+                    return Ok(false);
+                }
+            }
+        }
         done += chunk;
+    }
+    Ok(true)
+}
+
+/// Fault `[at, at + len)` in for writing, holding no lock, so that a
+/// [`copy_to_user_present`] of it straight after finds every page -- unless
+/// another thread undoes that in between, and the caller goes round again.
+///
+/// # Errors
+///
+/// [`UserError`], for a range that is not the program's or a page it may not
+/// write.
+pub(crate) fn fault_in_for_write(
+    space: &AddressSpace,
+    at: u64,
+    len: usize,
+) -> Result<(), UserError> {
+    let len = u64::try_from(len).map_err(|_| UserError::Overflow)?;
+    check_range(at, len)?;
+    let end = at.checked_add(len).ok_or(UserError::Overflow)?;
+    let mut page = at;
+    while page < end {
+        space.fault(page, Access::WRITE)?;
+        page = (page - page % PAGE_SIZE).saturating_add(PAGE_SIZE);
     }
     Ok(())
 }

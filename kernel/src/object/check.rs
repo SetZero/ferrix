@@ -766,6 +766,7 @@ fn check_two_processes() -> Result<Counter, &'static str> {
     check_a_refused_send_keeps_its_handles(&sender, near, &mut counter)?;
     check_a_cycle_of_channels_is_refused(&sender, &mut counter)?;
     check_an_endpoint_survives_a_bad_buffer(&sender, &mut counter)?;
+    check_an_endpoint_is_read_into_pages_shared_by_fork(&sender, &mut counter)?;
     check_ports(&sender, &mut counter)?;
     check_a_port_hears_a_process_end(&sender, &mut counter)?;
     check_a_full_channel_says_wait(&sender, near, &receiver, far, &mut counter)?;
@@ -2509,6 +2510,93 @@ fn check_an_endpoint_survives_a_bad_buffer(
         )
         .map_err(|_| "the endpoint delivered after a put-back is not the one sent")?;
 
+    for end in [near, far, arrived, carried_far] {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(end)])
+            .map_err(|_| "closing a channel end failed")?;
+    }
+    Ok(())
+}
+
+/// Where the fork check reads a message's bytes: three bytes before the end
+/// of the scratch region's first page, so that the bytes run on into the
+/// second, which a read faults in only once it has let go of the topology lock.
+const STRADDLE: u64 = SCRATCH + PAGE_SIZE - 3;
+
+/// A message carrying an endpoint is delivered into buffers still shared
+/// copy-on-write with a fork of the reader's memory, and the fork keeps what
+/// it had.
+///
+/// Delivering such a message holds the topology lock, and a write into a
+/// shared page copies it and then waits for every processor to drop the old
+/// translation, which no lock may be held across. So a delivery that meets a
+/// page it may not write in place puts the message back, lets the lock go,
+/// faults the page in, and reads again. The bytes here straddle two pages, and
+/// the read faults in only the first before it takes the lock, so the second
+/// is met under it: the count of such rounds has to move, the read still has to
+/// deliver the bytes and the endpoint that was sent, and the fork's copy of the
+/// pages has to be unchanged.
+fn check_an_endpoint_is_read_into_pages_shared_by_fork(
+    side: &Side,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    const SENT: &[u8] = b"forked";
+    const KEPT: &[u8] = b"before";
+
+    let (near, far) = side.channel()?;
+    let (carried, carried_far) = side.channel()?;
+    side.put_handles(&[carried])?;
+    side.put(PAYLOAD, SENT)?;
+    let _ = side
+        .call(
+            nr::CHANNEL_WRITE,
+            &[reg(near), PAYLOAD, len(SENT), HANDLES, 1],
+        )
+        .map_err(|_| "sending an endpoint to read into a forked page failed")?;
+
+    // Written before the fork, so both pages are committed, and so shared
+    // copy-on-write once it is made.
+    side.put(STRADDLE, KEPT)?;
+    let fork = side
+        .process
+        .space()
+        .fork()
+        .map_err(|_| "could not fork a space for the check")?;
+
+    let rounds = native::faulted_rounds();
+    let _ = side
+        .call(
+            nr::CHANNEL_READ,
+            &[reg(far), STRADDLE, len(SENT), HANDLES, 1, ACTUAL],
+        )
+        .map_err(|_| "a read into pages shared by a fork failed")?;
+    if native::faulted_rounds() == rounds {
+        return Err("a read under the topology lock wrote into a page shared by a fork in place");
+    }
+    if side.get(STRADDLE, SENT.len())? != SENT {
+        return Err("a read into pages shared by a fork did not deliver the bytes");
+    }
+    let mut kept = [0_u8; KEPT.len()];
+    uaccess::copy_from_user(&fork, STRADDLE, &mut kept)
+        .map_err(|_| "could not read the fork's copy of the pages")?;
+    if kept != KEPT {
+        return Err("a read into pages shared by a fork wrote into the fork's copy");
+    }
+
+    let arrived = Handle(side.get_u32(HANDLES)?);
+    side.put(PAYLOAD, b"y")?;
+    let _ = side
+        .call(nr::CHANNEL_WRITE, &[reg(arrived), PAYLOAD, 1, HANDLES, 0])
+        .map_err(|_| "the endpoint read into a forked page does not write")?;
+    let _ = side
+        .call(
+            nr::CHANNEL_READ,
+            &[reg(carried_far), INBOX, 8, HANDLES, 0, ACTUAL],
+        )
+        .map_err(|_| "the endpoint read into a forked page is not the one sent")?;
+    counter.messages += 1;
+
+    drop(fork);
     for end in [near, far, arrived, carried_far] {
         let _ = side
             .call(nr::HANDLE_CLOSE, &[reg(end)])
