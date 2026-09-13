@@ -45,13 +45,16 @@ use ferrix_bootinfo::{BootView, PAGE_SIZE};
 use ferrix_fdt::{EcamHost, Fdt};
 use ferrix_paging::{MapError, MapFlags};
 use ferrix_pci::Address;
-use ferrix_sync::{IrqSpinLock, Once};
+use ferrix_sync::Once;
 
 use crate::device::{DeviceNode, Location};
 use crate::{acpi, arch, fdt, mm, println};
 
+mod gate;
 mod smmuv3;
 mod vtd;
+
+use gate::Gate;
 
 /// Bytes of a VT-d unit's registers kept from drivers: the first page, which
 /// holds every register a legacy-mode driver uses. A DRHD gives no length.
@@ -400,8 +403,9 @@ enum Translation {
         unit: &'static vtd::Unit,
         /// The domain on it.
         attached: vtd::Attached,
-        /// Held across a pin's or an unpin's changes to the tables.
-        changing: IrqSpinLock<(), arch::Irq>,
+        /// Held across a pin's or an unpin's changes to the tables and the
+        /// unit's wait for them.
+        changing: Gate,
     },
     /// An `SMMUv3`.
     SmmuV3 {
@@ -409,15 +413,16 @@ enum Translation {
         unit: &'static smmuv3::Unit,
         /// The domain on it.
         attached: smmuv3::Attached,
-        /// Held across a pin's or an unpin's changes to the tables.
-        changing: IrqSpinLock<(), arch::Irq>,
+        /// Held across a pin's or an unpin's changes to the tables and the
+        /// unit's wait for them.
+        changing: Gate,
     },
 }
 
 impl Translation {
     /// The lock a translated domain holds across a pin's or an unpin's
     /// changes, or `None` for an untranslated one.
-    fn changing(&self) -> Option<&IrqSpinLock<(), arch::Irq>> {
+    fn changing(&self) -> Option<&Gate> {
         match self {
             Translation::None => None,
             Translation::VtD { changing, .. } | Translation::SmmuV3 { changing, .. } => {
@@ -595,7 +600,7 @@ impl Domain {
             if addresses.iter().any(|&phys| phys >> TRANSLATED_BITS != 0) {
                 return Err(DomainError::OutOfRange);
             }
-            let _held = changing.lock();
+            let _held = changing.enter().map_err(DomainError::Unit)?;
             map_all(&self.translation, &addresses, flags)?;
         } else if !DEGRADED.swap(true, Ordering::Relaxed) {
             println!(
@@ -629,7 +634,10 @@ impl Domain {
             return Err((DomainError::Foreign, pinned));
         }
         if let Some(changing) = self.translation.changing() {
-            let _held = changing.lock();
+            let _held = match changing.enter() {
+                Ok(entered) => entered,
+                Err(why) => return Err((DomainError::Unit(why), pinned)),
+            };
             // A failure part-way leaves the pages before it unmapped but not
             // yet flushed, and the pages after it still mapped: the domain
             // then holds a partial pin for good, and the caller keeps every
@@ -858,13 +866,13 @@ pub(crate) fn domain_for(function: Address) -> Domain {
         unit.attach(function).map(|attached| Translation::VtD {
             unit,
             attached,
-            changing: IrqSpinLock::new(()),
+            changing: Gate::new(),
         })
     } else if let Some((unit, stream)) = smmu_stream_for(programmed, function) {
         unit.attach(stream).map(|attached| Translation::SmmuV3 {
             unit,
             attached,
-            changing: IrqSpinLock::new(()),
+            changing: Gate::new(),
         })
     } else {
         return Domain::untranslated();
@@ -915,6 +923,8 @@ pub(crate) struct DomainReport {
     pub(crate) refusals: usize,
     /// Whether the domain checked was translated.
     pub(crate) translated: bool,
+    /// Waits on a unit made with interrupts on, since boot.
+    pub(crate) waits: u64,
 }
 
 /// Pin two frames through the first PCI node's domain, and require the node to
@@ -986,6 +996,7 @@ fn pin_and_unpin(
         return Err("a domain pinned nothing");
     }
     report.refusals += 1;
+    let waits = gate::waits_with_interrupts_on();
     if domain.unpin(pinned).is_err() {
         return Err("a domain refused its own pin");
     }
@@ -995,6 +1006,12 @@ fn pin_and_unpin(
     if domain.translated() && expected.iter().any(|&phys| domain.resolve(phys).is_some()) {
         return Err("a translated domain still reached a page it had unpinned");
     }
+    // The boot task may block, so the unpin's wait for its unit must have
+    // been made with interrupts on.
+    if domain.translated() && gate::waits_with_interrupts_on() == waits {
+        return Err("a translated domain's unpin waited on its unit with interrupts masked");
+    }
+    report.waits = gate::waits_with_interrupts_on();
     report.translated = domain.translated();
     report.pinned += 2;
     Ok(())

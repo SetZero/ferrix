@@ -32,6 +32,7 @@ use ferrix_paging::{MapError, MapFlags};
 use ferrix_sync::IrqSpinLock;
 
 use super::Fault;
+use super::gate::{self, Gate};
 use crate::mmio::Mmio;
 use crate::{arch, mm, timer, vmap};
 
@@ -152,8 +153,12 @@ pub(crate) struct Unit {
     vmids: u32,
     /// The `GICv2m` doorbell page every domain maps, if the machine has one.
     doorbell: Option<u64>,
-    /// VMIDs in use, and the command queue's producer index, together.
+    /// VMIDs in use, and the command queue's producer index, together. Held
+    /// only while they change, never across a wait.
     state: IrqSpinLock<State, arch::Irq>,
+    /// Held across a command and its wait, so two cannot interleave. A gate,
+    /// not a lock: the wait is made with interrupts on.
+    commanding: Gate,
 }
 
 /// What a unit hands out and where its command queue stands.
@@ -239,6 +244,7 @@ impl Unit {
             },
             doorbell,
             state: IrqSpinLock::new(State::default()),
+            commanding: Gate::new(),
         };
         unit.program(events)?;
         Ok(unit)
@@ -423,19 +429,22 @@ impl Unit {
     /// Queue `opcode` with `operand` in the high half of its first word, then a
     /// `SYNC`, and wait until the unit has consumed both.
     fn command(&self, opcode: u64, operand: u64) -> Result<(), &'static str> {
-        let mut state = self.state.lock();
+        let _entered = self.commanding.enter()?;
         let first = [
             opcode | operand << 32,
             if opcode == CMD_CFGI_STE { 1 } else { 0 },
         ];
-        for words in [first, [CMD_SYNC, 0]] {
-            let slot = state.produced & ((1 << COMMAND_BITS) - 1);
-            let at = self.commands + u64::from(slot) * COMMAND_BYTES;
-            write_entry(at, words[0]);
-            write_entry(at + 8, words[1]);
-            state.produced = (state.produced + 1) & ((1 << (COMMAND_BITS + 1)) - 1);
-        }
-        let produced = state.produced;
+        let produced = {
+            let mut state = self.state.lock();
+            for words in [first, [CMD_SYNC, 0]] {
+                let slot = state.produced & ((1 << COMMAND_BITS) - 1);
+                let at = self.commands + u64::from(slot) * COMMAND_BYTES;
+                write_entry(at, words[0]);
+                write_entry(at + 8, words[1]);
+                state.produced = (state.produced + 1) & ((1 << (COMMAND_BITS + 1)) - 1);
+            }
+            state.produced
+        };
         self.registers.write32(CMDQ_PROD, produced);
         let index = (1 << (COMMAND_BITS + 1)) - 1;
         self.wait(
@@ -461,16 +470,15 @@ impl Unit {
         self.wait(|| self.registers.read32(CR0ACK) == value, why)
     }
 
-    /// Wait for `ready`, up to [`PATIENCE_NANOS`].
+    /// Wait for `ready`, up to [`PATIENCE_NANOS`], with interrupts on
+    /// wherever the caller may block: see `gate`.
     fn wait(&self, ready: impl Fn() -> bool, why: &'static str) -> Result<(), &'static str> {
         let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
-        while !ready() {
-            if timer::now_nanos() > deadline {
-                return Err(why);
-            }
-            core::hint::spin_loop();
+        if gate::poll(ready, deadline) {
+            Ok(())
+        } else {
+            Err(why)
         }
-        Ok(())
     }
 }
 

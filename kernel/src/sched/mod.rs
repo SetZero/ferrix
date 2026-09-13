@@ -220,6 +220,15 @@ pub(crate) fn started() -> bool {
     STARTED.load(Ordering::Acquire)
 }
 
+/// Whether the running context may block: a task, on a processor taking
+/// interrupts, with nothing holding preemption off.
+pub(crate) fn may_block() -> bool {
+    started()
+        && arch::interrupts_enabled()
+        && this_cpu().is_some_and(|cpu| preempt_count(cpu) == 0)
+        && current().is_some()
+}
+
 /// The next identifier to give a task.
 fn next_id() -> TaskId {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)

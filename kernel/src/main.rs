@@ -681,7 +681,7 @@ fn check_iommu(view: &BootView<'_>) {
     };
     println!(
         "  iommu    {} pages pinned and unpinned through a device's {} domain, {} refusals \
-         as specified",
+         as specified, {} waits on a unit with interrupts on",
         domains.pinned,
         if domains.translated {
             "translated"
@@ -689,6 +689,7 @@ fn check_iommu(view: &BootView<'_>) {
             "untranslated"
         },
         domains.refusals,
+        domains.waits,
     );
 }
 

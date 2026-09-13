@@ -1940,6 +1940,22 @@ ARMv7-A, as the exit criterion says.
 The run recorded when it landed: 1 out-of-domain write faulted on x86-64 and on
 AArch64; ARMv7-A's untranslated domain was not probed.
 
+**Done — both units' waits made with interrupts on.** A VT-d invalidation and
+an `SMMUv3` command are waited for under a gate, `kernel/src/iommu/gate.rs`,
+instead of inside `IrqSpinLock`s that masked interrupts for up to 100 ms on the
+path every unpin takes. A task waiting to enter a domain's pins and unpins, or
+a unit's commands, sleeps on a wait queue; the one inside polls the unit with
+interrupts on and gives up its processor between looks. Only the few writes
+that queue an `SMMUv3` command still mask them. Before the scheduler runs, or
+in a context holding a spin lock, the gate and the wait spin as the locks did,
+within the same deadlines, and an unpin that runs out of patience keeps its
+frames rather than freeing what the unit may still reach. The domain check
+requires a translated domain's unpin to have waited with interrupts on.
+
+The run recorded when it landed: 10 waits on a unit with interrupts on by the
+end of the domain check on x86-64, under KVM, and on AArch64; none on ARMv7-A,
+whose domain is untranslated.
+
 **Still to do, in the order stage 11 needs it.** Stage 11 is done on the host
 and waits only for a ring-3 virtio-blk driver reading sectors, so everything on
 that path comes first and trusting decoding-off BARs, which it does not need,
@@ -1967,14 +1983,6 @@ agreements recorded here.
   The disk has to be `virtio-blk-pci` on AArch64: under ACPI, QEMU describes
   the virtio-mmio devices only in the DSDT, which is AML, which Ferrix will
   not interpret.
-* **IOMMU domains.** Where the units are, and which stream each function
-  arrives as, is found (above), and the tables are in `libs/paging`. Still
-  missing:
-  * *Both units' invalidations waiting with interrupts on.* VT-d's IOTLB
-    flush and the `SMMUv3`'s `SYNC` busy-wait today inside `IrqSpinLock`s, up
-    to 100 ms with interrupts masked, on exactly the path virtio-blk will take:
-    wait outside the lock behind a command-in-progress flag, or move VT-d to
-    queued invalidation — never a plain `SpinLock` held across the wait.
 * **Trusting a BAR firmware placed but did not enable**, so a device no
   firmware driver used — as virtio-rng on AArch64 was until its legacy
   interface was turned off — can still be given to a ring-3 driver. Worked

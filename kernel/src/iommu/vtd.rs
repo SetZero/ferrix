@@ -28,6 +28,7 @@ use ferrix_pci::Address;
 use ferrix_sync::IrqSpinLock;
 
 use super::Fault;
+use super::gate::{self, Gate};
 use crate::mmio::Mmio;
 use crate::{arch, mm, timer, vmap};
 
@@ -116,8 +117,9 @@ pub(crate) struct Unit {
     identifiers: u32,
     /// The tables' bookkeeping.
     tables: IrqSpinLock<Tables, arch::Irq>,
-    /// Held across a command and its wait, so two cannot interleave.
-    commands: IrqSpinLock<(), arch::Irq>,
+    /// Held across a command and its wait, so two cannot interleave. A gate,
+    /// not a lock: the wait is made with interrupts on.
+    commands: Gate,
 }
 
 /// What a unit has handed out.
@@ -188,7 +190,7 @@ impl Unit {
             caching: cap & CAP_CM != 0,
             identifiers: 1 << (4 + 2 * (cap & 0b111)),
             tables: IrqSpinLock::new(Tables::default()),
-            commands: IrqSpinLock::new(()),
+            commands: Gate::new(),
         })
     }
 
@@ -360,7 +362,7 @@ impl Unit {
     /// Set `bit` in GCMD, keeping every standing enable, and wait for GSTS to
     /// report it.
     fn command(&self, bit: u32, why: &'static str) -> Result<(), &'static str> {
-        let _held = self.commands.lock();
+        let _held = self.commands.enter()?;
         let standing = self.registers.read32(GSTS) & STANDING;
         self.registers.write32(GCMD, standing | bit);
         self.wait(|| self.registers.read32(GSTS) & bit != 0, why)
@@ -368,7 +370,7 @@ impl Unit {
 
     /// Invalidate the context cache for `scope`, and wait until it has.
     fn invalidate_context(&self, scope: u64) -> Result<(), &'static str> {
-        let _held = self.commands.lock();
+        let _held = self.commands.enter()?;
         write64(self.registers, CCMD, ICC | scope);
         self.wait(
             || read64(self.registers, CCMD) & ICC == 0,
@@ -378,7 +380,7 @@ impl Unit {
 
     /// Invalidate the IOTLB for `scope`, and wait until it has.
     fn invalidate_iotlb(&self, scope: u64) -> Result<(), &'static str> {
-        let _held = self.commands.lock();
+        let _held = self.commands.enter()?;
         write64(self.registers, self.iotlb, IVT | scope);
         self.wait(
             || read64(self.registers, self.iotlb) & IVT == 0,
@@ -386,16 +388,15 @@ impl Unit {
         )
     }
 
-    /// Wait for `ready`, up to [`PATIENCE_NANOS`].
+    /// Wait for `ready`, up to [`PATIENCE_NANOS`], with interrupts on
+    /// wherever the caller may block: see `gate`.
     fn wait(&self, ready: impl Fn() -> bool, why: &'static str) -> Result<(), &'static str> {
         let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
-        while !ready() {
-            if timer::now_nanos() > deadline {
-                return Err(why);
-            }
-            core::hint::spin_loop();
+        if gate::poll(ready, deadline) {
+            Ok(())
+        } else {
+            Err(why)
         }
-        Ok(())
     }
 }
 
