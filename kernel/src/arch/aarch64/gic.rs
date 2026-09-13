@@ -24,6 +24,9 @@ struct Layout {
     cpu_interface: u64,
     /// The architecture version firmware reports, or zero for "probe it".
     version: u8,
+    /// The first `GICv2m` frame: its address, and its SPI range if firmware
+    /// states one.
+    msi_frame: Option<(u64, Option<(u32, u32)>)>,
 }
 
 /// Read the distributor and CPU interface addresses out of the MADT.
@@ -34,6 +37,7 @@ fn layout(acpi: &Acpi<'_, DirectMap>) -> Result<Layout, &'static str> {
     let mut cpu_interface = 0;
     let mut version = 0;
     let mut banked = true;
+    let mut msi_frame = None;
 
     for entry in madt.entries() {
         match entry {
@@ -52,6 +56,12 @@ fn layout(acpi: &Acpi<'_, DirectMap>) -> Result<Layout, &'static str> {
                     banked = false;
                 }
             }
+            MadtEntry::GicMsiFrame(frame) if msi_frame.is_none() => {
+                let spis = frame
+                    .spis()
+                    .map(|(base, count)| (u32::from(base), u32::from(count)));
+                msi_frame = Some((frame.base_address, spis));
+            }
             _ => {}
         }
     }
@@ -66,6 +76,7 @@ fn layout(acpi: &Acpi<'_, DirectMap>) -> Result<Layout, &'static str> {
         distributor,
         cpu_interface,
         version,
+        msi_frame,
     })
 }
 
@@ -95,5 +106,10 @@ pub(crate) unsafe fn init(acpi: &Acpi<'_, DirectMap>) -> Result<u8, &'static str
     // SAFETY: the caller's contract is `gicv2::init`'s, and these are the two
     // register blocks firmware describes, checked above to be a GICv2's.
     unsafe { gicv2::init(layout.distributor, layout.cpu_interface)? };
+    // A frame that cannot be used leaves the machine without MSI vectors and
+    // nothing else: `gicv2::msi_allocate` says so to whoever asks for one.
+    if let Some((base, spis)) = layout.msi_frame {
+        let _ = gicv2::init_msi_frame(base, spis);
+    }
     Ok(version)
 }

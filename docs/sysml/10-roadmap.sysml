@@ -263,7 +263,9 @@ package FerrixRoadmap {
              * from the boot check, 64 bytes on every architecture; MSI-X tables and pending bits withheld
              * from apertures; the DMAR and IORT parsed; the ten
              * defects a review found fixed, apertures screened against
-             * everything the kernel owns and each other. Next, and
+             * everything the kernel owns and each other; the
+             * virtio-rng completion delivered by MSI-X on every architecture,
+             * through arch::msi_allocate (local APIC vectors, GICv2m SPIs). Next, and
              * needing nothing from stage 9: MSI-X vectors, IOMMU domains.
              * Needing stage 9: everything that runs in ring 3. */
     }

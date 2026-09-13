@@ -5,6 +5,7 @@ mod clock;
 pub(crate) mod console;
 mod cpu;
 mod gdt;
+mod msi;
 mod smp;
 mod switch;
 mod syscall;
@@ -535,6 +536,7 @@ pub(crate) fn wait_for_work() {
 }
 
 pub(crate) use apic::{ipi_irq, send_ipi_to_others};
+pub(crate) use msi::msi_allocate;
 
 /// How `ferrix_sync`'s interrupt-masking lock masks interrupts here.
 #[derive(Debug)]

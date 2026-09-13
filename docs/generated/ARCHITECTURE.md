@@ -93,7 +93,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1414 elements, 155 relations. Model digest `6940603b0fa954bd`.
+13 files, 16 packages, 1414 elements, 155 relations. Model digest `c3e9c391a9e8da2d`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -2701,7 +2701,7 @@ Built: the byte-level half, in libs/native-abi and libs/objects, host-tested, fu
 
 Enumeration, IOMMU domains, devmgr, the shared-ring block protocol, virtio-blk as a user process. Exit: a sector read through a ring-3 driver with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting.
 
-Built: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri; kernel enumeration from the MCFG and the device tree, in the boot test on all three architectures against a virtio-rng-pci device; device nodes whose apertures and vectors are tokens only device.rs mints; a virtio-rng device driven by DMA from the boot check, 64 bytes on every architecture; MSI-X tables and pending bits withheld from apertures; the DMAR and IORT parsed; the ten defects a review found fixed, apertures screened against everything the kernel owns and each other. Next, and needing nothing from stage 9: MSI-X vectors, IOMMU domains. Needing stage 9: everything that runs in ring 3.
+Built: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri; kernel enumeration from the MCFG and the device tree, in the boot test on all three architectures against a virtio-rng-pci device; device nodes whose apertures and vectors are tokens only device.rs mints; a virtio-rng device driven by DMA from the boot check, 64 bytes on every architecture; MSI-X tables and pending bits withheld from apertures; the DMAR and IORT parsed; the ten defects a review found fixed, apertures screened against everything the kernel owns and each other; the virtio-rng completion delivered by MSI-X on every architecture, through arch::msi_allocate (local APIC vectors, GICv2m SPIs). Next, and needing nothing from stage 9: MSI-X vectors, IOMMU domains. Needing stage 9: everything that runs in ring 3.
 
 **Allocated to: **`ferrix.kernel.devices` and `ferrix.kernel.iommu`
 

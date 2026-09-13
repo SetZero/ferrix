@@ -75,6 +75,18 @@ static DELIVERED: AtomicU64 = AtomicU64::new(0);
 /// worth seeing in the boot log rather than discovering as a livelock.
 static UNCLAIMED: AtomicU64 = AtomicU64::new(0);
 
+/// Where a device writes to raise one allocated interrupt, and the number it
+/// then arrives as. What `arch::msi_allocate` hands out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Msi {
+    /// What [`register`] and [`dispatch`] call it.
+    pub(crate) number: u32,
+    /// The address the device writes.
+    pub(crate) address: u64,
+    /// The value it writes there.
+    pub(crate) data: u32,
+}
+
 /// Attach `handler` to interrupt `irq`.
 ///
 /// # Errors

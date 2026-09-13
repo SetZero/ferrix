@@ -16,6 +16,9 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use ferrix_pci::msix;
+
+use crate::irq::Msi;
 use crate::mmio::Mmio;
 
 /// Distributor control.
@@ -28,6 +31,12 @@ const GICD_ISENABLER: u64 = 0x100;
 const GICD_ICENABLER: u64 = 0x180;
 /// Priority, one byte per interrupt.
 const GICD_IPRIORITYR: u64 = 0x400;
+/// Target processors, one byte per interrupt, a bit per CPU interface.
+/// Banked for interrupts 0..32, where each core reads back its own bit.
+const GICD_ITARGETSR: u64 = 0x800;
+/// Configuration, two bits per interrupt: the upper bit makes it
+/// edge-triggered rather than level-sensitive.
+const GICD_ICFGR: u64 = 0xC00;
 /// Bytes of register window the distributor occupies.
 const GICD_WINDOW: u64 = 0x1000;
 
@@ -141,6 +150,23 @@ pub(crate) fn enable(id: u32) {
     }
     gicd.write32(register, u32::from_ne_bytes(priorities));
 
+    // A shared interrupt goes only to the CPU interfaces its target byte
+    // names, and nothing in the architecture says what that byte resets to:
+    // on QEMU's virt it is zero, which delivers the interrupt nowhere. EDK2
+    // happens to route what it touches, U-Boot does not, so a shared line
+    // that works on AArch64 can be silent on ARMv7-A for no reason the
+    // interrupt itself shows. One with no target is given this core.
+    if id >= PRIVATE_LINES as u32 {
+        let register = GICD_ITARGETSR + u64::from(id & !3);
+        let mut targets = gicd.read32(register).to_ne_bytes();
+        if let Some(slot) = targets.get_mut((id % 4) as usize)
+            && *slot == 0
+        {
+            *slot = this_cpu_target(gicd);
+        }
+        gicd.write32(register, u32::from_ne_bytes(targets));
+    }
+
     gicd.write32(GICD_ISENABLER + word, bit);
 
     // A private interrupt's enable bit is this core's copy, so remember it:
@@ -149,6 +175,25 @@ pub(crate) fn enable(id: u32) {
     if id < PRIVATE_LINES as u32 {
         let _ = PRIVATE_ENABLED.fetch_or(bit, Ordering::Relaxed);
     }
+}
+
+/// This core's bit in the target registers.
+///
+/// The target bytes of interrupts 0..32 are banked, and each core reads back
+/// only its own CPU interface's bit in them: the one place a GICv2 says which
+/// interface a core is. The first word that answers is used, as Linux does;
+/// a uniprocessor GIC, whose target registers read as zero and ignore writes,
+/// gets bit 0, which is harmless there.
+fn this_cpu_target(gicd: Mmio) -> u8 {
+    (0..PRIVATE_LINES)
+        .step_by(4)
+        .map(|line| gicd.read32(GICD_ITARGETSR + line))
+        .find(|word| *word != 0)
+        .map_or(1, |word| {
+            word.to_ne_bytes()
+                .into_iter()
+                .fold(0, |mask, byte| mask | byte)
+        })
 }
 
 /// Stop delivering `id` until [`enable`] turns it back on.
@@ -262,4 +307,113 @@ pub(crate) fn init_this_cpu() {
 /// that each spell it for themselves.
 pub(crate) fn send_sgi_to_others() {
     window(&DISTRIBUTOR).write32(GICD_SGIR, SGIR_ALL_BUT_SELF | IPI_SGI);
+}
+
+// ---------------------------------------------------------------------------
+// Message-signalled interrupts, through a GICv2m frame
+// ---------------------------------------------------------------------------
+
+/// SPIs this driver hands out from a frame, at most: one word of bitmap.
+const MSI_SPIS: u32 = 64;
+
+/// Bytes of a `GICv2m` frame's register window.
+const V2M_WINDOW: u64 = 0x1000;
+
+/// Physical address of the `GICv2m` frame, or zero when there is none.
+static V2M_FRAME: AtomicU64 = AtomicU64::new(0);
+
+/// The GIC identifier the frame's SPIs start at.
+static V2M_FIRST: AtomicU32 = AtomicU32::new(0);
+
+/// How many of them this driver hands out.
+static V2M_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Which of them are allocated, one bit each.
+static V2M_TAKEN: AtomicU64 = AtomicU64::new(0);
+
+/// Make interrupt `id` edge-triggered.
+///
+/// A `GICv2m` frame raises an SPI by pulsing it, and a GICv2 latches a pulse as
+/// pending only on an edge-triggered line: on a level-sensitive one the level
+/// is gone before anything samples it, and the interrupt is lost without a
+/// trace. Changed while the line is still disabled, as the architecture asks.
+fn set_edge_triggered(id: u32) {
+    let gicd = window(&DISTRIBUTOR);
+    let register = GICD_ICFGR + u64::from(id / 16) * 4;
+    let bit = 1_u32 << (2 * (id % 16) + 1);
+    let value = gicd.read32(register);
+    gicd.write32(register, value | bit);
+}
+
+/// Record the `GICv2m` frame at `phys`. `spis` is `(first identifier, count)`
+/// when firmware states the range, and otherwise it is read from the frame's
+/// own `MSI_TYPER`.
+///
+/// # Errors
+///
+/// A frame that cannot be mapped, or whose range is not shared peripheral
+/// interrupts. The machine still boots; it has no MSI vectors to hand out.
+pub(crate) fn init_msi_frame(phys: u64, spis: Option<(u32, u32)>) -> Result<(), &'static str> {
+    if phys == 0 {
+        return Err("the GICv2m frame is at address zero");
+    }
+    let range = match spis {
+        Some((first, count)) if first < 1024 && count < 1024 => {
+            msix::gicv2m_spis((first << 16) | count)
+        }
+        Some(_) => None,
+        None => {
+            let frame = crate::vmap::map_device(phys, V2M_WINDOW)
+                .map_err(|_| "could not map the GICv2m frame")?;
+            let typer = Mmio::at(frame).read32(msix::GICV2M_TYPER);
+            let _ = crate::vmap::unmap_device(frame);
+            msix::gicv2m_spis(typer)
+        }
+    }
+    .ok_or("the GICv2m frame's range is not shared peripheral interrupts")?;
+    V2M_FIRST.store(range.first, Ordering::Relaxed);
+    V2M_COUNT.store(range.count.min(MSI_SPIS), Ordering::Relaxed);
+    V2M_FRAME.store(phys, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Take an SPI from the `GICv2m` frame, make it edge-triggered, enable it, and
+/// say what a device writes to raise it.
+///
+/// # Errors
+///
+/// No usable frame, or every SPI already taken.
+pub(crate) fn msi_allocate() -> Result<Msi, &'static str> {
+    let frame = V2M_FRAME.load(Ordering::Relaxed);
+    if frame == 0 {
+        return Err("the machine describes no usable GICv2m frame");
+    }
+    let count = V2M_COUNT.load(Ordering::Relaxed);
+    let index = loop {
+        let taken = V2M_TAKEN.load(Ordering::Relaxed);
+        let free = taken.trailing_ones();
+        if free >= count {
+            return Err("every GICv2m SPI is allocated");
+        }
+        if V2M_TAKEN
+            .compare_exchange(
+                taken,
+                taken | 1 << free,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            break free;
+        }
+    };
+    let id = V2M_FIRST.load(Ordering::Relaxed) + index;
+    let message = msix::gicv2m_message(frame, id).ok_or("the GICv2m frame's address overflows")?;
+    set_edge_triggered(id);
+    enable(id);
+    Ok(Msi {
+        number: id,
+        address: message.address,
+        data: message.data,
+    })
 }

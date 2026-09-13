@@ -26,22 +26,40 @@
 //! drained entropy source can miss any deadline chosen here without anything
 //! in the kernel being wrong.
 //!
-//! This is also the harness the next two pieces of stage 10 need: MSI-X is
-//! proven when this completion arrives as an interrupt rather than by
-//! polling, and an IOMMU domain when a descriptor pointing outside it faults.
+//! # By interrupt
+//!
+//! Where the device has MSI-X, the completion is not polled for: table entry 0
+//! is programmed with a vector the architecture allocated, the queue is told
+//! to use it, and the used ring is read only once the vector has been
+//! delivered. So the check proves the message path — table, controller,
+//! vector, dispatch — as well as DMA. A completion that arrives without its
+//! interrupt is reported and skipped, like a stall.
+//!
+//! It is also the harness the next piece of stage 10 needs: an IOMMU domain
+//! is proven when a descriptor pointing outside it faults.
+
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_pci::bar::{Bar, Region};
+use ferrix_pci::capability::{Capability, MSIX_ENTRY_SIZE, MsiX};
 use ferrix_pci::header::{COMMAND, COMMAND_BUS_MASTER, COMMAND_MEMORY_SPACE};
+use ferrix_pci::msix::{
+    self, CAPABILITY_CONTROL, CONTROL_ENABLE, CONTROL_FUNCTION_MASK, ENTRY_ADDRESS_HIGH,
+    ENTRY_ADDRESS_LOW, ENTRY_DATA, ENTRY_VECTOR_CONTROL, VECTOR_CONTROL_MASKED,
+};
 use ferrix_pci::virtio::{Location, Transport};
 use ferrix_pci::{Address, ConfigSpace};
+use ferrix_sync::Once;
 use ferrix_virtio::pci::{
     self as transport, COMMON_CONFIG_LEN, CommonConfig, NO_VECTOR, QueueAddresses, TransportError,
 };
 use ferrix_virtio::{Buffer, Layout, QueueMemory, SplitQueue};
 
 use super::{Failure, Space};
+use crate::arch;
 use crate::device::Reserved;
+use crate::irq::{self, Msi};
 use crate::mm;
 use crate::mmio::Mmio;
 use crate::timer;
@@ -68,8 +86,14 @@ const DEADLINE_NANOS: u64 = 2_000_000_000;
 /// What the check found.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Entropy {
-    /// The device wrote this many bytes where it was told to.
-    Read(u32),
+    /// The device wrote `bytes` where it was told to.
+    Read {
+        /// How many.
+        bytes: u32,
+        /// `None` if the completion arrived by MSI-X; otherwise why it was
+        /// polled for.
+        polled: Option<&'static str>,
+    },
     /// The device refused or stalled, for this reason, and was left alone.
     Skipped(&'static str),
 }
@@ -217,6 +241,112 @@ unsafe impl QueueMemory for Rings {
     fn barrier(&self) {}
 }
 
+/// Interrupts the check's vector has delivered.
+static DELIVERED: AtomicU64 = AtomicU64::new(0);
+
+/// The check's interrupt handler: count the delivery, and nothing else.
+fn on_entropy(_number: u32) {
+    let _ = DELIVERED.fetch_add(1, Ordering::SeqCst);
+}
+
+/// The one message vector the check uses, allocated and registered the first
+/// time it asks and kept for the life of the machine: `irq` cannot take a
+/// handler back out, so a vector given back here could not be reused anyway.
+static VECTOR: Once<Result<Msi, &'static str>> = Once::new();
+
+/// The check's vector, or why there is none.
+fn vector() -> Result<Msi, &'static str> {
+    *VECTOR.call_once(|| {
+        let msi = arch::msi_allocate()?;
+        irq::register(msi.number, on_entropy)
+            .map_err(|_| "the MSI vector already has a handler")?;
+        Ok(msi)
+    })
+}
+
+/// MSI-X table entry 0, programmed and enabled, and what to put back.
+#[derive(Debug)]
+struct Delivery {
+    /// The function's MSI-X capability.
+    capability: Capability,
+    /// The entry's sixteen bytes, mapped.
+    entry: Block,
+    /// The capability's control word before the check enabled MSI-X.
+    control: u16,
+}
+
+impl Delivery {
+    /// Program table entry 0 with the check's vector, unmask it, and enable
+    /// MSI-X. Needs memory decoding on, since the table is in a BAR.
+    ///
+    /// The entry is vetted like the virtio blocks: in a memory BAR, inside it,
+    /// and clear of memory the kernel owns.
+    fn arm(
+        space: &mut Space,
+        address: Address,
+        (capability, table): &(Capability, MsiX),
+        regions: &[Region],
+        reserved: &Reserved,
+    ) -> Result<Self, &'static str> {
+        let msi = vector()?;
+        let offset = msix::entry_offset(table, 0).ok_or("the MSI-X table is empty")?;
+        let region = regions
+            .iter()
+            .find(|region| region.index == table.table.bar)
+            .ok_or("the MSI-X table is in a BAR that was not sized")?;
+        let Bar::Memory { address: base, .. } = region.bar else {
+            return Err("the MSI-X table is in an I/O BAR");
+        };
+        if !region.contains(offset, MSIX_ENTRY_SIZE) {
+            return Err("the MSI-X table entry is outside its BAR");
+        }
+        let phys = base
+            .checked_add(offset)
+            .ok_or("the MSI-X table's address overflows")?;
+        if reserved.overlaps(phys, MSIX_ENTRY_SIZE) {
+            return Err("the MSI-X table overlaps memory the kernel owns");
+        }
+        let entry = Block::map(phys, MSIX_ENTRY_SIZE)?;
+
+        entry
+            .registers
+            .write32(ENTRY_VECTOR_CONTROL, VECTOR_CONTROL_MASKED);
+        entry
+            .registers
+            .write32(ENTRY_ADDRESS_LOW, msi.address as u32);
+        entry
+            .registers
+            .write32(ENTRY_ADDRESS_HIGH, (msi.address >> 32) as u32);
+        entry.registers.write32(ENTRY_DATA, msi.data);
+        entry.registers.write32(ENTRY_VECTOR_CONTROL, 0);
+
+        let at = capability.offset + CAPABILITY_CONTROL;
+        let control = space.read16(address, at);
+        space.write16(
+            address,
+            at,
+            (control | CONTROL_ENABLE) & !CONTROL_FUNCTION_MASK,
+        );
+        Ok(Delivery {
+            capability: *capability,
+            entry,
+            control,
+        })
+    }
+
+    /// Mask the entry and put the control word back.
+    fn disarm(self, space: &mut Space, address: Address) {
+        self.entry
+            .registers
+            .write32(ENTRY_VECTOR_CONTROL, VECTOR_CONTROL_MASKED);
+        space.write16(
+            address,
+            self.capability.offset + CAPABILITY_CONTROL,
+            self.control,
+        );
+    }
+}
+
 /// Why a device that refused or failed the protocol was left alone.
 const fn refusal(error: TransportError) -> &'static str {
     match error {
@@ -233,8 +363,9 @@ const fn refusal(error: TransportError) -> &'static str {
 ///
 /// Memory decoding and bus mastering are on only for the duration, and the
 /// device is reset — so it holds no address into memory this gives back —
-/// before the pages are freed or the command register restored. A device
-/// that will not reset keeps both off and its pages are never given back.
+/// before the pages are freed, MSI-X is disabled, or the command register is
+/// restored. A device that will not reset keeps decoding and bus mastering
+/// off and its pages are never given back.
 ///
 /// Decoding is not turned on at all if either register block overlaps memory
 /// `reserved` names. A BAR's address is whatever the register holds; on a
@@ -252,6 +383,7 @@ pub(super) fn entropy(
     address: Address,
     transport: &Transport,
     regions: &[Region],
+    msix: Option<&(Capability, MsiX)>,
     reserved: &Reserved,
 ) -> Result<Entropy, Failure> {
     if transport.common.length < COMMON_CONFIG_LEN {
@@ -292,15 +424,24 @@ pub(super) fn entropy(
         command | COMMAND_MEMORY_SPACE | COMMAND_BUS_MASTER,
     );
 
+    let delivery = match msix {
+        Some(table) => Delivery::arm(space, address, table, regions, reserved),
+        None => Err("the device has no MSI-X capability"),
+    };
     let outcome = drive(
         &common,
         &notify,
         transport.notify_multiplier,
         &rings,
         &buffer,
+        delivery.as_ref().map(|_| ()).map_err(|why| *why),
     );
 
-    if transport::reset(&mut Common(&common), RESET_POLLS).is_err() {
+    let reset = transport::reset(&mut Common(&common), RESET_POLLS);
+    if let Ok(delivery) = delivery {
+        delivery.disarm(space, address);
+    }
+    if reset.is_err() {
         space.write16(
             address,
             COMMAND,
@@ -319,13 +460,15 @@ pub(super) fn entropy(
     outcome
 }
 
-/// Bring the device up, make one request and wait for it.
+/// Bring the device up, make one request and wait for it: for its MSI-X
+/// interrupt when `interrupt` is `Ok`, and by polling otherwise.
 fn drive(
     common: &Block,
     notify: &Block,
     multiplier: u32,
     rings: &DmaPage,
     buffer: &DmaPage,
+    interrupt: Result<(), &'static str>,
 ) -> Result<Entropy, Failure> {
     let mut config = Common(common);
     if let Err(error) = transport::negotiate(&mut config, 0, 0, RESET_POLLS) {
@@ -351,12 +494,20 @@ fn drive(
         driver: base + layout.available_ring as u64,
         device: base + layout.used_ring as u64,
     };
-    let active = match transport::activate_queue(&mut config, 0, size, addresses, NO_VECTOR)
+    // Table entry 0, which `Delivery::arm` programmed.
+    let asked = if interrupt.is_ok() { 0 } else { NO_VECTOR };
+    let active = match transport::activate_queue(&mut config, 0, size, addresses, asked)
         .and_then(|active| transport::driver_ok(&mut config).map(|()| active))
     {
         Ok(active) => active,
         Err(error) => return Ok(Entropy::Skipped(refusal(error))),
     };
+    let polled = match interrupt {
+        Err(why) => Some(why),
+        Ok(()) if active.vector != asked => Some("the device kept no MSI-X vector for its queue"),
+        Ok(()) => None,
+    };
+    let by_interrupt = polled.is_none();
 
     let mut queue = SplitQueue::new(layout, Rings { virt: rings.virt() });
     let head = queue.add_chain(&[Buffer::writable(buffer.phys(), REQUEST)])?;
@@ -367,17 +518,23 @@ fn drive(
             "the queue's doorbell is outside its block",
         ));
     }
+    let before = DELIVERED.load(Ordering::SeqCst);
     notify.registers.write16(doorbell, 0);
 
     let deadline = timer::now_nanos().saturating_add(DEADLINE_NANOS);
     let completion = loop {
-        if let Some(completion) = queue.take_used()? {
+        let arrived = DELIVERED.load(Ordering::SeqCst) != before;
+        if (!by_interrupt || arrived)
+            && let Some(completion) = queue.take_used()?
+        {
             break completion;
         }
         if timer::now_nanos() > deadline {
-            return Ok(Entropy::Skipped(
-                "the device did not complete the request in time",
-            ));
+            return Ok(Entropy::Skipped(if by_interrupt && queue.has_used() {
+                "the device completed the request but its MSI-X interrupt never arrived"
+            } else {
+                "the device did not complete the request in time"
+            }));
         }
         core::hint::spin_loop();
     };
@@ -405,5 +562,8 @@ fn drive(
             "the device wrote nothing into the buffer it was given",
         ));
     }
-    Ok(Entropy::Read(completion.written))
+    Ok(Entropy::Read {
+        bytes: completion.written,
+        polled,
+    })
 }

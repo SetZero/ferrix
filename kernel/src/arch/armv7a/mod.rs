@@ -492,6 +492,10 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
     // SAFETY: called once from `kmain`, on the boot CPU, after the vector
     // table is installed and with interrupts masked.
     unsafe { gicv2::init(distributor.address, cpu_interface.address)? };
+    // As on AArch64, a frame that cannot be used costs MSI vectors, not boot.
+    if let Some(frame) = tree.gicv2m_frames().next() {
+        let _ = gicv2::init_msi_frame(frame.region.address, frame.spi_base.zip(frame.spi_count));
+    }
     timer::init(&tree)?;
     gicv2::enable(timer::irq());
     // And the inter-processor interrupt, whose enable bit is this core's own:
@@ -597,6 +601,15 @@ pub(crate) fn timer_disarm() {
 /// The interrupt number the timer arrives on.
 pub(crate) fn timer_irq() -> u32 {
     timer::irq()
+}
+
+/// Take an interrupt a device can raise by message, from the `GICv2m` frame.
+///
+/// # Errors
+///
+/// No usable frame, or every SPI it has already taken.
+pub(crate) fn msi_allocate() -> Result<crate::irq::Msi, &'static str> {
+    gicv2::msi_allocate()
 }
 
 /// Stop interrupt `number` being delivered until [`unmask_interrupt`] lets

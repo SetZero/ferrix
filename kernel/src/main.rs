@@ -519,7 +519,7 @@ fn check_pci(view: &BootView<'_>) -> (Vec<device::DeviceNode>, device::Reserved)
     println!(
         "  pci      {} functions from {} {} hosts ({} descriptions refused), {} host bridges, \
          {} unfollowed bridges; {} BARs sized ({} KiB), {} capabilities, {} virtio transports, \
-         {} entropy bytes read by DMA",
+         {} entropy bytes read by DMA, {} completions by MSI-X",
         report.functions,
         report.hosts,
         report.source,
@@ -531,7 +531,11 @@ fn check_pci(view: &BootView<'_>) -> (Vec<device::DeviceNode>, device::Reserved)
         report.capabilities,
         report.virtio,
         report.entropy_bytes,
+        report.entropy_by_interrupt,
     );
+    if let Some(why) = report.entropy_polled {
+        println!("  pci      an entropy request was polled, not interrupted: {why}");
+    }
     if let Some(why) = report.entropy_skip {
         println!(
             "  pci      {} entropy checks skipped: {why}",

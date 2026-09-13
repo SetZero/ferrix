@@ -554,6 +554,15 @@ pub(crate) fn timer_irq() -> u32 {
     timer::irq()
 }
 
+/// Take an interrupt a device can raise by message, from the `GICv2m` frame.
+///
+/// # Errors
+///
+/// No usable frame, or every SPI it has already taken.
+pub(crate) fn msi_allocate() -> Result<crate::irq::Msi, &'static str> {
+    gicv2::msi_allocate()
+}
+
 /// Stop interrupt `number` being delivered until [`unmask_interrupt`] lets
 /// it through again.
 ///

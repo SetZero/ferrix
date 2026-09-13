@@ -1418,6 +1418,34 @@ One consequence, recorded rather than hidden: EDK2 on AArch64 leaves memory
 decoding off for a function no firmware driver binds, so virtio-rng there now
 publishes no aperture. A driver for such a device waits on the item below.
 
+**Done — interrupts by message, on every architecture.** The boot check's
+virtio-rng request now completes by MSI-X rather than by polling: table entry
+0 is programmed with a vector the architecture allocated, the queue is told
+to use it, and the used ring is read only once the vector has been delivered
+to a kernel handler. That proves the whole message path — table, controller,
+vector, dispatch — on each machine, and `xtask test-boot` fails a boot where
+no completion arrived by interrupt.
+
+* `arch::msi_allocate` hands out an interrupt number with the address and
+  data a device writes to raise it: a local APIC vector from 0x40 to 0x7F on
+  x86-64, below the legacy system call gate and the kernel's own vectors, and
+  an SPI from the `GICv2m` frame on the Arm machines, found through the MADT
+  or the device tree and sized from its `MSI_TYPER`. A `GICv2m` write is a
+  pulse, so its SPIs are made edge-triggered; a level-sensitive line loses it.
+* **One bug, and only the U-Boot machine could show it.** A GICv2 delivers a
+  shared interrupt only to the CPU interfaces its `GICD_ITARGETSR` byte names,
+  and QEMU resets that byte to zero on a multiprocessor GIC. The driver had
+  never set one, because every interrupt the kernel used before was
+  per-core. EDK2 routes what it touches, so AArch64 worked; U-Boot does not,
+  so on ARMv7-A the device completed and the interrupt went nowhere. A shared
+  interrupt with no target is now given the enabling core's own bit, read from
+  the banked target bytes as Linux does.
+* The check's vector and its handler are kept for the life of the machine:
+  `irq` cannot take a handler back out.
+
+The run recorded when it landed: one completion by MSI-X, 64 bytes, on x86-64
+and AArch64 at four processors and on ARMv7-A at four and at two.
+
 **Still to do, in the order it can be done:**
 
 * **Trusting a BAR firmware placed but did not enable**, so a device no
@@ -1449,12 +1477,11 @@ publishes no aperture. A driver for such a device waits on the item below.
   * Later, on the device tree machines: assign addresses to decoding-off
     functions inside the windows, as Linux does unless `linux,pci-probe-only`
     is set, rather than depend on firmware's choice.
-* **MSI-X vectors for PCI nodes.** A PCI node has apertures and no vectors.
-  The messages and the table layout are written; what is missing is the
-  allocator behind the architecture facade — local APIC vectors on x86-64, the
-  `GICv2m` frame's SPIs on the Arm machines — built on stage 9's
-  `arch::mask_interrupt`, and the boot check's completion arriving as an
-  interrupt rather than by polling.
+* **PCI vectors a driver can be given.** Mint a `Vector` for each MSI-X
+  entry of a PCI node, from the allocator below, and route `Vector::mask` and
+  `unmask` to the entry's own mask bit — which the interrupt controller does
+  not reach — together with stage 9, whose `Interrupt` masks through
+  `arch::mask_interrupt` today.
 * **IOMMU domains, which need nothing from stage 9 either.** Where the
   hardware is can already be read: `libs/acpi` decodes the DMAR — each VT-d
   unit's register block and the devices behind it — and the IORT, following a

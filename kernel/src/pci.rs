@@ -38,7 +38,7 @@ use core::ops::RangeInclusive;
 use ferrix_bootinfo::BootView;
 use ferrix_pci::bar::{self, Region};
 use ferrix_pci::capability::{
-    self as pci_capability, Capabilities, ExtendedCapabilities, ID_MSIX, MsiX,
+    self as pci_capability, Capabilities, Capability, ExtendedCapabilities, ID_MSIX, MsiX,
 };
 use ferrix_pci::ecam::{BYTES_PER_BUS, Window};
 use ferrix_pci::header::{
@@ -295,6 +295,10 @@ pub(crate) struct Report {
     pub(crate) entropy_skipped: usize,
     /// Why the last one was skipped.
     pub(crate) entropy_skip: Option<&'static str>,
+    /// Entropy requests whose completion arrived by MSI-X.
+    pub(crate) entropy_by_interrupt: usize,
+    /// Why the last request that completed without MSI-X was polled instead.
+    pub(crate) entropy_polled: Option<&'static str>,
 }
 
 /// Why enumeration failed.
@@ -377,6 +381,8 @@ pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>, Res
         entropy_bytes: 0,
         entropy_skipped: 0,
         entropy_skip: None,
+        entropy_by_interrupt: 0,
+        entropy_polled: None,
     };
     let mut nodes = Vec::new();
     for host in hosts {
@@ -417,13 +423,17 @@ fn check_host(
         nodes.push(DeviceNode::pci(
             function.address,
             &regions,
-            msix.as_ref(),
+            msix.as_ref().map(|(_, table)| table),
             decoding,
             reserved,
         ));
     }
     Ok(())
 }
+
+/// What examining one function yields: its sized BARs, its MSI-X capability
+/// if it has one, and whether firmware left its memory decoding on.
+type Examined = (Vec<Region>, Option<(Capability, MsiX)>, bool);
 
 /// Size every BAR of one function and walk both its capability lists,
 /// returning the BARs it decodes, its MSI-X capability if it has one, and
@@ -433,7 +443,7 @@ fn check_function(
     function: Function,
     reserved: &Reserved,
     report: &mut Report,
-) -> Result<(Vec<Region>, Option<MsiX>, bool), Failure> {
+) -> Result<Examined, Failure> {
     let Function { address, identity } = function;
     report.functions += 1;
     if identity.class.base == CLASS_BRIDGE && identity.class.sub == SUBCLASS_HOST_BRIDGE {
@@ -452,7 +462,7 @@ fn check_function(
     }
 
     let msix = match pci_capability::find(&*space, address, ID_MSIX)? {
-        Some(capability) => Some(MsiX::read(&*space, capability)?),
+        Some(capability) => Some((capability, MsiX::read(&*space, capability)?)),
         None => None,
     };
 
@@ -484,9 +494,20 @@ fn check_function(
         transport.verify(&regions)?;
         report.virtio += 1;
         if kind == TYPE_ENTROPY {
-            match virtio::entropy(space, address, &transport, &regions, reserved)? {
-                virtio::Entropy::Read(written) => {
-                    report.entropy_bytes = report.entropy_bytes.saturating_add(written);
+            match virtio::entropy(
+                space,
+                address,
+                &transport,
+                &regions,
+                msix.as_ref(),
+                reserved,
+            )? {
+                virtio::Entropy::Read { bytes, polled } => {
+                    report.entropy_bytes = report.entropy_bytes.saturating_add(bytes);
+                    match polled {
+                        None => report.entropy_by_interrupt += 1,
+                        Some(why) => report.entropy_polled = Some(why),
+                    }
                 }
                 virtio::Entropy::Skipped(why) => {
                     report.entropy_skipped += 1;

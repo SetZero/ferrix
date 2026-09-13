@@ -77,6 +77,18 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
 /// device wrote into memory the kernel gave it.
 const ENTROPY_READ: &str = " entropy bytes read by DMA";
 
+/// What it prints after the number of those requests that completed by MSI-X.
+const BY_MSIX: &str = " completions by MSI-X";
+
+/// The number written just before `suffix` in `line`.
+fn count_before(line: &str, suffix: &str) -> Option<u32> {
+    let before = line.split(suffix).next()?;
+    before
+        .rsplit(' ')
+        .next()
+        .and_then(|count| count.parse::<u32>().ok())
+}
+
 /// Why a boot that reached the marker still failed the DMA check, if it did.
 ///
 /// The kernel skips a virtio-rng device that refuses or stalls rather than
@@ -89,18 +101,21 @@ fn entropy_problem(lines: &[String]) -> Option<String> {
     let Some(line) = lines.iter().find(|line| line.contains(ENTROPY_READ)) else {
         return Some("the kernel never reported reading entropy by DMA".to_owned());
     };
-    let before = line.split(ENTROPY_READ).next().unwrap_or_default();
-    match before
-        .rsplit(' ')
-        .next()
-        .and_then(|count| count.parse::<u32>().ok())
-    {
-        Some(count) if count > 0 => None,
-        _ => Some(format!(
+    if !count_before(line, ENTROPY_READ).is_some_and(|count| count > 0) {
+        return Some(format!(
             "the kernel read no entropy by DMA: `{}`",
             line.trim()
-        )),
+        ));
     }
+    // Every machine this tool boots has an interrupt controller that takes
+    // messages, so a completion that had to be polled is a lost interrupt.
+    if !count_before(line, BY_MSIX).is_some_and(|count| count > 0) {
+        return Some(format!(
+            "no entropy request completed by MSI-X: `{}`",
+            line.trim()
+        ));
+    }
+    None
 }
 
 /// Boot an image with a program and a script built in, and require the
@@ -692,7 +707,7 @@ mod tests {
         for count in ["64", "1"] {
             let boot = lines(&[
                 &format!(
-                    "  pci      2 functions, 1 virtio transports, {count} entropy bytes read by DMA"
+                    "  pci      2 functions, 1 virtio transports, {count} entropy bytes read by DMA, 1 completions by MSI-X"
                 ),
                 "FERRIX-BOOT-OK stages 1-9",
             ]);
@@ -706,5 +721,16 @@ mod tests {
         assert!(entropy_problem(&none).is_some(), "zero bytes");
         let silent = lines(&["FERRIX-BOOT-OK stages 1-9"]);
         assert!(entropy_problem(&silent).is_some(), "no line at all");
+    }
+
+    #[test]
+    fn a_boot_whose_completion_was_polled_fails() {
+        let polled = lines(&["  pci      64 entropy bytes read by DMA, 0 completions by MSI-X"]);
+        assert!(entropy_problem(&polled).is_some(), "no MSI-X");
+        let old = lines(&["  pci      64 entropy bytes read by DMA"]);
+        assert!(
+            entropy_problem(&old).is_some(),
+            "a kernel that does not say"
+        );
     }
 }
