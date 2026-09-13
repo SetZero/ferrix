@@ -39,6 +39,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-blkserve"
+version = "0.1.0"
+dependencies = [
+ "ferrix-blkring",
+ "ferrix-virtio",
+ "ferrix-virtio-blk",
+]
+
+[[package]]
 name = "ferrix-block"
 version = "0.1.0"
 

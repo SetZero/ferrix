@@ -125,6 +125,7 @@ fi
 forbid ferrix-btrfs-vfs "btrfs mount" "ferrix-kernel|ferrix-boot"
 forbid ferrix-blkring  "block ring protocol" "ferrix-kernel|ferrix-boot"
 forbid ferrix-virtio-blk "virtio-blk driver logic" "ferrix-kernel|ferrix-boot"
+forbid ferrix-blkserve "block driver serve loop" "ferrix-kernel|ferrix-boot"
 
 # ---------------------------------------------------------------------------
 # 3. Generic kernel code reaches architecture code through the facade.

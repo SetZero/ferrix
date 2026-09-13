@@ -9,6 +9,7 @@ members = [
     "libs/acpi",
     "libs/block",
     "libs/blkring",
+    "libs/blkserve",
     "libs/bootinfo",
     "libs/elf",
     "libs/fbtext",
@@ -67,6 +68,7 @@ publish = false
 ferrix-acpi = { path = "libs/acpi" }
 ferrix-block = { path = "libs/block" }
 ferrix-blkring = { path = "libs/blkring" }
+ferrix-blkserve = { path = "libs/blkserve" }
 ferrix-bootinfo = { path = "libs/bootinfo" }
 ferrix-elf = { path = "libs/elf" }
 ferrix-fbtext = { path = "libs/fbtext" }
