@@ -133,7 +133,7 @@ nobody has it yet.
 |---|---|---|
 | Threads: `clone(CLONE_VM\|CLONE_THREAD\|CLONE_SETTLS)` and everything a thread implies | ferrix-a5 | `rustc` is threaded; the largest missing piece on the roadmap. Exit test: a static musl Rust `std::thread` program under `test-shell` on all three architectures |
 | File-backed `mmap`: a file mapping maps the inode's own VMO pages, shared and private, with faults served from them | ferrix-e6 | `mmap` with a descriptor answers `ENODEV` today; `rustc` and the linker map rlibs. Same interface as the btrfs page cache |
-| Ring-3 virtio-blk reading sectors: `devmgr`, the ring, the driver (`VMO_PIN` is on main) | ferrix-d9, with ferrix-61 | Stage 11's mount and exit wait on it; the customer declined a kernel-side disk path |
+| Ring-3 virtio-blk reading sectors: `devmgr` (waiting on stage 9's `process_create`/`process_start`, which follow ferrix-a5's start argument, and process observers, ferrix-4b); the block ring's kernel side (the devfs node from HELLO, and reset before release on driver death); the virtio-blk driver process on `ferrix-rt` reading sectors through a translated domain | ferrix-d9, with ferrix-61 | Stage 11's mount and exit wait on it; the customer declined a kernel-side disk path |
 | `vmo_map` and native process creation | ferrix-4b, space.rs half reviewed by ferrix-e5 | `devmgr` cannot start a driver without them |
 | Stage 11's kernel mount, through the VFS, with file data in the inode's VMO | ferrix-61 | The read-only sysroot |
 

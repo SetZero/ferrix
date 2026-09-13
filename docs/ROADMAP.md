@@ -1984,13 +1984,26 @@ The run recorded when it landed: 10 waits on a unit with interrupts on by the
 end of the domain check on x86-64, under KVM, and on AArch64; none on ARMv7-A,
 whose domain is untranslated.
 
+**Done — the block ring's protocol, as a library, host-side.** `libs/blkring`
+(`ferrix-blkring`) is the ring the kernel and a ring-3 block driver will share,
+as `docs/BLOCK-RING.md` specifies it: the ring and data VMO layout, every index
+and entry the other side writes checked before it is used, doorbells over stage
+9 ports, and a HELLO carrying the disk's PCI location, its virtio serial and the
+name `devmgr` chose, numbered as Linux numbers `vda`, `vdb`. When a driver ends,
+every outstanding request fails at once, and the data VMO stays held until
+`devmgr` confirms the device was reset (BLOCK-RING.md §6.3); no path in the
+crate reports it releasable before that. It is pure logic, tested on the host,
+under Miri, and by a fuzz target that plays one side of the ring against an
+honest other. **No kernel crate or process uses it yet:** the ring's kernel side
+and the driver process are still to do, below.
+
 **Still to do, in the order stage 11 needs it.** Stage 11 is done on the host
 and waits only for a ring-3 virtio-blk driver reading sectors, so everything on
 that path comes first and trusting decoding-off BARs, which it does not need,
 comes last. Stage 9 writes `Vmo::hold`, `vmo_map` and native process creation;
-stage 11 writes virtio-blk's device protocol, the driver's logic as a library,
-the ring protocol's crate and the native user-space runtime, all against the
-agreements recorded here.
+stage 11 has written the ring protocol's crate (above) and is writing
+virtio-blk's device protocol, the driver's logic as a library and the native
+user-space runtime, all against the agreements recorded here.
 
 * **Everything that runs in ring 3.** Stage 9's device handles, `Interrupt`
   and `IoMapping`, and `VMO_PIN` (above), are on main. Still to come, in this
