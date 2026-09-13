@@ -47,7 +47,9 @@ there rather than waiting for a stage to end. The product owner verifies a
 candidate from a clean worktree (`test-boot` on all three architectures and
 armv7a at `--smp 2`, `test-shell` and `test-vfs` with the static busybox),
 then tags it: `stage-N` for a stage's exit, `stage-N.k-<slug>` for a testable
-step after it, annotated, with the tag message saying what to test and how.
+step after it, annotated, with the tag message carrying short release notes as a bullet
+list and saying what to test and how; the same notes go into
+`docs/RELEASES.md`.
 Owners say in one line what a person can test when such a landing is on
 `main`. Tags are local until the customer pushes; the customer is told in a
 line or two and nothing stops for it.
@@ -60,18 +62,22 @@ weaker form is written down as such in the stage's section.
 
 ## Owners
 
+Session names change on every restart; the table carries the current name
+and the one the rows below were written under. `ListAgents` shows what is
+alive.
+
 | Session | Area |
 |---|---|
-| ferrix-24 | Product owner: priorities, decisions, this file, cross-cutting debt |
-| ferrix-91 | Stage 7: processes, signals, threads, tty, futex, time; the user entry path |
-| ferrix-c2 | Stage 8: VFS, tmpfs, devfs, procfs, pipes, the fd and path calls; file-backed `mmap` |
-| ferrix-2a | Stage 9: native ABI, objects, `vmo_map`, native process creation, process observers |
-| ferrix-8b | Stage 10: PCI, IOMMU domains, `devmgr`, the block ring, virtio-blk in ring 3 |
-| ferrix-4d | Stage 11: `libs/btrfs`, `libs/block`, the kernel mount; the native user-space runtime |
-| ferrix-b9 | Scheduler: stage 5 flakes, lock convoys, wake latency, boot-time performance |
-| ferrix-54 | Stage 1–7 review fixes; asked to take the memory-management package below |
-| ferrix-b1 | The STM32MP157D-DK1 board, `xtask flash`, `docs/stm32mp157-dk.md`, the Arm UART drivers |
-| ferrix-53 | `ferrousli/`, beside the roadmap |
+| ferrix-32 (was ferrix-24) | Product owner: priorities, decisions, this file, milestones, cross-cutting debt |
+| ferrix-a5 (was ferrix-91) | Stage 7: processes, signals, threads, tty, futex, time; the user entry path |
+| ferrix-e6 (was ferrix-c2) | Stage 8: VFS, tmpfs, devfs, procfs, pipes, the fd and path calls; file-backed `mmap` |
+| ferrix-d9 (stage 9's session did not return from the restart) | Stage 9: native ABI, objects, `vmo_map`, native process creation, process observers |
+| ferrix-d9 (was ferrix-8b) | Stage 10: PCI, IOMMU domains, `devmgr`, the block ring, virtio-blk in ring 3 |
+| ferrix-61 (was ferrix-4d) | Stage 11: `libs/btrfs`, `libs/block`, the kernel mount; the native user-space runtime |
+| ferrix-34 (was ferrix-b9) | Scheduler: stage 5 flakes, lock convoys, wake latency, boot-time performance |
+| ferrix-e5 (was ferrix-54) | The memory-management package below; reviewer of the VMO reverse map and the space.rs half of file-backed mmap |
+| ferrix-4f (was ferrix-b1) | The STM32MP157D-DK1 board, `xtask flash`, `docs/stm32mp157-dk.md`, the Arm UART drivers |
+| ferrix-ce (was ferrix-53) | `ferrousli/`, beside the roadmap |
 
 ---
 
@@ -85,51 +91,51 @@ nobody has it yet.
 
 | Item | Owner | Why it is P0 |
 |---|---|---|
-| Threads: `clone(CLONE_VM\|CLONE_THREAD\|CLONE_SETTLS)` and everything a thread implies | ferrix-91 | `rustc` is threaded; the largest missing piece on the roadmap. Exit test: a static musl Rust `std::thread` program under `test-shell` on all three architectures |
-| File-backed `mmap`: a file mapping maps the inode's own VMO pages, shared and private, with faults served from them | ferrix-c2 | `mmap` with a descriptor answers `ENODEV` today; `rustc` and the linker map rlibs. Same interface as the btrfs page cache |
-| Ring-3 virtio-blk reading sectors: `VMO_PIN`, `devmgr`, the ring, the driver | ferrix-8b, with ferrix-4d and ferrix-2a | Stage 11's mount and exit wait on it; the customer declined a kernel-side disk path |
-| `vmo_map` and native process creation | ferrix-2a | `devmgr` cannot start a driver without them |
-| Stage 11's kernel mount, through the VFS, with file data in the inode's VMO | ferrix-4d | The read-only sysroot |
+| Threads: `clone(CLONE_VM\|CLONE_THREAD\|CLONE_SETTLS)` and everything a thread implies | ferrix-a5 | `rustc` is threaded; the largest missing piece on the roadmap. Exit test: a static musl Rust `std::thread` program under `test-shell` on all three architectures |
+| File-backed `mmap`: a file mapping maps the inode's own VMO pages, shared and private, with faults served from them | ferrix-e6 | `mmap` with a descriptor answers `ENODEV` today; `rustc` and the linker map rlibs. Same interface as the btrfs page cache |
+| Ring-3 virtio-blk reading sectors: `VMO_PIN`, `devmgr`, the ring, the driver | ferrix-d9, with ferrix-61 | Stage 11's mount and exit wait on it; the customer declined a kernel-side disk path |
+| `vmo_map` and native process creation | ferrix-d9, space.rs half reviewed by ferrix-e5 | `devmgr` cannot start a driver without them |
+| Stage 11's kernel mount, through the VFS, with file data in the inode's VMO | ferrix-61 | The read-only sysroot |
 
 ### P1 — required before a stage is called done
 
 | Item | Owner | Stage |
 |---|---|---|
-| Translated `SMMUv3` domains, and the out-of-domain fault on x86-64 and AArch64 (VT-d translates since this landing; ARMv7-A is stated as degraded trusted mode in the exit criterion) | ferrix-8b | 10 |
-| Reset on driver death, designed in the ring spec before the driver lands | ferrix-8b | 10 |
-| Trusting a BAR firmware placed but did not enable | ferrix-8b | 10 |
-| btrfs: honour the default subvolume; verify data checksums from the csum tree; parse `INODE_EXTREF`; a bounded metadata node cache | ferrix-4d | 11 |
-| btrfs: CI Miri step for `libs/btrfs` and `libs/block` under 15 minutes, whole-image tests ignored under Miri | ferrix-4d | 11 |
-| Process observers, so a port can watch a process end | ferrix-2a, reviewed by ferrix-91 | 9, for `devmgr` |
-| An interrupt wakes its port waiter at once, not at the 5 ms recheck | ferrix-b9 | 9, on the virtio-blk latency path |
-| `mprotect` leaves stale translations: `AddressSpace::protect` must invalidate, shown by a user-mode check | asked of ferrix-54 | 6 |
-| A user-mode copy-on-write write check, and a `MAP_SHARED` write check | asked of ferrix-54 | 6 |
-| `SA_RESTART`; boot checks that drive `SIGCHLD`, stop and continue, `alarm`, `sigaltstack` and fault-to-signal | ferrix-91 | 7; `rustc` needs `SIGSEGV` on the alternate stack |
-| Pid 1 for init and orphans reparented to it | ferrix-91 | 7, 15 |
-| `TCGETS2`, `fcntl` record locks, `flock` | ferrix-91 | 7 |
-| `mount -t proc` and `devtmpfs` | ferrix-c2 | 8 |
-| An "applets" group in `test-vfs`, separate from the exit criterion | ferrix-c2 | 8 |
-| The EEVDF fairness flake, root-caused; then a preemption count so no plain spin lock taken with interrupts on can convoy | ferrix-b9 | 5 |
-| FX-0601 "reserving a thousand pages cost a frame", about one x86-64 boot in three under KVM: a reap landing inside stage 6's frame-count window; the check must settle first, as the path check does | ferrix-b9 | 6 |
-| A regression check that exited programs give every frame back once reaped (the leak 0510a8a fixed) | ferrix-91 | 7 |
-| The first hardware run of stages 6–9 on the DK1: the full boot marker and `test-shell` at two processors, recorded as a hardware column in the roadmap's ARMv7-A section. Needs the board powered, and a shell also needs console receive (next row) | ferrix-b1 | ARMv7-A |
-| Console receive by interrupt on the PL011 and the STM32 USART, retiring the 20 ms polling thread | ferrix-b1, with ferrix-91 | 7, 15 |
-| ARMv7-A with 2 GiB does not boot: the loader must allocate below the direct map's ceiling, and RAM beyond it is reported unused rather than fatal | ferrix-b1 | ARMv7-A |
+| Translated `SMMUv3` domains, and the out-of-domain fault on x86-64 and AArch64 (VT-d translates since this landing; ARMv7-A is stated as degraded trusted mode in the exit criterion) | ferrix-d9 | 10 |
+| Reset on driver death, designed in the ring spec before the driver lands | ferrix-d9 | 10 |
+| Trusting a BAR firmware placed but did not enable | ferrix-d9 | 10 |
+| btrfs: honour the default subvolume; verify data checksums from the csum tree; parse `INODE_EXTREF`; a bounded metadata node cache | ferrix-61 | 11 |
+| btrfs: CI Miri step for `libs/btrfs` and `libs/block` under 15 minutes, whole-image tests ignored under Miri | ferrix-61 | 11 |
+| Process observers, so a port can watch a process end | ferrix-d9, reviewed by ferrix-a5 | 9, for `devmgr` |
+| An interrupt wakes its port waiter at once, not at the 5 ms recheck | ferrix-34 | 9, on the virtio-blk latency path |
+| `mprotect` leaves stale translations: `AddressSpace::protect` must invalidate, shown by a user-mode check | ferrix-e5 | 6 |
+| A user-mode copy-on-write write check, and a `MAP_SHARED` write check | ferrix-e5 | 6 |
+| `SA_RESTART`; boot checks that drive `SIGCHLD`, stop and continue, `alarm`, `sigaltstack` and fault-to-signal | ferrix-a5 | 7; `rustc` needs `SIGSEGV` on the alternate stack |
+| Pid 1 for init and orphans reparented to it | ferrix-a5 | 7, 15 |
+| `TCGETS2`, `fcntl` record locks, `flock` | ferrix-a5 | 7 |
+| `mount -t proc` and `devtmpfs` | ferrix-e6 | 8 |
+| An "applets" group in `test-vfs`, separate from the exit criterion | ferrix-e6 | 8 |
+| The EEVDF fairness flake, root-caused; then a preemption count so no plain spin lock taken with interrupts on can convoy | ferrix-34 | 5 |
+| FX-0601 "reserving a thousand pages cost a frame", about one x86-64 boot in three under KVM: a reap landing inside stage 6's frame-count window; the check must settle first, as the path check does | ferrix-34 | 6 |
+| A regression check that exited programs give every frame back once reaped (the leak 0510a8a fixed) | ferrix-a5 | 7 |
+| The first hardware run of stages 6–9 on the DK1: the full boot marker and `test-shell` at two processors, recorded as a hardware column in the roadmap's ARMv7-A section. Needs the board powered, and a shell also needs console receive (next row) | ferrix-4f | ARMv7-A |
+| Console receive by interrupt on the PL011 and the STM32 USART, retiring the 20 ms polling thread | ferrix-4f, with ferrix-a5 | 7, 15 |
+| ARMv7-A with 2 GiB does not boot: the loader must allocate below the direct map's ceiling, and RAM beyond it is reported unused rather than fatal | ferrix-4f | ARMv7-A |
 
 ### P2 — quality and performance, on the "fast" half of the goal
 
 | Item | Owner |
 |---|---|
-| Scoped user TLB shootdown: one page, only the processors running the space | asked of ferrix-54 |
-| The cost of the 20 µs one-shot armed on every wake onto the caller's processor, measured on pipe and futex paths | ferrix-b9 |
-| Boot time: stage 3's tick count at 250 ms, a per-check cost line, an idle mask so a spawn stops broadcasting, one shootdown per reap batch | ferrix-b9 |
-| Timestamps in xtask's serial logs | ferrix-b9 |
+| Scoped user TLB shootdown: one page, only the processors running the space; part of the VMO reverse map | ferrix-e6, reviewed by ferrix-e5 |
+| The cost of the 20 µs one-shot armed on every wake onto the caller's processor, measured on pipe and futex paths | ferrix-34 |
+| Boot time: stage 3's tick count at 250 ms, a per-check cost line, an idle mask so a spawn stops broadcasting, one shootdown per reap batch | ferrix-34 |
+| Timestamps in xtask's serial logs | ferrix-34 |
 | Per-CPU frame and heap caches, deferred since stage 2 | open, once a workload can measure them |
 | ASIDs and PCIDs, so a switch stops invalidating every user entry | open, after threads |
-| x86-64 kernel-mode NMI, #DB and #MC on IST stacks with a paranoid entry | asked of ferrix-54 |
-| `mremap` below 64 KiB answering `EPERM`; `AT_HWCAP` rechecked against real headers | asked of ferrix-54 |
+| x86-64 kernel-mode NMI, #DB and #MC on IST stacks with a paranoid entry | ferrix-e5 |
+| `mremap` below 64 KiB answering `EPERM`; `AT_HWCAP` rechecked against real headers | ferrix-e5 |
 | `getrandom` seeded from virtio-rng into a real generator; a real-time clock read from the RTC and `/dev/rtc` | open |
-| The debt the roadmap names: Miri for `frame`, `heap`, `paging`; fuzz targets for `cpio`, `fdt`, `acpi`, `virtio`, `linux-abi` | asked of ferrix-54 (the first three crates and `cpio`, `fdt`, `acpi`) |
+| The debt the roadmap names: Miri for `frame`, `heap`, `paging`; fuzz targets for `cpio`, `fdt`, `acpi`, `virtio`, `linux-abi` | ferrix-e5 (the first three crates and `cpio`, `fdt`, `acpi`) |
 | The host-test table in the roadmap generated from `cargo test --list` with a gate, instead of counted by hand | ferrix-24 |
 
 ### P3 — hardware variants and later stages, unowned
