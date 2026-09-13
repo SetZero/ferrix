@@ -5,6 +5,43 @@ owner before tagging as `docs/BACKLOG.md`'s *Milestones* rule says. The notes
 here are the tag's, kept short: what a person can try, and what is known not
 to work yet. Newest first.
 
+## stage-9.1-console-and-iommu — 2026-09-13, commit 5fb365f
+
+Arm console input, translated IOMMU domains, and the day's intermittent
+failures fixed.
+
+- Typed input works on the Arm machines: the PL011 and STM32 USART receive,
+  proven on the STM32MP157D-DK1 (the first keystroke read on hardware), and
+  the console drains before power-off so the last line arrives whole.
+- glibc programs run as init: `/proc/self/exe` is absolute, so Ubuntu's
+  static busybox reaches its prompt
+  (`FERRIX_INIT=/usr/bin/busybox cargo xtask run --arch x86_64`).
+- Stage 10: VT-d on x86-64 and SMMUv3 on AArch64 translate every device's
+  DMA, an out-of-domain write is caught by the unit's fault record, a driver
+  can pin VMO pages for its device, and IOMMU waits run with interrupts on.
+- Stage 11, host side: btrfs reads verify every data sector against the
+  checksum tree, honour the default subvolume and parse `INODE_EXTREF`.
+- Fixed: unmount left a dentry per mount cycle (stage 8 frame-count
+  failures); frame counts raced the reaper (stages 6 and 8); the preemption
+  count could be raised on one processor and lowered on another (FX-0503); a
+  new task was not charged before an insert (FX-0701); frame 0 was handed out
+  under OVMF (a root-table panic under KVM).
+- ferrousli is on the build path: `cargo xtask check --ferrousli` runs its
+  gates, CI runs them, and busybox builds against it from pinned sources (the
+  link still wants 154 functions).
+- Known limits: no threads, no file-backed `mmap`, no ring-3 disk driver yet;
+  the interrupt-driven console and reboot-to-U-Boot are on `develop`.
+
+What to test:
+
+```
+cargo xtask run --arch armv7a --init '~/.local/share/ferrix/busybox/{arch}/bin/busybox.static'
+FERRIX_INIT=/usr/bin/busybox cargo xtask run --arch x86_64
+```
+
+Type at the `ferrix#` prompt on the Arm machine; the second starts Ubuntu's
+glibc busybox as init on x86-64.
+
 ## stage-9 — 2026-09-13, commit 80d0ea7
 
 Stages 1–9 done, every known stage 5 and 6 intermittent failure fixed.
