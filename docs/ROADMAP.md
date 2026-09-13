@@ -207,7 +207,12 @@ say why.
 * x86-64 — GDT, TSS and a 256-entry IDT, every gate naming the kernel code
   selector the GDT installed a moment earlier. The double-fault gate runs on an
   IST stack of its own, because it is the one fault whose cause may be that the
-  stack is unusable.
+  stack is unusable. So do the NMI, the debug exception and the machine check,
+  on three more, because they arrive whether or not the kernel is on a stack of
+  its own, and the `SYSCALL` trampoline's first and last instructions run in
+  ring 0 on the program's stack: IST 1 the double fault, 2 the NMI, 3 `#DB`, 4
+  `#MC`, sixteen kibibytes each, static on the boot processor and from the
+  vmap arena, guard pages and all, on every other.
 * AArch64 — the `VBAR_EL1` vector table and its handlers.
 * One dispatch path above both (`kernel/src/trap.rs`), reached only through the
   architecture facade — `TrapFrame`, `classify`, `report_trap` — so generic code

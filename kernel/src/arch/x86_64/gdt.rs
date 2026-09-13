@@ -76,13 +76,44 @@ const TSS_AVAILABLE: u64 = 0b1001 << 40;
 
 /// Interrupt stack table slot used for the double-fault handler.
 ///
-/// The one fault that has to be handled on a stack of its own: a double fault
-/// usually means the kernel stack is unusable, and taking the handler on that
-/// same stack turns it into a triple fault, which is a silent reset.
+/// A double fault usually means the kernel stack is unusable, and taking the
+/// handler on that same stack turns it into a triple fault, which is a silent
+/// reset.
 pub(crate) const DOUBLE_FAULT_IST: u16 = 1;
 
+/// Interrupt stack table slot for the non-maskable interrupt.
+///
+/// An NMI is not held off by `cli`, so it can arrive on any instruction the
+/// kernel runs -- including the ones in the `SYSCALL` trampoline before the
+/// stack switch and after the switch back, where `RSP` is the program's. An
+/// exception that does not change privilege pushes its frame on whatever `RSP`
+/// is, so without a stack of its own the kernel would write its frame, and run
+/// its handler, on a stack a program chose.
+pub(crate) const NMI_IST: u16 = 2;
+
+/// Interrupt stack table slot for the debug exception, for the NMI's reason:
+/// a hardware breakpoint fires wherever its address is, ring 0 on a user stack
+/// included.
+pub(crate) const DEBUG_IST: u16 = 3;
+
+/// Interrupt stack table slot for the machine check, which the processor
+/// raises when it pleases, for the NMI's reason again.
+pub(crate) const MACHINE_CHECK_IST: u16 = 4;
+
+/// How many interrupt stack table stacks each processor has, one per slot
+/// above: slots 1 to this.
+const IST_STACKS: usize = 4;
+
 /// Bytes in each interrupt stack table stack.
+///
+/// The same as a vmap stack, which is what a secondary processor's come from:
+/// four pages.
 const IST_STACK_SIZE: usize = 16 * 1024;
+
+const _: () = assert!(
+    IST_STACK_SIZE as u64 == crate::vmap::STACK_PAGES * ferrix_bootinfo::PAGE_SIZE,
+    "the boot processor's interrupt stacks are the size a secondary's vmap stacks are"
+);
 
 /// Bytes in a 64-bit task state segment.
 const TSS_SIZE: usize = 104;
@@ -190,17 +221,21 @@ unsafe impl Sync for Global {}
 /// is an allocator.
 static BOOT_TABLES: Global = Global(UnsafeCell::new(Tables::new()));
 
-/// The boot processor's double-fault stack, static for the same reason.
+/// One of the boot processor's interrupt stack table stacks, static for the
+/// same reason.
 ///
-/// Every other processor's comes from the vmap arena, guard pages and all.
+/// Every other processor's come from the vmap arena, guard pages and all.
 #[repr(C, align(16))]
 struct BootStack(UnsafeCell<[u8; IST_STACK_SIZE]>);
 
-// SAFETY: nothing in the kernel reads or writes this: the CPU switches to it
-// on a double fault, which is its whole purpose.
+// SAFETY: nothing in the kernel names these by address: the CPU switches to
+// one on the exceptions its slot is given to, which is their whole purpose, and
+// only the handler running on it touches it.
 unsafe impl Sync for BootStack {}
 
-static BOOT_DOUBLE_FAULT_STACK: BootStack = BootStack(UnsafeCell::new([0; IST_STACK_SIZE]));
+/// The boot processor's interrupt stack table stacks, slot 1 first.
+static BOOT_IST_STACKS: [BootStack; IST_STACKS] =
+    [const { BootStack(UnsafeCell::new([0; IST_STACK_SIZE])) }; IST_STACKS];
 
 /// The operand `lgdt` takes: a limit and a base.
 #[repr(C, packed)]
@@ -223,10 +258,12 @@ pub(crate) unsafe fn init() {
     // past the last byte. Sixteen-byte aligned because the ABI says so and
     // because a misaligned stack breaks `movaps` in any handler that touches
     // floating point.
-    let stack_top = BOOT_DOUBLE_FAULT_STACK.0.get() as u64 + IST_STACK_SIZE as u64;
-    // SAFETY: the boot processor's own tables, loaded once, and a stack the
-    // CPU alone uses.
-    unsafe { load(tables, stack_top & !0xF) };
+    let tops = BOOT_IST_STACKS
+        .each_ref()
+        .map(|stack| (stack.0.get() as u64 + IST_STACK_SIZE as u64) & !0xF);
+    // SAFETY: the boot processor's own tables, loaded once, and stacks the CPU
+    // alone uses.
+    unsafe { load(tables, tops) };
 }
 
 /// Point this processor's `RSP0` at `top`.
@@ -298,12 +335,19 @@ pub(crate) unsafe fn set_privilege_stack(top: u64) {
 /// Must be called once, on the secondary processor itself, before it enables
 /// interrupts.
 pub(crate) unsafe fn init_secondary() -> Result<(), &'static str> {
-    let stack = crate::vmap::allocate_stack()
-        .map_err(|_| "no double-fault stack for a secondary processor")?;
+    // One per slot, and never freed: the processor uses them for the rest of
+    // its life. A failure part way leaks the ones already taken, which is what
+    // the fatal report this becomes costs anyway.
+    let mut tops = [0; IST_STACKS];
+    for top in &mut tops {
+        *top = crate::vmap::allocate_stack()
+            .map_err(|_| "no interrupt stack table stack for a secondary processor")?
+            .top;
+    }
     // Leaked: the processor uses these for the rest of its life.
     let tables: &'static mut Tables = Box::leak(Box::new(Tables::new()));
-    // SAFETY: fresh tables that nothing else refers to, and a fresh stack.
-    unsafe { load(tables, stack.top) };
+    // SAFETY: fresh tables that nothing else refers to, and fresh stacks.
+    unsafe { load(tables, tops) };
     Ok(())
 }
 
@@ -312,11 +356,12 @@ pub(crate) unsafe fn init_secondary() -> Result<(), &'static str> {
 /// # Safety
 ///
 /// `tables` must belong to this processor alone and live as long as it runs,
-/// and `double_fault_top` must be the top of a stack nothing else uses.
-unsafe fn load(tables: &'static mut Tables, double_fault_top: u64) {
-    tables
-        .tss
-        .set_interrupt_stack(DOUBLE_FAULT_IST, double_fault_top);
+/// and each of `ist_tops`, the stack for slot 1 first, must be the top of a
+/// stack nothing else uses.
+unsafe fn load(tables: &'static mut Tables, ist_tops: [u64; IST_STACKS]) {
+    for (slot, top) in (1..).zip(ist_tops) {
+        tables.tss.set_interrupt_stack(slot, top);
+    }
     tables.tss.deny_all_ports();
 
     let tss_address = (&raw const tables.tss) as u64;

@@ -31,6 +31,15 @@ const VECTORS: usize = 256;
 /// arithmetic rather than by 256 symbols.
 const STUB_SIZE: usize = 16;
 
+/// `#DB`: a hardware breakpoint, or a single step.
+const DEBUG: usize = 1;
+/// The non-maskable interrupt.
+const NMI: usize = 2;
+/// `#DF`: a fault while delivering another.
+const DOUBLE_FAULT: usize = 8;
+/// `#MC`: the processor found its own hardware in error.
+const MACHINE_CHECK: usize = 18;
+
 /// The register state at the point a trap was taken.
 ///
 /// Field order is the order the entry stub pushes them, which is the reverse of
@@ -259,14 +268,20 @@ pub(crate) unsafe fn init() {
     let stubs = (&raw const ferrix_trap_stubs) as u64;
 
     for (vector, gate) in table.iter_mut().enumerate() {
-        // The double fault is the one vector that cannot share the kernel
-        // stack: it usually means that stack is unusable, and faulting again
+        // Four vectors cannot share the interrupted stack. The double fault,
+        // because it usually means that stack is unusable, and faulting again
         // inside the handler is a triple fault, which the CPU answers with a
-        // silent reset and no diagnostic at all.
-        let ist = if vector == 8 {
-            gdt::DOUBLE_FAULT_IST
-        } else {
-            0
+        // silent reset and no diagnostic at all. And the three that arrive
+        // whether or not the kernel is ready for them -- the NMI, the debug
+        // exception and the machine check -- because the kernel is not always
+        // on a stack of its own: the `SYSCALL` trampoline's first and last
+        // instructions run in ring 0 on the program's stack.
+        let ist = match vector {
+            DEBUG => gdt::DEBUG_IST,
+            NMI => gdt::NMI_IST,
+            DOUBLE_FAULT => gdt::DOUBLE_FAULT_IST,
+            MACHINE_CHECK => gdt::MACHINE_CHECK_IST,
+            _ => 0,
         };
         *gate = Gate::new(stubs + (vector * STUB_SIZE) as u64, ist);
     }
