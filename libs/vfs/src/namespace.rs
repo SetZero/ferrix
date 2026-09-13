@@ -802,12 +802,45 @@ impl Namespace {
         let Some((parent, covered)) = &at.mount.parent else {
             return Err(Errno::EINVAL);
         };
-        let mut mounts = self.mounts.lock();
-        if mounts.keys().any(|&(on, _)| on == at.mount.id) {
-            return Err(Errno::EBUSY);
+        {
+            let mut mounts = self.mounts.lock();
+            if mounts.keys().any(|&(on, _)| on == at.mount.id) {
+                return Err(Errno::EBUSY);
+            }
+            let _ = mounts.remove(&(parent.id, covered.id()));
         }
-        let _ = mounts.remove(&(parent.id, covered.id()));
         covered.remove_mount();
+        // Outside the mount table's lock: the cache takes its own.
+        self.forget_tree(&at.mount.root);
         Ok(())
+    }
+
+    /// Drop the cache's references to every dentry of a tree that has just
+    /// been unmounted: its root and anything whose parents lead back to it.
+    ///
+    /// Nothing can reach that tree by name any more, but a cached dentry holds
+    /// its inode and, through its parents, every directory up to the root —
+    /// so without this an unmounted filesystem stayed allocated, a dentry at a
+    /// time, until the cache got round to evicting each one. A procfs or a
+    /// devtmpfs mounted and unmounted again left one behind per cycle. Linux
+    /// prunes a mount's dentries when it is unmounted for the same reason.
+    ///
+    /// A walk up each cached dentry's parents, paid only by unmount. Nothing is
+    /// freed under the lock: the entries taken out are dropped after it is
+    /// released, since the last reference to one releases its parent chain.
+    fn forget_tree(&self, root: &Arc<Dentry>) {
+        let released: Vec<Arc<Dentry>> = {
+            let mut cache = self.cache.lock();
+            let mut released = Vec::new();
+            cache.retain(|cached| {
+                let gone = root.is_ancestor_of(cached);
+                if gone {
+                    released.push(Arc::clone(cached));
+                }
+                !gone
+            });
+            released
+        };
+        drop(released);
     }
 }

@@ -348,8 +348,19 @@ pub(crate) fn run_calls() -> Result<CallsReport, &'static str> {
     let process = process::new_for_check()
         .map_err(|_| "could not make a process for the file system calls")?;
     let _warm = check_the_calls(&process)?;
+    let cached = fs::namespace().cached();
     let before = mm::free_frames();
     let bytes = check_the_calls(&process)?;
+    // The run mounts a fresh procfs and devtmpfs and walks into them. A dentry
+    // of either that outlives its unmount is heap the frame count only notices
+    // when the growth crosses a page, which is how this check once failed one
+    // boot in many; so the cache is required not to grow at all.
+    let cache_growth = i64::try_from(fs::namespace().cached()).unwrap_or(i64::MAX)
+        - i64::try_from(cached).unwrap_or(i64::MAX);
+    if cache_growth != 0 {
+        crate::console::println!("  pipes    dentry cache {cache_growth:+} across the second run");
+        return Err("the pipe and filesystem call checks left dentries behind in the cache");
+    }
     let leaked = i64::try_from(before).unwrap_or(i64::MAX)
         - i64::try_from(mm::free_frames()).unwrap_or(i64::MAX);
     // Checked, not only printed: a count nothing tests would boot green

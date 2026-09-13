@@ -732,6 +732,42 @@ fn a_mount_covers_a_directory_and_dotdot_climbs_out_of_it() {
 }
 
 #[test]
+fn unmount_takes_the_unmounted_tree_out_of_the_dentry_cache() {
+    let (ns, ctx) = fresh();
+    ns.mkdir(&ctx, None, b"/m", 0o755).unwrap();
+    let mut after_first = None;
+    let mut last_inode = None;
+    for cycle in 0..3_u64 {
+        let at = ns.resolve(&ctx, None, b"/m", true).unwrap();
+        let _ = ns.mount(tmpfs(10 + cycle), &at).unwrap();
+        drop(at);
+        ns.mkdir(&ctx, None, b"/m/d", 0o755).unwrap();
+        write_file(&ns, &ctx, "/m/d/f", b"inside");
+        let file = ns.resolve(&ctx, None, b"/m/d/f", true).unwrap();
+        let inode = file.dentry.inode().unwrap();
+        last_inode = Some(Arc::downgrade(&inode));
+        drop((file, inode));
+        let root = ns.resolve(&ctx, None, b"/m", true).unwrap();
+        ns.unmount(&root).unwrap();
+        drop(root);
+        match after_first {
+            None => after_first = Some(ns.cached()),
+            Some(first) => assert_eq!(
+                ns.cached(),
+                first,
+                "cycle {cycle} of mount and unmount left dentries in the cache"
+            ),
+        }
+    }
+    // The unmounted filesystem's file is gone with it: no cached dentry holds
+    // its inode.
+    assert!(
+        last_inode.unwrap().upgrade().is_none(),
+        "an unmounted file's inode outlived its mount"
+    );
+}
+
+#[test]
 fn unmount_refuses_a_mount_with_mounts_inside_it() {
     let (ns, ctx) = fresh();
     ns.mkdir(&ctx, None, b"/a", 0o755).unwrap();
