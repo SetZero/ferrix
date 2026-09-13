@@ -437,10 +437,13 @@ fn balancing(topology: &Topology, report: &mut Report) -> Result<(), &'static st
     // check is meant to exclude, and it would pass without periodic balancing
     // existing at all. That is how this check first failed: not because
     // balancing was broken, but because stealing beat it to the work.
-    wait_for(
+    if let Err(problem) = wait_for(
         || SPINNING.load(Ordering::Acquire) >= online as u64,
         "an anchor task never started",
-    )?;
+    ) {
+        describe_unstarted(&tasks, SPINNING.load(Ordering::Acquire), |index| index);
+        return Err(problem);
+    }
 
     // The imbalance: all of them on processor 0, free to move. No processor
     // will go idle from here until STOP, so nothing but `balance` can move
@@ -456,10 +459,17 @@ fn balancing(topology: &Topology, report: &mut Report) -> Result<(), &'static st
         )?);
     }
 
-    wait_for(
+    if let Err(problem) = wait_for(
         || SPINNING.load(Ordering::Acquire) >= total as u64,
         "a balancing task never started",
-    )?;
+    ) {
+        // Anchors wanted their own processor; the movable ones were all put
+        // on processor 0 and may since have been moved anywhere.
+        describe_unstarted(&tasks, SPINNING.load(Ordering::Acquire), |index| {
+            if index < online { index } else { 0 }
+        });
+        return Err(problem);
+    }
     super::sleep_for(BALANCE_SETTLE_NANOS);
 
     let moved = super::balanced_count().saturating_sub(before);
@@ -976,22 +986,9 @@ fn fairness(topology: &Topology, report: &mut Report) -> Result<(), &'static str
         || SPINNING.load(Ordering::Acquire) >= total,
         "a spinner never started",
     ) {
-        crate::console::println!(
-            "  fair     {} of {} spinners started",
-            SPINNING.load(Ordering::Acquire),
-            total,
-        );
-        for (index, task) in spinners.iter().enumerate() {
-            crate::console::println!(
-                "  fair     spinner {} wanted cpu {}, is on cpu {}, ran on {:#b}, {} switches",
-                index,
-                index / SPINNERS_PER_CPU,
-                task.cpu(),
-                task.cpus_run_on(),
-                task.switches(),
-            );
-        }
-        super::report_queues();
+        describe_unstarted(&spinners, SPINNING.load(Ordering::Acquire), |index| {
+            index / SPINNERS_PER_CPU
+        });
         return Err(problem);
     }
 
@@ -1014,6 +1011,7 @@ fn fairness(topology: &Topology, report: &mut Report) -> Result<(), &'static str
     report.bound = SLICE_NS.saturating_add(summary.worst_overrun);
 
     if report.worst_lag > report.bound {
+        describe_shares(topology, &spinners, report.bound);
         return Err("a task's service strayed further from its share than EEVDF allows");
     }
     shares_are_proportional(topology, &spinners, report.bound)?;
@@ -1072,7 +1070,7 @@ fn shares_are_proportional(
 
         let total: u128 = group
             .iter()
-            .map(|task| u128::from(task.since_baseline(task.runtime())))
+            .map(|task| u128::from(task.measured_runtime()))
             .sum();
         let weights: u128 = group
             .iter()
@@ -1083,22 +1081,79 @@ fn shares_are_proportional(
         }
 
         for task in group {
-            let had = u128::from(task.since_baseline(task.runtime()));
+            let had = u128::from(task.measured_runtime());
             let share = total * u128::from(task.entity_state().weight) / weights;
             if share.abs_diff(had) > u128::from(bound) {
-                // Named, because "a task" is one of a dozen and which one it
-                // was says whether the weights or the accounting is at fault.
-                crate::console::println!(
-                    "  fair     {} on cpu {} had {} ns of {} due, bound {}",
-                    task.name,
-                    cpu,
-                    had,
-                    share,
-                    bound,
-                );
+                describe_shares(topology, spinners, bound);
                 return Err("a task's share of its processor was not its weight's share");
             }
         }
     }
     Ok(())
+}
+
+/// Print what every spinner had against what it was due, and what each
+/// processor measured, for a fairness failure that would otherwise be one
+/// sentence about "a task".
+///
+/// Which task it was says whether the weights or the accounting is at fault,
+/// and which processor says whether the host stalled one of them.
+fn describe_shares(topology: &Topology, spinners: &[Arc<Task>], bound: u64) {
+    for cpu in 0..topology.online() {
+        if let Some(report) = super::cpu_report(cpu) {
+            crate::console::println!(
+                "  fair     cpu {cpu} measured worst lag {} us, worst overrun {} us",
+                report.worst_lag / 1000,
+                report.worst_overrun / 1000,
+            );
+        }
+        let group: Vec<&Arc<Task>> = spinners
+            .iter()
+            .skip(cpu * SPINNERS_PER_CPU)
+            .take(SPINNERS_PER_CPU)
+            .collect();
+        let total: u128 = group
+            .iter()
+            .map(|task| u128::from(task.measured_runtime()))
+            .sum();
+        let weights: u128 = group
+            .iter()
+            .map(|task| u128::from(task.entity_state().weight))
+            .sum();
+        for task in group {
+            let had = u128::from(task.measured_runtime());
+            let share = (total * u128::from(task.entity_state().weight))
+                .checked_div(weights)
+                .unwrap_or(0);
+            crate::console::println!(
+                "  fair     {} weight {} on cpu {} had {} us of {} us due, bound {} us, {} switches",
+                task.name,
+                task.entity_state().weight,
+                cpu,
+                had / 1000,
+                share / 1000,
+                bound / 1000,
+                task.switches(),
+            );
+        }
+    }
+}
+
+/// Print where each task that should have started is, and what every queue
+/// holds, for a wait that gave up on them.
+fn describe_unstarted(tasks: &[Arc<Task>], started: u64, wanted_cpu: impl Fn(usize) -> usize) {
+    crate::console::println!("  tasks    {} of {} started", started, tasks.len());
+    for (index, task) in tasks.iter().enumerate() {
+        crate::console::println!(
+            "  tasks    {} {} wanted cpu {}, is on cpu {}, ran on {:#b}, {} switches, state {}",
+            task.name,
+            index,
+            wanted_cpu(index),
+            task.cpu(),
+            task.cpus_run_on(),
+            task.switches(),
+            task.state(),
+        );
+    }
+    super::report_queues();
 }

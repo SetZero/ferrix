@@ -1382,34 +1382,65 @@ pub(crate) fn reap() -> usize {
 /// that joins a queue while the window is open was never owed any of what was
 /// handed out before it arrived, and counting it would report an arrival as a
 /// violation.
+///
+/// # Why each queue is charged first, under its lock
+///
+/// A running task is charged only when its processor next makes a decision,
+/// so its runtime as read from another processor is stale by up to a slice.
+/// A baseline taken from that number counts the stale part as service inside
+/// the window: the task looks up to a slice ahead of its share before the
+/// scheduler has done anything. With three spinners per processor the slice
+/// is a millisecond and the bound three, so the check's own measurement took
+/// a third of what it was measuring against — and the fairness check failed,
+/// rarely, on a scheduler that was keeping its promise. Charging the running
+/// task here, with its queue's lock held so that its processor cannot charge
+/// it in between, makes the baseline exact; `close_window` does the same so
+/// that the shares read afterwards end where the window did.
 pub(crate) fn open_window(tasks: &[Arc<Task>]) {
-    for task in tasks {
+    for_each_queue_charged(|cpu, queue| {
+        queue.stats.measuring = true;
+        queue.stats.worst_lag = 0;
+        queue.stats.worst_overrun = 0;
+        for task in tasks.iter().filter(|task| task.cpu() == cpu) {
+            task.open_window();
+        }
+    });
+    // A task on no queue this kernel knows of is still counted from now.
+    for task in tasks.iter().filter(|task| !task.is_measured()) {
         task.open_window();
     }
-    set_measuring(true);
 }
 
-/// Stop measuring.
+/// Stop measuring, and remember where each task's runtime stood.
 pub(crate) fn close_window(tasks: &[Arc<Task>]) {
-    set_measuring(false);
-    for task in tasks {
+    for_each_queue_charged(|cpu, queue| {
+        queue.stats.measuring = false;
+        for task in tasks.iter().filter(|task| task.cpu() == cpu) {
+            task.close_window();
+        }
+    });
+    for task in tasks.iter().filter(|task| task.is_measured()) {
         task.close_window();
     }
 }
 
-/// Open or close the measurement window on every processor.
-fn set_measuring(measuring: bool) {
+/// Visit every run queue with its running task charged up to the instant its
+/// lock was taken, holding that lock and with interrupts masked throughout.
+///
+/// The clock is read under each lock rather than once for all: a processor
+/// that made a decision between one reading and its lock being taken has an
+/// `exec_start` later than that reading, and charging it "up to" an earlier
+/// instant would move its start backwards and bill its task twice for the
+/// difference.
+fn for_each_queue_charged(mut visit: impl FnMut(usize, &mut CpuQueue)) {
     let Some(queues) = QUEUES.get() else {
         return;
     };
     let saved = <arch::Irq as IrqControl>::disable();
-    for lock in queues {
+    for (cpu, lock) in queues.iter().enumerate() {
         let mut queue = lock.lock();
-        queue.stats.measuring = measuring;
-        if measuring {
-            queue.stats.worst_lag = 0;
-            queue.stats.worst_overrun = 0;
-        }
+        queue.account(crate::timer::now_nanos());
+        visit(cpu, &mut queue);
     }
     <arch::Irq as IrqControl>::restore(saved);
 }
@@ -1518,6 +1549,10 @@ pub(crate) struct CpuReport {
     pub(crate) slice_ns: u64,
     /// Tasks on it, the running one included.
     pub(crate) queued: usize,
+    /// The worst lag it measured while the last window was open.
+    pub(crate) worst_lag: u64,
+    /// The worst overrun it has served.
+    pub(crate) worst_overrun: u64,
 }
 
 /// Read `cpu`'s queue, bringing its load average up to date first.
@@ -1531,6 +1566,8 @@ pub(crate) fn cpu_report(cpu: usize) -> Option<CpuReport> {
             load: queue.load_average(),
             slice_ns: queue.slice_ns(),
             queued: queue.len(),
+            worst_lag: queue.stats.worst_lag,
+            worst_overrun: queue.stats.worst_overrun,
         }
     };
     <arch::Irq as IrqControl>::restore(saved);

@@ -85,6 +85,10 @@ pub(crate) struct Task {
     sum_exec: AtomicU64,
     /// What `sum_exec` was when a measurement window opened.
     baseline: AtomicU64,
+    /// Its runtime when the window closed, for a check that reads the shares
+    /// afterwards: what it ran between `close_window` and its exit was never
+    /// measured and must not be judged.
+    window_end: AtomicU64,
     /// Whether a measurement window is counting this task. A task that joined
     /// a queue after the window opened is not: it was never owed the service
     /// handed out before it arrived, and counting it would make the fairness
@@ -188,6 +192,7 @@ impl Task {
             vlag: AtomicI64::new(0),
             sum_exec: AtomicU64::new(0),
             baseline: AtomicU64::new(0),
+            window_end: AtomicU64::new(0),
             measured: AtomicBool::new(false),
             sleep_until: AtomicU64::new(0),
             switches: AtomicU64::new(0),
@@ -222,6 +227,7 @@ impl Task {
             vlag: AtomicI64::new(0),
             sum_exec: AtomicU64::new(0),
             baseline: AtomicU64::new(0),
+            window_end: AtomicU64::new(0),
             measured: AtomicBool::new(false),
             sleep_until: AtomicU64::new(0),
             switches: AtomicU64::new(0),
@@ -324,11 +330,6 @@ impl Task {
         let _ = self.sum_exec.fetch_add(nanos, Ordering::Relaxed);
     }
 
-    /// Real nanoseconds it has run for.
-    pub(crate) fn runtime(&self) -> u64 {
-        self.sum_exec.load(Ordering::Relaxed)
-    }
-
     /// Start a measurement window here, and count this task in it.
     pub(crate) fn open_window(&self) {
         self.baseline
@@ -336,9 +337,16 @@ impl Task {
         self.measured.store(true, Ordering::Release);
     }
 
-    /// Stop counting this task.
+    /// Stop counting this task, remembering where its runtime stood.
     pub(crate) fn close_window(&self) {
+        self.window_end
+            .store(self.sum_exec.load(Ordering::Relaxed), Ordering::Relaxed);
         self.measured.store(false, Ordering::Release);
+    }
+
+    /// What it ran while the last window was open.
+    pub(crate) fn measured_runtime(&self) -> u64 {
+        self.since_baseline(self.window_end.load(Ordering::Relaxed))
     }
 
     /// Whether a measurement window is counting it.

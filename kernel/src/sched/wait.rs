@@ -19,7 +19,9 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use ferrix_sync::SpinLock;
+use ferrix_sync::IrqSpinLock;
+
+use crate::arch;
 
 use super::task::{BLOCKED, RUNNABLE, Task};
 
@@ -31,19 +33,40 @@ const RECHECK_NANOS: u64 = 5_000_000;
 /// Tasks waiting for one thing.
 #[derive(Debug)]
 pub(crate) struct WaitQueue {
-    /// Who is waiting. A plain lock: nothing takes it from an interrupt
-    /// handler. Holders do **not** mask interrupts, so a holder can be
-    /// switched out with it held, and nothing here relies on otherwise: the
+    /// Who is waiting.
+    ///
+    /// **Masking interrupts, though no interrupt handler takes it.** The
     /// wait's correctness rests on the order in `wait_until_deadline`, not
-    /// on the lock.
-    waiters: SpinLock<Vec<Arc<Task>>>,
+    /// on the lock; what the masking buys is that a holder cannot be
+    /// switched out with it held. The lock is a ticket lock, and a ticket
+    /// lock hands itself to whoever is next in line whether or not that
+    /// context is running. A holder preempted while holding it — a worker in
+    /// `wake_all`, cut by the timer inside the few instructions the lock is
+    /// held — stalls every waiter until it is scheduled again, and on a
+    /// queue of five hundred tasks at the shortest slice that is nearly two
+    /// hundred milliseconds. Worse, the waiters spin their slices away, are
+    /// preempted holding *tickets*, and the lock then passes to each of them
+    /// in turn, each hand-off costing another round of the queue.
+    ///
+    /// That was the thousand-task check taking twenty to fifty seconds one
+    /// boot in three on two processors: the checker spinning here with
+    /// interrupts on, on a processor that was tickless and never interrupted,
+    /// while the workers finishing on the other processor queued for the same
+    /// lock — two hundred thousand switches to run a thousand tasks that
+    /// needed three thousand, and at the end a quarter of them finished but
+    /// unable to leave. A holder with interrupts masked cannot be preempted,
+    /// so the lock is held for exactly the instructions it covers and no
+    /// convoy can form. Any plain `SpinLock` taken from a task with
+    /// interrupts on is exposed to the same thing once it is contended; this
+    /// is the one the scheduler's own check contends.
+    waiters: IrqSpinLock<Vec<Arc<Task>>, arch::Irq>,
 }
 
 impl WaitQueue {
     /// A queue with nobody on it.
     pub(crate) const fn new() -> WaitQueue {
         WaitQueue {
-            waiters: SpinLock::new(Vec::new()),
+            waiters: IrqSpinLock::new(Vec::new()),
         }
     }
 
