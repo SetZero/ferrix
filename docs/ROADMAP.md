@@ -1199,11 +1199,19 @@ the code that should meet a fuzzer before it meets ring 0.
   more of the same type.
 * **Open file descriptions and descriptor tables**, kept apart the way Linux
   keeps them: `dup` and `fork` share an offset, separate `open`s do not, and
-  close-on-exec belongs to the number.
+  close-on-exec belongs to the number. No lock of a description is held
+  across a call into its inode, because stage 11's btrfs waits on the disk
+  there. So two reads racing on one description may get the same bytes, as
+  on Linux before 3.14, until a sleeping lock the kernel lends the crate
+  serialises them.
 * **tmpfs**, whose file contents are not a byte vector but a page store the
   kernel supplies — a VMO there — so that `mmap` of a tmpfs file can later map
-  the file's own pages. Directory cursors are never reused, so `rm -rf`
-  reading a directory it is emptying sees every entry exactly once.
+  the file's own pages. The same store is the page cache of a filesystem on a
+  disk: made over a `PageSource`, it fills runs of at most 32 missing pages
+  with no lock held, keeps only those still missing, and forgets the source's
+  bytes past a truncation. The host tests pin that before the kernel's VMO
+  learns to fill. Directory cursors are never reused, so `rm -rf` reading a
+  directory it is emptying sees every entry exactly once.
 * **initramfs unpacking** through the same calls a program makes, hard links
   and device nodes included, and **the `getdents64` packer**, whose names start
   at byte 19 rather than at the structure's size of 24.

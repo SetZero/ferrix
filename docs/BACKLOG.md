@@ -259,7 +259,6 @@ with unlanded work, each committed and pushed, base and state as handed off:
 
 * `board-reset-3c` (95884cd): `arch::reset`, `reboot` resets, `ferrix.onexit=reset`; both reviews in, board proof A passed; needs a rebase over ec549f2's `arch/mod.rs` export lists, the row, proof B (`exit 7` under the option; no press needed). Then the CMDLINE.TXT follow-up and `test-boot --reset`.
 * `worktree-agent-a658b7811c6e2577d`: VMO reverse map with scoped shootdown; d5b515c passed the full row and review, two unbuilt WIP commits on top (review fixes, `protect` shootdown); needs squash, full row with KVM, re-review by the mm owner, then the stage 9 bullet.
-* `worktree-agent-a74d4fa11607fe5ad`: `libs/vfs` `PageSource` and the offset-lock fix; passed on c979d03; needs rebase, light row, go. Follow-up: a sleeping lock for `Namespace::rename` before stage 11's kernel mount.
 * `worktree-agent-a2d52ca1305875553` (a67f795): devfs block-device registry; full row passed on ec549f2; needs the stage 11 owner's trait review and a go.
 * `stage10-ring` (32d29fb, WIP, never compiled): the block ring's kernel side; rebase onto c9677b7, drop the picked commits, wire the module and the native call, use the registry, write `user/blkring-check` on the runtime, full row.
 * `worktree-agent-a16ff91583057388b` (24da536): virtio-blk library; Miri and fuzz passed; needs rebase and the full row.
