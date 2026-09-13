@@ -106,11 +106,24 @@ the wrong filesystem. `flash` additionally refuses `/boot/efi` by name: it is a
 mounted FAT like any other and would otherwise pass every check, and it is the
 one destination that can stop *this* computer booting.
 
-Two files are copied, which are the two the image contains:
+To boot to a shell rather than stop after the self-checks, give `flash` or
+`deploy` a static busybox, exactly as `build` and `run` take one:
+
+```sh
+cargo xtask deploy --arch armv7a --init /path/to/{arch}/bin/busybox.static
+```
+
+The kernel is built to start `sh -i` on the console, and the initramfs carries
+busybox at `/bin/busybox` with a link beside it for every applet. `FERRIX_INIT`
+works in place of `--init`. The binary must be static and hard-float ARMv7;
+Alpine's `busybox-static` for `armv7` is.
+
+Three files are copied, which are the three the image contains:
 
 ```
 EFI/BOOT/BOOTARM.EFI    the loader, where firmware looks with no boot entry
 FERRIX/KERNEL.ELF       the kernel, where the loader looks
+FERRIX/INITRD.IMG       the initramfs, beside the kernel; busybox, given --init
 ```
 
 Nothing else on the card is touched.

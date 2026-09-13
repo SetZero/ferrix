@@ -10,9 +10,9 @@
 //! filesystem. Writing our image over the card would remove all of it, and the
 //! board would stop booting entirely rather than boot the wrong kernel.
 //!
-//! So the card keeps its vendor layout, and this copies two files onto the
-//! FAT partition U-Boot already looks at — the same two paths the image
-//! contains, because firmware looks for them in the same places.
+//! So the card keeps its vendor layout, and this copies the loader, the kernel
+//! and the initramfs onto the FAT partition U-Boot already looks at — the same
+//! paths the image contains, because firmware looks for them in the same places.
 
 use std::path::{Path, PathBuf};
 
@@ -29,8 +29,14 @@ const KERNEL_PATH: &str = "FERRIX/KERNEL.ELF";
 /// Where the initramfs goes, beside the kernel.
 const INITRD_PATH: &str = "FERRIX/INITRD.IMG";
 
-/// Copy a freshly built loader and kernel onto the card.
-pub(crate) fn run(arch: Arch, loader: &Path, kernel: &Path, args: &Args) -> Result<()> {
+/// Copy a freshly built loader, kernel and initramfs onto the card.
+pub(crate) fn run(
+    arch: Arch,
+    loader: &Path,
+    kernel: &Path,
+    initramfs: &[u8],
+    args: &Args,
+) -> Result<()> {
     let target = match args.to.as_deref() {
         Some(given) => verify(Path::new(given))?,
         None => discover()?,
@@ -53,7 +59,7 @@ pub(crate) fn run(arch: Arch, loader: &Path, kernel: &Path, args: &Args) -> Resu
     copy(kernel, &kernel_target)?;
     // The same archive an image carries, so a board unpacks what QEMU does.
     let initramfs_target = target.join(INITRD_PATH);
-    std::fs::write(&initramfs_target, crate::initramfs::build(None)?)
+    std::fs::write(&initramfs_target, initramfs)
         .map_err(|error| Error::new(format!("writing {}: {error}", initramfs_target.display())))?;
     println!("    {}", initramfs_target.display());
 

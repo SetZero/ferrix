@@ -112,7 +112,7 @@ OPTIONS:
     --fast                               check: skip the cross-target clippy passes
     --to <MOUNT>                         flash: the card's mounted boot partition
     --port <DEVICE>                      watch-serial: e.g. /dev/ttyACM0
-    --init <PATH>                        The busybox; {arch} is replaced. build, run: [or FERRIX_INIT]
+    --init <PATH>                        The busybox; {arch} is replaced. build, run, flash, deploy: [or FERRIX_INIT]
                                          start `sh -i`, with the applets linked in /bin
     -h, --help                           This message
 ";
@@ -182,8 +182,8 @@ fn run() -> Result<()> {
         "model-doc" => check::model_doc(),
         "flash" => {
             let arch = args.single_arch()?;
-            let (loader, kernel) = build_halves(arch, &args)?;
-            flash::run(arch, &loader, &kernel, &args)
+            let (loader, kernel, initramfs) = build_board_files(arch, &args)?;
+            flash::run(arch, &loader, &kernel, &initramfs, &args)
         }
         "watch-serial" => serial::watch(None, &args),
         // The whole of a board round-trip. Separate commands exist because
@@ -192,8 +192,8 @@ fn run() -> Result<()> {
         // command per step is a command per step to forget.
         "deploy" => {
             let arch = args.single_arch()?;
-            let (loader, kernel) = build_halves(arch, &args)?;
-            flash::run(arch, &loader, &kernel, &args)?;
+            let (loader, kernel, initramfs) = build_board_files(arch, &args)?;
+            flash::run(arch, &loader, &kernel, &initramfs, &args)?;
             serial::watch(Some(&kernel), &args)
         }
         other => Err(Error::new(format!("unknown command `{other}`\n\n{USAGE}"))),
@@ -260,6 +260,22 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let initramfs = initramfs::build(Some(&program))?;
     let image = fat::write_image_with(arch, &loader, &kernel, &initramfs)?;
     Ok((image, kernel))
+}
+
+/// Compile what `flash` copies onto a board: the loader, the kernel and the
+/// initramfs.
+///
+/// Given a program the kernel starts `sh -i` and the archive carries busybox,
+/// exactly as [`build_image`] arranges for QEMU, so a card boots to the shell
+/// an image does. Without one the files are the ones they always were.
+fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u8>)> {
+    let Some(program) = optional_program(arch, args)? else {
+        let (loader, kernel) = build_halves(arch, args)?;
+        return Ok((loader, kernel, initramfs::build(None)?));
+    };
+    let loader = cargo::build_loader(arch, args.release)?;
+    let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
+    Ok((loader, kernel, initramfs::build(Some(&program))?))
 }
 
 /// The program `init` names for `arch`, with `{arch}` replaced by its name,
