@@ -206,7 +206,10 @@ package FerrixRoadmap {
              * busybox makes -- prctl, limits, priorities, credentials, sleeps,
              * clock setting, host names, sysinfo, syslog, reboot, and
              * sockets refused; mremap, execveat, unshare and setns; and
-             * /proc/self/exe as the resolved file actually loaded.
+             * /proc/self/exe as the resolved file actually loaded. The
+             * program init starts is pid 1, and a process's orphans go to the
+             * nearest reaping ancestor or else to init, zombies included, with
+             * the parent-death signal each asked for.
              *
              * Signals delivered on every return to user mode, on Linux's
              * frames, with rt_sigreturn, stop and continue, SIGPIPE, SIGALRM

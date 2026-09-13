@@ -1089,6 +1089,19 @@ once the reaper has settled. One window is not enough, because what lives
 across programs grows with how the processors happened to interleave; a leak
 keeps frames in every window.
 
+The program init starts is pid 1, as the first user process is on Linux:
+ordinary numbering starts at 2, and each program of a command list takes 1 in
+turn once the one before has let it go, so a shell as init reports `$$` as 1.
+A process's children outlive it with a parent, handed on as Linux's
+`forget_original_parent` hands them: to the nearest ancestor still running that
+set `PR_SET_CHILD_SUBREAPER`, or else to init, each sent the signal it asked
+for with `PR_SET_PDEATHSIG`. An orphan that had already ended is a zombie its
+new parent's `wait4` takes, and one still running tells its new parent when it
+ends. The boot check plays init with pid 1 and requires an ended and a running
+orphan to reach it with their statuses, a reaping ancestor to take them first
+and to pass them on once it has ended itself, and, as its control, the same
+orphan to be left with no parent when there is no init.
+
 **`futex` and `clone3`.** `futex` waits, wakes and requeues, plain and with a
 bitset, keyed by address space and user address, with the word compared under
 the table's lock so no wake is lost; the priority-inheritance operations and

@@ -148,7 +148,6 @@ nobody has it yet.
 | btrfs: CI Miri step for `libs/btrfs` and `libs/block` under 15 minutes, whole-image tests ignored under Miri | ferrix-61 | 11 |
 | A user-mode copy-on-write write check, and a `MAP_SHARED` write check | ferrix-e5 | 6 |
 | End-to-end user programs for what the `sigpaths` check proves at the kernel's decision: a `SIGSEGV` caught on the alternate stack, and a read interrupted by a handler and restarted under `SA_RESTART` (`SA_RESTART` and the driven signal paths have landed) | ferrix-a5 | 7; `rustc` needs `SIGSEGV` on the alternate stack |
-| Pid 1 for init and orphans reparented to it | ferrix-a5 | 7, 15 |
 | Retire the 20 ms console polling. Receive by interrupt into a 4 KiB ring has landed on the PL011 and the STM32 USART (through ST's EXTI on the DK1), with `console::input::{waiters, has_input}` for the console thread to wait on. Left: the console thread and readers waiting on it instead of sleeping (ferrix-a5, in `fs/terminal.rs`), and an I/O APIC route for the 16550's GSI so x86-64 stops polling too | ferrix-4f, with ferrix-a5 | 7, 15 |
 | ARMv7-A with 2 GiB does not boot: the loader must allocate below the direct map's ceiling, and RAM beyond it is reported unused rather than fatal | ferrix-4f | ARMv7-A |
 

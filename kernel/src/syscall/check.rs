@@ -109,6 +109,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let getpid_number = check_the_right_table_was_compiled_in(&mut counter)?;
     check_identity_answers(&mut counter)?;
     let pids = crate::syscall::registry::check()?;
+    check_orphans_are_reparented()?;
     check_an_unknown_number_is_enosys(&mut counter)?;
     check_errors_encode_as_negative(&mut counter)?;
     check_a_call_needing_a_process_says_so(&mut counter)?;
@@ -294,6 +295,103 @@ fn check_identity_answers(counter: &mut Counter) -> Result<(), &'static str> {
         .ok_or("this architecture has no number for gettid")?;
     if counter.call(pid) != counter.call(tid) {
         return Err("getpid and gettid disagree with one thread running");
+    }
+    Ok(())
+}
+
+/// A process's children outlive it with a parent: the nearest ancestor still
+/// running that set `PR_SET_CHILD_SUBREAPER`, or else init. An orphan that had
+/// already ended is a zombie init's `wait4` takes with its status; one still
+/// running ends later as init's child. The control is the same orphan with no
+/// init to take it, which is left with no parent at all.
+///
+/// Runs before init starts, so it plays init itself, with pid 1, and gives
+/// the pid back at the end.
+fn check_orphans_are_reparented() -> Result<(), &'static str> {
+    use crate::syscall::{attributes, registry};
+    use crate::user::space::AddressSpace;
+
+    const NO_SPACE: &str = "no address space for the orphan check";
+    let make = || process::new_for_check().map_err(|_| NO_SPACE);
+    let child_of = |parent: &Arc<Process>| -> Result<Arc<Process>, &'static str> {
+        let space = AddressSpace::new().map_err(|_| NO_SPACE)?;
+        let child = registry::register(Process::forked(parent, space, false, false));
+        parent.adopt(Arc::clone(&child));
+        Ok(child)
+    };
+    let parent_is = |child: &Process, expected: &Arc<Process>| {
+        child
+            .parent()
+            .is_some_and(|found| Arc::ptr_eq(&found, expected))
+    };
+
+    // The control, while nothing holds pid 1: nobody to hand the orphan to.
+    if !registry::is_free(registry::INIT_PID) {
+        return Err("init's pid was taken before the orphan check");
+    }
+    let parent = make()?;
+    let orphan = child_of(&parent)?;
+    process::kill(&parent, 0);
+    if orphan.parent().is_some() {
+        return Err("an orphan kept a parent when there was no init to take it");
+    }
+    process::kill(&orphan, 0);
+    drop((parent, orphan));
+
+    let space = AddressSpace::new().map_err(|_| NO_SPACE)?;
+    let init = registry::register(Process::new_init(space));
+    if init.pid() != registry::INIT_PID {
+        return Err("the orphan check's init was not given pid 1");
+    }
+
+    // To init: one child still running, one already ended with status 3.
+    let parent = make()?;
+    let running = child_of(&parent)?;
+    let ended = child_of(&parent)?;
+    process::kill(&ended, 3);
+    process::kill(&parent, 0);
+    if !parent_is(&running, &init) || !parent_is(&ended, &init) {
+        return Err("an orphan was not handed to init");
+    }
+    if !init.has_child(running.pid()) || !init.has_child(ended.pid()) {
+        return Err("init's children do not include the orphans it was handed");
+    }
+    let ended_pid = ended.pid();
+    match init.reap_child(&|child: &Process| child.pid() == ended_pid, true) {
+        Ok(Some(child)) if child.wait_status() == Some(3 << 8) => {}
+        _ => return Err("init could not reap an orphan that had ended, with its status"),
+    }
+    let running_pid = running.pid();
+    process::kill(&running, 5);
+    match init.reap_child(&|child: &Process| child.pid() == running_pid, true) {
+        Ok(Some(child)) if child.wait_status() == Some(5 << 8) => {}
+        _ => return Err("an orphan that ended under init was not init's to reap"),
+    }
+    drop((parent, running, ended));
+
+    // An ancestor that reaps orphans takes them before init does, and once it
+    // has ended itself they go on to init.
+    let keeper = make()?;
+    attributes::update(&keeper, |set| set.child_subreaper = true);
+    let middle = child_of(&keeper)?;
+    let grandchild = child_of(&middle)?;
+    process::kill(&middle, 0);
+    if !parent_is(&grandchild, &keeper) {
+        return Err("an orphan went past an ancestor that reaps orphans");
+    }
+    process::kill(&keeper, 0);
+    if !parent_is(&grandchild, &init) {
+        return Err("the orphans of an ended reaper did not go on to init");
+    }
+
+    process::kill(&grandchild, 0);
+    process::kill(&init, 0);
+    if grandchild.parent().is_some() {
+        return Err("init's children kept init as their parent after it ended");
+    }
+    drop((keeper, middle, grandchild, init));
+    if !registry::is_free(registry::INIT_PID) {
+        return Err("the orphan check's init did not give pid 1 back");
     }
     Ok(())
 }

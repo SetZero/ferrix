@@ -52,8 +52,9 @@ use crate::syscall::credentials::Credentials;
 use crate::syscall::fd;
 use crate::syscall::registry;
 use crate::syscall::signal::Signals;
-use crate::syscall::{futex, kill, uaccess};
+use crate::syscall::{attributes, futex, kill, uaccess};
 use crate::user::space::{AddressSpace, MMAP_MIN_ADDR, SpaceError};
+use ferrix_linux_abi::types::SIGCHLD;
 
 /// A program, as far as the system call layer is concerned.
 #[derive(Debug)]
@@ -116,9 +117,9 @@ pub(crate) struct Process {
     /// Registers its first task resumes from instead of entering at the
     /// program's start: set for a fork child, taken once.
     resume: SpinLock<Option<crate::arch::UserRegs>>,
-    /// The process that created it, if that process still exists. Weak,
-    /// because a parent keeps its children (until it waits for them) and not
-    /// the other way round.
+    /// The process that created it, or the one it was handed to when that one
+    /// ended, if that process still exists. Weak, because a parent keeps its
+    /// children (until it waits for them) and not the other way round.
     parent: SpinLock<Weak<Process>>,
     /// Its process group, which job control and `kill(0, …)` address.
     pgid: AtomicU32,
@@ -245,7 +246,7 @@ impl Process {
             sid: AtomicU32::new(pid),
             children: SpinLock::new(Vec::new()),
             child_exited: WaitQueue::new(),
-            exit_signal: AtomicU32::new(ferrix_linux_abi::types::SIGCHLD),
+            exit_signal: AtomicU32::new(SIGCHLD),
             execed: AtomicBool::new(false),
             vfork_done: WaitQueue::new(),
             signalled: WaitQueue::new(),
@@ -678,23 +679,86 @@ impl Process {
         {
             parent.disown(self);
         }
-        let (code, told) = if signal == 0 {
-            (kill::CLD_EXITED, status & 0xFF)
-        } else {
-            (kill::CLD_KILLED, signal as i32)
-        };
+        let (code, told) = self.end_report();
         kill::tell_parent(self, self.exit_signal.load(Ordering::Acquire), code, told);
 
-        // Its own children are orphaned: an ended one is released here, and a
-        // running one is released when it ends, since no parent is left to wait
-        // for it. Linux hands orphans to init; there is no init process to hand
-        // them to yet.
+        // Its own children are orphaned, and go where Linux's
+        // `forget_original_parent` sends them: to the nearest ancestor still
+        // running that asked to reap orphaned descendants, or else to init.
+        // Each is sent the signal it asked for on its parent's death.
+        //
+        // An orphan is put in its new parent's list before its parent is
+        // changed, so one ending at this moment disowns itself from a list it
+        // is already in. One that ended before the change told this process,
+        // which has ended and hears nothing, so its new parent is told here;
+        // if the orphan ends in between, the new parent is told twice, and
+        // `SIGCHLD` does not queue.
+        //
+        // With nobody to take them -- the boot checks run before init, and init
+        // itself may end -- they are released as before: an ended one here, a
+        // running one when it ends.
         let orphans = core::mem::take(&mut *self.children.lock());
-        for orphan in &orphans {
-            *orphan.parent.lock() = Weak::new();
+        let reaper = self.reaper_for_orphans();
+        for orphan in orphans {
+            let death_signal = attributes::get(&orphan).parent_death_signal;
+            let Some(reaper) = &reaper else {
+                *orphan.parent.lock() = Weak::new();
+                kill::send(
+                    &orphan,
+                    death_signal,
+                    crate::syscall::signal::Origin::Kernel,
+                );
+                continue;
+            };
+            // Linux's reason, verbatim: "We don't want people slaying init."
+            // An orphan made with another exit signal tells its new parent with
+            // `SIGCHLD`, which the new parent expects.
+            orphan.exit_signal.store(SIGCHLD, Ordering::Release);
+            reaper.adopt(Arc::clone(&orphan));
+            *orphan.parent.lock() = Arc::downgrade(reaper);
+            kill::send(
+                &orphan,
+                death_signal,
+                crate::syscall::signal::Origin::Kernel,
+            );
+            if orphan.is_terminated() {
+                if reaper.with_signals(|signals| signals.reaps_children_automatically()) {
+                    reaper.disown(&orphan);
+                }
+                let (code, told) = orphan.end_report();
+                kill::tell_parent(&orphan, SIGCHLD, code, told);
+            }
         }
-        drop(orphans);
         true
+    }
+
+    /// How its end is reported to a parent: the `si_code` and the status or
+    /// signal that goes with it. Valid once it has terminated.
+    fn end_report(&self) -> (i32, i32) {
+        let signal = self.exit.ended_by.load(Ordering::Acquire);
+        if signal == 0 {
+            (
+                kill::CLD_EXITED,
+                self.exit.status.load(Ordering::Acquire) & 0xFF,
+            )
+        } else {
+            (kill::CLD_KILLED, signal as i32)
+        }
+    }
+
+    /// Where its children go when it ends: the nearest ancestor still running
+    /// that set `PR_SET_CHILD_SUBREAPER`, or else init, if init is running and
+    /// is not this process.
+    fn reaper_for_orphans(&self) -> Option<Arc<Process>> {
+        let mut ancestor = self.parent();
+        while let Some(candidate) = ancestor {
+            if !candidate.is_terminated() && attributes::get(&candidate).child_subreaper {
+                return Some(candidate);
+            }
+            ancestor = candidate.parent();
+        }
+        registry::find(registry::INIT_PID)
+            .filter(|init| !init.is_terminated() && !core::ptr::eq(Arc::as_ptr(init), self))
     }
 }
 
@@ -748,12 +812,7 @@ impl Process {
         self.stopped.store(signal, Ordering::Release);
         self.continue_report.store(false, Ordering::Release);
         self.stop_report.store(signal, Ordering::Release);
-        kill::tell_parent(
-            self,
-            ferrix_linux_abi::types::SIGCHLD,
-            kill::CLD_STOPPED,
-            signal as i32,
-        );
+        kill::tell_parent(self, SIGCHLD, kill::CLD_STOPPED, signal as i32);
     }
 
     /// Continue it if it is stopped, and tell its parent: what `SIGCONT` does
@@ -767,7 +826,7 @@ impl Process {
         self.resumed.wake_all();
         kill::tell_parent(
             self,
-            ferrix_linux_abi::types::SIGCHLD,
+            SIGCHLD,
             kill::CLD_CONTINUED,
             ferrix_linux_abi::types::SIGCONT as i32,
         );

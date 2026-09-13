@@ -889,6 +889,10 @@ pub(crate) static STAGE7_SYSCALLS: Explanation = Explanation {
          on a frame that never returns, in a table nothing empties, or in a cycle, so the \
          frames of programs that exited never come back (the `give every frame back` \
          messages).",
+        "An orphan is handed to nobody, to the wrong process, or to a list it is not in: \
+         `Process::end` no longer looks for a reaping ancestor or init, changes the orphan's \
+         parent before the new parent's list holds it, or keeps a reaper that has ended \
+         (the `orphan` messages).",
     ],
     see: "kernel/src/syscall/check.rs run; kernel/src/syscall/mod.rs dispatch; libs/linux-abi; \
           docs/ROADMAP.md stage 7",
