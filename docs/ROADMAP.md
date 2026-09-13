@@ -849,6 +849,37 @@ wakes whoever waits on it. The boot test catches a wake that rouses nobody:
 
       futex    a changed word got EAGAIN and a timed wait ETIMEDOUT; a wake and a requeue roused 2 waiters, and a wake that roused nobody was caught
 
+A process's descriptors close when it ends, as Linux's exit closes them, not
+when its parent reaps it: otherwise a pipe's write end outlives the program
+that wrote, and `ls | wc -l` waits for an end of file that only reaping brings.
+
+**The calls busybox makes around the edges.** Measured across both busyboxes'
+applets and answered as a single-user system without networking answers them:
+`prctl` (name, death signal, dumpable, no-new-privileges, subreaper, bounding
+set), the robust-list head, resource limits (`RLIMIT_NOFILE` is the descriptor
+table's own), priorities and I/O priorities, `personality`, the scheduler's
+affinity and policy queries, credentials (uid and gid 0, anything else
+`EPERM`; `getgroups` reports group 0; capabilities 0 to 40 held), `nanosleep`
+and `clock_nanosleep`, `times` and `getrusage`, setting the real-time clock,
+`adjtimex` queries, host and domain names, `sysinfo`, `getcpu`, `syslog` over
+an empty log, `reboot` powering off, and every socket call refused as Linux
+without the address family refuses it. Their checks run in the handler group
+with every structure's buffer poisoned beyond its end. Still `ENOSYS`, each
+said so at its arm: swap, modules, System V shared memory, `acct`, `vhangup`
+and `rseq`.
+
+**`mremap`, `execveat`, and what `/proc/self/exe` says.** `mremap` shrinks in
+place, grows in place when the pages after are free, and otherwise moves --
+a private mapping's frames moved into a new object of the new length rather
+than copied, keeping protection and copy-on-write -- and refuses as Linux does,
+checked with a string across a page boundary surviving the move. `execveat`
+shares `execve`'s path, `AT_EMPTY_PATH` included. `unshare` answers what a
+process without namespaces can honestly answer, and `setns` refuses. A program
+is recorded as the absolute path of the file actually loaded, symlinks
+resolved and a script's interpreter rather than the script, which is what
+glibc's static start-up reads back through `/proc/self/exe`; `AT_EXECFN` is the
+name `execve` was given.
+
 **Left, and why it did not block the exit:**
 
 * **Signal delivery and `rt_sigreturn`**, and `SIGSEGV` from the fault path,
@@ -856,10 +887,10 @@ wakes whoever waits on it. The boot test catches a wake that rouses nobody:
   that has to kill a program.
 * **Threads**, which nothing single-threaded calls: `CLONE_VM` without
   `CLONE_VFORK`, and `CLONE_THREAD`, are `ENOSYS`.
-* **Everything that opens a file**, `fcntl` included — stage 8.
 * **Three stand-ins, each written down where it lives.** The console's `read`
   does a line discipline's job until stage 15 brings ttys; the real-time clocks
-  read 1970 until something reads a clock chip; `getrandom` is xorshift seeded
+  start at 1970 until something reads a clock chip, though `clock_settime`
+  moves them; `getrandom` is xorshift seeded
   from a counter and says so.
 
 ---

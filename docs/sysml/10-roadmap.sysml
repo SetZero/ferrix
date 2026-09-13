@@ -200,12 +200,15 @@ package FerrixRoadmap {
              * then fork, vfork and clone without threads, execve, wait4 and
              * waitid, and the process-group and session calls, with a forking
              * and an exec'ing program in the boot test; futex waits, wakes and
-             * requeues, and clone3 through the same path as clone.
+             * requeues, and clone3 through the same path as clone;
+             * descriptors closed when a process ends; and the edge calls
+             * busybox makes -- prctl, limits, priorities, credentials, sleeps,
+             * clock setting, host names, sysinfo, syslog, reboot, and
+             * sockets refused; mremap, execveat, unshare and setns; and
+             * /proc/self/exe as the resolved file actually loaded.
              *
-             * Left: signal delivery and rt_sigreturn, threads,
-             * everything that opens a file including the fcntl
-             * busybox's printf asks for, and the stand-ins for a tty, a clock
-             * chip and an entropy source. */
+             * Left: signal delivery and rt_sigreturn, threads, and the
+             * stand-ins for a tty, a clock chip and an entropy source. */
     }
 
     #inProgress requirement <'S8'> stage8Vfs : Stage {
