@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "aa66b06bbfc4106d3733f885a3b478f4891afede4efb95be3b397ba718250fd2",
+  "digest": "83e0999ac5be58945bbb6d903ad68647625695bcaaeb6271c3d1e255aa68c314",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -4188,7 +4188,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::vfs",
                   "kind": "attribute",
                   "redefines": "hostTests",
-                  "value": "51",
+                  "value": "59",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 838
