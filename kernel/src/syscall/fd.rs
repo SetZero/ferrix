@@ -434,5 +434,9 @@ pub(crate) fn sys_ioctl(
     if Arc::ptr_eq(file.io(), &console::console_inode()) {
         return tty::ioctl(process, &file, request, arg);
     }
+    // The two socket requests, which ask a socket what is queued each way.
+    if let Some(socket) = fs::socket::of(&file) {
+        return socket.ioctl(process, request, arg);
+    }
     Err(Errno::ENOTTY)
 }

@@ -22,6 +22,14 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use ferrix_bootinfo::{KERNEL_HALF_BASE, PAGE_SIZE};
 use ferrix_linux_abi::errno::Errno;
+use ferrix_linux_abi::nr::Syscall as Call;
+use ferrix_linux_abi::socket::{
+    AF_MAX, AF_UNIX, CmsgHdr, MSG_NOSIGNAL, MSG_OOB, MSG_PEEK, MSG_TRUNC, MSG_WAITALL, MsgHdr,
+    SCM_RIGHTS, SHUT_RD, SHUT_WR, SIOCINQ, SIOCOUTQ, SO_ACCEPTCONN, SO_DOMAIN, SO_ERROR,
+    SO_PEERCRED, SO_PROTOCOL, SO_RCVBUF, SO_RCVTIMEO_OLD, SO_TYPE, SOCK_DGRAM, SOCK_NONBLOCK,
+    SOCK_RDM, SOCK_SEQPACKET, SOCK_STREAM, SOCKET_BUFFER_MIN, SOL_SOCKET, Ucred, Width, cmsg_len,
+    cmsg_space,
+};
 use ferrix_linux_abi::types::{
     AT_FDCWD, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
     MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED,
@@ -37,7 +45,7 @@ use crate::console::println;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{Outcome, SyscallArgs, dispatch, uaccess};
-use crate::syscall::{exec, fd, file, image, load, signal, system, time};
+use crate::syscall::{exec, fd, file, image, load, signal, sockets, system, time};
 use crate::user::space::MMAP_MIN_ADDR;
 
 /// What the checks measured, for the boot log.
@@ -5505,7 +5513,7 @@ fn check_what_an_applet_asks_of_the_system(process: &Process) -> Result<(), &'st
         .and_then(|()| check_nanosleep_takes_its_time(process, page))
         .and_then(|()| check_setting_the_clock_moves_only_realtime(process, page))
         .and_then(|()| check_a_host_name_reaches_uname(process, page))
-        .and_then(|()| check_sockets_are_refused_honestly(process));
+        .and_then(|()| check_unix_sockets(process, page));
     let outcome = outcome.and_then(|()| check_time_is_the_realtime_seconds(process, page));
     let _ = memory::sys_munmap(process, page, PAGE_SIZE);
     outcome
@@ -6226,31 +6234,805 @@ fn check_a_host_name_reaches_uname(process: &Process, page: u64) -> Result<(), &
     outcome
 }
 
-/// `socket` is `EAFNOSUPPORT` for a family Linux has, a socket call on the
-/// console is `ENOTSOCK`, and one on a closed descriptor is `EBADF`.
-fn check_sockets_are_refused_honestly(process: &Process) -> Result<(), &'static str> {
-    use crate::syscall::sockets;
-    use ferrix_linux_abi::nr::Syscall as Call;
-    const AF_INET: i32 = 2;
-    const SOCK_STREAM: u32 = 1;
+// ---------------------------------------------------------------------------
+// Unix-domain sockets
+//
+// Through `dispatch`, the path a program arrives by: a pair of each type,
+// what it carries, what it reports about itself, and what the calls still
+// refuse. Every socket here is non-blocking, because a boot check must never
+// be the thing that waits, and every send passes `MSG_NOSIGNAL`, because the
+// boot task is not a process that could take a `SIGPIPE`.
+// ---------------------------------------------------------------------------
 
+/// Where a socket check stages what it sends, as an offset in its page.
+const SENT: u64 = 0x100;
+
+/// Where it reads what arrived.
+const RECEIVED: u64 = 0x200;
+
+/// Where it builds a `msghdr`, with its iovecs and control buffer after it.
+const MESSAGE: u64 = 0x300;
+
+/// `AF_UNIX` sockets: what a pair carries, what a socket reports, and what
+/// the calls refuse.
+fn check_unix_sockets(process: &Process, page: u64) -> Result<(), &'static str> {
+    check_what_the_socket_calls_refuse(process, page)
+        .and_then(|()| check_a_stream_pair_carries_bytes(process, page))
+        .and_then(|()| check_records_keep_their_boundaries(process, page))
+        .and_then(|()| check_shutdown_ends_one_direction(process, page))
+        .and_then(|()| check_a_socket_reports_itself(process, page))
+        .and_then(|()| check_a_message_scatters_and_gathers(process, page))?;
+    println!(
+        "  unix     a stream pair carried bytes across two writes and a peek left them; \
+         records kept their boundaries and MSG_TRUNC their lengths; shutdown ended one \
+         direction; a socket reported its type, buffers, credentials and unnamed address"
+    );
+    Ok(())
+}
+
+/// One socket call, through the dispatcher every socket call arrives by.
+fn socket_call(process: &Process, call: Call, a: &[u64; 6]) -> Result<usize, Errno> {
+    sockets::dispatch(call, a, process).unwrap_or(Err(Errno::ENOSYS))
+}
+
+/// A descriptor as the call argument it arrives as.
+fn as_arg(fd: i32) -> u64 {
+    u64::from(fd.cast_unsigned())
+}
+
+/// This build's pointer width, which every structure a socket call reads has.
+fn width() -> Width {
+    if size_of::<usize>() == 8 {
+        Width::Bits64
+    } else {
+        Width::Bits32
+    }
+}
+
+/// A connected pair of non-blocking sockets of `kind`.
+fn socket_pair(process: &Process, page: u64, kind: u32) -> Result<(i32, i32), &'static str> {
+    let family = u64::from(AF_UNIX);
+    let kind = u64::from(kind | SOCK_NONBLOCK);
+    if socket_call(process, Call::Socketpair, &[family, kind, 0, page, 0, 0]) != Ok(0) {
+        return Err("socketpair would not make a pair of Unix sockets");
+    }
+    let mut numbers = [0_u8; 8];
+    uaccess::copy_from_user(process.space(), page, &mut numbers)
+        .map_err(|_| "could not read back the pair's descriptors")?;
+    let one = i32::from_le_bytes(*numbers.first_chunk::<4>().ok_or("impossible")?);
+    let other = i32::from_le_bytes(*numbers.last_chunk::<4>().ok_or("impossible")?);
+    if one < 0 || other < 0 || one == other {
+        return Err("socketpair reported two descriptors that cannot be a pair");
+    }
+    Ok((one, other))
+}
+
+/// Close a pair, whatever the check that used it decided.
+fn close_socket_pair(process: &Process, pair: (i32, i32)) {
+    let _ = fd::sys_close(process, pair.0);
+    let _ = fd::sys_close(process, pair.1);
+}
+
+/// Send `data` through `fd`, staged in the page, never raising `SIGPIPE`.
+fn socket_send(
+    process: &Process,
+    page: u64,
+    fd: i32,
+    data: &[u8],
+    flags: u32,
+) -> Result<usize, Errno> {
+    let at = page + SENT;
+    uaccess::copy_to_user(process.space(), at, data).map_err(|_| Errno::EFAULT)?;
+    let flags = u64::from(flags | MSG_NOSIGNAL);
+    socket_call(
+        process,
+        Call::Sendto,
+        &[as_arg(fd), at, data.len() as u64, flags, 0, 0],
+    )
+}
+
+/// Receive up to `len` bytes from `fd` into the page.
+fn socket_recv(
+    process: &Process,
+    page: u64,
+    fd: i32,
+    len: u64,
+    flags: u32,
+) -> Result<usize, Errno> {
+    socket_call(
+        process,
+        Call::Recvfrom,
+        &[as_arg(fd), page + RECEIVED, len, u64::from(flags), 0, 0],
+    )
+}
+
+/// What the last receive left in the page: `len` bytes of it.
+fn socket_received(process: &Process, page: u64, len: usize) -> Result<Vec<u8>, &'static str> {
+    let mut out = alloc::vec![0_u8; len];
+    uaccess::copy_from_user(process.space(), page + RECEIVED, &mut out)
+        .map_err(|_| "could not read back what a socket received")?;
+    Ok(out)
+}
+
+/// What `ioctl` says is queued: `SIOCINQ` to read, `SIOCOUTQ` to send.
+fn socket_queued(process: &Process, page: u64, fd: i32, request: u32) -> Result<u32, &'static str> {
+    let _ = fd::sys_ioctl(process, fd, request, page + RECEIVED)
+        .map_err(|_| "a socket would not say what it has queued")?;
+    uaccess::get_u32(process.space(), page + RECEIVED).map_err(|_| "could not read a queue length")
+}
+
+/// `getsockopt(SOL_SOCKET, name)`, up to `len` bytes of it.
+fn socket_option(
+    process: &Process,
+    page: u64,
+    fd: i32,
+    name: i32,
+    len: usize,
+) -> Result<Vec<u8>, Errno> {
+    let length = page + RECEIVED;
+    let value = length + 8;
+    uaccess::put_u32(process.space(), length, u32::try_from(len).unwrap_or(0))?;
+    let level = u64::from(SOL_SOCKET.cast_unsigned());
+    let name = u64::from(name.cast_unsigned());
+    let _ = socket_call(
+        process,
+        Call::Getsockopt,
+        &[as_arg(fd), level, name, value, length, 0],
+    )?;
+    let mut out = alloc::vec![0_u8; len];
+    uaccess::copy_from_user(process.space(), value, &mut out).map_err(|_| Errno::EFAULT)?;
+    Ok(out)
+}
+
+/// The first four bytes of an option, as the `int` most of them are.
+fn socket_option_int(process: &Process, page: u64, fd: i32, name: i32) -> Result<i32, Errno> {
+    let bytes = socket_option(process, page, fd, name, 4)?;
+    let bytes = bytes.first_chunk::<4>().ok_or(Errno::EINVAL)?;
+    Ok(i32::from_le_bytes(*bytes))
+}
+
+/// `setsockopt(SOL_SOCKET, name, value)`.
+fn set_socket_option(
+    process: &Process,
+    page: u64,
+    fd: i32,
+    name: i32,
+    value: &[u8],
+) -> Result<usize, Errno> {
+    let at = page + SENT;
+    uaccess::copy_to_user(process.space(), at, value).map_err(|_| Errno::EFAULT)?;
+    let level = u64::from(SOL_SOCKET.cast_unsigned());
+    let name = u64::from(name.cast_unsigned());
+    socket_call(
+        process,
+        Call::Setsockopt,
+        &[as_arg(fd), level, name, at, value.len() as u64, 0],
+    )
+}
+
+/// What the socket calls refuse: the families and types `AF_UNIX` is not, a
+/// call on something that is not a socket, and one on a closed descriptor.
+fn check_what_the_socket_calls_refuse(process: &Process, page: u64) -> Result<(), &'static str> {
+    const INET: u64 = 2;
+    let unix = u64::from(AF_UNIX);
+    let stream = u64::from(SOCK_STREAM);
+    let socket = |a: [u64; 6]| socket_call(process, Call::Socket, &a);
     refuses(
-        sockets::sys_socket(AF_INET, SOCK_STREAM),
+        socket([INET, stream, 0, 0, 0, 0]),
         Errno::EAFNOSUPPORT,
         "socket(AF_INET, SOCK_STREAM) was not EAFNOSUPPORT",
     )?;
     refuses(
-        sockets::sys_socket(AF_INET, SOCK_STREAM | 0x100),
+        socket([u64::from(AF_MAX), stream, 0, 0, 0, 0]),
+        Errno::EAFNOSUPPORT,
+        "socket for a family past AF_MAX was not EAFNOSUPPORT",
+    )?;
+    refuses(
+        socket([unix, stream | 0x100, 0, 0, 0, 0]),
         Errno::EINVAL,
         "a socket type with an unknown flag was not EINVAL",
     )?;
-    if sockets::dispatch(Call::Bind, &[1, 0, 0, 0, 0, 0], process) != Some(Err(Errno::ENOTSOCK)) {
-        return Err("bind on the console was not ENOTSOCK");
+    refuses(
+        socket([unix, 11, 0, 0, 0, 0]),
+        Errno::EINVAL,
+        "a socket type past SOCK_MAX was not EINVAL",
+    )?;
+    refuses(
+        socket([unix, u64::from(SOCK_RDM), 0, 0, 0, 0]),
+        Errno::ESOCKTNOSUPPORT,
+        "SOCK_RDM on AF_UNIX was not ESOCKTNOSUPPORT",
+    )?;
+    refuses(
+        socket([unix, stream, 6, 0, 0, 0]),
+        Errno::EPROTONOSUPPORT,
+        "TCP's protocol number on AF_UNIX was not EPROTONOSUPPORT",
+    )?;
+    refuses(
+        socket_call(
+            process,
+            Call::Socketpair,
+            &[unix, stream, 0, KERNEL_HALF_BASE, 0, 0],
+        ),
+        Errno::EFAULT,
+        "socketpair wrote its descriptors into the kernel half",
+    )?;
+    refuses(
+        socket_call(process, Call::Bind, &[1, 0, 0, 0, 0, 0]),
+        Errno::ENOTSOCK,
+        "bind on the console was not ENOTSOCK",
+    )?;
+    refuses(
+        socket_call(process, Call::Listen, &[99, 0, 0, 0, 0, 0]),
+        Errno::EBADF,
+        "listen on a closed descriptor was not EBADF",
+    )?;
+    check_a_socket_refuses_what_is_still_to_come(process, page)
+}
+
+/// On a socket that is real, the calls the next landings bring say so, and
+/// the arguments none of them will ever take are refused as Linux refuses
+/// them.
+fn check_a_socket_refuses_what_is_still_to_come(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    let pair = socket_pair(process, page, SOCK_STREAM)?;
+    let outcome = (|| {
+        let fd = as_arg(pair.0);
+        let names = [Call::Bind, Call::Listen, Call::Connect, Call::Accept];
+        for call in names {
+            if socket_call(process, call, &[fd, page, 0, 0, 0, 0]) != Err(Errno::EOPNOTSUPP) {
+                return Err("a name call on a Unix socket was not EOPNOTSUPP");
+            }
+        }
+        refuses(
+            socket_call(process, Call::Accept4, &[fd, page, 0, 0x4000, 0, 0]),
+            Errno::EINVAL,
+            "accept4 with an unknown flag was not EINVAL",
+        )?;
+        refuses(
+            socket_send(process, page, pair.0, b"x", MSG_OOB),
+            Errno::EOPNOTSUPP,
+            "MSG_OOB on a Unix socket was not EOPNOTSUPP",
+        )?;
+        refuses(
+            socket_call(process, Call::Shutdown, &[fd, 7, 0, 0, 0, 0]),
+            Errno::EINVAL,
+            "shutdown with an unknown direction was not EINVAL",
+        )
+    })();
+    close_socket_pair(process, pair);
+    outcome
+}
+
+/// A stream pair: bytes in one end and out of the other, across writes, with
+/// the queue lengths, a peek, and what an empty non-blocking socket says.
+fn check_a_stream_pair_carries_bytes(process: &Process, page: u64) -> Result<(), &'static str> {
+    let pair = socket_pair(process, page, SOCK_STREAM)?;
+    let outcome = stream_pair_answers(process, page, pair);
+    close_socket_pair(process, pair);
+    outcome
+}
+
+/// [`check_a_stream_pair_carries_bytes`]'s questions.
+fn stream_pair_answers(
+    process: &Process,
+    page: u64,
+    (one, other): (i32, i32),
+) -> Result<(), &'static str> {
+    refuses(
+        socket_recv(process, page, other, 8, 0),
+        Errno::EAGAIN,
+        "an empty non-blocking socket did not answer EAGAIN",
+    )?;
+    let empty = fd::file(process, one).map_err(|_| "a pair lost a descriptor")?;
+    if !empty.io().poll().writable || empty.io().poll().readable {
+        return Err("an empty socket was not writable and only writable");
     }
-    if sockets::dispatch(Call::Listen, &[99, 0, 0, 0, 0, 0], process) != Some(Err(Errno::EBADF)) {
-        return Err("listen on a closed descriptor was not EBADF");
+    answers(
+        socket_send(process, page, one, b"hel", 0),
+        3,
+        "a stream socket did not take three bytes",
+    )?;
+    answers(
+        socket_send(process, page, one, b"lo", 0),
+        2,
+        "a stream socket did not take two more bytes",
+    )?;
+    if socket_queued(process, page, one, SIOCOUTQ)? != 5
+        || socket_queued(process, page, other, SIOCINQ)? != 5
+    {
+        return Err("a stream pair did not report five bytes queued between them");
+    }
+    // A peek reads without taking, so the queue is as long afterwards.
+    answers(
+        socket_recv(process, page, other, 8, MSG_PEEK),
+        5,
+        "a peek did not see five bytes",
+    )?;
+    if socket_received(process, page, 5)? != b"hello" {
+        return Err("a peek did not see both writes as one stream");
+    }
+    if socket_queued(process, page, other, SIOCINQ)? != 5 {
+        return Err("a peek took the bytes it looked at");
+    }
+    // Then a read that crosses both writes, and one that finds the rest.
+    answers(
+        socket_recv(process, page, other, 4, 0),
+        4,
+        "a stream read did not cross the two writes",
+    )?;
+    if socket_received(process, page, 4)? != b"hell" {
+        return Err("a stream read gave back the wrong bytes");
+    }
+    // `MSG_WAITALL` on a non-blocking socket takes what is there.
+    answers(
+        socket_recv(process, page, other, 8, MSG_WAITALL),
+        1,
+        "MSG_WAITALL on a non-blocking socket did not take what was queued",
+    )?;
+    // A length with no address names nothing, as on Linux.
+    let at = page + SENT;
+    uaccess::copy_to_user(process.space(), at, b"z").map_err(|_| "could not stage a byte")?;
+    answers(
+        socket_call(
+            process,
+            Call::Sendto,
+            &[as_arg(one), at, 1, u64::from(MSG_NOSIGNAL), 0, 16],
+        ),
+        1,
+        "sendto with a length but no address was refused on a connected stream",
+    )?;
+    answers(
+        socket_recv(process, page, other, 8, 0),
+        1,
+        "a send with a length but no address did not arrive",
+    )?;
+    refuses(
+        socket_recv(process, page, other, 8, 0),
+        Errno::EAGAIN,
+        "a drained non-blocking socket did not answer EAGAIN",
+    )
+}
+
+/// A sequenced-packet pair keeps each send whole and truncates a record that
+/// does not fit, and a datagram pair reports the next record's length rather
+/// than everything it holds.
+fn check_records_keep_their_boundaries(process: &Process, page: u64) -> Result<(), &'static str> {
+    let pair = socket_pair(process, page, SOCK_SEQPACKET)?;
+    let outcome = record_pair_answers(process, page, pair);
+    close_socket_pair(process, pair);
+    outcome?;
+    let pair = socket_pair(process, page, SOCK_DGRAM)?;
+    let outcome = datagram_pair_answers(process, page, pair);
+    close_socket_pair(process, pair);
+    outcome
+}
+
+/// [`check_records_keep_their_boundaries`]'s sequenced-packet half.
+fn record_pair_answers(
+    process: &Process,
+    page: u64,
+    (one, other): (i32, i32),
+) -> Result<(), &'static str> {
+    answers(
+        socket_send(process, page, one, b"abc", 0),
+        3,
+        "a sequenced-packet socket did not take a three-byte record",
+    )?;
+    answers(
+        socket_send(process, page, one, b"wxyz", 0),
+        4,
+        "a sequenced-packet socket did not take a second record",
+    )?;
+    // A short read takes the record's head and drops its tail, and with
+    // `MSG_TRUNC` says how long the whole record was.
+    answers(
+        socket_recv(process, page, other, 2, MSG_TRUNC),
+        3,
+        "MSG_TRUNC did not report the whole record's length",
+    )?;
+    if socket_received(process, page, 2)? != b"ab" {
+        return Err("a short record read gave back the wrong bytes");
+    }
+    // The next read finds the second record, not the first one's tail.
+    answers(
+        socket_recv(process, page, other, 8, 0),
+        4,
+        "a record read did not find the whole second record",
+    )?;
+    if socket_received(process, page, 4)? != b"wxyz" {
+        return Err("the second record came back changed");
+    }
+    refuses(
+        socket_recv(process, page, other, 8, 0),
+        Errno::EAGAIN,
+        "a drained record socket did not answer EAGAIN",
+    )
+}
+
+/// [`check_records_keep_their_boundaries`]'s datagram half.
+fn datagram_pair_answers(
+    process: &Process,
+    page: u64,
+    (one, other): (i32, i32),
+) -> Result<(), &'static str> {
+    answers(
+        socket_send(process, page, one, b"abc", 0),
+        3,
+        "a datagram socket did not take a datagram",
+    )?;
+    answers(
+        socket_send(process, page, one, b"wxyz", 0),
+        4,
+        "a datagram socket did not take a second datagram",
+    )?;
+    if socket_queued(process, page, other, SIOCINQ)? != 3 {
+        return Err("a datagram socket did not report the next datagram's length");
+    }
+    // A datagram socket that stopped receiving refuses with EPIPE, not as if
+    // it had gone.
+    let how = u64::from(SHUT_RD);
+    if socket_call(process, Call::Shutdown, &[as_arg(other), how, 0, 0, 0, 0]) != Ok(0) {
+        return Err("shutdown(SHUT_RD) on a datagram socket was refused");
+    }
+    refuses(
+        socket_send(process, page, one, b"x", 0),
+        Errno::EPIPE,
+        "a datagram sent to a socket that stopped receiving was not EPIPE",
+    )?;
+    // A socket `socket` made has no peer: a name for one is the next landing.
+    let kind = u64::from(SOCK_DGRAM | SOCK_NONBLOCK);
+    let alone = socket_call(
+        process,
+        Call::Socket,
+        &[u64::from(AF_UNIX), kind, 0, 0, 0, 0],
+    )
+    .map_err(|_| "socket would not make an unconnected datagram socket")?;
+    let alone = i32::try_from(alone).map_err(|_| "an impossible descriptor")?;
+    let outcome = refuses(
+        socket_send(process, page, alone, b"x", 0),
+        Errno::ENOTCONN,
+        "a send on an unconnected datagram socket was not ENOTCONN",
+    );
+    let _ = fd::sys_close(process, alone);
+    outcome
+}
+
+/// `shutdown` ends one direction at a time: the peer of a socket that has
+/// stopped sending reads what is queued and then end of file, and a socket
+/// that has stopped receiving breaks its peer's sends.
+fn check_shutdown_ends_one_direction(process: &Process, page: u64) -> Result<(), &'static str> {
+    let pair = socket_pair(process, page, SOCK_STREAM)?;
+    let outcome = shutdown_answers(process, page, pair);
+    close_socket_pair(process, pair);
+    outcome?;
+    let pair = socket_pair(process, page, SOCK_STREAM)?;
+    let outcome = (|| {
+        let how = u64::from(SHUT_RD);
+        if socket_call(process, Call::Shutdown, &[as_arg(pair.1), how, 0, 0, 0, 0]) != Ok(0) {
+            return Err("shutdown(SHUT_RD) was refused");
+        }
+        refuses(
+            socket_send(process, page, pair.0, b"x", 0),
+            Errno::EPIPE,
+            "a send to a socket that stopped receiving was not EPIPE",
+        )
+    })();
+    close_socket_pair(process, pair);
+    outcome
+}
+
+/// [`check_shutdown_ends_one_direction`]'s writer half.
+fn shutdown_answers(
+    process: &Process,
+    page: u64,
+    (one, other): (i32, i32),
+) -> Result<(), &'static str> {
+    answers(
+        socket_send(process, page, one, b"last", 0),
+        4,
+        "a stream socket did not take its last four bytes",
+    )?;
+    let how = u64::from(SHUT_WR);
+    if socket_call(process, Call::Shutdown, &[as_arg(one), how, 0, 0, 0, 0]) != Ok(0) {
+        return Err("shutdown(SHUT_WR) was refused");
+    }
+    refuses(
+        socket_send(process, page, one, b"more", 0),
+        Errno::EPIPE,
+        "a send after shutdown(SHUT_WR) was not EPIPE",
+    )?;
+    // What was queued before the shutdown is still there to be read.
+    answers(
+        socket_recv(process, page, other, 8, 0),
+        4,
+        "the bytes queued before a shutdown were lost",
+    )?;
+    answers(
+        socket_recv(process, page, other, 8, 0),
+        0,
+        "a drained socket whose peer stopped sending did not read end of file",
+    )?;
+    let ended = fd::file(process, other).map_err(|_| "a pair lost a descriptor")?;
+    if !ended.io().poll().readable {
+        return Err("a socket at end of file was not readable");
     }
     Ok(())
+}
+
+/// What a socket says about itself: its type, its family, its buffer sizes,
+/// the credentials of whoever made it, a timeout that reads back, and the
+/// unnamed address it has until names land.
+fn check_a_socket_reports_itself(process: &Process, page: u64) -> Result<(), &'static str> {
+    let pair = socket_pair(process, page, SOCK_SEQPACKET)?;
+    let outcome = socket_reports(process, page, pair.0);
+    close_socket_pair(process, pair);
+    outcome
+}
+
+/// [`check_a_socket_reports_itself`]'s questions.
+fn socket_reports(process: &Process, page: u64, fd: i32) -> Result<(), &'static str> {
+    let option = |name: i32| socket_option_int(process, page, fd, name);
+    if option(SO_TYPE) != Ok(SOCK_SEQPACKET.cast_signed()) {
+        return Err("SO_TYPE did not report the type the socket was made with");
+    }
+    if option(SO_DOMAIN) != Ok(i32::from(AF_UNIX)) || option(SO_PROTOCOL) != Ok(0) {
+        return Err("a Unix socket did not report its family and protocol");
+    }
+    if option(SO_ERROR) != Ok(0) || option(SO_ACCEPTCONN) != Ok(0) {
+        return Err("a socket that is neither failed nor listening said it was");
+    }
+    // Linux keeps twice what a program asks for, and reports what it kept.
+    if set_socket_option(process, page, fd, SO_RCVBUF, &8192_i32.to_le_bytes()) != Ok(0)
+        || option(SO_RCVBUF) != Ok(16384)
+    {
+        return Err("SO_RCVBUF did not read back as twice what was set");
+    }
+    if set_socket_option(process, page, fd, SO_RCVBUF, &1_i32.to_le_bytes()) != Ok(0)
+        || option(SO_RCVBUF) != Ok(i32::try_from(SOCKET_BUFFER_MIN).unwrap_or(0))
+    {
+        return Err("SO_RCVBUF went below the smallest socket buffer");
+    }
+    refuses(
+        set_socket_option(process, page, fd, SO_RCVBUF, &[1, 0]),
+        Errno::EINVAL,
+        "a socket option shorter than an int was not EINVAL",
+    )?;
+    if option(999) != Err(Errno::ENOPROTOOPT) {
+        return Err("an unknown socket option was not ENOPROTOOPT");
+    }
+    socket_credentials_and_timeouts(process, page, fd)?;
+    socket_names_are_unnamed(process, page, fd)
+}
+
+/// The credentials a pair reports, and a timeout that reads back as it was
+/// set -- with microseconds that are not microseconds refused.
+fn socket_credentials_and_timeouts(
+    process: &Process,
+    page: u64,
+    fd: i32,
+) -> Result<(), &'static str> {
+    let credentials = socket_option(process, page, fd, SO_PEERCRED, Ucred::SIZE)
+        .map_err(|_| "SO_PEERCRED was refused")?;
+    let credentials = Ucred::from_bytes(&credentials).ok_or("SO_PEERCRED was too short")?;
+    if credentials.pid != i32::try_from(process.pid()).unwrap_or(-1) {
+        return Err("SO_PEERCRED did not name the process that made the pair");
+    }
+    let word = size_of::<usize>();
+    let mut timeout = alloc::vec![0_u8; word * 2];
+    stage_word(&mut timeout, 0, 2)?;
+    stage_word(&mut timeout, word, 500)?;
+    if set_socket_option(process, page, fd, SO_RCVTIMEO_OLD, &timeout) != Ok(0) {
+        return Err("SO_RCVTIMEO was refused");
+    }
+    let read_back = socket_option(process, page, fd, SO_RCVTIMEO_OLD, word * 2)
+        .map_err(|_| "SO_RCVTIMEO would not read back")?;
+    if read_back != timeout {
+        return Err("SO_RCVTIMEO did not read back the time it was set to");
+    }
+    let mut absurd = alloc::vec![0_u8; word * 2];
+    stage_word(&mut absurd, word, 2_000_000)?;
+    refuses(
+        set_socket_option(process, page, fd, SO_RCVTIMEO_OLD, &absurd),
+        Errno::EDOM,
+        "a timeout of more microseconds than a second was accepted",
+    )
+}
+
+/// Write one pointer-sized word into a buffer this check is building.
+fn stage_word(bytes: &mut [u8], at: usize, value: u64) -> Result<(), &'static str> {
+    width()
+        .put_word(bytes, at, value)
+        .ok_or("could not stage a word")
+}
+
+/// Every socket is unnamed until names land, which `getsockname` reports as
+/// the family alone; a socket with no peer has none to report at all.
+fn socket_names_are_unnamed(process: &Process, page: u64, fd: i32) -> Result<(), &'static str> {
+    let length = page + RECEIVED;
+    let address = length + 8;
+    uaccess::put_u32(process.space(), length, 128).map_err(|_| "could not stage a length")?;
+    let call = [as_arg(fd), address, length, 0, 0, 0];
+    if socket_call(process, Call::Getsockname, &call) != Ok(0) {
+        return Err("getsockname on a Unix socket was refused");
+    }
+    let reported =
+        uaccess::get_u32(process.space(), length).map_err(|_| "could not read a length back")?;
+    let mut family = [0_u8; 2];
+    uaccess::copy_from_user(process.space(), address, &mut family)
+        .map_err(|_| "could not read an address")?;
+    if reported != 2 || u16::from_le_bytes(family) != AF_UNIX {
+        return Err("an unnamed socket did not report AF_UNIX and nothing else");
+    }
+    // The peer of a pair is unnamed too; a socket without one says so.
+    if socket_call(process, Call::Getpeername, &call) != Ok(0) {
+        return Err("getpeername on a connected socket was refused");
+    }
+    let alone = socket_call(
+        process,
+        Call::Socket,
+        &[u64::from(AF_UNIX), u64::from(SOCK_STREAM), 0, 0, 0, 0],
+    )
+    .map_err(|_| "socket would not make an unconnected socket")?;
+    let alone = i32::try_from(alone).map_err(|_| "an impossible descriptor")?;
+    let unconnected = fd::file(process, alone)
+        .map_err(|_| "a socket lost its descriptor")?
+        .io()
+        .poll();
+    if !unconnected.writable || !unconnected.hangup {
+        let _ = fd::sys_close(process, alone);
+        return Err("an unconnected stream socket did not poll as writable and hung up");
+    }
+    let outcome = refuses(
+        socket_recv(process, page, alone, 8, 0),
+        Errno::EINVAL,
+        "a receive on a stream socket that was never connected was not EINVAL",
+    )
+    .and_then(|()| {
+        refuses(
+            socket_call(
+                process,
+                Call::Getpeername,
+                &[as_arg(alone), address, length, 0, 0, 0],
+            ),
+            Errno::ENOTCONN,
+            "getpeername on an unconnected socket was not ENOTCONN",
+        )
+    });
+    let _ = fd::sys_close(process, alone);
+    outcome
+}
+
+/// `sendmsg` gathers a message's buffers and `recvmsg` scatters what arrives
+/// over its own, whatever their shapes; a message carrying descriptors waits
+/// for the landing that carries them.
+fn check_a_message_scatters_and_gathers(process: &Process, page: u64) -> Result<(), &'static str> {
+    let pair = socket_pair(process, page, SOCK_SEQPACKET)?;
+    let outcome = message_answers(process, page, pair);
+    close_socket_pair(process, pair);
+    outcome
+}
+
+/// [`check_a_message_scatters_and_gathers`]'s questions.
+fn message_answers(
+    process: &Process,
+    page: u64,
+    (one, other): (i32, i32),
+) -> Result<(), &'static str> {
+    let word = size_of::<usize>() as u64;
+    let header = page + MESSAGE;
+    let iov = header + 0x40;
+    // Two buffers out of the staged bytes, three back into the page.
+    uaccess::copy_to_user(process.space(), page + SENT, b"gathered")
+        .map_err(|_| "could not stage a message")?;
+    write_word(process, iov, page + SENT)?;
+    write_word(process, iov + word, 4)?;
+    write_word(process, iov + word * 2, page + SENT + 4)?;
+    write_word(process, iov + word * 3, 4)?;
+    stage_header(process, header, iov, 2)?;
+    let sent = socket_call(
+        process,
+        Call::Sendmsg,
+        &[as_arg(one), header, u64::from(MSG_NOSIGNAL), 0, 0, 0],
+    );
+    if sent != Ok(8) {
+        return Err("sendmsg did not gather the whole message");
+    }
+    for (index, len) in [3_u64, 3, 4].into_iter().enumerate() {
+        let entry = iov + (index as u64) * word * 2;
+        write_word(process, entry, page + RECEIVED + (index as u64) * 8)?;
+        write_word(process, entry + word, len)?;
+    }
+    stage_header(process, header, iov, 3)?;
+    let received = socket_call(process, Call::Recvmsg, &[as_arg(other), header, 0, 0, 0, 0]);
+    if received != Ok(8) {
+        return Err("recvmsg did not scatter the whole message");
+    }
+    let out = socket_received(process, page, 24)?;
+    if out.get(..3) != Some(b"gat".as_slice())
+        || out.get(8..11) != Some(b"her".as_slice())
+        || out.get(16..18) != Some(b"ed".as_slice())
+    {
+        return Err("a message did not scatter into the buffers it was given");
+    }
+    check_a_message_with_descriptors_is_refused(process, page, one)
+}
+
+/// Write a `msghdr` naming the `count` buffers at `iov` and nothing else.
+fn stage_header(process: &Process, header: u64, iov: u64, count: u64) -> Result<(), &'static str> {
+    let message = MsgHdr {
+        iov,
+        iov_len: count,
+        ..MsgHdr::default()
+    };
+    let mut bytes = [0_u8; MsgHdr::size(Width::Bits64)];
+    let staged = bytes
+        .get_mut(..MsgHdr::size(width()))
+        .ok_or("impossible pointer width")?;
+    message
+        .encode(staged, width())
+        .ok_or("could not build a msghdr")?;
+    uaccess::copy_to_user(process.space(), header, staged).map_err(|_| "could not stage a msghdr")
+}
+
+/// A control message carrying descriptors is `EOPNOTSUPP` until the landing
+/// that carries them, and one whose length is shorter than its own header is
+/// `EINVAL`, as `CMSG_OK` failing is on Linux. A buffer too short to hold a
+/// header at all is not that: it holds no message, and Linux sends it.
+fn check_a_message_with_descriptors_is_refused(
+    process: &Process,
+    page: u64,
+    fd: i32,
+) -> Result<(), &'static str> {
+    let header = page + MESSAGE;
+    let iov = header + 0x40;
+    let control = header + 0x80;
+    let word = size_of::<usize>() as u64;
+    write_word(process, iov, page + SENT)?;
+    write_word(process, iov + word, 1)?;
+    let mut buffer = alloc::vec![0_u8; cmsg_space(4, width())];
+    let cmsg = CmsgHdr {
+        len: cmsg_len(4, width()) as u64,
+        level: SOL_SOCKET,
+        kind: SCM_RIGHTS,
+    };
+    cmsg.encode(&mut buffer, width())
+        .ok_or("could not build a control message")?;
+    uaccess::copy_to_user(process.space(), control, &buffer)
+        .map_err(|_| "could not stage a control message")?;
+    let send = |control_len: u64| -> Result<usize, Errno> {
+        stage_header(process, header, iov, 1).map_err(|_| Errno::EFAULT)?;
+        let at = header + MsgHdr::control_offset(width()) as u64;
+        uaccess::put_word(process.space(), at, control)?;
+        let at = header + MsgHdr::control_len_offset(width()) as u64;
+        uaccess::put_word(process.space(), at, control_len)?;
+        socket_call(
+            process,
+            Call::Sendmsg,
+            &[as_arg(fd), header, u64::from(MSG_NOSIGNAL), 0, 0, 0],
+        )
+    };
+    refuses(
+        send(buffer.len() as u64),
+        Errno::EOPNOTSUPP,
+        "a message carrying descriptors was not EOPNOTSUPP",
+    )?;
+    let short = CmsgHdr {
+        len: 4,
+        level: SOL_SOCKET,
+        kind: SCM_RIGHTS,
+    };
+    short
+        .encode(&mut buffer, width())
+        .ok_or("could not build a control message")?;
+    uaccess::copy_to_user(process.space(), control, &buffer)
+        .map_err(|_| "could not stage a control message")?;
+    refuses(
+        send(buffer.len() as u64),
+        Errno::EINVAL,
+        "a control message shorter than its own header was not EINVAL",
+    )
 }
 
 /// A process that ends closes its descriptors then, not when it is reaped.

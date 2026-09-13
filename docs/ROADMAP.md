@@ -1147,8 +1147,8 @@ table's own), priorities and I/O priorities, `personality`, the scheduler's
 affinity and policy queries, `nanosleep`
 and `clock_nanosleep`, `times` and `getrusage`, setting the real-time clock,
 `adjtimex` queries, host and domain names, `sysinfo`, `getcpu`, `syslog` over
-an empty log, `reboot` powering off, and every socket call refused as Linux
-without the address family refuses it. Their checks run in the handler group
+an empty log, `reboot` powering off, and every socket call for a family that is
+not `AF_UNIX` refused as Linux without that address family refuses it. Their checks run in the handler group
 with every structure's buffer poisoned beyond its end. Still `ENOSYS`, each
 said so at its arm: swap, modules, System V IPC (shared memory, message
 queues and semaphores, each named in every architecture's table), `acct`,
@@ -1226,6 +1226,29 @@ the STM32 USART's and — through an I/O APIC input found from the MADT, since
 2026-09-13 — the 16550's receive interrupts fill. A console read returns `EINTR`
 when a signal is waiting. In the shell, `sleep 30` and `cat` are each ended by
 Ctrl-C with status 130 and the prompt back at once.
+
+**Unix-domain sockets, connected.** `fs/socket.rs` is a socket inode on a
+sockfs of its own, built the way pipes are: each direction is
+`libs/vfs`'s `SocketBuffer` -- one queue as values, telling a stream from
+records -- behind a lock, with a wait queue each way, and no wait ever happens
+with the buffer locked. `socket` and `socketpair` make stream,
+sequenced-packet and datagram sockets; `read`, `write`, `send`, `recv`,
+`sendmsg` and `recvmsg` carry bytes and whole records between a pair, with
+`MSG_DONTWAIT`, `MSG_PEEK`, `MSG_TRUNC`, `MSG_WAITALL` and `MSG_NOSIGNAL`,
+one copy in and one out however many buffers a message names. `shutdown` ends
+one direction at a time -- what was queued is still read, and the peer's sends
+break -- `poll` answers from the two queues, and `FIONREAD` and `SIOCOUTQ`
+report what a read would find and what a peer has not taken. `SO_TYPE`,
+`SO_DOMAIN`, `SO_PROTOCOL`, `SO_ERROR`, `SO_ACCEPTCONN`, the buffer sizes
+(kept doubled, as Linux keeps them), `SO_PEERCRED` and the two timeouts read
+back; `getsockname` and `getpeername` answer "unnamed", because a name is the
+next landing and `SCM_RIGHTS` the one after, each `EOPNOTSUPP` until then.
+The `unix` boot check drives a pair of each type through `dispatch`, and what
+each call refuses stands beside what it answers -- the families and types
+`AF_UNIX` is not, a call on the console, one on a closed descriptor, a peek
+that took what it looked at, a record read that found the last record's tail:
+
+      unix     a stream pair carried bytes across two writes and a peek left them; records kept their boundaries and MSG_TRUNC their lengths; shutdown ended one direction; a socket reported its type, buffers, credentials and unnamed address
 
 **Left, and why it did not block the exit:**
 
