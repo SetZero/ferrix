@@ -11,7 +11,10 @@
 //! Stage 3's exit criterion depends on that separation: it counts ticks with
 //! one and measures how long they took with the other.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// HANGDBG: temporary. Whether the one-shot or periodic timer is armed.
+pub(crate) static HANGDBG_ARMED: AtomicBool = AtomicBool::new(false);
 
 use crate::arch;
 use crate::irq::{self, IrqError};
@@ -82,6 +85,7 @@ fn on_tick(_irq: u32) {
         // disarming would be acknowledged, re-asserted before the handler had
         // returned, and the machine would take that interrupt forever.
         arch::timer_disarm();
+        HANGDBG_ARMED.store(false, Ordering::Relaxed);
     }
     // The scheduler arms this timer for the moment its processor next has a
     // decision to make, so every expiry is one. It only sets a flag: the
@@ -93,6 +97,7 @@ fn on_tick(_irq: u32) {
 /// Fire the timer interrupt once, `nanos` from now.
 pub(crate) fn after(nanos: u64) {
     INTERVAL.store(0, Ordering::Relaxed);
+    HANGDBG_ARMED.store(true, Ordering::Relaxed);
     arch::timer_arm(nanos);
 }
 
@@ -118,6 +123,7 @@ fn arm_periodic(next: u64, interval: u64) {
         next
     };
     DEADLINE.store(next, Ordering::Relaxed);
+    HANGDBG_ARMED.store(true, Ordering::Relaxed);
     arm_at(next);
 }
 
@@ -140,6 +146,7 @@ fn arm_at(deadline: u64) {
 /// Stop the timer. The counter keeps running; it always does.
 pub(crate) fn stop() {
     INTERVAL.store(0, Ordering::Relaxed);
+    HANGDBG_ARMED.store(false, Ordering::Relaxed);
     arch::timer_disarm();
 }
 

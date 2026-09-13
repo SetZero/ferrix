@@ -116,6 +116,8 @@ fn run_commands(list: &[u8]) {
         program.len() / 1024,
         commands.len()
     );
+    // HANGDBG: temporary.
+    crate::sched::HANGDBG_ON.store(true, core::sync::atomic::Ordering::Relaxed);
     for (index, argv) in commands.iter().enumerate() {
         println!("  init     command {index}: {}", Argv(argv));
         syscall::report_unanswered(UNANSWERED_LINES);

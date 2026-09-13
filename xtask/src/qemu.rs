@@ -511,6 +511,9 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
     let _ = command.current_dir(paths::workspace_root());
 
     let _ = command.args(["-accel", &accelerator]);
+    // HANGDBG: temporary monitor socket.
+    let monitor = std::env::var("FERRIX_QEMU_MONITOR")
+        .map_or_else(|_| "none".to_owned(), |path| format!("unix:{path},server,nowait"));
     let _ = command.args([
         "-m",
         &args.memory.to_string(),
@@ -522,7 +525,7 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
         "-display",
         "none",
         "-monitor",
-        "none",
+        &monitor,
         "-serial",
         "stdio",
         // No network device. QEMU adds one by default, and on AArch64 that

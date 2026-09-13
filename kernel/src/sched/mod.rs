@@ -493,9 +493,61 @@ fn idle_loop() -> ! {
             // still to free.
             arch::enable_interrupts();
         } else {
+            hangdbg_idle_halt(cpu, reaped);
             arch::wait_for_work();
             set_idle(cpu, false);
         }
+    }
+}
+
+/// HANGDBG: temporary. Set once init starts its commands, so nothing prints
+/// inside the boot checks' frame windows.
+pub(crate) static HANGDBG_ON: AtomicBool = AtomicBool::new(false);
+
+/// HANGDBG: temporary. The sleeper count last reported.
+static HANGDBG_LAST: AtomicU64 = AtomicU64::new(0);
+
+/// HANGDBG: temporary. Say so when the idle task halts owing a decision, or
+/// with sleepers and no timer armed, and whenever the sleeper set grows or
+/// shrinks by ten.
+fn hangdbg_idle_halt(cpu: Option<usize>, reaped: bool) {
+    let Some(c) = cpu else { return };
+    if !HANGDBG_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    let pending = NEED_RESCHED
+        .get()
+        .and_then(|flags| flags.get(c))
+        .is_some_and(|flag| flag.load(Ordering::Acquire));
+    let armed = crate::timer::HANGDBG_ARMED.load(Ordering::Relaxed);
+    let now = crate::timer::now_nanos();
+    let (count, dead, blocked, first, first_state) = queue_of(c).map_or((0, 0, 0, 0, 0), |lock| {
+        let queue = lock.lock();
+        let mut dead = 0;
+        let mut blocked = 0;
+        for task in queue.sleepers.values() {
+            if task.is_dead() {
+                dead += 1;
+            }
+            if task.state() == task::BLOCKED {
+                blocked += 1;
+            }
+        }
+        let (first, first_state) = queue
+            .sleepers
+            .iter()
+            .next()
+            .map_or((0, 0), |((at, _), task)| (*at, task.state()));
+        (queue.sleepers.len() as u64, dead, blocked, first, first_state)
+    });
+    let last = HANGDBG_LAST.load(Ordering::Relaxed);
+    let moved = count >= last.saturating_add(10) || count.saturating_add(10) <= last;
+    if pending || (count > 0 && !armed) || moved {
+        HANGDBG_LAST.store(count, Ordering::Relaxed);
+        crate::console::println!(
+            "  HANGDBG  idle halt: pending {pending}, armed {armed}, reaped {reaped}, {count} sleepers ({dead} dead, {blocked} blocked), first due {} ms ago in state {first_state}",
+            (now as i64 - first as i64) / 1_000_000
+        );
     }
 }
 
