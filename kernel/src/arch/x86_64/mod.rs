@@ -476,10 +476,37 @@ pub(crate) const USER_NATIVE_PROGRAM: &[u8] = &[
     0x0f, 0x05, 0xeb, 0xfe,
 ];
 
-/// One byte from the console, if one has arrived.
+/// One byte from the console, if one has arrived: through the receive ring's
+/// switch, which on this architecture always polls the port.
 pub(crate) fn read_console_byte() -> Option<u8> {
+    crate::console::input::read_byte(console::read_byte)
+}
+
+/// One byte straight from the console port, for its receive interrupt.
+pub(crate) fn take_console_byte() -> Option<u8> {
     console::read_byte()
 }
+
+/// The interrupt the console port receives on: none yet.
+///
+/// COM1 raises ISA IRQ 4, but nothing routes an I/O APIC input to a vector —
+/// `apic::quiesce_io_apics` only masks them — so the 16550 stays polled until a
+/// redirection entry for its GSI is written.
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "another architecture's version of this reads the device tree"
+)]
+pub(crate) fn console_receive_irq(_view: &BootView<'_>) -> Option<u32> {
+    None
+}
+
+/// Enable the console port's receive interrupt. Never called here, since
+/// [`console_receive_irq`] names none.
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "another architecture's version of this programs the GIC"
+)]
+pub(crate) fn enable_console_receive(_irq: u32) {}
 
 /// `AT_HWCAP` and `AT_HWCAP2` for a program started on this machine.
 ///

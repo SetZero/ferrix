@@ -373,12 +373,40 @@ pub(crate) const USER_NATIVE_PROGRAM: &[u8] = &[
     0xc8, 0x0b, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4, 0x00, 0x00, 0x00, 0x14,
 ];
 
-/// One byte from the console, if one has arrived.
-///
-/// Polled, as on x86-64: the `console` thread in `fs::terminal` drains it into
-/// the line discipline.
+/// One byte from the console, if one has arrived: from the receive ring once
+/// the port's interrupt is installed, straight from the port before then.
 pub(crate) fn read_console_byte() -> Option<u8> {
+    crate::console::input::read_byte(console::read_byte)
+}
+
+/// One byte straight from the console port, for its receive interrupt.
+pub(crate) fn take_console_byte() -> Option<u8> {
     console::read_byte()
+}
+
+/// The interrupt QEMU's `virt` machine wires its PL011 to: SPI 1.
+///
+/// **A stand-in, as [`console`]'s address is.** This architecture boots through
+/// ACPI and reads no SPCR table, which is where the console's interrupt belongs
+/// to come from; when the SPCR is parsed, its GSIV replaces this, and the
+/// address beside it.
+const QEMU_VIRT_UART0_INTERRUPT: u32 = 33;
+
+/// The GIC interrupt the console port receives on.
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "another architecture's version of this reads the device tree"
+)]
+pub(crate) fn console_receive_irq(_view: &BootView<'_>) -> Option<u32> {
+    Some(QEMU_VIRT_UART0_INTERRUPT)
+}
+
+/// Enable the console port's receive interrupt `irq`, at the GIC and in the
+/// port. On the calling processor, like the timer's: a shared interrupt goes
+/// to the core that enables it.
+pub(crate) fn enable_console_receive(irq: u32) {
+    gicv2::enable(irq);
+    console::enable_receive_interrupt();
 }
 
 /// `AT_HWCAP` and `AT_HWCAP2` for a program started on this machine: what the

@@ -30,6 +30,7 @@ Causes are listed most likely first.
 | [FX-0302](#fx-0302) | the timer interrupt did not arrive as programmed |
 | [FX-0303](#fx-0303) | the interrupt controller or the clocks could not be brought up |
 | [FX-0304](#fx-0304) | the timer's interrupt could not be registered |
+| [FX-0305](#fx-0305) | console input could not be set up |
 | [FX-0401](#fx-0401) | the processor list could not be read |
 | [FX-0402](#fx-0402) | a secondary processor could not be started |
 | [FX-0403](#fx-0403) | a secondary processor could not build its GDT |
@@ -339,6 +340,26 @@ tick is counted as unclaimed, and the timer self-check that follows cannot pass.
    this early.
 
 See: kernel/src/timer.rs init; kernel/src/irq.rs register.
+
+<a id="fx-0305"></a>
+
+## FX-0305 — console input could not be set up
+
+Before interrupts are first enabled, `console::input::check` fills the ring the
+console's receive interrupt will fill, and requires every byte back in order,
+the bytes past its capacity counted rather than kept, and a wait for input to
+return at once while input is there. Then `console::input::init` registers the
+port's receive interrupt, if the architecture names one. Nothing else touches
+the ring while the check runs, so a check failure is the ring's own logic; a
+registration failure means the interrupt number already has a handler.
+
+1. A change to the ring's arithmetic in `console/input.rs`: the wrap-around, the
+   held count `has_input` reads without the lock, or the overrun count.
+2. The architecture named a receive interrupt for the console port that the
+   timer or another early handler already holds, as a device tree giving two
+   devices one interrupt would.
+
+See: kernel/src/console/input.rs check; kernel/src/irq.rs register.
 
 <a id="fx-0401"></a>
 

@@ -2170,3 +2170,223 @@ fn a_ragged_map_or_a_malformed_mask_translates_nothing() {
         "a host with no map is not behind an IOMMU"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Following a device's interrupt to the GIC
+// ---------------------------------------------------------------------------
+
+/// The GIC specifiers of an STM32MP15's EXTI lines 0 to 30, as
+/// `stm32mp151.dtsi` lists them: `Some(spi)` for a line with a GIC interrupt
+/// behind it, `None` for the `<0>` placeholder of a line without one.
+const STM32MP15_EXTI_SPIS: [Option<u32>; 31] = [
+    Some(6),
+    Some(7),
+    Some(8),
+    Some(9),
+    Some(10),
+    Some(23),
+    Some(64),
+    Some(65),
+    Some(66),
+    Some(67),
+    Some(40),
+    Some(42),
+    Some(76),
+    Some(77),
+    Some(121),
+    Some(127),
+    Some(1),
+    None,
+    None,
+    Some(3),
+    None,
+    Some(31),
+    Some(33),
+    Some(72),
+    Some(95),
+    Some(107),
+    Some(37),
+    Some(38),
+    Some(39),
+    Some(71),
+    Some(52),
+];
+
+/// The GIC's phandle in the STM32MP15 trees below.
+const INTC: u32 = 5;
+/// EXTI's phandle in the same trees.
+const EXTI: u32 = 8;
+/// A GIC specifier's level-high flags.
+const LEVEL_HIGH: u32 = 4;
+
+/// An STM32MP15's GIC, and its EXTI with lines 0 to 30 routed as the chip's
+/// tree routes them.
+fn stm32mp15_controllers(b: &mut Builder) {
+    b.begin("interrupt-controller@a0021000");
+    b.prop_strings("compatible", &["arm,cortex-a7-gic"]);
+    b.prop("interrupt-controller", &[]);
+    b.prop_u32("#interrupt-cells", 3);
+    b.prop_u32("phandle", INTC);
+    b.end();
+
+    let mut routes = Vec::new();
+    for spi in STM32MP15_EXTI_SPIS {
+        match spi {
+            Some(spi) => routes.extend([INTC, 0, spi, LEVEL_HIGH]),
+            None => routes.push(0),
+        }
+    }
+    b.begin("interrupt-controller@5000d000");
+    b.prop_strings("compatible", &[STM32MP1_EXTI_COMPATIBLE, "syscon"]);
+    b.prop("interrupt-controller", &[]);
+    b.prop_u32("#interrupt-cells", 2);
+    b.prop_u32("phandle", EXTI);
+    b.prop_cells("interrupts-extended", &routes);
+    b.end();
+}
+
+/// A UART whose interrupt is `interrupts-extended` with `cells`.
+fn extended_uart(b: &mut Builder, cells: &[u32]) {
+    b.begin("serial@40010000");
+    b.prop_str("compatible", "st,stm32h7-uart");
+    b.prop_cells("interrupts-extended", cells);
+    b.end();
+}
+
+#[test]
+fn a_plain_gic_interrupt_is_followed_as_qemu_virt_writes_it() {
+    let blob = tree(|b| {
+        b.begin("intc@8000000");
+        b.prop_strings("compatible", &["arm,cortex-a15-gic"]);
+        b.prop_u32("#interrupt-cells", 3);
+        b.end();
+        b.begin("pl011@9000000");
+        b.prop_str("compatible", "arm,pl011");
+        b.prop_cells("interrupts", &[0, 1, LEVEL_HIGH]);
+        b.end();
+    });
+    let fdt = parse(&blob);
+    let uart = fdt.find_compatible("arm,pl011").unwrap();
+    assert_eq!(
+        fdt.gic_interrupt_of(&uart, 0),
+        Some(GicInterrupt {
+            id: 33,
+            trigger: Some(Trigger::LevelHigh)
+        })
+    );
+    assert_eq!(fdt.gic_interrupt_of(&uart, 1), None, "it has only one");
+}
+
+#[test]
+fn an_extended_entry_naming_the_gic_is_its_interrupt() {
+    let blob = tree(|b| {
+        stm32mp15_controllers(b);
+        extended_uart(b, &[INTC, 0, 52, LEVEL_HIGH]);
+    });
+    let fdt = parse(&blob);
+    let uart = fdt.find_compatible("st,stm32h7-uart").unwrap();
+    assert_eq!(
+        fdt.gic_interrupt_of(&uart, 0),
+        Some(GicInterrupt {
+            id: 84,
+            trigger: Some(Trigger::LevelHigh)
+        })
+    );
+}
+
+#[test]
+fn a_dk1_uart_reaches_gic_spi_52_through_exti_line_30() {
+    // UART4 as the DK1's live tree carries it: `<&exti 30 IRQ_TYPE_LEVEL_HIGH>`.
+    let blob = tree(|b| {
+        stm32mp15_controllers(b);
+        extended_uart(b, &[EXTI, 30, LEVEL_HIGH]);
+    });
+    let fdt = parse(&blob);
+    let uart = fdt.find_compatible("st,stm32h7-uart").unwrap();
+    assert_eq!(
+        fdt.gic_interrupt_of(&uart, 0),
+        Some(GicInterrupt {
+            id: 84,
+            trigger: Some(Trigger::LevelHigh)
+        }),
+        "the entries before line 30 mix four-cell routes with one-cell placeholders"
+    );
+}
+
+#[test]
+fn every_routed_exti_line_reaches_the_spi_its_entry_names() {
+    for (line, spi) in STM32MP15_EXTI_SPIS.iter().enumerate() {
+        let line = u32::try_from(line).unwrap();
+        let blob = tree(|b| {
+            stm32mp15_controllers(b);
+            extended_uart(b, &[EXTI, line, LEVEL_HIGH]);
+        });
+        let fdt = parse(&blob);
+        let uart = fdt.find_compatible("st,stm32h7-uart").unwrap();
+        let found = fdt.gic_interrupt_of(&uart, 0).map(|interrupt| interrupt.id);
+        assert_eq!(found, spi.map(|spi| 32 + spi), "EXTI line {line}");
+    }
+}
+
+#[test]
+fn an_exti_line_past_its_table_or_through_a_second_exti_is_not_followed() {
+    let blob = tree(|b| {
+        stm32mp15_controllers(b);
+        extended_uart(b, &[EXTI, 31, LEVEL_HIGH]);
+    });
+    let fdt = parse(&blob);
+    let uart = fdt.find_compatible("st,stm32h7-uart").unwrap();
+    assert_eq!(
+        fdt.gic_interrupt_of(&uart, 0),
+        None,
+        "line 31 is past the table"
+    );
+
+    // An EXTI whose line is routed to another EXTI: one level is followed, not two.
+    let blob = tree(|b| {
+        b.begin("interrupt-controller@1");
+        b.prop_strings("compatible", &[STM32MP1_EXTI_COMPATIBLE]);
+        b.prop_u32("#interrupt-cells", 2);
+        b.prop_u32("phandle", 9);
+        b.prop_cells("interrupts-extended", &[EXTI, 30, LEVEL_HIGH]);
+        b.end();
+        stm32mp15_controllers(b);
+        extended_uart(b, &[9, 0, LEVEL_HIGH]);
+    });
+    let fdt = parse(&blob);
+    let uart = fdt.find_compatible("st,stm32h7-uart").unwrap();
+    assert_eq!(fdt.gic_interrupt_of(&uart, 0), None);
+}
+
+#[test]
+fn a_dangling_phandle_or_a_short_entry_is_none_not_a_guess() {
+    for cells in [
+        &[77, 30, LEVEL_HIGH][..],
+        &[EXTI, 30][..],
+        &[INTC, 0, 52][..],
+        &[][..],
+    ] {
+        let blob = tree(|b| {
+            stm32mp15_controllers(b);
+            extended_uart(b, cells);
+        });
+        let fdt = parse(&blob);
+        let uart = fdt.find_compatible("st,stm32h7-uart").unwrap();
+        assert_eq!(fdt.gic_interrupt_of(&uart, 0), None, "cells {cells:?}");
+    }
+}
+
+#[test]
+fn a_plain_interrupt_whose_parent_is_not_the_gic_is_not_followed() {
+    let blob = tree(|b| {
+        stm32mp15_controllers(b);
+        b.begin("serial@40010000");
+        b.prop_str("compatible", "st,stm32h7-uart");
+        b.prop_u32("interrupt-parent", EXTI);
+        b.prop_cells("interrupts", &[30, LEVEL_HIGH]);
+        b.end();
+    });
+    let fdt = parse(&blob);
+    let uart = fdt.find_compatible("st,stm32h7-uart").unwrap();
+    assert_eq!(fdt.gic_interrupt_of(&uart, 0), None);
+}

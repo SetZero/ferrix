@@ -25,6 +25,11 @@ use crate::early::{EarlyError, EarlyMemory};
 /// two is ever brought up.
 const WINDOW: u64 = KERNEL_VMAP_BASE;
 
+/// Control register 1.
+const CR1: u64 = 0x00;
+/// `CR1`: interrupt when a received byte is waiting, and on an overrun. Named
+/// `RXFNEIE` on a port with its FIFO enabled; the same bit either way.
+const CR1_RXNEIE: u32 = 1 << 5;
 /// Interrupt and status register.
 const ISR: u64 = 0x1C;
 /// `ISR`: there is room for another byte, in the transmit register or in the
@@ -158,4 +163,19 @@ pub(crate) fn read_byte() -> Option<u8> {
         return None;
     }
     Some(read(RDR).to_le_bytes()[0])
+}
+
+/// Let the port interrupt when it has received something.
+///
+/// The one enable covers both reasons to: a byte waiting, and an overrun.
+/// [`read_byte`] ends both — reading `RDR` clears the first and it clears the
+/// second — so the handler needs nothing else. Only this bit of `CR1` changes;
+/// the ones firmware set for the line format may be written only with the port
+/// disabled, and are left as they are.
+pub(crate) fn enable_receive_interrupt() {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return;
+    }
+    write(CR1, read(CR1) | CR1_RXNEIE);
 }

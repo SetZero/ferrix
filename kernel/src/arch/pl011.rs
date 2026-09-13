@@ -39,6 +39,13 @@ const FR_RXFE: u32 = 1 << 4;
 const FR_TXFE: u32 = 1 << 7;
 /// `FR`: the port is still sending a byte, FIFO empty or not.
 const FR_BUSY: u32 = 1 << 3;
+/// Interrupt mask set/clear register: a set bit lets that interrupt out.
+const IMSC: u64 = 0x038;
+/// `IMSC`: the receive FIFO reached its trigger level.
+const IMSC_RX: u32 = 1 << 4;
+/// `IMSC`: bytes have sat in the receive FIFO, below the trigger level, for
+/// longer than a few characters' time — the interrupt a single keystroke raises.
+const IMSC_RT: u32 = 1 << 6;
 
 /// The mapped base address, once [`init`] has run.
 struct Base(UnsafeCell<u64>);
@@ -146,4 +153,18 @@ pub(crate) fn read_byte() -> Option<u8> {
         write(RSR_ECR, 0);
     }
     Some(data.to_le_bytes()[0])
+}
+
+/// Let the port interrupt when it has received something.
+///
+/// Both receive interrupts, because each alone loses: the FIFO-level one never
+/// fires for a byte or two typed by hand, and the timeout one waits out a gap
+/// in a stream that has already filled the FIFO. Reading the FIFO empty clears
+/// both, so the handler needs nothing but [`read_byte`].
+pub(crate) fn enable_receive_interrupt() {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return;
+    }
+    write(IMSC, read(IMSC) | IMSC_RX | IMSC_RT);
 }

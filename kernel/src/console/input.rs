@@ -1,0 +1,263 @@
+//! What the console port has received, between the interrupt that took it and
+//! the thread that reads it.
+//!
+//! # Why a ring sits between the two
+//!
+//! The line discipline in `fs::terminal` echoes, raises signals and walks the
+//! process registry, and none of that is work for an interrupt handler. What
+//! cannot wait is emptying the port: a PL011 holds sixteen bytes, an STM32
+//! USART without its FIFO holds one, and at 115200 baud the next byte arrives
+//! in under a tenth of a millisecond. So the receive interrupt moves the bytes
+//! here and wakes whoever waits, and the `console` thread takes them out
+//! through `arch::read_console_byte` at its own pace.
+//!
+//! A port whose receive interrupt the kernel has not installed never touches
+//! the ring: [`read_byte`] polls it, as every port was polled before.
+
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+use ferrix_bootinfo::BootView;
+use ferrix_sync::IrqSpinLock;
+
+use crate::arch;
+use crate::sched::WaitQueue;
+
+/// Bytes held for the reader, as many as Linux's line discipline holds. One
+/// more is dropped and counted in [`overruns`].
+const CAPACITY: usize = 4096;
+
+/// The most bytes one call to [`receive`] takes from the port.
+///
+/// Twice what the ring holds: more than any port delivers while its interrupt
+/// is being served, so a port that is merely busy is always emptied, and a
+/// port that never reports itself empty still lets the handler return.
+const RECEIVE_LIMIT: usize = CAPACITY * 2;
+
+/// A fixed ring of received bytes.
+struct Ring {
+    /// The storage, used from `head` round to `head + len`.
+    bytes: [u8; CAPACITY],
+    /// Where the oldest byte is.
+    head: usize,
+    /// How many bytes are held.
+    len: usize,
+}
+
+impl Ring {
+    /// An empty ring.
+    const fn new() -> Ring {
+        Ring {
+            bytes: [0; CAPACITY],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    /// Append `byte`, or refuse it when the ring is full.
+    fn push(&mut self, byte: u8) -> bool {
+        if self.len >= CAPACITY {
+            return false;
+        }
+        let mut at = self.head.wrapping_add(self.len);
+        if at >= CAPACITY {
+            at = at.wrapping_sub(CAPACITY);
+        }
+        let Some(slot) = self.bytes.get_mut(at) else {
+            return false;
+        };
+        *slot = byte;
+        self.len = self.len.wrapping_add(1);
+        true
+    }
+
+    /// Take the oldest byte.
+    fn pop(&mut self) -> Option<u8> {
+        if self.len == 0 {
+            return None;
+        }
+        let byte = self.bytes.get(self.head).copied();
+        self.head = self.head.wrapping_add(1);
+        if self.head >= CAPACITY {
+            self.head = 0;
+        }
+        self.len = self.len.wrapping_sub(1);
+        byte
+    }
+}
+
+/// The received bytes. Interrupt-masking, because the receive handler fills it.
+static RING: IrqSpinLock<Ring, arch::Irq> = IrqSpinLock::new(Ring::new());
+
+/// How many bytes [`RING`] holds, kept beside it so that [`has_input`] takes no
+/// lock. Written only under the ring's lock, and before any wake that follows.
+static HELD: AtomicUsize = AtomicUsize::new(0);
+
+/// Bytes dropped because the ring was full.
+static OVERRUNS: AtomicU64 = AtomicU64::new(0);
+
+/// Whether the port's receive interrupt is installed, so that input arrives
+/// through the ring rather than by polling.
+static INTERRUPT_DRIVEN: AtomicBool = AtomicBool::new(false);
+
+/// Whoever waits for input: the `console` thread.
+static WAITERS: WaitQueue = WaitQueue::new();
+
+/// What [`check`] established.
+pub(crate) struct Checked {
+    /// Bytes the ring held and gave back in order.
+    pub(crate) held: usize,
+    /// Bytes offered past its capacity and counted rather than kept.
+    pub(crate) dropped: u64,
+}
+
+/// Install the console port's receive interrupt, if the machine has one this
+/// kernel can take, and return its number.
+///
+/// `Ok(None)` when input stays polled: on x86-64, whose 16550 has no route
+/// through the I/O APIC yet, and on an Arm machine whose device tree names the
+/// port's interrupt in a shape `ferrix_fdt` does not follow.
+///
+/// Call with interrupts masked, before they are first enabled.
+///
+/// # Errors
+///
+/// When something else already holds the port's interrupt number.
+pub(crate) fn init(view: &BootView<'_>) -> Result<Option<u32>, &'static str> {
+    let Some(irq) = arch::console_receive_irq(view) else {
+        return Ok(None);
+    };
+    crate::irq::register(irq, on_interrupt)
+        .map_err(|_| "the console port's receive interrupt is already taken")?;
+    // Before the port may raise it: from here the reader looks in the ring,
+    // and a byte the port already holds arrives there the moment the line is
+    // enabled.
+    INTERRUPT_DRIVEN.store(true, Ordering::Relaxed);
+    arch::enable_console_receive(irq);
+    Ok(Some(irq))
+}
+
+/// The receive interrupt: empty the port into the ring, and wake the reader.
+fn on_interrupt(_irq: u32) {
+    receive(arch::take_console_byte);
+}
+
+/// Take what `take` yields into the ring, then wake whoever waits for input.
+///
+/// `take` is called until it has nothing more, so the port is emptied even
+/// when the ring is full: a byte that does not fit is counted in [`overruns`]
+/// rather than left in the port to hold its interrupt asserted.
+fn receive(mut take: impl FnMut() -> Option<u8>) {
+    let mut added = false;
+    {
+        let mut ring = RING.lock();
+        for _ in 0..RECEIVE_LIMIT {
+            let Some(byte) = take() else {
+                break;
+            };
+            if ring.push(byte) {
+                added = true;
+            } else {
+                let _ = OVERRUNS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        HELD.store(ring.len, Ordering::Relaxed);
+    }
+    // After the lock is dropped: the wake takes run-queue locks, and the
+    // section with interrupts masked should stay as short as the copy.
+    if added {
+        waiters().wake_all();
+    }
+}
+
+/// The oldest byte in the ring.
+fn pop() -> Option<u8> {
+    let mut ring = RING.lock();
+    let byte = ring.pop();
+    HELD.store(ring.len, Ordering::Relaxed);
+    byte
+}
+
+/// The next byte typed at the console, if one is waiting.
+///
+/// From the ring once the receive interrupt is installed, and straight from the
+/// port through `poll` until then — or for good, on a port with no interrupt.
+pub(crate) fn read_byte(poll: fn() -> Option<u8>) -> Option<u8> {
+    if interrupt_driven() { pop() } else { poll() }
+}
+
+/// Whether the ring holds a byte. Takes no lock, so it can be a wait's
+/// condition.
+pub(crate) fn has_input() -> bool {
+    HELD.load(Ordering::Relaxed) != 0
+}
+
+/// The queue the receive interrupt wakes when it adds to the ring.
+pub(crate) fn waiters() -> &'static WaitQueue {
+    &WAITERS
+}
+
+/// How many received bytes were dropped because the ring was full.
+pub(crate) fn overruns() -> u64 {
+    OVERRUNS.load(Ordering::Relaxed)
+}
+
+/// Whether input arrives by interrupt. When it does not, a reader has to poll.
+pub(crate) fn interrupt_driven() -> bool {
+    INTERRUPT_DRIVEN.load(Ordering::Relaxed)
+}
+
+/// The ring, checked before the port can add to it: bytes offered come back in
+/// order, the ones past its capacity are counted rather than kept, a wait for
+/// input returns at once while input is there, and an emptied ring says so.
+///
+/// # Errors
+///
+/// A description of the first property that did not hold. Also when called
+/// after [`init`] installed the interrupt, which would race the port.
+pub(crate) fn check() -> Result<Checked, &'static str> {
+    const EXTRA: usize = 3;
+
+    if interrupt_driven() {
+        return Err("the input ring was checked after the port could fill it");
+    }
+    let dropped_before = overruns();
+
+    let offered = CAPACITY.wrapping_add(EXTRA);
+    let mut given = 0usize;
+    receive(|| {
+        if given >= offered {
+            return None;
+        }
+        let byte = given.to_le_bytes()[0];
+        given = given.wrapping_add(1);
+        Some(byte)
+    });
+
+    if !has_input() {
+        return Err("the input ring said it was empty with bytes in it");
+    }
+    if !waiters().wait_until_deadline(has_input, crate::timer::now_nanos()) {
+        return Err("a wait for input did not return while input was waiting");
+    }
+    for expected in 0..CAPACITY {
+        match pop() {
+            Some(byte) if byte == expected.to_le_bytes()[0] => {}
+            Some(_) => return Err("the input ring gave bytes back out of order"),
+            None => return Err("the input ring gave back fewer bytes than it held"),
+        }
+    }
+    if pop().is_some() {
+        return Err("the input ring gave back more bytes than it has room for");
+    }
+    if has_input() {
+        return Err("the input ring said it held input after it was emptied");
+    }
+    let dropped = overruns().wrapping_sub(dropped_before);
+    if dropped != EXTRA as u64 {
+        return Err("the input ring did not count the bytes it had no room for");
+    }
+    Ok(Checked {
+        held: CAPACITY,
+        dropped,
+    })
+}

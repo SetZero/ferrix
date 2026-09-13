@@ -1758,6 +1758,28 @@ impl Node<'_> {
     }
 }
 
+/// `compatible` string of ST's extended interrupt and event controller on an
+/// STM32MP15, the interrupt parent its device tree gives each UART.
+pub const STM32MP1_EXTI_COMPATIBLE: &str = "st,stm32mp1-exti";
+
+/// Whether `node` is a GIC of either version this crate knows.
+fn is_gic(node: &Node<'_>) -> bool {
+    node.is_compatible(GICV3_COMPATIBLE)
+        || GICV2_COMPATIBLES
+            .iter()
+            .any(|binding| node.is_compatible(binding))
+}
+
+/// One entry of an `interrupts-extended` property.
+struct ExtendedEntry<'a> {
+    /// The controller the entry names.
+    controller: Node<'a>,
+    /// Its specifier, `width` cells of it, the rest zero.
+    specifier: [u32; 3],
+    /// How many cells the controller declares, at most three.
+    width: u32,
+}
+
 impl<'a> Fdt<'a> {
     /// Every enabled `SMMUv3`, in tree order.
     #[must_use]
@@ -1771,6 +1793,108 @@ impl<'a> Fdt<'a> {
     #[must_use]
     pub fn node_by_phandle(&self, phandle: u32) -> Option<Node<'a>> {
         self.nodes().find(|node| node.phandle() == Some(phandle))
+    }
+
+    /// The GIC interrupt a device's `index`th interrupt reaches, however the
+    /// tree routes it there.
+    ///
+    /// Three shapes are followed:
+    ///
+    /// * `interrupts`, when the tree's interrupt controller is a GIC taking
+    ///   three cells and the node names no other `interrupt-parent` — the shape
+    ///   QEMU's `virt` writes;
+    /// * `interrupts-extended`, whose every entry is a phandle and as many cells
+    ///   as the controller it names declares, when that controller is a GIC;
+    /// * one level through ST's EXTI ([`STM32MP1_EXTI_COMPATIBLE`]), which is
+    ///   how an STM32MP15 tree routes its UARTs. The EXTI line in the first
+    ///   cell names an entry of the EXTI node's own `interrupts-extended`, and
+    ///   that entry is the GIC interrupt the peripheral raises. On a DK1, UART4
+    ///   is EXTI line 30, which is GIC SPI 52.
+    ///
+    /// `None` for any other shape — an `interrupt-map`, a parent inherited from
+    /// an ancestor other than the GIC, an EXTI line with no GIC interrupt
+    /// behind it — and for an entry that runs off the end of its property.
+    #[must_use]
+    pub fn gic_interrupt_of(&self, node: &Node<'a>, index: usize) -> Option<GicInterrupt> {
+        if node.property("interrupts").is_some() {
+            if let Some(parent) = node.property("interrupt-parent").and_then(|p| p.as_u32()) {
+                let parent = self.node_by_phandle(parent)?;
+                if !is_gic(&parent) {
+                    return None;
+                }
+            }
+            let gic = self.interrupt_controller()?;
+            if gic.interrupt_cells() != Some(3) {
+                return None;
+            }
+            return node.gic_interrupts().nth(index);
+        }
+        let entry = self.interrupts_extended_entry(node, index)?;
+        self.gic_behind(&entry, true)
+    }
+
+    /// Entry `index` of `node`'s `interrupts-extended`: the controller it names
+    /// and the cells after the phandle.
+    ///
+    /// Each entry's width is the named controller's `#interrupt-cells`, so the
+    /// walk looks up every controller it passes. A zero phandle is a
+    /// placeholder of no cells, which the EXTI binding uses for lines with no
+    /// parent interrupt; landing on one is `None`.
+    fn interrupts_extended_entry(
+        &self,
+        node: &Node<'a>,
+        index: usize,
+    ) -> Option<ExtendedEntry<'a>> {
+        let mut cells = node.property("interrupts-extended")?.cells();
+        let mut position = 0usize;
+        loop {
+            let phandle = cells.next()?;
+            let controller = if phandle == 0 {
+                None
+            } else {
+                Some(self.node_by_phandle(phandle)?)
+            };
+            let width = match &controller {
+                Some(controller) => controller.property("#interrupt-cells")?.as_u32()?,
+                None => 0,
+            };
+            let mut specifier = [0_u32; 3];
+            let taken = specifier.get_mut(..usize::try_from(width).ok()?)?;
+            for cell in taken {
+                *cell = cells.next()?;
+            }
+            if position == index {
+                return Some(ExtendedEntry {
+                    controller: controller?,
+                    specifier,
+                    width,
+                });
+            }
+            position = position.checked_add(1)?;
+        }
+    }
+
+    /// The GIC interrupt an `interrupts-extended` entry comes to: the entry
+    /// itself when it names a GIC, or, when `through_exti` allows, the GIC
+    /// interrupt behind the EXTI line it names.
+    fn gic_behind(&self, entry: &ExtendedEntry<'a>, through_exti: bool) -> Option<GicInterrupt> {
+        let [first, second, third] = entry.specifier;
+        if is_gic(&entry.controller) {
+            return if entry.width == 3 {
+                gic_interrupt(first, second, third)
+            } else {
+                None
+            };
+        }
+        if through_exti
+            && entry.width == 2
+            && entry.controller.is_compatible(STM32MP1_EXTI_COMPATIBLE)
+        {
+            let line = usize::try_from(first).ok()?;
+            let behind = self.interrupts_extended_entry(&entry.controller, line)?;
+            return self.gic_behind(&behind, false);
+        }
+        None
     }
 
     /// The `iommu-map` of the ECAM host `host` was decoded from.

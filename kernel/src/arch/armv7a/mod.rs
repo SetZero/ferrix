@@ -394,12 +394,29 @@ pub(crate) const USER_NATIVE_PROGRAM: &[u8] = &[
     0xfe, 0xff, 0xff, 0xea,
 ];
 
-/// One byte from the console, if one has arrived.
-///
-/// Polled, as on x86-64: the `console` thread in `fs::terminal` drains it into
-/// the line discipline.
+/// One byte from the console, if one has arrived: from the receive ring once
+/// the port's interrupt is installed, straight from the port before then.
 pub(crate) fn read_console_byte() -> Option<u8> {
+    crate::console::input::read_byte(console::read_byte)
+}
+
+/// One byte straight from the console port, for its receive interrupt.
+pub(crate) fn take_console_byte() -> Option<u8> {
     console::read_byte()
+}
+
+/// The GIC interrupt the console port receives on, from the device tree.
+pub(crate) fn console_receive_irq(view: &BootView<'_>) -> Option<u32> {
+    let tree = crate::fdt::open(view).ok()?;
+    console::receive_interrupt(&tree)
+}
+
+/// Enable the console port's receive interrupt `irq`, at the GIC and in the
+/// port. On the calling processor, like the timer's: a shared interrupt goes
+/// to the core that enables it.
+pub(crate) fn enable_console_receive(irq: u32) {
+    gicv2::enable(irq);
+    console::enable_receive_interrupt();
 }
 
 /// `AT_HWCAP` and `AT_HWCAP2` for a program started on this machine: what the

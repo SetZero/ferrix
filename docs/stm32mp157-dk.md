@@ -185,12 +185,13 @@ busybox at `/bin/busybox` with a link beside it for every applet. `FERRIX_INIT`
 works in place of `--init`. The binary must be static and hard-float ARMv7;
 Alpine's `busybox-static` for `armv7` is.
 
-> **The shell reads the keyboard by polling.** The STM32 USART and PL011
-> drivers receive, and the kernel's `console` thread drains the port every
-> 20 ms. Typing works — so far seen under QEMU, not yet on the board. Pasting
-> may not: at 115200 baud, 20 ms is about 230 bytes, far more than the port
-> buffers, so a long paste can lose characters until receive is
-> interrupt-driven.
+> **The shell reads the keyboard by interrupt.** The STM32 USART's receive
+> interrupt empties the port into a 4 KiB ring the kernel's `console` thread
+> drains, so a paste is held rather than overrun between looks. On the DK1 that
+> interrupt is GIC SPI 52, which the device tree reaches through EXTI line 30;
+> the boot's `input` line names the number it installed. Typing, and a
+> 300-character line sent at once, come back whole under QEMU; neither has been
+> tried on the board yet.
 
 Three files are copied, which are the three the image contains:
 

@@ -167,6 +167,8 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
             "could not register the timer interrupt: {problem}"
         );
     }
+
+    start_console_input(view);
     arch::enable_interrupts();
 
     let measured = match timer_check() {
@@ -1152,6 +1154,37 @@ fn report_clocks(report: &irq::Report) {
 /// without it. Two integers and a `{:03}` say the same thing.
 const fn megahertz(hz: u64) -> (u64, u64) {
     (hz / 1_000_000, (hz % 1_000_000) / 1000)
+}
+
+/// The console's input ring, checked while nothing can fill it, and then the
+/// port's receive interrupt, installed with the timer's and before interrupts
+/// are first enabled: a byte the port already holds lands in the ring the moment
+/// they are.
+fn start_console_input(view: &BootView<'_>) {
+    let ring = match console::input::check() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::CONSOLE_INPUT,
+            "console input self-check failed: {problem}"
+        ),
+    };
+    let receive = match console::input::init(view) {
+        Ok(receive) => receive,
+        Err(problem) => fatal!(
+            catalog::CONSOLE_INPUT,
+            "could not install the console's receive interrupt: {problem}"
+        ),
+    };
+    match receive {
+        Some(irq) => println!(
+            "  input    {} bytes back in order from the ring, {} past it counted; the port receives by interrupt {irq}",
+            ring.held, ring.dropped
+        ),
+        None => println!(
+            "  input    {} bytes back in order from the ring, {} past it counted; the port is polled",
+            ring.held, ring.dropped
+        ),
+    }
 }
 
 /// The rest of stage 3's exit criterion: arm a timer, count the ticks,

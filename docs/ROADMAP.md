@@ -856,10 +856,11 @@ name. One lock per address space, never a global one.
 * `AddressSpace::protect` takes translations down without invalidating them, so
   after `mprotect` a stale entry can stay more permissive than the map. glibc's
   RELRO is the first real program to walk into it.
-* No check reads the console. Every architecture receives now — the Arm UART
+* No check types at the console. Every architecture receives now — the Arm UART
   drivers were write-only, so a program reading fd 0 there waited forever, until
-  the PL011 and the STM32 USART gained polled receive — but `test-shell` types
-  nothing, so input is exercised only by hand.
+  the PL011 and the STM32 USART gained receive, by interrupt into a ring — but
+  `test-shell` types nothing, so input is exercised only by hand. The ring
+  itself is checked at boot.
 
 **What the boot test cannot see, written down rather than trusted.** A
 copy-on-write fault replaces a live read-only translation with a writable one,
@@ -1129,8 +1130,9 @@ its own line editing without a doubled echo. `select`, `pselect6` and
 they are given, as `ppoll` does. Ctrl-C, Ctrl-\ and Ctrl-Z raise their signals
 on the foreground process group, and since nothing reads the console while a
 shell waits for a foreground program, the first read starts a `console` thread
-that drains the UART every twenty milliseconds — the 16550, the PL011 and the
-STM32 USART alike, each polled; a console read returns `EINTR`
+that drains the console every twenty milliseconds: the 4 KiB ring the PL011's
+and the STM32 USART's receive interrupts fill, and the 16550 directly, which
+has no route through the I/O APIC yet. A console read returns `EINTR`
 when a signal is waiting. In the shell, `sleep 30` and `cat` are each ended by
 Ctrl-C with status 130 and the prompt back at once.
 
@@ -1144,8 +1146,9 @@ Ctrl-C with status 130 and the prompt back at once.
 * **Threads**, which nothing single-threaded calls: `CLONE_VM` without
   `CLONE_VFORK`, and `CLONE_THREAD`, are `ENOSYS`.
 * **Three stand-ins, each written down where it lives.** The console is the one
-  terminal, its line discipline polling a UART that has no receive interrupt,
-  until stage 15 brings ttys; the real-time clocks
+  terminal, its line discipline fed by a thread that looks every twenty
+  milliseconds rather than waiting on the receive interrupt, and on x86-64 a
+  UART still polled, until stage 15 brings ttys; the real-time clocks
   start at 1970 until something reads a clock chip, though `clock_settime`
   moves them; `getrandom` is xorshift seeded
   from a counter and says so.

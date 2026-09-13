@@ -5,8 +5,9 @@
 //! `virt` and most Arm development boards have a PL011, and the STM32MP157 has
 //! ST's own USART at an address of its own. Both drivers are in
 //! `kernel/src/arch/` beside the GIC; what is here is how the machine's
-//! description says which one it has, and the `write_byte` the kernel's
-//! console calls without having to know.
+//! description says which one it has, the `write_byte` and `read_byte` the
+//! kernel's console calls without having to know, and which interrupt the port
+//! receives on.
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -74,17 +75,7 @@ fn port() -> Option<Port> {
 /// any the tree has turned off: an STM32MP15 describes eight UARTs and a board
 /// enables the one it wired to a connector.
 pub(crate) fn init(tree: &Fdt<'_>, memory: &mut EarlyMemory) -> Result<(), EarlyError> {
-    let (node, port) = match forced(tree) {
-        Some(found) => found,
-        None => {
-            let named = tree
-                .console()
-                .and_then(|node| Port::of(&node).map(|port| (node, port)));
-            named
-                .or_else(|| first_enabled(tree))
-                .ok_or(EarlyError::NoConsole)?
-        }
-    };
+    let (node, port) = chosen(tree).ok_or(EarlyError::NoConsole)?;
 
     let registers = node.reg().next().ok_or(EarlyError::NoConsole)?;
     match port {
@@ -94,6 +85,41 @@ pub(crate) fn init(tree: &Fdt<'_>, memory: &mut EarlyMemory) -> Result<(), Early
 
     PORT.store(port as u8, Ordering::Relaxed);
     Ok(())
+}
+
+/// The console's node and port, chosen as [`init`] describes.
+fn chosen<'a>(tree: &Fdt<'a>) -> Option<(Node<'a>, Port)> {
+    forced(tree).or_else(|| {
+        tree.console()
+            .and_then(|node| Port::of(&node).map(|port| (node, port)))
+            .or_else(|| first_enabled(tree))
+    })
+}
+
+/// The GIC interrupt the console port receives on, if the tree says so in a
+/// shape `ferrix_fdt` follows.
+///
+/// Chosen the way [`init`] chose the port, and only for the port it brought
+/// up: an interrupt belonging to a different node would be enabled for a port
+/// nothing reads. On QEMU's `virt` the PL011 names the GIC directly; on an
+/// STM32MP15 the USART names an EXTI line, behind which is the GIC interrupt.
+pub(crate) fn receive_interrupt(tree: &Fdt<'_>) -> Option<u32> {
+    let (node, port) = chosen(tree)?;
+    if self::port() != Some(port) {
+        return None;
+    }
+    tree.gic_interrupt_of(&node, 0)
+        .map(|interrupt| interrupt.id)
+}
+
+/// Let whichever port the machine turned out to have interrupt when it has
+/// received something.
+pub(crate) fn enable_receive_interrupt() {
+    match port() {
+        Some(Port::Pl011) => pl011::enable_receive_interrupt(),
+        Some(Port::Stm32) => stm32_usart::enable_receive_interrupt(),
+        None => {}
+    }
 }
 
 /// The port `console=` on the command line insists on, if it named one.

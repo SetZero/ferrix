@@ -25,6 +25,8 @@
 //! and then writes without it. A panic report interleaved with another CPU's
 //! line is legible; one that never appears is not.
 
+pub(crate) mod input;
+
 use core::fmt::{self, Write};
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
