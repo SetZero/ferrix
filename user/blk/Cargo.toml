@@ -1,0 +1,25 @@
+[package]
+name = "ferrix-blk"
+description = "The virtio-blk driver process: the block ring's driver end over a virtio-blk PCI device, on ferrix-rt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "blk"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferrix-blkring.workspace = true
+ferrix-blkserve.workspace = true
+ferrix-native-abi.workspace = true
+ferrix-rt.workspace = true
+ferrix-virtio.workspace = true
+ferrix-virtio-blk.workspace = true
+
+[lints]
+workspace = true

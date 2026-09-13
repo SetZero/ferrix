@@ -48,6 +48,7 @@ members = [
     # a pure function lives in `libs/native`.
     "user/rt",
     "user/channel-echo",
+    "user/blk",
 
     # Host-side build and test driver (`cargo xtask ...`).
     "xtask",

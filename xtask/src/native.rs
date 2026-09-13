@@ -38,10 +38,16 @@ pub(crate) struct Program {
 }
 
 /// Every native program the initramfs carries.
-pub(crate) const PROGRAMS: &[Program] = &[Program {
-    package: "ferrix-channel-echo",
-    binary: "channel-echo",
-}];
+pub(crate) const PROGRAMS: &[Program] = &[
+    Program {
+        package: "ferrix-channel-echo",
+        binary: "channel-echo",
+    },
+    Program {
+        package: "ferrix-blk",
+        binary: "blk",
+    },
+];
 
 /// Where native programs are unpacked, relative to the root: system programs,
 /// off the shell's `PATH=/bin`.

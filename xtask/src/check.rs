@@ -180,7 +180,7 @@ pub(crate) fn model_doc() -> Result<()> {
 
 /// The native runtime and the programs built on it: freestanding, so linted
 /// once per kernel target rather than for the host.
-const NATIVE: &[&str] = &["ferrix-rt", "ferrix-channel-echo"];
+const NATIVE: &[&str] = &["ferrix-rt", "ferrix-channel-echo", "ferrix-blk"];
 
 /// Every workspace member the host cannot build: the loader, the kernel, and
 /// [`NATIVE`].
@@ -189,6 +189,7 @@ const FREESTANDING: &[&str] = &[
     "ferrix-boot",
     "ferrix-rt",
     "ferrix-channel-echo",
+    "ferrix-blk",
 ];
 
 /// Announce a gate, run it, and report.
