@@ -50,7 +50,6 @@ stubs! {
     __h_errno_location
     atan2
     cos
-    dirname
     ether_aton_r
     ether_hostton
     exp
