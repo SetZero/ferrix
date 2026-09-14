@@ -114,6 +114,19 @@ static PREEMPT_SITE: Once<Vec<core::sync::atomic::AtomicPtr<core::panic::Locatio
 /// taken inside a by-hand window would overwrite.
 static LOCKS_HELD: Once<Vec<AtomicU32>> = Once::new();
 
+/// Where each processor's *outermost* lock was taken: the site recorded when
+/// [`LOCKS_HELD`] went from zero to one, and what a shootdown asked for under
+/// a lock names.
+///
+/// [`PREEMPT_SITE`] is the last raise, which is right for a holder found
+/// asleep: the lock it took last is the one it sleeps under. It is wrong
+/// for a shootdown under a lock, where the count is still up from a lock
+/// taken earlier and every lock taken and released since has overwritten
+/// the site: `channel_read`'s negative control named the VMO's page-list
+/// lock, released a moment before, instead of the topology lock it held.
+static LOCK_SITE: Once<Vec<core::sync::atomic::AtomicPtr<core::panic::Location<'static>>>> =
+    Once::new();
+
 /// The kernel's half of `ferrix_sync::PreemptControl`: this processor's
 /// entry in [`PREEMPT_OFF`].
 pub(crate) struct Preempt;
@@ -164,7 +177,12 @@ fn preempt_disable_at(site: &'static core::panic::Location<'static>, by_lock: bo
             slot.store(core::ptr::from_ref(site).cast_mut(), Ordering::Release);
         }
         if by_lock && let Some(held) = LOCKS_HELD.get().and_then(|counts| counts.get(cpu)) {
-            let _ = held.fetch_add(1, Ordering::AcqRel);
+            let was = held.fetch_add(1, Ordering::AcqRel);
+            if was == 0
+                && let Some(slot) = LOCK_SITE.get().and_then(|sites| sites.get(cpu))
+            {
+                slot.store(core::ptr::from_ref(site).cast_mut(), Ordering::Release);
+            }
         }
     }
     <arch::Irq as IrqControl>::restore(saved);
@@ -248,6 +266,16 @@ pub(crate) fn preempt_site(cpu: usize) -> Option<&'static core::panic::Location<
 /// for a check to print beside a result that preemption would explain.
 pub(crate) fn preemption_held(cpu: usize) -> u32 {
     preempt_count(cpu)
+}
+
+/// The file and line that took the outermost lock `cpu`'s running context
+/// still holds, if any is recorded: see [`LOCK_SITE`]. Meaningful only while
+/// [`locks_held`] is above zero.
+pub(crate) fn lock_site(cpu: usize) -> Option<&'static core::panic::Location<'static>> {
+    let pointer = LOCK_SITE.get()?.get(cpu)?.load(Ordering::Acquire);
+    // SAFETY: only `preempt_disable_at` stores here, and only a pointer to a
+    // `'static` location the compiler handed it.
+    unsafe { pointer.cast_const().as_ref() }
 }
 
 /// How many locks that disable preemption `cpu`'s running context holds,
@@ -437,6 +465,11 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
     let _ = PREEMPT_OFF.call_once(|| (0..online).map(|_| AtomicU32::new(0)).collect());
     let _ = LOCKS_HELD.call_once(|| (0..online).map(|_| AtomicU32::new(0)).collect());
     let _ = PREEMPT_SITE.call_once(|| {
+        (0..online)
+            .map(|_| core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()))
+            .collect()
+    });
+    let _ = LOCK_SITE.call_once(|| {
         (0..online)
             .map(|_| core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()))
             .collect()

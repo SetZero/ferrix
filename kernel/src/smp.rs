@@ -655,11 +655,13 @@ pub(crate) fn flush_tlb_everywhere() {
 fn shootdown_requested() {
     if let Some(cpu) = this_cpu() {
         let held = crate::sched::locks_held(cpu.logical);
-        let site = crate::sched::preempt_site(cpu.logical);
+        // The outermost lock's site, not the last raise: with the count still
+        // up, the last raise may be a lock released since.
+        let site = crate::sched::lock_site(cpu.logical);
         debug_assert!(
             held == 0,
             "a shootdown was requested on processor {} holding {held} lock(s) that disable \
-             preemption, the last taken at {}:{}",
+             preemption, the outermost taken at {}:{}",
             cpu.logical,
             site.map_or("?", |site| site.file()),
             site.map_or(0, core::panic::Location::line),
