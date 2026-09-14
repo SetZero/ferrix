@@ -16,6 +16,7 @@
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::any::Any;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::sync::SpinLock;
@@ -43,7 +44,8 @@ use crate::syscall::check::spinner;
 use crate::syscall::image;
 use crate::syscall::process::{self, Process, ProcessRef};
 use crate::syscall::{self as linux, Outcome, SyscallArgs, native, uaccess};
-use crate::user::space::{Access, Destination, SpaceError};
+use crate::user::space::{Access, Destination, FilePlace, SpaceError};
+use crate::user::vmo::Vmo;
 use ferrix_elf::Class;
 
 /// Where each check process keeps its buffers. Stage 10's ring check borrows
@@ -766,6 +768,7 @@ fn check_two_processes() -> Result<Counter, &'static str> {
     check_a_refused_send_keeps_its_handles(&sender, near, &mut counter)?;
     check_a_cycle_of_channels_is_refused(&sender, &mut counter)?;
     check_an_endpoint_survives_a_bad_buffer(&sender, &mut counter)?;
+    check_a_message_is_read_into_a_private_file_mapping(&sender, &mut counter)?;
     check_an_endpoint_is_read_into_pages_shared_by_fork(&sender, &mut counter)?;
     check_ports(&sender, &mut counter)?;
     check_a_port_hears_a_process_end(&sender, &mut counter)?;
@@ -2522,6 +2525,138 @@ fn check_an_endpoint_survives_a_bad_buffer(
 /// of the scratch region's first page, so that the bytes run on into the
 /// second, which a read faults in only once it has let go of the topology lock.
 const STRADDLE: u64 = SCRATCH + PAGE_SIZE - 3;
+
+/// Where the private-file check's file lives.
+const PRIVATE_FILE: &[u8] = b"/tmp/ferrix-channel-private";
+
+/// A message read into a private file mapping lands in the mapping's own copy
+/// of the page, never in the file.
+///
+/// Delivery under the topology lock writes only a page it may write in place,
+/// and a private file mapping's file page -- present and read-only once read --
+/// is not one: the delivery has to put the message back, fault the page in,
+/// which copies it into the mapping's shadow, and read again. The bytes
+/// straddle the file's two pages, both read back first so both are present.
+/// The count of such rounds has to move, the bytes have to arrive, and the
+/// file has to keep what it had. It runs before the fork check, so each of the
+/// write predicate's two rules has a check of its own to fail.
+fn check_a_message_is_read_into_a_private_file_mapping(
+    side: &Side,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let ns = crate::fs::namespace();
+    let flags = ferrix_vfs::OpenFlags {
+        read: true,
+        write: true,
+        create: true,
+        truncate: true,
+        ..ferrix_vfs::OpenFlags::default()
+    };
+    let file = ns
+        .open(&ns.context(), None, PRIVATE_FILE, &flags, 0o600)
+        .map_err(|_| "could not create a file to map privately")?;
+    let outcome = read_into_a_private_file_mapping(side, counter, &file);
+    let _ = ns.unlink(&ns.context(), None, PRIVATE_FILE);
+    outcome
+}
+
+/// The body of [`check_a_message_is_read_into_a_private_file_mapping`], on
+/// `file`, with the mapping unmapped whatever happens.
+fn read_into_a_private_file_mapping(
+    side: &Side,
+    counter: &mut Counter,
+    file: &Arc<ferrix_vfs::OpenFile>,
+) -> Result<(), &'static str> {
+    let page = usize::try_from(PAGE_SIZE).map_err(|_| "the page size does not fit")?;
+    let kept: Vec<u8> = (0..2 * page).map(|at| (at % 251) as u8).collect();
+    if file.write_at(0, &kept) != Ok(kept.len()) {
+        return Err("could not fill the file to map privately");
+    }
+    let object = file
+        .inode()
+        .mapping()
+        .and_then(|object| object.downcast::<Vmo>().ok())
+        .ok_or("a tmpfs file has no object to map")?;
+    let space = side.process.space();
+    let at = space
+        .map_file(
+            FilePlace::Anywhere(None),
+            2 * PAGE_SIZE,
+            VmaFlags::READ_WRITE,
+            object,
+            0,
+            Arc::clone(file) as Arc<dyn Any + Send + Sync>,
+        )
+        .map_err(|_| "could not map a file privately")?;
+    let outcome = deliver_into_file_pages(side, counter, at, &kept, file);
+    let _ = space.unmap(at, 2 * PAGE_SIZE);
+    outcome
+}
+
+/// Send bytes and read them into the private mapping at `at`, straddling its
+/// two file pages, which hold `kept`.
+fn deliver_into_file_pages(
+    side: &Side,
+    counter: &mut Counter,
+    at: u64,
+    kept: &[u8],
+    file: &ferrix_vfs::OpenFile,
+) -> Result<(), &'static str> {
+    const SENT: &[u8] = b"privately";
+    let straddle = at + PAGE_SIZE - 3;
+    let offset = usize::try_from(PAGE_SIZE - 3).map_err(|_| "the page size does not fit")?;
+    let before = kept
+        .get(offset..offset + SENT.len())
+        .ok_or("the private file is shorter than the straddle")?;
+
+    let (near, far) = side.channel()?;
+    // An endpoint rides along: only a message carrying a handle is delivered
+    // under the topology lock, into pages already there to be written, which is
+    // the path this check is for. One of bytes alone is copied with faults
+    // allowed, and copies the page without ever going round.
+    let (carried, carried_far) = side.channel()?;
+    side.put_handles(&[carried])?;
+    side.put(PAYLOAD, SENT)?;
+    let _ = side
+        .call(
+            nr::CHANNEL_WRITE,
+            &[reg(near), PAYLOAD, len(SENT), HANDLES, 1],
+        )
+        .map_err(|_| "sending an endpoint to read into a private file mapping failed")?;
+    // Both file pages read back: each is then present and read-only, the
+    // file's own page, which a delivery under the lock must not write through.
+    if side.get(straddle, SENT.len())? != before {
+        return Err("a private file mapping did not show its file before the read");
+    }
+
+    let rounds = native::faulted_rounds();
+    let _ = side
+        .call(
+            nr::CHANNEL_READ,
+            &[reg(far), straddle, len(SENT), HANDLES, 1, ACTUAL],
+        )
+        .map_err(|_| "a read into a private file mapping failed")?;
+    if native::faulted_rounds() == rounds {
+        return Err(
+            "a read under the topology lock wrote into a private file mapping's file page in place",
+        );
+    }
+    let mut in_file = vec![0_u8; SENT.len()];
+    if file.read_at(offset as u64, &mut in_file) != Ok(in_file.len()) || in_file != before {
+        return Err("a read into a private file mapping wrote the file");
+    }
+    if side.get(straddle, SENT.len())? != SENT {
+        return Err("a read into a private file mapping did not deliver the bytes");
+    }
+    counter.messages += 1;
+    let arrived = Handle(side.get_u32(HANDLES)?);
+    for end in [near, far, arrived, carried_far] {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(end)])
+            .map_err(|_| "closing a channel end failed")?;
+    }
+    Ok(())
+}
 
 /// A message carrying an endpoint is delivered into buffers still shared
 /// copy-on-write with a fork of the reader's memory, and the fork keeps what
