@@ -21,6 +21,7 @@ members = [
     "libs/btrfs-vfs",
     "libs/cpio",
     "libs/linux-abi",
+    "libs/netwire",
     "libs/native-abi",
     "libs/native",
     "libs/objects",
@@ -85,6 +86,7 @@ ferrix-cpio = { path = "libs/cpio" }
 ferrix-linux-abi = { path = "libs/linux-abi" }
 ferrix-native-abi = { path = "libs/native-abi" }
 ferrix-native = { path = "libs/native" }
+ferrix-netwire = { path = "libs/netwire" }
 ferrix-rt = { path = "user/rt" }
 ferrix-objects = { path = "libs/objects" }
 ferrix-sync = { path = "libs/sync" }

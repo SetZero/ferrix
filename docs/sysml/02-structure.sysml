@@ -868,6 +868,20 @@ package FerrixStructure {
             attribute :>> hostTests = 62;
             @stage { number = 10; }
         }
+        #writtenAhead part netwire : LibraryCrate {
+            attribute :>> path = "libs/netwire";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 54;
+            doc /* The byte-level half of the net core, written ahead of the
+                 * networking stage: Ethernet with one 802.1Q tag, ARP, IPv4
+                 * with its options, IPv6 with the extension-header walk,
+                 * ICMPv4, ICMPv6 and Neighbor Discovery, UDP, and TCP headers
+                 * with their negotiated options, each parsed without
+                 * allocation and emitted into a caller's buffer, checksums
+                 * verified where the format carries them. The netwire_parse
+                 * fuzz target requires every header that parses to emit and
+                 * parse back unchanged. */
+        }
         #writtenAhead part pci : LibraryCrate {
             attribute :>> path = "libs/pci";
             attribute :>> forbidsUnsafe = true;

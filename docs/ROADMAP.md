@@ -2761,6 +2761,13 @@ kernel calls them, for the reason the continuous rule gives: a packet is bytes
 someone else chose. They are header parsing, the TCP state machine with its
 retransmission and congestion arithmetic, and netlink message encoding.
 
+**Written ahead so far.** `libs/netwire` has the headers — Ethernet, ARP,
+IPv4 and IPv6 with its extension headers, ICMPv4, ICMPv6 and Neighbor
+Discovery, UDP and TCP — with 54 host tests and the `netwire_parse` fuzz
+target; see *Written ahead of their stage*. The TCP state machine, netlink
+message encoding and virtio-net's device protocol are still to be written,
+and nothing in the kernel calls any of it yet.
+
 **Exit:** under QEMU's user-mode network, busybox configures `eth0` with `ip`,
 and `route` and `netstat` report through `/proc/net`. `wget` fetches a file
 from a server on the host that byte-for-byte matches what it served, and `nc`
@@ -2980,16 +2987,17 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
 | `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one; and the reachability walk a send makes before it queues an endpoint. Has its fuzz target and its Miri step. | 24 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
+| `libs/netwire` | Networking — the headers: Ethernet with one 802.1Q tag, ARP, IPv4 with its options, IPv6 with the extension-header walk, ICMPv4, ICMPv6 and Neighbor Discovery, UDP, and TCP with the options a connection negotiates. Parsed without allocation and emitted into the caller's buffer, with each format's checksum verified where it carries one. Has its fuzz target, which requires every header that parses to emit and parse back unchanged. | 54 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **706 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **760 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has eleven:
+asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has fourteen:
 `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`, `vfs_ops`,
-`pci_walk`, `btrfs_read`, `block_queue`, `cpio_parse`, `fdt_parse` and
-`acpi_tables`. Every crate in the table above parses bytes that came from
+`pci_walk`, `btrfs_read`, `block_queue`, `cpio_parse`, `fdt_parse`,
+`acpi_tables`, `blkring`, `virtio_blk` and `netwire_parse`. Every crate in the table above parses bytes that came from
 outside the system — a disk, a firmware table, an archive a stranger built —
 which is precisely the population the rule was written for. The fuzz targets
 still owed — `virtio` and `linux-abi` — are owed *before* the consuming stage
@@ -3002,6 +3010,14 @@ prefix of an archive never reads a different entry, and that any archive
 walked to its trailer, written out again from what the reader reported, reads
 back identical. Its seeds include the archive every boot image carries, byte
 for byte, and two that GNU cpio wrote.
+
+`netwire_parse` runs every header parser in `libs/netwire` on the same bytes,
+with the transport checksums' addresses taken from the input so the fuzzer can
+steer them. Each header that parses must lie inside the input, and must emit
+and parse back to exactly the same header and payload — TCP's options in
+canonical form, Neighbor Discovery by its message body — while the IPv6
+extension walk stays inside the payload and a checksum summed in two pieces
+equals the checksum of the whole.
 
 `fdt_parse` holds the device tree reader to a second walk of the token stream
 written from the specification: a tree the reader accepts must be well formed

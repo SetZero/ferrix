@@ -30,6 +30,7 @@ ferrix-block = { path = "../libs/block", features = ["model"] }
 ferrix-blkring = { path = "../libs/blkring" }
 ferrix-virtio = { path = "../libs/virtio" }
 ferrix-virtio-blk = { path = "../libs/virtio-blk" }
+ferrix-netwire = { path = "../libs/netwire" }
 
 [[bin]]
 name = "elf_parse"
@@ -90,6 +91,11 @@ bench = false
 [[bin]]
 name = "blkring"
 path = "fuzz_targets/blkring.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "virtio_blk"
 path = "fuzz_targets/virtio_blk.rs"
 test = false
@@ -113,6 +119,13 @@ bench = false
 [[bin]]
 name = "acpi_tables"
 path = "fuzz_targets/acpi_tables.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "netwire_parse"
+path = "fuzz_targets/netwire_parse.rs"
 test = false
 doc = false
 bench = false
