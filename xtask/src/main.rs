@@ -52,6 +52,7 @@ mod serial;
 mod shell;
 mod symbolize;
 mod test_disk;
+mod tree;
 mod vfs;
 
 use std::path::PathBuf;
@@ -153,6 +154,12 @@ fn run() -> Result<()> {
         println!("{USAGE}");
         return Err(Error::new("no command given"));
     };
+
+    // A gate's log starts by naming the tree it ran on, so that the log alone
+    // pins the commit its result is evidence for.
+    if matches!(command, "check" | "test-boot" | "test-shell" | "test-vfs") {
+        tree::print_header(&paths::workspace_root());
+    }
 
     match command {
         "build" => {
