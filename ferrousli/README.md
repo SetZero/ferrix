@@ -73,7 +73,7 @@ glibc one.
 busybox also calls functions from the areas allowed to wait: pattern matching
 and a few math functions. Until each is written, the library defines a stub
 that writes that the function is not implemented yet and aborts, and there are
-11 functions in `src/stubs.rs`. That list only shrinks — name resolution left
+10 functions in `src/stubs.rs`. That list only shrinks — name resolution left
 it on 2026-09-16 — and the busybox Ferrix is tested with must reach none.
 
 ## Headers
@@ -122,13 +122,14 @@ x86-64, static programs linked at a fixed address.
 | `dirent.h` | `opendir`, `fdopendir`, `readdir`, `readdir_r`, `rewinddir`, `seekdir`, `telldir`, `dirfd`, `closedir`, `scandir`, `alphasort`, `versionsort`, with glibc's `64` names; records the kernel sends are checked against the bytes it filled | |
 | `getopt.h` | `getopt`, `getopt_long`, `getopt_long_only`, permuting as glibc does unless `POSIXLY_CORRECT` or a leading `+`, and `optreset` | |
 | `fnmatch.h` | `fnmatch`, with musl's linear-time matching: `*`, `?`, brackets with ranges, negation and classes, `FNM_PATHNAME`, `FNM_PERIOD`, `FNM_NOESCAPE`, `FNM_LEADING_DIR` and `FNM_CASEFOLD`, cross-checked against glibc | multibyte characters, which wait for a locale other than C |
+| `libgen.h` | `basename`, glibc's `__xpg_basename`, `dirname` | |
 | `errno.h` | `__errno_location`, per thread | |
 | `sys/auxv.h` | `getauxval` | |
 | C++ runtime | `__cxa_atexit`, and `__cxa_finalize` for a static program | |
 
 ## Next
 
-1. In progress: **`glob`, `regex`, `search.h` and `libgen.h`**, **thread
+1. In progress: **`glob`, `regex` and `search.h`**, **thread
    cancellation, semaphores and C11 threads**, and **the math library**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.

@@ -49,7 +49,6 @@ macro_rules! stubs {
 stubs! {
     atan2
     cos
-    dirname
     exp
     log
     pow

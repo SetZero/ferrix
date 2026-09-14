@@ -56,6 +56,7 @@ pub mod inet;
 pub mod ioctl;
 pub mod ipc;
 pub mod key;
+pub mod libgen;
 pub mod linux;
 pub mod locale;
 pub mod lock;

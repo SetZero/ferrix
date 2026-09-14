@@ -1,8 +1,9 @@
 //! The C programs that exercise the POSIX utilities built from logic over the
-//! rest of the library: `dirent.h`, `getopt` and `fnmatch.h`.
+//! rest of the library: `dirent.h`, `getopt`, `fnmatch.h` and `libgen.h`.
 //!
-//! The getopt programs' expected traces and error reports were generated once
-//! from the host glibc.
+//! The libgen programs are adapted from libc-test, and say so. The getopt
+//! programs' expected traces and error reports were generated once from the
+//! host glibc.
 //!
 //! The harness is in `tests/common`.
 
@@ -46,4 +47,14 @@ fn getopt_long_matches_abbreviates_and_reports_errors_as_glibc_does() {
 #[test]
 fn fnmatch_matches_wildcards_brackets_and_paths() {
     check(&Case::named("misc/fnmatch"));
+}
+
+#[test]
+fn basename_takes_the_last_component() {
+    check(&Case::named("misc/basename"));
+}
+
+#[test]
+fn dirname_drops_the_last_component() {
+    check(&Case::named("misc/dirname"));
 }
