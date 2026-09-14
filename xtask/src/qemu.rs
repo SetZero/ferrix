@@ -24,6 +24,18 @@ pub(crate) const SUCCESS_MARKER: &str = "FERRIX-BOOT-OK";
 /// What the panic handler prints. Seeing this ends the test immediately: the
 /// kernel will not recover, and waiting out the timeout only hides the reason.
 pub(crate) const PANIC_MARKER: &str = "FERRIX-PANIC";
+
+/// The command line `--reset` puts in the image's `CMDLINE.TXT`.
+pub(crate) const RESET_CMDLINE: &str = "ferrix.onexit=reset\n";
+
+/// What the kernel says once it has read that option.
+const RESET_ARMED: &str = "power    ferrix.onexit=reset: the machine resets when boot ends";
+
+/// What it says as it acts on it.
+const RESETTING: &str = "power    resetting, as ferrix.onexit=reset asks";
+
+/// The loader's first line, which only a machine that really reset prints twice.
+const LOADER_BANNER: &str = "Ferrix loader ";
 /// How long to keep reading after the panic marker. The marker line names the
 /// failure; the lines after it say where and on which processor, and a log
 /// that stops at the marker loses them.
@@ -80,6 +92,15 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
                     watched.log.display()
                 )));
             }
+            if args.reset {
+                if let Some(problem) = reset_problem(&watched) {
+                    return Err(Error::new(format!(
+                        "{arch}: {problem}.\n  Serial output is in {}",
+                        watched.log.display()
+                    )));
+                }
+                println!("  {arch}: the machine reset, as ferrix.onexit=reset asked");
+            }
             println!("  {arch}: boot ok");
             Ok(())
         }
@@ -90,6 +111,36 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
             args.timeout,
             watched.log.display()
         ))),
+    }
+}
+
+/// Why a `--reset` boot did not show a reset, if it did not.
+///
+/// The kernel has to have read the option from the image's `CMDLINE.TXT` and
+/// said it was resetting, and the loader then has to have started again. A
+/// power-off cannot do that: under `-action shutdown=pause` it only pauses
+/// QEMU, the debug-exit write on x86-64 included.
+fn reset_problem(watched: &Watched) -> Option<String> {
+    let first = |text: &str| watched.lines.iter().position(|line| line.contains(text));
+    if first(RESET_ARMED).is_none() {
+        return Some(format!(
+            "--reset: the kernel never said `{RESET_ARMED}`, so the image's CMDLINE.TXT did not reach it"
+        ));
+    }
+    let Some(at) = first(RESETTING) else {
+        return Some(format!("--reset: the kernel never said `{RESETTING}`"));
+    };
+    if watched
+        .lines
+        .iter()
+        .skip(at)
+        .any(|line| line.contains(LOADER_BANNER))
+    {
+        None
+    } else {
+        Some(format!(
+            "--reset: the loader did not start again after `{RESETTING}`, so the machine did not reset"
+        ))
     }
 }
 
@@ -436,7 +487,11 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
     let mut lines = Vec::new();
     let mut verdict = Verdict::Silent;
 
-    while verdict == Verdict::Silent {
+    // Under `--reset` the marker is not the end: the kernel still has to say it
+    // is resetting, and the loader to start again because it did.
+    let mut resetting = false;
+    let mut restarted = false;
+    while verdict == Verdict::Silent || (args.reset && verdict == Verdict::Reached && !restarted) {
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             break;
         };
@@ -445,10 +500,23 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
                 let at = started.elapsed().as_secs_f64();
                 println!("  {at:6.2} | {line}");
                 writeln!(log, "{at:6.2} | {line}")?;
-                if line.contains(until) {
+                if verdict == Verdict::Silent && line.contains(until) {
                     verdict = Verdict::Reached;
+                    // A kernel that has not said it will reset by its marker
+                    // never will, and a power-off only pauses QEMU: waiting
+                    // for the loader again would be waiting for the timeout.
+                    if args.reset && !lines.iter().any(|seen: &String| seen.contains(RESET_ARMED)) {
+                        restarted = true;
+                    }
                 } else if line.contains(PANIC_MARKER) {
                     verdict = Verdict::Panicked;
+                }
+                if args.reset && verdict == Verdict::Reached {
+                    if line.contains(RESETTING) {
+                        resetting = true;
+                    } else if resetting && line.contains(LOADER_BANNER) {
+                        restarted = true;
+                    }
                 }
                 lines.push(line);
             }
@@ -549,9 +617,6 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
         &args.memory.to_string(),
         "-smp",
         &args.smp.to_string(),
-        // A guest that reboots on a triple fault turns a crash into an endless
-        // loop, which in CI is a timeout with no cause in the log.
-        "-no-reboot",
         "-display",
         "none",
         "-monitor",
@@ -569,6 +634,16 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
         "-net",
         "none",
     ]);
+    // A guest that reboots on a triple fault turns a crash into an endless
+    // loop, which in CI is a timeout with no cause in the log. Not under
+    // `--reset`, whose point is that the machine starts again: there a reset
+    // restarts firmware and the loader, and a power-off only pauses QEMU, so
+    // the loader can appear a second time only if the kernel reset it.
+    if args.reset {
+        let _ = command.args(["-action", "shutdown=pause"]);
+    } else {
+        let _ = command.arg("-no-reboot");
+    }
 
     match arch {
         Arch::X86_64 => {

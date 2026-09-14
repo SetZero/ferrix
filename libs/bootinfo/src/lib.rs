@@ -1113,6 +1113,23 @@ impl<'a> BootView<'a> {
     }
 }
 
+/// The kernel command line a loader read from a file, as the kernel will be
+/// handed it: surrounding whitespace dropped, so the newline an editor adds is
+/// not part of the last option.
+///
+/// # Errors
+///
+/// A file that is not UTF-8, which [`BootInfo::validate`] would refuse, or
+/// whose text is longer than `capacity` bytes, the room the loader has for it.
+pub fn command_line_from_file(bytes: &[u8], capacity: usize) -> Result<&str, &'static str> {
+    let text = core::str::from_utf8(bytes).map_err(|_| "it is not UTF-8")?;
+    let text = text.trim();
+    if text.len() > capacity {
+        return Err("it is longer than the room the boot info has for it");
+    }
+    Ok(text)
+}
+
 /// Look up a `key=value` option in a command line the caller already has.
 ///
 /// The same grammar as [`BootView::option`], against a string from anywhere.
@@ -1788,5 +1805,38 @@ mod tests {
         assert_eq!(Arch::AArch64.elf_machine(), 183);
         assert_eq!(Arch::Armv7a.elf_machine(), 40);
         assert_eq!(Arch::Armv7a.name(), "armv7a");
+    }
+
+    #[test]
+    fn a_command_line_file_loses_its_surrounding_whitespace() {
+        assert_eq!(
+            command_line_from_file(b"ferrix.onexit=reset\r\n", 64),
+            Ok("ferrix.onexit=reset"),
+            "an editor's CRLF is not part of the option"
+        );
+        assert_eq!(command_line_from_file(b"  a=1 b=2 \n\n", 64), Ok("a=1 b=2"));
+        assert_eq!(
+            command_line_from_file(b" \r\n\t", 64),
+            Ok(""),
+            "blank is empty"
+        );
+        assert_eq!(
+            option_in(
+                command_line_from_file(b"x ferrix.onexit=reset\n", 64).unwrap(),
+                "ferrix.onexit"
+            ),
+            Some("reset")
+        );
+    }
+
+    #[test]
+    fn a_command_line_file_that_is_not_utf8_or_too_long_is_refused() {
+        assert!(command_line_from_file(b"ferrix.onexit=\xff\n", 64).is_err());
+        assert_eq!(
+            command_line_from_file(b"abcd\n", 4),
+            Ok("abcd"),
+            "exactly the room fits"
+        );
+        assert!(command_line_from_file(b"abcde", 4).is_err());
     }
 }

@@ -466,12 +466,14 @@ pub(crate) fn write_image(
     loader: &Path,
     kernel: &Path,
     natives: &[crate::native::Built],
+    cmdline: Option<&str>,
 ) -> Result<PathBuf> {
     write_image_with(
         arch,
         loader,
         kernel,
         &crate::initramfs::build(None, natives)?,
+        cmdline,
     )
 }
 
@@ -483,6 +485,7 @@ pub(crate) fn write_image_with(
     loader: &Path,
     kernel: &Path,
     initramfs: &[u8],
+    cmdline: Option<&str>,
 ) -> Result<PathBuf> {
     let mut fs = Fat32::new(IMAGE_BYTES)?;
 
@@ -500,6 +503,11 @@ pub(crate) fn write_image_with(
     // Beside the kernel, where the loader looks for it. Every image carries
     // one, because stage 8's self-check reads its files back through the VFS.
     fs.add_file("FERRIX/INITRD.IMG", initramfs)?;
+    // A kernel command line, when the caller has one: the loader reads it
+    // from beside the kernel and hands it over in the boot info.
+    if let Some(cmdline) = cmdline {
+        fs.add_file("FERRIX/CMDLINE.TXT", cmdline.as_bytes())?;
+    }
 
     let directory = paths::build_dir(arch);
     std::fs::create_dir_all(&directory)?;

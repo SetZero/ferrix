@@ -326,9 +326,24 @@ PSCI `SYSTEM_RESET` rather than `SYSTEM_OFF`, and the board comes back through
 TF-A to `STM32MP>` for the next image with no hand at it. The boot says
 `power    ferrix.onexit=reset: the machine resets when boot ends`, and the end
 says `power    resetting, as ferrix.onexit=reset asks`. U-Boot keeps `bootargs`
-in RAM, so the option survives that reset only if it was saved with `saveenv`;
-reading it from a `CMDLINE.TXT` on the card instead, and a `test-boot --reset`
-that proves the path under QEMU, are the follow-ups `docs/BACKLOG.md` records.
+in RAM, so an option set there survives that reset only if it was saved with
+`saveenv`.
+
+**Or put it on the card.** The loader reads a kernel command line from
+`FERRIX/CMDLINE.TXT`, beside the kernel, which survives every reset:
+
+```
+ferrix.onexit=reset
+```
+
+UTF-8, at most 3872 bytes, surrounding whitespace dropped. The loader says
+`cmdline  ferrix.onexit=reset  (from /FERRIX/CMDLINE.TXT)` when it reads one; a
+missing file says nothing, and a file it cannot use is reported and ignored,
+since every option has a safe default. The kernel prefers the file's options to
+U-Boot's `bootargs`. `flash` does not write the file: copy it by hand, or build
+the image with `--reset`, which puts exactly that line in it.
+`cargo xtask test-boot --reset` boots such an image and requires QEMU to see the
+machine reset rather than power off, on every architecture.
 
 ## 4. What a good boot looks like
 
@@ -463,6 +478,8 @@ tasks onto one queue reads many times slower there than on the board.
 | Pasted input arrives whole on the board | the same run: a 65-character line of three commands that lost 37 characters under polled receive ran whole; 300 and 1000 characters in one write reached `wc -c` as 301 and 1001 |
 | `ferrix.onexit=reset` resets the board to U-Boot | `board-reset-3c`, the same evening: `exit 7`, then TF-A's banner 0.44 s later and `STM32MP>` with no hand at the board |
 | The loader with its switch in a copyable block boots the board | `armv7a-2gib` with the instruction-cache invalidation, the same evening: the in-place path, `FERRIX-BOOT-OK stages 1-9` at two processors |
+| `CMDLINE.TXT` on the card reaches the kernel, and resets the board | 2026-09-14, U-Boot's `bootargs` undefined: `cmdline  ferrix.onexit=reset  (from /FERRIX/CMDLINE.TXT)`, `FERRIX-BOOT-OK stages 1-9`, then TF-A's banner and `STM32MP>` with no hand at the board |
+| `test-boot --reset` sees a reset under QEMU | `cargo xtask test-boot --reset` on x86_64, aarch64 and armv7a, and armv7a at `--smp 2`: after `power    resetting` each shows the loader start again, which a power-off, pausing QEMU under `-action shutdown=pause`, cannot |
 | Flashing from Windows through `ums` | the same evening, three times: the files copied to `bootfs`, flushed, and their SHA-256 checked on the card |
 | The console drains before power-off | the same run: after `exit 7`, `init     the shell exited with 7` arrived whole with nothing after it, where the earlier run stopped mid-word |
 | Both processors come up and share work | the same boot: `2 online`, `1000 threads ... on 2 processors (0b11)` |

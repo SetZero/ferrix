@@ -43,6 +43,11 @@ const KERNEL_PATH: &str = "/FERRIX/KERNEL.ELF";
 /// Where the initramfs is, when the image carries one.
 const INITRD_PATH: &str = "/FERRIX/INITRD.IMG";
 
+/// Where the loader looks for a kernel command line: a text file beside the
+/// kernel, so an option such as `ferrix.onexit=reset` survives a reset that
+/// clears what firmware was told.
+const CMDLINE_PATH: &str = "/FERRIX/CMDLINE.TXT";
+
 /// Bytes set aside for the boot info structure and the memory map behind it.
 /// At 24 bytes a region this holds around 2700 of them; firmware typically
 /// reports fewer than a hundred.
@@ -50,6 +55,10 @@ const BOOT_INFO_BYTES: u64 = 64 * 1024;
 
 /// Offset of the memory region array within that allocation.
 const REGIONS_OFFSET: u64 = PAGE_SIZE;
+
+/// Offset of the command line within that allocation: straight after the
+/// `BootInfo`, before the region array, which bounds how long it may be.
+const CMDLINE_OFFSET: u64 = size_of::<BootInfo>() as u64;
 
 /// What every flattened device tree begins with, big-endian.
 const FDT_MAGIC: u32 = 0xD00D_FEED;
@@ -398,6 +407,7 @@ fn write_boot_info(
         device_tree,
         initrd,
     } = carried;
+    let cmdline_len = load_cmdline(services, info_area);
     let info = BootInfo {
         magic: BOOTINFO_MAGIC,
         version: BOOTINFO_VERSION,
@@ -428,8 +438,12 @@ fn write_boot_info(
         dtb: device_tree.map_or(0, |(copy, _)| copy.address),
         dtb_len: device_tree.map_or(0, |(_, len)| len),
         uefi_system_table: services.system_table() as u64,
-        cmdline: 0,
-        cmdline_len: 0,
+        cmdline: if cmdline_len == 0 {
+            0
+        } else {
+            direct.address(info_area.address + CMDLINE_OFFSET)
+        },
+        cmdline_len,
     };
 
     // SAFETY: `info_area` is our own allocation of BOOT_INFO_BYTES, identity
@@ -450,6 +464,50 @@ fn leave_firmware(services: &Services, buffer: Allocation) -> Result<MemoryMap> 
     let map = services.memory_map(buffer)?;
     services.exit_boot_services(map.key)?;
     Ok(map)
+}
+
+/// Read `CMDLINE.TXT`, if the volume has one, into the boot info area, and say
+/// how many bytes of command line it gave.
+///
+/// A missing file is the ordinary case and says nothing. A file that cannot be
+/// used is reported and ignored rather than refused: every option the kernel
+/// reads has a safe default, and a board that will not boot because of a typo
+/// in a text file is worse than one that boots without the option.
+fn load_cmdline(services: &Services, info_area: Allocation) -> u64 {
+    let (file, len) = match services.read_file(CMDLINE_PATH, MemoryType::LOADER_DATA) {
+        Ok(read) => read,
+        Err(error) if error.status == Some(Status::NOT_FOUND) => return 0,
+        Err(error) => {
+            println!("  cmdline  {CMDLINE_PATH} could not be read, so it is ignored: {error}");
+            return 0;
+        }
+    };
+    // SAFETY: `read_file` filled `len` bytes of its own allocation, which is
+    // identity mapped under boot services and not written again.
+    let bytes = unsafe { core::slice::from_raw_parts(file.address as *const u8, len as usize) };
+    let capacity = (REGIONS_OFFSET - CMDLINE_OFFSET) as usize;
+    let text = match ferrix_bootinfo::command_line_from_file(bytes, capacity) {
+        Ok(text) => text,
+        Err(why) => {
+            println!("  cmdline  {CMDLINE_PATH} is ignored: {why}");
+            return 0;
+        }
+    };
+    // SAFETY: the destination is inside `info_area`, the loader's own zeroed
+    // allocation of BOOT_INFO_BYTES, between the `BootInfo` and the region
+    // array, and `text` was checked to fit there; it is a different
+    // allocation from the file the bytes come from.
+    unsafe {
+        ptr::copy_nonoverlapping(
+            text.as_ptr(),
+            (info_area.address + CMDLINE_OFFSET) as *mut u8,
+            text.len(),
+        );
+    }
+    if !text.is_empty() {
+        println!("  cmdline  {text}  (from {CMDLINE_PATH})");
+    }
+    text.len() as u64
 }
 
 /// Copy the firmware memory map into the boot info, sorted by address.

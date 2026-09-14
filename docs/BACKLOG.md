@@ -271,7 +271,6 @@ contended-count rounds (9f6a590, full row plus KVM by its owner), the FX-1001
 row and the btrfs node cache. All branches and tags are on origin. Branches
 with unlanded work, each committed and pushed, base and state as handed off:
 
-* `board-reset-3c`: landed with proof B on the board (`exit 7` under `ferrix.onexit=reset` reset to U-Boot with no hand at it). Left: reading the option from a `CMDLINE.TXT` on the card, so it survives a reset without `saveenv`, and `test-boot --reset`, which boots with the option and requires QEMU to show a reset rather than a power-off.
 * `stage10-ring` (32d29fb, WIP, never compiled): the block ring's kernel side; rebase onto c9677b7, drop the picked commits, wire the module and the native call, use the registry, write `user/blkring-check` on the runtime, full row.
 * `worktree-agent-a16ff91583057388b` (24da536): virtio-blk library; Miri and fuzz passed; needs rebase and the full row.
 * `worktree-agent-a102cb3140653d102` (f540994): native user-space runtime and `user/`; needs rebase and the full row.

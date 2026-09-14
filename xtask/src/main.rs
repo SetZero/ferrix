@@ -4,7 +4,7 @@
 //! cargo xtask build     --arch x86_64 [--release] [--init PATH/{arch}/busybox]
 //! cargo xtask run       --arch x86_64 [--release] [--gdb] [--smp N] [--memory M]
 //!                       [--accel auto|tcg|whpx|kvm|hvf] [--init PATH/{arch}/busybox]
-//! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS]
+//! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS] [--reset]
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask check     [--fast] [--ferrousli] [--miri]
@@ -121,6 +121,8 @@ OPTIONS:
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --miri                               check: add CI's Miri steps (needs nightly and miri)
+    --reset                              test-boot: ferrix.onexit=reset in CMDLINE.TXT, and require a reset;
+                                         build, run: put that CMDLINE.TXT in the image
     --to <MOUNT>                         flash: the card's mounted boot partition
     --port <DEVICE>                      watch-serial: e.g. /dev/ttyACM0
     --init <PATH|ferrousli>              The busybox; {arch} is replaced. build, run, flash, deploy: [or FERRIX_INIT]
@@ -185,7 +187,7 @@ fn run() -> Result<()> {
                 let kernel =
                     cargo::build_kernel_with_init(arch, args.release, &program, shell::SCRIPT)?;
                 let natives = native::build(arch, args.release)?;
-                let image = fat::write_image(arch, &loader, &kernel, &natives)?;
+                let image = fat::write_image(arch, &loader, &kernel, &natives, None)?;
                 qemu::test_shell(arch, &image, &kernel, &args)?;
             }
             Ok(())
@@ -238,7 +240,7 @@ fn test_vfs(args: &Args) -> Result<()> {
         let kernel = cargo::build_kernel_with_commands(arch, args.release, &list)?;
         let natives = native::build(arch, args.release)?;
         let initramfs = initramfs::build(Some(&program), &natives)?;
-        let image = fat::write_image_with(arch, &loader, &kernel, &initramfs)?;
+        let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
         if let Err(error) = qemu::test_vfs(arch, &image, &kernel, args) {
             eprintln!("\n  {error}");
             failed.push(arch.name());
@@ -252,6 +254,12 @@ fn test_vfs(args: &Args) -> Result<()> {
             failed.join(", ")
         )))
     }
+}
+
+/// The command line an image carries: `ferrix.onexit=reset` under `--reset`, so
+/// the machine resets when boot ends and `test-boot` can require that it did.
+fn image_cmdline(args: &Args) -> Option<&'static str> {
+    args.reset.then_some(qemu::RESET_CMDLINE)
 }
 
 /// Compile both halves for `arch` and assemble the bootable image.
@@ -270,13 +278,13 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let natives = native::build(arch, args.release)?;
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
-        let image = fat::write_image(arch, &loader, &kernel, &natives)?;
+        let image = fat::write_image(arch, &loader, &kernel, &natives, image_cmdline(args))?;
         return Ok((image, kernel));
     };
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
     let initramfs = initramfs::build(Some(&program), &natives)?;
-    let image = fat::write_image_with(arch, &loader, &kernel, &initramfs)?;
+    let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, image_cmdline(args))?;
     Ok((image, kernel))
 }
 
