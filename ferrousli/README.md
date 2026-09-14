@@ -68,7 +68,7 @@ glibc one.
 busybox also calls functions from the three areas allowed to wait: pattern
 matching, a few math functions, and name resolution. Until each is written,
 the library defines a stub that writes that the function is not implemented
-yet and aborts: 31 functions in `src/stubs.rs`. That list only shrinks, and
+yet and aborts: 30 functions in `src/stubs.rs`. That list only shrinks, and
 the busybox Ferrix is tested with must reach none of them.
 
 ## Headers
@@ -111,15 +111,15 @@ x86-64, static programs linked at a fixed address.
 | `setjmp.h` | `setjmp`, `longjmp`, `sigsetjmp`, `siglongjmp`, glibc's `__sigsetjmp` and `__longjmp_chk`, with saved pointers mangled | |
 | `dirent.h` | `opendir`, `fdopendir`, `readdir`, `readdir_r`, `rewinddir`, `seekdir`, `telldir`, `dirfd`, `closedir`, `scandir`, `alphasort`, `versionsort`, with glibc's `64` names; records the kernel sends are checked against the bytes it filled | |
 | `getopt.h` | `getopt`, `getopt_long`, `getopt_long_only`, permuting as glibc does unless `POSIXLY_CORRECT` or a leading `+`, and `optreset` | |
+| `fnmatch.h` | `fnmatch`, with musl's linear-time matching: `*`, `?`, brackets with ranges, negation and classes, `FNM_PATHNAME`, `FNM_PERIOD`, `FNM_NOESCAPE`, `FNM_LEADING_DIR` and `FNM_CASEFOLD`, cross-checked against glibc | multibyte characters, which wait for a locale other than C |
 | `errno.h` | `__errno_location`, per thread | |
 | `sys/auxv.h` | `getauxval` | |
 | C++ runtime | `__cxa_atexit`, and `__cxa_finalize` for a static program | |
 
 ## Next
 
-1. In progress: **`scanf`**, **`glob`, `fnmatch`, `regex`, `search.h` and
-   `libgen.h`**, **thread cancellation, semaphores and C11 threads**, and **the
-   math library**.
+1. In progress: **`glob`, `regex`, `search.h` and `libgen.h`**, **thread
+   cancellation, semaphores and C11 threads**, and **the math library**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
 3. **`long double` math and `complex.h`.**

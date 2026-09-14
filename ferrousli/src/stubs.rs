@@ -54,7 +54,6 @@ stubs! {
     ether_aton_r
     ether_hostton
     exp
-    fnmatch
     freeaddrinfo
     freeifaddrs
     getaddrinfo

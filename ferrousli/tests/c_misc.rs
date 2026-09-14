@@ -1,5 +1,5 @@
 //! The C programs that exercise the POSIX utilities built from logic over the
-//! rest of the library: `dirent.h` and `getopt`.
+//! rest of the library: `dirent.h`, `getopt` and `fnmatch.h`.
 //!
 //! The getopt programs' expected traces and error reports were generated once
 //! from the host glibc.
@@ -41,4 +41,9 @@ fn getopt_long_matches_abbreviates_and_reports_errors_as_glibc_does() {
                  prog: option requires an argument -- 'W'\n",
         ..Case::named("misc/getopt_long")
     });
+}
+
+#[test]
+fn fnmatch_matches_wildcards_brackets_and_paths() {
+    check(&Case::named("misc/fnmatch"));
 }

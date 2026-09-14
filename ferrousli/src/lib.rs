@@ -41,6 +41,7 @@ pub mod errno;
 pub mod exit;
 pub mod fcntl;
 pub mod float;
+pub mod fnmatch;
 pub mod futex;
 pub mod getopt;
 pub mod growable;
