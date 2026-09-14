@@ -1326,6 +1326,21 @@ pub const F_WRLCK: i16 = 1;
 pub const F_UNLCK: i16 = 2;
 /// Like [`F_DUPFD`], but set close-on-exec on the new descriptor.
 pub const F_DUPFD_CLOEXEC: u32 = 1030;
+/// `fcntl`: add seals to a file that allows sealing (`F_LINUX_SPECIFIC_BASE + 9`).
+pub const F_ADD_SEALS: u32 = 1033;
+/// `fcntl`: the seals a file carries (`F_LINUX_SPECIFIC_BASE + 10`).
+pub const F_GET_SEALS: u32 = 1034;
+/// Seal: no further seals may be added.
+pub const F_SEAL_SEAL: u32 = 0x0001;
+/// Seal: the file may not shrink.
+pub const F_SEAL_SHRINK: u32 = 0x0002;
+/// Seal: the file may not grow.
+pub const F_SEAL_GROW: u32 = 0x0004;
+/// Seal: the file's contents may not change; refused while it is mapped
+/// shared and writable.
+pub const F_SEAL_WRITE: u32 = 0x0008;
+/// Seal: no new write may start, while writable mappings made before stay.
+pub const F_SEAL_FUTURE_WRITE: u32 = 0x0010;
 /// The only descriptor flag: close this descriptor on `execve`.
 pub const FD_CLOEXEC: u32 = 1;
 
