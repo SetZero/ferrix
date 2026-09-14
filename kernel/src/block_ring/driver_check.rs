@@ -12,8 +12,11 @@
 //! own, as `block_ring::check` and stage 9's process checks do, so nothing
 //! here reaches the kernel by a path a program could not.
 //!
-//! What the check requires: the driver's HELLO accepted and its disk
-//! published under the name START gave it, within the patience; then sectors
+//! A driver is started for every virtio-blk function, in PCI order, named
+//! `vda`, `vdb` and so on as `devmgr` would name them; the second serves the
+//! btrfs fixture stage 11's exit mounts next. What the check requires: each
+//! driver's HELLO accepted and its disk published under the name START gave
+//! it, within the patience; then sectors of the first disk
 //! read through the registry's [`BlockDevice`] — the same path a mount takes
 //! — come back exactly as `xtask` wrote the test disk, whose layout is fixed
 //! in `xtask/src/test_disk.rs` and repeated here in [`expected`]. A driver
@@ -98,40 +101,41 @@ const RUN_SECTORS: usize = 16;
 /// What the check found.
 #[derive(Debug)]
 pub(crate) struct Report {
-    /// The disk's name in `/dev`.
-    pub(crate) name: &'static str,
-    /// Its size in sectors, as the driver announced it.
+    /// The disks' names in `/dev`, space-separated: one per virtio-blk
+    /// function, in PCI order.
+    pub(crate) names: &'static str,
+    /// The first disk's size in sectors, as its driver announced it.
     pub(crate) sectors: u64,
-    /// Sectors read back as written.
+    /// Sectors of the first disk read back as written.
     pub(crate) read: u32,
     /// Why nothing was checked, on a machine without the device.
     pub(crate) skipped: Option<&'static str>,
 }
 
-/// Start the driver and read the disk through it.
+/// Start a driver per virtio-blk function and read the test disk through the
+/// first.
 ///
 /// # Errors
 ///
 /// What did not happen, as a sentence.
 pub(crate) fn run() -> Result<Report, &'static str> {
-    let Some(node) = device::devices()
+    let nodes: Vec<Arc<device::DeviceNode>> = device::devices()
         .iter()
-        .find(|node| {
+        .filter(|node| {
             node.pci_function().is_some_and(|function| {
                 function.vendor == VIRTIO_VENDOR && VIRTIO_BLK_IDS.contains(&function.device)
             })
         })
         .cloned()
-    else {
+        .collect();
+    if nodes.is_empty() {
         return Ok(Report {
-            name: "",
+            names: "",
             sectors: 0,
             read: 0,
             skipped: Some("no virtio-blk function on this machine"),
         });
-    };
-    let name = DiskName::for_index(0).ok_or("the crate has no name for disk 0")?;
-    let start = start_for(&node, name).ok_or("the virtio-blk function has no virtio blocks")?;
+    }
 
     let side = Side::new()?;
     let _ = side
@@ -139,17 +143,6 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         .space()
         .map_anonymous(STAGE, PAGE_SIZE, VmaFlags::READ_WRITE)
         .map_err(|_| "could not map the starter's staging region")?;
-    let device = device_handle(&side, &node)?;
-    // The ring check's last round leaves the device bound; quiescing it
-    // releases the claim, and does nothing on a device nobody claimed.
-    let _ = side.call(nr::DEVICE_QUIESCE, &[reg(device)]);
-    let control = side.handle(
-        nr::BLOCK_RING_CREATE,
-        &[reg(device)],
-        "block_ring_create for the driver failed",
-    )?;
-
-    // The child, from the initramfs.
     let file = fs::read_file(&fs::namespace().context(), None, PROGRAM)
         .map_err(|_| "the initramfs carries no /sbin/blk")?;
     let image = image_vmo(&side, &file)?;
@@ -158,19 +151,67 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         .with_handles(|table| table.insert(Object::Job(Job::new_root()), Rights::JOB))
         .map_err(|_| "no room for the driver's job")?;
     side.put(NAME_AT, NAME)?;
+
+    let mut children = Vec::new();
+    for (index, node) in nodes.iter().enumerate() {
+        let index = u32::try_from(index).map_err(|_| "too many disks to name")?;
+        let name = DiskName::for_index(index).ok_or("the crate has no name for this disk")?;
+        children.push(start_driver(&side, node, name, image, job)?);
+    }
+
+    // Every disk, once its driver's HELLO is accepted; sectors through the
+    // first, the path a mount takes.
+    let mut first = None;
+    for (index, child) in children.iter().enumerate() {
+        let rdev = makedev(VIRTIO_BLK_MAJOR, u32::try_from(index).unwrap_or(0) * 16);
+        let disk = published(&side, *child, rdev)?;
+        if first.is_none() {
+            first = Some(disk);
+        }
+    }
+    let disk = first.ok_or("no disk was published")?;
+    let read = read_back(disk.as_ref())?;
+    Ok(Report {
+        names: names_str(children.len()),
+        sectors: disk.sectors(),
+        read,
+        skipped: None,
+    })
+}
+
+/// Start `/sbin/blk` on `node` as the disk called `name`: a ring on the
+/// device, a process from `image` in `job`, START over its bootstrap
+/// channel, its end watched. The child's handle is the answer.
+fn start_driver(
+    side: &Side,
+    node: &Arc<device::DeviceNode>,
+    name: DiskName,
+    image: Handle,
+    job: Handle,
+) -> Result<Handle, &'static str> {
+    let start = start_for(node, name).ok_or("a virtio-blk function has no virtio blocks")?;
+    let device = device_handle(side, node)?;
+    // The ring check's last round leaves its device bound; quiescing it
+    // releases the claim, and does nothing on a device nobody claimed.
+    let _ = side.call(nr::DEVICE_QUIESCE, &[reg(device)]);
+    let control = side.handle(
+        nr::BLOCK_RING_CREATE,
+        &[reg(device)],
+        "block_ring_create for a driver failed",
+    )?;
     let child = side.handle(
         nr::PROCESS_CREATE,
         &[reg(job), reg(image), NAME_AT, NAME.len() as u64],
-        "process_create for the driver failed",
+        "process_create for a driver failed",
     )?;
 
     // START over the bootstrap channel: the device, and the control channel.
     let _ = side
         .call(nr::CHANNEL_CREATE, &[PAIR])
-        .map_err(|_| "channel_create for the bootstrap failed")?;
+        .map_err(|_| "channel_create for a bootstrap failed")?;
     let near = Handle(side.get_u32(PAIR)?);
     let far = Handle(side.get_u32(PAIR + 4)?);
-    let for_child = device_handle(&side, &node)?;
+    let for_child = device_handle(side, node)?;
     let encoded = Message::Start(start).encode();
     side.put(OUTBOX, encoded.as_bytes())?;
     let words: Vec<u8> = [for_child, control]
@@ -189,7 +230,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
                 2,
             ],
         )
-        .map_err(|_| "sending START to the driver failed")?;
+        .map_err(|_| "sending START to a driver failed")?;
 
     // Hear the child end, then start it.
     let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
@@ -199,22 +240,11 @@ pub(crate) fn run() -> Result<Report, &'static str> {
             nr::OBJECT_WAIT_ASYNC,
             &[reg(child), reg(port), u64::from(Signals::TERMINATED.0), KEY],
         )
-        .map_err(|_| "watching the driver failed")?;
+        .map_err(|_| "watching a driver failed")?;
     let _ = side
         .call(nr::PROCESS_START, &[reg(child), reg(far)])
-        .map_err(|_| "process_start for the driver failed")?;
-
-    // The disk, once the driver's HELLO is accepted.
-    let rdev = makedev(VIRTIO_BLK_MAJOR, 0);
-    let disk = published(&side, child, rdev)?;
-
-    let read = read_back(disk.as_ref())?;
-    Ok(Report {
-        name: name_str(name),
-        sectors: disk.sectors(),
-        read,
-        skipped: None,
-    })
+        .map_err(|_| "process_start for a driver failed")?;
+    Ok(child)
 }
 
 /// Read sectors through `disk`, the path a mount takes, and compare each
@@ -314,12 +344,12 @@ fn expected(number: u64) -> [u8; SECTOR_SIZE] {
     bytes
 }
 
-/// The disk's name for the report: `vda`, from the crate's table.
-fn name_str(name: DiskName) -> &'static str {
-    match name.index() {
-        0 => "vda",
-        1 => "vdb",
-        2 => "vdc",
-        _ => "vd?",
+/// The disks' names for the report, in order.
+fn names_str(count: usize) -> &'static str {
+    match count {
+        1 => "vda",
+        2 => "vda vdb",
+        3 => "vda vdb vdc",
+        _ => "vda ...",
     }
 }

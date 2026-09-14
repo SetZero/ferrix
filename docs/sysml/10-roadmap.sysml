@@ -307,9 +307,9 @@ package FerrixRoadmap {
              * decoding-off BARs. */
     }
 
-    #inProgress requirement <'S11'> stage11BtrfsRead : Stage {
+    #implemented requirement <'S11'> stage11BtrfsRead : Stage {
         attribute :>> number = 11;
-        attribute :>> status = StageStatus::InProgress;
+        attribute :>> status = StageStatus::Done;
         attribute :>> size = "month";
         doc /* Block core, then btrfs stage A. Exit: an image made by real
              * mkfs.btrfs is mounted and a file tree read out byte-for-byte
@@ -320,8 +320,10 @@ package FerrixRoadmap {
              * real mkfs.btrfs images back exactly; the mount over stage 8's
              * traits in libs/btrfs-vfs; the block queue in libs/block. In the
              * kernel: mount -t btrfs on a registered block device, read-only,
-             * file data in the inode's VMO pages. Next: the exit, which
-             * needs stage 10's ring-3 block driver. */
+             * file data in the inode's VMO pages. Exit met: the mkfs.btrfs
+             * fixture on a second virtio-blk disk, served by the ring-3
+             * driver, mounted at /mnt and read back against its manifest
+             * on all three architectures. */
     }
 
     #planned requirement <'SN'> stageNetworking : Stage {

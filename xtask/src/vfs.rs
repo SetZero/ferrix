@@ -218,14 +218,25 @@ pub(crate) const APPLETS: &[Command] = &[
             "hostname: restored",
         ]),
     },
-    // `/proc/partitions`: the disk the boot check's driver serves, in
+    // The btrfs fixture the boot check mounted at `/mnt`, read by a program:
+    // `big.txt` is 140000 bytes in the manifest.
+    Command {
+        argv: &["sh", "-c", "wc -c < /mnt/big.txt; exit 9"],
+        status: 9,
+        expect: Expect::Lines(&["140000"]),
+    },
+    // `/proc/partitions`: the disks the boot check's drivers serve, in
     // Linux's format, 64 MiB of 1 KiB blocks at the virtio-blk major; and
     // `fdisk -l`, which reads it, finding nothing it can open rather than
     // dying of a signal.
     Command {
         argv: &["cat", "/proc/partitions"],
         status: 0,
-        expect: Expect::Lines(&["major minor  #blocks  name", " 254        0      65536 vda"]),
+        expect: Expect::Lines(&[
+            "major minor  #blocks  name",
+            " 254        0      65536 vda",
+            " 254       16     131072 vdb",
+        ]),
     },
     Command {
         argv: &["fdisk", "-l"],

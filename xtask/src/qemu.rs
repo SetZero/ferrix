@@ -12,6 +12,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::args::Args;
+use crate::btrfs_disk;
 use crate::cargo;
 use crate::paths::{self, Arch, Firmware};
 use crate::symbolize::Symbolizer;
@@ -621,6 +622,7 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
     };
     let _ = command.args(["-device", rng]);
     attach_test_disk(&mut command, arch)?;
+    attach_btrfs_disk(&mut command, arch)?;
 
     match &firmware {
         Firmware::Pflash { code, vars } => {
@@ -676,6 +678,33 @@ fn attach_test_disk(command: &mut Command, arch: Arch) -> Result<()> {
         "virtio-blk-pci,drive=testdisk,disable-legacy=on"
     } else {
         "virtio-blk-pci,drive=testdisk,disable-legacy=on,iommu_platform=on"
+    };
+    let _ = command.args(["-device", device]);
+    Ok(())
+}
+
+/// Attach the btrfs fixture as a third virtio device on PCI, after the
+/// pattern disk so that it is `vdb`: the disk stage 11's exit mounts. The
+/// same flags as the pattern disk, for the same reasons, and read-only, since
+/// the mount is.
+fn attach_btrfs_disk(command: &mut Command, arch: Arch) -> Result<()> {
+    let disk = btrfs_disk::ensure()?;
+    println!(
+        "  {arch}: btrfs disk {} as virtio-blk-pci: {}",
+        display(&disk),
+        btrfs_disk::describe()
+    );
+    let _ = command.args([
+        "-drive",
+        &format!(
+            "file={},if=none,format=raw,id=btrfsdisk,readonly=on",
+            display(&disk)
+        ),
+    ]);
+    let device = if arch == Arch::Armv7a {
+        "virtio-blk-pci,drive=btrfsdisk,disable-legacy=on"
+    } else {
+        "virtio-blk-pci,drive=btrfsdisk,disable-legacy=on,iommu_platform=on"
     };
     let _ = command.args(["-device", device]);
     Ok(())
@@ -891,7 +920,7 @@ mod tests {
                 &format!(
                     "  pci      2 functions, 1 virtio transports, {count} entropy bytes read by DMA, 1 completions by MSI-X"
                 ),
-                "FERRIX-BOOT-OK stages 1-10",
+                "FERRIX-BOOT-OK stages 1-11",
             ]);
             assert_eq!(entropy_problem(&boot), None, "{count} bytes");
         }
@@ -901,7 +930,7 @@ mod tests {
     fn a_boot_that_read_none_or_never_said_fails() {
         let none = lines(&["  pci      1 virtio transports, 0 entropy bytes read by DMA"]);
         assert!(entropy_problem(&none).is_some(), "zero bytes");
-        let silent = lines(&["FERRIX-BOOT-OK stages 1-10"]);
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-11"]);
         assert!(entropy_problem(&silent).is_some(), "no line at all");
     }
 
@@ -935,7 +964,7 @@ mod tests {
             "  iommu    0 VT-d units, 1 SMMUv3s; 1 PCI functions behind one, 0 bypassing, 1 unresolved",
         ]);
         assert!(iommu_problem(&unresolved).is_some(), "one unresolved");
-        let silent = lines(&["FERRIX-BOOT-OK stages 1-10"]);
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-11"]);
         assert!(iommu_problem(&silent).is_some(), "no line at all");
     }
 
@@ -952,7 +981,7 @@ mod tests {
             fault_problem(Arch::AArch64, &none).is_some(),
             "nothing faulted"
         );
-        let silent = lines(&["FERRIX-BOOT-OK stages 1-10"]);
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-11"]);
         assert!(
             fault_problem(Arch::X86_64, &silent).is_some(),
             "no line at all"

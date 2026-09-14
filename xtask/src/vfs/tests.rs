@@ -11,7 +11,7 @@ fn every_command() -> impl Iterator<Item = &'static Command> {
 
 /// The log a kernel that passes every command would write.
 fn passing_log() -> Vec<String> {
-    let mut log = owned(&["FERRIX-BOOT-OK stages 1-10"]);
+    let mut log = owned(&["FERRIX-BOOT-OK stages 1-11"]);
     for (index, command) in every_command().enumerate() {
         log.push(format!("  init     command {index}: {}", command.argv[0]));
         match command.expect {
@@ -174,17 +174,19 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
             "hostname: restored",
         ],
     ),
+    (8, &["140000"]),
     (
-        8,
+        9,
         &[
             "major minor  #blocks  name",
             "",
             " 254        0      65536 vda",
+            " 254       16     131072 vdb",
         ],
     ),
-    (9, &[]),
+    (10, &[]),
     (
-        10,
+        11,
         &[
             "Mem: 3964K used, 507124K free, 0K shrd, 0K buff, 0K cached",
             "CPU:   2% usr   0% sys   0% nic  97% idle   0% io   0% irq   0% sirq",
@@ -195,7 +197,7 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
         ],
     ),
     (
-        11,
+        12,
         &[
             "Linux 6.1.0-ferrix (ferrix)\t01/01/70\t_x86_64_\t(4 CPU)",
             "",
@@ -206,7 +208,7 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
         ],
     ),
     (
-        12,
+        13,
         &[
             "Linux 6.1.0-ferrix (ferrix) \t01/01/70 \t_x86_64_\t(4 CPU)",
             "",
@@ -215,15 +217,15 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
             "",
         ],
     ),
-    (13, &["0"]),
-    (14, &[" 00 00 00 00 00 00 00 00"]),
-    (15, &["cat: can't open '/tmp/x': No such device or address"]),
+    (14, &["0"]),
+    (15, &[" 00 00 00 00 00 00 00 00"]),
+    (16, &["cat: can't open '/tmp/x': No such device or address"]),
 ];
 
 /// A log of the applets alone, numbered after the criterion's commands, each
 /// printing `output` and exiting with its expected status.
 fn applets_log(outputs: &[(usize, &[&str])]) -> Vec<String> {
-    let mut log = owned(&["FERRIX-BOOT-OK stages 1-10"]);
+    let mut log = owned(&["FERRIX-BOOT-OK stages 1-11"]);
     for (index, output) in outputs {
         let command = &APPLETS[index - COMMANDS.len()];
         log.push(format!("  init     command {index}: {}", command.argv[0]));
@@ -249,16 +251,16 @@ fn the_applets_pass_on_what_busybox_printed_on_ferrix() {
 fn a_failing_applet_is_named_by_its_number_with_its_output() {
     let mut outputs = APPLETS_ON_X86_64.to_vec();
     // `/proc/stat` gone: top prints its memory and no CPU line.
-    outputs[7].1 = &["Mem: 3964K used, 507124K free, 0K shrd, 0K buff, 0K cached"];
+    outputs[8].1 = &["Mem: 3964K used, 507124K free, 0K shrd, 0K buff, 0K cached"];
     // A character node that opens as nothing, rather than as null.
-    outputs[10].1 = &["4"];
+    outputs[11].1 = &["4"];
     let failed = judge(APPLETS, COMMANDS.len(), &applets_log(&outputs)).unwrap_err();
     assert_eq!(failed.len(), 2, "{failed:#?}");
-    assert!(failed[0].starts_with("command 10 (top -b)"), "{failed:#?}");
+    assert!(failed[0].starts_with("command 11 (top -b)"), "{failed:#?}");
     assert!(failed[0].contains("CPU: *% usr *% idle*"), "{failed:#?}");
     assert!(failed[0].contains("507124K free"), "the output is shown");
     assert!(
-        failed[1].starts_with("command 13 (sh -c 'mknod /tmp/n"),
+        failed[1].starts_with("command 14 (sh -c 'mknod /tmp/n"),
         "{failed:#?}"
     );
     assert!(failed[1].contains("[\"4\"]"), "{failed:#?}");
@@ -307,7 +309,7 @@ fn kernel_lines_about_commands_are_read() {
 #[test]
 fn a_log_splits_into_each_commands_output_and_unanswered_calls() {
     let log = owned(&[
-        "FERRIX-BOOT-OK stages 1-10",
+        "FERRIX-BOOT-OK stages 1-11",
         "  init     /bin/busybox is 857 KiB, running 2 commands",
         "  init     command 0: ls -R /proc",
         "  syscall  Getdents64 (number 217) answered ENOSYS",

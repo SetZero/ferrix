@@ -37,6 +37,7 @@
 )]
 
 mod args;
+mod btrfs_disk;
 mod busybox;
 mod cargo;
 mod check;

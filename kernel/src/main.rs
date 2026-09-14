@@ -285,7 +285,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
         );
     }
 
-    println!("{SUCCESS_MARKER} stages 1-10");
+    println!("{SUCCESS_MARKER} stages 1-11");
 
     // After the marker, on purpose: see `init`. Returns at once when no program
     // was built in.
@@ -719,7 +719,34 @@ fn check_driver() {
     println!(
         "  driver   /sbin/blk serves {} ({} sectors) through the block ring; {} sectors read \
          back through the registry as xtask wrote them",
-        report.name, report.sectors, report.read,
+        report.names, report.sectors, report.read,
+    );
+    check_btrfs_disk();
+}
+
+/// Stage 11's exit: the btrfs fixture on the second disk, served by its own
+/// driver, mounted at `/mnt` through the kernel's mount path and read back
+/// against the fixture's manifest, file by file. The mount is left for the
+/// programs that run next.
+///
+/// Halts rather than returning, as every other stage's check does. A machine
+/// without a second disk passes and says so.
+fn check_btrfs_disk() {
+    let report = match fs::btrfs_check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE11_MOUNT,
+            "stage 11 self-check failed: {problem}"
+        ),
+    };
+    if let Some(why) = report.skipped {
+        println!("  btrfs    not checked: {why}");
+        return;
+    }
+    println!(
+        "  btrfs    vdb mounted read-only at /mnt: {} files ({} bytes), {} directories and {} \
+         links read back as the host wrote them",
+        report.files, report.bytes, report.directories, report.links,
     );
 }
 

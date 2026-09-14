@@ -731,6 +731,30 @@ pub(crate) static STAGE10_PCI: Explanation = Explanation {
           docs/ROADMAP.md stage 10",
 };
 
+/// For `check_btrfs_disk` in `main.rs`, when `fs::btrfs_check::run` fails.
+pub(crate) static STAGE11_MOUNT: Explanation = Explanation {
+    code: "FX-1101",
+    title: "the btrfs disk did not mount and read back as the host wrote it",
+    meaning: "Stage 11's exit: xtask attaches the `none` fixture, an image made by real \
+              mkfs.btrfs, as the second virtio-blk disk; the boot check's second driver serves \
+              it as vdb; `fs::btrfs_check::run` mounts it read-only at /mnt through the kernel's \
+              own mount path and reads every file, directory and link of the fixture's manifest \
+              back, comparing each file's size and CRC-32C with what the host computed from the \
+              bytes it gave mkfs.btrfs. The failing manifest line is printed before the report.",
+    causes: &[
+        "The mount failed: the disk is not a btrfs volume this reader reads (a log tree, an \
+         unknown feature, a checksum type other than CRC-32C), or its superblock could not be \
+         read through the ring.",
+        "A file's size or CRC-32C differs: a byte was wrong somewhere in the stack, from the \
+         driver's request layout and the pin's device addresses through the ring's data copy \
+         to the volume reader and the page source, or the fixture and the manifest disagree.",
+        "A directory or a link is missing or of the wrong kind: lookup, readdir or readlink \
+         in libs/btrfs-vfs changed what it answers.",
+    ],
+    see: "kernel/src/fs/btrfs_check.rs; kernel/src/fs/btrfs.rs; libs/btrfs-vfs; \
+          xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11",
+};
+
 /// For `check_driver` in `main.rs`, when `block_ring::driver_check::run`
 /// fails.
 pub(crate) static STAGE10_DRIVER: Explanation = Explanation {
@@ -1246,6 +1270,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE10_IOMMU,
     &STAGE10_RING,
     &STAGE10_DRIVER,
+    &STAGE11_MOUNT,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,

@@ -19,8 +19,8 @@ longer". This is a long program of work: stages 1–8 are a conventional kernel
 bring-up, 9–14 are the parts this design chose to do properly, and 15–17 are the
 goal. Nobody should read the table as a schedule.
 
-**Where it stands:** stages 0–10 are done and in the boot test on all three
-architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-10`.
+**Where it stands:** stages 0–11 are done and in the boot test on all three
+architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-11`.
 ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4 — and has run on
 hardware: an STM32MP157D-DK1 at two cores reached `FERRIX-BOOT-OK stages
 1-9` and ran stage 7's script at `fd4442e`. Stage 7's exit is
@@ -2353,7 +2353,7 @@ out-of-domain write faulted on both earlier in the same boot; on ARMv7-A the
 driver runs in degraded trusted mode, as the exit criterion decided. The
 disk is `virtio-blk-pci` on every machine, because under ACPI QEMU describes
 its virtio-mmio devices only in AML. The marker moves to `FERRIX-BOOT-OK
-stages 1-10`; what the stage still owes is below, after the exit, each with a
+stages 1-10` when it landed; what the stage still owes is below, after the exit, each with a
 row in `docs/BACKLOG.md`.
 
 The run recorded when it landed: `/sbin/blk serves vda (131072 sectors)
@@ -2415,7 +2415,7 @@ stage 10 is what makes that a system rather than a check.
 
 ---
 
-## Stage 11 — Block core and btrfs, read  ·  *month*
+## Stage 11 — Block core and btrfs, read ✅
 
 Request queues, merging, the I/O scheduler. Then btrfs stage A: superblock,
 chunk tree, root tree, fs trees, extents inline and regular, crc32c, and
@@ -2514,17 +2514,36 @@ logic `cargo test`, Miri and a fuzzer can reach.
   `btrfs` as the one type needing a device. Tested through the trait and the
   namespace on the host with heap pages; the same code runs over the kernel's.
 
-**Still to do.**
+**Done — the exit, on all three architectures.** `xtask` unpacks the `none`
+fixture — the image `scripts/gen-btrfs-fixtures.py` made with real
+`mkfs.btrfs` — into a raw disk and attaches it as a second `virtio-blk-pci`
+after the pattern disk. The boot check starts a driver for every virtio-blk
+function, so `/sbin/blk` serves the fixture as `vdb`; stage 11's check then
+mounts it read-only at `/mnt` through the kernel's own mount path, exactly as
+`mount -t btrfs -o ro /dev/vdb /mnt` would, and walks the fixture's manifest:
+every file read whole through the VFS and the inode's VMO pages, its size and
+CRC-32C compared with what the host computed from the bytes it gave
+`mkfs.btrfs`; every directory found to be one; the link's target read and
+compared the same way. The mount stays, and `test-vfs` reads a file of it
+through busybox. The run recorded when it landed, on x86-64, AArch64 and
+ARMv7-A at four processors and at two: `vdb mounted read-only at /mnt: 101
+files (1270061 bytes), 17 directories and 1 links read back as the host wrote
+them`, through the ring-3 driver, the block ring, the registry, the volume
+reader with its checksums and the page source. What the check compares is a
+checksum per file rather than every byte on the wire, and the checksum is the
+manifest's; a byte wrong anywhere in the stack is a CRC that differs.
 
-* **The exit criterion, in QEMU:** a real image on a second virtio-blk disk,
-  served by stage 10's ring-3 driver through the block ring, mounted and read
-  back byte for byte in `test-vfs`, and a mapping of a file seeing the pages
-  `read` fills once file `mmap` lands. It waits for the driver process itself,
-  which stage 11 writes on its runtime and its virtio-blk library.
+**Still to do, after the exit.**
+
+* A mapping of a file on the mount seeing the pages `read` fills, once file
+  `mmap` lands: the shared-page claim is about btrfs files, and the check
+  joins this stage's when the mapping does.
 * Device numbers are passed through as btrfs stores them, not yet checked
   against how Linux reports them.
 * A file's hole is tested only by construction: `mkfs.btrfs --rootdir` writes a
   sparse file's gap out as data.
+* Entering subvolumes, and the `subvol=`/`subvolid=` mount options: btrfs stage
+  C.
 
 ---
 

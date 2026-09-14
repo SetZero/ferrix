@@ -59,6 +59,7 @@ Causes are listed most likely first.
 | [FX-1003](#fx-1003) | an IOMMU domain gave a device the wrong addresses |
 | [FX-1004](#fx-1004) | the block ring's control plane answered a driver wrongly |
 | [FX-1005](#fx-1005) | the ring-3 virtio-blk driver did not serve the test disk |
+| [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -1124,6 +1125,31 @@ running.
 
 See: kernel/src/block_ring/driver_check.rs; user/blk/src/main.rs;
 docs/BLOCK-RING.md;           docs/ROADMAP.md stage 10.
+
+<a id="fx-1101"></a>
+
+## FX-1101 — the btrfs disk did not mount and read back as the host wrote it
+
+Stage 11's exit: xtask attaches the `none` fixture, an image made by real
+mkfs.btrfs, as the second virtio-blk disk; the boot check's second driver serves
+it as vdb; `fs::btrfs_check::run` mounts it read-only at /mnt through the
+kernel's own mount path and reads every file, directory and link of the
+fixture's manifest back, comparing each file's size and CRC-32C with what the
+host computed from the bytes it gave mkfs.btrfs. The failing manifest line is
+printed before the report.
+
+1. The mount failed: the disk is not a btrfs volume this reader reads (a log
+   tree, an unknown feature, a checksum type other than CRC-32C), or its
+   superblock could not be read through the ring.
+2. A file's size or CRC-32C differs: a byte was wrong somewhere in the stack,
+   from the driver's request layout and the pin's device addresses through the
+   ring's data copy to the volume reader and the page source, or the fixture and
+   the manifest disagree.
+3. A directory or a link is missing or of the wrong kind: lookup, readdir or
+   readlink in libs/btrfs-vfs changed what it answers.
+
+See: kernel/src/fs/btrfs_check.rs; kernel/src/fs/btrfs.rs; libs/btrfs-vfs;
+xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11.
 
 <a id="fx-9001"></a>
 
