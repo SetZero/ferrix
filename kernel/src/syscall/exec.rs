@@ -27,6 +27,8 @@ use ferrix_linux_abi::types::{
 use ferrix_ustack::{Spec, Width};
 use ferrix_vfs::access::MAY_EXEC;
 use ferrix_vfs::{Access, FileType, OpenFile, OpenFlags};
+
+use crate::fs::SetIds;
 use ferrix_vma::VmaFlags;
 
 use crate::arch;
@@ -124,6 +126,8 @@ pub(crate) struct Executable<'a> {
     pub(crate) exe: &'a [u8],
     /// The filename it was asked for by.
     pub(crate) exec_fn: &'a [u8],
+    /// The ids the file's set-user-id and set-group-id bits give it.
+    pub(crate) set_ids: SetIds,
 }
 
 /// Load `image`, which came from no file, into a new process, ready to run
@@ -146,6 +150,7 @@ pub(crate) fn load(
         image,
         exe: name,
         exec_fn: name,
+        set_ids: SetIds::NONE,
     };
     load_executable(program, args, env, random)
 }
@@ -282,11 +287,11 @@ fn populate(
     // What the processor can do. Not optional on Arm: musl's ARMv7-A `setjmp`
     // saves the callee-saved double registers only when told there is a VFP.
     let (hwcap, hwcap2) = arch::user_hwcaps();
-    // The ids the process keeps across `execve`, as `Credentials::exec` leaves
-    // them: nothing runs a set-user-id file, so `AT_SECURE` is set only for a
-    // process that moved its own effective id first, as on Linux.
+    // The ids the process runs the program with, as `Credentials::exec`
+    // leaves them: a set-user-id or set-group-id file's owner, and
+    // `AT_SECURE` when what it starts with is not what it had.
     let (user, group, secure) = process.with_credentials(|credentials| {
-        let secure = credentials.exec();
+        let secure = credentials.exec(program.set_ids.uid, program.set_ids.gid);
         (credentials.user, credentials.group, secure)
     });
     let auxv = [
@@ -345,6 +350,7 @@ pub(crate) fn run(
         image,
         exe: name,
         exec_fn: name,
+        set_ids: SetIds::NONE,
     };
     run_executable(program, args, env, random)
 }
@@ -502,12 +508,13 @@ fn execve_at(
     // `cd` resolves from there, and its identity, which the walk and the
     // execute check are made as. Cloned out: never walk with the lock held.
     let context = crate::syscall::path::context(process);
-    let (mut image, mut exe) = if path_bytes.is_empty() {
+    let (mut image, mut exe, mut set_ids) = if path_bytes.is_empty() {
         let file = fd::file(process, dirfd)?;
         let image = read_descriptor(&file, &context.who)?;
+        let set_ids = crate::fs::set_ids_of(&file.inode().metadata());
         let exe = crate::fs::namespace().path_of(file.location(), &context.root);
         path_bytes = descriptor_path(dirfd, &[]);
-        (image, exe)
+        (image, exe, set_ids)
     } else {
         let start = fd::start_for(process, dirfd, &path_bytes)?;
         if flags & AT_SYMLINK_NOFOLLOW != 0 {
@@ -517,7 +524,7 @@ fn execve_at(
                 return Err(Errno::ELOOP.into());
             }
         }
-        let (image, exe) = crate::fs::read_program(&context, start.as_ref(), &path_bytes)?;
+        let (image, exe, set_ids) = crate::fs::read_program(&context, start.as_ref(), &path_bytes)?;
         // What a script's interpreter is handed as the script's name, and
         // what `AT_EXECFN` names: the path itself when it means the same
         // thing from anywhere, and a name through the directory descriptor
@@ -525,7 +532,7 @@ fn execve_at(
         if start.is_some() {
             path_bytes = descriptor_path(dirfd, &path_bytes);
         }
-        (image, exe)
+        (image, exe, set_ids)
     };
     // The filename as asked for, which a script keeps: `AT_EXECFN` is the
     // script's name even though the interpreter is what runs.
@@ -545,8 +552,10 @@ fn execve_at(
         replaced.push(path_bytes);
         replaced.extend(args.into_iter().skip(1));
         args = replaced;
-        // The interpreter is the file actually loaded, so it is the exe.
-        (image, exe) = crate::fs::read_program(&context, None, &interpreter)?;
+        // The interpreter is the file actually loaded, so it is the exe -- and
+        // its set-id bits are the ones that count, which is why a set-user-id
+        // script gives nothing away here, as it gives nothing away on Linux.
+        (image, exe, set_ids) = crate::fs::read_program(&context, None, &interpreter)?;
         if image.starts_with(b"#!") {
             return Err(Errno::ENOEXEC.into());
         }
@@ -580,10 +589,16 @@ fn execve_at(
         let _ = thread.take_clear_child_tid();
         thread.with_own_signals(crate::syscall::signal::ThreadSignals::reset_for_exec);
     }
+    // `PR_SET_NO_NEW_PRIVS` gives up set-id programs for good, as it does on
+    // Linux: the file's bits are read and then dropped.
+    if crate::syscall::attributes::get(process).no_new_privs {
+        set_ids = SetIds::NONE;
+    }
     let program = Executable {
         image: &image,
         exe: &exe,
         exec_fn: &exec_fn,
+        set_ids,
     };
     let startup = populate(
         space,

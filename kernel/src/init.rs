@@ -101,6 +101,7 @@ pub(crate) fn run() {
         image: IMAGE,
         exe: BUILT_IN_EXE,
         exec_fn: name,
+        set_ids: fs::SetIds::NONE,
     };
     let status = exec::run_init(
         program,
@@ -118,7 +119,7 @@ pub(crate) fn run() {
 fn run_commands(list: &[u8]) {
     let commands = parse(list);
     let ctx = fs::namespace().context();
-    let (program, exe) = match fs::read_program(&ctx, None, PROGRAM.as_bytes()) {
+    let (program, exe, _set_ids) = match fs::read_program(&ctx, None, PROGRAM.as_bytes()) {
         Ok(read) => read,
         Err(errno) => {
             println!("  init     {PROGRAM} could not be read: errno {}", errno.0);
@@ -158,6 +159,7 @@ fn start(program: &[u8], exe: &[u8], argv: &[&[u8]]) -> Result<i32, exec::ExecEr
         image: program,
         exe,
         exec_fn: PROGRAM.as_bytes(),
+        set_ids: fs::SetIds::NONE,
     };
     exec::run_init(executable, argv, ENVIRONMENT, random_bytes())
 }

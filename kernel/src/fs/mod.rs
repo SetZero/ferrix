@@ -144,7 +144,7 @@ pub(crate) fn read_program(
     ctx: &Context,
     start: Option<&Location>,
     path: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>), Errno> {
+) -> Result<(Vec<u8>, Vec<u8>, SetIds), Errno> {
     let ns = namespace();
     let at = ns.resolve(ctx, start, path, true)?;
     let metadata = ns.stat(&at)?.metadata;
@@ -152,7 +152,37 @@ pub(crate) fn read_program(
         ctx.who.require(&metadata, MAY_EXEC)?;
     }
     let exe = ns.path_of(&at, &ctx.root);
-    Ok((read_location(at)?, exe))
+    let set_ids = set_ids_of(&metadata);
+    Ok((read_location(at)?, exe, set_ids))
+}
+
+/// The ids a program takes on when it runs: its owner where the file is
+/// set-user-id, its group where it is set-group-id.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SetIds {
+    /// The effective user id the program starts with, if any.
+    pub(crate) uid: Option<u32>,
+    /// The effective group id, if any.
+    pub(crate) gid: Option<u32>,
+}
+
+impl SetIds {
+    /// What an image from no file carries: nothing.
+    pub(crate) const NONE: SetIds = SetIds {
+        uid: None,
+        gid: None,
+    };
+}
+
+/// [`SetIds`] from a file's mode, as `bprm_fill_uid` reads it.
+///
+/// The set-group-id bit counts only where the group may execute; without that
+/// it means mandatory locking, which is not a privilege to take on.
+pub(crate) fn set_ids_of(metadata: &ferrix_vfs::Metadata) -> SetIds {
+    SetIds {
+        uid: (metadata.permissions & 0o4000 != 0).then_some(metadata.uid),
+        gid: (metadata.permissions & 0o2010 == 0o2010).then_some(metadata.gid),
+    }
 }
 
 /// The whole of the regular file at `at`: the half of [`read_file`] after the

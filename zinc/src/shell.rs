@@ -108,6 +108,23 @@ pub(crate) struct Shell {
     pub(crate) at_prompt: bool,
 }
 
+/// The id `name` asks for, read from the kernel each time rather than kept:
+/// a set-user-id program starts with an effective id that is not its real
+/// one, and `%#` and oh-my-zsh's prompts ask which.
+fn id_of(name: &[u8]) -> Vec<u8> {
+    let id = match name {
+        // SAFETY: getuid has no preconditions.
+        b"UID" => unsafe { libc::getuid() },
+        // SAFETY: geteuid has no preconditions.
+        b"EUID" => unsafe { libc::geteuid() },
+        // SAFETY: getgid has no preconditions.
+        b"GID" => unsafe { libc::getgid() },
+        // SAFETY: getegid has no preconditions.
+        _ => unsafe { libc::getegid() },
+    };
+    id.to_string().into_bytes()
+}
+
 /// Normalise an option name: lower case, no underscores.
 pub(crate) fn option_key(name: &[u8]) -> String {
     name.iter()
@@ -288,6 +305,7 @@ impl Shell {
                     Vec::new()
                 }));
             }
+            b"UID" | b"EUID" | b"GID" | b"EGID" => return Some(Value::Scalar(id_of(name))),
             _ => {}
         }
         if let Some(n) = std::str::from_utf8(name)

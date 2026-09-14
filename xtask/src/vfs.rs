@@ -302,6 +302,7 @@ pub(crate) const APPLETS: &[Command] = &[
             "proc self owned by 1000 1000",
             "listed its own descriptors",
             "Uid:*1000*1000*1000*1000",
+            "set-user-id gives uid 1000 euid 0",
             "hostname: *Operation not permitted",
             "*kill*1*Operation not permitted",
             "mknod: *Operation not permitted",
@@ -322,6 +323,8 @@ pub(crate) const APPLETS: &[Command] = &[
 const PERMISSIONS_SCRIPT: &str = r#"echo secret > /tmp/dac-private && chmod 600 /tmp/dac-private || exit 1
 mkdir -m 700 /tmp/dac-closed || exit 2
 echo 'echo ran' > /tmp/dac-noexec && chmod 644 /tmp/dac-noexec || exit 3
+mkdir /tmp/dac-suid && cp /bin/zinc /tmp/dac-suid/zinc || exit 4
+chmod 4755 /tmp/dac-suid/zinc || exit 5
 su ferrix -c 'id
 cat /tmp/dac-private
 echo mine > /tmp/dac-mine && stat -c "owned by %u %g" /tmp/dac-mine
@@ -332,6 +335,7 @@ ls /tmp/dac-closed
 stat -c "proc self owned by %u %g" /proc/self/status
 ls /proc/self/fd > /dev/null && echo "listed its own descriptors"
 head -12 /proc/self/status
+/tmp/dac-suid/zinc -f -c "echo set-user-id gives uid \$UID euid \$EUID"
 hostname dac-evil
 kill -0 1
 mknod /tmp/dac-null c 1 3'

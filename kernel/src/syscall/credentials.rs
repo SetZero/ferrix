@@ -180,13 +180,19 @@ impl Credentials {
         self.user.effective == 0
     }
 
-    /// What `execve` does to them, from `cap_bprm_creds_from_file`: the real
-    /// and effective ids and the groups stay, and the saved and filesystem ids
-    /// become the effective ones. Answers `AT_SECURE`, which Linux sets when
-    /// the effective id a program starts with is not its real one -- nothing
-    /// here runs a set-user-id file, so only a process that moved its own
-    /// effective id before `execve` gets it.
-    pub(crate) fn exec(&mut self) -> bool {
+    /// What `execve` does to them, from `cap_bprm_creds_from_file`: a
+    /// set-user-id or set-group-id file's owner becomes the effective id, the
+    /// real ids and the groups stay, and the saved and filesystem ids become
+    /// the effective ones. Answers `AT_SECURE`, which Linux sets when the
+    /// effective id a program starts with is not its real one: a set-id file,
+    /// or a process that moved its own effective id before `execve`.
+    pub(crate) fn exec(&mut self, set_uid: Option<u32>, set_gid: Option<u32>) -> bool {
+        if let Some(uid) = set_uid {
+            self.user.effective = uid;
+        }
+        if let Some(gid) = set_gid {
+            self.group.effective = gid;
+        }
         for ids in [&mut self.user, &mut self.group] {
             ids.saved = ids.effective;
             ids.filesystem = ids.effective;

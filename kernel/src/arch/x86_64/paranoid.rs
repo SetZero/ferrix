@@ -370,6 +370,7 @@ fn run_with_window_breakpoints(cpu: usize) -> Result<i32, &'static str> {
         image: &file,
         exe: b"/window",
         exec_fn: b"/window",
+        set_ids: crate::fs::SetIds::NONE,
     };
     let process = load_executable(
         program,

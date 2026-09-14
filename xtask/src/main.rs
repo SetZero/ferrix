@@ -241,7 +241,10 @@ fn test_vfs(args: &Args) -> Result<()> {
         vfs::write_if_changed(&list, &commands)?;
         let kernel = cargo::build_kernel_with_commands(arch, args.release, &list)?;
         let natives = native::build(arch, args.release)?;
-        let initramfs = initramfs::build(Some(&program), &natives, None)?;
+        // zinc too: the permissions commands run a set-user-id copy of it,
+        // which is the one program in the image that shows an effective id.
+        let shell = zinc::build(arch)?;
+        let initramfs = initramfs::build(Some(&program), &natives, shell.as_deref())?;
         let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
         if let Err(error) = qemu::test_vfs(arch, &image, &kernel, args) {
             eprintln!("\n  {error}");
