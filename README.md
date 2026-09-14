@@ -182,6 +182,81 @@ back; `test-vfs` runs the file system's commands and applets the same way.
 replaced by each architecture's name; that is how the gates give it the musl
 and glibc builds they check alongside.
 
+### On an STM32MP157-DK1 board
+
+The same ARMv7-A image boots the STM32MP157D-DK1 from its SD card, under
+mainline TF-A, OP-TEE and U-Boot. The whole story — building that firmware,
+partitioning the card, and what to do when a boot goes wrong — is in
+[the board guide](docs/stm32mp157-dk.md); this is the short version.
+
+**Once.** A card with the firmware on it (the guide's step 1), both boot
+switches on the underside **ON**, a micro-USB cable into the **ST-LINK** port and
+the USB-C cable to this computer. The micro-USB cable has to carry data: a
+charging-only one looks identical and nothing enumerates at all. The ST-LINK is
+powered from that cable, so its serial port is there even when the board is off.
+
+**Build.** The board needs a static, hard-float ARMv7 busybox (Alpine's
+`busybox-static` for `armv7` is one; `--init ferrousli` is x86-64 only):
+
+```
+cargo xtask build --arch armv7a --init PATH/{arch}/busybox.static
+```
+
+Add `--reset` to put `FERRIX/CMDLINE.TXT` with `ferrix.onexit=reset` in the image:
+the board then resets itself back to U-Boot when the shell exits, instead of
+powering off.
+
+**Watch the console first.** The ST-LINK's port is the board's console, at
+115200 8N1 with no flow control. U-Boot boots straight on, so open the port
+*before* resetting the board, and only one program can hold it at a time.
+
+- Linux: `/dev/ttyACM0`, in the `dialout` group — `cargo xtask watch-serial`
+  (which exits 0 on `FERRIX-BOOT-OK`), or `picocom -b 115200 /dev/ttyACM0` to type.
+- Windows: Device Manager → *Ports (COM & LPT)* → *STMicroelectronics STLink
+  Virtual COM Port (COMn)*; open that COM port in PuTTY as *Serial* at 115200.
+
+Bytes that arrive the moment the port opens are the ST-LINK's buffer from an
+earlier boot; trust what follows a reset.
+
+**Flash.** Reset the board, press a key to stop U-Boot's countdown, and let U-Boot
+expose the card over USB-C:
+
+```
+STM32MP> ums 0 mmc 0
+```
+
+- Linux: the desktop mounts `bootfs`; `cargo xtask flash --arch armv7a --to
+  <that mount>`. (`cargo xtask deploy --arch armv7a` builds, flashes and watches
+  in one command.)
+- Windows: `bootfs` appears as a drive — cancel any offer to format the card's
+  other partitions, they hold the firmware. `flash` does not run on Windows, so
+  copy by hand: `7z x build\armv7a\ferrix.img -oflash` and copy
+  `EFI\BOOT\BOOTARM.EFI`, `FERRIX\KERNEL.ELF`, `FERRIX\INITRD.IMG` (and
+  `FERRIX\CMDLINE.TXT`, if you built with `--reset`) to the same paths on the
+  drive, then `Write-VolumeCache <letter>` and compare `Get-FileHash` of each copy
+  with its source.
+
+Press Ctrl-C at the console to end mass-storage mode.
+
+**Run.** At the `STM32MP>` prompt, one line at a time, waiting for the prompt
+between them:
+
+```
+STM32MP> setenv bootargs
+STM32MP> load mmc 0:4 0xc2000000 EFI/BOOT/BOOTARM.EFI
+STM32MP> bootefi 0xc2000000 ${fdtcontroladdr}
+```
+
+The boot report ends in `FERRIX-BOOT-OK`, then busybox's `ferrix#` prompt, which
+takes what you type over the same port. To boot this way by default:
+`setenv bootcmd 'load mmc 0:4 0xc2000000 EFI/BOOT/BOOTARM.EFI; bootefi 0xc2000000 ${fdtcontroladdr}'`
+and `saveenv`.
+
+**Afterwards.** Leaving the shell powers the board off, and from there its reset
+button does nothing: unplug the USB-C cable and plug it back in. With
+`ferrix.onexit=reset` in `CMDLINE.TXT` the board comes back to `STM32MP>` by
+itself instead.
+
 ## Layout
 
 | | |
