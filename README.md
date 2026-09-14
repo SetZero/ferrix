@@ -128,6 +128,60 @@ firmware too but not U-Boot; for ARMv7-A, point `FERRIX_UBOOT` at a `qemu_arm`
 no `mtools` or `dosfstools` to install and the image is byte-for-byte
 reproducible.
 
+### A busybox shell
+
+Given a static busybox with `--init`, `build` and `run` put it in the kernel,
+which starts `sh -i` on the console, and in the initramfs at `/bin/busybox`
+with every applet linked beside it, so `ls /proc`, `cat /proc/self/maps` and
+`top` work where you type them.
+
+The busybox Ferrix is measured with is built against
+[ferrousli](ferrousli/README.md), this repository's C library, and
+`--init ferrousli` names it. It is x86-64 only for now, and built with a Linux
+C compiler, so on Windows that one step runs in WSL; QEMU and everything else
+run on Windows itself.
+
+On Windows, once, from PowerShell:
+
+```
+winget install SoftwareFreedomConservancy.QEMU
+wsl --install -d Ubuntu
+wsl --set-default Ubuntu        # xtask uses the default distribution
+```
+
+and once inside Ubuntu (`wsl`):
+
+```
+sudo apt install build-essential curl bzip2 file
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Then, from PowerShell in the checkout:
+
+```
+cargo xtask busybox                              # build busybox against ferrousli
+cargo xtask run --arch x86_64 --init ferrousli   # boot to a busybox shell
+```
+
+Quit QEMU with `Ctrl-A x`.
+
+`cargo xtask busybox` runs `ferrousli/tools/busybox/build.sh` in WSL, reaching
+the checkout through `/mnt`. The script downloads busybox
+1.37.0 and Alpine's configuration for it, both checked against pinned sums,
+builds ferrousli and busybox against it under `~/.local/share/ferrix/busybox/ferrousli`
+inside WSL, and copies the result to
+`%USERPROFILE%\.local\share\ferrix\busybox\ferrousli\x86_64\bin\busybox.static`,
+where `--init ferrousli` looks. It takes a few minutes the first time. Run it
+again after `ferrousli/` changes; `--init ferrousli` uses whatever it last
+installed. On Linux the same two commands work without WSL.
+
+`cargo xtask test-shell --arch x86_64 --init ferrousli` runs a script in that
+shell instead of waiting for you, and fails unless the script's output comes
+back; `test-vfs` runs the file system's commands and applets the same way.
+`--init` also takes the path of any other static busybox, with `{arch}` in it
+replaced by each architecture's name; that is how the gates give it the musl
+and glibc builds they check alongside.
+
 ## Layout
 
 | | |
