@@ -47,7 +47,7 @@ use crate::syscall::check as syscall_check;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{fd, image, uaccess};
-use crate::user::space::FilePlace;
+use crate::user::space::{FileMapping, FilePlace};
 use crate::user::vmo::Vmo;
 
 /// The working directory, as `openat` takes it.
@@ -656,7 +656,10 @@ fn check_a_program_writes_privately(file: &Arc<OpenFile>) -> Result<(), &'static
             VmaFlags::READ_WRITE,
             object,
             0,
-            Arc::clone(file) as Arc<dyn Any + Send + Sync>,
+            FileMapping {
+                file: Arc::clone(file) as Arc<dyn Any + Send + Sync>,
+                may_write: false,
+            },
         )
         .map_err(|_| "a private file mapping could not be placed where the program writes")?;
     let shared = VmaFlags {

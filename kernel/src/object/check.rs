@@ -44,7 +44,7 @@ use crate::syscall::check::spinner;
 use crate::syscall::image;
 use crate::syscall::process::{self, Process, ProcessRef};
 use crate::syscall::{self as linux, Outcome, SyscallArgs, native, uaccess};
-use crate::user::space::{Access, Destination, FilePlace, SpaceError};
+use crate::user::space::{Access, Destination, FileMapping, FilePlace, SpaceError};
 use crate::user::vmo::Vmo;
 use ferrix_elf::Class;
 
@@ -2585,7 +2585,10 @@ fn read_into_a_private_file_mapping(
             VmaFlags::READ_WRITE,
             object,
             0,
-            Arc::clone(file) as Arc<dyn Any + Send + Sync>,
+            FileMapping {
+                file: Arc::clone(file) as Arc<dyn Any + Send + Sync>,
+                may_write: false,
+            },
         )
         .map_err(|_| "could not map a file privately")?;
     let outcome = deliver_into_file_pages(side, counter, at, &kept, file);

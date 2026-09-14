@@ -181,7 +181,7 @@ struct Inner {
     /// preemption window or in a retirement's drop of the spaces it forgot, and
     /// the space drops its files there. So an open file's `Drop`, and its
     /// inode's, must take no lock that can sleep and ask for no shootdown.
-    files: BTreeMap<u64, Arc<dyn Any + Send + Sync>>,
+    files: BTreeMap<u64, FileMapping>,
     /// For an id a private file mapping names, the object its writes go to:
     /// anonymous, attached privately, and indexed by the file's page index.
     /// A page is read from the file until the mapping first writes it, and
@@ -577,6 +577,15 @@ impl AddressSpace {
             }
             for (&id, shadow) in &inner.shadows {
                 shadow.attach(Arc::downgrade(&child), id, Sharing::Private);
+            }
+            // The child's copy of a mapping that may write its file counts as
+            // one more, under the child's lock, before anything can look.
+            for (&id, mapping) in &inner.files {
+                if mapping.may_write
+                    && let Some(vmo) = inner.objects.get(&id)
+                {
+                    vmo.raise_shared_may_write();
+                }
             }
         }
         Ok(child)
@@ -1172,6 +1181,16 @@ impl AddressSpace {
                 shadows,
                 ..
             } = &mut *inner;
+            // A mapping that may write its file stops counting as its id
+            // leaves, under this lock, while its object is still in hand.
+            for (&id, mapping) in files.iter() {
+                if mapping.may_write
+                    && !still_named(map, id)
+                    && let Some(vmo) = objects.get(&id)
+                {
+                    vmo.lower_shared_may_write();
+                }
+            }
             objects.retain(|&id, vmo| {
                 let named = still_named(map, id);
                 if !named {
@@ -1192,7 +1211,11 @@ impl AddressSpace {
                 .copied()
                 .filter(|&id| !still_named(map, id))
                 .collect();
-            unkept.extend(gone.iter().filter_map(|id| files.remove(id)));
+            unkept.extend(
+                gone.iter()
+                    .filter_map(|id| files.remove(id))
+                    .map(|mapping| mapping.file),
+            );
         }
         drop(unkept);
         for (vmo, retired) in retiring {
@@ -1347,6 +1370,18 @@ impl AddressSpace {
 /// What a cut took out of a private mapping's shadow, for
 /// [`AddressSpace::forget_runs`]'s caller to release after its shootdown.
 pub(crate) type ShadowCopies = Vec<(Arc<Vmo>, Retired)>;
+
+/// What a file mapping's id keeps beside its object.
+#[derive(Clone, Debug)]
+pub(crate) struct FileMapping {
+    /// The open file it was mapped through.
+    pub(crate) file: Arc<dyn Any + Send + Sync>,
+    /// Whether this is a shared mapping that may write the file: of a file
+    /// open for writing, made while no seal refused writes. Counted in the
+    /// file object's may-write count for as long as the id is in the tables,
+    /// and what `mprotect` asks before it makes a shared file mapping writable.
+    pub(crate) may_write: bool,
+}
 
 /// Where a private file mapping's fault puts a frame: page `index` of the
 /// objects the region knows as `id`, at the address `page`.
@@ -2019,7 +2054,7 @@ impl AddressSpace {
         flags: VmaFlags,
         vmo: Arc<Vmo>,
         offset: u64,
-        file: Arc<dyn Any + Send + Sync>,
+        mapping: FileMapping,
     ) -> Result<u64, SpaceError> {
         if len == 0
             || !offset.is_multiple_of(PAGE_SIZE)
@@ -2054,15 +2089,22 @@ impl AddressSpace {
             shadow.attach(self.me.clone(), id, Sharing::Private);
             let _ = inner.shadows.insert(id, shadow);
         }
+        if mapping.may_write {
+            vmo.raise_shared_may_write();
+        }
         let _ = inner.objects.insert(id, vmo);
-        let _ = inner.files.insert(id, file);
+        let _ = inner.files.insert(id, mapping);
         Ok(at)
     }
 
     /// The open file a file mapping's region names by `id`, for
     /// `/proc/<pid>/maps`.
     pub(crate) fn mapped_file(&self, id: u64) -> Option<Arc<dyn Any + Send + Sync>> {
-        self.inner.lock().files.get(&id).map(Arc::clone)
+        self.inner
+            .lock()
+            .files
+            .get(&id)
+            .map(|mapping| Arc::clone(&mapping.file))
     }
 
     /// Change the permissions of an already-mapped range.
@@ -2096,13 +2138,27 @@ impl AddressSpace {
         let cpus = {
             let mut inner = self.inner.lock();
 
-            let Inner { map, native, .. } = &*inner;
+            let Inner {
+                map, native, files, ..
+            } = &*inner;
             let reaches_native = map.iter().any(|region| {
                 region.range.start() < range.end()
                     && range.start() < region.range.end()
                     && matches!(region.backing, Backing::Anonymous { id, .. } if native.contains(&id))
             });
-            if reaches_native {
+            // A shared file mapping that may not write its file -- of a file
+            // not open for writing, or made after a seal refused writes -- may
+            // not be made writable either: Linux's answer for a mapping without
+            // `VM_MAYWRITE`. Refused whole, before anything changes.
+            let reaches_unwritable = flags.write
+                && map.iter().any(|region| {
+                    region.range.start() < range.end()
+                        && range.start() < region.range.end()
+                        && region.flags.shared
+                        && matches!(region.backing, Backing::File { id, .. }
+                            if files.get(&id).is_some_and(|mapping| !mapping.may_write))
+                });
+            if reaches_native || reaches_unwritable {
                 return Err(SpaceError::Refused(at));
             }
 
@@ -2213,6 +2269,13 @@ impl Drop for AddressSpace {
         }
         for (&id, shadow) in &inner.shadows {
             shadow.detach(me, id);
+        }
+        for (&id, mapping) in &inner.files {
+            if mapping.may_write
+                && let Some(vmo) = inner.objects.get(&id)
+            {
+                vmo.lower_shared_may_write();
+            }
         }
         inner.objects.clear();
         inner.files.clear();

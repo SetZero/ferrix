@@ -134,6 +134,12 @@ pub(crate) struct Vmo {
     /// it by. Taken after a space's lock and before `pages`, never around
     /// either.
     mappers: SpinLock<Vec<Mapper>>,
+    /// How many shared mappings may write the file this object holds: made
+    /// from a file open for writing, and not after a seal refused writes.
+    /// What a write seal is refused for, as Linux's `i_mmap_writable`. Raised
+    /// under a space's lock before a mapping's id enters its tables, lowered
+    /// under it when the id leaves.
+    shared_may_write: AtomicU64,
 }
 
 /// How an address space maps an object.
@@ -235,6 +241,7 @@ impl Vmo {
             len: AtomicU64::new(pages),
             bound: AtomicU64::new(u64::MAX),
             mappers: SpinLock::new(Vec::new()),
+            shared_may_write: AtomicU64::new(0),
         })
     }
 
@@ -382,6 +389,7 @@ impl Vmo {
             len: AtomicU64::new(self.len_pages()),
             bound: AtomicU64::new(self.bound.load(Ordering::SeqCst)),
             mappers: SpinLock::new(Vec::new()),
+            shared_may_write: AtomicU64::new(0),
         }))
     }
 
@@ -455,6 +463,23 @@ impl Vmo {
     /// pages away and then takes the lock of every space that maps them.
     pub(crate) fn past_file_end(&self, index: u64) -> bool {
         index >= self.bound.load(Ordering::SeqCst)
+    }
+
+    /// One more shared mapping that may write the file. Before the mapping
+    /// reads the file's seals, so a seal stored before this is seen there,
+    /// and one stored after it sees this.
+    pub(crate) fn raise_shared_may_write(&self) {
+        let _ = self.shared_may_write.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// One fewer, as such a mapping's id leaves a space's tables.
+    pub(crate) fn lower_shared_may_write(&self) {
+        let _ = self.shared_may_write.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// Whether a shared mapping may write the file: what refuses a write seal.
+    pub(crate) fn writably_mapped(&self) -> bool {
+        self.shared_may_write.load(Ordering::SeqCst) > 0
     }
 
     /// [`Vmo::commit`] for a fault through a file mapping: `None`, committing

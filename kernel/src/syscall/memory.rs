@@ -22,15 +22,15 @@ use core::any::Any;
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
-    MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED,
-    MREMAP_MAYMOVE, MS_ASYNC, MS_INVALIDATE, MS_SYNC, PROT_EXEC, PROT_GROWSDOWN, PROT_GROWSUP,
-    PROT_READ, PROT_SEM, PROT_WRITE,
+    F_SEAL_FUTURE_WRITE, F_SEAL_WRITE, MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE,
+    MAP_SHARED, MREMAP_FIXED, MREMAP_MAYMOVE, MS_ASYNC, MS_INVALIDATE, MS_SYNC, PROT_EXEC,
+    PROT_GROWSDOWN, PROT_GROWSUP, PROT_READ, PROT_SEM, PROT_WRITE,
 };
 use ferrix_vma::VmaFlags;
 
 use crate::syscall::fd;
 use crate::syscall::process::Process;
-use crate::user::space::{Destination, FilePlace, MMAP_MIN_ADDR, SpaceError};
+use crate::user::space::{Destination, FileMapping, FilePlace, MMAP_MIN_ADDR, SpaceError};
 use crate::user::vmo::Vmo;
 
 /// What `mmap`'s sixth argument is counted in.
@@ -242,19 +242,31 @@ fn map_file(
         .mapping()
         .and_then(|object| object.downcast::<Vmo>().ok())
         .ok_or(Errno::ENODEV)?;
+    // A sealed file: a shared writable mapping is `EPERM`, and a shared
+    // read-only one may never be made writable. Linux's `seal_check_write`.
+    let write_sealed = |seals: u32| seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE) != 0;
+    let sealed = write_sealed(file.inode().seals().unwrap_or(0));
+    if vma.shared && vma.write && sealed {
+        return Err(Errno::EPERM);
+    }
+    let may_write = vma.shared && file.writable() && !sealed;
     let at = place(process, addr, len, flags)?;
-    process
+    let mapping = FileMapping {
+        file: Arc::clone(&file) as Arc<dyn Any + Send + Sync>,
+        may_write,
+    };
+    let mapped = process
         .space()
-        .map_file(
-            at,
-            len,
-            vma,
-            vmo,
-            offset,
-            file as Arc<dyn Any + Send + Sync>,
-        )
-        .map(usize_of)
-        .map_err(refused)
+        .map_file(at, len, vma, vmo, offset, mapping)
+        .map_err(refused)?;
+    // The second look. The mapping counted itself as it went into the tables,
+    // so a write seal stored before that count is seen here, and one stored
+    // after it has seen the count and refused itself with `EBUSY`.
+    if may_write && write_sealed(file.inode().seals().unwrap_or(0)) {
+        let _ = process.space().unmap(mapped, len);
+        return Err(Errno::EPERM);
+    }
+    Ok(usize_of(mapped))
 }
 
 /// `msync`.
