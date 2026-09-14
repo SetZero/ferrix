@@ -3,9 +3,9 @@
 //!
 //! busybox links only when every symbol it names is defined. Its applets
 //! call pattern matching, a few math functions, and name resolution with
-//! interface and Ethernet address lookups, and none of those is written yet.
-//! The terms for standing them in were agreed for the busybox row of
-//! `docs/BACKLOG.md`:
+//! interface and Ethernet address lookups. The math functions are written;
+//! the other two areas are not yet. The terms for standing them in were
+//! agreed for the busybox row of `docs/BACKLOG.md`:
 //!
 //! * Only those three areas may be stubs. System-call wrappers, terminals,
 //!   users and groups, and the rest of stdio are implemented properly.
@@ -48,12 +48,9 @@ macro_rules! stubs {
 
 stubs! {
     __h_errno_location
-    atan2
-    cos
     dirname
     ether_aton_r
     ether_hostton
-    exp
     freeaddrinfo
     freeifaddrs
     getaddrinfo
@@ -64,19 +61,16 @@ stubs! {
     getservbyname
     getservbyport
     hstrerror
-    log
     ns_get16
     ns_get32
     ns_initparse
     ns_name_uncompress
     ns_parserr
-    pow
     regcomp
     regerror
     regexec
     regfree
     res_mkquery
-    sin
 }
 
 #[cfg(test)]

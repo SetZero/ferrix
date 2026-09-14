@@ -56,6 +56,7 @@ pub mod linux;
 pub mod locale;
 pub mod lock;
 pub mod malloc;
+pub mod math;
 pub mod mman;
 pub mod mntent;
 pub mod mount;

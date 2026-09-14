@@ -66,10 +66,11 @@ this library does not have yet. Ferrix's `cargo xtask test-shell --init` and
 glibc one.
 
 busybox also calls functions from the three areas allowed to wait: pattern
-matching, a few math functions, and name resolution. Until each is written,
-the library defines a stub that writes that the function is not implemented
-yet and aborts: 30 functions in `src/stubs.rs`. That list only shrinks, and
-the busybox Ferrix is tested with must reach none of them.
+matching, a few math functions, and name resolution. The math functions are
+written. Until the rest are, the library defines a stub that writes that the
+function is not implemented yet and aborts: 24 functions in `src/stubs.rs`.
+That list only shrinks, and the busybox Ferrix is tested with must reach none
+of them.
 
 ## Headers
 
@@ -86,6 +87,7 @@ x86-64, static programs linked at a fixed address.
 | Threads | a control block in glibc's layout for every thread, static TLS, the stack protector's canary; `pthread_create`, `pthread_join`, `pthread_detach`, `pthread_exit`, attributes, names, `gettid`, `pthread_sigqueue`; mutexes, including recursive, error-checking, robust and priority-inheriting ones; condition variables, read-write locks, keys and `pthread_once`; a futex lock for the library's own state | cancellation, barriers, semaphores, C11 `threads.h`, `pthread_atfork`, `set*id` across threads |
 | Memory | the `malloc` family, on `mmap`, with size classes and integrity checks | returning empty regions to the kernel |
 | `stdlib.h` | `exit`, `_Exit`, `atexit` without a limit, `abort`, the environment functions; `strtol` and `strtod` families, correctly rounded for `float`, `double` and x87 `long double`, with glibc's `__isoc23_` names; `qsort`, `qsort_r`, `bsearch`; `abs` and `div` families; `rand`, `random` and `rand48` families | `ecvt`, `fcvt`, `gcvt`; NaN payloads and rounding modes in parsing |
+| `math.h` | `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, ported from musl and giving its bits and exceptions in every rounding mode; `fpclassify`, `isinf`, `isnan`, `isnormal`, `isfinite`, `signbit`, `isunordered` and the comparison macros for `float`, `double` and x87 `long double`; `math_errhandling` is `MATH_ERREXCEPT`, as in musl | the rest of `math.h`, the `float` and `long double` functions, `fenv.h`, `errno` set by math functions as glibc does |
 | `string.h`, `strings.h` | everything, with word-at-a-time scans and two-way `strstr` and `memmem`; `strcoll_l` and `strxfrm_l` | `strcasecmp_l`, `strncasecmp_l` |
 | `ctype.h` | the C locale, glibc's `__ctype_b_loc` tables, and the `_l` forms | |
 | `locale.h`, `langinfo.h` | `setlocale`, `localeconv`, `newlocale`, `duplocale`, `freelocale`, `uselocale`, `nl_langinfo`; musl's C and C.UTF-8 locales, any other name behaving as UTF-8 | message catalogues, glibc's `locale_t` layout |
@@ -119,7 +121,8 @@ x86-64, static programs linked at a fixed address.
 ## Next
 
 1. In progress: **`glob`, `regex`, `search.h` and `libgen.h`**, **thread
-   cancellation, semaphores and C11 threads**, and **the math library**.
+   cancellation, semaphores and C11 threads**, and **the rest of the math
+   library**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
 3. **`long double` math and `complex.h`.**
