@@ -1,5 +1,5 @@
 //! `arpa/inet.h`'s address conversions, `netinet/in.h`'s byte order
-//! functions, and `net/if.h`'s `if_nametoindex`.
+//! functions, and `net/if.h`'s `if_nametoindex` and `if_indextoname`.
 //!
 //! The conversions follow musl's `network/inet_aton.c`, `inet_addr.c`,
 //! `inet_ntoa.c`, `inet_ntop.c` and `inet_pton.c`, over byte slices rather
@@ -28,6 +28,8 @@ pub const AF_INET6: c_int = 10;
 const DGRAM_CLOEXEC: usize = 2 | 0o2_000_000;
 /// `SIOCGIFINDEX`, from `include/sys/ioctl.h`.
 const SIOCGIFINDEX: usize = 0x8933;
+/// `SIOCGIFNAME`, from `include/sys/ioctl.h`.
+const SIOCGIFNAME: usize = 0x8910;
 /// `IFNAMSIZ`, from `include/net/if.h`.
 const IFNAMSIZ: usize = 16;
 /// The size of `struct ifreq`, from `include/net/if.h`: the name, then a
@@ -110,7 +112,7 @@ fn number(text: &[u8]) -> (u64, usize) {
 /// Parses an IPv4 address in any of `inet_aton`'s forms: `a.b.c.d`, `a.b.c`
 /// with a 16-bit last part, `a.b` with a 24-bit one, or a single 32-bit `a`,
 /// each part in decimal, octal or hexadecimal.
-fn parse_aton(text: &[u8]) -> Option<[u8; 4]> {
+pub(crate) fn parse_aton(text: &[u8]) -> Option<[u8; 4]> {
     let mut parts = [0u64; 4];
     let mut count = 0;
     let mut rest = text;
@@ -385,7 +387,7 @@ fn pton4(mut text: &[u8]) -> Option<[u8; 4]> {
 /// `inet_pton.c` step for step: up to eight groups of up to four hexadecimal
 /// digits, one `::` standing for as many zero groups as are missing, and an
 /// IPv4 address in place of the last two groups.
-fn pton6(text: &[u8]) -> Option<[u8; 16]> {
+pub(crate) fn pton6(text: &[u8]) -> Option<[u8; 16]> {
     let mut s = text;
     let mut groups = [0u16; 8];
     let mut gap: Option<usize> = None;
@@ -567,9 +569,74 @@ pub unsafe extern "C" fn if_nametoindex(name: *const c_char) -> c_uint {
         .map_or(0, |index| c_int::from_ne_bytes(index).cast_unsigned())
 }
 
+/// Writes the name of the network interface with index `index` into `name`,
+/// and returns `name`. Returns null with `errno` set if there is none: `ENXIO`
+/// where the kernel says `ENODEV`, as musl's `if_indextoname.c` does.
+///
+/// # Safety
+///
+/// `name` must be valid for writes of `IF_NAMESIZE` bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn if_indextoname(index: c_uint, name: *mut c_char) -> *mut c_char {
+    // SAFETY: `socket` reads no memory.
+    let ret = unsafe { syscall::syscall3(nr::SOCKET, AF_UNIX as usize, DGRAM_CLOEXEC, 0) };
+    let fd = match errno::decode(ret) {
+        Ok(fd) => fd,
+        Err(error) => {
+            errno::set(error);
+            return core::ptr::null_mut();
+        }
+    };
+    let mut request = [0u8; IFREQ_SIZE];
+    for (slot, byte) in request
+        .iter_mut()
+        .skip(IFREQ_INDEX)
+        .zip(index.to_ne_bytes())
+    {
+        *slot = byte;
+    }
+    // SAFETY: the kernel reads and writes the request, a `struct ifreq`.
+    let ret =
+        unsafe { syscall::syscall3(nr::IOCTL, fd, SIOCGIFNAME, request.as_mut_ptr().addr()) };
+    // SAFETY: `close` reads no memory.
+    let _ = unsafe { syscall::syscall2(nr::CLOSE, fd, 0) };
+    if let Err(error) = errno::decode(ret) {
+        errno::set(if error == errno::ENODEV {
+            errno::ENXIO
+        } else {
+            error
+        });
+        return core::ptr::null_mut();
+    }
+    // As `strncpy` does: the name, then NULs to `IF_NAMESIZE` bytes.
+    let mut ended = false;
+    for (offset, &byte) in request.iter().take(IFNAMSIZ).enumerate() {
+        ended |= byte == 0;
+        // SAFETY: the caller passes `IF_NAMESIZE` writable bytes.
+        unsafe { name.wrapping_add(offset).write(if ended { 0 } else { byte as c_char }) };
+    }
+    name
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn if_indextoname_names_the_loopback_interface() {
+        // SAFETY: the name is NUL-terminated.
+        let index = unsafe { if_nametoindex(c"lo".as_ptr()) };
+        let mut name = [0x55 as c_char; 16];
+        // SAFETY: the buffer has `IF_NAMESIZE` bytes.
+        let got = unsafe { if_indextoname(index, name.as_mut_ptr()) };
+        assert_eq!(got, name.as_mut_ptr());
+        // SAFETY: `if_indextoname` wrote a NUL-terminated name.
+        assert_eq!(unsafe { core::ffi::CStr::from_ptr(got) }, c"lo");
+        // SAFETY: as above.
+        let got = unsafe { if_indextoname(u32::MAX, name.as_mut_ptr()) };
+        assert!(got.is_null());
+        assert_eq!(last_errno(), errno::ENXIO);
+    }
 
     fn last_errno() -> c_int {
         // SAFETY: the pointer is this thread's errno.
