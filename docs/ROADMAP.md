@@ -1568,6 +1568,30 @@ mode write a page of a private mapping it has only read:
   mmap     12339 bytes written through a shared file mapping and read back from the file, and the other way; refusals, msync and /proc maps answered; a truncation took 3 pages away from the mapping; 2 pages copied into a private mapping and kept from the file, a fork and a user-mode write included; 0 frames leaked
 ```
 
+**Done — an anonymous file, and its seals.** `memfd_create` makes a regular
+file that no directory names, on a tmpfs of its own that nothing mounts, named
+`memfd:NAME`, so it reads, writes, truncates and maps as a tmpfs file does.
+With `MFD_ALLOW_SEALING` it takes seals through `fcntl(F_ADD_SEALS)`, and
+tmpfs enforces them under the file's lock in shmem's order. A shrink seal
+refuses truncating downwards, a grow seal refuses extending by truncation,
+write or `fallocate`, and a write seal refuses every write. A write seal is
+refused with `EBUSY` while any shared mapping may write the file. The file's
+VMO counts those mappings, as Linux's `i_mmap_writable`: a shared mapping of a
+file open for writing, raised as its id enters a space's tables and lowered as
+it leaves, a `fork` child's copy included. The seal is stored and the count
+read under the file's lock, and `mmap` counts itself before it takes that lock
+to read the seals, so a write seal and a writable shared mapping never both
+stand. Once a write seal stands, a shared writable mapping is `EPERM` and
+`mprotect` to writable is `EACCES`; a private mapping still maps and keeps its
+writes to itself. The same accounting closes a gap: a read-only shared mapping
+of a file opened read-only can no longer be made writable. `MFD_HUGETLB`,
+`MFD_NOEXEC_SEAL` and `MFD_EXEC` are `EINVAL`, as on a kernel before 6.3's exec
+seal. The boot check runs it all twice, from a process of its own:
+
+```
+  memfd    4 seals added and enforced, 14 calls refused as Linux refuses them, a write seal refused while a shared mapping could write, a fork's copy included; 0 frames leaked
+```
+
 **The exit test, and how far it gets.** `cargo xtask test-vfs --init PATH`
 puts a static musl busybox into the initramfs and has init run the exit
 criterion's commands from it, checking their output after the boot marker. It
