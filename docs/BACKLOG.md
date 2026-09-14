@@ -233,6 +233,10 @@ nobody has it yet.
   RTC driver, and never, respectively.
 * `vfork` sharing memory rather than copying it.
 * Huge pages; frame share and release are order 0 by design.
+* A panic report as a QR code: a port of Linux's `drm_panic_qr` as
+  `libs/qr` (ferrix-qr), so a panic screen can carry the whole report. WIP
+  on branch `worktree-agent-a33c10946b6721065` (5690f0e), unbuilt into the
+  panic path.
 
 ---
 
