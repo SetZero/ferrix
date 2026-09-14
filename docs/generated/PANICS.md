@@ -54,6 +54,7 @@ Causes are listed most likely first.
 | [FX-0850](#fx-0850) | a panic was requested through /proc/sysrq-trigger |
 | [FX-0860](#fx-0860) | pipes, a FIFO or the filesystem calls failed their self-check |
 | [FX-0870](#fx-0870) | a shared file mapping failed its self-check |
+| [FX-0880](#fx-0880) | memfd_create or its seals failed their self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -960,11 +961,11 @@ last page; a write through the mapping must be what the file reads back, and a
 write to the file what the mapping shows, because both are the file's own VMO
 pages. mmap must refuse a descriptor that names nothing with EBADF, a directory
 with ENODEV, a writable shared mapping of a file opened read-only with EACCES,
-and a private file mapping with ENODEV. msync must answer a whole mapping and
-refuse bad flags and an unmapped range as Linux does, and /proc/<pid>/maps must
-name the mapping by its file. A truncation must take the pages past the new end
-away from the mapping, and a grow must show zeros there. The whole run is done
-twice and must leave no frame behind.
+while a writable private mapping of one maps. msync must answer a whole mapping
+and refuse bad flags and an unmapped range as Linux does, and /proc/<pid>/maps
+must name the mapping by its file. A truncation must take the pages past the new
+end away from the mapping, and a grow must show zeros there. The whole run is
+done twice and must leave no frame behind.
 
 1. A file's VMO is not attached as a mapper of the space, so a truncation's
    retirement never takes the mapping's translations down and a page past the
@@ -979,6 +980,39 @@ twice and must leave no frame behind.
 See: kernel/src/fs/mmap_check.rs; kernel/src/syscall/memory.rs sys_mmap,
 sys_msync; kernel/src/user/space.rs map_file, fault; kernel/src/fs/pages.rs;
 docs/ROADMAP.md stage 8.
+
+<a id="fx-0880"></a>
+
+## FX-0880 — memfd_create or its seals failed their self-check
+
+`fs::memfd_check::run` builds a process and makes memfds. An unknown flag and a
+250-byte name must be EINVAL; a memfd made without MFD_ALLOW_SEALING must carry
+F_SEAL_SEAL and refuse a seal with EPERM. A sealable memfd takes F_SEAL_SHRINK
+and then refuses a truncation downwards, and F_SEAL_GROW and then refuses
+growing by truncation or write, all with EPERM. F_SEAL_WRITE must be EBUSY while
+a shared mapping may write the file, a fork child's copy of one included, and
+succeed once none may; after it, a write and a shared writable mapping are
+EPERM, mprotect of a shared read-only mapping to writable is EACCES, and a
+private mapping still maps and keeps its writes from the file. An unknown seal
+is EINVAL, and any seal after F_SEAL_SEAL is EPERM. A shared read-only mapping
+of a file opened read-only must not become writable through mprotect. The whole
+run is done twice and must leave no frame behind.
+
+1. `map_file` does not raise the file object's may-write count for a shared
+   mapping of a writable file, or `give_back`, `Drop` or a fork child's attach
+   does not balance it, so F_SEAL_WRITE is granted beside a writable mapping or
+   refused forever.
+2. `add_seals` reads the may-write count before it stores the seal, or
+   `sys_mmap` reads the seals before the mapping counts itself, which lets a
+   race leave both standing.
+3. `AddressSpace::protect` does not look at a shared file region's may_write
+   before it makes the range writable.
+4. tmpfs's write_at, set_len or grow_to does not consult the node's seals under
+   its lock.
+
+See: kernel/src/fs/memfd_check.rs; kernel/src/syscall/memfd.rs;
+kernel/src/syscall/fd.rs sys_fcntl; kernel/src/syscall/memory.rs map_file;
+kernel/src/user/space.rs map_file, protect; libs/vfs/src/tmpfs.rs add_seals.
 
 <a id="fx-0901"></a>
 
