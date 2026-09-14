@@ -168,7 +168,7 @@ fn run_pinned() -> Result<Report, &'static str> {
         .ok_or("no processor to run the reverse map check on")?
         .logical;
     *OUTCOME.lock() = None;
-    let _task = crate::sched::spawn_on(
+    let task = crate::sched::spawn_on(
         "rmap-check",
         check_on,
         here,
@@ -178,7 +178,21 @@ fn run_pinned() -> Result<Report, &'static str> {
     )?;
     let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
     loop {
-        if let Some(outcome) = OUTCOME.lock().take() {
+        // Taken out first, so the lock's guard is gone before anything below
+        // sleeps: a spin lock held across the wait for the task is a lock held
+        // across a block, which the preemption count refuses.
+        let posted = OUTCOME.lock().take();
+        if let Some(outcome) = posted {
+            // Posting the outcome is the task's last act, and its exit is still
+            // ahead of it. Until it has exited the reaper cannot see it, so a
+            // caller that counted frames next -- this check's own measured run,
+            // after the warm-up -- would have its stack freed inside that count.
+            while !task.is_dead() {
+                if crate::timer::now_nanos() >= deadline {
+                    return Err("the reverse map check's task never exited after it answered");
+                }
+                crate::sched::sleep_for(1_000_000);
+            }
             return outcome;
         }
         if crate::timer::now_nanos() >= deadline {
