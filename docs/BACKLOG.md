@@ -21,12 +21,24 @@ These add to `docs/CONVENTIONS.md`, which still governs commits.
 
 | The change touches | Gate |
 |---|---|
-| Only `docs/`, or only `ferrousli/` | `cargo xtask check`; for ferrousli also `cargo test` in `ferrousli/` |
+| Only `docs/` | `cargo xtask check` |
+| Only `ferrousli/` | `cargo xtask check --ferrousli`, then `cargo xtask busybox` and, with the busybox it built, `test-shell` and `test-vfs` on x86_64 with `--init ferrousli`, so the binary the gates run never lags the library |
 | `libs/` only, and no crate the kernel builds | `cargo xtask check`, and one boot: `test-boot --arch armv7a --smp 2` |
-| Anything the image contains: `kernel/`, `boot/`, a kernel-side crate in `libs/`, `xtask` | `cargo xtask check`, then `test-boot` on x86_64, aarch64, armv7a at four processors and armv7a at `--smp 2`; a stage 7 or 8 change also runs `test-shell` on x86_64 with the musl busybox *and* the host's glibc busybox (`/usr/bin/busybox`), and `test-vfs` on x86_64. The whole of that, plus KVM, is what moves `main` |
+| Anything the image contains: `kernel/`, `boot/`, a kernel-side crate in `libs/`, `xtask` | `cargo xtask check`, then `test-boot` on x86_64, aarch64, armv7a at four processors and armv7a at `--smp 2`; a stage 7 or 8 change also runs `test-shell` on x86_64 with the ferrousli busybox (`--init ferrousli`), the musl busybox *and* the host's glibc busybox (`/usr/bin/busybox`), and `test-vfs` on x86_64 with the ferrousli busybox and the musl one. The whole of that, plus KVM, is what moves `main` |
 | User mode, page tables, TLB, SMP or the scheduler | The row above, and x86_64 under `--accel kvm` |
 
 Then fast-forward `develop` only if it is still the commit rebased onto.
+
+**The busyboxes.** The busybox built against ferrousli is the primary one: the
+userland Ferrix is measured with, and the one every `test-shell` and
+`test-vfs` above names first. `cargo xtask busybox` builds and installs it and
+`--init ferrousli` runs it; the flag is still given explicitly, since xtask
+has no default program. Alpine's static musl busybox and the host's glibc
+busybox stay required in every gate that names them, as the compatibility
+checks: a failure on any of the three fails the gate, and nothing was dropped
+when ferrousli's joined. `--init ferrousli` runs whatever `cargo xtask busybox`
+last installed, so on a base whose `ferrousli/` differs from the one the
+binary was built from, rebuild it first.
 
 **After the fast-forward,** the lander boots `develop` itself once on x86_64
 under `--accel kvm` and reports the hash together with that result, so a bad
@@ -35,8 +47,9 @@ merge is seen by the one who made it.
 **Two branches.** Sessions land on `develop`, which may be unstable. `main`
 moves only by the product owner, fast-forward, to a `develop` commit that has
 passed the whole matrix from a clean worktree on the product owner's own run:
-the four boots, x86_64 under KVM, `test-shell` with the musl and the glibc
-busybox, and `test-vfs`; at least every two hours while `develop` moves. So
+the four boots, x86_64 under KVM, `test-shell` with the ferrousli, the musl
+and the glibc busybox, and `test-vfs` with the ferrousli and the musl busybox;
+at least every two hours while `develop` moves. So
 `main` is always a working tree by construction, and a failure the customer
 finds on it is fixed forward on `develop` and re-verified before `main`
 moves again. Tags go on `main`. A landing on `develop` from a worktree is
@@ -84,7 +97,8 @@ architecture per tool call; the brief says so.
 **Milestones.** The customer tests from `main`, so testable progress is tagged
 there rather than waiting for a stage to end. The product owner verifies a
 candidate from a clean worktree (`test-boot` on all three architectures and
-armv7a at `--smp 2`, `test-shell` and `test-vfs` with the static busybox),
+armv7a at `--smp 2`, `test-shell` and `test-vfs` with the ferrousli busybox and
+the musl one),
 then tags it: `stage-N` for a stage's exit, `stage-N.k-<slug>` for a testable
 step after it, annotated, with the tag message carrying short release notes as a bullet
 list and saying what to test and how; the same notes go into
@@ -136,8 +150,6 @@ nobody has it yet.
 | Ring-3 virtio-blk reading sectors: `devmgr` (its kernel half is on develop: `device_info`, `device_quiesce`, START and bus mastering at the first pin; the program waits on the native runtime); the block ring's kernel side is on develop up to a published disk (the devfs node from HELLO); a sector read through the ring by a fake driver on `ferrix-rt` in the boot check, then the virtio-blk driver process on `ferrix-rt` reading sectors through a translated domain | ferrix-d9, with ferrix-61 | Stage 11's mount and exit wait on it; the customer declined a kernel-side disk path |
 | The out-of-domain probe on x86-64 under KVM on a loaded host, once in a few boots: VT-d's single fault record holds a fault other than the probe's (its stream, page or type differ), so the probe reports nothing and `test-boot` refuses the boot. Seen by os-94 on develop dc010db (1 of 5 loaded KVM boots; log `~/.local/share/ferrix/logs/frames-bisect/dc010db-4.log`) and by os-5b on ce38ee3 at load 12. The probe now prints the record's stream, page and type when they mismatch. Next: loop loaded KVM boots to read the record, then decide whether it is stale from the entropy request, a read where a write was expected, or another function's | os-5b | It can fail main's verification, as FX-1001 could |
 
-| ferrousli on the build path: `cargo xtask check` builds and tests `ferrousli/`; a script under `ferrousli/tools` builds busybox from a pinned source tarball against ferrousli as a static x86-64 program (musl headers, `crt1.o`, `libferrousli.a`, no other libc); `test-shell` runs it beside the musl and glibc busyboxes, and it becomes the third binary every stage 7 landing must pass | ferrix-ce, with ferrix-a5 for what the kernel owes it | The customer's call on 2026-09-13: ferrousli stops being beside the roadmap; a busybox built on it is the userland Ferrix is measured with |
-
 ### P1 — required before a stage is called done
 
 | Item | Owner | Stage |
@@ -161,6 +173,7 @@ nobody has it yet.
 | The debt the roadmap names: Miri for `frame`, `heap`, `paging`; fuzz targets for `cpio`, `fdt`, `acpi`, `virtio`, `linux-abi` | ferrix-e5 (the first three crates and `cpio`, `fdt`, `acpi`) |
 | The host-test table in the roadmap generated from `cargo test --list` with a gate, instead of counted by hand | ferrix-24 |
 | Zero-copy block reads: pin the page-cache pages themselves as the block ring's buffers, removing the data-VMO and scratch copies of stage 11's first read path (ARCHITECTURE §3) | ferrix-61, after stage 11's kernel mount |
+| ferrousli's busybox beyond the gates' applets: the 30 stubs in `ferrousli/src/stubs.rs` (regex for `grep` and `sed` patterns busybox does not handle itself, the math functions `awk` calls, name resolution with interface and Ethernet lookups), each ending the program when an applet reaches it; and `crypt`'s traditional DES and `$2*$` blowfish hashes, which return `"*"` | open |
 
 ### P3 — hardware variants and later stages, unowned
 
@@ -180,6 +193,13 @@ nobody has it yet.
 ## Decisions
 
 Dated, newest first. A decision here is final until the customer says otherwise.
+
+* **2026-09-14** The busybox built against ferrousli is the primary busybox:
+  the userland Ferrix is measured with, first in every `test-shell` and
+  `test-vfs` the gates run. The musl and glibc busyboxes stay required as
+  compatibility checks. A `ferrousli/` landing rebuilds it and runs both with
+  it. This carries out the customer's 2026-09-13 order below once the binary
+  passed both, at 5e9b0b6 with no stub reached.
 
 * **2026-09-13 (customer)** `develop` is the landing branch and may be unstable;
   `main` moves only to a verified `develop` commit. Set up at 8342362.

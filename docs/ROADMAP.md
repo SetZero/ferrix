@@ -2755,10 +2755,12 @@ own cargo workspace, depends on no Ferrix crate, and reaches the kernel only
 through Linux system calls. Until 2026-09-13 it sat beside this roadmap; by the
 customer's decision that day it is on it. `cargo xtask check --ferrousli` runs
 its formatting, lints and tests in both profiles, and `docs/BACKLOG.md` says
-which landings must pass it. The next step is busybox built against it, as a
-third binary for `test-shell` and `test-vfs` beside Alpine's musl build and the
-glibc one; until that exists, the static musl programs remain the goal's
-measure. Its test programs already boot as Ferrix's first process with `cargo
+which landings must pass it. Busybox 1.37.0 built against it by `cargo xtask
+busybox` links with no symbol undefined, and since 5e9b0b6 passes `test-shell`
+and `test-vfs` on x86_64 without reaching a stub. It is the primary busybox,
+the userland Ferrix is measured with: the gates run it first, with `--init
+ferrousli`, and keep Alpine's musl build and the glibc one as compatibility
+checks. Its test programs already boot as Ferrix's first process with `cargo
 xtask test-shell --init`, `tests/c/thread/on_ferrix.c` among them for
 `CLONE_THREAD`. Its own status is in [ferrousli/README.md](../ferrousli/README.md).
 
