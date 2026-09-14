@@ -137,26 +137,20 @@ with every applet linked beside it, so `ls /proc`, `cat /proc/self/maps` and
 
 The busybox Ferrix is measured with is built against
 [ferrousli](ferrousli/README.md), this repository's C library, and
-`--init ferrousli` names it. It is x86-64 only for now, and built with a Linux
-C compiler, so on Windows that one step runs in WSL; QEMU and everything else
-run on Windows itself.
+`--init ferrousli` names it. It is x86-64 only for now.
 
 On Windows, once, from PowerShell:
 
 ```
 winget install SoftwareFreedomConservancy.QEMU
-wsl --install -d Ubuntu
-wsl --set-default Ubuntu        # xtask uses the default distribution
+winget install Git.Git
+winget install LLVM.LLVM
+winget install StrawberryPerl.StrawberryPerl
 ```
 
-and once inside Ubuntu (`wsl`):
+On Debian or Ubuntu, `sudo apt install build-essential curl bzip2 file`.
 
-```
-sudo apt install build-essential curl bzip2 file
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-Then, from PowerShell in the checkout:
+Then, in the checkout:
 
 ```
 cargo xtask busybox                              # build busybox against ferrousli
@@ -165,15 +159,17 @@ cargo xtask run --arch x86_64 --init ferrousli   # boot to a busybox shell
 
 Quit QEMU with `Ctrl-A x`.
 
-`cargo xtask busybox` runs `ferrousli/tools/busybox/build.sh` in WSL, reaching
-the checkout through `/mnt`. The script downloads busybox
-1.37.0 and Alpine's configuration for it, both checked against pinned sums,
-builds ferrousli and busybox against it under `~/.local/share/ferrix/busybox/ferrousli`
-inside WSL, and copies the result to
-`%USERPROFILE%\.local\share\ferrix\busybox\ferrousli\x86_64\bin\busybox.static`,
-where `--init ferrousli` looks. It takes a few minutes the first time. Run it
-again after `ferrousli/` changes; `--init ferrousli` uses whatever it last
-installed. On Linux the same two commands work without WSL.
+`cargo xtask busybox` runs `ferrousli/tools/busybox/build.sh`, or on Windows
+`build-windows.sh` in Git for Windows' bash. Either downloads busybox 1.37.0
+and Alpine's configuration for it, both checked against pinned sums, builds
+ferrousli and busybox against it under `~/.local/share/ferrix/busybox/ferrousli`
+(`%USERPROFILE%\.local\share\ferrix\busybox\ferrousli` on Windows), and
+installs `x86_64/bin/busybox.static` there, where `--init ferrousli` looks. On
+Windows clang cross-compiles and links it, Strawberry Perl's gcc and gmake run
+busybox's own build, and the kernel headers busybox includes come from Alpine's
+`linux-headers` package, pinned the same way. It takes a few minutes the first
+time. Run it again after `ferrousli/` changes; `--init ferrousli` uses whatever
+it last installed.
 
 `cargo xtask test-shell --arch x86_64 --init ferrousli` runs a script in that
 shell instead of waiting for you, and fails unless the script's output comes

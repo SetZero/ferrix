@@ -23,4 +23,7 @@ targets = [
     # is compiled position-independent; see docs/arm32.md, decision 2. No libc
     # and no C runtime is linked: `.cargo/config.toml` says so.
     "armv7-unknown-linux-musleabi",
+    # ferrousli, the C library, when it is built on a host that is not Linux:
+    # `ferrousli/tools/busybox/build-windows.sh` cross-builds it on Windows.
+    "x86_64-unknown-linux-gnu",
 ]

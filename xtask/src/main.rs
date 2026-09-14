@@ -24,8 +24,9 @@
 //! and put it in the initramfs at `/bin/busybox` with every applet linked
 //! beside it, so that the shell finds `ls` on its `PATH=/bin`.
 //!
-//! `busybox` builds busybox against ferrousli, in WSL on Windows, and installs
-//! it for `--init ferrousli`, which names that binary instead of a path.
+//! `busybox` builds busybox against ferrousli, on Linux or natively on Windows,
+//! and installs it for `--init ferrousli`, which names that binary instead of a
+//! path.
 
 // AUDIT: this is a command-line build tool. Its output *is* stdout and stderr,
 // and routing it through a logging facade would make `cargo xtask build` read
@@ -105,7 +106,7 @@ COMMANDS:
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     check         Run every quality gate (fmt, clippy, layering, audits)
     model-doc     Regenerate docs/generated/ from the SysML model
-    busybox       Build busybox against ferrousli (x86_64, in WSL on Windows) for --init ferrousli
+    busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
     flash         Copy the loader and kernel onto a board's boot partition
     watch-serial  Watch a real serial port for the kernel's boot report
     deploy        flash, then watch-serial: one command for a board

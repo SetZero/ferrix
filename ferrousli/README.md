@@ -54,9 +54,14 @@ cc -static -no-pie -nostdlib -nostdinc -isystem include \
 
 `tools/busybox/build.sh` builds busybox 1.37.0 against this library, as a
 static x86-64 program: musl's headers, `crt1.o` and `libferrousli.a`, with the
-host's kernel UAPI headers and nothing from its C library. The busybox.net
-tarball and Alpine's config for its `busybox-static` 1.37.0-r20 are pinned by
-checksum, and `tools/busybox/config.sh` lists the changes made to that config.
+host's kernel UAPI headers and nothing from its C library. On Windows,
+`tools/busybox/build-windows.sh` builds the same program without WSL: this
+library for `x86_64-unknown-linux-gnu`, busybox with clang and lld against
+Alpine's pinned `linux-headers`, and busybox's host programs with mingw gcc and
+the few POSIX headers in `tools/busybox/hostcompat/`. `tools/busybox/sources.sh`
+pins the busybox.net tarball and Alpine's config for its `busybox-static`
+1.37.0-r20 by checksum, and `tools/busybox/config.sh` lists the changes made to
+that config.
 
 It downloads and builds under `~/.local/share/ferrix/busybox/ferrousli`, and
 installs `x86_64/busybox` there once the program links. Until then it exits 1

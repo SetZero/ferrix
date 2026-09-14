@@ -1,13 +1,12 @@
-//! ferrousli's busybox: built by `ferrousli/tools/busybox/build.sh`, and
-//! installed as `x86_64/bin/busybox.static` under
-//! `~/.local/share/ferrix/busybox/ferrousli` (or `$FERRIX_BUSYBOX`), where
-//! `--init ferrousli` finds it.
+//! ferrousli's busybox: built by `ferrousli/tools/busybox/build.sh`, or on
+//! Windows by `build-windows.sh` beside it, and installed as
+//! `x86_64/bin/busybox.static` under `~/.local/share/ferrix/busybox/ferrousli`
+//! (or `$FERRIX_BUSYBOX`), where `--init ferrousli` finds it.
 //!
-//! The script needs a Linux host, because it compiles busybox with the host's
-//! `cc` against the host's kernel UAPI headers. On Windows it runs in WSL's
-//! default distribution, reaching this checkout through `/mnt`, and the binary
-//! is copied out to the same path under the Windows home directory, so the
-//! kernel's build reads it as it reads any other `--init` program.
+//! `build.sh` compiles busybox with the host's `cc` against the host's kernel
+//! UAPI headers. Windows has neither, so `build-windows.sh` cross-compiles with
+//! clang against Alpine's pinned UAPI headers, in Git for Windows' bash. Both
+//! build the same pinned sources with the same config.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,24 +17,21 @@ use crate::{Error, Result, cargo};
 /// The `--init` value that names ferrousli's busybox rather than a path.
 pub(crate) const INIT_NAME: &str = "ferrousli";
 
-/// The list `build.sh` writes when the link fails, one symbol per line.
+/// The list the build scripts write when the link fails, one symbol per line.
 const UNDEFINED: &str = "undefined-symbols.txt";
 
-/// Run by `bash -c` in `ferrousli/`, with `$1` saying whether `$2`, the
-/// directory to install into, is a Windows path to translate.
+/// Run by `bash -c` in `ferrousli/`, with `$1` the build script in
+/// `tools/busybox/` and `$2` the directory to install into.
 ///
-/// `$out` is `build.sh`'s own: `$FERRIX_BUSYBOX`, with the script's default.
-/// On Linux it is the install directory itself, and the copy is skipped. Both
-/// lists are removed first, so a list read after a failure is this run's.
+/// `$out` is the scripts' own: `$FERRIX_BUSYBOX`, with their default. Normally
+/// it is the install directory itself, and the copy is skipped. Both lists are
+/// removed first, so a list read after a failure is this run's.
 const SCRIPT: &str = r#"set -uo pipefail
 root=$2
-if [ "$1" = windows ]; then
-    root=$(wslpath -a "$root") || exit 1
-fi
 out=${FERRIX_BUSYBOX:-$HOME/.local/share/ferrix/busybox/ferrousli}
 mkdir -p "$root/x86_64/bin" || exit 1
 rm -f "$out/undefined-symbols.txt" "$root/undefined-symbols.txt"
-if ! bash tools/busybox/build.sh; then
+if ! bash "tools/busybox/$1"; then
     if [ -f "$out/undefined-symbols.txt" ] && ! [ "$out" -ef "$root" ]; then
         cp "$out/undefined-symbols.txt" "$root/"
     fi
@@ -65,7 +61,7 @@ fn installed(root: &Path, arch: Arch) -> PathBuf {
     root.join(arch.name()).join("bin").join("busybox.static")
 }
 
-/// Refuse every architecture `build.sh` does not build for.
+/// Refuse every architecture the build scripts do not build for.
 fn refuse_other_than_x86_64(arch: Arch) -> Result<()> {
     if arch == Arch::X86_64 {
         Ok(())
@@ -92,8 +88,36 @@ pub(crate) fn program(arch: Arch) -> Result<PathBuf> {
     Ok(program)
 }
 
-/// `cargo xtask busybox`: run `build.sh`, in WSL on Windows, and install the
-/// binary for `--init ferrousli`.
+/// Git for Windows' bash for a `git` at `git`: the launcher `bin/bash.exe` in
+/// the nearest ancestor that also holds `usr/bin/bash.exe`, as Git's own
+/// directory does whether `git` is its `cmd/`, `bin/` or `mingw64/bin/` one.
+fn git_bash_beside(git: &Path, exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    git.ancestors().skip(1).find_map(|dir| {
+        let launcher = dir.join("bin").join("bash.exe");
+        let shell = dir.join("usr").join("bin").join("bash.exe");
+        (exists(&launcher) && exists(&shell)).then_some(launcher)
+    })
+}
+
+/// Git for Windows' bash, which runs `build-windows.sh`.
+///
+/// Not the first `bash` on `PATH`: on Windows that is often WSL's launcher in
+/// `System32`. And Git's launcher rather than `usr/bin/bash.exe` itself,
+/// because the launcher puts Git's POSIX tools on the shell's `PATH`.
+fn git_bash() -> Result<PathBuf> {
+    crate::paths::which("git")
+        .and_then(|git| git_bash_beside(&git, Path::is_file))
+        .or_else(|| git_bash_beside(Path::new("C:/Program Files/Git/cmd/git.exe"), Path::is_file))
+        .ok_or_else(|| {
+            Error::new(
+                "no Git for Windows bash to run build-windows.sh in; \
+                 install it with `winget install Git.Git`",
+            )
+        })
+}
+
+/// `cargo xtask busybox`: run `build.sh`, or `build-windows.sh` on Windows,
+/// and install the binary for `--init ferrousli`.
 ///
 /// While ferrousli still lacks functions busybox calls, the link fails and
 /// this refuses, naming them.
@@ -103,27 +127,31 @@ pub(crate) fn build(arch: Arch) -> Result<PathBuf> {
     let program = installed(&root, arch);
     let ferrousli = crate::paths::workspace_root().join("ferrousli");
 
-    let command = if cfg!(windows) {
-        let mut command = Command::new("wsl.exe");
-        // A login shell, so that `~/.profile` puts rustup's cargo on PATH.
-        let _ = command
-            .arg("--cd")
-            .arg(&ferrousli)
-            .args(["--exec", "bash", "-lc", SCRIPT, "bash", "windows"])
-            .arg(&root);
-        command
+    let (script, mut command) = if cfg!(windows) {
+        let mut command = Command::new(git_bash()?);
+        // One spelling of the directory for both the script and its caller,
+        // with the separators bash expects.
+        let root = root.to_string_lossy().replace('\\', "/");
+        let _ = command.env("FERRIX_BUSYBOX", &root).args([
+            "-c",
+            SCRIPT,
+            "bash",
+            "build-windows.sh",
+            &root,
+        ]);
+        ("build-windows.sh", command)
     } else {
         let mut command = Command::new("bash");
-        // `build.sh` looks for ferrousli's library in `ferrousli/target`.
-        let _ = command
-            .current_dir(&ferrousli)
-            .env_remove("CARGO_TARGET_DIR")
-            .args(["-c", SCRIPT, "bash", "native"])
-            .arg(&root);
-        command
+        let _ = command.args(["-c", SCRIPT, "bash", "build.sh"]).arg(&root);
+        ("build.sh", command)
     };
+    // Both scripts look for ferrousli's library in `ferrousli/target`.
+    let _ = command
+        .current_dir(&ferrousli)
+        .env_remove("CARGO_TARGET_DIR");
 
-    if let Err(error) = cargo::run(command, "ferrousli/tools/busybox/build.sh") {
+    let description = format!("ferrousli/tools/busybox/{script}");
+    if let Err(error) = cargo::run(command, &description) {
         let list = root.join(UNDEFINED);
         return Err(match std::fs::read_to_string(&list) {
             Ok(symbols) if !symbols.trim().is_empty() => not_linked(&symbols, &list),
@@ -132,7 +160,7 @@ pub(crate) fn build(arch: Arch) -> Result<PathBuf> {
     }
     if !program.is_file() {
         return Err(Error::new(format!(
-            "build.sh reported success but {} does not exist",
+            "{script} reported success but {} does not exist",
             program.display()
         )));
     }
@@ -174,5 +202,26 @@ mod tests {
     fn the_installed_path_matches_the_musl_busybox_layout() {
         let path = installed(Path::new("root"), Arch::X86_64);
         assert_eq!(path, Path::new("root/x86_64/bin/busybox.static"));
+    }
+
+    #[test]
+    fn git_bash_is_the_launcher_in_gits_own_directory() {
+        let layout = ["C:/Git/bin/bash.exe", "C:/Git/usr/bin/bash.exe"];
+        let exists = |path: &Path| layout.iter().any(|known| path == Path::new(known));
+        for git in [
+            "C:/Git/cmd/git.exe",
+            "C:/Git/bin/git.exe",
+            "C:/Git/mingw64/bin/git.exe",
+        ] {
+            assert_eq!(
+                git_bash_beside(Path::new(git), exists),
+                Some(PathBuf::from("C:/Git/bin/bash.exe")),
+                "{git}"
+            );
+        }
+        assert_eq!(
+            git_bash_beside(Path::new("C:/Windows/System32/git.exe"), exists),
+            None
+        );
     }
 }
