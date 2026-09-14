@@ -13,8 +13,8 @@
 //! Those offsets come from glibc's `tcbhead_t`. [`Thread`] keeps glibc's layout
 //! for its first 0x80 bytes, so that programs built for either C library find
 //! what they expect. Ferrousli's own fields follow: `errno`, the kernel's
-//! thread id, the locale `uselocale` set, and the [`State`] the thread
-//! functions share.
+//! thread id, the locale `uselocale` set, `h_errno`, and the [`State`] the
+//! thread functions share.
 //!
 //! # Where TLS goes
 //!
@@ -79,7 +79,9 @@ pub struct Thread {
     /// 0x88: the locale `uselocale` gave this thread, or null while it follows
     /// the global locale. A new thread starts with null: the global locale.
     locale: *mut Locale,
-    /// 0x90: what the thread functions share about this thread.
+    /// 0x90: this thread's `h_errno`, which `netdb.h`'s legacy lookups set.
+    h_errno: c_int,
+    /// 0x98: what the thread functions share about this thread.
     state: State,
 }
 
@@ -140,7 +142,8 @@ const _: () = assert!(offset_of!(Thread, split_stack_limit) == 0x70);
 const _: () = assert!(offset_of!(Thread, errno) == 0x80);
 const _: () = assert!(offset_of!(Thread, tid) == 0x84);
 const _: () = assert!(offset_of!(Thread, locale) == 0x88);
-const _: () = assert!(offset_of!(Thread, state) == 0x90);
+const _: () = assert!(offset_of!(Thread, h_errno) == 0x90);
+const _: () = assert!(offset_of!(Thread, state) == 0x98);
 // `struct robust_list_head` is three words: the list, the offset and the
 // pending entry, at 0, 8 and 16.
 const _: () = assert!(offset_of!(State, robust_off) - offset_of!(State, robust_head) == 8);
@@ -422,6 +425,7 @@ unsafe fn build(
             errno: 0,
             tid: AtomicI32::new(0),
             locale: null_mut(),
+            h_errno: 0,
             state: State::new(),
         });
     }
@@ -573,6 +577,13 @@ pub fn refresh_tid() {
 pub fn errno_location() -> *mut c_int {
     current()
         .wrapping_byte_add(offset_of!(Thread, errno))
+        .cast::<c_int>()
+}
+
+/// The calling thread's `h_errno`.
+pub fn h_errno_location() -> *mut c_int {
+    current()
+        .wrapping_byte_add(offset_of!(Thread, h_errno))
         .cast::<c_int>()
 }
 
