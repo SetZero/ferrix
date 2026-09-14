@@ -152,27 +152,27 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         .map_err(|_| "no room for the driver's job")?;
     side.put(NAME_AT, NAME)?;
 
-    let mut children = Vec::new();
+    // One driver at a time: each is started and its disk waited for before
+    // the next is started, so the registry lists the disks in PCI order,
+    // vda before vdb, as devmgr will register them and as /proc/partitions
+    // prints them. Started together, two drivers' HELLOs race and the order
+    // is whichever the kernel accepts first.
+    let mut first = None;
     for (index, node) in nodes.iter().enumerate() {
         let index = u32::try_from(index).map_err(|_| "too many disks to name")?;
         let name = DiskName::for_index(index).ok_or("the crate has no name for this disk")?;
-        children.push(start_driver(&side, node, name, image, job)?);
-    }
-
-    // Every disk, once its driver's HELLO is accepted; sectors through the
-    // first, the path a mount takes.
-    let mut first = None;
-    for (index, child) in children.iter().enumerate() {
-        let rdev = makedev(VIRTIO_BLK_MAJOR, u32::try_from(index).unwrap_or(0) * 16);
-        let disk = published(&side, *child, rdev)?;
+        let child = start_driver(&side, node, name, image, job)?;
+        let disk = published(&side, child, makedev(VIRTIO_BLK_MAJOR, index * 16))?;
         if first.is_none() {
             first = Some(disk);
         }
     }
+
+    // Sectors through the first disk, the path a mount takes.
     let disk = first.ok_or("no disk was published")?;
     let read = read_back(disk.as_ref())?;
     Ok(Report {
-        names: names_str(children.len()),
+        names: names_str(nodes.len()),
         sectors: disk.sectors(),
         read,
         skipped: None,
