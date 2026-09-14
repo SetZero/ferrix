@@ -45,6 +45,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use ferrix_bootinfo::BootView;
 use ferrix_sync::Once;
+use ferrix_vfs::access::MAY_EXEC;
 use ferrix_vfs::initramfs::{self, UnpackError, Unpacked, makedev};
 use ferrix_vfs::tmpfs::Tmpfs;
 use ferrix_vfs::{
@@ -137,7 +138,8 @@ pub(crate) fn read_file(
 ///
 /// # Errors
 ///
-/// As [`read_file`].
+/// As [`read_file`], and `EACCES` for a regular file the context may not
+/// execute.
 pub(crate) fn read_program(
     ctx: &Context,
     start: Option<&Location>,
@@ -145,6 +147,10 @@ pub(crate) fn read_program(
 ) -> Result<(Vec<u8>, Vec<u8>), Errno> {
     let ns = namespace();
     let at = ns.resolve(ctx, start, path, true)?;
+    let metadata = ns.stat(&at)?.metadata;
+    if metadata.kind == FileType::Regular {
+        ctx.who.require(&metadata, MAY_EXEC)?;
+    }
     let exe = ns.path_of(&at, &ctx.root);
     Ok((read_location(at)?, exe))
 }

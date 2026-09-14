@@ -11,6 +11,7 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_sync::{Parker, SleepLock, SpinLock};
 
 use crate::Result;
+use crate::access::{Access, MAY_READ, MAY_WRITE};
 use crate::dentry::Dentry;
 use crate::file::{OpenFile, OpenFlags};
 use crate::node::{FileSystem, FileType, Inode, Metadata, NewNode, SetAttributes, StatFs};
@@ -153,17 +154,21 @@ impl Location {
 /// namespace numbers its own from one, so no mount in a tree is ever this.
 const DETACHED_MOUNT: u64 = 0;
 
-/// The two places a relative and an absolute path start from.
+/// The two places a relative and an absolute path start from, and who is
+/// walking.
 ///
-/// A process's, in the kernel: `chroot` changes `root` and `chdir` changes
-/// `cwd`. The namespace takes them as an argument rather than knowing about
-/// processes, which is what lets the host tests be two processes at once.
+/// A process's, in the kernel: `chroot` changes `root`, `chdir` changes
+/// `cwd`, and `who` is its filesystem ids. The namespace takes them as an
+/// argument rather than knowing about processes, which is what lets the host
+/// tests be two processes -- or two users -- at once.
 #[derive(Clone, Debug)]
 pub struct Context {
     /// Where `/` is.
     pub root: Location,
     /// Where a relative path starts.
     pub cwd: Location,
+    /// The identity every permission check along the way is made against.
+    pub who: Access,
 }
 
 /// What `stat` reports.
@@ -265,12 +270,14 @@ impl Namespace {
         }
     }
 
-    /// A context with both root and working directory at the root.
+    /// A context with both root and working directory at the root, acting as
+    /// root.
     #[must_use]
     pub fn context(&self) -> Context {
         Context {
             root: self.root(),
             cwd: self.root(),
+            who: Access::root(),
         }
     }
 
@@ -508,7 +515,7 @@ impl Namespace {
             if walked.must_be_dir {
                 return Err(Errno::EISDIR);
             }
-            match self.create_at(&walked, NewNode::Regular, permissions) {
+            match self.create_at(ctx, &walked, NewNode::Regular, permissions) {
                 Ok(dentry) => {
                     let created = Location {
                         mount: walked.found.mount,
@@ -534,6 +541,19 @@ impl Namespace {
         if kind == FileType::Directory && (flags.write || flags.create) && !flags.path {
             return Err(Errno::EISDIR);
         }
+        // Linux's `may_open`: read for reading, write for writing or
+        // truncating. A file this call just created is not checked, and
+        // neither is an `O_PATH` handle, which allows no I/O.
+        if !flags.path {
+            let mut want = 0;
+            if flags.read {
+                want |= MAY_READ;
+            }
+            if flags.write || flags.truncate {
+                want |= MAY_WRITE;
+            }
+            ctx.who.require(&inode.metadata(), want)?;
+        }
         if flags.truncate && flags.write && kind == FileType::Regular {
             inode.set_len(0)?;
         }
@@ -544,8 +564,15 @@ impl Namespace {
 
     /// Create `node` at the negative name a walk found, returning the dentry
     /// that now names it.
+    ///
+    /// The directory must allow the context to write and search it, and the
+    /// new object belongs to the context: its filesystem user id, and its
+    /// filesystem group id or a set-group-id directory's group. A filesystem
+    /// makes what it creates root's, so the owner is given afterwards; one
+    /// that keeps no owners refuses, and what it made stays as it made it.
     fn create_at(
         &self,
+        ctx: &Context,
         walked: &Walked,
         node: NewNode<'_>,
         permissions: u32,
@@ -555,7 +582,19 @@ impl Namespace {
             return Err(Errno::EEXIST);
         }
         let dir = walked.parent.inode()?;
+        let dir_meta = dir.metadata();
+        ctx.who.may_create(&dir_meta)?;
+        let (uid, gid, permissions) = ctx.who.new_owner(&dir_meta, node.kind(), permissions);
         let inode = dir.create(name, node, permissions)?;
+        let made = inode.metadata();
+        if made.uid != uid || made.gid != gid {
+            let owner = SetAttributes {
+                uid: Some(uid),
+                gid: Some(gid),
+                ..SetAttributes::default()
+            };
+            let _ = inode.set_attributes(&owner);
+        }
         Ok(walked.parent.dentry.fill(name, &walked.found.dentry, inode))
     }
 
@@ -572,7 +611,7 @@ impl Namespace {
         permissions: u32,
     ) -> Result<()> {
         let walked = self.walk(ctx, Self::start(ctx, start), path, false)?;
-        self.create_at(&walked, NewNode::Directory, permissions)
+        self.create_at(ctx, &walked, NewNode::Directory, permissions)
             .map(drop)
     }
 
@@ -593,7 +632,7 @@ impl Namespace {
         if walked.must_be_dir && walked.found.dentry.inode().is_none() {
             return Err(Errno::ENOENT);
         }
-        self.create_at(&walked, node, permissions).map(drop)
+        self.create_at(ctx, &walked, node, permissions).map(drop)
     }
 
     /// `symlinkat`: make `path` a link to `target`.
@@ -640,7 +679,9 @@ impl Namespace {
         if !Arc::ptr_eq(&source.found.mount, &dest.parent.mount) {
             return Err(Errno::EXDEV);
         }
-        dest.parent.inode()?.link(name, &inode)?;
+        let dir = dest.parent.inode()?;
+        ctx.who.may_create(&dir.metadata())?;
+        dir.link(name, &inode)?;
         let _ = dest.parent.dentry.fill(name, &dest.found.dentry, inode);
         Ok(())
     }
@@ -654,6 +695,8 @@ impl Namespace {
         let walked = self.walk(ctx, Self::start(ctx, start), path, false)?;
         let name = walked.name_or(Errno::EISDIR)?;
         let inode = walked.found.inode()?;
+        ctx.who
+            .may_delete(&walked.parent.inode()?.metadata(), &inode.metadata())?;
         if inode.metadata().kind == FileType::Directory {
             return Err(Errno::EISDIR);
         }
@@ -684,6 +727,8 @@ impl Namespace {
             LastPart::Root => return Err(Errno::EBUSY),
         };
         let inode = walked.found.inode()?;
+        ctx.who
+            .may_delete(&walked.parent.inode()?.metadata(), &inode.metadata())?;
         if inode.metadata().kind != FileType::Directory {
             return Err(Errno::ENOTDIR);
         }
@@ -747,6 +792,19 @@ impl Namespace {
         }
         if moving_dir && source.found.dentry.is_ancestor_of(&dest.parent.dentry) {
             return Err(Errno::EINVAL);
+        }
+
+        // Linux's `vfs_rename`: the source may be deleted from its directory,
+        // the destination made or replaced in its own, and a directory moving
+        // to a new parent must be writable itself, because its `..` changes.
+        let who = &ctx.who;
+        who.may_delete(&source.parent.inode()?.metadata(), &moving_meta)?;
+        match dest.found.dentry.inode() {
+            Some(target) => who.may_delete(&dest.parent.inode()?.metadata(), &target.metadata())?,
+            None => who.may_create(&dest.parent.inode()?.metadata())?,
+        }
+        if moving_dir && !Arc::ptr_eq(&source.parent.dentry, &dest.parent.dentry) {
+            who.require(&moving_meta, MAY_WRITE)?;
         }
 
         let new_dir = dest.parent.inode()?;

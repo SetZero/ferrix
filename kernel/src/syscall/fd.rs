@@ -205,8 +205,9 @@ pub(crate) fn sys_openat(
     // behind, and the program's retry with `O_EXCL` would be `EEXIST`.
     let reserved = process.files().lock().reserve(cloexec)?;
     // A copy of the context rather than the lock: the walk calls into
-    // filesystems, and `chdir` on another thread must not wait for it.
-    let context = process.fs_context().lock().clone();
+    // filesystems, and `chdir` on another thread must not wait for it. It
+    // carries the caller's identity, which the walk and the open check.
+    let context = crate::syscall::path::context(process);
     let opened = fs::namespace()
         .open(
             &context,

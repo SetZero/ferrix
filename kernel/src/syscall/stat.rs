@@ -42,7 +42,7 @@ use ferrix_linux_abi::types::{
     R_OK, STATX_BASIC_STATS, STATX_MNT_ID, STATX_RESERVED, Statx, StatxTimestamp, W_OK, X_OK,
 };
 use ferrix_vfs::dirent::DirentWriter;
-use ferrix_vfs::{FileType, Stat, Timespec};
+use ferrix_vfs::{Access, Stat, Timespec};
 
 use crate::arch;
 use crate::syscall::fd;
@@ -190,11 +190,12 @@ pub(crate) fn sys_getdents64(
 
 /// `faccessat`, `faccessat2` and `access`.
 ///
-/// Everything runs as root, and root passes every read and write check.
-/// Execute is the exception Linux makes even for root: it needs an execute bit
-/// somewhere in the mode, or a directory, because a file nobody may execute is
-/// data and `execve` will refuse it. `AT_EACCESS` changes nothing while the
-/// real and effective identities are both root.
+/// Checked as the real user and group ids, as Linux's `access_override_creds`
+/// arranges, unless `AT_EACCESS` asks for the ones the process acts as; the
+/// walk to the file is made as the same identity. Root passes every read and
+/// write check, and execute only with an execute bit somewhere in the mode or
+/// on a directory, because a file nobody may execute is data and `execve`
+/// will refuse it.
 pub(crate) fn sys_faccessat(
     process: &Process,
     dirfd: i32,
@@ -208,12 +209,17 @@ pub(crate) fn sys_faccessat(
     if flags & !(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
         return Err(Errno::EINVAL);
     }
-    let target = path::target(process, dirfd, path, flags)?;
-    let metadata = target.stat()?.metadata;
-    if mode & X_OK != 0 && metadata.kind != FileType::Directory && metadata.permissions & 0o111 == 0
-    {
-        return Err(Errno::EACCES);
+    let mut ctx = path::context(process);
+    if flags & AT_EACCESS == 0 {
+        ctx.who = process.with_credentials(|credentials| Access {
+            uid: credentials.user.real,
+            gid: credentials.group.real,
+            groups: credentials.groups.clone(),
+        });
     }
+    let who = ctx.who.clone();
+    let target = path::target_in(process, ctx, dirfd, path, flags)?;
+    who.require(&target.stat()?.metadata, mode)?;
     Ok(0)
 }
 

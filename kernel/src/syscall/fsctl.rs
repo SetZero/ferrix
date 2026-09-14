@@ -63,6 +63,7 @@ use ferrix_linux_abi::types::{
     MNT_EXPIRE, MNT_FORCE, MS_BIND, MS_MGC_MSK, MS_MGC_VAL, MS_MOVE, MS_PRIVATE, MS_RDONLY,
     MS_REMOUNT, MS_SHARED, MS_SLAVE, MS_UNBINDABLE, UMOUNT_NOFOLLOW,
 };
+use ferrix_vfs::access::{MAY_EXEC, MAY_WRITE};
 use ferrix_vfs::statfs::StatfsLayout;
 use ferrix_vfs::{FileSystem, FileType};
 
@@ -279,6 +280,10 @@ fn readahead_count(a: &[u64; 6]) -> u64 {
 pub(crate) fn sys_truncate(process: &Process, at: u64, length: i64) -> Result<usize, Errno> {
     let length = u64::try_from(length).map_err(|_| Errno::EINVAL)?;
     let target = path::target(process, AT_FDCWD, at, 0)?;
+    let metadata = target.stat()?.metadata;
+    if metadata.kind == FileType::Regular {
+        path::context(process).who.require(&metadata, MAY_WRITE)?;
+    }
     fs::namespace().truncate(target.location(), length)?;
     Ok(0)
 }
@@ -331,14 +336,16 @@ pub(crate) fn sys_fallocate(
 
 /// `chroot`: make a directory the process's `/`.
 ///
-/// Permitted, because everything runs as root and `CAP_SYS_CHROOT` is the
-/// only check Linux makes. The working directory stays where it was, as on
-/// Linux.
+/// The new root must be a directory the caller may search, as Linux's
+/// `path_permission` requires; `CAP_SYS_CHROOT` is not checked yet. The
+/// working directory stays where it was, as on Linux.
 pub(crate) fn sys_chroot(process: &Process, at: u64) -> Result<usize, Errno> {
     let place = path::target(process, AT_FDCWD, at, 0)?.location().clone();
-    if fs::namespace().stat(&place)?.metadata.kind != FileType::Directory {
+    let metadata = fs::namespace().stat(&place)?.metadata;
+    if metadata.kind != FileType::Directory {
         return Err(Errno::ENOTDIR);
     }
+    path::context(process).who.require(&metadata, MAY_EXEC)?;
     process.fs_context().lock().root = place;
     Ok(0)
 }

@@ -25,7 +25,8 @@ use ferrix_linux_abi::types::{
     AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM, AT_SECURE, AT_SYMLINK_NOFOLLOW, AT_UID,
 };
 use ferrix_ustack::{Spec, Width};
-use ferrix_vfs::{FileType, OpenFile, OpenFlags};
+use ferrix_vfs::access::MAY_EXEC;
+use ferrix_vfs::{Access, FileType, OpenFile, OpenFlags};
 use ferrix_vma::VmaFlags;
 
 use crate::arch;
@@ -498,11 +499,12 @@ fn execve_at(
     let env = read_strings(space, envp, &mut budget)?;
 
     // The caller's own root and working directory, so a relative path after
-    // `cd` resolves from there. Cloned out: never walk with the lock held.
-    let context = process.fs_context().lock().clone();
+    // `cd` resolves from there, and its identity, which the walk and the
+    // execute check are made as. Cloned out: never walk with the lock held.
+    let context = crate::syscall::path::context(process);
     let (mut image, mut exe) = if path_bytes.is_empty() {
         let file = fd::file(process, dirfd)?;
-        let image = read_descriptor(&file)?;
+        let image = read_descriptor(&file, &context.who)?;
         let exe = crate::fs::namespace().path_of(file.location(), &context.root);
         path_bytes = descriptor_path(dirfd, &[]);
         (image, exe)
@@ -634,13 +636,14 @@ const DESCRIPTOR_READ_LIMIT: u64 = 64 * 1024 * 1024;
 ///
 /// # Errors
 ///
-/// `EACCES` for anything but a regular file, as Linux answers; `EFBIG` past
-/// [`DESCRIPTOR_READ_LIMIT`]; `ENOMEM` if the heap cannot hold it; and
-/// whatever reopening or reading refuses.
-fn read_descriptor(file: &Arc<OpenFile>) -> Result<Vec<u8>, Errno> {
+/// `EACCES` for anything but a regular file, as Linux answers, and for one
+/// `who` may not execute; `EFBIG` past [`DESCRIPTOR_READ_LIMIT`]; `ENOMEM` if
+/// the heap cannot hold it; and whatever reopening or reading refuses.
+fn read_descriptor(file: &Arc<OpenFile>, who: &Access) -> Result<Vec<u8>, Errno> {
     if file.kind() != FileType::Regular {
         return Err(Errno::EACCES);
     }
+    who.require(&file.inode().metadata(), MAY_EXEC)?;
     let reader = if file.readable() {
         Arc::clone(file)
     } else {

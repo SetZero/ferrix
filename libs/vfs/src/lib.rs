@@ -69,6 +69,7 @@
 
 extern crate alloc;
 
+pub mod access;
 mod dentry;
 pub mod dirent;
 pub mod fd;
@@ -86,6 +87,7 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
+pub use access::Access;
 pub use dentry::Dentry;
 pub use ferrix_linux_abi::errno::Errno;
 pub use file::{OpenFile, OpenFlags, Whence};

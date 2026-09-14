@@ -22,6 +22,7 @@ use alloc::vec::Vec;
 use ferrix_linux_abi::errno::Errno;
 
 use crate::Result;
+use crate::access::MAY_EXEC;
 use crate::dentry::Dentry;
 use crate::namespace::{Context, Location, Namespace};
 use crate::node::FileType;
@@ -200,6 +201,7 @@ impl Namespace {
 
         while let Some(step) = steps.next() {
             require_directory(&at.current)?;
+            require_search(ctx, &at.current)?;
             at.must_be_dir = step.must_be_dir;
             if let Some(target) = self.advance(ctx, &mut at, &step, follow_last)? {
                 steps.push(target, step.must_be_dir);
@@ -344,6 +346,13 @@ fn require_directory(at: &Location) -> Result<()> {
     } else {
         Err(Errno::ENOTDIR)
     }
+}
+
+/// `EACCES` unless the context may search the directory `at`: Linux's
+/// `may_lookup`, made before every component, `.` and `..` included.
+fn require_search(ctx: &Context, at: &Location) -> Result<()> {
+    let inode = at.dentry.inode().ok_or(Errno::ENOENT)?;
+    ctx.who.require(&inode.metadata(), MAY_EXEC)
 }
 
 /// `..` from `at`, which never climbs above `root`, nor above the top of the

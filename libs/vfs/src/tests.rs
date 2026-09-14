@@ -16,8 +16,8 @@ use crate::initramfs::{self, makedev};
 use crate::path::split_last;
 use crate::tmpfs::{HeapStorage, Tmpfs};
 use crate::{
-    Clock, Context, Errno, FileSystem, FileType, Namespace, OpenFile, OpenFlags, RenameMode,
-    Timespec, Whence,
+    Access, Clock, Context, Errno, FileSystem, FileType, Namespace, OpenFile, OpenFlags,
+    RenameMode, Timespec, Whence,
 };
 
 /// A clock that advances a second every time it is read.
@@ -657,6 +657,7 @@ fn a_working_directory_follows_its_directory_through_a_rename() {
     let here = Context {
         root: ctx.root.clone(),
         cwd,
+        who: ctx.who.clone(),
     };
     write_file(&ns, &here, "relative", b"r");
     assert_eq!(read_file(&ns, &ctx, "/renamed/b/relative").unwrap(), b"r");
@@ -798,8 +799,108 @@ fn dotdot_never_climbs_above_a_context_root() {
     let inside = Context {
         root: jail.clone(),
         cwd: jail,
+        who: ctx.who,
     };
     assert_eq!(read_file(&ns, &inside, "/../../secret").unwrap(), b"j");
+}
+
+// -- Permissions -------------------------------------------------------------
+
+fn as_user(ctx: &Context, uid: u32) -> Context {
+    Context {
+        who: Access::user(uid, uid),
+        ..ctx.clone()
+    }
+}
+
+#[test]
+fn a_user_cannot_read_write_or_search_what_the_mode_withholds() {
+    let (ns, root) = fresh();
+    write_file(&ns, &root, "/secret", b"s");
+    ns.mkdir(&root, None, b"/private", 0o700).unwrap();
+    write_file(&ns, &root, "/private/inside", b"i");
+    let user = as_user(&root, 1000);
+
+    assert_eq!(read_file(&ns, &user, "/secret").unwrap(), b"s");
+    assert_eq!(
+        ns.open(&user, None, b"/secret", &RW_CREATE, 0o644)
+            .unwrap_err(),
+        Errno::EACCES
+    );
+    assert_eq!(
+        read_file(&ns, &user, "/private/inside").unwrap_err(),
+        Errno::EACCES
+    );
+    assert_eq!(
+        ns.resolve(&user, None, b"/private/inside", true)
+            .unwrap_err(),
+        Errno::EACCES
+    );
+    assert_eq!(
+        ns.mkdir(&user, None, b"/mine", 0o755).unwrap_err(),
+        Errno::EACCES
+    );
+    assert_eq!(
+        ns.unlink(&user, None, b"/secret").unwrap_err(),
+        Errno::EACCES
+    );
+    assert_eq!(read_file(&ns, &root, "/private/inside").unwrap(), b"i");
+}
+
+#[test]
+fn a_sticky_directory_keeps_users_to_their_own_files() {
+    let (ns, root) = fresh();
+    ns.mkdir(&root, None, b"/tmp", 0o1777).unwrap();
+    let alice = as_user(&root, 1000);
+    let bob = as_user(&root, 1001);
+    write_file(&ns, &alice, "/tmp/alice", b"a");
+    let at = ns.resolve(&root, None, b"/tmp/alice", true).unwrap();
+    let made = ns.stat(&at).unwrap().metadata;
+    assert_eq!((made.uid, made.gid), (1000, 1000), "the creator owns it");
+
+    assert_eq!(
+        ns.unlink(&bob, None, b"/tmp/alice").unwrap_err(),
+        Errno::EPERM
+    );
+    assert_eq!(
+        ns.rename(
+            &bob,
+            (None, b"/tmp/alice"),
+            (None, b"/tmp/bob"),
+            RenameMode::Replace
+        )
+        .unwrap_err(),
+        Errno::EPERM
+    );
+    write_file(&ns, &alice, "/tmp/alice", b"again");
+    ns.unlink(&alice, None, b"/tmp/alice").unwrap();
+}
+
+#[test]
+fn moving_a_directory_to_another_parent_needs_write_on_it() {
+    let (ns, root) = fresh();
+    ns.mkdir(&root, None, b"/tmp", 0o1777).unwrap();
+    let user = as_user(&root, 1000);
+    ns.mkdir(&user, None, b"/tmp/a", 0o755).unwrap();
+    ns.mkdir(&user, None, b"/tmp/a/sub", 0o555).unwrap();
+    ns.mkdir(&user, None, b"/tmp/b", 0o755).unwrap();
+    assert_eq!(
+        ns.rename(
+            &user,
+            (None, b"/tmp/a/sub"),
+            (None, b"/tmp/b/sub"),
+            RenameMode::Replace
+        )
+        .unwrap_err(),
+        Errno::EACCES
+    );
+    ns.rename(
+        &user,
+        (None, b"/tmp/a/sub"),
+        (None, b"/tmp/a/renamed"),
+        RenameMode::Replace,
+    )
+    .unwrap();
 }
 
 // -- Descriptor tables -------------------------------------------------------

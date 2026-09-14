@@ -42,6 +42,7 @@ use ferrix_linux_abi::types::{
     RENAME_NOREPLACE, RENAME_WHITEOUT, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFMT, S_IFREG,
     S_IFSOCK, UTIME_NOW, UTIME_OMIT,
 };
+use ferrix_vfs::access::{Access, MAY_EXEC};
 use ferrix_vfs::initramfs::makedev;
 use ferrix_vfs::{
     Context, FileType, Location, NewNode, OpenFile, RenameMode, SetAttributes, Stat, Timespec,
@@ -157,9 +158,16 @@ fn word(value: u64) -> u32 {
 // Names, and where they start
 // ---------------------------------------------------------------------------
 
-/// The process's root and working directory, copied out of their lock.
+/// The process's root and working directory, copied out of their lock, and
+/// the identity its permission checks are made as: its filesystem ids.
 pub(crate) fn context(process: &Process) -> Context {
-    process.fs_context().lock().clone()
+    let mut ctx = process.fs_context().lock().clone();
+    ctx.who = process.with_credentials(|credentials| Access {
+        uid: credentials.user.filesystem,
+        gid: credentials.group.filesystem,
+        groups: credentials.groups.clone(),
+    });
+    ctx
 }
 
 /// A path a call is about to act on, and what it is relative to.
@@ -187,15 +195,16 @@ fn named_at(process: &Process, dirfd: i32, at: u64) -> Result<Named, Errno> {
 /// an empty path with a bad descriptor is `ENOENT` as on Linux and not
 /// `EBADF`.
 fn named(process: &Process, dirfd: i32, path: Vec<u8>) -> Result<Named, Errno> {
+    named_in(process, context(process), dirfd, path)
+}
+
+/// [`named`], walked with `ctx` rather than the process's own context.
+fn named_in(process: &Process, ctx: Context, dirfd: i32, path: Vec<u8>) -> Result<Named, Errno> {
     if path.is_empty() {
         return Err(Errno::ENOENT);
     }
     let start = fd::start_for(process, dirfd, &path)?;
-    Ok(Named {
-        ctx: context(process),
-        start,
-        path,
-    })
+    Ok(Named { ctx, start, path })
 }
 
 /// What a call that describes or changes a file is about.
@@ -236,6 +245,18 @@ impl Target {
 /// `AT_SYMLINK_NOFOLLOW` decides whether a link in last position is followed;
 /// every other flag is the caller's to have checked.
 pub(crate) fn target(process: &Process, dirfd: i32, at: u64, flags: u32) -> Result<Target, Errno> {
+    target_in(process, context(process), dirfd, at, flags)
+}
+
+/// [`target`], walked as `ctx` says rather than as the process's own
+/// context: `faccessat` walks as the real ids.
+pub(crate) fn target_in(
+    process: &Process,
+    ctx: Context,
+    dirfd: i32,
+    at: u64,
+    flags: u32,
+) -> Result<Target, Errno> {
     let empty_allowed = flags & AT_EMPTY_PATH != 0;
     let path = if empty_allowed && at == 0 {
         Vec::new()
@@ -244,11 +265,11 @@ pub(crate) fn target(process: &Process, dirfd: i32, at: u64, flags: u32) -> Resu
     };
     if path.is_empty() && empty_allowed {
         if dirfd == AT_FDCWD {
-            return Ok(Target::At(context(process).cwd));
+            return Ok(Target::At(ctx.cwd));
         }
         return open_file(process, dirfd).map(Target::Open);
     }
-    let named = named(process, dirfd, path)?;
+    let named = named_in(process, ctx, dirfd, path)?;
     let follow = flags & AT_SYMLINK_NOFOLLOW == 0;
     fs::namespace()
         .resolve(&named.ctx, named.start(), &named.path, follow)
@@ -457,20 +478,23 @@ fn link_of_descriptor(process: &Process, dirfd: i32) -> Result<Vec<u8>, Errno> {
 fn sys_chdir(process: &Process, at: u64) -> Result<usize, Errno> {
     let named = named_at(process, AT_FDCWD, at)?;
     let place = fs::namespace().resolve(&named.ctx, named.start(), &named.path, true)?;
-    set_cwd(process, place)
+    set_cwd(process, &named.ctx.who, place)
 }
 
 /// `fchdir`.
 fn sys_fchdir(process: &Process, fd: i32) -> Result<usize, Errno> {
     let file = open_file(process, fd)?;
-    set_cwd(process, file.location().clone())
+    set_cwd(process, &context(process).who, file.location().clone())
 }
 
-/// Make `place` the working directory, if it is a directory.
-fn set_cwd(process: &Process, place: Location) -> Result<usize, Errno> {
-    if place.inode()?.metadata().kind != FileType::Directory {
+/// Make `place` the working directory, if it is a directory `who` may
+/// search.
+fn set_cwd(process: &Process, who: &Access, place: Location) -> Result<usize, Errno> {
+    let metadata = place.inode()?.metadata();
+    if metadata.kind != FileType::Directory {
         return Err(Errno::ENOTDIR);
     }
+    who.require(&metadata, MAY_EXEC)?;
     let old = core::mem::replace(&mut process.fs_context().lock().cwd, place);
     // Dropped with the lock released: the last reference to a location may
     // release a chain of parent dentries, and that chain is unbounded.
@@ -503,9 +527,12 @@ pub(crate) fn sys_getcwd(process: &Process, buf: u64, size: u64) -> Result<usize
 // Attributes
 // ---------------------------------------------------------------------------
 
-/// Apply `change` to what `target` names.
-fn set(target: &Target, change: &SetAttributes) -> Result<usize, Errno> {
-    fs::namespace().set_attributes(target.location(), change)?;
+/// Apply `change` to what `target` names, as the caller may make it: the
+/// rules `chmod` and `chown` follow, from `Access::check_change`.
+fn set(process: &Process, target: &Target, change: &SetAttributes) -> Result<usize, Errno> {
+    let metadata = target.stat()?.metadata;
+    let change = context(process).who.check_change(&metadata, change)?;
+    fs::namespace().set_attributes(target.location(), &change)?;
     Ok(0)
 }
 
@@ -530,12 +557,12 @@ fn permissions(mode: u32) -> SetAttributes {
 /// `fchmodat` and `chmod`. Always follows a link in last position: the
 /// system call has no flags argument, whatever the C library's has.
 fn sys_fchmodat(process: &Process, dirfd: i32, at: u64, mode: u32) -> Result<usize, Errno> {
-    set(&target(process, dirfd, at, 0)?, &permissions(mode))
+    set(process, &target(process, dirfd, at, 0)?, &permissions(mode))
 }
 
 /// `fchmod`.
 fn sys_fchmod(process: &Process, fd: i32, mode: u32) -> Result<usize, Errno> {
-    set(&open_for_change(process, fd)?, &permissions(mode))
+    set(process, &open_for_change(process, fd)?, &permissions(mode))
 }
 
 /// `chown`'s change. An identifier of `-1` leaves that one alone.
@@ -550,8 +577,8 @@ fn owner((uid, gid): (u64, u64)) -> SetAttributes {
 
 /// `fchownat`, `chown` and `lchown`.
 ///
-/// The owner is stored and reported, and changes nothing else: there are no
-/// credentials yet for it to be checked against.
+/// Only a privileged caller may give a file away; its owner may change its
+/// group to one of the owner's own groups.
 fn sys_fchownat(
     process: &Process,
     dirfd: i32,
@@ -562,12 +589,12 @@ fn sys_fchownat(
     if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
         return Err(Errno::EINVAL);
     }
-    set(&target(process, dirfd, at, flags)?, &owner(ids))
+    set(process, &target(process, dirfd, at, flags)?, &owner(ids))
 }
 
 /// `fchown`.
 fn sys_fchown(process: &Process, fd: i32, ids: (u64, u64)) -> Result<usize, Errno> {
-    set(&open_for_change(process, fd)?, &owner(ids))
+    set(process, &open_for_change(process, fd)?, &owner(ids))
 }
 
 /// `utimensat` and `utimensat_time64`.
@@ -585,7 +612,7 @@ fn sys_utimensat(
     flags: u32,
     width: TimeWidth,
 ) -> Result<usize, Errno> {
-    let [atime, mtime] = read_times(process, times, width)?;
+    let ([atime, mtime], given) = read_times(process, times, width)?;
     if atime.is_none() && mtime.is_none() {
         return Ok(0);
     }
@@ -603,15 +630,20 @@ fn sys_utimensat(
     } else {
         target(process, dirfd, at, flags)?
     };
+    context(process)
+        .who
+        .may_set_times(&target.stat()?.metadata, given)?;
     let change = SetAttributes {
         atime,
         mtime,
         ..SetAttributes::default()
     };
-    set(&target, &change)
+    set(process, &target, &change)
 }
 
-/// The two times `utimensat` was given, `None` for one to leave alone.
+/// The two times `utimensat` was given, `None` for one to leave alone, and
+/// whether either was a value rather than `UTIME_NOW` -- which decides
+/// whether setting them needs ownership or only write permission.
 ///
 /// Two `timespec`s of two fields each, and the fields are `long`s for the
 /// native call — four bytes on ARMv7-A — and 64 bits for the `time64` one.
@@ -621,10 +653,10 @@ fn read_times(
     process: &Process,
     at: u64,
     width: TimeWidth,
-) -> Result<[Option<Timespec>; 2], Errno> {
+) -> Result<([Option<Timespec>; 2], bool), Errno> {
     let now = fs::clock().now();
     if at == 0 {
-        return Ok([Some(now), Some(now)]);
+        return Ok(([Some(now), Some(now)], false));
     }
     let field = match width {
         TimeWidth::Native => size_of::<usize>(),
@@ -635,17 +667,21 @@ fn read_times(
     uaccess::copy_from_user(process.space(), at, raw).map_err(|_| Errno::EFAULT)?;
 
     let mut times = [None, None];
+    let mut given = false;
     for (index, slot) in times.iter_mut().enumerate() {
         let tv_sec = signed_field(raw, index * 2 * field, field)?;
         let tv_nsec = signed_field(raw, (index * 2 + 1) * field, field)?;
         *slot = match tv_nsec {
             UTIME_NOW => Some(now),
             UTIME_OMIT => None,
-            0..=999_999_999 => Some(Timespec { tv_sec, tv_nsec }),
+            0..=999_999_999 => {
+                given = true;
+                Some(Timespec { tv_sec, tv_nsec })
+            }
             _ => return Err(Errno::EINVAL),
         };
     }
-    Ok(times)
+    Ok((times, given))
 }
 
 /// A signed little-endian field of four or eight bytes, sign-extended.
