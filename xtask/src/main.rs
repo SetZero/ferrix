@@ -54,6 +54,7 @@ mod shell;
 mod symbolize;
 mod test_disk;
 mod vfs;
+mod zinc;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -240,7 +241,7 @@ fn test_vfs(args: &Args) -> Result<()> {
         vfs::write_if_changed(&list, &commands)?;
         let kernel = cargo::build_kernel_with_commands(arch, args.release, &list)?;
         let natives = native::build(arch, args.release)?;
-        let initramfs = initramfs::build(Some(&program), &natives)?;
+        let initramfs = initramfs::build(Some(&program), &natives, None)?;
         let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
         if let Err(error) = qemu::test_vfs(arch, &image, &kernel, args) {
             eprintln!("\n  {error}");
@@ -284,7 +285,8 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     };
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
-    let initramfs = initramfs::build(Some(&program), &natives)?;
+    let shell = zinc::build(arch)?;
+    let initramfs = initramfs::build(Some(&program), &natives, shell.as_deref())?;
     let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, image_cmdline(args))?;
     Ok((image, kernel))
 }
@@ -300,11 +302,13 @@ fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u
     let natives = native::build(arch, args.release)?;
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
-        return Ok((loader, kernel, initramfs::build(None, &natives)?));
+        return Ok((loader, kernel, initramfs::build(None, &natives, None)?));
     };
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
-    Ok((loader, kernel, initramfs::build(Some(&program), &natives)?))
+    let shell = zinc::build(arch)?;
+    let initramfs = initramfs::build(Some(&program), &natives, shell.as_deref())?;
+    Ok((loader, kernel, initramfs))
 }
 
 /// The program `init` names for `arch`, with `{arch}` replaced by its name,

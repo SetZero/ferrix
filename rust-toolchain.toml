@@ -26,4 +26,8 @@ targets = [
     # ferrousli, the C library, when it is built on a host that is not Linux:
     # `ferrousli/tools/busybox/build-windows.sh` cross-builds it on Windows.
     "x86_64-unknown-linux-gnu",
+    # zinc, the zsh-compatible shell in `zinc/`: a static std program for the
+    # initramfs, linked by rust-lld against the target's own musl.
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
 ]

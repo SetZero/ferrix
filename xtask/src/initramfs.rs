@@ -199,20 +199,38 @@ pub(crate) const APPLETS: &[&str] = &[
     "whoami", "whois", "xargs", "xxd", "xz", "xzcat", "yes", "zcat", "zcip",
 ];
 
+/// Where zinc, the zsh-compatible shell, goes beside a program.
+pub(crate) const ZINC_PATH: &str = "bin/zinc";
+
 /// The archive every image carries: the tree's native programs in `/sbin`,
-/// and `program` at `/bin/busybox` when one is given.
-pub(crate) fn build(program: Option<&Path>, natives: &[native::Built]) -> Result<Vec<u8>> {
+/// and `program` at `/bin/busybox` when one is given, with `zinc` at
+/// `/bin/zinc` and `/bin/zsh` beside it when that is given too.
+pub(crate) fn build(
+    program: Option<&Path>,
+    natives: &[native::Built],
+    zinc: Option<&[u8]>,
+) -> Result<Vec<u8>> {
     let program = program
         .map(|path| {
             std::fs::read(path)
                 .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
         })
         .transpose()?;
-    build_with(program.as_deref(), natives)
+    build_with_shell(program.as_deref(), natives, zinc)
+}
+
+/// [`build`], with the program's bytes rather than its path and no zinc.
+#[cfg(test)]
+fn build_with(program: Option<&[u8]>, natives: &[native::Built]) -> Result<Vec<u8>> {
+    build_with_shell(program, natives, None)
 }
 
 /// [`build`], with the program's bytes rather than its path.
-fn build_with(program: Option<&[u8]>, natives: &[native::Built]) -> Result<Vec<u8>> {
+fn build_with_shell(
+    program: Option<&[u8]>,
+    natives: &[native::Built],
+    zinc: Option<&[u8]>,
+) -> Result<Vec<u8>> {
     let mut archive = Newc::new();
     archive.directory(".", 0o755)?;
     for (name, permissions) in [
@@ -258,6 +276,12 @@ fn build_with(program: Option<&[u8]>, natives: &[native::Built]) -> Result<Vec<u
         for applet in APPLETS {
             archive.symlink(&format!("bin/{applet}"), "busybox")?;
         }
+        // Only beside a program too: zinc is a shell a person starts from
+        // the busybox one, and the boot check's archive stays the same bytes.
+        if let Some(zinc) = zinc {
+            archive.file(ZINC_PATH, 0o755, zinc)?;
+            archive.symlink("bin/zsh", "zinc")?;
+        }
     }
     archive.finish()
 }
@@ -268,7 +292,10 @@ mod tests {
 
     #[test]
     fn the_archive_is_the_same_bytes_every_time() {
-        assert_eq!(build(None, &[]).unwrap(), build(None, &[]).unwrap());
+        assert_eq!(
+            build(None, &[], None).unwrap(),
+            build(None, &[], None).unwrap()
+        );
         let program: &[u8] = b"\x7fELF not really";
         assert_eq!(
             build_with(Some(program), &[]).unwrap(),
@@ -305,8 +332,29 @@ mod tests {
     }
 
     #[test]
+    fn zinc_goes_in_bin_as_zinc_and_zsh_only_beside_a_program() {
+        let with = build_with_shell(Some(b"program"), &[], Some(b"shell")).unwrap();
+        let without = build_with_shell(None, &[], Some(b"shell")).unwrap();
+        assert!(
+            with.windows(ZINC_PATH.len())
+                .any(|w| w == ZINC_PATH.as_bytes()),
+            "bin/zinc is in the archive beside a program"
+        );
+        assert!(
+            with.windows(b"bin/zsh".len()).any(|w| w == b"bin/zsh"),
+            "bin/zsh links to it"
+        );
+        assert!(
+            !without
+                .windows(ZINC_PATH.len())
+                .any(|w| w == ZINC_PATH.as_bytes()),
+            "without a program the archive is the one the boot check reads"
+        );
+    }
+
+    #[test]
     fn without_a_program_bin_is_empty() {
-        let bytes = build(None, &[]).unwrap();
+        let bytes = build(None, &[], None).unwrap();
         let archive = ferrix_cpio::Archive::new(&bytes);
         assert!(archive.find(PROGRAM_PATH).unwrap().is_none());
         assert!(
@@ -333,7 +381,7 @@ mod tests {
             "its directory is made"
         );
         assert!(
-            build(None, &[])
+            build(None, &[], None)
                 .unwrap()
                 .windows(4)
                 .all(|window| window != b"sbin"),
@@ -367,7 +415,7 @@ mod tests {
 
     #[test]
     fn the_archive_reads_back_with_the_kernels_own_reader() {
-        let bytes = build(None, &[]).unwrap();
+        let bytes = build(None, &[], None).unwrap();
         let archive = ferrix_cpio::Archive::new(&bytes);
         let names: Vec<&str> = archive.entries().map(|entry| entry.unwrap().name).collect();
         assert_eq!(names.first(), Some(&"."));

@@ -178,6 +178,17 @@ back; `test-vfs` runs the file system's commands and applets the same way.
 replaced by each architecture's name; that is how the gates give it the musl
 and glibc builds they check alongside.
 
+### zinc, a zsh-compatible shell
+
+`build` and `run` with a program also put [zinc](zinc/README.md) in the
+initramfs, at `/bin/zinc` with `/bin/zsh` beside it: a zsh-compatible shell
+written in Rust, whose goal is to run oh-my-zsh. Type `zsh` at the busybox
+prompt. It is built for x86-64 and AArch64 by `cargo` alone, against the
+target's own musl and linked by rust-lld, so Windows needs nothing else.
+
+`cargo xtask test-shell --arch x86_64 --init target/zinc/x86_64-unknown-linux-musl/release/zinc`
+runs stage 7's script with zinc as the first program instead of busybox.
+
 ### On an STM32MP157-DK1 board
 
 The same ARMv7-A image boots the STM32MP157D-DK1 from its SD card, under

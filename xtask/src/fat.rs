@@ -472,7 +472,7 @@ pub(crate) fn write_image(
         arch,
         loader,
         kernel,
-        &crate::initramfs::build(None, natives)?,
+        &crate::initramfs::build(None, natives, None)?,
         cmdline,
     )
 }
