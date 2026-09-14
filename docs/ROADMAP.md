@@ -1541,12 +1541,28 @@ committed. The filesystem tells the store the file's length, after an extend
 and before a cut, and a fault reads that bound under the VMO's lock. A touch
 past the end is `SIGBUS` from user mode and `EFAULT` from a system call.
 `msync` checks what Linux checks and writes nothing back, because the pages
-are the file's and nothing here has a disk to flush. A private file mapping is
-still `ENODEV`, until it can copy on write into an object of its own. The boot
-check maps a file under `/tmp` from a process of its own, twice:
+are the file's and nothing here has a disk to flush.
+
+**Done — a file mapped privately.** A private mapping of a file shows the
+file's pages until it writes one, and that write copies the page into a shadow
+object of the mapping's own. So neither the file nor any other mapping sees
+it: not a write through the mapping, not a `read` into it, and not a write by
+a `fork` child, which inherits the copies and copies again on its own write. A
+write to the file still shows through the pages the mapping has not copied.
+The region names both objects by one id, the file's VMO attached shared and
+the shadow attached privately, so a file's VMO still has only shared mappers.
+Every fault checks the file's end first, so a copied page past a cut is
+`SIGBUS` too. A truncation takes the copies past the cut, so a file grown back
+shows zeros through the mapping, as on Linux. `munmap` gives back the shadow's
+pages and never the file's. A writable private mapping of a file opened
+read-only maps, as Linux allows. No mappable object is filled from a page
+source yet, and one that is must give the fault a way to fill a page before
+it is copied. The boot check maps a file under `/tmp` from a process of its
+own, shared and private side by side, twice. It also has a program in user
+mode write a page of a private mapping it has only read:
 
 ```
-  mmap     12339 bytes written through a shared file mapping and read back from the file, and the other way; refusals, msync and /proc maps answered; a truncation took 3 pages away from the mapping; 0 frames leaked
+  mmap     12339 bytes written through a shared file mapping and read back from the file, and the other way; refusals, msync and /proc maps answered; a truncation took 3 pages away from the mapping; 2 pages copied into a private mapping and kept from the file, a fork and a user-mode write included; 0 frames leaked
 ```
 
 **The exit test, and how far it gets.** `cargo xtask test-vfs --init PATH`
