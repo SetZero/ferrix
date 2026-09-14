@@ -766,6 +766,28 @@ pub(crate) static STAGE11_MOUNT: Explanation = Explanation {
           xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11",
 };
 
+/// For `check_devmgr` in `main.rs`, when `devmgr::start` fails.
+pub(crate) static STAGE10_DEVMGR: Explanation = Explanation {
+    code: "FX-1006",
+    title: "devmgr could not be started, or did not report",
+    meaning: "The kernel starts `/sbin/devmgr` from the initramfs with a bootstrap channel \
+              holding one DEVICES message (a job, every device node twice, and every driver \
+              image `/lib/drivers/MANIFEST` names, as VMOs the kernel filled), then waits for \
+              devmgr's REPORT of what it started (`docs/DEVMGR.md`). devmgr matches devices to \
+              drivers, makes each driver's ring, starts it with START, and quiesces a device \
+              whose driver died. The boot's block drivers come from it from then on.",
+    causes: &[
+        "A driver the manifest names is not in the image, or its image does not fit a VMO: \
+         `xtask/src/native.rs` and the initramfs disagree.",
+        "`/sbin/devmgr` does not load as a native program, or could not be claimed to start.",
+        "devmgr exited before reporting: its exit status names the step (see `user/devmgr`).",
+        "devmgr reported nothing within twenty seconds: a driver did not bring its device up, \
+         or the kernel never sent PUBLISHED for a disk it accepted.",
+    ],
+    see: "kernel/src/devmgr.rs; user/devmgr/src/main.rs; docs/DEVMGR.md; docs/ROADMAP.md \
+          stage 10",
+};
+
 /// For `check_driver` in `main.rs`, when `block_ring::driver_check::run`
 /// fails.
 pub(crate) static STAGE10_DRIVER: Explanation = Explanation {
@@ -1358,6 +1380,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE10_IOMMU,
     &STAGE10_RING,
     &STAGE10_DRIVER,
+    &STAGE10_DEVMGR,
     &STAGE11_MOUNT,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,

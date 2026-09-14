@@ -62,6 +62,12 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
                     watched.log.display()
                 )));
             }
+            if let Some(problem) = devmgr_problem(&watched.lines) {
+                return Err(Error::new(format!(
+                    "{arch}: {problem}.\n  Serial output is in {}",
+                    watched.log.display()
+                )));
+            }
             if let Some(problem) = iommu_problem(&watched.lines) {
                 return Err(Error::new(format!(
                     "{arch}: {problem}.\n  Serial output is in {}",
@@ -169,6 +175,35 @@ fn iommu_problem(lines: &[String]) -> Option<String> {
 /// What stage 10's PCI check prints after the number of writes outside a
 /// translated domain that its unit faulted.
 const FAULTED: &str = " out-of-domain writes faulted";
+
+/// What stage 10's devmgr line ends with.
+const DEVMGR_FAILED: &str = " failed";
+
+/// Why a boot whose image carries `devmgr` failed to start its drivers, if
+/// it did: the devmgr line must say at least one started and none failed.
+/// Every machine this tool boots has a virtio-blk disk for it. An image
+/// without `devmgr` prints that it was not started, which is not a failure.
+fn devmgr_problem(lines: &[String]) -> Option<String> {
+    let Some(line) = lines.iter().find(|line| line.contains("  devmgr   ")) else {
+        return Some("the kernel never reported on devmgr".to_owned());
+    };
+    if line.contains("not started") {
+        return None;
+    }
+    let started = line
+        .split(" started")
+        .next()
+        .and_then(|before| before.rsplit(' ').next())
+        .and_then(|count| count.parse::<u32>().ok());
+    let failed = count_before(line, DEVMGR_FAILED);
+    match (started, failed) {
+        (Some(started), Some(0)) if started > 0 => None,
+        _ => Some(format!(
+            "devmgr started no driver, or one failed: `{}`",
+            line.trim()
+        )),
+    }
+}
 
 /// Why a boot on a machine whose IOMMU translates still failed the stage 10
 /// exit criterion's out-of-domain check, if it did.
@@ -907,10 +942,24 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 
 #[cfg(test)]
 mod tests {
-    use super::{Arch, entropy_problem, fault_problem, iommu_problem};
+    use super::{Arch, devmgr_problem, entropy_problem, fault_problem, iommu_problem};
 
     fn lines(text: &[&str]) -> Vec<String> {
         text.iter().map(|line| (*line).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_devmgr_line_must_say_one_started_and_none_failed() {
+        let good = lines(&["  devmgr   8 devices, 1 drivers, 2 started, 0 failed"]);
+        assert_eq!(devmgr_problem(&good), None, "two started");
+        let none = lines(&["  devmgr   8 devices, 1 drivers, 0 started, 0 failed"]);
+        assert!(devmgr_problem(&none).is_some(), "nothing started");
+        let failed = lines(&["  devmgr   8 devices, 1 drivers, 1 started, 1 failed"]);
+        assert!(devmgr_problem(&failed).is_some(), "one failed");
+        let absent = lines(&["  devmgr   not started: the image carries no /sbin/devmgr"]);
+        assert_eq!(devmgr_problem(&absent), None, "an image without devmgr");
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-11"]);
+        assert!(devmgr_problem(&silent).is_some(), "no line at all");
     }
 
     #[test]

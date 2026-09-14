@@ -35,6 +35,9 @@ pub(crate) struct Program {
     pub(crate) package: &'static str,
     /// Its binary, which is also its name in the initramfs.
     pub(crate) binary: &'static str,
+    /// The initramfs directory it goes in: [`DIRECTORY`] for system programs,
+    /// [`DRIVERS`] for the drivers `devmgr` starts.
+    pub(crate) directory: &'static str,
 }
 
 /// Every native program the initramfs carries.
@@ -42,12 +45,26 @@ pub(crate) const PROGRAMS: &[Program] = &[
     Program {
         package: "ferrix-channel-echo",
         binary: "channel-echo",
+        directory: DIRECTORY,
+    },
+    Program {
+        package: "ferrix-devmgr",
+        binary: "devmgr",
+        directory: DIRECTORY,
     },
     Program {
         package: "ferrix-blk",
         binary: "blk",
+        directory: DRIVERS,
     },
 ];
+
+/// Where drivers are unpacked, relative to the root, with a `MANIFEST`
+/// listing them one per line: what the kernel hands `devmgr`
+/// (`docs/DEVMGR.md` §2).
+pub(crate) const DRIVERS: &str = "lib/drivers";
+/// The manifest's name in [`DRIVERS`].
+pub(crate) const MANIFEST: &str = "MANIFEST";
 
 /// Where native programs are unpacked, relative to the root: system programs,
 /// off the shell's `PATH=/bin`.
@@ -56,8 +73,10 @@ pub(crate) const DIRECTORY: &str = "sbin";
 /// A native program, built and checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Built {
-    /// Its name in [`DIRECTORY`].
+    /// Its name in its directory.
     pub(crate) name: &'static str,
+    /// Its directory, relative to the root.
+    pub(crate) directory: &'static str,
     /// The ELF image.
     pub(crate) bytes: Vec<u8>,
 }
@@ -84,6 +103,7 @@ pub(crate) fn build_in(arch: Arch, release: bool, target_dir: &Path) -> Result<V
             })?;
             Ok(Built {
                 name: program.binary,
+                directory: program.directory,
                 bytes,
             })
         })

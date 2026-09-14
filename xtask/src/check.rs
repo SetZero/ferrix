@@ -189,7 +189,12 @@ pub(crate) fn model_doc() -> Result<()> {
 
 /// The native runtime and the programs built on it: freestanding, so linted
 /// once per kernel target rather than for the host.
-const NATIVE: &[&str] = &["ferrix-rt", "ferrix-channel-echo", "ferrix-blk"];
+const NATIVE: &[&str] = &[
+    "ferrix-rt",
+    "ferrix-channel-echo",
+    "ferrix-blk",
+    "ferrix-devmgr",
+];
 
 /// Every workspace member the host cannot build: the loader, the kernel, and
 /// [`NATIVE`].
@@ -199,6 +204,7 @@ const FREESTANDING: &[&str] = &[
     "ferrix-rt",
     "ferrix-channel-echo",
     "ferrix-blk",
+    "ferrix-devmgr",
 ];
 
 /// The crates CI's Miri job interprets, in its order.

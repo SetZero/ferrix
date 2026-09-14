@@ -10,6 +10,7 @@ members = [
     "libs/block",
     "libs/blkring",
     "libs/blkserve",
+    "libs/devmgr-proto",
     "libs/bootinfo",
     "libs/elf",
     "libs/fbtext",
@@ -49,6 +50,7 @@ members = [
     "user/rt",
     "user/channel-echo",
     "user/blk",
+    "user/devmgr",
 
     # Host-side build and test driver (`cargo xtask ...`).
     "xtask",
@@ -70,6 +72,7 @@ ferrix-acpi = { path = "libs/acpi" }
 ferrix-block = { path = "libs/block" }
 ferrix-blkring = { path = "libs/blkring" }
 ferrix-blkserve = { path = "libs/blkserve" }
+ferrix-devmgr-proto = { path = "libs/devmgr-proto" }
 ferrix-bootinfo = { path = "libs/bootinfo" }
 ferrix-elf = { path = "libs/elf" }
 ferrix-fbtext = { path = "libs/fbtext" }

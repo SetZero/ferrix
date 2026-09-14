@@ -69,12 +69,15 @@ forbid() {
         return 0
     fi
 
-    # Word-anchored, and it matters: `ferrix-boot` is a prefix of
-    # `ferrix-bootinfo`, so an unanchored match reports every crate that depends
-    # on the hand-off ABI as depending on the loader. `-` is not a word
-    # character to grep, so `\b` lands exactly between `boot` and `info`.
+    # Anchored on the whole name, and it matters: `ferrix-boot` is a prefix of
+    # `ferrix-bootinfo` and `ferrix-devmgr` of `ferrix-devmgr-proto`, so a
+    # looser match reports a crate that depends on the ABI as depending on the
+    # program. `cargo tree --prefix none` starts every line with the package
+    # name and follows it with a space, so that is the anchor; a word boundary
+    # would land between `devmgr` and `-proto`, since `-` is not a word
+    # character to grep.
     local offenders
-    offenders=$(echo "$deps" | grep -oE "\\b(${forbidden})\\b" | sort -u || true)
+    offenders=$(echo "$deps" | grep -oE "^(${forbidden}) " | sed 's/ $//' | sort -u || true)
     if [[ -n "$offenders" ]]; then
         echo "LAYERING VIOLATION: $crate ($role) links a crate it must not:" >&2
         echo "$offenders" | sed 's/^/    /' >&2

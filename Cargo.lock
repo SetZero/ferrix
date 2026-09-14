@@ -106,6 +106,20 @@ name = "ferrix-cpio"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-devmgr"
+version = "0.1.0"
+dependencies = [
+ "ferrix-blkring",
+ "ferrix-devmgr-proto",
+ "ferrix-native-abi",
+ "ferrix-rt",
+]
+
+[[package]]
+name = "ferrix-devmgr-proto"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-elf"
 version = "0.1.0"
 
@@ -135,6 +149,7 @@ dependencies = [
  "ferrix-bootinfo",
  "ferrix-btrfs",
  "ferrix-btrfs-vfs",
+ "ferrix-devmgr-proto",
  "ferrix-elf",
  "ferrix-fbtext",
  "ferrix-fdt",

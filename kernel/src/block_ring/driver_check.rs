@@ -54,7 +54,7 @@ const VIRTIO_VENDOR: u16 = 0x1AF4;
 const VIRTIO_BLK_IDS: [u16; 2] = [0x1042, 0x1001];
 
 /// The driver, as the initramfs carries it.
-const PROGRAM: &[u8] = b"/sbin/blk";
+const PROGRAM: &[u8] = b"/lib/drivers/blk";
 
 /// What the child is listed as.
 const NAME: &[u8] = b"blk";
@@ -118,7 +118,7 @@ pub(crate) struct Report {
 /// # Errors
 ///
 /// What did not happen, as a sentence.
-pub(crate) fn run() -> Result<Report, &'static str> {
+pub(crate) fn run(started_by_devmgr: bool) -> Result<Report, &'static str> {
     let nodes: Vec<Arc<device::DeviceNode>> = device::devices()
         .iter()
         .filter(|node| {
@@ -137,6 +137,26 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         });
     }
 
+    if started_by_devmgr {
+        // devmgr started the drivers: only the disks are checked here.
+        let mut first = None;
+        for index in 0..nodes.len() {
+            let rdev = makedev(VIRTIO_BLK_MAJOR, u32::try_from(index).unwrap_or(0) * 16);
+            let disk = published_by_devmgr(rdev)?;
+            if first.is_none() {
+                first = Some(disk);
+            }
+        }
+        let disk = first.ok_or("no disk was published")?;
+        let read = read_back(disk.as_ref())?;
+        return Ok(Report {
+            names: names_str(nodes.len()),
+            sectors: disk.sectors(),
+            read,
+            skipped: None,
+        });
+    }
+
     let side = Side::new()?;
     let _ = side
         .process
@@ -144,7 +164,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         .map_anonymous(STAGE, PAGE_SIZE, VmaFlags::READ_WRITE)
         .map_err(|_| "could not map the starter's staging region")?;
     let file = fs::read_file(&fs::namespace().context(), None, PROGRAM)
-        .map_err(|_| "the initramfs carries no /sbin/blk")?;
+        .map_err(|_| "the initramfs carries no /lib/drivers/blk")?;
     let image = image_vmo(&side, &file)?;
     let job = side
         .process
@@ -313,6 +333,20 @@ fn published(side: &Side, child: Handle, rdev: u64) -> Result<Arc<dyn BlockDevic
         }
         if timer::now_nanos() >= deadline {
             return Err("the driver published no disk within the patience");
+        }
+        sched::sleep_for(2_000_000);
+    }
+}
+
+/// The disk `devmgr`'s driver published, or why not within the patience.
+fn published_by_devmgr(rdev: u64) -> Result<Arc<dyn BlockDevice>, &'static str> {
+    let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    loop {
+        if let Some(disk) = fs::devfs::block_device(rdev) {
+            return Ok(disk);
+        }
+        if timer::now_nanos() >= deadline {
+            return Err("a disk devmgr reported started is not in the registry");
         }
         sched::sleep_for(2_000_000);
     }

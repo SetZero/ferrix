@@ -561,6 +561,7 @@ fn take_up<'s>(
     // Served from before READY goes out, not after: the driver may act on
     // READY, and devmgr may ask after the device, the instant it is sent.
     set_served(start.id, Some((start.location, Arc::clone(&start.control))));
+    crate::devmgr::published(start.location);
     let ready = Message::Ready.encode().as_bytes().to_vec();
     let handed = (Object::Port(Arc::clone(&kernel_port)), Rights::WRITE);
     if start

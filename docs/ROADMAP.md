@@ -2496,27 +2496,33 @@ through the block ring; 21 sectors read back through the registry as xtask
 wrote them`, on x86-64 through VT-d, on AArch64 through the `SMMUv3`, and on
 ARMv7-A in degraded trusted mode, at four processors and at two.
 
-**Still to do, after the exit.** Stage 11 has its driver; what is left of
-stage 10 is what makes that a system rather than a check.
+**Done — `devmgr`, the program.** `/sbin/devmgr` on the native runtime is
+what `docs/DEVMGR.md` says: started by the kernel after the boot checks with
+a bootstrap channel already holding DEVICES — a job, every device node
+twice, and every driver image the initramfs lists in `/lib/drivers/MANIFEST`,
+read by the kernel into anonymous VMOs, since a native program reads no
+files — it asks `device_info` of each device, matches virtio-blk by a table
+of its own, makes the ring, starts `blk` from the image in a job of its own
+with START, and waits for the kernel's PUBLISHED before the next, so disks
+register in PCI order and no two drivers race to be `vda`; then it REPORTs,
+the kernel prints the line and `xtask` requires it, and from then on a
+driver's death reaches `devmgr`'s port, which quiesces the device (retrying
+a `TIMED_OUT`, never a `BAD_STATE`) and tells the kernel DIED. A channel
+message carries 64 handles and ARMv7-A publishes 36 device nodes, so the
+kernel sends DEVICES in as many messages as the handles need, each saying how
+many devices are still to come. The boot check's own starter now runs only
+when the image carries no `devmgr`; with it, the driver check reads through
+the disks `devmgr`'s drivers serve. `libs/devmgr-proto` is the protocol's
+crate, host-tested. What the stage still owes is one row: trusting
+decoding-off BARs.
 
-* **`devmgr`, the program** (`docs/DEVMGR.md`), on the native runtime: given
-  every device node and every driver image at boot, it finds the virtio-blk
-  function, makes its ring, starts the driver with START through
-  `process_create` and `process_start` in a job of its own, watches it through
-  a process observer, and on its death quiesces the device before anything of
-  it is reused. Until it lands, the boot check's parent starts the driver; its
-  kernel half is above. Two things go with it:
-  * *The quiesce after a death.* `TERMINATED` fires when a driver's handles
-    close, which queues the closed channel for the ring's task but does not
-    wait for it, so a quiesce the instant after can find the device still
-    served and be refused. The fix — a quiesce on a served device whose
-    driver's end has closed waits, bounded, for the ring to let go, and only a
-    driver still holding its end is refused — is written and verified on a
-    branch and lands with `devmgr`, its first caller.
-  * *No driver faults on the disk it serves*, which under `docs/DEVMGR.md` §5
-    holds by construction: a driver's image is an anonymous VMO the kernel
-    filled from the initramfs, and a native program maps VMOs, never files.
-    The pivot onto btrfs must keep it so.
+The run recorded when it landed: `devmgr   8 devices, 1 drivers, 2 started,
+0 failed` on x86-64, 4 devices on AArch64, 36 on ARMv7-A at four processors
+and at two, each followed by the driver check's sectors read back through
+the disks `devmgr` started.
+
+**Still to do, after the exit.** One row, beside the path to the goal.
+
 * **Trusting a BAR firmware placed but did not enable**, so a device no
   firmware driver used — as virtio-rng on AArch64 was until its legacy
   interface was turned off — can still be given to a ring-3 driver. Worked

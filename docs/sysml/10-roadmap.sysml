@@ -302,9 +302,9 @@ package FerrixRoadmap {
              * pin; DEVMGR.md). Exit met: /sbin/blk, the virtio-blk driver in
              * ring 3, started from the boot check with START, reads sectors
              * through the ring with VT-d and the SMMUv3 translating, ARMv7-A
-             * in degraded trusted mode. Still owed after the exit: devmgr
-             * the program with the quiesce-after-death fix, and trusting
-             * decoding-off BARs. */
+             * in degraded trusted mode. devmgr the program started by the
+             * kernel with every device and driver image, starting blk per
+             * disk. Still owed after the exit: trusting decoding-off BARs. */
     }
 
     #implemented requirement <'S11'> stage11BtrfsRead : Stage {

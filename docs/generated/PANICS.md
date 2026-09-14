@@ -60,6 +60,7 @@ Causes are listed most likely first.
 | [FX-1003](#fx-1003) | an IOMMU domain gave a device the wrong addresses |
 | [FX-1004](#fx-1004) | the block ring's control plane answered a driver wrongly |
 | [FX-1005](#fx-1005) | the ring-3 virtio-blk driver did not serve the test disk |
+| [FX-1006](#fx-1006) | devmgr could not be started, or did not report |
 | [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
@@ -1169,6 +1170,29 @@ running.
 
 See: kernel/src/block_ring/driver_check.rs; user/blk/src/main.rs;
 docs/BLOCK-RING.md;           docs/ROADMAP.md stage 10.
+
+<a id="fx-1006"></a>
+
+## FX-1006 — devmgr could not be started, or did not report
+
+The kernel starts `/sbin/devmgr` from the initramfs with a bootstrap channel
+holding one DEVICES message (a job, every device node twice, and every driver
+image `/lib/drivers/MANIFEST` names, as VMOs the kernel filled), then waits for
+devmgr's REPORT of what it started (`docs/DEVMGR.md`). devmgr matches devices to
+drivers, makes each driver's ring, starts it with START, and quiesces a device
+whose driver died. The boot's block drivers come from it from then on.
+
+1. A driver the manifest names is not in the image, or its image does not fit a
+   VMO: `xtask/src/native.rs` and the initramfs disagree.
+2. `/sbin/devmgr` does not load as a native program, or could not be claimed to
+   start.
+3. devmgr exited before reporting: its exit status names the step (see
+   `user/devmgr`).
+4. devmgr reported nothing within twenty seconds: a driver did not bring its
+   device up, or the kernel never sent PUBLISHED for a disk it accepted.
+
+See: kernel/src/devmgr.rs; user/devmgr/src/main.rs; docs/DEVMGR.md;
+docs/ROADMAP.md stage 10.
 
 <a id="fx-1101"></a>
 

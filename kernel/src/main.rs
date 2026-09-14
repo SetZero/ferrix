@@ -24,6 +24,7 @@ mod backtrace;
 mod block_ring;
 mod console;
 mod device;
+mod devmgr;
 mod early;
 mod fdt;
 mod fs;
@@ -769,7 +770,8 @@ fn check_block_ring() {
             report.refusals, report.published, report.leaked,
         );
     }
-    check_driver();
+    let started_by_devmgr = check_devmgr();
+    check_driver(started_by_devmgr);
 }
 
 /// Stage 10's exit, the half that is a driver: `/sbin/blk`, started from
@@ -780,8 +782,8 @@ fn check_block_ring() {
 ///
 /// Halts rather than returning, as every other stage's check does. A machine
 /// without a virtio-blk function passes and says so.
-fn check_driver() {
-    let report = match block_ring::driver_check::run() {
+fn check_driver(started_by_devmgr: bool) {
+    let report = match block_ring::driver_check::run(started_by_devmgr) {
         Ok(report) => report,
         Err(problem) => fatal!(
             catalog::STAGE10_DRIVER,
@@ -793,11 +795,37 @@ fn check_driver() {
         return;
     }
     println!(
-        "  driver   /sbin/blk serves {} ({} sectors) through the block ring; {} sectors read \
-         back through the registry as xtask wrote them",
+        "  driver   blk serves {} ({} sectors) through the block ring; {} sectors read back \
+         through the registry as xtask wrote them",
         report.names, report.sectors, report.read,
     );
     check_btrfs_disk();
+}
+
+/// Stage 10: `devmgr`, started from the initramfs with every device and
+/// every driver image, and its REPORT (`docs/DEVMGR.md`). Answers whether it
+/// started the block drivers, so the driver check reads through them rather
+/// than starting its own.
+///
+/// Halts rather than returning, as every other stage's check does. An image
+/// without `/sbin/devmgr` passes and says so.
+fn check_devmgr() -> bool {
+    let report = match devmgr::start() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE10_DEVMGR,
+            "stage 10 devmgr self-check failed: {problem}"
+        ),
+    };
+    let Some(report) = report else {
+        println!("  devmgr   not started: the image carries no /sbin/devmgr");
+        return false;
+    };
+    println!(
+        "  devmgr   {} devices, {} drivers, {} started, {} failed",
+        report.devices, report.drivers, report.started, report.failed,
+    );
+    report.started > 0
 }
 
 /// Stage 11's exit: the btrfs fixture on the second disk, served by its own

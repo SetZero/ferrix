@@ -1,0 +1,23 @@
+[package]
+name = "ferrix-devmgr"
+description = "devmgr: matches the devices the kernel hands it to the drivers it was given, starts each in a job of its own, and quiesces a device whose driver died"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "devmgr"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferrix-blkring.workspace = true
+ferrix-devmgr-proto.workspace = true
+ferrix-native-abi.workspace = true
+ferrix-rt.workspace = true
+
+[lints]
+workspace = true

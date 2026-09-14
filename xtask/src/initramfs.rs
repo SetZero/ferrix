@@ -233,10 +233,20 @@ fn build_with(program: Option<&[u8]>, natives: &[native::Built]) -> Result<Vec<u
     // before native programs existed.
     if !natives.is_empty() {
         archive.directory(native::DIRECTORY, 0o755)?;
+        archive.directory("lib", 0o755)?;
+        archive.directory(native::DRIVERS, 0o755)?;
+        let mut manifest = String::new();
         for built in natives {
-            let path = format!("{}/{}", native::DIRECTORY, built.name);
+            let path = format!("{}/{}", built.directory, built.name);
             archive.file(&path, 0o755, &built.bytes)?;
+            if built.directory == native::DRIVERS {
+                manifest.push_str(built.name);
+                manifest.push('\n');
+            }
         }
+        // What the kernel reads to know the drivers, one name per line.
+        let path = format!("{}/{}", native::DRIVERS, native::MANIFEST);
+        archive.file(&path, 0o644, manifest.as_bytes())?;
     }
     if let Some(program) = program {
         // Who uid 0 is, for the applets that ask by name -- `whoami`, `id`,
@@ -311,6 +321,7 @@ mod tests {
     fn native_programs_go_in_sbin_and_only_when_there_are_some() {
         let natives = [native::Built {
             name: "channel-echo",
+            directory: native::DIRECTORY,
             bytes: b"\x7fELF native".to_vec(),
         }];
         let bytes = build_with(None, &natives).unwrap();

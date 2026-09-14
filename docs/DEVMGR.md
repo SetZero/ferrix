@@ -6,7 +6,8 @@ stage 11. `docs/ARCHITECTURE.md` §7 is the architecture; this is the protocol
 between the kernel and `devmgr`, and between `devmgr` and the drivers it
 starts. The kernel's half of it — `device_info`, `device_quiesce`, bus
 mastering at the first pin, START — is on develop; `devmgr` the program, on
-`ferrix-rt`, is what this document is written ahead of.
+`ferrix-rt`, is `user/devmgr`, started by `kernel/src/devmgr.rs`; the
+messages are `libs/devmgr-proto`.
 
 ## 1. What devmgr is, and what it is not
 
@@ -35,17 +36,24 @@ the other as its bootstrap handle (`Handle(1)`, which `ferrix-rt`'s
 Before starting it the kernel has written one message on its end:
 
 ```
-DEVICES  kernel -> devmgr, 8 + 32 x drivers bytes
+DEVICES  kernel -> devmgr, 24 + 32 x drivers bytes
 0   4  type = 1
 4   4  length
-8   4  devices      how many devices; each is two handles
-12  4  drivers      how many (name, image) pairs follow
-16  32 name[0]      the first driver's program name, NUL-padded, as
+8   4  devices      how many devices in this message; each is two handles
+12  4  drivers      how many (name, image) pairs follow; 0 unless first
+16  4  more         how many devices still come in later DEVICES messages
+20  4  flags        bit 0: the first message, which carries the job and
+                    the images
+24  32 name[0]      the first driver's program name, NUL-padded, as
                     process_create takes it (PROCESS_NAME_MAX)
-48  32 name[1]      ...
-handles: [device 0, device 0 again, ... device devices-1, device devices-1 again,
-          image 0 ... image drivers-1]
+56  32 name[1]      ...
+handles: [job (first only), device 0, device 0 again, ..., image 0 ...
+          (first only)]
 ```
+
+* **The job** comes first: a root job of `devmgr`'s own, with every right a
+  job carries, under which it makes a job per driver. A native program is
+  given no job otherwise, and `process_create` needs one.
 
 * **The devices** are every node `device::devices()` publishes, in that order,
   each as two handles with `DEVICE_RIGHTS` (`TRANSFER | MANAGE`). One is the
@@ -54,16 +62,19 @@ handles: [device 0, device 0 again, ... device devices-1, device devices-1 again
   `DUPLICATE` and a handle given away is gone. `device_info` (0x1049) on
   either says what the device is.
 * **The drivers** are every program in one fixed initramfs directory,
-  `/lib/drivers/`, in directory order. For each, the kernel reads the file
-  into a VMO it creates for the purpose — anonymous memory, filled by the
-  kernel from the initramfs — and hands the VMO with `READ | TRANSFER`. The
-  name is the file's name. `process_create` (0x1030) takes exactly this: a
-  job, an image VMO with `READ`, a name.
-* A channel message carries at most `CHANNEL_MAX_HANDLES` (64) handles; the
-  test machines have at most 6 functions and, in stage 10, one driver. When a
-  machine outgrows one message, the kernel sends a second DEVICES message with
-  the rest, and `devmgr` reads until the channel is empty; the layout does not
-  change.
+  `/lib/drivers/`, in the order of `/lib/drivers/MANIFEST`, one name per
+  line, which `xtask` writes when it builds the image: the kernel has no
+  directory listing of its own to spend on this. For each, the kernel reads
+  the file into a VMO it creates for the purpose — anonymous memory, filled
+  by the kernel from the initramfs — and hands the VMO with
+  `READ | TRANSFER`. The name is the file's name. `process_create` (0x1030)
+  takes exactly this: a job, an image VMO with `READ`, a name.
+* A channel message carries at most `CHANNEL_MAX_HANDLES` (64) handles, and
+  a device takes two: ARMv7-A's machine publishes 36 nodes, its 32
+  virtio-mmio transports among them. So the kernel sends as many DEVICES
+  messages as it takes — the first with the job and the images, the rest
+  with devices only — each saying in `more` how many devices are still to
+  come, and `devmgr` reads until that is zero.
 
 `devmgr` answers on the same channel once it has done what §3 says:
 
@@ -124,9 +135,12 @@ PUBLISHED  kernel -> devmgr, 16 bytes
 12  4  reserved   zero
 ```
 
-   `devmgr` waits for one PUBLISHED per driver it started, with a deadline,
-   then sends REPORT. A driver whose disk is not published in time counts as
-   failed, and its job is killed.
+   `devmgr` starts one driver, waits for its PUBLISHED, then starts the
+   next, so disks register in PCI order and no two drivers race to be `vda`;
+   then it sends REPORT. A native program has no clock, so the deadline is
+   the kernel's patience for REPORT: a driver that never publishes holds
+   `devmgr` there, and the boot fails saying so. A driver whose start fails
+   outright counts as failed.
 
 ## 4. When a driver dies
 
@@ -157,7 +171,9 @@ DIED     devmgr -> kernel, 16 bytes
 12  4  status     the driver's exit status; 137 if killed
 ```
 
-3. does not restart it. Version 1 has no restart policy: a dead disk driver
+3. does not restart it, and reports the status as 137 whether the driver
+   was killed or exited, since a `TERMINATED` packet carries no status.
+   Version 1 has no restart policy: a dead disk driver
    is a dead disk, said on the console, and the device stays quiesced. A
    restart is a decision for the day a driver's death is not a bug.
 
