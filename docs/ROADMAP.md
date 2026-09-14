@@ -1325,14 +1325,18 @@ that took what it looked at, a record read that found the last record's tail:
   `sigpaths` boot check; the fault-to-signal catch and an `SA_RESTART`
   interrupted read are proven at the kernel's decision, not yet end-to-end by a
   hand-assembled faulting or interrupted-read user program.
-* **Threads**, which nothing single-threaded calls: `CLONE_VM` without
-  `CLONE_VFORK`, and `CLONE_THREAD`, are `ENOSYS`. The ground is laid: every
-  program's task runs a `Thread` of its process, and signal state is split as
-  Linux splits it -- the dispositions, the signals sent to the process and
-  `ITIMER_REAL` on the process; the blocked mask, the alternate stack, the
-  signals sent to one thread and its restart state on each thread, which takes
-  its own signals before its process's. Next: `exit` apart from `exit_group`,
-  then `clone(CLONE_THREAD)`.
+* **Threads.** `clone(CLONE_THREAD)` makes a thread of the calling process:
+  every program's task runs a `Thread`, whose id comes from the pid space and
+  finds its process; signal state is split as Linux splits it, the thread
+  taking its own signals before its process's; `exit` ends a thread and
+  `exit_group` its process, which lets go of what it holds when its last
+  thread has gone. Boot checks on all three architectures make threads in
+  shared memory, clear `CLONE_CHILD_CLEARTID` as a thread ends, and end a
+  process whose last two threads exit together; ferrousli's static pthread
+  test runs to its end on x86-64. Left: signals, stop, `kill` and `execve`
+  across threads (`execve` answers `EAGAIN` with a second thread live until
+  then), the futex lock and TLB work, and `/proc`'s threads with the exit
+  test on three architectures.
 * **Three stand-ins, each written down where it lives.** The console is the one
   terminal, its line discipline fed by a thread that looks every twenty
   milliseconds rather than waiting on the receive interrupt, until stage 15
