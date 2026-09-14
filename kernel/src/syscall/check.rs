@@ -8003,7 +8003,8 @@ fn check_a_message_with_descriptors_is_refused(
 /// Without it, `ls | wc -l` in the shell hangs.
 fn check_an_ended_process_closes_its_descriptors() -> Result<(), &'static str> {
     let holder = process::new_for_check().map_err(|_| "no process to hold a pipe's write end")?;
-    let (reader, writer) = crate::fs::pipe::new_pipe(false).map_err(|_| "could not make a pipe")?;
+    let (reader, writer) =
+        crate::fs::pipe::new_pipe(false, (0, 0)).map_err(|_| "could not make a pipe")?;
     let _fd = holder
         .files()
         .lock()

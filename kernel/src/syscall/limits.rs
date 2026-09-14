@@ -26,6 +26,7 @@ use ferrix_vfs::fd::MAX_LIMIT;
 
 use crate::smp;
 use crate::syscall::attributes::{self, Limit, RLIM_NLIMITS, int, subject};
+use crate::syscall::credentials;
 use crate::syscall::process::Process;
 use crate::syscall::time::{self, TimeWidth};
 use crate::syscall::uaccess::{self, WORD};
@@ -111,15 +112,19 @@ pub(crate) fn limit_of(process: &Process, resource: u32) -> Result<Limit, Errno>
     })
 }
 
-/// Put `process` under `new` for `resource`, with `do_prlimit`'s checks.
+/// Put `process` under `new` for `resource` at `caller`'s asking, with
+/// `do_prlimit`'s checks.
 ///
-/// Raising a hard limit needs `CAP_SYS_RESOURCE`, which every process has.
-/// The one ceiling that remains is `RLIMIT_NOFILE`'s: `nr_open`, past which
-/// even root is `EPERM`.
-fn set_limit(process: &Process, resource: u32, new: Limit) -> Result<(), Errno> {
+/// Raising a hard limit needs `CAP_SYS_RESOURCE`: root's, `EPERM` for anyone
+/// else. `RLIMIT_NOFILE` also has a ceiling, `nr_open`, past which even root
+/// is `EPERM`.
+fn set_limit(caller: &Process, process: &Process, resource: u32, new: Limit) -> Result<(), Errno> {
     let index = index_of(resource)?;
     if new.soft > new.hard {
         return Err(Errno::EINVAL);
+    }
+    if new.hard > limit_of(process, resource)?.hard {
+        credentials::require_privilege(caller)?;
     }
     if resource == RLIMIT_NOFILE {
         if new.hard > u64::from(MAX_LIMIT) {
@@ -180,7 +185,7 @@ pub(crate) fn sys_setrlimit(process: &Process, resource: u32, at: u64) -> Result
     let space = process.space();
     let soft = from_word(uaccess::get_word(space, at)?);
     let hard = from_word(uaccess::get_word(space, at.wrapping_add(WORD as u64))?);
-    set_limit(process, resource, Limit { soft, hard }).map(|()| 0)
+    set_limit(process, process, resource, Limit { soft, hard }).map(|()| 0)
 }
 
 /// `prlimit64`: `struct rlimit64`, two `__u64`s and 16 bytes on every
@@ -210,9 +215,12 @@ pub(crate) fn sys_prlimit64(
         })
     };
     let target = subject(process, pid)?;
+    if !credentials::same_ids(process, &target) {
+        return Err(Errno::EPERM);
+    }
     let old = limit_of(&target, resource)?;
     if let Some(new) = new {
-        set_limit(&target, resource, new)?;
+        set_limit(process, &target, resource, new)?;
     }
     if old_at != 0 {
         let mut bytes = [0_u8; 16];
@@ -298,7 +306,10 @@ pub(crate) fn sys_sched_setaffinity(
     let take = usize::try_from(len).unwrap_or(usize::MAX).min(size);
     let wanted = mask.get_mut(..take).ok_or(Errno::EINVAL)?;
     uaccess::copy_from_user(process.space(), at, wanted).map_err(|_| Errno::EFAULT)?;
-    let _target = subject(process, pid)?;
+    let target = subject(process, pid)?;
+    if !credentials::same_owner(process, &target) {
+        return Err(Errno::EPERM);
+    }
     let runnable = online_cpus().into_iter().any(|cpu| {
         mask.get(cpu / 8)
             .is_some_and(|byte| byte & (1 << (cpu % 8)) != 0)
@@ -334,9 +345,12 @@ pub(crate) fn sys_sched_getparam(process: &Process, pid: i32, at: u64) -> Result
 pub(crate) fn sys_sched_setparam(process: &Process, pid: i32, at: u64) -> Result<usize, Errno> {
     param_args(pid, at)?;
     let priority = uaccess::get_u32(process.space(), at)?;
-    let _target = subject(process, pid)?;
+    let target = subject(process, pid)?;
     if priority != 0 {
         return Err(Errno::EINVAL);
+    }
+    if !credentials::same_owner(process, &target) {
+        return Err(Errno::EPERM);
     }
     Ok(0)
 }
@@ -368,9 +382,12 @@ pub(crate) fn sys_sched_setscheduler(
     }
     param_args(pid, at)?;
     let priority = uaccess::get_u32(process.space(), at)?;
-    let _target = subject(process, pid)?;
+    let target = subject(process, pid)?;
     if policy != SCHED_OTHER || priority != 0 {
         return Err(Errno::EINVAL);
+    }
+    if !credentials::same_owner(process, &target) {
+        return Err(Errno::EPERM);
     }
     Ok(0)
 }

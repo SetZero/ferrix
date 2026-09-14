@@ -628,9 +628,25 @@ fn online_cpus() -> u32 {
 
 /// `/proc/<pid>/status`.
 ///
-/// `Umask` is the mask the process keeps and `umask` changes. Uid and gid are
-/// zero because everything runs as root until credentials exist.
+/// `Umask` is the mask the process keeps and `umask` changes. `Uid` and `Gid`
+/// are its real, effective, saved and filesystem ids, in that order.
 pub(super) fn status(process: &Process) -> Result<Vec<u8>> {
+    let (uid, gid) = process.with_credentials(|ids| {
+        (
+            [
+                ids.user.real,
+                ids.user.effective,
+                ids.user.saved,
+                ids.user.filesystem,
+            ],
+            [
+                ids.group.real,
+                ids.group.effective,
+                ids.group.saved,
+                ids.group.filesystem,
+            ],
+        )
+    });
     let memory = Memory::of(process);
     let name = process.comm();
     // Slots in the table as Linux sizes one: a power of two, 64 at least.
@@ -644,8 +660,8 @@ pub(super) fn status(process: &Process) -> Result<Vec<u8>> {
         state: state_of(process),
         pid: process.pid(),
         ppid: parent_of(process),
-        uid: 0,
-        gid: 0,
+        uid,
+        gid,
         fd_size,
         vm_size: memory.size / 1024,
         vm_locked: memory.locked / 1024,

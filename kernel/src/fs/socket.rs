@@ -287,12 +287,14 @@ fn wait(queue: &WaitQueue, mut ready: impl FnMut() -> bool, deadline: u64) -> Re
 }
 
 impl Socket {
-    /// A socket of `kind` reading from `receive` and writing into `send`.
+    /// A socket of `kind` reading from `receive` and writing into `send`,
+    /// owned by `owner`: the creator's filesystem user and group ids.
     fn new(
         kind: SocketType,
         send: Option<Arc<Channel>>,
         receive: Arc<Channel>,
         peer_credentials: Option<Ucred>,
+        (uid, gid): (u32, u32),
     ) -> Arc<Socket> {
         let ino = sockfs().next_ino.fetch_add(1, Ordering::Relaxed);
         let now = fs::clock().now();
@@ -314,8 +316,8 @@ impl Socket {
                 // A socket's inode is `S_IFSOCK | 0777` on sockfs, as on Linux.
                 permissions: 0o777,
                 nlink: 1,
-                uid: 0,
-                gid: 0,
+                uid,
+                gid,
                 size: 0,
                 rdev: 0,
                 blocks: 0,
@@ -957,13 +959,20 @@ fn open(socket: Arc<Socket>, nonblock: bool) -> Result<Arc<OpenFile>, Errno> {
 }
 
 /// A socket of `kind` connected to nothing, as the open file `socket`
-/// installs.
+/// installs, owned by `owner`.
 ///
 /// # Errors
 ///
 /// Whatever [`OpenFile::new`] refuses, which for a socket is nothing.
-pub(crate) fn new_socket(kind: SocketType, nonblock: bool) -> Result<Arc<OpenFile>, Errno> {
-    open(Socket::new(kind, None, Channel::new(kind), None), nonblock)
+pub(crate) fn new_socket(
+    kind: SocketType,
+    nonblock: bool,
+    owner: (u32, u32),
+) -> Result<Arc<OpenFile>, Errno> {
+    open(
+        Socket::new(kind, None, Channel::new(kind), None, owner),
+        nonblock,
+    )
 }
 
 /// Two sockets of `kind` connected to each other, as the open files
@@ -980,13 +989,15 @@ pub(crate) fn new_pair(
     let first = Channel::new(kind);
     let second = Channel::new(kind);
     let credentials = Some(credentials_of(creator));
+    let owner = crate::syscall::path::creator_ids(creator);
     let one = Socket::new(
         kind,
         Some(Arc::clone(&second)),
         Arc::clone(&first),
         credentials,
+        owner,
     );
-    let other = Socket::new(kind, Some(first), second, credentials);
+    let other = Socket::new(kind, Some(first), second, credentials, owner);
     Ok((open(one, nonblock)?, open(other, nonblock)?))
 }
 

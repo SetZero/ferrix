@@ -299,6 +299,12 @@ pub(crate) const APPLETS: &[Command] = &[
             "chmod: /tmp/dac-private: Operation not permitted",
             "ls: can't open '/tmp/dac-closed': Permission denied",
             "*/tmp/dac-noexec: Permission denied",
+            "proc self owned by 1000 1000",
+            "listed its own descriptors",
+            "Uid:*1000*1000*1000*1000",
+            "hostname: *Operation not permitted",
+            "*kill*1*Operation not permitted",
+            "mknod: *Operation not permitted",
             "root still reads: secret",
         ]),
     },
@@ -309,8 +315,10 @@ pub(crate) const APPLETS: &[Command] = &[
 /// execute; `su` becomes the image's user `ferrix`, uid 1000, which is
 /// refused each of them with the error Linux gives -- `EACCES` for a mode,
 /// `EPERM` for the sticky bit and for `chmod` of another's file -- and owns
-/// the file it makes. Root reads the private file afterwards, so a kernel
-/// that refused everything to everyone cannot pass.
+/// the file it makes. Its own `/proc/self` belongs to it, so it may list its
+/// own descriptors, and `status` reports its ids in place of root's. Root
+/// reads the private file afterwards, so a kernel that refused everything to
+/// everyone cannot pass.
 const PERMISSIONS_SCRIPT: &str = r#"echo secret > /tmp/dac-private && chmod 600 /tmp/dac-private || exit 1
 mkdir -m 700 /tmp/dac-closed || exit 2
 echo 'echo ran' > /tmp/dac-noexec && chmod 644 /tmp/dac-noexec || exit 3
@@ -320,7 +328,13 @@ echo mine > /tmp/dac-mine && stat -c "owned by %u %g" /tmp/dac-mine
 rm -f /tmp/dac-private
 chmod 777 /tmp/dac-private
 ls /tmp/dac-closed
-/tmp/dac-noexec'
+/tmp/dac-noexec
+stat -c "proc self owned by %u %g" /proc/self/status
+ls /proc/self/fd > /dev/null && echo "listed its own descriptors"
+head -12 /proc/self/status
+hostname dac-evil
+kill -0 1
+mknod /tmp/dac-null c 1 3'
 echo "root still reads: $(cat /tmp/dac-private)"
 exit 9
 "#;

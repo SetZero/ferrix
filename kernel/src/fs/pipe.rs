@@ -391,12 +391,16 @@ impl Inode for PipeRoot {
 }
 
 /// A new pipe, as the two open files `pipe2` installs: the read end, then the
-/// write end, each non-blocking if asked.
+/// write end, each non-blocking if asked, and owned by `owner`, the creator's
+/// filesystem user and group ids.
 ///
 /// # Errors
 ///
 /// Whatever [`OpenFile::new`] refuses, which for a pipe end is nothing.
-pub(crate) fn new_pipe(nonblock: bool) -> Result<(Arc<OpenFile>, Arc<OpenFile>), Errno> {
+pub(crate) fn new_pipe(
+    nonblock: bool,
+    (uid, gid): (u32, u32),
+) -> Result<(Arc<OpenFile>, Arc<OpenFile>), Errno> {
     let pipefs = pipefs();
     let ino = pipefs.next_ino.fetch_add(1, Ordering::Relaxed);
     let now = fs::clock().now();
@@ -405,8 +409,8 @@ pub(crate) fn new_pipe(nonblock: bool) -> Result<(Arc<OpenFile>, Arc<OpenFile>),
         kind: FileType::Fifo,
         permissions: 0o600,
         nlink: 1,
-        uid: 0,
-        gid: 0,
+        uid,
+        gid,
         size: 0,
         rdev: 0,
         blocks: 0,

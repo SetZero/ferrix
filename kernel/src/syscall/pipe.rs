@@ -59,7 +59,8 @@ pub(crate) fn sys_pipe2(process: &Process, fds: u64, raw: u32) -> Result<usize, 
         return Err(Errno::EINVAL);
     }
     let (flags, cloexec) = fd::decode_open_flags(raw);
-    let (reader, writer) = fs::pipe::new_pipe(flags.nonblock)?;
+    let owner = crate::syscall::path::creator_ids(process);
+    let (reader, writer) = fs::pipe::new_pipe(flags.nonblock, owner)?;
     let (read_fd, write_fd) = install(process, reader, writer, cloexec)?;
 
     let pair: Vec<u8> = read_fd

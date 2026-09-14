@@ -49,6 +49,7 @@ use ferrix_vfs::{
 };
 
 use crate::fs;
+use crate::syscall::credentials;
 use crate::syscall::fd::{self, arg as int, file as open_file, user_path};
 use crate::syscall::process::Process;
 use crate::syscall::time::TimeWidth;
@@ -168,6 +169,12 @@ pub(crate) fn context(process: &Process) -> Context {
         groups: credentials.groups.clone(),
     });
     ctx
+}
+
+/// Who a process's new pipes, sockets and memfds belong to: its filesystem
+/// user and group ids, as Linux gives them.
+pub(crate) fn creator_ids(process: &Process) -> (u32, u32) {
+    process.with_credentials(|ids| (ids.user.filesystem, ids.group.filesystem))
 }
 
 /// A path a call is about to act on, and what it is relative to.
@@ -292,7 +299,7 @@ fn sys_mkdirat(process: &Process, dirfd: i32, at: u64, mode: u32) -> Result<usiz
 /// `mknodat` and `mknod`.
 ///
 /// Regular files, named pipes, socket names, and character and block device
-/// nodes, which root may make on Linux and the one user here is root. A device
+/// nodes, which only root may make, for `CAP_MKNOD`. A device
 /// node records the number `dev` gives; what opening it reaches is devfs's to
 /// say, by that number (`fs::devfs::attach_device`). A directory is `EPERM`,
 /// as Linux answers: `mkdir` makes those. The mode's kind is checked before the
@@ -320,6 +327,9 @@ fn sys_mknodat(
         _ => return Err(Errno::EINVAL),
     };
     let named = named_at(process, dirfd, at)?;
+    if matches!(node, NewNode::Device { .. }) {
+        credentials::require_privilege(process)?;
+    }
     let permissions = mode & 0o7777 & !process.umask();
     fs::namespace().mknod(&named.ctx, named.start(), &named.path, node, permissions)?;
     Ok(0)

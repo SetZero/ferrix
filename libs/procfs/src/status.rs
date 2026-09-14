@@ -89,10 +89,10 @@ pub struct Status<'a> {
     pub pid: u32,
     /// `PPid`.
     pub ppid: u32,
-    /// `Uid`, printed four times: real, effective, saved, filesystem.
-    pub uid: u32,
-    /// `Gid`, likewise.
-    pub gid: u32,
+    /// `Uid`: the real, effective, saved and filesystem user ids.
+    pub uid: [u32; 4],
+    /// `Gid`: the group ids, in the same order.
+    pub gid: [u32; 4],
     /// `FDSize`: slots in the descriptor table.
     pub fd_size: u32,
     /// `VmSize`: every mapped region, in kibibytes.
@@ -114,11 +114,14 @@ pub fn render(out: &mut Vec<u8>, status: &Status<'_>) {
     out.extend_from_slice(b"Name:\t");
     escape_name(out, status.name);
     let Status { pid, uid, gid, .. } = *status;
+    let [ruid, euid, suid, fsuid] = uid;
+    let [rgid, egid, sgid, fsgid] = gid;
     put(
         out,
         format_args!(
             "\nUmask:\t{:04o}\nState:\t{}\nTgid:\t{pid}\nNgid:\t0\nPid:\t{pid}\nPPid:\t{}\n\
-             TracerPid:\t0\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\nGid:\t{gid}\t{gid}\t{gid}\t{gid}\n\
+             TracerPid:\t0\nUid:\t{ruid}\t{euid}\t{suid}\t{fsuid}\n\
+             Gid:\t{rgid}\t{egid}\t{sgid}\t{fsgid}\n\
              FDSize:\t{}\nGroups:\t \nNStgid:\t{pid}\nNSpid:\t{pid}\n",
             status.umask,
             status.state.description(),

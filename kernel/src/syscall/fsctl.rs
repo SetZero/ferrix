@@ -70,6 +70,7 @@ use ferrix_vfs::{FileSystem, FileType};
 use crate::fs;
 use crate::fs::devfs::Devfs;
 use crate::fs::procfs::Procfs;
+use crate::syscall::credentials;
 use crate::syscall::path::{self, Target};
 use crate::syscall::process::Process;
 use crate::syscall::{fd, pipe, uaccess};
@@ -337,7 +338,7 @@ pub(crate) fn sys_fallocate(
 /// `chroot`: make a directory the process's `/`.
 ///
 /// The new root must be a directory the caller may search, as Linux's
-/// `path_permission` requires; `CAP_SYS_CHROOT` is not checked yet. The
+/// `path_permission` requires, and the caller root, for `CAP_SYS_CHROOT`. The
 /// working directory stays where it was, as on Linux.
 pub(crate) fn sys_chroot(process: &Process, at: u64) -> Result<usize, Errno> {
     let place = path::target(process, AT_FDCWD, at, 0)?.location().clone();
@@ -346,6 +347,7 @@ pub(crate) fn sys_chroot(process: &Process, at: u64) -> Result<usize, Errno> {
         return Err(Errno::ENOTDIR);
     }
     path::context(process).who.require(&metadata, MAY_EXEC)?;
+    credentials::require_privilege(process)?;
     process.fs_context().lock().root = place;
     Ok(0)
 }
@@ -419,6 +421,8 @@ pub(crate) fn sys_mount(
     if flags & REFUSED_MOUNT_FLAGS != 0 {
         return Err(Errno::EINVAL);
     }
+    // `may_mount`: `CAP_SYS_ADMIN`.
+    credentials::require_privilege(process)?;
     let read_only = flags & MS_RDONLY != 0;
     let filesystem = filesystem_named(process, &kind.ok_or(Errno::EINVAL)?, source, read_only)?;
     let _ = fs::namespace().mount(filesystem, &place)?;
@@ -439,6 +443,8 @@ pub(crate) fn sys_umount2(process: &Process, target: u64, flags: u32) -> Result<
     {
         return Err(Errno::EINVAL);
     }
+    // `may_mount`, before the target is looked up, as `ksys_umount` does.
+    credentials::require_privilege(process)?;
     let follow = if flags & UMOUNT_NOFOLLOW != 0 {
         AT_SYMLINK_NOFOLLOW
     } else {

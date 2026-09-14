@@ -32,7 +32,7 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{MFD_ALLOW_SEALING, MFD_CLOEXEC};
 use ferrix_sync::Once;
 use ferrix_vfs::tmpfs::Tmpfs;
-use ferrix_vfs::{FileSystem, Location, OpenFile, OpenFlags};
+use ferrix_vfs::{FileSystem, Location, OpenFile, OpenFlags, SetAttributes};
 
 use crate::fs;
 use crate::syscall::process::Process;
@@ -76,6 +76,13 @@ pub(crate) fn sys_memfd_create(process: &Process, name: u64, flags: u32) -> Resu
 
     let tmpfs = memfd_fs();
     let inode = tmpfs.new_unlinked_file(PERMISSIONS, flags & MFD_ALLOW_SEALING != 0)?;
+    // Its creator's, as Linux's tmpfs gives a memfd through `inode_init_owner`.
+    let (uid, gid) = crate::syscall::path::creator_ids(process);
+    inode.set_attributes(&SetAttributes {
+        uid: Some(uid),
+        gid: Some(gid),
+        ..SetAttributes::default()
+    })?;
     let shown = format!("memfd:{}", alloc::string::String::from_utf8_lossy(&bytes));
     let location = Location::detached(
         Arc::clone(tmpfs) as Arc<dyn FileSystem>,

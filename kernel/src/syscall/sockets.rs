@@ -154,7 +154,8 @@ pub(crate) fn sys_socket(
     protocol: i32,
 ) -> Result<usize, Errno> {
     let socket_type = socket_type(family, kind, protocol)?;
-    let file = fs::socket::new_socket(socket_type, kind & SOCK_NONBLOCK != 0)?;
+    let owner = crate::syscall::path::creator_ids(process);
+    let file = fs::socket::new_socket(socket_type, kind & SOCK_NONBLOCK != 0, owner)?;
     let descriptor = process
         .files()
         .lock()

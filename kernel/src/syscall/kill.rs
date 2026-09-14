@@ -37,9 +37,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use crate::sync::SpinLock;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
-use ferrix_linux_abi::types::{NSIG, SIGALRM, SIGCHLD};
+use ferrix_linux_abi::types::{NSIG, SIGALRM, SIGCHLD, SIGCONT};
 
 use crate::sched::{self, WaitQueue};
+use crate::syscall::credentials;
 use crate::syscall::deliver;
 use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
@@ -91,7 +92,7 @@ pub(crate) fn send(target: &Process, signal: u32, origin: Origin) {
     if signal == 0 || signal > NSIG || target.is_terminated() {
         return;
     }
-    if signal == ferrix_linux_abi::types::SIGCONT {
+    if signal == SIGCONT {
         target.leave_stop();
     }
     match target.post_signal(signal, origin) {
@@ -109,7 +110,7 @@ pub(crate) fn send_to_thread(thread: &Thread, signal: u32, origin: Origin) {
     if signal == 0 || signal > NSIG || target.is_terminated() {
         return;
     }
-    if signal == ferrix_linux_abi::types::SIGCONT {
+    if signal == SIGCONT {
         target.leave_stop();
     }
     match target.post_signal_to(thread, signal, origin) {
@@ -133,11 +134,14 @@ pub(crate) fn send_to_current(signal: u32) {
 /// `pid` above zero is that process; zero, every process in the caller's
 /// group; -1, every process but the caller and pid 1; below -1, every process
 /// in group `-pid`. Signal zero sends nothing and only asks whether a target
-/// exists. There is one user, so nothing is refused with `EPERM`.
+/// exists and may be signalled. A target the caller may not signal
+/// ([`may_signal`]) is passed over; a group or `-1` succeeds if any member was
+/// signalled, as Linux's `__kill_pgrp_info` does.
 ///
 /// # Errors
 ///
-/// `EINVAL` for a signal past 64; `ESRCH` when no process matches.
+/// `EINVAL` for a signal past 64; `ESRCH` when no process matches; `EPERM`
+/// when none that matched may be signalled.
 pub(crate) fn sys_kill(process: &Process, pid: i32, signal: u32) -> Result<usize, Errno> {
     if signal > NSIG {
         return Err(Errno::EINVAL);
@@ -162,10 +166,24 @@ pub(crate) fn sys_kill(process: &Process, pid: i32, signal: u32) -> Result<usize
     if targets.is_empty() {
         return Err(Errno::ESRCH);
     }
+    let mut sent = false;
     for target in &targets {
-        send(target, signal, Origin::User { pid: caller });
+        if may_signal(process, target, signal) {
+            send(target, signal, Origin::User { pid: caller });
+            sent = true;
+        }
+    }
+    if !sent {
+        return Err(Errno::EPERM);
     }
     Ok(0)
+}
+
+/// Linux's `check_kill_permission`: the ids allow it, or the signal is
+/// `SIGCONT` to a process in the caller's own session.
+fn may_signal(sender: &Process, target: &Process, signal: u32) -> bool {
+    credentials::may_signal_ids(sender, target)
+        || (signal == SIGCONT && sender.sid() == target.sid())
 }
 
 /// `tkill`: signal thread `tid` alone, found through its process.
@@ -179,6 +197,9 @@ pub(crate) fn sys_tkill(process: &Process, tid: i32, signal: u32) -> Result<usiz
         return Err(Errno::EINVAL);
     }
     let thread = find_thread(tid.unsigned_abs(), None)?;
+    if !may_signal(process, thread.process(), signal) {
+        return Err(Errno::EPERM);
+    }
     send_to_thread(&thread, signal, Origin::Thread { pid: process.pid() });
     Ok(0)
 }
@@ -210,6 +231,9 @@ pub(crate) fn sys_tgkill(
         return Err(Errno::EINVAL);
     }
     let thread = find_thread(tid.unsigned_abs(), Some(tgid.unsigned_abs()))?;
+    if !may_signal(process, thread.process(), signal) {
+        return Err(Errno::EPERM);
+    }
     send_to_thread(&thread, signal, Origin::Thread { pid: process.pid() });
     Ok(0)
 }

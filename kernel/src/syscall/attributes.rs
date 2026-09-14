@@ -43,7 +43,7 @@ use crate::sync::SpinLock;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
 
-use crate::syscall::credentials::CAP_LAST_CAP;
+use crate::syscall::credentials::{self, CAP_LAST_CAP};
 use crate::syscall::process::Process;
 use crate::syscall::registry;
 use crate::syscall::uaccess::{self, WORD};
@@ -462,8 +462,20 @@ fn named_by(process: &Process, which: i32, who: i32) -> Result<Vec<Subject<'_>>,
                 .map(Subject::Other)
                 .collect())
         }
-        PRIO_USER if who == 0 => Ok(registry::live().into_iter().map(Subject::Other).collect()),
-        PRIO_USER => Ok(Vec::new()),
+        // A user's processes: those whose real uid it is, and the caller's
+        // own real uid for zero.
+        PRIO_USER => {
+            let uid = match u32::try_from(who) {
+                Ok(0) => process.with_credentials(|ids| ids.user.real),
+                Ok(uid) => uid,
+                Err(_) => return Ok(Vec::new()),
+            };
+            Ok(registry::live()
+                .into_iter()
+                .filter(|member| member.with_credentials(|ids| ids.user.real) == uid)
+                .map(Subject::Other)
+                .collect())
+        }
         _ => Err(Errno::EINVAL),
     }
 }
@@ -487,8 +499,12 @@ pub(crate) fn sys_getpriority(process: &Process, which: i32, who: i32) -> Result
 /// `setpriority`: store a nice value, clamped to -20..=19 as Linux clamps it,
 /// on every process named.
 ///
-/// Stored and not acted on: the scheduler's weights do not read it yet. Root
-/// may lower a nice value, and everything runs as root.
+/// Stored and not acted on: the scheduler's weights do not read it yet.
+///
+/// Linux's `set_one_prio` for each: a process the caller does not own is
+/// `EPERM`, and lowering one's nice value without privilege `EACCES`. The
+/// call succeeds if any was set and no later one refused, which is the answer
+/// Linux's loop leaves behind.
 pub(crate) fn sys_setpriority(
     process: &Process,
     which: i32,
@@ -496,14 +512,23 @@ pub(crate) fn sys_setpriority(
     nice: i32,
 ) -> Result<usize, Errno> {
     let named = named_by(process, which, who)?;
-    if named.is_empty() {
-        return Err(Errno::ESRCH);
-    }
     let nice = nice.clamp(-20, 19);
+    let mut answer = Err(Errno::ESRCH);
     for subject in &named {
+        if !credentials::same_owner(process, subject) {
+            answer = Err(Errno::EPERM);
+            continue;
+        }
+        if nice < get(subject).nice && credentials::require_privilege(process).is_err() {
+            answer = Err(Errno::EACCES);
+            continue;
+        }
         update(subject, |a| a.nice = nice);
+        if answer == Err(Errno::ESRCH) {
+            answer = Ok(0);
+        }
     }
-    Ok(0)
+    answer
 }
 
 /// Bits below the class in an I/O priority: `IOPRIO_CLASS_SHIFT`.
@@ -566,11 +591,19 @@ pub(crate) fn sys_ioprio_set(
         IOPRIO_CLASS_NONE if level == 0 => {}
         _ => return Err(Errno::EINVAL),
     }
+    // `ioprio_check_cap`: the real-time class is root's.
+    if io_class(value) == IOPRIO_CLASS_RT {
+        credentials::require_privilege(process)?;
+    }
     let named = named_by(process, which.wrapping_sub(1), who)?;
     if named.is_empty() {
         return Err(Errno::ESRCH);
     }
     for subject in &named {
+        // `set_task_ioprio`: another user's process is `EPERM`.
+        if !credentials::same_owner(process, subject) {
+            return Err(Errno::EPERM);
+        }
         update(subject, |a| a.io_priority = Some(value));
     }
     Ok(0)

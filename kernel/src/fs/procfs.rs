@@ -590,13 +590,24 @@ impl Inode for Node {
     fn metadata(&self) -> Metadata {
         let (kind, permissions) = self.place.kind();
         let made = self.shared.made;
+        // A process's directory and everything in it belong to the ids the
+        // process acts as, as Linux's `task_dump_owner` gives them, so a user
+        // may list its own descriptors; the rest of /proc is root's.
+        let (uid, gid) = match self.place {
+            Place::Process(pid) | Place::Entry(pid, _) | Place::Descriptor(pid, _) => {
+                registry::find(pid).map_or((0, 0), |process| {
+                    process.with_credentials(|ids| (ids.user.effective, ids.group.effective))
+                })
+            }
+            Place::Root | Place::Top(_) => (0, 0),
+        };
         Metadata {
             ino: self.place.ino(),
             kind,
             permissions,
             nlink: if kind == FileType::Directory { 2 } else { 1 },
-            uid: 0,
-            gid: 0,
+            uid,
+            gid,
             // Linux reports zero for every generated file, and a program that
             // sized its buffer by `st_size` learns to read to end of file.
             size: 0,

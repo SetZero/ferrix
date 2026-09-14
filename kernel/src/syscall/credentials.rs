@@ -7,17 +7,10 @@
 //! of supplementary groups, on its `Process`. `fork` copies them. `execve`
 //! keeps the real and effective ids and the groups, and makes the saved and
 //! filesystem ids the effective ones, as Linux does. The calls here change them
-//! by Linux's rules and report them back. What nothing does yet is act on
-//! them: no file permission is checked against them. That belongs to the VFS,
-//! and until it lands a process that has dropped to uid 1000 can still open
-//! what root can.
-//!
-//! That is a gap in enforcement, not a lie in reporting, and the difference is
-//! why these calls can succeed now. `su` needs `setgroups`, `setgid` and
-//! `setuid` to succeed, and then needs the shell it starts to be uid 1000 to
-//! every call that reports an id: `id`, `whoami`, a prompt that shows `$`.
-//! All of that is true here. The part that is not, the files, is exactly what
-//! a permission check adds, and it adds it by reading these same fields.
+//! by Linux's rules and report them back, and the kernel acts on them: the
+//! VFS checks file permissions against the filesystem ids, and the calls only
+//! root may make, and those that reach another user's processes, ask
+//! [`require_privilege`], [`same_owner`] and [`may_signal_ids`] here.
 //!
 //! # Privilege is an effective uid of 0
 //!
@@ -49,6 +42,58 @@ const UNCHANGED: u32 = u32::MAX;
 
 /// The most supplementary groups a process may have: Linux's `NGROUPS_MAX`.
 const NGROUPS_MAX: u32 = 65_536;
+
+/// `EPERM` unless `process` may make a call only root may: an effective uid
+/// of 0, standing in for the capability Linux checks for that call
+/// (`CAP_SYS_ADMIN`, `CAP_SYS_BOOT`, `CAP_SYS_TIME`, `CAP_MKNOD`,
+/// `CAP_SYS_CHROOT`, `CAP_SYS_RESOURCE`, `CAP_SYS_NICE`, `CAP_SYSLOG`).
+///
+/// # Errors
+///
+/// `EPERM`.
+pub(crate) fn require_privilege(process: &Process) -> Result<(), Errno> {
+    if process.with_credentials(|ids| ids.privileged()) {
+        Ok(())
+    } else {
+        Err(Errno::EPERM)
+    }
+}
+
+/// Linux's `check_same_owner`: whether `caller` may change `target`'s
+/// scheduling -- its effective uid is the target's real or effective uid, or
+/// it is privileged.
+pub(crate) fn same_owner(caller: &Process, target: &Process) -> bool {
+    let (euid, privileged) = caller.with_credentials(|ids| (ids.user.effective, ids.privileged()));
+    privileged || target.with_credentials(|ids| euid == ids.user.real || euid == ids.user.effective)
+}
+
+/// Linux's `kill_ok_by_cred`: whether `caller` may signal `target` by their
+/// ids -- the caller's real or effective uid is the target's real or saved
+/// uid, or the caller is privileged.
+pub(crate) fn may_signal_ids(caller: &Process, target: &Process) -> bool {
+    let (real, effective, privileged) =
+        caller.with_credentials(|ids| (ids.user.real, ids.user.effective, ids.privileged()));
+    privileged
+        || target.with_credentials(|ids| {
+            [real, effective]
+                .into_iter()
+                .any(|id| id == ids.user.real || id == ids.user.saved)
+        })
+}
+
+/// Linux's `check_prlimit_permission`: whether `caller` may read or change
+/// another process's limits -- every one of the target's real, effective and
+/// saved user and group ids is the caller's real one, or the caller is
+/// privileged.
+pub(crate) fn same_ids(caller: &Process, target: &Process) -> bool {
+    let (uid, gid, privileged) =
+        caller.with_credentials(|ids| (ids.user.real, ids.group.real, ids.privileged()));
+    privileged
+        || target.with_credentials(|ids| {
+            [ids.user.real, ids.user.effective, ids.user.saved] == [uid; 3]
+                && [ids.group.real, ids.group.effective, ids.group.saved] == [gid; 3]
+        })
+}
 
 /// The highest capability number Linux 6.x defines, `CAP_CHECKPOINT_RESTORE`.
 /// `CAP_LAST_CAP` in `linux/capability.h`, 40, for both builds.

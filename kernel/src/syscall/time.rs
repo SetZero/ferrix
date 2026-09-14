@@ -20,6 +20,7 @@ use ferrix_linux_abi::types::{
 use crate::arch;
 use crate::sched;
 use crate::syscall::attributes::int;
+use crate::syscall::credentials;
 use crate::syscall::process::Process;
 use crate::syscall::signal::RestartBlock;
 use crate::syscall::thread::Thread;
@@ -471,7 +472,10 @@ pub(crate) fn sys_clock_settime(
         return Err(Errno::EINVAL);
     }
     let (seconds, nanos) = read_pair(process, at, width)?;
-    set_realtime(settable(seconds, nanos)?);
+    let target = settable(seconds, nanos)?;
+    // `CAP_SYS_TIME`, after the time is found settable, as Linux orders it.
+    credentials::require_privilege(process)?;
+    set_realtime(target);
     Ok(0)
 }
 
@@ -504,6 +508,7 @@ pub(crate) fn sys_settimeofday(process: &Process, tv: u64, tz: u64) -> Result<us
     if minutes_west.is_some_and(|minutes| !(-15 * 60..=15 * 60).contains(&minutes)) {
         return Err(Errno::EINVAL);
     }
+    credentials::require_privilege(process)?;
     if let Some(target) = target {
         set_realtime(target);
     }

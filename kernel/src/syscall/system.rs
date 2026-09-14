@@ -44,6 +44,7 @@ use crate::console::println;
 use crate::mm;
 use crate::smp;
 use crate::syscall::attributes::int;
+use crate::syscall::credentials;
 use crate::syscall::process::Process;
 use crate::syscall::registry;
 use crate::syscall::time;
@@ -210,8 +211,9 @@ fn read_name(process: &Process, at: u64, len: i32) -> Result<SetName, Errno> {
     Ok((bytes, len))
 }
 
-/// `sethostname`: at most 64 bytes, or `EINVAL`.
+/// `sethostname`: root's alone, and at most 64 bytes, or `EINVAL`.
 pub(crate) fn sys_sethostname(process: &Process, at: u64, len: i32) -> Result<usize, Errno> {
+    credentials::require_privilege(process)?;
     let (bytes, len) = read_name(process, at, len)?;
     set_hostname(bytes.get(..len).ok_or(Errno::EINVAL)?)?;
     Ok(0)
@@ -219,6 +221,7 @@ pub(crate) fn sys_sethostname(process: &Process, at: u64, len: i32) -> Result<us
 
 /// `setdomainname`: as `sethostname`, for the other field.
 pub(crate) fn sys_setdomainname(process: &Process, at: u64, len: i32) -> Result<usize, Errno> {
+    credentials::require_privilege(process)?;
     let (bytes, len) = read_name(process, at, len)?;
     set_domainname(bytes.get(..len).ok_or(Errno::EINVAL)?)?;
     Ok(0)
@@ -355,6 +358,11 @@ pub(crate) fn sys_syslog(
     buf: u64,
     len: i32,
 ) -> Result<usize, Errno> {
+    // `check_syslog_permissions` with `dmesg_restrict` off: reading the whole
+    // buffer and asking its size are anyone's, everything else root's.
+    if !matches!(action, 3 | 10) {
+        credentials::require_privilege(process)?;
+    }
     match action {
         // Close, open, clear, console off, console on, unread size.
         0 | 1 | 5 | 6 | 7 | 9 => Ok(0),
@@ -433,6 +441,8 @@ pub(crate) fn sys_reboot(
     cmd: u32,
     arg: u64,
 ) -> Result<usize, Errno> {
+    // `CAP_SYS_BOOT` before the magic numbers, as Linux checks.
+    credentials::require_privilege(process)?;
     if magic1 != REBOOT_MAGIC1 || !REBOOT_MAGIC2.contains(&magic2) {
         return Err(Errno::EINVAL);
     }
