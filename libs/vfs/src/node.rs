@@ -476,6 +476,12 @@ pub trait Inode: Send + Sync + fmt::Debug {
     /// [`crate::tmpfs::Pages`] store answers that store's
     /// [`crate::tmpfs::Pages::object`], making it first if a mapping comes
     /// before any read.
+    ///
+    /// A store filled from a page source must not be offered here until a
+    /// fault can fill it. A private mapping's first write copies the page it
+    /// finds, and a page the source has not filled yet would be copied as
+    /// zeros over the file's data; the kernel's private file fault documents
+    /// the hook it needs. tmpfs's stores have no source, so they are safe.
     fn mapping(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         None
     }

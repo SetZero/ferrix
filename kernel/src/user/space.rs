@@ -82,6 +82,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
+use core::ops::Deref;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::sync::SpinLock;
@@ -181,6 +182,14 @@ struct Inner {
     /// the space drops its files there. So an open file's `Drop`, and its
     /// inode's, must take no lock that can sleep and ask for no shootdown.
     files: BTreeMap<u64, Arc<dyn Any + Send + Sync>>,
+    /// For an id a private file mapping names, the object its writes go to:
+    /// anonymous, attached privately, and indexed by the file's page index.
+    /// A page is read from the file until the mapping first writes it, and
+    /// that write copies it in here. The file's own object stays in `objects`
+    /// under the same id, attached shared, so a truncation of the file or a
+    /// replacement in either object takes down whatever the region shows at
+    /// that address, whichever object holds the page.
+    shadows: BTreeMap<u64, Arc<Vmo>>,
     /// The next object id to hand out. Never zero, which `Backing` reserves
     /// for private memory with no named object.
     next_id: u64,
@@ -246,6 +255,7 @@ impl AddressSpace {
                 map,
                 objects: BTreeMap::new(),
                 files: BTreeMap::new(),
+                shadows: BTreeMap::new(),
                 next_id: 1,
                 native: BTreeSet::new(),
             }),
@@ -477,7 +487,9 @@ impl AddressSpace {
         // failure here has changed nothing the parent can observe.
         let mut objects = BTreeMap::new();
         for (&id, vmo) in &inner.objects {
-            let forked = if shared_object(&inner.map, id) {
+            // A file's own object is shared whatever its regions say: a
+            // private file mapping writes into its shadow, never here.
+            let forked = if shared_object(&inner.map, id) || inner.files.contains_key(&id) {
                 Arc::clone(vmo)
             } else {
                 match vmo.fork() {
@@ -489,6 +501,20 @@ impl AddressSpace {
                 }
             };
             let _ = objects.insert(id, forked);
+        }
+        // Each private file mapping's shadow copies on write, as private
+        // anonymous memory does: the child gets an object of its own.
+        let mut shadows = BTreeMap::new();
+        for (&id, shadow) in &inner.shadows {
+            match shadow.fork() {
+                Ok(forked) => {
+                    let _ = shadows.insert(id, forked);
+                }
+                Err(why) => {
+                    mm::deallocate_frames(root, 0);
+                    return Err(SpaceError::Backing(why));
+                }
+            }
         }
 
         // Only now the parent's map is marked and copied, and its writable
@@ -529,6 +555,7 @@ impl AddressSpace {
                 map,
                 objects,
                 files,
+                shadows,
                 // Continued rather than restarted, so that an id means the
                 // same object in a parent and a child for as long as they
                 // share one. Two spaces may hand out the same id afterwards,
@@ -541,12 +568,15 @@ impl AddressSpace {
         {
             let inner = child.inner.lock();
             for (&id, vmo) in &inner.objects {
-                let sharing = if shared_object(&inner.map, id) {
+                let sharing = if shared_object(&inner.map, id) || inner.files.contains_key(&id) {
                     Sharing::Shared
                 } else {
                     Sharing::Private
                 };
                 vmo.attach(Arc::downgrade(&child), id, sharing);
+            }
+            for (&id, shadow) in &inner.shadows {
+                shadow.attach(Arc::downgrade(&child), id, Sharing::Private);
             }
         }
         Ok(child)
@@ -592,11 +622,12 @@ impl AddressSpace {
             Backing::Device { physical } => {
                 return self.fault_device(page, physical.saturating_add(into_region), region.flags);
             }
-            // A private file mapping copies into an object of its own on its
-            // first write, which `mmap` does not make yet: it refuses one, so
-            // no such region exists. Reported rather than panicked all the
-            // same, because killing the process beats stopping the machine.
-            Backing::File { .. } => return Err(SpaceError::NotMapped(address)),
+            // A private file mapping reads the file's pages until it writes
+            // one, and writes into a shadow object of its own.
+            Backing::File { .. } => {
+                drop(inner);
+                return self.fault_private_file(address, access);
+            }
         };
 
         let vmo = Arc::clone(
@@ -733,6 +764,196 @@ impl AddressSpace {
         Ok(())
     }
 
+    /// [`AddressSpace::fault`] for a private file mapping.
+    ///
+    /// The region names two objects by one id: the file's own, attached
+    /// shared, and its shadow, attached privately, which holds the pages this
+    /// mapping has written. In order:
+    ///
+    /// * A page wholly past the file's end is refused before either object is
+    ///   looked at, so a page the mapping copied before a truncation is
+    ///   `SIGBUS` too, as on Linux.
+    /// * A write lands only in the shadow. A page the shadow lacks is copied
+    ///   into a fresh frame first: the file's page, or zeros for a hole, which
+    ///   leaves the file's object untouched. A shadow page a `fork` left in two
+    ///   spaces is copied again, as private anonymous memory is. **This is
+    ///   decided before the check for a page already present, on purpose**:
+    ///   the page present may be the file's, shown read-only, and returning
+    ///   early would send the write back to fault on it forever.
+    /// * A read shows the shadow's page if it has one, and otherwise the
+    ///   file's, read-only however writable the region is, so that the first
+    ///   write faults here.
+    ///
+    /// No mappable object has a page source yet: tmpfs's pages have none. A
+    /// filesystem whose inode offers an object filled from a source has to
+    /// give this path a way to fill an absent page before it is copied, or the
+    /// copy would put zeros over the file's data.
+    fn fault_private_file(&self, address: u64, access: Access) -> Result<(), SpaceError> {
+        let inner = self.inner.lock();
+        let region = *inner
+            .map
+            .find(address)
+            .ok_or(SpaceError::NotMapped(address))?;
+        if !permits(region.flags, access) {
+            return Err(SpaceError::Refused(address));
+        }
+        let Backing::File { id, offset } = region.backing else {
+            return Err(SpaceError::NotMapped(address));
+        };
+        let page = address & !(PAGE_SIZE - 1);
+        let index = offset.saturating_add(page.saturating_sub(region.range.start())) / PAGE_SIZE;
+        let (Some(file), Some(shadow)) = (
+            inner.objects.get(&id).map(Arc::clone),
+            inner.shadows.get(&id).map(Arc::clone),
+        ) else {
+            return Err(SpaceError::NotMapped(address));
+        };
+        if file.past_file_end(index) {
+            return Err(SpaceError::PastEnd(address));
+        }
+        let present =
+            mm::translate_in(self.root * PAGE_SIZE, page).map(|physical| physical / PAGE_SIZE);
+        let execute = region.flags.execute;
+        let placed = |frame| Placement {
+            id,
+            index,
+            page,
+            frame,
+        };
+
+        let Some(copied) = shadow.page(index) else {
+            if !access.write {
+                if present.is_some() {
+                    return Ok(());
+                }
+                let frame = commit_page(&file, index, true, address)?;
+                return self.install_page(inner, placed(frame), user_page(false, execute), false);
+            }
+            let frame = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
+            // A snapshot. The file's page is read through the direct map
+            // without its object's lock, so a write to the file landing
+            // meanwhile may be partly in the copy -- which is Linux's
+            // behaviour too: its private copy races a write to the file the
+            // same way. A fresh frame, never a second reference to the file's:
+            // a shared reference would make the file's next write copy on
+            // write, and the file would stop being what its shared mappings
+            // show.
+            match file.page(index) {
+                Some(original) => mm::copy_frame(frame, original),
+                None => mm::zero_frame(frame),
+            }
+            // Unreachable: the shadow lacked the page under this space's lock,
+            // and every change to a shadow is made under it. Refused rather
+            // than trusted all the same, which the process hears as a fault.
+            if !shadow.insert_absent(index, frame) {
+                let _ = mm::release_frame(frame);
+                return Err(SpaceError::BadRange);
+            }
+            let flags = user_page(region.flags.write, execute);
+            return self.install_page(inner, placed(frame), flags, present.is_some());
+        };
+
+        if access.write && region.cow {
+            // A shadow page a fork left in another space too is copied again.
+            // One nobody else holds any more -- the other side copied its own,
+            // unmapped or exited -- is this space's alone, and is mapped
+            // writable in place of the read-only entry the fork or a read
+            // left: returning because a page is present would send the write
+            // back into that entry forever.
+            if mm::frame_references(copied) > 1 {
+                return self.copy_shadow_page(inner, &shadow, placed(copied), execute);
+            }
+            let flags = user_page(true, execute);
+            return self.install_page(inner, placed(copied), flags, present.is_some());
+        }
+        if present == Some(copied) {
+            return Ok(());
+        }
+        let flags = user_page(region.flags.write && !region.cow, execute);
+        self.install_page(inner, placed(copied), flags, present.is_some())
+    }
+
+    /// Map `at.frame` at `at.page` with `flags`, and let `inner`, this space's
+    /// lock, go. With `replace`, the translation already there -- the file's
+    /// page that a copy now stands in for -- comes down first, with every
+    /// other translation of that page of the id in this space, and every
+    /// processor that may cache one is told before this returns.
+    fn install_page<G: Deref<Target = Inner>>(
+        &self,
+        inner: G,
+        at: Placement,
+        flags: MapFlags,
+        replace: bool,
+    ) -> Result<(), SpaceError> {
+        let mut pages = TlbPages::new();
+        if replace {
+            let _ = self.forget_in(&inner, at.id, &[(at.index, 1)], &mut pages);
+            pages.add(at.page);
+        }
+        let mapped = mm::map_in(
+            self.root * PAGE_SIZE,
+            at.page,
+            at.frame * PAGE_SIZE,
+            PAGE_SIZE,
+            flags,
+        );
+        if replace {
+            let cpus = self.begin_shootdown(&inner);
+            drop(inner);
+            self.shoot(&cpus, &pages);
+        } else {
+            drop(inner);
+        }
+        mapped.map_err(|_| SpaceError::OutOfMemory)
+    }
+
+    /// Copy the shadow page `at.frame`, which a `fork` left in another space
+    /// too, into a frame of this space's own, and map that writable: the
+    /// copy-on-write of [`AddressSpace::fault`], on a private file mapping's
+    /// shadow. The page the shadow gave up goes back once no processor can
+    /// reach it.
+    fn copy_shadow_page<G: Deref<Target = Inner>>(
+        &self,
+        inner: G,
+        shadow: &Arc<Vmo>,
+        at: Placement,
+        execute: bool,
+    ) -> Result<(), SpaceError> {
+        let copy = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
+        mm::copy_frame(copy, at.frame);
+        let (frame, retired) = match shadow.take_page(at.index, copy) {
+            Some(retired) => (copy, Some(retired)),
+            // Held since the count was read: the write goes to the held page.
+            None => {
+                let _ = mm::release_frame(copy);
+                (shadow.page(at.index).unwrap_or(at.frame), None)
+            }
+        };
+        let mut pages = TlbPages::new();
+        let _ = self.forget_in(&inner, at.id, &[(at.index, 1)], &mut pages);
+        pages.add(at.page);
+        let mapped = mm::map_in(
+            self.root * PAGE_SIZE,
+            at.page,
+            frame * PAGE_SIZE,
+            PAGE_SIZE,
+            user_page(true, execute),
+        );
+        let cpus = self.begin_shootdown(&inner);
+        drop(inner);
+        match retired {
+            Some(retired) => shadow.retire(
+                retired,
+                Some(Own {
+                    space: self,
+                    shootdown: Some((cpus, pages)),
+                }),
+            ),
+            None => self.shoot(&cpus, &pages),
+        }
+        mapped.map_err(|_| SpaceError::OutOfMemory)
+    }
+
     /// Run `touch` on the direct-map address of the byte at `address`, with the
     /// page held where it is for as long as `touch` runs.
     ///
@@ -784,7 +1005,7 @@ impl AddressSpace {
             let Some(physical) = mm::translate_in(self.root * PAGE_SIZE, address) else {
                 continue;
             };
-            if access.write && !writable_in_place(&region, physical) {
+            if access.write && !writable_in_place(&inner, &region, address, physical / PAGE_SIZE) {
                 continue;
             }
             let answer = touch(mm::direct_map(physical));
@@ -825,7 +1046,7 @@ impl AddressSpace {
         let Some(physical) = mm::translate_in(self.root * PAGE_SIZE, address) else {
             return Ok(None);
         };
-        if access.write && !writable_in_place(&region, physical) {
+        if access.write && !writable_in_place(&inner, &region, address, physical / PAGE_SIZE) {
             return Ok(None);
         }
         let answer = touch(mm::direct_map(physical));
@@ -887,11 +1108,19 @@ impl AddressSpace {
                 unmapping.range.bytes(),
             );
             pages.add_range(unmapping.range.start(), unmapping.range.bytes());
-            if let Backing::Anonymous { id, offset } = unmapping.backing {
+            let owned = match unmapping.backing {
+                Backing::Anonymous { id, offset } => Some((id, offset, false)),
+                // A private file mapping's own pages are its shadow's; the
+                // file's are never an unmapper's to take.
+                Backing::File { id, offset } if !unmapping.flags.shared => Some((id, offset, true)),
+                Backing::File { .. } | Backing::Device { .. } => None,
+            };
+            if let Some((id, offset, shadow)) = owned {
                 freeing.push(Freeing {
                     id,
                     first: offset / PAGE_SIZE,
                     pages: unmapping.range.bytes() / PAGE_SIZE,
+                    shadow,
                 });
             }
         }
@@ -922,16 +1151,11 @@ impl AddressSpace {
             // them, because taking one moves the count the decision reads.
             let sole: Vec<Freeing> = freeing
                 .into_iter()
-                .filter(|range| {
-                    inner
-                        .objects
-                        .get(&range.id)
-                        .is_some_and(|vmo| Arc::strong_count(vmo) == 1)
-                })
+                .filter(|range| owner(&inner, range).is_some_and(|vmo| Arc::strong_count(vmo) == 1))
                 .collect();
-            retiring.extend(sole.into_iter().filter_map(|Freeing { id, first, pages }| {
-                let vmo = inner.objects.get(&id)?;
-                let retired = vmo.take_range(first, pages);
+            retiring.extend(sole.into_iter().filter_map(|range| {
+                let vmo = owner(&inner, &range)?;
+                let retired = vmo.take_range(range.first, range.pages);
                 (!retired.is_empty()).then(|| (Arc::clone(vmo), retired))
             }));
 
@@ -945,6 +1169,7 @@ impl AddressSpace {
                 objects,
                 native,
                 files,
+                shadows,
                 ..
             } = &mut *inner;
             objects.retain(|&id, vmo| {
@@ -955,6 +1180,13 @@ impl AddressSpace {
                 named
             });
             native.retain(|id| objects.contains_key(id));
+            shadows.retain(|&id, shadow| {
+                let named = still_named(map, id);
+                if !named {
+                    shadow.detach(me, id);
+                }
+                named
+            });
             let gone: Vec<u64> = files
                 .keys()
                 .copied()
@@ -1091,6 +1323,28 @@ impl AddressSpace {
     }
 }
 
+/// Where a private file mapping's fault puts a frame: page `index` of the
+/// objects the region knows as `id`, at the address `page`.
+#[derive(Clone, Copy, Debug)]
+struct Placement {
+    id: u64,
+    index: u64,
+    page: u64,
+    frame: Frame,
+}
+
+/// The translation flags of a user page.
+fn user_page(write: bool, execute: bool) -> MapFlags {
+    MapFlags {
+        read: true,
+        write,
+        execute,
+        user: true,
+        global: false,
+        device: false,
+    }
+}
+
 /// Pages of one object whose translations an unmap has taken down, and which
 /// go back once every processor has been told.
 #[derive(Clone, Copy, Debug)]
@@ -1101,6 +1355,9 @@ struct Freeing {
     first: u64,
     /// How many.
     pages: u64,
+    /// Whether they come out of the id's shadow, for a private file mapping,
+    /// rather than out of its object.
+    shadow: bool,
 }
 
 /// Where [`AddressSpace::map_file`] puts a mapping.
@@ -1324,6 +1581,7 @@ impl AddressSpace {
                         id,
                         first: (first + new_len) / PAGE_SIZE,
                         pages: (old_len - new_len) / PAGE_SIZE,
+                        shadow: false,
                     });
                 }
                 (Ok(Backing::Anonymous { id, offset: first }), None)
@@ -1337,6 +1595,7 @@ impl AddressSpace {
                     id,
                     first: first / PAGE_SIZE,
                     pages: old_len / PAGE_SIZE,
+                    shadow: false,
                 });
                 fresh.attach(self.me.clone(), fresh_id, Sharing::Private);
                 let _ = inner.objects.insert(fresh_id, fresh);
@@ -1457,18 +1716,6 @@ fn named_elsewhere(map: &ferrix_vma::AddressSpace, id: u64, start: u64, end: u64
 }
 
 /// Whether a region with `flags` permits `access`.
-/// Whether a write may land in place on `physical`, the frame `region`
-/// translates the page to, rather than on the copy a fault would make first.
-///
-/// Not when the region is copy-on-write and some other space still holds the
-/// frame. One predicate, asked by both [`AddressSpace::with_page`] and
-/// [`AddressSpace::with_present_page`], because the rule will grow -- a file
-/// page of a private mapping will need its shadow copy too -- and two copies of
-/// it would drift apart.
-fn writable_in_place(region: &Vma, physical: u64) -> bool {
-    !(region.cow && mm::frame_references(physical / PAGE_SIZE) > 1)
-}
-
 fn permits(flags: VmaFlags, access: Access) -> bool {
     if access.write && !flags.write {
         return false;
@@ -1725,10 +1972,12 @@ impl AddressSpace {
         Ok(at)
     }
 
-    /// Map `len` bytes of `vmo`, a file's object, from byte `offset` of it,
-    /// shared: the region shows the file's own pages, and a write through it
-    /// is a write to the file. `file` is kept for as long as a region names
-    /// the mapping, and names it. Returns where it went.
+    /// Map `len` bytes of `vmo`, a file's object, from byte `offset` of it.
+    /// Shared, the region shows the file's own pages, and a write through it
+    /// is a write to the file. Private, it shows the same pages until it
+    /// writes one, and that write copies the page into a shadow object of the
+    /// mapping's own, which the file never sees. `file` is kept for as long
+    /// as a region names the mapping, and names it. Returns where it went.
     ///
     /// `place` is [`FilePlace::Fixed`] for `MAP_FIXED`, whose range the caller
     /// has already cleared, or [`FilePlace::Anywhere`] with the program's hint.
@@ -1775,6 +2024,11 @@ impl AddressSpace {
             .insert(range, flags, Backing::File { id, offset })
             .map_err(|_| SpaceError::BadRange)?;
         vmo.attach(self.me.clone(), id, Sharing::Shared);
+        if !flags.shared {
+            let shadow = Vmo::new_anonymous(offset.saturating_add(len).div_ceil(PAGE_SIZE));
+            shadow.attach(self.me.clone(), id, Sharing::Private);
+            let _ = inner.shadows.insert(id, shadow);
+        }
         let _ = inner.objects.insert(id, vmo);
         let _ = inner.files.insert(id, file);
         Ok(at)
@@ -1862,6 +2116,42 @@ impl AddressSpace {
     }
 }
 
+/// The object an unmapped range's pages come out of: the id's shadow for a
+/// private file mapping, and its object otherwise.
+fn owner<'a>(inner: &'a Inner, range: &Freeing) -> Option<&'a Arc<Vmo>> {
+    if range.shadow {
+        inner.shadows.get(&range.id)
+    } else {
+        inner.objects.get(&range.id)
+    }
+}
+
+/// Whether a write at `address` in `region` may go straight through the frame
+/// `frame` its translation reaches, or must fault first so the frame is
+/// copied.
+///
+/// One predicate, asked by both [`AddressSpace::with_page`] and
+/// [`AddressSpace::with_present_page`], so that the two can never disagree
+/// about a page a write must not reach in place.
+///
+/// Not a copy-on-write page some other space still holds; and in a private
+/// file mapping, only the page its shadow holds at that index. Any other frame
+/// there is the file's page, shown read-only, and a write through it would
+/// reach the file and every other mapping of it.
+fn writable_in_place(inner: &Inner, region: &Vma, address: u64, frame: Frame) -> bool {
+    if region.cow && mm::frame_references(frame) > 1 {
+        return false;
+    }
+    match region.backing {
+        Backing::File { id, offset } if !region.flags.shared => {
+            let into = (address & !(PAGE_SIZE - 1)).saturating_sub(region.range.start());
+            let index = offset.saturating_add(into) / PAGE_SIZE;
+            inner.shadows.get(&id).and_then(|shadow| shadow.page(index)) == Some(frame)
+        }
+        _ => true,
+    }
+}
+
 /// Whether any region still names object `id`.
 fn still_named(map: &ferrix_vma::AddressSpace, id: u64) -> bool {
     map.iter().any(|region| match region.backing {
@@ -1896,8 +2186,12 @@ impl Drop for AddressSpace {
         for (&id, vmo) in &inner.objects {
             vmo.detach(me, id);
         }
+        for (&id, shadow) in &inner.shadows {
+            shadow.detach(me, id);
+        }
         inner.objects.clear();
         inner.files.clear();
+        inner.shadows.clear();
 
         // The root itself. On x86-64 its upper half names the kernel's own
         // tables, which are emphatically not this space's to free -- but

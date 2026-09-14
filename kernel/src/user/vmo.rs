@@ -444,6 +444,19 @@ impl Vmo {
         self.bound.store(len.div_ceil(PAGE_SIZE), Ordering::SeqCst);
     }
 
+    /// Whether page `index` is wholly past the end of the file this object
+    /// holds, as its filesystem last said; never for an object that is not a
+    /// file's.
+    ///
+    /// For a private file mapping, whose fault refuses such a page before it
+    /// looks at the file or at the shadow its copies live in. Read without the
+    /// pages lock: the fault holds its space's lock from this check through
+    /// its mapping, and a truncation stores the new end before it takes the
+    /// pages away and then takes the lock of every space that maps them.
+    pub(crate) fn past_file_end(&self, index: u64) -> bool {
+        index >= self.bound.load(Ordering::SeqCst)
+    }
+
     /// [`Vmo::commit`] for a fault through a file mapping: `None`, committing
     /// nothing, for a page wholly past the end of the file, which is the
     /// fault Linux answers with `SIGBUS`.

@@ -116,11 +116,11 @@ pub(crate) struct MmapRequest {
 
 /// `mmap` and `mmap2`.
 ///
-/// Anonymous memory, and a file mapped shared: the region shows the file's own
+/// Anonymous memory, and a file. A shared file mapping shows the file's own
 /// pages, the ones `read` copies out of, so a write through either is seen
-/// through the other. A private file mapping is `ENODEV` until it can copy
-/// into an object of its own on first write, rather than a mapping that writes
-/// to the file behind the program's back.
+/// through the other. A private one shows the same pages until it writes one,
+/// and the write copies that page into an object of the mapping's own, so the
+/// file never sees it.
 pub(crate) fn sys_mmap(process: &Process, request: &MmapRequest) -> Result<usize, Errno> {
     let &MmapRequest {
         addr,
@@ -216,7 +216,8 @@ fn place(process: &Process, addr: u64, len: u64, flags: u32) -> Result<FilePlace
 ///
 /// The refusals come in Linux's order: a descriptor that names nothing, or
 /// only a path, is `EBADF`; one not open for reading is `EACCES`, and so is a
-/// shared writable mapping of one not open for writing; a file with no pages
+/// shared writable mapping of one not open for writing -- a private one never
+/// writes the file, so it may be writable either way; a file with no pages
 /// to map -- a directory, a pipe, a device, a generated `/proc` file -- is
 /// `ENODEV`. `O_APPEND` refuses nothing: Linux refuses only an inode marked
 /// append-only, which no filesystem here can mark.
@@ -241,9 +242,6 @@ fn map_file(
         .mapping()
         .and_then(|object| object.downcast::<Vmo>().ok())
         .ok_or(Errno::ENODEV)?;
-    if !vma.shared {
-        return Err(Errno::ENODEV);
-    }
     let at = place(process, addr, len, flags)?;
     process
         .space()
