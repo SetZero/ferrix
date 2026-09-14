@@ -331,6 +331,102 @@ Dated, newest first. A decision here is final until the customer says otherwise.
 
 ---
 
+## Wind-down of 2026-09-14, about 17:00
+
+The fleet ran on the Windows machine from the evening of 2026-09-13 (gates on
+the Linux host over ssh) until about 22:30, went quiet, and was renamed again
+by a restart; the customer wound it down on 2026-09-14 with the order to
+finish, not start. `main` is still ec549f2 (`stage-9.1-console-and-iommu`);
+`develop` is 73b17da, 63 commits ahead: 112 story points landed on the
+evening of the 13th, the largest of them the VMO reverse map, the kernel VMO
+fill, the block registry, the block ring's kernel side, `vmo_map`, native
+process creation, threads commits 1–3, the stage 11 stack (native runtime,
+test disk, virtio-blk library, SleepLock) and the kernel btrfs mount. Every
+one of those updated its rows and booted `develop` under KVM after its push.
+
+**`main` did not move.** `develop` 896ede5 passed the product owner's whole
+matrix from a clean worktree (21:37), but a boot check that can fail plain
+(FX-0820, the frame-count window, 1 in 16 unloaded boots) was not to be
+tagged into `main`'s CI; the frame-window landing below is its gate. The
+next product owner verifies the first `develop` that carries it and tags
+`stage-9.2`.
+
+**Stage 10's exit criterion is met but not landed.** `/sbin/blk`, a real
+user-mode virtio-blk driver started from the boot check, served `vda` through
+the block ring with VT-d translating and read 21 sectors back exactly as
+`xtask` wrote them, on the same boot that shows the out-of-domain fault
+(x86-64 TCG, 2026-09-13 ~22:20). Its landing moves the marker to
+`stages 1-10`; the Arm rows were still running at the restart.
+
+**Ferrousli's busybox links** (2026-09-14): 0 undefined symbols after crypt;
+in WSL `sh`, `ls`, `grep`, `sed`, `awk` and `ps` run and `mkpasswd` matches
+OpenSSL. **Its first boot on Ferrix (2026-09-14, x86-64, `test-shell`):**
+it boots as init and passes three of the script's lines (`the sum is 15`,
+`hello, ferrix`, `test agrees`), then ash's `case` reaches the `fnmatch`
+stub and exits 134. The unlanded `ferrousli-misc` WIP (e95d1e9) carries a
+tested `fnmatch`: one point between this busybox and the whole script.
+
+Branches with unlanded work, where they live (W = this Windows checkout's
+`.claude/worktrees/`, N = nazuna's repo, O = origin), state as handed off,
+and the landing order the product owner had set:
+
+1. `stage11-driver` 5b4b436 (W, N; stage 11): `libs/blkserve`, `user/blk`
+   and the boot check that starts it; x86-64 whole row was green at b2abda9,
+   the Arm results were pending; `stage10-exit-docs` edb91ea (stage 10's
+   exit paragraph and the marker move) merges on top before the push, both
+   owners co-sign. Needs a push word. **Lands first.** Driver points left:
+   0 of 8 once green; the stage 11 exit test (btrfs image on the second
+   disk, mounted in `test-vfs`) is 5.
+2. `stage10-quiesce` 705f106 (W, N; stage 10): a quiesce on a served device
+   whose driver's end has closed waits, bounded, for the ring to let go; the
+   check quiesces the instant the driver dies. Verified on eb3588d. Lands
+   right after the driver, whole row.
+3. `stage8-framewindow` / `os-c4/framewindow` 02a0da0 (W, N; stage 8): every
+   frame-counted window counts free frames plus heap-held pages and prints
+   the route on a mismatch; approved by mm and stage 9; evidence on 9706926:
+   whole row, 10 plain and 5 loaded KVM boots, negatives in all 9 windows.
+   Needs a rebase, a row and a push word. **`main`'s gate.**
+4. `stage9/channel-read-topology` 9f1ebe3 (W, O; stage 9): reviewed and
+   controlled; re-runs its whole row after 3 (its one red cell was FX-0820).
+5. `mm/stack` 0cdd2e6 (W only, on 95b538c; mm): shootdown-locks,
+   mprotect checks (waits on 3 as well), the x86-64 IST branch, Miri/fuzz —
+   ten commits, gate-green locally, never rowed on nazuna, never pushed.
+   **Only this machine holds it.**
+6. `land-3c` d30e397 (W; board): the 2 GiB allocation, uart-irq, the
+   trampoline pair, board-reset-3c, the DK1 docs; all proven on the board
+   (tag run, proof B, the trampoline boot); its go was live at the wind-down
+   with a scoped push word.
+7. `stage7-threads` 4b8b70a/47bd665 (W, N; threads): commit 4,
+   `clone(CLONE_THREAD)`, runs ferrousli's pthread test ("pthread: all ok")
+   on x86-64; in review with the check rework; commits 5–7 (signals across
+   threads, futex and races, procfs and the exit test) are 12 points.
+8. `stage7-unix-l1` b4db5dc/53ec4ac (W, N; sockets): `AF_UNIX` landing 1 of
+   3 in progress; L2 names 5, L3 descriptor passing with the in-flight
+   cycle pass 7; carries the P1 rows for `AF_UNIX`, the POSIX.1-2024 sweep,
+   `memfd_create` and the spawn split.
+9. `stage7-spawn-split` 5cfdaa6 (W; stage 7/9): not started; `process_start`
+   must not fail after moving the bootstrap; 2 points, after threads 3 (in).
+10. `stage8-filemmap` 52fee32 (W; stage 8): MAP_SHARED, 7 of 8 cells green,
+    the red one is FX-0601 from growing `AddressSpace`, which 3 makes
+    honest; MAP_PRIVATE (8) follows; `memfd_create` after.
+11. `stage11-fpos` e6d9c9a (W; stage 11): approved by both reviewers, 3
+    points, after the stack (in); the CI Miri step (2) after it.
+12. `xtask-busybox` 78013c3 (W, N): `cargo xtask busybox` and
+    `--init ferrousli`, row green on 73b17da, waits on a push word and a go
+    after 6.
+13. `ferrousli-crypt` dcc9adb (W, N): crypt and the `-r` link fix; lands on
+    its own gate, no slot.
+14. devmgr the program (stage 10, 13 points plus the quiesce race, not
+    started; `docs/DEVMGR.md` is the design), BAR trust (8), the VT-d
+    stale-record intermittent (P0 row): stage 10's "still to do" after its
+    exit.
+15. Stage 12 (btrfs write) has no session yet; its host-side half can start
+    any time by the continuous rule.
+
+The points ledger, with every estimate and landing timed, is in the product
+owner's memory (`ferrix-points-ledger`); the measured pace was about 112
+points across nine sessions in the four hours the queue ran.
+
 ## Wind-down of 2026-09-13, about 17:00
 
 Every session was asked to stop, commit and hand off. `main` is ec549f2,
