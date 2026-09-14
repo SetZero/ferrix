@@ -2532,8 +2532,9 @@ const STRADDLE: u64 = SCRATCH + PAGE_SIZE - 3;
 /// translation, which no lock may be held across. So a delivery that meets a
 /// page it may not write in place puts the message back, lets the lock go,
 /// faults the page in, and reads again. The bytes here straddle two pages, and
-/// the read faults in only the first before it takes the lock, so the second
-/// is met under it: the count of such rounds has to move, the read still has to
+/// the read faults in only the first before it takes the lock, so the second --
+/// read back after the fork, so present but shared -- is met under it: the
+/// count of such rounds has to move, the read still has to
 /// deliver the bytes and the endpoint that was sent, and the fork's copy of the
 /// pages has to be unchanged.
 fn check_an_endpoint_is_read_into_pages_shared_by_fork(
@@ -2562,6 +2563,16 @@ fn check_an_endpoint_is_read_into_pages_shared_by_fork(
         .space()
         .fork()
         .map_err(|_| "could not fork a space for the check")?;
+    // The fork took the parent's translations to the shared pages down, so
+    // every page the delivery writes is read back in: each is then present,
+    // read-only and still shared, which a delivery under the lock has to
+    // notice rather than write through. Left unread, none is present, every
+    // delivery faults whatever it checks, and this check would prove nothing.
+    if side.get(STRADDLE, KEPT.len())? != KEPT {
+        return Err("a fork changed the pages it shares");
+    }
+    let _ = side.get(HANDLES, 1)?;
+    let _ = side.get(ACTUAL, 1)?;
 
     let rounds = native::faulted_rounds();
     let _ = side
