@@ -317,6 +317,9 @@ impl Pages for VmoPages {
             *bound = (*bound).min(offset);
         }
         let _ = self.vmo.decommit_from(offset.div_ceil(PAGE_SIZE));
+        // A private mapping's copies of pages past the cut go too, and so does
+        // what one shows of a hole it wrote, which no page taken above names.
+        self.vmo.cut_mappings(offset.div_ceil(PAGE_SIZE));
         let Ok(within) = usize::try_from(offset % PAGE_SIZE) else {
             return;
         };

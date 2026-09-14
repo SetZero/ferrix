@@ -1236,27 +1236,48 @@ impl AddressSpace {
         pages: u64,
         flush: &mut TlbPages,
     ) -> Option<CpuSet> {
-        self.forget_runs(object, &[(first, pages)], flush)
+        self.forget_runs(object, &[(first, pages)], flush, None)
+            .map(|(cpus, _)| cpus)
     }
 
     /// [`AddressSpace::forget_pages`] for several runs of `(first, count)`
     /// pages, under one lock.
+    ///
+    /// With `cut`, the object a truncation is cutting: if that is the file this
+    /// space maps privately as `object`, the shadow's pages in `runs` are taken
+    /// out as well and handed back beside the set, for the caller to release
+    /// once its shootdown, which reaches every address taken down here, has
+    /// returned. See [`Vmo::cut_mappings`].
     pub(crate) fn forget_runs(
         &self,
         object: u64,
         runs: &[(u64, u64)],
         flush: &mut TlbPages,
-    ) -> Option<CpuSet> {
+        cut: Option<&Vmo>,
+    ) -> Option<(CpuSet, ShadowCopies)> {
         let inner = self.inner.lock();
         let found = self.forget_in(&inner, object, runs, flush);
+        // Under this lock, then the shadow's pages lock: the order the module
+        // gives.
+        let copies: ShadowCopies = match (inner.objects.get(&object), inner.shadows.get(&object)) {
+            (Some(file), Some(shadow))
+                if cut.is_some_and(|from| core::ptr::eq(Arc::as_ptr(file), from)) =>
+            {
+                runs.iter()
+                    .map(|&(first, count)| (Arc::clone(shadow), shadow.take_range(first, count)))
+                    .filter(|(_, taken)| !taken.is_empty())
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         let pending = self.flushes_pending.load(Ordering::SeqCst) > 0;
-        if !found && !pending {
+        if !found && !pending && copies.is_empty() {
             return None;
         }
         if pending {
             flush.everything();
         }
-        Some(self.begin_shootdown(&inner))
+        Some((self.begin_shootdown(&inner), copies))
     }
 
     /// Unmap every address at which a region of `inner`'s map shows one of
@@ -1322,6 +1343,10 @@ impl AddressSpace {
         self.flushed();
     }
 }
+
+/// What a cut took out of a private mapping's shadow, for
+/// [`AddressSpace::forget_runs`]'s caller to release after its shootdown.
+pub(crate) type ShadowCopies = Vec<(Arc<Vmo>, Retired)>;
 
 /// Where a private file mapping's fault puts a frame: page `index` of the
 /// objects the region knows as `id`, at the address `page`.

@@ -709,6 +709,41 @@ impl Vmo {
     /// Phase two takes every mapping space's lock in turn, and the shootdown
     /// waits for other processors.
     pub(crate) fn retire(&self, retired: Retired, own: Option<Own<'_>>) {
+        let runs = retired.runs();
+        self.retire_runs(retired, &runs, own, false);
+    }
+
+    /// Take down every mapping of this object's pages from page `first` on,
+    /// whether or not the object holds them, and give back what a private file
+    /// mapping copied of them, once no processor can reach it.
+    ///
+    /// What truncating a file does besides giving back the file's own pages
+    /// ([`Vmo::decommit_from`]). A private mapping of the file keeps the pages
+    /// it wrote in a shadow object; on Linux a truncation drops those copies
+    /// too, and a file grown back shows zeros through the mapping, not the old
+    /// copy. And a copy the mapping made of a hole names an index no page of
+    /// the file's own does, so no run of the file's pages would reach it. So
+    /// the forget runs over everything from `first`, and each space hands back
+    /// its shadow's pages there, released after this call's own shootdown:
+    /// their translations are among the addresses it takes down, and nothing
+    /// else maps a shadow.
+    ///
+    /// Only a truncation takes copies. A retirement of the file's own pages for
+    /// any other reason leaves a private mapping's copies alone, as reclaim
+    /// would on Linux.
+    ///
+    /// The run from `first` to the end is walked through each object's sparse
+    /// page map, never page by page, so its length costs nothing.
+    ///
+    /// Must not be called holding a spin lock.
+    pub(crate) fn cut_mappings(&self, first: u64) {
+        let runs = [(first, u64::MAX - first)];
+        self.retire_runs(Retired::nothing(), &runs, None, true);
+    }
+
+    /// [`Vmo::retire`] over `runs`, which cover at least the pages `retired`
+    /// took out; with `cut`, as [`Vmo::cut_mappings`].
+    fn retire_runs(&self, retired: Retired, runs: &[(u64, u64)], own: Option<Own<'_>>, cut: bool) {
         let mut cpus = CpuSet::empty();
         let mut pages = TlbPages::new();
         let except = own.as_ref().map(|own| own.space);
@@ -717,13 +752,15 @@ impl Vmo {
             pages.add_all(own_pages);
         }
 
-        let runs = retired.runs();
         let Retired { frames, release } = retired;
         let mut forgotten: Vec<Arc<AddressSpace>> = Vec::new();
+        let mut copies: Vec<(Arc<Vmo>, Retired)> = Vec::new();
         if !runs.is_empty() {
+            let from = cut.then_some(self);
             for (space, object) in self.mapped_by(except) {
-                if let Some(theirs) = space.forget_runs(object, &runs, &mut pages) {
+                if let Some((theirs, taken)) = space.forget_runs(object, runs, &mut pages, from) {
                     smp::add_cpus(&mut cpus, &theirs);
+                    copies.extend(taken);
                     forgotten.push(space);
                 }
             }
@@ -746,6 +783,14 @@ impl Vmo {
 
         if release {
             for frame in frames.into_values() {
+                let _ = mm::release_frame(frame);
+            }
+        }
+        // What a cut took out of private mappings' shadows. Their translations
+        // were among the addresses the shootdown above reached, so after it
+        // nothing reaches them.
+        for (_shadow, copy) in copies {
+            for frame in copy.frames.into_values() {
                 let _ = mm::release_frame(frame);
             }
         }
