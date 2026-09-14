@@ -1167,6 +1167,37 @@ pub(crate) static STAGE8_PIPES_AND_FILESYSTEM_CALLS: Explanation = Explanation {
           docs/ROADMAP.md stage 8",
 };
 
+/// For `check_filesystems` in `main.rs`, when the memfd check fails.
+pub(crate) static STAGE8_MEMFD: Explanation = Explanation {
+    code: "FX-0880",
+    title: "memfd_create or its seals failed their self-check",
+    meaning: "`fs::memfd_check::run` builds a process and makes memfds. An unknown flag and a \
+              250-byte name must be EINVAL; a memfd made without MFD_ALLOW_SEALING must carry \
+              F_SEAL_SEAL and refuse a seal with EPERM. A sealable memfd takes F_SEAL_SHRINK and \
+              then refuses a truncation downwards, and F_SEAL_GROW and then refuses growing by \
+              truncation or write, all with EPERM. F_SEAL_WRITE must be EBUSY while a shared \
+              mapping may write the file, a fork child's copy of one included, and succeed once \
+              none may; after it, a write and a shared writable mapping are EPERM, mprotect of a \
+              shared read-only mapping to writable is EACCES, and a private mapping still maps \
+              and keeps its writes from the file. An unknown seal is EINVAL, and any seal after \
+              F_SEAL_SEAL is EPERM. A shared read-only mapping of a file opened read-only must \
+              not become writable through mprotect. The whole run is done twice and must leave \
+              no frame behind.",
+    causes: &[
+        "`map_file` does not raise the file object's may-write count for a shared mapping of a \
+         writable file, or `give_back`, `Drop` or a fork child's attach does not balance it, so \
+         F_SEAL_WRITE is granted beside a writable mapping or refused forever.",
+        "`add_seals` reads the may-write count before it stores the seal, or `sys_mmap` reads \
+         the seals before the mapping counts itself, which lets a race leave both standing.",
+        "`AddressSpace::protect` does not look at a shared file region's may_write before it \
+         makes the range writable.",
+        "tmpfs's write_at, set_len or grow_to does not consult the node's seals under its lock.",
+    ],
+    see: "kernel/src/fs/memfd_check.rs; kernel/src/syscall/memfd.rs; kernel/src/syscall/fd.rs \
+          sys_fcntl; kernel/src/syscall/memory.rs map_file; kernel/src/user/space.rs map_file, \
+          protect; libs/vfs/src/tmpfs.rs add_seals",
+};
+
 /// For `check_filesystems` in `main.rs`, when the shared file mapping check
 /// fails.
 pub(crate) static STAGE8_FILE_MAPPINGS: Explanation = Explanation {
@@ -1178,7 +1209,7 @@ pub(crate) static STAGE8_FILE_MAPPINGS: Explanation = Explanation {
               write to the file what the mapping shows, because both are the file's own VMO \
               pages. mmap must refuse a descriptor that names nothing with EBADF, a directory \
               with ENODEV, a writable shared mapping of a file opened read-only with EACCES, \
-              and a private file mapping with ENODEV. msync must answer a whole mapping and \
+              while a writable private mapping of one maps. msync must answer a whole mapping and \
               refuse bad flags and an unmapped range as Linux does, and /proc/<pid>/maps must \
               name the mapping by its file. A truncation must take the pages past the new end \
               away from the mapping, and a grow must show zeros there. The whole run is done \
@@ -1374,6 +1405,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &SYSRQ_CRASH,
     &STAGE8_PIPES_AND_FILESYSTEM_CALLS,
     &STAGE8_FILE_MAPPINGS,
+    &STAGE8_MEMFD,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,

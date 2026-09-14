@@ -323,6 +323,24 @@ fn check_user_memory() {
     );
 }
 
+/// Stage 8's memfd check: `memfd_create` and its seals, and the may-write
+/// accounting a write seal is refused by.
+fn check_memfd() {
+    let sealed = match fs::memfd_check::run() {
+        Ok(sealed) => sealed,
+        Err(problem) => fatal!(
+            catalog::STAGE8_MEMFD,
+            "stage 8 memfd self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  memfd    {} seals added and enforced, {} calls refused as Linux refuses them, a \
+         write seal refused while a shared mapping could write, a fork's copy included; {} \
+         frames leaked",
+        sealed.seals, sealed.refusals, sealed.leaked,
+    );
+}
+
 /// Stage 8: build the root from the initramfs, and require it to be what the
 /// build wrote and to store what it is given.
 ///
@@ -390,6 +408,7 @@ fn check_filesystems(view: &BootView<'_>) {
          kept from the file, a fork and a user-mode write included; {} frames leaked",
         mapped.bytes, mapped.cut, mapped.copied, mapped.leaked,
     );
+    check_memfd();
 
     let pseudo = match fs::procfs::check::run() {
         Ok(pseudo) => pseudo,
