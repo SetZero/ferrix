@@ -7390,6 +7390,61 @@ fn check_an_ended_process_closes_its_descriptors() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A start prepared and then dropped gives back all it took -- its stack's
+/// frames, its thread's live count and the claim -- and leaves the process
+/// startable.
+///
+/// This is what lets `process_start` make its child's task before it moves the
+/// bootstrap handle: a move refused afterwards drops the prepared start, and
+/// nothing is left to undo. The program is started for real afterwards, by
+/// [`check_a_program_is_handed_its_start_argument`], so a drop that gave back
+/// too much would show there too.
+fn check_a_dropped_prepared_start_gives_everything_back(
+    program: &Arc<Process>,
+) -> Result<(), &'static str> {
+    // Once outside the window, for the reason the other frame checks give: the
+    // heap keeps a page of each size class the first run touches.
+    prepare_and_drop_a_start(program)?;
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
+    let window = mm::FrameWindow::open();
+    prepare_and_drop_a_start(program)?;
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
+    // Above zero the drop kept frames; below zero something outside the check
+    // gave frames back inside the window, which is not this check's to judge.
+    let kept = window.kept();
+    if kept > 0 {
+        mm::print_frame_delta("prepare", kept);
+        window.report("prepare");
+        return Err("a dropped prepared start did not give its task's stack back");
+    }
+    let claim = process::claim_start(program)
+        .map_err(|_| "a dropped prepared start did not give its claim back")?;
+    drop(claim);
+    Ok(())
+}
+
+/// Prepare `program`'s start and drop it: its thread is counted live and the
+/// claim held while it is prepared, and neither once it is dropped.
+fn prepare_and_drop_a_start(program: &Arc<Process>) -> Result<(), &'static str> {
+    let prepared = process::claim_start(program)
+        .map_err(|_| "a loaded program's start could not be claimed to prepare it")?
+        .prepare(None)
+        .map_err(|_| "a claimed start could not be prepared")?;
+    if program.live_thread_count() != 1 {
+        drop(prepared);
+        return Err("a prepared start did not count its thread live");
+    }
+    if process::claim_start(program).is_ok() {
+        drop(prepared);
+        return Err("a prepared start did not keep its claim");
+    }
+    drop(prepared);
+    if program.live_thread_count() != 0 {
+        return Err("a dropped prepared start kept its thread counted live");
+    }
+    Ok(())
+}
+
 /// The start argument [`check_a_program_is_handed_its_start_argument`] passes.
 const START_ARGUMENT: u64 = 57;
 /// What the program must exit with when the argument arrived.
@@ -7420,6 +7475,7 @@ fn check_a_program_is_handed_its_start_argument() -> Result<Option<i32>, &'stati
         return Err("a process's start was claimed twice at once");
     }
     drop(claim);
+    check_a_dropped_prepared_start_gives_everything_back(&program)?;
     let claim = process::claim_start(&program)
         .map_err(|_| "a released claim on a process could not be taken again")?;
     let _task = claim

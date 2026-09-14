@@ -816,19 +816,22 @@ fn load_status(error: exec::ExecError) -> Errno {
 
 /// `process_start`.
 ///
-/// In the order that makes a race harmless:
+/// In the order that makes a race harmless and a failure clean:
 /// 1. The start is claimed first, so a second start is refused before it has
 ///    moved anything.
-/// 2. The bootstrap is moved next, under both tables, so it is in exactly one
-///    of them throughout.
-/// 3. Only then is the task spawned, with the bootstrap's value in its first
-///    argument register.
+/// 2. The task is made next, without running: everything about the start that
+///    can fail, failing with nothing moved.
+/// 3. The bootstrap is moved under both tables, so it is in exactly one of them
+///    throughout.
+/// 4. Only then is the task run, with the bootstrap's value in its first
+///    argument register, which cannot fail.
 ///
 /// A process that ended before the claim is refused by the claim. One killed
 /// between the claim and the move has a closed table that refuses the handle,
-/// which then never leaves the caller. The `Control` held here keeps a last
-/// handle closed meanwhile from killing the process under a start that is
-/// about to succeed.
+/// which then never leaves the caller, and the prepared task is freed on the
+/// way out, after both tables' locks are let go. The `Control` held here keeps
+/// a last handle closed meanwhile from killing the process under a start that
+/// is about to succeed.
 fn process_start(process: &Process, target: Handle, bootstrap: Handle) -> Result<usize, Errno> {
     let control = process.with_handles(|table| {
         let (object, rights) = table.get(target).map_err(table_error)?;
@@ -842,27 +845,14 @@ fn process_start(process: &Process, target: Handle, bootstrap: Handle) -> Result
     })?;
     let child = control.process().ok_or(status::BAD_STATE)?;
     let claim = process::claim_start(&child).map_err(|_| status::BAD_STATE)?;
+    let prepared = claim.prepare(None).map_err(|_| status::NO_MEMORY)?;
     let placed = if bootstrap == Handle::default() {
         None
     } else {
         Some(move_handle(process, &child, bootstrap)?)
     };
     let argument = placed.map_or(0, |handle| u64::from(handle.0));
-    if claim.start(None, argument).is_err() {
-        // Only a task that could not be made reaches here, and the claim has
-        // been given back. The bootstrap goes back to the caller, under a new
-        // value if its old one was taken meanwhile; if even that is refused it
-        // stays in the child's table and goes when the child is ended.
-        //
-        // This move takes the child's table first and the caller's second,
-        // the reverse of the move in. That is safe only because the child has
-        // no task to take its own table's lock, and any second start is
-        // refused at the claim before it reaches either table.
-        if let Some(placed) = placed {
-            let _ = move_handle(&child, process, placed);
-        }
-        return Err(status::NO_MEMORY);
-    }
+    let _task = prepared.start(argument);
     control.started();
     Ok(0)
 }

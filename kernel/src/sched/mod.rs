@@ -765,7 +765,7 @@ pub(crate) fn spawn_on_in(
 ///
 /// # Errors
 ///
-/// If there is no stack for it, or the scheduler is not up.
+/// As [`prepare_user`].
 pub(crate) fn spawn_user(
     name: &'static str,
     entry: fn(usize),
@@ -773,18 +773,41 @@ pub(crate) fn spawn_user(
     cpu: Option<usize>,
     state: Option<arch::UserState>,
 ) -> Result<Arc<Task>, &'static str> {
+    prepare_user(name, entry, thread, cpu, state).map(PreparedTask::launch)
+}
+
+/// Make the task that would run `thread`, counted but on no queue: everything
+/// about starting a program that can fail, done before the one step that
+/// cannot.
+///
+/// A native start moves a handle into its child between the two, so that no
+/// start fails after the move and has to move the handle back.
+///
+/// # Errors
+///
+/// If there is no processor to place it on, or no stack for it.
+pub(crate) fn prepare_user(
+    name: &'static str,
+    entry: fn(usize),
+    thread: Arc<Thread>,
+    cpu: Option<usize>,
+    state: Option<arch::UserState>,
+) -> Result<PreparedTask, &'static str> {
     let here = this_cpu().ok_or("no processor to start a program on")?;
     let anywhere = *domain_cpus().ok_or("the scheduler has no domain")?;
     let (cpu, affinity) = match cpu {
         Some(cpu) => (cpu, CpuSet::of(cpu)),
         None => (choose_cpu(&anywhere, here).unwrap_or(here), anywhere),
     };
+    // Resolved here, so that launching has nothing left to refuse.
+    let queue = queue_of(cpu).ok_or("no such processor")?;
     let space = Arc::clone(thread.process().space());
     // Counted before the task exists: on another processor it can reach its
-    // thread's exit before this returns. A spawn that fails gives it back.
+    // thread's exit as soon as it is launched. A task that could not be made
+    // gives the count back here, and one never launched when it is dropped.
     let process = Arc::clone(thread.process());
     process.thread_starting();
-    spawn_task(
+    let task = make_task(
         name,
         entry,
         0,
@@ -795,15 +818,106 @@ pub(crate) fn spawn_user(
         Some(thread),
         state,
     )
-    .inspect_err(|_| process.thread_gone(false))
+    .inspect_err(|_| process.thread_gone(false))?;
+    Ok(PreparedTask {
+        task,
+        cpu,
+        queue,
+        process,
+        launched: false,
+    })
 }
 
-/// Make a task and put it on `cpu`'s queue: the one path every kind takes.
+/// A user task made and counted, on no queue yet.
+///
+/// [`PreparedTask::launch`] puts it on its processor's queue and cannot fail.
+/// Dropped instead, it frees its stack and then gives its thread's count back,
+/// as a spawn that failed does. Freeing a kernel stack waits for every
+/// processor to forget the mapping, so one must be dropped in task context,
+/// with interrupts enabled and no lock held that keeps preemption off.
+#[must_use = "dropping a prepared task frees it instead of running it"]
+pub(crate) struct PreparedTask {
+    /// The task, which nothing has run.
+    task: Arc<Task>,
+    /// The processor it is placed on.
+    cpu: usize,
+    /// That processor's queue, resolved when it was prepared.
+    queue: &'static SpinLock<CpuQueue>,
+    /// Whose live-thread count it holds.
+    process: Arc<crate::syscall::process::Process>,
+    /// Set by [`PreparedTask::launch`], after which a drop gives nothing back.
+    launched: bool,
+}
+
+impl PreparedTask {
+    /// Put it on its processor's queue, where it runs.
+    pub(crate) fn launch(mut self) -> Arc<Task> {
+        self.launched = true;
+        enqueue(&self.task, self.cpu, self.queue);
+        Arc::clone(&self.task)
+    }
+}
+
+impl Drop for PreparedTask {
+    /// Free the stack of a task never launched, then give its count back.
+    fn drop(&mut self) {
+        if self.launched {
+            return;
+        }
+        debug_assert!(
+            arch::interrupts_enabled(),
+            "a prepared task was dropped with interrupts off, and freeing its stack waits for \
+             every processor"
+        );
+        if let Some(stack) = self.task.stack() {
+            // SAFETY: the task was never on a queue, so no processor has run on
+            // its stack, and none will: this is its only reference.
+            let _ = unsafe { crate::vmap::free_stack(stack) };
+        }
+        self.process.thread_gone(false);
+    }
+}
+
+/// Make a task and put it on `cpu`'s queue: the path every kernel task takes.
 #[expect(
     clippy::too_many_arguments,
     reason = "private, with two callers that name every argument; a struct would be `NewTask` again"
 )]
 fn spawn_task(
+    name: &'static str,
+    entry: fn(usize),
+    argument: usize,
+    weight: u32,
+    cpu: usize,
+    affinity: CpuSet,
+    address_space: Option<Arc<crate::user::space::AddressSpace>>,
+    thread: Option<Arc<Thread>>,
+    user_state: Option<arch::UserState>,
+) -> Result<Arc<Task>, &'static str> {
+    // The queue before the task: a task made for a processor that does not
+    // exist would take a stack with it that nothing frees.
+    let queue = queue_of(cpu).ok_or("no such processor")?;
+    let task = make_task(
+        name,
+        entry,
+        argument,
+        weight,
+        cpu,
+        affinity,
+        address_space,
+        thread,
+        user_state,
+    )?;
+    enqueue(&task, cpu, queue);
+    Ok(task)
+}
+
+/// Make a task, with a stack laid out to begin at [`task_start`], on no queue.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "private, with two callers that name every argument; a struct would be `NewTask` again"
+)]
+fn make_task(
     name: &'static str,
     entry: fn(usize),
     argument: usize,
@@ -824,7 +938,7 @@ fn spawn_task(
     // SAFETY: the stack was allocated a moment ago, is mapped and writable,
     // and nothing else refers to it.
     let stack_pointer = unsafe { arch::prepare_stack(stack.top, task_start, 0) };
-    let task = Arc::new(Task::new(task::NewTask {
+    Ok(Arc::new(Task::new(task::NewTask {
         id: next_id(),
         name,
         entry,
@@ -837,13 +951,16 @@ fn spawn_task(
         address_space,
         thread,
         user_state,
-    }));
+    })))
+}
 
-    let lock = queue_of(cpu).ok_or("no such processor")?;
+/// Put a task made for `cpu` on `lock`, that processor's queue, and see that
+/// it is noticed. Cannot fail: the queue was resolved before the task was made.
+fn enqueue(task: &Arc<Task>, cpu: usize, lock: &'static SpinLock<CpuQueue>) {
     let saved = <arch::Irq as IrqControl>::disable();
     let (preempt, stealable) = {
         let mut queue = lock.lock();
-        queue.insert(&task);
+        queue.insert(task);
         // Three reasons to make the target reschedule, and the third is the
         // one that cost a day. Either something better than what it is
         // running has arrived; or it is not running anything at all and has
@@ -895,7 +1012,6 @@ fn spawn_task(
     if stealable {
         wake_idle_processors();
     }
-    Ok(task)
 }
 
 /// Wake every other processor so that anything idle looks for work to steal.

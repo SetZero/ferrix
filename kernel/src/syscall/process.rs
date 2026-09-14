@@ -1411,7 +1411,9 @@ pub(crate) fn start_on(
     cpu: Option<usize>,
 ) -> Result<Arc<Task>, &'static str> {
     let claim = claim_start(process)?;
-    claim.spawn(Arc::new(Thread::leader(process)), cpu, None)
+    Ok(claim
+        .prepare_thread(Arc::new(Thread::leader(process)), cpu, None)?
+        .launch())
 }
 
 /// The right to start a process, held by one starter at a time.
@@ -1474,54 +1476,90 @@ fn take_claim(process: &Arc<Process>) -> Result<StartClaim, &'static str> {
 impl StartClaim {
     /// Start the process with `argument` in its first argument register.
     ///
-    /// The argument is written while the claim is held, so no other start can
-    /// change it between here and the task reading it.
-    ///
     /// # Errors
     ///
-    /// If the process has no program loaded, or the scheduler has no stack for
-    /// its task; the start is given back either way. A spawn that fails leaves
-    /// `argument` written into the startup, which is harmless: the next start
-    /// writes its own before anything reads it.
+    /// As [`StartClaim::prepare`]; the start is given back.
     pub(crate) fn start(
         self,
         cpu: Option<usize>,
         argument: u64,
     ) -> Result<Arc<Task>, &'static str> {
-        let loaded = if let Some(startup) = self.process.startup.lock().as_mut() {
-            startup.argument = argument;
-            true
-        } else {
-            false
-        };
-        if !loaded {
+        Ok(self.prepare(cpu)?.start(argument))
+    }
+
+    /// Make the process's first task without running it: everything about the
+    /// start that can fail, so that what is put into the process afterwards --
+    /// a native starter's bootstrap handle -- is never put there by a start
+    /// that then fails.
+    ///
+    /// # Errors
+    ///
+    /// If the process has no program loaded, or the scheduler has no processor
+    /// or stack for its task; the start is given back either way.
+    pub(crate) fn prepare(self, cpu: Option<usize>) -> Result<PreparedStart, &'static str> {
+        if self.process.startup().is_none() {
             return Err("the process has no program loaded");
         }
         let thread = Arc::new(Thread::leader(&self.process));
-        self.spawn(thread, cpu, None)
+        self.prepare_thread(thread, cpu, None)
     }
 
-    /// Run the process's first task, for `thread`, one of its own: entering
+    /// Make the process's first task, for `thread`, one of its own: entering
     /// its program, or with `state` resuming a fork child with its parent's
     /// thread pointer and floating-point registers.
-    fn spawn(
-        mut self,
+    fn prepare_thread(
+        self,
         thread: Arc<Thread>,
         cpu: Option<usize>,
         state: Option<crate::arch::UserState>,
-    ) -> Result<Arc<Task>, &'static str> {
+    ) -> Result<PreparedStart, &'static str> {
         self.process.add_thread(&thread);
-        let task = sched::spawn_user("user", run_program, thread, cpu, state)?;
-        self.process.tasks.lock().push(Arc::downgrade(&task));
-        // An end requested between the spawn and the push found no task to
+        let task = sched::prepare_user("user", run_program, thread, cpu, state)?;
+        Ok(PreparedStart { task, claim: self })
+    }
+}
+
+/// A process's first task, made and counted but not yet run, with the claim on
+/// its start.
+///
+/// [`PreparedStart::start`] runs it and cannot fail. Dropped instead, the task
+/// is freed and its count given back first, then the start, leaving the process
+/// startable; as for [`sched::PreparedTask`], that frees a kernel stack, so it
+/// must be dropped in task context with no lock held.
+#[must_use = "dropping a prepared start frees its task and gives the start back"]
+pub(crate) struct PreparedStart {
+    /// Declared first, so dropped first: the task goes before the claim.
+    task: sched::PreparedTask,
+    /// The claim, spent when the task is launched.
+    claim: StartClaim,
+}
+
+impl PreparedStart {
+    /// Run the process with `argument` in its first argument register.
+    ///
+    /// The argument is written while the claim is held, so no other start can
+    /// change it between here and the task reading it.
+    pub(crate) fn start(self, argument: u64) -> Arc<Task> {
+        if let Some(startup) = self.claim.process.startup.lock().as_mut() {
+            startup.argument = argument;
+        }
+        self.launch()
+    }
+
+    /// Put the task on its queue and spend the claim.
+    fn launch(self) -> Arc<Task> {
+        let PreparedStart { task, mut claim } = self;
+        let task = task.launch();
+        claim.process.tasks.lock().push(Arc::downgrade(&task));
+        // An end requested between the launch and the push found no task to
         // wake or interrupt; it is told now, rather than running on in user
         // mode until it happens to make a call.
-        if self.process.is_terminated() {
+        if claim.process.is_terminated() {
             sched::wake(&task);
             sched::interrupt(&task);
         }
-        self.spent = true;
-        Ok(task)
+        claim.spent = true;
+        task
     }
 }
 
@@ -1547,7 +1585,7 @@ pub(crate) fn start_forked(
     state: crate::arch::UserState,
 ) -> Result<Arc<Task>, &'static str> {
     let claim = take_claim(thread.process())?;
-    claim.spawn(thread, None, Some(state))
+    Ok(claim.prepare_thread(thread, None, Some(state))?.launch())
 }
 
 /// Run a thread `clone` made in a process already running: it resumes from the

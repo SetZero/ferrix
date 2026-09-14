@@ -1831,14 +1831,19 @@ it with nothing on its stack. The child's code is therefore ordinary memory of
 its own, and no VMO is ever mapped executable. The child is placed, not yet
 running, in the job, and the caller gets a handle to it.
 
-`process_start(process, bootstrap)` works in three steps, so that a race
-between two starts, or a start and a kill, is harmless:
+`process_start(process, bootstrap)` works in four steps, so that a race
+between two starts, or a start and a kill, is harmless, and a start that fails
+has nothing to undo:
 1. It claims the start, so a second start is refused before it has moved
    anything.
-2. It moves the bootstrap handle into the child's table under both tables'
-   locks.
-3. It enters the program with that handle's value in its first argument
-   register.
+2. It makes the child's task without running it -- the processor it goes to,
+   its stack, its thread counted live -- so everything that can fail fails with
+   nothing moved.
+3. It moves the bootstrap handle into the child's table under both tables'
+   locks. A refusal here drops the prepared task, which frees its stack and
+   gives the start back.
+4. It enters the program with that handle's value in its first argument
+   register, which cannot fail.
 
 A process that has already started or ended is `BAD_STATE`, and the bootstrap
 then stays with the caller.

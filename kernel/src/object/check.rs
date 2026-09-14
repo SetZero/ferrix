@@ -472,9 +472,21 @@ fn check_a_child_finds_its_bootstrap(
         "process_start without MANAGE was not refused",
         counter,
     )?;
+    // A bootstrap the move refuses -- here one already closed -- is refused
+    // after the child's task is prepared, so the prepared start is dropped
+    // on the way out: the start given back, which the start below then takes.
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(manage_less)])
+        .map_err(|_| "closing a narrowed process handle failed")?;
+    refused(
+        side.call(nr::PROCESS_START, &[reg(child), reg(manage_less)]),
+        status::BAD_HANDLE,
+        "process_start with a closed bootstrap handle was not refused",
+        counter,
+    )?;
     let _ = side
         .call(nr::PROCESS_START, &[reg(child), reg(far)])
-        .map_err(|_| "process_start of a made process failed")?;
+        .map_err(|_| "process_start after a refused bootstrap move failed")?;
     refused(
         side.call(nr::HANDLE_CLOSE, &[reg(far)]),
         status::BAD_HANDLE,
