@@ -285,8 +285,45 @@ pub(crate) const APPLETS: &[Command] = &[
         status: 1,
         expect: Expect::Shaped(&["cat: *: No such device or address"]),
     },
+    // Permissions: a user who is not root is refused what the modes
+    // withhold, owns what it makes, and cannot delete another's file from
+    // the sticky `/tmp`; root is refused none of it.
+    Command {
+        argv: &["sh", "-c", PERMISSIONS_SCRIPT],
+        status: 9,
+        expect: Expect::Shaped(&[
+            "uid=1000(ferrix) gid=1000(ferrix)*",
+            "cat: can't open '/tmp/dac-private': Permission denied",
+            "owned by 1000 1000",
+            "rm: can't remove '/tmp/dac-private': Operation not permitted",
+            "chmod: /tmp/dac-private: Operation not permitted",
+            "ls: can't open '/tmp/dac-closed': Permission denied",
+            "*/tmp/dac-noexec: Permission denied",
+            "root still reads: secret",
+        ]),
+    },
     // `mount -t proc` and `mount -t devtmpfs` go here once mount takes them.
 ];
+
+/// Root makes a private file, a closed directory and a script nobody may
+/// execute; `su` becomes the image's user `ferrix`, uid 1000, which is
+/// refused each of them with the error Linux gives -- `EACCES` for a mode,
+/// `EPERM` for the sticky bit and for `chmod` of another's file -- and owns
+/// the file it makes. Root reads the private file afterwards, so a kernel
+/// that refused everything to everyone cannot pass.
+const PERMISSIONS_SCRIPT: &str = r#"echo secret > /tmp/dac-private && chmod 600 /tmp/dac-private || exit 1
+mkdir -m 700 /tmp/dac-closed || exit 2
+echo 'echo ran' > /tmp/dac-noexec && chmod 644 /tmp/dac-noexec || exit 3
+su ferrix -c 'id
+cat /tmp/dac-private
+echo mine > /tmp/dac-mine && stat -c "owned by %u %g" /tmp/dac-mine
+rm -f /tmp/dac-private
+chmod 777 /tmp/dac-private
+ls /tmp/dac-closed
+/tmp/dac-noexec'
+echo "root still reads: $(cat /tmp/dac-private)"
+exit 9
+"#;
 
 /// The list as `kernel/build.rs` takes it: each argument ends in a NUL, and
 /// each command in an empty argument.

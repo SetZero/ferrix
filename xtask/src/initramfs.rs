@@ -268,10 +268,16 @@ fn build_with_shell(
     }
     if let Some(program) = program {
         // Who uid 0 is, for the applets that ask by name -- `whoami`, `id`,
-        // `ls -l`. Only beside a program, so the archive without one stays
-        // the bytes the kernel's boot check reads.
-        archive.file("etc/passwd", 0o644, b"root:x:0:0:root:/:/bin/sh\n")?;
-        archive.file("etc/group", 0o644, b"root:x:0:\n")?;
+        // `ls -l` -- and a user who is not root, whom `test-vfs` becomes with
+        // `su` to be refused what only root may do. Only beside a program, so
+        // the archive without one stays the bytes the kernel's boot check
+        // reads.
+        archive.file(
+            "etc/passwd",
+            0o644,
+            b"root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/tmp:/bin/sh\n",
+        )?;
+        archive.file("etc/group", 0o644, b"root:x:0:\nferrix:x:1000:\n")?;
         archive.file(PROGRAM_PATH, 0o755, program)?;
         for applet in APPLETS {
             archive.symlink(&format!("bin/{applet}"), "busybox")?;

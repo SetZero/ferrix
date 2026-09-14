@@ -220,6 +220,19 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
     (14, &["0"]),
     (15, &[" 00 00 00 00 00 00 00 00"]),
     (16, &["cat: can't open '/tmp/x': No such device or address"]),
+    (
+        17,
+        &[
+            "uid=1000(ferrix) gid=1000(ferrix) groups=1000(ferrix)",
+            "cat: can't open '/tmp/dac-private': Permission denied",
+            "owned by 1000 1000",
+            "rm: can't remove '/tmp/dac-private': Operation not permitted",
+            "chmod: /tmp/dac-private: Operation not permitted",
+            "ls: can't open '/tmp/dac-closed': Permission denied",
+            "sh: /tmp/dac-noexec: Permission denied",
+            "root still reads: secret",
+        ],
+    ),
 ];
 
 /// A log of the applets alone, numbered after the criterion's commands, each
