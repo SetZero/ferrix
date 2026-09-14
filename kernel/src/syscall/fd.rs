@@ -28,9 +28,9 @@ use alloc::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
-    AT_FDCWD, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC, O_ACCMODE,
-    O_APPEND, O_CLOEXEC, O_CREAT, O_EXCL, O_NONBLOCK, O_PATH, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY,
-    SEEK_CUR, SEEK_DATA, SEEK_END, SEEK_HOLE, SEEK_SET,
+    AT_FDCWD, F_ADD_SEALS, F_DUPFD, F_DUPFD_CLOEXEC, F_GET_SEALS, F_GETFD, F_GETFL, F_SETFD,
+    F_SETFL, FD_CLOEXEC, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_EXCL, O_NONBLOCK, O_PATH,
+    O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, SEEK_CUR, SEEK_DATA, SEEK_END, SEEK_HOLE, SEEK_SET,
 };
 use ferrix_vfs::fd::FdTable;
 use ferrix_vfs::{FileType, Location, OpenFile, OpenFlags, Whence};
@@ -42,6 +42,7 @@ use crate::panic::{catalog, fatal};
 use crate::syscall::process::Process;
 use crate::syscall::tty;
 use crate::syscall::uaccess::{self, UserError};
+use crate::user::vmo::Vmo;
 
 /// Linux's `PATH_MAX`, counting the terminator.
 const PATH_MAX: usize = 4096;
@@ -337,6 +338,22 @@ pub(crate) fn sys_fcntl(process: &Process, fd: i32, cmd: u32, arg: u64) -> Resul
             status.append = arg & u64::from(O_APPEND) != 0;
             status.nonblock = arg & u64::from(O_NONBLOCK) != 0;
             file.set_status(status);
+            Ok(0)
+        }
+        F_GET_SEALS => file.inode().seals().map(|seals| seals as usize),
+        F_ADD_SEALS => {
+            // `memfd_add_seals`' order: a file not open for writing is `EPERM`
+            // before anything about the seals or the filesystem is asked.
+            if !file.writable() {
+                return Err(Errno::EPERM);
+            }
+            let seals = u32::try_from(arg).map_err(|_| Errno::EINVAL)?;
+            let object = file
+                .inode()
+                .mapping()
+                .and_then(|object| object.downcast::<Vmo>().ok());
+            let writably_mapped = || object.as_ref().is_some_and(|vmo| vmo.writably_mapped());
+            file.inode().add_seals(seals, &writably_mapped)?;
             Ok(0)
         }
         _ => Err(Errno::EINVAL),

@@ -54,6 +54,7 @@ pub(crate) mod image;
 pub(crate) mod kill;
 pub(crate) mod limits;
 pub(crate) mod load;
+pub(crate) mod memfd;
 pub(crate) mod memory;
 pub(crate) mod namespace;
 pub(crate) mod native;
@@ -434,6 +435,7 @@ fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<
         Syscall::Ftruncate64 => fd::sys_ftruncate(process, fd, wide(a, 1)),
         Syscall::Ioctl => fd::sys_ioctl(process, fd, truncate(a[1]), a[2]),
         Syscall::Flock => flock::sys_flock(process, fd, truncate(a[1])),
+        Syscall::MemfdCreate => memfd::sys_memfd_create(process, a[0], truncate(a[1])),
         _ => return None,
     };
     Some(answer)
