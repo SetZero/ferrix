@@ -505,7 +505,44 @@ pub struct Tmpfs {
     root: Arc<Node>,
 }
 
+/// `F_SEAL_SEAL`: no more seals may be added.
+pub const SEAL_SEAL: u32 = 0x0001;
+/// `F_SEAL_SHRINK`: the file may not shrink.
+pub const SEAL_SHRINK: u32 = 0x0002;
+/// `F_SEAL_GROW`: the file may not grow.
+pub const SEAL_GROW: u32 = 0x0004;
+/// `F_SEAL_WRITE`: the contents may not change.
+pub const SEAL_WRITE: u32 = 0x0008;
+/// `F_SEAL_FUTURE_WRITE`: no new write may start.
+pub const SEAL_FUTURE_WRITE: u32 = 0x0010;
+/// Every seal tmpfs knows.
+const SEALS_KNOWN: u32 = SEAL_SEAL | SEAL_SHRINK | SEAL_GROW | SEAL_WRITE | SEAL_FUTURE_WRITE;
+
 impl Tmpfs {
+    /// A regular file on this tmpfs that no directory names: what
+    /// `memfd_create` makes. With `sealable`, it starts with no seals and may
+    /// be sealed; without, it carries [`SEAL_SEAL`], as every other file does.
+    ///
+    /// # Errors
+    ///
+    /// What the storage refuses when it allocates the file's pages.
+    pub fn new_unlinked_file(&self, permissions: u32, sealable: bool) -> Result<Arc<dyn Inode>> {
+        let now = self.shared.clock.now();
+        let body = Body::File {
+            pages: self.shared.storage.allocate()?,
+            len: 0,
+        };
+        let node = Node::new(&self.shared, body, permissions, now);
+        {
+            let mut state = node.state.lock();
+            state.nlink = 0;
+            if sealable {
+                state.seals = 0;
+            }
+        }
+        Ok(node as Arc<dyn Inode>)
+    }
+
     /// An empty tmpfs whose root directory has `permissions`.
     #[must_use]
     pub fn new(
@@ -579,6 +616,9 @@ impl fmt::Debug for Node {
 
 #[derive(Debug)]
 struct State {
+    /// `F_SEAL_*` bits. [`SEAL_SEAL`] for every file but a memfd made to
+    /// allow sealing, as on Linux's shmem.
+    seals: u32,
     permissions: u32,
     uid: u32,
     gid: u32,
@@ -731,6 +771,7 @@ impl Node {
             me: Weak::clone(me),
             shared: Arc::clone(shared),
             state: SpinLock::new(State {
+                seals: SEAL_SEAL,
                 permissions: permissions & 0o7777,
                 uid: 0,
                 gid: 0,
@@ -1064,6 +1105,7 @@ impl Inode for Node {
         let now = self.now();
         let max = self.shared.storage.max_file_size();
         let mut state = self.state.lock();
+        let state_seals = state.seals;
         let end = match &mut state.body {
             Body::File { pages, len } => {
                 let start = if append { *len } else { offset };
@@ -1073,6 +1115,13 @@ impl Inode for Node {
                 let end = start.checked_add(data.len() as u64).ok_or(Errno::EFBIG)?;
                 if end > max {
                     return Err(Errno::EFBIG);
+                }
+                // `shmem_write_begin`'s order: a write seal refuses any write,
+                // a grow seal one that would extend the file.
+                if state_seals & (SEAL_WRITE | SEAL_FUTURE_WRITE) != 0
+                    || (state_seals & SEAL_GROW != 0 && end > *len)
+                {
+                    return Err(Errno::EPERM);
                 }
                 pages.write(start, data)?;
                 if end > *len {
@@ -1094,7 +1143,14 @@ impl Inode for Node {
             return Err(Errno::EFBIG);
         }
         let mut state = self.state.lock();
+        let seals = state.seals;
         match &mut state.body {
+            Body::File { len, .. }
+                if (new_len < *len && seals & SEAL_SHRINK != 0)
+                    || (new_len > *len && seals & SEAL_GROW != 0) =>
+            {
+                return Err(Errno::EPERM);
+            }
             Body::File { pages, len } => {
                 // The store hears the new length first, so a mapping's fault
                 // past the cut is refused before the cut pages go.
@@ -1117,10 +1173,12 @@ impl Inode for Node {
             return Err(Errno::EFBIG);
         }
         let mut state = self.state.lock();
+        let seals = state.seals;
         match &mut state.body {
             // Decided under the lock every write takes, so a writer that
             // extends the file in the meantime is never cut back.
             Body::File { len, .. } if *len >= new_len => return Ok(()),
+            Body::File { .. } if seals & SEAL_GROW != 0 => return Err(Errno::EPERM),
             // Nothing to clear: a shrink zeroes what it cuts off, so the bytes
             // this uncovers already read as zeros.
             Body::File { pages, len } => {
@@ -1139,6 +1197,42 @@ impl Inode for Node {
             Body::File { pages, .. } => pages.object(),
             _ => None,
         }
+    }
+
+    fn seals(&self) -> Result<u32> {
+        let state = self.state.lock();
+        match &state.body {
+            Body::File { .. } => Ok(state.seals),
+            _ => Err(Errno::EINVAL),
+        }
+    }
+
+    fn add_seals(&self, seals: u32, writably_mapped: &dyn Fn() -> bool) -> Result<()> {
+        if seals & !SEALS_KNOWN != 0 {
+            return Err(Errno::EINVAL);
+        }
+        // Stored first and looked at second, and both under the node's lock,
+        // as `mmap` counts itself first and then takes this lock to read the
+        // seals. The lock orders the two sides whatever the processor's store
+        // buffer does: if `mmap` takes it after this releases it, it sees the
+        // seal; if it took it before, its count was raised before its
+        // acquisition, which this acquisition follows, so the look below sees
+        // the count. A write seal and a shared mapping that may write the file
+        // therefore never both stand.
+        let mut state = self.state.lock();
+        if !matches!(state.body, Body::File { .. }) {
+            return Err(Errno::EINVAL);
+        }
+        if state.seals & SEAL_SEAL != 0 {
+            return Err(Errno::EPERM);
+        }
+        let added = seals & !state.seals;
+        state.seals |= seals;
+        if added & SEAL_WRITE != 0 && writably_mapped() {
+            state.seals &= !added;
+            return Err(Errno::EBUSY);
+        }
+        Ok(())
     }
 
     fn lookup(&self, name: &[u8]) -> Result<Arc<dyn Inode>> {

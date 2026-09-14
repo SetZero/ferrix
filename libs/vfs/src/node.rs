@@ -485,4 +485,24 @@ pub trait Inode: Send + Sync + fmt::Debug {
     fn mapping(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         None
     }
+
+    /// The seals on this file, as `fcntl(F_GET_SEALS)` reports them.
+    ///
+    /// `EINVAL`, the default, for a filesystem that cannot seal, which is
+    /// Linux's answer for any file not on shmem.
+    fn seals(&self) -> Result<u32> {
+        Err(Errno::EINVAL)
+    }
+
+    /// Add `seals`, as `fcntl(F_ADD_SEALS)` does.
+    ///
+    /// A write seal is refused with `EBUSY` while a shared mapping may write
+    /// the file. `writably_mapped` answers that, and is asked only after the
+    /// seal has been stored: a mapping counts itself before it reads the seals,
+    /// so one of the two always sees the other. `EPERM` once `F_SEAL_SEAL` is
+    /// set; `EINVAL` for a filesystem that cannot seal.
+    fn add_seals(&self, seals: u32, writably_mapped: &dyn Fn() -> bool) -> Result<()> {
+        let _ = (seals, writably_mapped);
+        Err(Errno::EINVAL)
+    }
 }
