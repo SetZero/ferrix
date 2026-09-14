@@ -1,5 +1,6 @@
 //! The C programs that exercise startup, exit, thread-local storage, `errno`,
-//! the auxiliary vector, the stack protector and the first string functions.
+//! the auxiliary vector, the stack protector, `assert` and the first string
+//! functions.
 //!
 //! The harness is in `tests/common`.
 
@@ -106,5 +107,29 @@ fn check_h_reports_a_failed_check_on_standard_error() {
         stderr: "check_failure.c:9: check failed: 1 + 1 == 3\n",
         ending: Ending::Code(1),
         ..Case::named("check_failure")
+    });
+}
+
+#[test]
+fn a_true_assert_does_nothing_and_a_false_one_aborts_with_musls_message() {
+    check(&Case {
+        stdout: "passed\n",
+        ..Case::named("assert")
+    });
+    check(&Case {
+        args: &["fail"],
+        stderr: "Assertion failed: 1 + 1 == 3 (assert.c: main: 100)\n",
+        ending: Ending::Signal(SIGABRT),
+        ..Case::named("assert")
+    });
+}
+
+#[test]
+fn ndebug_takes_assert_away() {
+    check(&Case {
+        cflags: &["-DNDEBUG"],
+        args: &["fail"],
+        stdout: "passed\n",
+        ..Case::named("assert")
     });
 }
