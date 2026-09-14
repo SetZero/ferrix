@@ -38,6 +38,13 @@ pub(crate) const MARKER: &[u8] =
 /// The magic of a plain newc header.
 const MAGIC: &[u8] = b"070701";
 
+/// The owner of everything in the archive but a user's own home directory:
+/// uid and gid zero, as an archive built on any host must be.
+const ROOT: (u32, u32) = (0, 0);
+
+/// The user the image carries beside root, for `test-vfs` to become.
+pub(crate) const USER: (u32, u32) = (1000, 1000);
+
 /// `c_mode` type bits.
 const S_IFDIR: u32 = 0o040_000;
 const S_IFREG: u32 = 0o100_000;
@@ -63,7 +70,15 @@ impl Newc {
         }
     }
 
-    fn entry(&mut self, name: &str, mode: u32, ino: u32, nlink: u32, data: &[u8]) -> Result<()> {
+    fn entry(
+        &mut self,
+        name: &str,
+        mode: u32,
+        ino: u32,
+        nlink: u32,
+        (uid, gid): (u32, u32),
+        data: &[u8],
+    ) -> Result<()> {
         let size = u32::try_from(data.len())
             .map_err(|_| Error::new(format!("{name} is too large for a newc entry")))?;
         let name_size = u32::try_from(name.len() + 1)
@@ -73,8 +88,8 @@ impl Newc {
         let fields = [
             ino,
             mode,
-            0,
-            0,
+            uid,
+            gid,
             nlink,
             FIXED_MTIME,
             size,
@@ -105,18 +120,24 @@ impl Newc {
     }
 
     fn directory(&mut self, name: &str, permissions: u32) -> Result<()> {
+        self.directory_owned(name, permissions, ROOT)
+    }
+
+    /// A directory belonging to `owner`: a user's home, which has to be the
+    /// user's or they cannot write in it.
+    fn directory_owned(&mut self, name: &str, permissions: u32, owner: (u32, u32)) -> Result<()> {
         let ino = self.ino();
-        self.entry(name, S_IFDIR | permissions, ino, 2, &[])
+        self.entry(name, S_IFDIR | permissions, ino, 2, owner, &[])
     }
 
     fn file(&mut self, name: &str, permissions: u32, data: &[u8]) -> Result<()> {
         let ino = self.ino();
-        self.entry(name, S_IFREG | permissions, ino, 1, data)
+        self.entry(name, S_IFREG | permissions, ino, 1, ROOT, data)
     }
 
     fn symlink(&mut self, name: &str, target: &str) -> Result<()> {
         let ino = self.ino();
-        self.entry(name, S_IFLNK | 0o777, ino, 1, target.as_bytes())
+        self.entry(name, S_IFLNK | 0o777, ino, 1, ROOT, target.as_bytes())
     }
 
     /// One file with several names. newc repeats the inode number on each and
@@ -127,13 +148,13 @@ impl Newc {
         let nlink = u32::try_from(names.len()).map_err(|_| Error::new("too many hard links"))?;
         for (at, name) in names.iter().enumerate() {
             let body = if at + 1 == names.len() { data } else { &[] };
-            self.entry(name, S_IFREG | permissions, ino, nlink, body)?;
+            self.entry(name, S_IFREG | permissions, ino, nlink, ROOT, body)?;
         }
         Ok(())
     }
 
     fn finish(mut self) -> Result<Vec<u8>> {
-        self.entry("TRAILER!!!", 0, 0, 1, &[])?;
+        self.entry("TRAILER!!!", 0, 0, 1, ROOT, &[])?;
         Ok(self.bytes)
     }
 }
@@ -331,7 +352,7 @@ fn build_with_shell(
         archive.file(
             "etc/passwd",
             0o644,
-            b"root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/tmp:/bin/sh\n",
+            b"root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/home/ferrix:/bin/zsh\n",
         )?;
         archive.file("etc/group", 0o644, b"root:x:0:\nferrix:x:1000:\n")?;
         // Where the C library's resolver asks. `10.0.2.3` is the gateway's
@@ -347,6 +368,10 @@ fn build_with_shell(
             archive.directory(directory, 0o755)?;
         }
         archive.file(UDHCPC_SCRIPT_PATH, 0o755, UDHCPC_SCRIPT)?;
+        // A home the user owns: `su - ferrix` starts there, and a home root
+        // owned would be a home its user cannot write in.
+        archive.directory("home", 0o755)?;
+        archive.directory_owned("home/ferrix", 0o755, USER)?;
         archive.file(PROGRAM_PATH, 0o755, program)?;
         for applet in APPLETS {
             archive.symlink(&format!("bin/{applet}"), "busybox")?;

@@ -298,14 +298,15 @@ pub(crate) const APPLETS: &[Command] = &[
             "rm: can't remove '/tmp/dac-private': Operation not permitted",
             "chmod: /tmp/dac-private: Operation not permitted",
             "ls: can't open '/tmp/dac-closed': Permission denied",
-            "*/tmp/dac-noexec: Permission denied",
+            "*permission denied: /tmp/dac-noexec",
             "proc self owned by 1000 1000",
             "listed its own descriptors",
             "Uid:*1000*1000*1000*1000",
             "set-user-id gives uid 1000 euid 0",
             "hostname: *Operation not permitted",
-            "*kill*1*Operation not permitted",
+            "*kill 1 failed: operation not permitted",
             "mknod: *Operation not permitted",
+            "login shell *zsh in /home/ferrix as 1000",
             "root still reads: secret",
         ]),
     },
@@ -339,6 +340,7 @@ head -12 /proc/self/status
 hostname dac-evil
 kill -0 1
 mknod /tmp/dac-null c 1 3'
+su - ferrix -c 'echo "login shell $0 in $PWD as $EUID"'
 echo "root still reads: $(cat /tmp/dac-private)"
 exit 9
 "#;

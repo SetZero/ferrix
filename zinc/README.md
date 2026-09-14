@@ -41,6 +41,12 @@ the parser's trees.
   to `typeset`, `read`, `source`, `autoload`, `getopts` and `trap EXIT`.
 * **Interactive:** a prompt with the plain `%` escapes and continuation lines.
   No line editor, completion, job control or history yet.
+* **A login shell:** `-l`, or a name beginning with `-`, as `login` and `su -`
+  start one; `/etc/zshenv`, `.zshenv`, `/etc/zprofile`, `.zprofile`,
+  `/etc/zshrc`, `.zshrc`, `/etc/zlogin` and `.zlogin` in zsh's order. It is
+  the `ferrix` user's shell in Ferrix's image, so `su - ferrix` starts it.
+* **Who is running it:** `UID`, `EUID`, `GID` and `EGID`, read from the
+  kernel at each use, which is what `%#` and a theme's prompt ask.
 
 Next, in the order oh-my-zsh needs them: the parser parity run against
 `zsh -n` over oh-my-zsh and zsh's function library; the rest of the

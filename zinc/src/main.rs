@@ -190,6 +190,12 @@ fn main() {
     let mut command: Option<Vec<u8>> = None;
     let mut force_interactive = false;
     let mut no_rcs = false;
+    // A login shell: `-l`, or a name beginning with `-`, which is how
+    // `login` and `su -` start one.
+    let mut login = argv0
+        .rsplit(|&c| c == b'/')
+        .next()
+        .is_some_and(|name| name.first() == Some(&b'-'));
     let mut k = 1;
     while let Some(a) = args.get(k) {
         match a.as_slice() {
@@ -221,6 +227,7 @@ fn main() {
                             command = args.get(k).map(|c| tok::metafy(c));
                         }
                         b'i' => force_interactive = true,
+                        b'l' => login = true,
                         b'f' => no_rcs = true,
                         b'x' => drop(sh.set_option(b"xtrace", true)),
                         b'e' => drop(sh.set_option(b"errexit", true)),
@@ -289,8 +296,19 @@ fn main() {
             .or_else(|| sh.get(b"HOME"))
             .map(|v| v.joined())
             .unwrap_or_default();
-        for f in [&b"/.zshenv"[..], b"/.zshrc"] {
-            let path = [dir.as_slice(), f].concat();
+        // zsh's order, each global file before the user's own, and the
+        // profile and login files only for a login shell.
+        let mut files: Vec<(&[u8], &[u8])> = vec![(b"/etc/zshenv", b"/.zshenv")];
+        if login {
+            files.push((b"/etc/zprofile", b"/.zprofile"));
+        }
+        files.push((b"/etc/zshrc", b"/.zshrc"));
+        if login {
+            files.push((b"/etc/zlogin", b"/.zlogin"));
+        }
+        for (global, own) in files {
+            source_if_exists(&mut sh, global);
+            let path = [dir.as_slice(), own].concat();
             source_if_exists(&mut sh, &tok::unmetafy(&path));
         }
     }

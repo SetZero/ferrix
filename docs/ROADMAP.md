@@ -1243,8 +1243,28 @@ them; exec keeps them and makes the saved and filesystem ids the effective
 ones, as `cap_bprm_creds_from_file` does, with `AT_SECURE` set when the
 effective id is not the real one. The `set*id` calls, `setgroups` and `capget`
 follow `kernel/sys.c` and `kernel/groups.c`, an effective uid of 0 standing in
-for the capabilities, so busybox's `su` reaches a user. Nothing checks a
-file's permissions against the ids yet; that is the VFS's. `flock` locks
+for the capabilities, so busybox's `su` reaches a user.
+
+**The ids are enforced**, which is what makes Ferrix multi-user rather than a
+machine with ids written on it. `libs/vfs`'s `access` holds the rules as pure
+functions -- `generic_permission`, `may_create`, `may_delete` with the sticky
+bit, `setattr_prepare`'s chown and chmod rules, `inode_init_owner` -- and the
+namespace calls them where Linux does: search on every directory of a walk,
+read or write on an open, execute on a program, write and search on the
+directory of a create or a delete, and ownership for `chmod`, `chown` and
+`utimensat`. A new file, pipe, socket or memfd belongs to its creator, a
+process's `/proc` directory to the ids it acts as, and a set-user-id or
+set-group-id program runs as its file's owner unless `PR_SET_NO_NEW_PRIVS`
+forbade it. The calls that change the machine -- `sethostname`, `reboot`,
+`mount`, `chroot`, `mknod` of a device, setting the clock -- and the calls
+that reach another user's processes -- `kill`, `setpriority`, `prlimit64`,
+`sched_setaffinity` -- refuse anyone but root, each with the error Linux
+gives. `cargo xtask test-vfs` proves it from the user's side: the image
+carries a `ferrix` user with a home of its own, `su` becomes it, and every
+refusal above is required of the kernel, with root still able to read the
+file it was refused.
+
+`flock` locks
 belong to the open file description, so a forked command keeps its parent's.
 `fcntl` record locks come in both kinds: classic ones, owned by the
 descriptor table and released by any close of the file, and open file
