@@ -144,6 +144,26 @@ pub(crate) fn in_class(name: &[u8], c: u8) -> bool {
     test(c_int::from(c)) != 0
 }
 
+/// Whether `name` is one of the C locale's character classes, which
+/// [`in_class`] knows.
+pub(crate) fn is_class(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"alnum"
+            | b"alpha"
+            | b"blank"
+            | b"cntrl"
+            | b"digit"
+            | b"graph"
+            | b"lower"
+            | b"print"
+            | b"punct"
+            | b"space"
+            | b"upper"
+            | b"xdigit"
+    )
+}
+
 /// `c` in the other case, if it is an ASCII letter.
 const fn other_case(c: u8) -> u8 {
     if c.is_ascii_uppercase() {

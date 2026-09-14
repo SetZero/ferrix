@@ -71,6 +71,7 @@ pub mod qsort;
 pub mod rand;
 pub mod random;
 pub mod realpath;
+pub mod regex;
 pub mod rename;
 pub mod resource;
 pub mod rwlock;
