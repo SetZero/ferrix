@@ -1336,10 +1336,13 @@ that took what it looked at, a record read that found the last record's tail:
   thread has gone. Boot checks on all three architectures make threads in
   shared memory, clear `CLONE_CHILD_CLEARTID` as a thread ends, and end a
   process whose last two threads exit together; ferrousli's static pthread
-  test runs to its end on x86-64. Left: signals, stop, `kill` and `execve`
-  across threads (`execve` answers `EAGAIN` with a second thread live until
-  then), the futex lock and TLB work, and `/proc`'s threads with the exit
-  test on three architectures.
+  test runs to its end on x86-64. Signals work across threads: a signal sent
+  to a process is judged across every live thread's mask and wakes one that
+  can take it, `tkill`, `tgkill` and `SIGPIPE` reach one thread, a stop parks
+  every thread and their blocked calls restart after `SIGCONT`, and `execve`
+  from any thread ends the others and takes the pid -- each checked at boot on
+  all three architectures. Left: the futex lock and TLB work, and `/proc`'s
+  threads with the exit test on three architectures.
 * **Three stand-ins, each written down where it lives.** The console is the one
   terminal, its line discipline fed by a thread that looks every twenty
   milliseconds rather than waiting on the receive interrupt, until stage 15
