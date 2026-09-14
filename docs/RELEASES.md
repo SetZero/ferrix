@@ -5,6 +5,61 @@ owner before tagging as `docs/BACKLOG.md`'s *Milestones* rule says. The notes
 here are the tag's, kept short: what a person can try, and what is known not
 to work yet. Newest first.
 
+## stage-11-ring-3-disk-and-btrfs — 2026-09-14
+
+Stages 10 and 11 done: a user-mode disk driver behind the IOMMU, and btrfs
+read through it; threads begun; ferrousli's busybox as the userland.
+
+- Stage 10's exit: `/sbin/blk`, a virtio-blk driver running in ring 3 on the
+  native runtime, serves the disk through the block ring with VT-d (x86-64)
+  and the SMMUv3 (AArch64) translating its DMA, a deliberate out-of-domain
+  write faults, and a driver's death resets its device before any pinned
+  frame is freed. ARMv7-A runs its driver in degraded trusted mode, as
+  decided. `FERRIX-BOOT-OK stages 1-10`.
+- Stage 11's exit: an image made by real `mkfs.btrfs` is mounted read-only
+  at `/mnt` through that driver and 101 files, 17 directories and a link
+  read back byte for byte on all three architectures, with every data sector
+  checked against the checksum tree and the default subvolume honoured.
+  `FERRIX-BOOT-OK stages 1-11`.
+- The page cache is the inode's VMO on tmpfs and btrfs alike: files fill
+  from a page source, and `mmap` of a file with `MAP_SHARED` maps those pages
+  — writes go both ways, `msync` answers, a touch past the end is `SIGBUS`.
+  The VMO reverse map takes a VMO's pages out of every space that maps them
+  before their frames go back, shooting down only where they may be cached.
+- Threads have begun: every task has a thread with signal state of its own,
+  `exit` ends a thread apart from `exit_group`, and `clone(CLONE_THREAD)` is
+  on `develop` running ferrousli's pthread test.
+- Native process creation: `process_create` and `process_start`, `vmo_map`,
+  process observers, and a start argument on entry; `devmgr`'s kernel half.
+- `SA_RESTART`, pid 1 with orphans reparented, a program killed by its own
+  fault no longer panics the kernel, `uname -s` says `Ferrix`.
+- All three architectures take console input by interrupt (x86-64's COM1
+  through the I/O APIC); ARMv7-A boots with 2 GiB; `ferrix.onexit=reset`
+  returns the DK1 to U-Boot with no hand at it — proven on the board, with
+  the flash-from-Windows procedure in the board guide.
+- Every frame-counted self-check nets heap pages against free frames and
+  names the route of any mismatch; the interrupt line frees at its last
+  handle's close; the wake check counts wakes rather than timing them.
+- ferrousli: its busybox links (from 154 undefined symbols to none) and is
+  the primary busybox the gates run — `test-shell` and `test-vfs` pass with
+  it on Ferrix, with the musl and glibc busyboxes kept as compatibility
+  checks. `cargo xtask busybox` builds it; `--init ferrousli` runs it.
+- Decisions of record: POSIX.1-2024 compatibility is a goal, Linux winning
+  where they differ; the goal after `rustc` is a Hyprland-shaped compositor
+  in Rust (stages 17–19); estimates are story points.
+- Known limits: no `AF_UNIX` sockets yet (landing 1 of 3 is verified on
+  `develop`), no `MAP_PRIVATE` file mappings, no `devmgr` program (the boot
+  check starts the driver), one open lead on ARMv7-A at one processor.
+
+What to test:
+
+```
+cargo xtask busybox
+cargo xtask run --arch x86_64 --init ferrousli
+cargo xtask test-vfs --arch x86_64 --init ferrousli
+cargo xtask test-boot --arch armv7a --memory 2048 --smp 2
+```
+
 ## stage-9.1-console-and-iommu — 2026-09-13, commit 5fb365f
 
 Arm console input, translated IOMMU domains, and the day's intermittent
