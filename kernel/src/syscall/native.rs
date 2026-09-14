@@ -802,7 +802,7 @@ fn object_wait_one(
     };
 
     let satisfied = object.waiters().wait_until_deadline(
-        || object.signals().intersects(wanted) || process.is_terminated(),
+        || object.signals().intersects(wanted) || process.caller_must_leave(),
         deadline,
     );
     let observed = object.signals();
@@ -812,7 +812,7 @@ fn object_wait_one(
         uaccess::copy_to_user(process.space(), observed_at, &observed.0.to_ne_bytes())
             .map_err(fault)?;
     }
-    if process.is_terminated() {
+    if process.caller_must_leave() {
         return Err(Errno::EINTR);
     }
     if satisfied {
@@ -1343,7 +1343,8 @@ fn port_queue(process: &Process, port: Handle, packet: u64) -> Result<usize, Err
 ///
 /// A packet taken and then not delivered, because the caller's buffer
 /// faulted, is put back at the head of the queue. The wait also ends when the
-/// caller is killed, for the reason `object_wait_one` gives.
+/// caller is killed, or another of its process's threads replaces the program,
+/// for the reason `object_wait_one` gives.
 fn port_wait(
     process: &Process,
     port: Handle,
@@ -1359,8 +1360,8 @@ fn port_wait(
     let packet = loop {
         let _ = port
             .waiters()
-            .wait_until_deadline(|| !port.is_empty() || process.is_terminated(), deadline);
-        if process.is_terminated() {
+            .wait_until_deadline(|| !port.is_empty() || process.caller_must_leave(), deadline);
+        if process.caller_must_leave() {
             return Err(Errno::EINTR);
         }
         // Another waiter on the same port may have taken the packet that

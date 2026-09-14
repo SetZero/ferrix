@@ -12,11 +12,14 @@
 //! is taken soon: a task blocked in a call is woken, and one running in user
 //! mode on another processor is interrupted.
 //!
-//! # One thread per process
+//! # A process or one thread
 //!
-//! A thread id is a pid here, so `tkill` and `tgkill` are `kill` of one process
-//! with a different `si_code`. glibc's `raise` and `abort` both come through
-//! `tgkill(getpid(), gettid(), sig)`, and `gettid` answers the pid.
+//! `kill` sends to a process as a whole: any of its threads that does not
+//! block the signal may take it, and one is woken to. `tkill`, `tgkill` and a
+//! write to a broken pipe send to one thread, into its own queue, where only
+//! that thread takes it -- which is how glibc's and musl's `raise`, `abort`
+//! and `pthread_kill` reach the thread they mean. Either way a stop, a
+//! continue or a fatal default acts on the whole process.
 //!
 //! # The interval timer
 //!
@@ -41,6 +44,7 @@ use crate::syscall::deliver;
 use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
 use crate::syscall::signal::{Alarm, Origin, Posted};
+use crate::syscall::thread::{self, Thread};
 use crate::syscall::uaccess;
 
 /// `si_code` for a child that exited.
@@ -93,16 +97,34 @@ pub(crate) fn send(target: &Process, signal: u32, origin: Origin) {
     match target.post_signal(signal, origin) {
         Posted::Discarded => {}
         Posted::Fatal => process::kill(target, 128 + signal as i32),
-        Posted::Pending => target.notify_signal(),
+        Posted::Pending => target.notify_signal(signal),
     }
 }
 
-/// Send `signal` to the running task's own process, from the kernel: what a
-/// write to a pipe with no reader does with `SIGPIPE`. Nothing, for a kernel
-/// thread.
+/// Send `signal` to `thread` alone, as `origin`: as [`send`], except that it
+/// is recorded for that thread, judged against that thread's mask, and only
+/// that thread is woken to take it.
+pub(crate) fn send_to_thread(thread: &Thread, signal: u32, origin: Origin) {
+    let target = thread.process();
+    if signal == 0 || signal > NSIG || target.is_terminated() {
+        return;
+    }
+    if signal == ferrix_linux_abi::types::SIGCONT {
+        target.leave_stop();
+    }
+    match target.post_signal_to(thread, signal, origin) {
+        Posted::Discarded => {}
+        Posted::Fatal => process::kill(target, 128 + signal as i32),
+        Posted::Pending => target.notify_signal_to(thread),
+    }
+}
+
+/// Send `signal` to the running task's own thread, from the kernel: what a
+/// write to a pipe with no reader does with `SIGPIPE`, which Linux sends to
+/// the writing thread. Nothing, for a kernel thread.
 pub(crate) fn send_to_current(signal: u32) {
-    if let Some(process) = process::current() {
-        send(&process, signal, Origin::Kernel);
+    if let Some(thread) = thread::current() {
+        send_to_thread(&thread, signal, Origin::Kernel);
     }
 }
 
@@ -146,22 +168,29 @@ pub(crate) fn sys_kill(process: &Process, pid: i32, signal: u32) -> Result<usize
     Ok(0)
 }
 
-/// `tkill`: signal thread `tid`, which a thread's id finds through its process.
-///
-/// The signal goes to the process as a whole for now; sending it to the one
-/// thread comes with signals across threads.
+/// `tkill`: signal thread `tid` alone, found through its process.
 ///
 /// # Errors
 ///
 /// `EINVAL` for a thread id below one or a signal past 64; `ESRCH` for a
-/// thread nobody has.
+/// thread nobody has, or one that has begun to end.
 pub(crate) fn sys_tkill(process: &Process, tid: i32, signal: u32) -> Result<usize, Errno> {
     if tid <= 0 || signal > NSIG {
         return Err(Errno::EINVAL);
     }
-    let target = registry::find(tid.unsigned_abs()).ok_or(Errno::ESRCH)?;
-    send(&target, signal, Origin::Thread { pid: process.pid() });
+    let thread = find_thread(tid.unsigned_abs(), None)?;
+    send_to_thread(&thread, signal, Origin::Thread { pid: process.pid() });
     Ok(0)
+}
+
+/// The live thread numbered `tid`, required to be one of process `tgid`'s
+/// when that is given.
+fn find_thread(tid: u32, tgid: Option<u32>) -> Result<Arc<Thread>, Errno> {
+    let target = registry::find(tid).ok_or(Errno::ESRCH)?;
+    if tgid.is_some_and(|tgid| target.pid() != tgid) {
+        return Err(Errno::ESRCH);
+    }
+    target.thread_by_tid(tid).ok_or(Errno::ESRCH)
 }
 
 /// `tgkill`: signal thread `tid` of process `tgid`, which is what glibc's
@@ -180,11 +209,8 @@ pub(crate) fn sys_tgkill(
     if tgid <= 0 || tid <= 0 || signal > NSIG {
         return Err(Errno::EINVAL);
     }
-    let target = registry::find(tid.unsigned_abs()).ok_or(Errno::ESRCH)?;
-    if target.pid() != tgid.unsigned_abs() {
-        return Err(Errno::ESRCH);
-    }
-    send(&target, signal, Origin::Thread { pid: process.pid() });
+    let thread = find_thread(tid.unsigned_abs(), Some(tgid.unsigned_abs()))?;
+    send_to_thread(&thread, signal, Origin::Thread { pid: process.pid() });
     Ok(0)
 }
 

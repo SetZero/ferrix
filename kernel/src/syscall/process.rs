@@ -114,6 +114,19 @@ pub(crate) struct Process {
     /// thread's task is spawned, lowered as the task ends. When it reaches
     /// zero on a process that is ending, the process lets go of what it holds.
     live_threads: AtomicU32,
+    /// The id of a thread replacing the program while other threads of it are
+    /// live, or zero. While it is set every other thread leaves on its way back
+    /// to user mode, and no new thread starts. See
+    /// [`Process::end_other_threads`].
+    exec_thread: AtomicU32,
+    /// Woken whenever one of its threads has gone, for an `execve` waiting for
+    /// the others to leave.
+    thread_left: WaitQueue,
+    /// The id of the thread a signal sent to it was last given to -- chosen by
+    /// [`Process::notify_signal`], or handed on by
+    /// [`Process::hand_on_newly_blocked`] -- or zero: for the checks that such
+    /// a signal reaches the thread that can take it.
+    handed_to: AtomicU32,
     /// Set by the one [`Process::release`] that runs, as it starts.
     released: AtomicBool,
     /// Set as that release finishes, after its orphans have gone on and before
@@ -249,6 +262,9 @@ impl Process {
             start_claimed: AtomicBool::new(false),
             ending: AtomicBool::new(false),
             live_threads: AtomicU32::new(0),
+            exec_thread: AtomicU32::new(0),
+            thread_left: WaitQueue::new(),
+            handed_to: AtomicU32::new(0),
             released: AtomicBool::new(false),
             release_finished: AtomicBool::new(false),
             leader_status: AtomicI32::new(0),
@@ -622,6 +638,92 @@ impl Process {
         self.live_threads.load(Ordering::Acquire)
     }
 
+    /// Whether every task running its code is blocked or has ended: for the
+    /// check that a stopped process's threads have all parked. The tasks are
+    /// taken out of the list before they are looked at, so none is dropped
+    /// under its lock.
+    pub(crate) fn every_task_blocked(&self) -> bool {
+        let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
+        tasks.iter().all(|task| task.is_blocked() || task.is_dead())
+    }
+
+    /// Whether the running task, waiting on behalf of this process, is to stop
+    /// waiting and leave: the process is ending, or the task is a thread of it
+    /// that another thread's `execve` is ending. What a wait that does not look
+    /// at signals checks instead, so that neither an exit nor an `execve` waits
+    /// for it for ever.
+    pub(crate) fn caller_must_leave(&self) -> bool {
+        self.is_terminated()
+            || thread::current_of(self).is_some_and(|thread| self.must_leave(&thread))
+    }
+
+    /// Whether `thread` is to leave rather than run on: its process is ending,
+    /// or another of its threads is replacing the program.
+    pub(crate) fn must_leave(&self, thread: &Thread) -> bool {
+        if self.is_terminated() {
+            return true;
+        }
+        let replacing = self.exec_thread.load(Ordering::Acquire);
+        replacing != 0 && replacing != thread.tid()
+    }
+
+    /// End every thread of it but `caller`, which is about to replace the
+    /// program, as Linux's `de_thread` does; then let `caller` take the pid if
+    /// it was not the first thread, since it is the leader from here on.
+    ///
+    /// The other threads are made to come back through the kernel -- woken
+    /// from any wait, which [`Thread::signal_pending`] ends, interrupted in
+    /// user mode, released from a stop -- and each finds it must leave, and
+    /// leaves, writing its cleared id into the memory that is still the old
+    /// program's. A thread starting at this moment leaves before it enters the
+    /// program. The wait lasts until `caller` is the only live thread.
+    ///
+    /// # Errors
+    ///
+    /// `EAGAIN` when another thread is already replacing the program, which
+    /// makes this one leave, or when the process begins to end during the
+    /// wait. Either way `caller` never returns to the program.
+    pub(crate) fn end_other_threads(&self, caller: &Thread) -> Result<(), Errno> {
+        // A thread numbered zero -- of a process made with every pid in use --
+        // cannot mark itself as the one replacing the program, since zero
+        // means none: it refuses while other threads are live, as `execve` did
+        // before threads could be ended.
+        if caller.tid() == 0 {
+            return if self.live_thread_count() > 1 {
+                Err(Errno::EAGAIN)
+            } else {
+                Ok(())
+            };
+        }
+        if self
+            .exec_thread
+            .compare_exchange(0, caller.tid(), Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(Errno::EAGAIN);
+        }
+        self.signalled.wake_all();
+        self.resumed.wake_all();
+        self.wake_other_tasks();
+        let _ = self.thread_left.wait_until_deadline(
+            || self.live_thread_count() <= 1 || self.is_terminated(),
+            u64::MAX,
+        );
+        // Cleared before the id changes hands, so the caller is never, even
+        // for a moment, a thread that must leave.
+        self.exec_thread.store(0, Ordering::Release);
+        if self.is_terminated() {
+            return Err(Errno::EAGAIN);
+        }
+        let pid = self.pid();
+        let own = caller.tid();
+        if own != pid {
+            let _ = caller.take_pid(pid);
+            registry::release_thread(own, self);
+        }
+        Ok(())
+    }
+
     /// Count a thread about to start. Before its task is spawned, because the
     /// task can reach its exit on another processor before the spawn returns.
     pub(crate) fn thread_starting(&self) {
@@ -645,6 +747,7 @@ impl Process {
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |live| {
                 live.checked_sub(1)
             });
+        self.thread_left.wake_all();
         if before != Ok(1) {
             return;
         }
@@ -691,22 +794,7 @@ impl Process {
         self.vfork_done.wake_all();
         self.signalled.wake_all();
         self.resumed.wake_all();
-        // Its tasks find out on their way back to user mode: one blocked in a
-        // call is woken to, and one running in user mode is interrupted to.
-        // Waiting for a tick is not enough, because a task alone on its
-        // processor gets none -- the scheduler leaves a lone task to run -- and
-        // a program spinning there would outlive its end until it chose to make
-        // a call. The caller's own task, if it is one, is already on its way.
-        let current = sched::current();
-        let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
-        for task in &tasks {
-            if current.as_ref().is_some_and(|me| Arc::ptr_eq(me, task)) {
-                continue;
-            }
-            sched::wake(task);
-            sched::interrupt(task);
-        }
-        drop(tasks);
+        self.wake_other_tasks();
         if self.live_threads.load(Ordering::Acquire) == 0 {
             self.release();
         }
@@ -884,26 +972,145 @@ impl Process {
         }
     }
 
-    /// Make sure its tasks look at a signal just made pending: one blocked in a
-    /// call is woken, so its wait sees [`Process::signal_pending`], and one
-    /// running in user mode on another processor is interrupted, so it comes
-    /// back through the kernel to have it delivered.
-    pub(crate) fn notify_signal(&self) {
+    /// Make sure a thread of it looks at `signal`, sent to it as a whole and
+    /// just made pending.
+    ///
+    /// Every wait on [`Process::signalled`] is woken, since a thread may be in
+    /// `rt_sigtimedwait` for exactly this signal, blocked. Beyond that, one
+    /// thread that does not block it -- the caller, if it is one, or else the
+    /// first -- is woken from whatever else it waits in and interrupted if it
+    /// is running in user mode on another processor, so that it comes back
+    /// through the kernel to have the signal delivered, as Linux's
+    /// `complete_signal` chooses one. A signal every thread blocks waits in the
+    /// process's queue for the first thread to unblock it.
+    pub(crate) fn notify_signal(&self, signal: u32) {
         self.signalled.wake_all();
+        let taker = thread::current_of(self)
+            .filter(|me| !me.is_gone() && !me.blocks(signal))
+            .or_else(|| {
+                self.threads()
+                    .into_iter()
+                    .find(|thread| !thread.blocks(signal))
+            });
+        if let Some(taker) = taker {
+            self.handed_to.store(taker.tid(), Ordering::Release);
+            self.wake_thread(&taker);
+        }
+    }
+
+    /// Make sure `thread` looks at a signal just made pending for it alone.
+    pub(crate) fn notify_signal_to(&self, thread: &Thread) {
+        self.signalled.wake_all();
+        self.wake_thread(thread);
+    }
+
+    /// Make every task of it but the caller's come back through the kernel:
+    /// one blocked in a call is woken, and one running in user mode is
+    /// interrupted, each to find on its way back to user mode that its process
+    /// is ending or stopping.
+    ///
+    /// Waiting for a tick is not enough, because a task alone on its processor
+    /// gets none -- the scheduler leaves a lone task to run -- and a program
+    /// spinning there would outlive the change until it chose to make a call.
+    /// The caller's own task, if it is one, is already on its way.
+    fn wake_other_tasks(&self) {
+        let current = sched::current();
         let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
         for task in &tasks {
+            if current.as_ref().is_some_and(|me| Arc::ptr_eq(me, task)) {
+                continue;
+            }
             sched::wake(task);
             sched::interrupt(task);
         }
     }
 
-    /// Its threads.
+    /// Hand a signal sent to it as a whole on to a thread that can take it,
+    /// when the thread calling this is leaving: interrupt the first remaining
+    /// thread that does not block one of the pending signals, as Linux's
+    /// `retarget_shared_pending` does. Otherwise a signal only the leaving
+    /// thread would have taken waits until another happens to come back
+    /// through the kernel.
+    pub(crate) fn retarget_shared_signals(&self) {
+        self.hand_on(u64::MAX, None);
+    }
+
+    /// Hand the signals among `newly` that are pending for the process as a
+    /// whole on to a thread other than `from` that does not block them, once
+    /// `from` has blocked them.
+    ///
+    /// A thread chosen to take a signal may block it before it gets there --
+    /// through `rt_sigprocmask`, a handler's mask or `rt_sigsuspend` -- and the
+    /// signal would then wait for another thread to happen to come back through
+    /// the kernel, which a thread alone on its processor may never do. Linux's
+    /// `__set_task_blocked` hands it on through `retarget_shared_pending`.
+    /// `newly` is worked out under the signal lock the mask changed under, and
+    /// this is called once that lock is let go.
+    pub(crate) fn hand_on_newly_blocked(&self, from: &Thread, newly: u64) {
+        if newly != 0 {
+            self.hand_on(newly, Some(from));
+        }
+    }
+
+    /// Wake live threads but `except`, in order, until each of `signals` that
+    /// is pending for the process as a whole has one that does not block it.
+    fn hand_on(&self, signals: u64, except: Option<&Thread>) {
+        let mut pending = self.with_signals(|shared| shared.pending()) & signals;
+        // On until every one of them has a thread that can take it, as Linux's
+        // `retarget_shared_pending` goes on: one thread may take one of them
+        // and block another.
+        for thread in self.threads() {
+            if pending == 0 {
+                break;
+            }
+            if except.is_some_and(|except| core::ptr::eq(Arc::as_ptr(&thread), except)) {
+                continue;
+            }
+            let takes = thread.with_own_signals(|own| pending & !own.blocked());
+            if takes != 0 {
+                self.handed_to.store(thread.tid(), Ordering::Release);
+                self.wake_thread(&thread);
+                pending &= !takes;
+            }
+        }
+    }
+
+    /// The id of the thread a signal was last handed on to, taken so that the
+    /// next hand-off is seen afresh; zero if none was since the last look.
+    pub(crate) fn take_handed_to(&self) -> u32 {
+        self.handed_to.swap(0, Ordering::AcqRel)
+    }
+
+    /// Wake `thread`'s task from any wait it is in, and interrupt it if it is
+    /// running.
+    fn wake_thread(&self, thread: &Thread) {
+        let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
+        for task in &tasks {
+            if task
+                .thread()
+                .is_some_and(|own| core::ptr::eq(Arc::as_ptr(own), thread))
+            {
+                sched::wake(task);
+                sched::interrupt(task);
+            }
+        }
+    }
+
+    /// Its threads that have not begun to end.
     pub(crate) fn threads(&self) -> Vec<Arc<Thread>> {
         self.threads
             .lock()
             .iter()
             .filter_map(Weak::upgrade)
+            .filter(|thread| !thread.is_gone())
             .collect()
+    }
+
+    /// Its thread numbered `tid`, if that thread has not begun to end.
+    pub(crate) fn thread_by_tid(&self, tid: u32) -> Option<Arc<Thread>> {
+        self.threads()
+            .into_iter()
+            .find(|thread| thread.tid() == tid)
     }
 
     /// List `thread` as one of its own, if it is not already: before the
@@ -926,17 +1133,54 @@ impl Process {
     }
 
     /// Record `signal` sent to it as a whole, or decide it needs no recording:
-    /// [`Signals::post`] under its signal lock, judged against the blocked mask
-    /// of the thread that would take it. A process with no thread yet -- a
-    /// native child before `process_start` -- is judged against no mask, which
-    /// is the truth: nothing in it can have blocked anything.
+    /// [`Signals::post`] under its signal lock, once what the signal cancels
+    /// is gone from every queue.
+    ///
+    /// Ignoring is judged against its first thread's mask -- or, with that
+    /// thread gone, the first still live -- as Linux judges it against the
+    /// task the signal is sent to; a fatal default against every live
+    /// thread's, since any one that does not block it would take it. A process
+    /// with no thread yet -- a native child before `process_start` -- is judged
+    /// against no mask, which is the truth: nothing in it can have blocked
+    /// anything.
     pub(crate) fn post_signal(&self, signal: u32, origin: Origin) -> Posted {
-        let taker = self.signal_taker();
+        self.post(None, signal, origin)
+    }
+
+    /// Record `signal` sent to `thread` alone, as `tkill`, `tgkill` and a
+    /// broken pipe send one: into the thread's own queue, judged against its
+    /// mask alone, once what the signal cancels is gone from every queue.
+    pub(crate) fn post_signal_to(&self, thread: &Thread, signal: u32, origin: Origin) -> Posted {
+        self.post(Some(thread), signal, origin)
+    }
+
+    /// [`Process::post_signal`] without a `target`, and
+    /// [`Process::post_signal_to`] with one. The threads are listed before the
+    /// signal lock is taken, because the thread list's lock comes first.
+    fn post(&self, target: Option<&Thread>, signal: u32, origin: Origin) -> Posted {
+        let threads = self.threads();
+        let first = threads
+            .iter()
+            .find(|thread| thread.tid() == self.pid())
+            .or_else(|| threads.first());
         self.with_signals(|signals| {
-            let blocked = taker
-                .as_ref()
-                .map_or(0, |thread| thread.with_own_signals(|own| own.blocked()));
-            signals.post(blocked, signal, origin)
+            signals.cancel(signal);
+            let mut blocked = 0;
+            let mut blocked_everywhere = if threads.is_empty() { 0 } else { u64::MAX };
+            for thread in &threads {
+                let mask = thread.with_own_signals(|own| {
+                    own.cancel(signal);
+                    own.blocked()
+                });
+                blocked_everywhere &= mask;
+                if first.is_some_and(|first| Arc::ptr_eq(first, thread)) {
+                    blocked = mask;
+                }
+            }
+            match target {
+                None => signals.post(blocked, blocked_everywhere, signal, origin),
+                Some(thread) => thread.with_own_signals(|own| own.post(signals, signal, origin)),
+            }
         })
     }
 
@@ -959,6 +1203,13 @@ impl Process {
         self.stopped.store(signal, Ordering::Release);
         self.continue_report.store(false, Ordering::Release);
         self.stop_report.store(signal, Ordering::Release);
+        // Every other thread stops too: its wait ends on the stop, or its
+        // program is interrupted, and it waits on its way back to user mode.
+        // Linux reports a stop once every thread has parked; here the report
+        // goes now, from the thread that took the signal, and a thread still
+        // on its way to park runs no user code before it does.
+        self.signalled.wake_all();
+        self.wake_other_tasks();
         kill::tell_parent(self, SIGCHLD, kill::CLD_STOPPED, signal as i32);
     }
 
@@ -1141,7 +1392,7 @@ impl Process {
             || {
                 self.execed.load(Ordering::Acquire)
                     || self.is_terminated()
-                    || caller.is_terminated()
+                    || caller.caller_must_leave()
             },
             u64::MAX,
         );
@@ -1605,15 +1856,16 @@ pub(crate) fn start_thread(
     state: crate::arch::UserState,
 ) -> Result<Arc<Task>, &'static str> {
     let process = Arc::clone(thread.process());
-    if process.is_terminated() {
-        return Err("the process is ending");
+    if process.is_terminated() || process.exec_thread.load(Ordering::Acquire) != 0 {
+        return Err("the process is ending, or another thread is replacing its program");
     }
     process.add_thread(&thread);
     let task = sched::spawn_user("thread", run_program, thread, None, Some(state))?;
     process.tasks.lock().push(Arc::downgrade(&task));
     // As for a process's first thread: an end requested between the spawn and
-    // the push found no task to wake or interrupt, so it is told now.
-    if process.is_terminated() {
+    // the push found no task to wake or interrupt, so it is told now -- and so
+    // is a thread replacing the program, which waits for this one to leave.
+    if process.is_terminated() || process.exec_thread.load(Ordering::Acquire) != 0 {
         sched::wake(&task);
         sched::interrupt(&task);
     }
@@ -1668,7 +1920,11 @@ pub(crate) fn leave_current() -> ! {
 fn end_thread(status: Option<i32>, group: bool) -> ! {
     crate::arch::enable_interrupts();
     if let Some(thread) = thread::current() {
+        // First, so that no signal is chosen for a thread on its way out, and
+        // then any the process was sent is handed to a thread that stays.
+        thread.mark_gone();
         let process = Arc::clone(thread.process());
+        process.retarget_shared_signals();
         if let Some(status) = status {
             if thread.tid() == process.pid() {
                 process.leader_status.store(status, Ordering::Release);
@@ -1710,7 +1966,9 @@ fn run_program(_argument: usize) {
     // interrupt pending, and it is taken from user mode on the first
     // instruction, where the check sees it. Entering user mode opens them.
     crate::arch::disable_interrupts();
-    if process.is_terminated() {
+    if thread::current().is_some_and(|thread| process.must_leave(&thread))
+        || process.is_terminated()
+    {
         drop(process);
         leave_current();
     }

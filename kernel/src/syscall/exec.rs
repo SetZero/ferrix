@@ -554,17 +554,21 @@ fn execve_at(
     let arg_slices: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
     let env_slices: Vec<&[u8]> = env.iter().map(Vec::as_slice).collect();
 
-    // A second thread would keep running in the memory about to be replaced,
-    // and write its cleared id into the new program as it ended. Until
-    // `execve` ends a process's other threads first, it refuses while there
-    // are any; a thread `clone` makes after this test is that work's too.
-    if process.live_thread_count() > 1 {
-        return Err(Errno::EAGAIN.into());
+    // Every other thread ends first, as Linux's `de_thread` ends them: each
+    // would otherwise run on in the memory about to be replaced, and write its
+    // cleared id into the new program as it ended. The caller takes the pid if
+    // it was not the first thread. Refused only when another thread is already
+    // replacing the program or the process is ending, and then this thread
+    // never returns to the program. A self-check that execs into a process it
+    // does not run in has no thread there to keep.
+    if let Some(thread) = crate::syscall::thread::current_of(process) {
+        process.end_other_threads(&thread)?;
     }
 
     // The point of no return.
     empty_user_half(space).map_err(|_| ExecveError::Lost)?;
     process.reset_for_exec();
+    crate::syscall::attributes::forget_robust_list(process);
     // The address the calling thread asked to have cleared, and its alternate
     // stack, were in the memory just emptied. Only the caller's own thread: a
     // self-check can exec into a process it is not running in.

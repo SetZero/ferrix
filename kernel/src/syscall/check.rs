@@ -78,6 +78,16 @@ pub(crate) struct Report {
     /// How many programs whose last two threads called `exit` together each
     /// ended with their first thread's status.
     pub(crate) exits_together: Option<u32>,
+    /// What a process ended with whose second thread replaced the program
+    /// while its first waited: the new program's status when right.
+    pub(crate) dethreaded: Option<i32>,
+    /// What a program of three threads, stopped and continued, was killed
+    /// with afterwards: 137 when right.
+    pub(crate) stopped_threads: Option<i32>,
+    /// What a program of two threads, whose signals reached and were handed on
+    /// to the thread that could take them, was killed with afterwards: 137
+    /// when right.
+    pub(crate) handed_on: Option<i32>,
     /// How many runs of that program gave back every frame once reaped, and in
     /// which measured window they first did.
     pub(crate) reclaimed: Option<(u32, u32)>,
@@ -185,6 +195,13 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let threaded = check_a_thread_shares_its_process_and_ends_alone()?;
     let exits_together = check_two_last_threads_exiting_together_end_their_process()?;
     check_a_reader_blocked_in_syslog_is_released_by_a_kill()?;
+    // The hand-off decided in the kernel first, so that a fault at one of its
+    // sites fails here by its own message before the program checks run it end
+    // to end.
+    check_a_signal_blocked_after_it_was_sent_is_handed_on()?;
+    let dethreaded = check_execve_from_a_thread_ends_the_others()?;
+    let stopped_threads = check_a_stop_stops_every_thread_and_a_continue_restarts_their_calls()?;
+    let handed_on = check_a_signal_reaches_the_thread_that_can_take_it()?;
     mark!(5);
     let reclaimed = check_ended_programs_give_their_frames_back()?;
     let signalled = check_a_handler_runs_and_returns()?;
@@ -213,6 +230,9 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         forked,
         threaded,
         exits_together,
+        dethreaded,
+        stopped_threads,
+        handed_on,
         reclaimed,
         signalled,
         copied,
@@ -4819,6 +4839,399 @@ fn check_a_reader_blocked_in_syslog_is_released_by_a_kill() -> Result<(), &'stat
     Ok(())
 }
 
+/// A program's second thread `execve`s the plain test program while its first
+/// thread waits in `FUTEX_WAIT` on a word nobody wakes: the first thread must
+/// be ended, the second must take the pid and give its own id back, and the
+/// process must end with the new program's status, recorded as the file it
+/// ran.
+///
+/// Waited for with a deadline, so an `execve` whose wait for the other thread
+/// never ends fails by name rather than hanging the boot.
+fn check_execve_from_a_thread_ends_the_others() -> Result<Option<i32>, &'static str> {
+    use ferrix_vfs::OpenFlags;
+
+    if arch::USER_DETHREAD_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let class = class_of_this_build();
+    let machine = arch::ARCH.elf_machine();
+    let target = image::build_with(class, machine, image::Shape::Good, arch::USER_TEST_PROGRAM);
+    let caller = image::build_with(
+        class,
+        machine,
+        image::Shape::Good,
+        arch::USER_DETHREAD_PROGRAM,
+    );
+
+    let ns = crate::fs::namespace();
+    let ctx = ns.context();
+    let create = OpenFlags {
+        read: false,
+        write: true,
+        create: true,
+        exclusive: false,
+        truncate: true,
+        append: false,
+        directory: false,
+        nofollow: false,
+        path: false,
+        nonblock: false,
+    };
+    let file = ns
+        .open(&ctx, None, EXEC_TARGET, &create, 0o755)
+        .map_err(|_| "could not create the program a thread is to execve")?;
+    if file.write(&target) != Ok(target.len()) {
+        return Err("could not write the program a thread is to execve");
+    }
+    drop(file);
+    let outcome = run_a_thread_that_execs(&caller);
+    ns.unlink(&ctx, None, EXEC_TARGET)
+        .map_err(|_| "could not remove the program a thread ran through execve")?;
+    outcome
+}
+
+/// Run [`arch::USER_DETHREAD_PROGRAM`] from `image` and judge how it ended,
+/// for [`check_execve_from_a_thread_ends_the_others`].
+fn run_a_thread_that_execs(image: &[u8]) -> Result<Option<i32>, &'static str> {
+    let execing = process::load(
+        image,
+        &[b"/dethread"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that execs from a thread could not be loaded")?;
+    let pid = execing.pid();
+    let _task = process::start(&execing)
+        .map_err(|_| "a program that execs from a thread could not be started")?;
+    let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+    let status = execing
+        .wait_for_exit(deadline)
+        .ok_or("a process whose thread called execve while its first thread waited never ended")?;
+    match status {
+        96 => return Err("a program that execs from a thread could not make its thread"),
+        97 => return Err("execve from a thread other than the first returned to the program"),
+        status if status != arch::USER_TEST_STATUS => {
+            return Err(
+                "a process whose thread called execve did not end with the new program's status",
+            );
+        }
+        _ => {}
+    }
+    if execing.pid() != pid || execing.exe() != EXEC_TARGET {
+        return Err("a thread's execve did not run the new program in the same process");
+    }
+    if crate::syscall::registry::numbers_naming(&execing) != 1 {
+        return Err(
+            "a thread that replaced its process's program kept a thread id of its own beside the pid",
+        );
+    }
+    Ok(Some(status))
+}
+
+/// Where [`arch::USER_STOPPED_PROGRAM`] keeps its two counts, the word its
+/// third thread waits on, and what that wait returned.
+const STOPPED_PAGE: u64 = 0x6000_0000;
+
+/// What [`check_a_stop_stops_every_thread_and_a_continue_restarts_their_calls`]
+/// kills the program with, and the status it must then end with.
+const STOPPED_KILL_STATUS: i32 = 137;
+
+/// How long each step of that check waits for the program to get there.
+const STOP_PATIENCE_NANOS: u64 = 10_000_000_000;
+
+/// How often it looks meanwhile.
+const STOP_POLL_NANOS: u64 = 1_000_000;
+
+/// How long a stopped program's counts must stay still.
+const STOP_STILL_NANOS: u64 = 50_000_000;
+
+/// A program of three threads -- two counting on their own words, one waiting
+/// in `FUTEX_WAIT` with no timeout -- is stopped and continued from outside.
+///
+/// Both counts must have moved and the third thread be waiting before the
+/// stop, so a thread that never ran cannot pass for a stopped one. After
+/// `SIGSTOP` every one of its tasks must be blocked, and both counts must stay
+/// still across a window; after `SIGCONT` both must move again and the waiter
+/// must be back in its wait, never having returned from it -- a stop ends a
+/// blocked call, and the call must restart, not fail. `SIGKILL` then ends it.
+fn check_a_stop_stops_every_thread_and_a_continue_restarts_their_calls()
+-> Result<Option<i32>, &'static str> {
+    use crate::syscall::signal::Origin;
+    use ferrix_linux_abi::types::SIGKILL;
+
+    if arch::USER_STOPPED_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_STOPPED_PROGRAM,
+    );
+    let stopped = process::load(
+        &file,
+        &[b"/stopped"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program of three threads could not be loaded")?;
+    let _task =
+        process::start(&stopped).map_err(|_| "a program of three threads could not be started")?;
+    let outcome = stop_and_continue(&stopped);
+    crate::syscall::kill::send(&stopped, SIGKILL, Origin::Kernel);
+    let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+    let status = stopped.wait_for_exit(deadline);
+    if status == Some(96) {
+        return Err("a program of three threads could not map its page or make its threads");
+    }
+    outcome?;
+    match status {
+        Some(STOPPED_KILL_STATUS) => Ok(Some(STOPPED_KILL_STATUS)),
+        Some(_) => Err("a program of three threads killed with SIGKILL ended with another status"),
+        None => Err("a program of three threads was never released after SIGKILL"),
+    }
+}
+
+/// Where [`arch::USER_HANDOFF_PROGRAM`] keeps the id of the thread its
+/// `SIGUSR1` handler ran on, its two threads' ids, and its main thread's word.
+const HANDOFF_PAGE: u64 = 0x6000_0000;
+
+/// A signal sent to a process of two threads reaches the thread that can take
+/// it, in a program whose first thread waits in `FUTEX_WAIT` and whose second
+/// spins, alone on its processor where it gets no tick.
+///
+/// First, sent while the first thread blocks it: the second must take it --
+/// the one it is given to must be the thread that does not block it. Then the
+/// first thread is sent a `SIGUSR2` of its own and the process a `SIGUSR1`,
+/// neither waking anyone, and only the first thread is woken: it takes its own
+/// signal first, and its handler's mask blocks `SIGUSR1` while that is still
+/// pending, so only the hand-off from the handler's mask can bring it to the
+/// second thread. That handler waits for it to arrive there, and returns
+/// after about three seconds if it never does -- when the first thread would
+/// take it itself, which fails by name. `SIGKILL` then ends the program.
+fn check_a_signal_reaches_the_thread_that_can_take_it() -> Result<Option<i32>, &'static str> {
+    use crate::syscall::signal::Origin;
+    use ferrix_linux_abi::types::SIGKILL;
+
+    if arch::USER_HANDOFF_PROGRAM.is_empty() {
+        return Ok(None);
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_HANDOFF_PROGRAM,
+    );
+    let handing = process::load(
+        &file,
+        &[b"/handoff"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program of two threads with handlers could not be loaded")?;
+    let _task = process::start(&handing)
+        .map_err(|_| "a program of two threads with handlers could not be started")?;
+    let outcome = hand_a_signal_on(&handing);
+    crate::syscall::kill::send(&handing, SIGKILL, Origin::Kernel);
+    let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+    let status = handing.wait_for_exit(deadline);
+    if status == Some(96) {
+        return Err(
+            "a program of two threads with handlers could not map its page, install its handlers \
+             or make its thread",
+        );
+    }
+    outcome?;
+    match status {
+        Some(STOPPED_KILL_STATUS) => Ok(Some(STOPPED_KILL_STATUS)),
+        Some(_) => {
+            Err("a program of two threads with handlers ended with another status than SIGKILL's")
+        }
+        None => Err("a program of two threads with handlers was never released after SIGKILL"),
+    }
+}
+
+/// The two sends of [`check_a_signal_reaches_the_thread_that_can_take_it`].
+fn hand_a_signal_on(handing: &Process) -> Result<(), &'static str> {
+    use crate::syscall::signal::Origin;
+    use ferrix_linux_abi::types::{SIGUSR1, SIGUSR2};
+
+    let read = |offset: u64| -> Option<u32> {
+        let mut bytes = [0_u8; 4];
+        uaccess::copy_from_user(handing.space(), HANDOFF_PAGE + offset, &mut bytes)
+            .ok()
+            .map(|()| u32::from_le_bytes(bytes))
+    };
+    let until = |ready: &dyn Fn() -> bool, failure: &'static str| -> Result<(), &'static str> {
+        let deadline = crate::timer::now_nanos().saturating_add(STOP_PATIENCE_NANOS);
+        loop {
+            if ready() {
+                return Ok(());
+            }
+            if handing.is_terminated() {
+                return Err(
+                    "a program of two threads with handlers ended before the check was done",
+                );
+            }
+            if crate::timer::now_nanos() >= deadline {
+                return Err(failure);
+            }
+            crate::sched::sleep_for(STOP_POLL_NANOS);
+        }
+    };
+
+    until(
+        &|| {
+            read(4).is_some_and(|tid| tid != 0)
+                && read(12).is_some_and(|tid| tid != 0)
+                && futex::waiters_on(handing, HANDOFF_PAGE + 8) == 1
+        },
+        "a program of two threads with handlers never had its second thread running and its first \
+         waiting",
+    )?;
+    let second = read(4).ok_or("could not read the hand-off program's second thread's id")?;
+    let first_tid = read(12).ok_or("could not read the hand-off program's first thread's id")?;
+    let first = handing
+        .thread_by_tid(first_tid)
+        .ok_or("the hand-off program's first thread was not found by its id")?;
+
+    signal::change_blocked(&first, |_, own| {
+        let _ = own.replace_blocked(signal::bit(SIGUSR1));
+    });
+    let _ = handing.take_handed_to();
+    crate::syscall::kill::send(handing, SIGUSR1, Origin::Kernel);
+    match handing.take_handed_to() {
+        tid if tid == second => {}
+        0 => return Err("a signal sent to a process of two threads was given to no thread"),
+        _ => {
+            return Err(
+                "a signal sent to a process was given to a thread that blocks it, not the one that \
+                 does not",
+            );
+        }
+    }
+    until(
+        &|| read(0).is_some_and(|tid| tid != 0),
+        "a signal sent to a process whose first thread blocks it never reached its second thread",
+    )?;
+    if read(0) != Some(second) {
+        return Err(
+            "a signal sent to a process was taken by a thread other than the one not blocking it",
+        );
+    }
+    uaccess::copy_to_user(handing.space(), HANDOFF_PAGE, &0_u32.to_le_bytes())
+        .map_err(|_| "could not clear the hand-off program's word")?;
+    signal::change_blocked(&first, |_, own| {
+        let _ = own.replace_blocked(0);
+    });
+
+    let _ = handing.post_signal_to(&first, SIGUSR2, Origin::Kernel);
+    let _ = handing.post_signal(SIGUSR1, Origin::Kernel);
+    handing.notify_signal_to(&first);
+    until(
+        &|| read(0).is_some_and(|tid| tid != 0),
+        "a signal a handler's mask blocked in the thread that would take it never reached another \
+         thread",
+    )?;
+    if read(0) != Some(second) {
+        return Err(
+            "a signal a handler's mask blocked was taken by the thread that blocked it, not handed on",
+        );
+    }
+    // Zero is the second thread having come back through the kernel -- a tick,
+    // an interrupt, a reschedule -- and taken SIGUSR1 itself before the first
+    // thread's handler blocked it: a right outcome too, and one no program can
+    // rule out. The hand-off itself is decided deterministically, without a
+    // program, by `check_a_signal_blocked_after_it_was_sent_is_handed_on`; here
+    // it only has to have reached the right thread.
+    match handing.take_handed_to() {
+        tid if tid == second => {
+            println!(
+                "  threads  on {}, SIGUSR1 was handed on from the handler's mask",
+                arch::NAME
+            );
+            Ok(())
+        }
+        0 => {
+            println!(
+                "  threads  on {}, SIGUSR1 was taken by the second thread before the hand-off",
+                arch::NAME
+            );
+            Ok(())
+        }
+        _ => Err("a signal a handler's mask blocked was handed on to a thread that blocks it"),
+    }
+}
+
+/// The stop and the continue of
+/// [`check_a_stop_stops_every_thread_and_a_continue_restarts_their_calls`].
+fn stop_and_continue(stopped: &Process) -> Result<(), &'static str> {
+    use crate::syscall::signal::Origin;
+    use ferrix_linux_abi::types::{SIGCONT, SIGSTOP};
+
+    let word = |offset: u64| -> Result<u32, &'static str> {
+        let mut bytes = [0_u8; 4];
+        uaccess::copy_from_user(stopped.space(), STOPPED_PAGE + offset, &mut bytes)
+            .map_err(|_| "could not read the page of a program of three threads")?;
+        Ok(u32::from_le_bytes(bytes))
+    };
+    let waiting = |wait: &dyn Fn() -> Result<bool, &'static str>| -> Result<bool, &'static str> {
+        if word(12)? != 1 {
+            return Err("a FUTEX_WAIT stopped and continued returned instead of being restarted");
+        }
+        Ok(futex::waiters_on(stopped, STOPPED_PAGE + 8) == 1 && wait()?)
+    };
+    let until = |ready: &dyn Fn() -> Result<bool, &'static str>,
+                 failure: &'static str|
+     -> Result<(), &'static str> {
+        let deadline = crate::timer::now_nanos().saturating_add(STOP_PATIENCE_NANOS);
+        loop {
+            if ready()? {
+                return Ok(());
+            }
+            if stopped.is_terminated() {
+                return Err("a program of three threads ended before the check was done with it");
+            }
+            if crate::timer::now_nanos() >= deadline {
+                return Err(failure);
+            }
+            crate::sched::sleep_for(STOP_POLL_NANOS);
+        }
+    };
+
+    // The page is the program's to map: until it has, and has marked its waiter
+    // as waiting, nothing on it can be read.
+    until(
+        &|| {
+            let mut bytes = [0_u8; 4];
+            Ok(
+                uaccess::copy_from_user(stopped.space(), STOPPED_PAGE + 12, &mut bytes).is_ok()
+                    && u32::from_le_bytes(bytes) == 1,
+            )
+        },
+        "a program of three threads never mapped its page",
+    )?;
+    until(
+        &|| waiting(&|| Ok(word(0)? != 0 && word(4)? != 0)),
+        "a program of three threads never had both counts moving and its third thread waiting",
+    )?;
+    crate::syscall::kill::send(stopped, SIGSTOP, Origin::Kernel);
+    until(
+        &|| Ok(stopped.is_stopped() && stopped.every_task_blocked()),
+        "a thread of a stopped process kept running instead of stopping",
+    )?;
+    let still = (word(0)?, word(4)?);
+    crate::sched::sleep_for(STOP_STILL_NANOS);
+    if (word(0)?, word(4)?) != still {
+        return Err("a thread of a stopped process went on counting");
+    }
+    crate::syscall::kill::send(stopped, SIGCONT, Origin::Kernel);
+    until(
+        &|| waiting(&|| Ok(word(0)? != still.0 && word(4)? != still.1)),
+        "a stopped process's threads did not all run again after SIGCONT",
+    )
+}
+
 /// Runs of the forking program measured by
 /// [`check_ended_programs_give_their_frames_back`].
 const RECLAIM_RUNS: u32 = 4;
@@ -4990,6 +5403,7 @@ fn check_untested_signal_paths() -> Result<(), &'static str> {
     check_a_fault_forces_its_signal_past_a_block()?;
     check_a_threads_own_signal_goes_before_its_processs()?;
     check_a_signal_is_judged_against_its_takers_mask()?;
+    check_signals_are_decided_across_threads()?;
     crate::syscall::deliver::check_restart_decisions()?;
     println!(
         "  sigpaths SIGCHLD reached a handler and wait4 still reaped; a stop and continue were \
@@ -5179,7 +5593,7 @@ fn check_a_fault_forces_its_signal_past_a_block() -> Result<(), &'static str> {
 
     let dies = process::new_for_check().map_err(|_| "could not make a process")?;
     let dies_thread = crate::syscall::thread::Thread::leader(&dies);
-    dies_thread.with_signals(|shared, own| {
+    signal::change_blocked(&dies_thread, |shared, own| {
         shared.install_action(SIGSEGV, CHECK_HANDLER, SA_ONSTACK);
         let _ = own.replace_blocked(signal::bit(SIGSEGV));
     });
@@ -5205,7 +5619,7 @@ fn check_a_threads_own_signal_goes_before_its_processs() -> Result<(), &'static 
     let (sent, forced, first, second) = Thread::leader(&process).with_signals(|shared, own| {
         shared.install_action(SIGINT, CHECK_HANDLER, 0);
         shared.install_action(SIGUSR2, CHECK_HANDLER, 0);
-        let sent = shared.post(own.blocked(), SIGINT, Origin::Kernel);
+        let sent = shared.post(own.blocked(), own.blocked(), SIGINT, Origin::Kernel);
         let forced = signal::force(shared, own, SIGUSR2, Origin::Kernel);
         let first = signal::take_next(shared, own).map(|taken| taken.signal);
         let second = signal::take_next(shared, own).map(|taken| taken.signal);
@@ -5222,8 +5636,8 @@ fn check_a_threads_own_signal_goes_before_its_processs() -> Result<(), &'static 
     let first = Thread::leader(&control).with_signals(|shared, own| {
         shared.install_action(SIGINT, CHECK_HANDLER, 0);
         shared.install_action(SIGUSR2, CHECK_HANDLER, 0);
-        let _ = shared.post(own.blocked(), SIGUSR2, Origin::Kernel);
-        let _ = shared.post(own.blocked(), SIGINT, Origin::Kernel);
+        let _ = shared.post(own.blocked(), own.blocked(), SIGUSR2, Origin::Kernel);
+        let _ = shared.post(own.blocked(), own.blocked(), SIGINT, Origin::Kernel);
         signal::take_next(shared, own).map(|taken| taken.signal)
     });
     if first != Some(SIGINT) {
@@ -5246,7 +5660,7 @@ fn check_a_signal_is_judged_against_its_takers_mask() -> Result<(), &'static str
     let parent = process::new_for_check().map_err(|_| "could not make a process")?;
     let parent_thread = Arc::new(Thread::leader(&parent));
     parent.add_thread(&parent_thread);
-    parent_thread.with_own_signals(|own| {
+    signal::change_blocked(&parent_thread, |_, own| {
         let _ = own.replace_blocked(signal::bit(SIGTERM));
     });
     if parent.post_signal(SIGTERM, Origin::Kernel) != Posted::Pending {
@@ -5268,6 +5682,217 @@ fn check_a_signal_is_judged_against_its_takers_mask() -> Result<(), &'static str
     if control.post_signal(SIGTERM, Origin::Kernel) != Posted::Fatal {
         return Err("a SIGTERM nothing blocks was not judged fatal");
     }
+    Ok(())
+}
+
+/// (h) Signals across a process's threads, decided without a program. A
+/// signal sent to a process of two threads is fatal while either does not
+/// block it, and waits in the process's queue once both do. One sent to a
+/// single thread waits in that thread's queue alone when it blocks it, and is
+/// fatal when it does not. A continue cancels a stop pending in any thread's
+/// queue, and a stop a continue. `tkill` finds a live thread by its id, but
+/// not one that has begun to end, and `tgkill` not one under another process.
+/// Nothing is killed: posting only decides.
+fn check_signals_are_decided_across_threads() -> Result<(), &'static str> {
+    use crate::syscall::kill::{sys_tgkill, sys_tkill};
+    use crate::syscall::signal::{Origin, Posted};
+    use crate::syscall::thread::Thread;
+    use ferrix_linux_abi::types::{SIGCONT, SIGTERM, SIGTSTP, SIGUSR1};
+
+    let process = process::new_for_check().map_err(|_| "could not make a process")?;
+    let first = Arc::new(Thread::leader(&process));
+    process.add_thread(&first);
+    let tid = crate::syscall::registry::allocate_thread(&process)
+        .ok_or("no thread id for the check of signals across threads")?;
+    let second = Arc::new(Thread::sibling(&process, tid, &first));
+    process.add_thread(&second);
+    let block = |thread: &Thread, signals: u64| {
+        signal::change_blocked(thread, |_, own| {
+            let _ = own.replace_blocked(signals);
+        });
+    };
+    let shared = || process.with_signals(|signals| signals.pending());
+    let own = |thread: &Thread| thread.with_own_signals(|own| own.pending());
+
+    block(&first, signal::bit(SIGTERM));
+    block(&second, 0);
+    if process.post_signal(SIGTERM, Origin::Kernel) != Posted::Fatal {
+        return Err(
+            "a SIGTERM sent to a process was not fatal while one of its threads did not block it",
+        );
+    }
+    block(&second, signal::bit(SIGTERM));
+    if process.post_signal(SIGTERM, Origin::Kernel) != Posted::Pending
+        || shared() & signal::bit(SIGTERM) == 0
+    {
+        return Err(
+            "a SIGTERM both of a process's threads block was not left pending for the process",
+        );
+    }
+
+    block(&first, signal::bit(SIGUSR1));
+    block(&second, 0);
+    if process.post_signal_to(&first, SIGUSR1, Origin::Kernel) != Posted::Pending
+        || own(&first) & signal::bit(SIGUSR1) == 0
+        || (own(&second) | shared()) & signal::bit(SIGUSR1) != 0
+    {
+        return Err(
+            "a SIGUSR1 sent to one thread that blocks it was not left pending for it alone",
+        );
+    }
+    if process.post_signal_to(&second, SIGUSR1, Origin::Kernel) != Posted::Fatal {
+        return Err("a SIGUSR1 sent to a thread that does not block it was not fatal");
+    }
+
+    block(&second, signal::bit(SIGTSTP));
+    let _ = process.post_signal_to(&second, SIGTSTP, Origin::Kernel);
+    if own(&second) & signal::bit(SIGTSTP) == 0 {
+        return Err("a SIGTSTP sent to a thread that blocks it was not left pending");
+    }
+    let _ = process.post_signal(SIGCONT, Origin::Kernel);
+    if own(&second) & signal::bit(SIGTSTP) != 0 {
+        return Err(
+            "a SIGCONT sent to a process left a stop pending in one of its threads' queues",
+        );
+    }
+    block(&first, signal::bit(SIGCONT));
+    let _ = process.post_signal_to(&first, SIGCONT, Origin::Kernel);
+    if own(&first) & signal::bit(SIGCONT) == 0 {
+        return Err("a SIGCONT sent to a thread that blocks it was not left pending");
+    }
+    let _ = process.post_signal(SIGTSTP, Origin::Kernel);
+    if own(&first) & signal::bit(SIGCONT) != 0 {
+        return Err(
+            "a stop sent to a process left a SIGCONT pending in one of its threads' queues",
+        );
+    }
+
+    let number = i32::try_from(tid).map_err(|_| "a thread id past i32")?;
+    if sys_tkill(&process, number, 0) != Ok(0) {
+        return Err("tkill did not find a live thread by its id");
+    }
+    let other = process::new_for_check().map_err(|_| "could not make a process")?;
+    let other_pid = i32::try_from(other.pid()).map_err(|_| "a pid past i32")?;
+    if sys_tgkill(&process, other_pid, number, 0) != Err(Errno::ESRCH) {
+        return Err("tgkill found a thread under a process it does not belong to");
+    }
+    second.mark_gone();
+    if sys_tkill(&process, number, 0) != Err(Errno::ESRCH) {
+        return Err("tkill found a thread that had begun to end");
+    }
+    Ok(())
+}
+
+/// Where [`check_a_signal_blocked_after_it_was_sent_is_handed_on`] says its
+/// handlers are. Never run: no task of that process ever enters user mode.
+const HANDOFF_HANDLER: u64 = 0x1000;
+
+/// (i) A signal a process was sent, which the thread that would take it then
+/// blocks, goes on to another thread. With `SIGUSR1` pending for a process of
+/// two threads, `rt_sigsuspend` with a mask that blocks it -- ending at once,
+/// since the first thread has a `SIGUSR2` of its own to take -- hands it to the
+/// second, and so do `rt_sigprocmask` blocking it, the mask `rt_sigsuspend`
+/// saved coming back on the way to user mode, a handler frame's mask coming
+/// back through `rt_sigreturn`, and a handler's own mask. No task runs: the
+/// thread the hand-off woke is read back.
+fn check_a_signal_blocked_after_it_was_sent_is_handed_on() -> Result<(), &'static str> {
+    use crate::syscall::deliver::sys_rt_sigsuspend;
+    use crate::syscall::signal::{Origin, sys_rt_sigprocmask};
+    use crate::syscall::thread::Thread;
+    use ferrix_linux_abi::types::{SIG_BLOCK, SIGUSR1, SIGUSR2};
+
+    let process = process::new_for_check().map_err(|_| "could not make a process")?;
+    let first = Arc::new(Thread::leader(&process));
+    process.add_thread(&first);
+    let tid = crate::syscall::registry::allocate_thread(&process)
+        .ok_or("no thread id for the hand-off check")?;
+    let second = Arc::new(Thread::sibling(&process, tid, &first));
+    process.add_thread(&second);
+    process.with_signals(|signals| {
+        signals.install_action(SIGUSR1, HANDOFF_HANDLER, 0);
+        signals.install_action(SIGUSR2, HANDOFF_HANDLER, 0);
+    });
+    let page = map_rw(&process, PAGE_SIZE)?;
+    uaccess::copy_to_user(process.space(), page, &signal::bit(SIGUSR1).to_le_bytes())
+        .map_err(|_| "could not write the hand-off check's signal set")?;
+
+    let _ = process.post_signal(SIGUSR1, Origin::Kernel);
+    let _ = process.post_signal_to(&first, SIGUSR2, Origin::Kernel);
+    let _ = sys_rt_sigsuspend(&first, page, 8);
+    if process.take_handed_to() != tid {
+        return Err(
+            "a signal pending for a process was not handed on when rt_sigsuspend blocked it in the \
+             thread that would take it",
+        );
+    }
+    // Put back through the funnel directly, not the way back's helper, so that
+    // a fault in that helper fails its own case below rather than this one.
+    signal::change_blocked(&first, |_, own| own.restore_saved_mask());
+
+    let _ = sys_rt_sigprocmask(&first, SIG_BLOCK, page, 0, 8)
+        .map_err(|_| "rt_sigprocmask refused the hand-off check's block")?;
+    if process.take_handed_to() != tid {
+        return Err(
+            "a signal pending for a process was not handed on when rt_sigprocmask blocked it in the \
+             thread that would take it",
+        );
+    }
+
+    // The saved mask coming back on the way to user mode: one that blocks
+    // SIGUSR1, saved by an rt_sigsuspend with an empty mask, comes back while
+    // SIGUSR1 is still pending for the process.
+    signal::change_blocked(&first, |_, own| own.suspend_with(0));
+    let _ = process.take_handed_to();
+    crate::syscall::deliver::restore_saved_mask(&first);
+    if process.take_handed_to() != tid {
+        return Err(
+            "a signal pending for a process was not handed on when the mask rt_sigsuspend saved came \
+             back on the way to user mode",
+        );
+    }
+
+    // A handler's frame putting back a mask that blocks SIGUSR1, as
+    // rt_sigreturn does.
+    signal::change_blocked(&first, |_, own| {
+        let _ = own.replace_blocked(0);
+    });
+    let _ = process.take_handed_to();
+    crate::syscall::deliver::leave_handler(
+        &first,
+        signal::bit(SIGUSR1),
+        crate::syscall::deliver::StackRecord::default(),
+        0,
+    );
+    if process.take_handed_to() != tid {
+        return Err(
+            "a signal pending for a process was not handed on when rt_sigreturn restored a mask that \
+             blocks it in the thread that would take it",
+        );
+    }
+
+    // A handler's mask: the first thread takes a SIGUSR2 of its own, whose
+    // handler blocks SIGUSR1, while SIGUSR1 is still pending for the process.
+    signal::change_blocked(&first, |_, own| {
+        let _ = own.replace_blocked(0);
+    });
+    process.with_signals(|signals| {
+        signals.install_action_masked(SIGUSR2, HANDOFF_HANDLER, 0, signal::bit(SIGUSR1));
+    });
+    let _ = process.post_signal_to(&first, SIGUSR2, Origin::Kernel);
+    let taken = first
+        .with_signals(signal::take_next)
+        .ok_or("the hand-off check's first thread had no signal to take")?;
+    if taken.signal != SIGUSR2 {
+        return Err("a thread did not take a signal of its own before its process's");
+    }
+    let _ = crate::syscall::deliver::enter_handler_for(&first, &taken, 0);
+    if process.take_handed_to() != tid {
+        return Err(
+            "a signal pending for a process was not handed on when a handler's mask blocked it in \
+             the thread that would take it",
+        );
+    }
+    let _ = memory::sys_munmap(&process, page, PAGE_SIZE);
     Ok(())
 }
 
@@ -5423,9 +6048,10 @@ fn check_a_write_after_mprotect_read_only_faults() -> Result<Option<i32>, &'stat
     }
 }
 
-/// `kill` and its thread forms find a process by pid, refuse a signal past 64
-/// and a thread that is not the process, and discard a signal the process
-/// ignores by default rather than leaving it pending.
+/// `kill` finds a process by pid, refuses a signal past 64, and discards a
+/// signal the process ignores by default rather than leaving it pending; its
+/// thread forms refuse a thread that does not exist -- which, for a process
+/// with no thread, is even the one numbered by its pid.
 ///
 /// Against a process with no task, so nothing sent here is ever delivered:
 /// signal zero, which only asks, and `SIGCHLD`, which is ignored.
@@ -5451,7 +6077,10 @@ fn check_kill_finds_its_targets_and_refuses_what_it_should(
     if kill::sys_tkill(process, 0, 0) != Err(Errno::EINVAL) {
         return Err("tkill of thread zero was not EINVAL");
     }
-    if kill::sys_tgkill(process, pid, pid, SIGCHLD) != Ok(0)
+    if kill::sys_tgkill(process, pid, pid, 0) != Err(Errno::ESRCH) {
+        return Err("tgkill found a thread in a process that has none");
+    }
+    if kill::sys_kill(process, pid, SIGCHLD) != Ok(0)
         || process.with_signals(|signals| signals.pending()) != 0
     {
         return Err("SIGCHLD, ignored by default, was left pending instead of discarded");

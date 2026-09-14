@@ -39,6 +39,7 @@ use ferrix_linux_abi::errno::Errno;
 use crate::sched;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
+use crate::syscall::signal;
 use crate::syscall::thread::Thread;
 use crate::syscall::time::TimeWidth;
 use crate::syscall::uaccess;
@@ -215,12 +216,25 @@ fn read_sigset(process: &Process, at: u64, size: u64) -> Result<Option<u64>, Err
 }
 
 /// Run `body` with the calling thread's blocked mask replaced by `mask`, if
-/// there is one, and put its own back afterwards.
-fn with_sigmask<R>(thread: &Thread, mask: Option<u64>, body: impl FnOnce() -> R) -> R {
-    let saved = mask.map(|mask| thread.with_own_signals(|signals| signals.replace_blocked(mask)));
+/// there is one, as Linux's `set_user_sigmask` and
+/// `restore_saved_sigmask_unless` do. When `body` was interrupted -- `EINTR`
+/// or `ERESTARTNOHAND` -- the program's own mask stays saved, to come back on
+/// the way to user mode after a handler's frame has saved it; otherwise it
+/// comes back now, so that nothing the program's mask blocks is delivered
+/// under the temporary one. Both changes go through
+/// [`signal::change_blocked`], which hands on what a change newly blocks.
+fn with_sigmask(
+    thread: &Thread,
+    mask: Option<u64>,
+    body: impl FnOnce() -> Result<usize, Errno>,
+) -> Result<usize, Errno> {
+    let Some(mask) = mask else {
+        return body();
+    };
+    signal::change_blocked(thread, |_, own| own.suspend_with(mask));
     let answer = body();
-    if let Some(saved) = saved {
-        let _ = thread.with_own_signals(|signals| signals.replace_blocked(saved));
+    if !matches!(answer, Err(error) if error == Errno::EINTR || error == Errno::ERESTARTNOHAND) {
+        signal::change_blocked(thread, |_, own| own.restore_saved_mask());
     }
     answer
 }

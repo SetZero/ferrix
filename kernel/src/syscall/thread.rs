@@ -27,7 +27,7 @@
 //! other way round.
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::sched;
 use crate::sync::SpinLock;
@@ -38,8 +38,13 @@ use crate::syscall::signal::{self, Signals, ThreadSignals};
 /// One line of execution through a process.
 #[derive(Debug)]
 pub(crate) struct Thread {
-    /// Its thread id. A leader's is its process's pid, and zero with it.
-    tid: u32,
+    /// Its thread id. A leader's is its process's pid, and zero with it. It
+    /// changes once at most: a thread that replaces its process's program
+    /// while not the leader takes the pid, as the leader it becomes.
+    tid: AtomicU32,
+    /// Set as it begins to end, after which a signal is never chosen for it
+    /// and its process no longer lists it.
+    gone: AtomicBool,
     /// The program it runs. Holding it is what keeps the process alive while
     /// the thread is: a process does not own its threads, its threads own it.
     process: Arc<Process>,
@@ -75,14 +80,15 @@ impl Thread {
             .with_own_signals(|signals| signals.inherited())
             .without_alt_stack();
         let mut thread = Thread::with(process, ThreadSignals::from(inherited));
-        thread.tid = tid;
+        *thread.tid.get_mut() = tid;
         thread
     }
 
     /// The first thread of `process`, numbered by its pid, with `signals`.
     fn with(process: &Arc<Process>, signals: ThreadSignals) -> Thread {
         Thread {
-            tid: process.pid(),
+            tid: AtomicU32::new(process.pid()),
+            gone: AtomicBool::new(false),
             process: Arc::clone(process),
             clear_child_tid: AtomicU64::new(0),
             signals: SpinLock::new(signals),
@@ -102,7 +108,25 @@ impl Thread {
 
     /// Its thread id; zero if its process was made with every pid in use.
     pub(crate) fn tid(&self) -> u32 {
-        self.tid
+        self.tid.load(Ordering::Acquire)
+    }
+
+    /// Take `pid` as its thread id, as a thread that replaced its process's
+    /// program while not the first does, becoming the leader. Answers the id
+    /// it had, which its process then gives back.
+    pub(crate) fn take_pid(&self, pid: u32) -> u32 {
+        self.tid.swap(pid, Ordering::AcqRel)
+    }
+
+    /// Whether it has begun to end.
+    pub(crate) fn is_gone(&self) -> bool {
+        self.gone.load(Ordering::Acquire)
+    }
+
+    /// Record that it has begun to end: from here on its process neither lists
+    /// it nor chooses it to take a signal.
+    pub(crate) fn mark_gone(&self) {
+        self.gone.store(true, Ordering::Release);
     }
 
     /// The process it runs.
@@ -119,7 +143,7 @@ impl Thread {
     /// survives, a wrong pid it does not.
     pub(crate) fn set_clear_child_tid(&self, address: u64) -> u32 {
         self.clear_child_tid.store(address, Ordering::Release);
-        self.tid
+        self.tid()
     }
 
     /// The address registered to be cleared, or zero.
@@ -151,10 +175,23 @@ impl Thread {
             .with_signals(|shared| change(shared, &mut self.signals.lock()))
     }
 
-    /// Whether a wait it is in should end: its process has ended, or a signal
-    /// it does not block is pending for it or for its process.
+    /// Whether it blocks `signal`.
+    pub(crate) fn blocks(&self, signal: u32) -> bool {
+        self.with_own_signals(|own| own.blocked() & signal::bit(signal) != 0)
+    }
+
+    /// Whether a wait it is in should end: its process has ended or stopped,
+    /// another thread is replacing the program, or a signal it does not block
+    /// is pending for it or for its process.
+    ///
+    /// A stop ends a wait so that the thread stops with the rest, as Linux's
+    /// group stop wakes every thread: one blocked reading a pipe must not take
+    /// input while its process is reported stopped. The waits answer restart
+    /// codes, and no handler runs for a stop, so the call resumes after
+    /// `SIGCONT` as if it had never left.
     pub(crate) fn signal_pending(&self) -> bool {
-        self.process.is_terminated()
+        self.process.must_leave(self)
+            || self.process.is_stopped()
             || self.with_signals(|shared, own| signal::deliverable(shared, own) != 0)
     }
 }
@@ -163,8 +200,9 @@ impl Drop for Thread {
     /// Give its thread id back, unless it is its process's first, whose id is
     /// the pid and goes with the process.
     fn drop(&mut self) {
-        if self.tid != 0 && self.tid != self.process.pid() {
-            registry::release_thread(self.tid, &self.process);
+        let tid = *self.tid.get_mut();
+        if tid != 0 && tid != self.process.pid() {
+            registry::release_thread(tid, &self.process);
         }
     }
 }

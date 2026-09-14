@@ -231,7 +231,7 @@ impl FrameBytes {
 pub(crate) fn needs_attention() -> bool {
     thread::current().is_some_and(|thread| {
         let process = thread.process();
-        process.is_terminated()
+        process.must_leave(&thread)
             || process.is_stopped()
             || thread.with_signals(|shared, own| signal::needs_attention(shared, own))
     })
@@ -263,12 +263,12 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
         .zip(RestartKind::of(context.syscall_result()));
 
     for _ in 0..DELIVERY_ROUNDS {
-        if process.is_terminated() {
+        if process.must_leave(&thread) {
             break;
         }
         if process.is_stopped() {
             let _ = process.resumed().wait_until_deadline(
-                || !process.is_stopped() || process.is_terminated(),
+                || !process.is_stopped() || process.must_leave(&thread),
                 u64::MAX,
             );
             continue;
@@ -293,8 +293,8 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
     if let Some((ctx, kind)) = restart {
         restart_call(context, &ctx, kind);
     }
-    thread.with_own_signals(signal::ThreadSignals::restore_saved_mask);
-    if thread.process().is_terminated() {
+    restore_saved_mask(&thread);
+    if process.must_leave(&thread) {
         // Left with interrupts still open, as the release its exit may run
         // needs. Nothing after the thread's exit runs to drop it.
         drop(thread);
@@ -469,11 +469,7 @@ fn run_handler(
         return Err(BadFrame);
     }
     let sp = context.stack_pointer();
-    let (mask, altstack, stack) = thread.with_signals(|shared, own| {
-        let stack = own.frame_base(taken.action.flags, sp);
-        let (mask, altstack) = signal::enter_handler(shared, own, taken);
-        (mask, altstack, stack)
-    });
+    let (mask, altstack, stack) = enter_handler_for(thread, taken, sp);
     let request = FrameRequest {
         signal: taken.signal,
         info: taken.origin.encode(taken.signal),
@@ -485,6 +481,40 @@ fn run_handler(
         altstack,
     };
     arch::setup_signal_frame(thread.process().space(), context, &request)
+}
+
+/// Change `thread`'s signal state for entering `taken`'s handler from a stack
+/// pointer of `sp`: answer the mask and alternate stack the frame saves and
+/// where the frame goes, and hand on to another thread what the handler's mask
+/// newly blocks while it is pending for the process. What `run_handler` does
+/// before it writes the frame, apart so that a boot check can drive it.
+pub(crate) fn enter_handler_for(
+    thread: &Thread,
+    taken: &Taken,
+    sp: u64,
+) -> (u64, StackRecord, u64) {
+    signal::change_blocked(thread, |shared, own| {
+        let stack = own.signals().frame_base(taken.action.flags, sp);
+        let (mask, altstack) = signal::enter_handler(shared, own, taken);
+        (mask, altstack, stack)
+    })
+}
+
+/// Put back the mask `rt_sigsuspend`, `ppoll` or `pselect6` replaced, if no
+/// handler's frame took it first: on the way back to user mode, through
+/// [`signal::change_blocked`], so that a signal the mask blocks again while it
+/// is pending for the process is handed on. Apart from `return_to_user` so
+/// that a boot check can drive it.
+pub(crate) fn restore_saved_mask(thread: &Thread) {
+    signal::change_blocked(thread, |_, own| own.restore_saved_mask());
+}
+
+/// Leave a handler as `rt_sigreturn` does: put back the mask and alternate
+/// stack its frame saved, through [`signal::change_blocked`], so that a signal
+/// the restored mask blocks while it is pending for the process is handed on.
+/// Apart from `sigreturn` so that a boot check can drive it.
+pub(crate) fn leave_handler(thread: &Thread, mask: u64, altstack: StackRecord, sp: u64) {
+    signal::change_blocked(thread, |_, own| own.leave_handler(mask, altstack, sp));
 }
 
 /// `rt_sigreturn`, and ARMv7-A's `sigreturn` when `rt` is false: put back the
@@ -502,9 +532,7 @@ pub(crate) fn sigreturn(context: &mut arch::UserContext, rt: bool) {
     match arch::restore_signal_frame(process.space(), context, rt) {
         Ok(restored) => {
             let sp = context.stack_pointer();
-            thread.with_own_signals(|signals| {
-                signals.leave_handler(restored.mask, restored.altstack, sp);
-            });
+            leave_handler(&thread, restored.mask, restored.altstack, sp);
         }
         Err(BadFrame) => {
             println!(
@@ -544,10 +572,14 @@ fn wait_for_signal(thread: &Thread, deadline: u64, mut also: impl FnMut() -> boo
 /// handler's frame has saved it, so the handler runs under `mask` and the
 /// program resumes under its own.
 ///
+/// Answers `ERESTARTNOHAND`, as Linux does: `EINTR` when a handler runs, and
+/// the call made again when none does -- a stop and a continue, which end
+/// every wait -- so the program is still suspended afterwards.
+///
 /// # Errors
 ///
 /// `EINVAL` for a set size other than eight; `EFAULT` for a bad set; `EINTR`,
-/// always, once it has waited.
+/// always, once a handler has run.
 pub(crate) fn sys_rt_sigsuspend(
     thread: &Thread,
     mask: u64,
@@ -557,21 +589,24 @@ pub(crate) fn sys_rt_sigsuspend(
         return Err(Errno::EINVAL);
     }
     let mask = read_sigset(thread.process(), mask)?;
-    thread.with_own_signals(|signals| signals.suspend_with(mask));
+    signal::change_blocked(thread, |_, own| own.suspend_with(mask));
     wait_for_signal(thread, u64::MAX, || false);
-    Err(Errno::EINTR)
+    Err(Errno::ERESTARTNOHAND)
 }
 
 /// `pause`: wait for a signal, and return `EINTR`.
 ///
+/// Answers `ERESTARTNOHAND`, as [`sys_rt_sigsuspend`] does, so a stop and a
+/// continue leave the program still paused.
+///
 /// # Errors
 ///
-/// `EINTR`, always.
+/// `EINTR`, always, once a handler has run.
 pub(crate) fn sys_pause(process: &Process) -> Result<usize, Errno> {
     let _ = process
         .signalled()
         .wait_until_deadline(|| process.signal_pending(), u64::MAX);
-    Err(Errno::EINTR)
+    Err(Errno::ERESTARTNOHAND)
 }
 
 /// `rt_sigpending`: the pending signals the calling thread blocks, its own and

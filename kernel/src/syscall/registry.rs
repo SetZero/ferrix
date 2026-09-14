@@ -141,6 +141,18 @@ pub(crate) fn release_thread(tid: u32, process: &Process) {
     }
 }
 
+/// How many numbers name `process`: its pid, and one for each of its threads
+/// that holds an id of its own. For the check that a thread which replaced
+/// its process's program gave its own id back.
+pub(crate) fn numbers_naming(process: &Process) -> usize {
+    REGISTRY
+        .lock()
+        .live
+        .values()
+        .filter(|entry| core::ptr::eq(entry.as_ptr(), process))
+        .count()
+}
+
 /// Make a process that is already shared findable by its pid.
 ///
 /// For a process that must be complete before `kill`, a process group's

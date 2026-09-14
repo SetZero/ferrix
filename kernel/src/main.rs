@@ -664,6 +664,24 @@ fn print_threads(report: &syscall::check::Report) {
              with its first thread's status"
         );
     }
+    if let Some(status) = report.dethreaded {
+        println!(
+            "  threads  a thread replaced its program while the first thread waited, which was \
+             ended; the process kept its pid and exited with {status}"
+        );
+    }
+    if let Some(status) = report.stopped_threads {
+        println!(
+            "  threads  a stop parked all three threads of a program and a continue ran them \
+             again, a futex wait restarted rather than failed; SIGKILL ended it with {status}"
+        );
+    }
+    if let Some(status) = report.handed_on {
+        println!(
+            "  threads  a signal reached the one thread not blocking it, and one a handler's mask \
+             blocked was handed on to it; SIGKILL ended the program with {status}"
+        );
+    }
 }
 
 /// Stage 6's reverse map: a shared object's page decommitted, replaced and

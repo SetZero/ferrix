@@ -427,6 +427,17 @@ impl Signals {
     /// delivery decision without a user-space `rt_sigaction`, which would need a
     /// `struct sigaction` written into a program's own memory first.
     pub(crate) fn install_action(&mut self, signal: u32, handler: u64, flags: u64) {
+        self.install_action_masked(signal, handler, flags, 0);
+    }
+
+    /// [`Signals::install_action`], with `mask` blocked while the handler runs.
+    pub(crate) fn install_action_masked(
+        &mut self,
+        signal: u32,
+        handler: u64,
+        flags: u64,
+        mask: u64,
+    ) {
         if let Ok(index) = index_of(signal)
             && let Some(slot) = self.actions.get_mut(index)
         {
@@ -434,7 +445,7 @@ impl Signals {
                 handler,
                 flags,
                 restorer: 0,
-                mask: 0,
+                mask: mask & !UNBLOCKABLE,
             };
         }
     }
@@ -445,15 +456,35 @@ impl Signals {
     }
 
     /// Record `signal` sent to the process, or decide it needs no recording.
-    /// `blocked` is the mask of the thread that would take it: zero for a
-    /// process with none.
-    pub(crate) fn post(&mut self, blocked: u64, signal: u32, origin: Origin) -> Posted {
-        post_into(&self.actions, &mut self.shared, blocked, signal, origin)
+    /// `blocked` is the mask of the thread it is judged for, and
+    /// `blocked_everywhere` what every thread that could take it blocks: both
+    /// zero for a process with no thread. See [`post_into`].
+    pub(crate) fn post(
+        &mut self,
+        blocked: u64,
+        blocked_everywhere: u64,
+        signal: u32,
+        origin: Origin,
+    ) -> Posted {
+        post_into(
+            &self.actions,
+            &mut self.shared,
+            blocked,
+            blocked_everywhere,
+            signal,
+            origin,
+        )
     }
 
     /// Forget `signal` if the process as a whole has it pending.
     fn discard(&mut self, signal: u32) {
         self.shared.pending &= !bit(signal);
+    }
+
+    /// Forget what sending `signal` cancels, if the process as a whole has it
+    /// pending. See [`cancelled_by`].
+    pub(crate) fn cancel(&mut self, signal: u32) {
+        self.shared.pending &= !cancelled_by(signal);
     }
 
     /// `ITIMER_REAL` as it stands.
@@ -517,7 +548,7 @@ impl ThreadSignals {
     /// Replace the blocked mask with `mask`, returning the mask it replaced:
     /// what `ppoll` and `pselect6` wait under, and put back afterwards.
     /// `SIGKILL` and `SIGSTOP` are never blocked, whatever `mask` says.
-    pub(crate) fn replace_blocked(&mut self, mask: u64) -> u64 {
+    fn replace_blocked(&mut self, mask: u64) -> u64 {
         core::mem::replace(&mut self.blocked, mask & !UNBLOCKABLE)
     }
 
@@ -615,14 +646,14 @@ impl ThreadSignals {
     /// Leave a handler, as `rt_sigreturn` does: the mask its frame saved comes
     /// back, and so does the alternate stack, if that is still a stack
     /// `sigaltstack` would accept from a program whose stack pointer is `sp`.
-    pub(crate) fn leave_handler(&mut self, mask: u64, stack: StackRecord, sp: u64) {
+    fn leave_handler(&mut self, mask: u64, stack: StackRecord, sp: u64) {
         self.blocked = mask & !UNBLOCKABLE;
         let _ = self.install_alt_stack((stack.sp, stack.flags, stack.size), sp);
     }
 
     /// Put back the mask `rt_sigsuspend` replaced, if no handler's frame took
     /// it first.
-    pub(crate) fn restore_saved_mask(&mut self) {
+    fn restore_saved_mask(&mut self) {
         if let Some(mask) = self.saved_mask.take() {
             self.blocked = mask;
         }
@@ -630,7 +661,7 @@ impl ThreadSignals {
 
     /// Block `mask` instead until the way back to user mode, as
     /// `rt_sigsuspend` does.
-    pub(crate) fn suspend_with(&mut self, mask: u64) {
+    fn suspend_with(&mut self, mask: u64) {
         if self.saved_mask.is_none() {
             self.saved_mask = Some(self.blocked);
         }
@@ -640,6 +671,26 @@ impl ThreadSignals {
     /// Forget `signal` if this thread alone has it pending.
     pub(crate) fn discard(&mut self, signal: u32) {
         self.private.pending &= !bit(signal);
+    }
+
+    /// Forget what sending `signal` cancels, if this thread alone has it
+    /// pending. See [`cancelled_by`].
+    pub(crate) fn cancel(&mut self, signal: u32) {
+        self.private.pending &= !cancelled_by(signal);
+    }
+
+    /// Record `signal` sent to this thread alone, judged against its own mask
+    /// and `process`'s dispositions, or decide it needs no recording.
+    pub(crate) fn post(&mut self, process: &Signals, signal: u32, origin: Origin) -> Posted {
+        let blocked = self.blocked;
+        post_into(
+            &process.actions,
+            &mut self.private,
+            blocked,
+            blocked,
+            signal,
+            origin,
+        )
     }
 
     /// Install an alternate stack from `sigaltstack`'s `(sp, flags, size)`,
@@ -700,6 +751,66 @@ impl From<Inherited> for ThreadSignals {
     }
 }
 
+/// A thread's signal state, open to a change of its blocked mask: what
+/// [`change_blocked`] hands its closure, and outside this module the only way
+/// to write a blocked mask.
+pub(crate) struct Blocking<'a>(&'a mut ThreadSignals);
+
+impl Blocking<'_> {
+    /// The thread's signal state as it stands.
+    pub(crate) const fn signals(&self) -> &ThreadSignals {
+        self.0
+    }
+
+    /// Replace the blocked mask with `mask`, answering the mask it replaced.
+    pub(crate) fn replace_blocked(&mut self, mask: u64) -> u64 {
+        self.0.replace_blocked(mask)
+    }
+
+    /// Block `mask` instead until the way back to user mode, saving the mask it
+    /// replaces, as `rt_sigsuspend`, `ppoll` and `pselect6` do.
+    pub(crate) fn suspend_with(&mut self, mask: u64) {
+        self.0.suspend_with(mask);
+    }
+
+    /// Put back the mask [`Blocking::suspend_with`] saved, if no handler's
+    /// frame took it first.
+    pub(crate) fn restore_saved_mask(&mut self) {
+        self.0.restore_saved_mask();
+    }
+
+    /// Put back a handler frame's mask and alternate stack, as `rt_sigreturn`
+    /// does, for a program whose stack pointer is `sp`.
+    pub(crate) fn leave_handler(&mut self, mask: u64, stack: StackRecord, sp: u64) {
+        self.0.leave_handler(mask, stack, sp);
+    }
+}
+
+/// Change `thread`'s blocked mask through `change`, and hand on to another
+/// thread every signal the change newly blocks while it is pending for the
+/// process: the one way a blocked mask is written, so that no writer can
+/// strand a signal the thread was chosen to take.
+///
+/// `rt_sigprocmask`, a handler's entry and return, `rt_sigsuspend`, `ppoll`
+/// and `pselect6`, and the saved mask coming back on the way to user mode all
+/// come through here, as every Linux path comes through `__set_task_blocked`
+/// and `retarget_shared_pending`. The change is made under the process's
+/// signal lock as well as the thread's, so a signal sent meanwhile either sees
+/// the new mask when it chooses a taker or is seen pending here; the hand-off
+/// happens once both locks are let go.
+pub(crate) fn change_blocked<R>(
+    thread: &Thread,
+    change: impl FnOnce(&mut Signals, &mut Blocking<'_>) -> R,
+) -> R {
+    let (answer, newly) = thread.with_signals(|shared, own| {
+        let before = own.blocked;
+        let answer = change(shared, &mut Blocking(own));
+        (answer, own.blocked & !before & shared.pending())
+    });
+    thread.process().hand_on_newly_blocked(thread, newly);
+    answer
+}
+
 /// Pending signals a thread does not block, its own and its process's: what
 /// delivery has to act on.
 pub(crate) const fn deliverable(process: &Signals, thread: &ThreadSignals) -> u64 {
@@ -732,27 +843,34 @@ pub(crate) fn force(
         action.handler = SIG_DFL;
     }
     thread.blocked &= !bit(signal);
+    let blocked = thread.blocked;
     post_into(
         &process.actions,
         &mut thread.private,
-        thread.blocked,
+        blocked,
+        blocked,
         signal,
         origin,
     )
 }
 
-/// Record `signal` in `queue`, judged against `actions` and a thread's
-/// `blocked` mask, or decide it needs no recording.
+/// Record `signal` in `queue`, judged against `actions` and two masks, or
+/// decide it needs no recording. `blocked` is the mask of the thread the
+/// signal is sent to -- for one sent to a process, its first thread's -- and
+/// `blocked_everywhere` holds what every thread that could take it blocks.
 ///
 /// Linux's order. A signal the program ignores, explicitly or by default, is
-/// discarded -- unless it is blocked, because the program may install a
-/// handler before it unblocks it. One whose default action is fatal and which
-/// nothing blocks is fatal now. Sending a stop signal cancels a pending
-/// `SIGCONT` in the same set, and `SIGCONT` cancels pending stops.
+/// discarded -- unless the thread it is sent to blocks it, because the program
+/// may install a handler before it unblocks it. One whose default action is
+/// fatal is fatal now when some thread that could take it does not block it,
+/// as Linux's `complete_signal` finds one; blocked by all of them, it waits.
+/// What a stop signal or `SIGCONT` cancels is left to the caller, which can
+/// reach every queue ([`cancelled_by`]).
 fn post_into(
     actions: &[Disposition],
     queue: &mut Queue,
     blocked: u64,
+    blocked_everywhere: u64,
     signal: u32,
     origin: Origin,
 ) -> Posted {
@@ -762,29 +880,37 @@ fn post_into(
     if signal == SIGKILL {
         return Posted::Fatal;
     }
-    if bit(signal) & STOP_SIGNALS != 0 {
-        queue.pending &= !bit(SIGCONT);
-    }
-    if signal == SIGCONT {
-        queue.pending &= !STOP_SIGNALS;
-    }
     let action = actions.get(index).copied().unwrap_or_default();
-    let blocked = blocked & bit(signal) != 0;
     let default = default_action(signal);
     let ignored = action.handler == SIG_IGN
         || action.handler == SIG_DFL
             && matches!(default, DefaultAction::Ignore | DefaultAction::Continue);
-    if ignored && !blocked {
+    if ignored && blocked & bit(signal) == 0 {
         return Posted::Discarded;
     }
     if action.handler == SIG_DFL
-        && !blocked
+        && blocked_everywhere & bit(signal) == 0
         && matches!(default, DefaultAction::Terminate | DefaultAction::Core)
     {
         return Posted::Fatal;
     }
     queue.add(signal, origin);
     Posted::Pending
+}
+
+/// What sending `signal` cancels among the signals already pending: a stop
+/// signal cancels `SIGCONT`, and `SIGCONT` every stop signal. Applied to a
+/// process's own queue and to each of its threads', as Linux's
+/// `prepare_signal` does, since a stop pending for any one thread stops them
+/// all and a continue pending anywhere would undo a later stop.
+const fn cancelled_by(signal: u32) -> u64 {
+    if bit(signal) & STOP_SIGNALS != 0 {
+        bit(SIGCONT)
+    } else if signal == SIGCONT {
+        STOP_SIGNALS
+    } else {
+        0
+    }
 }
 
 /// Take the next signal `thread` should act on: from its own pending set
@@ -830,9 +956,10 @@ fn take_among(process: &mut Signals, thread: &mut ThreadSignals, ready: u64) -> 
 /// disarm the alternate stack if it asked for that.
 pub(crate) fn enter_handler(
     process: &mut Signals,
-    thread: &mut ThreadSignals,
+    blocking: &mut Blocking<'_>,
     taken: &Taken,
 ) -> (u64, StackRecord) {
+    let thread = &mut *blocking.0;
     let saved = thread.saved_mask.take().unwrap_or(thread.blocked);
     let mut adding = taken.action.mask;
     if taken.action.flags & SA_NODEFER == 0 {
@@ -1011,7 +1138,10 @@ pub(crate) fn sys_rt_sigprocmask(
         Some(u64::from_le_bytes(bytes) & !UNBLOCKABLE)
     };
 
-    let previous = thread.with_own_signals(|signals| {
+    // Through the funnel every blocked mask is written through, which hands on
+    // whatever the new mask blocks while it is pending for the process.
+    let previous = change_blocked(thread, |_, blocking| {
+        let signals = &mut *blocking.0;
         let previous = signals.blocked;
         if let Some(request) = request {
             signals.blocked = match how {

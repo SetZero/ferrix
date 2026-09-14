@@ -406,6 +406,12 @@ pub(crate) fn sys_set_robust_list(process: &Process, head: u64, len: u64) -> Res
     Ok(0)
 }
 
+/// Forget the robust futex list `set_robust_list` registered, as `execve`
+/// does: its head was in the memory just replaced.
+pub(crate) fn forget_robust_list(process: &Process) {
+    update(process, |a| a.robust_list = 0);
+}
+
 /// `get_robust_list`: the size through `len_ptr`, then the head through
 /// `head_ptr`, both native words, in that order as `kernel/futex/syscalls.c`
 /// writes them.

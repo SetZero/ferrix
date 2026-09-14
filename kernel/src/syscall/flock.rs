@@ -136,7 +136,8 @@ static RELEASED: WaitQueue = WaitQueue::new();
 /// `EBADF` for a descriptor that names nothing, or only a name (`O_PATH`);
 /// `EINVAL` for an operation that is not `LOCK_SH`, `LOCK_EX` or `LOCK_UN`,
 /// with or without `LOCK_NB`; `EAGAIN` -- `EWOULDBLOCK` -- when `LOCK_NB` meets
-/// a conflicting lock; `EINTR` when a signal arrives during the wait.
+/// a conflicting lock; `EINTR` when a handler runs during the wait, which a
+/// stop and a continue, running none, take up again instead.
 pub(crate) fn sys_flock(process: &Process, fd: i32, operation: u32) -> Result<usize, Errno> {
     // Held for the whole call, as Linux's `fdget` holds the file: a `close`
     // on another thread must not end the description out from under a wait.
@@ -168,7 +169,9 @@ pub(crate) fn sys_flock(process: &Process, fd: i32, operation: u32) -> Result<us
         return Err(Errno::EAGAIN);
     }
 
-    let mut outcome = Err(Errno::EINTR);
+    // A restart code, as Linux's lock waits answer: `EINTR` once a handler
+    // runs, and the wait taken up again when none does.
+    let mut outcome = Err(Errno::ERESTARTSYS);
     let mut converted = false;
     let _ = RELEASED.wait_until_deadline(
         || {
@@ -426,7 +429,8 @@ pub(crate) fn is_record_lock(cmd: u32, call: Syscall) -> bool {
 /// describe in a 32-bit `struct flock`; `EBADF` for a read lock on a
 /// descriptor not open for reading or a write lock on one not open for
 /// writing; `EAGAIN` for `F_SETLK` meeting a conflicting lock; `EINTR` when a
-/// signal arrives during `F_SETLKW`'s wait.
+/// handler runs during `F_SETLKW`'s wait, which a stop and a continue take up
+/// again instead.
 pub(crate) fn sys_fcntl_lock(
     process: &Process,
     fd: i32,
@@ -566,7 +570,8 @@ fn set_lock(
         FOREVER,
     );
     if !placed {
-        return Err(Errno::EINTR);
+        // A restart code, as for `flock` above.
+        return Err(Errno::ERESTARTSYS);
     }
     RELEASED.wake_all();
     Ok(0)
