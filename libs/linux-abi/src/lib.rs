@@ -39,9 +39,12 @@
 
 pub mod errno;
 pub mod hwcap;
+pub mod inet;
+pub mod netlink;
 pub mod nr;
 pub mod socket;
 pub mod types;
+mod wire;
 
 #[cfg(test)]
 mod tests;

@@ -23,6 +23,7 @@ ferrix-ustack = { path = "../libs/ustack" }
 ferrix-linux-abi = { path = "../libs/linux-abi" }
 ferrix-native-abi = { path = "../libs/native-abi" }
 ferrix-objects = { path = "../libs/objects" }
+ferrix-sync = { path = "../libs/sync" }
 ferrix-vfs = { path = "../libs/vfs" }
 ferrix-pci = { path = "../libs/pci" }
 ferrix-btrfs = { path = "../libs/btrfs" }

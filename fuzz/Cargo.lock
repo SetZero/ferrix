@@ -79,6 +79,7 @@ dependencies = [
  "ferrix-netwire",
  "ferrix-objects",
  "ferrix-pci",
+ "ferrix-sync",
  "ferrix-ustack",
  "ferrix-vfs",
  "ferrix-virtio",

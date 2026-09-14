@@ -2764,9 +2764,13 @@ retransmission and congestion arithmetic, and netlink message encoding.
 **Written ahead so far.** `libs/netwire` has the headers — Ethernet, ARP,
 IPv4 and IPv6 with its extension headers, ICMPv4, ICMPv6 and Neighbor
 Discovery, UDP and TCP — with 54 host tests and the `netwire_parse` fuzz
-target; see *Written ahead of their stage*. The TCP state machine, netlink
-message encoding and virtio-net's device protocol are still to be written,
-and nothing in the kernel calls any of it yet.
+target; see *Written ahead of their stage*. `libs/linux-abi` has the numbers
+and layouts a program passes: `sockaddr_in` and `sockaddr_in6`, the
+`IPPROTO_`, `IP_`, `IPV6_` and `TCP_` options, and the fixed headers of
+netlink and its routing messages, each checked against a probe compiled from
+the UAPI headers. The TCP state machine, netlink message encoding and
+virtio-net's device protocol are still to be written, and nothing in the
+kernel calls any of it yet.
 
 **Exit:** under QEMU's user-mode network, busybox configures `eth0` with `ip`,
 and `route` and `netstat` report through `/proc/net`. `wget` fetches a file
@@ -2977,7 +2981,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. Has its fuzz target. | 70 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
 | `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
-| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts, and which identification register fields grant each Arm `AT_HWCAP` bit. Constants and pure functions of them. Three number tables, one of them 32-bit. | 78 |
+| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts, and which identification register fields grant each Arm `AT_HWCAP` bit. Constants and pure functions of them. Three number tables, one of them 32-bit. The socket numbers and address layouts `AF_UNIX`, IPv4, IPv6 and netlink use, and the fixed headers of the routing messages, from a probe compiled against the UAPI headers. | 106 |
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. Has its fuzz target. | 45 |
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 59 |
@@ -2990,7 +2994,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/netwire` | Networking — the headers: Ethernet with one 802.1Q tag, ARP, IPv4 with its options, IPv6 with the extension-header walk, ICMPv4, ICMPv6 and Neighbor Discovery, UDP, and TCP with the options a connection negotiates. Parsed without allocation and emitted into the caller's buffer, with each format's checksum verified where it carries one. Has its fuzz target, which requires every header that parses to emit and parse back unchanged. | 54 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **760 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **788 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

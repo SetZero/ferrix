@@ -218,7 +218,7 @@ fn tree_is_a_tree(ns: &Namespace, ctx: &Context) {
 }
 
 fuzz_target!(|data: &[u8]| {
-    let ns = Namespace::with_cache(tmpfs(1), 16);
+    let ns = Namespace::with_cache(tmpfs(1), 16, Arc::new(ferrix_sync::SpinParker));
     let ctx = ns.context();
     let _ = ns.mkdir(&ctx, None, b"/mnt", 0o755);
     let mut input = Input { rest: data };

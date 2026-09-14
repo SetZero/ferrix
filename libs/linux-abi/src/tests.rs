@@ -3066,3 +3066,6 @@ fn ucred_and_linger_are_plain_ints_on_every_architecture() {
     assert_eq!(Linger::from_bytes(&bytes), Some(linger));
     assert_eq!(Linger::from_bytes(&bytes[..7]), None);
 }
+
+mod inet;
+mod netlink;
