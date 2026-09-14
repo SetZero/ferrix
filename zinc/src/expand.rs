@@ -93,7 +93,7 @@ pub(crate) fn expand_words(sh: &mut Shell, words: &[Vec<u8>]) -> Result<Vec<Vec<
         for b in braced {
             let fields = expand(sh, &b, Mode::Fields)?;
             for f in fields {
-                if f.glob && sh.opt("glob") && has_wildcards(&f.bytes) {
+                if f.glob && sh.opt("glob") && has_wildcards(&f.bytes, sh.opt("extendedglob")) {
                     let (pat, nullglob) = strip_null_qualifier(&f.bytes);
                     let matches = glob(sh, &pat);
                     if matches.is_empty() {
@@ -264,7 +264,27 @@ fn walk(sh: &mut Shell, w: &[u8], out: &mut Out, mut dq: bool) -> Result<(), Str
                 Some(n) if is_param_start(n) => {
                     let (name, len) = simple_name(w.get(i..).unwrap_or(&[]));
                     i += len;
-                    let r = param::expand_simple(sh, &name, dq)?;
+                    let ident = name
+                        .first()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_');
+                    // `$name[sub]` subscripts in native zsh, as `${name[sub]}`.
+                    // Inside double quotes the brackets were not tokenized.
+                    let open = match w.get(i) {
+                        Some(&INBRACK) => Some((INBRACK, OUTBRACK)),
+                        Some(&b'[') if dq => Some((b'[', b']')),
+                        _ => None,
+                    };
+                    let r = if let Some((o, c)) = open.filter(|_| ident && !sh.opt("ksharrays")) {
+                        let end = find_close(w, i + 1, o, c);
+                        let mut inner = name.clone();
+                        inner.push(INBRACK);
+                        inner.extend_from_slice(w.get(i + 1..end).unwrap_or(&[]));
+                        inner.push(OUTBRACK);
+                        i = end + 1;
+                        param::expand_brace(sh, &inner, dq)?
+                    } else {
+                        param::expand_simple(sh, &name, dq)?
+                    };
                     insert_param(out, r, dq);
                 }
                 _ => push_literal(out, b'$'),
@@ -605,7 +625,7 @@ fn glob(sh: &Shell, pat: &[u8]) -> Vec<Vec<u8>> {
         let last = n + 1 == comps.len();
         let mut next = Vec::new();
         for base in &paths {
-            if !has_wildcards(comp) {
+            if !has_wildcards(comp, extended) {
                 let mut p = base.clone();
                 if !p.is_empty() && p.last() != Some(&b'/') {
                     p.push(b'/');
@@ -658,7 +678,7 @@ fn glob(sh: &Shell, pat: &[u8]) -> Vec<Vec<u8>> {
         }
         paths = next;
     }
-    if comps.iter().all(|c| !has_wildcards(c)) {
+    if comps.iter().all(|c| !has_wildcards(c, extended)) {
         return Vec::new();
     }
     paths

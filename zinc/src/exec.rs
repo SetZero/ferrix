@@ -127,7 +127,9 @@ pub(crate) fn capture(sh: &mut Shell, cmd: &[u8]) -> Vec<u8> {
     }
     close(r);
     if pid > 0 {
-        sh.status = wait_pid(pid);
+        let status = wait_pid(pid);
+        sh.status = status;
+        sh.subst_status = Some(status);
     }
     out
 }
@@ -328,10 +330,8 @@ pub(crate) fn apply_redirs(sh: &mut Shell, redirs: &[Redir]) -> Result<Vec<(i32,
                     }
                     None => Vec::new(),
                 };
-                let mut body = tok::unmetafy(&body);
-                if !body.is_empty() {
-                    body.push(b'\n');
-                }
+                // The body already ends with its last line's newline.
+                let body = tok::unmetafy(&body);
                 (vec![r.fd], data_fd(&body)?)
             }
             RedirKind::HereStr => {
@@ -615,7 +615,7 @@ fn run_simple(
     if noglob {
         let _ok = sh.set_option(b"glob", false);
     }
-    sh.status = 0;
+    sh.subst_status = None;
     let expanded = expand_words(sh, words);
     if noglob {
         let _ok = sh.set_option(b"glob", glob_was);
@@ -625,11 +625,11 @@ fn run_simple(
         Err(e) => {
             sh.error(&e);
             sh.status = 1;
+            sh.flow = Flow::Abort;
             return;
         }
     };
     if args.is_empty() {
-        let status = sh.status;
         for a in assigns {
             if let Err(e) = assign(sh, a, false) {
                 sh.error(&e);
@@ -645,7 +645,8 @@ fn run_simple(
                 return;
             }
         }
-        sh.status = status;
+        // An assignment's status is its last command substitution's, or 0.
+        sh.status = sh.subst_status.take().unwrap_or(0);
         return;
     }
     let (mut use_functions, mut force_builtin, mut exec) = (true, false, false);

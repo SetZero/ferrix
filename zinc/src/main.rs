@@ -115,6 +115,7 @@ fn read_line() -> Option<Vec<u8>> {
 
 fn interactive_loop(sh: &mut Shell) -> ! {
     let mut buffer: Vec<u8> = Vec::new();
+    sh.at_prompt = true;
     loop {
         let which: &[u8] = if buffer.is_empty() { b"PS1" } else { b"PS2" };
         let ps = sh.get(which).map(|v| v.joined()).unwrap_or_default();
@@ -132,6 +133,7 @@ fn interactive_loop(sh: &mut Shell) -> ! {
         }
         let text = std::mem::take(&mut buffer);
         exec::run_string(sh, &text);
+        sh.at_prompt = true;
         reap(sh);
         match sh.flow {
             Flow::Exit => finish(sh),

@@ -91,15 +91,16 @@ impl Pattern {
     }
 }
 
-/// True if `pat` contains a pattern token.
-pub(crate) fn has_wildcards(pat: &[u8]) -> bool {
+/// True if `pat` contains a pattern token. `#` and `^` are operators only
+/// with EXTENDED_GLOB, so `extended` says whether they count.
+pub(crate) fn has_wildcards(pat: &[u8], extended: bool) -> bool {
     let mut i = 0;
     while let Some(&c) = pat.get(i) {
         if c == META || c == BNULL {
             i += 2;
             continue;
         }
-        if matches!(c, STAR | QUEST | INPAR | POUND | HAT | INANG) {
+        if matches!(c, STAR | QUEST | INPAR | INANG) || (extended && matches!(c, POUND | HAT)) {
             return true;
         }
         // A `[` is a pattern only with a `]` to close it: `[` alone, the

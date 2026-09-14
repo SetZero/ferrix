@@ -57,6 +57,9 @@ pub(crate) enum Flow {
     Continue(u32),
     Return,
     Exit,
+    /// An error that ends the command list, as zsh's `errflag` does: back to
+    /// the prompt, or the end of a script.
+    Abort,
 }
 
 /// A shell function.
@@ -97,6 +100,12 @@ pub(crate) struct Shell {
     pub(crate) source_depth: u32,
     /// `getopts`' position inside a bundled option argument.
     pub(crate) optpos: usize,
+    /// The status of the last command substitution in the words being
+    /// expanded: an assignment-only command's status.
+    pub(crate) subst_status: Option<i32>,
+    /// Reading a line typed at the prompt, where `#` starts a comment only
+    /// with INTERACTIVE_COMMENTS; sourced files always have comments.
+    pub(crate) at_prompt: bool,
 }
 
 /// Normalise an option name: lower case, no underscores.
@@ -193,6 +202,8 @@ impl Shell {
             jobs: Vec::new(),
             source_depth: 0,
             optpos: 1,
+            subst_status: None,
+            at_prompt: false,
         };
         for (k, v) in [
             ("IFS", &b" \t\n\x83 "[..]),
@@ -427,7 +438,7 @@ impl Shell {
             kshglob: self.opt("kshglob"),
             ignorebraces: self.opt("ignorebraces"),
             ignoreclosebraces: self.opt("ignoreclosebraces"),
-            comments: !self.interactive || self.opt("interactivecomments"),
+            comments: !self.at_prompt || self.opt("interactivecomments"),
             rcquotes: self.opt("rcquotes"),
             cshjunkiequotes: self.opt("cshjunkiequotes"),
             cshjunkieloops: self.opt("cshjunkieloops"),

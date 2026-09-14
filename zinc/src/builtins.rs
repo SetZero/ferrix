@@ -908,7 +908,9 @@ fn source(sh: &mut Shell, name: &[u8], args: &[Vec<u8>]) -> i32 {
     };
     sh.source_depth += 1;
     sh.status = 0;
+    let at_prompt = std::mem::replace(&mut sh.at_prompt, false);
     exec::run_string(sh, &tok::metafy(&text));
+    sh.at_prompt = at_prompt;
     sh.source_depth -= 1;
     if sh.flow == Flow::Return && sh.locals.is_empty() {
         sh.flow = Flow::Normal;
@@ -1250,8 +1252,8 @@ fn kill(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
             .ok()
             .and_then(|t| t.parse::<i32>().ok())
         {
-            // SAFETY: kill has no memory-safety preconditions.
             Some(pid) => {
+                // SAFETY: kill has no memory-safety preconditions.
                 if unsafe { libc::kill(pid, sig) } != 0 {
                     sh.error(&format!("kill: kill {pid} failed: no such process"));
                     status = 1;
