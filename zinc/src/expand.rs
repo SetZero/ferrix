@@ -27,11 +27,19 @@ struct Field {
     glob: bool,
     quoted: bool,
     expanded: bool,
+    /// An empty `"$@"` asked for this word to go. It outlives the closing
+    /// quote, which would otherwise mark the field quoted again and keep an
+    /// empty word that zsh does not keep.
+    no_word: bool,
 }
 
 struct Out {
     fields: Vec<Field>,
     mode: Mode,
+    /// Where the fields an RC_EXPAND_PARAM expansion made begin. What the
+    /// word adds after one goes on every one of them, so `${^a}.txt` ends
+    /// `x.txt y.txt` and not `x y.txt`.
+    rc: Option<usize>,
 }
 
 impl Out {
@@ -48,7 +56,42 @@ impl Out {
     }
 
     fn push_plain(&mut self, b: &[u8]) {
-        self.cur().bytes.extend_from_slice(b);
+        let Some(start) = self.rc else {
+            self.cur().bytes.extend_from_slice(b);
+            return;
+        };
+        for f in self.fields.iter_mut().skip(start) {
+            f.bytes.extend_from_slice(b);
+        }
+    }
+
+    /// Insert an expansion RC_EXPAND_PARAM distributes: every element takes a
+    /// copy of the whole word around it.
+    fn push_values_rc(&mut self, vals: &[Vec<u8>], quoted: bool) {
+        let start = self
+            .rc
+            .unwrap_or_else(|| self.fields.len().saturating_sub(1));
+        let prefix: Vec<Field> = self
+            .fields
+            .get(start..)
+            .map(<[Field]>::to_vec)
+            .unwrap_or_default();
+        let prefix = if prefix.is_empty() {
+            vec![Field::default()]
+        } else {
+            prefix
+        };
+        self.fields.truncate(start);
+        for p in &prefix {
+            for v in vals {
+                let mut f = p.clone();
+                f.expanded = true;
+                f.quoted |= quoted;
+                f.bytes.extend_from_slice(v);
+                self.fields.push(f);
+            }
+        }
+        self.rc = Some(start);
     }
 
     /// Insert expansion results: the first joins the current field, the rest
@@ -93,11 +136,28 @@ pub(crate) fn expand_words(sh: &mut Shell, words: &[Vec<u8>]) -> Result<Vec<Vec<
         for b in braced {
             let fields = expand(sh, &b, Mode::Fields)?;
             for f in fields {
-                if f.glob && sh.opt("glob") && has_wildcards(&f.bytes, sh.opt("extendedglob")) {
-                    let (pat, nullglob) = strip_null_qualifier(&f.bytes);
-                    let matches = glob(sh, &pat);
+                let (pat, qualifiers) = if sh.opt("bareglobqual") {
+                    crate::qual::split(&f.bytes)
+                } else {
+                    (f.bytes.clone(), None)
+                };
+                let qualified = qualifiers.is_some();
+                if f.glob
+                    && sh.opt("glob")
+                    && (qualified || has_wildcards(&pat, sh.opt("extendedglob")))
+                {
+                    let mut matches = glob(sh, &pat, qualifiers.as_ref());
+                    if let Some(q) = &qualifiers
+                        && !q.modifiers.is_empty()
+                    {
+                        matches = match param::apply_modifiers(Value::Array(matches), &q.modifiers)?
+                        {
+                            Value::Array(a) => a,
+                            other => vec![other.joined()],
+                        };
+                    }
                     if matches.is_empty() {
-                        if nullglob || sh.opt("nullglob") {
+                        if qualifiers.as_ref().is_some_and(|q| q.nullglob) || sh.opt("nullglob") {
                             continue;
                         }
                         if sh.opt("nomatch") {
@@ -113,7 +173,10 @@ pub(crate) fn expand_words(sh: &mut Shell, words: &[Vec<u8>]) -> Result<Vec<Vec<
                         continue;
                     }
                 }
-                if f.bytes.is_empty() && f.expanded && !f.quoted {
+                // An empty word goes unless it was quoted into being; a `$@`
+                // with no elements is not such a quote, however it was
+                // written.
+                if f.bytes.is_empty() && (f.no_word || (f.expanded && !f.quoted)) {
                     continue;
                 }
                 args.push(tok::remove_nulls(&f.bytes));
@@ -138,16 +201,6 @@ pub(crate) fn expand_pattern(sh: &mut Shell, w: &[u8]) -> Result<Vec<u8>, String
     let fields = expand(sh, w, Mode::Pattern)?;
     let joined: Vec<Vec<u8>> = fields.into_iter().map(|f| f.bytes).collect();
     Ok(joined.join(&b' '))
-}
-
-/// Remove a trailing `(N)` glob qualifier.
-fn strip_null_qualifier(p: &[u8]) -> (Vec<u8>, bool) {
-    for q in [&[INPAR, b'N', OUTPAR][..], &[INPAR, b'N', b'.', OUTPAR][..]] {
-        if let Some(stem) = p.strip_suffix(q) {
-            return (stem.to_vec(), true);
-        }
-    }
-    (p.to_vec(), false)
 }
 
 /// Index of the byte closing the construct opened just before `i`, counting
@@ -176,6 +229,7 @@ fn expand(sh: &mut Shell, w: &[u8], mode: Mode) -> Result<Vec<Field>, String> {
     let mut out = Out {
         fields: vec![Field::default()],
         mode,
+        rc: None,
     };
     walk(sh, w, &mut out, false)?;
     Ok(out.fields)
@@ -418,7 +472,18 @@ fn insert_param(out: &mut Out, r: param::Expansion, dq: bool) {
             } else {
                 a.into_iter().filter(|v| !v.is_empty()).collect()
             };
-            out.push_values(&vals, dq);
+            // A quoted `$@` with no elements adds no word at all, where
+            // `"$*"` adds an empty one; marking the field expanded and not
+            // quoted is what lets an otherwise empty word be dropped.
+            if vals.is_empty() {
+                let f = out.cur();
+                f.expanded = true;
+                f.no_word = true;
+            } else if r.rc {
+                out.push_values_rc(&vals, dq);
+            } else {
+                out.push_values(&vals, dq);
+            }
         }
         other => {
             let s = other.joined();
@@ -645,7 +710,7 @@ fn brace_parts(inner: &[u8]) -> Option<Vec<Vec<u8>>> {
 }
 
 /// Glob a tokenized pattern against the file system, sorted.
-fn glob(sh: &Shell, pat: &[u8]) -> Vec<Vec<u8>> {
+fn glob(sh: &Shell, pat: &[u8], qualifiers: Option<&crate::qual::Quals>) -> Vec<Vec<u8>> {
     let raw = pat.to_vec();
     let absolute = raw.first() == Some(&b'/');
     let comps: Vec<&[u8]> = raw
@@ -653,7 +718,7 @@ fn glob(sh: &Shell, pat: &[u8]) -> Vec<Vec<u8>> {
         .filter(|c| !c.is_empty())
         .collect();
     let mut paths: Vec<Vec<u8>> = vec![if absolute { b"/".to_vec() } else { Vec::new() }];
-    let dotglob = sh.opt("globdots");
+    let dotglob = sh.opt("globdots") || qualifiers.is_some_and(|q| q.dots);
     let extended = sh.opt("extendedglob");
     for (n, comp) in comps.iter().enumerate() {
         let last = n + 1 == comps.len();
@@ -665,11 +730,10 @@ fn glob(sh: &Shell, pat: &[u8]) -> Vec<Vec<u8>> {
                     p.push(b'/');
                 }
                 p.extend_from_slice(&tok::remove_nulls(comp));
-                if last
-                    || std::path::Path::new(std::ffi::OsStr::new(&*String::from_utf8_lossy(
-                        &tok::unmetafy(&p),
-                    )))
-                    .exists()
+                if std::fs::symlink_metadata(std::ffi::OsStr::new(&*String::from_utf8_lossy(
+                    &tok::unmetafy(&p),
+                )))
+                .is_ok()
                 {
                     next.push(p);
                 }
@@ -712,8 +776,22 @@ fn glob(sh: &Shell, pat: &[u8]) -> Vec<Vec<u8>> {
         }
         paths = next;
     }
-    if comps.iter().all(|c| !has_wildcards(c, extended)) {
+    if qualifiers.is_none() && comps.iter().all(|c| !has_wildcards(c, extended)) {
         return Vec::new();
+    }
+    if let Some(q) = qualifiers {
+        paths.retain(|p| q.keep(&tok::unmetafy(p)));
+        if q.mark_dirs {
+            for p in &mut paths {
+                let raw = tok::unmetafy(p);
+                if std::fs::metadata(std::ffi::OsStr::new(&*String::from_utf8_lossy(&raw)))
+                    .is_ok_and(|m| m.is_dir())
+                    && p.last() != Some(&b'/')
+                {
+                    p.push(b'/');
+                }
+            }
+        }
     }
     paths
 }

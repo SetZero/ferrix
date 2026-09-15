@@ -24,6 +24,7 @@ mod parse;
 mod parsectl;
 mod pattern;
 mod prompt;
+mod qual;
 mod regex;
 mod shell;
 mod tok;

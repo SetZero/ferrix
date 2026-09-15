@@ -12,6 +12,9 @@ pub(crate) struct Expansion {
     pub(crate) value: Value,
     /// Array elements become separate fields.
     pub(crate) splat: bool,
+    /// RC_EXPAND_PARAM: every element takes a copy of the word around it,
+    /// which a `^` before the name asks for and the option makes the rule.
+    pub(crate) rc: bool,
 }
 
 /// `$name`.
@@ -20,6 +23,7 @@ pub(crate) fn expand_simple(sh: &mut Shell, name: &[u8], dq: bool) -> Result<Exp
     Ok(Expansion {
         value,
         splat: !dq || name == b"@",
+        rc: sh.opt("rcexpandparam"),
     })
 }
 
@@ -43,6 +47,8 @@ struct Flags {
     quote: u8,
     unquote: bool,
     indirect: bool,
+    /// Set by `^`, cleared by `^^`; unset leaves the option to decide.
+    rc: Option<bool>,
 }
 
 fn parse_flags(s: &[u8], f: &mut Flags) {
@@ -142,7 +148,13 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
                 isset = true;
                 i += 1;
             }
-            Some(b'=' | b'~' | b'^') if next.is_some() => i += 1,
+            // `^` asks for RC_EXPAND_PARAM and `^^` refuses it.
+            Some(b'^') if next.is_some() => {
+                let off = next.map(tok::detok) == Some(b'^');
+                f.rc = Some(!off);
+                i += if off { 2 } else { 1 };
+            }
+            Some(b'=' | b'~') if next.is_some() => i += 1,
             _ => break,
         }
     }
@@ -210,6 +222,7 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
             return Ok(Expansion {
                 value: Value::Scalar(b"0".to_vec()),
                 splat: false,
+                rc: false,
             });
         }
     }
@@ -230,6 +243,7 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
         return Ok(Expansion {
             value: Value::Scalar(if value.is_some() { b"1" } else { b"0" }.to_vec()),
             splat: false,
+            rc: false,
         });
     }
     let is_set = value.is_some();
@@ -261,6 +275,7 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
         return Ok(Expansion {
             value: Value::Scalar(n.to_string().into_bytes()),
             splat: false,
+            rc: false,
         });
     }
     v = map_elems(v, |s| {
@@ -323,7 +338,11 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
     if f.unquote {
         v = map_elems(v, |s| unquote(&s));
     }
-    Ok(Expansion { value: v, splat })
+    Ok(Expansion {
+        value: v,
+        splat,
+        rc: f.rc.unwrap_or_else(|| sh.opt("rcexpandparam")),
+    })
 }
 
 /// The `]` closing a subscript that opened just before `i`, counting nested
@@ -737,7 +756,7 @@ fn apply_op(
             }) {
                 return substring(sh, v, after);
             }
-            modifiers(v, after)
+            apply_modifiers(v, after)
         }
         _ => Ok(v),
     }
@@ -788,7 +807,7 @@ fn substring(sh: &mut Shell, v: Value, spec: &[u8]) -> Result<Value, String> {
     })
 }
 
-fn modifiers(v: Value, spec: &[u8]) -> Result<Value, String> {
+pub(crate) fn apply_modifiers(v: Value, spec: &[u8]) -> Result<Value, String> {
     let plain: Vec<u8> = spec.iter().map(|&c| tok::detok(c)).collect();
     let mut v = v;
     let mut i = 0;
