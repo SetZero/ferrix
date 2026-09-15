@@ -136,7 +136,7 @@ alive.
 | os-96 (was ferrix-61, ferrix-4d) | Stage 11: `libs/btrfs`, `libs/block`, the kernel mount; the virtio-blk library, the native user-space runtime, the QEMU test disk |
 | os-a6 (was ferrix-e5, ferrix-54) | The memory-management package below; reviewer of the VMO reverse map and the space.rs halves of `vmo_map` and file-backed mmap; the scheduler rows (was ferrix-34), since no scheduler session was spawned |
 | os-87 (was ferrix-3c, and ferrix-4f's area) | The STM32MP157D-DK1 board: the serial link, OpenOCD, every hardware run, filing what the board shows with the area that owns it; `xtask flash` and `deploy`, `docs/stm32mp157-dk.md`, the Arm UART drivers, the x86-64 console interrupt route |
-| os-50 (was os-7c/os-fb, ferrix-ce) | `ferrousli/`, on the roadmap by the P0 row below. Done: locales and wide characters; time zones, `strftime` and `strptime`; buffered stdio and `printf`; threads, mutexes, condition variables and keys, with `tests/c/thread/on_ferrix.c` ready as a static threaded program for `CLONE_THREAD`; `dirent.h` and `getopt`; mounts, file system statistics and `mntent.h`; sockets and the address conversions, System V IPC, and Linux's own process and system calls; `termios.h`; `system`, `popen`, temporary files, `realpath`, the `execl` family and `daemon`; the user, group and shadow databases; `syslog.h`, and `utmpx.h` with musl's empty records; the `scanf` family. In progress: termios (area 2); then pwd/grp/shadow, crypt, utmpx and syslog (area 3) and scanf, popen, mkstemp, realpath (area 4), split across sessions when they exist; the wrappers and stubs busybox links against; `scanf`, `glob` and `regex`, thread cancellation and semaphores, the math library |
+| os-b7 (was os-50/os-7c/os-fb, ferrix-ce) | `ferrousli/`, on the roadmap by the P0 row below. Done: locales and wide characters; time zones, `strftime` and `strptime`; buffered stdio and `printf`; threads, mutexes, condition variables and keys, with `tests/c/thread/on_ferrix.c` ready as a static threaded program for `CLONE_THREAD`; `dirent.h` and `getopt`; mounts, file system statistics and `mntent.h`; sockets and the address conversions, System V IPC, and Linux's own process and system calls; `termios.h`; `system`, `popen`, temporary files, `realpath`, the `execl` family and `daemon`; the user, group and shadow databases; `syslog.h`, and `utmpx.h` with musl's empty records; the `scanf` family. In progress: termios (area 2); then pwd/grp/shadow, crypt, utmpx and syslog (area 3) and scanf, popen, mkstemp, realpath (area 4), split across sessions when they exist; the wrappers and stubs busybox links against; `scanf`; `assert` and the traditional DES `crypt`, which landed as dcaecd6 with the POSIX.1-2024 gap in `docs/POSIX-2024.md`. In progress, one branch each on origin, none reviewed or gated: `ferrousli-math-stubs` (`sin`, `cos`, `exp`, `log`, `pow`, `atan2` and the floating-point classifiers), `ferrousli-patterns` (`dirname`, `regex`) and `ferrousli-netdb` (name resolution, DNS, `getifaddrs`, `ether_*`). Waiting behind them: `glob` and `search.h`, thread cancellation and semaphores, the rest of the math library |
 
 The fleet restarted on the customer's Windows machine on the evening of
 2026-09-13. `cargo` builds there, but every boot, the KVM row, `test-shell`,
@@ -244,6 +244,16 @@ nobody has it yet.
 
 Dated, newest first. A decision here is final until the customer says otherwise.
 
+* **2026-09-15 (customer)** The customer holds the product owner seat: there is
+  no product-owner session, and the names in this file from before the restart
+  (os-23, os-f7 and the rest) are gone. Two sessions are left, so the queue and
+  the per-landing "go" have nobody to ask and are suspended: a session lands
+  when it judges the tree stable, and commits to `main` directly rather than
+  through `develop`. This supersedes "The landing queue" and "Two branches"
+  above for as long as the fleet is this small. What does not change: the gate
+  table, judging a gate by its output, and that a landing carries its own
+  documentation. `main` is still what the customer tests, so "stable" means the
+  gate a change's own row names has passed on the commit being landed.
 * **2026-09-14** The busybox built against ferrousli is the primary busybox:
   the userland Ferrix is measured with, first in every `test-shell` and
   `test-vfs` the gates run. The musl and glibc busyboxes stay required as
