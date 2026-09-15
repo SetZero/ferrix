@@ -30,6 +30,7 @@ compile_error!("ferrousli supports only x86-64 so far");
 
 pub mod arch;
 pub mod arith;
+pub mod assert;
 pub mod auxv;
 pub mod cancel;
 pub mod cond;

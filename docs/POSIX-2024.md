@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 682 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 683 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 19 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
-| broken | 14 | present, but it fails to link or gives a wrong answer |
+| broken | 13 | present, but it fails to link or gives a wrong answer |
 | stubbed | 16 | defined in `src/stubs.rs`, which ends the program |
 | absent | 512 | not there |
 
-561 interfaces are missing in one of the last four ways. 116 of them are
+560 interfaces are missing in one of the last four ways. 116 of them are
 already written on the three unlanded branches of 2026-09-13
 (`ferrousli-threads`, `ferrousli-math`, `ferrousli-misc`), which were
 committed without a build and are not reviewed.
@@ -37,7 +37,7 @@ new subsystem. Every area's missing names are in the index at the end.
 
 | Area | Interfaces | Missing | On a branch | Points | What the points buy |
 |---|---|---|---|---|---|
-| Language support and the standard library | 118 | 49 | 0 | 5 | `<stdatomic.h>` over the compiler's builtins 2 (the build passes `-nostdinc`, so the compiler's own header is out of reach); the 12 `endian.h` functions 1; `quick_exit` and `at_quick_exit` 1; `a64l`, `l64a`, `getsubopt`, `secure_getenv` 1. `assert` is in the link-breakers below, `setkey` with `encrypt` |
+| Language support and the standard library | 118 | 48 | 0 | 5 | `<stdatomic.h>` over the compiler's builtins 2 (the build passes `-nostdinc`, so the compiler's own header is out of reach); the 12 `endian.h` functions 1; `quick_exit` and `at_quick_exit` 1; `a64l`, `l64a`, `getsubopt`, `secure_getenv` 1. `setkey` is counted with `encrypt` |
 | Strings and characters | 72 | 2 | 0 | 1 | `strcasecmp_l`, `strncasecmp_l` |
 | Wide and multibyte characters | 118 | 35 | 0 | 14 | wide-character streams (`fgetwc` to `vwscanf`, `fwide`, `ungetwc`) 8; the `wcstol` and `wcstod` families with `wcstoimax` and `wcstoumax` 3; `open_wmemstream` 2; `wcsftime`, `wcslcpy`, `wcslcat` 1 |
 | Standard I/O | 70 | 1 | 0 | 1 | `tmpnam` |
@@ -57,18 +57,18 @@ new subsystem. Every area's missing names are in the index at the end.
 | Patterns, paths and search | 23 | 22 | 15 | 13 | landing `ferrousli-misc`: `search.h`, `libgen.h`, `glob` 3; `regex.h`, replacing four stubs, 5; `wordexp` 3; `nftw` 2 |
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 5 | 0 | 2 | `dlfcn.h` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here |
-| Across areas | | | | 8 | the link-breakers below 5; POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **561** | **116** | **164** | |
+| Across areas | | | | 7 | the link-breakers below 4; POSIX.1-2024's declarations in `include/` 3 |
+| **All** | **1243** | **560** | **116** | **163** | |
 
 ## Present but broken
 
 These look present and are not, which makes them worse than a missing name: a
 program compiles against the header and then fails to link, or runs and gets
-the wrong answer. One landing, 5 points.
+the wrong answer. Four points remain.
 
-* **`assert`** expands to a call of `__assert_fail`, which the archive does not
-  define. Every program built without `NDEBUG` that uses it fails to link. 1
-  point, with the classifiers.
+`assert` was in this list. `__assert_fail` is now defined, so a false assertion
+writes its diagnostic and aborts instead of failing to link.
+
 * **`fpclassify`** calls `__fpclassify`, `__fpclassifyf` or `__fpclassifyl` for
   every type, and **`isinf`, `isnan`, `isnormal`, `isfinite` and `signbit`**
   call `__fpclassifyl` or `__signbitl` for `long double`. So do **`isgreater`,
@@ -200,7 +200,7 @@ interface.
 
 | Header | Status | Interfaces |
 |---|---|---|
-| `<assert.h>` | broken (1) | `assert`: expands to __assert_fail, which the archive lacks: fails to link |
+| `<assert.h>` | present (1) | `assert` |
 | `<endian.h>` | macro only (12) | `be16toh`, `be32toh`, `be64toh`, `htobe16`, `htobe32`, `htobe64`, `htole16`, `htole32`, `htole64`, `le16toh`, `le32toh`, `le64toh` |
 | `<errno.h>` | present (1) | `errno` |
 | `<inttypes.h>` | present (4) | `imaxabs`, `imaxdiv`, `strtoimax`, `strtoumax` |
