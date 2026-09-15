@@ -66,6 +66,9 @@ pub(crate) enum Flow {
 #[derive(Debug, Clone)]
 pub(crate) struct Function {
     pub(crate) body: Rc<List>,
+    /// The line the definition began on. An error inside the body counts its
+    /// line from here, as zsh counts one.
+    pub(crate) line: u64,
 }
 
 /// The whole state of the shell.
@@ -75,6 +78,10 @@ pub(crate) struct Shell {
     /// One frame per function call: the values `local` replaced.
     pub(crate) locals: Vec<Vec<(Vec<u8>, Option<Var>)>>,
     pub(crate) functions: HashMap<Vec<u8>, Function>,
+    /// Names `autoload` marked. zsh looks the file up along `fpath` when the
+    /// function is first called, not when it is marked, so a later `fpath`
+    /// still counts.
+    pub(crate) autoloads: std::collections::HashSet<Vec<u8>>,
     pub(crate) aliases: HashMap<Vec<u8>, AliasDef>,
     pub(crate) suffix_aliases: HashMap<Vec<u8>, AliasDef>,
     pub(crate) positional: Vec<Vec<u8>>,
@@ -94,6 +101,9 @@ pub(crate) struct Shell {
     pub(crate) subshell: bool,
     /// Line number of the command being run.
     pub(crate) lineno: u64,
+    /// The line an error counts from: the first line of the file, or of the
+    /// body of the function being run.
+    pub(crate) line_base: u64,
     /// Children started with `&`.
     pub(crate) jobs: Vec<i32>,
     /// Nesting of `source` and `.`: `return` leaves the file.
@@ -106,6 +116,10 @@ pub(crate) struct Shell {
     /// Reading a line typed at the prompt, where `#` starts a comment only
     /// with INTERACTIVE_COMMENTS; sourced files always have comments.
     pub(crate) at_prompt: bool,
+    /// The file being run, which an error names in place of the shell: what
+    /// zsh prints as `/path/to/file:12: ...`. Empty while the shell's own
+    /// input is being run.
+    pub(crate) script: Vec<u8>,
 }
 
 /// The id `name` asks for, read from the kernel each time rather than kept:
@@ -201,6 +215,7 @@ impl Shell {
             vars,
             locals: Vec::new(),
             functions: HashMap::new(),
+            autoloads: std::collections::HashSet::new(),
             aliases: HashMap::new(),
             suffix_aliases: HashMap::new(),
             positional: Vec::new(),
@@ -216,11 +231,13 @@ impl Shell {
             exit_trap: None,
             subshell: false,
             lineno: 0,
+            line_base: 0,
             jobs: Vec::new(),
             source_depth: 0,
             optpos: 1,
             subst_status: None,
             at_prompt: false,
+            script: Vec::new(),
         };
         for (k, v) in [
             ("IFS", &b" \t\n\x83 "[..]),
@@ -440,11 +457,33 @@ impl Shell {
 
     /// Print an error the way zsh does: `name: message`.
     pub(crate) fn error(&self, msg: &str) {
+        self.report(None, msg);
+    }
+
+    /// Print an error a builtin raised. zsh names the builtin between the
+    /// file and the line: `zsh:kill:13: kill 1 failed: no such process`.
+    pub(crate) fn error_at(&self, nam: &str, msg: &str) {
+        self.report(Some(nam), msg);
+    }
+
+    fn report(&self, nam: Option<&str>, msg: &str) {
         use std::io::Write;
-        let line = if self.interactive || self.lineno == 0 {
-            format!("{}: {msg}\n", self.name)
+        // The file being run names the error, as zsh names it; the shell
+        // itself names what it read from its own input.
+        let mut who = if self.script.is_empty() {
+            self.name.clone()
         } else {
-            format!("{}:{}: {msg}\n", self.name, self.lineno)
+            String::from_utf8_lossy(&crate::tok::unmetafy(&self.script)).into_owned()
+        };
+        if let Some(n) = nam {
+            who.push(':');
+            who.push_str(n);
+        }
+        let lineno = self.lineno.saturating_sub(self.line_base);
+        let line = if lineno == 0 || (self.interactive && self.script.is_empty()) {
+            format!("{who}: {msg}\n")
+        } else {
+            format!("{who}:{lineno}: {msg}\n")
         };
         let _ignored = std::io::stderr().write_all(line.as_bytes());
     }

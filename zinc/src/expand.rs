@@ -261,6 +261,17 @@ fn walk(sh: &mut Shell, w: &[u8], out: &mut Out, mut dq: bool) -> Result<(), Str
                     let r = param::expand_brace(sh, &inner, dq)?;
                     insert_param(out, r, dq);
                 }
+                // `$#name` and `$+name`, which zsh reads as `${#name}` and
+                // `${+name}`: how long the parameter is, and whether it is
+                // set at all. `$#` on its own counts the arguments instead.
+                Some(p) if matches!(tok::detok(p), b'#' | b'+') && starts_name(w.get(i + 1)) => {
+                    let (name, len) = simple_name(w.get(i + 1..).unwrap_or(&[]));
+                    let mut inner = vec![tok::detok(p)];
+                    inner.extend_from_slice(&name);
+                    i = take_subscript(w, i + 1 + len, &mut inner);
+                    let r = param::expand_brace(sh, &inner, dq)?;
+                    insert_param(out, r, dq);
+                }
                 Some(n) if is_param_start(n) => {
                     let (name, len) = simple_name(w.get(i..).unwrap_or(&[]));
                     i += len;
@@ -268,22 +279,17 @@ fn walk(sh: &mut Shell, w: &[u8], out: &mut Out, mut dq: bool) -> Result<(), Str
                         .first()
                         .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_');
                     // `$name[sub]` subscripts in native zsh, as `${name[sub]}`.
-                    // Inside double quotes the brackets were not tokenized.
-                    let open = match w.get(i) {
-                        Some(&INBRACK) => Some((INBRACK, OUTBRACK)),
-                        Some(&b'[') if dq => Some((b'[', b']')),
-                        _ => None,
-                    };
-                    let r = if let Some((o, c)) = open.filter(|_| ident && !sh.opt("ksharrays")) {
-                        let end = find_close(w, i + 1, o, c);
-                        let mut inner = name.clone();
-                        inner.push(INBRACK);
-                        inner.extend_from_slice(w.get(i + 1..end).unwrap_or(&[]));
-                        inner.push(OUTBRACK);
-                        i = end + 1;
-                        param::expand_brace(sh, &inner, dq)?
+                    let mut inner = name.clone();
+                    let after = if ident && !sh.opt("ksharrays") {
+                        take_subscript(w, i, &mut inner)
                     } else {
+                        i
+                    };
+                    let r = if after == i {
                         param::expand_simple(sh, &name, dq)?
+                    } else {
+                        i = after;
+                        param::expand_brace(sh, &inner, dq)?
                     };
                     insert_param(out, r, dq);
                 }
@@ -348,6 +354,34 @@ fn push_literal(out: &mut Out, b: u8) {
     } else {
         out.push_plain(&[b]);
     }
+}
+
+/// True if a parameter name starts at `c`.
+fn starts_name(c: Option<&u8>) -> bool {
+    c.is_some_and(|&c| {
+        let c = tok::detok(c);
+        c.is_ascii_alphabetic() || c == b'_'
+    })
+}
+
+/// Read a `[subscript]` at `i`, appending it to `inner` as `${name[sub]}`
+/// spells one, and answer where the word goes on. Brackets reach here
+/// tokenized or plain, depending on where the word was quoted, so both count;
+/// an opening bracket with no closing one is not a subscript at all.
+fn take_subscript(w: &[u8], i: usize, inner: &mut Vec<u8>) -> usize {
+    let (open, close) = match w.get(i) {
+        Some(&INBRACK) => (INBRACK, OUTBRACK),
+        Some(&b'[') => (b'[', b']'),
+        _ => return i,
+    };
+    let end = find_close(w, i + 1, open, close);
+    if end >= w.len() {
+        return i;
+    }
+    inner.push(INBRACK);
+    inner.extend_from_slice(w.get(i + 1..end).unwrap_or(&[]));
+    inner.push(OUTBRACK);
+    end + 1
 }
 
 fn is_param_start(c: u8) -> bool {

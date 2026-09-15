@@ -4,7 +4,7 @@
 use crate::expand::{expand_pattern, expand_single};
 use crate::pattern::Pattern;
 use crate::shell::{Shell, Value};
-use crate::tok::{self, INBRACE, INBRACK, INPAR, OUTBRACE, OUTBRACK, OUTPAR, QSTRING, STRING};
+use crate::tok::{self, INBRACE, INPAR, OUTBRACE, OUTPAR, QSTRING, STRING};
 
 /// The result of one parameter expansion.
 #[derive(Debug, Clone)]
@@ -214,9 +214,10 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
         }
     }
     let mut splat = f.splat || !dq || name == b"@";
-    // Subscript.
-    if inner.get(i) == Some(&INBRACK) {
-        let end = close_of(inner, i + 1, INBRACK, OUTBRACK);
+    // Subscript. The brackets are tokenized or plain, depending on where the
+    // word they came from was quoted.
+    if inner.get(i).is_some_and(|&c| tok::detok(c) == b'[') {
+        let end = close_sub(inner, i + 1);
         let sub = inner.get(i + 1..end).unwrap_or(&[]).to_vec();
         i = end + 1;
         let (v, whole) = subscript(sh, value.take(), &sub)?;
@@ -323,6 +324,26 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
         v = map_elems(v, |s| unquote(&s));
     }
     Ok(Expansion { value: v, splat })
+}
+
+/// The `]` closing a subscript that opened just before `i`, counting nested
+/// brackets. Either bracket may be tokenized or plain, so both count.
+fn close_sub(s: &[u8], mut i: usize) -> usize {
+    let mut depth = 1;
+    while let Some(&c) = s.get(i) {
+        match tok::detok(c) {
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    s.len()
 }
 
 fn close_of(s: &[u8], mut i: usize, open: u8, close: u8) -> usize {
@@ -470,7 +491,10 @@ fn subscript(
     {
         let flags = plain.get(1..close).unwrap_or(&[]).to_vec();
         let pat_word = sub.get(close + 1..).unwrap_or(&[]).to_vec();
-        let pat = Pattern::compile(&expand_pattern(sh, &pat_word)?, sh.opt("extendedglob"));
+        let pat = Pattern::compile(
+            &expand_pattern(sh, &crate::pattern::tokenize(&pat_word))?,
+            sh.opt("extendedglob"),
+        );
         let elems: Vec<(Vec<u8>, Vec<u8>)> = match &v {
             Value::Array(a) => a
                 .iter()
@@ -591,6 +615,23 @@ fn apply_op(
         Value::Array(a) => a.is_empty(),
         other => other.joined().is_empty(),
     };
+    // `${a:|b}` and `${a:*b}`: the elements of `a` that are absent from, or
+    // present in, the array named by `b`.
+    if c0 == b':' && matches!(c1, Some(b'|' | b'*')) {
+        let keep = c1 == Some(b'*');
+        let other = expand_single(sh, rest.get(2..).unwrap_or(&[]))?;
+        let theirs = match sh.get(&other) {
+            Some(Value::Array(a)) => a,
+            Some(one) => vec![one.joined()],
+            None => Vec::new(),
+        };
+        let mine = to_vec(v);
+        return Ok(Value::Array(
+            mine.into_iter()
+                .filter(|x| theirs.contains(x) == keep)
+                .collect(),
+        ));
+    }
     let (colon, op, word_at) = if c0 == b':' && matches!(c1, Some(b'-' | b'=' | b'+' | b'?')) {
         (true, c1.unwrap_or(b'-'), 2)
     } else if matches!(c0, b'-' | b'=' | b'+' | b'?') {
@@ -650,7 +691,10 @@ fn apply_op(
                 .get(if longest { 2 } else { 1 }..)
                 .unwrap_or(&[])
                 .to_vec();
-            let pat = Pattern::compile(&expand_pattern(sh, &pat_word)?, sh.opt("extendedglob"));
+            let pat = Pattern::compile(
+                &expand_pattern(sh, &crate::pattern::tokenize(&pat_word))?,
+                sh.opt("extendedglob"),
+            );
             Ok(map_elems(v, |s| {
                 remove_match(&pat, &s, c0 == b'#', longest)
             }))
@@ -678,7 +722,10 @@ fn apply_op(
             }
             let pat_word = body.get(..split).unwrap_or(&[]).to_vec();
             let repl_word = body.get(split + 1..).unwrap_or(&[]).to_vec();
-            let pat = Pattern::compile(&expand_pattern(sh, &pat_word)?, sh.opt("extendedglob"));
+            let pat = Pattern::compile(
+                &expand_pattern(sh, &crate::pattern::tokenize(&pat_word))?,
+                sh.opt("extendedglob"),
+            );
             let repl = expand_single(sh, &repl_word)?;
             Ok(map_elems(v, |s| replace(&pat, &s, &repl, all, anchor)))
         }

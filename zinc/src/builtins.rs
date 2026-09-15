@@ -104,13 +104,10 @@ pub(crate) fn run(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
         }
         b"exit" | b"logout" | b"return" => {
             if let Some(n) = rest.first() {
-                match std::str::from_utf8(n)
-                    .ok()
-                    .and_then(|t| t.trim().parse::<i32>().ok())
-                {
-                    Some(v) => sh.status = v,
-                    None => {
-                        sh.error(&format!("{}: bad number: {}", lossy(name), lossy(n)));
+                match count_arg(sh, n) {
+                    Ok(v) => sh.status = i32::try_from(v & 0xff).unwrap_or(0),
+                    Err(msg) => {
+                        sh.error_at(&lossy(name), &msg);
                         return 1;
                     }
                 }
@@ -123,10 +120,16 @@ pub(crate) fn run(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
             sh.status
         }
         b"break" | b"continue" => {
-            let n = rest
-                .first()
-                .and_then(|a| std::str::from_utf8(a).ok()?.parse::<u32>().ok())
-                .unwrap_or(1);
+            let n = match rest.first() {
+                Some(a) => match count_arg(sh, a) {
+                    Ok(v) => u32::try_from(v).unwrap_or(1),
+                    Err(msg) => {
+                        sh.error_at(&lossy(name), &msg);
+                        return 1;
+                    }
+                },
+                None => 1,
+            };
             if sh.loop_depth == 0 {
                 sh.error(&format!(
                     "{}: not in while, until, select, or repeat loop",
@@ -142,18 +145,7 @@ pub(crate) fn run(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
             0
         }
         b"set" => set(sh, rest),
-        b"shift" => {
-            let n = rest
-                .first()
-                .and_then(|a| std::str::from_utf8(a).ok()?.parse::<usize>().ok())
-                .unwrap_or(1);
-            if n > sh.positional.len() {
-                sh.error("shift: shift count must be <= $#");
-                return 1;
-            }
-            let _gone: Vec<_> = sh.positional.drain(..n).collect();
-            0
-        }
+        b"shift" => shift_builtin(sh, rest),
         b"export" | b"local" | b"typeset" | b"declare" | b"readonly" | b"integer" | b"float" => {
             typeset_expanded(sh, name, rest.to_vec(), &[])
         }
@@ -549,7 +541,7 @@ fn printf(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
                         match crate::arith::eval(sh, t.as_bytes()) {
                             Ok(v) => v,
                             Err(_) => {
-                                sh.error(&format!("printf: {t}: invalid number"));
+                                sh.error_at("printf", &format!("{t}: invalid number"));
                                 status = 1;
                                 0
                             }
@@ -664,7 +656,7 @@ fn cd(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
         } else {
             "no such file or directory"
         };
-        sh.error(&format!("cd: {msg}: {}", lossy(&target)));
+        sh.error_at("cd", &format!("{msg}: {}", lossy(&target)));
         return 1;
     }
     sh.set_scalar(b"OLDPWD", old);
@@ -909,7 +901,14 @@ fn source(sh: &mut Shell, name: &[u8], args: &[Vec<u8>]) -> i32 {
     sh.source_depth += 1;
     sh.status = 0;
     let at_prompt = std::mem::replace(&mut sh.at_prompt, false);
+    // Errors from here name the file, and the line within it.
+    let outer = std::mem::replace(&mut sh.script, path.clone());
+    let outer_line = sh.lineno;
+    let outer_base = std::mem::replace(&mut sh.line_base, 0);
     exec::run_string(sh, &tok::metafy(&text));
+    sh.line_base = outer_base;
+    sh.script = outer;
+    sh.lineno = outer_line;
     sh.at_prompt = at_prompt;
     sh.source_depth -= 1;
     if sh.flow == Flow::Return && sh.locals.is_empty() {
@@ -1230,6 +1229,52 @@ fn signal_number(s: &[u8]) -> Option<i32> {
     })
 }
 
+/// The number a control builtin was given. zsh reads it as a math expression,
+/// so `return ret` returns what `ret` holds.
+fn count_arg(sh: &mut Shell, arg: &[u8]) -> Result<i64, String> {
+    crate::arith::eval(sh, arg)
+}
+
+/// `shift [n] [name ...]`: drop the first `n` of the positional parameters,
+/// or of each named array. A first argument naming an array is a name, not a
+/// count, which is how zsh tells the two apart.
+fn shift_builtin(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
+    let mut args = args;
+    let mut n = 1usize;
+    if let Some(first) = args.first()
+        && !matches!(sh.get(first), Some(Value::Array(_)))
+    {
+        match count_arg(sh, first) {
+            Ok(v) => n = usize::try_from(v).unwrap_or(0),
+            Err(msg) => {
+                sh.error_at("shift", &msg);
+                return 1;
+            }
+        }
+        args = args.get(1..).unwrap_or(&[]);
+    }
+    if args.is_empty() {
+        if n > sh.positional.len() {
+            sh.error_at("shift", "shift count must be <= $#");
+            return 1;
+        }
+        let _gone: Vec<_> = sh.positional.drain(..n).collect();
+        return 0;
+    }
+    for name in args {
+        let Some(Value::Array(a)) = sh.get(name) else {
+            continue;
+        };
+        if n > a.len() {
+            sh.error_at("shift", "shift count must be <= $#");
+            return 1;
+        }
+        let rest = a.get(n..).unwrap_or(&[]).to_vec();
+        sh.set_value(name, Value::Array(rest));
+    }
+    0
+}
+
 fn kill(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
     let mut sig = libc::SIGTERM;
     let mut status = 0;
@@ -1242,7 +1287,7 @@ fn kill(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
             match signal_number(name) {
                 Some(n) => sig = n,
                 None => {
-                    sh.error(&format!("kill: unknown signal: {}", lossy(a)));
+                    sh.error_at("kill", &format!("unknown signal: {}", lossy(a)));
                     return 1;
                 }
             }
@@ -1255,12 +1300,13 @@ fn kill(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
             Some(pid) => {
                 // SAFETY: kill has no memory-safety preconditions.
                 if unsafe { libc::kill(pid, sig) } != 0 {
-                    sh.error(&format!("kill: kill {pid} failed: no such process"));
+                    let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                    sh.error_at("kill", &format!("kill {pid} failed: {}", exec::errmsg(err)));
                     status = 1;
                 }
             }
             None => {
-                sh.error(&format!("kill: illegal pid: {}", lossy(a)));
+                sh.error_at("kill", &format!("illegal pid: {}", lossy(a)));
                 status = 1;
             }
         }
@@ -1284,14 +1330,39 @@ fn umask(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
                 0
             }
             Err(_) => {
-                sh.error(&format!("umask: bad umask: {}", lossy(a)));
+                sh.error_at("umask", &format!("bad umask: {}", lossy(a)));
                 1
             }
         },
     }
 }
 
+/// Mark names to be loaded from `fpath` the first time they are called. zsh
+/// searches then, not now, so a directory added to `fpath` afterwards counts.
 fn autoload(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
+    for name in args
+        .iter()
+        .filter(|a| a.first() != Some(&b'-') && a.first() != Some(&b'+'))
+    {
+        let _new = sh.autoloads.insert(name.clone());
+    }
+    // Load what `fpath` already holds, so a function stays defined even if
+    // `fpath` later loses the directory it came from; a name not found now is
+    // still marked, and the call looks again.
+    let _tried = load_from_fpath(sh, args);
+    0
+}
+
+/// Read a marked function from `fpath` and define it. Answers whether it is
+/// defined afterwards.
+pub(crate) fn load_autoload(sh: &mut Shell, name: &[u8]) -> bool {
+    if !sh.autoloads.remove(name) {
+        return false;
+    }
+    load_from_fpath(sh, &[name.to_vec()]) == 0 && sh.functions.contains_key(name)
+}
+
+fn load_from_fpath(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
     let fpath: Vec<Vec<u8>> = match sh.get(b"fpath") {
         Some(Value::Array(a)) => a,
         Some(v) => v
@@ -1336,6 +1407,7 @@ fn autoload(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
                     name.clone(),
                     crate::shell::Function {
                         body: std::rc::Rc::new(body),
+                        line: 0,
                     },
                 );
             }

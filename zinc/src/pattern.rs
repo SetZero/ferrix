@@ -343,25 +343,44 @@ fn match_nodes(nodes: &[Node], s: &[u8]) -> bool {
         .any(|n| s.get(n..).is_some_and(|tail| match_nodes(rest, tail)))
 }
 
+/// Make the glob characters of `p` into the tokens `compile` reads. A pattern
+/// written inside `${...}` reaches the expansion untokenized, because the
+/// lexer read it as the body of a substitution rather than as a word; a
+/// backslash there protects the character after it.
+pub(crate) fn tokenize(p: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(p.len());
+    let mut i = 0;
+    while let Some(&b) = p.get(i) {
+        i += 1;
+        if b == b'\\' {
+            if let Some(&next) = p.get(i) {
+                out.push(next);
+                i += 1;
+            }
+            continue;
+        }
+        out.push(match b {
+            b'*' => STAR,
+            b'?' => QUEST,
+            b'[' => INBRACK,
+            b']' => OUTBRACK,
+            b'(' => INPAR,
+            b')' => OUTPAR,
+            b'|' => BAR,
+            b'#' => POUND,
+            b'^' => HAT,
+            _ => b,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn tokd(p: &str) -> Vec<u8> {
-        p.bytes()
-            .map(|b| match b {
-                b'*' => STAR,
-                b'?' => QUEST,
-                b'[' => INBRACK,
-                b']' => OUTBRACK,
-                b'(' => INPAR,
-                b')' => OUTPAR,
-                b'|' => BAR,
-                b'#' => POUND,
-                b'^' => HAT,
-                _ => b,
-            })
-            .collect()
+        tokenize(p.as_bytes())
     }
 
     #[test]

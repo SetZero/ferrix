@@ -253,6 +253,7 @@ fn main() {
             ));
             exec::exit_now(127);
         };
+        sh.script = file.clone();
         exec::run_string(&mut sh, &tok::metafy(&text));
         finish(&mut sh);
     }

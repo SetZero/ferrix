@@ -270,6 +270,27 @@ fn restore_fd(fd: i32, saved: i32) {
     }
 }
 
+/// What zsh prints for an errno: the system's own words, with a capital first
+/// letter lowered unless a second capital follows, which is `zerrmsg`'s `%e`.
+pub(crate) fn errmsg(err: i32) -> String {
+    // SAFETY: strerror returns a pointer to a string that outlives the call.
+    let p = unsafe { libc::strerror(err) };
+    if p.is_null() {
+        return format!("error {err}");
+    }
+    // SAFETY: p is a valid NUL-terminated string.
+    let s = unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy();
+    let mut bytes = s.into_owned().into_bytes();
+    let second_is_upper = bytes.get(1).is_some_and(u8::is_ascii_uppercase);
+    if let Some(first) = bytes.first_mut()
+        && first.is_ascii_uppercase()
+        && !second_is_upper
+    {
+        *first = first.to_ascii_lowercase();
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 fn open_file(path: &[u8], flags: i32) -> Result<i32, String> {
     let c = CString::new(tok::unmetafy(path)).map_err(|_| "bad file name".to_owned())?;
     // SAFETY: c is a valid NUL-terminated string.
@@ -680,6 +701,9 @@ fn run_simple(
         }
         return;
     };
+    if use_functions && !force_builtin && !sh.functions.contains_key(&name) {
+        let _loaded = crate::builtins::load_autoload(sh, &name);
+    }
     let is_function = use_functions && !force_builtin && sh.functions.contains_key(&name);
     let is_builtin = crate::builtins::is_builtin(&name);
     if force_builtin && !is_builtin {
@@ -884,9 +908,15 @@ pub(crate) fn call_function(sh: &mut Shell, name: &[u8], args: Vec<Vec<u8>>) -> 
     let saved_pos = std::mem::replace(&mut sh.positional, args);
     let saved_zero = std::mem::replace(&mut sh.argzero, name.to_vec());
     let saved_loops = std::mem::replace(&mut sh.loop_depth, 0);
+    // An error in the body names the function and counts its line from the
+    // definition, the way zsh reports one.
+    let saved_script = std::mem::replace(&mut sh.script, name.to_vec());
+    let saved_base = std::mem::replace(&mut sh.line_base, f.line);
     sh.push_scope();
     run_list(sh, &f.body);
     sh.pop_scope();
+    sh.line_base = saved_base;
+    sh.script = saved_script;
     sh.loop_depth = saved_loops;
     sh.positional = saved_pos;
     sh.argzero = saved_zero;
@@ -1102,6 +1132,7 @@ fn run_compound(sh: &mut Shell, kind: &CmdKind) {
                     b"(anon)".to_vec(),
                     Function {
                         body: Rc::clone(body),
+                        line: sh.lineno,
                     },
                 );
                 sh.status = call_function(sh, b"(anon)", args);
@@ -1113,6 +1144,7 @@ fn run_compound(sh: &mut Shell, kind: &CmdKind) {
                     name,
                     Function {
                         body: Rc::clone(body),
+                        line: sh.lineno,
                     },
                 );
             }
