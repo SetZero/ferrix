@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 695 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 724 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 7 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 13 | present, but it fails to link or gives a wrong answer |
 | stubbed | 16 | defined in `src/stubs.rs`, which ends the program |
-| absent | 512 | not there |
+| absent | 483 | not there |
 
-548 interfaces are missing in one of the last four ways. 116 of them are
+519 interfaces are missing in one of the last four ways. 116 of them are
 already written on the three unlanded branches of 2026-09-13
 (`ferrousli-threads`, `ferrousli-math`, `ferrousli-misc`), which were
 committed without a build and are not reviewed.
@@ -37,7 +37,7 @@ new subsystem. Every area's missing names are in the index at the end.
 
 | Area | Interfaces | Missing | On a branch | Points | What the points buy |
 |---|---|---|---|---|---|
-| Language support and the standard library | 118 | 36 | 0 | 4 | `<stdatomic.h>` over the compiler's builtins 2 (the build passes `-nostdinc`, so the compiler's own header is out of reach); `quick_exit` and `at_quick_exit` 1; `a64l`, `l64a`, `getsubopt`, `secure_getenv` 1. `setkey` is counted with `encrypt` |
+| Language support and the standard library | 118 | 7 | 0 | 2 | `quick_exit` and `at_quick_exit` 1; `a64l`, `l64a`, `getsubopt`, `secure_getenv` 1. `setkey` is counted with `encrypt` |
 | Strings and characters | 72 | 2 | 0 | 1 | `strcasecmp_l`, `strncasecmp_l` |
 | Wide and multibyte characters | 118 | 35 | 0 | 14 | wide-character streams (`fgetwc` to `vwscanf`, `fwide`, `ungetwc`) 8; the `wcstol` and `wcstod` families with `wcstoimax` and `wcstoumax` 3; `open_wmemstream` 2; `wcsftime`, `wcslcpy`, `wcslcat` 1 |
 | Standard I/O | 70 | 1 | 0 | 1 | `tmpnam` |
@@ -58,7 +58,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 5 | 0 | 2 | `dlfcn.h` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here |
 | Across areas | | | | 7 | the link-breakers below 4; POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **548** | **116** | **162** | |
+| **All** | **1243** | **519** | **116** | **160** | |
 
 ## Present but broken
 
@@ -103,7 +103,7 @@ change. What follows from it:
 `include/` holds musl 1.2.5's headers unmodified, and musl 1.2.5 predates
 POSIX.1-2024.
 
-* **Missing:** `<devctl.h>`, `<ndbm.h>` and `<stdatomic.h>`.
+* **Missing:** `<devctl.h>` and `<ndbm.h>`.
 * **Not declared anywhere in `include/`**, beyond those three headers' contents:
   `posix_getdents`; the six `gettext` `_l` forms and `getlocalename_l`; the
   `clock` waits `pthread_cond_clockwait`, `pthread_mutex_clocklock`,
@@ -205,7 +205,7 @@ interface.
 | `<errno.h>` | present (1) | `errno` |
 | `<inttypes.h>` | present (4) | `imaxabs`, `imaxdiv`, `strtoimax`, `strtoumax` |
 | `<stdarg.h>` | present (4) | `va_arg`, `va_copy`, `va_end`, `va_start` |
-| `<stdatomic.h>` | absent (29) | `atomic_compare_exchange_strong`, `atomic_compare_exchange_strong_explicit`, `atomic_compare_exchange_weak`, `atomic_compare_exchange_weak_explicit`, `atomic_exchange`, `atomic_exchange_explicit`, `atomic_fetch_add`, `atomic_fetch_add_explicit`, `atomic_fetch_and`, `atomic_fetch_and_explicit`, `atomic_fetch_or`, `atomic_fetch_or_explicit`, `atomic_fetch_sub`, `atomic_fetch_sub_explicit`, `atomic_fetch_xor`, `atomic_fetch_xor_explicit`, `atomic_flag_clear`, `atomic_flag_clear_explicit`, `atomic_flag_test_and_set`, `atomic_flag_test_and_set_explicit`, `atomic_init`, `atomic_is_lock_free`, `atomic_load`, `atomic_load_explicit`, `atomic_signal_fence`, `atomic_store`, `atomic_store_explicit`, `atomic_thread_fence`, `kill_dependency` |
+| `<stdatomic.h>` | present (29) | `atomic_compare_exchange_strong`, `atomic_compare_exchange_strong_explicit`, `atomic_compare_exchange_weak`, `atomic_compare_exchange_weak_explicit`, `atomic_exchange`, `atomic_exchange_explicit`, `atomic_fetch_add`, `atomic_fetch_add_explicit`, `atomic_fetch_and`, `atomic_fetch_and_explicit`, `atomic_fetch_or`, `atomic_fetch_or_explicit`, `atomic_fetch_sub`, `atomic_fetch_sub_explicit`, `atomic_fetch_xor`, `atomic_fetch_xor_explicit`, `atomic_flag_clear`, `atomic_flag_clear_explicit`, `atomic_flag_test_and_set`, `atomic_flag_test_and_set_explicit`, `atomic_init`, `atomic_is_lock_free`, `atomic_load`, `atomic_load_explicit`, `atomic_signal_fence`, `atomic_store`, `atomic_store_explicit`, `atomic_thread_fence`, `kill_dependency` |
 | `<stdlib.h>` | present (60) | `_Exit`, `abort`, `abs`, `aligned_alloc`, `atexit`, `atof`, `atoi`, `atol`, `atoll`, `bsearch`, `calloc`, `div`, `drand48` (XSI), `erand48` (XSI), `exit`, `free`, `getenv`, `initstate` (XSI), `jrand48` (XSI), `labs`, `lcong48` (XSI), `ldiv`, `llabs`, `lldiv`, `lrand48` (XSI), `malloc`, `mblen`, `mbstowcs`, `mbtowc`, `mkdtemp`, `mkostemp`, `mkstemp`, `mrand48` (XSI), `nrand48` (XSI), `posix_memalign` (ADV), `putenv` (XSI), `qsort`, `qsort_r`, `rand`, `random` (XSI), `realloc`, `reallocarray`, `realpath`, `seed48` (XSI), `setenv`, `setstate` (XSI), `srand`, `srand48` (XSI), `srandom` (XSI), `strtod`, `strtof`, `strtol`, `strtold`, `strtoll`, `strtoul`, `strtoull`, `system`, `unsetenv`, `wcstombs`, `wctomb` |
 | `<stdlib.h>` | absent (7) | `a64l` (XSI), `at_quick_exit`, `getsubopt`, `l64a` (XSI), `quick_exit`, `secure_getenv`, `setkey` |
 

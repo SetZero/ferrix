@@ -93,6 +93,7 @@ x86-64, static programs linked at a fixed address.
 | `stdlib.h` | `exit`, `_Exit`, `atexit` without a limit, `abort`, the environment functions; `strtol` and `strtod` families, correctly rounded for `float`, `double` and x87 `long double`, with glibc's `__isoc23_` names; `qsort`, `qsort_r`, `bsearch`; `abs` and `div` families; `rand`, `random` and `rand48` families | `ecvt`, `fcvt`, `gcvt`; NaN payloads and rounding modes in parsing |
 | `assert.h` | `assert`, whose `__assert_fail` writes musl's message straight to standard error and aborts | |
 | `endian.h` | all 12 host, big-endian and little-endian conversions, both as macros and callable functions | |
+| `stdatomic.h` | C atomic types, memory orders, fences, compare-exchange, exchange, load, store, fetch operations and flags over the compiler's atomic builtins | |
 | `string.h`, `strings.h` | everything, with word-at-a-time scans and two-way `strstr` and `memmem`; `strcoll_l` and `strxfrm_l` | `strcasecmp_l`, `strncasecmp_l` |
 | `ctype.h` | the C locale, glibc's `__ctype_b_loc` tables, and the `_l` forms | |
 | `locale.h`, `langinfo.h` | `setlocale`, `localeconv`, `newlocale`, `duplocale`, `freelocale`, `uselocale`, `nl_langinfo`; musl's C and C.UTF-8 locales, any other name behaving as UTF-8 | message catalogues, glibc's `locale_t` layout |
