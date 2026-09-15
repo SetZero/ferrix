@@ -37,6 +37,7 @@ pub mod cond;
 pub mod crypt;
 pub mod ctype;
 pub mod dirent;
+pub mod endian;
 pub mod env;
 pub mod errno;
 pub mod exit;
