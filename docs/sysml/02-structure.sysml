@@ -1019,6 +1019,28 @@ package FerrixStructure {
                  * displayctl fuzz target requires decoding to be exact and
                  * the session never to accept a flip out of order. */
         }
+        #writtenAhead part inputctl : LibraryCrate {
+            attribute :>> path = "libs/inputctl";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 23;
+            @stage { number = 17; }
+            doc /* The control protocol between the kernel's input core and a
+                 * ring-3 input driver, and evdev's per-open queues, written
+                 * ahead of both for the input iteration (docs/INPUT.md). Six
+                 * fixed messages decoded strictly; the core's side of the
+                 * conversation, which publishes only the event types it
+                 * supports, refuses a message holding any event the driver
+                 * did not declare before any of it takes effect, keeps the
+                 * device state as Linux's input_get_disposition does and
+                 * delivers whole reports to the grabbing open or to all; and
+                 * the queue, Linux evdev's ring with its SYN_DROPPED rule,
+                 * packet boundary, flush on a state read and clock change,
+                 * read as input_event at both widths. The inputctl fuzz
+                 * target requires decoding to be exact, every delivered
+                 * report whole and published, and every drained read to end
+                 * at a SYN_REPORT with its clean reports the ones delivered,
+                 * in order. */
+        }
         #writtenAhead part pci : LibraryCrate {
             attribute :>> path = "libs/pci";
             attribute :>> forbidsUnsafe = true;

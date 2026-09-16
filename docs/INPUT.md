@@ -520,7 +520,17 @@ agreed with them. `ferrix-virtio` depends on `ferrix-linux-abi` for that: a
 `no_std` crate with no dependencies that the kernel, `ferrix-rt` and the fuzz
 crate already link. Its tests now also require the bits QEMU's devices set to
 be L1's codes, and its fuzz target ran 50,283,653 inputs in ten minutes on
-nazuna without a failure. L3–L7 are open. Of iteration 2's prerequisites,
+nazuna without a failure. L3 is on a branch, gated, and waits for the
+product owner to land it: `libs/inputctl` with §3.2's messages, the core's
+session and §3.1's queue, host-tested and fuzzed. Where this document left a
+rule to Linux, it follows `drivers/input/evdev.c` and `input.c`, and it
+records four places where they answer differently from the text above, for
+L6 to settle: a full queue keeps `SYN_DROPPED` and the newest event rather
+than only `SYN_DROPPED`; the state changes as each event arrives, since
+whether an event passes depends on it; `read` answers `ENODEV` as soon as the
+device is gone, queued events or not; and `EVIOCGABS` of an undeclared axis
+answers zeros, which the crate leaves to the glue. L4–L7 are open. Of
+iteration 2's prerequisites,
 E1–E3 landed (os-26): the kernel side is done except E4, which is in
 progress. The roadmap's stage 17 records what E1 and E2 do not yet do as
 Linux does.
