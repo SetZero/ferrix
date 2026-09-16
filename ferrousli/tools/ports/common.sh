@@ -66,7 +66,14 @@ build_ferrousli() {
 # libc++abi and libunwind from $prefix/lib. It is usable once that port is
 # built. The bare C++ compiler has no C++ library at all, for building that
 # port. Both link with --eh-frame-hdr, which gcc leaves out of a static link:
-# libunwind finds a program's unwind tables through the header it makes.
+# libunwind finds a program's unwind tables through the header it makes. And
+# both link gcc's crtbeginT.o and crtend.o, as gcc's own static link does:
+# they define __dso_handle, which every C++ static destructor is registered
+# against, and which belongs to the compiler rather than to a C library.
+#
+# What the wrappers add after the caller's arguments comes after `-x none`, so
+# a caller that compiles from standard input with `-x c++ -` does not make gcc
+# read crtend.o and the libraries as C++ source.
 #
 # Empty libm, libpthread and the rest stand in for the libraries a configure
 # script asks for by name: ferrousli is one library, as musl is.
@@ -85,8 +92,10 @@ make_compilers() {
     for l in m crypt resolv rt pthread dl util; do
         [ -f "$stubs/lib$l.a" ] || ar rc "$stubs/lib$l.a"
     done
-    local compiler_include
+    local compiler_include crtbegin crtend
     compiler_include=$(gcc -print-file-name=include)
+    crtbegin=$(gcc -print-file-name=crtbeginT.o)
+    crtend=$(gcc -print-file-name=crtend.o)
 
     local name driver kind
     for name in ferrousli-cc ferrousli-c++ ferrousli-c++-bare; do
@@ -115,9 +124,15 @@ case $kind in
         cxxlibs=(-Wl,--eh-frame-hdr)
         ;;
 esac
+begin=()
+end=()
+if [ $kind != c ]; then
+    begin=("$crtbegin")
+    end=("$crtend")
+fi
 if [ \$link = 1 ]; then
     exec $driver "\${cxx[@]}" "\${common[@]}" -static -no-pie -nostdlib -L"$stubs" -L"$prefix/lib" \\
-        "$crt1" "\$@" "\${cxxlibs[@]}" -Wl,--start-group "$lib" -lgcc -Wl,--end-group
+        "$crt1" "\${begin[@]}" "\$@" -x none "\${cxxlibs[@]}" -Wl,--start-group "$lib" -lgcc -Wl,--end-group "\${end[@]}"
 else
     exec $driver "\${cxx[@]}" "\${common[@]}" "\$@"
 fi

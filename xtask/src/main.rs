@@ -120,7 +120,7 @@ COMMANDS:
     check         Run every quality gate (fmt, clippy, layering, audits)
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
-    ports         Build the programs ported onto ferrousli (x86_64: curl), which images carry beside busybox
+    ports         Build the programs ported onto ferrousli (x86_64: curl, btop), which images carry beside busybox
     flash         Copy the loader and kernel onto a board's boot partition
     watch-serial  Watch a real serial port for the kernel's boot report
     deploy        flash, then watch-serial: one command for a board
