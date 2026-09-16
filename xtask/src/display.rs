@@ -8,6 +8,12 @@
 //! asks QEMU, over its QMP socket, for a screendump of the virtio-gpu head,
 //! and requires every pixel to be that colour.
 //!
+//! The marker line also names the plane the program found on the card after
+//! its modeset, read the way Smithay's legacy path reads planes: the test
+//! requires it to be a primary plane, so a card whose planes or `type`
+//! property break fails here before a compositor panics on it
+//! (`docs/DISPLAY.md` §2.3, E4).
+//!
 //! A check that cannot fail proves nothing, so the test runs twice: once as
 //! above, and once with the program built with `negative-control`, which
 //! draws pixel (0, 0) in another colour. The second boot must fail the check
@@ -38,6 +44,10 @@ pub(crate) const MARKER: &str = "compositor: scanout";
 
 /// What the program prints when it could not.
 pub(crate) const FAILED: &str = "compositor: failed";
+
+/// What the marker line ends with when the card has a primary plane for the
+/// CRTC the program set: `plane <id> Primary`.
+const PRIMARY: &str = "Primary";
 
 /// What both of its lines start with, which is what the boot is watched for.
 const EITHER: &str = "compositor: ";
@@ -294,6 +304,16 @@ pub(crate) fn mismatches(
     (found, count)
 }
 
+/// The id of the primary plane the marker line names, if it names one: its
+/// last three words are `plane <id> Primary`.
+pub(crate) fn primary_plane(line: &str) -> Option<u32> {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    match words.as_slice() {
+        [.., "plane", id, kind] if *kind == PRIMARY => id.parse().ok(),
+        _ => None,
+    }
+}
+
 /// Take a screendump of `device` into `file` and parse it.
 fn read_dump(qmp: &mut Qmp, device: Option<&str>, file: &Path) -> Result<Image> {
     let _ = std::fs::remove_file(file);
@@ -333,6 +353,17 @@ fn boot_and_dump(arch: Arch, program: &Path, args: &Args, name: &str) -> Result<
                 .unwrap_or_else(|error| format!("no screendump either: {error}"));
             return Err(Error::new(format!("{arch}: {} ({firmware})", line.trim())));
         }
+        let marker = lines
+            .iter()
+            .rev()
+            .find(|line| line.contains(MARKER))
+            .map_or("", |line| line.trim());
+        let Some(plane) = primary_plane(marker) else {
+            return Err(Error::new(format!(
+                "{arch}: the program found no primary plane on the card: `{marker}`"
+            )));
+        };
+        println!("  {arch}: the card's primary plane {plane} shows the framebuffer");
         let settle = Instant::now() + SETTLE;
         loop {
             let screen = read_dump(&mut qmp, Some(DEVICE_ID), &dump)?;
@@ -430,6 +461,25 @@ mod tests {
         assert!(parse_ppm(b"P6\n2 2\n65535\n").is_err(), "wide samples");
         assert!(parse_ppm(b"P6\n2").is_err(), "no header");
         assert!(parse_ppm(b"P6\nx 2\n255\n").is_err(), "not a number");
+    }
+
+    #[test]
+    fn the_marker_line_must_name_a_primary_plane() {
+        let line = "[  4.2] compositor: scanout 1024x768 1024x768 colour 0x1e1e2e plane 4 Primary";
+        assert_eq!(primary_plane(line), Some(4));
+        assert_eq!(
+            primary_plane("compositor: scanout 1024x768 colour 0x1e1e2e plane 4 Overlay"),
+            None
+        );
+        assert_eq!(
+            primary_plane("compositor: scanout 1024x768 colour 0x1e1e2e plane none"),
+            None
+        );
+        assert_eq!(
+            primary_plane("compositor: scanout 1024x768 colour 0x1e1e2e"),
+            None
+        );
+        assert_eq!(primary_plane("plane x Primary"), None);
     }
 
     #[test]

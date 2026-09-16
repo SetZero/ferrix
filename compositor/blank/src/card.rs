@@ -4,8 +4,9 @@ use std::ffi::CStr;
 use std::io;
 
 use ferrix_linux_abi::drm::{
-    self, CardRes, CreateDumb, Crtc, FbCmd2, Field, GetConnector, GetEncoder, Layout, MapDumb,
-    ModeInfo,
+    self, CardRes, CreateDumb, Crtc, FbCmd2, Field, GetConnector, GetEncoder, GetPlane,
+    GetPlaneRes, GetProperty, Layout, MapDumb, ModeInfo, ObjGetProperties, PropertyEnum,
+    SetClientCap,
 };
 
 use crate::modeset;
@@ -58,6 +59,9 @@ fn address<T>(items: &mut [T]) -> u64 {
 struct Plan {
     connector: u32,
     crtc: u32,
+    /// The CRTC's index in `GETRESOURCES`' list, which `possible_crtcs` bit
+    /// masks count in.
+    crtc_index: usize,
     mode: ModeInfo,
 }
 
@@ -113,9 +117,14 @@ fn plan(card: &Card) -> io::Result<Plan> {
         card.ioctl(drm::IOCTL_MODE_GETENCODER, &mut encoder)?;
         let crtc = modeset::choose_crtc(encoder.crtc_id, encoder.possible_crtcs, &crtcs)
             .ok_or_else(|| io::Error::other("no CRTC for the connector's encoder"))?;
+        let crtc_index = crtcs
+            .iter()
+            .position(|&id| id == crtc)
+            .ok_or_else(|| io::Error::other("the encoder's CRTC is not the card's"))?;
         return Ok(Plan {
             connector: connector_id,
             crtc,
+            crtc_index,
             mode,
         });
     }
@@ -191,9 +200,94 @@ pub(crate) fn show(card: &Card) -> io::Result<String> {
     card.ioctl(drm::IOCTL_MODE_SETCRTC, &mut crtc)?;
     plan.mode = crtc.mode;
 
+    let planes = planes(card)?;
+    let described =
+        modeset::describe_planes(&planes, plan.crtc_index, plan.crtc, framebuffer.fb_id)
+            .map_err(io::Error::other)?;
+
     Ok(format!(
-        "{MARKER} {} {width}x{height} colour 0x{:06x}",
+        "{MARKER} {} {width}x{height} colour 0x{:06x} {described}",
         modeset::mode_name(&plan.mode),
         modeset::BACKGROUND
     ))
+}
+
+/// Every plane the card lists once universal planes are asked for, read the
+/// way Smithay's legacy path reads them (`backend/drm/mod.rs`, `planes` and
+/// `plane_type`): `GETPLANERESOURCES`, `GETPLANE`, then each plane's
+/// properties through `OBJ_GETPROPERTIES` and `GETPROPERTY`, looking for
+/// `type`. Each list is asked for twice, counts first.
+fn planes(card: &Card) -> io::Result<Vec<modeset::Plane>> {
+    let mut universal = SetClientCap {
+        capability: drm::CLIENT_CAP_UNIVERSAL_PLANES,
+        value: 1,
+    };
+    card.ioctl(drm::IOCTL_SET_CLIENT_CAP, &mut universal)?;
+
+    let mut resources = GetPlaneRes::ZERO;
+    card.ioctl(drm::IOCTL_MODE_GETPLANERESOURCES, &mut resources)?;
+    let mut ids = vec![0u32; resources.count_planes as usize];
+    resources.plane_id_ptr = address(&mut ids);
+    card.ioctl(drm::IOCTL_MODE_GETPLANERESOURCES, &mut resources)?;
+    ids.truncate(resources.count_planes as usize);
+
+    let mut planes = Vec::with_capacity(ids.len());
+    for id in ids {
+        let mut plane = GetPlane {
+            plane_id: id,
+            ..GetPlane::ZERO
+        };
+        card.ioctl(drm::IOCTL_MODE_GETPLANE, &mut plane)?;
+        planes.push(modeset::Plane {
+            id,
+            crtc: plane.crtc_id,
+            framebuffer: plane.fb_id,
+            possible_crtcs: plane.possible_crtcs,
+            kind: plane_type(card, id)?,
+        });
+    }
+    Ok(planes)
+}
+
+/// The name of plane `id`'s `type` value in the property's enum list, if the
+/// plane has a `type` property.
+fn plane_type(card: &Card, id: u32) -> io::Result<Option<String>> {
+    let mut request = ObjGetProperties {
+        obj_id: id,
+        obj_type: drm::MODE_OBJECT_PLANE,
+        ..ObjGetProperties::ZERO
+    };
+    card.ioctl(drm::IOCTL_MODE_OBJ_GETPROPERTIES, &mut request)?;
+    let mut properties = vec![0u32; request.count_props as usize];
+    let mut values = vec![0u64; request.count_props as usize];
+    request.props_ptr = address(&mut properties);
+    request.prop_values_ptr = address(&mut values);
+    card.ioctl(drm::IOCTL_MODE_OBJ_GETPROPERTIES, &mut request)?;
+
+    for (&property_id, &value) in properties.iter().zip(&values) {
+        let mut property = GetProperty {
+            prop_id: property_id,
+            ..GetProperty::ZERO
+        };
+        card.ioctl(drm::IOCTL_MODE_GETPROPERTY, &mut property)?;
+        if modeset::c_name(&property.name) != "type" {
+            continue;
+        }
+        let mut enums = vec![0u8; property.count_enum_blobs as usize * PropertyEnum::SIZE];
+        property = GetProperty {
+            enum_blob_ptr: address(&mut enums),
+            count_values: 0,
+            ..property
+        };
+        card.ioctl(drm::IOCTL_MODE_GETPROPERTY, &mut property)?;
+        let names: Vec<(u64, String)> = enums
+            .chunks_exact(PropertyEnum::SIZE)
+            .filter_map(PropertyEnum::read)
+            .map(|entry| (entry.value, modeset::c_name(&entry.name)))
+            .collect();
+        return Ok(Some(
+            modeset::enum_name(value, &names).unwrap_or_else(|| format!("value {value}")),
+        ));
+    }
+    Ok(None)
 }

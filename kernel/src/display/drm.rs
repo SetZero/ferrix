@@ -4,7 +4,8 @@
 //! One open at a time (§5, a written deviation from Linux's many opens with
 //! one master): the open holds the dumb buffers it created, the framebuffers
 //! it added and the page-flip events it has not read. The card has one
-//! connector, one encoder and one CRTC, with fixed object ids. Dumb buffers
+//! connector, one encoder, one CRTC and one primary plane with its immutable
+//! `type` property, with fixed object ids below the framebuffers'. Dumb buffers
 //! are ranges of the card VMO the core hands out, and takes back decommitted
 //! once the device has let go of them; a program maps them through the
 //! card's own inode, whose `mapping()` is that VMO, at the offset
@@ -24,13 +25,14 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::any::Any;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_displayctl::message::{MAX_DIMENSION, Rect, Status};
 use ferrix_linux_abi::drm::{
     self, CardRes, ClipRect, CreateDumb, Crtc, CrtcPageFlip, DestroyDumb, Event, EventVblank,
-    FbCmd, FbCmd2, FbDirtyCmd, Field, GetCap, GetConnector, GetEncoder, Layout, MapDumb, ModeInfo,
-    SetClientCap, Version,
+    FbCmd, FbCmd2, FbDirtyCmd, Field, GetCap, GetConnector, GetEncoder, GetPlane, GetPlaneRes,
+    GetProperty, Layout, MapDumb, ModeInfo, ObjGetProperties, PropertyEnum, SetClientCap, Version,
 };
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::socket::Width;
@@ -45,12 +47,35 @@ use crate::syscall::process::{self, Process};
 use crate::syscall::uaccess;
 use crate::timer;
 
+// Object ids. Linux numbers every mode object of a device, whatever its type,
+// from one idr, so an id names one object and `OBJ_GETPROPERTIES` can look one
+// up with `DRM_MODE_OBJECT_ANY`. The card keeps that: the fixed objects take
+// ids below `FIRST_FRAMEBUFFER_ID`, and framebuffers are numbered from there
+// up, never reused within an open, as `add_framebuffer` counts.
+
 /// The CRTC's object id.
 const CRTC_ID: u32 = 1;
 /// The encoder's.
 const ENCODER_ID: u32 = 2;
 /// The connector's.
 const CONNECTOR_ID: u32 = 3;
+/// The primary plane's.
+const PLANE_ID: u32 = 4;
+/// The plane `type` property's.
+const TYPE_PROPERTY_ID: u32 = 5;
+/// The first framebuffer id; everything below is a fixed object's.
+const FIRST_FRAMEBUFFER_ID: u32 = 32;
+
+/// The one format the primary plane takes.
+const PLANE_FORMATS: [u32; 1] = [drm::FORMAT_XRGB8888];
+
+/// The `type` property's named values, in `drm_plane_type_enum_list`'s order
+/// (`drivers/gpu/drm/drm_mode_config.c`).
+const PLANE_TYPES: [(u64, &[u8]); 3] = [
+    (drm::PLANE_TYPE_OVERLAY, b"Overlay"),
+    (drm::PLANE_TYPE_PRIMARY, b"Primary"),
+    (drm::PLANE_TYPE_CURSOR, b"Cursor"),
+];
 
 /// This build's pointer width, which `DRM_IOCTL_VERSION`'s layout follows.
 const NATIVE: Width = if size_of::<usize>() == 8 {
@@ -111,6 +136,9 @@ pub(crate) struct CardFile {
     /// A sleep lock: the changes wait for the driver, and no spin lock is
     /// held while it is taken.
     modeset: SleepLock<()>,
+    /// Whether the open set `DRM_CLIENT_CAP_UNIVERSAL_PLANES`, without which
+    /// `GETPLANERESOURCES` lists only overlay planes, and so none here.
+    universal_planes: AtomicBool,
 }
 
 impl core::fmt::Debug for CardFile {
@@ -129,12 +157,7 @@ impl CardFile {
         }
         if card
             .opened
-            .compare_exchange(
-                false,
-                true,
-                core::sync::atomic::Ordering::AcqRel,
-                core::sync::atomic::Ordering::Acquire,
-            )
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
             return Err(Errno::EBUSY);
@@ -143,11 +166,12 @@ impl CardFile {
             card,
             state: SpinLock::new(OpenState {
                 next_handle: 1,
-                next_framebuffer: 1,
+                next_framebuffer: FIRST_FRAMEBUFFER_ID,
                 ..OpenState::default()
             }),
             readable: Arc::new(WaitQueue::new()),
             modeset: SleepLock::new((), &SchedParker),
+            universal_planes: AtomicBool::new(false),
         }))
     }
 }
@@ -161,9 +185,7 @@ impl Drop for CardFile {
         let state = self.state.get_mut();
         let buffers: Vec<u32> = state.dumbs.iter().map(|dumb| dumb.buffer).collect();
         self.card.release(&buffers);
-        self.card
-            .opened
-            .store(false, core::sync::atomic::Ordering::Release);
+        self.card.opened.store(false, Ordering::Release);
     }
 }
 
@@ -370,13 +392,7 @@ pub(crate) fn ioctl(
         drm::IOCTL_SET_MASTER | drm::IOCTL_DROP_MASTER => Ok(0),
         request if request == drm::ioctl_version(NATIVE) => version(process, arg),
         drm::IOCTL_GET_CAP => get_cap(process, arg),
-        drm::IOCTL_SET_CLIENT_CAP => {
-            let cap: SetClientCap = read_arg(process, arg)?;
-            match cap.capability {
-                drm::CLIENT_CAP_UNIVERSAL_PLANES | drm::CLIENT_CAP_ATOMIC => Err(Errno::EOPNOTSUPP),
-                _ => Err(Errno::EINVAL),
-            }
-        }
+        drm::IOCTL_SET_CLIENT_CAP => set_client_cap(process, file, arg),
         drm::IOCTL_MODE_GETRESOURCES => get_resources(process, file, arg),
         drm::IOCTL_MODE_GETCONNECTOR => connector(process, &file.card, arg),
         drm::IOCTL_MODE_GETENCODER => get_encoder(process, arg),
@@ -404,8 +420,198 @@ pub(crate) fn ioctl(
             page_flip(process, file, arg)
         }
         drm::IOCTL_MODE_DIRTYFB => dirty_fb(process, file, arg),
+        drm::IOCTL_MODE_GETPLANERESOURCES => get_plane_resources(process, file, arg),
+        drm::IOCTL_MODE_GETPLANE => get_plane(process, file, arg),
+        drm::IOCTL_MODE_OBJ_GETPROPERTIES => obj_get_properties(process, file, arg),
+        drm::IOCTL_MODE_GETPROPERTY => get_property(process, arg),
         _ => Err(Errno::ENOTTY),
     }
+}
+
+/// `SET_CLIENT_CAP` as Linux's `drm_setclientcap` answers a driver without
+/// atomic: universal planes is 0 or 1 and only changes what
+/// `GETPLANERESOURCES` lists; atomic is refused, so clients stay on the
+/// legacy calls (`docs/DISPLAY.md` §5).
+fn set_client_cap(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
+    let cap: SetClientCap = read_arg(process, arg)?;
+    match cap.capability {
+        drm::CLIENT_CAP_UNIVERSAL_PLANES => {
+            if cap.value > 1 {
+                return Err(Errno::EINVAL);
+            }
+            file.universal_planes
+                .store(cap.value == 1, Ordering::Relaxed);
+            Ok(0)
+        }
+        drm::CLIENT_CAP_ATOMIC => Err(Errno::EOPNOTSUPP),
+        _ => Err(Errno::EINVAL),
+    }
+}
+
+/// Copy the first `capacity` of `items` to the user array at `at`, as
+/// Linux's per-element `put_user` loops do: a short array gets what fits, and
+/// the count written back says how many there are.
+fn write_prefix<T: Copy>(
+    process: &Process,
+    at: u64,
+    capacity: u32,
+    items: &[T],
+    bytes_of: impl Fn(T) -> Vec<u8>,
+) -> Result<(), Errno> {
+    let fits = items.len().min(capacity as usize);
+    if fits == 0 {
+        return Ok(());
+    }
+    let bytes: Vec<u8> = items
+        .iter()
+        .take(fits)
+        .flat_map(|&item| bytes_of(item))
+        .collect();
+    uaccess::copy_to_user(process.space(), at, &bytes).map_err(|_| Errno::EFAULT)
+}
+
+/// `GETPLANERESOURCES`: the primary plane to an open that set universal
+/// planes, and no plane to one that did not, since Linux's
+/// `drm_mode_getplane_res` lists only overlay planes then.
+fn get_plane_resources(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
+    let mut resources: GetPlaneRes = read_arg(process, arg)?;
+    let planes: &[u32] = if file.universal_planes.load(Ordering::Relaxed) {
+        &[PLANE_ID]
+    } else {
+        &[]
+    };
+    write_prefix(
+        process,
+        resources.plane_id_ptr,
+        resources.count_planes,
+        planes,
+        |id| id.to_le_bytes().to_vec(),
+    )?;
+    resources.count_planes = u32::try_from(planes.len()).unwrap_or(u32::MAX);
+    write_arg(process, arg, &resources)
+}
+
+/// `GETPLANE`, as `drm_mode_getplane` answers it for a plane without atomic
+/// state: the CRTC and framebuffer are the ones `SETCRTC` and `PAGE_FLIP`
+/// last showed, and the formats are copied only into an array with room for
+/// all of them.
+fn get_plane(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
+    let mut plane: GetPlane = read_arg(process, arg)?;
+    if plane.plane_id != PLANE_ID {
+        return Err(Errno::ENOENT);
+    }
+    let shown = file.state.lock().shown.map(|(id, _)| id);
+    plane.crtc_id = if shown.is_some() { CRTC_ID } else { 0 };
+    plane.fb_id = shown.unwrap_or(0);
+    plane.possible_crtcs = 1;
+    plane.gamma_size = 0;
+    if plane.count_format_types as usize >= PLANE_FORMATS.len() {
+        let bytes: Vec<u8> = PLANE_FORMATS
+            .iter()
+            .flat_map(|format| format.to_le_bytes())
+            .collect();
+        uaccess::copy_to_user(process.space(), plane.format_type_ptr, &bytes)
+            .map_err(|_| Errno::EFAULT)?;
+    }
+    plane.count_format_types = PLANE_FORMATS.len() as u32;
+    write_arg(process, arg, &plane)
+}
+
+/// What an object id names, with its `DRM_MODE_OBJECT_*` type.
+fn object_type(file: &CardFile, id: u32) -> Option<u32> {
+    match id {
+        CRTC_ID => Some(drm::MODE_OBJECT_CRTC),
+        ENCODER_ID => Some(drm::MODE_OBJECT_ENCODER),
+        CONNECTOR_ID => Some(drm::MODE_OBJECT_CONNECTOR),
+        PLANE_ID => Some(drm::MODE_OBJECT_PLANE),
+        TYPE_PROPERTY_ID => Some(drm::MODE_OBJECT_PROPERTY),
+        _ => file
+            .state
+            .lock()
+            .framebuffers
+            .iter()
+            .any(|fb| fb.id == id)
+            .then_some(drm::MODE_OBJECT_FB),
+    }
+}
+
+/// `OBJ_GETPROPERTIES`, as `drm_mode_obj_get_properties_ioctl` answers a
+/// client without atomic. An id of another type than the one asked for is
+/// `ENOENT`, as `__drm_mode_object_find` has it. The plane has its `type`;
+/// the CRTC has none, since Linux attaches CRTC properties only to atomic
+/// drivers; the connector has none either, where Linux has `DPMS`,
+/// `link-status`, `non-desktop` and `TILE` (`docs/DISPLAY.md` §2.3). Encoders,
+/// framebuffers and properties carry no property list, which is `EINVAL`.
+fn obj_get_properties(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
+    let mut request: ObjGetProperties = read_arg(process, arg)?;
+    let found = object_type(file, request.obj_id)
+        .filter(|&kind| request.obj_type == drm::MODE_OBJECT_ANY || request.obj_type == kind)
+        .ok_or(Errno::ENOENT)?;
+    let properties: &[(u32, u64)] = match found {
+        drm::MODE_OBJECT_PLANE => &[(TYPE_PROPERTY_ID, drm::PLANE_TYPE_PRIMARY)],
+        drm::MODE_OBJECT_CRTC | drm::MODE_OBJECT_CONNECTOR => &[],
+        _ => return Err(Errno::EINVAL),
+    };
+    write_prefix(
+        process,
+        request.props_ptr,
+        request.count_props,
+        properties,
+        |(id, _)| id.to_le_bytes().to_vec(),
+    )?;
+    write_prefix(
+        process,
+        request.prop_values_ptr,
+        request.count_props,
+        properties,
+        |(_, value)| value.to_le_bytes().to_vec(),
+    )?;
+    request.count_props = u32::try_from(properties.len()).unwrap_or(u32::MAX);
+    write_arg(process, arg, &request)
+}
+
+/// `GETPROPERTY` of the plane `type` property, as `drm_mode_getproperty_ioctl`
+/// answers it: an immutable enum whose values are the three plane types,
+/// each named, copied as far as the caller's arrays have room.
+fn get_property(process: &Process, arg: u64) -> Result<usize, Errno> {
+    let mut property: GetProperty = read_arg(process, arg)?;
+    if property.prop_id != TYPE_PROPERTY_ID {
+        return Err(Errno::ENOENT);
+    }
+    let mut name = [0u8; drm::PROP_NAME_LEN];
+    if let Some(slot) = name.get_mut(..4) {
+        slot.copy_from_slice(b"type");
+    }
+    property.name = name;
+    property.flags = drm::MODE_PROP_ENUM | drm::MODE_PROP_IMMUTABLE;
+    write_prefix(
+        process,
+        property.values_ptr,
+        property.count_values,
+        &PLANE_TYPES,
+        |(value, _)| value.to_le_bytes().to_vec(),
+    )?;
+    write_prefix(
+        process,
+        property.enum_blob_ptr,
+        property.count_enum_blobs,
+        &PLANE_TYPES,
+        |(value, label)| {
+            let mut record = PropertyEnum {
+                value,
+                name: [0; drm::PROP_NAME_LEN],
+            };
+            if let Some(slot) = record.name.get_mut(..label.len()) {
+                slot.copy_from_slice(label);
+            }
+            let mut bytes = vec![0u8; PropertyEnum::SIZE];
+            let _ = record.write(&mut bytes);
+            bytes
+        },
+    )?;
+    property.count_values = PLANE_TYPES.len() as u32;
+    property.count_enum_blobs = PLANE_TYPES.len() as u32;
+    write_arg(process, arg, &property)
 }
 
 fn get_cap(process: &Process, arg: u64) -> Result<usize, Errno> {

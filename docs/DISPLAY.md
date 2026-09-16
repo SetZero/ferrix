@@ -185,7 +185,7 @@ source is committed this time.
 |---|---|
 | `DRM_IOCTL_VERSION` | name `virtio_gpu`, so drm-rs and Smithay identify the card |
 | `DRM_IOCTL_GET_CAP` | `DRM_CAP_DUMB_BUFFER` = 1, `DUMB_PREFERRED_DEPTH` = 24, `DUMB_PREFER_SHADOW` = 0, `TIMESTAMP_MONOTONIC` = 1, `CRTC_IN_VBLANK_EVENT` = 1; others `EINVAL` |
-| `DRM_IOCTL_SET_CLIENT_CAP` | `UNIVERSAL_PLANES` and `ATOMIC` refused with `EOPNOTSUPP`, so clients fall back to legacy |
+| `DRM_IOCTL_SET_CLIENT_CAP` | `UNIVERSAL_PLANES` takes 0 or 1 (E4) and changes only what `GETPLANERESOURCES` lists; `ATOMIC` refused with `EOPNOTSUPP`, so clients fall back to legacy; the rest `EINVAL` |
 | `DRM_IOCTL_SET_MASTER`, `DROP_MASTER` | succeed; the exclusive open (below) is the master |
 | `MODE_GETRESOURCES` | one CRTC, one encoder, one connector, the framebuffer ids |
 | `MODE_GETCONNECTOR` | `Virtual-1`, connected, the preferred mode from `HELLO` plus the standard modes that fit |
@@ -196,32 +196,99 @@ source is committed this time.
 | `MODE_PAGE_FLIP` | `SCANOUT` if the buffer changed, then `FLUSH`; `DRM_MODE_PAGE_FLIP_EVENT` queues a `drm_event_vblank` when `FLIPPED` arrives |
 | `MODE_DIRTYFB` | `FLUSH` of the clip rectangles |
 | `read()` | `drm_event_vblank` records; blocks while none are queued, `EAGAIN` under `O_NONBLOCK` |
-| `MODE_GETPLANERESOURCES` | **iteration 2 (E4), not yet:** the one plane's id |
-| `MODE_GETPLANE` | **iteration 2 (E4), not yet:** the primary plane: format `XRGB8888`, `possible_crtcs` 1, the CRTC and framebuffer it shows |
-| `MODE_OBJ_GETPROPERTIES` | **iteration 2 (E4), not yet:** for the plane, its `type` property at the primary value; for the connector, an empty list |
-| `MODE_GETPROPERTY` | **iteration 2 (E4), not yet:** `type`, the immutable enum property with its named values |
+| `MODE_GETPLANERESOURCES` | E4: the primary plane, id 4, to an open that set `UNIVERSAL_PLANES`; no plane to one that did not |
+| `MODE_GETPLANE` | E4: plane 4: format `XRGB8888`, `possible_crtcs` 1, and the CRTC and framebuffer `SETCRTC` or `PAGE_FLIP` last showed, 0 and 0 while nothing is; the formats are copied only into an array with room for all of them; another id `ENOENT` |
+| `MODE_OBJ_GETPROPERTIES` | E4: the plane has `type` (property 5) at `Primary` (1); the CRTC and the connector have none; the encoder, a framebuffer and the property have no property list, `EINVAL`; an id of another type than the one asked for, or no object, `ENOENT` |
+| `MODE_GETPROPERTY` | E4: property 5, `type`, `DRM_MODE_PROP_ENUM \| DRM_MODE_PROP_IMMUTABLE`, values 0, 1 and 2 named `Overlay`, `Primary` and `Cursor`; another id `ENOENT` |
 
-**Iteration 2 adds planes and properties (E4, 3 points, the GUI session
-os-e5; decided by os-f6, 2026-09-16).** This table first assumed Smithay's
-legacy path needs no planes. It does: `create_surface` enumerates planes
-even there, reads each plane's properties to find `type` and reaches
-`unreachable!()` for a plane without one, and keeps only primary planes
-when universal planes are refused; with none it fails with `NoPlane`. It
-also reads the connector's properties to look for `DPMS`, where an empty
-list is fine (`docs/INPUT.md` §2.3 has the source lines). So `card0` gets
-one primary plane with a `type` property, and the four ioctls above.
-`GETPROPBLOB` and `OBJ_SETPROPERTY` stay out while the plane has no
-`IN_FORMATS` or `SIZE_HINTS` and the connector no `DPMS`. The numbers,
-`struct drm_mode_get_plane_res`, `drm_mode_get_plane`,
-`drm_mode_obj_get_properties` and `drm_mode_get_property` come from
-`probe/drm.c`, extended, not from memory; the plane type values, which the
-UAPI headers do not export, are written down from the kernel's
-`enum drm_plane_type` as the connector status values were. One thing E4
-checks first against `drivers/gpu/drm/drm_plane.c`: whether Linux lists a
-primary plane in `GETPLANERESOURCES` to a client that has not set
-`DRM_CLIENT_CAP_UNIVERSAL_PLANES`. If it does not, `card0` either accepts
-that capability while still refusing atomic, or lists the plane anyway as a
-written deviation.
+**Iteration 2's planes and properties (E4, 3 points, the GUI session
+os-e5; decided by os-f6, 2026-09-16; on the branch `e4-planes`, for os-02's
+review).** This table first assumed Smithay's legacy path needs no planes. It
+does: `create_surface` enumerates planes even there, reads each plane's
+properties to find `type` and reaches `unreachable!()` for a plane without
+one, and keeps only primary planes when universal planes are refused; with
+none it fails with `NoPlane`. It also reads the connector's properties to look
+for `DPMS`, where an empty list is fine (`docs/INPUT.md` §2.3 has the source
+lines). So `card0` has one primary plane with a `type` property, and answers
+the four ioctls above. `GETPROPBLOB` and `OBJ_SETPROPERTY` stay out while the
+plane has no `IN_FORMATS` or `SIZE_HINTS` and the connector no `DPMS`. The
+numbers and `struct drm_mode_get_plane_res`, `drm_mode_get_plane`,
+`drm_mode_obj_get_properties`, `drm_mode_get_property` and
+`drm_mode_property_enum` come from `probe/drm.c`, extended, at both widths.
+The plane type values, which the UAPI headers do not export, are written down
+from the kernel's `enum drm_plane_type`, as the connector status values were.
+
+**What Linux does, read before the code** (`drivers/gpu/drm/` at `master` on
+2026-09-16 and at `v6.12`, the same in both):
+
+* **The primary plane is hidden without the capability.**
+  `drm_mode_getplane_res` (`drm_plane.c`) skips every plane whose type is not
+  `DRM_PLANE_TYPE_OVERLAY` unless `file_priv->universal_planes` is set. Smithay
+  asks for the capability first (`device/mod.rs`) and keeps only primary
+  planes when it is refused, so refusing it would leave Smithay with no plane
+  at all. So `card0` accepts it, the product owner's choice.
+* **The capability drags in nothing atomic.** `drm_setclientcap`
+  (`drm_ioctl.c`) takes `DRM_CLIENT_CAP_UNIVERSAL_PLANES` with a value of 0 or
+  1, anything larger `EINVAL`, and sets only `universal_planes`. The implication
+  runs the other way: `DRM_CLIENT_CAP_ATOMIC` sets `universal_planes` too, and a
+  driver without `DRIVER_ATOMIC` refuses it with `EOPNOTSUPP`, as `card0` does.
+  No deviation is needed.
+* **A legacy primary plane carries `type` and, unless the driver opts out,
+  `IN_FORMATS`.** `__drm_universal_plane_init` (`drm_plane.c`) attaches
+  `plane_type_property` to every plane; the `FB_ID`, `CRTC_ID`, `CRTC_*` and
+  `SRC_*` properties only under `DRIVER_ATOMIC`; and `IN_FORMATS` whenever the
+  plane has format modifiers, which it has unless the driver set
+  `mode_config.fb_modifiers_not_supported`. That flag is also what
+  `DRM_CAP_ADDFB2_MODIFIERS` reports. `card0` is such a driver: no modifiers,
+  no `IN_FORMATS`. Linux would answer that capability 0 where `card0` answers
+  `EINVAL`, and Smithay reads `IN_FORMATS` only when the answer is 1, so both
+  lead it to the plane's format list from `GETPLANE`.
+* **`type` is an immutable enum.** `drm_mode_create_standard_properties`
+  (`drm_mode_config.c`) makes it with `drm_property_create_enum` and
+  `DRM_MODE_PROP_IMMUTABLE`, which adds `DRM_MODE_PROP_ENUM`, from
+  `drm_plane_type_enum_list`: `Overlay` 0, `Primary` 1, `Cursor` 2.
+  `drm_property_add_enum` keeps the values in that order in `values`.
+* **Counts, then arrays.** `drm_mode_obj_get_properties_ioctl`
+  (`drm_mode_object.c`) finds the object with `drm_mode_object_find`, which
+  answers nothing for an id of another type unless `DRM_MODE_OBJECT_ANY` was
+  asked (`ENOENT`), and refuses an object with no property list (`EINVAL`).
+  `drm_mode_object_get_properties` skips `DRM_MODE_PROP_ATOMIC` properties
+  for a client without atomic, copies each id and value while the caller's
+  count has room, and writes back the full count. `drm_mode_getproperty_ioctl`
+  (`drm_property.c`) copies the name and flags, each value while
+  `count_values` has room, each enum record while `count_enum_blobs` has room,
+  and writes back both counts. `drm_mode_getplane_res` and the formats of
+  `drm_mode_getplane` count the same way, except that the formats are copied
+  only when all of them fit. drm-rs's `get_plane_resources`, `get_plane`,
+  `get_properties` and `get_property` (drm-ffi 0.9.0, which Smithay 0.7.0
+  takes) call each twice, counts first.
+* **A legacy plane shows what the legacy calls set.** `drm_mode_getplane`
+  reads `plane->crtc` and `plane->fb` for a plane without atomic state, which
+  `__drm_mode_set_config_internal` (`drm_crtc.c`, under `drm_mode_setcrtc`)
+  sets to the CRTC and framebuffer, or to none when the CRTC is turned off.
+* **CRTCs and connectors.** `__drm_crtc_init_with_planes` attaches CRTC
+  properties only under `DRIVER_ATOMIC`, so a legacy CRTC's list is empty, as
+  `card0`'s is. `drm_connector_init_only` (`drm_connector.c`) attaches
+  `DPMS`, `link-status`, `non-desktop` and `TILE` to every connector, and
+  `EDID` unless it is virtual. `card0`'s connector has none, as decided above:
+  Smithay's legacy path sets `DPMS` only on a connector that has it, and
+  `EDID` and `TILE` are blobs, which need `GETPROPBLOB`.
+
+**Object ids.** Linux numbers all of a device's mode objects from one idr, so
+an id names one object whatever its type, and `DRM_MODE_OBJECT_ANY` lookups
+are well defined. `card0` keeps that: the CRTC is 1, the encoder 2, the
+connector 3, the plane 4 and the `type` property 5, the ids below 32 are kept
+for fixed objects, and framebuffers are numbered from 32 up and never reused
+within an open. In iteration 1 framebuffers were numbered from 1, the same
+ids as the CRTC, encoder and connector, which no call could tell apart until
+`OBJ_GETPROPERTIES` took `DRM_MODE_OBJECT_ANY`.
+
+**How it is checked.** `compositor/blank` asks for universal planes after its
+modeset, reads the planes as Smithay does, and ends its marker line with
+`plane 4 Primary`: the plane whose `type` value is named `Primary` in the
+property's own enum list, and which must show the framebuffer and CRTC the
+program set. `cargo xtask test-display` requires `plane <id> Primary` at the
+end of the marker line on x86-64 and AArch64.
 
 **Legacy is not rework.** Linux keeps `SETCRTC` and `PAGE_FLIP` alongside
 atomic, and Smithay's DRM backend falls back to them. Atomic commit is an

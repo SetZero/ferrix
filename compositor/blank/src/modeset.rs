@@ -56,12 +56,73 @@ pub(crate) fn fill(
 
 /// A mode's name, up to its NUL.
 pub(crate) fn mode_name(mode: &ModeInfo) -> String {
-    let end = mode
-        .name
+    c_name(&mode.name)
+}
+
+/// A NUL-padded name field as text, up to its NUL.
+pub(crate) fn c_name(field: &[u8]) -> String {
+    let end = field
         .iter()
         .position(|&byte| byte == 0)
-        .unwrap_or(mode.name.len());
-    String::from_utf8_lossy(mode.name.get(..end).unwrap_or(&[])).into_owned()
+        .unwrap_or(field.len());
+    String::from_utf8_lossy(field.get(..end).unwrap_or(&[])).into_owned()
+}
+
+/// A plane as the card described it after the modeset: its id, the CRTC and
+/// framebuffer it shows, the CRTCs it can be on, and the name its `type`
+/// property's value has in that property's enum list, if it has one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Plane {
+    pub(crate) id: u32,
+    pub(crate) crtc: u32,
+    pub(crate) framebuffer: u32,
+    pub(crate) possible_crtcs: u32,
+    pub(crate) kind: Option<String>,
+}
+
+/// The name `value` has among an enum property's `(value, name)` pairs.
+pub(crate) fn enum_name(value: u64, names: &[(u64, String)]) -> Option<String> {
+    names
+        .iter()
+        .find(|(named, _)| *named == value)
+        .map(|(_, name)| name.clone())
+}
+
+/// What the marker line says of the planes that can be on the CRTC at index
+/// `crtc_index`: the primary plane, as Smithay's legacy path picks one, with
+/// the `type` name the card gave it; else the first plane with whatever type
+/// it has, so a card that got the type wrong shows it; else that there is
+/// none.
+///
+/// A primary plane that does not show `framebuffer` on `crtc` after the
+/// modeset is an error: the card would be telling a compositor something
+/// other than what is on the screen.
+pub(crate) fn describe_planes(
+    planes: &[Plane],
+    crtc_index: usize,
+    crtc: u32,
+    framebuffer: u32,
+) -> Result<String, String> {
+    let usable: Vec<&Plane> = planes
+        .iter()
+        .filter(|plane| crtc_index < 32 && plane.possible_crtcs & (1 << crtc_index) != 0)
+        .collect();
+    let primary = usable
+        .iter()
+        .find(|plane| plane.kind.as_deref() == Some("Primary"));
+    match (primary, usable.first()) {
+        (Some(plane), _) if plane.crtc != crtc || plane.framebuffer != framebuffer => Err(format!(
+            "primary plane {} shows framebuffer {} on CRTC {}, not {framebuffer} on {crtc}",
+            plane.id, plane.framebuffer, plane.crtc
+        )),
+        (Some(plane), _) => Ok(format!("plane {} Primary", plane.id)),
+        (None, Some(plane)) => Ok(format!(
+            "plane {} {}",
+            plane.id,
+            plane.kind.as_deref().unwrap_or("untyped")
+        )),
+        (None, None) => Ok(String::from("plane none")),
+    }
 }
 
 #[cfg(test)]
@@ -100,6 +161,55 @@ mod tests {
         assert_eq!(choose_crtc(0, 0b10, &[40, 41]), Some(41));
         assert_eq!(choose_crtc(0, 0b01, &[40, 41]), Some(40));
         assert_eq!(choose_crtc(0, 0b100, &[40, 41]), None);
+    }
+
+    fn plane(id: u32, kind: Option<&str>, possible_crtcs: u32) -> Plane {
+        Plane {
+            id,
+            crtc: 1,
+            framebuffer: 32,
+            possible_crtcs,
+            kind: kind.map(String::from),
+        }
+    }
+
+    #[test]
+    fn the_primary_plane_on_the_crtc_is_named() {
+        let names = vec![
+            (0, String::from("Overlay")),
+            (1, String::from("Primary")),
+            (2, String::from("Cursor")),
+        ];
+        assert_eq!(enum_name(1, &names).as_deref(), Some("Primary"));
+        assert_eq!(enum_name(3, &names), None);
+
+        let planes = [
+            plane(7, Some("Overlay"), 0b1),
+            plane(8, Some("Primary"), 0b10),
+            plane(9, Some("Primary"), 0b1),
+        ];
+        assert_eq!(
+            describe_planes(&planes, 0, 1, 32).as_deref(),
+            Ok("plane 9 Primary")
+        );
+        // The primary plane for another CRTC does not count.
+        assert_eq!(
+            describe_planes(&planes[..2], 0, 1, 32).as_deref(),
+            Ok("plane 7 Overlay")
+        );
+        assert_eq!(
+            describe_planes(&[plane(4, None, 1)], 0, 1, 32).as_deref(),
+            Ok("plane 4 untyped")
+        );
+        assert_eq!(describe_planes(&[], 0, 1, 32).as_deref(), Ok("plane none"));
+    }
+
+    #[test]
+    fn a_primary_plane_not_showing_the_modeset_is_an_error() {
+        let shown = plane(4, Some("Primary"), 1);
+        assert!(describe_planes(core::slice::from_ref(&shown), 0, 1, 33).is_err());
+        assert!(describe_planes(core::slice::from_ref(&shown), 0, 2, 32).is_err());
+        assert!(describe_planes(&[shown], 0, 1, 32).is_ok());
     }
 
     #[test]
