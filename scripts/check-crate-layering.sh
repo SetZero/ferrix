@@ -106,6 +106,7 @@ forbid ferrix-block    "block core" "ferrix-kernel|ferrix-boot"
 forbid ferrix-btrfs    "btrfs read path" "ferrix-kernel|ferrix-boot"
 forbid ferrix-netwire  "network wire formats" "ferrix-kernel|ferrix-boot"
 forbid ferrix-nettcp   "TCP state machine" "ferrix-kernel|ferrix-boot"
+forbid ferrix-net      "net core" "ferrix-kernel|ferrix-boot"
 
 # ---------------------------------------------------------------------------
 # 2a. Ring-3 programs sit beside the kernel, never in it.

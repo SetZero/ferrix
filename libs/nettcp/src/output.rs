@@ -56,6 +56,9 @@ impl Connection {
     /// A caller drives this from [`Connection::poll_at`]; calling it early is
     /// harmless and does nothing.
     pub fn on_timer(&mut self, now: Millis) -> Progress {
+        if self.state == State::Closed {
+            return Progress::default();
+        }
         let mut progress = self.expire_linger(now);
         progress = progress.or(self.expire_retransmit(now));
         if self.delayed_ack_at.is_some_and(|at| now >= at) {

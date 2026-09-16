@@ -2769,9 +2769,12 @@ and layouts a program passes: `sockaddr_in` and `sockaddr_in6`, the
 `IPPROTO_`, `IP_`, `IPV6_` and `TCP_` options, and the fixed headers of
 netlink and its routing messages, each checked against a probe compiled from
 the UAPI headers. `libs/nettcp` has the TCP state machine over those headers,
-with 30 host tests and the `nettcp_state` fuzz target; see *Written ahead of
-their stage*. Netlink message encoding and virtio-net's device protocol are
-still to be written, and nothing in the kernel calls any of it yet.
+with 30 host tests and the `nettcp_state` fuzz target, and `libs/net` has the
+net core over both — interfaces, routes, neighbours, reassembly, ICMP, UDP and
+the socket table — with 45 host tests and the `net_input` fuzz target; see
+*Written ahead of their stage*. Netlink message encoding and virtio-net's
+device protocol are still to be written, and nothing in the kernel calls any of
+it yet.
 
 **Exit:** under QEMU's user-mode network, busybox configures `eth0` with `ip`,
 and `route` and `netstat` report through `/proc/net`. `wget` fetches a file
@@ -2994,16 +2997,18 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 | `libs/netwire` | Networking — the headers: Ethernet with one 802.1Q tag, ARP, IPv4 with its options, IPv6 with the extension-header walk, ICMPv4, ICMPv6 and Neighbor Discovery, UDP, and TCP with the options a connection negotiates. Parsed without allocation and emitted into the caller's buffer, with each format's checksum verified where it carries one. Has its fuzz target, which requires every header that parses to emit and parse back unchanged. | 54 |
 | `libs/nettcp` | Networking — the TCP state machine over `libs/netwire`'s headers: the eleven states of RFC 9293 in the standard's order, including simultaneous open and simultaneous close; reassembly of what arrives out of order; window scaling and the maximum segment size; selective acknowledgment blocks for what is missing; Nagle, delayed acknowledgments, silly-window avoidance and the zero-window probe; retransmission timing by RFC 6298 with Karn's algorithm and Linux's bounds; and NewReno slow start, congestion avoidance, fast retransmit and fast recovery. It holds no clock, no socket and no address, so its tests drive two connections against each other across a wire the test loses and delays segments on, at a clock it advances by hand. Has its fuzz target. | 30 |
+| `libs/net` | Networking — the net core over the two above: interfaces and their addresses, one routing table for both families with longest-prefix and metric order, a neighbour cache that answers ARP's question and Neighbor Discovery's the same way and holds the packets waiting for either, IPv4 fragmentation and reassembly bounded so a stranger cannot fill this host's memory, ICMP echo both ways including the unprivileged socket `ping` uses and the unreachable a closed port earns, UDP with Linux's socket-matching order, and TCP connections and listeners. A packet routed to the loopback goes back into the input path instead of out of a driver, so a host talks to itself with no device at all. Has its fuzz target. | 45 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **818 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **863 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has fifteen:
+asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has sixteen:
 `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`, `vfs_ops`,
 `pci_walk`, `btrfs_read`, `block_queue`, `cpio_parse`, `fdt_parse`,
-`acpi_tables`, `blkring`, `virtio_blk`, `netwire_parse` and `nettcp_state`. Every crate in the table above parses bytes that came from
+`acpi_tables`, `blkring`, `virtio_blk`, `netwire_parse`, `nettcp_state` and
+`net_input`. Every crate in the table above parses bytes that came from
 outside the system — a disk, a firmware table, an archive a stranger built —
 which is precisely the population the rule was written for. The fuzz targets
 still owed — `virtio` and `linux-abi` — are owed *before* the consuming stage
@@ -3031,7 +3036,18 @@ fuzzer moves. Beyond the absence of a panic it requires that every header the
 state machine answers with can be written by `libs/netwire` and parsed back,
 that neither buffer grows past the capacity it was built with however many
 out-of-order segments arrive, and that a connection which reached `CLOSED`
-stays there and sends nothing more.
+stays there and sends nothing more. It has already earned its place: it found
+a connection closed during its handshake that kept its retransmission timer,
+which fired afterwards and rewound the sequence numbers of a connection that
+no longer existed.
+
+`net_input` drives a whole host — an interface, an address, a route and four
+sockets — from a stranger's frames, with the clock moved by the fuzzer between
+them. Every frame the host answers with is parsed back as Ethernet and as the
+IP packet inside it, so a header the stack builds that nothing can read is a
+crash rather than a packet on a wire. The reassembly ceiling is asserted after
+every frame, and a host that has been sent nothing but rubbish is required to
+stop talking rather than to keep producing frames for ever.
 
 `fdt_parse` holds the device tree reader to a second walk of the token stream
 written from the specification: a tree the reader accepts must be well formed

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "d4d52922845c2a7ebdb2ceaf14fb10ad37d7a073ee59078f74a0ae448f713cc5",
+  "digest": "6077e1e7de5e1512d8f54bb31ae0bbb9dbde440b5edf4e36fba03d0d267868da",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -57,11 +57,11 @@
   ],
   "summary": {
     "packages": 16,
-    "elements": 1434,
+    "elements": 1438,
     "maturity": {
       "implemented": 127,
       "inProgress": 8,
-      "writtenAhead": 13,
+      "writtenAhead": 14,
       "planned": 98
     },
     "deferred": 22,
@@ -4387,13 +4387,12 @@
               ]
             },
             {
-              "name": "pci",
-              "qualifiedName": "FerrixStructure::Workspace::pci",
+              "name": "netCore",
+              "qualifiedName": "FerrixStructure::Workspace::netCore",
               "kind": "part",
               "type": "LibraryCrate",
               "maturity": "writtenAhead",
-              "stage": 10,
-              "doc": "PCI configuration space over a ConfigSpace the caller implements: ECAM geometry, headers, BAR decoding and sizing, both capability lists with a visited set, MSI-X, the bus walk without recursion or allocation, and virtio's PCI transport. The pci_walk fuzz target requires every walk to end and sizing to restore every register.",
+              "doc": "The net core, written ahead of the networking stage: interfaces and the addresses on them, one routing table for both families, a neighbour cache that answers ARP's question and Neighbor Discovery's the same way, IPv4 fragmentation and reassembly under a ceiling a stranger cannot raise, ICMP echo in both directions with the unprivileged socket ping uses, UDP with Linux's socket-matching order, and TCP connections and listeners over nettcp. It holds no lock, no clock and no device: frames and a time go in and frames come out, and a packet routed to the loopback goes back into the input path rather than out of a driver. The net_input fuzz target drives a whole host from a stranger's frames.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 903
@@ -4401,10 +4400,10 @@
               "children": [
                 {
                   "name": "",
-                  "qualifiedName": "FerrixStructure::Workspace::pci",
+                  "qualifiedName": "FerrixStructure::Workspace::netCore",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/pci\"",
+                  "value": "\"libs/net\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 904
@@ -4412,7 +4411,7 @@
                 },
                 {
                   "name": "",
-                  "qualifiedName": "FerrixStructure::Workspace::pci",
+                  "qualifiedName": "FerrixStructure::Workspace::netCore",
                   "kind": "attribute",
                   "redefines": "forbidsUnsafe",
                   "value": "true",
@@ -4423,13 +4422,61 @@
                 },
                 {
                   "name": "",
+                  "qualifiedName": "FerrixStructure::Workspace::netCore",
+                  "kind": "attribute",
+                  "redefines": "hostTests",
+                  "value": "45",
+                  "source": {
+                    "file": "docs/sysml/02-structure.sysml",
+                    "line": 906
+                  }
+                }
+              ]
+            },
+            {
+              "name": "pci",
+              "qualifiedName": "FerrixStructure::Workspace::pci",
+              "kind": "part",
+              "type": "LibraryCrate",
+              "maturity": "writtenAhead",
+              "stage": 10,
+              "doc": "PCI configuration space over a ConfigSpace the caller implements: ECAM geometry, headers, BAR decoding and sizing, both capability lists with a visited set, MSI-X, the bus walk without recursion or allocation, and virtio's PCI transport. The pci_walk fuzz target requires every walk to end and sizing to restore every register.",
+              "source": {
+                "file": "docs/sysml/02-structure.sysml",
+                "line": 921
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixStructure::Workspace::pci",
+                  "kind": "attribute",
+                  "redefines": "path",
+                  "value": "\"libs/pci\"",
+                  "source": {
+                    "file": "docs/sysml/02-structure.sysml",
+                    "line": 922
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixStructure::Workspace::pci",
+                  "kind": "attribute",
+                  "redefines": "forbidsUnsafe",
+                  "value": "true",
+                  "source": {
+                    "file": "docs/sysml/02-structure.sysml",
+                    "line": 923
+                  }
+                },
+                {
+                  "name": "",
                   "qualifiedName": "FerrixStructure::Workspace::pci",
                   "kind": "attribute",
                   "redefines": "hostTests",
                   "value": "46",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 906
+                    "line": 924
                   }
                 }
               ]
@@ -4444,7 +4491,7 @@
               "doc": "The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. One table on every architecture, in 0x1000..=0x1FFF, tested clear of all three Linux tables. No argument wider than a register.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 915
+                "line": 933
               },
               "children": [
                 {
@@ -4455,7 +4502,7 @@
                   "value": "\"libs/native-abi\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 916
+                    "line": 934
                   }
                 },
                 {
@@ -4466,7 +4513,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 917
+                    "line": 935
                   }
                 },
                 {
@@ -4477,7 +4524,7 @@
                   "value": "13",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 918
+                    "line": 936
                   }
                 }
               ]
@@ -4492,7 +4539,7 @@
               "doc": "The handle table and the channel message queue, generic over what a handle names. A handle is a slot and a generation, and a slot retires rather than wrap, so a closed handle never resolves again -- which the handle_table fuzz target checks against a model.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 925
+                "line": 943
               },
               "children": [
                 {
@@ -4503,7 +4550,7 @@
                   "value": "\"libs/objects\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 926
+                    "line": 944
                   }
                 },
                 {
@@ -4514,7 +4561,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 927
+                    "line": 945
                   }
                 },
                 {
@@ -4525,7 +4572,7 @@
                   "value": "24",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 928
+                    "line": 946
                   }
                 }
               ]
@@ -4540,7 +4587,7 @@
               "doc": "The btrfs read path, allocating nothing: parsing, mount bootstrap, lookup, readdir and read, and zlib, LZO and zstd decoders. Tested against four real mkfs.btrfs images, and fuzzed from them by btrfs_read.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 936
+                "line": 954
               },
               "children": [
                 {
@@ -4551,7 +4598,7 @@
                   "value": "\"libs/btrfs\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 937
+                    "line": 955
                   }
                 },
                 {
@@ -4562,7 +4609,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 938
+                    "line": 956
                   }
                 },
                 {
@@ -4573,7 +4620,7 @@
                   "value": "158",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 939
+                    "line": 957
                   }
                 }
               ]
@@ -4588,7 +4635,7 @@
               "doc": "btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only, holding no lock across I/O.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 946
+                "line": 964
               },
               "children": [
                 {
@@ -4599,7 +4646,7 @@
                   "value": "\"libs/btrfs-vfs\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 947
+                    "line": 965
                   }
                 },
                 {
@@ -4610,7 +4657,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 948
+                    "line": 966
                   }
                 },
                 {
@@ -4621,7 +4668,7 @@
                   "value": "15",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 949
+                    "line": 967
                   }
                 }
               ]
@@ -4636,7 +4683,7 @@
               "doc": "The block core's request queue: merging, flush and FUA barriers no request crosses, deadline scheduling. Checked against a model by the block_queue fuzz target.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 954
+                "line": 972
               },
               "children": [
                 {
@@ -4647,7 +4694,7 @@
                   "value": "\"libs/block\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 955
+                    "line": 973
                   }
                 },
                 {
@@ -4658,7 +4705,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 956
+                    "line": 974
                   }
                 },
                 {
@@ -4669,7 +4716,7 @@
                   "value": "36",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 957
+                    "line": 975
                   }
                 }
               ]
@@ -4684,7 +4731,7 @@
               "doc": "The classic-BPF interpreter as a pure function over bytes.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 965
+                "line": 983
               },
               "children": [
                 {
@@ -4695,7 +4742,7 @@
                   "value": "\"libs/seccomp\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 966
+                    "line": 984
                   }
                 },
                 {
@@ -4706,7 +4753,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 967
+                    "line": 985
                   }
                 }
               ]
@@ -4719,7 +4766,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 972
+                "line": 990
               },
               "children": [
                 {
@@ -4730,7 +4777,7 @@
                   "value": "\"boot\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 973
+                    "line": 991
                   }
                 },
                 {
@@ -4741,7 +4788,7 @@
                   "value": "CrateKind::Loader",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 974
+                    "line": 992
                   }
                 },
                 {
@@ -4752,7 +4799,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 975
+                    "line": 993
                   }
                 },
                 {
@@ -4763,7 +4810,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 976
+                    "line": 994
                   }
                 }
               ]
@@ -4776,7 +4823,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 978
+                "line": 996
               },
               "children": [
                 {
@@ -4787,7 +4834,7 @@
                   "value": "\"kernel\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 979
+                    "line": 997
                   }
                 },
                 {
@@ -4798,7 +4845,7 @@
                   "value": "CrateKind::Kernel",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 980
+                    "line": 998
                   }
                 },
                 {
@@ -4809,7 +4856,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 981
+                    "line": 999
                   }
                 },
                 {
@@ -4820,7 +4867,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 982
+                    "line": 1000
                   }
                 }
               ]
@@ -4834,7 +4881,7 @@
               "doc": "Cross-compiles both halves, writes the FAT32 image with its own writer, converts the ARMv7-A loader ELF to PE32, drives QEMU. Nothing from crates.io.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 984
+                "line": 1002
               },
               "children": [
                 {
@@ -4845,7 +4892,7 @@
                   "value": "\"xtask\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 985
+                    "line": 1003
                   }
                 },
                 {
@@ -4856,7 +4903,7 @@
                   "value": "CrateKind::HostTool",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 986
+                    "line": 1004
                   }
                 },
                 {
@@ -4867,7 +4914,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 987
+                    "line": 1005
                   }
                 },
                 {
@@ -4878,7 +4925,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 988
+                    "line": 1006
                   }
                 },
                 {
@@ -4889,7 +4936,7 @@
                   "value": "41",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 989
+                    "line": 1007
                   }
                 },
                 {
@@ -4901,7 +4948,7 @@
                   "value": "(\"build\", \"run\", \"test-boot\", \"check\", \"flash\", \"watch-serial\", \"deploy\")",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 993
+                    "line": 1011
                   }
                 }
               ]
@@ -4914,7 +4961,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 995
+                "line": 1013
               },
               "children": [
                 {
@@ -4925,7 +4972,7 @@
                   "value": "\"fuzz\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 996
+                    "line": 1014
                   }
                 },
                 {
@@ -4936,7 +4983,7 @@
                   "value": "CrateKind::FuzzTargets",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 997
+                    "line": 1015
                   }
                 },
                 {
@@ -4947,7 +4994,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 998
+                    "line": 1016
                   }
                 },
                 {
@@ -4958,7 +5005,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 999
+                    "line": 1017
                   }
                 }
               ]
@@ -4972,7 +5019,7 @@
               "value": "(\"x86_64-unknown-none\", \"aarch64-unknown-none-softfloat\", \"armv7a-none-eabi\")",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1009
+                "line": 1027
               }
             },
             {
@@ -4984,7 +5031,7 @@
               "value": "(\"x86_64-unknown-uefi\", \"aarch64-unknown-uefi\", \"armv7-unknown-linux-musleabi\")",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1010
+                "line": 1028
               }
             },
             {
@@ -4995,7 +5042,7 @@
               "value": "\"1.97.1\"",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1011
+                "line": 1029
               }
             }
           ]
@@ -16815,7 +16862,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1003
+      "line": 1021
     },
     {
       "kind": "dependency",
@@ -16827,7 +16874,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1004
+      "line": 1022
     },
     {
       "kind": "dependency",
@@ -16837,7 +16884,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1005
+      "line": 1023
     },
     {
       "kind": "dependency",
@@ -16848,7 +16895,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1006
+      "line": 1024
     },
     {
       "kind": "import",
@@ -20126,6 +20173,13 @@
           "label": "nettcp",
           "kind": "box",
           "sublabel": "libs/nettcp",
+          "maturity": "writtenAhead"
+        },
+        {
+          "id": "FerrixStructure::Workspace::netCore",
+          "label": "netCore",
+          "kind": "box",
+          "sublabel": "libs/net",
           "maturity": "writtenAhead"
         },
         {

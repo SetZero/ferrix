@@ -410,8 +410,13 @@ impl Connection {
         }
         match self.state {
             State::SynSent => {
+                // Nothing was ever established, so there is nobody to tell.
+                // The timers go with it: a closed connection that still has a
+                // retransmission armed will rewind its own sequence numbers
+                // when it fires, which the fuzz target caught.
                 self.state = State::Closed;
                 self.failure = None;
+                self.clear_timers();
             }
             State::SynReceived | State::Established => {
                 self.fin_queued = true;

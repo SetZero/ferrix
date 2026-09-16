@@ -33,6 +33,7 @@ ferrix-virtio = { path = "../libs/virtio" }
 ferrix-virtio-blk = { path = "../libs/virtio-blk" }
 ferrix-netwire = { path = "../libs/netwire" }
 ferrix-nettcp = { path = "../libs/nettcp" }
+ferrix-net = { path = "../libs/net" }
 
 [[bin]]
 name = "elf_parse"
@@ -134,6 +135,13 @@ bench = false
 [[bin]]
 name = "nettcp_state"
 path = "fuzz_targets/nettcp_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "net_input"
+path = "fuzz_targets/net_input.rs"
 test = false
 doc = false
 bench = false

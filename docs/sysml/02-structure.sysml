@@ -900,6 +900,24 @@ package FerrixStructure {
                  * stranger's segments and requires every header it answers
                  * with to write and parse back. */
         }
+        #writtenAhead part netCore : LibraryCrate {
+            attribute :>> path = "libs/net";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 45;
+            doc /* The net core, written ahead of the networking stage:
+                 * interfaces and the addresses on them, one routing table for
+                 * both families, a neighbour cache that answers ARP's
+                 * question and Neighbor Discovery's the same way, IPv4
+                 * fragmentation and reassembly under a ceiling a stranger
+                 * cannot raise, ICMP echo in both directions with the
+                 * unprivileged socket ping uses, UDP with Linux's
+                 * socket-matching order, and TCP connections and listeners
+                 * over nettcp. It holds no lock, no clock and no device:
+                 * frames and a time go in and frames come out, and a packet
+                 * routed to the loopback goes back into the input path rather
+                 * than out of a driver. The net_input fuzz target drives a
+                 * whole host from a stranger's frames. */
+        }
         #writtenAhead part pci : LibraryCrate {
             attribute :>> path = "libs/pci";
             attribute :>> forbidsUnsafe = true;
