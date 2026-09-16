@@ -577,7 +577,8 @@ impl Core {
         let _ = std::thread::Builder::new()
             .name("ferrix-net-connect".to_owned())
             .spawn(move || {
-                let stream = TcpStream::connect_timeout(&SocketAddr::V4(key.seen), CONNECT_TIMEOUT);
+                let target = SocketAddr::V4(super::host_of(key.seen));
+                let stream = TcpStream::connect_timeout(&target, CONNECT_TIMEOUT);
                 let _ = sender.send(Connected { key, stream });
             });
     }

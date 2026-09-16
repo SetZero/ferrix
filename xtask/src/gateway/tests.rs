@@ -42,7 +42,7 @@ struct Guest {
 impl Guest {
     /// Start a gateway and take QEMU's place on the other end of it.
     fn start() -> Guest {
-        let gateway = Gateway::start(&std::env::temp_dir()).unwrap();
+        let gateway = Gateway::start(&std::env::temp_dir(), None).unwrap();
         let socket = UnixDatagram::bind(gateway.qemu_socket()).unwrap();
         socket.connect(gateway.host_socket()).unwrap();
         socket.set_read_timeout(Some(PATIENCE)).unwrap();

@@ -24,7 +24,7 @@ use super::{Core, DNS_IP, MTU, Result, bump};
 use crate::Error;
 
 /// The port a DNS query goes to, and which `10.0.2.3` is forwarded on.
-const DNS_PORT: u16 = 53;
+pub(super) const DNS_PORT: u16 = 53;
 
 /// The port a DHCP server listens on; those never leave the gateway.
 const DHCP_SERVER_PORT: u16 = 67;
@@ -125,14 +125,14 @@ impl Core {
 
     /// Where a datagram addressed to `seen` actually goes.
     ///
-    /// Only `10.0.2.3:53` is rewritten. Everything else goes where the guest
-    /// addressed it, which is the point: this is a gateway to the real network,
-    /// not a set of services pretending to be one.
+    /// `10.0.2.3:53` goes to the resolver, wherever that is. The gateway's own
+    /// address is the host's loopback, as [`super::host_of`] explains.
+    /// Everything else goes where the guest addressed it.
     fn target_of(&self, seen: SocketAddrV4) -> SocketAddrV4 {
         if *seen.ip() == DNS_IP && seen.port() == DNS_PORT {
-            SocketAddrV4::new(self.resolver, DNS_PORT)
+            self.resolver
         } else {
-            seen
+            super::host_of(seen)
         }
     }
 

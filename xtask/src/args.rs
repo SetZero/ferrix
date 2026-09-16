@@ -9,7 +9,7 @@ use crate::paths::Arch;
 use crate::{Error, Result};
 
 /// Parsed command line.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Args {
     /// The subcommand, if one was given.
     pub(crate) command: Option<String>,
@@ -54,6 +54,11 @@ pub(crate) struct Args {
     /// is replaced by each architecture's name, so one path serves `--arch all`.
     /// `ferrousli` names the busybox built against ferrousli, in `busybox.rs`.
     pub(crate) init: Option<String>,
+    /// Where the gateway's `10.0.2.3:53` forwards to. No flag sets it: it is
+    /// how `test-net` points the guest's DNS at the answers it serves itself,
+    /// so that the test says the same thing on a machine with no network.
+    /// `None` is the host's own resolver.
+    pub(crate) resolver: Option<std::net::SocketAddrV4>,
 }
 
 impl Args {

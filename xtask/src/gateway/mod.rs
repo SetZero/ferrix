@@ -71,7 +71,7 @@ mod udp;
 mod tests;
 
 use std::collections::BTreeMap;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -97,6 +97,23 @@ const NETMASK: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
 
 /// Its broadcast address.
 const BROADCAST_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 255);
+
+/// Where an address the guest used actually goes on the host.
+///
+/// [`GATEWAY_IP`] is this gateway, and slirp's convention -- which every piece
+/// of QEMU documentation assumes -- is that it is the host as well: a guest
+/// that opens `10.0.2.2:8080` reaches whatever is listening on the host's
+/// `127.0.0.1:8080`. That is also what lets a test be hermetic, because the
+/// server the guest fetches from can be the test itself. Every other address
+/// is left alone, because this is a gateway to the real network and not a set
+/// of services pretending to be one.
+pub(crate) fn host_of(seen: SocketAddrV4) -> SocketAddrV4 {
+    if *seen.ip() == GATEWAY_IP {
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, seen.port())
+    } else {
+        seen
+    }
+}
 
 /// The gateway's MAC address. Locally administered, and slirp's.
 pub(crate) const GATEWAY_MAC: Mac = [0x52, 0x55, 0x0A, 0x00, 0x02, 0x02];
@@ -233,7 +250,11 @@ impl Gateway {
     /// The socket files go in a directory of their own so that removing them
     /// cannot remove anything else, and so that the names are the same on every
     /// run; only the directory carries the run number.
-    pub(crate) fn start(parent: &Path) -> Result<Gateway> {
+    ///
+    /// `resolver` is where `10.0.2.3:53` forwards to, or the host's own when
+    /// it is `None`. A test that must answer a name the same way on every
+    /// machine, with or without a network, passes its own.
+    pub(crate) fn start(parent: &Path, resolver: Option<SocketAddrV4>) -> Result<Gateway> {
         let run = NEXT_RUN.fetch_add(1, Ordering::Relaxed);
         let directory = parent.join(format!("ferrix-net-{}-{run}", std::process::id()));
         std::fs::create_dir_all(&directory).map_err(|error| {
@@ -250,7 +271,11 @@ impl Gateway {
         let _ = std::fs::remove_file(&host_socket);
         let _ = std::fs::remove_file(&qemu_socket);
 
-        let core = Core::bind(&host_socket, &qemu_socket)?;
+        let core = Core::bind(
+            &host_socket,
+            &qemu_socket,
+            resolver.unwrap_or_else(default_resolver),
+        )?;
         let counters = Arc::clone(&core.counters);
         let stop = Arc::new(AtomicBool::new(false));
         let signal = Arc::clone(&stop);
@@ -345,8 +370,10 @@ struct Core {
         std::sync::mpsc::Sender<tcp::Connected>,
         std::sync::mpsc::Receiver<tcp::Connected>,
     ),
-    /// The resolver `10.0.2.3:53` forwards to.
-    resolver: Ipv4Addr,
+    /// The resolver `10.0.2.3:53` forwards to, with its port: a test serves
+    /// its own answers from a socket the kernel gave a free port, and asking
+    /// it on 53 would reach nothing.
+    resolver: SocketAddrV4,
     /// The initial send sequence number the next connection takes.
     next_iss: u32,
     /// What has happened.
@@ -355,7 +382,7 @@ struct Core {
 
 impl Core {
     /// Bind the host socket and prepare the tables.
-    fn bind(host_socket: &Path, guest_socket: &Path) -> Result<Core> {
+    fn bind(host_socket: &Path, guest_socket: &Path, resolver: SocketAddrV4) -> Result<Core> {
         let socket = std::os::unix::net::UnixDatagram::bind(host_socket).map_err(|error| {
             Error::new(format!(
                 "could not bind the gateway socket {}: {error}",
@@ -370,7 +397,7 @@ impl Core {
             udp: BTreeMap::new(),
             tcp: BTreeMap::new(),
             connected: std::sync::mpsc::channel(),
-            resolver: host_resolver(),
+            resolver,
             // Not random, and it does not need to be: this is a NAT on a
             // private wire with one guest on it, where an off-path attacker
             // guessing a sequence number is not a threat that exists. A fixed
@@ -565,6 +592,12 @@ fn put(out: &mut [u8], at: usize, field: &[u8]) -> Result<()> {
         .ok_or(ferrix_netwire::Error::NoSpace)?
         .copy_from_slice(field);
     Ok(())
+}
+
+/// Where `10.0.2.3:53` forwards to when nobody said: the host's own resolver,
+/// on port 53.
+fn default_resolver() -> SocketAddrV4 {
+    SocketAddrV4::new(host_resolver(), udp::DNS_PORT)
 }
 
 /// The first IPv4 resolver `/etc/resolv.conf` names, or [`FALLBACK_RESOLVER`].

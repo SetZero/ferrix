@@ -807,7 +807,18 @@ fn serve(
         if turn.busy {
             continue;
         }
+        // Ask to be rung, and look once more: the kernel rings only a driver
+        // that has said it is going to sleep, so a driver that sleeps without
+        // saying so sleeps through every frame it is given. `Wait::Again`
+        // means a submission arrived between the last look and this one.
+        if !matches!(
+            ring.side.prepare_to_sleep(&mut ring.ring),
+            Ok(ferrix_netring::Wait::Sleep)
+        ) {
+            continue;
+        }
         let packet = ring.port.wait(Deadline::Never).map_err(|_| Step::Serve)?;
+        ring.side.woke(&mut ring.ring);
         match packet.key {
             KEY_CONTROL => {
                 let _ = control.wait_async(

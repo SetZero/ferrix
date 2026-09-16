@@ -30,6 +30,7 @@
 //! The conversion is [`now`], and it is the only place the two meet.
 
 pub(crate) mod check;
+pub(crate) mod ifreq;
 pub(crate) mod netlink;
 pub(crate) mod socket;
 

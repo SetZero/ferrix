@@ -661,6 +661,9 @@ impl InetSocket {
         let count = match request {
             ferrix_linux_abi::socket::SIOCINQ => self.queued(),
             ferrix_linux_abi::socket::SIOCOUTQ => self.unsent(),
+            // Everything else is about an interface rather than about this
+            // socket, and `sys_ioctl` sends it on to `net::ifreq` for every
+            // socket family alike.
             _ => return Err(Errno::ENOTTY),
         };
         crate::syscall::uaccess::put_u32(

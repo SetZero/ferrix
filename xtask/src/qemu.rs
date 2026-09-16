@@ -422,6 +422,64 @@ pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> 
     )))
 }
 
+/// Boot with a network device and require the guest's networking programs to
+/// pass, one report for the lot.
+///
+/// The programs come from the caller rather than from a constant, because
+/// their arguments hold the ports the host's servers were given a moment ago.
+pub(crate) fn test_net(
+    arch: Arch,
+    image: &Path,
+    kernel: &Path,
+    programs: &[crate::vfs::Command],
+    args: &Args,
+) -> Result<()> {
+    println!(
+        "  {arch}: running {} networking programs under QEMU (timeout {}s)",
+        programs.len(),
+        args.timeout
+    );
+    let watched = watch(arch, image, kernel, args, crate::vfs::DONE)?;
+    let log = watched.log.display();
+    let after_boot = watched
+        .lines
+        .iter()
+        .position(|line| line.contains(SUCCESS_MARKER))
+        .and_then(|at| watched.lines.get(at..))
+        .unwrap_or_default();
+    let ending = match watched.verdict {
+        Verdict::Reached => None,
+        Verdict::Panicked => Some("the kernel panicked".to_owned()),
+        Verdict::Silent => Some(format!(
+            "the programs did not all finish within {}s",
+            args.timeout
+        )),
+    };
+    let judged = crate::vfs::judge(programs, 0, after_boot);
+    match (judged, ending) {
+        (Ok(passed), None) => {
+            for line in passed {
+                println!("  {arch}: {line}");
+            }
+            println!("  {arch}: the networking programs all passed");
+            Ok(())
+        }
+        (Ok(_), Some(ending)) => Err(Error::new(format!(
+            "{arch}: {ending}.\n  Serial output is in {log}"
+        ))),
+        (Err(failed), ending) => {
+            let why = failed.join("\n    ");
+            let ending = ending.map_or(String::new(), |ending| format!("{ending}; "));
+            Err(Error::new(format!(
+                "{arch}: {ending}{} of {} networking programs failed:\n    {why}\n  \
+                 Serial output is in {log}",
+                failed.len(),
+                programs.len()
+            )))
+        }
+    }
+}
+
 /// How a watched boot ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
@@ -797,7 +855,7 @@ fn attach_network(command: &mut Command, arch: Arch, args: &Args) -> Result<Netw
         let _ = command.args(["-net", "none"]);
         return Ok(None);
     }
-    let gateway = crate::gateway::Gateway::start(&gateway_directory())?;
+    let gateway = crate::gateway::Gateway::start(&gateway_directory(), args.resolver)?;
     println!(
         "  {arch}: network through xtask's gateway: guest {}, gateway {}, DNS {}",
         crate::gateway::GUEST_IP,
