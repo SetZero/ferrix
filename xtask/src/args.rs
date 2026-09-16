@@ -39,6 +39,9 @@ pub(crate) struct Args {
     pub(crate) help: bool,
     /// `--smp`, virtual CPUs.
     pub(crate) smp: u32,
+    /// Whether `--smp` was given, rather than left at its default: under WHPX
+    /// the default is one processor, and a count asked for is kept.
+    pub(crate) smp_given: bool,
     /// `--memory`, guest RAM in MiB.
     pub(crate) memory: u32,
     /// `--timeout`, seconds `test-boot` waits for the kernel to report.
@@ -95,7 +98,10 @@ impl Args {
                 "--net" => args.net = true,
                 "--display" => args.display = true,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
-                "--smp" => args.smp = number(&mut items, "--smp")?,
+                "--smp" => {
+                    args.smp = number(&mut items, "--smp")?;
+                    args.smp_given = true;
+                }
                 "--memory" => args.memory = number(&mut items, "--memory")?,
                 "--timeout" => args.timeout = number(&mut items, "--timeout")?,
                 "--accel" => args.accel = Some(value(&mut items, "--accel")?),
@@ -192,6 +198,7 @@ mod tests {
     fn defaults_are_the_documented_ones() {
         let args = parse(&["build"]).unwrap();
         assert_eq!(args.smp, 4);
+        assert!(!args.smp_given, "the default is not a count asked for");
         assert_eq!(args.memory, 512);
         assert_eq!(args.timeout, 120);
         assert!(!args.release);
@@ -252,6 +259,11 @@ mod tests {
     fn rejects_a_missing_or_unparseable_value() {
         assert!(parse(&["build", "--arch"]).is_err());
         assert!(parse(&["build", "--smp", "lots"]).is_err());
+        let given = parse(&["run", "--smp", "2"]).expect("a count parses");
+        assert!(
+            given.smp_given && given.smp == 2,
+            "a count asked for is kept and marked"
+        );
     }
 
     #[test]

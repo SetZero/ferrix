@@ -121,6 +121,10 @@ believing a change to page tables or invalidation, for the reason
 [Reliability](docs/RELIABILITY.md) gives: an interpreted `MMU` has no `TLB`, so
 a stale translation is a bug the default gate structurally cannot see. `run`
 uses `auto` unless it is given `--accel` or `--gdb`; the tests keep `tcg`.
+Under `whpx` the guest gets one processor unless `--smp` says otherwise:
+QEMU 11.1's WHPX emulation of device registers faults ring-3 drivers with
+more than one, and `/sbin/blk` dies at boot. `--smp N` still works there,
+with a warning.
 
 `--net` gives the guest a virtio-net card whose other end is `xtask`'s own
 gateway on a loopback UDP socket: the guest is `10.0.2.15`, `10.0.2.2` is the

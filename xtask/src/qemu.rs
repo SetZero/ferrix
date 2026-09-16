@@ -743,6 +743,7 @@ fn qemu_command(
 
     let firmware = paths::find_firmware(arch)?;
     let accelerator = accelerator(arch, &binary, args.accel.as_deref())?;
+    let processors = processors(&accelerator, args);
 
     let mut command = Command::new(binary);
     let _ = command.current_dir(paths::workspace_root());
@@ -752,7 +753,7 @@ fn qemu_command(
         "-m",
         &args.memory.to_string(),
         "-smp",
-        &args.smp.to_string(),
+        &processors.to_string(),
         "-display",
         if args.display && args.command.as_deref() == Some("run") {
             "default"
@@ -1128,6 +1129,42 @@ fn accelerator(arch: Arch, binary: &Path, requested: Option<&str>) -> Result<Str
         Some(name) if supported(name) && usable(binary, name) => Ok(name.to_owned()),
         _ => Ok("tcg".to_owned()),
     }
+}
+
+/// How many processors to give the guest under `accelerator`.
+///
+/// # One under WHPX
+///
+/// QEMU 11.1's Windows Hypervisor Platform backend emulates a guest's
+/// memory-mapped I/O with QEMU's own x86 emulator, which walks the guest's
+/// page tables itself (`target/i386/emulate/x86_mmu.c`). With more than one
+/// processor that walk intermittently answers "not mapped" for a mapping that
+/// is there, and the fault it raises reaches the guest as error code 12 at
+/// address 0: `/sbin/blk` dies reading its virtio registers, and stage 10's
+/// driver check panics. Ferrix's own page tables and `CR3` were checked at the
+/// fault and are right; `docs/BACKLOG.md` has the analysis. At one processor
+/// it has not happened, and WHPX is still the fast path for the display, so
+/// that is the default under WHPX. A count given with `--smp` is kept, with a
+/// warning, for whoever is looking into it.
+fn processors(accelerator: &str, args: &Args) -> u32 {
+    if accelerator != "whpx" {
+        return args.smp;
+    }
+    if !args.smp_given {
+        println!(
+            "  qemu: one processor under whpx: QEMU 11.1's WHPX MMIO emulation faults ring-3 \
+             drivers with more than one (docs/BACKLOG.md); --smp N overrides"
+        );
+        return 1;
+    }
+    if args.smp > 1 {
+        println!(
+            "  qemu: warning: --smp {} under whpx: QEMU 11.1's WHPX MMIO emulation faults ring-3 \
+             drivers with more than one processor, and /sbin/blk may die (docs/BACKLOG.md)",
+            args.smp
+        );
+    }
+    args.smp
 }
 
 /// Whether this QEMU can actually *initialise* `name` on this machine.
