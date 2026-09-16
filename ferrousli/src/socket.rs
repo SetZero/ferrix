@@ -104,6 +104,14 @@ fn call(number: usize, args: [usize; 6]) -> isize {
     errno::from_syscall(ret)
 }
 
+/// [`call`], as a cancellation point.
+fn call_cp(number: usize, args: [usize; 6]) -> isize {
+    let [a0, a1, a2, a3, a4, a5] = args;
+    // SAFETY: each caller vouches for the memory its arguments point to.
+    let ret = unsafe { crate::cancel::syscall_cp(number, a0, a1, a2, a3, a4, a5) };
+    errno::from_syscall(ret)
+}
+
 /// Creates a socket of `domain`, `type` and `protocol`, and returns its
 /// descriptor. `type` may carry `SOCK_CLOEXEC` and `SOCK_NONBLOCK`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
@@ -157,7 +165,7 @@ pub unsafe extern "C" fn bind(fd: c_int, addr: *const c_void, len: c_uint) -> c_
 /// `addr` must be valid for reads of `len` bytes.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn connect(fd: c_int, addr: *const c_void, len: c_uint) -> c_int {
-    call(
+    call_cp(
         nr::CONNECT,
         [fd as usize, addr.addr(), len as usize, 0, 0, 0],
     ) as c_int
@@ -179,7 +187,7 @@ pub extern "C" fn listen(fd: c_int, backlog: c_int) -> c_int {
 /// for a read and a write.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn accept(fd: c_int, addr: *mut c_void, len: *mut c_uint) -> c_int {
-    call(nr::ACCEPT, [fd as usize, addr.addr(), len.addr(), 0, 0, 0]) as c_int
+    call_cp(nr::ACCEPT, [fd as usize, addr.addr(), len.addr(), 0, 0, 0]) as c_int
 }
 
 /// `accept`, with `SOCK_CLOEXEC` and `SOCK_NONBLOCK` in `flags` set on the
@@ -195,7 +203,7 @@ pub unsafe extern "C" fn accept4(
     len: *mut c_uint,
     flags: c_int,
 ) -> c_int {
-    call(
+    call_cp(
         nr::ACCEPT4,
         [fd as usize, addr.addr(), len.addr(), flags as usize, 0, 0],
     ) as c_int
@@ -306,7 +314,7 @@ pub unsafe extern "C" fn sendto(
     addr: *const c_void,
     alen: c_uint,
 ) -> isize {
-    call(
+    call_cp(
         nr::SENDTO,
         [
             fd as usize,
@@ -347,7 +355,7 @@ pub unsafe extern "C" fn recvfrom(
     addr: *mut c_void,
     alen: *mut c_uint,
 ) -> isize {
-    call(
+    call_cp(
         nr::RECVFROM,
         [
             fd as usize,
@@ -382,7 +390,7 @@ pub unsafe extern "C" fn recv(fd: c_int, buf: *mut c_void, len: usize, flags: c_
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn sendmsg(fd: c_int, msg: *const Msghdr, flags: c_int) -> isize {
     if msg.is_null() {
-        return call(nr::SENDMSG, [fd as usize, 0, flags as usize, 0, 0, 0]);
+        return call_cp(nr::SENDMSG, [fd as usize, 0, flags as usize, 0, 0, 0]);
     }
     // SAFETY: the caller passes a valid header.
     let mut header = unsafe { msg.read() };
@@ -402,7 +410,7 @@ pub unsafe extern "C" fn sendmsg(fd: c_int, msg: *const Msghdr, flags: c_int) ->
         zero_control_padding(copy);
         header.msg_control = control.as_mut_ptr().cast();
     }
-    call(
+    call_cp(
         nr::SENDMSG,
         [
             fd as usize,
@@ -425,13 +433,13 @@ pub unsafe extern "C" fn sendmsg(fd: c_int, msg: *const Msghdr, flags: c_int) ->
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn recvmsg(fd: c_int, msg: *mut Msghdr, flags: c_int) -> isize {
     if msg.is_null() {
-        return call(nr::RECVMSG, [fd as usize, 0, flags as usize, 0, 0, 0]);
+        return call_cp(nr::RECVMSG, [fd as usize, 0, flags as usize, 0, 0, 0]);
     }
     // SAFETY: the caller passes a valid header.
     let mut header = unsafe { msg.read() };
     header.__pad1 = 0;
     header.__pad2 = 0;
-    let ret = call(
+    let ret = call_cp(
         nr::RECVMSG,
         [
             fd as usize,

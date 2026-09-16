@@ -35,6 +35,7 @@ use core::ptr::null_mut;
 
 use crate::errno;
 use crate::float::{self, BINARY32, BINARY64, Class, Format, Rounded};
+use crate::locale::Locale;
 use crate::scan::{CText, Input, set_end, skip_space};
 
 /// A parsed number.
@@ -407,6 +408,57 @@ pub unsafe extern "C" fn strtold(s: *const c_char, endptr: *mut *mut c_char) {
         "ret",
         convert = sym strtold_x87,
     )
+}
+
+/// [`strtod`] in `locale`. Every locale this library has uses `.` as its
+/// radix character, as musl's do, so the locale changes nothing.
+///
+/// # Safety
+///
+/// As [`strtod`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strtod_l(
+    s: *const c_char,
+    endptr: *mut *mut c_char,
+    locale: *mut Locale,
+) -> c_double {
+    let _ = locale;
+    // SAFETY: the caller's contract is `strtod`'s.
+    unsafe { strtod(s, endptr) }
+}
+
+/// [`strtof`] in `locale`, which changes nothing, as for [`strtod_l`].
+///
+/// # Safety
+///
+/// As [`strtod`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strtof_l(
+    s: *const c_char,
+    endptr: *mut *mut c_char,
+    locale: *mut Locale,
+) -> c_float {
+    let _ = locale;
+    // SAFETY: the caller's contract is `strtof`'s.
+    unsafe { strtof(s, endptr) }
+}
+
+/// [`strtold`] in `locale`, which changes nothing, as for [`strtod_l`]. A
+/// jump rather than a call, so that the `long double` [`strtold`] leaves in
+/// `st(0)` is this function's result; the locale in `rdx` is not read.
+///
+/// # Safety
+///
+/// As [`strtod`].
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strtold_l(
+    s: *const c_char,
+    endptr: *mut *mut c_char,
+    locale: *mut Locale,
+) {
+    core::arch::naked_asm!("jmp {strtold}", strtold = sym strtold)
 }
 
 #[cfg(test)]

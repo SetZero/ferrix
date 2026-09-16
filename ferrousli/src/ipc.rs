@@ -43,6 +43,14 @@ fn call(number: usize, args: [usize; 5]) -> isize {
     errno::from_syscall(ret)
 }
 
+/// [`call`], as a cancellation point.
+fn call_cp(number: usize, args: [usize; 5]) -> isize {
+    let [a0, a1, a2, a3, a4] = args;
+    // SAFETY: each caller vouches for the memory its arguments point to.
+    let ret = unsafe { crate::cancel::syscall_cp(number, a0, a1, a2, a3, a4, 0) };
+    errno::from_syscall(ret)
+}
+
 /// The size `shmget` asks the kernel for. Like musl, a size too large for
 /// `ptrdiff_t` becomes the largest there is, which the kernel refuses rather
 /// than reading as a small one.
@@ -180,7 +188,7 @@ pub extern "C" fn msgget(key: c_int, flag: c_int) -> c_int {
 /// `msg` must be valid for reads of a `long` and `size` bytes after it.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn msgsnd(id: c_int, msg: *const c_void, size: usize, flag: c_int) -> c_int {
-    call(
+    call_cp(
         nr::MSGSND,
         [id as usize, msg.addr(), size, flag as usize, 0],
     ) as c_int
@@ -200,7 +208,7 @@ pub unsafe extern "C" fn msgrcv(
     r#type: c_long,
     flag: c_int,
 ) -> isize {
-    call(
+    call_cp(
         nr::MSGRCV,
         [
             id as usize,

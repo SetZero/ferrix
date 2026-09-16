@@ -8,7 +8,7 @@ use core::ffi::{c_int, c_short, c_ulong, c_void};
 use core::mem::{offset_of, size_of};
 
 use crate::errno;
-use crate::syscall::{self, nr};
+use crate::syscall::nr;
 use crate::time::{self, KERNEL_SIGSET_SIZE, Timespec};
 
 /// C's `struct pollfd`. The kernel's in `asm-generic/poll.h` is the same.
@@ -40,7 +40,7 @@ unsafe fn raw_ppoll(
     // SAFETY: the caller vouches for `fds` and `mask`, and the timeout is a
     // live local copy or null.
     let ret = unsafe {
-        syscall::syscall6(
+        crate::cancel::syscall_cp(
             nr::PPOLL,
             fds.addr(),
             count as usize,

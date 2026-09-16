@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 988 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 996 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 7 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 0 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 248 | not there |
+| absent | 240 | not there |
 
-255 interfaces are missing in one of the last four ways. None of them is
+247 interfaces are missing in one of the last four ways. None of them is
 written on a branch any more: the three unlanded branches of 2026-09-13,
 `ferrousli-math`, `ferrousli-threads` and `ferrousli-misc`, were built,
 fixed and landed on 2026-09-16.
@@ -43,22 +43,22 @@ new subsystem. Every area's missing names are in the index at the end.
 | Standard I/O | 70 | 0 | 0 | 0 | landed: `tmpnam` |
 | Math and the floating-point environment | 201 | 59 | 0 | 8 | every `long double` form 8. Landed: every `double` and `float` function: the error and gamma functions with `signgam` and `lgamma_r`, the Bessel functions; the hyperbolic functions and `hypot` for `double` and `float`; `tan`, `asin`, `acos`, `atan` for `double`, and all of them with `sin`, `cos` and `atan2` for `float`; `exp2`, `expm1`, `log2`, `log10`, `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `fenv.h`; rounding, manipulation, remainders and `fma` for `double` and `float`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, bit for bit musl's in every rounding mode; and the classifiers for all three types |
 | Complex arithmetic | 69 | 66 | 0 | 8 | `complex.h` over the math library, `creal` and `cimag` as functions |
-| Locales, messages and conversion | 32 | 24 | 0 | 15 | the `gettext` family with `.mo` catalogues 5; `iconv` 5; `catopen`, `catgets`, `catclose` 2; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1 |
+| Locales, messages and conversion | 32 | 21 | 0 | 13 | the `gettext` family with `.mo` catalogues 5; `iconv` 5; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1. Landed: `catopen`, `catgets`, `catclose` |
 | Files, directories and I/O multiplexing | 46 | 1 | 0 | 1 | `posix_getdents` |
-| Processes, identity and the system | 103 | 10 | 0 | 8 | `confstr`, `pathconf`, `fpathconf` 2; `setresuid`, `setresgid` 1; `nice`, `lockf` 1; `posix_close` 1; `fmtmsg` 1; `encrypt` and `setkey` 2 |
+| Processes, identity and the system | 103 | 8 | 0 | 7 | `confstr` 1; `setresuid`, `setresgid` 1; `nice`, `lockf` 1; `posix_close` 1; `fmtmsg` 1; `encrypt` and `setkey` 2. Landed: `pathconf`, `fpathconf` |
 | Spawning | 25 | 25 | 0 | 7 | the `posix_spawn` family on `clone(CLONE_VM\|CLONE_VFORK)`, which lets `system` and `popen` stop forking, 5; `_Fork` 1; `fexecve` 1 |
 | Signals and non-local jumps | 28 | 4 | 0 | 2 | `psignal`, `psiginfo` 1; `sig2str`, `str2sig` 1 |
 | Time and clocks | 29 | 3 | 0 | 3 | `getdate` and `getdate_err` 2; `timespec_get` 1 |
-| Threads and scheduling | 145 | 8 | 0 | 11 | cancellation, `pthread_cancel` and `pthread_testcancel` with their cancellation points 8; the `clock` variants of the condition, mutex, read-write lock and semaphore waits 2; `pthread_atfork` 1 |
+| Threads and scheduling | 145 | 6 | 0 | 3 | the `clock` variants of the condition, mutex, read-write lock and semaphore waits 2; `pthread_atfork` 1. Landed: cancellation, `pthread_cancel` and `pthread_testcancel` with their cancellation points |
 | Memory mapping and System V IPC | 21 | 1 | 0 | 1 | `ftok` |
 | Realtime: asynchronous I/O, message queues, timers, shared memory | 29 | 29 | 0 | 11 | `aio.h` over threads 3; `mqueue.h` 3; `timer_*` with `SIGEV_THREAD` 3; `shm_open`, `shm_unlink` 1; `clock_getcpuclockid` 1. Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
 | Terminals and devices | 25 | 7 | 0 | 3 | `posix_openpt`, `grantpt`, `unlockpt`, `ptsname`, `ptsname_r`, `ctermid` 2; `posix_devctl` and `<devctl.h>` 1 |
 | Networking and name resolution | 55 | 0 | 0 | 0 | landed: `getaddrinfo`, `getnameinfo`, `freeaddrinfo` and `gai_strerror` over `/etc/hosts` and a DNS stub resolver; the hosts, networks, protocols and services databases; `if_nameindex`, `if_freenameindex`, `if_indextoname`; `in6addr_any`, `in6addr_loopback`, `sockatmark` |
 | Patterns, paths and search | 23 | 3 | 0 | 5 | `wordexp` 3; `nftw` 2. Landed: `glob` and `globfree`; `search.h`'s hash table, trees, linear search and queues; `libgen.h`'s `basename` and `dirname`, and `regex.h`, replacing five stubs |
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
-| Dynamic loading | 5 | 5 | 0 | 2 | `dlfcn.h` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here |
+| Dynamic loading | 5 | 4 | 0 | 2 | `dlopen`, `dlsym`, `dlclose` and `dlerror` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here. Landed: `dladdr`, over the program's own headers |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **255** | **0** | **91** | |
+| **All** | **1243** | **247** | **0** | **80** | |
 
 ## Present but broken
 
@@ -258,7 +258,7 @@ interface.
 | `<locale.h>` | present (6) | `duplocale`, `freelocale`, `localeconv`, `newlocale`, `setlocale`, `uselocale` |
 | `<locale.h>` | absent (1) | `getlocalename_l` |
 | `<monetary.h>` | absent (2) | `strfmon`, `strfmon_l` |
-| `<nl_types.h>` | absent (3) | `catclose`, `catgets`, `catopen` |
+| `<nl_types.h>` | present (3) | `catclose`, `catgets`, `catopen` |
 
 ### Files, directories and I/O multiplexing
 
@@ -283,8 +283,8 @@ interface.
 | `<sys/utsname.h>` | present (1) | `uname` |
 | `<sys/wait.h>` | present (3) | `wait`, `waitid`, `waitpid` |
 | `<syslog.h>` | present (4) | `closelog` (XSI), `openlog` (XSI), `setlogmask` (XSI), `syslog` (XSI) |
-| `<unistd.h>` | present (79) | `_exit`, `access`, `alarm`, `chdir`, `chown`, `close`, `crypt` (XSI), `dup`, `dup2`, `dup3`, `environ`, `execl`, `execle`, `execlp`, `execv`, `execve`, `execvp`, `faccessat`, `fchdir`, `fchown`, `fchownat`, `fdatasync` (SIO), `fork`, `fsync` (FSC), `ftruncate`, `getcwd`, `getegid`, `getentropy`, `geteuid`, `getgid`, `getgroups`, `gethostid` (XSI), `gethostname`, `getlogin`, `getlogin_r`, `getopt`, `getpgid`, `getpgrp`, `getpid`, `getppid`, `getresgid` (XSI), `getresuid` (XSI), `getsid`, `getuid`, `lchown`, `link`, `linkat`, `lseek`, `optarg`, `opterr`, `optind`, `optopt`, `pause`, `pipe`, `pipe2`, `pread`, `pwrite`, `read`, `readlink`, `readlinkat`, `rmdir`, `setegid`, `seteuid`, `setgid`, `setpgid`, `setregid` (XSI), `setreuid` (XSI), `setsid`, `setuid`, `sleep`, `swab` (XSI), `symlink`, `symlinkat`, `sync` (XSI), `sysconf`, `truncate`, `unlink`, `unlinkat`, `write` |
-| `<unistd.h>` | absent (9) | `confstr`, `encrypt`, `fpathconf`, `lockf` (XSI), `nice` (XSI), `pathconf`, `posix_close`, `setresgid` (XSI), `setresuid` (XSI) |
+| `<unistd.h>` | present (81) | `_exit`, `access`, `alarm`, `chdir`, `chown`, `close`, `crypt` (XSI), `dup`, `dup2`, `dup3`, `environ`, `execl`, `execle`, `execlp`, `execv`, `execve`, `execvp`, `faccessat`, `fchdir`, `fchown`, `fchownat`, `fdatasync` (SIO), `fork`, `fpathconf`, `fsync` (FSC), `ftruncate`, `getcwd`, `getegid`, `getentropy`, `geteuid`, `getgid`, `getgroups`, `gethostid` (XSI), `gethostname`, `getlogin`, `getlogin_r`, `getopt`, `getpgid`, `getpgrp`, `getpid`, `getppid`, `getresgid` (XSI), `getresuid` (XSI), `getsid`, `getuid`, `lchown`, `link`, `linkat`, `lseek`, `optarg`, `opterr`, `optind`, `optopt`, `pathconf`, `pause`, `pipe`, `pipe2`, `pread`, `pwrite`, `read`, `readlink`, `readlinkat`, `rmdir`, `setegid`, `seteuid`, `setgid`, `setpgid`, `setregid` (XSI), `setreuid` (XSI), `setsid`, `setuid`, `sleep`, `swab` (XSI), `symlink`, `symlinkat`, `sync` (XSI), `sysconf`, `truncate`, `unlink`, `unlinkat`, `write` |
+| `<unistd.h>` | absent (7) | `confstr`, `encrypt`, `lockf` (XSI), `nice` (XSI), `posix_close`, `setresgid` (XSI), `setresuid` (XSI) |
 
 ### Spawning
 
@@ -314,8 +314,8 @@ interface.
 
 | Header | Status | Interfaces |
 |---|---|---|
-| `<pthread.h>` | present (94) | `pthread_attr_destroy`, `pthread_attr_getdetachstate`, `pthread_attr_getguardsize`, `pthread_attr_getinheritsched` (TPS), `pthread_attr_getschedparam`, `pthread_attr_getschedpolicy` (TPS), `pthread_attr_getscope` (TPS), `pthread_attr_getstack`, `pthread_attr_getstacksize` (TSS), `pthread_attr_init`, `pthread_attr_setdetachstate`, `pthread_attr_setguardsize`, `pthread_attr_setinheritsched` (TPS), `pthread_attr_setschedparam`, `pthread_attr_setschedpolicy` (TPS), `pthread_attr_setscope` (TPS), `pthread_attr_setstack`, `pthread_attr_setstacksize` (TSS), `pthread_barrier_destroy`, `pthread_barrier_init`, `pthread_barrier_wait`, `pthread_barrierattr_destroy`, `pthread_barrierattr_getpshared` (TSH), `pthread_barrierattr_init`, `pthread_barrierattr_setpshared` (TSH), `pthread_cleanup_pop`, `pthread_cleanup_push`, `pthread_cond_broadcast`, `pthread_cond_destroy`, `pthread_cond_init`, `pthread_cond_signal`, `pthread_cond_timedwait`, `pthread_cond_wait`, `pthread_condattr_destroy`, `pthread_condattr_getclock`, `pthread_condattr_getpshared` (TSH), `pthread_condattr_init`, `pthread_condattr_setclock`, `pthread_condattr_setpshared` (TSH), `pthread_create`, `pthread_detach`, `pthread_equal`, `pthread_exit`, `pthread_getschedparam` (TPS), `pthread_getspecific`, `pthread_join`, `pthread_key_create`, `pthread_key_delete`, `pthread_mutex_consistent`, `pthread_mutex_destroy`, `pthread_mutex_getprioceiling` (RPP or TPP), `pthread_mutex_init`, `pthread_mutex_lock`, `pthread_mutex_setprioceiling` (RPP or TPP), `pthread_mutex_timedlock`, `pthread_mutex_trylock`, `pthread_mutex_unlock`, `pthread_mutexattr_destroy`, `pthread_mutexattr_getprioceiling` (RPP or TPP), `pthread_mutexattr_getprotocol` (MC1), `pthread_mutexattr_getpshared` (TSH), `pthread_mutexattr_getrobust`, `pthread_mutexattr_gettype`, `pthread_mutexattr_init`, `pthread_mutexattr_setprioceiling` (RPP or TPP), `pthread_mutexattr_setprotocol` (MC1), `pthread_mutexattr_setpshared` (TSH), `pthread_mutexattr_setrobust`, `pthread_mutexattr_settype`, `pthread_once`, `pthread_rwlock_destroy`, `pthread_rwlock_init`, `pthread_rwlock_rdlock`, `pthread_rwlock_timedrdlock`, `pthread_rwlock_timedwrlock`, `pthread_rwlock_tryrdlock`, `pthread_rwlock_trywrlock`, `pthread_rwlock_unlock`, `pthread_rwlock_wrlock`, `pthread_rwlockattr_destroy`, `pthread_rwlockattr_getpshared` (TSH), `pthread_rwlockattr_init`, `pthread_rwlockattr_setpshared` (TSH), `pthread_self`, `pthread_setcancelstate`, `pthread_setcanceltype`, `pthread_setschedparam` (TPS), `pthread_setschedprio` (TPS), `pthread_setspecific`, `pthread_spin_destroy`, `pthread_spin_init`, `pthread_spin_lock`, `pthread_spin_trylock`, `pthread_spin_unlock` |
-| `<pthread.h>` | absent (7) | `pthread_atfork` (OB), `pthread_cancel`, `pthread_cond_clockwait`, `pthread_mutex_clocklock`, `pthread_rwlock_clockrdlock`, `pthread_rwlock_clockwrlock`, `pthread_testcancel` |
+| `<pthread.h>` | present (96) | `pthread_attr_destroy`, `pthread_attr_getdetachstate`, `pthread_attr_getguardsize`, `pthread_attr_getinheritsched` (TPS), `pthread_attr_getschedparam`, `pthread_attr_getschedpolicy` (TPS), `pthread_attr_getscope` (TPS), `pthread_attr_getstack`, `pthread_attr_getstacksize` (TSS), `pthread_attr_init`, `pthread_attr_setdetachstate`, `pthread_attr_setguardsize`, `pthread_attr_setinheritsched` (TPS), `pthread_attr_setschedparam`, `pthread_attr_setschedpolicy` (TPS), `pthread_attr_setscope` (TPS), `pthread_attr_setstack`, `pthread_attr_setstacksize` (TSS), `pthread_barrier_destroy`, `pthread_barrier_init`, `pthread_barrier_wait`, `pthread_barrierattr_destroy`, `pthread_barrierattr_getpshared` (TSH), `pthread_barrierattr_init`, `pthread_barrierattr_setpshared` (TSH), `pthread_cancel`, `pthread_cleanup_pop`, `pthread_cleanup_push`, `pthread_cond_broadcast`, `pthread_cond_destroy`, `pthread_cond_init`, `pthread_cond_signal`, `pthread_cond_timedwait`, `pthread_cond_wait`, `pthread_condattr_destroy`, `pthread_condattr_getclock`, `pthread_condattr_getpshared` (TSH), `pthread_condattr_init`, `pthread_condattr_setclock`, `pthread_condattr_setpshared` (TSH), `pthread_create`, `pthread_detach`, `pthread_equal`, `pthread_exit`, `pthread_getschedparam` (TPS), `pthread_getspecific`, `pthread_join`, `pthread_key_create`, `pthread_key_delete`, `pthread_mutex_consistent`, `pthread_mutex_destroy`, `pthread_mutex_getprioceiling` (RPP or TPP), `pthread_mutex_init`, `pthread_mutex_lock`, `pthread_mutex_setprioceiling` (RPP or TPP), `pthread_mutex_timedlock`, `pthread_mutex_trylock`, `pthread_mutex_unlock`, `pthread_mutexattr_destroy`, `pthread_mutexattr_getprioceiling` (RPP or TPP), `pthread_mutexattr_getprotocol` (MC1), `pthread_mutexattr_getpshared` (TSH), `pthread_mutexattr_getrobust`, `pthread_mutexattr_gettype`, `pthread_mutexattr_init`, `pthread_mutexattr_setprioceiling` (RPP or TPP), `pthread_mutexattr_setprotocol` (MC1), `pthread_mutexattr_setpshared` (TSH), `pthread_mutexattr_setrobust`, `pthread_mutexattr_settype`, `pthread_once`, `pthread_rwlock_destroy`, `pthread_rwlock_init`, `pthread_rwlock_rdlock`, `pthread_rwlock_timedrdlock`, `pthread_rwlock_timedwrlock`, `pthread_rwlock_tryrdlock`, `pthread_rwlock_trywrlock`, `pthread_rwlock_unlock`, `pthread_rwlock_wrlock`, `pthread_rwlockattr_destroy`, `pthread_rwlockattr_getpshared` (TSH), `pthread_rwlockattr_init`, `pthread_rwlockattr_setpshared` (TSH), `pthread_self`, `pthread_setcancelstate`, `pthread_setcanceltype`, `pthread_setschedparam` (TPS), `pthread_setschedprio` (TPS), `pthread_setspecific`, `pthread_spin_destroy`, `pthread_spin_init`, `pthread_spin_lock`, `pthread_spin_trylock`, `pthread_spin_unlock`, `pthread_testcancel` |
+| `<pthread.h>` | absent (5) | `pthread_atfork` (OB), `pthread_cond_clockwait`, `pthread_mutex_clocklock`, `pthread_rwlock_clockrdlock`, `pthread_rwlock_clockwrlock` |
 | `<sched.h>` | present (8) | `sched_get_priority_max` (PS or TPS), `sched_get_priority_min` (PS or TPS), `sched_getparam` (PS), `sched_getscheduler` (PS), `sched_rr_get_interval` (PS or TPS), `sched_setparam` (PS), `sched_setscheduler` (PS), `sched_yield` |
 | `<semaphore.h>` | present (11) | `sem_clockwait`, `sem_close`, `sem_destroy`, `sem_getvalue`, `sem_init`, `sem_open`, `sem_post`, `sem_timedwait`, `sem_trywait`, `sem_unlink`, `sem_wait` |
 | `<threads.h>` | macro only (1) | `thrd_equal` |
@@ -385,4 +385,5 @@ interface.
 
 | Header | Status | Interfaces |
 |---|---|---|
-| `<dlfcn.h>` | absent (5) | `dladdr`, `dlclose`, `dlerror`, `dlopen`, `dlsym` |
+| `<dlfcn.h>` | present (1) | `dladdr` |
+| `<dlfcn.h>` | absent (4) | `dlclose`, `dlerror`, `dlopen`, `dlsym` |

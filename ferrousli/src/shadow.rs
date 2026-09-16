@@ -116,6 +116,8 @@ fn parse(line: &mut [u8]) -> Option<Fields> {
 ///
 /// `path` must be a NUL-terminated string.
 unsafe fn open_shadow(path: *const c_char) -> Result<Option<*mut File>, c_int> {
+    // Cancellation waits until this is finished, as in musl.
+    let _cancel = crate::cancel::disable();
     // SAFETY: the caller passes a NUL-terminated path.
     let fd = unsafe { open(path, TCB_FLAGS, 0) };
     if fd >= 0 {

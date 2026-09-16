@@ -204,12 +204,14 @@ pub unsafe extern "C" fn sigtimedwait(
         // kernel reads one word of `mask` and all of `timeout`, and writes a
         // whole `siginfo_t`.
         let ret = unsafe {
-            syscall::syscall4(
+            crate::cancel::syscall_cp(
                 nr::RT_SIGTIMEDWAIT,
                 mask.addr(),
                 info.addr(),
                 timeout.addr(),
                 KERNEL_SIGSET_SIZE,
+                0,
+                0,
             )
         };
         if errno::decode(ret) != Err(errno::EINTR) {
