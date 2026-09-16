@@ -108,6 +108,7 @@ forbid ferrix-netwire  "network wire formats" "ferrix-kernel|ferrix-boot"
 forbid ferrix-nettcp   "TCP state machine" "ferrix-kernel|ferrix-boot"
 forbid ferrix-net      "net core" "ferrix-kernel|ferrix-boot"
 forbid ferrix-netring  "net ring protocol" "ferrix-kernel|ferrix-boot"
+forbid ferrix-netserve "net driver serve loop" "ferrix-kernel|ferrix-boot"
 forbid ferrix-netlink  "netlink messages" "ferrix-kernel|ferrix-boot"
 
 # ---------------------------------------------------------------------------

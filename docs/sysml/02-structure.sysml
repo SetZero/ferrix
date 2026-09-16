@@ -918,6 +918,23 @@ package FerrixStructure {
                  * than out of a driver. The net_input fuzz target drives a
                  * whole host from a stranger's frames. */
         }
+        #writtenAhead part netServe : LibraryCrate {
+            attribute :>> path = "libs/netserve";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 10;
+            doc /* A ring-3 network driver's serve loop: the net ring on one
+                 * side, a virtio-net device on the other, and the rules where
+                 * they meet. The two directions are not symmetrical -- sending
+                 * is a copy and a submission, while a frame arrives into a
+                 * buffer the device chose and takes the oldest receive slot
+                 * the kernel posted, or is dropped if none is waiting. A
+                 * submission is never taken that cannot be answered, and a
+                 * device buffer goes back the moment its bytes are copied,
+                 * because a buffer the driver holds is a frame the device
+                 * cannot deliver. Written against a trait, so the loop runs on
+                 * the host with a fake device on one side and the ring's own
+                 * kernel end on the other. */
+        }
         #writtenAhead part netRing : LibraryCrate {
             attribute :>> path = "libs/netring";
             attribute :>> forbidsUnsafe = true;
