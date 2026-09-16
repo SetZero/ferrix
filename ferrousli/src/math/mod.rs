@@ -1,10 +1,13 @@
 //! `math.h`: so far `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`,
 //! `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `exp`, `exp2`, `expm1`,
-//! `log`, `log2`, `log10`, `log1p`, `pow` and `hypot` for `double`, `sinf`,
-//! `cosf`, `tanf`, `asinf`, `acosf`, `atanf`, `atan2f`, `sinhf`, `coshf`,
-//! `tanhf`, `asinhf`, `acoshf`, `atanhf`, `expf`, `exp2f`, `expm1f`, `logf`,
-//! `log2f`, `log10f`, `log1pf`, `powf` and `hypotf` for `float`, and the
-//! classification functions the header's macros call for every type.
+//! `log`, `log2`, `log10`, `log1p`, `pow`, `hypot`, `erf`, `erfc`, `lgamma`,
+//! `lgamma_r`, `tgamma`, `j0`, `j1`, `jn`, `y0`, `y1` and `yn` for `double`,
+//! `sinf`, `cosf`, `tanf`, `asinf`, `acosf`, `atanf`, `atan2f`, `sinhf`,
+//! `coshf`, `tanhf`, `asinhf`, `acoshf`, `atanhf`, `expf`, `exp2f`, `expm1f`,
+//! `logf`, `log2f`, `log10f`, `log1pf`, `powf`, `hypotf`, `erff`, `erfcf`,
+//! `lgammaf`, `lgammaf_r`, `tgammaf`, `j0f`, `j1f`, `jnf`, `y0f`, `y1f` and
+//! `ynf` for `float`, `signgam`, and the classification functions the
+//! header's macros call for every type.
 //!
 //! # Where the code comes from
 //!
@@ -77,6 +80,17 @@
 //! the same way, and that found one more: LLVM turns `a - C / b`, for a
 //! constant `C`, into `a + -C / b`, which rounds the quotient the other way,
 //! so where musl subtracts such a quotient, it goes through `barrier` too.
+//! The error and gamma functions and the Bessel functions, `erf` to `ynf`,
+//! were compared the same way, and with a second program for `lgamma_r`'s
+//! sign, `signgam` and the integer order of `jn`, and that found two more.
+//! Where two `float` polynomials in the same variable are written out side by
+//! side, the vectoriser evaluates them in two lanes of one `mulps` whose
+//! other lanes hold other coefficients or stale register contents, and
+//! multiplying those by a small number again and again raises underflow; such
+//! polynomials are evaluated one at a time by a function that is never
+//! inlined. And LLVM turns a test that a `float`'s bits but the sign are all
+//! zero into `ucomiss` against 0, which raises denormal for a subnormal
+//! argument, so where that matters the bits go through `black_box` first.
 //!
 //! # Errors
 //!
@@ -131,12 +145,21 @@ pub mod atan;
 pub mod atanh;
 pub mod classify;
 pub mod cosh;
+pub mod erf;
+pub mod erff;
 pub mod exp;
 pub mod exp2;
 pub mod expf;
 pub mod expm1;
 pub mod fma;
 pub mod hypot;
+pub mod j0;
+pub mod j0f;
+pub mod j1;
+pub mod j1f;
+pub mod jn;
+pub mod lgamma;
+pub mod lgammaf;
 pub mod log;
 pub mod log10;
 pub mod log1p;
@@ -154,5 +177,6 @@ pub mod sqrt;
 pub(crate) mod support;
 pub mod tan;
 pub mod tanh;
+pub mod tgamma;
 pub mod trig;
 pub mod trigf;

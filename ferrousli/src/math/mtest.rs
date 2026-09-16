@@ -441,6 +441,9 @@ pub(crate) struct Rules {
     within_one_ulp: bool,
     /// An integer result is not compared when invalid is expected.
     unless_invalid: bool,
+    /// For a negative argument, the result must be a NaN or -inf, and its
+    /// error is not measured.
+    negative_domain: bool,
 }
 
 impl Rules {
@@ -454,6 +457,7 @@ impl Rules {
         underflow_tolerated: false,
         within_one_ulp: false,
         unless_invalid: false,
+        negative_domain: false,
     };
 
     /// `checkexceptall` and `checkcr`, for the exact functions.
@@ -533,6 +537,15 @@ impl Rules {
         }
     }
 
+    /// The rule of `y0.c`, `y1.c` and `yn.c`: a negative argument must give a
+    /// NaN or -inf, whose error is not measured.
+    pub(crate) const fn negative_domain(self) -> Self {
+        Self {
+            negative_domain: true,
+            ..self
+        }
+    }
+
     /// Whether `raised` is acceptable for `row`.
     fn exceptions_pass(&self, row: &Row, raised: c_int) -> bool {
         let want = row.except;
@@ -601,6 +614,12 @@ pub(crate) fn judge<F: Float>(
         Value::Exact | Value::Integer => {
             if !checkcr(got, want) {
                 problems.push(result);
+            }
+        }
+        Value::Ulp if rules.negative_domain && F::field(row, 0).wide() < 0.0 => {
+            let got = got.wide();
+            if !got.is_nan() && got != f64::NEG_INFINITY {
+                problems.push(format!("{result}, not a NaN or -inf"));
             }
         }
         Value::Ulp => {
@@ -798,6 +817,43 @@ pub(crate) fn di_d<F: Float>(
         judge(&rules, row, raised, got, want, dy, || {
             format!("{name}({}, {n})", hex(x))
         })
+    });
+}
+
+/// The tables of a function that returns a sign through a pointer, as
+/// `lgamma_r` does: `x, y, dy, i`. As `lgamma_r.c` does, the sign is compared
+/// unless `x` is a NaN or -inf or division by zero is expected, and a wrong
+/// sign is never tolerated.
+pub(crate) fn d_di<F: Float>(
+    name: &str,
+    files: &[&str],
+    function: impl Fn(F) -> (F, c_int),
+    rules: Rules,
+    allow: &[Allow],
+) {
+    run(name, files, allow, |row| {
+        let x = F::field(row, 0);
+        let want = F::field(row, 1);
+        let dy = row.f32(2);
+        let want_sign = row.int(3);
+        let ((got, sign), raised) = under(row.mode, || function(x));
+        let call = || format!("{name}({})", hex(x));
+        let verdict = judge(&rules, row, raised, got, want, dy, call);
+        let x = x.wide();
+        if !x.is_nan()
+            && x != f64::NEG_INFINITY
+            && row.except & FE_DIVBYZERO == 0
+            && i64::from(sign) != want_sign
+        {
+            verdict.and(Verdict::Fail(format!(
+                "{}: {} {}: sign want {want_sign} got {sign}",
+                row.place,
+                mode_name(row.mode),
+                call()
+            )))
+        } else {
+            verdict
+        }
     });
 }
 

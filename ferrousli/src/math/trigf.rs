@@ -247,7 +247,7 @@ pub extern "C" fn tanf(x: f32) -> f32 {
 
 /// musl's `__sindf`: sin(x) for |x| ~<= π/4, rounded to `float`. The caller
 /// returns sin(-0) itself.
-fn kernel_sinf(x: f64) -> f32 {
+pub(crate) fn kernel_sinf(x: f64) -> f32 {
     let z = x * x;
     let w = z * z;
     let r = S3 + z * S4;
@@ -256,7 +256,7 @@ fn kernel_sinf(x: f64) -> f32 {
 }
 
 /// musl's `__cosdf`: cos(x) for |x| ~<= π/4, rounded to `float`.
-fn kernel_cosf(x: f64) -> f32 {
+pub(crate) fn kernel_cosf(x: f64) -> f32 {
     let z = x * x;
     let w = z * z;
     let r = C2 + z * C3;

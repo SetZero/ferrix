@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 973 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 988 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 7 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 0 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 263 | not there |
+| absent | 248 | not there |
 
-270 interfaces are missing in one of the last four ways. None of them is
+255 interfaces are missing in one of the last four ways. None of them is
 written on a branch any more: the three unlanded branches of 2026-09-13,
 `ferrousli-math`, `ferrousli-threads` and `ferrousli-misc`, were built,
 fixed and landed on 2026-09-16.
@@ -41,7 +41,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Strings and characters | 72 | 0 | 0 | 0 | landed: `strcasecmp_l`, `strncasecmp_l` |
 | Wide and multibyte characters | 118 | 0 | 0 | 0 | landed: the `wscanf` family, `fwscanf` to `wscanf`; `open_wmemstream`; the `wprintf` family, `fwprintf` to `wprintf`; wide-character stream I/O (`fgetwc`, `fgetws`, `fputwc`, `fputws`, `getwc`, `getwchar`, `putwc`, `putwchar`, `ungetwc`, `fwide`); the `wcstol` and `wcstod` families with `wcstoimax` and `wcstoumax`; `wcsftime`, `wcslcpy`, `wcslcat` |
 | Standard I/O | 70 | 0 | 0 | 0 | landed: `tmpnam` |
-| Math and the floating-point environment | 201 | 74 | 0 | 11 | the error and gamma functions for `double` and `float`, the Bessel functions and `signgam` 3; every `long double` form 8. Landed: the hyperbolic functions and `hypot` for `double` and `float`; `tan`, `asin`, `acos`, `atan` for `double`, and all of them with `sin`, `cos` and `atan2` for `float`; `exp2`, `expm1`, `log2`, `log10`, `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `fenv.h`; rounding, manipulation, remainders and `fma` for `double` and `float`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, bit for bit musl's in every rounding mode; and the classifiers for all three types |
+| Math and the floating-point environment | 201 | 59 | 0 | 8 | every `long double` form 8. Landed: every `double` and `float` function: the error and gamma functions with `signgam` and `lgamma_r`, the Bessel functions; the hyperbolic functions and `hypot` for `double` and `float`; `tan`, `asin`, `acos`, `atan` for `double`, and all of them with `sin`, `cos` and `atan2` for `float`; `exp2`, `expm1`, `log2`, `log10`, `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `fenv.h`; rounding, manipulation, remainders and `fma` for `double` and `float`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, bit for bit musl's in every rounding mode; and the classifiers for all three types |
 | Complex arithmetic | 69 | 66 | 0 | 8 | `complex.h` over the math library, `creal` and `cimag` as functions |
 | Locales, messages and conversion | 32 | 24 | 0 | 15 | the `gettext` family with `.mo` catalogues 5; `iconv` 5; `catopen`, `catgets`, `catclose` 2; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1 |
 | Files, directories and I/O multiplexing | 46 | 1 | 0 | 1 | `posix_getdents` |
@@ -58,7 +58,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 5 | 0 | 2 | `dlfcn.h` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **270** | **0** | **94** | |
+| **All** | **1243** | **255** | **0** | **91** | |
 
 ## Present but broken
 
@@ -237,8 +237,8 @@ interface.
 | Header | Status | Interfaces |
 |---|---|---|
 | `<fenv.h>` | present (11) | `feclearexcept`, `fegetenv`, `fegetexceptflag`, `fegetround`, `feholdexcept`, `feraiseexcept`, `fesetenv`, `fesetexceptflag`, `fesetround`, `fetestexcept`, `feupdateenv` |
-| `<math.h>` | present (116) | `acos`, `acosf`, `acosh`, `acoshf`, `asin`, `asinf`, `asinh`, `asinhf`, `atan`, `atan2`, `atan2f`, `atanf`, `atanh`, `atanhf`, `cbrt`, `cbrtf`, `ceil`, `ceilf`, `copysign`, `copysignf`, `cos`, `cosf`, `cosh`, `coshf`, `exp`, `exp2`, `exp2f`, `expf`, `expm1`, `expm1f`, `fabs`, `fabsf`, `fdim`, `fdimf`, `floor`, `floorf`, `fma`, `fmaf`, `fmax`, `fmaxf`, `fmin`, `fminf`, `fmod`, `fmodf`, `fpclassify`, `frexp`, `frexpf`, `hypot`, `hypotf`, `ilogb`, `ilogbf`, `isfinite`, `isgreater`, `isgreaterequal`, `isinf`, `isless`, `islessequal`, `islessgreater`, `isnan`, `isnormal`, `isunordered`, `ldexp`, `ldexpf`, `llrint`, `llrintf`, `llround`, `llroundf`, `log`, `log10`, `log10f`, `log1p`, `log1pf`, `log2`, `log2f`, `logb`, `logbf`, `logf`, `lrint`, `lrintf`, `lround`, `lroundf`, `modf`, `modff`, `nan`, `nanf`, `nearbyint`, `nearbyintf`, `nextafter`, `nextafterf`, `pow`, `powf`, `remainder`, `remainderf`, `remquo`, `remquof`, `rint`, `rintf`, `round`, `roundf`, `scalbln`, `scalblnf`, `scalbn`, `scalbnf`, `signbit`, `sin`, `sinf`, `sinh`, `sinhf`, `sqrt`, `sqrtf`, `tan`, `tanf`, `tanh`, `tanhf`, `trunc`, `truncf` |
-| `<math.h>` | absent (74) | `acoshl`, `acosl`, `asinhl`, `asinl`, `atan2l`, `atanhl`, `atanl`, `cbrtl`, `ceill`, `copysignl`, `coshl`, `cosl`, `erf`, `erfc`, `erfcf`, `erfcl`, `erff`, `erfl`, `exp2l`, `expl`, `expm1l`, `fabsl`, `fdiml`, `floorl`, `fmal`, `fmaxl`, `fminl`, `fmodl`, `frexpl`, `hypotl`, `ilogbl`, `j0` (XSI), `j1` (XSI), `jn` (XSI), `ldexpl`, `lgamma`, `lgammaf`, `lgammal`, `llrintl`, `llroundl`, `log10l`, `log1pl`, `log2l`, `logbl`, `logl`, `lrintl`, `lroundl`, `modfl`, `nanl`, `nearbyintl`, `nextafterl`, `nexttoward`, `nexttowardf`, `nexttowardl`, `powl`, `remainderl`, `remquol`, `rintl`, `roundl`, `scalblnl`, `scalbnl`, `signgam` (XSI), `sinhl`, `sinl`, `sqrtl`, `tanhl`, `tanl`, `tgamma`, `tgammaf`, `tgammal`, `truncl`, `y0` (XSI), `y1` (XSI), `yn` (XSI) |
+| `<math.h>` | present (131) | `acos`, `acosf`, `acosh`, `acoshf`, `asin`, `asinf`, `asinh`, `asinhf`, `atan`, `atan2`, `atan2f`, `atanf`, `atanh`, `atanhf`, `cbrt`, `cbrtf`, `ceil`, `ceilf`, `copysign`, `copysignf`, `cos`, `cosf`, `cosh`, `coshf`, `erf`, `erfc`, `erfcf`, `erff`, `exp`, `exp2`, `exp2f`, `expf`, `expm1`, `expm1f`, `fabs`, `fabsf`, `fdim`, `fdimf`, `floor`, `floorf`, `fma`, `fmaf`, `fmax`, `fmaxf`, `fmin`, `fminf`, `fmod`, `fmodf`, `fpclassify`, `frexp`, `frexpf`, `hypot`, `hypotf`, `ilogb`, `ilogbf`, `isfinite`, `isgreater`, `isgreaterequal`, `isinf`, `isless`, `islessequal`, `islessgreater`, `isnan`, `isnormal`, `isunordered`, `j0` (XSI), `j1` (XSI), `jn` (XSI), `ldexp`, `ldexpf`, `lgamma`, `lgammaf`, `llrint`, `llrintf`, `llround`, `llroundf`, `log`, `log10`, `log10f`, `log1p`, `log1pf`, `log2`, `log2f`, `logb`, `logbf`, `logf`, `lrint`, `lrintf`, `lround`, `lroundf`, `modf`, `modff`, `nan`, `nanf`, `nearbyint`, `nearbyintf`, `nextafter`, `nextafterf`, `pow`, `powf`, `remainder`, `remainderf`, `remquo`, `remquof`, `rint`, `rintf`, `round`, `roundf`, `scalbln`, `scalblnf`, `scalbn`, `scalbnf`, `signbit`, `signgam` (XSI), `sin`, `sinf`, `sinh`, `sinhf`, `sqrt`, `sqrtf`, `tan`, `tanf`, `tanh`, `tanhf`, `tgamma`, `tgammaf`, `trunc`, `truncf`, `y0` (XSI), `y1` (XSI), `yn` (XSI) |
+| `<math.h>` | absent (59) | `acoshl`, `acosl`, `asinhl`, `asinl`, `atan2l`, `atanhl`, `atanl`, `cbrtl`, `ceill`, `copysignl`, `coshl`, `cosl`, `erfcl`, `erfl`, `exp2l`, `expl`, `expm1l`, `fabsl`, `fdiml`, `floorl`, `fmal`, `fmaxl`, `fminl`, `fmodl`, `frexpl`, `hypotl`, `ilogbl`, `ldexpl`, `lgammal`, `llrintl`, `llroundl`, `log10l`, `log1pl`, `log2l`, `logbl`, `logl`, `lrintl`, `lroundl`, `modfl`, `nanl`, `nearbyintl`, `nextafterl`, `nexttoward`, `nexttowardf`, `nexttowardl`, `powl`, `remainderl`, `remquol`, `rintl`, `roundl`, `scalblnl`, `scalbnl`, `sinhl`, `sinl`, `sqrtl`, `tanhl`, `tanl`, `tgammal`, `truncl` |
 
 ### Complex arithmetic
 
