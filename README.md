@@ -123,10 +123,13 @@ a stale translation is a bug the default gate structurally cannot see. `run`
 uses `auto` unless it is given `--accel` or `--gdb`; the tests keep `tcg`.
 
 `--net` gives the guest a virtio-net card whose other end is `xtask`'s own
-gateway on a loopback UDP socket: DHCP hands out `10.0.2.15`, `10.0.2.2` is the
+gateway on a loopback UDP socket: the guest is `10.0.2.15`, `10.0.2.2` is the
 host, `10.0.2.3` forwards DNS to the host's resolver, and TCP and UDP to
 anywhere else are relayed through ordinary host sockets. It needs no
-privilege, and works the same on Linux and on Windows.
+privilege, and works the same on Linux and on Windows. With `--init`, the
+shell configures `eth0` itself before its first prompt, so `wget
+http://example.com` works at once. The gateway also answers DHCP, but busybox's
+`udhcpc` and `ping` open raw sockets, which Ferrix does not have yet.
 
 You need QEMU and UEFI firmware. Debian and Ubuntu: `qemu-system-x86`,
 `qemu-system-arm`, `ovmf`, `qemu-efi-aarch64` and `u-boot-qemu`. Windows:

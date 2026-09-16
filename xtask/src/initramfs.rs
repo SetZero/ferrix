@@ -202,6 +202,23 @@ pub(crate) const APPLETS: &[&str] = &[
 /// Where zinc, the zsh-compatible shell, goes beside a program.
 pub(crate) const ZINC_PATH: &str = "bin/zinc";
 
+/// `/etc/profile`, which the kernel's interactive shell reads through `ENV`.
+///
+/// Configures `eth0` for xtask's gateway (`crate::gateway`): its address, the
+/// route through `10.0.2.2`, and the resolver `/etc/resolv.conf` already
+/// names. Only when there is an `eth0` and it has no IPv4 address, so a boot
+/// without `--net` is quiet, a nested `sh -i` changes nothing, and neither
+/// does an interface somebody configured by hand first.
+const PROFILE: &[u8] = b"\
+# Written by cargo xtask: configure eth0 for xtask's network gateway, once.
+if ip link show eth0 >/dev/null 2>&1 && ! ip -o addr show eth0 | grep -q ' inet '; then
+\tip link set eth0 up &&
+\tip addr add 10.0.2.15/24 dev eth0 &&
+\tip route add default via 10.0.2.2 &&
+\techo 'eth0: 10.0.2.15/24, default route via 10.0.2.2, DNS 10.0.2.3'
+fi
+";
+
 /// The archive every image carries: the tree's native programs in `/sbin`,
 /// and `program` at `/bin/busybox` when one is given, with `zinc` at
 /// `/bin/zinc` and `/bin/zsh` beside it when that is given too.
@@ -282,6 +299,13 @@ fn build_with_shell(
         // forwarder, which is where slirp puts one too, so a guest configured
         // by DHCP and a guest configured by hand agree.
         archive.file("etc/resolv.conf", 0o644, b"nameserver 10.0.2.3\n")?;
+        // What the interactive shell runs first, through `ENV`: bring up
+        // `eth0` the way xtask's gateway expects, when there is one and
+        // nothing has configured it. By hand rather than by DHCP, which the
+        // gateway serves but which `udhcpc` cannot ask for yet — it opens a
+        // raw socket, and Ferrix has none. `test-net` configures the same
+        // three things itself and never starts an interactive shell.
+        archive.file("etc/profile", 0o644, PROFILE)?;
         archive.file(PROGRAM_PATH, 0o755, program)?;
         for applet in APPLETS {
             archive.symlink(&format!("bin/{applet}"), "busybox")?;

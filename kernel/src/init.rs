@@ -106,7 +106,15 @@ pub(crate) fn run() {
     let status = exec::run_init(
         program,
         args,
-        &[b"PATH=/bin", b"HOME=/", b"TERM=dumb", b"PS1=ferrix# "],
+        // `ENV` is what an interactive POSIX shell reads before its first
+        // prompt; xtask's initramfs puts the network setup there.
+        &[
+            b"PATH=/bin",
+            b"HOME=/",
+            b"TERM=dumb",
+            b"PS1=ferrix# ",
+            b"ENV=/etc/profile",
+        ],
         random_bytes(),
     );
     match status {
