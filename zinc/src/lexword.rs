@@ -317,6 +317,19 @@ enum Step {
 }
 
 impl Lexer {
+    /// The whole input tokenized as one word, as zsh's `parse_subst_string`
+    /// does; `None` on a lexical error.
+    pub(crate) fn gettokstr_sub(&mut self) -> Option<Vec<u8>> {
+        let Some(c) = self.input.get() else {
+            return Some(Vec::new());
+        };
+        let t = self.gettokstr(c, true);
+        if t == Tok::Lexerr || self.error.is_some() {
+            return None;
+        }
+        Some(self.tokstr.take().unwrap_or_default())
+    }
+
     /// Tokenize the rest of a word starting with `c` (zsh's `gettokstr`).
     /// With `sub`, the whole input is one word (a substitution's operand).
     pub(crate) fn gettokstr(&mut self, first: u8, sub: bool) -> Tok {

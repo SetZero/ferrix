@@ -181,10 +181,11 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
 /// the unit tests, and the line editor's completion driven through a
 /// pseudo-terminal, which is the only way to see what a Tab does.
 ///
-/// Clippy allows `excessive_nesting`: the runtime zinc landed with carries
-/// that warning in its parser and builtins, which the port of zsh's runtime
-/// (the `zinc-next` branch) replaces rather than restructures. Every other
-/// warning fails the gate.
+/// Clippy and the tests build with the `next` feature, so `zinc-next`, the
+/// port of zsh's runtime that lands in slices, meets the same gate as
+/// `zinc`. Clippy allows `excessive_nesting`: the runtime zinc landed with
+/// carries that warning in its parser and builtins, which that port replaces
+/// rather than restructures. Every other warning fails the gate.
 ///
 /// The tests start Linux executables and the pty needs a Linux kernel, so on
 /// Windows those steps run in WSL, as ferrousli's do.
@@ -206,6 +207,8 @@ fn zinc(root: &std::path::Path) -> Result<()> {
                 "--target",
                 TARGET,
                 "--all-targets",
+                "--features",
+                "next",
                 "--",
                 "-D",
                 "warnings",
@@ -220,9 +223,9 @@ fn zinc(root: &std::path::Path) -> Result<()> {
     }
     step("zinc: tests", || {
         let command = if cfg!(windows) {
-            crate::wsl::cargo(&dir, &["test", "--target", TARGET])
+            crate::wsl::cargo(&dir, &["test", "--features", "next", "--target", TARGET])
         } else {
-            native(&["test", "--target", TARGET])
+            native(&["test", "--features", "next", "--target", TARGET])
         };
         cargo::run(command, "cargo test (zinc)")
     })?;

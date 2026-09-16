@@ -17,6 +17,17 @@ publish = false
 name = "zinc"
 path = "src/main.rs"
 
+# The runtime being ported from zsh 5.9's C, module by module, beside the
+# shell above until it replaces it. It shares the lexer and parser, and is
+# built only on request: `cargo build --features next --bin zinc-next`.
+[[bin]]
+name = "zinc-next"
+path = "src/next/main.rs"
+required-features = ["next"]
+
+[features]
+next = []
+
 [dependencies]
 # The one dependency. A shell needs `fork`, `execve`, `dup2`, `sigaction`,
 # `tcsetpgrp`, `termios` and `waitpid`, none of which std offers. `libc` is

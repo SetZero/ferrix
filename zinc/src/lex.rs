@@ -272,6 +272,8 @@ pub(crate) struct Lexer {
     pending_heredocs: Vec<HereDocSlot>,
     /// The next word's alias expansion ended in a blank: expand it too.
     inalmore: bool,
+    /// zsh's `lexflags`: splitting words for `${(z)}` rather than parsing.
+    pub(crate) lexflags: i32,
 }
 
 impl Lexer {
@@ -300,6 +302,7 @@ impl Lexer {
             opts,
             pending_heredocs: Vec::new(),
             inalmore: false,
+            lexflags: 0,
         }
     }
 
