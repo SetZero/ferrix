@@ -91,10 +91,12 @@ fetch "$HEADERS_URL" "$src/$HEADERS" sha256sum "$HEADERS_SHA256"
 echo "Alpine's $HEADERS, verified"
 
 step "ferrousli, release, $TARGET"
+# Where cargo puts the library: the caller's CARGO_TARGET_DIR when set.
+target=${CARGO_TARGET_DIR:-$ferrousli/target}
 # The host's target is Windows; crt1.o and the library are Linux code.
 cargo build --release --lib --target $TARGET --manifest-path "$(win "$ferrousli/Cargo.toml")"
-lib=$ferrousli/target/$TARGET/release/libferrousli.a
-crt1=$(ls -t "$ferrousli"/target/$TARGET/release/build/ferrousli-*/out/crt1.o | head -1)
+lib=$target/$TARGET/release/libferrousli.a
+crt1=$(ls -t "$target"/$TARGET/release/build/ferrousli-*/out/crt1.o | head -1)
 [ -f "$lib" ] && [ -f "$crt1" ]
 echo "$lib"
 echo "$crt1"

@@ -233,10 +233,19 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
         let _ = command.args(["-c", SCRIPT, "bash", "build.sh"]).arg(&root);
         ("build.sh", command)
     };
-    // Both scripts look for ferrousli's library in `ferrousli/target`.
-    let _ = command
-        .current_dir(&ferrousli)
-        .env_remove("CARGO_TARGET_DIR");
+    // Both scripts build ferrousli under `CARGO_TARGET_DIR` when it is set and
+    // in `ferrousli/target` otherwise. A caller's target directory is shared
+    // by every workspace it builds, so ferrousli gets a directory of its own
+    // inside it rather than mixing its crates with the caller's.
+    let _ = command.current_dir(&ferrousli);
+    match ferrousli_target_dir(std::env::var_os("CARGO_TARGET_DIR")) {
+        Some(dir) => {
+            let _ = command.env("CARGO_TARGET_DIR", dir);
+        }
+        None => {
+            let _ = command.env_remove("CARGO_TARGET_DIR");
+        }
+    }
 
     let description = format!("ferrousli/tools/busybox/{script}");
     if let Err(error) = cargo::run(command, &description) {
@@ -254,6 +263,16 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
     }
     println!("\nbuilt {}", program.display());
     Ok(program)
+}
+
+/// The target directory ferrousli is built in for a caller whose
+/// `CARGO_TARGET_DIR` is `caller`: `ferrousli` inside it, spelled with the
+/// forward slashes the build scripts' bash expects, or `None` when the caller
+/// has none.
+fn ferrousli_target_dir(caller: Option<std::ffi::OsString>) -> Option<String> {
+    let caller = caller.filter(|dir| !dir.is_empty())?;
+    let dir = Path::new(&caller).join("ferrousli");
+    Some(dir.to_string_lossy().replace('\\', "/"))
 }
 
 /// The refusal for a link that failed on `symbols`, the list at `list`.
@@ -277,6 +296,17 @@ mod tests {
             assert!(program(arch).is_err(), "{arch}");
             assert!(build(arch).is_err(), "{arch}");
         }
+    }
+
+    #[test]
+    fn ferrousli_builds_inside_the_callers_target_dir() {
+        assert_eq!(ferrousli_target_dir(None), None);
+        assert_eq!(ferrousli_target_dir(Some("".into())), None);
+        assert_eq!(
+            ferrousli_target_dir(Some("/home/u/.local/share/ferrix/target-os-05".into()))
+                .as_deref(),
+            Some("/home/u/.local/share/ferrix/target-os-05/ferrousli")
+        );
     }
 
     #[test]

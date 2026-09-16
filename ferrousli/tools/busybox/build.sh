@@ -33,9 +33,11 @@ step "sources"
 fetch_sources "$src"
 
 step "ferrousli, release"
+# Where cargo puts the library: the caller's CARGO_TARGET_DIR when set.
+target=${CARGO_TARGET_DIR:-$ferrousli/target}
 cargo build --release --lib --manifest-path "$ferrousli/Cargo.toml"
-lib=$ferrousli/target/release/libferrousli.a
-crt1=$(ls -t "$ferrousli"/target/release/build/ferrousli-*/out/crt1.o | head -1)
+lib=$target/release/libferrousli.a
+crt1=$(ls -t "$target"/release/build/ferrousli-*/out/crt1.o | head -1)
 [ -f "$lib" ] && [ -f "$crt1" ]
 echo "$lib"
 echo "$crt1"
