@@ -26,9 +26,19 @@
 //! the waiter put on the table, while the table's lock is held, and a waker
 //! takes the same lock to look. A waker that changed the word before the read
 //! makes the read see the change, and one that changed it after finds the
-//! waiter listed. The read goes through [`uaccess`] like every other, faulting
-//! the page in; it is done once before the lock is taken, so that the read
-//! under it only ever finds a page already present.
+//! waiter listed.
+//!
+//! The read under the lock never faults. Resolving a fault takes the space's
+//! lock and allocates a frame, and once memory is reclaimed it may wait, none
+//! of which a spin lock's holder may do. So the word is read first with
+//! nothing held, faulting its page in, and read again under the lock only if
+//! its page is still there, through [`uaccess::copy_from_user_present`]. With
+//! threads the page can go in between -- another thread unmaps it -- and then
+//! the lock is let go and the whole read done again. A `SpinLock` stays the
+//! right kind for the table: no interrupt handler wakes a futex, and nothing
+//! done under it now sleeps. `AddressSpace::fault` asserts that it is never
+//! resolved under a lock that disables preemption, which is what names this
+//! read if it ever faults under the table again.
 //!
 //! A waker rouses a waiter while still holding the lock, and a waiter leaving
 //! for any reason takes the lock before it returns. So a wake can never land
@@ -210,11 +220,25 @@ fn key(process: &Process, address: u64) -> Result<Key, Errno> {
     Ok(Key::new(process.space(), address))
 }
 
-/// Read the futex word at `address`.
+/// Read the futex word at `address`, faulting its page in. Never with
+/// [`TABLE`] held.
 fn read_word(process: &Process, address: u64) -> Result<u32, Errno> {
     let mut bytes = [0_u8; 4];
     uaccess::copy_from_user(process.space(), address, &mut bytes).map_err(|_| Errno::EFAULT)?;
     Ok(u32::from_le_bytes(bytes))
+}
+
+/// Read the futex word at `address` with [`TABLE`] held: `None` if its page is
+/// not there to be read without a fault, which the caller answers by letting
+/// go of the table and faulting it in with [`read_word`].
+///
+/// The word is aligned and four bytes long, so it lies in one page and the read
+/// is all or nothing.
+fn read_present_word(process: &Process, address: u64) -> Result<Option<u32>, Errno> {
+    let mut bytes = [0_u8; 4];
+    let read = uaccess::copy_from_user_present(process.space(), address, &mut bytes)
+        .map_err(|_| Errno::EFAULT)?;
+    Ok(read.then(|| u32::from_le_bytes(bytes)))
 }
 
 /// Sleep on `address` if it holds `expected`, until a wake whose bitset
@@ -227,22 +251,27 @@ fn wait(
     deadline: Option<u64>,
 ) -> Result<usize, Errno> {
     let key = key(process, address)?;
-    // Faulted in here, outside the lock, and read again under it.
-    let _ = read_word(process, address)?;
     let sleeper = Arc::new(Sleeper {
         task: sched::current(),
         woken: AtomicBool::new(false),
     });
-    {
+    loop {
+        // Faulted in here, outside the lock, and read again under it without
+        // a fault. Round again if the page went in between.
+        let _ = read_word(process, address)?;
         let mut table = TABLE.lock();
-        if read_word(process, address)? != expected {
-            return Err(Errno::EAGAIN);
+        match read_present_word(process, address)? {
+            None => {}
+            Some(word) if word != expected => return Err(Errno::EAGAIN),
+            Some(_) => {
+                table.push(Entry {
+                    key,
+                    bitset,
+                    sleeper: Arc::clone(&sleeper),
+                });
+                break;
+            }
         }
-        table.push(Entry {
-            key,
-            bitset,
-            sleeper: Arc::clone(&sleeper),
-        });
     }
 
     let _ = SLEEP.wait_until_deadline(
@@ -314,16 +343,20 @@ fn requeue(
     };
     let source = key(process, from)?;
     let target = key(process, to)?;
-    if expected.is_some() {
+    // As `wait` reads its word: faulted in outside the lock, then read under
+    // it without a fault, round again if the page went in between.
+    let mut table = loop {
+        let Some(expected) = expected else {
+            break TABLE.lock();
+        };
         let _ = read_word(process, from)?;
-    }
-
-    let mut table = TABLE.lock();
-    if let Some(expected) = expected
-        && read_word(process, from)? != expected
-    {
-        return Err(Errno::EAGAIN);
-    }
+        let table = TABLE.lock();
+        match read_present_word(process, from)? {
+            None => {}
+            Some(word) if word != expected => return Err(Errno::EAGAIN),
+            Some(_) => break table,
+        }
+    };
     let mut taken = 0_usize;
     let mut moved = Vec::new();
     let mut index = 0;

@@ -606,6 +606,7 @@ impl AddressSpace {
     /// segmentation fault, and [`SpaceError::Refused`] if the region does not
     /// permit the access, which is the other one.
     pub(crate) fn fault(&self, address: u64, access: Access) -> Result<(), SpaceError> {
+        fault_requested();
         let inner = self.inner.lock();
 
         let region = *inner
@@ -1773,6 +1774,32 @@ fn named_elsewhere(map: &ferrix_vma::AddressSpace, id: u64, start: u64, end: u64
         }
         _ => false,
     })
+}
+
+/// The rule [`AddressSpace::fault`] is resolved under, checked where it is
+/// resolved: no lock that disables preemption is held.
+///
+/// Resolving a fault takes this space's lock, allocates, and for a
+/// copy-on-write page asks for a shootdown and waits for it; once memory is
+/// reclaimed it may wait for that too. A caller holding a lock reads and writes
+/// through [`AddressSpace::with_present_page`] instead and faults with the
+/// lock let go, as `futex` and `uaccess::copy_to_user_present`'s callers do.
+/// Checked on every fault rather than only the ones that happen to wait, so
+/// that a read under a lock is named by the first boot that makes one, not by
+/// the first boot that reclaims a page in the middle of one.
+fn fault_requested() {
+    if let Some(cpu) = smp::this_cpu() {
+        let held = crate::sched::locks_held(cpu.logical);
+        let site = crate::sched::lock_site(cpu.logical);
+        debug_assert!(
+            held == 0,
+            "a user page fault was resolved on processor {} holding {held} lock(s) that disable \
+             preemption, the outermost taken at {}:{}",
+            cpu.logical,
+            site.map_or("?", |site| site.file()),
+            site.map_or(0, core::panic::Location::line),
+        );
+    }
 }
 
 /// Whether a region with `flags` permits `access`.

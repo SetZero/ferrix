@@ -139,6 +139,42 @@ pub(crate) fn copy_from_user(
     from: u64,
     out: &mut [u8],
 ) -> Result<(), UserError> {
+    let copied = copy_from_user_through(space, from, out, Through::Faulting)?;
+    debug_assert!(copied, "a copy that faults pages in stopped short");
+    Ok(())
+}
+
+/// Copy `out.len()` bytes out of the program's memory at `from` only through
+/// pages already there to be read, and answer `false` at the first that is
+/// not.
+///
+/// For a read made holding a lock, as [`copy_to_user_present`] is for a write:
+/// resolving a fault may allocate a frame and take the space's lock, and once
+/// memory can be reclaimed it may wait, which nothing may do holding a lock.
+/// This never faults: a page not present yet stops the copy with what came
+/// before it already copied, and the caller lets go of its lock, reads the
+/// range with [`copy_from_user`], which faults it in, and tries again.
+///
+/// # Errors
+///
+/// [`UserError`], for a range that is not the program's or a page it may not
+/// read.
+pub(crate) fn copy_from_user_present(
+    space: &AddressSpace,
+    from: u64,
+    out: &mut [u8],
+) -> Result<bool, UserError> {
+    copy_from_user_through(space, from, out, Through::Present)
+}
+
+/// The copy both [`copy_from_user`] and [`copy_from_user_present`] make:
+/// `false` if a page `through` may not fault in stopped it.
+fn copy_from_user_through(
+    space: &AddressSpace,
+    from: u64,
+    out: &mut [u8],
+    through: Through,
+) -> Result<bool, UserError> {
     let len = u64::try_from(out.len()).map_err(|_| UserError::Overflow)?;
     check_range(from, len)?;
 
@@ -149,18 +185,31 @@ pub(crate) fn copy_from_user(
             .ok_or(UserError::Overflow)?;
         let chunk = chunk_len(at, out.len() - done)?;
         let target = out.get_mut(done..done + chunk).ok_or(UserError::Overflow)?;
-        resolve(space, at, Access::READ, |source| {
-            // SAFETY: `resolve` translated the page through the space's own
-            // tables and runs this with the page held, so `source` is the
-            // direct-map address of a frame that stays live for the read;
-            // `chunk` was clamped to the remainder of that page, so the whole
-            // read is inside it. The direct map is readable for all of RAM.
+        let read = |source: u64| {
+            // SAFETY: both ways here -- `resolve`, having faulted the page in,
+            // and `with_present_page`, having found it present -- translated
+            // it through the space's own tables and run this with the space's
+            // lock held, so `source` is the direct-map address of a frame that
+            // stays live for the read; `chunk` was clamped to the remainder of
+            // that page, so the whole read is inside it. The direct map is
+            // readable for all of RAM.
             let bytes = unsafe { core::slice::from_raw_parts(source as *const u8, chunk) };
             target.copy_from_slice(bytes);
-        })?;
+        };
+        match through {
+            Through::Faulting => resolve(space, at, Access::READ, read)?,
+            Through::Present => {
+                if !is_user_address(at) {
+                    return Err(UserError::NotUserRange);
+                }
+                if space.with_present_page(at, Access::READ, read)?.is_none() {
+                    return Ok(false);
+                }
+            }
+        }
         done += chunk;
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Copy `data` into the program's memory at `to`.
@@ -199,12 +248,13 @@ pub(crate) fn copy_to_user_present(
     copy_to_user_through(space, to, data, Through::Present)
 }
 
-/// How a copy into user memory reaches each page.
+/// How a copy to or from user memory reaches each page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Through {
-    /// Faulting it in first, as [`copy_to_user`] does.
+    /// Faulting it in first, as [`copy_from_user`] and [`copy_to_user`] do.
     Faulting,
-    /// Only if it is already there, as [`copy_to_user_present`] does.
+    /// Only if it is already there, as [`copy_from_user_present`] and
+    /// [`copy_to_user_present`] do.
     Present,
 }
 

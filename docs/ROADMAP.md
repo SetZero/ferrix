@@ -1341,8 +1341,10 @@ that took what it looked at, a record read that found the last record's tail:
   can take it, `tkill`, `tgkill` and `SIGPIPE` reach one thread, a stop parks
   every thread and their blocked calls restart after `SIGCONT`, and `execve`
   from any thread ends the others and takes the pid -- each checked at boot on
-  all three architectures. Left: the futex lock and TLB work, and `/proc`'s
-  threads with the exit test on three architectures.
+  all three architectures. A futex wait reads its word under the table without
+  faulting, and retries if another thread unmapped the page in between. Left:
+  the `munmap` and `brk`-vs-fork races, and `/proc`'s threads with the exit
+  test on three architectures.
 * **Three stand-ins, each written down where it lives.** The console is the one
   terminal, its line discipline fed by a thread that looks every twenty
   milliseconds rather than waiting on the receive interrupt, until stage 15
