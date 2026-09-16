@@ -11,11 +11,17 @@ use std::process::Command;
 use crate::paths::{self, Arch};
 use crate::{Error, Result};
 
+/// A static, fixed-address executable against the target's own musl, which
+/// rust-lld links without a C toolchain.
+const RUSTFLAGS: &str =
+    "-C link-self-contained=yes -C target-feature=+crt-static -C relocation-model=static";
+
 /// The Rust target zinc is built for on `arch`, if there is one yet.
 fn target(arch: Arch) -> Option<&'static str> {
     match arch.name() {
         "x86_64" => Some("x86_64-unknown-linux-musl"),
         "aarch64" => Some("aarch64-unknown-linux-musl"),
+        "armv7a" => Some("armv7-unknown-linux-musleabi"),
         _ => None,
     }
 }
@@ -33,7 +39,12 @@ pub(crate) fn build(arch: Arch) -> Result<Option<Vec<u8>>> {
     let _ = command
         .current_dir(paths::workspace_root().join("zinc"))
         .args(["build", "--release", "--target", target])
-        .env("CARGO_TARGET_DIR", &target_dir);
+        .env("CARGO_TARGET_DIR", &target_dir)
+        // The flags `zinc/.cargo/config.toml` gives each target, set here
+        // because cargo merges rustflags from every config file up the tree,
+        // and the root one gives `armv7-unknown-linux-musleabi` the ARM
+        // loader's linker script. RUSTFLAGS replaces the configured flags.
+        .env("RUSTFLAGS", RUSTFLAGS);
     crate::cargo::run(command, "cargo build (zinc)")?;
     let path = target_dir.join(target).join("release").join("zinc");
     std::fs::read(&path)
