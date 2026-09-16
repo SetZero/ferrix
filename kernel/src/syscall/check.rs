@@ -764,6 +764,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_kill_finds_its_targets_and_refuses_what_it_should(&process)?;
     check_an_alternate_stack_is_recorded_and_refused_when_small(&process)?;
     check_an_image_loads_where_its_headers_say(&process)?;
+    check_a_static_pie_loads_at_its_base()?;
     check_the_loader_refuses_what_it_cannot_run(&process)?;
     check_descriptors(&process)?;
     check_what_an_applet_asks_of_the_system(&process)?;
@@ -2446,6 +2447,53 @@ fn check_the_segments_got_their_own_permissions(process: &Process) -> Result<(),
     Ok(())
 }
 
+/// What a static PIE that was not moved fails with, which the negative
+/// control requires by name.
+const PIE_NOT_MOVED: &str =
+    "a static PIE's entry point is not its link-time one moved to the PIE base";
+
+/// A position-independent image with no interpreter -- the shape rustc gives a
+/// musl program -- loads with every address it names moved to
+/// [`load::PIE_BASE`]: the entry point, `AT_PHDR`, the end the heap starts at,
+/// and the segments themselves, with nothing left at the link-time address.
+/// And `execve`'s check accepts it, as the loader does.
+fn check_a_static_pie_loads_at_its_base() -> Result<(), &'static str> {
+    let class = class_of_this_build();
+    let file = image::build(
+        class,
+        arch::ARCH.elf_machine(),
+        image::Shape::PositionIndependent,
+    );
+    if load::check(&file).is_err() {
+        return Err("execve's image check refused a static PIE");
+    }
+    let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
+    let space = scratch.space();
+    let loaded = load::load(space, &file).map_err(|_| "the loader refused a static PIE")?;
+    let moved = |linked: u64| linked - image::BASE + load::PIE_BASE;
+
+    if loaded.entry != moved(image::ENTRY) {
+        return Err(PIE_NOT_MOVED);
+    }
+    if loaded.phdr != moved(image::BASE + class.header_size() as u64) {
+        return Err("a static PIE's AT_PHDR is not its program headers' moved address");
+    }
+    if loaded.end <= moved(image::DATA_VADDR) {
+        return Err("a static PIE's end is below its moved data segment");
+    }
+    let mut read = [0_u8; image::DATA_FILESZ];
+    uaccess::copy_from_user(space, moved(image::DATA_VADDR), &mut read)
+        .map_err(|_| "a static PIE's data segment is not at its moved address")?;
+    if read != image::DATA_MARK {
+        return Err("a static PIE's data segment does not hold its contents at the moved address");
+    }
+    let mut magic = [0_u8; 4];
+    if uaccess::copy_from_user(space, image::BASE, &mut magic).is_ok() {
+        return Err("a static PIE left something mapped at its link-time address");
+    }
+    Ok(())
+}
+
 /// The images the loader must refuse, and refuse by name.
 fn check_the_loader_refuses_what_it_cannot_run(process: &Process) -> Result<(), &'static str> {
     let class = class_of_this_build();
@@ -2455,10 +2503,6 @@ fn check_the_loader_refuses_what_it_cannot_run(process: &Process) -> Result<(), 
         (
             image::Shape::ForeignMachine,
             "an image for another architecture",
-        ),
-        (
-            image::Shape::PositionIndependent,
-            "a position-independent image",
         ),
         (
             image::Shape::WriteExecute,

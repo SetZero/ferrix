@@ -48,7 +48,8 @@ pub(crate) const DATA_MARK: [u8; DATA_FILESZ] = *b"stage7-loaded-ok";
 pub(crate) enum Shape {
     /// Valid: read-execute text, read-write data with a `.bss` tail.
     Good,
-    /// `ET_DYN`, which needs relocations nothing applies yet.
+    /// `ET_DYN` with no interpreter: a static PIE, placed at the loader's
+    /// base rather than where it is linked.
     PositionIndependent,
     /// A machine this kernel is not.
     ForeignMachine,
@@ -151,8 +152,7 @@ fn write_header(file: &mut [u8], class: Class, machine: u16, shape: Shape, phoff
     };
     put(file, 4, &[class_byte, 1, 1, 0]);
 
-    // ET_DYN is 3 and ET_EXEC is 2. The loader refuses the former because
-    // nothing applies relocations yet.
+    // ET_DYN is 3 and ET_EXEC is 2. The loader moves the former to its base.
     let elf_type: u16 = if shape == Shape::PositionIndependent {
         3
     } else {

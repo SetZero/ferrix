@@ -68,7 +68,7 @@ fn build(arch: Arch, negative: bool) -> Result<PathBuf> {
             .env(
                 "RUSTFLAGS",
                 "-C linker-flavor=ld.lld -C link-self-contained=yes \
-                 -C target-feature=+crt-static -C relocation-model=static",
+                 -C target-feature=+crt-static",
             );
     }
     cargo::run(command, "cargo build (threads-test)")?;

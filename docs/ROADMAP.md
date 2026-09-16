@@ -1350,8 +1350,12 @@ that took what it looked at, a record read that found the last record's tail:
   `cargo xtask test-threads` boots a static musl Rust program of five threads
   using `std::thread`, `Mutex` and `mpsc` as init on all three architectures,
   which counts its threads through `/proc/self`, with a build that expects
-  one thread too many failing on that count. It is linked at a fixed address;
-  a static PIE, rustc's default for musl, is not loaded yet.
+  one thread too many failing on that count. It is linked as rustc links a
+  musl program by default, which on x86-64 is a static PIE: the loader places
+  an `ET_DYN` image without an interpreter at two thirds of the user half,
+  with its entry and `AT_PHDR` moved, and the program relocates itself; a
+  boot check loads such an image on all three architectures. A dynamically
+  linked program, which names an interpreter, is still refused.
 * **Three stand-ins, each written down where it lives.** The console is the one
   terminal, its line discipline fed by a thread that looks every twenty
   milliseconds rather than waiting on the receive interrupt, until stage 15
