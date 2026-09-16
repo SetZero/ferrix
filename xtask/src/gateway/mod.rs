@@ -322,6 +322,7 @@ fn serve(mut core: Core, stop: &AtomicBool) {
         // an earlier send found no socket at QEMU's address, which is QEMU
         // having exited and is not this thread's to act on.
         if let Ok((len, from)) = core.socket.recv_from(&mut frame)
+            && Some(from) != core.own_address
             && core.is_guest(from)
         {
             bump(&core.counters.frames_in);
@@ -355,6 +356,9 @@ struct Core {
     udp: BTreeMap<udp::Key, udp::Flow>,
     /// Host connections standing in for the guest's TCP connections.
     tcp: BTreeMap<tcp::Key, tcp::Connection>,
+    /// This socket's own address, from which only the wake-ups a helper thread
+    /// sends arrive: they end the wait for a frame, and are not frames.
+    own_address: Option<SocketAddr>,
     /// Where a host connection's outcome arrives from the thread that made it.
     connected: (
         std::sync::mpsc::Sender<tcp::Connected>,
@@ -384,15 +388,18 @@ impl Core {
         let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .map_err(|error| Error::new(format!("could not bind the gateway socket: {error}")))?;
         socket.set_read_timeout(Some(TURN))?;
+        let own_address = socket.local_addr().ok();
+        let waker = socket.try_clone().ok().zip(own_address);
         Ok(Core {
             socket,
+            own_address,
             guest_socket: None,
             guest_mac: None,
             udp: BTreeMap::new(),
             tcp: BTreeMap::new(),
             connected: std::sync::mpsc::channel(),
             resolver,
-            pings: icmp::Forwarder::new(),
+            pings: icmp::Forwarder::new(waker),
             // Not random, and it does not need to be: this is a NAT on a
             // private wire with one guest on it, where an off-path attacker
             // guessing a sequence number is not a threat that exists. A fixed
