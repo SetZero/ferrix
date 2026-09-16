@@ -44,6 +44,11 @@ int main(void)
 	VALUE(DRM_IOCTL_MODE_CREATE_DUMB);
 	VALUE(DRM_IOCTL_MODE_MAP_DUMB);
 	VALUE(DRM_IOCTL_MODE_DESTROY_DUMB);
+	/* Planes and properties, iteration 2 (E4). */
+	VALUE(DRM_IOCTL_MODE_GETPLANERESOURCES);
+	VALUE(DRM_IOCTL_MODE_GETPLANE);
+	VALUE(DRM_IOCTL_MODE_OBJ_GETPROPERTIES);
+	VALUE(DRM_IOCTL_MODE_GETPROPERTY);
 
 	/* Capabilities, and the client capabilities a client may ask for. */
 	VALUE(DRM_CAP_DUMB_BUFFER);
@@ -99,6 +104,29 @@ int main(void)
 	VALUE(DRM_FORMAT_ARGB8888);
 	VALUE(DRM_FORMAT_XBGR8888);
 	VALUE(DRM_FORMAT_ABGR8888);
+
+	/* Mode objects and properties. */
+	VALUE(DRM_MODE_OBJECT_CRTC);
+	VALUE(DRM_MODE_OBJECT_CONNECTOR);
+	VALUE(DRM_MODE_OBJECT_ENCODER);
+	VALUE(DRM_MODE_OBJECT_MODE);
+	VALUE(DRM_MODE_OBJECT_PROPERTY);
+	VALUE(DRM_MODE_OBJECT_FB);
+	VALUE(DRM_MODE_OBJECT_BLOB);
+	VALUE(DRM_MODE_OBJECT_PLANE);
+	VALUE(DRM_MODE_OBJECT_ANY);
+	VALUE(DRM_PROP_NAME_LEN);
+	VALUE(DRM_MODE_PROP_PENDING);
+	VALUE(DRM_MODE_PROP_RANGE);
+	VALUE(DRM_MODE_PROP_IMMUTABLE);
+	VALUE(DRM_MODE_PROP_ENUM);
+	VALUE(DRM_MODE_PROP_BLOB);
+	VALUE(DRM_MODE_PROP_BITMASK);
+	VALUE(DRM_MODE_PROP_LEGACY_TYPE);
+	VALUE(DRM_MODE_PROP_EXTENDED_TYPE);
+	VALUE(DRM_MODE_PROP_OBJECT);
+	VALUE(DRM_MODE_PROP_SIGNED_RANGE);
+	VALUE(DRM_MODE_PROP_ATOMIC);
 
 	/* Layouts. */
 	SIZE(drm_version);
@@ -243,6 +271,39 @@ int main(void)
 
 	SIZE(drm_mode_destroy_dumb);
 	FIELD(drm_mode_destroy_dumb, handle);
+
+	SIZE(drm_mode_get_plane_res);
+	FIELD(drm_mode_get_plane_res, plane_id_ptr);
+	FIELD(drm_mode_get_plane_res, count_planes);
+
+	SIZE(drm_mode_get_plane);
+	FIELD(drm_mode_get_plane, plane_id);
+	FIELD(drm_mode_get_plane, crtc_id);
+	FIELD(drm_mode_get_plane, fb_id);
+	FIELD(drm_mode_get_plane, possible_crtcs);
+	FIELD(drm_mode_get_plane, gamma_size);
+	FIELD(drm_mode_get_plane, count_format_types);
+	FIELD(drm_mode_get_plane, format_type_ptr);
+
+	SIZE(drm_mode_obj_get_properties);
+	FIELD(drm_mode_obj_get_properties, props_ptr);
+	FIELD(drm_mode_obj_get_properties, prop_values_ptr);
+	FIELD(drm_mode_obj_get_properties, count_props);
+	FIELD(drm_mode_obj_get_properties, obj_id);
+	FIELD(drm_mode_obj_get_properties, obj_type);
+
+	SIZE(drm_mode_get_property);
+	FIELD(drm_mode_get_property, values_ptr);
+	FIELD(drm_mode_get_property, enum_blob_ptr);
+	FIELD(drm_mode_get_property, prop_id);
+	FIELD(drm_mode_get_property, flags);
+	FIELD(drm_mode_get_property, name);
+	FIELD(drm_mode_get_property, count_values);
+	FIELD(drm_mode_get_property, count_enum_blobs);
+
+	SIZE(drm_mode_property_enum);
+	FIELD(drm_mode_property_enum, value);
+	FIELD(drm_mode_property_enum, name);
 
 	SIZE(drm_event);
 	FIELD(drm_event, type);

@@ -32,6 +32,7 @@ fn probe(text: &str) -> BTreeMap<String, u64> {
 fn constants(width: Width) -> Vec<(&'static str, u64)> {
     let mut all = ioctls(width);
     all.extend(values());
+    all.extend(object_values());
     all
 }
 
@@ -70,6 +71,19 @@ fn ioctls(width: Width) -> Vec<(&'static str, u64)> {
         (
             "DRM_IOCTL_MODE_DESTROY_DUMB",
             drm::IOCTL_MODE_DESTROY_DUMB.into(),
+        ),
+        (
+            "DRM_IOCTL_MODE_GETPLANERESOURCES",
+            drm::IOCTL_MODE_GETPLANERESOURCES.into(),
+        ),
+        ("DRM_IOCTL_MODE_GETPLANE", drm::IOCTL_MODE_GETPLANE.into()),
+        (
+            "DRM_IOCTL_MODE_OBJ_GETPROPERTIES",
+            drm::IOCTL_MODE_OBJ_GETPROPERTIES.into(),
+        ),
+        (
+            "DRM_IOCTL_MODE_GETPROPERTY",
+            drm::IOCTL_MODE_GETPROPERTY.into(),
         ),
     ]
 }
@@ -154,6 +168,45 @@ fn values() -> Vec<(&'static str, u64)> {
     ]
 }
 
+/// The mode object types and property flags.
+fn object_values() -> Vec<(&'static str, u64)> {
+    vec![
+        ("DRM_MODE_OBJECT_CRTC", drm::MODE_OBJECT_CRTC.into()),
+        (
+            "DRM_MODE_OBJECT_CONNECTOR",
+            drm::MODE_OBJECT_CONNECTOR.into(),
+        ),
+        ("DRM_MODE_OBJECT_ENCODER", drm::MODE_OBJECT_ENCODER.into()),
+        ("DRM_MODE_OBJECT_MODE", drm::MODE_OBJECT_MODE.into()),
+        ("DRM_MODE_OBJECT_PROPERTY", drm::MODE_OBJECT_PROPERTY.into()),
+        ("DRM_MODE_OBJECT_FB", drm::MODE_OBJECT_FB.into()),
+        ("DRM_MODE_OBJECT_BLOB", drm::MODE_OBJECT_BLOB.into()),
+        ("DRM_MODE_OBJECT_PLANE", drm::MODE_OBJECT_PLANE.into()),
+        ("DRM_MODE_OBJECT_ANY", drm::MODE_OBJECT_ANY.into()),
+        ("DRM_PROP_NAME_LEN", drm::PROP_NAME_LEN as u64),
+        ("DRM_MODE_PROP_PENDING", drm::MODE_PROP_PENDING.into()),
+        ("DRM_MODE_PROP_RANGE", drm::MODE_PROP_RANGE.into()),
+        ("DRM_MODE_PROP_IMMUTABLE", drm::MODE_PROP_IMMUTABLE.into()),
+        ("DRM_MODE_PROP_ENUM", drm::MODE_PROP_ENUM.into()),
+        ("DRM_MODE_PROP_BLOB", drm::MODE_PROP_BLOB.into()),
+        ("DRM_MODE_PROP_BITMASK", drm::MODE_PROP_BITMASK.into()),
+        (
+            "DRM_MODE_PROP_LEGACY_TYPE",
+            drm::MODE_PROP_LEGACY_TYPE.into(),
+        ),
+        (
+            "DRM_MODE_PROP_EXTENDED_TYPE",
+            drm::MODE_PROP_EXTENDED_TYPE.into(),
+        ),
+        ("DRM_MODE_PROP_OBJECT", drm::MODE_PROP_OBJECT.into()),
+        (
+            "DRM_MODE_PROP_SIGNED_RANGE",
+            drm::MODE_PROP_SIGNED_RANGE.into(),
+        ),
+        ("DRM_MODE_PROP_ATOMIC", drm::MODE_PROP_ATOMIC.into()),
+    ]
+}
+
 /// A layout's `sizeof` and `offsetof` lines as the probe prints them.
 fn layout_lines(c_name: &str, size: usize, fields: &[(&str, usize)]) -> Vec<(String, u64)> {
     let mut lines = vec![(format!("sizeof.{c_name}"), size as u64)];
@@ -193,6 +246,11 @@ fn expected(width: Width) -> BTreeMap<String, u64> {
     lines.extend(layouts::<drm::CreateDumb>());
     lines.extend(layouts::<drm::MapDumb>());
     lines.extend(layouts::<drm::DestroyDumb>());
+    lines.extend(layouts::<drm::GetPlaneRes>());
+    lines.extend(layouts::<drm::GetPlane>());
+    lines.extend(layouts::<drm::ObjGetProperties>());
+    lines.extend(layouts::<drm::GetProperty>());
+    lines.extend(layouts::<drm::PropertyEnum>());
     lines.extend(layouts::<drm::Event>());
     lines.extend(layouts::<drm::EventVblank>());
     let count = lines.len();
@@ -299,6 +357,11 @@ fn every_structure_reads_and_writes_back() {
     round_trip::<drm::CreateDumb>();
     round_trip::<drm::MapDumb>();
     round_trip::<drm::DestroyDumb>();
+    round_trip::<drm::GetPlaneRes>();
+    round_trip::<drm::GetPlane>();
+    round_trip::<drm::ObjGetProperties>();
+    round_trip::<drm::GetProperty>();
+    round_trip::<drm::PropertyEnum>();
     round_trip::<drm::Event>();
     round_trip::<drm::EventVblank>();
 }
@@ -384,6 +447,52 @@ fn drm_version_at_both_widths() {
     };
     assert_eq!(too_wide.write(Width::Bits32, &mut [0; 36]), None);
     assert_eq!(too_wide.write(Width::Bits64, &mut [0; 64]), Some(()));
+}
+
+#[test]
+fn a_property_and_its_enum_land_where_the_headers_put_them() {
+    let mut name = [0u8; drm::PROP_NAME_LEN];
+    name[..4].copy_from_slice(b"type");
+    let mut bytes = vec![0u8; drm::GetProperty::SIZE];
+    drm::GetProperty {
+        values_ptr: 0x1000,
+        enum_blob_ptr: 0x2000,
+        prop_id: 5,
+        flags: drm::MODE_PROP_ENUM | drm::MODE_PROP_IMMUTABLE,
+        name,
+        count_values: 3,
+        count_enum_blobs: 3,
+    }
+    .write(&mut bytes)
+    .expect("it fits");
+    assert_eq!(bytes[16..20], 5u32.to_le_bytes());
+    assert_eq!(bytes[20..24], 12u32.to_le_bytes());
+    assert_eq!(&bytes[24..28], b"type");
+    assert_eq!(bytes[56..64], [3, 0, 0, 0, 3, 0, 0, 0]);
+
+    let mut record = [0u8; 40];
+    let mut primary = [0u8; drm::PROP_NAME_LEN];
+    primary[..7].copy_from_slice(b"Primary");
+    drm::PropertyEnum {
+        value: drm::PLANE_TYPE_PRIMARY,
+        name: primary,
+    }
+    .write(&mut record)
+    .expect("it fits");
+    assert_eq!(record[0..8], 1u64.to_le_bytes());
+    assert_eq!(&record[8..15], b"Primary");
+
+    let mut request = [0u8; 32];
+    drm::ObjGetProperties {
+        obj_id: 4,
+        obj_type: drm::MODE_OBJECT_PLANE,
+        ..drm::ObjGetProperties::ZERO
+    }
+    .write(&mut request)
+    .expect("it fits");
+    assert_eq!(request[20..24], 4u32.to_le_bytes());
+    assert_eq!(request[24..28], [0xEE; 4]);
+    assert_eq!(request[28..32], [0; 4], "tail padding");
 }
 
 #[test]

@@ -1,10 +1,11 @@
 //! DRM/KMS: the ioctls, constants and structures a software-rendered
 //! compositor uses on `/dev/dri/card0`.
 //!
-//! This is the subset `docs/DISPLAY.md` §2.3 answers in iteration 1 of the
-//! display: the legacy mode-setting calls, dumb buffers, page flips and the
-//! event records read back from the card. Atomic commit, planes, properties,
-//! GEM names, PRIME and render nodes are later.
+//! This is the subset `docs/DISPLAY.md` §2.3 answers: the legacy
+//! mode-setting calls, dumb buffers, page flips and the event records read
+//! back from the card in iteration 1, and the plane and property queries
+//! Smithay's legacy path makes in iteration 2 (E4). Atomic commit, setting
+//! properties, property blobs, GEM names, PRIME and render nodes are later.
 //!
 //! # Where the numbers come from
 //!
@@ -75,6 +76,14 @@ pub const IOCTL_MODE_MAP_DUMB: u32 = 0xC010_64B3;
 pub const IOCTL_MODE_DESTROY_DUMB: u32 = 0xC004_64B4;
 /// `DRM_IOCTL_MODE_ADDFB2`.
 pub const IOCTL_MODE_ADDFB2: u32 = 0xC068_64B8;
+/// `DRM_IOCTL_MODE_GETPROPERTY`.
+pub const IOCTL_MODE_GETPROPERTY: u32 = 0xC040_64AA;
+/// `DRM_IOCTL_MODE_GETPLANERESOURCES`.
+pub const IOCTL_MODE_GETPLANERESOURCES: u32 = 0xC010_64B5;
+/// `DRM_IOCTL_MODE_GETPLANE`.
+pub const IOCTL_MODE_GETPLANE: u32 = 0xC020_64B6;
+/// `DRM_IOCTL_MODE_OBJ_GETPROPERTIES`.
+pub const IOCTL_MODE_OBJ_GETPROPERTIES: u32 = 0xC020_64B9;
 
 /// `DRM_IOCTL_VERSION` at `width`.
 #[must_use]
@@ -222,6 +231,66 @@ pub const FORMAT_ARGB8888: u32 = fourcc(b'A', b'R', b'2', b'4');
 pub const FORMAT_XBGR8888: u32 = fourcc(b'X', b'B', b'2', b'4');
 /// `DRM_FORMAT_ABGR8888`.
 pub const FORMAT_ABGR8888: u32 = fourcc(b'A', b'B', b'2', b'4');
+
+// ---------------------------------------------------------------------------
+// Mode objects, planes and properties
+// ---------------------------------------------------------------------------
+
+/// `DRM_MODE_OBJECT_CRTC`: an object type, as `OBJ_GETPROPERTIES` names it.
+pub const MODE_OBJECT_CRTC: u32 = 0xCCCC_CCCC;
+/// `DRM_MODE_OBJECT_CONNECTOR`.
+pub const MODE_OBJECT_CONNECTOR: u32 = 0xC0C0_C0C0;
+/// `DRM_MODE_OBJECT_ENCODER`.
+pub const MODE_OBJECT_ENCODER: u32 = 0xE0E0_E0E0;
+/// `DRM_MODE_OBJECT_MODE`.
+pub const MODE_OBJECT_MODE: u32 = 0xDEDE_DEDE;
+/// `DRM_MODE_OBJECT_PROPERTY`.
+pub const MODE_OBJECT_PROPERTY: u32 = 0xB0B0_B0B0;
+/// `DRM_MODE_OBJECT_FB`.
+pub const MODE_OBJECT_FB: u32 = 0xFBFB_FBFB;
+/// `DRM_MODE_OBJECT_BLOB`.
+pub const MODE_OBJECT_BLOB: u32 = 0xBBBB_BBBB;
+/// `DRM_MODE_OBJECT_PLANE`.
+pub const MODE_OBJECT_PLANE: u32 = 0xEEEE_EEEE;
+/// `DRM_MODE_OBJECT_ANY`: whatever type the id has.
+pub const MODE_OBJECT_ANY: u32 = 0;
+
+/// `DRM_PROP_NAME_LEN`: a property's and an enum value's name field.
+pub const PROP_NAME_LEN: usize = 32;
+/// `DRM_MODE_PROP_PENDING`, deprecated.
+pub const MODE_PROP_PENDING: u32 = 1 << 0;
+/// `DRM_MODE_PROP_RANGE`.
+pub const MODE_PROP_RANGE: u32 = 1 << 1;
+/// `DRM_MODE_PROP_IMMUTABLE`: userspace cannot set it.
+pub const MODE_PROP_IMMUTABLE: u32 = 1 << 2;
+/// `DRM_MODE_PROP_ENUM`: the values are named in the enum list.
+pub const MODE_PROP_ENUM: u32 = 1 << 3;
+/// `DRM_MODE_PROP_BLOB`.
+pub const MODE_PROP_BLOB: u32 = 1 << 4;
+/// `DRM_MODE_PROP_BITMASK`.
+pub const MODE_PROP_BITMASK: u32 = 1 << 5;
+/// `DRM_MODE_PROP_LEGACY_TYPE`: the types that each have a bit.
+pub const MODE_PROP_LEGACY_TYPE: u32 =
+    MODE_PROP_RANGE | MODE_PROP_ENUM | MODE_PROP_BLOB | MODE_PROP_BITMASK;
+/// `DRM_MODE_PROP_EXTENDED_TYPE`: the types numbered in bits 6 to 15.
+pub const MODE_PROP_EXTENDED_TYPE: u32 = 0x0000_FFC0;
+/// `DRM_MODE_PROP_OBJECT`: `DRM_MODE_PROP_TYPE(1)`.
+pub const MODE_PROP_OBJECT: u32 = 1 << 6;
+/// `DRM_MODE_PROP_SIGNED_RANGE`: `DRM_MODE_PROP_TYPE(2)`.
+pub const MODE_PROP_SIGNED_RANGE: u32 = 2 << 6;
+/// `DRM_MODE_PROP_ATOMIC`: hidden from clients that did not ask for atomic.
+pub const MODE_PROP_ATOMIC: u32 = 0x8000_0000;
+
+/// The `type` property's value for an overlay plane: the kernel's
+/// `DRM_PLANE_TYPE_OVERLAY` in `enum drm_plane_type`
+/// (`include/drm/drm_plane.h`), which the UAPI headers do not export, so the
+/// probe cannot print it. The names are `drm_plane_type_enum_list`'s in
+/// `drivers/gpu/drm/drm_mode_config.c`.
+pub const PLANE_TYPE_OVERLAY: u64 = 0;
+/// `DRM_PLANE_TYPE_PRIMARY`, named `Primary`.
+pub const PLANE_TYPE_PRIMARY: u64 = 1;
+/// `DRM_PLANE_TYPE_CURSOR`, named `Cursor`.
+pub const PLANE_TYPE_CURSOR: u64 = 2;
 
 // ---------------------------------------------------------------------------
 // Layouts
@@ -521,6 +590,83 @@ layout! {
     DestroyDumb = "drm_mode_destroy_dumb", 4 {
         /// The buffer.
         handle: u32 = 0 / "handle",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_get_plane_res`: `DRM_IOCTL_MODE_GETPLANERESOURCES`.
+    GetPlaneRes = "drm_mode_get_plane_res", 16 {
+        /// Where to write plane ids.
+        plane_id_ptr: u64 = 0 / "plane_id_ptr",
+        /// Planes: capacity in, count out.
+        count_planes: u32 = 8 / "count_planes",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_get_plane`: `DRM_IOCTL_MODE_GETPLANE`.
+    GetPlane = "drm_mode_get_plane", 32 {
+        /// The plane, as the caller asked.
+        plane_id: u32 = 0 / "plane_id",
+        /// The CRTC it shows on, or 0.
+        crtc_id: u32 = 4 / "crtc_id",
+        /// The framebuffer it shows, or 0.
+        fb_id: u32 = 8 / "fb_id",
+        /// A bit per CRTC index it can be on.
+        possible_crtcs: u32 = 12 / "possible_crtcs",
+        /// Never used.
+        gamma_size: u32 = 16 / "gamma_size",
+        /// Formats: capacity in, count out.
+        count_format_types: u32 = 20 / "count_format_types",
+        /// Where to write the `u32` fourcc codes.
+        format_type_ptr: u64 = 24 / "format_type_ptr",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_obj_get_properties`:
+    /// `DRM_IOCTL_MODE_OBJ_GETPROPERTIES`.
+    ObjGetProperties = "drm_mode_obj_get_properties", 32 {
+        /// Where to write `u32` property ids.
+        props_ptr: u64 = 0 / "props_ptr",
+        /// Where to write each property's `u64` value.
+        prop_values_ptr: u64 = 8 / "prop_values_ptr",
+        /// Properties: capacity in, count out.
+        count_props: u32 = 16 / "count_props",
+        /// The object.
+        obj_id: u32 = 20 / "obj_id",
+        /// Its `DRM_MODE_OBJECT_*` type, or [`MODE_OBJECT_ANY`].
+        obj_type: u32 = 24 / "obj_type",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_get_property`: `DRM_IOCTL_MODE_GETPROPERTY`.
+    GetProperty = "drm_mode_get_property", 64 {
+        /// Where to write the `u64` values.
+        values_ptr: u64 = 0 / "values_ptr",
+        /// Where to write `struct drm_mode_property_enum` records.
+        enum_blob_ptr: u64 = 8 / "enum_blob_ptr",
+        /// The property, as the caller asked.
+        prop_id: u32 = 16 / "prop_id",
+        /// `DRM_MODE_PROP_*`.
+        flags: u32 = 20 / "flags",
+        /// The name, NUL-padded.
+        name: [u8; 32] = 24 / "name",
+        /// Values: capacity in, count out.
+        count_values: u32 = 56 / "count_values",
+        /// Enum records: capacity in, count out.
+        count_enum_blobs: u32 = 60 / "count_enum_blobs",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_property_enum`: one named value of an enum property.
+    PropertyEnum = "drm_mode_property_enum", 40 {
+        /// The value.
+        value: u64 = 0 / "value",
+        /// Its name, NUL-padded.
+        name: [u8; 32] = 8 / "name",
     }
 }
 
