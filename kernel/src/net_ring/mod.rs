@@ -197,10 +197,14 @@ fn run(id: usize) {
 ///
 /// `None` when the ring never began.
 fn serve_ring(start: &Start) -> Option<()> {
-    let message = receive_hello(&start.control)?;
+    let Some(message) = receive_hello(&start.control) else {
+        crate::console::println!("  FX1151DIAG ring ended: no HELLO (closed, error or timeout)");
+        return None;
+    };
     let mut serving = match take_up(start, &message) {
         Ok(serving) => serving,
         Err(refusal) => {
+            crate::console::println!("  FX1151DIAG ring ended: HELLO refused {refusal:?}");
             refuse(&start.control, refusal);
             return None;
         }
@@ -520,9 +524,11 @@ impl Serving {
                     .queue_user(bell.key(), [u64::from(bell.tail()), 0]);
             }
             if !self.drain() {
+                crate::console::println!("  FX1151DIAG ring ended: drain failed");
                 return;
             }
             if self.control_closed() {
+                crate::console::println!("  FX1151DIAG ring ended: control closed");
                 return;
             }
             self.rest();
@@ -624,6 +630,7 @@ impl Serving {
     /// Whether the driver has closed its end.
     fn control_closed(&mut self) -> bool {
         if self.control.signals().intersects(Signals::PEER_CLOSED) {
+            crate::console::println!("  FX1151DIAG control: peer closed");
             return true;
         }
         match self
@@ -633,7 +640,10 @@ impl Serving {
             Ok(message) => {
                 crate::object::dispose(message.handles.into_iter().map(|(object, _)| object));
                 match Message::decode(&message.bytes) {
-                    Ok(Message::Stopped) => true,
+                    Ok(Message::Stopped) => {
+                        crate::console::println!("  FX1151DIAG control: STOPPED");
+                        true
+                    }
                     Ok(Message::Link(up)) => {
                         net::core().set_carrier(self.interface, up);
                         false
@@ -642,7 +652,10 @@ impl Serving {
                 }
             }
             Err(ReadError::Empty) => false,
-            Err(_) => true,
+            Err(error) => {
+                crate::console::println!("  FX1151DIAG control: read error {error:?}");
+                true
+            }
         }
     }
 

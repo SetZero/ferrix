@@ -444,7 +444,10 @@ impl Driver {
                         .map_err(|_| "the kernel sent a message that would not decode");
                 }
                 Err(ReadError::Empty) => {}
-                Err(_) => return Err("the kernel closed the control channel"),
+                Err(error) => {
+                    crate::console::println!("  FX1151DIAG check read error {error:?}");
+                    return Err("the kernel closed the control channel");
+                }
             }
             let ready = control.waiters().wait_until_deadline(
                 || {
