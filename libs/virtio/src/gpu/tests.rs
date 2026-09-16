@@ -430,3 +430,69 @@ fn rect_fits_inside_a_resource() {
         .fits(u32::MAX, 1)
     );
 }
+
+#[test]
+fn write_with_puts_every_byte_once_and_agrees_with_encode() {
+    let entries = [
+        MemEntry {
+            addr: 0x1000,
+            length: 4096,
+        },
+        MemEntry {
+            addr: 0x9000,
+            length: 8192,
+        },
+    ];
+    let rect = Rect {
+        x: 1,
+        y: 2,
+        width: 3,
+        height: 4,
+    };
+    for command in [
+        Command::GetDisplayInfo,
+        Command::ResourceCreate2d {
+            resource_id: 1,
+            format: Format::B8G8R8X8,
+            width: 2,
+            height: 3,
+        },
+        Command::ResourceUnref { resource_id: 1 },
+        Command::SetScanout {
+            rect,
+            scanout_id: 0,
+            resource_id: 1,
+        },
+        Command::ResourceFlush {
+            rect,
+            resource_id: 1,
+        },
+        Command::TransferToHost2d {
+            rect,
+            offset: 9,
+            resource_id: 1,
+        },
+        Command::ResourceAttachBacking {
+            resource_id: 1,
+            entries: &entries,
+        },
+        Command::ResourceDetachBacking { resource_id: 1 },
+    ] {
+        let mut out = vec![0xEEu8; command.len()];
+        let mut times = vec![0u32; command.len()];
+        let len = command
+            .write_with(|at, bytes| {
+                out[at..at + bytes.len()].copy_from_slice(bytes);
+                for count in &mut times[at..at + bytes.len()] {
+                    *count += 1;
+                }
+            })
+            .expect("it writes");
+        assert_eq!(len, command.len());
+        assert!(
+            times.iter().all(|&count| count == 1),
+            "{command:?}: {times:?}"
+        );
+        assert_eq!(out, encoded(&command), "{command:?}");
+    }
+}

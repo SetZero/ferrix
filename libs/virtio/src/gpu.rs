@@ -242,13 +242,6 @@ impl Rect {
         }
     }
 
-    fn encode(self, out: &mut [u8], at: usize) -> Option<()> {
-        put32(out, at, self.x)?;
-        put32(out, at + 4, self.y)?;
-        put32(out, at + 8, self.width)?;
-        put32(out, at + 12, self.height)
-    }
-
     fn decode(bytes: &[u8], at: usize) -> Option<Self> {
         Some(Self {
             x: get32(bytes, at)?,
@@ -391,10 +384,7 @@ impl Command<'_> {
     /// The success response the command expects.
     #[must_use]
     pub const fn expects(&self) -> u32 {
-        match self {
-            Self::GetDisplayInfo => RESP_OK_DISPLAY_INFO,
-            _ => RESP_OK_NODATA,
-        }
+        expects(self.code())
     }
 
     /// Encode the request into the start of `out`, returning its length.
@@ -403,23 +393,40 @@ impl Command<'_> {
     /// each response and needs no fence.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize, GpuError> {
         let len = self.len();
-        if let Self::ResourceAttachBacking { entries, .. } = self
-            && (entries.is_empty() || entries.len() > MAX_BACKING_ENTRIES)
-        {
-            return Err(GpuError::BackingEntries(entries.len()));
-        }
         let short = GpuError::BufferTooShort {
             needed: len,
             got: out.len(),
         };
-        let out = out.get_mut(..len).ok_or(short)?;
-        out.fill(0);
-        self.encode_body(out).map(|()| len).ok_or(short)
+        if out.len() < len {
+            self.check()?;
+            return Err(short);
+        }
+        self.write_with(|at, bytes| {
+            if let Some(slot) = at
+                .checked_add(bytes.len())
+                .and_then(|end| out.get_mut(at..end))
+            {
+                slot.copy_from_slice(bytes);
+            }
+        })
     }
 
-    fn encode_body(&self, out: &mut [u8]) -> Option<()> {
-        put32(out, 0, self.code())?;
+    /// Encode the request field by field, handing each field and its offset
+    /// to `put`, and return its length. Every byte of the request is put
+    /// exactly once, padding as zero, so memory `put` writes need not be
+    /// cleared first. For a driver writing a request into shared memory that
+    /// is not one slice, such as a large `RESOURCE_ATTACH_BACKING`.
+    pub fn write_with(&self, mut put: impl FnMut(usize, &[u8])) -> Result<usize, GpuError> {
+        self.check()?;
         let body = HEADER_LEN;
+        put(0, &self.code().to_le_bytes());
+        put(4, &[0; HEADER_LEN - 4]);
+        let rect = |put: &mut dyn FnMut(usize, &[u8]), at: usize, rect: Rect| {
+            put(at, &rect.x.to_le_bytes());
+            put(at + 4, &rect.y.to_le_bytes());
+            put(at + 8, &rect.width.to_le_bytes());
+            put(at + 12, &rect.height.to_le_bytes());
+        };
         match *self {
             Self::GetDisplayInfo => {}
             Self::ResourceCreate2d {
@@ -428,50 +435,80 @@ impl Command<'_> {
                 width,
                 height,
             } => {
-                put32(out, body, resource_id)?;
-                put32(out, body + 4, format as u32)?;
-                put32(out, body + 8, width)?;
-                put32(out, body + 12, height)?;
+                put(body, &resource_id.to_le_bytes());
+                put(body + 4, &(format as u32).to_le_bytes());
+                put(body + 8, &width.to_le_bytes());
+                put(body + 12, &height.to_le_bytes());
             }
             Self::ResourceUnref { resource_id } | Self::ResourceDetachBacking { resource_id } => {
-                put32(out, body, resource_id)?;
+                put(body, &resource_id.to_le_bytes());
+                put(body + 4, &[0; 4]);
             }
             Self::SetScanout {
-                rect,
+                rect: area,
                 scanout_id,
                 resource_id,
             } => {
-                rect.encode(out, body)?;
-                put32(out, body + RECT_LEN, scanout_id)?;
-                put32(out, body + RECT_LEN + 4, resource_id)?;
+                rect(&mut put, body, area);
+                put(body + RECT_LEN, &scanout_id.to_le_bytes());
+                put(body + RECT_LEN + 4, &resource_id.to_le_bytes());
             }
-            Self::ResourceFlush { rect, resource_id } => {
-                rect.encode(out, body)?;
-                put32(out, body + RECT_LEN, resource_id)?;
+            Self::ResourceFlush {
+                rect: area,
+                resource_id,
+            } => {
+                rect(&mut put, body, area);
+                put(body + RECT_LEN, &resource_id.to_le_bytes());
+                put(body + RECT_LEN + 4, &[0; 4]);
             }
             Self::TransferToHost2d {
-                rect,
+                rect: area,
                 offset,
                 resource_id,
             } => {
-                rect.encode(out, body)?;
-                put64(out, body + RECT_LEN, offset)?;
-                put32(out, body + RECT_LEN + 8, resource_id)?;
+                rect(&mut put, body, area);
+                put(body + RECT_LEN, &offset.to_le_bytes());
+                put(body + RECT_LEN + 8, &resource_id.to_le_bytes());
+                put(body + RECT_LEN + 12, &[0; 4]);
             }
             Self::ResourceAttachBacking {
                 resource_id,
                 entries,
             } => {
-                put32(out, body, resource_id)?;
-                put32(out, body + 4, u32::try_from(entries.len()).ok()?)?;
+                put(body, &resource_id.to_le_bytes());
+                // At most MAX_BACKING_ENTRIES, which `check` enforced.
+                let count = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+                put(body + 4, &count.to_le_bytes());
                 for (index, entry) in entries.iter().enumerate() {
                     let at = body + 8 + index * MEM_ENTRY_LEN;
-                    put64(out, at, entry.addr)?;
-                    put32(out, at + 8, entry.length)?;
+                    put(at, &entry.addr.to_le_bytes());
+                    put(at + 8, &entry.length.to_le_bytes());
+                    put(at + 12, &[0; 4]);
                 }
             }
         }
-        Some(())
+        Ok(self.len())
+    }
+
+    /// Refuse a backing list with no entries or more than
+    /// [`MAX_BACKING_ENTRIES`].
+    fn check(&self) -> Result<(), GpuError> {
+        if let Self::ResourceAttachBacking { entries, .. } = self
+            && (entries.is_empty() || entries.len() > MAX_BACKING_ENTRIES)
+        {
+            return Err(GpuError::BackingEntries(entries.len()));
+        }
+        Ok(())
+    }
+}
+
+/// The success response command `code` expects.
+#[must_use]
+pub const fn expects(code: u32) -> u32 {
+    if code == CMD_GET_DISPLAY_INFO {
+        RESP_OK_DISPLAY_INFO
+    } else {
+        RESP_OK_NODATA
     }
 }
 
@@ -520,6 +557,12 @@ impl Response {
     /// Parse the response the device wrote into `buffer` for `command`, of
     /// which it says it wrote `written` bytes.
     pub fn parse(command: &Command<'_>, buffer: &[u8], written: u32) -> Result<Self, GpuError> {
+        Self::parse_for(command.code(), buffer, written)
+    }
+
+    /// [`Response::parse`] for the command whose type code is `command`, for a
+    /// driver that keeps only the code of the command in flight.
+    pub fn parse_for(command: u32, buffer: &[u8], written: u32) -> Result<Self, GpuError> {
         let written = written as usize;
         if written > buffer.len() {
             return Err(GpuError::WroteTooMuch {
@@ -548,9 +591,9 @@ impl Response {
         if let Some(error) = error {
             return Err(GpuError::Device(error));
         }
-        if code != command.expects() {
+        if code != expects(command) {
             return Err(GpuError::UnexpectedResponse {
-                command: command.code(),
+                command,
                 response: code,
             });
         }
@@ -717,16 +760,4 @@ impl fmt::Display for GpuError {
 fn get32(bytes: &[u8], at: usize) -> Option<u32> {
     let field = bytes.get(at..at.checked_add(4)?)?;
     Some(u32::from_le_bytes(field.try_into().ok()?))
-}
-
-fn put32(out: &mut [u8], at: usize, value: u32) -> Option<()> {
-    out.get_mut(at..at.checked_add(4)?)?
-        .copy_from_slice(&value.to_le_bytes());
-    Some(())
-}
-
-fn put64(out: &mut [u8], at: usize, value: u64) -> Option<()> {
-    out.get_mut(at..at.checked_add(8)?)?
-        .copy_from_slice(&value.to_le_bytes());
-    Some(())
 }

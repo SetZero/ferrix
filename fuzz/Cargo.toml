@@ -33,6 +33,7 @@ ferrix-virtio = { path = "../libs/virtio" }
 ferrix-displayctl = { path = "../libs/displayctl" }
 ferrix-virtio-blk = { path = "../libs/virtio-blk" }
 ferrix-virtio-net = { path = "../libs/virtio-net" }
+ferrix-virtio-gpu = { path = "../libs/virtio-gpu" }
 ferrix-netwire = { path = "../libs/netwire" }
 ferrix-nettcp = { path = "../libs/nettcp" }
 ferrix-net = { path = "../libs/net" }
@@ -181,6 +182,13 @@ bench = false
 [[bin]]
 name = "displayctl"
 path = "fuzz_targets/displayctl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "virtio_gpu_pipeline"
+path = "fuzz_targets/virtio_gpu_pipeline.rs"
 test = false
 doc = false
 bench = false

@@ -328,6 +328,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-virtio-gpu"
+version = "0.1.0"
+dependencies = [
+ "ferrix-displayctl",
+ "ferrix-virtio",
+]
+
+[[package]]
 name = "ferrix-virtio-net"
 version = "0.1.0"
 dependencies = [

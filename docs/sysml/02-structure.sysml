@@ -985,6 +985,20 @@ package FerrixStructure {
                  * used entry and header byte a stranger chose, and requires
                  * every accepted frame to be answered exactly once. */
         }
+        #writtenAhead part virtioGpu : LibraryCrate {
+            attribute :>> path = "libs/virtio-gpu";
+            attribute :>> hostTests = 14;
+            @stage { number = 17; }
+            doc /* The virtio-gpu 2D driver logic, written ahead of the driver
+                 * process for the compositor's first iteration: bring-up with
+                 * the control queue alone, one command at a time, every
+                 * response checked, and the pipeline from the display core's
+                 * requests to device commands. A failed step is undone as far
+                 * as is safe, and pages the device may still hold are never
+                 * unpinned. Its tests drive a frame to a fake device's screen;
+                 * the virtio_gpu_pipeline fuzz target requires one reply per
+                 * request and no unpin without a pin. */
+        }
         #writtenAhead part displayctl : LibraryCrate {
             attribute :>> path = "libs/displayctl";
             attribute :>> forbidsUnsafe = true;

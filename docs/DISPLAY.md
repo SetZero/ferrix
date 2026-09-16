@@ -108,13 +108,25 @@ others.
 
 **Each message maps to device commands:**
 
-* `ATTACH`: `RESOURCE_CREATE_2D` (format `B8G8R8X8_UNORM`, which is
-  little-endian `XRGB8888`), then pin, then `RESOURCE_ATTACH_BACKING`.
+* `ATTACH`: pin, then `RESOURCE_CREATE_2D` (format `B8G8R8X8_UNORM`, which
+  is little-endian `XRGB8888`), then `RESOURCE_ATTACH_BACKING`. A refused
+  create is unpinned; refused backing is unreferenced, then unpinned; either
+  way `ATTACHED` carries the failure.
 * `SCANOUT`: `SET_SCANOUT`.
-* `FLUSH`: `TRANSFER_TO_HOST_2D` over the damage, then `RESOURCE_FLUSH`.
-  `FLIPPED` is sent when the flush's response arrives.
+* `FLUSH`: `TRANSFER_TO_HOST_2D` over the damage, from the offset of the
+  rectangle's first pixel in the backing, then `RESOURCE_FLUSH`. `FLIPPED`
+  is sent when the flush's response arrives; a refused transfer skips the
+  flush and `FLIPPED` says so.
 * `DETACH`: `RESOURCE_DETACH_BACKING`, `RESOURCE_UNREF`, then the pin's
   handle is closed.
+
+**Pages the device may still hold are never unpinned.** If the device
+refuses `RESOURCE_DETACH_BACKING`, the driver does not unreference the
+resource and does not close the pin: the range stays pinned for good, and
+`DETACHED` reports `DeviceRefused`, which tells the core never to hand that
+range out again. Unpinning it would let the device write into memory that
+belongs to someone else (os-f6's decision, 2026-09-16; `libs/virtio-gpu`'s
+`pipeline` implements it and its fuzz target checks it).
 
 The driver runs commands one at a time on the control queue: a frame is two
 commands, and at 60 frames a second a queue per frame is not worth its
