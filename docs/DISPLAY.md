@@ -6,7 +6,8 @@ Ferrix in QEMU*, pulled forward from stage 17. Approved by the product owner
 (os-f6) on 2026-09-16, with the decisions in §5. Implemented: L5 and L6 landed
 together as one reviewed stack (os-02), since L5 alone would have been dead
 code or the kernel drawing; `cargo xtask test-display` passes on x86-64 and
-AArch64.
+AArch64. That is iteration 1. Iteration 2's planes and properties (E4, §2.3)
+are not implemented yet.
 
 ## 1. What this is, and what it is not
 
@@ -195,10 +196,10 @@ source is committed this time.
 | `MODE_PAGE_FLIP` | `SCANOUT` if the buffer changed, then `FLUSH`; `DRM_MODE_PAGE_FLIP_EVENT` queues a `drm_event_vblank` when `FLIPPED` arrives |
 | `MODE_DIRTYFB` | `FLUSH` of the clip rectangles |
 | `read()` | `drm_event_vblank` records; blocks while none are queued, `EAGAIN` under `O_NONBLOCK` |
-| `MODE_GETPLANERESOURCES` | **iteration 2 (E4):** the one plane's id |
-| `MODE_GETPLANE` | **iteration 2 (E4):** the primary plane: format `XRGB8888`, `possible_crtcs` 1, the CRTC and framebuffer it shows |
-| `MODE_OBJ_GETPROPERTIES` | **iteration 2 (E4):** for the plane, its `type` property at the primary value; for the connector, an empty list |
-| `MODE_GETPROPERTY` | **iteration 2 (E4):** `type`, the immutable enum property with its named values |
+| `MODE_GETPLANERESOURCES` | **iteration 2 (E4), not yet:** the one plane's id |
+| `MODE_GETPLANE` | **iteration 2 (E4), not yet:** the primary plane: format `XRGB8888`, `possible_crtcs` 1, the CRTC and framebuffer it shows |
+| `MODE_OBJ_GETPROPERTIES` | **iteration 2 (E4), not yet:** for the plane, its `type` property at the primary value; for the connector, an empty list |
+| `MODE_GETPROPERTY` | **iteration 2 (E4), not yet:** `type`, the immutable enum property with its named values |
 
 **Iteration 2 adds planes and properties (E4, 3 points, the GUI session
 os-e5; decided by os-f6, 2026-09-16).** This table first assumed Smithay's

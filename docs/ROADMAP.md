@@ -46,6 +46,13 @@ sectors through the block ring with VT-d on x86-64 and the `SMMUv3` on AArch64
 translating, and a deliberate out-of-domain write faulted on both; ARMv7-A runs
 it in degraded trusted mode, as decided. What the stage still owes — `devmgr`
 the program, trusting decoding-off BARs — is after the exit in its section.
+Stage 17, display and input, has begun. Its first display iteration is done:
+`/dev/dri/card0` served by a ring-3 virtio-gpu driver, with `cargo xtask
+test-display` requiring a compositor's colour pixel for pixel on x86-64 and
+AArch64. Input is designed in `docs/INPUT.md`, and its first two landings,
+evdev's numbers and the virtio-input protocol, are in. `epoll`, `eventfd` and
+`ioctl(FIONBIO)` are in the boot test, so the kernel side of iteration 2's
+prerequisites is done except E4, `card0`'s planes.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -3356,14 +3363,21 @@ driver and the evdev nodes read one copy the probe pins. Its fuzz target,
 **Estimate, re-baselined by os-f6 on 2026-09-16:** 74 points, from 55. The
 display's iteration 1 took 37, the input iteration is 23 (`docs/INPUT.md`
 §5), and the prerequisites of iteration 2 are 14: nested `epoll` (E1),
-`eventfd2` (E2) and `FIONBIO` (E3), which os-26 holds, and `card0`'s planes
-and properties (E4, `docs/DISPLAY.md` §2.3), which the GUI session holds.
+`eventfd2` (E2) and `FIONBIO` (E3), which os-26 landed on 2026-09-16, and
+`card0`'s planes and properties (E4, `docs/DISPLAY.md` §2.3), which the GUI
+session holds.
 Nested `epoll`, `FIONBIO` and the plane objects were not counted before
 `docs/INPUT.md` §2 read Smithay's event loop.
 
-**Still to do:** input L3–L7, E1–E4, `timerfd`
-(wanted, not required), atomic commit, per-open windows onto the card VMO,
-and the rest of the exit below.
+**Still to do:** input L3–L7; E4, `card0`'s primary plane and properties
+(the GUI session, in progress, landing after the release); `timerfd` (wanted,
+not required, deferred); atomic commit; per-open windows onto the card VMO;
+and the rest of the exit below. E1–E3 are done (os-26), so the kernel side of
+iteration 2's prerequisites is done except E4. Their paragraphs below record
+what they do not yet do as Linux does: `EPOLLRDHUP` and `EPOLLPRI` are never
+reported, `poll` and epoll waits recheck every 5 ms instead of waking on the
+event (a P2 row in `docs/BACKLOG.md`), and a zero-length write to an eventfd
+returns 0 rather than `EINVAL`.
 
 **Exit:** in the boot test on x86-64 and AArch64 (ARMv7-A's QEMU machine has
 no virtio-gpu; the DK1's LTDC is a hardware row, P3), a user program opens

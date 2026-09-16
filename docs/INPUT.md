@@ -497,10 +497,10 @@ input iteration does not wait for them:
 
 | # | Landing | Kernel? | Points |
 |---|---|---|---|
-| E1 | `epoll_create1`, `epoll_ctl` with `EPOLLET` and `EPOLLONESHOT`, `epoll_pwait` and `epoll_wait`, on every pollable file; an epoll descriptor pollable in turn | yes | 8 |
-| E2 | `eventfd2` with `EFD_CLOEXEC`, `EFD_NONBLOCK`, `EFD_SEMAPHORE` | yes | 2 |
-| E3 | `ioctl(FIONBIO)` (and `FIOCLEX`/`FIONCLEX`) on every descriptor | yes | 1 |
-| E4 | `card0`'s primary plane and properties: `GETPLANERESOURCES`, `GETPLANE`, `OBJ_GETPROPERTIES`, `GETPROPERTY`, from `probe/drm.c` extended | yes | 3 |
+| E1 | `epoll_create1`, `epoll_ctl` with `EPOLLET` and `EPOLLONESHOT`, `epoll_pwait` and `epoll_wait`, on every pollable file; an epoll descriptor pollable in turn. Landed (os-26, d047480d) | yes | 8 |
+| E2 | `eventfd2` with `EFD_CLOEXEC`, `EFD_NONBLOCK`, `EFD_SEMAPHORE`. Landed with `eventfd` (os-26, 9ed8808f) | yes | 2 |
+| E3 | `ioctl(FIONBIO)` (and `FIOCLEX`/`FIONCLEX`) on every descriptor. `FIONBIO` landed (os-26, 2dbeadbf); `FIOCLEX` and `FIONCLEX` are not answered yet | yes | 1 |
+| E4 | `card0`'s primary plane and properties: `GETPLANERESOURCES`, `GETPLANE`, `OBJ_GETPROPERTIES`, `GETPROPERTY`, from `probe/drm.c` extended. In progress (GUI session) | yes | 3 |
 | E5 | `timerfd_create`, `timerfd_settime`, `timerfd_gettime` (wanted, not required) | yes | 3 |
 |  | **Required for iteration 2 (E1–E4)** |  | **14** |
 
@@ -520,7 +520,10 @@ agreed with them. `ferrix-virtio` depends on `ferrix-linux-abi` for that: a
 `no_std` crate with no dependencies that the kernel, `ferrix-rt` and the fuzz
 crate already link. Its tests now also require the bits QEMU's devices set to
 be L1's codes, and its fuzz target ran 50,283,653 inputs in ten minutes on
-nazuna without a failure.
+nazuna without a failure. L3–L7 are open. Of iteration 2's prerequisites,
+E1–E3 landed (os-26): the kernel side is done except E4, which is in
+progress. The roadmap's stage 17 records what E1 and E2 do not yet do as
+Linux does.
 
 ## 6. Decisions and open questions
 
