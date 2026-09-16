@@ -49,6 +49,8 @@ const MAX_DRIVERS: usize = ferrix_devmgr_proto::MAX_DRIVERS;
 const VIRTIO_VENDOR: u16 = 0x1AF4;
 const VIRTIO_BLK_IDS: [u16; 2] = [0x1042, 0x1001];
 const VIRTIO_NET_IDS: [u16; 2] = [0x1041, 0x1000];
+/// virtio-gpu has only a modern id.
+const VIRTIO_GPU_IDS: [u16; 1] = [0x1050];
 
 /// Which kind of ring a driver serves its device over. The two rings are
 /// separate protocols with separate kernel ends, and the only thing devmgr
@@ -60,6 +62,8 @@ enum Kind {
     Block,
     /// `docs/NET-RING.md`: a network interface, named by the kernel.
     Net,
+    /// `docs/DISPLAY.md`: a card, numbered by the kernel.
+    Display,
 }
 
 /// A driver about to be started: its kind, carrying what only that kind
@@ -73,13 +77,16 @@ enum Plan {
     Block(DiskName),
     /// A network interface, whose name the kernel chooses.
     Net,
+    /// A card, whose number the kernel chooses.
+    Display,
 }
 
 /// The table: which driver, by name in the initramfs, drives which device,
 /// and over which ring.
-const DRIVERS: [(u16, &[u16], &[u8], Kind); 2] = [
+const DRIVERS: [(u16, &[u16], &[u8], Kind); 3] = [
     (VIRTIO_VENDOR, &VIRTIO_BLK_IDS, b"blk", Kind::Block),
     (VIRTIO_VENDOR, &VIRTIO_NET_IDS, b"net", Kind::Net),
+    (VIRTIO_VENDOR, &VIRTIO_GPU_IDS, b"gpu", Kind::Display),
 ];
 
 /// Where devmgr gave up, as the exit status.
@@ -176,6 +183,7 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
                 Plan::Block(name)
             }
             Kind::Net => Plan::Net,
+            Kind::Display => Plan::Display,
         };
         let Some(slot) = started.get_mut(count as usize) else {
             failed += 1;
@@ -387,6 +395,7 @@ fn start(
     match plan {
         Plan::Block(name) => start_block(job, device, image, info, name, port, key),
         Plan::Net => start_net(job, device, image, info, port, key),
+        Plan::Display => start_display(job, device, image, info, port, key),
     }
 }
 
@@ -473,6 +482,55 @@ fn start_net(
         port,
         key,
         bytes.get(..written).unwrap_or_default(),
+        [device, control],
+    )
+}
+
+/// A virtio-gpu driver, over the display control channel
+/// (`docs/DISPLAY.md` §2.2). START is the block driver's: where the device's
+/// virtio register blocks are, which a virtio-gpu driver needs the same way;
+/// its name field is unused, since the kernel numbers the card.
+fn start_display(
+    job: &Job<Kernel>,
+    device: Device<Kernel>,
+    image: &Vmo<Kernel>,
+    info: &DeviceInfo,
+    port: &Port<Kernel>,
+    key: u64,
+) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+    let control = device.display_control().map_err(|_| ())?;
+    let block = |block: ferrix_native_abi::types::DeviceBlock| Block {
+        phys: block.phys,
+        offset: block.offset,
+        length: block.length,
+    };
+    let start = Start {
+        common: block(info.common),
+        notify: block(info.notify),
+        isr: block(info.isr),
+        device: block(info.device),
+        notify_off_multiplier: info.notify_off_multiplier,
+        msix_table_size: info.msix_table_size,
+        pci_device_id: info.device_id,
+        location: info.location,
+        name: [b'g', b'p', b'u', 0, 0, 0, 0, 0],
+    };
+    let device = device
+        .into_owned()
+        .replace(Requested::Exactly(DEVICE_RIGHTS))
+        .map_err(|_| ())?;
+    let control = control
+        .into_owned()
+        .replace(Requested::Exactly(CONTROL_RIGHTS))
+        .map_err(|_| ())?;
+    let encoded = Ring::Start(start).encode();
+    launch(
+        job,
+        image,
+        "gpu",
+        port,
+        key,
+        encoded.as_bytes(),
         [device, control],
     )
 }

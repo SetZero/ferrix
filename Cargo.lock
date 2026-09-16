@@ -145,6 +145,18 @@ name = "ferrix-frame"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-gpu"
+version = "0.1.0"
+dependencies = [
+ "ferrix-blkring",
+ "ferrix-displayctl",
+ "ferrix-native-abi",
+ "ferrix-rt",
+ "ferrix-virtio",
+ "ferrix-virtio-gpu",
+]
+
+[[package]]
 name = "ferrix-heap"
 version = "0.1.0"
 
@@ -159,6 +171,7 @@ dependencies = [
  "ferrix-btrfs",
  "ferrix-btrfs-vfs",
  "ferrix-devmgr-proto",
+ "ferrix-displayctl",
  "ferrix-elf",
  "ferrix-fbtext",
  "ferrix-fdt",

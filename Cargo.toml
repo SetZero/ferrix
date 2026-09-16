@@ -60,6 +60,7 @@ members = [
     "user/channel-echo",
     "user/blk",
     "user/net",
+    "user/gpu",
     "user/devmgr",
 
     # Host-side build and test driver (`cargo xtask ...`).
