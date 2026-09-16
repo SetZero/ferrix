@@ -76,6 +76,7 @@ dependencies = [
  "ferrix-frame",
  "ferrix-linux-abi",
  "ferrix-native-abi",
+ "ferrix-nettcp",
  "ferrix-netwire",
  "ferrix-objects",
  "ferrix-pci",
@@ -96,6 +97,13 @@ name = "ferrix-native-abi"
 version = "0.1.0"
 dependencies = [
  "ferrix-linux-abi",
+]
+
+[[package]]
+name = "ferrix-nettcp"
+version = "0.1.0"
+dependencies = [
+ "ferrix-netwire",
 ]
 
 [[package]]

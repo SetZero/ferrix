@@ -882,6 +882,24 @@ package FerrixStructure {
                  * fuzz target requires every header that parses to emit and
                  * parse back unchanged. */
         }
+        #writtenAhead part nettcp : LibraryCrate {
+            attribute :>> path = "libs/nettcp";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 30;
+            doc /* The TCP state machine, written ahead of the networking
+                 * stage and above netwire: the eleven states of RFC 9293 in
+                 * the standard's order, reassembly of what arrives out of
+                 * order, window scaling, selective acknowledgment blocks,
+                 * Nagle, delayed acknowledgments, silly-window avoidance and
+                 * the zero-window probe, retransmission timing by RFC 6298
+                 * with Karn's algorithm, and NewReno congestion control. It
+                 * holds no clock and no address: segments and a time go in,
+                 * segments come out, which is what lets its tests drive two
+                 * connections against each other over a wire they control.
+                 * The nettcp_state fuzz target drives one connection from a
+                 * stranger's segments and requires every header it answers
+                 * with to write and parse back. */
+        }
         #writtenAhead part pci : LibraryCrate {
             attribute :>> path = "libs/pci";
             attribute :>> forbidsUnsafe = true;

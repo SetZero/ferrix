@@ -190,6 +190,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-nettcp"
+version = "0.1.0"
+dependencies = [
+ "ferrix-netwire",
+]
+
+[[package]]
 name = "ferrix-netwire"
 version = "0.1.0"
 
