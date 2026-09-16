@@ -598,3 +598,47 @@ pub(crate) unsafe fn read_gdt() -> (u64, u16) {
     ]);
     (base, limit)
 }
+
+/// A 64-bit random number from the CPU: `RDSEED`, or `RDRAND` on a CPU that
+/// has only that, each tried ten times as Intel's guidance says; `None` on a
+/// CPU with neither, or one that kept reporting failure.
+pub(crate) fn hardware_random() -> Option<u64> {
+    use core::arch::x86_64::{__cpuid, __cpuid_count};
+    let rdseed = __cpuid(0).eax >= 7 && __cpuid_count(7, 0).ebx & (1 << 18) != 0;
+    let rdrand = __cpuid(1).ecx & (1 << 30) != 0;
+    if !rdseed && !rdrand {
+        return None;
+    }
+    for _ in 0..10 {
+        let value: u64;
+        let carry: u8;
+        if rdseed {
+            // SAFETY: CPUID says `RDSEED` exists; it sets one register and the
+            // carry flag, which says whether the value is good.
+            unsafe {
+                core::arch::asm!(
+                    "rdseed {value}",
+                    "setc {carry}",
+                    value = out(reg) value,
+                    carry = out(reg_byte) carry,
+                    options(nomem, nostack),
+                );
+            }
+        } else {
+            // SAFETY: as above, for `RDRAND`.
+            unsafe {
+                core::arch::asm!(
+                    "rdrand {value}",
+                    "setc {carry}",
+                    value = out(reg) value,
+                    carry = out(reg_byte) carry,
+                    options(nomem, nostack),
+                );
+            }
+        }
+        if carry == 1 {
+            return Some(value);
+        }
+    }
+    None
+}

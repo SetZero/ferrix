@@ -210,6 +210,52 @@ pub(crate) struct BootServices {
     create_event_ex: usize,
 }
 
+/// `EFI_TIME`: a calendar time as firmware's real-time clock keeps it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Time {
+    pub(crate) year: u16,
+    pub(crate) month: u8,
+    pub(crate) day: u8,
+    pub(crate) hour: u8,
+    pub(crate) minute: u8,
+    pub(crate) second: u8,
+    pad1: u8,
+    pub(crate) nanosecond: u32,
+    /// Minutes from UTC, or [`Time::UNSPECIFIED_TIMEZONE`].
+    pub(crate) time_zone: i16,
+    pub(crate) daylight: u8,
+    pad2: u8,
+}
+
+impl Time {
+    /// `EFI_UNSPECIFIED_TIMEZONE`: the clock keeps local time and does not
+    /// say which.
+    pub(crate) const UNSPECIFIED_TIMEZONE: i16 = 0x07ff;
+}
+
+/// Runtime services, which outlive `exit_boot_services`. Only `get_time` is
+/// called, before the exit; the rest are declared for their offsets.
+#[repr(C)]
+pub(crate) struct RuntimeServices {
+    pub(crate) header: TableHeader,
+    pub(crate) get_time:
+        unsafe extern "efiapi" fn(time: *mut Time, capabilities: *mut c_void) -> Status,
+    set_time: usize,
+    get_wakeup_time: usize,
+    set_wakeup_time: usize,
+    set_virtual_address_map: usize,
+    convert_pointer: usize,
+    get_variable: usize,
+    get_next_variable_name: usize,
+    set_variable: usize,
+    get_next_high_monotonic_count: usize,
+    reset_system: usize,
+    update_capsule: usize,
+    query_capsule_capabilities: usize,
+    query_variable_info: usize,
+}
+
 /// The table firmware hands the loader.
 #[repr(C)]
 pub(crate) struct SystemTable {
@@ -222,7 +268,7 @@ pub(crate) struct SystemTable {
     pub(crate) con_out: *mut SimpleTextOutput,
     pub(crate) standard_error_handle: Handle,
     pub(crate) std_err: *mut SimpleTextOutput,
-    pub(crate) runtime_services: *mut c_void,
+    pub(crate) runtime_services: *mut RuntimeServices,
     pub(crate) boot_services: *mut BootServices,
     pub(crate) number_of_table_entries: usize,
     pub(crate) configuration_table: *mut ConfigurationTable,

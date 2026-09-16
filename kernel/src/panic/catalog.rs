@@ -405,6 +405,24 @@ pub(crate) static CONSOLE_INPUT: Explanation = Explanation {
     see: "kernel/src/console/input.rs check; kernel/src/irq.rs register",
 };
 
+/// For `kmain` in `main.rs`, when `random::check` fails.
+pub(crate) static RANDOM_GENERATOR: Explanation = Explanation {
+    code: "FX-0306",
+    title: "the random number generator repeated itself",
+    meaning: "`random::check` reads the generator twice, after `random::init` seeded it from \
+              firmware, the CPU and timer jitter, and requires the two reads to differ and \
+              neither to be all zeros. `getrandom`, `/dev/urandom` and every program's \
+              `AT_RANDOM` read this generator: one that repeats hands every program the same \
+              stack canary and every TLS session the same key.",
+    causes: &[
+        "A change to `libs/crng` that stopped `fill` from replacing the key, so each read \
+         starts from the same block; its host tests check the construction.",
+        "A change to `random::fill` that no longer takes the lock around the generator, so \
+         two reads copied one state.",
+    ],
+    see: "kernel/src/random.rs; libs/crng",
+};
+
 /// For `bring_up_processors` in `main.rs`, when `smp::discover` fails.
 pub(crate) static PROCESSOR_DISCOVERY: Explanation = Explanation {
     code: "FX-0401",
@@ -1545,6 +1563,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &INTERRUPT_BRING_UP,
     &TIMER_REGISTRATION,
     &CONSOLE_INPUT,
+    &RANDOM_GENERATOR,
     &PROCESSOR_DISCOVERY,
     &SECONDARY_START,
     &SECONDARY_GDT,
