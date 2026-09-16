@@ -3118,6 +3118,28 @@ the future"*, because the kernel's clock starts at 1970. The kernel's
 row for both is in `docs/BACKLOG.md`'s P2, and `test-net` gets an HTTPS
 program when it is done.
 
+**Done — btop, and the C++ runtime under it.** `ferrousli/tools/ports/libcxx`
+builds LLVM 23.1.1's libc++, libc++abi and libunwind against ferrousli with
+the host's gcc. `ferrousli/tools/ports/btop` builds btop 1.4.7, a C++23
+program, over them. What ferrousli lacked for that landed with them:
+`dl_iterate_phdr` and `dladdr`, the message catalogues, the `strtod_l` family,
+`pathconf`, `copy_file_range`, `getloadavg`, and thread cancellation, which
+btop uses to stop a stalled collector thread. The kernel lacked two things.
+`/proc/<pid>/mounts` did not exist, and it is where btop reads the mounts.
+And a program larger than four mebibytes could not be started at all: `execve`
+read the file into one heap allocation, the heap takes a large one from the
+buddy allocator in a single block, and the largest block is `2^MAX_ORDER`
+frames. btop is 4.6 MiB, and `timeout btop` failed with `ENOMEM`. A program
+is now read into a `vmap::Buffer`, on single frames mapped into the kernel's
+arena, so the limit is `READ_FILE_LIMIT`'s 64 MiB, which it was always
+documented to be.
+
+Every x86-64 image with a busybox carries `/bin/btop`. In a `test-net` guest,
+`timeout 8 btop` drew the CPU, memory, network and process panels on the
+serial console, with `eth0`, `lo` and the running `sh`, `busybox` and
+`btop`, and redrew them every two seconds until `timeout` ended it. No gate
+runs it yet; `docs/BACKLOG.md` has the row.
+
 **Exit, and it is met:** under `xtask`'s gateway — which is where this
 criterion's *"under QEMU's user-mode network"* now reads — busybox configures
 `eth0` with `ip`, and `route` and `netstat` report through `/proc/net`. `wget`

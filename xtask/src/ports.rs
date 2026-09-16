@@ -18,8 +18,9 @@ use crate::paths::Arch;
 use crate::{Error, Result, cargo};
 
 /// The ports `cargo xtask ports` builds, in order, each a directory of
-/// `ferrousli/tools/ports/` holding a `build.sh`.
-const PORTS: &[&str] = &["curl"];
+/// `ferrousli/tools/ports/` holding a `build.sh`. `libcxx` is the C++ runtime
+/// btop links against, and installs nothing an image carries.
+const PORTS: &[&str] = &["curl", "libcxx", "btop"];
 
 /// A file a port installs, and where it goes in the initramfs.
 pub(crate) struct Installed {
@@ -42,6 +43,11 @@ pub(crate) const FILES: &[Installed] = &[
         path: "etc/ssl/certs/ca-certificates.crt",
         mode: 0o644,
         port: "curl",
+    },
+    Installed {
+        path: "bin/btop",
+        mode: 0o755,
+        port: "btop",
     },
 ];
 
