@@ -7,9 +7,9 @@
 //! an impression. This makes it a check again: the same two markers, the same
 //! verdict, the same exit status.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -26,6 +26,8 @@ const BAUD: &str = "115200";
 /// The DK's ST-LINK presents a CDC-ACM device, so `ttyACM0` is the usual
 /// answer; an FTDI cable on the same header is `ttyUSB0`. Both are searched
 /// because which one a given board and cable produce is not worth remembering.
+/// Windows numbers every serial port `COM<n>` instead, and lists the ones
+/// present in the registry; see [`windows_ports`].
 const CANDIDATE_PREFIXES: [&str; 2] = ["ttyACM", "ttyUSB"];
 
 /// Watch `port` until the kernel reports, or the patience runs out.
@@ -39,30 +41,43 @@ pub(crate) fn watch(kernel: Option<&Path>, args: &Args) -> Result<()> {
         None => discover()?,
     };
 
-    configure(&port)?;
+    let opened = open(&port)?;
     println!(
         "  watching {} at {BAUD} baud (timeout {}s, Ctrl-C to stop)",
         port.display(),
         args.timeout
     );
 
-    // Opened read-only and read on a thread, for `qemu::test_boot`'s reason:
-    // a board may say nothing for seconds and the deadline is for the boot as
-    // a whole. Unlike QEMU there is no child process to reap — the port stays
-    // open whether or not anything is driving it, so a timeout here means
-    // "nothing arrived", never "the thing exited".
-    let file = std::fs::File::open(&port)
-        .map_err(|error| Error::new(format!("opening {}: {error}", port.display())))?;
-
+    // Read on a thread, for `qemu::test_boot`'s reason: a board may say
+    // nothing for seconds and the deadline is for the boot as a whole. The
+    // port stays open whether or not anything is driving it, so a timeout here
+    // means "nothing arrived", never "the thing exited".
+    //
+    // Lines are read as bytes and made text afterwards: what the ST-LINK has
+    // buffered from before the port was opened can be anything, and a line
+    // that is not UTF-8 is a line to print with a replacement character, not a
+    // reason to stop reading and report the board unplugged.
     let (sender, receiver) = mpsc::channel();
     let _reader = std::thread::spawn(move || {
-        for line in BufReader::new(file).lines() {
-            let Ok(line) = line else { break };
+        let mut reader = BufReader::new(opened.reader);
+        let mut bytes = Vec::new();
+        loop {
+            bytes.clear();
+            match reader.read_until(b'\n', &mut bytes) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let line = String::from_utf8_lossy(&bytes)
+                .trim_end_matches(['\r', '\n'])
+                .to_owned();
             if sender.send(line).is_err() {
                 break;
             }
         }
     });
+    // Held to the end of this function: on Windows it is the process holding
+    // the port, and dropping it closes the port.
+    let _holder = opened.holder;
 
     let log_path = crate::paths::build_dir(crate::paths::Arch::Armv7a).join("board-serial.log");
     if let Some(parent) = log_path.parent() {
@@ -119,6 +134,19 @@ pub(crate) fn watch(kernel: Option<&Path>, args: &Args) -> Result<()> {
 /// guessing wrong means watching a port nothing is driving and concluding the
 /// board is dead.
 fn discover() -> Result<PathBuf> {
+    if cfg!(windows) {
+        return match windows_ports().as_slice() {
+            [one] => Ok(PathBuf::from(one)),
+            [] => Err(Error::new(
+                "no serial port found (looked in HKLM\\HARDWARE\\DEVICEMAP\\SERIALCOMM).\n  \
+                 Plug the board's USB debug port in, or pass --port COM<n>.",
+            )),
+            several => Err(Error::new(format!(
+                "several serial ports are present; say which with --port:\n    {}",
+                several.join("\n    ")
+            ))),
+        };
+    }
     let mut found: Vec<PathBuf> = Vec::new();
     let Ok(entries) = std::fs::read_dir("/dev") else {
         return Err(Error::new(
@@ -152,6 +180,126 @@ fn discover() -> Result<PathBuf> {
                 .join("\n    ")
         ))),
     }
+}
+
+/// An open port: something to read the board's bytes from, and on Windows the
+/// process that holds the port for as long as it is kept.
+struct Opened {
+    /// The port's bytes, as they arrive.
+    reader: Box<dyn Read + Send>,
+    /// Killed and reaped on drop.
+    holder: Option<Holder>,
+}
+
+/// A child process that must not outlive the watch.
+struct Holder(Child);
+
+impl Drop for Holder {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Configure `port` and open it for reading.
+fn open(port: &Path) -> Result<Opened> {
+    if cfg!(windows) {
+        return open_windows(port);
+    }
+    configure(port)?;
+    let file = std::fs::File::open(port)
+        .map_err(|error| Error::new(format!("opening {}: {error}", port.display())))?;
+    Ok(Opened {
+        reader: Box::new(file),
+        holder: None,
+    })
+}
+
+/// The serial ports Windows says are present: the values under
+/// `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`, which the serial drivers write as
+/// each port appears and remove as it goes. `reg`'s line for each reads
+/// `    \Device\USBSER000    REG_SZ    COM8` in every display language.
+fn windows_ports() -> Vec<String> {
+    let Ok(output) = Command::new("reg")
+        .args(["query", r"HKLM\HARDWARE\DEVICEMAP\SERIALCOMM"])
+        .stdin(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    let mut ports: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            match fields.as_slice() {
+                [_, "REG_SZ", port] => Some((*port).to_owned()),
+                _ => None,
+            }
+        })
+        .collect();
+    ports.sort();
+    ports
+}
+
+/// The `COM<n>` a `--port` names, whether given bare or as `\\.\COM<n>`.
+///
+/// Checked to be exactly that, because it goes into a PowerShell script.
+fn com_name(port: &Path) -> Option<String> {
+    let text = port.to_str()?;
+    let name = text.strip_prefix(r"\\.\").unwrap_or(text);
+    let digits = name
+        .get(..3)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("COM"))
+        .and_then(|_| name.get(3..))?;
+    (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| format!("COM{digits}"))
+}
+
+/// Open a Windows serial port through .NET's `SerialPort`, in a PowerShell
+/// that copies what arrives to its standard output.
+///
+/// Not as a file. A COM port opened with `CreateFile` reads by the rules of
+/// its `COMMTIMEOUTS`, which belong to the handle and which `std` cannot set:
+/// left as they are, a read can wait until the whole buffer is full, and a
+/// boot log of a few hundred bytes a second arrives in lumps or not at all.
+/// `SerialPort` sets the line and the timeouts itself, and a read from its
+/// stream returns as soon as there is a byte. The process holds the port, so
+/// it is killed when the watch ends, and only one program can hold a port:
+/// a terminal left open on it makes this fail to open, with the reason.
+fn open_windows(port: &Path) -> Result<Opened> {
+    let Some(name) = com_name(port) else {
+        return Err(Error::new(format!(
+            "{} is not a Windows serial port; pass --port COM<n>.",
+            port.display()
+        )));
+    };
+    let script = format!(
+        "$ErrorActionPreference = 'Stop'; \
+         $p = [System.IO.Ports.SerialPort]::new('{name}', {BAUD}, 'None', 8, 'One'); \
+         $p.Handshake = 'None'; $p.ReadTimeout = -1; $p.Open(); \
+         $out = [Console]::OpenStandardOutput(); $buffer = [byte[]]::new(4096); \
+         while ($true) {{ $n = $p.BaseStream.Read($buffer, 0, $buffer.Length); \
+         if ($n -le 0) {{ break }}; $out.Write($buffer, 0, $n); $out.Flush() }}"
+    );
+    let mut child = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|error| {
+            Error::new(format!(
+                "could not start PowerShell to open {name}: {error}"
+            ))
+        })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Error::new("PowerShell gave no output to read"))?;
+    Ok(Opened {
+        reader: Box::new(stdout),
+        holder: Some(Holder(child)),
+    })
 }
 
 /// Put the port in raw mode at the right speed.
@@ -202,4 +350,22 @@ fn configure(port: &Path) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::com_name;
+
+    #[test]
+    fn a_windows_port_is_com_and_digits_and_nothing_else() {
+        assert_eq!(com_name(Path::new("COM8")).as_deref(), Some("COM8"));
+        assert_eq!(com_name(Path::new("com12")).as_deref(), Some("COM12"));
+        assert_eq!(com_name(Path::new(r"\\.\COM3")).as_deref(), Some("COM3"));
+        // It goes into a PowerShell script, so nothing that could end a quote.
+        assert_eq!(com_name(Path::new("COM8'; Remove-Item x; '")), None);
+        assert_eq!(com_name(Path::new("COM")), None);
+        assert_eq!(com_name(Path::new("/dev/ttyACM0")), None);
+    }
 }

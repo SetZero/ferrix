@@ -61,12 +61,18 @@ pub(crate) fn run(
     let initramfs_target = target.join(INITRD_PATH);
     std::fs::write(&initramfs_target, initramfs)
         .map_err(|error| Error::new(format!("writing {}: {error}", initramfs_target.display())))?;
+    flush(&initramfs_target)?;
     println!("    {}", initramfs_target.display());
 
     // A card pulled from the slot with dirty pages still in the page cache is
     // a card with a truncated kernel on it, and the symptom is a loader that
     // rejects the image for reasons that have nothing to do with the build.
+    // Each file was flushed as it was written; this is the rest, the
+    // directories and the FAT itself, where the host has a way to ask.
     sync();
+    if cfg!(windows) {
+        sync_volume(&target);
+    }
 
     println!("  flashed; the card is safe to remove");
     Ok(())
@@ -76,15 +82,49 @@ pub(crate) fn run(
 fn copy(from: &Path, to: &Path) -> Result<()> {
     let bytes = std::fs::copy(from, to)
         .map_err(|error| Error::new(format!("writing {}: {error}", to.display())))?;
+    flush(to)?;
     println!("    {} ({} KiB)", to.display(), bytes / 1024);
     Ok(())
 }
 
-/// Flush the page cache, so the card can be pulled.
+/// Ask the host to put one written file on the device before returning:
+/// `fsync` on Linux, `FlushFileBuffers` on Windows, through the one call `std`
+/// has for both.
+fn flush(path: &Path) -> Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| Error::new(format!("flushing {}: {error}", path.display())))
+}
+
+/// Flush what is left of the card's metadata, so the card can be pulled.
+///
+/// `sync` where there is one. Windows has none, and flushes a volume's cache
+/// with `Write-VolumeCache`, which wants the drive letter.
 fn sync() {
+    if cfg!(windows) {
+        return;
+    }
     if let Some(sync) = paths::which("sync") {
         let _ = std::process::Command::new(sync).status();
     }
+}
+
+/// Windows' half of [`sync`], given the drive the files went to.
+fn sync_volume(target: &Path) {
+    let Some(letter) = drive_letter(target) else {
+        return;
+    };
+    let _ = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!("Write-VolumeCache -DriveLetter {letter}"),
+        ])
+        .stdin(std::process::Stdio::null())
+        .status();
 }
 
 /// Check that `path` is somewhere it is safe to write a boot loader.
@@ -108,12 +148,13 @@ fn verify(path: &Path) -> Result<PathBuf> {
         )));
     }
 
-    let canonical = path
-        .canonicalize()
-        .map_err(|error| Error::new(format!("resolving {}: {error}", path.display())))?;
+    let canonical = plain(
+        path.canonicalize()
+            .map_err(|error| Error::new(format!("resolving {}: {error}", path.display())))?,
+    );
 
     let mounts = fat_mount_points();
-    if mounts.is_empty() {
+    if mounts.all.is_empty() && !cfg!(windows) {
         // No /proc/mounts to read: not Linux, or something unusual. Say so
         // rather than silently dropping the check that makes this safe.
         return Err(Error::new(
@@ -126,8 +167,9 @@ fn verify(path: &Path) -> Result<PathBuf> {
     // Refused by name, not merely left out of discovery. `/boot/efi` is a
     // mounted FAT and passes every other check here, so without this the one
     // destination that can stop this computer booting is the one destination
-    // `--to` accepts without complaint.
-    if starts_with_any(&canonical, &["/boot", "/efi"]) {
+    // `--to` accepts without complaint. On Windows the system partition has no
+    // path of its own, so it is refused by what Windows says it is.
+    if starts_with_any(&canonical, &["/boot", "/efi"]) || mounts.own.contains(&canonical) {
         return Err(Error::new(format!(
             "{} is this machine's own EFI system partition, not a board's.\n  \
              Writing a boot loader there could stop this computer booting. If \
@@ -136,13 +178,18 @@ fn verify(path: &Path) -> Result<PathBuf> {
         )));
     }
 
-    if !mounts.iter().any(|mount| mount == &canonical) {
+    if !mounts.all.iter().any(|mount| mount == &canonical) {
         return Err(Error::new(format!(
             "{} is not a mounted FAT filesystem.\n  \
-             It must be the card's boot partition itself, mounted. Currently mounted \
+             It must be the card's boot partition itself, mounted{}. Currently mounted \
              FAT filesystems:\n    {}",
             canonical.display(),
-            describe(&mounts)
+            if cfg!(windows) {
+                " and given as its drive, like E:\\"
+            } else {
+                ""
+            },
+            describe(&mounts.all)
         )));
     }
 
@@ -156,10 +203,11 @@ fn verify(path: &Path) -> Result<PathBuf> {
 /// more than one FAT filesystem, and one of them is the one this computer
 /// boots from. Writing a loader into that is a bad afternoon.
 fn discover() -> Result<PathBuf> {
-    let mounts: Vec<PathBuf> = fat_mount_points()
+    let FatMounts { all, own } = fat_mount_points();
+    let mounts: Vec<PathBuf> = all
         .into_iter()
         // /boot/efi is this machine's own, and never the answer.
-        .filter(|mount| !starts_with_any(mount, &["/boot", "/efi"]))
+        .filter(|mount| !starts_with_any(mount, &["/boot", "/efi"]) && !own.contains(mount))
         .collect();
 
     match mounts.as_slice() {
@@ -176,12 +224,29 @@ fn discover() -> Result<PathBuf> {
     }
 }
 
-/// Every mounted FAT filesystem, from `/proc/mounts`.
-fn fat_mount_points() -> Vec<PathBuf> {
+/// The mounted FAT filesystems, and which of them belong to this machine.
+struct FatMounts {
+    /// Every one, by the path it is mounted at.
+    all: Vec<PathBuf>,
+    /// Those this computer boots from, where the host says so. Linux's are
+    /// recognised by where they are mounted instead; see [`starts_with_any`].
+    own: Vec<PathBuf>,
+}
+
+/// Every mounted FAT filesystem: from `/proc/mounts`, or on Windows from the
+/// volumes that have a drive letter.
+fn fat_mount_points() -> FatMounts {
+    if cfg!(windows) {
+        return windows_fat_volumes();
+    }
     let Ok(text) = std::fs::read_to_string("/proc/mounts") else {
-        return Vec::new();
+        return FatMounts {
+            all: Vec::new(),
+            own: Vec::new(),
+        };
     };
-    text.lines()
+    let all = text
+        .lines()
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
             let _device = fields.next()?;
@@ -191,7 +256,76 @@ fn fat_mount_points() -> Vec<PathBuf> {
             // older driver, still selectable.
             (kind == "vfat" || kind == "msdos").then(|| PathBuf::from(unescape(mount)))
         })
-        .collect()
+        .collect();
+    FatMounts {
+        all,
+        own: Vec::new(),
+    }
+}
+
+/// The GPT type of an EFI system partition.
+const ESP_GPT_TYPE: &str = "{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}";
+
+/// Windows' FAT volumes with a drive letter, as `E:\`.
+///
+/// Through PowerShell's storage cmdlets, one line per partition with a letter
+/// and a FAT filesystem: the letter, then `1` if Windows boots from it or it
+/// is an EFI system partition, else `0`. A card in a reader, or a board's
+/// U-Boot `ums` disk, is an ordinary partition with a letter; this machine's
+/// own ESP normally has no letter at all, and is refused if someone gave it
+/// one.
+fn windows_fat_volumes() -> FatMounts {
+    let script = format!(
+        "Get-Partition | Where-Object DriveLetter | ForEach-Object {{ \
+         $v = $_ | Get-Volume; \
+         if ($v.FileSystemType -in 'FAT', 'FAT32') {{ \
+         $own = $_.IsSystem -or $_.IsBoot -or $_.GptType -eq '{ESP_GPT_TYPE}'; \
+         '{{0}} {{1}}' -f $_.DriveLetter, [int]$own }} }}"
+    );
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdin(std::process::Stdio::null())
+        .output();
+    let mut mounts = FatMounts {
+        all: Vec::new(),
+        own: Vec::new(),
+    };
+    let Ok(output) = output else {
+        return mounts;
+    };
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [letter, own] = fields.as_slice() else {
+            continue;
+        };
+        let Some(letter) = letter.chars().next().filter(char::is_ascii_alphabetic) else {
+            continue;
+        };
+        let root = PathBuf::from(format!("{letter}:\\"));
+        if *own == "1" {
+            mounts.own.push(root.clone());
+        }
+        mounts.all.push(root);
+    }
+    mounts
+}
+
+/// `path` without the `\\?\` prefix Windows' `canonicalize` adds to a local
+/// drive's path, so that it compares equal to the `E:\` a volume listing
+/// gives. Unchanged anywhere else.
+fn plain(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
+/// The drive letter of a Windows path like `E:\`.
+fn drive_letter(path: &Path) -> Option<char> {
+    let text = path.to_str()?;
+    let mut chars = text.chars();
+    let letter = chars.next().filter(char::is_ascii_alphabetic)?;
+    (chars.next() == Some(':')).then_some(letter)
 }
 
 /// Undo the octal escaping `/proc/mounts` applies to spaces and tabs.
@@ -226,6 +360,9 @@ fn starts_with_any(path: &Path, prefixes: &[&str]) -> bool {
 
 /// Mount points, one per line, for an error message.
 fn describe(mounts: &[PathBuf]) -> String {
+    if mounts.is_empty() {
+        return "(none)".to_owned();
+    }
     mounts
         .iter()
         .map(|mount| mount.display().to_string())
@@ -260,6 +397,22 @@ mod tests {
                 "refused for the wrong reason: {message}"
             );
         }
+    }
+
+    #[test]
+    fn a_windows_drive_path_loses_its_verbatim_prefix_and_keeps_its_letter() {
+        assert_eq!(plain(PathBuf::from(r"\\?\E:\")), PathBuf::from(r"E:\"));
+        // A share is not a drive, and is left alone.
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\UNC\host\share")),
+            PathBuf::from(r"\\?\UNC\host\share")
+        );
+        assert_eq!(
+            plain(PathBuf::from("/media/bootfs")),
+            PathBuf::from("/media/bootfs")
+        );
+        assert_eq!(drive_letter(Path::new(r"E:\")), Some('E'));
+        assert_eq!(drive_letter(Path::new("/media/bootfs")), None);
     }
 
     #[test]
