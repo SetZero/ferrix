@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 948 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 959 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 7 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 0 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 288 | not there |
+| absent | 277 | not there |
 
-295 interfaces are missing in one of the last four ways. None of them is
+284 interfaces are missing in one of the last four ways. None of them is
 written on a branch any more: the three unlanded branches of 2026-09-13,
 `ferrousli-math`, `ferrousli-threads` and `ferrousli-misc`, were built,
 fixed and landed on 2026-09-16.
@@ -41,7 +41,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Strings and characters | 72 | 0 | 0 | 0 | landed: `strcasecmp_l`, `strncasecmp_l` |
 | Wide and multibyte characters | 118 | 0 | 0 | 0 | landed: the `wscanf` family, `fwscanf` to `wscanf`; `open_wmemstream`; the `wprintf` family, `fwprintf` to `wprintf`; wide-character stream I/O (`fgetwc`, `fgetws`, `fputwc`, `fputws`, `getwc`, `getwchar`, `putwc`, `putwchar`, `ungetwc`, `fwide`); the `wcstol` and `wcstod` families with `wcstoimax` and `wcstoumax`; `wcsftime`, `wcslcpy`, `wcslcat` |
 | Standard I/O | 70 | 0 | 0 | 0 | landed: `tmpnam` |
-| Math and the floating-point environment | 201 | 99 | 0 | 15 | the trigonometric, hyperbolic, error and gamma functions for `double` and `float`, `hypot`, the Bessel functions and `signgam` 7; every `long double` form 8. Landed: `exp2`, `expm1`, `log2`, `log10`, `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `fenv.h`; rounding, manipulation, remainders and `fma` for `double` and `float`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, bit for bit musl's in every rounding mode; and the classifiers for all three types |
+| Math and the floating-point environment | 201 | 88 | 0 | 13 | the hyperbolic, error and gamma functions for `double` and `float`, `hypot`, the Bessel functions and `signgam` 5; every `long double` form 8. Landed: `tan`, `asin`, `acos`, `atan` for `double`, and all of them with `sin`, `cos` and `atan2` for `float`; `exp2`, `expm1`, `log2`, `log10`, `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `fenv.h`; rounding, manipulation, remainders and `fma` for `double` and `float`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, bit for bit musl's in every rounding mode; and the classifiers for all three types |
 | Complex arithmetic | 69 | 66 | 0 | 8 | `complex.h` over the math library, `creal` and `cimag` as functions |
 | Locales, messages and conversion | 32 | 24 | 0 | 15 | the `gettext` family with `.mo` catalogues 5; `iconv` 5; `catopen`, `catgets`, `catclose` 2; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1 |
 | Files, directories and I/O multiplexing | 46 | 1 | 0 | 1 | `posix_getdents` |
@@ -58,7 +58,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 5 | 0 | 2 | `dlfcn.h` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **295** | **0** | **98** | |
+| **All** | **1243** | **284** | **0** | **96** | |
 
 ## Present but broken
 
@@ -237,8 +237,8 @@ interface.
 | Header | Status | Interfaces |
 |---|---|---|
 | `<fenv.h>` | present (11) | `feclearexcept`, `fegetenv`, `fegetexceptflag`, `fegetround`, `feholdexcept`, `feraiseexcept`, `fesetenv`, `fesetexceptflag`, `fesetround`, `fetestexcept`, `feupdateenv` |
-| `<math.h>` | present (91) | `atan2`, `cbrt`, `cbrtf`, `ceil`, `ceilf`, `copysign`, `copysignf`, `cos`, `exp`, `exp2`, `exp2f`, `expf`, `expm1`, `expm1f`, `fabs`, `fabsf`, `fdim`, `fdimf`, `floor`, `floorf`, `fma`, `fmaf`, `fmax`, `fmaxf`, `fmin`, `fminf`, `fmod`, `fmodf`, `fpclassify`, `frexp`, `frexpf`, `ilogb`, `ilogbf`, `isfinite`, `isgreater`, `isgreaterequal`, `isinf`, `isless`, `islessequal`, `islessgreater`, `isnan`, `isnormal`, `isunordered`, `ldexp`, `ldexpf`, `llrint`, `llrintf`, `llround`, `llroundf`, `log`, `log10`, `log10f`, `log1p`, `log1pf`, `log2`, `log2f`, `logb`, `logbf`, `logf`, `lrint`, `lrintf`, `lround`, `lroundf`, `modf`, `modff`, `nan`, `nanf`, `nearbyint`, `nearbyintf`, `nextafter`, `nextafterf`, `pow`, `powf`, `remainder`, `remainderf`, `remquo`, `remquof`, `rint`, `rintf`, `round`, `roundf`, `scalbln`, `scalblnf`, `scalbn`, `scalbnf`, `signbit`, `sin`, `sqrt`, `sqrtf`, `trunc`, `truncf` |
-| `<math.h>` | absent (99) | `acos`, `acosf`, `acosh`, `acoshf`, `acoshl`, `acosl`, `asin`, `asinf`, `asinh`, `asinhf`, `asinhl`, `asinl`, `atan`, `atan2f`, `atan2l`, `atanf`, `atanh`, `atanhf`, `atanhl`, `atanl`, `cbrtl`, `ceill`, `copysignl`, `cosf`, `cosh`, `coshf`, `coshl`, `cosl`, `erf`, `erfc`, `erfcf`, `erfcl`, `erff`, `erfl`, `exp2l`, `expl`, `expm1l`, `fabsl`, `fdiml`, `floorl`, `fmal`, `fmaxl`, `fminl`, `fmodl`, `frexpl`, `hypot`, `hypotf`, `hypotl`, `ilogbl`, `j0` (XSI), `j1` (XSI), `jn` (XSI), `ldexpl`, `lgamma`, `lgammaf`, `lgammal`, `llrintl`, `llroundl`, `log10l`, `log1pl`, `log2l`, `logbl`, `logl`, `lrintl`, `lroundl`, `modfl`, `nanl`, `nearbyintl`, `nextafterl`, `nexttoward`, `nexttowardf`, `nexttowardl`, `powl`, `remainderl`, `remquol`, `rintl`, `roundl`, `scalblnl`, `scalbnl`, `signgam` (XSI), `sinf`, `sinh`, `sinhf`, `sinhl`, `sinl`, `sqrtl`, `tan`, `tanf`, `tanh`, `tanhf`, `tanhl`, `tanl`, `tgamma`, `tgammaf`, `tgammal`, `truncl`, `y0` (XSI), `y1` (XSI), `yn` (XSI) |
+| `<math.h>` | present (102) | `acos`, `acosf`, `asin`, `asinf`, `atan`, `atan2`, `atan2f`, `atanf`, `cbrt`, `cbrtf`, `ceil`, `ceilf`, `copysign`, `copysignf`, `cos`, `cosf`, `exp`, `exp2`, `exp2f`, `expf`, `expm1`, `expm1f`, `fabs`, `fabsf`, `fdim`, `fdimf`, `floor`, `floorf`, `fma`, `fmaf`, `fmax`, `fmaxf`, `fmin`, `fminf`, `fmod`, `fmodf`, `fpclassify`, `frexp`, `frexpf`, `ilogb`, `ilogbf`, `isfinite`, `isgreater`, `isgreaterequal`, `isinf`, `isless`, `islessequal`, `islessgreater`, `isnan`, `isnormal`, `isunordered`, `ldexp`, `ldexpf`, `llrint`, `llrintf`, `llround`, `llroundf`, `log`, `log10`, `log10f`, `log1p`, `log1pf`, `log2`, `log2f`, `logb`, `logbf`, `logf`, `lrint`, `lrintf`, `lround`, `lroundf`, `modf`, `modff`, `nan`, `nanf`, `nearbyint`, `nearbyintf`, `nextafter`, `nextafterf`, `pow`, `powf`, `remainder`, `remainderf`, `remquo`, `remquof`, `rint`, `rintf`, `round`, `roundf`, `scalbln`, `scalblnf`, `scalbn`, `scalbnf`, `signbit`, `sin`, `sinf`, `sqrt`, `sqrtf`, `tan`, `tanf`, `trunc`, `truncf` |
+| `<math.h>` | absent (88) | `acosh`, `acoshf`, `acoshl`, `acosl`, `asinh`, `asinhf`, `asinhl`, `asinl`, `atan2l`, `atanh`, `atanhf`, `atanhl`, `atanl`, `cbrtl`, `ceill`, `copysignl`, `cosh`, `coshf`, `coshl`, `cosl`, `erf`, `erfc`, `erfcf`, `erfcl`, `erff`, `erfl`, `exp2l`, `expl`, `expm1l`, `fabsl`, `fdiml`, `floorl`, `fmal`, `fmaxl`, `fminl`, `fmodl`, `frexpl`, `hypot`, `hypotf`, `hypotl`, `ilogbl`, `j0` (XSI), `j1` (XSI), `jn` (XSI), `ldexpl`, `lgamma`, `lgammaf`, `lgammal`, `llrintl`, `llroundl`, `log10l`, `log1pl`, `log2l`, `logbl`, `logl`, `lrintl`, `lroundl`, `modfl`, `nanl`, `nearbyintl`, `nextafterl`, `nexttoward`, `nexttowardf`, `nexttowardl`, `powl`, `remainderl`, `remquol`, `rintl`, `roundl`, `scalblnl`, `scalbnl`, `signgam` (XSI), `sinh`, `sinhf`, `sinhl`, `sinl`, `sqrtl`, `tanh`, `tanhf`, `tanhl`, `tanl`, `tgamma`, `tgammaf`, `tgammal`, `truncl`, `y0` (XSI), `y1` (XSI), `yn` (XSI) |
 
 ### Complex arithmetic
 

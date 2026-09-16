@@ -1,7 +1,9 @@
-//! `math.h`: so far `sin`, `cos`, `exp`, `exp2`, `expm1`, `log`, `log2`,
-//! `log10`, `log1p`, `pow` and `atan2` for `double`, `expf`, `exp2f`,
-//! `expm1f`, `logf`, `log2f`, `log10f`, `log1pf` and `powf` for `float`, and
-//! the classification functions the header's macros call for every type.
+//! `math.h`: so far `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`,
+//! `exp`, `exp2`, `expm1`, `log`, `log2`, `log10`, `log1p` and `pow` for
+//! `double`, `sinf`, `cosf`, `tanf`, `asinf`, `acosf`, `atanf`, `atan2f`,
+//! `expf`, `exp2f`, `expm1f`, `logf`, `log2f`, `log10f`, `log1pf` and `powf`
+//! for `float`, and the classification functions the header's macros call for
+//! every type.
 //!
 //! # Where the code comes from
 //!
@@ -63,7 +65,13 @@
 //! arguments in each of the four rounding modes.
 //! The exponentials and logarithms added after it, `exp2` to `powf`, were
 //! compared the same way against a musl 1.2.5 build, for 200,000 arguments
-//! each in each mode.
+//! each in each mode, and so were the trigonometric functions added after
+//! those, `tan` to `atan2f`, together with `sin` and `cos`. That comparison
+//! found two more rewrites. LLVM turns `a - (b - c)` into `a + (c - b)`, so
+//! where musl subtracts an inexact difference, the difference goes through
+//! `barrier`. And its vectoriser may pair two unrelated `float` divisions in
+//! one `divps`, whose two unused lanes divide 0 by 0 and raise invalid, so a
+//! function whose division it paired that way is never inlined.
 //!
 //! # Errors
 //!
@@ -107,9 +115,11 @@
 //! `x + toint - toint` survives as written. The unit tests check the
 //! exceptions of every table case in both the debug and the release build.
 
+pub mod acos;
 #[cfg(target_arch = "x86_64")]
 #[path = "x86_64.rs"]
 pub(crate) mod arch;
+pub mod asin;
 pub mod atan;
 pub mod classify;
 pub mod exp;
@@ -131,4 +141,6 @@ pub mod remainder;
 pub mod rounding;
 pub mod sqrt;
 pub(crate) mod support;
+pub mod tan;
 pub mod trig;
+pub mod trigf;
