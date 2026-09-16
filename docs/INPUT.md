@@ -1,9 +1,9 @@
 # Input: `/dev/input/eventN` over a ring-3 virtio-input driver
 
-Version 1, a draft. Written by the GUI session (os-e5) for the input
-iteration of the compositor's path (`docs/DISPLAY.md` §4: after iteration 1's
-colour and iteration 2's two tiled pattern clients, input). Not yet approved
-by the product owner (os-f6); §6 lists what needs deciding. It has the shape
+Version 1. Written by the GUI session (os-e5) for the input iteration of the
+compositor's path (`docs/DISPLAY.md` §4: after iteration 1's colour and
+iteration 2's two tiled pattern clients, input). Approved as drafted by the
+product owner (os-f6) on 2026-09-16, whose answers are §6. It has the shape
 of `docs/DISPLAY.md` on purpose: an input core in the kernel, a ring-3 driver
 started by devmgr, the Linux ABI (evdev) with its subset taken from a UAPI
 probe, and QEMU's monitor as the test's stimulus.
@@ -25,7 +25,7 @@ the driver in ring 3. This document specifies:
 * **the test**: QMP `input-send-event` in, the events read back out.
 
 It is not the virtio-input protocol, which the driver speaks to the device
-(`libs/virtio::input`, written on branch `virtio-input`). It is not the
+(`libs/virtio::input`, on `main` since 493fd843). It is not the
 keymap: evdev delivers key codes, and turning them into keysyms is
 xkbcommon's job in the compositor. It is not udev, libinput or a seat
 manager, none of which Ferrix will have (§2.3). It is not hotplug, force
@@ -173,7 +173,8 @@ has no `IN_FORMATS` or `SIZE_HINTS` and the connector has no `DPMS`.
 
 Smithay has no renderer that writes into a dumb buffer on the CPU without a C
 library (its CPU renderer is pixman), so the tiny-skia renderer is the
-compositor's own `Renderer`; that is iteration 2's business and not a call.
+compositor's own `Renderer`; that is iteration 2's business and not a call
+(a stage 18 item of its own, 5 points).
 
 ### 2.4 An evdev consumer
 
@@ -398,18 +399,23 @@ against the macros.
 `value` (`linux/input.h:26`–`46`): 24 bytes on x86-64 and AArch64, 16 on
 ARMv7-A. That is what `read` returns. User space built without
 `__USE_TIME_BITS64` sees a `struct timeval` there instead, which on a 32-bit
-libc with a 64-bit `time_t` is a different size. The probe prints both views
-on the 32-bit build so the difference is written down. ARMv7-A takes no part
-in the gates (no PCI virtio in its QEMU configuration here), and ferrousli's
-32-bit header is a row for its owner (§6).
+libc with a 64-bit `time_t` is a different size. The probe builds three views
+at both widths and records them: 32-bit `time_t`, 64-bit `time_t` with the
+macro as glibc sets it, both 16 bytes on ARMv7-A, and 64-bit `time_t` with the
+macro undefined, which is 24 bytes there. ferrousli's `bits/alltypes.h`
+defines `__USE_TIME_BITS64`, as musl's does, so its programs should see the
+kernel's 16 bytes; that is read from the header, not shown by a program
+built against ferrousli. ARMv7-A takes no part in the gates (no PCI virtio in
+its QEMU configuration here).
 
 **`read`** returns as many whole events as fit in `count`, from whole
 reports only. It returns `EINVAL` if `count` is smaller than one event,
 blocks while the queue is empty, answers `EAGAIN` under `O_NONBLOCK`, and
 `ENODEV` once the device is gone and the queue is drained. **`write`**
 answers `EINVAL` in this iteration: on Linux it injects events, used for
-LEDs, which come later (§6). **`poll`** reports `POLLIN | POLLRDNORM` when a
-whole report is queued and `POLLHUP | POLLERR` when the device is gone.
+LEDs, which come later (§6, and a `docs/BACKLOG.md` row). **`poll`** reports
+`POLLIN | POLLRDNORM` when a whole report is queued and `POLLHUP | POLLERR`
+when the device is gone.
 
 **Kernel plumbing this needs:** a devfs subdirectory (the mechanism
 `/dev/dri/` added), character nodes whose `open` makes a per-open object, an
@@ -478,7 +484,7 @@ it.
 | # | Landing | Kernel? | Points |
 |---|---|---|---|
 | L1 | `libs/linux-abi::input`: the §3.3 ioctls (with a sample length for the sized ones), `EV_VERSION`, `INPUT_MAJOR`, event types and codes, `*_MAX`/`*_CNT`, the clock ids, and `input_event`, `input_id` and `input_absinfo` layouts at both widths. From a committed probe (`probe/input.c`, `input.sh`, `input-64.txt`, `input-32.txt`) compiled on nazuna against `/usr/include/linux/input.h`, pinned by `src/tests/input.rs` | no | 2 |
-| L2 | `libs/virtio::input`: configuration queries and the 8-byte event, hostile-device tests, checked against QEMU 9.2.4. Written on branch `virtio-input`; what is left is review, a fuzz target, and taking its evdev numbers from L1 | no | 2 |
+| L2 | `libs/virtio::input`: configuration queries and the 8-byte event, hostile-device tests, checked against QEMU 9.2.4. On `main` since 493fd843 and 0bfb1de4; what is left is running its fuzz target and taking its evdev numbers from L1 | no | 2 |
 | L3 | `libs/inputctl`: §3.2's messages and validation, and `queue`: report assembly, per-open queues, `SYN_DROPPED`, grab, clock conversion, state for `EVIOCGKEY`/`EVIOCGABS`. Host-tested, fuzzed | no | 3 |
 | L4 | `libs/virtio-input`: driver logic over `libs/virtio-blk`'s traits (bring-up, the queries into `HELLO`, keeping the event queue full, filtering, batching), tested against a simulated device that drops short reports as QEMU does | no | 3 |
 | L5 | `user/input`, devmgr's table entry and `start_input`, `INPUT_CONTROL_CREATE`, the core's per-device task; exit: the boot line names each device and its event types | yes | 5 |
@@ -502,45 +508,56 @@ Stage 17 was 55 points, of which iteration 1 took 37. The input iteration
 and E1–E4 together are 37 more. The difference comes from what §2 found:
 nesting epoll, `FIONBIO` and the plane objects were never counted. Neither
 was the per-open queue logic, which the roadmap's one line on input did not
-break down.
+break down. The product owner re-baselined stage 17 to 74 points on
+2026-09-16: 37 for the display, 23 for input and 14 for E1–E4.
+
+**Where the landings stand.** L1 is done: the probe's numbers and layouts
+matched this document's text, and it found `EVIOCSFF` to be a second request
+whose number depends on the width, since `struct ff_effect` holds a pointer.
+L2's `libs/virtio::input` is on `main` (493fd843, 0bfb1de4); what is left of
+it is running its fuzz target and taking its `EV_*` numbers from L1, which
+agree with its own today.
 
 ## 6. Decisions and open questions
 
-**For the product owner (os-f6):**
+**Decided by os-f6, 2026-09-16:**
 
 1. **One driver process per input device**, as blk has one per disk, rather
    than one `user/input` serving every virtio-input function.
-2. **No software autorepeat in the core** (§3.1), a written deviation from
-   Linux: no value-2 events. Compositors repeat keys themselves.
-3. **`write` refused in this iteration**, so the caps-lock LED does not
-   light. LEDs come with the status queue, as an additive `inputctl` message
-   (`STATUS`, core → driver).
+2. **No kernel key autorepeat** (§3.1), a written deviation from Linux: the
+   core makes no value-2 events. Compositors repeat keys themselves
+   (`wl_keyboard.repeat_info`), and libinput ignores `EV_REP` events.
+3. **`write` is refused for now**, so the caps-lock LED does not light. LEDs
+   are a `docs/BACKLOG.md` row: they come with the status queue, as an
+   additive `inputctl` message (`STATUS`, core → driver).
 4. **Multi-touch, force feedback and sound are left out** of what the core
-   publishes, even when a device declares them. QEMU's keyboard and tablet
-   declare none of them.
-5. **Hotplug is out.** Devices exist from boot. A later iteration adds
-   `inotify` on `/dev/input` (not in Ferrix today) or accepts a compositor
-   that rescans; which one is open.
-6. **The compositor's input backend:** hand-written over
-   `ferrix-linux-abi::input`, or the `evdev` crate (§2.4 is what the latter
-   needs, and the subset answers all of it). The first matches "evdev
-   through linux-abi's subset"; the second is less code and pulls in `nix`.
-7. **E1–E4 belong to iteration 2**, and E1 is the largest single piece left
-   in stage 17. Who owns it, and whether `timerfd` (E5) is done with it, is
-   the product owner's call. `DISPLAY.md` §2.3 named "os-26's epoll", and that
-   session is not on today's roster.
-8. **Smithay needs plane and property objects on `card0`** (§2.3, E4), which
-   `DISPLAY.md` §2.3's subset did not list: its legacy path is not as
-   plane-free as that table assumed.
+   publishes, even when a device declares them, each with a backlog row.
+   QEMU's keyboard and tablet declare none of them.
+5. **Hotplug is out of scope**, with a backlog row. Devices exist from boot.
+   Whether a later iteration adds `inotify` on `/dev/input` (not in Ferrix
+   today) or accepts a compositor that rescans is that row's question.
+6. **The compositor's input backend is hand-written over
+   `ferrix-linux-abi::input`**, not the `evdev` crate or `nix`: the no-C-stack
+   rule, and a small surface. §2.4 stays as the check that the subset would
+   serve an `evdev`-crate consumer too.
+7. **os-26 holds E1** (`epoll`, with nesting), **E2** (`eventfd2`) **and E3**
+   (`FIONBIO`). E5 (`timerfd`) is wanted, not required, and not assigned.
+8. **E4, `card0`'s planes and properties (3 points), belongs to the GUI
+   session (os-e5)**, and `docs/DISPLAY.md` §2.3 describes it as iteration 2:
+   `GETPLANERESOURCES`, `GETPLANE`, `OBJ_GETPROPERTIES` and `GETPROPERTY`,
+   with the primary plane and `type` property Smithay needs (§2.3 here).
 
 **For others:**
 
-* **ferrousli (32-bit):** whether its `linux/input.h` view of
-  `struct input_event` matches the kernel's 16 bytes under a 64-bit `time_t`
-  (§3.3). This does not block x86-64 or AArch64.
-* **The kernel reader of L6:** the ioctl branch again, or `Inode::ioctl`
-  first, now that there would be two device-specific branches.
+* **ferrousli (32-bit):** its `bits/alltypes.h` defines `__USE_TIME_BITS64`,
+  so its view of `struct input_event` should be the kernel's 16 bytes (§3.3).
+  A program built against it for ARMv7-A has not shown it. This does not
+  block x86-64 or AArch64.
+* **The kernel reader of L6:** `sys_ioctl` already special-cases the
+  console, sockets and `card<N>`; `/dev/input/eventN` would be a fourth. The
+  `Inode::ioctl` row in `docs/BACKLOG.md` says so; whether it lands first is
+  the reader's call.
 * **The XKB data** (`/usr/share/X11/xkb`) must be in the image for
   xkbcommon's keymap compiler, or the compositor builds its keymap from a
-  string it carries. That is the compositor's choice, but it changes the
-  initramfs.
+  string it carries. It is a stage 18 item: a pinned subset of
+  xkeyboard-config in the image (2 points).

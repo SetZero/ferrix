@@ -195,6 +195,32 @@ source is committed this time.
 | `MODE_PAGE_FLIP` | `SCANOUT` if the buffer changed, then `FLUSH`; `DRM_MODE_PAGE_FLIP_EVENT` queues a `drm_event_vblank` when `FLIPPED` arrives |
 | `MODE_DIRTYFB` | `FLUSH` of the clip rectangles |
 | `read()` | `drm_event_vblank` records; blocks while none are queued, `EAGAIN` under `O_NONBLOCK` |
+| `MODE_GETPLANERESOURCES` | **iteration 2 (E4):** the one plane's id |
+| `MODE_GETPLANE` | **iteration 2 (E4):** the primary plane: format `XRGB8888`, `possible_crtcs` 1, the CRTC and framebuffer it shows |
+| `MODE_OBJ_GETPROPERTIES` | **iteration 2 (E4):** for the plane, its `type` property at the primary value; for the connector, an empty list |
+| `MODE_GETPROPERTY` | **iteration 2 (E4):** `type`, the immutable enum property with its named values |
+
+**Iteration 2 adds planes and properties (E4, 3 points, the GUI session
+os-e5; decided by os-f6, 2026-09-16).** This table first assumed Smithay's
+legacy path needs no planes. It does: `create_surface` enumerates planes
+even there, reads each plane's properties to find `type` and reaches
+`unreachable!()` for a plane without one, and keeps only primary planes
+when universal planes are refused; with none it fails with `NoPlane`. It
+also reads the connector's properties to look for `DPMS`, where an empty
+list is fine (`docs/INPUT.md` §2.3 has the source lines). So `card0` gets
+one primary plane with a `type` property, and the four ioctls above.
+`GETPROPBLOB` and `OBJ_SETPROPERTY` stay out while the plane has no
+`IN_FORMATS` or `SIZE_HINTS` and the connector no `DPMS`. The numbers,
+`struct drm_mode_get_plane_res`, `drm_mode_get_plane`,
+`drm_mode_obj_get_properties` and `drm_mode_get_property` come from
+`probe/drm.c`, extended, not from memory; the plane type values, which the
+UAPI headers do not export, are written down from the kernel's
+`enum drm_plane_type` as the connector status values were. One thing E4
+checks first against `drivers/gpu/drm/drm_plane.c`: whether Linux lists a
+primary plane in `GETPLANERESOURCES` to a client that has not set
+`DRM_CLIENT_CAP_UNIVERSAL_PLANES`. If it does not, `card0` either accepts
+that capability while still refusing atomic, or lists the plane anyway as a
+written deviation.
 
 **Legacy is not rework.** Linux keeps `SETCRTC` and `PAGE_FLIP` alongside
 atomic, and Smithay's DRM backend falls back to them. Atomic commit is an

@@ -3238,7 +3238,7 @@ The remaining syscall surface, the memory scale, the process spawn path for
 
 ---
 
-## Stage 17 — Display and input  ·  *55 points*
+## Stage 17 — Display and input  ·  *74 points*
 
 The first stage of the goal after `rustc`: a Hyprland-shaped Wayland
 compositor, written in Rust, running on Ferrix. The compositor is a user
@@ -3285,8 +3285,29 @@ time. `cargo xtask test-display` boots `compositor/blank` as init on x86-64
 and AArch64 and requires every pixel of QEMU's screendump of the virtio-gpu
 to be its colour, and its negative control to fail at exactly pixel (0, 0).
 
-**Still to do:** input (virtio-input as evdev), the event-loop calls, atomic
-commit, per-open windows onto the card VMO, and the rest of the exit below.
+**Done — L1 of the input iteration, evdev's numbers (2026-09-16).**
+`docs/INPUT.md` is the design, approved by os-f6 the same day. Its first
+landing is `ferrix-linux-abi::input`: the evdev ioctls `/dev/input/eventN`
+will answer, with the sized ones as functions and a request's parts taken
+apart as the kernel's `_IOC_*` macros do, the event types and the codes the
+test and QEMU's keyboard and tablet use, and `input_event`, `input_id` and
+`input_absinfo`. A committed probe, `probe/input.c`, prints every number and
+layout from linux-libc-dev 7.0.0-29.29's headers natively and under
+`qemu-arm`, including the three views of `input_event` a 32-bit libc can
+take, and the tests name each line the module disagrees with.
+
+**Estimate, re-baselined by os-f6 on 2026-09-16:** 74 points, from 55. The
+display's iteration 1 took 37, the input iteration is 23 (`docs/INPUT.md`
+§5), and the prerequisites of iteration 2 are 14: nested `epoll` (E1),
+`eventfd2` (E2) and `FIONBIO` (E3), which os-26 holds, and `card0`'s planes
+and properties (E4, `docs/DISPLAY.md` §2.3), which the GUI session holds.
+Nested `epoll`, `FIONBIO` and the plane objects were not counted before
+`docs/INPUT.md` §2 read Smithay's event loop.
+
+**Still to do:** input L2–L7 (the virtio-input protocol half of L2 is on
+`main`; its fuzz run and the switch to L1's numbers remain), E1–E4, `timerfd`
+(wanted, not required), atomic commit, per-open windows onto the card VMO,
+and the rest of the exit below.
 
 **Exit:** in the boot test on x86-64 and AArch64 (ARMv7-A's QEMU machine has
 no virtio-gpu; the DK1's LTDC is a hardware row, P3), a user program opens
@@ -3345,6 +3366,10 @@ configuration and the IPC are written new, in Rust, to Hyprland's shape.
 * **Rendering** on the CPU into stage 17's dumb buffers: damage tracking,
   a pixman-shaped Rust rasteriser (`tiny-skia`), one page flip per frame,
   frame callbacks on vblank.
+* **A tiny-skia `Renderer` for Smithay,** whose own CPU renderer is pixman (C)
+  (5 points).
+* **XKB data in the image:** a pinned subset of xkeyboard-config, the files
+  xkbcommon's keymap compiler reads (2 points).
 * **Hyprland's shape:** the dwindle and master layouts, workspaces, the
   keybind and dispatcher model (`movefocus`, `movewindow`, `workspace`,
   `killactive`, `togglefloating`, `fullscreen`), gaps and borders, window
