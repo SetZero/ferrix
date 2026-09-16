@@ -7,11 +7,22 @@
 //! proves nothing. The device's side is played by [`Device`], a configuration
 //! block that answers a query the way virtio 1.2 §5.8.4 says, from a table,
 //! and records every access; some of its answers are wrong on purpose.
+//!
+//! The evdev names from `ferrix_linux_abi::input` appear only on the other
+//! side of an assertion from those hand-written numbers: where QEMU's devices
+//! set bit 30 for `KEY_A`, the test requires that bit to be the probe's
+//! `KEY_A`, so a code QEMU sends and the probe's number for it cannot part.
 
 extern crate std;
 
 use std::vec;
 use std::vec::Vec;
+
+use ferrix_linux_abi::input::{
+    ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_SLOT, ABS_MT_TRACKING_ID, BTN_EXTRA,
+    BTN_GEAR_DOWN, BTN_GEAR_UP, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, BTN_SIDE, BTN_TOUCH,
+    INPUT_PROP_DIRECT, KEY_A, KEY_ESC, LED_CAPSL, LED_NUML, LED_SCROLLL, REL_WHEEL, REL_X, REL_Y,
+};
 
 use super::*;
 
@@ -304,6 +315,7 @@ fn bitmap_bit_n_is_byte_n_over_8_bit_n_mod_8() {
     );
     let set: Vec<u16> = (0..1024).filter(|&bit| bits.bit(bit)).collect();
     assert_eq!(set, [1, 30, 0x110]);
+    assert_eq!(set, [KEY_ESC, KEY_A, BTN_LEFT]);
     // Past the answer, and past the union, is clear.
     assert!(!bits.bit(35 * 8));
     assert!(!bits.bit(u16::MAX));
@@ -460,7 +472,10 @@ fn qemus_keyboard_reads_whole() {
     assert!((0..8).all(|bit| !rep.bit(bit)));
     // LED_NUML, LED_CAPSL, LED_SCROLLL.
     let leds = ev_bits(&mut dev, 0x11).expect("leds");
-    assert_eq!((0..8).filter(|&bit| leds.bit(bit)).count(), 3);
+    assert_eq!(
+        (0..8).filter(|&bit| leds.bit(bit)).collect::<Vec<_>>(),
+        [LED_NUML, LED_CAPSL, LED_SCROLLL]
+    );
     let keys = ev_bits(&mut dev, 0x01).expect("keys");
     assert_eq!(keys.len(), 29);
     assert!(keys.bit(226) && keys.bit(30) && !keys.bit(227));
@@ -482,6 +497,19 @@ fn qemus_mouse_and_tablet_read_whole() {
     // BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE, BTN_EXTRA, BTN_TOUCH,
     // BTN_GEAR_DOWN, BTN_GEAR_UP.
     let buttons = [0x110, 0x111, 0x112, 0x113, 0x114, 0x14a, 0x150, 0x151];
+    assert_eq!(
+        buttons,
+        [
+            BTN_LEFT,
+            BTN_RIGHT,
+            BTN_MIDDLE,
+            BTN_SIDE,
+            BTN_EXTRA,
+            BTN_TOUCH,
+            BTN_GEAR_DOWN,
+            BTN_GEAR_UP
+        ]
+    );
     let mut mouse = qemu_device(vec![
         qemu_name(b"QEMU Virtio Mouse"),
         qemu_devids(2, 2),
@@ -494,7 +522,7 @@ fn qemus_mouse_and_tablet_read_whole() {
     // REL_X, REL_Y, REL_WHEEL.
     assert_eq!(
         (0..16).filter(|&bit| rel.bit(bit)).collect::<Vec<_>>(),
-        [0, 1, 8]
+        [REL_X, REL_Y, REL_WHEEL]
     );
     let keys = ev_bits(&mut mouse, 0x01).expect("buttons");
     assert_eq!(keys.len(), 43);
@@ -544,8 +572,18 @@ fn qemus_multitouch_reads_whole() {
     ]);
     assert_eq!(dev.block.len(), 51);
     assert!(prop_bits(&mut dev).expect("props").bit(1));
+    assert!(prop_bits(&mut dev).expect("props").bit(INPUT_PROP_DIRECT));
     let abs = ev_bits(&mut dev, 0x03).expect("abs");
     assert_eq!(abs.len(), 8);
+    assert_eq!(
+        (0..64).filter(|&bit| abs.bit(bit)).collect::<Vec<_>>(),
+        [
+            ABS_MT_SLOT,
+            ABS_MT_POSITION_X,
+            ABS_MT_POSITION_Y,
+            ABS_MT_TRACKING_ID
+        ]
+    );
     for (axis, max) in [(0x2f, 10), (0x39, 10), (0x35, 0x7fff), (0x36, 0x7fff)] {
         assert!(abs.bit(axis));
         assert_eq!(abs_info(&mut dev, axis).expect("axis").max, max);

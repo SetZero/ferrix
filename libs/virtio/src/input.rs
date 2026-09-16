@@ -14,10 +14,12 @@
 //! # Where the numbers come from
 //!
 //! Virtio 1.2 §5.8, checked against Linux 6.8's
-//! `include/uapi/linux/virtio_input.h` and `input-event-codes.h`, and against
-//! QEMU 9.2.4's copy of the first, `include/standard-headers/linux/
-//! virtio_input.h`, and the devices it builds from it in
-//! `hw/input/virtio-input.c` and `virtio-input-hid.c`.
+//! `include/uapi/linux/virtio_input.h`, and against QEMU 9.2.4's copy of it,
+//! `include/standard-headers/linux/virtio_input.h`, and the devices it builds
+//! from it in `hw/input/virtio-input.c` and `virtio-input-hid.c`. The evdev
+//! numbers (`EV_*`, `SYN_REPORT`) are not this module's: they are
+//! re-exported from `ferrix_linux_abi::input`, whose probe pins them against
+//! `input-event-codes.h`, so the driver and the evdev nodes read one copy.
 //!
 //! # What QEMU's devices answer
 //!
@@ -375,30 +377,18 @@ fn sized<D: ConfigSelect + ?Sized>(
 /// Bytes of `struct virtio_input_event`.
 pub const EVENT_LEN: usize = 8;
 
-// The event types and codes are evdev's, from Linux's
-// `include/uapi/linux/input-event-codes.h`: virtio-input does not renumber
-// them, so a virtio event is an `input_event` without its timestamp.
+// The event types and codes are evdev's, and virtio-input does not renumber
+// them: a virtio event is an `input_event` without its timestamp. So they are
+// not written down here but taken from `ferrix-linux-abi`'s input module,
+// where the probe compiled against Linux's `input-event-codes.h` pins every
+// one; a second copy here could only drift from it.
 
-/// `EV_SYN`: a marker between reports.
-pub const EV_SYN: u16 = 0x00;
-/// `EV_KEY`: a key or button, pressed (1), released (0) or repeated (2).
-pub const EV_KEY: u16 = 0x01;
-/// `EV_REL`: relative motion, such as a mouse's.
-pub const EV_REL: u16 = 0x02;
-/// `EV_ABS`: an absolute position, such as a tablet's.
-pub const EV_ABS: u16 = 0x03;
-/// `EV_MSC`: anything else, such as a key's scan code.
-pub const EV_MSC: u16 = 0x04;
-/// `EV_LED`: an LED's state, which the driver sends on [`STATUS_QUEUE`].
-pub const EV_LED: u16 = 0x11;
-/// `EV_SND`: a sound, which the driver sends on [`STATUS_QUEUE`].
-pub const EV_SND: u16 = 0x12;
-/// `EV_REP`: autorepeat's delay and period.
-pub const EV_REP: u16 = 0x14;
-/// `EV_MAX`: the largest event type.
-pub const EV_MAX: u16 = 0x1f;
-/// `SYN_REPORT`: the `EV_SYN` code that ends a report.
-pub const SYN_REPORT: u16 = 0;
+/// `EV_*`, the event types, and `SYN_REPORT`, the `EV_SYN` code that ends a
+/// report. `EV_LED` and `EV_SND` are the ones a driver sends on
+/// [`STATUS_QUEUE`].
+pub use ferrix_linux_abi::input::{
+    EV_ABS, EV_KEY, EV_LED, EV_MAX, EV_MSC, EV_REL, EV_REP, EV_SND, EV_SYN, SYN_REPORT,
+};
 
 /// `struct virtio_input_event`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
