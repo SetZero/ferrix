@@ -233,6 +233,7 @@ nobody has it yet.
 | Item | Owner |
 |---|---|
 | The cost of the 20 µs one-shot armed on every wake onto the caller's processor, measured on pipe and futex paths | ferrix-34 |
+| Waits that wake on the event: `poll`, `ppoll`, `select`, `pselect6` and the epoll waits recheck every 5 ms rather than sleeping on the files' wait queues, so a compositor's frame loop and every idle client pay a wake-up per slice and up to 5 ms of latency. The same wake-from-the-source pattern as d22f9d3: a pollable inode names the wait queues its readiness reads, and a wait joins all of them before its last look, so a `wake_all` on any of them ends it. 5 points. Written deviations of the epoll landing (d047480d) until then: `EPOLLRDHUP` and `EPOLLPRI` are never reported, because `Readiness` carries neither a half-closed peer nor urgent data | os-26 |
 | Per-CPU frame and heap caches, deferred since stage 2 | open, once a workload can measure them |
 | `Inode::ioctl`: `sys_ioctl` special-cases the console, sockets and `/dev/dri/card<N>` by the open object's type; a hook on the inode replaces the three branches (os-02's review of the display stack, 2026-09-16) | open, kernel VFS owner |
 | Checked register offsets in the ring-3 virtio drivers: `Block::read`/`write` in `user/blk` and `user/gpu` assert on a device-controlled `notify_off` × multiplier, and on ARMv7-A `offset + size_of::<T>()` can wrap past the bounds check; one shared checked-offset accessor for both (os-02's review, 2026-09-16) | open, driver owner |
