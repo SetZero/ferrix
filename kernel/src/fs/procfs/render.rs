@@ -23,7 +23,7 @@ use ferrix_procfs::stat::{self, Stat};
 use ferrix_procfs::status::{self, State, Status};
 use ferrix_procfs::sysctl;
 use ferrix_vfs::fd::MAX_LIMIT;
-use ferrix_vfs::{Errno, Location, OpenFile, Result};
+use ferrix_vfs::{Errno, Location, Namespace, OpenFile, Result};
 
 use super::{Kernel, ThreadOf};
 use crate::arch;
@@ -161,13 +161,28 @@ pub(super) fn mounts(_: &Kernel) -> Result<Vec<u8>> {
         || ns.root(),
         |caller| caller.fs_context().lock().root.clone(),
     );
+    mounts_from(&ns, &root)
+}
+
+/// `/proc/<pid>/mounts`: [`mounts`], with each mount point as that process's
+/// root sees it rather than the reader's, as Linux has it. Programs read
+/// `/proc/self/mounts` more often than `/proc/mounts`, which on Linux is a
+/// link to it; btop reads nothing else when there is no `/etc/mtab`.
+pub(super) fn process_mounts(process: &Process) -> Result<Vec<u8>> {
+    let ns = fs::namespace();
+    let root = process.fs_context().lock().root.clone();
+    mounts_from(&ns, &root)
+}
+
+/// The mount table, with each mount point as `root` sees it.
+fn mounts_from(ns: &Namespace, root: &Location) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     for mount in ns.mounts() {
         let at = Location {
             dentry: Arc::clone(mount.root()),
             mount: Arc::clone(&mount),
         };
-        let point = ns.path_of(&at, &root);
+        let point = ns.path_of(&at, root);
         let name = mount.filesystem().name().as_bytes();
         mounts::render(
             &mut out,

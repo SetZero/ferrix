@@ -193,6 +193,84 @@ impl Mapping {
     }
 }
 
+/// A zeroed kernel buffer on pages that need not be contiguous, freed when it
+/// is dropped.
+///
+/// For whole files read into the kernel, which is what loading a program is.
+/// The heap takes a large allocation from the buddy allocator in one piece,
+/// and its largest piece is `2^MAX_ORDER` frames, four mebibytes: a program
+/// larger than that, btop at 4.6 MiB the first, could not be read at all,
+/// however much memory was free. A buffer here is limited by free frames and
+/// by the arena instead.
+#[derive(Debug)]
+pub(crate) struct Buffer {
+    /// The pages, or `None` for an empty buffer, which needs none.
+    mapping: Option<Mapping>,
+    /// Bytes in use, at most the mapping's length.
+    len: usize,
+}
+
+impl Buffer {
+    /// `len` zeroed bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`allocate`]'s, when the frames or the addresses for it are not there.
+    pub(crate) fn zeroed(len: usize) -> Result<Buffer, VmapError> {
+        if len == 0 {
+            return Ok(Buffer { mapping: None, len });
+        }
+        let bytes = u64::try_from(len).map_err(|_| VmapError::BadLength(u64::MAX))?;
+        let mapping = allocate(bytes.div_ceil(PAGE_SIZE), MapFlags::KERNEL_DATA)?;
+        Ok(Buffer {
+            mapping: Some(mapping),
+            len,
+        })
+    }
+
+    /// Keep only the first `len` bytes. The pages stay until the drop.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.len = self.len.min(len);
+    }
+}
+
+impl core::ops::Deref for Buffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        match self.mapping {
+            None => &[],
+            // SAFETY: the mapping is `len` bytes or more of readable kernel
+            // memory this buffer alone owns, zeroed when it was mapped, and it
+            // stays mapped until the drop.
+            Some(mapping) => unsafe {
+                core::slice::from_raw_parts(mapping.base as usize as *const u8, self.len)
+            },
+        }
+    }
+}
+
+impl core::ops::DerefMut for Buffer {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        match self.mapping {
+            None => &mut [],
+            // SAFETY: as `deref`, and writable; `&mut self` makes this the
+            // only reference.
+            Some(mapping) => unsafe {
+                core::slice::from_raw_parts_mut(mapping.base as usize as *mut u8, self.len)
+            },
+        }
+    }
+}
+
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        if let Some(mapping) = self.mapping.take() {
+            let _ = free(mapping.base);
+        }
+    }
+}
+
 /// Reserve `len` usable bytes with a guard page on each side.
 fn reserve(len: u64, flags: VmaFlags, kind: Kind) -> Result<Mapping, VmapError> {
     if len == 0 || !len.is_multiple_of(PAGE_SIZE) || len > ARENA_END - ARENA_BASE - 2 * GUARD_BYTES
