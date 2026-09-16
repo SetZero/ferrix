@@ -168,3 +168,8 @@ fn standard_input_standard_error_and_perror() {
 fn scanf_reads_numbers_strings_and_sets_from_strings_and_streams() {
     check(&stdio("stdio/scanf"));
 }
+
+#[test]
+fn wide_characters_read_and_write_utf_8_and_report_bad_sequences() {
+    check(&stdio("stdio/wide"));
+}

@@ -228,6 +228,9 @@ pub struct Inner {
     pushback: [u8; UNGET],
     /// How many bytes are pushed back.
     pushed: usize,
+    /// The orientation `fwide` reports: 0 until the stream is used for wide
+    /// or byte I/O, positive once wide, negative once byte-oriented.
+    pub orientation: i8,
 }
 
 impl Inner {
@@ -252,6 +255,7 @@ impl Inner {
             wlen: 0,
             pushback: [0; UNGET],
             pushed: 0,
+            orientation: 0,
         }
     }
 
@@ -626,6 +630,19 @@ impl Inner {
         done
     }
 
+    /// Pushes `bytes` back so that they are read next, in order, or nothing if
+    /// they do not all fit or the stream cannot be read. `ungetwc` pushes a
+    /// whole character's bytes this way.
+    pub fn unget_bytes(&mut self, bytes: &[u8]) -> bool {
+        if !self.start_reading() || UNGET - self.pushed < bytes.len() {
+            return false;
+        }
+        for &byte in bytes.iter().rev() {
+            let _ = self.unget(byte);
+        }
+        true
+    }
+
     /// Pushes `byte` back. False if the pushback is full or the stream cannot
     /// be read.
     pub fn unget(&mut self, byte: u8) -> bool {
@@ -764,6 +781,7 @@ impl Inner {
         self.rend = 0;
         self.wlen = 0;
         self.pushed = 0;
+        self.orientation = 0;
         if !self.chosen {
             self.mode = Mode::Auto;
         }

@@ -79,6 +79,22 @@ pub struct MbState {
 
 const _: () = assert!(size_of::<MbState>() == 8);
 
+impl MbState {
+    /// The initial conversion state, which a zeroed `mbstate_t` is.
+    pub const fn new() -> Self {
+        Self {
+            state: 0,
+            unused: 0,
+        }
+    }
+}
+
+impl Default for MbState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A function's own conversion state, for when it is given a null one.
 struct InternalState(UnsafeCell<MbState>);
 
