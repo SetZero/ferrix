@@ -60,6 +60,9 @@ int epoll_create1(int);
 int epoll_ctl(int, int, int, struct epoll_event *);
 int epoll_wait(int, struct epoll_event *, int, int);
 int epoll_pwait(int, struct epoll_event *, int, int, const sigset_t *);
+/* Ferrousli, not musl 1.2.5: glibc's epoll_pwait2, with a timespec timeout. */
+struct timespec;
+int epoll_pwait2(int, struct epoll_event *, int, const struct timespec *, const sigset_t *);
 
 
 #ifdef __cplusplus

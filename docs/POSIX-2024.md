@@ -135,7 +135,8 @@ the tables above. These are the ones POSIX does not require, and several are
 what real programs call. The `netdb` and `ifaddrs` rows — `gethostbyname`,
 `gethostbyaddr`, `hstrerror`, `herror`, `__h_errno_location`, `getifaddrs` and
 `freeifaddrs` — left the list with the name-resolution landing of 2026-09-16,
-which added `ether_*`, `res_*` and the `ns_*` parser beside them:
+which added `ether_*`, `res_*` and the `ns_*` parser beside them, and the
+`sys/epoll` row with the epoll and eventfd wrappers of 2026-09-17:
 
 | Area | Functions |
 |---|---|
@@ -145,7 +146,6 @@ which added `ether_*`, `res_*` and the `ns_*` parser beside them:
 | err | `err`, `err_set_exit`, `err_set_file`, `errc`, `errx`, `verr`, `verrc`, `verrx`, `vwarn`, `vwarnc`, `vwarnx`, `warn`, `warnc`, `warnx` |
 | stdio | `__fpending`, `__fpurge`, `__freadable`, `__freading`, `__fwritable`, `__fwriting`, `cuserid`, `gets`, `renameat2`, `tempnam` |
 | time | `timelocal`, `timespec_getres` |
-| sys/epoll | `epoll_create`, `epoll_create1`, `epoll_ctl`, `epoll_pwait`, `epoll_wait` |
 | arpa/inet | `inet_lnaof`, `inet_makeaddr`, `inet_netof`, `inet_network` |
 | shadow | `endspent`, `getspent`, `getspnam`, `setspent` |
 | dirent | `fdclosedir` |

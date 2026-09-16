@@ -11,3 +11,8 @@ use common::{Case, check};
 fn linux_and_process_calls_reach_the_kernel_without_changing_the_system() {
     check(&Case::named("linux/calls"));
 }
+
+#[test]
+fn an_eventfd_written_by_one_thread_wakes_another_threads_epoll_wait() {
+    check(&Case::named("linux/epoll"));
+}
