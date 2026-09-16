@@ -11,6 +11,8 @@
 //! * [`lookup`]: turning a host name into addresses and a service name into
 //!   ports, from a numeric address, the hosts file, or DNS.
 //! * [`addrinfo`]: `getaddrinfo`, `freeaddrinfo` and `getnameinfo`.
+//! * [`hostent`]: `gethostbyname` and its relatives, `getservbyname` and
+//!   `getservbyport`, and the `set*ent`, `get*ent` and `end*ent` cursors.
 //! * [`dns`]: building and parsing DNS packets.
 //! * [`resolver`]: `/etc/resolv.conf`, and sending queries to its name servers
 //!   over UDP, falling back to TCP for a truncated answer.
@@ -37,6 +39,7 @@
 
 pub mod addrinfo;
 pub mod dns;
+pub mod hostent;
 pub mod lookup;
 pub mod resolver;
 
@@ -301,6 +304,10 @@ impl SockaddrIn6 {
 pub struct Sources<'a> {
     /// The hosts file.
     pub hosts: &'a CStr,
+    /// The networks file, which only the `getnetent` cursor reads.
+    pub networks: &'a CStr,
+    /// The protocols file, which only the `getprotoent` cursor reads.
+    pub protocols: &'a CStr,
     /// The services file.
     pub services: &'a CStr,
     /// The resolver's configuration.
@@ -312,6 +319,8 @@ pub struct Sources<'a> {
 /// What the C functions read: the standard files, and name servers on port 53.
 pub const SYSTEM: Sources<'static> = Sources {
     hosts: c"/etc/hosts",
+    networks: c"/etc/networks",
+    protocols: c"/etc/protocols",
     services: c"/etc/services",
     resolv_conf: c"/etc/resolv.conf",
     port: 53,
@@ -440,6 +449,34 @@ pub(crate) fn c_len(text: &[u8]) -> usize {
     text.iter()
         .position(|&byte| byte == 0)
         .unwrap_or(text.len())
+}
+
+/// Copies `len` bytes of `text`, and a NUL after them, to `dest`.
+///
+/// # Safety
+///
+/// `dest` must be valid for writes of `len + 1` bytes.
+pub(crate) unsafe fn copy_out(dest: *mut c_char, text: &[u8], len: usize) {
+    for index in 0..len {
+        let byte = at(text, index);
+        // SAFETY: the caller vouches for `len + 1` writable bytes.
+        unsafe { dest.wrapping_add(index).write(byte as c_char) };
+    }
+    // SAFETY: as above.
+    unsafe { dest.wrapping_add(len).write(0) };
+}
+
+/// Copies `len` bytes of `text` to `dest`, without a NUL.
+///
+/// # Safety
+///
+/// `dest` must be valid for writes of `len` bytes.
+pub(crate) unsafe fn copy_bytes(dest: *mut c_char, text: &[u8], len: usize) {
+    for index in 0..len {
+        let byte = at(text, index);
+        // SAFETY: the caller vouches for `len` writable bytes.
+        unsafe { dest.wrapping_add(index).write(byte as c_char) };
+    }
 }
 
 /// The bytes of the C string `s`, without its NUL.
@@ -625,6 +662,8 @@ pub(crate) mod testing {
     #[derive(Debug)]
     pub(crate) struct Paths {
         pub(crate) hosts: CString,
+        pub(crate) networks: CString,
+        pub(crate) protocols: CString,
         pub(crate) services: CString,
         pub(crate) resolv_conf: CString,
     }
@@ -634,6 +673,8 @@ pub(crate) mod testing {
         pub(crate) fn new(resolv_conf: &str) -> Self {
             Self {
                 hosts: fixture("hosts"),
+                networks: fixture("networks"),
+                protocols: fixture("protocols"),
                 services: fixture("services"),
                 resolv_conf: fixture(resolv_conf),
             }
@@ -643,6 +684,8 @@ pub(crate) mod testing {
         pub(crate) fn sources(&self, port: u16) -> Sources<'_> {
             Sources {
                 hosts: &self.hosts,
+                networks: &self.networks,
+                protocols: &self.protocols,
                 services: &self.services,
                 resolv_conf: &self.resolv_conf,
                 port,

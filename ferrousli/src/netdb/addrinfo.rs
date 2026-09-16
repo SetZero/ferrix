@@ -30,7 +30,7 @@ use super::{
     EAI_MEMORY, EAI_NODATA, EAI_NONAME, EAI_OVERFLOW, EAI_SYSTEM, IPPROTO_UDP, NI_DGRAM,
     NI_NAMEREQD, NI_NUMERICHOST, NI_NUMERICSCOPE, NI_NUMERICSERV, SOCK_CLOEXEC, SOCK_DGRAM,
     SOCKADDR_IN_LEN, SOCKADDR_IN6_LEN, SYSTEM, SockaddrIn, SockaddrIn6, Sources, V4MAPPED, at,
-    c_bytes, c_bytes_max, c_len, copy_c, is_linklocal, is_mc_linklocal, is_space,
+    c_bytes, c_bytes_max, c_len, copy_c, copy_out, is_linklocal, is_mc_linklocal, is_space,
 };
 use crate::inet::{if_indextoname, inet_ntop};
 use crate::malloc::{calloc, free};
@@ -121,19 +121,6 @@ fn decimal(out: &mut [u8], len: &mut usize, value: u32) {
 fn write_bytes(out: &mut [u8], len: &mut usize, text: &[u8]) {
     for &byte in text {
         put(out, len, byte);
-    }
-}
-
-/// Copies `len` bytes of `text` and a NUL to `dest`.
-///
-/// # Safety
-///
-/// `dest` must be valid for writes of `len + 1` bytes.
-unsafe fn copy_out(dest: *mut c_char, text: &[u8], len: usize) {
-    for index in 0..=len {
-        let byte = at(text, index);
-        // SAFETY: the caller vouches for `len + 1` writable bytes.
-        unsafe { dest.wrapping_add(index).write(byte as c_char) };
     }
 }
 

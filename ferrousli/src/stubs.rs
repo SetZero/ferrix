@@ -54,11 +54,7 @@ stubs! {
     ether_hostton
     exp
     freeifaddrs
-    gethostbyaddr
-    gethostbyname
     getifaddrs
-    getservbyname
-    getservbyport
     log
     pow
     regcomp
