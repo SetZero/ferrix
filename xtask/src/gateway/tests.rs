@@ -41,7 +41,10 @@ struct Guest {
 impl Guest {
     /// Start a gateway and take QEMU's place on the other end of it.
     fn start() -> Guest {
-        let gateway = Gateway::start(None).unwrap();
+        // A resolver named, so no test asks the host for its own: on Windows
+        // that is a PowerShell per gateway, and twenty of them at once starve
+        // the other tests' sockets.
+        let gateway = Gateway::start(Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 53))).unwrap();
         let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).unwrap();
         socket.connect(gateway.address()).unwrap();
         socket.set_read_timeout(Some(PATIENCE)).unwrap();
@@ -219,15 +222,44 @@ fn does_not_answer_a_ping_it_is_not_addressed_by() {
     let request = icmpv4::Header::echo(icmpv4::kind::ECHO_REQUEST, 1, 1);
     let mut message = vec![0_u8; icmpv4::HEADER_LEN];
     let _ = request.emit(&[], &mut message).unwrap();
-    // Forwarding this would need a raw socket, so it is dropped rather than
-    // half-answered from an address that never saw it.
+    // Nothing but the gateway lives on the guest network, and the host's
+    // `ping` cannot ask an address that exists only here.
     guest.send_ipv4(
         ipv4::protocol::ICMP,
         GUEST_IP,
-        Ipv4Addr::new(1, 1, 1, 1),
+        Ipv4Addr::new(10, 0, 2, 99),
         &message,
     );
-    guest.expect_silence("an echo to the outside world is dropped, not answered");
+    guest.expect_silence("an echo to an empty address on the guest network is not answered");
+}
+
+#[test]
+fn forwards_a_ping_to_the_outside_and_answers_when_the_host_is_answered() {
+    let guest = Guest::start();
+    let body = b"out and back";
+    let request = icmpv4::Header::echo(icmpv4::kind::ECHO_REQUEST, 0x7777, 3);
+    let mut message = vec![0_u8; icmpv4::HEADER_LEN + body.len()];
+    let _ = request.emit(body, &mut message).unwrap();
+    // The host's own loopback: outside the guest network, and an address the
+    // host's `ping` reaches on every machine, with or without a network.
+    let outside = Ipv4Addr::LOCALHOST;
+    guest.send_ipv4(ipv4::protocol::ICMP, GUEST_IP, outside, &message);
+
+    let (header, payload) = guest.ipv4_of(ipv4::protocol::ICMP);
+    assert_eq!(
+        Ipv4Addr::from(header.source),
+        outside,
+        "the reply comes from the address the guest pinged"
+    );
+    let reply = icmpv4::Header::parse(&payload).unwrap();
+    assert_eq!(reply.header.kind, icmpv4::kind::ECHO_REPLY);
+    assert_eq!(reply.header.echo_fields(), Some((0x7777, 3)));
+    assert_eq!(reply.body, body, "with the request's body");
+    assert!(
+        guest.gateway.counters().report().contains("(1 forwarded)"),
+        "and it was the host's ping that answered: {}",
+        guest.gateway.counters().report()
+    );
 }
 
 /// Send a UDP datagram from the guest, and return the frame the gateway makes

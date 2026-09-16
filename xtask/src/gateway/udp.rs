@@ -107,7 +107,11 @@ impl Core {
         if self.udp.contains_key(&key) {
             return Ok(());
         }
-        let target = self.target_of(key.seen);
+        let Some(target) = self.target_of(key.seen) else {
+            // The host's resolver is still being found; the guest asks again.
+            bump(&self.counters.unsupported);
+            return Ok(());
+        };
         let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))
             .map_err(|error| Error::new(format!("no host socket for {}: {error}", key.guest)))?;
         socket.set_nonblocking(true)?;
@@ -128,11 +132,11 @@ impl Core {
     /// `10.0.2.3:53` goes to the resolver, wherever that is. The gateway's own
     /// address is the host's loopback, as [`super::host_of`] explains.
     /// Everything else goes where the guest addressed it.
-    fn target_of(&mut self, seen: SocketAddrV4) -> SocketAddrV4 {
+    fn target_of(&mut self, seen: SocketAddrV4) -> Option<SocketAddrV4> {
         if *seen.ip() == DNS_IP && seen.port() == DNS_PORT {
-            *self.resolver.get_or_insert_with(super::default_resolver)
+            self.resolver.now()
         } else {
-            super::host_of(seen)
+            Some(super::host_of(seen))
         }
     }
 

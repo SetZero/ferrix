@@ -61,11 +61,9 @@
 //! * **ARP** — answers requests for `10.0.2.2` and `10.0.2.3`, and learns the
 //!   guest's MAC from anything it sends.
 //! * **DHCP** — a minimal server, enough for `udhcpc` to configure `eth0`.
-//! * **ICMP echo** — answered for `10.0.2.2` and `10.0.2.3` only. Echo to the
-//!   outside world is *not* forwarded: sending one needs either a raw socket
-//!   (privileged) or `IPPROTO_ICMP` datagram sockets, which are gated behind
-//!   `net.ipv4.ping_group_range` and so are not something a build tool can rely
-//!   on. `ping 10.0.2.2` works; `ping 1.1.1.1` does not.
+//! * **ICMP echo** — answered here for `10.0.2.2` and `10.0.2.3`, and for any
+//!   other address carried out by the host's own `ping`, as [`icmp`] explains:
+//!   `ping 10.0.2.2` and `ping 1.1.1.1` both work.
 //! * **UDP** — one host socket per guest flow, with an idle timeout. A datagram
 //!   to `10.0.2.3:53` goes to the host's own resolver: the first in
 //!   `/etc/resolv.conf`, or on Windows the first the network configuration
@@ -79,6 +77,7 @@
 //!   advertisement will prefer the address in it.
 
 mod dhcp;
+mod icmp;
 mod tcp;
 mod udp;
 
@@ -172,6 +171,8 @@ pub(crate) struct Counters {
     arp: AtomicU64,
     /// ICMP echoes answered.
     icmp: AtomicU64,
+    /// ICMP echoes to the outside that the host's `ping` saw answered.
+    icmp_forwarded: AtomicU64,
     /// DHCP offers and acknowledgments sent.
     dhcp: AtomicU64,
     /// UDP flows opened towards the host.
@@ -202,12 +203,13 @@ impl Counters {
     pub(crate) fn report(&self) -> String {
         let get = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         format!(
-            "frames {}/{} in/out, arp {}, icmp {}, dhcp {}, udp {} flows {}/{} out/in, \
+            "frames {}/{} in/out, arp {}, icmp {} ({} forwarded), dhcp {}, udp {} flows {}/{} out/in, \
              tcp {} opened {} refused, dropped {} oversize {} unsupported {} malformed",
             get(&self.frames_in),
             get(&self.frames_out),
             get(&self.arp),
             get(&self.icmp),
+            get(&self.icmp_forwarded),
             get(&self.dhcp),
             get(&self.udp_flows),
             get(&self.udp_out),
@@ -334,6 +336,7 @@ fn serve(mut core: Core, stop: &AtomicBool) {
         }
         core.poll_udp();
         core.poll_tcp();
+        core.poll_icmp();
         core.expire();
     }
 }
@@ -359,11 +362,12 @@ struct Core {
     ),
     /// The resolver `10.0.2.3:53` forwards to, with its port: a test serves
     /// its own answers from a socket the kernel gave a free port, and asking
-    /// it on 53 would reach nothing. `None` until the guest first asks, when
-    /// nobody named one: finding the host's own costs a PowerShell start on
-    /// Windows, which a gateway whose guest never resolves a name, like most
-    /// of this module's tests, should not pay.
-    resolver: Option<SocketAddrV4>,
+    /// it on 53 would reach nothing. Found on a thread of its own when nobody
+    /// named one, because finding the host's costs a PowerShell start on
+    /// Windows, seconds in which this loop would carry nothing at all.
+    resolver: Resolver,
+    /// Echo requests out to the host's `ping`.
+    pings: icmp::Forwarder,
     /// The initial send sequence number the next connection takes.
     next_iss: u32,
     /// What has happened.
@@ -373,6 +377,10 @@ struct Core {
 impl Core {
     /// Bind the host socket and prepare the tables.
     fn bind(resolver: Option<SocketAddrV4>) -> Result<Core> {
+        let resolver = match resolver {
+            Some(named) => Resolver::Known(named),
+            None => Resolver::find(),
+        };
         let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .map_err(|error| Error::new(format!("could not bind the gateway socket: {error}")))?;
         socket.set_read_timeout(Some(TURN))?;
@@ -384,6 +392,7 @@ impl Core {
             tcp: BTreeMap::new(),
             connected: std::sync::mpsc::channel(),
             resolver,
+            pings: icmp::Forwarder::new(),
             // Not random, and it does not need to be: this is a NAT on a
             // private wire with one guest on it, where an off-path attacker
             // guessing a sequence number is not a threat that exists. A fixed
@@ -461,16 +470,10 @@ impl Core {
         }
     }
 
-    /// Answer an echo request addressed to the gateway or the forwarder.
-    ///
-    /// Only to those two. Forwarding an echo would mean originating ICMP on the
-    /// host, which needs a raw socket or a permitted ping group; the module
-    /// documentation says so and this is where it is true.
+    /// Answer an echo request: here for the gateway's and the forwarder's own
+    /// addresses, and through the host's `ping` for any other one outside the
+    /// guest network, which [`Core::poll_icmp`] answers when the host has.
     fn on_icmp(&mut self, source: Ipv4Addr, destination: Ipv4Addr, bytes: &[u8]) -> Result<()> {
-        if destination != GATEWAY_IP && destination != DNS_IP {
-            bump(&self.counters.unsupported);
-            return Ok(());
-        }
         let message = icmpv4::Header::parse(bytes)?;
         let Some((identifier, sequence)) = message.header.echo_fields() else {
             bump(&self.counters.unsupported);
@@ -479,14 +482,69 @@ impl Core {
         if message.header.kind != icmpv4::kind::ECHO_REQUEST {
             return Ok(());
         }
+        if destination == GATEWAY_IP || destination == DNS_IP {
+            return self.echo_reply(destination, source, identifier, sequence, message.body);
+        }
+        // Nothing else on the guest network answers, and a broadcast or a
+        // group is not a host the host's `ping` can ask.
+        let outside = !on_guest_network(destination)
+            && !destination.is_broadcast()
+            && !destination.is_multicast()
+            && !destination.is_unspecified();
+        let taken = outside
+            && self.pings.forward(icmp::Answered {
+                guest: source,
+                destination,
+                identifier,
+                sequence,
+                body: message.body.to_vec(),
+            });
+        if !taken {
+            bump(&self.counters.unsupported);
+        }
+        Ok(())
+    }
+
+    /// Reply to the echoes the host's `ping` saw answered, from the address
+    /// the guest asked.
+    fn poll_icmp(&mut self) {
+        for answered in self.pings.answered() {
+            bump(&self.counters.icmp_forwarded);
+            // The reply names where the guest sent the request, which for
+            // everything outside is the address the host pinged.
+            let from = answered.destination;
+            if self
+                .echo_reply(
+                    from,
+                    answered.guest,
+                    answered.identifier,
+                    answered.sequence,
+                    &answered.body,
+                )
+                .is_err()
+            {
+                bump(&self.counters.malformed);
+            }
+        }
+    }
+
+    /// Send an echo reply carrying `body` from `from` to `to`.
+    fn echo_reply(
+        &self,
+        from: Ipv4Addr,
+        to: Ipv4Addr,
+        identifier: u16,
+        sequence: u16,
+        body: &[u8],
+    ) -> Result<()> {
         let mut reply = [0_u8; MTU];
         let header = icmpv4::Header::echo(icmpv4::kind::ECHO_REPLY, identifier, sequence);
-        let len = header.emit(message.body, &mut reply)?;
+        let len = header.emit(body, &mut reply)?;
         bump(&self.counters.icmp);
         self.send_ipv4(
             ipv4::protocol::ICMP,
-            destination,
-            source,
+            from,
+            to,
             reply.get(..len).ok_or(ferrix_netwire::Error::NoSpace)?,
         )
     }
@@ -590,6 +648,57 @@ fn put(out: &mut [u8], at: usize, field: &[u8]) -> Result<()> {
         .ok_or(ferrix_netwire::Error::NoSpace)?
         .copy_from_slice(field);
     Ok(())
+}
+
+/// Whether `address` is on the guest network, `10.0.2.0/24`, where nothing but
+/// the gateway's own addresses answers an echo.
+fn on_guest_network(address: Ipv4Addr) -> bool {
+    address.octets()[..3] == GATEWAY_IP.octets()[..3]
+}
+
+/// The resolver `10.0.2.3:53` forwards to: named, or being found.
+#[derive(Debug)]
+enum Resolver {
+    /// Known.
+    Known(SocketAddrV4),
+    /// The host's own, which a thread started with the gateway is looking up.
+    Finding(std::sync::mpsc::Receiver<SocketAddrV4>),
+}
+
+impl Resolver {
+    /// Start looking up the host's own on a thread, so the serving loop never
+    /// waits for PowerShell. It is started with the gateway, before QEMU is,
+    /// so it is found long before a guest has booted far enough to ask.
+    fn find() -> Resolver {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("ferrix-net-resolver".to_owned())
+            .spawn(move || {
+                let _ = sender.send(default_resolver());
+            });
+        match started {
+            Ok(_) => Resolver::Finding(receiver),
+            Err(_) => Resolver::Known(SocketAddrV4::new(FALLBACK_RESOLVER, udp::DNS_PORT)),
+        }
+    }
+
+    /// The resolver if it is known by now. A query that arrives before it is
+    /// is dropped, and the guest's resolver asks again.
+    fn now(&mut self) -> Option<SocketAddrV4> {
+        if let Resolver::Finding(receiver) = self {
+            match receiver.try_recv() {
+                Ok(found) => *self = Resolver::Known(found),
+                Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    *self = Resolver::Known(SocketAddrV4::new(FALLBACK_RESOLVER, udp::DNS_PORT));
+                }
+            }
+        }
+        match self {
+            Resolver::Known(address) => Some(*address),
+            Resolver::Finding(_) => None,
+        }
+    }
 }
 
 /// Where `10.0.2.3:53` forwards to when nobody said: the host's own resolver,
