@@ -302,7 +302,7 @@ static SYS_KERNEL: [Entry<Kernel>; 6] = [
 ];
 
 /// `/proc/<pid>`.
-pub(crate) static PER_PROCESS: [Entry<Process>; 10] = [
+pub(crate) static PER_PROCESS: [Entry<Process>; 11] = [
     Entry {
         name: b"fd",
         permissions: 0o500,
@@ -318,6 +318,7 @@ pub(crate) static PER_PROCESS: [Entry<Process>; 10] = [
     file(b"cmdline", render::cmdline),
     file(b"stat", render::stat),
     file(b"maps", render::maps),
+    file(b"mounts", render::process_mounts),
     Entry {
         name: b"cwd",
         permissions: 0o777,
