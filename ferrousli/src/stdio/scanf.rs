@@ -33,21 +33,32 @@ use super::file::{self, File, Inner, stdin};
 use crate::errno;
 use crate::float::{BINARY32, BINARY64, X87_EXTENDED};
 use crate::malloc::{free, malloc, realloc};
-use crate::multibyte::{MbState, WChar, mbrtowc, mbsinit};
+use crate::multibyte::{MbState, WChar, WInt, mbrtowc, mbsinit, wcrtomb};
 use crate::scan::{CText, Input, digit, is_space};
 use crate::strtod;
 use crate::strtol;
 use crate::va::{self, VaList, VaListTag};
+use crate::wctype::iswspace;
 
 /// The longest number field read.
 const TOKEN: usize = 128;
 
 /// Where a conversion reads from.
-trait Source {
+///
+/// A wide source, for the `wscanf` family, gives one unit per wide character:
+/// the character itself when it is ASCII, a space for any other white space,
+/// and `0x80`, which no number or directive holds, for anything else. So widths
+/// and `%n` count characters, and numbers read as they do from bytes. What the
+/// last unit really was is [`Source::last_wide`].
+pub(super) trait Source {
     /// The next byte, or `None` at the end of the input or on an error.
     fn next(&mut self) -> Option<u8>;
     /// Gives back `byte`, the last byte [`Source::next`] returned.
     fn back(&mut self, byte: u8);
+    /// For a wide source, the wide character the last unit stood for.
+    fn last_wide(&self) -> Option<WChar> {
+        None
+    }
 }
 
 /// A C string, for `sscanf`.
@@ -439,6 +450,53 @@ unsafe fn floating<S: Source>(
     Ok(())
 }
 
+/// Whether the wide character `wc` belongs in a `%s`, `%c` or `%[` field read
+/// from a wide source: not white space for `%s`, anything for `%c`, and for
+/// `%[` a member of the set written in the wide format from `start`, at the
+/// `[`, to `end`, at the closing `]`, read as [`byte_set`] reads it.
+///
+/// # Safety
+///
+/// For `%[`, `format` must hold at least `end + 1` characters.
+unsafe fn wide_member(
+    format: *const WChar,
+    start: usize,
+    end: usize,
+    conversion: u8,
+    wc: WChar,
+) -> bool {
+    match conversion {
+        b's' => iswspace(wc as WInt) == 0,
+        b'[' => {
+            // SAFETY: the caller vouches for the characters up to `end`.
+            let at = |i: usize| unsafe { format.wrapping_add(i).read() };
+            let mut i = start + 1;
+            let invert = at(i) == WChar::from(b'^');
+            if invert {
+                i += 1;
+            }
+            let mut found = false;
+            if at(i) == WChar::from(b'-') || at(i) == WChar::from(b']') {
+                found |= at(i) == wc;
+                i += 1;
+            }
+            while i < end {
+                let c = at(i);
+                if c == WChar::from(b'-') && i + 1 < end {
+                    let (from, to) = (at(i - 1), at(i + 1));
+                    found |= (from..=to).contains(&wc) || to == wc;
+                    i += 2;
+                    continue;
+                }
+                found |= c == wc;
+                i += 1;
+            }
+            found != invert
+        }
+        _ => true,
+    }
+}
+
 /// Builds the set of bytes a `%s`, `%c` or `%[` field may hold. For `%[`,
 /// `p` is at the `[`, and is left at the closing `]`.
 fn byte_set(format: &CText, p: &mut usize, conversion: u8) -> Result<[bool; 256], Stop> {
@@ -563,6 +621,7 @@ impl Buffer {
 unsafe fn string<S: Source>(
     reader: &mut Reader<'_, S>,
     format: &CText,
+    wide_format: *const WChar,
     p: &mut usize,
     conversion: u8,
     width: usize,
@@ -570,6 +629,7 @@ unsafe fn string<S: Source>(
     dest: *mut c_void,
     alloc: bool,
 ) -> Result<(), Stop> {
+    let set_start = *p;
     let set = byte_set(format, p, conversion)?;
     let wide = size == Size::Long;
     let element = if wide { size_of::<WChar>() } else { 1 };
@@ -597,6 +657,41 @@ unsafe fn string<S: Source>(
     let mut stored = 0;
     let mut result = Ok(());
     while let Some(byte) = reader.next() {
+        if let Some(wc) = reader.src.last_wide() {
+            // SAFETY: a wide source comes with the wide format, whose set runs
+            // from `set_start` to `*p`.
+            if !unsafe { wide_member(wide_format, set_start, *p, conversion, wc) } {
+                reader.back(byte);
+                break;
+            }
+            if wide {
+                if !buffer.push(stored, wc) {
+                    result = Err(Stop::Failure);
+                    break;
+                }
+                stored += 1;
+                continue;
+            }
+            let mut bytes = [0u8; 4];
+            let mut encoding = MbState::new();
+            // SAFETY: `bytes` has room for the longest sequence.
+            let len = unsafe { wcrtomb(bytes.as_mut_ptr().cast(), wc, &raw mut encoding) };
+            if len == usize::MAX {
+                result = Err(Stop::Failure);
+                break;
+            }
+            for &unit in bytes.get(..len).unwrap_or_default() {
+                if !buffer.push(stored, i32::from(unit)) {
+                    result = Err(Stop::Failure);
+                    break;
+                }
+                stored += 1;
+            }
+            if result.is_err() {
+                break;
+            }
+            continue;
+        }
         if !set.get(usize::from(byte)).copied().unwrap_or(false) {
             reader.back(byte);
             break;
@@ -669,7 +764,12 @@ unsafe fn nth(start: &mut VaListTag, n: u8) -> *mut c_void {
 ///
 /// `format` must be a NUL-terminated string, and `ap` hold a pointer of the
 /// right type for each conversion that stores.
-unsafe fn scan<S: Source>(src: &mut S, format: *const c_char, ap: *mut VaListTag) -> c_int {
+pub(super) unsafe fn scan<S: Source>(
+    src: &mut S,
+    format: *const c_char,
+    wide_format: *const WChar,
+    ap: *mut VaListTag,
+) -> c_int {
     // SAFETY: the caller passes a NUL-terminated format.
     let fmt = unsafe { CText::new(format) };
     // SAFETY: the caller passes its own list.
@@ -704,7 +804,14 @@ unsafe fn scan<S: Source>(src: &mut S, format: *const c_char, ap: *mut VaListTag
                 reader.next()
             };
             match got {
-                Some(matched) if matched == fmt.at(p) => {
+                Some(matched)
+                    if matched == fmt.at(p)
+                        && (matched < 0x80
+                            || reader.src.last_wide().is_none()
+                            // SAFETY: a wide source comes with the wide
+                            // format, which has a character at `p`.
+                            || reader.src.last_wide() == Some(unsafe { wide_format.wrapping_add(p).read() })) =>
+                {
                     p += 1;
                     continue;
                 }
@@ -798,6 +905,7 @@ unsafe fn scan<S: Source>(src: &mut S, format: *const c_char, ap: *mut VaListTag
                     string(
                         &mut reader,
                         &fmt,
+                        wide_format,
                         &mut p,
                         conversion,
                         width,
@@ -851,7 +959,7 @@ pub unsafe extern "C" fn vfscanf(
     let op = |inner: &mut Inner| {
         let mut source = Stream { inner };
         // SAFETY: the caller passes a format and its arguments.
-        unsafe { scan(&mut source, format, ap) }
+        unsafe { scan(&mut source, format, core::ptr::null(), ap) }
     };
     // SAFETY: the caller passes a live stream.
     unsafe { file::locked(stream, op) }
@@ -871,7 +979,7 @@ pub unsafe extern "C" fn vsscanf(
 ) -> c_int {
     let mut source = Text { start: s, pos: 0 };
     // SAFETY: the caller passes a string, a format and its arguments.
-    unsafe { scan(&mut source, format, ap) }
+    unsafe { scan(&mut source, format, core::ptr::null(), ap) }
 }
 
 /// Reads standard input by `format`, storing through the pointers in `ap`.

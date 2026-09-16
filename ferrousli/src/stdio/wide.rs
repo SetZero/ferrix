@@ -14,8 +14,8 @@
 //! * The first wide read or write makes the stream wide-oriented, which
 //!   `fwide` reports. The byte functions do not orient a stream, as in musl.
 //!
-//! The `wprintf` family is in [`super::wprintf`], and `open_wmemstream` in
-//! [`super::memory`]. The `wscanf` family is not here yet.
+//! The `wprintf` family is in [`super::wprintf`], the `wscanf` family in
+//! [`super::wscanf`], and `open_wmemstream` in [`super::memory`].
 
 use core::ffi::{c_char, c_int};
 use core::ptr::null_mut;
@@ -50,7 +50,7 @@ fn encode(wc: WChar) -> Option<([u8; MB_LEN_MAX], usize)> {
 }
 
 /// Reads one wide character, as `fgetwc` does.
-fn get_wide(inner: &mut Inner) -> WInt {
+pub(super) fn get_wide(inner: &mut Inner) -> WInt {
     orient_wide(inner);
     let mut state = MbState::new();
     let mut wc: WChar = 0;

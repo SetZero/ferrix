@@ -183,3 +183,8 @@ fn wprintf_counts_wide_characters_and_writes_utf_8() {
 fn open_wmemstream_grows_a_wide_buffer_counting_characters() {
     check(&stdio("stdio/wmemstream"));
 }
+
+#[test]
+fn wscanf_counts_wide_characters_and_matches_wide_sets() {
+    check(&stdio("stdio/wscanf"));
+}
