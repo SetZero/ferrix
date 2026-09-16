@@ -157,6 +157,49 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
     }))
 }
 
+/// The process that last mapped each device's registers or took its interrupt,
+/// as how it ends, by the device's PCI location: what a check that waits for a
+/// driver's work looks at to say the driver died, and how, rather than that the
+/// work never came. The record outlives the process, and the latest such
+/// process replaces it: a boot check's own processes use a device before
+/// devmgr's driver does.
+static DRIVER_ENDINGS: SpinLock<Vec<(Location, Arc<process::Exit>)>> = SpinLock::new(Vec::new());
+
+/// Note that `driver` mapped `node`'s registers or took its interrupt: it is
+/// that device's driver now. Cheap when it is already noted, which every call
+/// after its first is.
+pub(crate) fn note_driver(node: &device::DeviceNode, driver: &process::Process) {
+    let Some(location) = crate::block_ring::location_of(node) else {
+        return;
+    };
+    let exit = driver.exit_record();
+    let replaced = {
+        let mut drivers = DRIVER_ENDINGS.lock();
+        match drivers.iter_mut().find(|(at, _)| *at == location) {
+            Some((_, noted)) if Arc::ptr_eq(noted, &exit) => None,
+            Some((_, noted)) => Some(core::mem::replace(noted, exit)),
+            None => {
+                drivers.push((location, exit));
+                None
+            }
+        }
+    };
+    // A record let go of here may be the last reference to how an old driver
+    // ended, and is dropped with the table unlocked.
+    drop(replaced);
+}
+
+/// How the driver of the device at `location` ended, if one was noted and
+/// has.
+pub(crate) fn driver_ending(location: Location) -> Option<(i32, Option<u32>)> {
+    let exit = DRIVER_ENDINGS
+        .lock()
+        .iter()
+        .find(|(at, _)| *at == location)
+        .map(|(_, exit)| Arc::clone(exit))?;
+    exit.status().map(|status| (status, exit.signal()))
+}
+
 /// Tell `devmgr` that the disk of the device at `location` is published.
 /// Nothing, before `devmgr` is started or if it is gone.
 pub(crate) fn published(location: Location) {
