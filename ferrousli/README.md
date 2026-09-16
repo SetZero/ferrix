@@ -76,6 +76,34 @@ while each of those was a stub that wrote that the function was not
 implemented yet and aborted, listed in `src/stubs.rs`. The last of them were
 replaced by the real functions on 2026-09-16, and the file is gone.
 
+## Ports
+
+`tools/ports/` builds other programs against this library the way
+`tools/busybox/` builds busybox: static x86-64 programs with the host's gcc,
+from sources pinned by checksum, downloaded and built under
+`~/.local/share/ferrix/ports/ferrousli` (or `$FERRIX_PORTS`). `common.sh` holds
+what they share: the pinned download, the release library, and compiler
+wrappers, `ferrousli-cc` and `ferrousli-c++`, that compile against `include/`
+and link `crt1.o` and `libferrousli.a` and nothing from the host's C library.
+Each port installs into `x86_64/` there with the layout it has on the guest,
+and a link that fails writes `undefined-symbols.txt` beside its build, as
+busybox's does.
+
+| Port | What | Installs |
+|---|---|---|
+| `curl` | curl 8.22.0 over Mbed TLS 3.6.7, and curl.se's extract of Mozilla's CA certificates | `bin/curl`, `etc/ssl/certs/ca-certificates.crt` |
+
+`cargo xtask ports` runs them, on a Linux host. Every image that carries a
+busybox carries the ports that are installed, on x86_64, and `cargo xtask
+test-net` fetches with curl as well as with `wget` when curl is there.
+
+curl linked with nothing missing from this library on 2026-09-16. On Linux it
+fetches over HTTPS and refuses a self-signed certificate. On Ferrix it fetches
+over HTTP, and an HTTPS handshake gets as far as checking the certificate,
+which it refuses because the kernel's clock starts at 1970. The kernel's
+`getrandom` is not random yet either. Until both are fixed, HTTPS on Ferrix is
+not secure. `docs/BACKLOG.md` has the row.
+
 ## Headers
 
 `include/` holds musl 1.2.5's headers, unmodified. See

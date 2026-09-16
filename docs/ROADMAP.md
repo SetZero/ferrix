@@ -3099,6 +3099,25 @@ landed. musl's `initgroups` tries an `AF_UNIX` connection to nscd before it
 reads `/etc/group`; `EOPNOTSUPP` is an error it gives up on, and `ENOENT` is
 one it falls back from.
 
+**Done — curl, built against ferrousli.** `ferrousli/tools/ports/curl` builds
+curl 8.22.0 over Mbed TLS 3.6.7 as a static x86-64 program against ferrousli,
+from sources pinned by checksum, with curl.se's extract of Mozilla's CA
+certificates. It linked with nothing missing from the library. `cargo xtask
+ports` builds it. Every x86-64 image that carries a busybox carries it at
+`/bin/curl`, with the bundle at `/etc/ssl/certs/ca-certificates.crt`. When
+curl is installed, `test-net` adds two programs to its thirteen: curl fetches
+the file by name through `/etc/resolv.conf`, and fetches the quarter megabyte
+whose `cksum` must match the server's.
+
+HTTPS is built in, but it is not usable on Ferrix yet. On the Linux host the
+same binary fetches over HTTPS and refuses a self-signed certificate. In the
+guest, a fetch from `https://1.1.1.1/` got through the handshake to the
+certificate check and was refused with *"The certificate validity starts in
+the future"*, because the kernel's clock starts at 1970. The kernel's
+`getrandom` is not random either, so a session key would be predictable. The
+row for both is in `docs/BACKLOG.md`'s P2, and `test-net` gets an HTTPS
+program when it is done.
+
 **Exit, and it is met:** under `xtask`'s gateway — which is where this
 criterion's *"under QEMU's user-mode network"* now reads — busybox configures
 `eth0` with `ip`, and `route` and `netstat` report through `/proc/net`. `wget`
