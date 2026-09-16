@@ -72,6 +72,11 @@ fn semaphores_count_time_out_and_are_shared_named_and_unnamed() {
 }
 
 #[test]
+fn c11_threads_mutexes_conditions_and_storage_work_over_pthreads() {
+    check(&Case::named("thread/c11"));
+}
+
+#[test]
 fn keys_hold_values_per_thread_and_run_destructors_in_rounds() {
     check(&Case::named("thread/keys"));
 }

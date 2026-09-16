@@ -18,17 +18,16 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 898 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 922 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 7 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 0 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 338 | not there |
+| absent | 314 | not there |
 
-345 interfaces are missing in one of the last four ways. 37 of them are
-already written on the two unlanded branches of 2026-09-13
-(`ferrousli-threads`, `ferrousli-misc`), which were committed without a
-build and are not reviewed. The third, `ferrousli-math`, landed on
-2026-09-16.
+321 interfaces are missing in one of the last four ways. 13 of them are
+already written on `ferrousli-misc`, the last unlanded branch of 2026-09-13,
+which was committed without a build and is not reviewed. The other two,
+`ferrousli-math` and `ferrousli-threads`, landed on 2026-09-16.
 
 ## What is left, by area, in points
 
@@ -50,7 +49,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Spawning | 25 | 25 | 0 | 7 | the `posix_spawn` family on `clone(CLONE_VM\|CLONE_VFORK)`, which lets `system` and `popen` stop forking, 5; `_Fork` 1; `fexecve` 1 |
 | Signals and non-local jumps | 28 | 4 | 0 | 2 | `psignal`, `psiginfo` 1; `sig2str`, `str2sig` 1 |
 | Time and clocks | 29 | 3 | 0 | 3 | `getdate` and `getdate_err` 2; `timespec_get` 1 |
-| Threads and scheduling | 145 | 32 | 24 | 15 | landing `ferrousli-threads`: C11 `threads.h` 4; cancellation, `pthread_cancel` and `pthread_testcancel` with their cancellation points 8; the `clock` variants of the condition, mutex, read-write lock and semaphore waits 2; `pthread_atfork` 1 |
+| Threads and scheduling | 145 | 8 | 0 | 11 | cancellation, `pthread_cancel` and `pthread_testcancel` with their cancellation points 8; the `clock` variants of the condition, mutex, read-write lock and semaphore waits 2; `pthread_atfork` 1 |
 | Memory mapping and System V IPC | 21 | 1 | 0 | 1 | `ftok` |
 | Realtime: asynchronous I/O, message queues, timers, shared memory | 29 | 29 | 0 | 11 | `aio.h` over threads 3; `mqueue.h` 3; `timer_*` with `SIGEV_THREAD` 3; `shm_open`, `shm_unlink` 1; `clock_getcpuclockid` 1. Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
 | Terminals and devices | 25 | 7 | 0 | 3 | `posix_openpt`, `grantpt`, `unlockpt`, `ptsname`, `ptsname_r`, `ctermid` 2; `posix_devctl` and `<devctl.h>` 1 |
@@ -59,7 +58,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 5 | 0 | 2 | `dlfcn.h` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **345** | **37** | **108** | |
+| **All** | **1243** | **321** | **13** | **104** | |
 
 ## Present but broken
 
@@ -320,7 +319,7 @@ interface.
 | `<sched.h>` | present (8) | `sched_get_priority_max` (PS or TPS), `sched_get_priority_min` (PS or TPS), `sched_getparam` (PS), `sched_getscheduler` (PS), `sched_rr_get_interval` (PS or TPS), `sched_setparam` (PS), `sched_setscheduler` (PS), `sched_yield` |
 | `<semaphore.h>` | present (11) | `sem_clockwait`, `sem_close`, `sem_destroy`, `sem_getvalue`, `sem_init`, `sem_open`, `sem_post`, `sem_timedwait`, `sem_trywait`, `sem_unlink`, `sem_wait` |
 | `<threads.h>` | macro only (1) | `thrd_equal` |
-| `<threads.h>` | absent, written on ferrousli-threads (24) | `call_once`, `cnd_broadcast`, `cnd_destroy`, `cnd_init`, `cnd_signal`, `cnd_timedwait`, `cnd_wait`, `mtx_destroy`, `mtx_init`, `mtx_lock`, `mtx_timedlock`, `mtx_trylock`, `mtx_unlock`, `thrd_create`, `thrd_current`, `thrd_detach`, `thrd_exit`, `thrd_join`, `thrd_sleep`, `thrd_yield`, `tss_create`, `tss_delete`, `tss_get`, `tss_set` |
+| `<threads.h>` | present (24) | `call_once`, `cnd_broadcast`, `cnd_destroy`, `cnd_init`, `cnd_signal`, `cnd_timedwait`, `cnd_wait`, `mtx_destroy`, `mtx_init`, `mtx_lock`, `mtx_timedlock`, `mtx_trylock`, `mtx_unlock`, `thrd_create`, `thrd_current`, `thrd_detach`, `thrd_exit`, `thrd_join`, `thrd_sleep`, `thrd_yield`, `tss_create`, `tss_delete`, `tss_get`, `tss_set` |
 
 ### Memory mapping and System V IPC
 

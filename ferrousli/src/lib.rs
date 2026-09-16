@@ -114,6 +114,7 @@ pub mod syslog;
 pub mod temp;
 pub mod termios;
 pub mod thread;
+pub mod threads;
 pub mod time;
 pub mod times;
 pub mod tm;

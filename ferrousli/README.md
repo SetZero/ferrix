@@ -88,7 +88,7 @@ x86-64, static programs linked at a fixed address.
 | Area | There | Not yet |
 |---|---|---|
 | Startup | `_start`, `__libc_start_main`, `environ`, the auxiliary vector, `.preinit_array` and `.init_array` | position-independent static programs |
-| Threads | a control block in glibc's layout for every thread, static TLS, the stack protector's canary; `pthread_create`, `pthread_join`, `pthread_detach`, `pthread_exit`, attributes, names, `gettid`, `pthread_sigqueue`; mutexes, including recursive, error-checking, robust and priority-inheriting ones; condition variables, read-write locks, keys and `pthread_once`; barriers, private and process-shared, and spin locks; scheduling policy, priority and affinity per thread, `sched.h`'s policy calls, `pthread_getcpuclockid`; semaphores, unnamed, process-shared and named in `/dev/shm`, with `sem_clockwait`; a futex lock for the library's own state | cancellation, C11 `threads.h`, `pthread_atfork`, `set*id` across threads |
+| Threads | a control block in glibc's layout for every thread, static TLS, the stack protector's canary; `pthread_create`, `pthread_join`, `pthread_detach`, `pthread_exit`, attributes, names, `gettid`, `pthread_sigqueue`; mutexes, including recursive, error-checking, robust and priority-inheriting ones; condition variables, read-write locks, keys and `pthread_once`; barriers, private and process-shared, and spin locks; scheduling policy, priority and affinity per thread, `sched.h`'s policy calls, `pthread_getcpuclockid`; semaphores, unnamed, process-shared and named in `/dev/shm`, with `sem_clockwait`; C11's `threads.h` over the `pthread.h` objects; a futex lock for the library's own state | cancellation, `pthread_atfork`, `set*id` across threads |
 | Memory | the `malloc` family, on `mmap`, with size classes and integrity checks | returning empty regions to the kernel |
 | `stdlib.h` | `exit`, `_Exit`, `atexit` without a limit, `abort`, the environment functions; `strtol` and `strtod` families, correctly rounded for `float`, `double` and x87 `long double`, with glibc's `__isoc23_` names; `qsort`, `qsort_r`, `bsearch`; `abs` and `div` families; `rand`, `random` and `rand48` families; `quick_exit` and `at_quick_exit`; `secure_getenv`, `a64l`, `l64a` and `getsubopt` | `ecvt`, `fcvt`, `gcvt`; NaN payloads and rounding modes in parsing |
 | `assert.h` | `assert`, whose `__assert_fail` writes musl's message straight to standard error and aborts | |
@@ -132,7 +132,7 @@ x86-64, static programs linked at a fixed address.
 ## Next
 
 1. In progress: **`glob` and `search.h`**, **thread
-   cancellation, semaphores and C11 threads**, and **the rest of the math
+   cancellation**, and **the rest of the math
    library**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
