@@ -34,6 +34,7 @@ pub mod assert;
 pub mod auxv;
 pub mod barrier;
 pub mod cancel;
+pub mod complex;
 pub mod cond;
 pub mod crypt;
 pub mod ctype;

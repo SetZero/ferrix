@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 996 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
-| macro only | 7 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
+| present | 1040 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| macro only | 3 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 0 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 240 | not there |
+| absent | 200 | not there |
 
-247 interfaces are missing in one of the last four ways. None of them is
+203 interfaces are missing in one of the last four ways. None of them is
 written on a branch any more: the three unlanded branches of 2026-09-13,
 `ferrousli-math`, `ferrousli-threads` and `ferrousli-misc`, were built,
 fixed and landed on 2026-09-16.
@@ -42,7 +42,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Wide and multibyte characters | 118 | 0 | 0 | 0 | landed: the `wscanf` family, `fwscanf` to `wscanf`; `open_wmemstream`; the `wprintf` family, `fwprintf` to `wprintf`; wide-character stream I/O (`fgetwc`, `fgetws`, `fputwc`, `fputws`, `getwc`, `getwchar`, `putwc`, `putwchar`, `ungetwc`, `fwide`); the `wcstol` and `wcstod` families with `wcstoimax` and `wcstoumax`; `wcsftime`, `wcslcpy`, `wcslcat` |
 | Standard I/O | 70 | 0 | 0 | 0 | landed: `tmpnam` |
 | Math and the floating-point environment | 201 | 59 | 0 | 8 | every `long double` form 8. Landed: every `double` and `float` function: the error and gamma functions with `signgam` and `lgamma_r`, the Bessel functions; the hyperbolic functions and `hypot` for `double` and `float`; `tan`, `asin`, `acos`, `atan` for `double`, and all of them with `sin`, `cos` and `atan2` for `float`; `exp2`, `expm1`, `log2`, `log10`, `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `fenv.h`; rounding, manipulation, remainders and `fma` for `double` and `float`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, bit for bit musl's in every rounding mode; and the classifiers for all three types |
-| Complex arithmetic | 69 | 66 | 0 | 8 | `complex.h` over the math library, `creal` and `cimag` as functions |
+| Complex arithmetic | 69 | 22 | 0 | 2 | the `long double complex` forms, after `long double` math 2. Landed: every `double complex` and `float complex` function, `creal` and `cimag` among them as functions, bit for bit musl's |
 | Locales, messages and conversion | 32 | 21 | 0 | 13 | the `gettext` family with `.mo` catalogues 5; `iconv` 5; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1. Landed: `catopen`, `catgets`, `catclose` |
 | Files, directories and I/O multiplexing | 46 | 1 | 0 | 1 | `posix_getdents` |
 | Processes, identity and the system | 103 | 8 | 0 | 7 | `confstr` 1; `setresuid`, `setresgid` 1; `nice`, `lockf` 1; `posix_close` 1; `fmtmsg` 1; `encrypt` and `setkey` 2. Landed: `pathconf`, `fpathconf` |
@@ -58,7 +58,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 4 | 0 | 2 | `dlopen`, `dlsym`, `dlclose` and `dlerror` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here. Landed: `dladdr`, over the program's own headers |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **247** | **0** | **80** | |
+| **All** | **1243** | **203** | **0** | **74** | |
 
 ## Present but broken
 
@@ -244,9 +244,9 @@ interface.
 
 | Header | Status | Interfaces |
 |---|---|---|
-| `<complex.h>` | present (3) | `CMPLX`, `CMPLXF`, `CMPLXL` |
-| `<complex.h>` | macro only (6) | `cimag`, `cimagf`, `cimagl`, `creal`, `crealf`, `creall` |
-| `<complex.h>` | absent (60) | `cabs`, `cabsf`, `cabsl`, `cacos`, `cacosf`, `cacosh`, `cacoshf`, `cacoshl`, `cacosl`, `carg`, `cargf`, `cargl`, `casin`, `casinf`, `casinh`, `casinhf`, `casinhl`, `casinl`, `catan`, `catanf`, `catanh`, `catanhf`, `catanhl`, `catanl`, `ccos`, `ccosf`, `ccosh`, `ccoshf`, `ccoshl`, `ccosl`, `cexp`, `cexpf`, `cexpl`, `clog`, `clogf`, `clogl`, `conj`, `conjf`, `conjl`, `cpow`, `cpowf`, `cpowl`, `cproj`, `cprojf`, `cprojl`, `csin`, `csinf`, `csinh`, `csinhf`, `csinhl`, `csinl`, `csqrt`, `csqrtf`, `csqrtl`, `ctan`, `ctanf`, `ctanh`, `ctanhf`, `ctanhl`, `ctanl` |
+| `<complex.h>` | present (47) | `CMPLX`, `CMPLXF`, `CMPLXL`, `cabs`, `cabsf`, `cacos`, `cacosf`, `cacosh`, `cacoshf`, `carg`, `cargf`, `casin`, `casinf`, `casinh`, `casinhf`, `catan`, `catanf`, `catanh`, `catanhf`, `ccos`, `ccosf`, `ccosh`, `ccoshf`, `cexp`, `cexpf`, `cimag`, `cimagf`, `clog`, `clogf`, `conj`, `conjf`, `cpow`, `cpowf`, `cproj`, `cprojf`, `creal`, `crealf`, `csin`, `csinf`, `csinh`, `csinhf`, `csqrt`, `csqrtf`, `ctan`, `ctanf`, `ctanh`, `ctanhf` |
+| `<complex.h>` | macro only (2) | `cimagl`, `creall` |
+| `<complex.h>` | absent (20) | `cabsl`, `cacoshl`, `cacosl`, `cargl`, `casinhl`, `casinl`, `catanhl`, `catanl`, `ccoshl`, `ccosl`, `cexpl`, `clogl`, `conjl`, `cpowl`, `cprojl`, `csinhl`, `csinl`, `csqrtl`, `ctanhl`, `ctanl` |
 
 ### Locales, messages and conversion
 

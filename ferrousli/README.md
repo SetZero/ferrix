@@ -131,6 +131,7 @@ x86-64, static programs linked at a fixed address.
 | `endian.h` | all 12 host, big-endian and little-endian conversions, both as macros and callable functions | |
 | `stdatomic.h` | C atomic types, memory orders, fences, compare-exchange, exchange, load, store, fetch operations and flags over the compiler's atomic builtins | |
 | `math.h`, `fenv.h` | the floating-point environment; rounding (`rint`, `nearbyint`, `lrint`, `lround` and the rest), manipulation (`frexp`, `ldexp`, `scalbn`, `logb`, `modf`, `nextafter`, `nan`), `fmod`, `remainder`, `remquo` and `fma` for `double` and `float`; the error and gamma functions with `signgam`, and the Bessel functions; the hyperbolic functions and `hypot` for `double` and `float`; `tan`, `asin`, `acos` and `atan` for `double`, and the trigonometric functions for `float`; `exp2`, `expm1`, `log2`, `log10` and `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, ported from musl and giving its bits and exceptions in every rounding mode; `fpclassify`, `isinf`, `isnan`, `isnormal`, `isfinite`, `signbit`, `isunordered` and the comparison macros for `float`, `double` and x87 `long double`; `math_errhandling` is `MATH_ERREXCEPT`, as in musl | the `long double` functions, `nexttoward`, `errno` set by math functions as glibc does |
+| `complex.h` | every `double complex` and `float complex` function, `cabs` to `ctanh` and `cabsf` to `ctanhf`, with `creal`, `cimag` and their `float` forms callable | the `long double complex` functions |
 | `string.h`, `strings.h` | everything, with word-at-a-time scans and two-way `strstr` and `memmem`; `strcoll_l`, `strxfrm_l`, `strcasecmp_l` and `strncasecmp_l` | |
 | `ctype.h` | the C locale, glibc's `__ctype_b_loc` tables, and the `_l` forms | |
 | `locale.h`, `langinfo.h` | `setlocale`, `localeconv`, `newlocale`, `duplocale`, `freelocale`, `uselocale`, `nl_langinfo`; musl's C and C.UTF-8 locales, any other name behaving as UTF-8; `nl_types.h`'s message catalogues, `catopen`, `catgets` and `catclose`, reading `gencat`'s files as musl does; `strtod_l`, `strtof_l` and `strtold_l` | glibc's `locale_t` layout |
@@ -172,6 +173,6 @@ x86-64, static programs linked at a fixed address.
 1. In progress: **`long double` math**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
-3. **`long double` math and `complex.h`.**
+3. **`long double` math, and with it `complex.h`'s `long double` forms.**
 4. **AArch64 and ARMv7**, the other two architectures Ferrix runs.
 5. **Dynamic linking**: a loader, then glibc's symbol versions.
