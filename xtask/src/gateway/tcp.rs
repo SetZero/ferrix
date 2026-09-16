@@ -27,15 +27,17 @@
 //!   the host, which is real flow control and no more;
 //! * retransmission of everything unacknowledged on a fixed timer, with no
 //!   round-trip estimate;
-//! * no congestion control at all, no fast retransmit, no SACK, no window
-//!   scaling and no timestamps.
+//! * no congestion control, no SACK, no window scaling and no timestamps.
 //!
-//! None of that is a gap to be filled later. The path between the two ends is a
-//! loopback socket to this machine's own kernel: it does not reorder packets,
-//! loses one only when a receive buffer is full, and has no bandwidth-delay
-//! product worth a congestion window. Every one of those mechanisms exists to
-//! cope with a network, and there is no network here. Correctness is the whole requirement,
-//! and simplicity is how it is met.
+//! The path between the two ends is a loopback socket to this machine's own
+//! kernel and a virtio-net device: it does not reorder packets and has no
+//! bandwidth-delay product worth a congestion window. It does lose them: a
+//! burst larger than the receive buffers the guest's driver has posted is
+//! dropped between QEMU and the guest. Two things answer that, and nothing
+//! more: a burst is at most [`BURST`] segments a turn, which the guest can
+//! take, and three duplicate acknowledgments resend from the first missing
+//! byte at once instead of after [`RETRANSMIT`]. Measured before either, a
+//! 256 KiB download spent 1.8 of its 2.3 seconds waiting for that timer.
 //!
 //! # Out-of-order data
 //!
@@ -76,6 +78,15 @@ const SEND_CAPACITY: usize = 64 * 1024;
 /// How long to wait for an acknowledgment before sending everything
 /// unacknowledged again.
 const RETRANSMIT: Duration = Duration::from_millis(200);
+
+/// The most segments one connection sends in one turn: fewer than the sixteen
+/// receive buffers Ferrix's network driver keeps posted, so a burst the guest
+/// cannot hold is not sent to be dropped.
+const BURST: usize = 12;
+
+/// How many acknowledgments of the same byte, with nothing new in them, mean a
+/// segment was lost: RFC 5681's three.
+const DUPLICATE_ACKS: u32 = 3;
 
 /// How long a connect to the real destination may take before it is called
 /// refused. Without a bound the thread making it outlives the boot.
@@ -181,6 +192,8 @@ pub(super) struct Connection {
     mss: usize,
     /// When something was last sent, for the retransmission timer.
     sent_at: Instant,
+    /// How many acknowledgments in a row repeated `snd_una`.
+    duplicate_acks: u32,
     /// When the guest was last heard from.
     heard_at: Instant,
 }
@@ -209,6 +222,7 @@ impl Connection {
             inbound: Vec::new(),
             mss: offered.clamp(MIN_SEGMENT, MAX_SEGMENT),
             sent_at: now,
+            duplicate_acks: 0,
             heard_at: now,
         }
     }
@@ -301,7 +315,7 @@ impl Connection {
             return;
         }
         if header.flags.contains(Flags::ACK) {
-            self.on_ack(header.acknowledgment);
+            self.on_ack(header.acknowledgment, !segment.payload.is_empty());
         }
         self.snd_wnd = header.window;
         if self.state == State::Handshaking && self.snd_una != self.iss {
@@ -321,12 +335,27 @@ impl Connection {
     /// An acknowledgment of something never sent, or of something already
     /// acknowledged, is ignored rather than trusted: `snd_una` must only ever
     /// move forwards, and only as far as `snd_nxt`.
-    fn on_ack(&mut self, acknowledgment: u32) {
+    ///
+    /// An acknowledgment of `snd_una` again, carrying no data, while something
+    /// is outstanding is a duplicate; the third in a row resends from
+    /// `snd_una` straight away, as fast retransmit does.
+    fn on_ack(&mut self, acknowledgment: u32, carries_data: bool) {
         let acked = acknowledgment.wrapping_sub(self.snd_una);
         let outstanding = self.snd_nxt.wrapping_sub(self.snd_una);
-        if acked == 0 || acked > outstanding {
+        if acked == 0 {
+            if outstanding > 0 && !carries_data {
+                self.duplicate_acks += 1;
+                if self.duplicate_acks == DUPLICATE_ACKS {
+                    self.snd_nxt = self.snd_una;
+                    self.sent_at = Instant::now();
+                }
+            }
             return;
         }
+        if acked > outstanding {
+            return;
+        }
+        self.duplicate_acks = 0;
         let mut covered = usize::try_from(acked).unwrap_or(0);
         if self.syn_pending {
             // The SYN-ACK's sequence number is the first one this end ever
@@ -460,7 +489,10 @@ impl Connection {
         // new window. With nothing outstanding there is nothing to probe with
         // and nothing to lose by waiting for the guest's own window update.
         let window = usize::from(self.snd_wnd);
-        while self.push_one(window, out) {}
+        let mut sent = 0;
+        while sent < BURST && self.push_one(window, out) {
+            sent += 1;
+        }
         self.push_fin(window, out);
     }
 
