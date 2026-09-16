@@ -7449,7 +7449,8 @@ fn check_unix_sockets(process: &Process, page: u64) -> Result<(), &'static str> 
          direction; a socket reported its type, buffers, credentials and unnamed address; \
          a connection crossed an abstract name and a path, and 6 name calls were refused \
          as specified; a descriptor travelled with a message, kept its file open in the \
-         queue, and was closed when a receive had no room for it"
+         queue, and was closed when a receive had no room for it; a cycle of sockets in \
+         flight was collected at its last close, and one a descriptor reached was kept"
     );
     Ok(())
 }
@@ -8475,7 +8476,9 @@ fn message_answers(
     {
         return Err("a message did not scatter into the buffers it was given");
     }
-    check_descriptors_travel_with_a_message(process, page, (one, other))
+    check_descriptors_travel_with_a_message(process, page, (one, other))?;
+    check_a_cycle_in_flight_is_collected(process, page)?;
+    check_a_cycle_a_descriptor_reaches_is_kept(process, page)
 }
 
 /// Write a `msghdr` naming the `count` buffers at `iov` and nothing else.
@@ -8617,6 +8620,95 @@ fn a_descriptor_with_no_room_is_closed(
         return Err("a descriptor a receive had no room for was not closed");
     }
     Ok(())
+}
+
+/// What a cycle nobody can reach that outlives its last close fails with,
+/// which the negative control requires by name.
+const CYCLE_NOT_COLLECTED: &str =
+    "a cycle of sockets passed over each other outlived the last close of them";
+
+/// What an emptied queue a descriptor could still read fails with.
+const REACHABLE_EMPTIED: &str =
+    "a queue a program could still read was emptied as though nobody could";
+
+/// Make a sequenced-packet pair and pass each end over itself, so each end's
+/// open file sits in the other's queue. Answers the two descriptors.
+fn socket_cycle(process: &Process, page: u64) -> Result<(i32, i32), &'static str> {
+    let (one, other) = socket_pair(process, page, SOCK_SEQPACKET)?;
+    let passed = message_with_control(process, page, one, SCM_RIGHTS, &rights(&[one]), None)
+        .and_then(|_| {
+            message_with_control(process, page, other, SCM_RIGHTS, &rights(&[other]), None)
+        });
+    if passed != Ok(1) {
+        close_socket_pair(process, (one, other));
+        return Err("a socket could not be passed over its own connection");
+    }
+    Ok((one, other))
+}
+
+/// A pair whose ends were each passed over themselves and then closed is
+/// referred to only by the other's queue: the close must collect both, so that
+/// neither open file outlives it.
+fn check_a_cycle_in_flight_is_collected(process: &Process, page: u64) -> Result<(), &'static str> {
+    let (one, other) = socket_cycle(process, page)?;
+    let files = (
+        fd::file(process, one).map(|file| Arc::downgrade(&file)),
+        fd::file(process, other).map(|file| Arc::downgrade(&file)),
+    );
+    let _ = fd::sys_close(process, one);
+    let _ = fd::sys_close(process, other);
+    let (Ok(one), Ok(other)) = files else {
+        return Err("a socket of a cycle had no open file");
+    };
+    if one.upgrade().is_some() || other.upgrade().is_some() {
+        return Err(CYCLE_NOT_COLLECTED);
+    }
+    Ok(())
+}
+
+/// The same cycle, with a third descriptor still open on one end: nothing may
+/// be collected, and the queues must still hold what was sent, which a program
+/// reads back through that descriptor and the one it receives.
+fn check_a_cycle_a_descriptor_reaches_is_kept(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    let (one, other) = socket_cycle(process, page)?;
+    let Ok(kept) = fd::sys_dup(process, one).map(|fd| fd as i32) else {
+        close_socket_pair(process, (one, other));
+        return Err("could not keep a descriptor for a socket of a cycle");
+    };
+    let _ = fd::sys_close(process, one);
+    let _ = fd::sys_close(process, other);
+    let outcome = (|| {
+        let capacity = cmsg_space(4, width());
+        let (count, _, _, control) = receive_with_control(process, page, kept, capacity)?;
+        let other = installed_descriptor(&control)
+            .filter(|_| count == 1)
+            .ok_or(REACHABLE_EMPTIED)?;
+        let received = receive_with_control(process, page, other, capacity);
+        let one = received.as_ref().ok().and_then(|(count, _, _, control)| {
+            installed_descriptor(control).filter(|_| *count == 1)
+        });
+        let _ = fd::sys_close(process, other);
+        let one = one.ok_or(REACHABLE_EMPTIED)?;
+        let _ = fd::sys_close(process, one);
+        Ok(())
+    })();
+    let _ = fd::sys_close(process, kept);
+    outcome
+}
+
+/// The descriptor an `SCM_RIGHTS` message of one names, if `control` holds one.
+fn installed_descriptor(control: &[u8]) -> Option<i32> {
+    let header = CmsgHdr::decode(control, width())?;
+    if header.level != SOL_SOCKET || header.kind != SCM_RIGHTS {
+        return None;
+    }
+    control
+        .get(CmsgHdr::size(width())..CmsgHdr::size(width()) + 4)
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(i32::from_le_bytes)
 }
 
 /// A descriptor that is not open is `EBADF`, more than `SCM_MAX_FD` is

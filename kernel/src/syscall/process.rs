@@ -873,6 +873,7 @@ impl Process {
                 fd::closed(self, file);
             }
             drop(closed);
+            let _ = fs::socket::collect_cycles();
         }
         // Whoever watches it through a port hears now, once its handles and
         // descriptors are closed: a driver's pins are given back or kept

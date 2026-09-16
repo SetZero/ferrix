@@ -3015,3 +3015,23 @@ fn a_stream_delivers_bytes_and_ancillary_data_in_order_against_a_model() {
         assert_eq!(buf.queued(), model.len());
     }
 }
+
+#[test]
+fn a_socket_buffer_shows_its_ancillary_data_without_taking_it() {
+    let mut buf = SocketBuffer::<u32>::new(Kind::Stream, SOCKET_CAP);
+    assert_eq!(buf.write(b"ab", &mut Some(7)), SocketWrite::Wrote(2));
+    assert_eq!(buf.write(b"cd", &mut None), SocketWrite::Wrote(2));
+    assert_eq!(buf.write(b"ef", &mut Some(9)), SocketWrite::Wrote(2));
+    assert_eq!(buf.ancillary().copied().collect::<Vec<_>>(), [7, 9]);
+    // Looking took nothing: the first read still brings the first set.
+    let (outcome, bytes) = read_all(&mut buf, false);
+    assert_eq!(bytes, b"ab");
+    assert!(matches!(
+        outcome,
+        SocketRead::Read {
+            ancillary: Some(7),
+            ..
+        }
+    ));
+    assert_eq!(buf.ancillary().copied().collect::<Vec<_>>(), [9]);
+}

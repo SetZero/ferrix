@@ -257,6 +257,7 @@ pub(crate) fn sys_close(process: &Process, fd: i32) -> Result<usize, Errno> {
     let file = process.files().lock().remove(fd)?;
     closed(process, &file);
     drop(file);
+    let _ = fs::socket::collect_cycles();
     Ok(0)
 }
 

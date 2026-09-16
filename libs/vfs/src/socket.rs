@@ -442,6 +442,17 @@ impl<A> SocketBuffer<A> {
     }
 }
 
+impl<A> SocketBuffer<A> {
+    /// Every piece of ancillary data still queued, oldest first, left where it
+    /// is: for the kernel's pass over sockets in flight, which looks at what
+    /// each queue holds without taking anything out of it.
+    pub fn ancillary(&self) -> impl Iterator<Item = &A> {
+        self.segments
+            .iter()
+            .filter_map(|segment| segment.ancillary.as_ref())
+    }
+}
+
 /// Copy the front of `from` into `to`, as much as fits, and say how much that
 /// was.
 fn copy_out(from: &VecDeque<u8>, to: &mut [u8]) -> usize {

@@ -1320,15 +1320,17 @@ back; names came in the landing after. `SCM_RIGHTS` passes descriptors: a
 send takes a reference to each named file and queues it with the first byte,
 a receive installs as many as its control buffer has room for and closes the
 rest, flagging `MSG_CTRUNC`, and a file is only ever dropped with the
-descriptor table and the queue unlocked. A socket passed over its own
-connection is not collected yet, and a peek installs nothing where Linux's
-installs duplicates.
+descriptor table and the queue unlocked. Sockets passed over each other's
+connections and then closed are collected at the last close, as Linux's
+`unix_gc` collects them: a pass finds the sockets only queues refer to that no
+readable queue holds, and empties their queues. A peek installs nothing where
+Linux's installs duplicates.
 The `unix` boot check drives a pair of each type through `dispatch`, and what
 each call refuses stands beside what it answers -- the families and types
 `AF_UNIX` is not, a call on the console, one on a closed descriptor, a peek
 that took what it looked at, a record read that found the last record's tail:
 
-      unix     a stream pair carried bytes across two writes and a peek left them; records kept their boundaries and MSG_TRUNC their lengths; shutdown ended one direction; a socket reported its type, buffers, credentials and unnamed address; a connection crossed an abstract name and a path, and 6 name calls were refused as specified; a descriptor travelled with a message, kept its file open in the queue, and was closed when a receive had no room for it
+      unix     a stream pair carried bytes across two writes and a peek left them; records kept their boundaries and MSG_TRUNC their lengths; shutdown ended one direction; a socket reported its type, buffers, credentials and unnamed address; a connection crossed an abstract name and a path, and 6 name calls were refused as specified; a descriptor travelled with a message, kept its file open in the queue, and was closed when a receive had no room for it; a cycle of sockets in flight was collected at its last close, and one a descriptor reached was kept
 
 **Left, and why it did not block the exit:**
 
