@@ -12,7 +12,7 @@
 //!   ports, from a numeric address, the hosts file, or DNS.
 //! * [`addrinfo`]: `getaddrinfo`, `freeaddrinfo` and `getnameinfo`.
 //! * [`hostent`]: `gethostbyname` and its relatives, `getservbyname` and
-//!   `getservbyport`.
+//!   `getservbyport`, and the `set*ent`, `get*ent` and `end*ent` cursors.
 //! * [`dns`]: building and parsing DNS packets.
 //! * [`resolver`]: `/etc/resolv.conf`, and sending queries to its name servers
 //!   over UDP, falling back to TCP for a truncated answer.
@@ -47,7 +47,7 @@ use core::ffi::{CStr, c_char, c_int, c_uint, c_void};
 use core::mem::{offset_of, size_of};
 
 use crate::stdio::file::{self, File};
-use crate::stdio::io::{fgets, feof, getc};
+use crate::stdio::io::{feof, ferror, fgets, getc};
 use crate::stdio::open::{fclose, fopen};
 use crate::stdio::printf::{FileSink, Sink};
 use crate::string::{strlen, strnlen};
@@ -304,6 +304,10 @@ impl SockaddrIn6 {
 pub struct Sources<'a> {
     /// The hosts file.
     pub hosts: &'a CStr,
+    /// The networks file, which only the `getnetent` cursor reads.
+    pub networks: &'a CStr,
+    /// The protocols file, which only the `getprotoent` cursor reads.
+    pub protocols: &'a CStr,
     /// The services file.
     pub services: &'a CStr,
     /// The resolver's configuration.
@@ -315,6 +319,8 @@ pub struct Sources<'a> {
 /// What the C functions read: the standard files, and name servers on port 53.
 pub const SYSTEM: Sources<'static> = Sources {
     hosts: c"/etc/hosts",
+    networks: c"/etc/networks",
+    protocols: c"/etc/protocols",
     services: c"/etc/services",
     resolv_conf: c"/etc/resolv.conf",
     port: 53,
@@ -440,7 +446,37 @@ pub(crate) fn at(text: &[u8], index: usize) -> u8 {
 /// The length of the C string at the start of `text`: up to its first NUL, or
 /// all of it.
 pub(crate) fn c_len(text: &[u8]) -> usize {
-    text.iter().position(|&byte| byte == 0).unwrap_or(text.len())
+    text.iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(text.len())
+}
+
+/// Copies `len` bytes of `text`, and a NUL after them, to `dest`.
+///
+/// # Safety
+///
+/// `dest` must be valid for writes of `len + 1` bytes.
+pub(crate) unsafe fn copy_out(dest: *mut c_char, text: &[u8], len: usize) {
+    for index in 0..len {
+        let byte = at(text, index);
+        // SAFETY: the caller vouches for `len + 1` writable bytes.
+        unsafe { dest.wrapping_add(index).write(byte as c_char) };
+    }
+    // SAFETY: as above.
+    unsafe { dest.wrapping_add(len).write(0) };
+}
+
+/// Copies `len` bytes of `text` to `dest`, without a NUL.
+///
+/// # Safety
+///
+/// `dest` must be valid for writes of `len` bytes.
+pub(crate) unsafe fn copy_bytes(dest: *mut c_char, text: &[u8], len: usize) {
+    for index in 0..len {
+        let byte = at(text, index);
+        // SAFETY: the caller vouches for `len` writable bytes.
+        unsafe { dest.wrapping_add(index).write(byte as c_char) };
+    }
 }
 
 /// The bytes of the C string `s`, without its NUL.
@@ -563,6 +599,14 @@ impl Database {
         // SAFETY: the stream is open.
         unsafe { getc(self.stream) }
     }
+
+    /// Whether a read failed, rather than reaching the end. A directory
+    /// opens as a file and fails on its first read, which is how the
+    /// resolver's configuration reports `EISDIR`.
+    pub(crate) fn failed(&mut self) -> bool {
+        // SAFETY: the stream is open.
+        unsafe { ferror(self.stream) != 0 }
+    }
 }
 
 impl Drop for Database {
@@ -618,6 +662,8 @@ pub(crate) mod testing {
     #[derive(Debug)]
     pub(crate) struct Paths {
         pub(crate) hosts: CString,
+        pub(crate) networks: CString,
+        pub(crate) protocols: CString,
         pub(crate) services: CString,
         pub(crate) resolv_conf: CString,
     }
@@ -627,6 +673,8 @@ pub(crate) mod testing {
         pub(crate) fn new(resolv_conf: &str) -> Self {
             Self {
                 hosts: fixture("hosts"),
+                networks: fixture("networks"),
+                protocols: fixture("protocols"),
                 services: fixture("services"),
                 resolv_conf: fixture(resolv_conf),
             }
@@ -636,6 +684,8 @@ pub(crate) mod testing {
         pub(crate) fn sources(&self, port: u16) -> Sources<'_> {
             Sources {
                 hosts: &self.hosts,
+                networks: &self.networks,
+                protocols: &self.protocols,
                 services: &self.services,
                 resolv_conf: &self.resolv_conf,
                 port,
@@ -747,6 +797,66 @@ pub(crate) mod testing {
         threads: Vec<JoinHandle<()>>,
     }
 
+    /// Answers each question that arrives over `udp` until `stop` is set.
+    fn serve_udp(
+        udp: &UdpSocket,
+        stop: &AtomicBool,
+        questions: &AtomicUsize,
+        reply: fn(&str, u16) -> Reply,
+    ) {
+        let mut buf = [0u8; 512];
+        while !stop.load(Ordering::Relaxed) {
+            let Ok((len, from)) = udp.recv_from(&mut buf) else {
+                continue;
+            };
+            let _ = questions.fetch_add(1, Ordering::Relaxed);
+            let query = &buf[..len];
+            let (name, kind, _) = question(query);
+            let out = answer(query, &reply(&name, kind), false);
+            let _ = udp.send_to(&out, from);
+        }
+    }
+
+    /// Answers one question per connection to `tcp` until `stop` is set.
+    fn serve_tcp(
+        tcp: &TcpListener,
+        stop: &AtomicBool,
+        questions: &AtomicUsize,
+        reply: fn(&str, u16) -> Reply,
+    ) {
+        while !stop.load(Ordering::Relaxed) {
+            let Ok((stream, _)) = tcp.accept() else {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                continue;
+            };
+            answer_one(stream, questions, reply);
+        }
+    }
+
+    /// Reads one length-framed question from `stream` and answers it.
+    fn answer_one(
+        mut stream: std::net::TcpStream,
+        questions: &AtomicUsize,
+        reply: fn(&str, u16) -> Reply,
+    ) {
+        use std::io::{Read, Write};
+        stream.set_nonblocking(false).unwrap();
+        let mut len = [0u8; 2];
+        if stream.read_exact(&mut len).is_err() {
+            return;
+        }
+        let mut query = vec![0u8; usize::from(u16::from_be_bytes(len))];
+        if stream.read_exact(&mut query).is_err() {
+            return;
+        }
+        let _ = questions.fetch_add(1, Ordering::Relaxed);
+        let (name, kind, _) = question(&query);
+        let out = answer(&query, &reply(&name, kind), true);
+        let mut framed = u16::try_from(out.len()).unwrap().to_be_bytes().to_vec();
+        framed.extend_from_slice(&out);
+        let _ = stream.write_all(&framed);
+    }
+
     impl Responder {
         /// Starts a responder that answers each question with
         /// `reply(name, type)`.
@@ -771,45 +881,14 @@ pub(crate) mod testing {
                 let stop = Arc::clone(&stop);
                 let questions = Arc::clone(&questions);
                 threads.push(std::thread::spawn(move || {
-                    let mut buf = [0u8; 512];
-                    while !stop.load(Ordering::Relaxed) {
-                        let Ok((len, from)) = udp.recv_from(&mut buf) else {
-                            continue;
-                        };
-                        questions.fetch_add(1, Ordering::Relaxed);
-                        let query = &buf[..len];
-                        let (name, kind, _) = question(query);
-                        let out = answer(query, &reply(&name, kind), false);
-                        let _ = udp.send_to(&out, from);
-                    }
+                    serve_udp(&udp, &stop, &questions, reply);
                 }));
             }
             {
                 let stop = Arc::clone(&stop);
                 let questions = Arc::clone(&questions);
                 threads.push(std::thread::spawn(move || {
-                    use std::io::{Read, Write};
-                    while !stop.load(Ordering::Relaxed) {
-                        let Ok((mut stream, _)) = tcp.accept() else {
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                            continue;
-                        };
-                        stream.set_nonblocking(false).unwrap();
-                        let mut len = [0u8; 2];
-                        if stream.read_exact(&mut len).is_err() {
-                            continue;
-                        }
-                        let mut query = vec![0u8; usize::from(u16::from_be_bytes(len))];
-                        if stream.read_exact(&mut query).is_err() {
-                            continue;
-                        }
-                        questions.fetch_add(1, Ordering::Relaxed);
-                        let (name, kind, _) = question(&query);
-                        let out = answer(&query, &reply(&name, kind), true);
-                        let mut framed = u16::try_from(out.len()).unwrap().to_be_bytes().to_vec();
-                        framed.extend_from_slice(&out);
-                        let _ = stream.write_all(&framed);
-                    }
+                    serve_tcp(&tcp, &stop, &questions, reply);
                 }));
             }
             Self {

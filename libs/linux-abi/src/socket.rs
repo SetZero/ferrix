@@ -361,6 +361,74 @@ pub const SIOCINQ: u32 = FIONREAD;
 /// its socket name.
 pub const SIOCOUTQ: u32 = TIOCOUTQ;
 
+/// The interface ioctls, from `linux/sockios.h`. Every one takes a pointer to
+/// a `struct ifreq` -- `SIOCGIFCONF` a `struct ifconf` -- and every one is
+/// what a program that was not written against netlink uses: `ifconfig`,
+/// `if_nametoindex`, `getifaddrs`, and busybox's `ip link set`, which asks for
+/// the flags this way even though it sets everything else over rtnetlink.
+///
+/// The index a name has.
+pub const SIOCGIFNAME: u32 = 0x8910;
+/// Every interface with an address, as an array of `struct ifreq`.
+pub const SIOCGIFCONF: u32 = 0x8912;
+/// The `IFF_` flags.
+pub const SIOCGIFFLAGS: u32 = 0x8913;
+/// Set them.
+pub const SIOCSIFFLAGS: u32 = 0x8914;
+/// The interface's first address.
+pub const SIOCGIFADDR: u32 = 0x8915;
+/// Set it.
+pub const SIOCSIFADDR: u32 = 0x8916;
+/// The address at the far end of a point-to-point link.
+pub const SIOCGIFDSTADDR: u32 = 0x8917;
+/// Set it.
+pub const SIOCSIFDSTADDR: u32 = 0x8918;
+/// The broadcast address.
+pub const SIOCGIFBRDADDR: u32 = 0x8919;
+/// Set it.
+pub const SIOCSIFBRDADDR: u32 = 0x891A;
+/// The network mask.
+pub const SIOCGIFNETMASK: u32 = 0x891B;
+/// Set it.
+pub const SIOCSIFNETMASK: u32 = 0x891C;
+/// The route metric, which Linux always reports as zero.
+pub const SIOCGIFMETRIC: u32 = 0x891D;
+/// Set it, which Linux always refuses.
+pub const SIOCSIFMETRIC: u32 = 0x891E;
+/// The MTU.
+pub const SIOCGIFMTU: u32 = 0x8921;
+/// Set it.
+pub const SIOCSIFMTU: u32 = 0x8922;
+/// The hardware address, as a `sockaddr` whose family is the `ARPHRD_` kind.
+pub const SIOCGIFHWADDR: u32 = 0x8927;
+/// The index of the interface a name has.
+pub const SIOCGIFINDEX: u32 = 0x8933;
+/// Take an address away.
+pub const SIOCDIFADDR: u32 = 0x8936;
+/// How many interfaces there are.
+pub const SIOCGIFCOUNT: u32 = 0x8938;
+/// The transmit queue's length.
+pub const SIOCGIFTXQLEN: u32 = 0x8942;
+/// Set it.
+pub const SIOCSIFTXQLEN: u32 = 0x8943;
+
+/// The bytes of `ifr_name`, which is `IFNAMSIZ`: fifteen characters and a
+/// terminator.
+pub const IFNAMSIZ: usize = 16;
+
+/// Where `ifr_ifru`, the union after the name, starts.
+pub const IFREQ_UNION: usize = IFNAMSIZ;
+
+/// The bytes of a `struct ifreq`.
+///
+/// The union after the name is a `struct sockaddr` (16 bytes), an `int`, a
+/// `short`, a pointer, or a `struct ifmap`, and `ifmap` is the longest: two
+/// `unsigned long`s and five bytes, which pads to 24 where a long is eight
+/// bytes and to 16 where it is four. Nothing here reads a field beyond the
+/// first sixteen bytes of the union, so only `SIOCGIFCONF`, which walks an
+/// array of these, depends on the size at all.
+pub const IFREQ_BYTES: usize = IFNAMSIZ + if size_of::<usize>() == 8 { 24 } else { 16 };
+
 // ---------------------------------------------------------------------------
 // struct msghdr
 // ---------------------------------------------------------------------------

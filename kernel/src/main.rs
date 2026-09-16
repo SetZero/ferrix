@@ -33,6 +33,8 @@ mod iommu;
 mod irq;
 mod mm;
 mod mmio;
+mod net;
+mod net_ring;
 mod object;
 mod panic;
 mod pci;
@@ -810,6 +812,91 @@ fn check_block_ring() {
     }
     let started_by_devmgr = check_devmgr();
     check_driver(started_by_devmgr);
+    // The net core follows the same chain rather than a line of its own in
+    // `kmain`, for the reason the block ring's two do: it needs everything
+    // they need -- a root filesystem for sockfs, and the scheduler for the
+    // task that drives the stack -- and nothing else.
+    check_net();
+}
+
+/// The net core, over the loopback: a socket call reaches the stack, the
+/// stack builds a packet, and the packet comes back up the input path.
+///
+/// Here, after the block ring, because every socket is an inode on sockfs and
+/// so it needs the root filesystem, and because the stack is driven by a task
+/// and so it needs the scheduler. It needs no device at all: a machine with no
+/// network adapter still has to be able to talk to itself, and that is the
+/// whole of the path a packet takes with the wire left out.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_net() {
+    if let Err(problem) = net::start() {
+        fatal!(
+            catalog::NET_CORE,
+            "the net core's task could not be started: {problem}"
+        );
+    }
+    let report = match net::check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(catalog::NET_CORE, "net core self-check failed: {problem}"),
+    };
+    if let Some(why) = report.skipped {
+        println!("  net      not checked: {why}");
+        return;
+    }
+    println!(
+        "  net      {} interface up, {} bytes carried over the loopback in both families, \
+         {} connections made and accepted, {} calls refused as specified",
+        report.interfaces, report.bytes, report.connections, report.refusals,
+    );
+    check_net_ring();
+    check_netlink();
+}
+
+/// The net ring, played from both ends with no network device: the whole
+/// kernel side of an interface, from the control handshake to a frame in and a
+/// frame out.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_net_ring() {
+    let report = match net_ring::check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(catalog::NET_RING, "net ring self-check failed: {problem}"),
+    };
+    if let Some(why) = report.skipped {
+        println!("  netring  not checked: {why}");
+        return;
+    }
+    println!(
+        "  netring  {} HELLOs refused as specified, {} slots posted for a driver to fill, \
+         {} frames taken up the stack and {} answered back down it",
+        report.refusals, report.posted, report.received, report.sent,
+    );
+}
+
+/// `AF_NETLINK`, over the same loopback: the requests `ip` makes are answered
+/// from the net core, and what they changed is in the next dump.
+///
+/// Here, straight after the net core's own check, because it is the same
+/// subsystem reached through a different family: a socket, a buffer of
+/// requests, and the tables `libs/net` holds. Nothing about it touches a
+/// device either.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_netlink() {
+    let report = match net::netlink::check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(catalog::NETLINK, "netlink self-check failed: {problem}"),
+    };
+    if let Some(why) = report.skipped {
+        println!("  netlink  not checked: {why}");
+        return;
+    }
+    println!(
+        "  netlink  {} links, {} addresses and {} routes dumped, an address and a route added \
+         and taken away again, {} requests refused as specified",
+        report.links, report.addresses, report.routes, report.refusals,
+    );
 }
 
 /// Stage 10's exit, the half that is a driver: `/sbin/blk`, started from

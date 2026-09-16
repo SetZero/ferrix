@@ -136,7 +136,7 @@ alive.
 | os-96 (was ferrix-61, ferrix-4d) | Stage 11: `libs/btrfs`, `libs/block`, the kernel mount; the virtio-blk library, the native user-space runtime, the QEMU test disk |
 | os-a6 (was ferrix-e5, ferrix-54) | The memory-management package below; reviewer of the VMO reverse map and the space.rs halves of `vmo_map` and file-backed mmap; the scheduler rows (was ferrix-34), since no scheduler session was spawned |
 | os-87 (was ferrix-3c, and ferrix-4f's area) | The STM32MP157D-DK1 board: the serial link, OpenOCD, every hardware run, filing what the board shows with the area that owns it; `xtask flash` and `deploy`, `docs/stm32mp157-dk.md`, the Arm UART drivers, the x86-64 console interrupt route |
-| os-50 (was os-7c/os-fb, ferrix-ce) | `ferrousli/`, on the roadmap by the P0 row below. Done: locales and wide characters; time zones, `strftime` and `strptime`; buffered stdio and `printf`; threads, mutexes, condition variables and keys, with `tests/c/thread/on_ferrix.c` ready as a static threaded program for `CLONE_THREAD`; `dirent.h` and `getopt`; mounts, file system statistics and `mntent.h`; sockets and the address conversions, System V IPC, and Linux's own process and system calls; `termios.h`; `system`, `popen`, temporary files, `realpath`, the `execl` family and `daemon`; the user, group and shadow databases; `syslog.h`, and `utmpx.h` with musl's empty records; the `scanf` family. In progress: termios (area 2); then pwd/grp/shadow, crypt, utmpx and syslog (area 3) and scanf, popen, mkstemp, realpath (area 4), split across sessions when they exist; the wrappers and stubs busybox links against; `scanf`, `glob` and `regex`, thread cancellation and semaphores, the math library |
+| os-b7 (was os-50/os-7c/os-fb, ferrix-ce) | `ferrousli/`, on the roadmap by the P0 row below. Done: locales and wide characters; time zones, `strftime` and `strptime`; buffered stdio and `printf`; threads, mutexes, condition variables and keys, with `tests/c/thread/on_ferrix.c` ready as a static threaded program for `CLONE_THREAD`; `dirent.h` and `getopt`; mounts, file system statistics and `mntent.h`; sockets and the address conversions, System V IPC, and Linux's own process and system calls; `termios.h`; `system`, `popen`, temporary files, `realpath`, the `execl` family and `daemon`; the user, group and shadow databases; `syslog.h`, and `utmpx.h` with musl's empty records; the `scanf` family. In progress: termios (area 2); then pwd/grp/shadow, crypt, utmpx and syslog (area 3) and scanf, popen, mkstemp, realpath (area 4), split across sessions when they exist; the wrappers and stubs busybox links against; `scanf`; `assert` and the traditional DES `crypt`, which landed as dcaecd6 with the POSIX.1-2024 gap in `docs/POSIX-2024.md`; name resolution, which finished `origin/ferrousli-netdb` and landed it — `getaddrinfo`, `getnameinfo`, the `gethostby*` and `getservby*` families, the hosts, networks, protocols and services databases, `getifaddrs`, `if_nameindex`, `ether_*` and `sockatmark`, closing the whole networking area of `docs/POSIX-2024.md` and nineteen stubs. In progress, one branch each on origin, none reviewed or gated: `ferrousli-math-stubs` (`sin`, `cos`, `exp`, `log`, `pow`, `atan2` and the floating-point classifiers) and `ferrousli-patterns` (`dirname`, `regex`). Waiting behind them: `glob` and `search.h`, thread cancellation and semaphores, the rest of the math library |
 
 The fleet restarted on the customer's Windows machine on the evening of
 2026-09-13. `cargo` builds there, but every boot, the KVM row, `test-shell`,
@@ -209,8 +209,8 @@ nobody has it yet.
 | The POSIX measure: musl's libc-test functional and conformance programs built static against musl and against ferrousli, run under `test-shell` on all three architectures, with the pass count in the roadmap's host-test table and every failure filed with its owner | os-7c, with os-9f once threads run | 
 | `futex.rs` holds `TABLE` across `read_word`, a read fault; safe only while a read fault never invalidates and frame allocation has no reclaim. Stage 13's reclaim makes it a bug: read the word before taking the table, or retry after. From the 2026-09-13 spin-lock audit | os-a6, before stage 13's reclaim |
 | Zero-copy block reads: pin the page-cache pages themselves as the block ring's buffers, removing the data-VMO and scratch copies of stage 11's first read path (ARCHITECTURE §3) | ferrix-61, after stage 11's kernel mount |
-| ferrousli's busybox beyond the gates' applets: the 30 stubs in `ferrousli/src/stubs.rs` (regex for `grep` and `sed` patterns busybox does not handle itself, the math functions `awk` calls, name resolution with interface and Ethernet lookups), each ending the program when an applet reaches it; and `crypt`'s `$2*$` blowfish hash, which returns `"*"` (the traditional DES hash, for the two-character salt POSIX requires, is in P1's link-breakers row) | open |
-| The rest of ferrousli's POSIX.1-2024 gap, by area in `docs/POSIX-2024.md`: 427 interfaces the P1 rows leave, 138 points. The largest parts: the math library beyond `ferrousli-math` (21: the transcendental functions, the Bessel functions, every `long double` form) with `complex.h` (8); locales and messages (15: `gettext`, `iconv`, `catgets`, `strfmon`); wide-character streams and conversions (14); name resolution and the network databases (13); cancellation and the `clock` waits (11); realtime (11: `aio.h`, `mqueue.h`, timers, `shm_open`); `wordexp` and `nftw` (5); spawning (7); and POSIX.1-2024's declarations in musl 1.2.5's headers (3). Each landing updates the document's tables | open (ferrousli, os-50) |
+| ferrousli's busybox beyond the gates' applets: the 11 stubs in `ferrousli/src/stubs.rs` (regex for `grep` and `sed` patterns busybox does not handle itself, the math functions `awk` calls, and `dirname`), each ending the program when an applet reaches it. Name resolution left the list on 2026-09-16, with the interface and Ethernet lookups; and `crypt`'s `$2*$` blowfish hash, which returns `"*"` (the traditional DES hash, for the two-character salt POSIX requires, is in P1's link-breakers row) | open |
+| The rest of ferrousli's POSIX.1-2024 gap, by area in `docs/POSIX-2024.md`: 399 interfaces the P1 rows leave, 125 points. The largest parts: the math library beyond `ferrousli-math` (21: the transcendental functions, the Bessel functions, every `long double` form) with `complex.h` (8); locales and messages (15: `gettext`, `iconv`, `catgets`, `strfmon`); wide-character streams and conversions (14); cancellation and the `clock` waits (11); realtime (11: `aio.h`, `mqueue.h`, timers, `shm_open`); `wordexp` and `nftw` (5); spawning (7); and POSIX.1-2024's declarations in musl 1.2.5's headers (3). Name resolution and the network databases, which were 13, landed on 2026-09-16. Each landing updates the document's tables | open (ferrousli, os-50) |
 | `cargo xtask check --ferrousli` cannot pass on Windows: `ferrousli/tools/gen-abi.py` reads `/usr/include/x86_64-linux-gnu/asm/unistd_64.h`, which no Windows host has. Give it a pinned copy of the Linux UAPI numbers in the tree, so the ferrousli gate runs wherever `cargo xtask busybox` now does. 2 points; found landing the native Windows busybox build, 2026-09-14 | open |
 | The seam measured, 1: what the hop to ring 3 costs. Under `test-boot`, the kernel times submit-to-complete on the pattern disk at queue depths 1 and 32, and `blk` times its own device round trip for the same requests, so the difference is the ring, the doorbells and the scheduler between them and nothing else. Beside it, the same QEMU disk read at the same depths by a Linux guest (a stock image, `dd` with `iflag=direct`), as the in-kernel reference the 2026-09-13 decision forbids building in Ferrix. Both numbers, on x86-64 under KVM and on AArch64, go into the roadmap's stage 11 section with the boot line that carried them, and the zero-copy row above is re-costed against them. 5 points | open |
 | The seam measured, 2: how much of a build-like workload crosses it. Counters kept from boot: Linux system calls answered; page-cache pages served from an inode's VMO against pages filled through the ring; ring submissions and completions; printed as one line at the end of `test-vfs`, and of the `rustc` run when stage 16 has one. The claim under test is that the seam is on a cold path for the goal's workload; the row is done when the ratio is in the roadmap's stage 11 section and the decision of 2026-09-16 cites it. 3 points | open |
@@ -244,6 +244,38 @@ nobody has it yet.
 
 ---
 
+## `su` failed under the musl busybox, and `AF_UNIX` names fixed it
+
+`cargo xtask test-vfs --arch x86_64` with the Alpine musl busybox failed
+applet 17, the permissions script: `su: can't set groups: Not supported`, and
+the script never reached the `id` its expectation begins with. The ferrousli
+busybox passed the same applet, which is why the landing that added it did not
+see this.
+
+It was never a regression: the same failure reproduced on `a643475`, the
+commit that added the applet. musl's `initgroups` goes through `getgrouplist`,
+which tries an `AF_UNIX` connection to nscd before it reads `/etc/group`, and
+Ferrix answered `connect` on an `AF_UNIX` socket with `EOPNOTSUPP` because
+`AF_UNIX` names had not landed. musl treats that as an error rather than as
+"no nscd" and gives up.
+
+It closed itself exactly as predicted: `connect` to `/var/run/nscd/socket` now
+answers `ENOENT`, musl falls back to `/etc/group`, and the applet passes. Kept
+here because the reasoning -- a refusal with the wrong errno is a library
+giving up rather than falling back -- is worth having written down the next
+time a C library is surprising. | done | 0
+
+## The debt the net ring took on
+
+`libs/netring` and `libs/blkring` keep the same index discipline -- private
+indices, checked reads of the peer's, the want-bell handshake -- and it is
+written twice. Extracting it into a crate both depend on is the right shape and
+was deliberately not done in the landing that added the second copy: it would
+refactor a subsystem that is shipped, fuzzed and on the boot path, in the same
+commit as a new one, and a mistake there is a disk that stops reading. The
+extraction is 3 points and wants a landing of its own, with both rings' tests
+and both fuzz targets as the evidence. | open | 3
+
 ## Decisions
 
 Dated, newest first. A decision here is final until the customer says otherwise.
@@ -268,6 +300,17 @@ Dated, newest first. A decision here is final until the customer says otherwise.
   than by argument: the two "seam measured" rows in P2, the seam gate and
   the per-platform isolation table in P1. Drivers stay in ring 3 and no
   kernel disk path is built for the measurement (2026-09-13 below).
+
+* **2026-09-15 (customer)** The customer holds the product owner seat: there is
+  no product-owner session, and the names in this file from before the restart
+  (os-23, os-f7 and the rest) are gone. Two sessions are left, so the queue and
+  the per-landing "go" have nobody to ask and are suspended: a session lands
+  when it judges the tree stable, and commits to `main` directly rather than
+  through `develop`. This supersedes "The landing queue" and "Two branches"
+  above for as long as the fleet is this small. What does not change: the gate
+  table, judging a gate by its output, and that a landing carries its own
+  documentation. `main` is still what the customer tests, so "stable" means the
+  gate a change's own row names has passed on the commit being landed.
 
 * **2026-09-14** The busybox built against ferrousli is the primary busybox:
   the userland Ferrix is measured with, first in every `test-shell` and

@@ -22,6 +22,10 @@ use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{CHANNEL_MAX_HANDLES, DEVICE_VIRTIO_PCI, DeviceInfo};
+use ferrix_netring::control::{
+    CONTROL_RIGHTS as NET_CONTROL_RIGHTS, DEVICE_RIGHTS as NET_DEVICE_RIGHTS, MAX_MESSAGE,
+    Message as NetRing, Start as NetStart,
+};
 use ferrix_rt::native::channel::{self, Channel};
 use ferrix_rt::native::device::Device;
 use ferrix_rt::native::error::Error;
@@ -40,12 +44,43 @@ const MAX_DEVICES: usize = 64;
 /// The most drivers, as the protocol fixes it.
 const MAX_DRIVERS: usize = ferrix_devmgr_proto::MAX_DRIVERS;
 
-/// virtio's PCI vendor, and virtio-blk's modern and transitional device ids.
+/// virtio's PCI vendor, and virtio-blk's and virtio-net's modern and
+/// transitional device ids.
 const VIRTIO_VENDOR: u16 = 0x1AF4;
 const VIRTIO_BLK_IDS: [u16; 2] = [0x1042, 0x1001];
+const VIRTIO_NET_IDS: [u16; 2] = [0x1041, 0x1000];
 
-/// The table: which driver, by name in the initramfs, drives which device.
-const DRIVERS: [(u16, &[u16], &[u8]); 1] = [(VIRTIO_VENDOR, &VIRTIO_BLK_IDS, b"blk")];
+/// Which kind of ring a driver serves its device over. The two rings are
+/// separate protocols with separate kernel ends, and the only thing devmgr
+/// does differently between them is which one it asks the kernel to make and
+/// which START it writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// `docs/BLOCK-RING.md`: a disk, named `vda` and upwards.
+    Block,
+    /// `docs/NET-RING.md`: a network interface, named by the kernel.
+    Net,
+}
+
+/// A driver about to be started: its kind, carrying what only that kind
+/// needs. The disk name is in here rather than beside it because a function
+/// that took both would take one argument too many, and because a net driver
+/// with a disk name would be a thing the table could say and the protocol
+/// could not carry.
+#[derive(Clone, Copy)]
+enum Plan {
+    /// A disk, to be `vda` or whichever letter is next.
+    Block(DiskName),
+    /// A network interface, whose name the kernel chooses.
+    Net,
+}
+
+/// The table: which driver, by name in the initramfs, drives which device,
+/// and over which ring.
+const DRIVERS: [(u16, &[u16], &[u8], Kind); 2] = [
+    (VIRTIO_VENDOR, &VIRTIO_BLK_IDS, b"blk", Kind::Block),
+    (VIRTIO_VENDOR, &VIRTIO_NET_IDS, b"net", Kind::Net),
+];
 
 /// Where devmgr gave up, as the exit status.
 #[repr(i32)]
@@ -124,20 +159,29 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             failed += 1;
             continue;
         };
-        let Some(image) = driver_for(&info, &given.names, given.drivers, &given.images) else {
+        let Some((image, kind)) = driver_for(&info, &given.names, given.drivers, &given.images)
+        else {
             // A device nobody drives: both handles close here.
             continue;
         };
-        let Some(name) = DiskName::for_index(disks) else {
-            failed += 1;
-            continue;
+        // Only a disk is named here, and only disks are counted, so a net
+        // driver between two disks does not shift the second one's letter.
+        let plan = match kind {
+            Kind::Block => {
+                let Some(name) = DiskName::for_index(disks) else {
+                    failed += 1;
+                    continue;
+                };
+                disks += 1;
+                Plan::Block(name)
+            }
+            Kind::Net => Plan::Net,
         };
-        disks += 1;
         let Some(slot) = started.get_mut(count as usize) else {
             failed += 1;
             continue;
         };
-        match start(&job, device, image, &info, name, &port, u64::from(count)) {
+        match start(&job, device, image, &info, plan, &port, u64::from(count)) {
             Ok((job, process)) => {
                 // One at a time: the kernel's PUBLISHED for this disk before
                 // the next driver starts, so disks register in PCI order
@@ -308,14 +352,14 @@ fn driver_for<'a>(
     names: &[[u8; NAME_BYTES]; MAX_DRIVERS],
     drivers: usize,
     images: &'a [Option<Vmo<Kernel>>; MAX_DRIVERS],
-) -> Option<&'a Vmo<Kernel>> {
+) -> Option<(&'a Vmo<Kernel>, Kind)> {
     if info.virtio != DEVICE_VIRTIO_PCI {
         return None;
     }
-    let (_, _, wanted) = DRIVERS
+    let (_, _, wanted, kind) = DRIVERS
         .iter()
-        .find(|(vendor, ids, _)| *vendor == info.vendor_id && ids.contains(&info.device_id))?;
-    (0..drivers)
+        .find(|(vendor, ids, _, _)| *vendor == info.vendor_id && ids.contains(&info.device_id))?;
+    let image = (0..drivers)
         .find(|&j| {
             names.get(j).is_some_and(|name| {
                 let end = name
@@ -325,12 +369,29 @@ fn driver_for<'a>(
                 name.get(..end) == Some(*wanted)
             })
         })
-        .and_then(|j| images.get(j).and_then(Option::as_ref))
+        .and_then(|j| images.get(j).and_then(Option::as_ref))?;
+    Some((image, *kind))
 }
 
-/// Start `image` on `device`, the disk to be `name`: a ring, a job, a
+/// Start `image` on `device`: a ring of the kind the table names, a job, a
 /// process, START over its bootstrap, a watch on its end, and go.
 fn start(
+    job: &Job<Kernel>,
+    device: Device<Kernel>,
+    image: &Vmo<Kernel>,
+    info: &DeviceInfo,
+    plan: Plan,
+    port: &Port<Kernel>,
+    key: u64,
+) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+    match plan {
+        Plan::Block(name) => start_block(job, device, image, info, name, port, key),
+        Plan::Net => start_net(job, device, image, info, port, key),
+    }
+}
+
+/// A virtio-blk driver, over a block ring, for the disk to be `name`.
+fn start_block(
     job: &Job<Kernel>,
     device: Device<Kernel>,
     image: &Vmo<Kernel>,
@@ -340,9 +401,6 @@ fn start(
     key: u64,
 ) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
     let control = device.block_ring().map_err(|_| ())?;
-    let child_job = job.create_child().map_err(|_| ())?;
-    let process = pending::create_process(&child_job, image, "blk").map_err(|_| ())?;
-    let (near, far) = channel::create(Kernel).map_err(|_| ())?;
     let block = |block: ferrix_native_abi::types::DeviceBlock| Block {
         phys: block.phys,
         offset: block.offset,
@@ -371,8 +429,69 @@ fn start(
         .replace(Requested::Exactly(CONTROL_RIGHTS))
         .map_err(|_| ())?;
     let encoded = Ring::Start(start).encode();
-    near.write_with(encoded.as_bytes(), [device, control])
+    launch(
+        job,
+        image,
+        "blk",
+        port,
+        key,
+        encoded.as_bytes(),
+        [device, control],
+    )
+}
+
+/// A virtio-net driver, over a net ring. The kernel names the interface, so
+/// START carries no name: only which device it is, and index zero for
+/// "choose one".
+fn start_net(
+    job: &Job<Kernel>,
+    device: Device<Kernel>,
+    image: &Vmo<Kernel>,
+    info: &DeviceInfo,
+    port: &Port<Kernel>,
+    key: u64,
+) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+    let control = device.net_ring().map_err(|_| ())?;
+    let start = NetStart {
+        index: 0,
+        location: info.location,
+    };
+    let device = device
+        .into_owned()
+        .replace(Requested::Exactly(NET_DEVICE_RIGHTS))
         .map_err(|_| ())?;
+    let control = control
+        .into_owned()
+        .replace(Requested::Exactly(NET_CONTROL_RIGHTS))
+        .map_err(|_| ())?;
+    let mut bytes = [0_u8; MAX_MESSAGE];
+    let written = NetRing::Start(start).encode(&mut bytes).map_err(|_| ())?;
+    launch(
+        job,
+        image,
+        "net",
+        port,
+        key,
+        bytes.get(..written).unwrap_or_default(),
+        [device, control],
+    )
+}
+
+/// The job, the process, the bootstrap channel and the watch every driver
+/// starts with: only START's bytes and handles differ between the rings.
+fn launch(
+    job: &Job<Kernel>,
+    image: &Vmo<Kernel>,
+    program: &str,
+    port: &Port<Kernel>,
+    key: u64,
+    start: &[u8],
+    handles: [OwnedHandle<Kernel>; 2],
+) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+    let child_job = job.create_child().map_err(|_| ())?;
+    let process = pending::create_process(&child_job, image, program).map_err(|_| ())?;
+    let (near, far) = channel::create(Kernel).map_err(|_| ())?;
+    near.write_with(start, handles).map_err(|_| ())?;
     process.notify_on_exit(port, key).map_err(|_| ())?;
     process.start(far.into_owned()).map_err(|_| ())?;
     drop(near);

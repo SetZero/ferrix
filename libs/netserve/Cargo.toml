@@ -1,0 +1,15 @@
+[package]
+name = "ferrix-netserve"
+description = "A ring-3 network driver's serve loop: the net ring on one side, a virtio-net device on the other"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrix-netring = { workspace = true }
+ferrix-virtio-net = { workspace = true }
+
+[lints]
+workspace = true

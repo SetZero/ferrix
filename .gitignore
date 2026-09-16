@@ -4,3 +4,4 @@
 *.fd
 /fuzz/target
 __pycache__/
+/fuzz/artifacts

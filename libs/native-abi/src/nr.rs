@@ -78,6 +78,9 @@ pub const IO_MAPPING_MAP: usize = 0x1041;
 
 /// [`NativeCall::BlockRingCreate`].
 pub const BLOCK_RING_CREATE: usize = 0x1048;
+
+/// [`NativeCall::NetRingCreate`].
+pub const NET_RING_CREATE: usize = 0x104B;
 /// [`NativeCall::DeviceInfo`].
 pub const DEVICE_INFO: usize = 0x1049;
 /// [`NativeCall::DeviceQuiesce`].
@@ -188,6 +191,9 @@ pub enum NativeCall {
     /// ring's control channel and answers with the other, on which the driver
     /// sends HELLO. Needs `MANAGE` on the device, which has one ring.
     BlockRingCreate,
+    /// Make a net ring for a device this process holds with `MANAGE`, and
+    /// answer the driver's end of its control channel.
+    NetRingCreate,
     /// `(device, info)` → 0. Write a `DeviceInfo` at `info`: the device as
     /// enumeration found it, which is what whoever starts a driver on it puts
     /// in the driver's START. Any device handle will do.
@@ -200,7 +206,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 30] = [
+pub const ALL: [NativeCall; 31] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -231,6 +237,7 @@ pub const ALL: [NativeCall; 30] = [
     NativeCall::BlockRingCreate,
     NativeCall::DeviceInfo,
     NativeCall::DeviceQuiesce,
+    NativeCall::NetRingCreate,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -274,6 +281,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         IO_MAPPING_CREATE => NativeCall::IoMappingCreate,
         IO_MAPPING_MAP => NativeCall::IoMappingMap,
         BLOCK_RING_CREATE => NativeCall::BlockRingCreate,
+        NET_RING_CREATE => NativeCall::NetRingCreate,
         DEVICE_INFO => NativeCall::DeviceInfo,
         DEVICE_QUIESCE => NativeCall::DeviceQuiesce,
         _ => return None,
@@ -313,6 +321,7 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::IoMappingCreate => IO_MAPPING_CREATE,
         NativeCall::IoMappingMap => IO_MAPPING_MAP,
         NativeCall::BlockRingCreate => BLOCK_RING_CREATE,
+        NativeCall::NetRingCreate => NET_RING_CREATE,
         NativeCall::DeviceInfo => DEVICE_INFO,
         NativeCall::DeviceQuiesce => DEVICE_QUIESCE,
     }

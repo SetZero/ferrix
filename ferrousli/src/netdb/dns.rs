@@ -73,7 +73,10 @@ pub fn mkquery(
         return None;
     }
     let n = 17 + l + usize::from(l != 0);
-    if l > 253 || op.cast_unsigned() > 15 || class.cast_unsigned() > 255 || kind.cast_unsigned() > 255
+    if l > 253
+        || op.cast_unsigned() > 15
+        || class.cast_unsigned() > 255
+        || kind.cast_unsigned() > 255
     {
         return None;
     }
@@ -201,7 +204,7 @@ pub fn expand(packet: &[u8], src: usize, dest: &mut [u8]) -> Option<usize> {
             d += j;
         } else {
             *dest.get_mut(d)? = 0;
-            return Some(len.unwrap_or(p + 1 - src));
+            return Some(len.unwrap_or_else(|| p + 1 - src));
         }
         i += 2;
     }
@@ -553,9 +556,13 @@ pub unsafe extern "C" fn ns_skiprr(
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn ns_initparse(msg: *const u8, msglen: c_int, handle: *mut NsMsg) -> c_int {
     // SAFETY: the caller passes a writable handle.
-    unsafe { (&raw mut (*handle)._msg).write(msg) };
+    let msg_field = unsafe { &raw mut (*handle)._msg };
+    // SAFETY: the field is inside the handle.
+    unsafe { msg_field.write(msg) };
     // SAFETY: as above.
-    unsafe { (&raw mut (*handle)._eom).write(msg.wrapping_offset(msglen as isize)) };
+    let eom_field = unsafe { &raw mut (*handle)._eom };
+    // SAFETY: as above.
+    unsafe { eom_field.write(msg.wrapping_offset(msglen as isize)) };
     let Ok(len) = usize::try_from(msglen) else {
         errno::set(errno::EMSGSIZE);
         return -1;
@@ -668,7 +675,10 @@ pub fn parserr(
     rrnum: c_int,
     name: &mut [u8],
 ) -> Result<Record, c_int> {
-    let Some(index) = usize::try_from(section).ok().filter(|&index| index < NS_S_MAX) else {
+    let Some(index) = usize::try_from(section)
+        .ok()
+        .filter(|&index| index < NS_S_MAX)
+    else {
         return Err(errno::ENODEV);
     };
     let start = parsed.sections.get(index).copied().flatten();
@@ -694,7 +704,10 @@ pub fn parserr(
         cursor.rrnum = rrnum;
     }
     let name_len = expand(packet, p, name).ok_or(errno::EMSGSIZE)?;
-    let written = name.iter().position(|&byte| byte == 0).map_or(0, |nul| nul + 1);
+    let written = name
+        .iter()
+        .position(|&byte| byte == 0)
+        .map_or(0, |nul| nul + 1);
     p += name_len;
     cursor.ptr = Some(p);
     if 4 > eom.saturating_sub(p) {
@@ -782,31 +795,46 @@ pub unsafe extern "C" fn ns_parserr(
     };
     // SAFETY: the message is readable, as the caller vouches.
     let packet = unsafe { core::slice::from_raw_parts(msg, len) };
-    // SAFETY: the caller passes a writable `ns_rr`, whose name has
-    // `NS_MAXDNAME` bytes.
-    let name = unsafe {
-        core::slice::from_raw_parts_mut((&raw mut (*rr).name).cast::<u8>(), EXPANDED_MAX)
-    };
+    // SAFETY: the caller passes a writable `ns_rr`.
+    let name_field = unsafe { &raw mut (*rr).name };
+    // SAFETY: the name has `NS_MAXDNAME` bytes, more than `EXPANDED_MAX`.
+    let name = unsafe { core::slice::from_raw_parts_mut(name_field.cast::<u8>(), EXPANDED_MAX) };
     let result = parserr(packet, &parsed, &mut cursor, section, rrnum, name);
     let back = |offset: Option<usize>| offset.map_or(null(), |offset| msg.wrapping_add(offset));
     // SAFETY: the handle is writable, as the caller vouches.
-    unsafe { (&raw mut (*handle)._sect).write(cursor.sect) };
+    let sect_field = unsafe { &raw mut (*handle)._sect };
+    // SAFETY: the field is inside the handle.
+    unsafe { sect_field.write(cursor.sect) };
     // SAFETY: as above.
-    unsafe { (&raw mut (*handle)._rrnum).write(cursor.rrnum) };
+    let rrnum_field = unsafe { &raw mut (*handle)._rrnum };
     // SAFETY: as above.
-    unsafe { (&raw mut (*handle)._msg_ptr).write(back(cursor.ptr)) };
+    unsafe { rrnum_field.write(cursor.rrnum) };
+    // SAFETY: as above.
+    let ptr_field = unsafe { &raw mut (*handle)._msg_ptr };
+    // SAFETY: as above.
+    unsafe { ptr_field.write(back(cursor.ptr)) };
     match result {
         Ok(record) => {
             // SAFETY: `rr` is writable, as the caller vouches.
-            unsafe { (&raw mut (*rr).r#type).write(record.kind) };
+            let kind_field = unsafe { &raw mut (*rr).r#type };
+            // SAFETY: the field is inside the record.
+            unsafe { kind_field.write(record.kind) };
             // SAFETY: as above.
-            unsafe { (&raw mut (*rr).rr_class).write(record.class) };
+            let class_field = unsafe { &raw mut (*rr).rr_class };
             // SAFETY: as above.
-            unsafe { (&raw mut (*rr).ttl).write(record.ttl) };
+            unsafe { class_field.write(record.class) };
             // SAFETY: as above.
-            unsafe { (&raw mut (*rr).rdlength).write(record.rdlength) };
+            let ttl_field = unsafe { &raw mut (*rr).ttl };
             // SAFETY: as above.
-            unsafe { (&raw mut (*rr).rdata).write(back(record.rdata)) };
+            unsafe { ttl_field.write(record.ttl) };
+            // SAFETY: as above.
+            let rdlength_field = unsafe { &raw mut (*rr).rdlength };
+            // SAFETY: as above.
+            unsafe { rdlength_field.write(record.rdlength) };
+            // SAFETY: as above.
+            let rdata_field = unsafe { &raw mut (*rr).rdata };
+            // SAFETY: as above.
+            unsafe { rdata_field.write(back(record.rdata)) };
             0
         }
         Err(error) => {
@@ -865,7 +893,10 @@ mod tests {
         assert_eq!(n, 17 + 15 + 1);
 
         let (q, n) = mkquery(0, b"", 1, RR_A, 0).unwrap_or(([9; 280], 0));
-        assert_eq!(q.get(..n), Some(&[0, 0, 1, 32, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1][..]));
+        assert_eq!(
+            q.get(..n),
+            Some(&[0, 0, 1, 32, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1][..])
+        );
         let (_, n) = mkquery(0, b".", 1, RR_A, 0).unwrap_or(([9; 280], 0));
         assert_eq!(n, 17);
 
@@ -893,13 +924,33 @@ mod tests {
         let mut buf = [0u8; 280];
         // SAFETY: the name is NUL-terminated and the buffer has 280 bytes.
         let n = unsafe {
-            res_mkquery(0, c"a.b".as_ptr(), 1, RR_A, null(), 0, null(), buf.as_mut_ptr(), 21)
+            res_mkquery(
+                0,
+                c"a.b".as_ptr(),
+                1,
+                RR_A,
+                null(),
+                0,
+                null(),
+                buf.as_mut_ptr(),
+                21,
+            )
         };
         assert_eq!(n, 21);
         assert_eq!(buf.get(12..17), Some(&[1, b'a', 1, b'b', 0][..]));
         // SAFETY: as above.
         let n = unsafe {
-            res_mkquery(0, c"a.b".as_ptr(), 1, RR_A, null(), 0, null(), buf.as_mut_ptr(), 20)
+            res_mkquery(
+                0,
+                c"a.b".as_ptr(),
+                1,
+                RR_A,
+                null(),
+                0,
+                null(),
+                buf.as_mut_ptr(),
+                20,
+            )
         };
         assert_eq!(n, -1);
     }
@@ -960,14 +1011,18 @@ mod tests {
         let r = unsafe { dn_expand(base, end, base, name.as_mut_ptr(), 8) };
         assert_eq!(r, 5);
         // SAFETY: `dn_expand` ended the name.
-        assert_eq!(unsafe { core::ffi::CStr::from_ptr(name.as_ptr()) }, c"pq");
-        // SAFETY: as above; the source is at the end, then before the start.
-        assert_eq!(unsafe { dn_expand(base, end, end, name.as_mut_ptr(), 8) }, -1);
+        let expanded = unsafe { core::ffi::CStr::from_ptr(name.as_ptr()) };
+        assert_eq!(expanded, c"pq");
+        // SAFETY: as above; the source is at the end of the packet.
+        let at_end = unsafe { dn_expand(base, end, end, name.as_mut_ptr(), 8) };
+        assert_eq!(at_end, -1);
         let before = base.wrapping_sub(1);
         // SAFETY: as above; nothing is read for a source before the start.
-        assert_eq!(unsafe { dn_expand(base, end, before, name.as_mut_ptr(), 8) }, -1);
+        let before_start = unsafe { dn_expand(base, end, before, name.as_mut_ptr(), 8) };
+        assert_eq!(before_start, -1);
         // SAFETY: as above.
-        assert_eq!(unsafe { dn_expand(base, end, base, name.as_mut_ptr(), 0) }, -1);
+        let no_room = unsafe { dn_expand(base, end, base, name.as_mut_ptr(), 0) };
+        assert_eq!(no_room, -1);
 
         assert_eq!(skipname(&packet, 0), Some(5));
         assert_eq!(skipname(&packet, 5), Some(1));
@@ -1026,9 +1081,11 @@ mod tests {
             });
             assert!(ret == -1 || cut >= 12, "{cut}");
         }
-        // A record length past the end.
+        // A record length past the end: the second address record's, which
+        // is the 12-byte authority record and 16 bytes back, then 10 bytes
+        // in past the compressed name, the type, the class and the ttl.
         let mut long = r.clone();
-        let len_at = long.len() - 14 - 16 + 10;
+        let len_at = long.len() - 12 - 16 + 10;
         if let Some(byte) = long.get_mut(len_at) {
             *byte = 0xff;
         }
@@ -1063,15 +1120,30 @@ mod tests {
             .map(|_| parserr(&r, &parsed, &mut cursor, 1, -1, &mut name).map(|record| record.kind))
             .collect();
         assert_eq!(answers, [Ok(5), Ok(1), Ok(1)]);
-        assert_eq!(parserr(&r, &parsed, &mut cursor, 1, -1, &mut name), Err(errno::ENODEV));
+        assert_eq!(
+            parserr(&r, &parsed, &mut cursor, 1, -1, &mut name),
+            Err(errno::ENODEV)
+        );
         // Going back to an earlier record starts the section again.
         let first = parserr(&r, &parsed, &mut cursor, 1, 1, &mut name);
         assert_eq!(first.map(|record| record.rdlength), Ok(4));
         let authority = parserr(&r, &parsed, &mut cursor, 2, 0, &mut name);
-        assert_eq!(authority.map(|record| (record.kind, record.ttl, record.name_len)), Ok((2, 5, 1)));
-        assert_eq!(parserr(&r, &parsed, &mut cursor, 3, 0, &mut name), Err(errno::ENODEV));
-        assert_eq!(parserr(&r, &parsed, &mut cursor, 4, 0, &mut name), Err(errno::ENODEV));
-        assert_eq!(parserr(&r, &parsed, &mut cursor, -1, 0, &mut name), Err(errno::ENODEV));
+        assert_eq!(
+            authority.map(|record| (record.kind, record.ttl, record.name_len)),
+            Ok((2, 5, 1))
+        );
+        assert_eq!(
+            parserr(&r, &parsed, &mut cursor, 3, 0, &mut name),
+            Err(errno::ENODEV)
+        );
+        assert_eq!(
+            parserr(&r, &parsed, &mut cursor, 4, 0, &mut name),
+            Err(errno::ENODEV)
+        );
+        assert_eq!(
+            parserr(&r, &parsed, &mut cursor, -1, 0, &mut name),
+            Err(errno::ENODEV)
+        );
     }
 
     #[test]
@@ -1133,7 +1205,8 @@ mod tests {
         assert_eq!(crate::pwd::last_errno(), errno::ENODEV);
         assert_eq!(addresses, [0xc000_0201, 0xc000_0202]);
         // SAFETY: `rr.name` was ended by `ns_parserr`.
-        assert_eq!(unsafe { core::ffi::CStr::from_ptr(rr.name.as_ptr()) }, c"example.org");
+        let owner = unsafe { core::ffi::CStr::from_ptr(rr.name.as_ptr()) };
+        assert_eq!(owner, c"example.org");
         // SAFETY: as above.
         assert_eq!(unsafe { ns_initparse(r.as_ptr(), 11, &raw mut handle) }, -1);
         assert_eq!(crate::pwd::last_errno(), errno::EMSGSIZE);

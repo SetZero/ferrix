@@ -45,6 +45,7 @@
 //! for the next datagram, which on Linux could come from anyone, and only its
 //! own `shutdown(SHUT_RD)` ends its reads.
 
+use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::sync::Arc;
 use alloc::vec;
@@ -59,10 +60,12 @@ use ferrix_linux_abi::socket::{
     SO_ERROR, SO_KEEPALIVE, SO_LINGER, SO_OOBINLINE, SO_PASSCRED, SO_PEERCRED, SO_PRIORITY,
     SO_PROTOCOL, SO_RCVBUF, SO_RCVBUFFORCE, SO_RCVLOWAT, SO_RCVTIMEO_NEW, SO_RCVTIMEO_OLD,
     SO_REUSEADDR, SO_SNDBUF, SO_SNDBUFFORCE, SO_SNDLOWAT, SO_SNDTIMEO_NEW, SO_SNDTIMEO_OLD,
-    SO_TYPE, SOCK_DGRAM, SOCK_RAW, SOCK_SEQPACKET, SOCK_STREAM, SOCKET_BUFFER_DEFAULT,
-    SOCKET_BUFFER_MAX, SOCKET_BUFFER_MIN, SOL_SOCKET, Ucred, Width,
+    SO_TYPE, SOCK_DGRAM, SOCK_RAW, SOCK_SEQPACKET, SOCK_STREAM, SOCKADDR_UN_SIZE,
+    SOCKET_BUFFER_DEFAULT, SOCKET_BUFFER_MAX, SOCKET_BUFFER_MIN, SOL_SOCKET, SOMAXCONN, Ucred,
+    UnixAddress, Width,
 };
 use ferrix_sync::Once;
+use ferrix_vfs::Context;
 use ferrix_vfs::path::NAME_MAX;
 use ferrix_vfs::socket::{Kind, ReadOutcome, SocketBuffer, WriteOutcome};
 use ferrix_vfs::{
@@ -71,6 +74,7 @@ use ferrix_vfs::{
 };
 
 use crate::fs;
+use crate::fs::sockname::{self, Name};
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
 use crate::syscall::process::{self, Process};
@@ -212,10 +216,48 @@ pub(crate) struct Socket {
     /// has a peer.
     send: SpinLock<Option<Arc<Channel>>>,
     options: SpinLock<Options>,
-    /// What `SO_PEERCRED` reports: for a pair, whoever made it.
-    peer_credentials: Option<Ucred>,
+    /// Whoever made this socket, which is what its peer's `SO_PEERCRED`
+    /// reports.
+    credentials: Ucred,
+    /// What `SO_PEERCRED` reports: for a pair, whoever made it; for a
+    /// connection, whoever made the other end. A socket with no peer has
+    /// none, and answers the overflow ids.
+    peer_credentials: SpinLock<Option<Ucred>>,
+    /// The name `bind` gave it. Set once: Linux's `unix_bind` refuses a
+    /// second one.
+    bound: SpinLock<Option<Name>>,
+    /// The name of whatever it is connected to, when that had one.
+    peer_name: SpinLock<Option<Name>>,
+    /// The connections waiting to be accepted, once `listen` has been called.
+    listener: SpinLock<Option<Backlog>>,
+    /// Woken when the backlog changes: an `accept` waits here for a
+    /// connection, and a `connect` waits here for room.
+    arrivals: WaitQueue,
     /// What `stat` reports through it.
     metadata: Metadata,
+}
+
+/// What a listening socket is holding: the connections that have arrived and
+/// how many may wait.
+#[derive(Debug)]
+struct Backlog {
+    /// How many connections may wait. `listen(n)` allows `n + 1`, which is
+    /// what Linux's `unix_recvq_full` -- a strict `>` against
+    /// `sk_max_ack_backlog` -- means.
+    limit: usize,
+    /// The server ends of connections nobody has accepted yet, oldest first.
+    /// Never longer than `limit`, and allocated to `limit` at `listen`, so
+    /// that pushing one never allocates under the lock.
+    waiting: VecDeque<Waiting>,
+}
+
+/// One connection waiting to be accepted.
+#[derive(Debug)]
+struct Waiting {
+    /// The server end, already wired to the client's.
+    socket: Arc<Socket>,
+    /// The client's name, if it had bound one.
+    peer: Option<Name>,
 }
 
 impl fmt::Debug for Socket {
@@ -293,6 +335,7 @@ impl Socket {
         kind: SocketType,
         send: Option<Arc<Channel>>,
         receive: Arc<Channel>,
+        credentials: Ucred,
         peer_credentials: Option<Ucred>,
         (uid, gid): (u32, u32),
     ) -> Arc<Socket> {
@@ -309,7 +352,12 @@ impl Socket {
                 pass_credentials: false,
                 shut_write: false,
             }),
-            peer_credentials,
+            credentials,
+            peer_credentials: SpinLock::new(peer_credentials),
+            bound: SpinLock::new(None),
+            peer_name: SpinLock::new(None),
+            listener: SpinLock::new(None),
+            arrivals: WaitQueue::new(),
             metadata: Metadata {
                 ino,
                 kind: FileType::Socket,
@@ -337,6 +385,257 @@ impl Socket {
     /// Whether it has a peer to send to.
     pub(crate) fn is_connected(&self) -> bool {
         self.send.lock().is_some()
+    }
+
+    // -- Names, and the connections they make -------------------------------
+
+    /// `bind`: give this socket a name.
+    ///
+    /// # Errors
+    ///
+    /// `EINVAL` for a socket that already has one, as Linux's `unix_bind`
+    /// refuses a second, and for the unnamed address, which Linux answers by
+    /// inventing an abstract name a program cannot predict.
+    /// `EADDRINUSE` if the name is taken, and whatever the walk to a path
+    /// refuses.
+    pub(crate) fn bind(
+        self: &Arc<Socket>,
+        ctx: &Context,
+        address: &UnixAddress<'_>,
+    ) -> Result<(), Errno> {
+        if self.bound.lock().is_some() {
+            return Err(Errno::EINVAL);
+        }
+        // Outside the lock: binding a path walks the filesystem, and a walk
+        // may sleep. A `SpinLock` held across one is a processor that cannot
+        // be preempted while it waits for a disk.
+        let name = match *address {
+            UnixAddress::Unnamed => return Err(Errno::EINVAL),
+            UnixAddress::Path(path) => sockname::bind_path(self, ctx, None, path)?,
+            UnixAddress::Abstract(name) => sockname::bind_abstract(self, name)?,
+        };
+        let mut bound = self.bound.lock();
+        if bound.is_some() {
+            // Two binds at once, and this one lost. Undo it rather than leave
+            // a name pointing at a socket that answers by another.
+            drop(bound);
+            sockname::forget(&name);
+            return Err(Errno::EINVAL);
+        }
+        *bound = Some(name);
+        Ok(())
+    }
+
+    /// `listen`: take connections, up to `backlog` of them waiting.
+    ///
+    /// # Errors
+    ///
+    /// `EOPNOTSUPP` for a datagram socket, which has no connections, and
+    /// `EINVAL` for one that is not bound or is already connected -- Linux's
+    /// `unix_listen` refuses both.
+    pub(crate) fn listen(&self, backlog: i32) -> Result<(), Errno> {
+        if self.kind == SocketType::Datagram {
+            return Err(Errno::EOPNOTSUPP);
+        }
+        if self.bound.lock().is_none() || self.send.lock().is_some() {
+            return Err(Errno::EINVAL);
+        }
+        let asked = usize::try_from(backlog.max(0)).unwrap_or(0);
+        // `n + 1`, because Linux's queue-full test is a strict `>` against
+        // the backlog, so `listen(0)` still takes one connection.
+        let limit = asked.min(SOMAXCONN).saturating_add(1);
+        let waiting = VecDeque::with_capacity(limit);
+        let mut listener = self.listener.lock();
+        match listener.as_mut() {
+            // Listening again only changes the number: the connections
+            // already waiting stay, as they do on Linux.
+            Some(held) => held.limit = limit,
+            None => *listener = Some(Backlog { limit, waiting }),
+        }
+        Ok(())
+    }
+
+    /// `connect`: reach the socket bound to `address`.
+    ///
+    /// # Errors
+    ///
+    /// `EINVAL` for the unnamed address, `EPROTOTYPE` for a socket of another
+    /// type, `ECONNREFUSED` for a name nobody is listening on, `EISCONN` for
+    /// a socket that is already connected, `EAGAIN` for a full backlog a
+    /// non-blocking socket will not wait for, and whatever the walk refuses.
+    pub(crate) fn connect(
+        self: &Arc<Socket>,
+        ctx: &Context,
+        address: &UnixAddress<'_>,
+        nonblock: bool,
+    ) -> Result<(), Errno> {
+        let target = match *address {
+            UnixAddress::Unnamed => return Err(Errno::EINVAL),
+            UnixAddress::Path(path) => sockname::socket_at(ctx, None, path)?,
+            UnixAddress::Abstract(name) => sockname::socket_named(name)?,
+        };
+        // A stream may not connect to a datagram socket bound to the same
+        // name, which is what Linux answers `EPROTOTYPE` to.
+        if target.kind != self.kind {
+            return Err(Errno::EPROTOTYPE);
+        }
+        if Arc::ptr_eq(self, &target) && self.kind != SocketType::Datagram {
+            return Err(Errno::ECONNREFUSED);
+        }
+        let peer_name = target.bound.lock().clone();
+        if self.kind == SocketType::Datagram {
+            return self.connect_datagram(&target, peer_name);
+        }
+        self.connect_stream(&target, peer_name, nonblock)
+    }
+
+    /// A datagram `connect`, which only chooses where sends go. Linux lets
+    /// one be repeated, and a datagram socket has no handshake to fail.
+    fn connect_datagram(
+        self: &Arc<Socket>,
+        target: &Arc<Socket>,
+        peer_name: Option<Name>,
+    ) -> Result<(), Errno> {
+        *self.send.lock() = Some(Arc::clone(&target.receive));
+        *self.peer_name.lock() = peer_name;
+        *self.peer_credentials.lock() = Some(target.credentials);
+        Ok(())
+    }
+
+    /// A stream or sequenced-packet `connect`: make the far end, put it in the
+    /// listener's backlog, and wire the two together.
+    ///
+    /// The connection is complete when it is queued, not when it is accepted,
+    /// which is what Linux's `unix_stream_connect` does: a client may write
+    /// before the server has called `accept`, and what it writes waits in the
+    /// buffer.
+    fn connect_stream(
+        self: &Arc<Socket>,
+        target: &Arc<Socket>,
+        peer_name: Option<Name>,
+        nonblock: bool,
+    ) -> Result<(), Errno> {
+        if self.send.lock().is_some() {
+            return Err(Errno::EISCONN);
+        }
+        if self.listener.lock().is_some() {
+            return Err(Errno::EINVAL);
+        }
+        let mine = self.bound.lock().clone();
+        let deadline = deadline(self.options.lock().send_timeout);
+        loop {
+            // Made before the lock is taken and wired after it is dropped: the
+            // far end is created with no send channel, so dropping it if there
+            // is no room closes nothing of this socket's.
+            let far = Channel::new(self.kind);
+            let server = Socket::new(
+                self.kind,
+                None,
+                Arc::clone(&far),
+                target.credentials,
+                Some(self.credentials),
+                (target.metadata.uid, target.metadata.gid),
+            );
+            let queued = {
+                let mut listener = target.listener.lock();
+                let Some(backlog) = listener.as_mut() else {
+                    return Err(Errno::ECONNREFUSED);
+                };
+                if backlog.waiting.len() < backlog.limit {
+                    backlog.waiting.push_back(Waiting {
+                        socket: Arc::clone(&server),
+                        peer: mine.clone(),
+                    });
+                    true
+                } else {
+                    false
+                }
+            };
+            if queued {
+                *server.send.lock() = Some(Arc::clone(&self.receive));
+                *server.peer_name.lock() = mine;
+                *self.send.lock() = Some(far);
+                *self.peer_name.lock() = peer_name;
+                *self.peer_credentials.lock() = Some(target.credentials);
+                target.arrivals.wake_all();
+                return Ok(());
+            }
+            drop(server);
+            if nonblock {
+                return Err(Errno::EAGAIN);
+            }
+            wait(&target.arrivals, || target.has_room(), deadline)?;
+        }
+    }
+
+    /// Whether the backlog has room for one more, for a waiting `connect`.
+    fn has_room(&self) -> bool {
+        self.listener
+            .lock()
+            .as_ref()
+            .is_none_or(|backlog| backlog.waiting.len() < backlog.limit)
+    }
+
+    /// Whether a connection is waiting, for a waiting `accept`.
+    fn has_arrival(&self) -> bool {
+        self.listener
+            .lock()
+            .as_ref()
+            .is_none_or(|backlog| !backlog.waiting.is_empty())
+    }
+
+    /// `accept`: take the oldest waiting connection, and say who made it.
+    ///
+    /// # Errors
+    ///
+    /// `EOPNOTSUPP` for a datagram socket, `EINVAL` for one that is not
+    /// listening, `EAGAIN` for a non-blocking socket with nothing waiting.
+    pub(crate) fn accept(
+        self: &Arc<Socket>,
+        nonblock: bool,
+    ) -> Result<(Arc<OpenFile>, Vec<u8>), Errno> {
+        if self.kind == SocketType::Datagram {
+            return Err(Errno::EOPNOTSUPP);
+        }
+        let deadline = deadline(self.options.lock().receive_timeout);
+        loop {
+            let taken = {
+                let mut listener = self.listener.lock();
+                let Some(backlog) = listener.as_mut() else {
+                    return Err(Errno::EINVAL);
+                };
+                backlog.waiting.pop_front()
+            };
+            if let Some(waiting) = taken {
+                // Room in the backlog now, which a `connect` may be waiting
+                // for.
+                self.arrivals.wake_all();
+                let address = encode_name(waiting.peer.as_ref());
+                return Ok((open(waiting.socket, nonblock)?, address));
+            }
+            if nonblock {
+                return Err(Errno::EAGAIN);
+            }
+            wait(&self.arrivals, || self.has_arrival(), deadline)?;
+        }
+    }
+
+    /// What `getsockname` answers: the bound name, or the unnamed address.
+    pub(crate) fn sock_name(&self) -> Vec<u8> {
+        encode_name(self.bound.lock().as_ref())
+    }
+
+    /// What `getpeername` answers.
+    ///
+    /// # Errors
+    ///
+    /// `ENOTCONN` for a socket with no peer, which is what Linux answers
+    /// whether or not the peer would have had a name.
+    pub(crate) fn peer_sock_name(&self) -> Result<Vec<u8>, Errno> {
+        if self.send.lock().is_none() {
+            return Err(Errno::ENOTCONN);
+        }
+        Ok(encode_name(self.peer_name.lock().as_ref()))
     }
 
     /// What a write into a direction nobody reads any more answers: Linux's
@@ -677,14 +976,14 @@ impl Socket {
         Ok(match name {
             SO_TYPE => int(i32::try_from(self.kind.linux()).unwrap_or(0)),
             SO_DOMAIN => int(i32::from(AF_UNIX)),
-            SO_PROTOCOL | SO_ERROR | SO_ACCEPTCONN | SO_DEBUG | SO_REUSEADDR | SO_KEEPALIVE
-            | SO_BROADCAST | SO_DONTROUTE | SO_OOBINLINE | SO_PRIORITY => int(0),
+            SO_ACCEPTCONN => int(i32::from(self.listener.lock().is_some())),
+            SO_PROTOCOL | SO_ERROR | SO_DEBUG | SO_REUSEADDR | SO_KEEPALIVE | SO_BROADCAST
+            | SO_DONTROUTE | SO_OOBINLINE | SO_PRIORITY => int(0),
             SO_RCVLOWAT | SO_SNDLOWAT => int(1),
             SO_SNDBUF => size(options.send_buffer),
             SO_RCVBUF => size(self.receive.buffer.lock().capacity()),
             SO_PASSCRED => int(i32::from(options.pass_credentials)),
-            SO_PEERCRED => self
-                .peer_credentials
+            SO_PEERCRED => (*self.peer_credentials.lock())
                 .unwrap_or(Ucred {
                     pid: 0,
                     uid: OVERFLOW_ID,
@@ -776,7 +1075,7 @@ fn buffer_size(requested: i32) -> usize {
 }
 
 /// A timeout in nanoseconds as the `timeval` of `width` a program reads.
-fn timeval(nanos: u64, width: Width) -> Vec<u8> {
+pub(crate) fn timeval(nanos: u64, width: Width) -> Vec<u8> {
     let mut bytes = vec![0_u8; width.bytes() * 2];
     let _ = width.put_word(&mut bytes, 0, nanos / NANOS_PER_SECOND);
     let _ = width.put_word(
@@ -789,7 +1088,7 @@ fn timeval(nanos: u64, width: Width) -> Vec<u8> {
 
 /// A `timeval` of `width` as a timeout in nanoseconds: `sock_set_timeout`'s
 /// rules. All zero waits forever; negative seconds give up at once.
-fn read_timeval(value: &[u8], width: Width) -> Result<u64, Errno> {
+pub(crate) fn read_timeval(value: &[u8], width: Width) -> Result<u64, Errno> {
     let seconds = width.word(value, 0).ok_or(Errno::EINVAL)?;
     let micros = width.word(value, width.bytes()).ok_or(Errno::EINVAL)?;
     // Signed fields, of the width's size.
@@ -815,6 +1114,11 @@ fn read_timeval(value: &[u8], width: Width) -> Result<u64, Errno> {
 
 impl Drop for Socket {
     fn drop(&mut self) {
+        // The name goes first, so that a `connect` racing this drop finds
+        // nothing rather than a socket whose channels are already closing.
+        if let Some(name) = self.bound.lock().take() {
+            sockname::forget(&name);
+        }
         // Nobody reads this direction again: what is queued goes, and a writer
         // sees a broken socket. Taken out under the lock, dropped after it.
         let dropped = self.receive.buffer.lock().close_reader();
@@ -967,10 +1271,12 @@ fn open(socket: Arc<Socket>, nonblock: bool) -> Result<Arc<OpenFile>, Errno> {
 pub(crate) fn new_socket(
     kind: SocketType,
     nonblock: bool,
-    owner: (u32, u32),
+    creator: &Process,
 ) -> Result<Arc<OpenFile>, Errno> {
+    let credentials = credentials_of(creator);
+    let owner = crate::syscall::path::creator_ids(creator);
     open(
-        Socket::new(kind, None, Channel::new(kind), None, owner),
+        Socket::new(kind, None, Channel::new(kind), credentials, None, owner),
         nonblock,
     )
 }
@@ -990,18 +1296,111 @@ pub(crate) fn new_pair(
     let second = Channel::new(kind);
     let credentials = Some(credentials_of(creator));
     let owner = crate::syscall::path::creator_ids(creator);
+    let mine = credentials_of(creator);
     let one = Socket::new(
         kind,
         Some(Arc::clone(&second)),
         Arc::clone(&first),
+        mine,
         credentials,
         owner,
     );
-    let other = Socket::new(kind, Some(first), second, credentials, owner);
+    let other = Socket::new(kind, Some(first), second, mine, credentials, owner);
     Ok((open(one, nonblock)?, open(other, nonblock)?))
+}
+
+/// A bound name as `getsockname` and `getpeername` write it, or the unnamed
+/// address -- `sun_family` and nothing after it -- when there is none.
+fn encode_name(name: Option<&Name>) -> Vec<u8> {
+    let address = match name {
+        Some(Name::Path { path, .. }) => UnixAddress::Path(path),
+        Some(Name::Abstract(bytes)) => UnixAddress::Abstract(bytes),
+        None => UnixAddress::Unnamed,
+    };
+    let mut encoded = [0_u8; SOCKADDR_UN_SIZE + 1];
+    let written = address.encode(&mut encoded).unwrap_or(0);
+    encoded.get(..written).unwrap_or_default().to_vec()
 }
 
 /// The socket an open file reads and writes through, if it is one.
 pub(crate) fn of(file: &OpenFile) -> Option<Arc<Socket>> {
     Arc::clone(file.io()).into_any().downcast::<Socket>().ok()
+}
+
+/// The next inode number on sockfs.
+///
+/// Every socket has one of its own, whatever family it is: `/proc/self/fd`
+/// shows it and `fstat` reports it, and two sockets sharing a number would be
+/// two sockets a program cannot tell apart.
+pub(crate) fn next_ino() -> u64 {
+    sockfs().next_ino.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The metadata a socket of any family reports: `S_IFSOCK | 0777` on sockfs,
+/// as on Linux.
+pub(crate) fn socket_metadata(ino: u64, (uid, gid): (u32, u32)) -> Metadata {
+    let now = fs::clock().now();
+    Metadata {
+        ino,
+        kind: FileType::Socket,
+        permissions: 0o777,
+        nlink: 1,
+        uid,
+        gid,
+        size: 0,
+        rdev: 0,
+        blocks: 0,
+        block_size: BLOCK_SIZE,
+        atime: now,
+        mtime: now,
+        ctime: now,
+    }
+}
+
+/// An open file on a socket of any family, at a detached location on sockfs.
+///
+/// This is what puts an `AF_INET` socket on the same filesystem as an
+/// `AF_UNIX` one, so that `fstat`, `fstatfs` and `/proc/self/fd` answer the
+/// same way for both without the net core knowing what sockfs is.
+///
+/// # Errors
+///
+/// Whatever [`OpenFile::new`] refuses, which for a socket is nothing.
+pub(crate) fn open_on_sockfs(
+    inode: Arc<dyn Inode>,
+    ino: u64,
+    nonblock: bool,
+) -> Result<Arc<OpenFile>, Errno> {
+    let name = format!("socket:[{ino}]");
+    let flags = OpenFlags {
+        read: true,
+        write: true,
+        nonblock,
+        ..OpenFlags::default()
+    };
+    let sockfs: Arc<SockFs> = Arc::clone(sockfs());
+    let parker = Arc::clone(fs::namespace().parker());
+    OpenFile::new(
+        Location::detached(sockfs, inode, name.as_bytes(), parker),
+        &flags,
+    )
+}
+
+/// Sleep on `queue` until `ready`, the caller has a signal to take, or
+/// `deadline` passes, answering the way a socket call answers.
+///
+/// Shared with the net core so that an `AF_INET` socket's wait is the same
+/// wait an `AF_UNIX` one makes, down to which errno a signal turns into.
+pub(crate) fn wait_on(
+    queue: &WaitQueue,
+    ready: impl FnMut() -> bool,
+    deadline: u64,
+) -> Result<(), Errno> {
+    wait(queue, ready, deadline)
+}
+
+/// When a wait with `timeout` nanoseconds of patience must give up; zero waits
+/// forever.
+pub(crate) fn deadline_after(timeout: u64) -> u64 {
+    deadline(timeout)
 }

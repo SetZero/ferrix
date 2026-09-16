@@ -49,6 +49,12 @@ use core::fmt;
 use crate::pci::{FEATURE_ACCESS_PLATFORM, FEATURE_VERSION_1};
 use crate::{Buffer, QueueError, QueueMemory, SplitQueue};
 
+/// The configuration-block reader, which every device class shares.
+pub use crate::DeviceConfig;
+/// The pin granularity a device address is given per, which every device
+/// class shares.
+pub use crate::PAGE_SIZE;
+
 #[cfg(test)]
 mod tests;
 
@@ -163,59 +169,6 @@ pub const CONFIG_SECURE_ERASE: u32 = 60;
 pub const CONFIG_ZONED: u32 = 72;
 /// Bytes of `struct virtio_blk_config` as virtio 1.2 defines it.
 pub const CONFIG_LEN: u32 = 96;
-
-/// A device's device-specific configuration block.
-///
-/// The widths are there because virtio 1.2 §4.1.3.1 has a driver access each
-/// field of a PCI device's configuration with its natural width, and Linux
-/// does. Offsets past [`DeviceConfig::config_len`] are never passed by
-/// [`Config::read`].
-pub trait DeviceConfig {
-    /// Bytes in the block.
-    fn config_len(&self) -> u32;
-    /// The byte at `offset`.
-    fn config_read8(&self, offset: u32) -> u8;
-    /// The little-endian `u16` at `offset`.
-    fn config_read16(&self, offset: u32) -> u16;
-    /// The little-endian `u32` at `offset`.
-    fn config_read32(&self, offset: u32) -> u32;
-}
-
-/// A configuration block that has already been copied out, as bytes.
-impl DeviceConfig for [u8] {
-    fn config_len(&self) -> u32 {
-        u32::try_from(self.len()).unwrap_or(u32::MAX)
-    }
-
-    fn config_read8(&self, offset: u32) -> u8 {
-        byte_at(self, offset)
-    }
-
-    fn config_read16(&self, offset: u32) -> u16 {
-        u16::from_le_bytes([
-            byte_at(self, offset),
-            byte_at(self, offset.saturating_add(1)),
-        ])
-    }
-
-    fn config_read32(&self, offset: u32) -> u32 {
-        u32::from_le_bytes([
-            byte_at(self, offset),
-            byte_at(self, offset.saturating_add(1)),
-            byte_at(self, offset.saturating_add(2)),
-            byte_at(self, offset.saturating_add(3)),
-        ])
-    }
-}
-
-/// The byte at `offset`, or zero past the end.
-fn byte_at(bytes: &[u8], offset: u32) -> u8 {
-    usize::try_from(offset)
-        .ok()
-        .and_then(|at| bytes.get(at))
-        .copied()
-        .unwrap_or(0)
-}
 
 /// `struct virtio_blk_geometry`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -526,9 +479,6 @@ pub const SECTOR_SIZE: u32 = 512;
 /// one is broken rather than exotic: a data length that is a multiple of it
 /// could not be split at page boundaries.
 pub const MAX_BLOCK_SIZE: u32 = 4096;
-
-/// The size of the pages `dma_pin` returns one device address for.
-pub const PAGE_SIZE: u64 = 4096;
 
 /// The most data descriptors [`plan`] puts in one chain, whatever `seg_max`
 /// allows.

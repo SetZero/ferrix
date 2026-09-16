@@ -1,0 +1,14 @@
+[package]
+name = "ferrix-nettcp"
+description = "The TCP state machine: sequence arithmetic, reassembly, retransmission and congestion control, as a pure function of segments and time"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrix-netwire = { workspace = true }
+
+[lints]
+workspace = true

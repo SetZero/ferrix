@@ -628,11 +628,37 @@ impl Namespace {
         node: NewNode<'_>,
         permissions: u32,
     ) -> Result<()> {
+        self.mknod_at(ctx, start, path, node, permissions).map(drop)
+    }
+
+    /// `mknodat`, answering where the new node is.
+    ///
+    /// [`Namespace::mknod`] is this and a `drop`. A caller that has to use
+    /// what it made -- binding an `AF_UNIX` socket to a name, which keys its
+    /// table by the node the bind created -- needs that node, and looking the
+    /// path up again afterwards would find whatever is there by then rather
+    /// than what this call made.
+    ///
+    /// # Errors
+    ///
+    /// As [`Namespace::mknod`].
+    pub fn mknod_at(
+        &self,
+        ctx: &Context,
+        start: Option<&Location>,
+        path: &[u8],
+        node: NewNode<'_>,
+        permissions: u32,
+    ) -> Result<Location> {
         let walked = self.walk(ctx, Self::start(ctx, start), path, false)?;
         if walked.must_be_dir && walked.found.dentry.inode().is_none() {
             return Err(Errno::ENOENT);
         }
-        self.create_at(ctx, &walked, node, permissions).map(drop)
+        let dentry = self.create_at(ctx, &walked, node, permissions)?;
+        Ok(Location {
+            mount: Arc::clone(&walked.found.mount),
+            dentry,
+        })
     }
 
     /// `symlinkat`: make `path` a link to `target`.

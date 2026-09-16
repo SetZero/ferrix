@@ -135,6 +135,10 @@ impl Errno {
     pub const EADDRNOTAVAIL: Self = Self(99);
     /// Network is down.
     pub const ENETDOWN: Self = Self(100);
+    /// Network is unreachable: no route to the destination's network.
+    pub const ENETUNREACH: Self = Self(101);
+    /// Software caused connection abort.
+    pub const ECONNABORTED: Self = Self(103);
     /// Connection reset by peer.
     pub const ECONNRESET: Self = Self(104);
     /// No buffer space available.
@@ -143,10 +147,17 @@ impl Errno {
     pub const EISCONN: Self = Self(106);
     /// Transport endpoint is not connected.
     pub const ENOTCONN: Self = Self(107);
+    /// Cannot send after transport endpoint shutdown.
+    pub const ESHUTDOWN: Self = Self(108);
     /// Connection timed out.
     pub const ETIMEDOUT: Self = Self(110);
     /// Connection refused.
     pub const ECONNREFUSED: Self = Self(111);
+    /// No route to host.
+    pub const EHOSTUNREACH: Self = Self(113);
+    /// Operation already in progress: what a second `connect` on a socket
+    /// still connecting answers.
+    pub const EALREADY: Self = Self(114);
     /// Operation now in progress.
     pub const EINPROGRESS: Self = Self(115);
 

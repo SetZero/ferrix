@@ -17,6 +17,7 @@ bench = false
 ferrix-blkring.workspace = true
 ferrix-devmgr-proto.workspace = true
 ferrix-native-abi.workspace = true
+ferrix-netring.workspace = true
 ferrix-rt.workspace = true
 
 [lints]

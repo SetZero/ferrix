@@ -1,0 +1,25 @@
+[package]
+name = "ferrix-net-driver"
+description = "The virtio-net driver process: the net ring's driver end over a virtio-net PCI device, on ferrix-rt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "net"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferrix-native-abi.workspace = true
+ferrix-netring.workspace = true
+ferrix-netserve.workspace = true
+ferrix-rt.workspace = true
+ferrix-virtio.workspace = true
+ferrix-virtio-net.workspace = true
+
+[lints]
+workspace = true

@@ -3,8 +3,8 @@
 //! ```text
 //! cargo xtask build     --arch x86_64 [--release] [--init PATH/{arch}/busybox]
 //! cargo xtask run       --arch x86_64 [--release] [--gdb] [--smp N] [--memory M]
-//!                       [--accel auto|tcg|whpx|kvm|hvf] [--init PATH/{arch}/busybox]
-//! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS] [--reset]
+//!                       [--accel auto|tcg|whpx|kvm|hvf] [--init PATH/{arch}/busybox] [--net]
+//! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS] [--reset] [--net]
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask check     [--fast] [--ferrousli] [--miri]
@@ -44,8 +44,13 @@ mod cargo;
 mod check;
 mod fat;
 mod flash;
+// The host half of the guest's network, which is a UNIX datagram socket and
+// so has no Windows spelling in `std`. See the module for why it exists at all.
+#[cfg(unix)]
+mod gateway;
 mod initramfs;
 mod native;
+mod net;
 mod paths;
 mod pe;
 mod qemu;
@@ -105,6 +110,7 @@ COMMANDS:
     test-boot     Boot the image under QEMU and assert the kernel came up
     test-shell    Boot with a static busybox built in and require its script's output
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
+    test-net      Boot with a network device and require busybox to configure it and fetch a file
     check         Run every quality gate (fmt, clippy, layering, audits)
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
@@ -120,6 +126,9 @@ OPTIONS:
     --timeout <SECONDS>                  test-boot patience    [default: 120]
     --accel <auto|tcg|whpx|kvm|hvf>      QEMU accelerator      [default: tcg]
     --gdb                                Wait for a debugger on :1234
+    --net                                run, test-boot, test-shell, test-vfs: a virtio-net device,
+                                         behind xtask's own NAT gateway (10.0.2.2, guest 10.0.2.15);
+                                         test-net turns it on whether or not it is given
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --miri                               check: add CI's Miri steps (needs nightly and miri)
@@ -195,6 +204,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         "test-vfs" => test_vfs(&args),
+        "test-net" => test_net(&args),
         "check" => check::run(&args),
         "model-doc" => check::model_doc(),
         "busybox" => busybox::build(args.single_arch()?).map(|_| ()),
@@ -256,6 +266,55 @@ fn test_vfs(args: &Args) -> Result<()> {
     } else {
         Err(Error::new(format!(
             "stage 8's exit programs or applets failed on {}",
+            failed.join(", ")
+        )))
+    }
+}
+
+/// `test-net`: the networking exit criterion, on each architecture asked for.
+///
+/// The servers the guest fetches from are threads of this process, bound to
+/// the host's loopback on ports its kernel chose, so they are started before
+/// the guest's programs are written down: the ports are in the arguments. The
+/// gateway's DNS forwarder is pointed at the stub for the run, and `--net` is
+/// on whether or not it was asked for, since a network test without a network
+/// device is a test of nothing.
+fn test_net(args: &Args) -> Result<()> {
+    let init = args.init.as_deref().ok_or_else(|| {
+        Error::new(
+            "test-net needs --init PATH, a static busybox for each architecture; \
+             `{arch}` in the path is replaced by the architecture's name",
+        )
+    })?;
+    let servers = net::Servers::start()?;
+    println!("  host: {}", servers.describe());
+    let programs = net::commands(&servers);
+    let commands = vfs::encode(&programs)?;
+    let args = Args {
+        net: true,
+        resolver: Some(servers.dns()),
+        ..args.clone()
+    };
+    let mut failed = Vec::new();
+    for arch in args.arches()? {
+        let program = program_for(init, arch)?;
+        let loader = cargo::build_loader(arch, args.release)?;
+        let list = paths::build_dir(arch).join("net-commands");
+        vfs::write_if_changed(&list, &commands)?;
+        let kernel = cargo::build_kernel_with_commands(arch, args.release, &list)?;
+        let natives = native::build(arch, args.release)?;
+        let initramfs = initramfs::build(Some(&program), &natives, None)?;
+        let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
+        if let Err(error) = qemu::test_net(arch, &image, &kernel, &programs, &args) {
+            eprintln!("\n  {error}");
+            failed.push(arch.name());
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::new(format!(
+            "the networking programs failed on {}",
             failed.join(", ")
         )))
     }

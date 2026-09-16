@@ -112,6 +112,7 @@ dependencies = [
  "ferrix-blkring",
  "ferrix-devmgr-proto",
  "ferrix-native-abi",
+ "ferrix-netring",
  "ferrix-rt",
 ]
 
@@ -157,6 +158,11 @@ dependencies = [
  "ferrix-heap",
  "ferrix-linux-abi",
  "ferrix-native-abi",
+ "ferrix-net",
+ "ferrix-netlink",
+ "ferrix-netring",
+ "ferrix-nettcp",
+ "ferrix-netwire",
  "ferrix-objects",
  "ferrix-paging",
  "ferrix-pci",
@@ -187,6 +193,56 @@ name = "ferrix-native-abi"
 version = "0.1.0"
 dependencies = [
  "ferrix-linux-abi",
+]
+
+[[package]]
+name = "ferrix-net"
+version = "0.1.0"
+dependencies = [
+ "ferrix-nettcp",
+ "ferrix-netwire",
+]
+
+[[package]]
+name = "ferrix-net-driver"
+version = "0.1.0"
+dependencies = [
+ "ferrix-native-abi",
+ "ferrix-netring",
+ "ferrix-netserve",
+ "ferrix-rt",
+ "ferrix-virtio",
+ "ferrix-virtio-net",
+]
+
+[[package]]
+name = "ferrix-netlink"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+]
+
+[[package]]
+name = "ferrix-netring"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
+]
+
+[[package]]
+name = "ferrix-netserve"
+version = "0.1.0"
+dependencies = [
+ "ferrix-netring",
+ "ferrix-virtio-net",
+]
+
+[[package]]
+name = "ferrix-nettcp"
+version = "0.1.0"
+dependencies = [
+ "ferrix-netwire",
 ]
 
 [[package]]
@@ -258,6 +314,13 @@ version = "0.1.0"
 
 [[package]]
 name = "ferrix-virtio-blk"
+version = "0.1.0"
+dependencies = [
+ "ferrix-virtio",
+]
+
+[[package]]
+name = "ferrix-virtio-net"
 version = "0.1.0"
 dependencies = [
  "ferrix-virtio",
@@ -423,4 +486,5 @@ version = "0.1.0"
 dependencies = [
  "ferrix-cpio",
  "ferrix-elf",
+ "ferrix-netwire",
 ]

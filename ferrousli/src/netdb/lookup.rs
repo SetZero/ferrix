@@ -25,10 +25,10 @@ use core::ffi::{c_int, c_uint};
 use super::dns::{self, RR_A, RR_AAAA, RR_CNAME};
 use super::resolver::{self, ResolvConf};
 use super::{
-    AF_INET, AF_INET6, AF_UNSPEC, AI_ALL, AI_NUMERICHOST, AI_NUMERICSERV, AI_PASSIVE,
-    AI_V4MAPPED, Database, EAI_AGAIN, EAI_FAIL, EAI_NODATA, EAI_NONAME, EAI_SERVICE, EAI_SYSTEM,
-    IPPROTO_TCP, IPPROTO_UDP, SOCK_CLOEXEC, SOCK_DGRAM, SOCK_STREAM, SockaddrIn6, Sources,
-    V4MAPPED, at, c_len, copy_c, find, has_at, is_linklocal, is_mc_linklocal, is_space, strtoul,
+    AF_INET, AF_INET6, AF_UNSPEC, AI_ALL, AI_NUMERICHOST, AI_NUMERICSERV, AI_PASSIVE, AI_V4MAPPED,
+    Database, EAI_AGAIN, EAI_FAIL, EAI_NODATA, EAI_NONAME, EAI_SERVICE, EAI_SYSTEM, IPPROTO_TCP,
+    IPPROTO_UDP, SOCK_CLOEXEC, SOCK_DGRAM, SOCK_STREAM, SockaddrIn6, Sources, V4MAPPED, at, c_len,
+    copy_c, find, has_at, is_linklocal, is_mc_linklocal, is_space, strtoul,
 };
 use crate::cancel;
 use crate::growable::sort_by;
@@ -181,9 +181,8 @@ pub fn is_valid_hostname(host: &[u8]) -> bool {
         return false;
     }
     // SAFETY: `host` holds a NUL within its bytes, found above.
-    let chars = unsafe {
-        crate::multibyte::mbstowcs(core::ptr::null_mut(), host.as_ptr().cast(), 0)
-    };
+    let chars =
+        unsafe { crate::multibyte::mbstowcs(core::ptr::null_mut(), host.as_ptr().cast(), 0) };
     if chars == usize::MAX {
         return false;
     }
@@ -199,7 +198,9 @@ fn name_from_null(buf: &mut [Address], family: c_int, flags: c_int) -> c_int {
     let mut cnt = 0;
     let passive = flags & AI_PASSIVE != 0;
     if family != AF_INET6 {
-        found[cnt] = v4(if passive { [0; 4] } else { [127, 0, 0, 1] });
+        if let Some(slot) = found.get_mut(cnt) {
+            *slot = v4(if passive { [0; 4] } else { [127, 0, 0, 1] });
+        }
         cnt += 1;
     }
     if family != AF_INET {
@@ -235,9 +236,8 @@ fn name_from_localhost(buf: &mut [Address], name: &[u8], family: c_int) -> c_int
     if !local {
         return 0;
     }
-    let mut loopback6 = [0u8; 16];
-    loopback6[15] = 1;
-    name_from_null(buf, family, 0) + 0 * loopback6.len() as c_int
+    // The loopback addresses are what no name gives without `AI_PASSIVE`.
+    name_from_null(buf, family, 0)
 }
 
 /// The addresses the hosts file gives `name`, and its canonical name, as
@@ -397,8 +397,10 @@ fn name_from_dns(
         // No need for the AD flag.
         set(&mut query, 3, 0);
         // Keep the ids distinct.
-        if nq > 0 && at(&query, 0) == at(&qbuf[0], 0) {
-            set(&mut query, 0, at(&query, 0).wrapping_add(1));
+        let first_id = qbuf.first().map_or(0, |first| at(first, 0));
+        if nq > 0 && at(&query, 0) == first_id {
+            let bumped = at(&query, 0).wrapping_add(1);
+            set(&mut query, 0, bumped);
         }
         if let (Some(q), Some(l), Some(t)) =
             (qbuf.get_mut(nq), qlens.get_mut(nq), qtypes.get_mut(nq))
@@ -412,20 +414,22 @@ fn name_from_dns(
 
     let [q0, q1] = &qbuf;
     let [l0, l1] = qlens;
-    let queries: [&[u8]; 2] = [q0.get(..l0).unwrap_or_default(), q1.get(..l1).unwrap_or_default()];
+    let queries: [&[u8]; 2] = [
+        q0.get(..l0).unwrap_or_default(),
+        q1.get(..l1).unwrap_or_default(),
+    ];
     let mut abuf = [[0u8; ABUF_SIZE]; 2];
     let [a0, a1] = &mut abuf;
     let mut answers: [&mut [u8]; 2] = [a0, a1];
     let mut alens = [0isize; 2];
     let _ = src;
-    if resolver::msend_rc(
+    if let Err(error) = resolver::msend_rc(
         queries.get(..nq).unwrap_or_default(),
         answers.get_mut(..nq).unwrap_or_default(),
         &mut alens,
         conf,
-    )
-    .is_err()
-    {
+    ) {
+        crate::errno::set(error);
         return EAI_SYSTEM;
     }
 
@@ -651,49 +655,18 @@ fn sort(buf: &mut [Address]) {
     let state = cancel::set_state(cancel::DISABLE);
     for (i, address) in buf.iter_mut().enumerate() {
         let family = address.family;
-        let mut key = 0;
-        let mut sa6 = SockaddrIn6::default();
         let mut da6 = SockaddrIn6::v6([0; 16], 65535, address.scopeid);
-        let (da, dalen, mut salen) = if family == AF_INET6 {
+        let (da, dalen) = if family == AF_INET6 {
             da6.sin6_addr = address.addr;
-            (da6, super::SOCKADDR_IN6_LEN, super::SOCKADDR_IN6_LEN)
+            (da6, super::SOCKADDR_IN6_LEN)
         } else {
-            sa6.sin6_addr = mapped([0; 4]);
             let v4 = first4(&address.addr);
             da6.sin6_addr = mapped(v4);
-            (
-                SockaddrIn6::v4(v4, 65535),
-                super::SOCKADDR_IN_LEN,
-                super::SOCKADDR_IN_LEN,
-            )
+            (SockaddrIn6::v4(v4, 65535), super::SOCKADDR_IN_LEN)
         };
         let dpolicy = policyof(&da6.sin6_addr);
         let dscope = scopeof(&da6.sin6_addr);
-        let mut prefixlen = 0;
-        let fd = socket(family, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
-        if fd >= 0 {
-            // SAFETY: `da` is a live local of `dalen` bytes.
-            if unsafe { connect(fd, da.as_ptr(), dalen) } == 0 {
-                key |= DAS_USABLE;
-                let mut sa = SockaddrIn6::default();
-                // SAFETY: `sa` is a live local of 28 bytes, at least `salen`.
-                if unsafe { getsockname(fd, sa.as_mut_ptr(), &raw mut salen) } == 0 {
-                    if family == AF_INET {
-                        sa6.sin6_addr = mapped(sa.v4_addr());
-                    } else {
-                        sa6.sin6_addr = sa.sin6_addr;
-                    }
-                    if dscope == scopeof(&sa6.sin6_addr) {
-                        key |= DAS_MATCHINGSCOPE;
-                    }
-                    if dpolicy.label == policyof(&sa6.sin6_addr).label {
-                        key |= DAS_MATCHINGLABEL;
-                    }
-                    prefixlen = prefixmatch(&sa6.sin6_addr, &da6.sin6_addr);
-                }
-            }
-            let _ = close(fd);
-        }
+        let (mut key, prefixlen) = probe(family, &da, dalen, &da6.sin6_addr, &dpolicy, dscope);
         key |= dpolicy.prec << DAS_PREC_SHIFT;
         key |= (15 - dscope) << DAS_SCOPE_SHIFT;
         key |= prefixlen << DAS_PREFIX_SHIFT;
@@ -702,6 +675,51 @@ fn sort(buf: &mut [Address]) {
     }
     sort_by(buf, |a, b| b.sortkey.cmp(&a.sortkey));
     let _ = cancel::set_state(state);
+}
+
+/// What connecting a datagram socket to `da`, the destination `da6` in its
+/// IPv6 form, says about it: the sort key bits rules 1, 2 and 5 set, and how
+/// many leading bits the source address the kernel chose shares with it,
+/// which is rule 9. A socket that cannot be opened or connected leaves both
+/// at zero, as musl's `__lookup_name` does.
+fn probe(
+    family: c_int,
+    da: &SockaddrIn6,
+    dalen: c_uint,
+    da6: &[u8; 16],
+    dpolicy: &Policy,
+    dscope: c_int,
+) -> (c_int, c_int) {
+    let fd = socket(family, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
+    if fd < 0 {
+        return (0, 0);
+    }
+    // SAFETY: `da` is a live address of at least `dalen` bytes.
+    let connected = unsafe { connect(fd, da.as_ptr(), dalen) } == 0;
+    let mut sa = SockaddrIn6::default();
+    let mut salen = dalen;
+    // SAFETY: `sa` is a live local of 28 bytes, at least `salen`.
+    let named = connected && unsafe { getsockname(fd, sa.as_mut_ptr(), &raw mut salen) } == 0;
+    let _ = close(fd);
+    if !connected {
+        return (0, 0);
+    }
+    if !named {
+        return (DAS_USABLE, 0);
+    }
+    let source = if family == AF_INET {
+        mapped(sa.v4_addr())
+    } else {
+        sa.sin6_addr
+    };
+    let mut key = DAS_USABLE;
+    if dscope == scopeof(&source) {
+        key |= DAS_MATCHINGSCOPE;
+    }
+    if dpolicy.label == policyof(&source).label {
+        key |= DAS_MATCHINGLABEL;
+    }
+    (key, prefixmatch(&source, da6))
 }
 
 /// Looks up `name`, at most 255 bytes of a C string, or no name, as musl's
@@ -764,14 +782,18 @@ pub fn lookup_name(
     if flags & AI_V4MAPPED != 0 {
         if flags & AI_ALL == 0 && buf.iter().take(cnt).any(|a| a.family == AF_INET6) {
             // Some IPv6 results: drop the IPv4 ones.
-            let mut j = 0;
-            for i in 0..cnt {
-                if buf[i].family == AF_INET6 {
-                    buf[j] = buf[i];
-                    j += 1;
+            let mut kept = 0;
+            for index in 0..cnt {
+                let address = buf.get(index).copied().unwrap_or_default();
+                if address.family != AF_INET6 {
+                    continue;
+                }
+                if let Some(slot) = buf.get_mut(kept) {
+                    *slot = address;
+                    kept += 1;
                 }
             }
-            cnt = j;
+            cnt = kept;
         }
         for address in buf.iter_mut().take(cnt) {
             if address.family == AF_INET {
@@ -854,7 +876,9 @@ pub fn lookup_serv(
             return EAI_SERVICE;
         }
         if proto != IPPROTO_UDP {
-            buf[cnt] = tcp(port);
+            if let Some(slot) = buf.get_mut(cnt) {
+                *slot = tcp(port);
+            }
             cnt += 1;
         }
         if proto != IPPROTO_TCP {
@@ -943,12 +967,29 @@ mod tests {
     use super::*;
     use crate::netdb::testing::{Paths, Record, Reply, Responder};
 
-    fn lookup(src: &Sources<'_>, name: &str, family: c_int, flags: c_int) -> (c_int, Vec<Address>, String) {
+    fn lookup(
+        src: &Sources<'_>,
+        name: &str,
+        family: c_int,
+        flags: c_int,
+    ) -> (c_int, Vec<Address>, String) {
         let mut buf = [Address::default(); MAXADDRS];
         let mut canon = [0u8; CANON];
-        let cnt = lookup_name(src, &mut buf, &mut canon, Some(name.as_bytes()), family, flags);
-        let found = buf.iter().take(usize::try_from(cnt).unwrap_or(0)).copied().collect();
-        let canon = String::from_utf8_lossy(canon.get(..c_len(&canon)).unwrap_or_default()).into_owned();
+        let cnt = lookup_name(
+            src,
+            &mut buf,
+            &mut canon,
+            Some(name.as_bytes()),
+            family,
+            flags,
+        );
+        let found = buf
+            .iter()
+            .take(usize::try_from(cnt).unwrap_or(0))
+            .copied()
+            .collect();
+        let canon =
+            String::from_utf8_lossy(canon.get(..c_len(&canon)).unwrap_or_default()).into_owned();
         (cnt, found, canon)
     }
 
@@ -971,9 +1012,18 @@ mod tests {
         assert_eq!((out.family, out.scopeid), (AF_INET6, 7));
         assert_eq!(ipliteral(&mut out, b"fe80::1%lo", AF_UNSPEC), 1);
         assert!(out.scopeid > 0);
-        assert_eq!(ipliteral(&mut out, b"fe80::1%ferrousli-none", AF_UNSPEC), EAI_NONAME);
-        assert_eq!(ipliteral(&mut out, b"2001:db8::1%lo", AF_UNSPEC), EAI_NONAME);
-        assert_eq!(ipliteral(&mut out, b"::1%4294967296", AF_UNSPEC), EAI_NONAME);
+        assert_eq!(
+            ipliteral(&mut out, b"fe80::1%ferrousli-none", AF_UNSPEC),
+            EAI_NONAME
+        );
+        assert_eq!(
+            ipliteral(&mut out, b"2001:db8::1%lo", AF_UNSPEC),
+            EAI_NONAME
+        );
+        assert_eq!(
+            ipliteral(&mut out, b"::1%4294967296", AF_UNSPEC),
+            EAI_NONAME
+        );
         assert_eq!(ipliteral(&mut out, b"::1%4294967295", AF_UNSPEC), 1);
         assert_eq!(ipliteral(&mut out, b"example", AF_UNSPEC), 0);
         assert_eq!(ipliteral(&mut out, b"1.2.3.4.5", AF_UNSPEC), 0);
@@ -1018,8 +1068,14 @@ mod tests {
         assert_eq!(cnt, 2);
         assert!(found.iter().any(|a| a.family == AF_INET6));
         // Not a localhost name, and not in the hosts file: numeric only fails.
-        assert_eq!(lookup(&src, "localhostx", AF_INET, AI_NUMERICHOST).0, EAI_NONAME);
-        assert_eq!(lookup(&src, "localhost", AF_INET, AI_NUMERICHOST).0, EAI_NONAME);
+        assert_eq!(
+            lookup(&src, "localhostx", AF_INET, AI_NUMERICHOST).0,
+            EAI_NONAME
+        );
+        assert_eq!(
+            lookup(&src, "localhost", AF_INET, AI_NUMERICHOST).0,
+            EAI_NONAME
+        );
     }
 
     #[test]
@@ -1039,11 +1095,18 @@ mod tests {
         // Only IPv6 in the file for this name.
         assert_eq!(lookup(&src, "six.example.test", AF_INET, 0).0, EAI_NODATA);
         let (cnt, found, _) = lookup(&src, "six.example.test", AF_INET6, 0);
-        assert_eq!((cnt, found[0].addr), (1, v6([0x2001, 0xdb8, 0, 0, 0, 0, 0, 6])));
+        assert_eq!(
+            (cnt, found[0].addr),
+            (1, v6([0x2001, 0xdb8, 0, 0, 0, 0, 0, 6]))
+        );
         // A comment does not name a host, and a name must stand alone.
-        assert_eq!(lookup(&src, "commented", AF_INET, AI_NUMERICHOST).0, EAI_NONAME);
+        assert_eq!(
+            lookup(&src, "commented", AF_INET, AI_NUMERICHOST).0,
+            EAI_NONAME
+        );
+        // `AI_V4MAPPED` maps only what `AF_INET6` asked for.
         let (cnt, found, _) = lookup(&src, "six.example.test", AF_INET, AI_V4MAPPED);
-        assert_eq!((cnt, found[0].family), (EAI_NODATA, 0));
+        assert_eq!((cnt, found.len()), (EAI_NODATA, 0));
         let (cnt, found, _) = lookup(&src, "server.example.test", AF_INET6, AI_V4MAPPED);
         assert_eq!(cnt, 1);
         assert_eq!(found[0].addr, mapped([192, 0, 2, 10]));
@@ -1088,8 +1151,10 @@ mod tests {
         let (cnt, _, canon) = lookup(&src, "dotted.name", AF_INET, 0);
         assert_eq!((cnt, canon.as_str()), (1, "dotted.name"));
         assert_eq!(lookup(&src, "nothing", AF_INET, 0).0, EAI_NONAME);
+        // A server failure is asked again and a refusal is ignored: neither
+        // is an answer, so both time out into `EAI_AGAIN`.
         assert_eq!(lookup(&src, "fail", AF_INET, 0).0, EAI_AGAIN);
-        assert_eq!(lookup(&src, "broken", AF_INET, 0).0, EAI_FAIL);
+        assert_eq!(lookup(&src, "broken", AF_INET, 0).0, EAI_AGAIN);
         assert_eq!(lookup(&src, "empty", AF_INET, 0).0, EAI_NODATA);
         assert_eq!(lookup(&src, "trailing..", AF_INET, 0).0, EAI_NONAME);
     }
@@ -1097,14 +1162,18 @@ mod tests {
     #[test]
     fn a_truncated_answer_is_asked_again_over_tcp() {
         let paths = Paths::new("resolv.conf");
-        let responder = Responder::start(|_, _| {
-            Reply::Truncated(vec![Record::A([203, 0, 113, 5])])
-        });
+        let responder =
+            Responder::start(|_, _| Reply::Truncated(vec![Record::A([203, 0, 113, 5])]));
         let src = paths.sources(responder.port);
         let (cnt, found, _) = lookup(&src, "big.test", AF_INET, 0);
         assert_eq!(cnt, 1);
         assert_eq!(first4(&found[0].addr), [203, 0, 113, 5]);
-        assert!(responder.questions.load(std::sync::atomic::Ordering::Relaxed) >= 2);
+        assert!(
+            responder
+                .questions
+                .load(std::sync::atomic::Ordering::Relaxed)
+                >= 2
+        );
     }
 
     #[test]
@@ -1132,28 +1201,65 @@ mod tests {
             lookup_serv(&src, buf, name.map(str::as_bytes), proto, socktype, flags)
         };
         assert_eq!(serv(&mut buf, Some("80"), 0, 0, 0), 2);
-        assert_eq!(buf[0], Service { port: 80, proto: 6, socktype: 1 });
-        assert_eq!(buf[1], Service { port: 80, proto: 17, socktype: 2 });
+        assert_eq!(
+            buf[0],
+            Service {
+                port: 80,
+                proto: 6,
+                socktype: 1
+            }
+        );
+        assert_eq!(
+            buf[1],
+            Service {
+                port: 80,
+                proto: 17,
+                socktype: 2
+            }
+        );
         assert_eq!(serv(&mut buf, Some("53"), 0, SOCK_DGRAM, 0), 1);
         assert_eq!(buf[0].proto, 17);
         assert_eq!(serv(&mut buf, Some("65536"), 0, 0, 0), EAI_SERVICE);
         assert_eq!(serv(&mut buf, Some(""), 0, 0, 0), EAI_SERVICE);
         assert_eq!(serv(&mut buf, None, 0, SOCK_STREAM, 0), 1);
         assert_eq!(serv(&mut buf, None, 0, 3, 0), 1);
-        assert_eq!(buf[0], Service { port: 0, proto: 0, socktype: 3 });
+        assert_eq!(
+            buf[0],
+            Service {
+                port: 0,
+                proto: 0,
+                socktype: 3
+            }
+        );
         assert_eq!(serv(&mut buf, Some("http"), 0, 3, 0), EAI_SERVICE);
-        assert_eq!(serv(&mut buf, Some("80"), IPPROTO_UDP, SOCK_STREAM, 0), EAI_SERVICE);
+        assert_eq!(
+            serv(&mut buf, Some("80"), IPPROTO_UDP, SOCK_STREAM, 0),
+            EAI_SERVICE
+        );
 
         assert_eq!(serv(&mut buf, Some("http"), 0, 0, 0), 2);
-        assert_eq!(buf[0], Service { port: 8080, proto: 6, socktype: 1 });
+        assert_eq!(
+            buf[0],
+            Service {
+                port: 8080,
+                proto: 6,
+                socktype: 1
+            }
+        );
         assert_eq!(buf[1].proto, 17);
         assert_eq!(serv(&mut buf, Some("www"), IPPROTO_TCP, 0, 0), 1);
         assert_eq!(buf[0].port, 8080);
         assert_eq!(serv(&mut buf, Some("domain"), 0, SOCK_STREAM, 0), 1);
         assert_eq!(buf[0].port, 5353);
-        assert_eq!(serv(&mut buf, Some("syslog"), IPPROTO_TCP, 0, 0), EAI_SERVICE);
+        assert_eq!(
+            serv(&mut buf, Some("syslog"), IPPROTO_TCP, 0, 0),
+            EAI_SERVICE
+        );
         assert_eq!(serv(&mut buf, Some("syslog"), 0, 0, 0), 1);
-        assert_eq!(serv(&mut buf, Some("http"), 0, 0, AI_NUMERICSERV), EAI_NONAME);
+        assert_eq!(
+            serv(&mut buf, Some("http"), 0, 0, AI_NUMERICSERV),
+            EAI_NONAME
+        );
         assert_eq!(serv(&mut buf, Some("htt"), 0, 0, 0), EAI_SERVICE);
         assert_eq!(serv(&mut buf, Some("commented"), 0, 0, 0), EAI_SERVICE);
     }

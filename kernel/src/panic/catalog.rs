@@ -766,6 +766,98 @@ pub(crate) static STAGE11_MOUNT: Explanation = Explanation {
           xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11",
 };
 
+/// For `check_net` in `main.rs`, when the net core's self-check fails.
+pub(crate) static NET_CORE: Explanation = Explanation {
+    code: "FX-1150",
+    title: "the net core did not carry a packet round its own loopback",
+    meaning: "The net core is `libs/net` behind one lock, driven by a kernel task. Its check \
+              uses the loopback and nothing else, so it passes on a machine with no network \
+              device: a datagram sent to a bound port must arrive with its sender's address, a \
+              datagram to an empty port must earn ECONNREFUSED from the unreachable this host \
+              sends itself, a connection to a listening port must be made, accepted, carry \
+              bytes both ways and end as a clean close, and a connection to a port nobody \
+              listens on must be refused rather than left to time out — all of it over IPv4 \
+              and again over IPv6.",
+    causes: &[
+        "The loopback interface is not up, or does not own 127.0.0.1 and ::1: `Stack::new` no \
+         longer adds it, or `add_local_routes` no longer gives it its two routes.",
+        "A packet routed to the loopback was handed out instead of going back up the input \
+         path: `Stack::poll_transmit`'s loopback turn, or `NetCore::take_frames`, changed.",
+        "A socket call reached the stack and the stack did not move: the net core's task is \
+         not running, or `NetCore::with` stopped draining the egress after the call.",
+        "A blocking call waited for ever: the wait's condition and what wakes it disagree, or \
+         `NetCore::progress` is no longer woken after the stack moves.",
+        "A connection was refused that should have been made, or made that should have been \
+         refused: the listener lookup in `libs/net`'s TCP input, or the reset it sends a \
+         segment with nowhere to go.",
+    ],
+    see: "kernel/src/net/check.rs; kernel/src/net/mod.rs; libs/net; libs/nettcp; \
+          docs/ROADMAP.md",
+};
+
+/// For `check_net_ring` in `main.rs`, when the net ring's self-check fails.
+pub(crate) static NET_RING: Explanation = Explanation {
+    code: "FX-1151",
+    title: "the net ring did not carry a frame between the kernel and a driver",
+    meaning: "`docs/NET-RING.md` is the memory the kernel shares with a ring-3 network driver. \
+              The check plays the driver: it makes the two VMOs and the port a driver makes, \
+              writes the ring header, sends HELLO, and answers submissions by hand, so the whole \
+              kernel side is exercised on a machine with no network adapter. It requires a HELLO \
+              whose handles carry the wrong rights to be refused, one as specified to be answered \
+              with READY and its completion port, the interface to appear in the net core with \
+              the name, address and MTU the HELLO gave it, every free slot to be posted for the \
+              driver to fill, an ARP request written into a slot to be answered with an ARP \
+              reply in a slot the kernel submits, and the interface to go when the driver does.",
+    causes: &[
+        "A HELLO with duplicable VMO handles was accepted: the exact-rights check in \
+         `net_ring::decode_hello` was loosened, and the kernel's handle to a driver's memory \
+         can now be copied.",
+        "No slot was posted: `Serving::post_receives` stopped filling the ring, which is a \
+         driver with no buffers and an interface that silently drops every packet.",
+        "The ARP request was not answered: it never reached `libs/net`'s input path, the \
+         interface has no address, or the reply was queued for an interface nobody drains.",
+        "The interface outlived its driver: `Serving::finish` no longer takes it out of the net \
+         core, so a route can still point at a device that is gone.",
+        "The ring's task did not stop when the control channel closed, which a frame count \
+         taken after the check would then see as a leak.",
+    ],
+    see: "kernel/src/net_ring/check.rs; kernel/src/net_ring/mod.rs; libs/netring; \
+          docs/NET-RING.md",
+};
+
+/// For `check_netlink` in `main.rs`, when the netlink self-check fails.
+pub(crate) static NETLINK: Explanation = Explanation {
+    code: "FX-1152",
+    title: "AF_NETLINK did not answer the requests `ip` makes",
+    meaning: "`AF_NETLINK` is how a program configures an interface: `ip` uses nothing else, and \
+              `ifconfig`, `route`, `udhcpc` and `getifaddrs` all end at the same socket. The \
+              check opens one, binds it, and requires a dump of the links to hold the loopback \
+              with its name and its up and loopback flags, an address and a route added through \
+              it to appear in the next dump and to be gone after they are removed, a request \
+              nothing answers to earn NLMSG_ERROR with EOPNOTSUPP, and a message too short for \
+              its fixed header to earn EINVAL -- with every reply addressed to the port \
+              getsockname reported, which is what libnetlink checks before it believes any of \
+              it.",
+    causes: &[
+        "A reply could not be walked back: `libs/netlink`'s builder and its walk disagree about \
+         a length or the padding between messages, which no host test covers if the two changed \
+         together.",
+        "A dump answered with nothing, or without the loopback: `RTM_GETLINK` no longer reaches \
+         the net core's interface list, or `Stack::new` stopped adding the loopback.",
+        "An address or a route was accepted and did not appear, or was removed and stayed: the \
+         handler read the wrong attribute, or acted on a different interface from the one the \
+         message named.",
+        "A refusal came back as something else: the order of the checks in `kernel/src/net/\
+         netlink/route.rs` changed, so an unknown type is answered before it is refused.",
+        "A reply was addressed to another port or another sequence number: the socket's port \
+         identifier is not what `getsockname` reports, or a reply no longer echoes the request's \
+         sequence number -- which is silent breakage, because a program filters those replies \
+         out and then waits for ever.",
+    ],
+    see: "kernel/src/net/netlink/check.rs; kernel/src/net/netlink/route.rs; libs/netlink; \
+          docs/ROADMAP.md",
+};
+
 /// For `check_devmgr` in `main.rs`, when `devmgr::start` fails.
 pub(crate) static STAGE10_DEVMGR: Explanation = Explanation {
     code: "FX-1006",
@@ -1414,6 +1506,9 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE10_DRIVER,
     &STAGE10_DEVMGR,
     &STAGE11_MOUNT,
+    &NET_CORE,
+    &NET_RING,
+    &NETLINK,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,

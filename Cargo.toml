@@ -22,6 +22,11 @@ members = [
     "libs/cpio",
     "libs/linux-abi",
     "libs/netwire",
+    "libs/nettcp",
+    "libs/net",
+    "libs/netring",
+    "libs/netserve",
+    "libs/netlink",
     "libs/native-abi",
     "libs/native",
     "libs/objects",
@@ -29,6 +34,7 @@ members = [
     "libs/ustack",
     "libs/virtio",
     "libs/virtio-blk",
+    "libs/virtio-net",
     "libs/vma",
     "libs/paging",
     "libs/procfs",
@@ -51,6 +57,7 @@ members = [
     "user/rt",
     "user/channel-echo",
     "user/blk",
+    "user/net",
     "user/devmgr",
 
     # Host-side build and test driver (`cargo xtask ...`).
@@ -87,12 +94,19 @@ ferrix-linux-abi = { path = "libs/linux-abi" }
 ferrix-native-abi = { path = "libs/native-abi" }
 ferrix-native = { path = "libs/native" }
 ferrix-netwire = { path = "libs/netwire" }
+ferrix-nettcp = { path = "libs/nettcp" }
+ferrix-net = { path = "libs/net" }
+ferrix-netring = { path = "libs/netring" }
+ferrix-netserve = { path = "libs/netserve" }
+ferrix-netlink = { path = "libs/netlink" }
 ferrix-rt = { path = "user/rt" }
+ferrix-net-driver = { path = "user/net" }
 ferrix-objects = { path = "libs/objects" }
 ferrix-sync = { path = "libs/sync" }
 ferrix-ustack = { path = "libs/ustack" }
 ferrix-virtio = { path = "libs/virtio" }
 ferrix-virtio-blk = { path = "libs/virtio-blk" }
+ferrix-virtio-net = { path = "libs/virtio-net" }
 ferrix-vma = { path = "libs/vma" }
 ferrix-qr = { path = "libs/qr" }
 ferrix-vfs = { path = "libs/vfs" }

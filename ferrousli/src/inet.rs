@@ -1,5 +1,6 @@
 //! `arpa/inet.h`'s address conversions, `netinet/in.h`'s byte order
-//! functions, and `net/if.h`'s `if_nametoindex` and `if_indextoname`.
+//! functions and its two wildcard addresses, and `net/if.h`'s
+//! `if_nametoindex` and `if_indextoname`.
 //!
 //! The conversions follow musl's `network/inet_aton.c`, `inet_addr.c`,
 //! `inet_ntoa.c`, `inet_ntop.c` and `inet_pton.c`, over byte slices rather
@@ -47,6 +48,53 @@ pub struct InAddr {
 }
 
 const _: () = assert!(size_of::<InAddr>() == 4);
+
+/// C's `struct in6_addr`, from `include/netinet/in.h`: an IPv6 address. The
+/// header declares it as a union of `uint8_t[16]`, `uint16_t[8]` and
+/// `uint32_t[4]`, so it is four-byte aligned and a program may read it
+/// through any of the three.
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct In6Addr {
+    /// The address, its most significant byte first in memory.
+    pub s6_addr: [u8; 16],
+}
+
+const _: () = assert!(size_of::<In6Addr>() == 16);
+const _: () = assert!(align_of::<In6Addr>() == 4);
+
+/// `in6addr_any`, the wildcard address `::`, from `include/netinet/in.h`.
+///
+/// It is an object rather than a macro, which is what the standard requires
+/// and what a program that writes `&in6addr_any` needs.
+// The name is the standard's, so it is not the upper case Rust wants. The
+// exemption is only needed where there is no `no_mangle` to excuse it, which
+// is the test build.
+#[cfg_attr(
+    test,
+    expect(
+        non_upper_case_globals,
+        reason = "AUDIT: the name is the standard's, which C programs name"
+    )
+)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub static in6addr_any: In6Addr = In6Addr { s6_addr: [0; 16] };
+
+/// `in6addr_loopback`, `::1`, from `include/netinet/in.h`.
+// The name is the standard's, so it is not the upper case Rust wants. The
+// exemption is only needed where there is no `no_mangle` to excuse it, which
+// is the test build.
+#[cfg_attr(
+    test,
+    expect(
+        non_upper_case_globals,
+        reason = "AUDIT: the name is the standard's, which C programs name"
+    )
+)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub static in6addr_loopback: In6Addr = In6Addr {
+    s6_addr: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+};
 
 /// Converts a 32-bit value from host to network byte order.
 #[cfg_attr(not(test), unsafe(no_mangle))]
@@ -596,8 +644,7 @@ pub unsafe extern "C" fn if_indextoname(index: c_uint, name: *mut c_char) -> *mu
         *slot = byte;
     }
     // SAFETY: the kernel reads and writes the request, a `struct ifreq`.
-    let ret =
-        unsafe { syscall::syscall3(nr::IOCTL, fd, SIOCGIFNAME, request.as_mut_ptr().addr()) };
+    let ret = unsafe { syscall::syscall3(nr::IOCTL, fd, SIOCGIFNAME, request.as_mut_ptr().addr()) };
     // SAFETY: `close` reads no memory.
     let _ = unsafe { syscall::syscall2(nr::CLOSE, fd, 0) };
     if let Err(error) = errno::decode(ret) {
@@ -613,7 +660,10 @@ pub unsafe extern "C" fn if_indextoname(index: c_uint, name: *mut c_char) -> *mu
     for (offset, &byte) in request.iter().take(IFNAMSIZ).enumerate() {
         ended |= byte == 0;
         // SAFETY: the caller passes `IF_NAMESIZE` writable bytes.
-        unsafe { name.wrapping_add(offset).write(if ended { 0 } else { byte as c_char }) };
+        unsafe {
+            name.wrapping_add(offset)
+                .write(if ended { 0 } else { byte as c_char })
+        };
     }
     name
 }
@@ -621,6 +671,19 @@ pub unsafe extern "C" fn if_indextoname(index: c_uint, name: *mut c_char) -> *mu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_wildcard_addresses_are_the_ones_the_standard_names() {
+        assert_eq!(in6addr_any.s6_addr, [0; 16]);
+        assert_eq!(
+            in6addr_loopback.s6_addr,
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        );
+        // They are objects, so a program may take their address, and the
+        // union in the header reads them four bytes at a time.
+        assert_eq!((&raw const in6addr_any).addr() % 4, 0);
+        assert_eq!((&raw const in6addr_loopback).addr() % 4, 0);
+    }
 
     #[test]
     fn if_indextoname_names_the_loopback_interface() {

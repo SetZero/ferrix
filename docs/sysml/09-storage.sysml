@@ -29,11 +29,16 @@ package FerrixStorage {
     part def RequestQueue;
     part def IoScheduler;
 
-    #planned part def NetCore {
-        doc /* Not on the path to rustc; staged after stage 11 as the
-             * networking stage (docs/ROADMAP.md, Networking): sockets,
-             * AF_NETLINK route, interfaces, loopback and /proc/net, with
-             * virtio-net as its first driver, in user mode. */
+    #implemented part def NetCore {
+        doc /* The networking stage (docs/ROADMAP.md, Networking), which is
+             * not on the path to rustc and was taken after stage 11: AF_INET
+             * and AF_INET6 sockets over libs/net, AF_NETLINK route sockets
+             * and the ifreq ioctls for configuring an interface, /proc/net
+             * for the programs that read it, the net ring, and virtio-net as
+             * its first driver, in ring 3, with AF_UNIX names under it all.
+             * Its exit criterion is met: cargo xtask test-net configures
+             * eth0, resolves a name and fetches a file byte for byte on
+             * every architecture. */
     }
 
     // -----------------------------------------------------------------------

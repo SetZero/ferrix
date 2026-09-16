@@ -274,7 +274,7 @@ package FerrixStructure {
         #planned part pageCache : PageCache;
         #planned part filesystems : Filesystems;
         #planned part blockCore : BlockCore;
-        #planned part netCore : NetCore;
+        #implemented part netCore : NetCore;
         #planned part namespaces : Namespaces;
         #planned part cgroups : Cgroups;
         #planned part seccomp : Seccomp;
@@ -865,10 +865,10 @@ package FerrixStructure {
         #implemented part virtio : LibraryCrate {
             attribute :>> path = "libs/virtio";
             attribute :>> forbidsUnsafe = false;
-            attribute :>> hostTests = 62;
+            attribute :>> hostTests = 81;
             @stage { number = 10; }
         }
-        #writtenAhead part netwire : LibraryCrate {
+        #implemented part netwire : LibraryCrate {
             attribute :>> path = "libs/netwire";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 54;
@@ -881,6 +881,109 @@ package FerrixStructure {
                  * verified where the format carries them. The netwire_parse
                  * fuzz target requires every header that parses to emit and
                  * parse back unchanged. */
+        }
+        #implemented part nettcp : LibraryCrate {
+            attribute :>> path = "libs/nettcp";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 30;
+            doc /* The TCP state machine, written ahead of the networking
+                 * stage and above netwire: the eleven states of RFC 9293 in
+                 * the standard's order, reassembly of what arrives out of
+                 * order, window scaling, selective acknowledgment blocks,
+                 * Nagle, delayed acknowledgments, silly-window avoidance and
+                 * the zero-window probe, retransmission timing by RFC 6298
+                 * with Karn's algorithm, and NewReno congestion control. It
+                 * holds no clock and no address: segments and a time go in,
+                 * segments come out, which is what lets its tests drive two
+                 * connections against each other over a wire they control.
+                 * The nettcp_state fuzz target drives one connection from a
+                 * stranger's segments and requires every header it answers
+                 * with to write and parse back. */
+        }
+        #implemented part netCore : LibraryCrate {
+            attribute :>> path = "libs/net";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 45;
+            doc /* The net core, written ahead of the networking stage:
+                 * interfaces and the addresses on them, one routing table for
+                 * both families, a neighbour cache that answers ARP's
+                 * question and Neighbor Discovery's the same way, IPv4
+                 * fragmentation and reassembly under a ceiling a stranger
+                 * cannot raise, ICMP echo in both directions with the
+                 * unprivileged socket ping uses, UDP with Linux's
+                 * socket-matching order, and TCP connections and listeners
+                 * over nettcp. It holds no lock, no clock and no device:
+                 * frames and a time go in and frames come out, and a packet
+                 * routed to the loopback goes back into the input path rather
+                 * than out of a driver. The net_input fuzz target drives a
+                 * whole host from a stranger's frames. */
+        }
+        #implemented part netServe : LibraryCrate {
+            attribute :>> path = "libs/netserve";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 10;
+            doc /* A ring-3 network driver's serve loop: the net ring on one
+                 * side, a virtio-net device on the other, and the rules where
+                 * they meet. The two directions are not symmetrical -- sending
+                 * is a copy and a submission, while a frame arrives into a
+                 * buffer the device chose and takes the oldest receive slot
+                 * the kernel posted, or is dropped if none is waiting. A
+                 * submission is never taken that cannot be answered, and a
+                 * device buffer goes back the moment its bytes are copied,
+                 * because a buffer the driver holds is a frame the device
+                 * cannot deliver. Written against a trait, so the loop runs on
+                 * the host with a fake device on one side and the ring's own
+                 * kernel end on the other. */
+        }
+        #implemented part netRing : LibraryCrate {
+            attribute :>> path = "libs/netring";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 32;
+            doc /* The net ring: the memory the kernel shares with a ring-3
+                 * network driver, specified in docs/NET-RING.md. The block
+                 * ring's discipline with its allocator removed: a frame is
+                 * bounded by the MTU, so the data VMO is entries slots of a
+                 * fixed size and a submission names its slot, which takes
+                 * away the class of bug where a region is reused before its
+                 * completion. Private indices, checked reads of the peer's,
+                 * the want-bell handshake, and every entry checked when it is
+                 * read; corruption is terminal for the side that sees it. */
+        }
+        #implemented part netlink : LibraryCrate {
+            attribute :>> path = "libs/netlink";
+            attribute :>> hostTests = 48;
+            doc /* The byte-level half of netlink, over linux-abi's headers:
+                 * walking a buffer of messages and the attributes after each
+                 * fixed header, and building replies into a caller's buffer
+                 * with every length and pad computed rather than taken. Both
+                 * walks refuse a length below the header it introduces, one
+                 * past the end, and the zero that would walk the same message
+                 * for ever, and every step forward is at least a header wide,
+                 * so a walk over any bytes at all ends -- which is what lets
+                 * the kernel read a buffer a program wrote. It allocates
+                 * nothing, so a whole dump is encoded inside the lock over the
+                 * net core. The netlink_walk fuzz target requires the walk to
+                 * end, what it borrows to lie inside the input, and anything
+                 * the builder writes to walk back to what was built. */
+        }
+        #implemented part virtioNet : LibraryCrate {
+            attribute :>> path = "libs/virtio-net";
+            attribute :>> hostTests = 22;
+            @stage { number = 10; }
+            doc /* The virtio-net driver logic, written ahead of the network
+                 * device it will drive: bring-up in the order the status
+                 * protocol fixes, a receive queue the driver fills and refills
+                 * because an empty one drops every frame in silence, a
+                 * transmit queue whose buffers stay the caller's until the
+                 * device says it has read them, and a drain that acknowledges
+                 * the interrupt before it starts. It negotiates no checksum,
+                 * segmentation or merge-buffer feature, so a frame is one
+                 * buffer and every header is the twelve bytes VERSION_1 makes
+                 * it. It holds no handle: a transport, pinned pages and a
+                 * header area go in, and frames go each way. The virtio_net
+                 * fuzz target drives it from a device whose every register,
+                 * used entry and header byte a stranger chose, and requires
+                 * every accepted frame to be answered exactly once. */
         }
         #writtenAhead part pci : LibraryCrate {
             attribute :>> path = "libs/pci";

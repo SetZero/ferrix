@@ -31,7 +31,11 @@ ferrix-block = { path = "../libs/block", features = ["model"] }
 ferrix-blkring = { path = "../libs/blkring" }
 ferrix-virtio = { path = "../libs/virtio" }
 ferrix-virtio-blk = { path = "../libs/virtio-blk" }
+ferrix-virtio-net = { path = "../libs/virtio-net" }
 ferrix-netwire = { path = "../libs/netwire" }
+ferrix-nettcp = { path = "../libs/nettcp" }
+ferrix-net = { path = "../libs/net" }
+ferrix-netlink = { path = "../libs/netlink" }
 
 [[bin]]
 name = "elf_parse"
@@ -104,6 +108,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "virtio_net"
+path = "fuzz_targets/virtio_net.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "cpio_parse"
 path = "fuzz_targets/cpio_parse.rs"
 test = false
@@ -127,6 +138,26 @@ bench = false
 [[bin]]
 name = "netwire_parse"
 path = "fuzz_targets/netwire_parse.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "nettcp_state"
+path = "fuzz_targets/nettcp_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "net_input"
+path = "fuzz_targets/net_input.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "netlink_walk"
+path = "fuzz_targets/netlink_walk.rs"
 test = false
 doc = false
 bench = false

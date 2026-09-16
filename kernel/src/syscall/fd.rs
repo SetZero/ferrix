@@ -453,8 +453,20 @@ pub(crate) fn sys_ioctl(
         return tty::ioctl(process, &file, request, arg);
     }
     // The two socket requests, which ask a socket what is queued each way.
-    if let Some(socket) = fs::socket::of(&file) {
-        return socket.ioctl(process, request, arg);
+    let answered = if let Some(socket) = fs::socket::of(&file) {
+        socket.ioctl(process, request, arg)
+    } else if let Some(socket) = crate::net::socket::of(&file) {
+        socket.ioctl(process, request, arg)
+    } else {
+        return Err(Errno::ENOTTY);
+    };
+    match answered {
+        // Every socket answers the interface requests, whatever its family:
+        // Linux's `sock_ioctl` passes what the family did not know to
+        // `dev_ioctl`, and a program relies on that. musl's
+        // `if_nametoindex` -- which is how `ip` turns a name into an index,
+        // and which POSIX.1-2024 specifies -- asks over an `AF_UNIX` socket.
+        Err(Errno::ENOTTY) => crate::net::ifreq::ioctl(process, request, arg),
+        answer => answer,
     }
-    Err(Errno::ENOTTY)
 }

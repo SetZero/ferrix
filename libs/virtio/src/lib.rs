@@ -77,7 +77,73 @@
 use core::fmt;
 
 pub mod blk;
+pub mod net;
 pub mod pci;
+
+/// The size of the pages a pin returns one device address for.
+///
+/// Every device-specific module here lays its buffers out against this, since
+/// what a driver is given is one address per page and no promise that page
+/// `i + 1` follows page `i`.
+pub const PAGE_SIZE: u64 = 4096;
+
+/// A device's device-specific configuration block.
+///
+/// Beside the common configuration [`pci::CommonConfig`] describes, each
+/// device class has a block of its own — `struct virtio_blk_config`, `struct
+/// virtio_net_config` — and each module here reads its own out of one of
+/// these.
+///
+/// The widths are there because virtio 1.2 §4.1.3.1 has a driver access each
+/// field of a PCI device's configuration with its natural width, and Linux
+/// does. Offsets past [`DeviceConfig::config_len`] are never passed by the
+/// readers in this crate.
+pub trait DeviceConfig {
+    /// Bytes in the block.
+    fn config_len(&self) -> u32;
+    /// The byte at `offset`.
+    fn config_read8(&self, offset: u32) -> u8;
+    /// The little-endian `u16` at `offset`.
+    fn config_read16(&self, offset: u32) -> u16;
+    /// The little-endian `u32` at `offset`.
+    fn config_read32(&self, offset: u32) -> u32;
+}
+
+/// A configuration block that has already been copied out, as bytes.
+impl DeviceConfig for [u8] {
+    fn config_len(&self) -> u32 {
+        u32::try_from(self.len()).unwrap_or(u32::MAX)
+    }
+
+    fn config_read8(&self, offset: u32) -> u8 {
+        byte_at(self, offset)
+    }
+
+    fn config_read16(&self, offset: u32) -> u16 {
+        u16::from_le_bytes([
+            byte_at(self, offset),
+            byte_at(self, offset.saturating_add(1)),
+        ])
+    }
+
+    fn config_read32(&self, offset: u32) -> u32 {
+        u32::from_le_bytes([
+            byte_at(self, offset),
+            byte_at(self, offset.saturating_add(1)),
+            byte_at(self, offset.saturating_add(2)),
+            byte_at(self, offset.saturating_add(3)),
+        ])
+    }
+}
+
+/// The byte at `offset`, or zero past the end.
+fn byte_at(bytes: &[u8], offset: u32) -> u8 {
+    usize::try_from(offset)
+        .ok()
+        .and_then(|at| bytes.get(at))
+        .copied()
+        .unwrap_or(0)
+}
 
 /// Largest queue size a split virtqueue may have, from virtio 1.2 §2.7.
 ///

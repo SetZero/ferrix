@@ -47,13 +47,15 @@ const DEBUG_EXIT_SUCCESS: i32 = 33;
 
 /// Boot the image with the serial port attached to this terminal.
 pub(crate) fn run(arch: Arch, image: &Path, args: &Args) -> Result<()> {
-    let mut command = qemu_command(arch, image, args)?;
+    let (mut command, network) = qemu_command(arch, image, args)?;
     if args.gdb {
         let _ = command.args(["-s", "-S"]);
         println!("  waiting for a debugger on localhost:1234");
     }
     println!("  {arch}: booting (quit with Ctrl-A x)\n");
-    cargo::run(command, "qemu")
+    let booted = cargo::run(command, "qemu");
+    report_network(&network);
+    booted
 }
 
 /// Boot the image headless and require the kernel to report success.
@@ -420,6 +422,64 @@ pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> 
     )))
 }
 
+/// Boot with a network device and require the guest's networking programs to
+/// pass, one report for the lot.
+///
+/// The programs come from the caller rather than from a constant, because
+/// their arguments hold the ports the host's servers were given a moment ago.
+pub(crate) fn test_net(
+    arch: Arch,
+    image: &Path,
+    kernel: &Path,
+    programs: &[crate::vfs::Command],
+    args: &Args,
+) -> Result<()> {
+    println!(
+        "  {arch}: running {} networking programs under QEMU (timeout {}s)",
+        programs.len(),
+        args.timeout
+    );
+    let watched = watch(arch, image, kernel, args, crate::vfs::DONE)?;
+    let log = watched.log.display();
+    let after_boot = watched
+        .lines
+        .iter()
+        .position(|line| line.contains(SUCCESS_MARKER))
+        .and_then(|at| watched.lines.get(at..))
+        .unwrap_or_default();
+    let ending = match watched.verdict {
+        Verdict::Reached => None,
+        Verdict::Panicked => Some("the kernel panicked".to_owned()),
+        Verdict::Silent => Some(format!(
+            "the programs did not all finish within {}s",
+            args.timeout
+        )),
+    };
+    let judged = crate::vfs::judge(programs, 0, after_boot);
+    match (judged, ending) {
+        (Ok(passed), None) => {
+            for line in passed {
+                println!("  {arch}: {line}");
+            }
+            println!("  {arch}: the networking programs all passed");
+            Ok(())
+        }
+        (Ok(_), Some(ending)) => Err(Error::new(format!(
+            "{arch}: {ending}.\n  Serial output is in {log}"
+        ))),
+        (Err(failed), ending) => {
+            let why = failed.join("\n    ");
+            let ending = ending.map_or(String::new(), |ending| format!("{ending}; "));
+            Err(Error::new(format!(
+                "{arch}: {ending}{} of {} networking programs failed:\n    {why}\n  \
+                 Serial output is in {log}",
+                failed.len(),
+                programs.len()
+            )))
+        }
+    }
+}
+
 /// How a watched boot ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
@@ -451,7 +511,7 @@ struct Watched {
 /// report's backtrace addresses are resolved against.
 fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> Result<Watched> {
     let symbols = Symbolizer::open(kernel);
-    let mut command = qemu_command(arch, image, args)?;
+    let (mut command, network) = qemu_command(arch, image, args)?;
     let _ = command.stdout(Stdio::piped()).stderr(Stdio::inherit());
 
     let mut child = command
@@ -533,6 +593,9 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
     drop(receiver);
     let _ = reader.join();
     log.flush()?;
+    // After QEMU has gone, so that the numbers are final and the gateway's
+    // thread is not still being fed while they are read.
+    report_network(&network);
 
     Ok(Watched {
         lines,
@@ -596,7 +659,7 @@ fn finish(child: &mut std::process::Child, decided: bool) -> Result<std::process
 }
 
 /// Assemble the QEMU command line for `arch`.
-fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
+fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<(Command, Network)> {
     let binary = paths::which(arch.qemu_binary()).ok_or_else(|| {
         Error::new(format!(
             "{} is not on PATH.\n  Install QEMU (Debian/Ubuntu: `qemu-system-x86` and \
@@ -623,16 +686,6 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
         "none",
         "-serial",
         "stdio",
-        // No network device. QEMU adds one by default, and on AArch64 that
-        // means firmware finds a PCI option ROM built for x86 and says so:
-        //
-        //     Image type X64 can't be loaded on AARCH64 UEFI system.
-        //
-        // Which is alarming, unrelated to us, and exactly the kind of noise
-        // that trains people to skim the boot log. There is no network driver
-        // to exercise until stage 10; this comes back with one.
-        "-net",
-        "none",
     ]);
     // A guest that reboots on a triple fault turns a crash into an endless
     // loop, which in CI is a timeout with no cause in the log. Not under
@@ -733,6 +786,7 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
     let _ = command.args(["-device", rng]);
     attach_test_disk(&mut command, arch)?;
     attach_btrfs_disk(&mut command, arch)?;
+    let network = attach_network(&mut command, arch, args)?;
 
     match &firmware {
         Firmware::Pflash { code, vars } => {
@@ -753,8 +807,126 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<Command> {
         }
     }
 
-    Ok(command)
+    Ok((command, network))
 }
+
+/// The MAC address the guest's virtio-net device carries.
+///
+/// QEMU's own default for the first NIC, kept so that a guest driver, a DHCP
+/// lease and a packet capture all name the guest the same way whether the
+/// frames went through this gateway or through anything else.
+const GUEST_MAC: &str = "52:54:00:12:34:56";
+
+/// What `--net` leaves behind for the caller to hold: on a UNIX host, the
+/// gateway serving the guest's wire.
+#[cfg(unix)]
+type Network = Option<crate::gateway::Gateway>;
+
+/// And on a host with no `UnixDatagram` in `std`, nothing that can exist.
+#[cfg(not(unix))]
+type Network = Option<std::convert::Infallible>;
+
+/// Give the guest a network device, or deliberately no network at all.
+///
+/// Without `--net` this is the argument it always was, and the comment is the
+/// one that was on it, because the reason has not changed: QEMU adds a network
+/// device by default, and on AArch64 firmware then finds a PCI option ROM built
+/// for x86 and says so —
+///
+/// ```text
+/// Image type X64 can't be loaded on AARCH64 UEFI system.
+/// ```
+///
+/// — which is alarming, unrelated to us, and exactly the kind of noise that
+/// trains people to skim the boot log.
+///
+/// With `--net` the device is a virtio-net on PCI whose backend is a pair of
+/// UNIX datagram sockets, with `xtask`'s own gateway on the other end of them;
+/// `gateway` says why that rather than `-netdev user`. `-netdev` is enough on
+/// its own to stop QEMU adding its default device, so `-net none` is not also
+/// passed: QEMU warns about mixing the two families.
+///
+/// The same virtio flags as every other device this tool attaches, and the same
+/// ARMv7-A exception: U-Boot 2025.10's virtio-pci driver fails a heap assertion
+/// and resets when a device offers `VIRTIO_F_ACCESS_PLATFORM`.
+#[cfg(unix)]
+fn attach_network(command: &mut Command, arch: Arch, args: &Args) -> Result<Network> {
+    if !args.net {
+        let _ = command.args(["-net", "none"]);
+        return Ok(None);
+    }
+    let gateway = crate::gateway::Gateway::start(&gateway_directory(), args.resolver)?;
+    println!(
+        "  {arch}: network through xtask's gateway: guest {}, gateway {}, DNS {}",
+        crate::gateway::GUEST_IP,
+        crate::gateway::GATEWAY_IP,
+        crate::gateway::DNS_IP
+    );
+    let _ = command.args([
+        "-netdev",
+        &format!(
+            "dgram,id=net0,local.type=unix,local.path={},remote.type=unix,remote.path={}",
+            display(gateway.qemu_socket()),
+            display(gateway.host_socket())
+        ),
+    ]);
+    let flags = if arch == Arch::Armv7a {
+        "disable-legacy=on"
+    } else {
+        "disable-legacy=on,iommu_platform=on"
+    };
+    let _ = command.args([
+        "-device",
+        &format!("virtio-net-pci,netdev=net0,mac={GUEST_MAC},{flags}"),
+    ]);
+    Ok(Some(gateway))
+}
+
+/// The same, where `std` has no UNIX datagram socket to build the backend on.
+#[cfg(not(unix))]
+fn attach_network(command: &mut Command, _arch: Arch, args: &Args) -> Result<Network> {
+    if args.net {
+        return Err(Error::new(
+            "--net needs a UNIX datagram socket for QEMU's `dgram` backend, which this \
+             platform's std does not have",
+        ));
+    }
+    let _ = command.args(["-net", "none"]);
+    Ok(None)
+}
+
+/// Where the gateway's socket files go.
+///
+/// The temporary directory rather than `build/`, and for one reason: a UNIX
+/// socket address is a `sun_path` of 108 bytes including its terminator, and a
+/// checkout under a worktree under a home directory spends most of that before
+/// the file name starts. QEMU's error for a name that does not fit is about a
+/// path being too long, which reads as a bug in this tool rather than as an
+/// operating system limit.
+#[cfg(unix)]
+fn gateway_directory() -> PathBuf {
+    std::env::temp_dir()
+}
+
+/// Say what the gateway saw, once the guest has stopped talking to it.
+///
+/// A network test that fails says the guest never got an address, or never
+/// resolved a name. Which of those is a driver that never transmitted and which
+/// is a gateway that dropped what it was given is not visible from the guest's
+/// side at all, and is exactly what these counters answer.
+#[cfg(unix)]
+fn report_network(network: &Network) {
+    if let Some(gateway) = network {
+        println!("  gateway: {}", gateway.counters().report());
+        if gateway.counters().frames_in() == 0 {
+            println!("  gateway: the guest never transmitted a frame");
+        }
+    }
+}
+
+/// The same, where there is never a gateway to report on.
+#[cfg(not(unix))]
+fn report_network(_network: &Network) {}
 
 /// Attach the test disk as a second virtio device on PCI: a block device, for
 /// stage 10's ring-3 driver to read sectors from.

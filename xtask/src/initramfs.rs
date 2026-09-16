@@ -278,6 +278,10 @@ fn build_with_shell(
             b"root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/tmp:/bin/sh\n",
         )?;
         archive.file("etc/group", 0o644, b"root:x:0:\nferrix:x:1000:\n")?;
+        // Where the C library's resolver asks. `10.0.2.3` is the gateway's
+        // forwarder, which is where slirp puts one too, so a guest configured
+        // by DHCP and a guest configured by hand agree.
+        archive.file("etc/resolv.conf", 0o644, b"nameserver 10.0.2.3\n")?;
         archive.file(PROGRAM_PATH, 0o755, program)?;
         for applet in APPLETS {
             archive.symlink(&format!("bin/{applet}"), "busybox")?;

@@ -57,6 +57,11 @@ pub(crate) const PROGRAMS: &[Program] = &[
         binary: "blk",
         directory: DRIVERS,
     },
+    Program {
+        package: "ferrix-net-driver",
+        binary: "net",
+        directory: DRIVERS,
+    },
 ];
 
 /// Where drivers are unpacked, relative to the root, with a `MANIFEST`

@@ -104,6 +104,12 @@ forbid ferrix-sched    "scheduler logic" "ferrix-kernel|ferrix-boot"
 forbid ferrix-pci      "PCI configuration space" "ferrix-kernel|ferrix-boot"
 forbid ferrix-block    "block core" "ferrix-kernel|ferrix-boot"
 forbid ferrix-btrfs    "btrfs read path" "ferrix-kernel|ferrix-boot"
+forbid ferrix-netwire  "network wire formats" "ferrix-kernel|ferrix-boot"
+forbid ferrix-nettcp   "TCP state machine" "ferrix-kernel|ferrix-boot"
+forbid ferrix-net      "net core" "ferrix-kernel|ferrix-boot"
+forbid ferrix-netring  "net ring protocol" "ferrix-kernel|ferrix-boot"
+forbid ferrix-netserve "net driver serve loop" "ferrix-kernel|ferrix-boot"
+forbid ferrix-netlink  "netlink messages" "ferrix-kernel|ferrix-boot"
 
 # ---------------------------------------------------------------------------
 # 2a. Ring-3 programs sit beside the kernel, never in it.
@@ -128,6 +134,7 @@ fi
 forbid ferrix-btrfs-vfs "btrfs mount" "ferrix-kernel|ferrix-boot"
 forbid ferrix-blkring  "block ring protocol" "ferrix-kernel|ferrix-boot"
 forbid ferrix-virtio-blk "virtio-blk driver logic" "ferrix-kernel|ferrix-boot"
+forbid ferrix-virtio-net "virtio-net driver logic" "ferrix-kernel|ferrix-boot"
 forbid ferrix-blkserve "block driver serve loop" "ferrix-kernel|ferrix-boot"
 
 # ---------------------------------------------------------------------------

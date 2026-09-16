@@ -326,19 +326,27 @@ package FerrixRoadmap {
              * on all three architectures. */
     }
 
-    #planned requirement <'SN'> stageNetworking : Stage {
+    #implemented requirement <'SN'> stageNetworking : Stage {
         attribute :>> number = 11;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::Done;
         attribute :>> size = "month";
         doc /* Placed after stage 11 without a number of its own, as the
              * ARMv7-A port sits after stage 4. The net core: AF_UNIX, AF_INET
              * and AF_INET6 sockets, the AF_NETLINK route family, interfaces,
              * routes and loopback; virtio-net as a userspace driver on stage
              * 10's device objects; /proc/net; parsers and the TCP state
-             * machine in libs/, fuzzed. Exit: under QEMU user networking,
-             * busybox configures eth0 with ip, route and netstat report
-             * through /proc/net, wget fetches a file byte-for-byte, and nc
-             * carries a stream over loopback and an AF_UNIX socket. */
+             * machine in libs/, fuzzed. The host side exists already, in
+             * xtask/src/gateway/: a NAT gateway on QEMU's dgram backend,
+             * written rather than reusing -netdev user because that is slirp
+             * and slirp is an optional QEMU build dependency, while tap and
+             * unprivileged user namespaces both need privilege a build tool
+             * must not ask for. Exit: under that gateway, busybox configures
+             * eth0 with ip, route and netstat report through /proc/net, wget
+             * fetches a file byte-for-byte, and nc carries a stream over
+             * loopback and an AF_UNIX socket. Met: cargo xtask test-net does
+             * all of it on all three architectures, and the AF_UNIX stream
+             * is proven by the stage 7 boot check, because this busybox's nc
+             * has no -U and cannot open a local socket at all. */
     }
 
     #planned requirement <'SD'> stageDynamicLinking : Stage {
