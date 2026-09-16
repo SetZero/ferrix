@@ -55,8 +55,8 @@
 //!   on. `ping 10.0.2.2` works; `ping 1.1.1.1` does not.
 //! * **UDP** — one host socket per guest flow, with an idle timeout. A datagram
 //!   to `10.0.2.3:53` goes to the resolver named in the host's `/etc/resolv.conf`.
-//! * **TCP** — not yet; the guest's SYN is counted and dropped. Terminating it
-//!   here and re-opening it as a host `TcpStream` is the next commit.
+//! * **TCP** — terminated here and re-opened as an ordinary host `TcpStream`,
+//!   with the payload relayed between the two; see [`tcp`](self::tcp).
 //! * **Fragments** — refused, in both directions. The MTU is 1500 and nothing
 //!   here fragments; an over-long relayed datagram is dropped and counted.
 //! * **IPv6** — not offered. The guest has no stack pointed at it yet, and a
@@ -64,6 +64,7 @@
 //!   advertisement will prefer the address in it.
 
 mod dhcp;
+mod tcp;
 mod udp;
 
 #[cfg(test)]
@@ -321,6 +322,7 @@ fn serve(mut core: Core, stop: &AtomicBool) {
             }
         }
         core.poll_udp();
+        core.poll_tcp();
         core.expire();
     }
 }
@@ -336,8 +338,17 @@ struct Core {
     guest_mac: Option<Mac>,
     /// Host sockets standing in for the guest's UDP flows.
     udp: BTreeMap<udp::Key, udp::Flow>,
+    /// Host connections standing in for the guest's TCP connections.
+    tcp: BTreeMap<tcp::Key, tcp::Connection>,
+    /// Where a host connection's outcome arrives from the thread that made it.
+    connected: (
+        std::sync::mpsc::Sender<tcp::Connected>,
+        std::sync::mpsc::Receiver<tcp::Connected>,
+    ),
     /// The resolver `10.0.2.3:53` forwards to.
     resolver: Ipv4Addr,
+    /// The initial send sequence number the next connection takes.
+    next_iss: u32,
     /// What has happened.
     counters: Arc<Counters>,
 }
@@ -357,7 +368,14 @@ impl Core {
             guest_socket: guest_socket.to_path_buf(),
             guest_mac: None,
             udp: BTreeMap::new(),
+            tcp: BTreeMap::new(),
+            connected: std::sync::mpsc::channel(),
             resolver: host_resolver(),
+            // Not random, and it does not need to be: this is a NAT on a
+            // private wire with one guest on it, where an off-path attacker
+            // guessing a sequence number is not a threat that exists. A fixed
+            // start also makes one captured run comparable with the next.
+            next_iss: 0x1000_0000,
             counters: Arc::new(Counters::default()),
         })
     }
@@ -413,6 +431,7 @@ impl Core {
         match packet.header.protocol {
             ipv4::protocol::ICMP => self.on_icmp(source, destination, packet.payload),
             ipv4::protocol::UDP => self.on_udp(source, destination, packet.payload),
+            ipv4::protocol::TCP => self.on_tcp(source, destination, packet.payload),
             _ => {
                 bump(&self.counters.unsupported);
                 Ok(())
@@ -530,9 +549,10 @@ impl Core {
         Ok(())
     }
 
-    /// Drop what has gone idle.
+    /// Drop what has gone idle, and what has finished.
     fn expire(&mut self) {
         self.expire_udp();
+        self.expire_tcp();
     }
 }
 
