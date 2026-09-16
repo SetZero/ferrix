@@ -90,6 +90,23 @@ pub(crate) fn cargo(dir: &Path, arguments: &[&str]) -> Command {
     command
 }
 
+/// `script` run by bash in the default distribution in `dir`, with
+/// `CARGO_TARGET_DIR` set as [`cargo`] sets it and `arguments` as `"$@"`.
+pub(crate) fn bash(dir: &Path, script: &str, arguments: &[&str]) -> Command {
+    let mut command = Command::new("wsl.exe");
+    let _ = command
+        .arg("--cd")
+        .arg(dir)
+        .args(["--exec", "bash", "-lc"])
+        .arg(format!(
+            "export CARGO_TARGET_DIR=\"$HOME/.cache/ferrix/target/{}\"; {script}",
+            target_name(dir)
+        ))
+        .arg("bash")
+        .args(arguments);
+    command
+}
+
 /// A directory name for `dir`'s build: its path with everything but letters,
 /// digits and hyphens made a hyphen, so it is one path component on Linux and
 /// the same on every run.

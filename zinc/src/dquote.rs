@@ -27,8 +27,7 @@ impl Lexer {
         let mut err: i32 = 0;
         let math = endchar == b')' || endchar == b']' || self.infor > 0;
         let mut last: u8 = 0;
-        'outer: loop {
-            let Some(mut c) = self.input.get() else { break };
+        'outer: while let Some(mut c) = self.input.get() {
             if !(c != endchar || bct > 0 || (math && (pct > 0 || brct > 0)) || intick > 0) {
                 break;
             }

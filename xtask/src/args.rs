@@ -23,6 +23,8 @@ pub(crate) struct Args {
     pub(crate) fast: bool,
     /// `--ferrousli`: `check` also runs ferrousli's gates, its own workspace.
     pub(crate) ferrousli: bool,
+    /// `--zinc`: `check` also runs zinc's gates, its own workspace.
+    pub(crate) zinc: bool,
     /// `--miri`: add CI's Miri steps to `check`.
     pub(crate) miri: bool,
     /// `--reset`: the image carries `ferrix.onexit=reset` in `CMDLINE.TXT`, and
@@ -81,6 +83,7 @@ impl Args {
                 "--gdb" => args.gdb = true,
                 "--fast" => args.fast = true,
                 "--ferrousli" => args.ferrousli = true,
+                "--zinc" => args.zinc = true,
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
                 "--net" => args.net = true,
@@ -257,6 +260,12 @@ mod tests {
         assert!(!parse(&["check"]).unwrap().ferrousli);
         let args = parse(&["check", "--fast", "--ferrousli"]).unwrap();
         assert!(args.fast && args.ferrousli);
+    }
+
+    #[test]
+    fn zinc_is_off_unless_asked_for() {
+        assert!(!parse(&["check"]).unwrap().zinc);
+        assert!(parse(&["check", "--zinc"]).unwrap().zinc);
     }
 
     #[test]

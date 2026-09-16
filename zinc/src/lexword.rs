@@ -589,7 +589,7 @@ impl Lexer {
         }
     }
 
-    fn word_inpar(&mut self, sub: bool, st: &mut WordScan, buf: &mut Vec<u8>) -> Step {
+    fn word_inpar(&mut self, sub: bool, st: &mut WordScan, buf: &mut [u8]) -> Step {
         let ibp = st.in_brace_param > 0;
         if self.opts.shglob {
             if sub || ibp {

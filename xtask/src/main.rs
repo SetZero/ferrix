@@ -7,7 +7,7 @@
 //! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS] [--reset] [--net]
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
-//! cargo xtask check     [--fast] [--ferrousli] [--miri]
+//! cargo xtask check     [--fast] [--ferrousli] [--zinc] [--miri]
 //! cargo xtask busybox   [--arch x86_64]
 //! cargo xtask flash     [--arch armv7a] [--to MOUNT]
 //! cargo xtask watch-serial            [--port DEVICE] [--timeout SECONDS]
@@ -131,6 +131,7 @@ OPTIONS:
                                          test-net turns it on whether or not it is given
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
+    --zinc                               check: also zinc's fmt, clippy, tests and pty completion test
     --miri                               check: add CI's Miri steps (needs nightly and miri)
     --reset                              test-boot: ferrix.onexit=reset in CMDLINE.TXT, and require a reset;
                                          build, run: put that CMDLINE.TXT in the image

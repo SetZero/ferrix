@@ -387,7 +387,7 @@ pub(crate) fn apply_redirs(sh: &mut Shell, redirs: &[Redir]) -> Result<Vec<(i32,
                         let fd = open_file(&t, libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC)?;
                         (vec![1, 2], fd)
                     }
-                    None => return Err(format!("file number expected")),
+                    None => return Err("file number expected".to_string()),
                 }
             }
             RedirKind::InPipe | RedirKind::OutPipe => {

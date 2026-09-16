@@ -100,6 +100,10 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         ferrousli(&root)?;
     }
 
+    if args.zinc {
+        zinc(&root)?;
+    }
+
     // Opt-in, because it is minutes rather than seconds and needs a nightly
     // toolchain with the miri component: the same crates, in the same order,
     // as CI's Miri job, so a UB report can be reproduced before pushing.
@@ -189,6 +193,75 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
             in_ferrousli(&["test", "--release"]),
             "cargo test --release (ferrousli)",
         )
+    })
+}
+
+/// zinc's gates, behind `--zinc`.
+///
+/// zinc is a workspace of its own too, and `build` only compiles it into the
+/// initramfs. These are the gates a zinc landing runs: formatting, clippy,
+/// the unit tests, and the line editor's completion driven through a
+/// pseudo-terminal, which is the only way to see what a Tab does.
+///
+/// Clippy allows `excessive_nesting`: the runtime zinc landed with carries
+/// that warning in its parser and builtins, which the port of zsh's runtime
+/// (the `zinc-next` branch) replaces rather than restructures. Every other
+/// warning fails the gate.
+///
+/// The tests start Linux executables and the pty needs a Linux kernel, so on
+/// Windows those steps run in WSL, as ferrousli's do.
+fn zinc(root: &std::path::Path) -> Result<()> {
+    let dir = root.join("zinc");
+    const TARGET: &str = "x86_64-unknown-linux-musl";
+    let native = |arguments: &[&str]| {
+        let mut command = Command::new(cargo_binary());
+        let _ = command.current_dir(&dir).args(arguments);
+        command
+    };
+    step("zinc: formatting", || {
+        cargo::run(native(&["fmt", "--check"]), "cargo fmt (zinc)")
+    })?;
+    step("zinc: clippy", || {
+        cargo::run(
+            native(&[
+                "clippy",
+                "--target",
+                TARGET,
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+                "-A",
+                "clippy::excessive_nesting",
+            ]),
+            "cargo clippy (zinc)",
+        )
+    })?;
+    if cfg!(windows) {
+        step("zinc: WSL", crate::wsl::require_toolchain)?;
+    }
+    step("zinc: tests", || {
+        let command = if cfg!(windows) {
+            crate::wsl::cargo(&dir, &["test", "--target", TARGET])
+        } else {
+            native(&["test", "--target", TARGET])
+        };
+        cargo::run(command, "cargo test (zinc)")
+    })?;
+    step("zinc: completion on a pty", || {
+        let script = "cargo build --release --target \"$1\" && \
+                      python3 tests/pty_completion.py \"$CARGO_TARGET_DIR/$1/release/zinc\"";
+        let command = if cfg!(windows) {
+            crate::wsl::bash(&dir, script, &[TARGET])
+        } else {
+            let mut command = Command::new("bash");
+            let _ = command
+                .current_dir(&dir)
+                .env("CARGO_TARGET_DIR", paths::target_dir().join("zinc-check"))
+                .args(["-c", script, "bash", TARGET]);
+            command
+        };
+        cargo::run(command, "zinc/tests/pty_completion.py")
     })
 }
 
