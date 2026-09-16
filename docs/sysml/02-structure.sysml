@@ -304,11 +304,12 @@ package FerrixStructure {
     #planned part def Initramfs {
         @stage { number = 8; }
         doc /* A cpio "newc" archive the loader places in RAM, holding devmgr,
-             * the virtio-blk driver and init. What breaks the cycle "the root
+             * the virtio-blk and virtio-gpu drivers, and init. What breaks the cycle "the root
              * filesystem needs a block driver that lives on the root
              * filesystem". */
         part devmgr : UserBinary;
         part virtioBlk : UserBinary;
+        part virtioGpu : UserBinary;
         part init : UserBinary;
     }
 

@@ -3,8 +3,10 @@
 Version 1. Written by the GUI session (os-e5) for iteration 1 of the
 compositor's path, the customer's order of 2026-09-16: *a blank screen on
 Ferrix in QEMU*, pulled forward from stage 17. Approved by the product owner
-(os-f6) on 2026-09-16, with the decisions in §5. The kernel landings, L5 and
-L6, wait for a kernel reader: os-26, or os-02 after its threads landing 3.
+(os-f6) on 2026-09-16, with the decisions in §5. Implemented: L5 and L6 landed
+together as one reviewed stack (os-02), since L5 alone would have been dead
+code or the kernel drawing; `cargo xtask test-display` passes on x86-64 and
+AArch64.
 
 ## 1. What this is, and what it is not
 
@@ -38,8 +40,10 @@ the same on a person's screen.
 **The display core owns the pixels.** Each card has one kernel VMO, the *card
 VMO*: anonymous, sparse and committed on demand. It is sized to the card's
 buffer budget (iteration 1: 256 MiB), which is also the most memory an opener
-can make the card commit. A dumb buffer is a page-aligned range of it, handed
-out by a bump allocator. `MODE_MAP_DUMB` returns the range's offset.
+can make the card commit. A dumb buffer is a page-aligned range of it, the
+first free one that fits. `MODE_MAP_DUMB` returns the range's offset. A buffer
+is at most `MAX_BUFFER_PAGES` (8192 pages, 32 MiB: a 4K buffer), which the
+driver sizes its backing lists for.
 
 * **The compositor maps it with no new mapping code.** `card0`'s devfs inode
   answers `Inode::mapping()` with the card VMO. `mmap(fd, len, PROT_READ |
@@ -60,11 +64,23 @@ out by a bump allocator. `MODE_MAP_DUMB` returns the range's offset.
 * **No copy in the guest.** The compositor writes pages that are the device's
   backing. virtio-gpu 2D does copy on the host side (`TRANSFER_TO_HOST_2D`),
   which is QEMU's business.
-* **Freeing.** `MODE_DESTROY_DUMB` sends `DETACH` and waits for `DETACHED`
-  before the range may be reused. Iteration 1 does not reuse ranges: the bump
-  allocator only grows, and a card that has spent its budget answers
-  `ENOMEM`. Closing the card's last descriptor detaches everything and resets
-  the allocator. Reusing ranges needs a VMO decommit and is iteration 2.
+* **Freeing.** `MODE_DESTROY_DUMB` sends `DETACH` without waiting, or, while
+  a framebuffer still refers to the buffer, only takes the handle away and
+  detaches with the last `RMFB`, as Linux keeps the object. Closing the card
+  turns the scanout off and detaches every buffer the open made. A range
+  comes back when `DETACHED` reports success, or when `ATTACHED` reports a
+  failure: the card's task decommits it, so the next buffer there starts
+  zeroed and shows nothing of the last one, then gives it back. A refused
+  `DETACHED` keeps the range, and the id, out of use for good.
+* **Buffer ids are the card's, not the open's.** The core numbers buffers on
+  the card and never reuses an id, so no reply is taken for a later buffer's
+  request and the driver never sees an id again that the device may still
+  hold pages under. The DRM handle is the open's own name for one.
+* **Nothing is left behind by a timeout.** A request waits 5 seconds for its
+  reply. An attach that times out, and a buffer let go of while a flush of
+  it is still in flight, become the card's orphans: the card's task detaches
+  each as soon as the session allows. A reply nobody waits for any more is
+  dropped.
 
 **The size `card0` reports.** `card0`'s inode reports `st_size` equal to the
 card VMO's size, `CARD_BUDGET`. `map_file`'s bounds check, which is what makes
@@ -181,7 +197,10 @@ additive later landing. Stage 17's text names it and stays as written.
   refactor that I'd rather not smuggle in.
 * **An exclusive open.** A second `open` gets `EBUSY` until the first closes.
   That stands in for DRM master and keeps one opener's buffers from another
-  in iteration 1.
+  in iteration 1. It does not end a mapping: a program that mapped the card
+  and closed it can still read whatever the next opener draws. The node is
+  `0660` root's, as Linux's `video` group has it, until per-open windows onto
+  the card VMO (stage 19's render node) close that.
 * **`poll`/`epoll` readiness** on the node when os-26's epoll lands. Iteration
   1's binary doesn't wait on events.
 
@@ -274,7 +293,9 @@ server), then input.
 **Decided by os-f6, 2026-09-16:**
 
 1. **The card VMO's budget is 256 MiB** for iteration 1, as one named
-   constant with its arithmetic (§2.1). Ranges are decommitted in iteration 2.
+   constant with its arithmetic (§2.1). Ranges are decommitted and reused
+   (added in os-02's review round, which found the budget could be spent for
+   good).
 2. **The exclusive open stands in for DRM master**, as a written deviation
    from Linux: a second `open` of `card0` answers `EBUSY`, and `SET_MASTER`
    and `DROP_MASTER` answer for the one client. Linux's many opens with one

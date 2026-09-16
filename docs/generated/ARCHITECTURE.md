@@ -95,7 +95,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1464 elements, 160 relations. Model digest `4eb0120ff4be1542`.
+13 files, 16 packages, 1465 elements, 160 relations. Model digest `fb9aa959c37748ca`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -331,6 +331,7 @@ kernel : Kernel
 initramfs : Initramfs  [planned]
   devmgr : UserBinary
   virtioBlk : UserBinary
+  virtioGpu : UserBinary
   init : UserBinary
 userland : Userland  [planned]
   init : UserProcess
@@ -2141,7 +2142,7 @@ An ordinary user process in its own Job, holding exactly the capabilities devmgr
 | `interrupts` | part | `Interrupt` |  | One per vector, bound to a Port. |
 | `eventPort` | part | `Port` |  |  |
 | `dmaBuffers` | part | `Vmo` |  | Device addresses from the device's IOMMU domain. |
-| `channel` | part | `Channel` |  | To the kernel subsystem it serves: block, net, input. |
+| `channel` | part | `Channel` |  | To the kernel subsystem it serves: block, display, net, input. |
 | `ring` | part | `SharedRing` |  |  |
 
 #### SharedRing

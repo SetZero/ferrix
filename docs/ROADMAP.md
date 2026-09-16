@@ -3270,6 +3270,24 @@ through the Linux ABI so that Rust's existing compositor crates run unchanged.
   the firmware framebuffer is a panic's, once. The display core hands scanout
   to whoever opened the card; a panic after that still writes text over it.
 
+**Done — iteration 1, a colour on the screen (2026-09-16).** `docs/DISPLAY.md`
+is the design. The display core (`kernel/src/display`) takes a ring-3
+driver's HELLO on a control channel `DISPLAY_CONTROL_CREATE` (0x104C) makes,
+checks it through `ferrix-displayctl`'s session, refuses it when the firmware
+framebuffer is memory the allocator owns, and publishes `/dev/dri/card0`: a
+256 MiB card VMO whose ranges are dumb buffers, mapped by the program through
+the card's inode and pinned read-only by the driver. `user/gpu`, started by
+devmgr for 0x1050, drives virtio-gpu's 2D commands through
+`ferrix-virtio-gpu` behind VT-d or the SMMUv3. The card answers the legacy
+DRM subset — resources, connector, encoder, CRTC, dumb buffers, `ADDFB`,
+`ADDFB2`, `SETCRTC`, `PAGE_FLIP` with its event, `DIRTYFB` — to one open at a
+time. `cargo xtask test-display` boots `compositor/blank` as init on x86-64
+and AArch64 and requires every pixel of QEMU's screendump of the virtio-gpu
+to be its colour, and its negative control to fail at exactly pixel (0, 0).
+
+**Still to do:** input (virtio-input as evdev), the event-loop calls, atomic
+commit, per-open windows onto the card VMO, and the rest of the exit below.
+
 **Exit:** in the boot test on x86-64 and AArch64 (ARMv7-A's QEMU machine has
 no virtio-gpu; the DK1's LTDC is a hardware row, P3), a user program opens
 `/dev/dri/card0`, sets the mode, draws a known pattern into a dumb buffer and

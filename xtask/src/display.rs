@@ -28,6 +28,10 @@ use crate::args::Args;
 use crate::paths::{self, Arch};
 use crate::{Error, Result};
 
+/// What `--init` names `compositor/blank` by, built for the architecture
+/// first, so `run --display --init blank` shows its screen in a window.
+pub(crate) const INIT_NAME: &str = "blank";
+
 /// What the program prints once the colour is on the screen. The same string
 /// as `compositor/blank/src/card.rs`'s `MARKER`.
 pub(crate) const MARKER: &str = "compositor: scanout";
