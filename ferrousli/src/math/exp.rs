@@ -1,4 +1,4 @@
-//! `exp`, and the table of 2^(k/128) that `pow` shares.
+//! `exp`, and the table of 2^(k/128) that `pow` and `exp2` share.
 //!
 //! Ported from musl 1.2.5's `exp.c`, `exp_data.c` and `exp_data.h` (MIT; see
 //! [`crate::math`] for the notice). musl took them from ARM's
@@ -322,6 +322,12 @@ fn specialcase(tmp: f64, sbits: u64, ki: u64) -> f64 {
         let scale = f64::from_bits(sbits.wrapping_sub(1009 << 52));
         return hexf64!("0x1p1009") * (scale + scale * tmp);
     }
+    scale_down(tmp, sbits)
+}
+
+/// The k < 0 half of [`specialcase`], which `exp2`'s shares: scale·(1 + tmp),
+/// where the result may be subnormal, rounded once.
+pub(crate) fn scale_down(tmp: f64, sbits: u64) -> f64 {
     // k < 0: take care in the subnormal range.
     let scale = f64::from_bits(sbits.wrapping_add(1022 << 52));
     let mut y = scale + scale * tmp;

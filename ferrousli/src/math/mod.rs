@@ -1,6 +1,7 @@
-//! `math.h`: so far `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for
-//! `double`, and the classification functions the header's macros call for
-//! every type.
+//! `math.h`: so far `sin`, `cos`, `exp`, `exp2`, `expm1`, `log`, `log2`,
+//! `log10`, `log1p`, `pow` and `atan2` for `double`, `expf`, `exp2f`,
+//! `expm1f`, `logf`, `log2f`, `log10f`, `log1pf` and `powf` for `float`, and
+//! the classification functions the header's macros call for every type.
 //!
 //! # Where the code comes from
 //!
@@ -60,6 +61,9 @@
 //! program against musl 1.2.5 and against this library, debug and release,
 //! and comparing the bits and exceptions of every function for 800,000
 //! arguments in each of the four rounding modes.
+//! The exponentials and logarithms added after it, `exp2` to `powf`, were
+//! compared the same way against a musl 1.2.5 build, for 200,000 arguments
+//! each in each mode.
 //!
 //! # Errors
 //!
@@ -109,12 +113,20 @@ pub(crate) mod arch;
 pub mod atan;
 pub mod classify;
 pub mod exp;
+pub mod exp2;
+pub mod expf;
+pub mod expm1;
 pub mod fma;
 pub mod log;
+pub mod log10;
+pub mod log1p;
+pub mod log2;
+pub mod logf;
 pub mod manipulate;
 #[cfg(test)]
 pub(crate) mod mtest;
 pub mod pow;
+pub mod powf;
 pub mod remainder;
 pub mod rounding;
 pub mod sqrt;

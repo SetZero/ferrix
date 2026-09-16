@@ -320,7 +320,7 @@ static TABLE2: [(f64, f64); N as usize] = [
 ];
 
 /// The top 16 bits of a `double`.
-const fn top16(x: f64) -> u32 {
+pub(crate) const fn top16(x: f64) -> u32 {
     (x.to_bits() >> 48) as u32
 }
 
