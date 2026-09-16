@@ -350,7 +350,17 @@ pub unsafe extern "C" fn sigpending(set: *mut SigSet) -> c_int {
 pub unsafe extern "C" fn sigsuspend(mask: *const SigSet) -> c_int {
     // SAFETY: the caller vouches for the set, of which the kernel reads one
     // word.
-    let ret = unsafe { syscall::syscall2(nr::RT_SIGSUSPEND, mask.addr(), KERNEL_SIGSET_SIZE) };
+    let ret = unsafe {
+        crate::cancel::syscall_cp(
+            nr::RT_SIGSUSPEND,
+            mask.addr(),
+            KERNEL_SIGSET_SIZE,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
     errno::from_syscall(ret) as c_int
 }
 

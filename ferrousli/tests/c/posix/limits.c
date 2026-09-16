@@ -1,5 +1,5 @@
 /*
- * Limits: sysconf, resource limits and usage, and scheduling priority.
+ * Limits: sysconf, pathconf, resource limits and usage, and scheduling priority.
  */
 
 #define _GNU_SOURCE
@@ -40,6 +40,16 @@ int main(void)
 	CHECK(sysconf(-1) == -1 && errno == EINVAL);
 	errno = 0;
 	CHECK(sysconf(100000) == -1 && errno == EINVAL);
+
+	/* pathconf and fpathconf: musl's table, whatever the file. */
+	CHECK(pathconf("/", _PC_NAME_MAX) == NAME_MAX);
+	CHECK(fpathconf(0, _PC_PATH_MAX) == PATH_MAX);
+	CHECK(pathconf("/", _PC_PIPE_BUF) == PIPE_BUF);
+	errno = 0;
+	CHECK(fpathconf(0, _PC_SYMLINK_MAX) == -1 && errno == 0);
+	CHECK(fpathconf(0, -1) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(pathconf("/", _PC_2_SYMLINKS + 1) == -1 && errno == EINVAL);
 
 	/* A round trip on RLIMIT_NOFILE's soft limit. */
 	CHECK(getrlimit(RLIMIT_NOFILE, &old) == 0 && old.rlim_cur <= old.rlim_max);

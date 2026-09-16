@@ -4,7 +4,7 @@ use core::ffi::{c_int, c_void};
 use core::mem::{offset_of, size_of};
 
 use crate::errno;
-use crate::syscall::{self, nr};
+use crate::syscall::nr;
 
 /// C's `struct iovec`, one buffer. The kernel's in `linux/uio.h` is the same.
 #[repr(C)]
@@ -29,7 +29,9 @@ const _: () = assert!(offset_of!(Iovec, iov_len) == 8);
 pub unsafe extern "C" fn readv(fd: c_int, iov: *const Iovec, count: c_int) -> isize {
     // SAFETY: the caller vouches for the vector and its buffers. A negative
     // count sign-extends to a length the kernel refuses.
-    let ret = unsafe { syscall::syscall3(nr::READV, fd as usize, iov.addr(), count as usize) };
+    let ret = unsafe {
+        crate::cancel::syscall_cp(nr::READV, fd as usize, iov.addr(), count as usize, 0, 0, 0)
+    };
     errno::from_syscall(ret)
 }
 
@@ -42,7 +44,9 @@ pub unsafe extern "C" fn readv(fd: c_int, iov: *const Iovec, count: c_int) -> is
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn writev(fd: c_int, iov: *const Iovec, count: c_int) -> isize {
     // SAFETY: the caller vouches for the vector, and the kernel only reads.
-    let ret = unsafe { syscall::syscall3(nr::WRITEV, fd as usize, iov.addr(), count as usize) };
+    let ret = unsafe {
+        crate::cancel::syscall_cp(nr::WRITEV, fd as usize, iov.addr(), count as usize, 0, 0, 0)
+    };
     errno::from_syscall(ret)
 }
 
@@ -57,7 +61,7 @@ pub unsafe extern "C" fn preadv(fd: c_int, iov: *const Iovec, count: c_int, offs
     // half; on a 64-bit kernel the low half is the whole offset and the high
     // one is ignored, and musl passes both the same way.
     let ret = unsafe {
-        syscall::syscall6(
+        crate::cancel::syscall_cp(
             nr::PREADV,
             fd as usize,
             iov.addr(),
@@ -79,7 +83,7 @@ pub unsafe extern "C" fn preadv(fd: c_int, iov: *const Iovec, count: c_int, offs
 pub unsafe extern "C" fn pwritev(fd: c_int, iov: *const Iovec, count: c_int, offset: i64) -> isize {
     // SAFETY: as in `writev` and `preadv`.
     let ret = unsafe {
-        syscall::syscall6(
+        crate::cancel::syscall_cp(
             nr::PWRITEV,
             fd as usize,
             iov.addr(),

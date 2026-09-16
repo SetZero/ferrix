@@ -59,7 +59,7 @@ openat mkdirat fchownat newfstatat unlinkat renameat linkat symlinkat
 readlinkat fchmodat faccessat pselect6 ppoll utimensat dup3 pipe2 prlimit64
 renameat2 getrandom memfd_create execveat statx clone3 faccessat2
 fadvise64 fallocate mlock munlock mlockall munlockall getpriority setpriority
-waitid preadv pwritev mknodat setresuid setresgid fchmodat2
+waitid preadv pwritev mknodat setresuid setresgid fchmodat2 copy_file_range
 set_robust_list get_robust_list sched_setparam sched_getparam
 sched_setscheduler sched_getscheduler sched_get_priority_max
 sched_get_priority_min sched_rr_get_interval sched_setaffinity getcpu prctl

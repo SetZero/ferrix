@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sched.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
 #include <sys/inotify.h>
@@ -47,6 +48,7 @@ int main(void)
 	int notify, watch, source, dest, other, size;
 	off_t offset;
 	struct sysinfo info;
+	double loads[5];
 	struct itimerval timer, old;
 	struct timex tx;
 	uid_t ruid, euid, suid;
@@ -108,6 +110,9 @@ int main(void)
 	/* sysinfo, the kernel log's size, and a reboot command that does not
 	 * exist. */
 	CHECK(sysinfo(&info) == 0 && info.totalram > 0 && info.mem_unit > 0 && info.procs > 0);
+	/* getloadavg: up to three averages, none for n of zero, -1 for a negative n. */
+	CHECK(getloadavg(loads, 5) == 3 && loads[0] >= 0 && loads[1] >= 0 && loads[2] >= 0);
+	CHECK(getloadavg(loads, 0) == 0 && getloadavg(loads, -1) == -1);
 	errno = 0;
 	size = klogctl(10, 0, 0);
 	CHECK(size > 0 || errno == EPERM);

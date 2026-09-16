@@ -326,6 +326,8 @@ fn exchange(
     asize: usize,
     conf: &ResolvConf,
 ) -> Result<(), c_int> {
+    // Cancellation waits until this is finished, as in musl.
+    let _cancel = cancel::disable();
     let query = |i: usize| queries.get(i).copied().unwrap_or_default();
     let timeout = 1000 * u64::from(conf.timeout);
     let attempts = u64::from(conf.attempts.max(1));

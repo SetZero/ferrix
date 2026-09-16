@@ -224,7 +224,9 @@ pub unsafe extern "C" fn cfmakeraw(tio: *mut Termios) {
 /// Waits until the output queued on terminal `fd` has been written.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn tcdrain(fd: c_int) -> c_int {
-    ioctl(fd, TCSBRK, 1)
+    // SAFETY: `TCSBRK` with a nonzero argument waits and reads no memory.
+    let ret = unsafe { crate::cancel::syscall_cp(nr::IOCTL, fd as usize, TCSBRK, 1, 0, 0, 0) };
+    errno::from_syscall(ret) as c_int
 }
 
 /// Suspends or restarts output or input on terminal `fd`, as `action` says.

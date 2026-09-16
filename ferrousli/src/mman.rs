@@ -129,7 +129,8 @@ pub unsafe extern "C" fn mprotect(addr: *mut c_void, len: usize, prot: c_int) ->
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn msync(addr: *mut c_void, len: usize, flags: c_int) -> c_int {
     // SAFETY: `msync` changes no mapping and reads no user memory.
-    let ret = unsafe { syscall::syscall3(nr::MSYNC, addr.addr(), len, flags as usize) };
+    let ret =
+        unsafe { crate::cancel::syscall_cp(nr::MSYNC, addr.addr(), len, flags as usize, 0, 0, 0) };
     errno::from_syscall(ret) as c_int
 }
 
