@@ -225,6 +225,8 @@ unsafe fn run_shell(command: *const c_char) -> ! {
 /// `command` must be null or a NUL-terminated string.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn system(command: *const c_char) -> c_int {
+    // Cancellation waits until this is finished, as in musl.
+    let _cancel = crate::cancel::disable();
     if command.is_null() {
         return 1;
     }
@@ -289,6 +291,8 @@ pub unsafe extern "C" fn system(command: *const c_char) -> c_int {
 /// `command` and `mode` must be NUL-terminated strings.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn popen(command: *const c_char, mode: *const c_char) -> *mut File {
+    // Cancellation waits until this is finished, as in musl.
+    let _cancel = crate::cancel::disable();
     // SAFETY: the caller passes a NUL-terminated mode.
     let reading = match unsafe { mode.read() } as u8 {
         b'r' => true,

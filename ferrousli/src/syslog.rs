@@ -161,6 +161,8 @@ pub unsafe extern "C" fn openlog(ident: *const c_char, options: c_int, facility:
 /// Closes the connection to the logger.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn closelog() {
+    // Cancellation waits until this is finished, as in musl.
+    let _cancel = crate::cancel::disable();
     with_state(|state| {
         let _ = close(state.fd);
         state.fd = -1;
@@ -245,6 +247,8 @@ fn send_entry(fd: c_int, entry: &[u8]) -> bool {
 ///
 /// `message` must be a format string and `ap` its arguments.
 unsafe fn log(state: &mut State, priority: c_int, message: *const c_char, ap: *mut VaListTag) {
+    // Cancellation waits until this is finished, as in musl.
+    let _cancel = crate::cancel::disable();
     let saved_errno = last_errno();
     if state.fd < 0 {
         open_socket(state);

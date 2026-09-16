@@ -113,12 +113,14 @@ pub unsafe extern "C" fn openat(
     // Casting `dirfd` and `flags` sign-extends, and the kernel reads the low
     // 32 bits back.
     let ret = unsafe {
-        syscall::syscall4(
+        crate::cancel::syscall_cp(
             nr::OPENAT,
             dirfd as usize,
             path.addr(),
             flags as usize,
             mode as usize,
+            0,
+            0,
         )
     };
     errno::from_syscall(ret) as c_int
@@ -181,10 +183,22 @@ pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, arg: c_ulong) -> c_int {
             }
         }
     }
-    // SAFETY: the caller vouches for `arg` for this command.
-    let ret = unsafe { syscall::syscall3(nr::FCNTL, fd as usize, cmd as usize, arg as usize) };
+    let ret = if cmd == F_SETLKW {
+        // Waiting for a lock is a cancellation point; musl makes only this
+        // command one, and not `F_OFD_SETLKW`, and so does this.
+        // SAFETY: the caller vouches for `arg` for this command.
+        unsafe {
+            crate::cancel::syscall_cp(nr::FCNTL, fd as usize, cmd as usize, arg as usize, 0, 0, 0)
+        }
+    } else {
+        // SAFETY: as above.
+        unsafe { syscall::syscall3(nr::FCNTL, fd as usize, cmd as usize, arg as usize) }
+    };
     errno::from_syscall(ret) as c_int
 }
+
+/// `F_SETLKW`: set a record lock, waiting for it.
+const F_SETLKW: c_int = 7;
 
 /// Advises the kernel how `len` bytes of `fd` from `offset` will be used.
 /// Returns the error number rather than setting `errno`.

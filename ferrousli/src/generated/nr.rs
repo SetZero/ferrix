@@ -296,6 +296,8 @@ pub const SETRESUID: usize = 117;
 pub const SETRESGID: usize = 119;
 /// `fchmodat2`.
 pub const FCHMODAT2: usize = 452;
+/// `copy_file_range`.
+pub const COPY_FILE_RANGE: usize = 326;
 /// `set_robust_list`.
 pub const SET_ROBUST_LIST: usize = 273;
 /// `get_robust_list`.
