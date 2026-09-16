@@ -21,6 +21,21 @@ use crate::uefi::{Guid, Handle, Status};
 /// `LocateHandleBuffer`'s search by protocol.
 const BY_PROTOCOL: u32 = 2;
 
+/// How much a framebuffer is worth keeping, highest first: one a panic can
+/// be drawn on and the allocator will not own; one a panic can be drawn on;
+/// one the allocator will not own; the rest. Ties go to the output firmware
+/// listed first.
+fn rank(framebuffer: &ferrix_bootinfo::Framebuffer) -> u8 {
+    let drawable =
+        framebuffer.is_present() && framebuffer.format != ferrix_bootinfo::PixelFormat::Unknown;
+    match (drawable, framebuffer.is_reclaimable()) {
+        (true, false) => 3,
+        (true, true) => 2,
+        (false, false) => 1,
+        (false, true) => 0,
+    }
+}
+
 /// The linear framebuffer behind a graphics output, if it has one.
 fn describe_output(graphics: *mut GraphicsOutput) -> Option<ferrix_bootinfo::Framebuffer> {
     // SAFETY: firmware returned a live `GraphicsOutput`.
@@ -511,9 +526,10 @@ impl Services {
     /// always the one to keep. On QEMU's AArch64 machine with a virtio-gpu,
     /// AAVMF's `VirtioGpuDxe` offers one whose framebuffer is boot-services
     /// data, which the kernel's frame allocator hands out again, beside
-    /// `ramfb`'s, which is reserved. One whose framebuffer the allocator will
-    /// not own is preferred; [`ferrix_bootinfo::allocator_owns`] decides over
-    /// `map`, and the choice's `reclaimable` says what it found.
+    /// `ramfb`'s, which is reserved. [`rank`] prefers one a panic can be drawn
+    /// on and whose framebuffer the allocator will not own;
+    /// [`ferrix_bootinfo::allocator_owns`] decides the second over `map`, and
+    /// the choice's `reclaimable` says what it found.
     ///
     /// A machine with no graphics output is not an error: the serial console is
     /// the one the boot test reads.
@@ -561,8 +577,7 @@ impl Services {
                 candidate.size,
             );
             candidate.reclaimable = u32::from(owned);
-            let better = chosen.is_none_or(|current| current.is_reclaimable() && !owned);
-            if better {
+            if chosen.is_none_or(|current| rank(&candidate) > rank(&current)) {
                 chosen = Some(candidate);
             }
         }
