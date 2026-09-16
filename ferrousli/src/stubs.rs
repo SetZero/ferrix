@@ -52,10 +52,6 @@ stubs! {
     exp
     log
     pow
-    regcomp
-    regerror
-    regexec
-    regfree
     sin
 }
 

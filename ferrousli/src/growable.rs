@@ -82,6 +82,19 @@ impl<T: Copy> Growable<T> {
         true
     }
 
+    /// Removes and returns the last element, if there is one.
+    pub(crate) fn pop(&mut self) -> Option<T> {
+        let last = self.as_slice().last().copied()?;
+        self.len -= 1;
+        Some(last)
+    }
+
+    /// Shortens the array to `len` elements. A `len` beyond the array's
+    /// changes nothing. The memory is kept for later pushes.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.len = self.len.min(len);
+    }
+
     /// The elements as a slice.
     pub(crate) fn as_slice(&self) -> &[T] {
         if self.ptr.is_null() {
