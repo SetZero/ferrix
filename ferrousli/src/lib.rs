@@ -49,6 +49,7 @@ pub mod float;
 pub mod fnmatch;
 pub mod futex;
 pub mod getopt;
+pub mod glob;
 pub mod growable;
 pub mod grp;
 #[cfg(test)]

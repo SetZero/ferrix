@@ -78,3 +78,8 @@ fn lsearch_appends_what_lfind_does_not_find() {
 fn the_tsearch_tree_finds_deletes_walks_and_stays_balanced() {
     check(&Case::named("misc/search_tsearch"));
 }
+
+#[test]
+fn glob_finds_marks_sorts_appends_and_reports_errors() {
+    check(&Case::named("misc/glob"));
+}

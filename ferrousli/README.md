@@ -123,6 +123,7 @@ x86-64, static programs linked at a fixed address.
 | `dirent.h` | `opendir`, `fdopendir`, `readdir`, `readdir_r`, `rewinddir`, `seekdir`, `telldir`, `dirfd`, `closedir`, `scandir`, `alphasort`, `versionsort`, with glibc's `64` names; records the kernel sends are checked against the bytes it filled | |
 | `getopt.h` | `getopt`, `getopt_long`, `getopt_long_only`, permuting as glibc does unless `POSIXLY_CORRECT` or a leading `+`, and `optreset` | |
 | `fnmatch.h` | `fnmatch`, with musl's linear-time matching: `*`, `?`, brackets with ranges, negation and classes, `FNM_PATHNAME`, `FNM_PERIOD`, `FNM_NOESCAPE`, `FNM_LEADING_DIR` and `FNM_CASEFOLD`, cross-checked against glibc | multibyte characters, which wait for a locale other than C |
+| `glob.h` | `glob` and `globfree`, with musl's flags and glibc's `GLOB_TILDE`, `GLOB_TILDE_CHECK` and `64` names | |
 | `libgen.h` | `basename`, glibc's `__xpg_basename`, `dirname` | |
 | `search.h` | `hsearch` and glibc's `_r` forms over a growing table, `tsearch`, `tfind`, `tdelete`, `twalk` and glibc's `tdestroy` over a balanced tree, `lfind`, `lsearch`, `insque`, `remque` | |
 | `regex.h` | `regcomp`, `regexec`, `regerror`, `regfree`: basic and extended expressions with musl's grammar, `REG_ICASE`, `REG_NEWLINE`, `REG_NOSUB`, `REG_NOTBOL`, `REG_NOTEOL`, back-references, and POSIX's leftmost-longest match with its submatches, found by simulating the whole automaton at once rather than backtracking | multibyte characters and collating elements, which wait for a locale other than C |
@@ -132,8 +133,7 @@ x86-64, static programs linked at a fixed address.
 
 ## Next
 
-1. In progress: **`glob`**, **thread
-   cancellation**, and **the rest of the math
+1. In progress: **thread cancellation** and **the rest of the math
    library**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
