@@ -269,6 +269,13 @@ fn serve_http(listener: &TcpListener, stop: &AtomicBool) {
 
 /// Read one request and write its answer.
 fn answer_http(mut stream: TcpStream) {
+    // Blocking, whatever the listener is. The listener is non-blocking so the
+    // accept loop can look at its stop flag, and on Windows a socket `accept`
+    // returns inherits that; Linux's does not. Left non-blocking, the first
+    // read here answers `WouldBlock` whenever the guest's request has not
+    // arrived yet, the loop below takes that for the end of it, and the
+    // guest's `wget` is told 404 for a request nobody read.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
     let mut request = Vec::new();
