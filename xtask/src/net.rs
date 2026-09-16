@@ -531,6 +531,12 @@ pub(crate) fn commands(servers: &Servers, curl: bool) -> Vec<Command> {
         },
     ];
     if curl {
+        commands.push(Command {
+            argv: &["sh", "-c", "date; curl -sS -o /dev/null -w 'probe %{http_code} %{ssl_verify_result}
+' https://1.1.1.1/; echo probe-exit $?"],
+            status: 0,
+            expect: Expect::Nothing,
+        });
         commands.extend(curl_commands(http, digest));
     }
     commands
