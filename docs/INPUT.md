@@ -1,0 +1,546 @@
+# Input: `/dev/input/eventN` over a ring-3 virtio-input driver
+
+Version 1, a draft. Written by the GUI session (os-e5) for the input
+iteration of the compositor's path (`docs/DISPLAY.md` §4: after iteration 1's
+colour and iteration 2's two tiled pattern clients, input). Not yet approved
+by the product owner (os-f6); §6 lists what needs deciding. It has the shape
+of `docs/DISPLAY.md` on purpose: an input core in the kernel, a ring-3 driver
+started by devmgr, the Linux ABI (evdev) with its subset taken from a UAPI
+probe, and QEMU's monitor as the test's stimulus.
+
+## 1. What this is, and what it is not
+
+Stage 17 gives a Linux compositor what it needs to read a keyboard and a
+pointer: `/dev/input/event*` answering evdev. `docs/ARCHITECTURE.md` §7 puts
+the driver in ring 3. This document specifies:
+
+* **what the compositor's event loop calls**, verified from the sources of the
+  crates it will be built on (§2), because the input iteration is the first
+  one whose consumer waits on several descriptors at once, and iteration 2's
+  protocol server is the first that runs Smithay's loop;
+* **the kernel's input core**, which owns the event nodes and their queues;
+* **the control protocol** between the core and the ring-3 virtio-input
+  driver, in a host-tested crate `libs/inputctl`;
+* **the evdev subset** the nodes answer, its numbers and layouts from a probe;
+* **the test**: QMP `input-send-event` in, the events read back out.
+
+It is not the virtio-input protocol, which the driver speaks to the device
+(`libs/virtio::input`, written on branch `virtio-input`). It is not the
+keymap: evdev delivers key codes, and turning them into keysyms is
+xkbcommon's job in the compositor. It is not udev, libinput or a seat
+manager, none of which Ferrix will have (§2.3). It is not hotplug, force
+feedback, multi-touch or writing to the device (LEDs); §6 says when each
+comes.
+
+**Exit of the input iteration:** on x86-64 and AArch64, with a virtio
+keyboard and a virtio tablet, a user program finds both under `/dev/input`,
+identifies them through evdev's ioctls, and prints every `input_event` it
+reads. `cargo xtask test-input` sends a key press and release, a pointer
+position and a button click through QMP, and requires exactly those events,
+in order, each report ended by `SYN_REPORT`. `cargo xtask run --display`
+gives a person the same devices. This is stage 17's input exit as the roadmap
+words it ("a key and a pointer motion sent through QEMU's monitor arrive as
+`input_event`s on `/dev/input/event0` and are echoed on the console").
+
+## 2. Prerequisites: what the event loop calls
+
+An earlier answer to the product owner said iteration 1 needs no `epoll`, and
+iteration 2 (Smithay and calloop) needs `epoll` and `eventfd` but neither
+`timerfd` nor `signalfd`. That answer was not checked against source. This
+section is the check: the crates were fetched from crates.io at the versions
+Smithay's current release (0.7.0) resolves to, and read.
+
+| Crate | Version | Why |
+|---|---|---|
+| `smithay` | 0.7.0 | the compositor base (`docs/BACKLOG.md`, assumed) |
+| `calloop` | 0.14.4 | Smithay's event loop (`calloop ^0.14.0`) |
+| `polling` | 3.11.0 | calloop's poller (`polling ^3.0.0`) |
+| `rustix` | 1.1.4 | the system-call layer of all of the above |
+| `wayland-server`, `wayland-backend` | 0.31.14, 0.3.17 | the protocol server, pure-Rust backend (no `server_system` feature, so no libwayland) |
+| `drm`, `drm-ffi` | 0.14.1, 0.9.1 | Smithay's DRM backend (`drm ^0.14.0`) |
+| `xkbcommon` | 0.8.0 | keymaps (`xkbcommon ^0.8.0`, a non-optional Smithay dependency) |
+| `evdev` | 0.13.2 | the evdev reader an input backend without libinput would use |
+
+rustix picks its raw Linux backend on Linux unless `use-libc` or
+`--cfg=rustix_no_linux_raw` says otherwise (`rustix/build.rs:120`–`129`), so
+the calls below are made directly, not through ferrousli. Rust's `std` goes
+through ferrousli.
+
+### 2.1 The event loop
+
+* **`polling` on Linux is epoll** (`polling/src/lib.rs:83`–`89`). `Poller::new`
+  calls `epoll_create1(EPOLL_CLOEXEC)` (`epoll.rs:45`), makes a notifier with
+  `eventfd2(EFD_CLOEXEC | EFD_NONBLOCK)` and, only if that fails, `pipe2`
+  (`epoll.rs:444`, `462`), and **makes a timerfd**:
+  `timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK)`
+  (`epoll.rs:50`–`54`). The timerfd is optional, since its result goes through
+  `.ok()`, but when it exists every wait calls `timerfd_settime` and
+  `epoll_ctl(MOD)` before waiting (`epoll.rs:181`–`203`). Without it, the
+  timeout is passed to the wait itself (`epoll.rs:210`–`214`). Registrations
+  use `EPOLLONESHOT`, `EPOLLET` or neither, with `EPOLLIN | EPOLLHUP |
+  EPOLLERR | EPOLLPRI` for reading and `EPOLLOUT | EPOLLHUP | EPOLLERR` for
+  writing (`epoll.rs:293`–`320`).
+* **The wait is `epoll_pwait`, not `epoll_wait`.** rustix calls
+  `epoll_pwait` with a null mask whenever the timeout fits in an `int` of
+  milliseconds, and `epoll_pwait2` otherwise or under its `linux_5_11`
+  feature (`rustix/src/backend/linux_raw/event/syscalls.rs:286`–`334`).
+* **calloop** adds one more eventfd per `Ping` source, and `LoopSignal` is one
+  (`calloop/src/sources/ping/eventfd.rs:41`). That one has no pipe fallback.
+  Timers are a wheel in user space whose next deadline becomes the poller's
+  timeout (`sources/timer.rs`, `sys.rs:223`–`237`), not timerfds. Signals use
+  `signalfd` only under calloop's `signals` feature (`Cargo.toml`
+  `signals = ["nix"]`, `sources/signals.rs:19`), which Smithay does not turn
+  on. `set_nonblocking` in its async I/O adapter is `fcntl(F_GETFL/F_SETFL)`
+  (`io.rs:396`–`403`).
+* **wayland-backend's server has an epoll of its own.** `Backend::new`
+  calls `epoll_create1` (`rs/server_impl/common_poll.rs:39`), each client is
+  added with `EPOLLIN` (`rs/server_impl/handle.rs:366`), and dispatching
+  waits with a zero timeout (`common_poll.rs:89`). The compositor registers
+  *that* epoll descriptor in calloop's epoll, so **an epoll descriptor must
+  itself be pollable and report readiness to another epoll.**
+* **The socket.** `ListeningSocket::bind` takes `$XDG_RUNTIME_DIR`, opens a
+  lock file and `flock(LOCK_EX | LOCK_NB)`s it (`wayland-server/src/socket.rs:92`),
+  binds a `UnixListener` (`:133`) and calls `set_nonblocking(true)` on it
+  (`:135`). In `std` on Linux that is **`ioctl(FIONBIO)`**, for sockets and
+  for any descriptor alike (`std/src/sys/net/connection/socket/unix.rs:583`–`585`,
+  `std/src/sys/fd/unix.rs:608`–`611`), not `fcntl`. `accept` is
+  `accept4(SOCK_CLOEXEC)` (`unix.rs:259`) and sockets are made with
+  `SOCK_CLOEXEC` (`unix.rs:84`). Messages go out with `sendmsg` carrying
+  `SCM_RIGHTS` under `MSG_DONTWAIT | MSG_NOSIGNAL` (`rs/socket.rs:45`–`62`) and
+  come in with `recvmsg` under `MSG_DONTWAIT | MSG_CMSG_CLOEXEC` (`:77`–`87`).
+  Client credentials are `getsockopt(SO_PEERCRED)` (`server_impl/client.rs:314`).
+
+### 2.2 Smithay's own calls
+
+* **Clocks:** `clock_gettime` of `CLOCK_MONOTONIC` and `CLOCK_REALTIME`
+  (`smithay/src/utils/clock.rs:12`, `22`, `46`).
+* **Keymaps** are a sealed memfd: `memfd_create(MFD_CLOEXEC |
+  MFD_ALLOW_SEALING)`, then `F_ADD_SEALS` of seal, shrink, grow and write
+  (`utils/sealed_file.rs:34`–`45`). If that fails the keymap is written to a
+  temporary file in `$XDG_RUNTIME_DIR` instead (`input/keyboard/keymap_file.rs:73`–`82`),
+  so the memfd is wanted, not required.
+* **`wl_shm` pools** are `mmap(MAP_SHARED)` of the client's descriptor, and a
+  client that shrinks its file under the compositor is survived by a
+  `SIGBUS` handler (`sigaction(SIGBUS, SA_SIGINFO | SA_NODEFER)`) that maps
+  anonymous memory `MAP_FIXED` over the faulting pool, or re-raises
+  (`wayland/shm/pool.rs:261`–`342`).
+* **`/proc/self/fd/N`** is read with `readlink` for log messages
+  (`utils/fd.rs:70`); a failure is tolerated.
+* **Sessions.** Smithay 0.7.0 has one session implementation, libseat
+  (`backend/session/mod.rs:22`–`27`). `Session` is a trait whose `open` returns
+  an `OwnedFd`; without libseat, the compositor implements it with `openat`
+  and does nothing on `change_vt`. No calls beyond `openat` and `close`.
+* **Input.** Smithay's only input backend is libinput
+  (`backend_libinput = ["input"]`); `backend::input` is traits. Without
+  libinput the compositor implements `InputBackend` over evdev descriptors
+  itself (§2.4).
+* **xkbcommon** links `libxkbcommon` (`xkbcommon/src/xkb/ffi.rs:114`), whose
+  keymap compiler `stat`s and `eaccess`es its include paths and `mmap`s or
+  reads the files it opens (libxkbcommon `src/context.c:46`–`56`,
+  `src/utils.c:30`–`33`, `104`–`120`). The XKB data must be in the image.
+
+### 2.3 Smithay's DRM backend, legacy path
+
+`DrmDeviceFd::new` asks for master (`backend/drm/device/fd.rs:77`), and
+`DrmDevice::new` reads `st_rdev` through `fstat` (`:97`), asks for the
+universal-planes client capability, the monotonic-timestamp and cursor-size
+capabilities (`device/mod.rs:198`–`209`), and falls back to legacy when the
+atomic capability is refused (`:250`–`256`). `card0` answers all of that
+today. **Then it goes further than `card0` does:**
+
+* **`create_surface` enumerates planes even on the legacy path**
+  (`device/mod.rs:331`, `mod.rs:152`–`216`): `MODE_GETPLANERESOURCES`,
+  `MODE_GETPLANE` for each, then `MODE_OBJ_GETPROPERTIES` and
+  `MODE_GETPROPERTY` of each plane's properties to find `type`, `zpos`,
+  `IN_FORMATS` and `SIZE_HINTS`. A plane with no `type` property reaches
+  `unreachable!()` (`mod.rs:244`): the compositor panics. With universal
+  planes refused, Smithay keeps only the primary planes from that list
+  (`mod.rs:210`–`214`), and with none, `create_surface` fails with `NoPlane`.
+* **Connectors' properties are read** to find `DPMS`
+  (`device/legacy.rs:159`–`220`), on the device's reset and on every
+  connector change: `MODE_OBJ_GETPROPERTIES` must answer for the connector,
+  though an empty list is fine and then nothing is set.
+* **Resetting the device** calls `MODE_CURSOR` with no buffer, ignoring the
+  answer, and `SETCRTC` with no mode (`device/legacy.rs:101`–`119`), which
+  `card0` already treats as off.
+* **Vblank events** are `read` from the card (`drm/src/control/mod.rs:995`–`1003`).
+
+So `card0` needs, before Smithay can drive it: one primary plane with a `type`
+property, `GETPLANERESOURCES`, `GETPLANE` (format `XRGB8888`,
+`possible_crtcs` 1), `OBJ_GETPROPERTIES` for planes and the connector, and
+`GETPROPERTY`. `GETPROPBLOB` and `OBJ_SETPROPERTY` are not needed if the plane
+has no `IN_FORMATS` or `SIZE_HINTS` and the connector has no `DPMS`.
+
+Smithay has no renderer that writes into a dumb buffer on the CPU without a C
+library (its CPU renderer is pixman), so the tiny-skia renderer is the
+compositor's own `Renderer`; that is iteration 2's business and not a call.
+
+### 2.4 An evdev consumer
+
+The `evdev` crate's `Device::open` opens read-write, falling back to
+read-only (`evdev/src/raw_stream.rs:99`–`111`), then **requires** answers to
+`EVIOCGBIT(0)`, `EVIOCGID`, `EVIOCGVERSION` and `EVIOCGPROP`, and to
+`EVIOCGBIT(type)` for every type the device reports, plus `EVIOCGREP` when it
+reports `EV_REP` (QEMU's keyboard does) and `EVIOCGEFFECTS` when it reports
+`EV_FF` (`:114`–`230`). `EVIOCGNAME`, `EVIOCGPHYS` and `EVIOCGUNIQ` may fail;
+their answer must be the length copied *including* the NUL, which the crate
+asserts (`:17`–`35`). After `SYN_DROPPED` it re-reads the state with
+`EVIOCGKEY`, `EVIOCGABS(axis)` for each axis, `EVIOCGSW` and `EVIOCGLED`
+(`:506`–`549`, `sync_stream.rs:308`–`322`). Events are `read` as whole
+`struct input_event`s (`raw_stream.rs:429`–`445`). `EVIOCGRAB` and
+`EVIOCSCLOCKID` are called only when asked for (`:648`, `sys.rs:76`); a
+compositor asks for both, as libinput does, to own the device and to get
+monotonic timestamps.
+
+### 2.5 The table
+
+"Ferrix today" is `main` at `aa47c0c6`, read from `kernel/src/syscall` and
+`libs/linux-abi`; `card0` is branch `display-core`.
+
+| Call | Needed by | Ferrix today | Iteration |
+|---|---|---|---|
+| `epoll_create1`, `epoll_ctl` (`ONESHOT`, `ET`) | polling, wayland-backend | **no**: numbers and `epoll_event` in `linux-abi` (`nr.rs`, `types.rs`), no handler | 2 |
+| `epoll_pwait` (and `epoll_wait` on x86-64 and ARMv7-A) | rustix, musl | **no** | 2 |
+| an epoll descriptor pollable by another epoll | wayland-backend inside calloop | **no** | 2 |
+| `epoll_pwait2` | rustix, timeouts over `INT_MAX` ms or `linux_5_11` | **no**, not in `nr.rs` | not needed |
+| `eventfd2` | polling (else `pipe2`), calloop `Ping` (no fallback) | **no**: number only | 2 |
+| `timerfd_create`, `timerfd_settime` | polling, optional | **no**, not in `nr.rs` | wanted for 2 (sub-millisecond timeouts), not required |
+| `signalfd4` | calloop `signals` feature only | no | not needed |
+| `pipe2` | polling's fallback | yes (`syscall/fsctl.rs:99`) | — |
+| `ioctl(FIONBIO)` | `std`'s `set_nonblocking`, wayland-server's listener | **no**: `sys_ioctl` answers `ENOTTY` for everything but the console, sockets' `SIOCINQ`/`SIOCOUTQ` and interface requests (`syscall/fd.rs:442`) | 2 |
+| `fcntl(F_GETFL/F_SETFL)` `O_NONBLOCK` | calloop, evdev | yes (`syscall/fd.rs`) | — |
+| `socket`/`accept4` with `SOCK_CLOEXEC`, `bind`, `listen` on `AF_UNIX` | wayland-server | yes (`syscall/sockets.rs:115`, `fs/socket.rs`) | — |
+| `sendmsg`/`recvmsg` with `SCM_RIGHTS`, `MSG_DONTWAIT`, `MSG_NOSIGNAL`, `MSG_CMSG_CLOEXEC` | wayland-backend | yes, `SCM_RIGHTS` since `aa47c0c6` (`syscall/sockets.rs:1059`) | — |
+| `getsockopt(SO_PEERCRED)` | wayland-backend | yes (`fs/socket.rs:74`) | — |
+| `flock` | wayland-server's lock file | yes (`syscall/mod.rs:438`) | — |
+| `memfd_create`, `F_ADD_SEALS` | Smithay keymaps (tempfile fallback) | yes (`syscall/mod.rs:439`, `fs/memfd_check.rs`) | — |
+| `mmap(MAP_SHARED)` of a file, `SIGBUS` past its end, `SA_SIGINFO` handler remapping `MAP_FIXED` | Smithay `wl_shm` | partial: the mapping and `SIGBUS` are there (`syscall/memory.rs`); a handler that repairs the fault and returns is unproven | 2 |
+| `clock_gettime` `MONOTONIC`, `REALTIME` | Smithay, `std` | yes (`syscall/mod.rs:376`) | — |
+| `poll`, `ppoll` | the input test program (§4) | yes (`syscall/mod.rs:386`, `syscall/signal.rs:1004`) | — |
+| `readlink /proc/self/fd/N` | Smithay logging, tolerated | yes (`fs/procfs.rs`, `fd`) | — |
+| `DRM_IOCTL_MODE_GETPLANERESOURCES`, `GETPLANE` | Smithay `create_surface` | **no** (`card0` answers `ENOTTY`) | 2 |
+| `DRM_IOCTL_MODE_OBJ_GETPROPERTIES`, `GETPROPERTY` | Smithay plane `type`, connector `DPMS` | **no** | 2 |
+| `DRM_IOCTL_MODE_GETPROPBLOB`, `OBJ_SETPROPERTY`, `CURSOR` | only if the properties exist; `CURSOR`'s answer is ignored | no | not needed |
+| `EVIOCGVERSION`, `EVIOCGID`, `EVIOCGNAME`, `EVIOCGPHYS`, `EVIOCGUNIQ`, `EVIOCGPROP`, `EVIOCGBIT`, `EVIOCGREP` | evdev `open` | **no** | 3 (this document) |
+| `EVIOCGKEY`, `EVIOCGABS`, `EVIOCGSW`, `EVIOCGLED` | evdev after `SYN_DROPPED` | **no** | 3 |
+| `EVIOCGRAB`, `EVIOCSCLOCKID` | a compositor's input backend | **no** | 3 |
+
+**What the earlier claim got right and wrong.**
+
+* *Iteration 1 needs no epoll:* right. `compositor/blank` calls the card's
+  ioctls directly and waits on nothing.
+* *Iteration 2 needs epoll and eventfd:* right, and incomplete. It also needs
+  an epoll descriptor that is itself pollable, `ioctl(FIONBIO)`, and four DRM
+  ioctls `card0` lacks, without which Smithay's DRM backend fails or panics.
+* *Not timerfd:* right that it is not required, wrong that it is not called.
+  `polling` creates one in every `Poller::new` and arms it on every wait
+  when it exists; `ENOSYS` makes it fall back to a millisecond timeout.
+* *Not signalfd:* right, for Smithay with calloop's default features.
+
+**The input iteration itself needs none of the missing event-loop calls.** Its
+test program waits with `poll(2)`, which exists, and the event nodes answer
+`Inode::poll` like any other file, so they will work under epoll when it
+lands without further change.
+
+## 3. The design
+
+### 3.1 Who owns the events: the core, per device, with a queue per open
+
+**The input core** (`kernel/src/input`) has one task per input device, as the
+display core has one per card. It holds what the driver said the device is,
+the device's current state (keys down, axis values, LEDs, switches), and the
+opens of its node, each with a queue of `input_event`s.
+
+* **A report is the unit.** Events arrive in reports ended by `EV_SYN` /
+  `SYN_REPORT`. The core keeps a report's events aside until its
+  `SYN_REPORT` arrives, stamps the whole report with one time, updates the
+  device state, and then appends it to every open's queue, or only to the
+  grabbing open's (§3.3). A reader never sees half a report, which is what
+  Linux's evdev does with its packet head.
+* **A full queue drops, and says so.** When a report does not fit, the open's
+  queue is emptied and a `SYN_DROPPED` event is queued, which tells the reader
+  to re-read the state with `EVIOCGKEY` and the others. Each queue's size
+  follows Linux's `evdev_compute_buffer_size`. L6 checks that behaviour and
+  that size against `drivers/input/evdev.c` of the header version the probe
+  records, not from memory.
+* **Undeclared events are dropped.** An event whose type or code the device
+  did not declare is not delivered, as Linux's input core does. The driver
+  drops them first (§3.2); one reaching the core means the driver lied, which
+  is a refusal (§3.2).
+* **No software autorepeat.** Linux's input core repeats a held key as value-2
+  events for devices that declare `EV_REP`. Compositors ignore those and repeat
+  keys themselves (`wl_keyboard.repeat_info`), so the core does not generate
+  them. `EVIOCGREP` answers a stored delay and period, and `EVIOCSREP` stores
+  new ones. This is a written deviation (§6).
+* **Timestamps.** Each report is stamped from the monotonic clock once, and a
+  read converts it to the open's clock: realtime by default, as on Linux, or
+  the clock `EVIOCSCLOCKID` chose (`CLOCK_REALTIME`, `CLOCK_MONOTONIC` or
+  `CLOCK_BOOTTIME`).
+
+The queue, report assembly, grab and drop rules are pure logic. They go in
+`libs/inputctl` beside the protocol (`inputctl::queue`), host-tested and
+fuzzed, so the kernel's part is glue.
+
+### 3.2 The driver protocol: a control channel, `libs/inputctl`
+
+As for the display, events are small and rare next to a disk's traffic, so
+there is no data ring: one control `Channel` per device, with
+`libs/displayctl`'s message shape. Each message is fixed-size and
+little-endian, starts with a type and a length, has reserved bytes that must be
+zero, and is validated in the order its fields are read. Handles travel
+alongside.
+
+**Bring-up follows the display.** devmgr's table gets `(0x1AF4, [0x1052],
+b"input", Kind::Input)` (`DEVMGR.md` already names 0x1052). `start_input` asks
+the kernel for the control channel with a new native call,
+`INPUT_CONTROL_CREATE` (0x104D, the next free number after
+`DISPLAY_CONTROL_CREATE`), sends `START` with blk's layout to
+`/lib/drivers/input`, and waits for `PUBLISHED`. QEMU's keyboard and tablet
+are two PCI functions, so there are two driver processes, as there is one
+blk driver per disk.
+
+| Type | Direction | Body | Handles |
+|---|---|---|---|
+| `HELLO` | driver → core | version; location; device ids (bus type, vendor, product, version); name and serial, each with its length; property bits; for each event type the core supports, its code bitmap; for each declared absolute axis, minimum, maximum, fuzz, flat and resolution | driver port (`WRITE \| TRANSFER`) |
+| `READY` | core → driver | the node's index `N` | core port (`WRITE`) |
+| `REFUSED` | core → driver | reason | — |
+| `EVENTS` | driver → core | count; up to `MAX_EVENTS` events of 8 bytes each, virtio-input's own layout (type `u16`, code `u16`, value `i32`) | — |
+| `STOP` / `STOPPED` | as blk | | |
+
+`HELLO` holds virtio-input's answers as the device gave them. Its bitmaps are
+as long as the probe's `*_CNT` for each type, so the message is fixed-size and
+well under a channel's 64 KiB. The event types the core supports in this
+iteration are `EV_SYN`, `EV_KEY`, `EV_REL`, `EV_ABS`, `EV_MSC`, `EV_SW`,
+`EV_LED` and `EV_REP`. A device declaring `EV_FF`, `EV_SND` or multi-touch
+axes is published without them, and the boot line says what was left out.
+
+`EVENTS` may end in the middle of a report. The next message continues it,
+and the core only delivers at `SYN_REPORT` (§3.1). `MAX_EVENTS` is 64, which
+holds any report QEMU's HID devices make.
+
+**The driver** (`user/input`, logic in `libs/virtio-input` over
+`libs/virtio-blk`'s traits as `libs/virtio-gpu` does) negotiates features,
+asks the configuration queries through `libs/virtio::input`, sends `HELLO`,
+and on `READY` sets `DRIVER_OK`. It then keeps every descriptor of the event
+queue posted with an 8-byte buffer: **QEMU drops a whole report without
+telling anyone when the queue lacks buffers for it**
+(`hw/input/virtio-input.c:47`–`56`), so the driver refills after each
+interrupt before it forwards anything. It checks each event against what the
+device declared, drops those it did not declare, and forwards the rest in
+`EVENTS`. The status queue is not used in this iteration.
+
+**Doorbells** are the channel's own signal both ways, as for the display.
+
+**What the core never trusts:** a `HELLO` with a length over its field, a
+bit beyond its type's `*_MAX`, an axis whose minimum lies above its maximum,
+an `EVENTS` count over `MAX_EVENTS`, an event of a type or code not in
+`HELLO`, or a report longer than the core will hold (256 events). Any of these
+gets `REFUSED`, then quiesce, the same as a display driver that lies. The
+device's word is checked by the driver first (`libs/virtio::input`'s trust
+section); the core checks the driver's.
+
+**A driver that goes away** takes the node with it. Every open's `read`
+answers `ENODEV` once its queue is drained, and `poll` reports `POLLHUP |
+POLLERR`, as a Linux evdev client sees an unplugged device. The node leaves
+`/dev/input`, and its index is not given out again this boot, so a program
+never opens a different device under a name it remembered.
+
+**`PUBLISHED`** is sent when the core has registered `eventN`.
+
+### 3.3 The evdev subset
+
+`/dev/input/eventN` is a character device, major `INPUT_MAJOR` (13,
+`linux/major.h`) and minor 64 + N, the range Linux's evdev takes for its first
+32 devices. The node is `0660` and root's, as `card0` is, since Ferrix has no
+`input` group. `/dev/input/` becomes devfs's second subdirectory after
+`/dev/dri/`. Any number of opens is allowed, as on Linux, each with its own
+queue, clock and grab state. Nothing here stands in for DRM master's exclusive
+open.
+
+Numbers and layouts go into `libs/linux-abi` (`input` module), from a probe
+compiled on nazuna against `/usr/include/linux/input.h` and
+`input-event-codes.h` (`linux-libc-dev` 7.0.0-29.29 today), at both pointer
+widths. The probe is committed as `libs/linux-abi/probe/input.c` and
+`input.sh`, its output as `input-64.txt` and `input-32.txt`, and the numbers
+are pinned by `libs/linux-abi/src/tests/input.rs`, exactly as `drm.c`,
+`drm.sh`, `drm-64.txt`, `drm-32.txt` and `tests/drm.rs` did for the display.
+**No number in this document or in the code is written from memory.** The
+behaviour in the table below that the headers do not fix (which errors, which
+lengths) is Linux's `drivers/input/evdev.c`, which L6 checks line by line
+rather than trusting this table.
+
+| ioctl (`linux/input.h` line) | The input iteration |
+|---|---|
+| `EVIOCGVERSION` (130) | `EV_VERSION` |
+| `EVIOCGID` (131) | the device ids from `HELLO` |
+| `EVIOCGREP`, `EVIOCSREP` (132–133) | only for a device declaring `EV_REP`; the stored delay and period (§3.1) |
+| `EVIOCGNAME(len)`, `EVIOCGUNIQ(len)` (140, 142) | the name or serial, cut to `len`, returning the bytes copied including the NUL; `ENOENT` when the device gave none |
+| `EVIOCGPHYS(len)` (141) | `ENOENT`: a virtio device has no physical path |
+| `EVIOCGPROP(len)` (143) | the property bits, returning the bytes copied |
+| `EVIOCGKEY`, `EVIOCGLED`, `EVIOCGSW(len)` (171, 172, 174) | the current state bitmaps |
+| `EVIOCGSND(len)` (173) | an empty bitmap |
+| `EVIOCGBIT(ev, len)` (176) | `ev` 0: the event types; otherwise that type's codes; an undeclared type is an empty bitmap |
+| `EVIOCGABS(abs)` (177) | the axis's `input_absinfo` with its current value; `EINVAL` for an undeclared axis |
+| `EVIOCGRAB` (184) | 1 grabs: only this open receives events, `EBUSY` if another holds the grab. 0 releases: `EINVAL` if this open does not hold it. Closing releases |
+| `EVIOCREVOKE` (185) | this open reads `ENODEV` and polls `POLLHUP \| POLLERR` from now on |
+| `EVIOCSCLOCKID` (241) | `CLOCK_REALTIME`, `CLOCK_MONOTONIC`, `CLOCK_BOOTTIME`; others `EINVAL` |
+| `EVIOCGKEYCODE*`, `EVIOCSKEYCODE*`, `EVIOCSABS`, `EVIOCGMTSLOTS`, `EVIOCSFF`, `EVIOCRMFF`, `EVIOCGEFFECTS`, `EVIOCGMASK`, `EVIOCSMASK` | `EINVAL` in this iteration; none is called by the consumers in §2.4 for the devices QEMU offers |
+
+**Lengths follow the caller's width.** Linux copies bitmaps in whole `long`s
+of the caller's width and returns the byte count. The EVIOCG* requests that
+carry a length encode it in the request number, so the core decodes direction,
+type `'E'`, number and size rather than matching whole numbers. L1's probe
+prints each request's number for a sample length so the decoder is checked
+against the macros.
+
+**`struct input_event` at both widths.** The kernel's own definition is two
+`__kernel_ulong_t`s (seconds and microseconds), then `type`, `code` and
+`value` (`linux/input.h:26`–`46`): 24 bytes on x86-64 and AArch64, 16 on
+ARMv7-A. That is what `read` returns. User space built without
+`__USE_TIME_BITS64` sees a `struct timeval` there instead, which on a 32-bit
+libc with a 64-bit `time_t` is a different size. The probe prints both views
+on the 32-bit build so the difference is written down. ARMv7-A takes no part
+in the gates (no PCI virtio in its QEMU configuration here), and ferrousli's
+32-bit header is a row for its owner (§6).
+
+**`read`** returns as many whole events as fit in `count`, from whole
+reports only. It returns `EINVAL` if `count` is smaller than one event,
+blocks while the queue is empty, answers `EAGAIN` under `O_NONBLOCK`, and
+`ENODEV` once the device is gone and the queue is drained. **`write`**
+answers `EINVAL` in this iteration: on Linux it injects events, used for
+LEDs, which come later (§6). **`poll`** reports `POLLIN | POLLRDNORM` when a
+whole report is queued and `POLLHUP | POLLERR` when the device is gone.
+
+**Kernel plumbing this needs:** a devfs subdirectory (the mechanism
+`/dev/dri/` added), character nodes whose `open` makes a per-open object, an
+ioctl branch in `sys_ioctl` beside `card0`'s (or the `Inode::ioctl` hook, if
+the kernel reader of the display asked for it first), and `Inode::poll` and
+`read_stream` on the per-open object, the way `card0`'s event `read` works.
+
+### 3.4 Discovery without udev
+
+A compositor finds devices by reading `/dev/input` and asking each
+`eventN` `EVIOCGBIT(0)`: keys make a keyboard, relative axes a mouse,
+absolute axes a tablet. It needs nothing from `/sys`. Devices exist before init runs in this iteration,
+because devmgr starts the drivers at boot. Hotplug, and how a compositor
+would learn of it without udev (an `inotify` watch on `/dev/input`), is §6.
+
+## 4. QEMU and xtask
+
+* **Devices.** `-device virtio-keyboard-pci,id=kbd0,disable-legacy=on,iommu_platform=on`
+  and `-device virtio-tablet-pci,id=tablet0,disable-legacy=on,iommu_platform=on`,
+  on x86-64 and AArch64, only under `test-input` and `run --display`, so no
+  existing gate changes. A tablet rather than a mouse because its absolute
+  position is what a screendump test of a cursor will want later, and
+  because `input-send-event`'s `abs` events are what reach it.
+* **Routing.** QEMU gives an event to the first handler in its list that
+  takes its kind, and a virtio-input device moves itself to the head of that
+  list when its driver sets `DRIVER_OK` (`ui/input.c:63`–`67`, `101`–`123`,
+  `hw/input/virtio-input-hid.c`'s `change_active`); before that it discards
+  events (`virtio-input.c:28`–`30`). On q35 the PS/2 devices are behind it
+  once the driver is up. So the test sends nothing until the program says
+  it is ready, which is after both drivers are.
+* **The program.** `compositor/evecho`, built as init like
+  `compositor/blank`. It reads `/dev/input`, opens every `eventN` with
+  `O_RDONLY | O_NONBLOCK | O_CLOEXEC`, identifies each with `EVIOCGVERSION`,
+  `EVIOCGID`, `EVIOCGNAME`, `EVIOCGPROP`, `EVIOCGBIT` and `EVIOCGABS`, sets
+  `EVIOCSCLOCKID(CLOCK_MONOTONIC)` and `EVIOCGRAB(1)`, and prints one
+  `evecho: device` line for each. It then prints `evecho: ready`, waits in
+  `poll(2)`, and prints `evecho: event N type code value` for each event, in
+  decimal. It uses `ferrix-linux-abi::input` as `blank` uses `::drm`.
+* **`test-input`.** It boots the program with the two devices and waits for
+  the two device lines. It requires the names QEMU gives, `QEMU Virtio
+  Keyboard` and `QEMU Virtio Tablet` (`virtio-input-hid.c:19`–`21`), and the
+  bits each declares. It waits for `ready`, then sends over QMP (TCP on
+  localhost, as `test-display` does), one `input-send-event` per report:
+  key `a` down; key `a` up; tablet `abs` x and y together; button `left`
+  down; button `left` up. It requires, in order, `EV_KEY`/`KEY_A` 1,
+  `SYN_REPORT`; `KEY_A` 0, `SYN_REPORT`; `ABS_X` and `ABS_Y` at the values
+  sent, `SYN_REPORT`; `BTN_LEFT` 1, `SYN_REPORT`; `BTN_LEFT` 0, `SYN_REPORT`.
+  The names come from `linux-abi::input`, and the values sent lie inside
+  QEMU's `INPUT_EVENT_ABS_MIN`..`MAX` (`include/ui/input.h:13`–`14`), which
+  the tablet passes through unscaled. If the program prints `evecho: failed`,
+  the test stops at once and reports it.
+* **The negative control.** `evecho` built with `negative-control` prints
+  `evecho: negative control` first, and reports the first `EV_KEY` event's
+  code one higher than it read. The check must see that marker line, then fail
+  on exactly the `KEY_A` 1 line and report expected against actual, and on
+  nothing else.
+* **`run --display`** adds the same two devices, so the customer can type at
+  and point into whatever the compositor of that iteration shows.
+
+## 5. Landings and points
+
+Each is a small landing on main, gated on nazuna. The first four touch no
+kernel code. **L1 comes first:** every later landing takes its numbers from
+it.
+
+| # | Landing | Kernel? | Points |
+|---|---|---|---|
+| L1 | `libs/linux-abi::input`: the §3.3 ioctls (with a sample length for the sized ones), `EV_VERSION`, `INPUT_MAJOR`, event types and codes, `*_MAX`/`*_CNT`, the clock ids, and `input_event`, `input_id` and `input_absinfo` layouts at both widths. From a committed probe (`probe/input.c`, `input.sh`, `input-64.txt`, `input-32.txt`) compiled on nazuna against `/usr/include/linux/input.h`, pinned by `src/tests/input.rs` | no | 2 |
+| L2 | `libs/virtio::input`: configuration queries and the 8-byte event, hostile-device tests, checked against QEMU 9.2.4. Written on branch `virtio-input`; what is left is review, a fuzz target, and taking its evdev numbers from L1 | no | 2 |
+| L3 | `libs/inputctl`: §3.2's messages and validation, and `queue`: report assembly, per-open queues, `SYN_DROPPED`, grab, clock conversion, state for `EVIOCGKEY`/`EVIOCGABS`. Host-tested, fuzzed | no | 3 |
+| L4 | `libs/virtio-input`: driver logic over `libs/virtio-blk`'s traits (bring-up, the queries into `HELLO`, keeping the event queue full, filtering, batching), tested against a simulated device that drops short reports as QEMU does | no | 3 |
+| L5 | `user/input`, devmgr's table entry and `start_input`, `INPUT_CONTROL_CREATE`, the core's per-device task; exit: the boot line names each device and its event types | yes | 5 |
+| L6 | devfs `/dev/input/eventN`: subdirectory, character nodes, per-open objects, the ioctl branch and §3.3's subset, `read` and `poll`; Linux's queue size, drop rule, grab and revoke answers, string and bitmap lengths, and `read`'s errors checked against `drivers/input/evdev.c` | yes | 5 |
+| L7 | `compositor/evecho`; `xtask test-input` with QMP `input-send-event` and its negative control; the devices under `run --display` | no | 3 |
+|  | **The input iteration** |  | **23** |
+
+**The event-loop prerequisites (§2) are iteration 2's, not these 23**, and the
+input iteration does not wait for them:
+
+| # | Landing | Kernel? | Points |
+|---|---|---|---|
+| E1 | `epoll_create1`, `epoll_ctl` with `EPOLLET` and `EPOLLONESHOT`, `epoll_pwait` and `epoll_wait`, on every pollable file; an epoll descriptor pollable in turn | yes | 8 |
+| E2 | `eventfd2` with `EFD_CLOEXEC`, `EFD_NONBLOCK`, `EFD_SEMAPHORE` | yes | 2 |
+| E3 | `ioctl(FIONBIO)` (and `FIOCLEX`/`FIONCLEX`) on every descriptor | yes | 1 |
+| E4 | `card0`'s primary plane and properties: `GETPLANERESOURCES`, `GETPLANE`, `OBJ_GETPROPERTIES`, `GETPROPERTY`, from `probe/drm.c` extended | yes | 3 |
+| E5 | `timerfd_create`, `timerfd_settime`, `timerfd_gettime` (wanted, not required) | yes | 3 |
+|  | **Required for iteration 2 (E1–E4)** |  | **14** |
+
+Stage 17 was 55 points, of which iteration 1 took 37. The input iteration
+and E1–E4 together are 37 more. The difference comes from what §2 found:
+nesting epoll, `FIONBIO` and the plane objects were never counted. Neither
+was the per-open queue logic, which the roadmap's one line on input did not
+break down.
+
+## 6. Decisions and open questions
+
+**For the product owner (os-f6):**
+
+1. **One driver process per input device**, as blk has one per disk, rather
+   than one `user/input` serving every virtio-input function.
+2. **No software autorepeat in the core** (§3.1), a written deviation from
+   Linux: no value-2 events. Compositors repeat keys themselves.
+3. **`write` refused in this iteration**, so the caps-lock LED does not
+   light. LEDs come with the status queue, as an additive `inputctl` message
+   (`STATUS`, core → driver).
+4. **Multi-touch, force feedback and sound are left out** of what the core
+   publishes, even when a device declares them. QEMU's keyboard and tablet
+   declare none of them.
+5. **Hotplug is out.** Devices exist from boot. A later iteration adds
+   `inotify` on `/dev/input` (not in Ferrix today) or accepts a compositor
+   that rescans; which one is open.
+6. **The compositor's input backend:** hand-written over
+   `ferrix-linux-abi::input`, or the `evdev` crate (§2.4 is what the latter
+   needs, and the subset answers all of it). The first matches "evdev
+   through linux-abi's subset"; the second is less code and pulls in `nix`.
+7. **E1–E4 belong to iteration 2**, and E1 is the largest single piece left
+   in stage 17. Who owns it, and whether `timerfd` (E5) is done with it, is
+   the product owner's call. `DISPLAY.md` §2.3 named "os-26's epoll", and that
+   session is not on today's roster.
+8. **Smithay needs plane and property objects on `card0`** (§2.3, E4), which
+   `DISPLAY.md` §2.3's subset did not list: its legacy path is not as
+   plane-free as that table assumed.
+
+**For others:**
+
+* **ferrousli (32-bit):** whether its `linux/input.h` view of
+  `struct input_event` matches the kernel's 16 bytes under a 64-bit `time_t`
+  (§3.3). This does not block x86-64 or AArch64.
+* **The kernel reader of L6:** the ioctl branch again, or `Inode::ioctl`
+  first, now that there would be two device-specific branches.
+* **The XKB data** (`/usr/share/X11/xkb`) must be in the image for
+  xkbcommon's keymap compiler, or the compositor builds its keymap from a
+  string it carries. That is the compositor's choice, but it changes the
+  initramfs.
