@@ -12,7 +12,10 @@
 //! expected result is from the exact one in ulps, and the exceptions expected.
 //! The tables are read from a libc-test checkout, never copied: set
 //! `FERROUSLI_LIBC_TEST` to its path, or keep it at
-//! `~/.local/share/ferrix/ferrousli-ref/libc-test`.
+//! `~/.local/share/ferrix/ferrousli-ref/libc-test`. The results here are for
+//! commit 7b95dfa5f5d5ca4d949221e0228ccc290bacc14e of
+//! <https://repo.or.cz/libc-test.git>, which CI's ferrousli job fetches; move
+//! the two together.
 //!
 //! [`Rules`] reproduces how each of libc-test's programs judges a case,
 //! including the cases a program prints with an `X` and does not count as an
