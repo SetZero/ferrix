@@ -62,6 +62,11 @@ pub(crate) const PROGRAMS: &[Program] = &[
         binary: "net",
         directory: DRIVERS,
     },
+    Program {
+        package: "ferrix-gpu",
+        binary: "gpu",
+        directory: DRIVERS,
+    },
 ];
 
 /// Where drivers are unpacked, relative to the root, with a `MANIFEST`

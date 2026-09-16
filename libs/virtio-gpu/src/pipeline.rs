@@ -233,6 +233,12 @@ impl Pipeline {
         self.current.is_none() && self.count == 0
     }
 
+    /// Whether [`QUEUE_DEPTH`] requests are waiting, so a push would fail.
+    #[must_use]
+    pub const fn is_full(&self) -> bool {
+        self.count >= QUEUE_DEPTH
+    }
+
     /// Queue a request.
     pub fn push(&mut self, request: Request) -> Result<(), PipelineError> {
         if self.count >= QUEUE_DEPTH {

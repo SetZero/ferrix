@@ -307,6 +307,7 @@ const NATIVE: &[&str] = &[
     "ferrix-channel-echo",
     "ferrix-blk",
     "ferrix-net-driver",
+    "ferrix-gpu",
     "ferrix-devmgr",
 ];
 
@@ -319,6 +320,7 @@ const FREESTANDING: &[&str] = &[
     "ferrix-channel-echo",
     "ferrix-blk",
     "ferrix-net-driver",
+    "ferrix-gpu",
     "ferrix-devmgr",
 ];
 
