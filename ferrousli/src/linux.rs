@@ -1,7 +1,7 @@
 //! Linux's own calls, from headers POSIX does not have: `sys/prctl.h`,
 //! `capget` and `capset`, `sys/personality.h`, `sys/reboot.h`, `sys/klog.h`,
-//! `sys/inotify.h`, `sys/sendfile.h`, `sys/sysinfo.h`, and `sys/file.h`'s
-//! `flock`.
+//! `sys/inotify.h`, `sys/sendfile.h`, `sys/sysinfo.h`, `sys/file.h`'s
+//! `flock`, and `stdlib.h`'s `getloadavg`, which is `sysinfo` read again.
 //!
 //! Each is its system call, as in musl. `prctl` is variadic in C. Like
 //! `fcntl`, it is defined with fixed parameters instead ([`crate::fcntl`] says
@@ -10,7 +10,7 @@
 //! takes. musl's `inotify_init1` falls back to `inotify_init` on kernels
 //! without it, which every x86-64 kernel has, so there is no fallback here.
 
-use core::ffi::{c_char, c_int, c_ulong, c_void};
+use core::ffi::{c_char, c_double, c_int, c_ulong, c_void};
 
 use crate::errno;
 use crate::syscall::{self, nr};
@@ -171,6 +171,44 @@ pub unsafe extern "C" fn sendfile64(
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn sysinfo(info: *mut c_void) -> c_int {
     call(nr::SYSINFO, [info.addr(), 0, 0, 0, 0]) as c_int
+}
+
+/// The size of the kernel's `struct sysinfo` on x86-64, in words.
+const SYSINFO_WORDS: usize = 14;
+
+/// `SI_LOAD_SHIFT`: `sysinfo`'s load averages are fixed point with this many
+/// fraction bits.
+const SI_LOAD_SHIFT: u32 = 16;
+
+/// Writes up to `n` of the 1, 5 and 15 minute load averages to `loads`, from
+/// `sysinfo`, and returns how many; -1 for a negative `n` or a failed call.
+/// As in musl, which reads `/proc/loadavg` no more than this does.
+///
+/// # Safety
+///
+/// `loads` must be valid to write `min(n, 3)` doubles.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn getloadavg(loads: *mut c_double, n: c_int) -> c_int {
+    if n <= 0 {
+        return if n == 0 { 0 } else { -1 };
+    }
+    let mut info = [0_u64; SYSINFO_WORDS];
+    // `struct sysinfo` is 112 bytes, `uptime` then `loads[3]`, all longs.
+    const _: () = assert!(size_of::<[u64; SYSINFO_WORDS]>() == 112);
+    // SAFETY: `info` is the size of the kernel's structure.
+    if unsafe { sysinfo(info.as_mut_ptr().cast()) } != 0 {
+        return -1;
+    }
+    let count = n.min(3);
+    let mut i = 0;
+    while i < count as usize {
+        let raw = info.get(1 + i).copied().unwrap_or(0);
+        let slot = loads.wrapping_add(i);
+        // SAFETY: the caller vouches for `min(n, 3)` doubles.
+        unsafe { slot.write(raw as c_double / f64::from(1_u32 << SI_LOAD_SHIFT)) };
+        i += 1;
+    }
+    count
 }
 
 /// Takes or releases an advisory lock on the open file `fd`, as `op` says.

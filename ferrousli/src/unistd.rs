@@ -48,7 +48,8 @@ const _: () = assert!(size_of::<KernelTermios>() == 36);
 pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isize {
     // SAFETY: the caller vouches for the buffer. Casting `fd` sign-extends,
     // and the kernel reads the low 32 bits back.
-    let ret = unsafe { syscall::syscall3(nr::READ, fd as usize, buf.addr(), count) };
+    let ret =
+        unsafe { crate::cancel::syscall_cp(nr::READ, fd as usize, buf.addr(), count, 0, 0, 0) };
     errno::from_syscall(ret)
 }
 
@@ -60,7 +61,8 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> isize {
     // SAFETY: the caller vouches for the buffer, and the kernel only reads it.
-    let ret = unsafe { syscall::syscall3(nr::WRITE, fd as usize, buf.addr(), count) };
+    let ret =
+        unsafe { crate::cancel::syscall_cp(nr::WRITE, fd as usize, buf.addr(), count, 0, 0, 0) };
     errno::from_syscall(ret)
 }
 
@@ -73,8 +75,17 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn pread(fd: c_int, buf: *mut c_void, count: usize, offset: i64) -> isize {
     // SAFETY: as in `read`.
-    let ret =
-        unsafe { syscall::syscall4(nr::PREAD64, fd as usize, buf.addr(), count, offset as usize) };
+    let ret = unsafe {
+        crate::cancel::syscall_cp(
+            nr::PREAD64,
+            fd as usize,
+            buf.addr(),
+            count,
+            offset as usize,
+            0,
+            0,
+        )
+    };
     errno::from_syscall(ret)
 }
 
@@ -88,12 +99,14 @@ pub unsafe extern "C" fn pread(fd: c_int, buf: *mut c_void, count: usize, offset
 pub unsafe extern "C" fn pwrite(fd: c_int, buf: *const c_void, count: usize, offset: i64) -> isize {
     // SAFETY: as in `write`.
     let ret = unsafe {
-        syscall::syscall4(
+        crate::cancel::syscall_cp(
             nr::PWRITE64,
             fd as usize,
             buf.addr(),
             count,
             offset as usize,
+            0,
+            0,
         )
     };
     errno::from_syscall(ret)
@@ -113,7 +126,7 @@ pub extern "C" fn _exit(status: c_int) -> ! {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn close(fd: c_int) -> c_int {
     // SAFETY: `close` reads no memory.
-    let ret = unsafe { syscall::syscall2(nr::CLOSE, fd as usize, 0) };
+    let ret = unsafe { crate::cancel::syscall_cp(nr::CLOSE, fd as usize, 0, 0, 0, 0, 0) };
     match errno::decode(ret) {
         Ok(_) | Err(errno::EINTR) => 0,
         Err(error) => {
@@ -207,11 +220,95 @@ pub unsafe extern "C" fn pipe(fds: *mut c_int) -> c_int {
     unsafe { pipe2(fds, 0) }
 }
 
+/// Copies up to `len` bytes from `fd_in` to `fd_out` in the kernel, each from
+/// its offset if one is given, updating it, and from the file offset
+/// otherwise; returns how many were copied.
+///
+/// # Safety
+///
+/// `off_in` and `off_out` must each be null or valid for a read and a write of
+/// an `off_t`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn copy_file_range(
+    fd_in: c_int,
+    off_in: *mut i64,
+    fd_out: c_int,
+    off_out: *mut i64,
+    len: usize,
+    flags: c_uint,
+) -> isize {
+    // SAFETY: the kernel reads and writes the offsets the caller vouches for.
+    let ret = unsafe {
+        syscall::syscall6(
+            nr::COPY_FILE_RANGE,
+            fd_in as usize,
+            off_in.addr(),
+            fd_out as usize,
+            off_out.addr(),
+            len,
+            flags as usize,
+        )
+    };
+    errno::from_syscall(ret)
+}
+
+/// The limits and options `fpathconf` answers, indexed by `_PC_` name: musl's
+/// table, the same for every file, as musl gives them.
+const PATHCONF: [c_long; 21] = [
+    8,    // _PC_LINK_MAX: _POSIX_LINK_MAX
+    255,  // _PC_MAX_CANON: _POSIX_MAX_CANON
+    255,  // _PC_MAX_INPUT: _POSIX_MAX_INPUT
+    255,  // _PC_NAME_MAX: NAME_MAX
+    4096, // _PC_PATH_MAX: PATH_MAX
+    4096, // _PC_PIPE_BUF: PIPE_BUF
+    1,    // _PC_CHOWN_RESTRICTED
+    1,    // _PC_NO_TRUNC
+    0,    // _PC_VDISABLE
+    1,    // _PC_SYNC_IO
+    -1,   // _PC_ASYNC_IO
+    -1,   // _PC_PRIO_IO
+    -1,   // _PC_SOCK_MAXBUF
+    64,   // _PC_FILESIZEBITS
+    4096, // _PC_REC_INCR_XFER_SIZE
+    4096, // _PC_REC_MAX_XFER_SIZE
+    4096, // _PC_REC_MIN_XFER_SIZE
+    4096, // _PC_REC_XFER_ALIGN
+    4096, // _PC_ALLOC_SIZE_MIN
+    -1,   // _PC_SYMLINK_MAX
+    1,    // _PC_2_SYMLINKS
+];
+
+/// The value of limit or option `name` for the file `fd` refers to, from
+/// musl's fixed table, whatever the file; -1 without changing `errno` for a
+/// limit that has none, and -1 with `EINVAL` for an unknown name.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn fpathconf(fd: c_int, name: c_int) -> c_long {
+    let _ = fd;
+    match usize::try_from(name).ok().and_then(|at| PATHCONF.get(at)) {
+        Some(&value) => value,
+        None => {
+            errno::set(errno::EINVAL);
+            -1
+        }
+    }
+}
+
+/// [`fpathconf`] for the file at `path`, which, as in musl, is not looked at.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn pathconf(path: *const c_char, name: c_int) -> c_long {
+    let _ = path;
+    fpathconf(-1, name)
+}
+
 /// Writes `fd`'s data and metadata to storage.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn fsync(fd: c_int) -> c_int {
     // SAFETY: `fsync` reads no memory.
-    let ret = unsafe { syscall::syscall2(nr::FSYNC, fd as usize, 0) };
+    let ret = unsafe { crate::cancel::syscall_cp(nr::FSYNC, fd as usize, 0, 0, 0, 0, 0) };
     errno::from_syscall(ret) as c_int
 }
 
@@ -219,7 +316,7 @@ pub extern "C" fn fsync(fd: c_int) -> c_int {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn fdatasync(fd: c_int) -> c_int {
     // SAFETY: `fdatasync` reads no memory.
-    let ret = unsafe { syscall::syscall2(nr::FDATASYNC, fd as usize, 0) };
+    let ret = unsafe { crate::cancel::syscall_cp(nr::FDATASYNC, fd as usize, 0, 0, 0, 0, 0) };
     errno::from_syscall(ret) as c_int
 }
 

@@ -80,3 +80,8 @@ fn c11_threads_mutexes_conditions_and_storage_work_over_pthreads() {
 fn keys_hold_values_per_thread_and_run_destructors_in_rounds() {
     check(&Case::named("thread/keys"));
 }
+
+#[test]
+fn cancellation_acts_at_blocking_calls_in_asynchronous_threads_and_not_while_disabled() {
+    check(&Case::named("thread/cancel"));
+}

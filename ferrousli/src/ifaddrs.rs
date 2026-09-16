@@ -423,6 +423,8 @@ fn rtnetlink_enumerate(
     addr_af: u8,
     each: &mut impl FnMut(u16, &[u8]) -> Result<(), c_int>,
 ) -> Result<(), c_int> {
+    // Cancellation waits until this is finished, as in musl.
+    let _cancel = cancel::disable();
     let fd = socket(PF_NETLINK, RAW_CLOEXEC, NETLINK_ROUTE);
     if fd < 0 {
         return Err(crate::pwd::last_errno());
@@ -614,6 +616,8 @@ pub unsafe extern "C" fn freeifaddrs(ifp: *mut Ifaddrs) {
 /// Builds the list from `SIOCGIFCONF`, for a kernel without `AF_NETLINK`.
 /// IPv4 addresses only, each interface's flags and netmask asked for in turn.
 fn from_ioctl(ctx: &mut Ctx) -> Result<(), c_int> {
+    // Cancellation waits until this is finished, as in musl.
+    let _cancel = cancel::disable();
     let fd = socket(AF_INET, DGRAM_CLOEXEC, 0);
     if fd < 0 {
         return Err(crate::pwd::last_errno());

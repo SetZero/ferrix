@@ -133,6 +133,8 @@ fn write_bytes(out: &mut [u8], len: &mut usize, text: &[u8]) {
 /// family's own loopback address. `Err` holds `EAI_SYSTEM` for a failure that
 /// says nothing about the family.
 fn configured(af: c_int, address: &SockaddrIn6, len: c_uint) -> Result<bool, c_int> {
+    // Cancellation waits until this is finished, as in musl.
+    let _cancel = cancel::disable();
     let fd = socket(af, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
     let error = if fd < 0 {
         crate::pwd::last_errno()

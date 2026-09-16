@@ -8,7 +8,7 @@ use core::ptr::null_mut;
 
 use crate::errno;
 use crate::resource::Rusage;
-use crate::syscall::{self, nr};
+use crate::syscall::nr;
 
 /// Waits for child `pid`, as `waitpid` selects it, stores its status in
 /// `*status` and its resource usage in `*usage`, each if not null.
@@ -27,12 +27,14 @@ pub unsafe extern "C" fn wait4(
     // SAFETY: the kernel writes `status` and `usage` when they are not null,
     // as the caller vouches.
     let ret = unsafe {
-        syscall::syscall4(
+        crate::cancel::syscall_cp(
             nr::WAIT4,
             pid as usize,
             status.addr(),
             options as usize,
             usage.addr(),
+            0,
+            0,
         )
     };
     errno::from_syscall(ret) as c_int
@@ -91,7 +93,7 @@ pub unsafe extern "C" fn waitid(
     // SAFETY: the kernel writes `info` when it is not null, as the caller
     // vouches, and no usage is asked for.
     let ret = unsafe {
-        syscall::syscall6(
+        crate::cancel::syscall_cp(
             nr::WAITID,
             idtype as usize,
             id as usize,

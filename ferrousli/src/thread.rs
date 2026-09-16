@@ -513,6 +513,19 @@ pub unsafe fn init_main() {
     }
 }
 
+/// The calling thread's copy of the program's TLS block, or `None` when the
+/// program has no `PT_TLS` segment. It ends at the thread pointer.
+pub fn tls_block() -> Option<*mut c_void> {
+    let memsz = TLS_MEMSZ.load(Ordering::Relaxed);
+    if memsz == 0 {
+        return None;
+    }
+    let offset = tls_offset(memsz, TLS_ALIGN.load(Ordering::Relaxed))?;
+    Some(with_exposed_provenance_mut(
+        arch::thread_pointer().checked_sub(offset)?,
+    ))
+}
+
 /// The calling thread's control block.
 ///
 /// Before [`init_main`] the thread pointer is zero, and this faults.

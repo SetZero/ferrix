@@ -331,7 +331,7 @@ pub unsafe extern "C" fn sigset(sig: c_int, handler: Handler) -> Handler {
 }
 
 /// The restorer every installed action returns through.
-fn restorer() -> usize {
+pub fn restorer() -> usize {
     (__restore_rt as unsafe extern "C" fn() as *const ()).addr()
 }
 
