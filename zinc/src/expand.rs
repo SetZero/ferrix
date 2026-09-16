@@ -65,6 +65,18 @@ impl Out {
         }
     }
 
+    /// A pattern token appended after an RC expansion belongs to every copy
+    /// of the word, not only to the last field currently under construction.
+    fn mark_glob(&mut self) {
+        if let Some(start) = self.rc {
+            for field in self.fields.iter_mut().skip(start) {
+                field.glob = true;
+            }
+        } else {
+            self.cur().glob = true;
+        }
+    }
+
     /// Insert an expansion RC_EXPAND_PARAM distributes: every element takes a
     /// copy of the whole word around it.
     fn push_values_rc(&mut self, vals: &[Vec<u8>], quoted: bool) {
@@ -131,7 +143,7 @@ pub(crate) fn expand_words(sh: &mut Shell, words: &[Vec<u8>]) -> Result<Vec<Vec<
         let braced = if sh.opt("ignorebraces") {
             vec![w.clone()]
         } else {
-            brace_expand(w)
+            brace_expand(sh, w)
         };
         for b in braced {
             let fields = expand(sh, &b, Mode::Fields)?;
@@ -388,7 +400,7 @@ fn walk(sh: &mut Shell, w: &[u8], out: &mut Out, mut dq: bool) -> Result<(), Str
                 if dq {
                     push_literal(out, tok::detok(t));
                 } else {
-                    out.cur().glob = true;
+                    out.mark_glob();
                     out.push_plain(&[t]);
                 }
             }
@@ -589,7 +601,7 @@ pub(crate) fn dollar_quote(body: &[u8]) -> Vec<u8> {
 }
 
 /// Brace expansion: `x{a,b}y` and `{1..3}`, outermost first.
-pub(crate) fn brace_expand(w: &[u8]) -> Vec<Vec<u8>> {
+pub(crate) fn brace_expand(sh: &Shell, w: &[u8]) -> Vec<Vec<u8>> {
     let mut i = 0;
     while let Some(&c) = w.get(i) {
         match c {
@@ -625,13 +637,13 @@ pub(crate) fn brace_expand(w: &[u8]) -> Vec<Vec<u8>> {
                     let inner = w.get(i + 1..end).unwrap_or(&[]);
                     let pre = w.get(..i).unwrap_or(&[]);
                     let post = w.get(end + 1..).unwrap_or(&[]);
-                    if let Some(parts) = brace_parts(inner) {
+                    if let Some(parts) = brace_parts(sh, inner) {
                         let mut out = Vec::new();
                         for p in parts {
                             let mut word = pre.to_vec();
                             word.extend_from_slice(&p);
                             word.extend_from_slice(post);
-                            out.extend(brace_expand(&word));
+                            out.extend(brace_expand(sh, &word));
                         }
                         return out;
                     }
@@ -644,7 +656,7 @@ pub(crate) fn brace_expand(w: &[u8]) -> Vec<Vec<u8>> {
     vec![w.to_vec()]
 }
 
-fn brace_parts(inner: &[u8]) -> Option<Vec<Vec<u8>>> {
+fn brace_parts(sh: &Shell, inner: &[u8]) -> Option<Vec<Vec<u8>>> {
     let mut parts = Vec::new();
     let mut depth = 0;
     let mut start = 0;
@@ -666,8 +678,13 @@ fn brace_parts(inner: &[u8]) -> Option<Vec<Vec<u8>>> {
     let text = std::str::from_utf8(&plain).ok()?;
     let mut it = text.split("..");
     let (a, b, step) = (it.next()?, it.next()?, it.next());
+    if it.next().is_some() {
+        return None;
+    }
+    let a = brace_range_endpoint(sh, a)?;
+    let b = brace_range_endpoint(sh, b)?;
     let step: i64 = step
-        .map_or(Some(1i64), |s| s.parse::<i64>().ok())?
+        .map_or(Some(1i64), |s| brace_range_endpoint(sh, s)?.parse().ok())?
         .abs()
         .max(1);
     if let (Ok(x), Ok(y)) = (a.parse::<i64>(), b.parse::<i64>()) {
@@ -707,6 +724,36 @@ fn brace_parts(inner: &[u8]) -> Option<Vec<Vec<u8>>> {
         );
     }
     None
+}
+
+/// A brace range endpoint is normally literal.  zsh additionally recognises
+/// its compact `$#name` spelling here; compaudit uses `{1..$#_i_addfiles}` to
+/// walk an array without constructing a second list.
+fn brace_range_endpoint(sh: &Shell, endpoint: &str) -> Option<String> {
+    let Some(name) = endpoint.strip_prefix("$#") else {
+        return Some(endpoint.to_owned());
+    };
+    let name = name.as_bytes();
+    if !name.is_empty()
+        && (name
+            .first()
+            .is_none_or(|c| !c.is_ascii_alphabetic() && *c != b'_')
+            || name
+                .iter()
+                .any(|c| !c.is_ascii_alphanumeric() && *c != b'_'))
+    {
+        return None;
+    }
+    let n = if name.is_empty() {
+        sh.positional.len()
+    } else {
+        match sh.get(name).unwrap_or(Value::Scalar(Vec::new())) {
+            Value::Array(a) => a.len(),
+            Value::Assoc(a) => a.len(),
+            Value::Scalar(s) => String::from_utf8_lossy(&tok::unmetafy(&s)).chars().count(),
+        }
+    };
+    Some(n.to_string())
 }
 
 /// Glob a tokenized pattern against the file system, sorted.

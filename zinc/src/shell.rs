@@ -139,6 +139,45 @@ fn id_of(name: &[u8]) -> Vec<u8> {
     id.to_string().into_bytes()
 }
 
+/// The host zsh function tree, in the same pre-order as zsh 5.9's compiled
+/// `fpath`. A Ferrix image without that tree simply starts with an empty path;
+/// distributors can provide the functions without rebuilding zinc.
+fn default_fpath() -> Vec<Vec<u8>> {
+    let mut out: Vec<Vec<u8>> = [
+        "/usr/local/share/zsh/site-functions",
+        "/usr/share/zsh/vendor-functions",
+        "/usr/share/zsh/vendor-completions",
+    ]
+    .into_iter()
+    .filter(|path| std::path::Path::new(path).is_dir())
+    .map(|path| path.as_bytes().to_vec())
+    .collect();
+    collect_fpath_dirs(std::path::Path::new("/usr/share/zsh/functions"), &mut out);
+    out
+}
+
+fn collect_fpath_dirs(root: &std::path::Path, out: &mut Vec<Vec<u8>>) {
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut dirs: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .file_type()
+                .is_ok_and(|kind| kind.is_dir())
+                .then(|| entry.path())
+        })
+        .collect();
+    dirs.sort();
+    for dir in dirs {
+        out.push(dir.as_os_str().as_bytes().to_vec());
+        collect_fpath_dirs(&dir, out);
+    }
+}
+
 /// Normalise an option name: lower case, no underscores.
 pub(crate) fn option_key(name: &[u8]) -> String {
     name.iter()
@@ -250,6 +289,37 @@ impl Shell {
                     .insert(k.as_bytes().to_vec(), Var::scalar(v.to_vec()));
             }
         }
+        if !sh.vars.contains_key(&b"fpath"[..]) {
+            let fpath = match sh.vars.get(&b"FPATH"[..]) {
+                Some(value) => value
+                    .value
+                    .joined()
+                    .split(|&c| c == b':')
+                    .map(<[u8]>::to_vec)
+                    .collect(),
+                None => default_fpath(),
+            };
+            sh.set_value(b"fpath", Value::Array(fpath));
+        }
+        // These are always-present integer special parameters in zsh.  OMZ's
+        // history setup compares their defaults before raising them.
+        for (name, value) in [
+            (b"HISTSIZE".as_slice(), b"30".as_slice()),
+            (b"SAVEHIST", b"0"),
+            (b"OPTIND", b"1"),
+        ] {
+            if !sh.vars.contains_key(name) {
+                let _old = sh.vars.insert(
+                    name.to_vec(),
+                    Var {
+                        value: Value::Scalar(value.to_vec()),
+                        export: false,
+                        readonly: false,
+                        integer: true,
+                    },
+                );
+            }
+        }
         if !sh.vars.contains_key(&b"PS1"[..]) {
             sh.set_scalar(b"PS1", b"%m%# ".to_vec());
         }
@@ -323,6 +393,26 @@ impl Shell {
                 }));
             }
             b"UID" | b"EUID" | b"GID" | b"EGID" => return Some(Value::Scalar(id_of(name))),
+            b"aliases" => {
+                let mut aliases: Vec<(Vec<u8>, Vec<u8>)> = self
+                    .aliases
+                    .iter()
+                    .filter(|(_, definition)| !definition.global)
+                    .map(|(name, definition)| (name.clone(), definition.text.clone()))
+                    .collect();
+                aliases.sort_by(|left, right| left.0.cmp(&right.0));
+                return Some(Value::Assoc(aliases));
+            }
+            b"galiases" => {
+                let mut aliases: Vec<(Vec<u8>, Vec<u8>)> = self
+                    .aliases
+                    .iter()
+                    .filter(|(_, definition)| definition.global)
+                    .map(|(name, definition)| (name.clone(), definition.text.clone()))
+                    .collect();
+                aliases.sort_by(|left, right| left.0.cmp(&right.0));
+                return Some(Value::Assoc(aliases));
+            }
             _ => {}
         }
         if let Some(n) = std::str::from_utf8(name)
@@ -359,6 +449,38 @@ impl Shell {
             self.set_scalar(b"PATH", joined);
             return;
         }
+        if name == b"fpath" {
+            let fpath = match value {
+                Value::Array(a) => a,
+                other => other
+                    .joined()
+                    .split(|&c| c == b':')
+                    .map(<[u8]>::to_vec)
+                    .collect(),
+            };
+            let joined = fpath.join(&b':');
+            self.store_value(b"fpath", Value::Array(fpath));
+            self.store_value(b"FPATH", Value::Scalar(joined));
+            return;
+        }
+        if name == b"FPATH" {
+            let joined = value.joined();
+            let fpath = joined.split(|&c| c == b':').map(<[u8]>::to_vec).collect();
+            self.store_value(b"FPATH", Value::Scalar(joined));
+            self.store_value(b"fpath", Value::Array(fpath));
+            return;
+        }
+        if matches!(name, b"aliases" | b"galiases") {
+            let global = name == b"galiases";
+            self.aliases
+                .retain(|_, definition| definition.global != global);
+            if let Value::Assoc(aliases) = value {
+                for (name, text) in aliases {
+                    let _old = self.aliases.insert(name, AliasDef { text, global });
+                }
+            }
+            return;
+        }
         if let Some(n) = std::str::from_utf8(name)
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
@@ -381,6 +503,10 @@ impl Shell {
             }
             return;
         }
+        self.store_value(name, value);
+    }
+
+    fn store_value(&mut self, name: &[u8], value: Value) {
         match self.vars.get_mut(name) {
             Some(v) => {
                 v.value = if v.integer {
@@ -406,6 +532,15 @@ impl Shell {
 
     /// Make `name` local to the current function, saving its old value.
     pub(crate) fn make_local(&mut self, name: &[u8]) {
+        if name == b"fpath" || name == b"FPATH" {
+            self.make_one_local(b"fpath");
+            self.make_one_local(b"FPATH");
+            return;
+        }
+        self.make_one_local(name);
+    }
+
+    fn make_one_local(&mut self, name: &[u8]) {
         let Some(frame) = self.locals.last_mut() else {
             return;
         };

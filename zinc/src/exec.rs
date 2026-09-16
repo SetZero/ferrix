@@ -9,7 +9,7 @@ use crate::ast::{
 };
 use crate::ast::{Redir, RedirKind, Sublist, Sublist2};
 use crate::expand::{expand_pattern, expand_single, expand_words};
-use crate::lex::Lexer;
+use crate::lex::{AliasDef, Lexer};
 use crate::parse::Parser;
 use crate::pattern::Pattern;
 use crate::shell::{Flow, Function, Shell, Value};
@@ -572,6 +572,23 @@ fn assign_element(
     val: Vec<u8>,
     append: bool,
 ) -> Result<(), String> {
+    if matches!(name, b"aliases" | b"galiases") {
+        let key = expand_single(sh, sub)?;
+        let global = name == b"galiases";
+        let text = if append {
+            let mut old = sh
+                .aliases
+                .get(&key)
+                .map(|definition| definition.text.clone())
+                .unwrap_or_default();
+            old.extend_from_slice(&val);
+            old
+        } else {
+            val
+        };
+        let _old = sh.aliases.insert(key, AliasDef { text, global });
+        return Ok(());
+    }
     match sh.get(name) {
         Some(Value::Assoc(mut pairs)) => {
             let key = expand_single(sh, sub)?;

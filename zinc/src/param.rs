@@ -44,6 +44,8 @@ struct Flags {
     rsort: bool,
     numeric: bool,
     unique: bool,
+    /// `(M)` reverses `${array:#pattern}`: retain matching elements.
+    matching: bool,
     quote: u8,
     unquote: bool,
     indirect: bool,
@@ -89,6 +91,7 @@ fn parse_flags(s: &[u8], f: &mut Flags) {
             b'O' => f.rsort = true,
             b'n' => f.numeric = true,
             b'u' => f.unique = true,
+            b'M' => f.matching = true,
             b'q' => f.quote += 1,
             b'Q' => f.unquote = true,
             b'P' => f.indirect = true,
@@ -266,7 +269,7 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
     }
     // Operators.
     let rest = inner.get(i..).unwrap_or(&[]).to_vec();
-    v = apply_op(sh, v, is_set, &name, &rest)?;
+    v = apply_op(sh, v, is_set, &name, &rest, f.matching)?;
     if length {
         let n = match &v {
             Value::Array(a) => a.len(),
@@ -624,6 +627,7 @@ fn apply_op(
     is_set: bool,
     name: &[u8],
     rest: &[u8],
+    matching: bool,
 ) -> Result<Value, String> {
     let Some(&first) = rest.first() else {
         return Ok(v);
@@ -634,6 +638,32 @@ fn apply_op(
         Value::Array(a) => a.is_empty(),
         other => other.joined().is_empty(),
     };
+    // For an array, `${name:#pattern}` removes matching elements rather than
+    // removing text from each element. `(M)` keeps the matches instead. This
+    // is how compaudit partitions its candidate directory list.
+    if c0 == b':' && c1 == Some(b'#') {
+        let pat_word = rest.get(2..).unwrap_or(&[]).to_vec();
+        let pat = Pattern::compile(
+            &expand_pattern(sh, &crate::pattern::tokenize(&pat_word))?,
+            sh.opt("extendedglob"),
+        );
+        let hit = |s: &[u8]| pat.matches(&tok::unmetafy(s));
+        return Ok(match v {
+            Value::Array(a) => Value::Array(a.into_iter().filter(|s| hit(s) == matching).collect()),
+            Value::Assoc(a) => Value::Assoc(
+                a.into_iter()
+                    .filter(|(_, value)| hit(value) == matching)
+                    .collect(),
+            ),
+            Value::Scalar(s) => {
+                if hit(&s) == matching {
+                    Value::Scalar(s)
+                } else {
+                    Value::Scalar(Vec::new())
+                }
+            }
+        });
+    }
     // `${a:|b}` and `${a:*b}`: the elements of `a` that are absent from, or
     // present in, the array named by `b`.
     if c0 == b':' && matches!(c1, Some(b'|' | b'*')) {
