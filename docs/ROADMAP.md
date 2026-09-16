@@ -3116,14 +3116,45 @@ curl is installed, `test-net` adds two programs to its thirteen: curl fetches
 the file by name through `/etc/resolv.conf`, and fetches the quarter megabyte
 whose `cksum` must match the server's.
 
-HTTPS is built in, but it is not usable on Ferrix yet. On the Linux host the
-same binary fetches over HTTPS and refuses a self-signed certificate. In the
-guest, a fetch from `https://1.1.1.1/` got through the handshake to the
-certificate check and was refused with *"The certificate validity starts in
-the future"*, because the kernel's clock starts at 1970. The kernel's
-`getrandom` is not random either, so a session key would be predictable. The
-row for both is in `docs/BACKLOG.md`'s P2, and `test-net` gets an HTTPS
-program when it is done.
+HTTPS first failed in the guest. A fetch from `https://1.1.1.1/` got through
+the handshake to the certificate check and was refused with *"The certificate
+validity starts in the future"*, because the kernel's clock started at 1970.
+And `getrandom` was xorshift seeded from a counter, so a session key would have
+been predictable.
+
+**Done — the time of day, and random numbers worth a key.** The loader asks
+firmware for both before it leaves boot services: `GetTime`, turned into Unix
+nanoseconds by `ferrix_bootinfo::unix_nanos`, and 32 bytes from
+`EFI_RNG_PROTOCOL`. `BootInfo` version 5 carries them, with a flag for each
+that firmware provided. The kernel starts `CLOCK_REALTIME` at that time after
+stage 3's timer check.
+
+`libs/crng` is the generator: ChaCha20 with fast key erasure, its block
+function checked against RFC 8439's vector and OpenSSL's keystream. Every
+64-byte block replaces the key with its first half and hands out the second.
+`kernel/src/random.rs` seeds it from firmware's bytes, credited 256 bits, and
+from the CPU's `RDSEED` or `RDRAND` on x86-64, or `RNDR` on AArch64, at 32 bits
+a word. It also mixes in timer jitter, credited nothing, and mixes the counter
+into every read. `getrandom`, `/dev/random`, `/dev/urandom` and `AT_RANDOM` all
+read it. A boot says what it had:
+
+```
+  firmware clock read, random number protocol read
+  clock    1789590336 seconds since the epoch, from firmware's clock
+  random   seeded with 512 bits: firmware, 8 words from the CPU, timer jitter
+```
+
+That was OVMF, with RDRAND turned on in `xtask`'s QEMU CPU. AAVMF, and U-Boot's
+EFI on ARMv7-A, gave both the time and the random bytes too. A machine with no
+firmware protocol and no CPU instruction boots `NOT SEEDED`, in capitals, and
+`getrandom` answers anyway. Linux would block instead, but that wait never ends
+on a machine with nothing to wait for. The boot check reads the generator twice
+and panics as FX-0306 if the two reads match. Its negative control, not
+committed, on x86-64: with the second read replaced by a copy of the first, the
+boot printed `FERRIX-PANIC random generator check failed: two reads of the
+random generator were the same` under FX-0306. The clock's: with the loader's
+time flag cleared, the boot said `firmware has no clock: CLOCK_REALTIME starts
+at the epoch`.
 
 **Done — btop, and the C++ runtime under it.** `ferrousli/tools/ports/libcxx`
 builds LLVM 23.1.1's libc++, libc++abi and libunwind against ferrousli with

@@ -13,9 +13,11 @@ use ferrix_bootinfo::PAGE_SIZE;
 
 use crate::uefi::protocols::{
     FILE_MODE_READ, FILE_POSITION_END, FileProtocol, GRAPHICS_OUTPUT_GUID, GraphicsOutput,
-    LOADED_IMAGE_GUID, LoadedImage, SIMPLE_FILE_SYSTEM_GUID, SimpleFileSystem,
+    LOADED_IMAGE_GUID, LoadedImage, RNG_GUID, Rng, SIMPLE_FILE_SYSTEM_GUID, SimpleFileSystem,
 };
-use crate::uefi::tables::{AllocateType, BootServices, MemoryDescriptor, MemoryType, SystemTable};
+use crate::uefi::tables::{
+    AllocateType, BootServices, MemoryDescriptor, MemoryType, SystemTable, Time,
+};
 use crate::uefi::{Guid, Handle, Status};
 
 /// `LocateHandleBuffer`'s search by protocol.
@@ -584,6 +586,62 @@ impl Services {
         // SAFETY: firmware allocated `handles` from pool for us to free.
         let _ = unsafe { (self.boot().free_pool)(handles.cast::<u8>()) };
         (chosen, outputs)
+    }
+
+    /// The time of day from firmware's real-time clock, as nanoseconds since
+    /// the Unix epoch, or `None` when firmware has no clock or reports a time
+    /// that is not a date.
+    pub(crate) fn firmware_time(&self) -> Option<i64> {
+        let runtime = self.table().runtime_services;
+        if runtime.is_null() {
+            return None;
+        }
+        let mut time = Time::default();
+        // SAFETY: firmware owns the runtime services table, checked non-null,
+        // and `get_time` writes one `EFI_TIME` into a live local; a null
+        // capabilities pointer is allowed.
+        let status = unsafe { ((*runtime).get_time)(&raw mut time, ptr::null_mut()) };
+        if status.is_error() {
+            return None;
+        }
+        let offset = if time.time_zone == Time::UNSPECIFIED_TIMEZONE {
+            0
+        } else {
+            // EFI_TIME counts minutes *west* of UTC as positive: local time
+            // is UTC less the zone.
+            time.time_zone.checked_neg()?
+        };
+        ferrix_bootinfo::unix_nanos(
+            time.year,
+            time.month,
+            time.day,
+            time.hour,
+            time.minute,
+            time.second,
+            time.nanosecond,
+            offset,
+        )
+    }
+
+    /// Thirty-two bytes from firmware's `EFI_RNG_PROTOCOL`, or `None` when
+    /// firmware offers none or it fails.
+    pub(crate) fn firmware_seed(&self) -> Option<[u8; 32]> {
+        let mut interface: *mut c_void = ptr::null_mut();
+        // SAFETY: `locate_protocol` writes an interface pointer into a live
+        // local; boot services are live.
+        let status = unsafe {
+            (self.boot().locate_protocol)(&RNG_GUID, ptr::null_mut(), &raw mut interface)
+        };
+        if status.is_error() || interface.is_null() {
+            return None;
+        }
+        let rng = interface.cast::<Rng>();
+        let mut seed = [0_u8; 32];
+        // SAFETY: firmware returned a live `EFI_RNG_PROTOCOL`; `get_rng` writes
+        // `seed.len()` bytes into a live local, with firmware's default
+        // algorithm.
+        let status = unsafe { ((*rng).get_rng)(rng, ptr::null(), seed.len(), seed.as_mut_ptr()) };
+        (!status.is_error()).then_some(seed)
     }
 
     /// Look up a configuration table by GUID.

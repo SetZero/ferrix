@@ -57,8 +57,70 @@ pub const BOOTINFO_MAGIC: u64 = 0x4645_5252_4958_4249;
 /// identity mapping of its own image inside the kernel's tree, which a board
 /// whose RAM is above the split needs and which the kernel has to take down.
 /// Version 4 added [`Framebuffer::reclaimable`], because firmware can leave a
-/// framebuffer in boot-services memory the kernel hands out again.
-pub const BOOTINFO_VERSION: u32 = 4;
+/// framebuffer in boot-services memory the kernel hands out again. Version 5
+/// added what firmware knows that the kernel cannot find out for itself: the
+/// time of day, and random bytes. HTTPS needs both, and so does anything else
+/// that checks a certificate or makes a key.
+pub const BOOTINFO_VERSION: u32 = 5;
+
+/// [`BootInfo::firmware_flags`]: [`BootInfo::firmware_time`] holds the time
+/// firmware's `GetTime` gave.
+pub const FIRMWARE_TIME: u64 = 1 << 0;
+
+/// [`BootInfo::firmware_flags`]: [`BootInfo::firmware_seed`] holds bytes from
+/// firmware's `EFI_RNG_PROTOCOL`.
+pub const FIRMWARE_SEED: u64 = 1 << 1;
+
+/// A calendar time as firmware's clock reports it, `offset_minutes` east of
+/// UTC, as nanoseconds since the Unix epoch; `None` for a date that does not
+/// exist or does not fit.
+///
+/// Days are counted with the proleptic Gregorian calendar, by Howard
+/// Hinnant's `days_from_civil`, which is exact for every year an `i64` of
+/// nanoseconds spans.
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fields of EFI_TIME, one argument each, as firmware gives them"
+)]
+pub fn unix_nanos(
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    nanosecond: u32,
+    offset_minutes: i16,
+) -> Option<i64> {
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if day == 0 || day > month_days || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    if nanosecond >= 1_000_000_000 {
+        return None;
+    }
+    let y = i64::from(year) - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let year_of_era = y.rem_euclid(400);
+    let shifted_month = (i64::from(month) + 9) % 12;
+    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    let seconds =
+        days * 86_400 + i64::from(hour) * 3_600 + i64::from(minute) * 60 + i64::from(second)
+            - i64::from(offset_minutes) * 60;
+    seconds
+        .checked_mul(1_000_000_000)?
+        .checked_add(i64::from(nanosecond))
+}
 
 // ---------------------------------------------------------------------------
 // Virtual memory layout
@@ -774,7 +836,7 @@ pub fn allocator_owns(regions: impl IntoIterator<Item = MemRegion>, base: u64, l
 /// tables the loader installed before jumping to the kernel, which is to say
 /// inside the direct map at [`PHYSMAP_BASE`]. Fields named `_phys` are
 /// physical. None of them is a pointer type, so the structure is the same
-/// 232 bytes on every word width.
+/// 280 bytes on every word width.
 ///
 /// Read it through [`BootInfo::validate`] rather than field by field.
 #[repr(C)]
@@ -859,13 +921,23 @@ pub struct BootInfo {
     pub cmdline: u64,
     /// Length of the command line in bytes.
     pub cmdline_len: u64,
+
+    /// Nanoseconds since the Unix epoch when the loader asked firmware, if
+    /// [`FIRMWARE_TIME`] is set. Firmware keeps local time or UTC as the
+    /// machine's owner set it; a time zone it does not know is read as UTC.
+    pub firmware_time: i64,
+    /// Random bytes from firmware, if [`FIRMWARE_SEED`] is set; zeros if not.
+    pub firmware_seed: [u8; 32],
+    /// Which of the two above firmware provided: [`FIRMWARE_TIME`] and
+    /// [`FIRMWARE_SEED`].
+    pub firmware_flags: u64,
 }
 
 // The claim the module documentation makes, asserted where it can fail: a
 // field whose size follows the pointer width would break it, and the loader
 // and the host tests would then disagree about a layout neither of them sees.
 const _: () = assert!(
-    size_of::<BootInfo>() == 232,
+    size_of::<BootInfo>() == 280,
     "BootInfo must be laid out identically on every word width"
 );
 const _: () = assert!(
@@ -1256,7 +1328,62 @@ mod tests {
             uefi_system_table: 0,
             cmdline: cmdline.as_ptr().expose_provenance() as u64,
             cmdline_len: cmdline.len() as u64,
+            firmware_time: 0,
+            firmware_seed: [0; 32],
+            firmware_flags: 0,
         }
+    }
+
+    #[test]
+    fn firmware_calendar_times_become_unix_nanoseconds() {
+        const NANOS: i64 = 1_000_000_000;
+        assert_eq!(unix_nanos(1970, 1, 1, 0, 0, 0, 0, 0), Some(0));
+        assert_eq!(unix_nanos(1970, 1, 1, 0, 0, 1, 5, 0), Some(NANOS + 5));
+        // `date -u -d 2026-09-16T21:50:45 +%s`.
+        assert_eq!(
+            unix_nanos(2026, 9, 16, 21, 50, 45, 0, 0),
+            Some(1_789_595_445 * NANOS)
+        );
+        // The last day of a leap February, and the next morning.
+        assert_eq!(
+            unix_nanos(2024, 2, 29, 12, 0, 0, 0, 0),
+            Some(1_709_208_000 * NANOS)
+        );
+        assert_eq!(
+            unix_nanos(2024, 3, 1, 0, 0, 0, 0, 0),
+            Some(1_709_251_200 * NANOS)
+        );
+        // An hour east of UTC is an hour earlier in UTC.
+        assert_eq!(
+            unix_nanos(2026, 9, 16, 22, 50, 45, 0, 60),
+            Some(1_789_595_445 * NANOS)
+        );
+        // Before the epoch, and at the far end of the range.
+        assert_eq!(unix_nanos(1969, 12, 31, 23, 59, 59, 0, 0), Some(-NANOS));
+        assert_eq!(
+            unix_nanos(2262, 1, 1, 0, 0, 0, 0, 0),
+            Some(9_214_646_400 * NANOS)
+        );
+        assert_eq!(unix_nanos(2263, 1, 1, 0, 0, 0, 0, 0), None);
+        for (year, month, day) in [
+            (2023, 2, 29),
+            (1900, 2, 29),
+            (2026, 13, 1),
+            (2026, 4, 31),
+            (2026, 1, 0),
+        ] {
+            assert_eq!(
+                unix_nanos(year, month, day, 0, 0, 0, 0, 0),
+                None,
+                "{year}-{month}-{day}"
+            );
+        }
+        assert_eq!(unix_nanos(2026, 1, 1, 24, 0, 0, 0, 0), None);
+        assert_eq!(unix_nanos(2026, 1, 1, 0, 0, 0, 1_000_000_000, 0), None);
+        assert_eq!(
+            unix_nanos(2000, 2, 29, 0, 0, 0, 0, 0),
+            Some(951_782_400 * NANOS)
+        );
     }
 
     #[test]

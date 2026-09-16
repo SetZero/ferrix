@@ -9,6 +9,7 @@ mod switch;
 mod timer;
 mod trap;
 
+pub(crate) use cpu::hardware_random;
 pub(crate) use signal::{SIGNAL_RED_ZONE, UserContext, restore_signal_frame, setup_signal_frame};
 
 use core::sync::atomic::{AtomicBool, Ordering};

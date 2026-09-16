@@ -27,8 +27,8 @@ use core::panic::PanicInfo;
 use core::ptr;
 
 use ferrix_bootinfo::{
-    BOOT_STACK_SIZE, BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, Framebuffer, MemRegion, PAGE_SIZE,
-    PHYSMAP_BASE,
+    BOOT_STACK_SIZE, BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, FIRMWARE_SEED, FIRMWARE_TIME,
+    Framebuffer, MemRegion, PAGE_SIZE, PHYSMAP_BASE,
 };
 
 use console::println;
@@ -416,6 +416,15 @@ fn write_boot_info(
         framebuffer,
     } = carried;
     let cmdline_len = load_cmdline(services, info_area);
+    let time = services.firmware_time();
+    let seed = services.firmware_seed();
+    // What the kernel's clock and random generator start from, said here
+    // because firmware is the only one who can say which it lacked.
+    println!(
+        "  firmware clock {}, random number protocol {}",
+        if time.is_some() { "read" } else { "absent" },
+        if seed.is_some() { "read" } else { "absent" }
+    );
     let info = BootInfo {
         magic: BOOTINFO_MAGIC,
         version: BOOTINFO_VERSION,
@@ -452,6 +461,9 @@ fn write_boot_info(
             direct.address(info_area.address + CMDLINE_OFFSET)
         },
         cmdline_len,
+        firmware_time: time.unwrap_or(0),
+        firmware_seed: seed.unwrap_or([0; 32]),
+        firmware_flags: time.map_or(0, |_| FIRMWARE_TIME) | seed.map_or(0, |_| FIRMWARE_SEED),
     };
 
     // SAFETY: `info_area` is our own allocation of BOOT_INFO_BYTES, identity

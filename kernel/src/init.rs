@@ -33,7 +33,6 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::arch;
 use crate::console::println;
 use crate::fs;
 use crate::syscall::{self, exec};
@@ -212,19 +211,7 @@ impl fmt::Display for Argv<'_> {
     }
 }
 
-/// Sixteen bytes for `AT_RANDOM`.
-///
-/// **Not random.** Two readings of the high-resolution counter, which differ
-/// from boot to boot and are good enough that a libc's stack-protector canary
-/// is not the same constant on every machine. They are not good enough for
-/// anything an attacker is involved in, and nothing here pretends otherwise:
-/// the entropy pool is a later stage's.
+/// Sixteen bytes for `AT_RANDOM`: [`crate::syscall::exec::random_bytes`].
 fn random_bytes() -> [u8; ferrix_ustack::RANDOM_BYTES] {
-    let first = arch::counter_now().to_le_bytes();
-    let second = arch::counter_now().rotate_left(29).to_le_bytes();
-    let mut bytes = [0_u8; ferrix_ustack::RANDOM_BYTES];
-    for (slot, value) in bytes.iter_mut().zip(first.iter().chain(second.iter())) {
-        *slot = *value;
-    }
-    bytes
+    crate::syscall::exec::random_bytes()
 }

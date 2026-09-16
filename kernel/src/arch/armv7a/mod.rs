@@ -855,6 +855,12 @@ pub(crate) fn enable_console_receive(irq: u32) {
     console::enable_receive_interrupt();
 }
 
+/// A random number from the CPU: never, since no ARMv7-A core has a random
+/// instruction. The generator is seeded from firmware and jitter alone here.
+pub(crate) fn hardware_random() -> Option<u64> {
+    None
+}
+
 /// `AT_HWCAP` and `AT_HWCAP2` for a program started on this machine: what the
 /// core's identification registers say it has, in the bits
 /// `arch/arm/include/uapi/asm/hwcap.h` numbers. See `ferrix_linux_abi::hwcap`.
