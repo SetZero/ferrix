@@ -10,7 +10,9 @@
 //!
 //! 1. **A query asks, then reads what it was told**: `select` is written
 //!    before `subsel`, both before `size` is read; an answer is refused
-//!    exactly when `size` is over 128, and otherwise is `size` bytes of the
+//!    exactly when `size` is over 128 or runs past the configuration block,
+//!    whose length is the header plus the union the input gives (QEMU sizes
+//!    its blocks to the longest answer), and otherwise is `size` bytes of the
 //!    union, byte for byte.
 //! 2. **A parsed structure keeps its promises**: a name or serial is never
 //!    empty, an axis's minimum is not above its maximum, and every field reads
@@ -30,7 +32,8 @@ use ferrix_virtio::input::{
 use libfuzzer_sys::fuzz_target;
 
 /// A device whose answer to every query is the fuzzer's: `size` and the
-/// union come from the input whatever was asked.
+/// union come from the input whatever was asked, and the block is as long as
+/// the header and the union.
 struct Device<'a> {
     size: u8,
     union: &'a [u8],
@@ -41,7 +44,7 @@ struct Device<'a> {
 
 impl DeviceConfig for Device<'_> {
     fn config_len(&self) -> u32 {
-        136
+        8 + self.union.len() as u32
     }
 
     fn config_read8(&self, offset: u32) -> u8 {
@@ -51,7 +54,9 @@ impl DeviceConfig for Device<'_> {
             1 => self.subsel.unwrap_or(0),
             2 => self.size,
             3..=7 => 0,
-            _ => self.union.get(offset as usize - 8).copied().unwrap_or(0),
+            _ => self.union.get(offset as usize - 8).copied().unwrap_or_else(|| {
+                panic!("a query read offset {offset} past its block")
+            }),
         }
     }
 
@@ -101,6 +106,7 @@ fuzz_target!(|bytes: &[u8]| {
     match query(&mut dev, 0x11, asked) {
         Ok(answer) => {
             assert!(size <= 128);
+            assert!(usize::from(size) <= union.len());
             assert_eq!(answer.len(), usize::from(size));
             for (at, &byte) in answer.as_bytes().iter().enumerate() {
                 assert_eq!(byte, union_byte(union, at));
@@ -113,6 +119,14 @@ fuzz_target!(|bytes: &[u8]| {
         Err(InputError::SizeTooLarge { size: refused, .. }) => {
             assert!(size > 128);
             assert_eq!(refused, size);
+        }
+        Err(InputError::AnswerPastConfig {
+            size: refused, len, ..
+        }) => {
+            assert!(size <= 128);
+            assert_eq!(refused, size);
+            assert_eq!(len as usize, 8 + union.len());
+            assert!(usize::from(size) > union.len());
         }
         Err(other) => panic!("a query failed with {other:?}"),
     }

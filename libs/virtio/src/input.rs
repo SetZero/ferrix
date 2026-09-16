@@ -14,10 +14,22 @@
 //! # Where the numbers come from
 //!
 //! Virtio 1.2 §5.8, checked against Linux 6.8's
-//! `include/uapi/linux/virtio_input.h` and `input-event-codes.h`. QEMU 9.2.4
-//! implements the device from its own copy of the first,
-//! `include/standard-headers/linux/virtio_input.h`, which is to be checked
-//! against these numbers at gate time.
+//! `include/uapi/linux/virtio_input.h` and `input-event-codes.h`, and against
+//! QEMU 9.2.4's copy of the first, `include/standard-headers/linux/
+//! virtio_input.h`, and the devices it builds from it in
+//! `hw/input/virtio-input.c` and `virtio-input-hid.c`.
+//!
+//! # What QEMU's devices answer
+//!
+//! QEMU sizes the configuration block to its longest answer plus the 8-byte
+//! header, not to the 136 bytes of the structure: a keyboard's block is 37
+//! bytes, a mouse's or tablet's 51. So a block need only hold the header, and
+//! an answer is refused when it would run past the block, where QEMU reads
+//! back `0xff`. A name's `size` counts its NUL, since QEMU fills it in with
+//! `sizeof` a string literal; a serial's does not, since it comes from
+//! `snprintf`. A keyboard answers `EV_REP` with a `size` of 1 and no bits
+//! set: an event type is present when its answer is not empty, whatever bits
+//! it holds, which is how Linux's driver fills `evbit`.
 //!
 //! # A query is a write and a read
 //!
@@ -41,7 +53,8 @@
 //! # Trust
 //!
 //! The answers and events are the device's word. A `size` over 128 is refused,
-//! not cut to fit; a structure answer shorter than its structure is refused; an
+//! not cut to fit, and so is one that runs past the configuration block; a
+//! structure answer shorter than its structure is refused; an
 //! axis whose minimum lies above its maximum is refused; a completion on the
 //! event queue that wrote anything but exactly one event is refused.
 
@@ -93,7 +106,9 @@ pub const CONFIG_SIZE: u32 = 2;
 pub const CONFIG_UNION: u32 = 8;
 /// Bytes of the union, and so the longest answer.
 pub const ANSWER_MAX: usize = 128;
-/// Bytes of `struct virtio_input_config`.
+/// Bytes of `struct virtio_input_config`. A device's block may be shorter,
+/// down to the [`CONFIG_UNION`] bytes of the header, as long as each answer
+/// fits in it.
 pub const CONFIG_LEN: u32 = 136;
 
 /// `VIRTIO_INPUT_CFG_UNSET`: no question.
@@ -165,7 +180,8 @@ impl Answer {
     }
 
     /// Read as a string: the bytes before the first NUL, or all of them. The
-    /// device need not end its string with a NUL: `size` is its length.
+    /// device need not end its string with a NUL, and `size` may or may not
+    /// count one: QEMU's names count it and its serials do not.
     #[must_use]
     pub fn as_str_bytes(&self) -> &[u8] {
         let bytes = self.as_bytes();
@@ -180,12 +196,15 @@ impl Answer {
 /// Ask the device `select` about `subsel` and return its answer: write
 /// `select`, then `subsel`, then read `size` and that many bytes of the
 /// union.
+///
+/// The block need only hold the header: an answer is refused when `size` is
+/// over [`ANSWER_MAX`], or when that many bytes would run past the block.
 pub fn query<D: ConfigSelect + ?Sized>(
     dev: &mut D,
     select: u8,
     subsel: u8,
 ) -> Result<Answer, InputError> {
-    if dev.config_len() < CONFIG_LEN {
+    if dev.config_len() < CONFIG_UNION {
         return Err(InputError::ConfigTooShort(dev.config_len()));
     }
     dev.config_write8(CONFIG_SELECT, select);
@@ -196,6 +215,14 @@ pub fn query<D: ConfigSelect + ?Sized>(
             select,
             subsel,
             size,
+        });
+    }
+    if CONFIG_UNION + u32::from(size) > dev.config_len() {
+        return Err(InputError::AnswerPastConfig {
+            select,
+            subsel,
+            size,
+            len: dev.config_len(),
         });
     }
     let mut answer = Answer {
@@ -225,8 +252,9 @@ pub fn prop_bits<D: ConfigSelect + ?Sized>(dev: &mut D) -> Result<Answer, InputE
 }
 
 /// The bitmap of codes of event type `ev_type` the device sends; empty when
-/// it sends none. With `ev_type` [`EV_SYN`], QEMU answers nothing, and the
-/// event types are the types whose bitmaps are not empty.
+/// it sends none. The device sends events of `ev_type` exactly when the answer
+/// is not empty, even with no bit set: QEMU's keyboard answers `EV_REP` with
+/// one zero byte. With `ev_type` [`EV_SYN`], QEMU answers nothing.
 pub fn ev_bits<D: ConfigSelect + ?Sized>(dev: &mut D, ev_type: u16) -> Result<Answer, InputError> {
     query(dev, CFG_EV_BITS, subsel(ev_type)?)
 }
@@ -435,7 +463,7 @@ impl Event {
 /// What can go wrong speaking to a virtio-input device.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum InputError {
-    /// The configuration block is shorter than `struct virtio_input_config`.
+    /// The configuration block is shorter than its 8-byte header.
     ConfigTooShort(u32),
     /// The device answered with a `size` over [`ANSWER_MAX`].
     SizeTooLarge {
@@ -445,6 +473,17 @@ pub enum InputError {
         subsel: u8,
         /// The size it gave.
         size: u8,
+    },
+    /// The answer's `size` runs past the end of the configuration block.
+    AnswerPastConfig {
+        /// The question.
+        select: u8,
+        /// About what.
+        subsel: u8,
+        /// The size it gave.
+        size: u8,
+        /// The block's length.
+        len: u32,
     },
     /// An event type or axis too large for `subsel`'s byte.
     Subsel(u16),
@@ -486,7 +525,7 @@ impl fmt::Display for InputError {
         match self {
             Self::ConfigTooShort(len) => write!(
                 f,
-                "virtio-input configuration is {len} bytes, under {CONFIG_LEN}"
+                "virtio-input configuration is {len} bytes, under its {CONFIG_UNION}-byte header"
             ),
             Self::SizeTooLarge {
                 select,
@@ -495,6 +534,15 @@ impl fmt::Display for InputError {
             } => write!(
                 f,
                 "virtio-input answered select {select:#x}/{subsel:#x} with {size} bytes, over {ANSWER_MAX}"
+            ),
+            Self::AnswerPastConfig {
+                select,
+                subsel,
+                size,
+                len,
+            } => write!(
+                f,
+                "virtio-input answered select {select:#x}/{subsel:#x} with {size} bytes, past its {len}-byte configuration"
             ),
             Self::Subsel(code) => write!(f, "{code:#x} does not fit virtio-input's subsel"),
             Self::Absent { select, subsel } => write!(
