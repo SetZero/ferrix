@@ -41,6 +41,8 @@ pub mod drm;
 pub mod errno;
 pub mod hwcap;
 pub mod inet;
+pub mod input;
+pub mod layout;
 pub mod netlink;
 pub mod nr;
 pub mod socket;

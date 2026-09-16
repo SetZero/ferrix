@@ -3077,4 +3077,5 @@ fn ucred_and_linger_are_plain_ints_on_every_architecture() {
 
 mod drm;
 mod inet;
+mod input;
 mod netlink;

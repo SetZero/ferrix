@@ -811,7 +811,7 @@ package FerrixStructure {
         #writtenAhead part linuxAbi : LibraryCrate {
             attribute :>> path = "libs/linux-abi";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 106;
+            attribute :>> hostTests = 119;
             @stage { number = 7; }
             doc /* Three system call number tables, not two: x86-64's own,
                  * AArch64's generic one, and ARMv7-A's EABI one. The 32-bit
@@ -819,7 +819,10 @@ package FerrixStructure {
                  * own numbers -- mmap2 counts its offset in pages, _llseek
                  * returns through a pointer, fstat64 writes a different
                  * structure -- so they are separate calls rather than the
-                 * same calls renumbered. */
+                 * same calls renumbered. Reached early for stage 17: the
+                 * DRM/KMS and evdev ioctls and layouts card0 and eventN
+                 * answer, each pinned line by line to a committed UAPI
+                 * probe run at both widths. */
         }
         #writtenAhead part ustack : LibraryCrate {
             attribute :>> path = "libs/ustack";
