@@ -440,4 +440,5 @@ version = "0.1.0"
 dependencies = [
  "ferrix-cpio",
  "ferrix-elf",
+ "ferrix-netwire",
 ]

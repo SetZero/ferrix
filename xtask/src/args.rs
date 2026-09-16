@@ -28,6 +28,11 @@ pub(crate) struct Args {
     /// `--reset`: the image carries `ferrix.onexit=reset` in `CMDLINE.TXT`, and
     /// `test-boot` requires QEMU to see the machine reset rather than power off.
     pub(crate) reset: bool,
+    /// `--net`: give the guest a virtio-net device, with `xtask`'s own gateway
+    /// behind it. Off by default, because every boot that does not need a
+    /// network is a boot with one fewer device on the bus and one fewer thread
+    /// in this process.
+    pub(crate) net: bool,
     /// `-h`/`--help`.
     pub(crate) help: bool,
     /// `--smp`, virtual CPUs.
@@ -72,6 +77,7 @@ impl Args {
                 "--ferrousli" => args.ferrousli = true,
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
+                "--net" => args.net = true,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
                 "--smp" => args.smp = number(&mut items, "--smp")?,
                 "--memory" => args.memory = number(&mut items, "--memory")?,
@@ -251,5 +257,17 @@ mod tests {
     fn reset_is_off_unless_asked_for() {
         assert!(!parse(&["test-boot"]).unwrap().reset);
         assert!(parse(&["test-boot", "--reset"]).unwrap().reset);
+    }
+
+    #[test]
+    fn net_is_off_unless_asked_for() {
+        assert!(
+            !parse(&["run"]).unwrap().net,
+            "a boot has no network device unless one was asked for"
+        );
+        assert!(
+            parse(&["run", "--net"]).unwrap().net,
+            "--net turns the device and the gateway on"
+        );
     }
 }

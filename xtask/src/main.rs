@@ -3,8 +3,8 @@
 //! ```text
 //! cargo xtask build     --arch x86_64 [--release] [--init PATH/{arch}/busybox]
 //! cargo xtask run       --arch x86_64 [--release] [--gdb] [--smp N] [--memory M]
-//!                       [--accel auto|tcg|whpx|kvm|hvf] [--init PATH/{arch}/busybox]
-//! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS] [--reset]
+//!                       [--accel auto|tcg|whpx|kvm|hvf] [--init PATH/{arch}/busybox] [--net]
+//! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS] [--reset] [--net]
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask check     [--fast] [--ferrousli] [--miri]
@@ -44,6 +44,10 @@ mod cargo;
 mod check;
 mod fat;
 mod flash;
+// The host half of the guest's network, which is a UNIX datagram socket and
+// so has no Windows spelling in `std`. See the module for why it exists at all.
+#[cfg(unix)]
+mod gateway;
 mod initramfs;
 mod native;
 mod paths;
@@ -120,6 +124,8 @@ OPTIONS:
     --timeout <SECONDS>                  test-boot patience    [default: 120]
     --accel <auto|tcg|whpx|kvm|hvf>      QEMU accelerator      [default: tcg]
     --gdb                                Wait for a debugger on :1234
+    --net                                run, test-boot, test-shell, test-vfs: a virtio-net device,
+                                         behind xtask's own NAT gateway (10.0.2.2, guest 10.0.2.15)
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --miri                               check: add CI's Miri steps (needs nightly and miri)
