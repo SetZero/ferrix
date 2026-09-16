@@ -5,6 +5,98 @@ owner before tagging as `docs/BACKLOG.md`'s *Milestones* rule says. The notes
 here are the tag's, kept short: what a person can try, and what is known not
 to work yet. Newest first.
 
+## stage-11.1-network-display-and-threads — 2026-09-16, features at a89aeb25
+
+Two days of the fleet landing on `main` directly: a network that works, a
+colour on the screen from a Linux program, threads finished, ferrousli
+most of the way through POSIX.1-2024, and the first ports.
+
+- **Networking, exit met.** A net core beside the block core: `AF_INET` and
+  `AF_INET6` TCP and UDP, raw IPv4 and IPv6 sockets (`ping`, `ping6`),
+  `AF_PACKET` (`udhcpc` gets a lease), `AF_NETLINK` route sockets (`ip`
+  configures `eth0`), `/proc/net` rendered as Linux prints it, and a
+  virtio-net driver in ring 3 started by `devmgr`. `xtask` carries its own
+  gateway over loopback UDP, so `run --net` reaches the network on every
+  host, Windows included, and `cargo xtask test-net` runs thirteen programs
+  on all three architectures, hermetically.
+- **`AF_UNIX`** sockets with path and abstract names and descriptor passing
+  over `SCM_RIGHTS`; Wayland's transport.
+- **Threads, done.** Signals, stops and `execve` across a process's threads,
+  the futex lock kind with the `munmap`/`brk` races closed,
+  `/proc/<pid>/task`, and a Rust `std::thread`/`Mutex`/`mpsc` program
+  printing `threads: all ok` on all three architectures under
+  `cargo xtask test-threads`. A static PIE loads at a base of its own, so
+  `rustc`'s default x86-64 binary runs unchanged.
+- **Files and users.** `memfd_create` with seals; file permissions checked
+  against the caller's credentials, ownership of what a process makes, the
+  root-only calls refused to others, and set-user-id programs running as
+  their owner.
+- **Display, iteration 1.** A display core takes a ring-3 virtio-gpu
+  driver's card and publishes `/dev/dri/card0` with the legacy DRM subset a
+  software compositor uses; `cargo xtask run --arch x86_64 --display --init
+  blank` puts a colour on the screen from a Linux program, checked pixel by
+  pixel on x86-64 and AArch64. The firmware framebuffer stays a panic's.
+- **The event loop's calls.** `epoll` (level, edge, one-shot, a set inside a
+  set), `eventfd2`, and `ioctl(FIONBIO)` on every file: iteration 2's kernel side, done. Input is designed in `docs/INPUT.md` as evdev over a
+  ring-3 virtio-input driver, with the ABI probe and the virtio-input
+  protocol landed.
+- **The compositor's first crates:** the `hyprland.conf` parser and
+  Hyprland's layout and dispatcher core, host-tested and fuzzed.
+- **ferrousli** answers 996 of POSIX.1-2024's 1243 interfaces (247 missing, none
+  stubbed): the whole double and float `<math.h>`, `<fenv.h>`, regex and
+  libgen, barriers, semaphores, scheduling calls and C11 `<threads.h>`,
+  `<search.h>`, `glob`, the wide-character I/O families, name resolution
+  and the netdb databases, atomics, `assert.h`. Its busybox is what every
+  gate runs, rebuilt by `cargo xtask busybox` when stale, natively on
+  Windows too.
+- **zinc,** the zsh-compatible shell in Rust, is in every initramfs with a
+  line editor and tab completion, runs zsh scripts and sources oh-my-zsh's setup, and completes commands, files, parameters and users the zsh way (`/bin/zinc`, also `/bin/zsh`).
+- **Ports:** curl (HTTP, with mbedTLS built in) and btop, both built against
+  ferrousli, are in every x86-64 image: fetch files by name or byte-exact,
+  and watch CPU, memory, network and processes live on the console.
+  Programs over 4 MiB now start, `/proc/<pid>/mounts` exists, and
+  ferrousli gained thread cancellation and what libc++ needs. HTTPS is
+  not usable yet: it waits on the firmware clock and a seeded `getrandom`.
+- **Windows parity:** `xtask` on Windows runs `run --net`, `run` under WHPX,
+  the ferrousli gate and ARMv7-A U-Boot through WSL, `watch-serial` and
+  `flash`; gates for landings run on the Linux host over ssh.
+- **Decisions of record:** the customer holds the product-owner seat and
+  landings go to `main` directly at stable points, each gated on the Linux
+  host; the architecture stays what it is, with dynamic linking staged
+  behind it; input is evdev over virtio-input; stage 17 is 74 points, 18 is
+  96.
+
+Known limits, each with a backlog row:
+
+- `poll`, `ppoll` and `epoll` waits recheck every 5 ms rather than waking on
+  the event; `EPOLLRDHUP` and `EPOLLPRI` are never reported; a zero-length
+  `eventfd` write returns 0, not `EINVAL`.
+- `AF_UNIX`: a socket passed over its own connection is never freed (no
+  cycle pass); `SCM_CREDENTIALS` and `SO_PASSCRED` are `EOPNOTSUPP`;
+  `MSG_PEEK` on a message carrying descriptors installs none; `sendto`
+  with an address on a datagram socket is `EOPNOTSUPP`.
+- Threads: `set*id` changes credentials for every thread, a written
+  deviation; a thread's `comm` is its process's; the two-last-threads
+  exit check does not provably race.
+- `card0` is legacy DRM only, one exclusive master, no atomic commit, no
+  planes or properties yet (E4), no input devices yet (input L3–L7).
+- `timerfd` and `signalfd` do not exist; dynamic linking (`PT_INTERP`) does
+  not; the display does not run on ARMv7-A's QEMU machine.
+- Stage 10's VT-d stale-record intermittent (P0, reproduced once under
+  load) and BAR trust are open; FX-0701, a stop across threads, has a lead.
+- The musl busybox's `su` has never worked, and is not a regression; its
+  `nc` has no `-U`. The ferrousli busybox is the one to use.
+
+What to test:
+
+```
+cargo xtask test-net --arch x86_64 --init ferrousli
+cargo xtask run --arch x86_64 --net --init ferrousli
+cargo xtask run --arch x86_64 --display --init blank
+cargo xtask test-threads --arch all
+cargo xtask test-vfs --arch aarch64 --init ferrousli
+```
+
 ## stage-11-ring-3-disk-and-btrfs — 2026-09-14
 
 Stages 10 and 11 done: a user-mode disk driver behind the IOMMU, and btrfs

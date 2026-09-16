@@ -45,28 +45,23 @@ the binary a gate runs is the base's.
 under `--accel kvm` and reports the hash together with that result, so a bad
 merge is seen by the one who made it.
 
-**Two branches.** Sessions land on `develop`, which may be unstable. `main`
-moves only by the product owner, fast-forward, to a `develop` commit that has
-passed the whole matrix from a clean worktree on the product owner's own run:
-the four boots, x86_64 under KVM, `test-shell` with the ferrousli, the musl
-and the glibc busybox, `test-vfs` with the ferrousli and the musl busybox, and
-`test-threads --arch all`;
-at least every two hours while `develop` moves. So
-`main` is always a working tree by construction, and a failure the customer
-finds on it is fixed forward on `develop` and re-verified before `main`
-moves again. Tags go on `main`. A landing on `develop` from a worktree is
-`git push <root> <branch>:develop`, which refuses anything but a
-fast-forward; the root checkout keeps `main` checked out and never lands
-`develop` through its index.
-
-**The landing queue.** Image changes on `develop` queue; documentation, ferrousli and
-host-only `libs/` landings do not. A session whose image change has passed
-its row tells the product owner "ready to land" with the base it verified
-on; the product owner answers with its place in the queue and says "go" when
-the landing before it has fast-forwarded. Nobody fast-forwards an image
-change without a go, and a go lapses after 30 minutes. This exists because
-on 2026-09-13 a 25-minute row kept losing to a `main` that moved every ten
-minutes, and one branch passed on seven bases without landing.
+**Landing on `main`, and milestones.** Since 2026-09-15 there is no
+`develop`: a session lands on `main` directly at a stable point, from its
+own worktree, after its row from the gate table has passed on the Linux
+host, by compare-and-set (`git update-ref refs/heads/main <new> <old>`) or a
+fast-forward from a clean root, and pushes `main` to nazuna afterwards. A
+milestone is an annotated tag on `main`, placed only after the product
+owner has run the whole matrix on that commit from a clean worktree
+(`~/.local/share/ferrix/po-verify.sh <commit>` on nazuna): `check
+--ferrousli --zinc`, `busybox`, the four boots, x86_64 under KVM,
+`test-shell` with the ferrousli, the musl and the glibc busybox, `test-vfs`
+with the ferrousli and the musl busybox, `test-net --arch all`,
+`test-display --arch all` and `test-threads --arch all`. A release freeze
+(the customer's word) means: each session lands what is gate-green, leaves
+the rest on its branch with a row saying where it stands, deletes its
+target directory and reports; the product owner lands the release notes
+last, verifies that head, tags it, and the push to `origin` is the
+customer's.
 
 **Re-verifying after `main` moved.** When the commits that moved it touch
 none of the files the change touches, re-run `cargo xtask check` and two
@@ -164,11 +159,12 @@ alive.
 | Session | Area |
 |---|---|
 | the customer | Product owner since 2026-09-15: priorities, decisions, what is stable enough for `main`. os-f6 (was os-f7, os-23, ferrix-32, ferrix-24) keeps this file, the roster, the points ledger and the verification of `main` when asked |
-| os-02 | Stage 7, threads: commits 6 and 7 of the plan — the futex lock kind and the `munmap`/`brk` races, then `/proc` threads and the `std::thread` exit test on three architectures |
-| os-05 | zinc: the zsh-compatible shell in Rust toward oh-my-zsh, in the initramfs since a3af247; and `cargo xtask busybox` rebuilding the ferrousli busybox when stale |
-| os-a8 (was os-b7, os-50, os-7c, os-fb, ferrix-ce) | `ferrousli/`: `docs/POSIX-2024.md`'s list worked top to bottom (988 present, 255 missing, 91 points on the evening of 2026-09-16, with none on a branch), each landing rebuilding the busybox and passing both ferrousli gates |
-| os-26 | Windows parity for `xtask`: the loopback-UDP network gateway, `run` under WHPX, the ferrousli gate and ARMv7-A U-Boot through WSL, vendored UAPI headers; next `flash` and `watch-serial` on Windows. Holds stage 17's E1 (`epoll` with nesting), E2 (`eventfd2`) and E3 (`FIONBIO`), `docs/INPUT.md` §5, os-f6 2026-09-16 |
-| open | Stage 8's list (14), `AF_UNIX` landings 2 and 3 (5, 7), the POSIX interface sweep, stage 10's VT-d record (5) and BAR trust (8), networking's remaining host half (34) and its kernel half, stage 12 |
+| os-02 | Stage 7's remainder: `AF_UNIX` 3b, the in-flight cycle pass (3), and 3c, credentials (2); FX-0701's lead; the kernel-side reviews of stage 17's landings (E4 card0 planes, input L5) |
+| os-05 | zinc: `zinc-next`, the port of zsh's C runtime (26k lines, does not compile yet), landed in slices that keep the oh-my-zsh gate green (40 points); `cargo xtask busybox` and its staleness rule |
+| os-a8 (was os-b7, os-50, os-7c, os-fb, ferrix-ce) | `ferrousli/`: first the wrappers for epoll, eventfd and `FIONBIO` with a C test (3), then `docs/POSIX-2024.md`'s list from the top of what is left (996 present, 247 missing, 80 points on 2026-09-16), each landing rebuilding the busybox and passing both ferrousli gates |
+| os-26 | The event loop's kernel rows are done (epoll, eventfd, `FIONBIO`); next the wake-on-event row (5) so `poll`/`epoll` waits stop rechecking every 5 ms, then the `AF_PACKET` gaps; Windows parity for `xtask` is held |
+| os-12 | Ports onto ferrousli: curl with HTTPS through mbedTLS and btop with libc++ landed for the release; on `ports-curl-btop` the firmware clock, ChaCha20 `getrandom` (BootInfo v5) and a hermetic HTTPS `test-net` program boot on all three architectures but are not gated; git not started |
+| open | Stage 8's list (14), `AF_UNIX` 3b the in-flight cycle pass (3) and 3c credentials (2), stage 10's VT-d record (5) and BAR trust (8), `timerfd` (3), dynamic linking (39), stage 12 |
 
 The fleet restarted on the customer's Windows machine on the evening of
 2026-09-13. `cargo` builds there, but every boot, the KVM row, `test-shell`,
@@ -328,6 +324,12 @@ and both fuzz targets as the evidence. | open | 3
 
 Dated, newest first. A decision here is final until the customer says otherwise.
 
+* **2026-09-16 (customer)** A release with every current feature finished:
+  the freeze went to os-02, os-05, os-a8, os-26, os-e5 and os-12 at about
+  22:35; each landed what was gate-green and stopped, the product owner
+  verified the head (a89aeb25 with these notes) whole on nazuna and tagged it `stage-11.1-network-display-and-threads`
+  (notes in `docs/RELEASES.md`). After the tag the fleet continues, and
+  every session is to have work — the owners table says what.
 * **2026-09-16 (customer)** Everyone has work and the record says who: the
   owners table above is the roster of this day, with the product-owner
   session back as os-f6 keeping the file while the customer holds the seat.
@@ -466,8 +468,8 @@ Dated, newest first. A decision here is final until the customer says otherwise.
   replug; only a hang still does.
 * The root filesystem: 1.7 TB of the 1.9 TB is outside Ferrix. The sessions
   can only keep their own build output down.
-* Pushes to `origin`: local `main` is 60 commits ahead, and the last CI runs
-  there failed in the Ubuntu test job before today's landings.
+* Pushes to `origin`: local `main` is 152 commits ahead at the `stage-11.1-network-display-and-threads` tag;
+  pushing it is the customer's word, given in a session of their own.
 
 ---
 
