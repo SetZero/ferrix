@@ -62,6 +62,9 @@ pub const IPPROTO_NONE: i32 = 59;
 pub const IPPROTO_DSTOPTS: i32 = 60;
 /// Raw IP packets: a `SOCK_RAW` socket that writes its own IP header.
 pub const IPPROTO_RAW: i32 = 255;
+/// One past the highest protocol number `socket` accepts: `IPPROTO_MPTCP`,
+/// 262, is the last.
+pub const IPPROTO_MAX: i32 = 263;
 
 // ---------------------------------------------------------------------------
 // Option levels
@@ -80,6 +83,10 @@ pub const SOL_IPV6: i32 = 41;
 pub const SOL_ICMPV6: i32 = 58;
 /// Options of raw sockets.
 pub const SOL_RAW: i32 = 255;
+
+/// At [`SOL_RAW`] on a raw ICMP socket: a 32-bit mask with one bit per ICMP
+/// type, set for a type the socket is not to receive.
+pub const ICMP_FILTER: i32 = 1;
 
 // ---------------------------------------------------------------------------
 // IPv4 options, at SOL_IP

@@ -874,7 +874,10 @@ fn inet_sockets(stream: bool, six: bool) -> Vec<procfs_net::Socket> {
                     ferrix_net::Socket::Stream(_) | ferrix_net::Socket::Listen(_)
                 );
                 let is_six = matches!(socket.family(), ferrix_net::Family::V6);
-                is_stream == stream && is_six == six
+                // A raw socket is neither TCP's nor UDP's: Linux lists it in
+                // `/proc/net/raw`, which this file tree does not have yet.
+                let is_raw = matches!(socket, ferrix_net::Socket::Raw(_));
+                !is_raw && is_stream == stream && is_six == six
             })
             .enumerate()
             .map(|(slot, (id, socket))| socket_row(slot, id, socket))
@@ -906,6 +909,7 @@ fn socket_row(
         ferrix_net::Socket::Udp(datagram) | ferrix_net::Socket::Icmp(datagram) => {
             (7, 0, datagram.queued() as u32)
         }
+        ferrix_net::Socket::Raw(raw) => (7, 0, raw.datagram.queued() as u32),
     };
     procfs_net::Socket {
         slot,

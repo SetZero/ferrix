@@ -7151,6 +7151,22 @@ fn check_what_uid_1000_is_told(user: &Arc<Process>, page: u64) -> Result<(), &'s
         return Err("capget reported capabilities for uid 1000");
     }
 
+    // No CAP_NET_RAW, so no raw socket: the negative control for the raw
+    // sockets `check_the_internet_families_open` opens as root. Protocol zero
+    // stays EPROTONOSUPPORT, because inet_create looks the protocol up before
+    // it asks about the capability.
+    let raw = u64::from(SOCK_RAW);
+    refuses(
+        socket_call(user, Call::Socket, &[2, raw, 1, 0, 0, 0]),
+        Errno::EPERM,
+        "uid 1000 opened a raw socket",
+    )?;
+    refuses(
+        socket_call(user, Call::Socket, &[2, raw, 0, 0, 0, 0]),
+        Errno::EPROTONOSUPPORT,
+        "uid 1000's raw socket at protocol zero was not EPROTONOSUPPORT",
+    )?;
+
     let space = crate::user::space::AddressSpace::new()
         .map_err(|_| "no address space for the credential check's child")?;
     let child = Process::forked(user, space, false, false);
@@ -7818,9 +7834,11 @@ fn check_what_the_socket_calls_refuse(process: &Process, page: u64) -> Result<()
 /// The internet families open, and refuse the types and protocols they do not
 /// have.
 ///
-/// `SOCK_RAW` is `EPERM` rather than a refusal of the type: Linux has raw
-/// sockets and keeps them behind `CAP_NET_RAW`, and busybox's `ping` falls
-/// back to the unprivileged echo socket only on that errno.
+/// A raw socket opens for root, as it does for a process with `CAP_NET_RAW`;
+/// [`check_what_uid_1000_is_told`] is the negative control, where the same call
+/// is `EPERM`. Protocol zero on a raw socket matches nothing in
+/// `inet_create`'s lookup and is `EPROTONOSUPPORT`, and a protocol at or past
+/// `IPPROTO_MAX` is `EINVAL` before any lookup.
 fn check_the_internet_families_open(process: &Process) -> Result<(), &'static str> {
     const INET: u64 = 2;
     const INET6: u64 = 10;
@@ -7838,6 +7856,8 @@ fn check_the_internet_families_open(process: &Process) -> Result<(), &'static st
         [INET, datagram, 0, 0, 0, 0],
         [INET, datagram, UDP, 0, 0, 0],
         [INET, datagram, ICMP, 0, 0, 0],
+        [INET, raw, ICMP, 0, 0, 0],
+        [INET, raw, 255, 0, 0, 0],
         [INET6, stream, 0, 0, 0, 0],
         [INET6, datagram, 0, 0, 0, 0],
     ] {
@@ -7850,9 +7870,14 @@ fn check_the_internet_families_open(process: &Process) -> Result<(), &'static st
         }
     }
     refuses(
-        socket([INET, raw, ICMP, 0, 0, 0]),
-        Errno::EPERM,
-        "a raw socket without CAP_NET_RAW was not EPERM",
+        socket([INET, raw, 0, 0, 0, 0]),
+        Errno::EPROTONOSUPPORT,
+        "a raw socket at protocol zero was not EPROTONOSUPPORT",
+    )?;
+    refuses(
+        socket([INET, raw, 263, 0, 0, 0]),
+        Errno::EINVAL,
+        "a raw socket at IPPROTO_MAX was not EINVAL",
     )?;
     refuses(
         socket([INET, stream, UDP, 0, 0, 0]),

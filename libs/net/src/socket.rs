@@ -232,6 +232,45 @@ impl DatagramSocket {
     }
 }
 
+/// A raw IP socket: every packet of one protocol that reaches this host, and
+/// packets of that protocol a program builds.
+///
+/// Linux's `raw(7)`. The queue is a datagram socket's, and so are the
+/// addresses, with the port always zero: a raw socket is bound and connected
+/// to addresses only. What arrives is a copy, taken beside the stack's own
+/// handling of the packet, so an echo request both reaches a raw ICMP socket
+/// and is answered.
+#[derive(Debug)]
+pub struct RawSocket {
+    /// The queue, the addresses and the options.
+    pub datagram: DatagramSocket,
+    /// The protocol number it was opened with: which packets it receives, and
+    /// what the header of a packet it sends names.
+    pub protocol: u8,
+    /// `IP_HDRINCL`: what the program sends starts with the IPv4 header.
+    /// Always set for `IPPROTO_RAW`, which may not clear it.
+    pub header_included: bool,
+    /// `ICMP_FILTER`: one bit per ICMP type, set for a type not to deliver.
+    pub icmp_filter: u32,
+}
+
+impl RawSocket {
+    /// `IPPROTO_RAW`: a socket that sends packets whose header it wrote, and
+    /// receives nothing.
+    pub const IPPROTO_RAW: u8 = 255;
+
+    /// An unbound raw socket for `protocol`.
+    #[must_use]
+    pub fn new(family: Family, protocol: u8, capacity: usize) -> RawSocket {
+        RawSocket {
+            datagram: DatagramSocket::new(family, capacity),
+            protocol,
+            header_included: protocol == Self::IPPROTO_RAW,
+            icmp_filter: 0,
+        }
+    }
+}
+
 /// A stream socket: one TCP connection and the two addresses it is between.
 #[derive(Debug)]
 pub struct StreamSocket {
@@ -304,13 +343,15 @@ impl ListenSocket {
     }
 }
 
-/// One of the four kinds.
+/// One of the five kinds.
 #[derive(Debug)]
 pub enum Socket {
     /// A UDP socket.
     Udp(DatagramSocket),
     /// An ICMP echo socket, which `ping` uses without privilege.
     Icmp(DatagramSocket),
+    /// A raw IP socket, which needs privilege.
+    Raw(RawSocket),
     /// A TCP connection.
     ///
     /// Boxed because it is four times the size of the others: a connection
@@ -327,6 +368,7 @@ impl Socket {
     pub fn readiness(&self) -> Readiness {
         match self {
             Socket::Udp(socket) | Socket::Icmp(socket) => socket.readiness(),
+            Socket::Raw(socket) => socket.datagram.readiness(),
             Socket::Stream(socket) => socket.readiness(),
             Socket::Listen(socket) => socket.readiness(),
         }
@@ -337,6 +379,7 @@ impl Socket {
     pub fn local(&self) -> Endpoint {
         match self {
             Socket::Udp(socket) | Socket::Icmp(socket) => socket.local,
+            Socket::Raw(socket) => socket.datagram.local,
             Socket::Stream(socket) => socket.local,
             Socket::Listen(socket) => socket.local,
         }
@@ -347,6 +390,7 @@ impl Socket {
     pub fn remote(&self) -> Option<Endpoint> {
         match self {
             Socket::Udp(socket) | Socket::Icmp(socket) => socket.remote,
+            Socket::Raw(socket) => socket.datagram.remote,
             Socket::Stream(socket) => Some(socket.remote),
             Socket::Listen(_) => None,
         }
@@ -357,6 +401,7 @@ impl Socket {
     pub fn options(&self) -> Options {
         match self {
             Socket::Udp(socket) | Socket::Icmp(socket) => socket.options,
+            Socket::Raw(socket) => socket.datagram.options,
             Socket::Stream(socket) => socket.options,
             Socket::Listen(socket) => socket.options,
         }
@@ -366,6 +411,7 @@ impl Socket {
     pub fn options_mut(&mut self) -> &mut Options {
         match self {
             Socket::Udp(socket) | Socket::Icmp(socket) => &mut socket.options,
+            Socket::Raw(socket) => &mut socket.datagram.options,
             Socket::Stream(socket) => &mut socket.options,
             Socket::Listen(socket) => &mut socket.options,
         }
@@ -376,6 +422,7 @@ impl Socket {
     pub fn family(&self) -> Family {
         match self {
             Socket::Udp(socket) | Socket::Icmp(socket) => socket.family,
+            Socket::Raw(socket) => socket.datagram.family,
             Socket::Stream(socket) => socket.family,
             Socket::Listen(socket) => socket.family,
         }

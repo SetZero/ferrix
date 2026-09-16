@@ -6,6 +6,7 @@
 //! difference between the two protocols stated as an API.
 
 use alloc::vec;
+use alloc::vec::Vec;
 
 use ferrix_netwire::{icmpv4, icmpv6, udp};
 
@@ -37,6 +38,7 @@ impl Stack {
         match self.sockets.get(&id.0).ok_or(Error::NoSocket)? {
             Socket::Udp(_) => self.send_udp(id, data, to, now),
             Socket::Icmp(_) => self.send_icmp(id, data, to, now),
+            Socket::Raw(_) => self.send_raw(id, data, to, now),
             Socket::Stream(_) => self.send_stream(id, data),
             Socket::Listen(_) => Err(Error::NotConnected),
         }
@@ -198,6 +200,115 @@ impl Stack {
         Ok(data.len())
     }
 
+    /// Send a packet from a raw socket.
+    ///
+    /// Without `IP_HDRINCL` the program wrote the payload, and the stack builds
+    /// the header with the socket's protocol, fragmenting if it must. With it
+    /// the program wrote the header too, and the stack fills in what
+    /// `raw_send_hdrinc` fills in: the total length, the checksum, an
+    /// identification left zero and a source left zero. That packet goes out
+    /// whole, to where the call named, which need not be where the header does.
+    fn send_raw(
+        &mut self,
+        id: crate::socket::SocketId,
+        data: &[u8],
+        to: Option<Endpoint>,
+        now: Millis,
+    ) -> Result<usize, Error> {
+        let Some(Socket::Raw(raw)) = self.sockets.get(&id.0) else {
+            return Err(Error::WrongKind);
+        };
+        if raw.datagram.write_shut {
+            return Err(Error::ShutDown);
+        }
+        let destination = normalise(to.or(raw.datagram.remote).ok_or(Error::NotConnected)?).address;
+        if destination.is_unspecified() || !destination.is_v4() {
+            return Err(Error::Invalid);
+        }
+        let options = raw.datagram.options;
+        let bound = raw.datagram.local.address;
+        let protocol = raw.protocol;
+        let header_included = raw.header_included;
+        let source = if bound.is_unspecified() {
+            self.source_for(destination)?
+        } else {
+            bound
+        };
+        if !header_included {
+            self.send_ip(
+                source,
+                destination,
+                protocol,
+                data,
+                options.hop_limit,
+                options.device,
+                now,
+            )?;
+            return Ok(data.len());
+        }
+        let packet = self.complete_header(data, source)?;
+        self.send_whole_v4(packet, destination, options.device, now)?;
+        Ok(data.len())
+    }
+
+    /// An `IP_HDRINCL` packet with the fields the stack fills in filled in.
+    fn complete_header(&mut self, data: &[u8], source: IpAddress) -> Result<Vec<u8>, Error> {
+        let first = *data.first().ok_or(Error::Invalid)?;
+        let header_len = usize::from(first & 0x0F) * 4;
+        if data.len() < ferrix_netwire::ipv4::MIN_HEADER_LEN
+            || first >> 4 != 4
+            || header_len < ferrix_netwire::ipv4::MIN_HEADER_LEN
+            || header_len > data.len()
+        {
+            return Err(Error::Invalid);
+        }
+        let total = u16::try_from(data.len()).map_err(|_| Error::TooLarge)?;
+        let mut packet = data.to_vec();
+        put(&mut packet, 2, &total.to_be_bytes())?;
+        if packet.get(4..6) == Some(&[0, 0]) {
+            let identification = self.next_identification();
+            put(&mut packet, 4, &identification.to_be_bytes())?;
+        }
+        if packet.get(12..16) == Some(&[0, 0, 0, 0])
+            && let IpAddress::V4(address) = source
+        {
+            put(&mut packet, 12, &address.octets())?;
+        }
+        put(&mut packet, 10, &[0, 0])?;
+        let header = packet.get(..header_len).ok_or(Error::Invalid)?;
+        let sum = ferrix_netwire::checksum::checksum(header);
+        put(&mut packet, 10, &sum.to_be_bytes())?;
+        Ok(packet)
+    }
+
+    /// Route a finished IPv4 packet and put it on its link, unfragmented.
+    fn send_whole_v4(
+        &mut self,
+        packet: Vec<u8>,
+        destination: IpAddress,
+        device: Option<u32>,
+        now: Millis,
+    ) -> Result<(), Error> {
+        let hop = self.routes.lookup(destination).ok_or(Error::Unreachable)?;
+        if device.is_some_and(|wanted| wanted != hop.interface) {
+            return Err(Error::Unreachable);
+        }
+        let interface = self.interface(hop.interface).ok_or(Error::Unreachable)?;
+        if !interface.is_up() {
+            return Err(Error::Unreachable);
+        }
+        if packet.len() > interface.mtu as usize {
+            return Err(Error::TooLarge);
+        }
+        self.dispatch(
+            hop.interface,
+            hop.address,
+            packet,
+            ferrix_netwire::ethernet::ethertype::IPV4,
+            now,
+        )
+    }
+
     /// Put bytes in a connection's send queue.
     fn send_stream(&mut self, id: crate::socket::SocketId, data: &[u8]) -> Result<usize, Error> {
         let Some(Socket::Stream(stream)) = self.sockets.get_mut(&id.0) else {
@@ -231,7 +342,11 @@ impl Stack {
         peek: bool,
     ) -> Result<Received, Error> {
         match self.sockets.get_mut(&id.0).ok_or(Error::NoSocket)? {
-            Socket::Udp(socket) | Socket::Icmp(socket) => {
+            Socket::Udp(socket)
+            | Socket::Icmp(socket)
+            | Socket::Raw(crate::socket::RawSocket {
+                datagram: socket, ..
+            }) => {
                 if let Some(error) = socket.take_error() {
                     return Err(error);
                 }
@@ -286,6 +401,15 @@ impl Stack {
             Socket::Listen(_) => Err(Error::NotConnected),
         }
     }
+}
+
+/// Overwrite `field.len()` bytes of `packet` at `at`.
+fn put(packet: &mut [u8], at: usize, field: &[u8]) -> Result<(), Error> {
+    packet
+        .get_mut(at..at + field.len())
+        .ok_or(Error::Invalid)?
+        .copy_from_slice(field);
+    Ok(())
 }
 
 /// Copy as much of `from` as fits, and say how much that was.

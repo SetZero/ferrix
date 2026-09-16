@@ -2802,9 +2802,8 @@ the two queue ioctls answer for `AF_INET` and `AF_INET6` as they already did
 for `AF_UNIX`, through one enumeration so the order of Linux's checks cannot
 drift apart between the families. An `AF_INET6` socket carries IPv4 through
 `::ffff:0:0/96` unless `IPV6_V6ONLY` says otherwise, and reports a v4 peer in
-that spelling. `SOCK_RAW` is `EPERM`, not a refusal of the type, because
-busybox's `ping` falls back to the unprivileged echo socket on that errno and
-on no other.
+that spelling. `SOCK_RAW` was `EPERM` for everyone until raw sockets landed
+(below); it still is for a process without `CAP_NET_RAW`.
 
 The boot check uses the loopback and nothing else, so it passes on a machine
 with no network device -- which every machine is until the driver lands. It
@@ -2817,6 +2816,28 @@ left to time out -- over IPv4 and again over IPv6. It reads:
 ```
   net      1 interface up, 318 bytes carried over the loopback in both families, 2 connections made and accepted, 3 calls refused as specified
 ```
+
+**Done — raw IPv4 sockets, for `ping`.** busybox 1.37's `ping` opens
+`socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)` and nothing else — it has no fallback
+to the unprivileged echo socket — and read every reply with its IPv4 header in
+front. `SOCK_RAW` now opens for root at any protocol from 1 to 255 (zero is
+`EPROTONOSUPPORT` for everyone, as `inet_create`'s lookup makes it; past
+`IPPROTO_MAX` is `EINVAL`), and is `EPERM` without the privilege. A raw socket
+is handed a copy of every IPv4 packet of its protocol that reaches this host,
+header and all, beside the stack's own handling: an echo request is both
+answered and copied. It takes only its peer's packets once connected, only its
+address's once bound, and only its device's once pinned; `IPPROTO_RAW` takes
+nothing; `ICMP_FILTER` holds back the ICMP types it names. A send builds the
+header, or with `IP_HDRINCL` — always set for `IPPROTO_RAW` — completes the
+program's: the length, the checksum, and an identification and source left at
+zero. `AF_INET6` raw sockets are not in yet, and `AF_PACKET`, which `udhcpc`
+needs, is next. The boot check pings the loopback through a raw socket and
+requires the request and the reply, each with its header; a second socket
+filtering replies must read the request and not the reply; an `IPPROTO_RAW`
+packet with zeroed fields must reach a UDP socket; and uid 1000 must be
+refused, a control that panics the boot when the privilege check is removed.
+The line now ends `, 3 packets read by raw sockets`, and `test-net`'s `ping`
+passes with the busybox built against ferrousli.
 
 **Done — `AF_NETLINK` route sockets, which is how an interface is
 configured.** Every way of configuring a network on Linux ends at the same

@@ -34,7 +34,7 @@ use alloc::vec::Vec;
 use ferrix_bootinfo::is_user_address;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::inet::{
-    IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_TCP, IPPROTO_UDP, SOCKADDR_STORAGE_SIZE,
+    IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_MAX, IPPROTO_TCP, IPPROTO_UDP, SOCKADDR_STORAGE_SIZE,
 };
 use ferrix_linux_abi::netlink::NETLINK_ROUTE;
 use ferrix_linux_abi::nr::Syscall;
@@ -146,7 +146,7 @@ impl Any {
             Any::Unix(socket) => socket.kind(),
             Any::Inet(socket) => match socket.kind() {
                 InetKind::Stream => SocketType::Stream,
-                InetKind::Datagram | InetKind::Echo => SocketType::Datagram,
+                InetKind::Datagram | InetKind::Echo | InetKind::Raw { .. } => SocketType::Datagram,
             },
             // `SOCK_RAW` and `SOCK_DGRAM` are the same socket on netlink, and
             // both carry records.
@@ -321,6 +321,20 @@ enum Opened {
     Netlink(u32),
 }
 
+/// Whether `socket` may open what `socket_type` named: a raw socket needs
+/// `CAP_NET_RAW`, which here is being root, as for every capability.
+///
+/// Asked after the type and protocol are known to exist, as `inet_create`
+/// asks it after its protocol lookup, so a raw socket at protocol zero is
+/// `EPROTONOSUPPORT` for everyone.
+fn permitted(process: &Process, opened: &Opened) -> Result<(), Errno> {
+    let raw = matches!(opened, Opened::Inet(_, InetKind::Raw { .. }));
+    if raw && !process.with_credentials(|ids| ids.privileged()) {
+        return Err(Errno::EPERM);
+    }
+    Ok(())
+}
+
 /// Only `SOCK_NONBLOCK` and `SOCK_CLOEXEC` may accompany a type, or be given
 /// to `accept4`.
 fn known_flags(flags: u32) -> Result<(), Errno> {
@@ -364,11 +378,15 @@ fn socket_type(family: i32, kind: u32, protocol: i32) -> Result<Opened, Errno> {
 
 /// The `AF_INET` or `AF_INET6` socket a type and a protocol name.
 ///
-/// `SOCK_RAW` is `EPERM` rather than `EPROTONOSUPPORT`: Linux has raw sockets
-/// and refuses them to a process without `CAP_NET_RAW`, and a program that
-/// falls back to the unprivileged echo socket -- as busybox's `ping` does --
-/// only does so on `EPERM`.
+/// `SOCK_RAW` takes any protocol but zero, which `inet_create`'s lookup
+/// finds no match for, and `IPPROTO_MAX` and above, which it refuses first.
+/// Whether the caller may have one is [`permitted`]'s question. An `AF_INET6`
+/// raw socket is not implemented yet and is `EPROTONOSUPPORT` to a caller
+/// who could otherwise have had it.
 fn inet_type(family: Family, kind: u32, protocol: i32) -> Result<Opened, Errno> {
+    if !(0..IPPROTO_MAX).contains(&protocol) {
+        return Err(Errno::EINVAL);
+    }
     let echo = match family {
         Family::V4 => IPPROTO_ICMP,
         Family::V6 => IPPROTO_ICMPV6,
@@ -377,7 +395,11 @@ fn inet_type(family: Family, kind: u32, protocol: i32) -> Result<Opened, Errno> 
         (SOCK_STREAM, 0 | IPPROTO_TCP) => Ok(Opened::Inet(family, InetKind::Stream)),
         (SOCK_DGRAM, 0 | IPPROTO_UDP) => Ok(Opened::Inet(family, InetKind::Datagram)),
         (SOCK_DGRAM, given) if given == echo => Ok(Opened::Inet(family, InetKind::Echo)),
-        (SOCK_RAW, _) => Err(Errno::EPERM),
+        (SOCK_RAW, 0) => Err(Errno::EPROTONOSUPPORT),
+        (SOCK_RAW, given) => match (family, u8::try_from(given)) {
+            (Family::V4, Ok(protocol)) => Ok(Opened::Inet(family, InetKind::Raw { protocol })),
+            _ => Err(Errno::EPROTONOSUPPORT),
+        },
         (SOCK_STREAM | SOCK_DGRAM, _) => Err(Errno::EPROTONOSUPPORT),
         _ => Err(Errno::ESOCKTNOSUPPORT),
     }
@@ -408,6 +430,7 @@ pub(crate) fn sys_socket(
     protocol: i32,
 ) -> Result<usize, Errno> {
     let opened = socket_type(family, kind, protocol)?;
+    permitted(process, &opened)?;
     let owner = crate::syscall::path::creator_ids(process);
     let nonblock = kind & SOCK_NONBLOCK != 0;
     let file = match opened {
@@ -438,7 +461,9 @@ pub(crate) fn sys_socketpair(
 ) -> Result<usize, Errno> {
     known_flags(kind & !SOCK_TYPE_MASK)?;
     user_buffer(pair, 8)?;
-    let socket_type = match socket_type(family, kind, protocol)? {
+    let opened = socket_type(family, kind, protocol)?;
+    permitted(process, &opened)?;
+    let socket_type = match opened {
         Opened::Unix(socket_type) => socket_type,
         // `inet_socketpair` is `sock_no_socketpair`: the internet families
         // have no way to make two connected sockets without a listener, and

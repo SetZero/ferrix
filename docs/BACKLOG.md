@@ -243,7 +243,7 @@ nobody has it yet.
 
 | Item | Owner |
 |---|---|
-| Raw sockets: `AF_INET` `SOCK_RAW` (ICMP, for busybox's `ping`) and `AF_PACKET` (for `udhcpc`), both answered `EPERM` today, so `run --net` configures `eth0` from `/etc/profile` instead of DHCP. Networking stage | open |
+| Raw sockets: `AF_INET` `SOCK_RAW` landed 2026-09-16 (busybox's `ping` works); left are `AF_PACKET` `SOCK_DGRAM` and `SOCK_RAW` bound to an interface, for `udhcpc`, after which `run --net` configures `eth0` by DHCP instead of from `/etc/profile`, and `AF_INET6` `SOCK_RAW` for `ping6`. Networking stage | os-26 |
 
 ### P3 — hardware variants and later stages, unowned
 

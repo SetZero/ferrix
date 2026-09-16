@@ -190,7 +190,7 @@ impl Stack {
 
     /// The identification the next datagram carries, so that two datagrams
     /// fragmented at once are not reassembled into each other.
-    fn next_identification(&mut self) -> u16 {
+    pub(crate) fn next_identification(&mut self) -> u16 {
         self.ip_id = self.ip_id.wrapping_add(1);
         self.ip_id
     }

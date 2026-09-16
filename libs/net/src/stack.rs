@@ -26,7 +26,7 @@ use crate::rand::Random;
 use crate::reassembly::Reassembler;
 use crate::route::{Origin, Route, Routes};
 use crate::socket::{
-    DatagramSocket, Error, Family, ListenSocket, Readiness, Shutdown, Socket, SocketId,
+    DatagramSocket, Error, Family, ListenSocket, RawSocket, Readiness, Shutdown, Socket, SocketId,
     StreamSocket,
 };
 
@@ -330,6 +330,16 @@ impl Stack {
         self.install_socket(Socket::Icmp(socket))
     }
 
+    /// Open a raw socket for `protocol`, which receives a copy of every packet
+    /// of that protocol this host takes in and sends packets of it.
+    ///
+    /// Whether the caller may is not the stack's question: Linux keeps raw
+    /// sockets behind `CAP_NET_RAW`, and the kernel asks that before this.
+    pub fn open_raw(&mut self, family: Family, protocol: u8) -> SocketId {
+        let socket = RawSocket::new(family, protocol, self.config.datagram_capacity);
+        self.install_socket(Socket::Raw(socket))
+    }
+
     /// Open a TCP socket, which is neither connected nor listening yet.
     ///
     /// It is held as a listener with a backlog of zero until `connect` or
@@ -401,7 +411,7 @@ impl Stack {
                     }
                 }
             }
-            Socket::Udp(_) | Socket::Icmp(_) => {}
+            Socket::Udp(_) | Socket::Icmp(_) | Socket::Raw(_) => {}
         }
     }
 
@@ -439,6 +449,12 @@ impl Stack {
     pub fn bind(&mut self, id: SocketId, requested: Endpoint) -> Result<(), Error> {
         let family = self.sockets.get(&id.0).ok_or(Error::NoSocket)?.family();
         self.check_bind_address(family, requested.address)?;
+        // A raw socket is bound to an address and never to a port, and may be
+        // bound again: `raw_bind` only records the address.
+        if let Some(Socket::Raw(raw)) = self.sockets.get_mut(&id.0) {
+            raw.datagram.local = Endpoint::new(requested.address, 0);
+            return Ok(());
+        }
         let port = if requested.port == 0 {
             self.choose_port(id, family)?
         } else {
@@ -461,7 +477,7 @@ impl Stack {
                 }
                 listener.local = endpoint;
             }
-            Socket::Stream(_) => return Err(Error::AlreadyDone),
+            Socket::Stream(_) | Socket::Raw(_) => return Err(Error::AlreadyDone),
         }
         Ok(())
     }
@@ -509,6 +525,8 @@ impl Stack {
                 Socket::Listen(_) | Socket::Stream(_) => stream,
                 Socket::Icmp(_) => icmp,
                 Socket::Udp(_) => !stream && !icmp,
+                // A raw socket holds no port.
+                Socket::Raw(_) => false,
             };
             if !same_protocol || socket.family() != family {
                 return false;
@@ -574,7 +592,11 @@ impl Stack {
     /// Shut a socket down in one or both directions.
     pub fn shutdown(&mut self, id: SocketId, how: Shutdown) -> Result<(), Error> {
         match self.sockets.get_mut(&id.0).ok_or(Error::NoSocket)? {
-            Socket::Udp(socket) | Socket::Icmp(socket) => {
+            Socket::Udp(socket)
+            | Socket::Icmp(socket)
+            | Socket::Raw(RawSocket {
+                datagram: socket, ..
+            }) => {
                 if matches!(how, Shutdown::Read | Shutdown::Both) {
                     socket.read_shut = true;
                 }
@@ -600,6 +622,7 @@ impl Stack {
     pub fn take_error(&mut self, id: SocketId) -> Option<Error> {
         match self.sockets.get_mut(&id.0)? {
             Socket::Udp(socket) | Socket::Icmp(socket) => socket.take_error(),
+            Socket::Raw(raw) => raw.datagram.take_error(),
             Socket::Stream(stream) => stream.error.take().or_else(|| {
                 stream.connection.failure().map(|failure| match failure {
                     ferrix_nettcp::Failure::Refused => Error::Refused,
@@ -621,6 +644,7 @@ impl Stack {
     pub fn connect(&mut self, id: SocketId, remote: Endpoint, now: Millis) -> Result<(), Error> {
         match self.sockets.get(&id.0).ok_or(Error::NoSocket)? {
             Socket::Udp(_) | Socket::Icmp(_) => self.connect_datagram(id, remote),
+            Socket::Raw(_) => self.connect_raw(id, remote),
             Socket::Listen(listener) if listener.backlog == 0 => {
                 self.connect_stream(id, remote, now)
             }
@@ -645,6 +669,20 @@ impl Stack {
         }
         socket.local.port = port;
         socket.remote = Some(remote);
+        Ok(())
+    }
+
+    /// A raw socket's connect records the peer's address, and this host's
+    /// address towards it if the socket was not bound; there are no ports.
+    fn connect_raw(&mut self, id: SocketId, remote: Endpoint) -> Result<(), Error> {
+        let source = self.source_for(remote.address)?;
+        let Some(Socket::Raw(raw)) = self.sockets.get_mut(&id.0) else {
+            return Err(Error::WrongKind);
+        };
+        if raw.datagram.local.address.is_unspecified() {
+            raw.datagram.local.address = source;
+        }
+        raw.datagram.remote = Some(Endpoint::new(remote.address, 0));
         Ok(())
     }
 

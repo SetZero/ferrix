@@ -16,7 +16,12 @@
 //!   in both directions, and ends as a clean close at both ends;
 //! * a connection to a port nobody listens on is refused rather than left to
 //!   time out;
-//! * the same over IPv6, so that the second family is not a claim.
+//! * the same over IPv6, so that the second family is not a claim;
+//! * a raw ICMP socket reads the echo it sent and the reply to it, each with
+//!   its IPv4 header, and one filtering replies with `ICMP_FILTER` reads the
+//!   request and not the reply; and an `IPPROTO_RAW` socket's packet, whose
+//!   header leaves the source, identification, length and checksum at zero,
+//!   is completed and reaches a UDP socket.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -41,6 +46,8 @@ pub(crate) struct Report {
     pub(crate) refusals: usize,
     /// How many connections were made and accepted.
     pub(crate) connections: usize,
+    /// How many packets raw sockets read.
+    pub(crate) raw_packets: usize,
 }
 
 /// The body every check sends, chosen so a truncation shows.
@@ -104,6 +111,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         IpAddress::V4(Ipv4::LOOPBACK),
         7_781,
     )?;
+    raw_icmp(&mut report)?;
+    raw_header_included(&mut report, 7_782)?;
 
     // Nothing here leaves this host, so nothing should be waiting for a
     // driver. A frame queued for one is a route pointing at an interface with
@@ -277,6 +286,183 @@ fn refused(
         }
         _ => Err("a connection to a port nobody listens on was not refused"),
     }
+}
+
+/// An echo request's identifier the raw check uses, which no other socket on
+/// the loopback answers to.
+const RAW_IDENTIFIER: u16 = 0x5245;
+
+/// ICMP's protocol number.
+const ICMP: u8 = 1;
+
+/// A raw ICMP socket reads what `ping` needs, and `ICMP_FILTER` holds back
+/// exactly the type it names.
+///
+/// Over the loopback a raw ICMP socket is handed the request on its way in,
+/// then the reply the host sends itself. The filtered socket is the negative
+/// control: it must read the request, so it was not simply deaf, and not the
+/// reply.
+fn raw_icmp(report: &mut Report) -> Result<(), &'static str> {
+    let loopback = encode(IpAddress::V4(Ipv4::LOOPBACK), 0);
+    let ping = socket(Family::V4, InetKind::Raw { protocol: ICMP })?;
+    let filtered = socket(Family::V4, InetKind::Raw { protocol: ICMP })?;
+    let replies_only = 1_u32 << ferrix_netwire::icmpv4::kind::ECHO_REPLY;
+    filtered
+        .set_option(
+            ferrix_linux_abi::inet::SOL_RAW,
+            ferrix_linux_abi::inet::ICMP_FILTER,
+            &replies_only.to_ne_bytes(),
+            ferrix_linux_abi::socket::Width::Bits64,
+        )
+        .map_err(|_| "ICMP_FILTER was refused on a raw ICMP socket")?;
+
+    let request = echo_request(RAW_IDENTIFIER, BODY)?;
+    let sent = ping
+        .send(&request, 0, false, Some(&loopback))
+        .map_err(|_| "a raw ICMP socket could not send an echo request")?;
+    if sent != request.len() {
+        return Err("a raw ICMP socket sent its echo request short");
+    }
+
+    let seen = drain(&ping)?;
+    report.raw_packets += seen.len();
+    let types = echo_types(&seen)?;
+    if !types.contains(&ferrix_netwire::icmpv4::kind::ECHO_REQUEST) {
+        return Err("a raw ICMP socket was not handed its own echo request off the loopback");
+    }
+    let reply = seen.iter().find(|packet| {
+        icmp_at(packet).is_some_and(|message| {
+            message.first() == Some(&ferrix_netwire::icmpv4::kind::ECHO_REPLY)
+                && message.get(4..6) == Some(RAW_IDENTIFIER.to_be_bytes().as_slice())
+                && message.get(8..) == Some(BODY)
+        })
+    });
+    if reply.is_none() {
+        return Err("a raw ICMP socket did not read the echo reply with its identifier and body");
+    }
+
+    let held_back = drain(&filtered)?;
+    report.raw_packets += held_back.len();
+    let filtered_types = echo_types(&held_back)?;
+    if !filtered_types.contains(&ferrix_netwire::icmpv4::kind::ECHO_REQUEST) {
+        return Err("a raw ICMP socket filtering replies read nothing at all");
+    }
+    if filtered_types.contains(&ferrix_netwire::icmpv4::kind::ECHO_REPLY) {
+        return Err("ICMP_FILTER let the echo reply it names through");
+    }
+    report.refusals += 1;
+    Ok(())
+}
+
+/// An `IPPROTO_RAW` socket sends a UDP datagram inside a header it wrote with
+/// the source, identification, total length and checksum left zero, and the
+/// datagram reaches a UDP socket: the stack filled those in, or the input path
+/// would have dropped the packet for its checksum.
+fn raw_header_included(report: &mut Report, port: u16) -> Result<(), &'static str> {
+    let loopback = IpAddress::V4(Ipv4::LOOPBACK);
+    let server = socket(Family::V4, InetKind::Datagram)?;
+    server
+        .bind(&encode(loopback, port))
+        .map_err(|_| "a datagram socket could not bind the loopback for the raw check")?;
+    let sender = socket(Family::V4, InetKind::Raw { protocol: 255 })?;
+
+    let pseudo = ferrix_netwire::checksum::Pseudo::V4 {
+        source: Ipv4::LOOPBACK.octets(),
+        destination: Ipv4::LOOPBACK.octets(),
+    };
+    let mut datagram = alloc::vec![0_u8; ferrix_netwire::udp::HEADER_LEN + BODY.len()];
+    let _ = ferrix_netwire::udp::Header {
+        source_port: port.wrapping_add(1),
+        destination_port: port,
+    }
+    .emit(BODY, pseudo, &mut datagram)
+    .map_err(|_| "the raw check's UDP datagram did not fit")?;
+    let mut packet = alloc::vec![0_u8; ferrix_netwire::ipv4::MIN_HEADER_LEN];
+    let fields: [(usize, u8); 3] = [(0, 0x45), (8, 64), (9, ferrix_netwire::udp::PROTOCOL)];
+    for (at, value) in fields {
+        *packet
+            .get_mut(at)
+            .ok_or("the raw check's header is too short")? = value;
+    }
+    packet
+        .get_mut(16..20)
+        .ok_or("the raw check's header is too short")?
+        .copy_from_slice(&Ipv4::LOOPBACK.octets());
+    packet.extend_from_slice(&datagram);
+
+    let sent = sender
+        .send(&packet, 0, false, Some(&encode(loopback, 0)))
+        .map_err(|_| "an IPPROTO_RAW socket could not send a packet with its own header")?;
+    if sent != packet.len() {
+        return Err("an IPPROTO_RAW socket sent its packet short");
+    }
+    let mut out = [0_u8; 128];
+    let (received, _) = server
+        .recv(&mut out, 0, true)
+        .map_err(|_| "a header-included packet was not completed and delivered")?;
+    if out.get(..received.bytes) != Some(BODY) {
+        return Err("a header-included packet arrived as something else");
+    }
+    report.bytes += received.bytes;
+
+    // `IPPROTO_RAW` receives nothing, even a packet of its own number.
+    let mut nothing = [0_u8; 8];
+    match sender.recv(&mut nothing, 0, true) {
+        Err(Errno::EAGAIN) => Ok(()),
+        _ => Err("an IPPROTO_RAW socket was handed a packet"),
+    }
+}
+
+/// An echo request with its checksum, as `ping` builds one.
+fn echo_request(identifier: u16, body: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let [high, low] = identifier.to_be_bytes();
+    let header = ferrix_netwire::icmpv4::Header {
+        kind: ferrix_netwire::icmpv4::kind::ECHO_REQUEST,
+        code: 0,
+        rest: [high, low, 0, 1],
+    };
+    let mut message = alloc::vec![0_u8; ferrix_netwire::icmpv4::HEADER_LEN + body.len()];
+    let _ = header
+        .emit(body, &mut message)
+        .map_err(|_| "the raw check's echo request did not fit")?;
+    Ok(message)
+}
+
+/// Every packet waiting on a raw socket.
+fn drain(raw: &Arc<InetSocket>) -> Result<Vec<Vec<u8>>, &'static str> {
+    let mut packets = Vec::new();
+    loop {
+        let mut out = [0_u8; 256];
+        match raw.recv(&mut out, 0, true) {
+            Ok((received, _)) => {
+                packets.push(out.get(..received.bytes).unwrap_or_default().to_vec());
+            }
+            Err(Errno::EAGAIN) => return Ok(packets),
+            Err(_) => return Err("a raw socket's receive failed"),
+        }
+    }
+}
+
+/// The ICMP message of a packet a raw socket read, after its IPv4 header.
+fn icmp_at(packet: &[u8]) -> Option<&[u8]> {
+    let first = *packet.first()?;
+    if first >> 4 != 4 || packet.get(9) != Some(&ICMP) {
+        return None;
+    }
+    packet.get(usize::from(first & 0x0F) * 4..)
+}
+
+/// The ICMP types of what a raw ICMP socket read, refusing a packet that does
+/// not start with an IPv4 header naming ICMP.
+fn echo_types(packets: &[Vec<u8>]) -> Result<Vec<u8>, &'static str> {
+    packets
+        .iter()
+        .map(|packet| {
+            icmp_at(packet)
+                .and_then(|message| message.first().copied())
+                .ok_or("a raw ICMP socket read a packet without an IPv4 header naming ICMP")
+        })
+        .collect()
 }
 
 /// A `sockaddr` for an address and a port.

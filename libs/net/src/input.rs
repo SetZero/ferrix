@@ -123,6 +123,10 @@ impl Stack {
             return;
         }
         if !packet.header.is_fragment() {
+            let length = ipv4::MIN_HEADER_LEN + packet.options.len() + packet.payload.len();
+            if let Some(whole) = bytes.get(..length) {
+                self.raw_input_v4(interface, whole, packet.header.protocol);
+            }
             self.transport_input(
                 interface,
                 source,
@@ -152,6 +156,7 @@ impl Stack {
             return;
         };
         self.counters.reassembled += 1;
+        self.raw_input_reassembled(interface, &packet.header, &whole);
         self.transport_input(
             interface,
             source,
@@ -198,6 +203,92 @@ impl Stack {
             upper.bytes,
             now,
         );
+    }
+
+    /// Give a copy of an IPv4 packet that reached this host to every raw
+    /// socket that asks for it, header and all, as `raw_v4_input` does.
+    ///
+    /// A raw socket takes a packet when its protocol matches, when it is
+    /// bound to no address or to the one the packet came to, when it is
+    /// connected to nothing or to the one the packet came from, and when it
+    /// is pinned to no interface or to this one. `IPPROTO_RAW` takes nothing,
+    /// and a raw ICMP socket skips the types its `ICMP_FILTER` names.
+    fn raw_input_v4(&mut self, interface: u32, packet: &[u8], protocol: u8) {
+        let address_at = |at: usize| {
+            packet
+                .get(at..at + 4)
+                .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+                .map(|octets| IpAddress::V4(Ipv4::new(octets)))
+        };
+        let (Some(source), Some(destination)) = (address_at(12), address_at(16)) else {
+            return;
+        };
+        let header_len = usize::from(packet.first().map_or(0, |byte| byte & 0x0F)) * 4;
+        let icmp_type = packet.get(header_len).copied();
+        let mut delivered = false;
+        for socket in self.sockets.values_mut() {
+            let Socket::Raw(raw) = socket else {
+                continue;
+            };
+            let datagram = &raw.datagram;
+            let wanted = raw.protocol == protocol
+                && raw.protocol != crate::socket::RawSocket::IPPROTO_RAW
+                && matches!(datagram.family, crate::socket::Family::V4)
+                && (datagram.local.address.is_unspecified()
+                    || datagram.local.address == destination)
+                && datagram
+                    .remote
+                    .is_none_or(|remote| remote.address == source)
+                && datagram
+                    .options
+                    .device
+                    .is_none_or(|device| device == interface);
+            if !wanted {
+                continue;
+            }
+            if protocol == ipv4::protocol::ICMP
+                && icmp_type.is_some_and(|kind| kind < 32 && raw.icmp_filter & (1 << kind) != 0)
+            {
+                continue;
+            }
+            delivered |= raw.datagram.deliver(Datagram {
+                remote: Endpoint::new(source, 0),
+                local: destination,
+                interface,
+                payload: packet.to_vec(),
+            });
+        }
+        if delivered {
+            self.counters.delivered += 1;
+        }
+    }
+
+    /// The same for a datagram put back together from fragments: the header
+    /// is the last fragment's with the fragment fields cleared and the length
+    /// of the whole, which is what a raw socket on Linux reads too, less any
+    /// options, which only the first fragment is sure to carry.
+    fn raw_input_reassembled(&mut self, interface: u32, last: &ipv4::Header, payload: &[u8]) {
+        let has_raw = self
+            .sockets
+            .values()
+            .any(|socket| matches!(socket, Socket::Raw(_)));
+        if !has_raw {
+            return;
+        }
+        let header = ipv4::Header {
+            dont_fragment: false,
+            more_fragments: false,
+            fragment_offset: 0,
+            ..*last
+        };
+        let mut packet = vec![0_u8; ipv4::MIN_HEADER_LEN + payload.len()];
+        let Ok(at) = header.emit(&[], payload.len(), &mut packet) else {
+            return;
+        };
+        if let Some(body) = packet.get_mut(at..) {
+            body.copy_from_slice(payload);
+        }
+        self.raw_input_v4(interface, &packet, header.protocol);
     }
 
     /// A transport payload, by protocol number.

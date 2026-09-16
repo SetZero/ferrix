@@ -21,15 +21,15 @@ use core::fmt;
 
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::inet::{
-    IP_TOS, IP_TTL, IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_TCP, IPPROTO_UDP, IPV6_UNICAST_HOPS,
-    IPV6_V6ONLY, InetAddress, SOCKADDR_STORAGE_SIZE, SOL_IP, SOL_IPV6, SOL_TCP, TCP_MAXSEG,
-    TCP_NODELAY,
+    ICMP_FILTER, IP_HDRINCL, IP_TOS, IP_TTL, IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_TCP,
+    IPPROTO_UDP, IPV6_UNICAST_HOPS, IPV6_V6ONLY, InetAddress, SOCKADDR_STORAGE_SIZE, SOL_IP,
+    SOL_IPV6, SOL_RAW, SOL_TCP, TCP_MAXSEG, TCP_NODELAY,
 };
 use ferrix_linux_abi::socket::{
     AF_INET, AF_INET6, MSG_DONTWAIT, MSG_PEEK, SHUT_RD, SHUT_RDWR, SHUT_WR, SO_ACCEPTCONN,
     SO_BROADCAST, SO_DOMAIN, SO_ERROR, SO_KEEPALIVE, SO_PROTOCOL, SO_RCVBUF, SO_RCVTIMEO_NEW,
     SO_RCVTIMEO_OLD, SO_REUSEADDR, SO_SNDBUF, SO_SNDTIMEO_NEW, SO_SNDTIMEO_OLD, SO_TYPE,
-    SOCK_DGRAM, SOCK_STREAM, SOCKET_BUFFER_DEFAULT, SOL_SOCKET, Width,
+    SOCK_DGRAM, SOCK_RAW, SOCK_STREAM, SOCKET_BUFFER_DEFAULT, SOL_SOCKET, Width,
 };
 use ferrix_net::socket::{Error, Family, Shutdown, Socket as NetSocket};
 use ferrix_net::{Endpoint, IpAddress, Ipv4, Ipv6, SocketId, to_v6};
@@ -49,6 +49,12 @@ pub(crate) enum InetKind {
     /// `SOCK_DGRAM` at `IPPROTO_ICMP`: the echo socket `ping` uses without
     /// privilege.
     Echo,
+    /// `SOCK_RAW` at a protocol: every packet of it, header and all, which
+    /// needs privilege.
+    Raw {
+        /// The protocol number it was opened with.
+        protocol: u8,
+    },
 }
 
 impl InetKind {
@@ -57,6 +63,7 @@ impl InetKind {
         match self {
             InetKind::Stream => SOCK_STREAM,
             InetKind::Datagram | InetKind::Echo => SOCK_DGRAM,
+            InetKind::Raw { .. } => SOCK_RAW,
         }
     }
 
@@ -67,6 +74,7 @@ impl InetKind {
             (InetKind::Datagram, _) => IPPROTO_UDP,
             (InetKind::Echo, Family::V4) => IPPROTO_ICMP,
             (InetKind::Echo, Family::V6) => IPPROTO_ICMPV6,
+            (InetKind::Raw { protocol }, _) => protocol as i32,
         }
     }
 
@@ -148,6 +156,7 @@ impl InetSocket {
             InetKind::Stream => stack.open_tcp(family),
             InetKind::Datagram => stack.open_udp(family),
             InetKind::Echo => stack.open_icmp(family),
+            InetKind::Raw { protocol } => stack.open_raw(family, protocol),
         });
         Self::wrap(id, family, kind, nonblock, owner)
     }
@@ -507,6 +516,8 @@ impl InetSocket {
                 Ok(i32::from(self.stack_options().hop_limit))
             }
             (SOL_IP, IP_TOS) => Ok(i32::from(self.stack_options().traffic_class)),
+            (SOL_IP, IP_HDRINCL) => self.with_raw(|raw| i32::from(raw.header_included)),
+            (SOL_RAW, ICMP_FILTER) => self.icmp_filter().map(u32::cast_signed),
             (SOL_IPV6, IPV6_V6ONLY) => Ok(i32::from(self.stack_options().v6_only)),
             (SOL_TCP, TCP_NODELAY) => Ok(i32::from(self.nodelay())),
             (SOL_TCP, TCP_MAXSEG) => Ok(self.segment_size()),
@@ -549,6 +560,9 @@ impl InetSocket {
                 options.send_timeout = nanos;
             }
             return Ok(());
+        }
+        if (level, name) == (SOL_RAW, ICMP_FILTER) {
+            return self.set_icmp_filter(value);
         }
         let number = read_int(value)?;
         match (level, name) {
@@ -596,6 +610,7 @@ impl InetSocket {
                 self.set_nodelay(number != 0);
                 Ok(())
             }
+            (SOL_IP, IP_HDRINCL) => self.with_raw(|raw| raw.header_included = number != 0),
             // An option a program may set that changes nothing here is
             // accepted rather than refused: refusing one makes a program that
             // sets it for luck fail, and Linux accepts them all.
@@ -620,6 +635,52 @@ impl InetSocket {
                 body(socket.options_mut());
             }
         });
+    }
+
+    /// Read or change the stack's side of a raw socket.
+    ///
+    /// # Errors
+    ///
+    /// `ENOPROTOOPT` on any other socket: `IP_HDRINCL` is `do_ip_setsockopt`'s
+    /// and refused there unless the socket is `SOCK_RAW`.
+    fn with_raw<T>(
+        &self,
+        body: impl FnOnce(&mut ferrix_net::socket::RawSocket) -> T,
+    ) -> Result<T, Errno> {
+        net::core().with(|stack, _| match stack.socket_mut(self.id) {
+            Some(NetSocket::Raw(raw)) => Ok(body(raw)),
+            _ => Err(Errno::ENOPROTOOPT),
+        })
+    }
+
+    /// `ICMP_FILTER`'s mask, on a raw ICMP socket.
+    ///
+    /// # Errors
+    ///
+    /// `EOPNOTSUPP` on a raw socket of another protocol, as `raw_geticmpfilter`
+    /// answers, and `ENOPROTOOPT` on a socket that is not raw.
+    fn icmp_filter(&self) -> Result<u32, Errno> {
+        self.with_raw(|raw| {
+            (raw.protocol == ICMP_PROTOCOL)
+                .then_some(raw.icmp_filter)
+                .ok_or(Errno::EOPNOTSUPP)
+        })?
+    }
+
+    /// Set `ICMP_FILTER`: at most four bytes are read, as `raw_seticmpfilter`
+    /// reads them, and fewer leave the remaining bits zero.
+    fn set_icmp_filter(&self, value: &[u8]) -> Result<(), Errno> {
+        let mut mask = [0_u8; 4];
+        for (slot, byte) in mask.iter_mut().zip(value.iter()) {
+            *slot = *byte;
+        }
+        self.with_raw(|raw| {
+            if raw.protocol != ICMP_PROTOCOL {
+                return Err(Errno::EOPNOTSUPP);
+            }
+            raw.icmp_filter = u32::from_ne_bytes(mask);
+            Ok(())
+        })?
     }
 
     /// Whether Nagle's algorithm is off.
@@ -681,6 +742,10 @@ impl InetSocket {
             Some(NetSocket::Udp(socket) | NetSocket::Icmp(socket)) => {
                 socket.peek().map_or(0, |datagram| datagram.payload.len())
             }
+            Some(NetSocket::Raw(raw)) => raw
+                .datagram
+                .peek()
+                .map_or(0, |datagram| datagram.payload.len()),
             _ => 0,
         })
     }
@@ -750,6 +815,9 @@ pub(crate) const fn errno(error: Error) -> Errno {
         Error::TimedOut => Errno::ETIMEDOUT,
     }
 }
+
+/// ICMP's protocol number, as a raw socket's protocol holds it.
+const ICMP_PROTOCOL: u8 = IPPROTO_ICMP as u8;
 
 /// An option's value as the `int` most of them are.
 fn read_int(value: &[u8]) -> Result<i32, Errno> {

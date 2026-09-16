@@ -847,8 +847,9 @@ fn check_net() {
     }
     println!(
         "  net      {} interface up, {} bytes carried over the loopback in both families, \
-         {} connections made and accepted, {} calls refused as specified",
-        report.interfaces, report.bytes, report.connections, report.refusals,
+         {} connections made and accepted, {} calls refused as specified, \
+         {} packets read by raw sockets",
+        report.interfaces, report.bytes, report.connections, report.refusals, report.raw_packets,
     );
     check_net_ring();
     check_netlink();
