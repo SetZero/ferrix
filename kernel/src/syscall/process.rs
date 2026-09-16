@@ -669,10 +669,22 @@ impl Process {
         self.live_threads.load(Ordering::Acquire)
     }
 
+    /// Every task running its code, with its thread's id: for a check's
+    /// report of what each was doing when the check failed. Taken out of the
+    /// list before they are looked at, so none is dropped under its lock.
+    pub(crate) fn tasks_for_report(&self) -> Vec<(Arc<Task>, u32)> {
+        let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
+        tasks
+            .into_iter()
+            .map(|task| {
+                let tid = task.thread().map_or(0, |thread| thread.tid());
+                (task, tid)
+            })
+            .collect()
+    }
+
     /// Whether every task running its code is blocked or has ended: for the
-    /// check that a stopped process's threads have all parked. The tasks are
-    /// taken out of the list before they are looked at, so none is dropped
-    /// under its lock.
+    /// check that a stopped process's threads have all parked.
     pub(crate) fn every_task_blocked(&self) -> bool {
         let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
         tasks.iter().all(|task| task.is_blocked() || task.is_dead())

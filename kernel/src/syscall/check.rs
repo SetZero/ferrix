@@ -5223,10 +5223,13 @@ fn stop_and_continue(stopped: &Process) -> Result<(), &'static str> {
         "a program of three threads never had both counts moving and its third thread waiting",
     )?;
     crate::syscall::kill::send(stopped, SIGSTOP, Origin::Kernel);
-    until(
+    if let Err(failure) = until(
         &|| Ok(stopped.is_stopped() && stopped.every_task_blocked()),
         "a thread of a stopped process kept running instead of stopping",
-    )?;
+    ) {
+        report_a_stop_that_did_not_park(stopped, &word);
+        return Err(failure);
+    }
     let still = (word(0)?, word(4)?);
     crate::sched::sleep_for(STOP_STILL_NANOS);
     if (word(0)?, word(4)?) != still {
@@ -5237,6 +5240,44 @@ fn stop_and_continue(stopped: &Process) -> Result<(), &'static str> {
         &|| waiting(&|| Ok(word(0)? != still.0 && word(4)? != still.1)),
         "a stopped process's threads did not all run again after SIGCONT",
     )
+}
+
+/// What FX-0701 needs to be told apart, printed when a stopped program's
+/// threads have not all parked: whether the process took the stop at all, each
+/// task's state, queue, switch and preemption counts and the processors it has
+/// run on, and whether the counting threads are still counting.
+fn report_a_stop_that_did_not_park(
+    stopped: &Process,
+    word: &dyn Fn(u64) -> Result<u32, &'static str>,
+) {
+    let counts = (word(0), word(4), word(12));
+    println!(
+        "  FX-0701 stopped={} terminated={} counts={:?} {:?} waiter={:?}",
+        stopped.is_stopped(),
+        stopped.is_terminated(),
+        counts.0,
+        counts.1,
+        counts.2
+    );
+    for (task, tid) in stopped.tasks_for_report() {
+        println!(
+            "  FX-0701 task tid={tid} state={} cpu={} queued={} switches={} preemptions={} \
+             cpus_run_on={:#x}",
+            task.state(),
+            task.cpu(),
+            task.is_queued(),
+            task.switches(),
+            task.preemptions(),
+            task.cpus_run_on(),
+        );
+    }
+    crate::sched::sleep_for(STOP_STILL_NANOS);
+    println!(
+        "  FX-0701 after {} ms: counts={:?} {:?}",
+        STOP_STILL_NANOS / 1_000_000,
+        word(0),
+        word(4)
+    );
 }
 
 /// Runs of the forking program measured by
