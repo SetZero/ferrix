@@ -924,12 +924,15 @@ mod tests {
         unsafe { freeifaddrs(null_mut()) };
     }
 
+    /// `127.0.0.1` on `lo` is a `/8`. Found by its address rather than as the
+    /// loopback's IPv4 entry, because `lo` may carry more than one: WSL 2 adds
+    /// `10.255.255.254/32` to it for its DNS tunnel.
     #[test]
     fn the_loopback_netmask_is_eight_bits_of_ones() {
         let mut list: *mut Ifaddrs = null_mut();
         // SAFETY: `list` is a live local.
         assert_eq!(unsafe { getifaddrs(&raw mut list) }, 0);
-        let mut seen = None;
+        let mut seen = Vec::new();
         let mut entry = list;
         while !entry.is_null() {
             // SAFETY: the entry is one `getifaddrs` allocated.
@@ -940,14 +943,20 @@ mod tests {
             let family = (!ifa.ifa_addr.is_null())
                 .then(|| unsafe { ifa.ifa_addr.cast::<u16>().read_unaligned() });
             if name == c"lo" && family == Some(AF_INET as u16) && !ifa.ifa_netmask.is_null() {
+                // SAFETY: the address is a `struct sockaddr_in` of the entry's.
+                let address = unsafe { ifa.ifa_addr.cast::<SockaddrIn6>().read_unaligned() };
                 // SAFETY: the netmask is a `struct sockaddr_in` of the entry's.
-                seen = Some(unsafe { ifa.ifa_netmask.cast::<SockaddrIn6>().read_unaligned() });
+                let mask = unsafe { ifa.ifa_netmask.cast::<SockaddrIn6>().read_unaligned() };
+                seen.push((address.v4_addr(), mask.v4_addr()));
             }
             entry = ifa.ifa_next;
         }
         // SAFETY: the list is freed once.
         unsafe { freeifaddrs(list) };
-        assert_eq!(seen.map(|mask| mask.v4_addr()), Some([255, 0, 0, 0]));
+        assert!(
+            seen.contains(&([127, 0, 0, 1], [255, 0, 0, 0])),
+            "lo's IPv4 addresses and masks: {seen:?}"
+        );
     }
 
     #[test]

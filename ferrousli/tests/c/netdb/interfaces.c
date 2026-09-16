@@ -1,8 +1,9 @@
 /*
  * The interface list, the Ethernet address conversions and sockatmark.
  *
- * Every machine has a loopback interface, so that much is asserted; what else
- * it has is not.
+ * Every machine has a loopback interface with 127.0.0.1 on it, so that much is
+ * asserted; what else it has is not. Not even that 127.0.0.1 is the loopback's
+ * only IPv4 address: WSL 2 adds 10.255.255.254/32 to it for its DNS tunnel.
  */
 
 #define _GNU_SOURCE
@@ -21,7 +22,7 @@
 static void interfaces(void)
 {
 	struct ifaddrs *list = 0, *p;
-	int loopback = 0, ipv4 = 0;
+	int loopback = 0, localhost = 0;
 
 	CHECK(getifaddrs(&list) == 0);
 	for (p = list; p; p = p->ifa_next) {
@@ -33,13 +34,13 @@ static void interfaces(void)
 		CHECK((p->ifa_flags & IFF_UP) != 0);
 		if (p->ifa_addr && p->ifa_addr->sa_family == AF_INET) {
 			struct sockaddr_in *sin = (struct sockaddr_in *)p->ifa_addr;
-			CHECK(sin->sin_addr.s_addr == htonl(INADDR_LOOPBACK));
 			CHECK(p->ifa_netmask != 0);
-			ipv4++;
+			if (sin->sin_addr.s_addr == htonl(INADDR_LOOPBACK))
+				localhost++;
 		}
 	}
 	CHECK(loopback > 0);
-	CHECK(ipv4 > 0);
+	CHECK(localhost == 1);
 	freeifaddrs(list);
 	freeifaddrs(0);
 }
