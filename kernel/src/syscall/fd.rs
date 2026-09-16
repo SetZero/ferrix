@@ -29,8 +29,9 @@ use alloc::vec::Vec;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     AT_FDCWD, F_ADD_SEALS, F_DUPFD, F_DUPFD_CLOEXEC, F_GET_SEALS, F_GETFD, F_GETFL, F_SETFD,
-    F_SETFL, FD_CLOEXEC, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_EXCL, O_NONBLOCK, O_PATH,
-    O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, SEEK_CUR, SEEK_DATA, SEEK_END, SEEK_HOLE, SEEK_SET,
+    F_SETFL, FD_CLOEXEC, FIONBIO, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_EXCL, O_NONBLOCK,
+    O_PATH, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, SEEK_CUR, SEEK_DATA, SEEK_END, SEEK_HOLE,
+    SEEK_SET,
 };
 use ferrix_vfs::fd::FdTable;
 use ferrix_vfs::{FileType, Location, OpenFile, OpenFlags, Whence};
@@ -436,9 +437,24 @@ pub(crate) fn sys_ftruncate(process: &Process, fd: i32, length: i64) -> Result<u
     Ok(0)
 }
 
-/// `ioctl`: `EBADF` for a closed descriptor, the terminal requests for the
-/// console, and `ENOTTY` for every other file, which is what Linux answers for
-/// a descriptor that is not a terminal. See `crate::syscall::tty`.
+/// `ioctl(fd, FIONBIO, &on)`: `O_NONBLOCK` set when the `int` at `arg` is
+/// not zero and cleared when it is, as `ioctl_fionbio` does.
+///
+/// # Errors
+///
+/// `EFAULT` for an unreadable `arg`.
+fn fionbio(process: &Process, file: &OpenFile, arg: u64) -> Result<usize, Errno> {
+    let on = uaccess::get_u32(process.space(), arg)?;
+    let mut status = file.status();
+    status.nonblock = on != 0;
+    file.set_status(status);
+    Ok(0)
+}
+
+/// `ioctl`: `EBADF` for a closed descriptor, `FIONBIO` for any file, the
+/// terminal requests for the console, and `ENOTTY` for every other file,
+/// which is what Linux answers for a descriptor that is not a terminal. See
+/// `crate::syscall::tty`.
 pub(crate) fn sys_ioctl(
     process: &Process,
     fd: i32,
@@ -446,6 +462,11 @@ pub(crate) fn sys_ioctl(
     arg: u64,
 ) -> Result<usize, Errno> {
     let file = file(process, fd)?;
+    // Answered before the file is asked, as `do_vfs_ioctl` answers it, so a
+    // pipe, a socket and a terminal all take it.
+    if request == FIONBIO {
+        return fionbio(process, &file, arg);
+    }
     // By what reads and writes reach, not by what `fstat` reports: `/dev/tty`
     // is a devfs node of its own that opens the console, and busybox's shell
     // asks its job-control questions through it.

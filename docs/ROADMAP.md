@@ -3372,6 +3372,17 @@ waiting reader woken by a write, 8 calls refused as Linux refuses them; 0
 frames leaked`. With the write's wake removed, the boot panics with "a waiting
 eventfd reader was ended by its recheck, not by the write's wake".
 
+**Done — `ioctl(FIONBIO)`, iteration 2's third kernel row.** `FIONBIO` is
+answered for every file before any file-specific request, as `do_vfs_ioctl`
+answers it. The `int` its argument points at sets `O_NONBLOCK` when not zero
+and clears it when zero, and an unreadable argument is `EFAULT`. It was
+`ENOTTY` for everything but the console before. The stage 8 pipe check makes a
+blocking pipe non-blocking through it: an empty read is then `EAGAIN` and
+`F_GETFL` reports `O_NONBLOCK`, and zero clears the flag again. It does the
+same to an `AF_UNIX` socket. With the request left unanswered, the boot panics
+with "FIONBIO on a pipe was refused". With E1 to E3 in, the kernel side of
+iteration 2 is done.
+
 ---
 
 ## Stage 18 — The compositor  ·  *96 points*

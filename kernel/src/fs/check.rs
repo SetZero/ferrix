@@ -23,9 +23,10 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
-    AT_FDCWD, AT_REMOVEDIR, F_GETFD, FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE, FD_CLOEXEC,
-    MAP_ANONYMOUS, MAP_PRIVATE, MS_NODEV, MS_NOEXEC, MS_NOSUID, MS_RELATIME, O_APPEND, O_CLOEXEC,
-    O_CREAT, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, PROT_READ, PROT_WRITE, SEEK_CUR,
+    AT_FDCWD, AT_REMOVEDIR, F_GETFD, F_GETFL, FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE,
+    FD_CLOEXEC, FIONBIO, MAP_ANONYMOUS, MAP_PRIVATE, MS_NODEV, MS_NOEXEC, MS_NOSUID, MS_RELATIME,
+    O_APPEND, O_CLOEXEC, O_CREAT, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, PROT_READ,
+    PROT_WRITE, SEEK_CUR,
 };
 use ferrix_vfs::pipe::PIPEFS_MAGIC;
 use ferrix_vfs::tmpfs::{PageSource, Pages, Storage, TMPFS_MAGIC};
@@ -620,6 +621,7 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
 
     let outcome = check_a_pipe_carries_bytes_and_then_ends(process, page)
         .and_then(|piped| check_a_pipe_refuses_as_linux_does(process, page).map(|()| piped))
+        .and_then(|piped| check_fionbio_reaches_pipes_and_sockets(process, page).map(|()| piped))
         .and_then(|piped| check_a_fifo_is_one_pipe(process, page).map(|fifo| piped + fifo))
         .and_then(|bytes| check_statfs_says_tmp_is_tmpfs(process, page).map(|()| bytes))
         .and_then(|bytes| check_truncate_and_fallocate_grow(process, page).map(|()| bytes))
@@ -821,6 +823,79 @@ fn check_a_pipe_refuses_as_linux_does(process: &Process, page: u64) -> Result<()
         Errno::EBADF,
         "a pipe2 that failed left a descriptor behind",
     )
+}
+
+/// `ioctl(FIONBIO)` is every file's, not only a terminal's: on a pipe made
+/// blocking it makes a read of the empty pipe `EAGAIN` and `F_GETFL` report
+/// `O_NONBLOCK`, and with zero it clears the flag again; on an `AF_UNIX`
+/// socket it does the same; and an unreadable argument is `EFAULT`.
+fn check_fionbio_reaches_pipes_and_sockets(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    let fionbio = |fd: i32, on: u32| -> Result<usize, Errno> {
+        uaccess::copy_to_user(process.space(), page + AT_OFFSET, &on.to_le_bytes())
+            .map_err(|_| Errno::EFAULT)?;
+        fd::sys_ioctl(process, fd, FIONBIO, page + AT_OFFSET)
+    };
+    let nonblocking = |fd: i32| {
+        fd::sys_fcntl(process, fd, F_GETFL, 0).map(|flags| flags as u32 & O_NONBLOCK != 0)
+    };
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, 0),
+        0,
+        "pipe2 was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    answers(fionbio(reader, 1), 0, "FIONBIO on a pipe was refused")?;
+    if nonblocking(reader) != Ok(true) {
+        return Err("FIONBIO on a pipe did not set O_NONBLOCK");
+    }
+    refuses(
+        file::sys_read(process, reader, page + AT_BACK, 1),
+        Errno::EAGAIN,
+        "a pipe FIONBIO made non-blocking did not answer EAGAIN",
+    )?;
+    answers(fionbio(reader, 0), 0, "FIONBIO off on a pipe was refused")?;
+    if nonblocking(reader) != Ok(false) {
+        return Err("FIONBIO with zero did not clear O_NONBLOCK");
+    }
+    refuses(
+        fd::sys_ioctl(process, reader, FIONBIO, KERNEL_ADDRESS),
+        Errno::EFAULT,
+        "FIONBIO with an unreadable argument was not EFAULT",
+    )?;
+    answers(
+        fd::sys_close(process, reader),
+        0,
+        "a pipe's read end would not close",
+    )?;
+    answers(
+        fd::sys_close(process, writer),
+        0,
+        "a pipe's write end would not close",
+    )?;
+
+    const AF_UNIX: u64 = 1;
+    const SOCK_STREAM: u64 = 1;
+    answers(
+        by_number(
+            process,
+            Syscall::Socketpair,
+            [AF_UNIX, SOCK_STREAM, 0, page + AT_FDS, 0, 0],
+        ),
+        0,
+        "socketpair was refused",
+    )?;
+    let (one, other) = pair(process, page)?;
+    answers(fionbio(one, 1), 0, "FIONBIO on a socket was refused")?;
+    refuses(
+        file::sys_read(process, one, page + AT_BACK, 1),
+        Errno::EAGAIN,
+        "a socket FIONBIO made non-blocking did not answer EAGAIN",
+    )?;
+    answers(fd::sys_close(process, one), 0, "a socket would not close")?;
+    answers(fd::sys_close(process, other), 0, "a socket would not close")
 }
 
 /// A FIFO under /tmp is one pipe for every opener: a non-blocking writer with

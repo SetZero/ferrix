@@ -1409,6 +1409,9 @@ pub const TIOCGWINSZ: u32 = 0x5413;
 pub const TIOCSWINSZ: u32 = 0x5414;
 /// How many bytes a read would return without waiting.
 pub const FIONREAD: u32 = 0x541B;
+/// Set or clear `O_NONBLOCK` from the `int` the argument points at: any
+/// file, not only a terminal.
+pub const FIONBIO: u32 = 0x5421;
 /// The same request as [`FIONREAD`], under its terminal name.
 pub const TIOCINQ: u32 = FIONREAD;
 /// Give up the controlling terminal.

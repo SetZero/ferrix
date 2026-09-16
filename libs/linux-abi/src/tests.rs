@@ -1046,6 +1046,7 @@ fn terminal_ioctls_match_the_generic_header() {
     assert_eq!(types::TCFLSH, 0x540B, "TCFLSH is 'T' 0x0B");
     assert_eq!(types::TIOCSPGRP, 0x5410, "TIOCSPGRP is 'T' 0x10");
     assert_eq!(types::FIONREAD, 0x541B, "FIONREAD is 'T' 0x1B");
+    assert_eq!(types::FIONBIO, 0x5421, "FIONBIO is 'T' 0x21");
     assert_eq!(types::TIOCINQ, types::FIONREAD, "TIOCINQ is FIONREAD");
     assert_eq!(types::TIOCNOTTY, 0x5422, "TIOCNOTTY is 'T' 0x22");
     assert_eq!(types::TIOCGSID, 0x5429, "TIOCGSID is 'T' 0x29");

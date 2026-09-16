@@ -932,15 +932,17 @@ See: kernel/src/fs/procfs.rs sysrq_trigger; docs/RELIABILITY.md.
 buffers in its own memory. A pipe must carry what is written into it, report
 pipefs to fstatfs, read end of file once its writer closes, answer EAGAIN when
 empty and non-blocking and EPIPE with no reader, and pipe2 must close both
-descriptors again when it cannot hand them back. A FIFO under /tmp must be one
-pipe for its openers. statfs of /tmp must decode TMPFS_MAGIC, and statfs64 must
-take 84 and musl's 88 as its size. truncate and fallocate must grow a file and
-fallocate never shrink one, and sendfile must copy a file with and without an
-offset. Then, by syscall number, mount -t proc and mount -t devtmpfs must each
-make a new instance on a directory under /tmp: the check process must be found
-through the procfs, zero must read zeros from the devtmpfs, /proc/mounts must
-list both, both must unmount, and mount -t sysfs must still be ENODEV. The whole
-run is done twice and must leave no frame behind.
+descriptors again when it cannot hand them back. ioctl(FIONBIO) must set and
+clear O_NONBLOCK on a pipe and on an AF_UNIX socket, and be EFAULT for an
+unreadable argument. A FIFO under /tmp must be one pipe for its openers. statfs
+of /tmp must decode TMPFS_MAGIC, and statfs64 must take 84 and musl's 88 as its
+size. truncate and fallocate must grow a file and fallocate never shrink one,
+and sendfile must copy a file with and without an offset. Then, by syscall
+number, mount -t proc and mount -t devtmpfs must each make a new instance on a
+directory under /tmp: the check process must be found through the procfs, zero
+must read zeros from the devtmpfs, /proc/mounts must list both, both must
+unmount, and mount -t sysfs must still be ENODEV. The whole run is done twice
+and must leave no frame behind.
 
 1. A pipe end's drop no longer counts it out of the buffer, so a reader never
    sees end of file and the pipe outlives its descriptors as leaked frames.
