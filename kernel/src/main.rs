@@ -33,6 +33,7 @@ mod iommu;
 mod irq;
 mod mm;
 mod mmio;
+mod net;
 mod object;
 mod panic;
 mod pci;
@@ -810,6 +811,43 @@ fn check_block_ring() {
     }
     let started_by_devmgr = check_devmgr();
     check_driver(started_by_devmgr);
+    // The net core follows the same chain rather than a line of its own in
+    // `kmain`, for the reason the block ring's two do: it needs everything
+    // they need -- a root filesystem for sockfs, and the scheduler for the
+    // task that drives the stack -- and nothing else.
+    check_net();
+}
+
+/// The net core, over the loopback: a socket call reaches the stack, the
+/// stack builds a packet, and the packet comes back up the input path.
+///
+/// Here, after the block ring, because every socket is an inode on sockfs and
+/// so it needs the root filesystem, and because the stack is driven by a task
+/// and so it needs the scheduler. It needs no device at all: a machine with no
+/// network adapter still has to be able to talk to itself, and that is the
+/// whole of the path a packet takes with the wire left out.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_net() {
+    if let Err(problem) = net::start() {
+        fatal!(
+            catalog::NET_CORE,
+            "the net core's task could not be started: {problem}"
+        );
+    }
+    let report = match net::check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(catalog::NET_CORE, "net core self-check failed: {problem}"),
+    };
+    if let Some(why) = report.skipped {
+        println!("  net      not checked: {why}");
+        return;
+    }
+    println!(
+        "  net      {} interface up, {} bytes carried over the loopback in both families, \
+         {} connections made and accepted, {} calls refused as specified",
+        report.interfaces, report.bytes, report.connections, report.refusals,
+    );
 }
 
 /// Stage 10's exit, the half that is a driver: `/sbin/blk`, started from

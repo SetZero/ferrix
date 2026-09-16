@@ -85,6 +85,10 @@ pub struct Counters {
     pub connected: u64,
     /// Resets sent to a segment with nowhere to go.
     pub resets_sent: u64,
+    /// Unreachable messages sent for a datagram with nowhere to go.
+    pub unreachable_sent: u64,
+    /// Errors an unreachable message was carried back to a socket by.
+    pub errors_reported: u64,
 }
 
 /// The net core.

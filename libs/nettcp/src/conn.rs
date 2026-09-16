@@ -344,6 +344,17 @@ impl Connection {
         self.snd_mss
     }
 
+    /// What the connection was built with.
+    #[must_use]
+    pub const fn config(&self) -> Config {
+        self.config
+    }
+
+    /// Turn Nagle's algorithm off or on, which is `TCP_NODELAY`.
+    pub const fn set_no_delay(&mut self, off: bool) {
+        self.config.no_delay = off;
+    }
+
     /// The congestion window, for `/proc/net/tcp` and for tests.
     #[must_use]
     pub const fn congestion_window(&self) -> u32 {

@@ -766,6 +766,35 @@ pub(crate) static STAGE11_MOUNT: Explanation = Explanation {
           xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11",
 };
 
+/// For `check_net` in `main.rs`, when the net core's self-check fails.
+pub(crate) static NET_CORE: Explanation = Explanation {
+    code: "FX-1150",
+    title: "the net core did not carry a packet round its own loopback",
+    meaning: "The net core is `libs/net` behind one lock, driven by a kernel task. Its check \
+              uses the loopback and nothing else, so it passes on a machine with no network \
+              device: a datagram sent to a bound port must arrive with its sender's address, a \
+              datagram to an empty port must earn ECONNREFUSED from the unreachable this host \
+              sends itself, a connection to a listening port must be made, accepted, carry \
+              bytes both ways and end as a clean close, and a connection to a port nobody \
+              listens on must be refused rather than left to time out — all of it over IPv4 \
+              and again over IPv6.",
+    causes: &[
+        "The loopback interface is not up, or does not own 127.0.0.1 and ::1: `Stack::new` no \
+         longer adds it, or `add_local_routes` no longer gives it its two routes.",
+        "A packet routed to the loopback was handed out instead of going back up the input \
+         path: `Stack::poll_transmit`'s loopback turn, or `NetCore::take_frames`, changed.",
+        "A socket call reached the stack and the stack did not move: the net core's task is \
+         not running, or `NetCore::with` stopped draining the egress after the call.",
+        "A blocking call waited for ever: the wait's condition and what wakes it disagree, or \
+         `NetCore::progress` is no longer woken after the stack moves.",
+        "A connection was refused that should have been made, or made that should have been \
+         refused: the listener lookup in `libs/net`'s TCP input, or the reset it sends a \
+         segment with nowhere to go.",
+    ],
+    see: "kernel/src/net/check.rs; kernel/src/net/mod.rs; libs/net; libs/nettcp; \
+          docs/ROADMAP.md",
+};
+
 /// For `check_devmgr` in `main.rs`, when `devmgr::start` fails.
 pub(crate) static STAGE10_DEVMGR: Explanation = Explanation {
     code: "FX-1006",
@@ -1414,6 +1443,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE10_DRIVER,
     &STAGE10_DEVMGR,
     &STAGE11_MOUNT,
+    &NET_CORE,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,

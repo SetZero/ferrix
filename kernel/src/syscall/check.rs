@@ -27,8 +27,8 @@ use ferrix_linux_abi::socket::{
     AF_MAX, AF_UNIX, CmsgHdr, MSG_NOSIGNAL, MSG_OOB, MSG_PEEK, MSG_TRUNC, MSG_WAITALL, MsgHdr,
     SCM_RIGHTS, SHUT_RD, SHUT_WR, SIOCINQ, SIOCOUTQ, SO_ACCEPTCONN, SO_DOMAIN, SO_ERROR,
     SO_PEERCRED, SO_PROTOCOL, SO_RCVBUF, SO_RCVTIMEO_OLD, SO_TYPE, SOCK_DGRAM, SOCK_NONBLOCK,
-    SOCK_RDM, SOCK_SEQPACKET, SOCK_STREAM, SOCKET_BUFFER_MIN, SOL_SOCKET, Ucred, Width, cmsg_len,
-    cmsg_space,
+    SOCK_RAW, SOCK_RDM, SOCK_SEQPACKET, SOCK_STREAM, SOCKET_BUFFER_MIN, SOL_SOCKET, Ucred, Width,
+    cmsg_len, cmsg_space,
 };
 use ferrix_linux_abi::types::{
     AT_FDCWD, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
@@ -7370,18 +7370,13 @@ fn set_socket_option(
     )
 }
 
-/// What the socket calls refuse: the families and types `AF_UNIX` is not, a
+/// What the socket calls refuse: the types and protocols no family has, a
 /// call on something that is not a socket, and one on a closed descriptor.
 fn check_what_the_socket_calls_refuse(process: &Process, page: u64) -> Result<(), &'static str> {
-    const INET: u64 = 2;
     let unix = u64::from(AF_UNIX);
     let stream = u64::from(SOCK_STREAM);
     let socket = |a: [u64; 6]| socket_call(process, Call::Socket, &a);
-    refuses(
-        socket([INET, stream, 0, 0, 0, 0]),
-        Errno::EAFNOSUPPORT,
-        "socket(AF_INET, SOCK_STREAM) was not EAFNOSUPPORT",
-    )?;
+    check_the_internet_families_open(process)?;
     refuses(
         socket([u64::from(AF_MAX), stream, 0, 0, 0, 0]),
         Errno::EAFNOSUPPORT,
@@ -7427,6 +7422,62 @@ fn check_what_the_socket_calls_refuse(process: &Process, page: u64) -> Result<()
         "listen on a closed descriptor was not EBADF",
     )?;
     check_a_socket_refuses_what_is_still_to_come(process, page)
+}
+
+/// The internet families open, and refuse the types and protocols they do not
+/// have.
+///
+/// `SOCK_RAW` is `EPERM` rather than a refusal of the type: Linux has raw
+/// sockets and keeps them behind `CAP_NET_RAW`, and busybox's `ping` falls
+/// back to the unprivileged echo socket only on that errno.
+fn check_the_internet_families_open(process: &Process) -> Result<(), &'static str> {
+    const INET: u64 = 2;
+    const INET6: u64 = 10;
+    const TCP: u64 = 6;
+    const UDP: u64 = 17;
+    const ICMP: u64 = 1;
+    let stream = u64::from(SOCK_STREAM);
+    let datagram = u64::from(SOCK_DGRAM);
+    let raw = u64::from(SOCK_RAW);
+    let socket = |a: [u64; 6]| socket_call(process, Call::Socket, &a);
+
+    for arguments in [
+        [INET, stream, 0, 0, 0, 0],
+        [INET, stream, TCP, 0, 0, 0],
+        [INET, datagram, 0, 0, 0, 0],
+        [INET, datagram, UDP, 0, 0, 0],
+        [INET, datagram, ICMP, 0, 0, 0],
+        [INET6, stream, 0, 0, 0, 0],
+        [INET6, datagram, 0, 0, 0, 0],
+    ] {
+        let Ok(opened) = socket(arguments) else {
+            return Err("an internet socket a program may open was refused");
+        };
+        let descriptor = i32::try_from(opened).map_err(|_| "a socket got no descriptor")?;
+        if fd::sys_close(process, descriptor).is_err() {
+            return Err("an internet socket could not be closed");
+        }
+    }
+    refuses(
+        socket([INET, raw, ICMP, 0, 0, 0]),
+        Errno::EPERM,
+        "a raw socket without CAP_NET_RAW was not EPERM",
+    )?;
+    refuses(
+        socket([INET, stream, UDP, 0, 0, 0]),
+        Errno::EPROTONOSUPPORT,
+        "UDP's protocol number on a stream socket was not EPROTONOSUPPORT",
+    )?;
+    refuses(
+        socket([INET, datagram, TCP, 0, 0, 0]),
+        Errno::EPROTONOSUPPORT,
+        "TCP's protocol number on a datagram socket was not EPROTONOSUPPORT",
+    )?;
+    refuses(
+        socket_call(process, Call::Socketpair, &[INET, stream, 0, 0, 0, 0]),
+        Errno::EOPNOTSUPP,
+        "socketpair on AF_INET was not EOPNOTSUPP",
+    )
 }
 
 /// On a socket that is real, the calls the next landings bring say so, and

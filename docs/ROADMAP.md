@@ -2776,6 +2776,41 @@ the socket table — with 45 host tests and the `net_input` fuzz target; see
 device protocol are still to be written, and nothing in the kernel calls any of
 it yet.
 
+**Done — the net core, and `AF_INET` and `AF_INET6` sockets.** `kernel/src/net`
+is `libs/net` behind one lock and a task that drives it. Nothing sleeps inside
+that lock: every call takes what it needs into a kernel buffer, drops it, and
+only then touches the program's memory, which is `kernel/src/fs/socket.rs`'s
+rule and the same reason. Sockets have no wait queue of their own -- they all
+wait on one, woken whenever the stack moved, and each waiter re-checks its own
+condition; that is a thundering herd in the textbook sense and the right trade
+for a host with tens of sockets rather than thousands.
+
+`socket`, `bind`, `listen`, `accept`, `accept4`, `connect`, `getsockname`,
+`getpeername`, `send*`, `recv*`, `shutdown`, `getsockopt`, `setsockopt` and
+the two queue ioctls answer for `AF_INET` and `AF_INET6` as they already did
+for `AF_UNIX`, through one enumeration so the order of Linux's checks cannot
+drift apart between the families. An `AF_INET6` socket carries IPv4 through
+`::ffff:0:0/96` unless `IPV6_V6ONLY` says otherwise, and reports a v4 peer in
+that spelling. `SOCK_RAW` is `EPERM`, not a refusal of the type, because
+busybox's `ping` falls back to the unprivileged echo socket on that errno and
+on no other.
+
+The boot check uses the loopback and nothing else, so it passes on a machine
+with no network device -- which every machine is until the driver lands. It
+requires a datagram to arrive with its sender's address, a datagram to an empty
+port to earn `ECONNREFUSED` from the unreachable this host sends itself, a
+connection to be made, accepted, to carry bytes both ways and to end as a clean
+close, and a connection to a port nobody listens on to be refused rather than
+left to time out -- over IPv4 and again over IPv6. It reads:
+
+```
+  net      1 interface up, 318 bytes carried over the loopback in both families, 2 connections made and accepted, 3 calls refused as specified
+```
+
+**Still to do:** the virtio-net driver and the ring it speaks over, `AF_NETLINK`
+for `ip`, `/proc/net`, and `AF_UNIX` names so that `nc` can carry a stream over
+a local socket.
+
 **Exit:** under QEMU's user-mode network, busybox configures `eth0` with `ip`,
 and `route` and `netstat` report through `/proc/net`. `wget` fetches a file
 from a server on the host that byte-for-byte matches what it served, and `nc`

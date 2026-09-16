@@ -332,3 +332,102 @@ fn a_datagram_crosses_over_ipv6_after_neighbour_discovery() {
         Some(IpAddress::V6(ONE_V6))
     );
 }
+
+#[test]
+fn a_datagram_to_an_empty_port_on_this_host_earns_an_unreachable() {
+    let mut host = Alone::new();
+    let client = host.stack.open_udp(Family::V4);
+    host.stack
+        .connect(client, at(Ipv4::LOOPBACK, 9), host.now)
+        .expect("the loopback is routable");
+    let now = host.now;
+    let sent = host.stack.send(client, b"anyone?", None, now);
+    assert!(
+        sent.is_ok(),
+        "the datagram itself should have gone: {sent:?}"
+    );
+    host.settle();
+
+    let mut out = [0_u8; 16];
+    assert_eq!(
+        host.stack.recv(client, &mut out, false),
+        Err(Error::PortUnreachable)
+    );
+}
+
+#[test]
+fn an_unreachable_is_earned_even_with_other_sockets_open() {
+    // The kernel's boot check does exactly this, in this order, and found a
+    // hole the shorter test above did not.
+    let mut host = Alone::new();
+    let server = host.stack.open_udp(Family::V4);
+    host.stack
+        .bind(server, at(Ipv4::LOOPBACK, 7_777))
+        .expect("bound");
+    let client = host.stack.open_udp(Family::V4);
+    let now = host.now;
+    let _ = host
+        .stack
+        .send(client, b"hello", Some(at(Ipv4::LOOPBACK, 7_777)), now)
+        .expect("sent");
+    host.settle();
+    let mut out = [0_u8; 128];
+    let _ = host.stack.recv(server, &mut out, false).expect("arrived");
+
+    let lonely = host.stack.open_udp(Family::V4);
+    host.stack
+        .connect(lonely, at(Ipv4::LOOPBACK, 9), host.now)
+        .expect("connected");
+    let before = host.stack.counters();
+    let now = host.now;
+    let _ = host
+        .stack
+        .send(lonely, b"anyone?", None, now)
+        .expect("sent");
+    host.settle();
+    let after = host.stack.counters();
+    assert_eq!(
+        after.malformed, before.malformed,
+        "the datagram came back malformed"
+    );
+    assert_ne!(
+        after.no_socket, before.no_socket,
+        "the datagram never reached the demultiplexer"
+    );
+    assert_ne!(
+        after.unreachable_sent, before.unreachable_sent,
+        "no unreachable was sent"
+    );
+    assert_ne!(
+        after.errors_reported, before.errors_reported,
+        "the unreachable never came back up"
+    );
+    assert_eq!(
+        host.stack.recv(lonely, &mut out, false),
+        Err(Error::PortUnreachable)
+    );
+}
+
+#[test]
+fn an_unreachable_comes_back_over_ipv6_as_well() {
+    let mut wire = Wire::new();
+    let client = wire.one.open_udp(Family::V6);
+    let now = wire.now;
+    wire.one
+        .connect(client, at_v6(TWO_V6, 9), now)
+        .expect("the address is routable");
+    let now = wire.now;
+    let _ = wire.one.send(client, b"anyone?", None, now).expect("sent");
+    wire.settle();
+    assert_eq!(
+        wire.one.counters().malformed,
+        0,
+        "a message came back unreadable"
+    );
+    assert_eq!(wire.two.counters().unreachable_sent, 1);
+    let mut out = [0_u8; 16];
+    assert_eq!(
+        wire.one.recv(client, &mut out, false),
+        Err(Error::PortUnreachable)
+    );
+}

@@ -7,6 +7,7 @@
 //! wildcard one.
 
 use alloc::vec;
+use alloc::vec::Vec;
 
 use ferrix_netwire::{icmpv4, icmpv6, ipv4, ipv6, tcp, udp};
 
@@ -144,7 +145,11 @@ impl Stack {
     }
 
     /// The same, for an ICMPv6 message.
-    pub(crate) fn report_v6_error(&mut self, quoted: &[u8], code: u8) {
+    pub(crate) fn report_v6_error(&mut self, body: &[u8], code: u8) {
+        // Past the four unused bytes RFC 4443 puts after the code.
+        let Some(quoted) = body.get(4..) else {
+            return;
+        };
         let Ok(packet) = ipv6::Header::parse(quoted) else {
             return;
         };
@@ -174,6 +179,7 @@ impl Stack {
         let Some(ports) = transport.first_chunk::<4>() else {
             return;
         };
+        self.counters.errors_reported += 1;
         let from = u16::from_be_bytes([ports[0], ports[1]]);
         let to = u16::from_be_bytes([ports[2], ports[3]]);
         // The quoted packet is one this host sent, so its source is our local
@@ -218,6 +224,7 @@ impl Stack {
         let quote = transport
             .get(..QUOTE_BYTES.min(transport.len()))
             .unwrap_or(&[]);
+        self.counters.unreachable_sent += 1;
         match (source, destination) {
             (IpAddress::V4(from), IpAddress::V4(to)) => {
                 self.unreachable_v4(from, to, quote, now);
@@ -289,11 +296,19 @@ impl Stack {
             return;
         };
         body.copy_from_slice(quote);
-        let mut packet = vec![0_u8; icmpv6::HEADER_LEN + 4 + quoted.len()];
+        // RFC 4443: the four bytes after the code are unused and are part of
+        // the body as `libs/netwire` counts it, whose header is the type, the
+        // code and the checksum. Leaving them out makes a message whose
+        // checksum is taken over a different length than the receiver takes
+        // it over, which is a packet nobody can read.
+        let mut body = Vec::with_capacity(4 + quoted.len());
+        body.extend_from_slice(&[0_u8; 4]);
+        body.extend_from_slice(&quoted);
+        let mut packet = vec![0_u8; icmpv6::HEADER_LEN + body.len()];
         let message = icmpv6::Message {
             kind: icmpv6::kind::DESTINATION_UNREACHABLE,
             code: 4,
-            body: &quoted,
+            body: &body,
         };
         if message
             .emit(from.octets(), to.octets(), &mut packet)

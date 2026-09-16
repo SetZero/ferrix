@@ -157,6 +157,8 @@ dependencies = [
  "ferrix-heap",
  "ferrix-linux-abi",
  "ferrix-native-abi",
+ "ferrix-net",
+ "ferrix-nettcp",
  "ferrix-objects",
  "ferrix-paging",
  "ferrix-pci",

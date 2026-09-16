@@ -776,7 +776,7 @@ fn buffer_size(requested: i32) -> usize {
 }
 
 /// A timeout in nanoseconds as the `timeval` of `width` a program reads.
-fn timeval(nanos: u64, width: Width) -> Vec<u8> {
+pub(crate) fn timeval(nanos: u64, width: Width) -> Vec<u8> {
     let mut bytes = vec![0_u8; width.bytes() * 2];
     let _ = width.put_word(&mut bytes, 0, nanos / NANOS_PER_SECOND);
     let _ = width.put_word(
@@ -789,7 +789,7 @@ fn timeval(nanos: u64, width: Width) -> Vec<u8> {
 
 /// A `timeval` of `width` as a timeout in nanoseconds: `sock_set_timeout`'s
 /// rules. All zero waits forever; negative seconds give up at once.
-fn read_timeval(value: &[u8], width: Width) -> Result<u64, Errno> {
+pub(crate) fn read_timeval(value: &[u8], width: Width) -> Result<u64, Errno> {
     let seconds = width.word(value, 0).ok_or(Errno::EINVAL)?;
     let micros = width.word(value, width.bytes()).ok_or(Errno::EINVAL)?;
     // Signed fields, of the width's size.
@@ -1004,4 +1004,82 @@ pub(crate) fn new_pair(
 /// The socket an open file reads and writes through, if it is one.
 pub(crate) fn of(file: &OpenFile) -> Option<Arc<Socket>> {
     Arc::clone(file.io()).into_any().downcast::<Socket>().ok()
+}
+
+/// The next inode number on sockfs.
+///
+/// Every socket has one of its own, whatever family it is: `/proc/self/fd`
+/// shows it and `fstat` reports it, and two sockets sharing a number would be
+/// two sockets a program cannot tell apart.
+pub(crate) fn next_ino() -> u64 {
+    sockfs().next_ino.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The metadata a socket of any family reports: `S_IFSOCK | 0777` on sockfs,
+/// as on Linux.
+pub(crate) fn socket_metadata(ino: u64, (uid, gid): (u32, u32)) -> Metadata {
+    let now = fs::clock().now();
+    Metadata {
+        ino,
+        kind: FileType::Socket,
+        permissions: 0o777,
+        nlink: 1,
+        uid,
+        gid,
+        size: 0,
+        rdev: 0,
+        blocks: 0,
+        block_size: BLOCK_SIZE,
+        atime: now,
+        mtime: now,
+        ctime: now,
+    }
+}
+
+/// An open file on a socket of any family, at a detached location on sockfs.
+///
+/// This is what puts an `AF_INET` socket on the same filesystem as an
+/// `AF_UNIX` one, so that `fstat`, `fstatfs` and `/proc/self/fd` answer the
+/// same way for both without the net core knowing what sockfs is.
+///
+/// # Errors
+///
+/// Whatever [`OpenFile::new`] refuses, which for a socket is nothing.
+pub(crate) fn open_on_sockfs(
+    inode: Arc<dyn Inode>,
+    ino: u64,
+    nonblock: bool,
+) -> Result<Arc<OpenFile>, Errno> {
+    let name = format!("socket:[{ino}]");
+    let flags = OpenFlags {
+        read: true,
+        write: true,
+        nonblock,
+        ..OpenFlags::default()
+    };
+    let sockfs: Arc<SockFs> = Arc::clone(sockfs());
+    let parker = Arc::clone(fs::namespace().parker());
+    OpenFile::new(
+        Location::detached(sockfs, inode, name.as_bytes(), parker),
+        &flags,
+    )
+}
+
+/// Sleep on `queue` until `ready`, the caller has a signal to take, or
+/// `deadline` passes, answering the way a socket call answers.
+///
+/// Shared with the net core so that an `AF_INET` socket's wait is the same
+/// wait an `AF_UNIX` one makes, down to which errno a signal turns into.
+pub(crate) fn wait_on(
+    queue: &WaitQueue,
+    ready: impl FnMut() -> bool,
+    deadline: u64,
+) -> Result<(), Errno> {
+    wait(queue, ready, deadline)
+}
+
+/// When a wait with `timeout` nanoseconds of patience must give up; zero waits
+/// forever.
+pub(crate) fn deadline_after(timeout: u64) -> u64 {
+    deadline(timeout)
 }

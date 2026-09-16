@@ -63,6 +63,7 @@ Causes are listed most likely first.
 | [FX-1005](#fx-1005) | the ring-3 virtio-blk driver did not serve the test disk |
 | [FX-1006](#fx-1006) | devmgr could not be started, or did not report |
 | [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
+| [FX-1150](#fx-1150) | the net core did not carry a packet round its own loopback |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -1252,6 +1253,37 @@ printed before the report.
 
 See: kernel/src/fs/btrfs_check.rs; kernel/src/fs/btrfs.rs; libs/btrfs-vfs;
 xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11.
+
+<a id="fx-1150"></a>
+
+## FX-1150 — the net core did not carry a packet round its own loopback
+
+The net core is `libs/net` behind one lock, driven by a kernel task. Its check
+uses the loopback and nothing else, so it passes on a machine with no network
+device: a datagram sent to a bound port must arrive with its sender's address, a
+datagram to an empty port must earn ECONNREFUSED from the unreachable this host
+sends itself, a connection to a listening port must be made, accepted, carry
+bytes both ways and end as a clean close, and a connection to a port nobody
+listens on must be refused rather than left to time out — all of it over IPv4
+and again over IPv6.
+
+1. The loopback interface is not up, or does not own 127.0.0.1 and ::1:
+   `Stack::new` no longer adds it, or `add_local_routes` no longer gives it its
+   two routes.
+2. A packet routed to the loopback was handed out instead of going back up the
+   input path: `Stack::poll_transmit`'s loopback turn, or
+   `NetCore::take_frames`, changed.
+3. A socket call reached the stack and the stack did not move: the net core's
+   task is not running, or `NetCore::with` stopped draining the egress after the
+   call.
+4. A blocking call waited for ever: the wait's condition and what wakes it
+   disagree, or `NetCore::progress` is no longer woken after the stack moves.
+5. A connection was refused that should have been made, or made that should have
+   been refused: the listener lookup in `libs/net`'s TCP input, or the reset it
+   sends a segment with nowhere to go.
+
+See: kernel/src/net/check.rs; kernel/src/net/mod.rs; libs/net; libs/nettcp;
+docs/ROADMAP.md.
 
 <a id="fx-9001"></a>
 

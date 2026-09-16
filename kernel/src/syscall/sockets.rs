@@ -33,16 +33,21 @@ use alloc::vec::Vec;
 
 use ferrix_bootinfo::is_user_address;
 use ferrix_linux_abi::errno::Errno;
+use ferrix_linux_abi::inet::{
+    IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_TCP, IPPROTO_UDP, SOCKADDR_STORAGE_SIZE,
+};
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::socket::{
-    AF_MAX, AF_UNIX, ControlMessages, MSG_CMSG_COMPAT, MSG_OOB, MSG_TRUNC, MsgHdr, SCM_CREDENTIALS,
-    SCM_RIGHTS, SOCK_CLOEXEC, SOCK_NONBLOCK, SOCK_TYPE_MASK, SOCKADDR_UN_SIZE, SOL_SOCKET,
-    UnixAddress, Width,
+    AF_INET, AF_INET6, AF_MAX, AF_UNIX, ControlMessages, MSG_CMSG_COMPAT, MSG_OOB, MSG_TRUNC,
+    MsgHdr, SCM_CREDENTIALS, SCM_RIGHTS, SOCK_CLOEXEC, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_RAW,
+    SOCK_STREAM, SOCK_TYPE_MASK, SOCKADDR_UN_SIZE, SOL_SOCKET, UnixAddress, Width,
 };
+use ferrix_net::socket::Family;
 use ferrix_vfs::OpenFile;
 
 use crate::fs;
 use crate::fs::socket::{Received, Socket, SocketType};
+use crate::net::socket::{self as inet, InetKind, InetSocket};
 use crate::syscall::attributes::int;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
@@ -85,13 +90,11 @@ pub(crate) fn dispatch(
     let answer = match call {
         Syscall::Socket => sys_socket(process, int(a[0]), a[1] as u32, int(a[2])),
         Syscall::Socketpair => sys_socketpair(process, int(a[0]), a[1] as u32, int(a[2]), a[3]),
-        // Names arrive with the next landing.
-        Syscall::Bind | Syscall::Listen | Syscall::Accept | Syscall::Connect => {
-            socket_of(process, descriptor).and(Err(Errno::EOPNOTSUPP))
-        }
-        Syscall::Accept4 => known_flags(a[3] as u32)
-            .and_then(|()| socket_of(process, descriptor))
-            .and(Err(Errno::EOPNOTSUPP)),
+        Syscall::Bind => sys_bind(process, descriptor, a[1], a[2]),
+        Syscall::Listen => sys_listen(process, descriptor, int(a[1])),
+        Syscall::Connect => sys_connect(process, descriptor, a[1], a[2]),
+        Syscall::Accept => sys_accept(process, descriptor, a[1], a[2], 0),
+        Syscall::Accept4 => sys_accept(process, descriptor, a[1], a[2], a[3] as u32),
         Syscall::Getsockname => sys_getname(process, descriptor, a[1], a[2], false),
         Syscall::Getpeername => sys_getname(process, descriptor, a[1], a[2], true),
         Syscall::Shutdown => sys_shutdown(process, descriptor, a[1] as u32),
@@ -101,6 +104,7 @@ pub(crate) fn dispatch(
             a[1],
             a[2],
             a[3] as u32,
+            a[4],
             name_length(a[4], a[5]),
         ),
         Syscall::Recvfrom => sys_recvfrom(process, descriptor, a[1], a[2], a[3] as u32, a[4], a[5]),
@@ -117,6 +121,170 @@ pub(crate) fn dispatch(
     Some(answer)
 }
 
+/// A socket reached through a descriptor, whatever family it is.
+///
+/// The syscall layer is one set of checks in Linux's order, and only the last
+/// step of each call differs between the families. This is that step: every
+/// call above takes an `Any` and asks it, so the order of the checks cannot
+/// drift apart between `AF_UNIX` and `AF_INET`.
+#[derive(Debug)]
+enum Any {
+    /// An `AF_UNIX` socket.
+    Unix(Arc<Socket>),
+    /// An `AF_INET` or `AF_INET6` socket.
+    Inet(Arc<InetSocket>),
+}
+
+impl Any {
+    /// Its type, as `SO_TYPE` reports it.
+    fn kind(&self) -> SocketType {
+        match self {
+            Any::Unix(socket) => socket.kind(),
+            Any::Inet(socket) => match socket.kind() {
+                InetKind::Stream => SocketType::Stream,
+                InetKind::Datagram | InetKind::Echo => SocketType::Datagram,
+            },
+        }
+    }
+
+    /// Whether it has a peer.
+    fn is_connected(&self) -> bool {
+        match self {
+            Any::Unix(socket) => socket.is_connected(),
+            Any::Inet(socket) => socket.is_connected(),
+        }
+    }
+
+    /// Stop one or both directions.
+    fn shutdown(&self, how: u32) -> Result<(), Errno> {
+        match self {
+            Any::Unix(socket) => socket.shutdown(how),
+            Any::Inet(socket) => socket.shutdown(how),
+        }
+    }
+
+    /// Send, to `to` if the call named a destination.
+    fn send(
+        &self,
+        data: &[u8],
+        flags: u32,
+        nonblock: bool,
+        to: Option<&[u8]>,
+    ) -> Result<usize, Errno> {
+        match self {
+            Any::Unix(socket) => socket.send(data, flags, nonblock),
+            Any::Inet(socket) => socket.send(data, flags, nonblock, to),
+        }
+    }
+
+    /// Receive, and say where it came from.
+    fn recv(
+        &self,
+        out: &mut [u8],
+        flags: u32,
+        nonblock: bool,
+    ) -> Result<(Received, Option<Vec<u8>>), Errno> {
+        match self {
+            Any::Unix(socket) => socket.recv(out, flags, nonblock).map(|taken| (taken, None)),
+            Any::Inet(socket) => socket.recv(out, flags, nonblock).map(|(taken, from)| {
+                (
+                    Received {
+                        bytes: taken.bytes,
+                        full: taken.full,
+                    },
+                    from,
+                )
+            }),
+        }
+    }
+
+    /// An option's value.
+    fn get_option(&self, level: i32, name: i32, width: Width) -> Result<Vec<u8>, Errno> {
+        match self {
+            Any::Unix(socket) => socket.get_option(level, name, width),
+            Any::Inet(socket) => socket.get_option(level, name, width),
+        }
+    }
+
+    /// Set an option.
+    fn set_option(&self, level: i32, name: i32, value: &[u8], width: Width) -> Result<(), Errno> {
+        match self {
+            Any::Unix(socket) => socket.set_option(level, name, value, width),
+            Any::Inet(socket) => socket.set_option(level, name, value, width),
+        }
+    }
+
+    /// The name it is bound to, as a `sockaddr`.
+    ///
+    /// An `AF_UNIX` socket without a name is `AF_UNIX` alone, two bytes long,
+    /// which is what Linux reports for one.
+    fn local_name(&self) -> Result<Vec<u8>, Errno> {
+        match self {
+            Any::Unix(_) => unnamed(),
+            Any::Inet(socket) => Ok(socket.local_name()),
+        }
+    }
+
+    /// The name of its peer.
+    fn peer_name(&self) -> Result<Vec<u8>, Errno> {
+        match self {
+            Any::Unix(_) => unnamed(),
+            Any::Inet(socket) => socket.peer_name().ok_or(Errno::ENOTCONN),
+        }
+    }
+
+    /// Give it a name.
+    fn bind(&self, raw: &[u8]) -> Result<(), Errno> {
+        match self {
+            // `AF_UNIX` names arrive with the landing after this one.
+            Any::Unix(_) => Err(Errno::EOPNOTSUPP),
+            Any::Inet(socket) => socket.bind(raw),
+        }
+    }
+
+    /// Start listening.
+    fn listen(&self, backlog: i32) -> Result<(), Errno> {
+        match self {
+            Any::Unix(_) => Err(Errno::EOPNOTSUPP),
+            Any::Inet(socket) => socket.listen(backlog),
+        }
+    }
+
+    /// Connect to a peer.
+    fn connect(&self, raw: &[u8], nonblock: bool) -> Result<(), Errno> {
+        match self {
+            Any::Unix(_) => Err(Errno::EOPNOTSUPP),
+            Any::Inet(socket) => socket.connect(raw, nonblock),
+        }
+    }
+
+    /// Take a connection, and say who made it.
+    fn accept(&self, nonblock: bool, owner: (u32, u32)) -> Result<(Arc<OpenFile>, Vec<u8>), Errno> {
+        match self {
+            Any::Unix(_) => Err(Errno::EOPNOTSUPP),
+            Any::Inet(socket) => socket.accept(nonblock, owner),
+        }
+    }
+}
+
+/// The unnamed `AF_UNIX` address, which is a family and nothing else.
+fn unnamed() -> Result<Vec<u8>, Errno> {
+    let mut encoded = [0_u8; SOCKADDR_UN_SIZE + 1];
+    let actual = UnixAddress::Unnamed
+        .encode(&mut encoded)
+        .ok_or(Errno::EINVAL)?;
+    Ok(encoded.get(..actual).unwrap_or_default().to_vec())
+}
+
+/// What a `socket` call asked for.
+#[derive(Clone, Copy, Debug)]
+enum Opened {
+    /// An `AF_UNIX` socket of this type.
+    Unix(SocketType),
+    /// An `AF_INET` or `AF_INET6` socket of this kind.
+    Inet(Family, InetKind),
+}
+
 /// Only `SOCK_NONBLOCK` and `SOCK_CLOEXEC` may accompany a type, or be given
 /// to `accept4`.
 fn known_flags(flags: u32) -> Result<(), Errno> {
@@ -126,15 +294,22 @@ fn known_flags(flags: u32) -> Result<(), Errno> {
     Ok(())
 }
 
-/// The `AF_UNIX` socket type `socket`'s arguments name: `__sys_socket`,
-/// `__sock_create` and `unix_create`'s checks, in their order.
-fn socket_type(family: i32, kind: u32, protocol: i32) -> Result<SocketType, Errno> {
+/// What `socket`'s arguments name: `__sys_socket`, `__sock_create` and the
+/// family's own create function, in their order.
+fn socket_type(family: i32, kind: u32, protocol: i32) -> Result<Opened, Errno> {
     known_flags(kind & !SOCK_TYPE_MASK)?;
     if !(0..i32::from(AF_MAX)).contains(&family) {
         return Err(Errno::EAFNOSUPPORT);
     }
     if kind & SOCK_TYPE_MASK >= SOCK_MAX {
         return Err(Errno::EINVAL);
+    }
+    let kind = kind & SOCK_TYPE_MASK;
+    if family == i32::from(AF_INET) {
+        return inet_type(Family::V4, kind, protocol);
+    }
+    if family == i32::from(AF_INET6) {
+        return inet_type(Family::V6, kind, protocol);
     }
     if family != i32::from(AF_UNIX) {
         return Err(Errno::EAFNOSUPPORT);
@@ -143,7 +318,30 @@ fn socket_type(family: i32, kind: u32, protocol: i32) -> Result<SocketType, Errn
     if protocol != 0 && protocol != i32::from(AF_UNIX) {
         return Err(Errno::EPROTONOSUPPORT);
     }
-    SocketType::from_linux(kind & SOCK_TYPE_MASK).ok_or(Errno::ESOCKTNOSUPPORT)
+    SocketType::from_linux(kind)
+        .map(Opened::Unix)
+        .ok_or(Errno::ESOCKTNOSUPPORT)
+}
+
+/// The `AF_INET` or `AF_INET6` socket a type and a protocol name.
+///
+/// `SOCK_RAW` is `EPERM` rather than `EPROTONOSUPPORT`: Linux has raw sockets
+/// and refuses them to a process without `CAP_NET_RAW`, and a program that
+/// falls back to the unprivileged echo socket -- as busybox's `ping` does --
+/// only does so on `EPERM`.
+fn inet_type(family: Family, kind: u32, protocol: i32) -> Result<Opened, Errno> {
+    let echo = match family {
+        Family::V4 => IPPROTO_ICMP,
+        Family::V6 => IPPROTO_ICMPV6,
+    };
+    match (kind, protocol) {
+        (SOCK_STREAM, 0 | IPPROTO_TCP) => Ok(Opened::Inet(family, InetKind::Stream)),
+        (SOCK_DGRAM, 0 | IPPROTO_UDP) => Ok(Opened::Inet(family, InetKind::Datagram)),
+        (SOCK_DGRAM, given) if given == echo => Ok(Opened::Inet(family, InetKind::Echo)),
+        (SOCK_RAW, _) => Err(Errno::EPERM),
+        (SOCK_STREAM | SOCK_DGRAM, _) => Err(Errno::EPROTONOSUPPORT),
+        _ => Err(Errno::ESOCKTNOSUPPORT),
+    }
 }
 
 /// `socket`.
@@ -153,9 +351,13 @@ pub(crate) fn sys_socket(
     kind: u32,
     protocol: i32,
 ) -> Result<usize, Errno> {
-    let socket_type = socket_type(family, kind, protocol)?;
+    let opened = socket_type(family, kind, protocol)?;
     let owner = crate::syscall::path::creator_ids(process);
-    let file = fs::socket::new_socket(socket_type, kind & SOCK_NONBLOCK != 0, owner)?;
+    let nonblock = kind & SOCK_NONBLOCK != 0;
+    let file = match opened {
+        Opened::Unix(socket_type) => fs::socket::new_socket(socket_type, nonblock, owner)?,
+        Opened::Inet(family, kind) => InetSocket::open(family, kind, nonblock, owner)?,
+    };
     let descriptor = process
         .files()
         .lock()
@@ -179,7 +381,12 @@ pub(crate) fn sys_socketpair(
 ) -> Result<usize, Errno> {
     known_flags(kind & !SOCK_TYPE_MASK)?;
     user_buffer(pair, 8)?;
-    let socket_type = socket_type(family, kind, protocol)?;
+    let socket_type = match socket_type(family, kind, protocol)? {
+        Opened::Unix(socket_type) => socket_type,
+        // `inet_socketpair` is `sock_no_socketpair`: the internet families
+        // have no way to make two connected sockets without a listener.
+        Opened::Inet(_, _) => return Err(Errno::EOPNOTSUPP),
+    };
     let (one, other) = fs::socket::new_pair(socket_type, kind & SOCK_NONBLOCK != 0, process)?;
     let (first, second) = install_pair(process, one, other, kind & SOCK_CLOEXEC != 0)?;
     let numbers: Vec<u8> = first
@@ -242,10 +449,13 @@ fn user_buffer(at: u64, len: u64) -> Result<(), Errno> {
 /// The socket behind `descriptor`, with the open file it was reached through:
 /// `EBADF` if nothing is open there, and `ENOTSOCK` if something that is not a
 /// socket is.
-fn socket_of(process: &Process, descriptor: i32) -> Result<(Arc<OpenFile>, Arc<Socket>), Errno> {
+fn socket_of(process: &Process, descriptor: i32) -> Result<(Arc<OpenFile>, Any), Errno> {
     let file = fd::file(process, descriptor)?;
-    let socket = fs::socket::of(&file).ok_or(Errno::ENOTSOCK)?;
-    Ok((file, socket))
+    if let Some(socket) = fs::socket::of(&file) {
+        return Ok((file, Any::Unix(socket)));
+    }
+    let socket = inet::of(&file).ok_or(Errno::ENOTSOCK)?;
+    Ok((file, Any::Inet(socket)))
 }
 
 /// A length a program gave for a buffer it passes by pointer: `EINVAL` if it
@@ -256,9 +466,11 @@ fn buffer_length(process: &Process, at: u64) -> Result<usize, Errno> {
     usize::try_from(length).map_err(|_| Errno::EINVAL)
 }
 
-/// `getsockname`, and `getpeername` with `peer`: a socket without a name is
-/// reported as `AF_UNIX` alone, two bytes long, as Linux reports it; and every
-/// socket is without one until names land.
+/// `getsockname`, and `getpeername` with `peer`.
+///
+/// An `AF_UNIX` socket without a name is reported as `AF_UNIX` alone, two
+/// bytes long, as Linux reports it; an internet socket reports the address and
+/// port it is bound or connected to.
 fn sys_getname(
     process: &Process,
     descriptor: i32,
@@ -271,18 +483,132 @@ fn sys_getname(
         return Err(Errno::ENOTCONN);
     }
     let capacity = buffer_length(process, length)?;
-    let mut encoded = [0_u8; SOCKADDR_UN_SIZE + 1];
-    let actual = UnixAddress::Unnamed
-        .encode(&mut encoded)
-        .ok_or(Errno::EINVAL)?;
-    let shown = encoded.get(..capacity.min(actual)).unwrap_or_default();
-    uaccess::copy_to_user(process.space(), address, shown).map_err(|_| Errno::EFAULT)?;
-    uaccess::put_u32(
-        process.space(),
-        length,
-        u32::try_from(actual).unwrap_or(u32::MAX),
-    )?;
+    let encoded = if peer {
+        socket.peer_name()?
+    } else {
+        socket.local_name()?
+    };
+    write_address(process, address, length, &encoded, capacity)?;
     Ok(0)
+}
+
+/// Write a `sockaddr` back to a program, cut to the room it offered, with the
+/// length it would have taken.
+///
+/// That is Linux's `move_addr_to_user`: the length reported is the address's
+/// own, not the number of bytes written, so a program that gave a short buffer
+/// can tell it was cut.
+fn write_address(
+    process: &Process,
+    address: u64,
+    length: u64,
+    encoded: &[u8],
+    capacity: usize,
+) -> Result<(), Errno> {
+    if address != 0 {
+        let shown = encoded
+            .get(..capacity.min(encoded.len()))
+            .unwrap_or_default();
+        uaccess::copy_to_user(process.space(), address, shown).map_err(|_| Errno::EFAULT)?;
+    }
+    if length != 0 {
+        uaccess::put_u32(
+            process.space(),
+            length,
+            u32::try_from(encoded.len()).unwrap_or(u32::MAX),
+        )?;
+    }
+    Ok(())
+}
+
+/// A `sockaddr` a program passed by pointer and length.
+fn read_address(process: &Process, address: u64, length: u64) -> Result<Vec<u8>, Errno> {
+    let length = length & u64::from(u32::MAX);
+    if (length as u32).cast_signed() < 0 {
+        return Err(Errno::EINVAL);
+    }
+    let length = usize::try_from(length).map_err(|_| Errno::EINVAL)?;
+    if length > SOCKADDR_STORAGE_SIZE {
+        return Err(Errno::EINVAL);
+    }
+    // `move_addr_to_kernel` takes a length of zero and copies nothing, leaving
+    // the family to refuse an address it cannot read. Refusing here instead
+    // would answer `EINVAL` where Linux answers whatever the family answers.
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    copy_in(process, address, length)
+}
+
+/// `bind`.
+fn sys_bind(process: &Process, descriptor: i32, address: u64, length: u64) -> Result<usize, Errno> {
+    let (_file, socket) = socket_of(process, descriptor)?;
+    let raw = read_address(process, address, length)?;
+    socket.bind(&raw)?;
+    Ok(0)
+}
+
+/// `listen`.
+fn sys_listen(process: &Process, descriptor: i32, backlog: i32) -> Result<usize, Errno> {
+    let (_file, socket) = socket_of(process, descriptor)?;
+    socket.listen(backlog)?;
+    Ok(0)
+}
+
+/// `connect`.
+fn sys_connect(
+    process: &Process,
+    descriptor: i32,
+    address: u64,
+    length: u64,
+) -> Result<usize, Errno> {
+    let (file, socket) = socket_of(process, descriptor)?;
+    let raw = read_address(process, address, length)?;
+    socket.connect(&raw, file.status().nonblock)?;
+    Ok(0)
+}
+
+/// `accept` and `accept4`: the connection is installed as a new descriptor and
+/// the peer's address written back.
+///
+/// The new descriptor's non-blocking and close-on-exec flags come from
+/// `accept4`'s own flags and are not inherited from the listener, which is
+/// what Linux does and what a program that forgets to set them relies on.
+fn sys_accept(
+    process: &Process,
+    descriptor: i32,
+    address: u64,
+    length: u64,
+    flags: u32,
+) -> Result<usize, Errno> {
+    known_flags(flags)?;
+    let (file, socket) = socket_of(process, descriptor)?;
+    let owner = crate::syscall::path::creator_ids(process);
+    let nonblock = flags & SOCK_NONBLOCK != 0;
+    let (accepted, peer) = socket.accept(file.status().nonblock, owner)?;
+    if nonblock {
+        let mut status = accepted.status();
+        status.nonblock = true;
+        accepted.set_status(status);
+    }
+    let taken = process
+        .files()
+        .lock()
+        .insert(accepted, flags & SOCK_CLOEXEC != 0)?;
+    // The address is written last, as `__sys_accept4` writes it: a program
+    // that passed an unreadable length still gets its connection taken, and
+    // closing the descriptor again is this call's job rather than its
+    // caller's.
+    if address != 0 {
+        let written = buffer_length(process, length)
+            .and_then(|capacity| write_address(process, address, length, &peer, capacity));
+        if let Err(errno) = written {
+            let displaced = process.files().lock().remove(taken);
+            drop(displaced);
+            return Err(errno);
+        }
+    }
+    usize::try_from(taken).map_err(|_| Errno::EMFILE)
 }
 
 /// `shutdown`.
@@ -297,9 +623,17 @@ fn sys_shutdown(process: &Process, descriptor: i32, how: u32) -> Result<usize, E
 /// `EOPNOTSUPP`, as `unix_stream_sendmsg` does; a sequenced-packet socket
 /// ignores it, as `unix_seqpacket_sendmsg` does; and a datagram to a name
 /// waits for names.
-fn check_destination(socket: &Socket, length: u64) -> Result<(), Errno> {
+fn check_destination(socket: &Any, length: u64) -> Result<(), Errno> {
     if length == 0 {
         return Ok(());
+    }
+    if let Any::Inet(_) = socket {
+        // An internet datagram socket takes a destination on every send; a
+        // connected stream one refuses it, as `tcp_sendmsg` does.
+        return match socket.kind() {
+            SocketType::Stream => Err(Errno::EISCONN),
+            SocketType::Datagram | SocketType::SeqPacket => Ok(()),
+        };
     }
     match socket.kind() {
         SocketType::Stream if socket.is_connected() => Err(Errno::EISCONN),
@@ -336,7 +670,7 @@ fn copy_in(process: &Process, at: u64, length: usize) -> Result<Vec<u8>, Errno> 
 
 /// What a receive answers: a record's whole length under `MSG_TRUNC`, and the
 /// bytes copied otherwise.
-fn received_count(socket: &Socket, received: Received, flags: u32) -> usize {
+fn received_count(socket: &Any, received: Received, flags: u32) -> usize {
     if flags & MSG_TRUNC != 0 && socket.kind() != SocketType::Stream {
         received.full
     } else {
@@ -366,6 +700,7 @@ fn sys_sendto(
     buffer: u64,
     length: u64,
     flags: u32,
+    a_address: u64,
     address_length: u64,
 ) -> Result<usize, Errno> {
     user_buffer(buffer, length)?;
@@ -379,8 +714,13 @@ fn sys_sendto(
     if flags & MSG_OOB != 0 {
         return Err(Errno::EOPNOTSUPP);
     }
+    let destination = if address_length == 0 {
+        None
+    } else {
+        Some(read_address(process, a_address, address_length)?)
+    };
     let data = copy_in(process, buffer, clamped(length))?;
-    socket.send(&data, flags, file.status().nonblock)
+    socket.send(&data, flags, file.status().nonblock, destination.as_deref())
 }
 
 /// `recvfrom`. A peer without a name reports an address of length zero, as
@@ -399,12 +739,18 @@ fn sys_recvfrom(
     if flags & MSG_OOB != 0 {
         return Err(Errno::EOPNOTSUPP);
     }
+    let capacity = if address == 0 {
+        0
+    } else {
+        buffer_length(process, address_length)?
+    };
     let mut data = zeroed(clamped(length))?;
-    let received = socket.recv(&mut data, flags, file.status().nonblock)?;
+    let (received, from) = socket.recv(&mut data, flags, file.status().nonblock)?;
     let taken = data.get(..received.bytes).unwrap_or_default();
     uaccess::copy_to_user(process.space(), buffer, taken).map_err(|_| Errno::EFAULT)?;
     if address != 0 {
-        uaccess::put_u32(process.space(), address_length, 0)?;
+        let encoded = from.unwrap_or_default();
+        write_address(process, address, address_length, &encoded, capacity)?;
     }
     Ok(received_count(&socket, received, flags))
 }
@@ -488,10 +834,16 @@ fn sys_sendmsg(
     }
     let (file, socket) = socket_of(process, descriptor)?;
     let message = read_header(process, header)?;
-    check_destination(&socket, name_length_of(&message)?)?;
+    let name_length = name_length_of(&message)?;
+    check_destination(&socket, name_length)?;
     if flags & MSG_OOB != 0 {
         return Err(Errno::EOPNOTSUPP);
     }
+    let destination = if name_length == 0 {
+        None
+    } else {
+        Some(read_address(process, message.name, name_length)?)
+    };
     let segments = iovecs(process, &message)?;
     check_control(process, &message)?;
     let total = segments
@@ -510,7 +862,7 @@ fn sys_sendmsg(
         uaccess::copy_from_user(process.space(), base, slot).map_err(|_| Errno::EFAULT)?;
         filled += take;
     }
-    socket.send(&data, flags, file.status().nonblock)
+    socket.send(&data, flags, file.status().nonblock, destination.as_deref())
 }
 
 /// `recvmsg`: one receive scattered over the message's buffers, with its
@@ -537,8 +889,13 @@ fn sys_recvmsg(
         .map(|&(_, length)| length)
         .sum::<usize>()
         .min(MAX_TRANSFER);
+    let capacity = if message.name == 0 {
+        0
+    } else {
+        usize::try_from(message.name_len).unwrap_or(0)
+    };
     let mut data = zeroed(total)?;
-    let received = socket.recv(&mut data, flags, file.status().nonblock)?;
+    let (received, from) = socket.recv(&mut data, flags, file.status().nonblock)?;
     let mut offset = 0;
     for (base, length) in segments {
         if offset >= received.bytes {
@@ -551,7 +908,14 @@ fn sys_recvmsg(
     }
     let field = |offset: usize| header.saturating_add(offset as u64);
     if message.name != 0 {
-        uaccess::put_u32(process.space(), field(MsgHdr::name_len_offset(NATIVE)), 0)?;
+        let encoded = from.unwrap_or_default();
+        write_address(
+            process,
+            message.name,
+            field(MsgHdr::name_len_offset(NATIVE)),
+            &encoded,
+            capacity,
+        )?;
     }
     let truncated = socket.kind() != SocketType::Stream && received.full > received.bytes;
     uaccess::put_u32(
