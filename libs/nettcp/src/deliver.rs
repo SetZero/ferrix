@@ -32,6 +32,10 @@ impl Connection {
         if start == self.rcv_nxt {
             self.deliver(bytes);
             self.drain_holes();
+            self.unacknowledged_segments += 1;
+            if self.unacknowledged_segments >= 2 {
+                self.ack_immediately = true;
+            }
         } else {
             self.holes.insert(start, bytes);
             // A hole means a segment was lost or reordered. The peer learns

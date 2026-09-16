@@ -228,6 +228,7 @@ impl Connection {
         }
         self.ack_immediately = false;
         self.delayed_ack_at = None;
+        self.unacknowledged_segments = 0;
         self.arm_persist(now);
         Some(Transmit {
             header,
@@ -355,6 +356,7 @@ impl Connection {
         }
         self.ack_immediately = false;
         self.delayed_ack_at = None;
+        self.unacknowledged_segments = 0;
         Some(Transmit {
             header: self.header(Flags::ACK, self.snd_nxt),
             payload_len: 0,
@@ -414,6 +416,7 @@ impl Connection {
         }
         self.ack_immediately = false;
         self.delayed_ack_at = None;
+        self.unacknowledged_segments = 0;
         self.arm_retransmit(now);
     }
 

@@ -165,3 +165,36 @@ fn nagle_holds_small_writes_together_and_no_delay_does_not() {
         "Nagle sent {nagled} segments and TCP_NODELAY {prompt_segments}"
     );
 }
+
+#[test]
+fn every_second_segment_is_acknowledged_at_once_and_a_lone_one_waits() {
+    let eager = Config {
+        no_delay: true,
+        ..Config::default()
+    };
+    let mut link = Link::new(eager, Config::default());
+    link.settle();
+    let segment = usize::from(link.client.segment_size());
+
+    let _ = link.client.write(&body(segment));
+    link.exchange();
+    assert!(
+        link.client.in_flight() > 0,
+        "one segment alone is held for the delayed acknowledgment"
+    );
+    link.settle();
+    assert_eq!(
+        link.client.in_flight(),
+        0,
+        "and acknowledged once the delayed acknowledgment fires"
+    );
+
+    let _ = link.client.write(&body(2 * segment));
+    link.exchange();
+    assert_eq!(
+        link.client.in_flight(),
+        0,
+        "two segments are acknowledged without the clock moving"
+    );
+    assert_eq!(link.drain(End::Server).len(), 3 * segment);
+}

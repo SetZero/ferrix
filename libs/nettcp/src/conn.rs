@@ -180,6 +180,12 @@ pub struct Connection {
     /// Whether an acknowledgment must be sent at the next opportunity rather
     /// than held back.
     pub(crate) ack_immediately: bool,
+    /// Segments of data taken in order since the last acknowledgment went.
+    /// The second one is acknowledged at once: RFC 9293 section 3.8.6.3 says
+    /// a receiver SHOULD acknowledge at least every second full-sized segment,
+    /// and holding every acknowledgment for [`DELAYED_ACK`] leaves a sender
+    /// waiting on a window it has already filled.
+    pub(crate) unacknowledged_segments: u32,
     /// Whether a window probe is owed because the peer's window is shut.
     pub(crate) probe_pending: bool,
     /// How many probes have gone into a shut window without it opening.
@@ -228,6 +234,7 @@ impl Connection {
             fin_received: false,
             reset_pending: false,
             ack_immediately: false,
+            unacknowledged_segments: 0,
             probe_pending: false,
             probes: 0,
             sack_permitted: false,
