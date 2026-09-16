@@ -38,6 +38,10 @@ pub(crate) const ARCH: Arch = Arch::AArch64;
 pub(crate) const STAT_LAYOUT: crate::syscall::stat::StatLayout =
     crate::syscall::stat::StatLayout::Generic;
 
+/// AArch64's `struct epoll_event`, 16 bytes: not packed, so `data` is
+/// aligned at offset 8.
+pub(crate) const EPOLL_EVENT_BYTES: usize = 16;
+
 /// The page table descriptor layout this machine uses.
 pub(crate) type PageEncoding = ferrix_paging::aarch64::AArch64;
 

@@ -1237,6 +1237,20 @@ impl Inode for Socket {
         self.readiness()
     }
 
+    /// Every queue its readiness reads: its own direction's two, its peer's
+    /// two while it has one, and the backlog's.
+    fn poll_changes(&self) -> Option<u64> {
+        let own = self
+            .receive
+            .readable
+            .wakes()
+            .wrapping_add(self.receive.writable.wakes());
+        let peer = self.send.lock().as_ref().map_or(0, |peer| {
+            peer.readable.wakes().wrapping_add(peer.writable.wakes())
+        });
+        Some(own.wrapping_add(peer).wrapping_add(self.arrivals.wakes()))
+    }
+
     fn read_stream(&self, buf: &mut [u8], nonblock: bool) -> ferrix_vfs::Result<usize> {
         self.recv(buf, 0, nonblock).map(|received| received.bytes)
     }

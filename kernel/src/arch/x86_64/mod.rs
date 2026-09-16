@@ -40,6 +40,11 @@ pub(crate) const ARCH: Arch = Arch::X86_64;
 pub(crate) const STAT_LAYOUT: crate::syscall::stat::StatLayout =
     crate::syscall::stat::StatLayout::Legacy;
 
+/// x86-64's `struct epoll_event`, 12 bytes: `EPOLL_PACKED` in
+/// `include/uapi/linux/eventpoll.h`, so `data` follows `events` with no
+/// padding.
+pub(crate) const EPOLL_EVENT_BYTES: usize = 12;
+
 /// The page table descriptor layout this machine uses.
 pub(crate) type PageEncoding = ferrix_paging::x86_64::X86_64;
 

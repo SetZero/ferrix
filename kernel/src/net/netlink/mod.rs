@@ -446,6 +446,12 @@ impl Inode for NetlinkSocket {
         self.readiness()
     }
 
+    /// The net core's progress queue, which every change a socket's
+    /// readiness reads wakes.
+    fn poll_changes(&self) -> Option<u64> {
+        Some(net::core().progress().wakes())
+    }
+
     fn read_stream(&self, buf: &mut [u8], nonblock: bool) -> ferrix_vfs::Result<usize> {
         self.recv(buf, 0, nonblock)
             .map(|(received, _from)| received.bytes)

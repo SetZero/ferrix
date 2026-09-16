@@ -43,6 +43,7 @@ pub(crate) mod attributes;
 pub(crate) mod check;
 pub(crate) mod credentials;
 pub(crate) mod deliver;
+pub(crate) mod epoll;
 pub(crate) mod exec;
 pub(crate) mod family;
 pub(crate) mod fd;
@@ -437,6 +438,12 @@ fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<
         Syscall::Ioctl => fd::sys_ioctl(process, fd, truncate(a[1]), a[2]),
         Syscall::Flock => flock::sys_flock(process, fd, truncate(a[1])),
         Syscall::MemfdCreate => memfd::sys_memfd_create(process, a[0], truncate(a[1])),
+        Syscall::EpollCreate1 => epoll::sys_epoll_create1(process, truncate(a[0])),
+        Syscall::EpollCreate => epoll::sys_epoll_create(process, fd::arg(a[0])),
+        Syscall::EpollCtl => epoll::sys_epoll_ctl(process, fd, truncate(a[1]), fd::arg(a[2]), a[3]),
+        Syscall::EpollWait => {
+            epoll::sys_epoll_wait(process, fd, a[1], fd::arg(a[2]), fd::arg(a[3]))
+        }
         _ => return None,
     };
     Some(answer)

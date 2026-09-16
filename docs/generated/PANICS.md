@@ -55,6 +55,7 @@ Causes are listed most likely first.
 | [FX-0860](#fx-0860) | pipes, a FIFO or the filesystem calls failed their self-check |
 | [FX-0870](#fx-0870) | a shared file mapping failed its self-check |
 | [FX-0880](#fx-0880) | memfd_create or its seals failed their self-check |
+| [FX-0881](#fx-0881) | epoll failed its self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -1017,6 +1018,36 @@ See: kernel/src/fs/memfd_check.rs; kernel/src/syscall/memfd.rs;
 kernel/src/syscall/fd.rs sys_fcntl; kernel/src/syscall/memory.rs map_file;
 kernel/src/user/space.rs map_file, protect; libs/vfs/src/tmpfs.rs add_seals.
 
+<a id="fx-0881"></a>
+
+## FX-0881 — epoll failed its self-check
+
+`fs::epoll_check::run` builds a process, makes epoll sets by number and watches
+pipes with them. A level-triggered registration must report an unread pipe at
+every wait, with the cookie it was added with and only the events it asked for;
+an edge-triggered one must report once, not again until more is written, and
+again after the pipe was drained and written; a one-shot one must report once
+and not again until EPOLL_CTL_MOD. With room for one event, two ready pipes must
+come by turns. A registration must outlive its number while a dup keeps the file
+open and go with the file. A set holding a set must poll readable and report the
+inner set's cookie when the inner set has something; a set added to itself is
+EINVAL, to a set it holds ELOOP, and a sixth set in a chain ELOOP. The refusals
+are Linux's, in Linux's order, and the run is done twice and must leave no frame
+behind.
+
+1. An inode's `poll_changes` does not move when its readiness changes, or a
+   queue it reads is woken without `WaitQueue::wake_all`, so an edge-triggered
+   registration misses the data written after a drain.
+2. `Epoll::delivered` does not clear `due`, disarm a one-shot registration or
+   move a level-triggered one behind the others.
+3. `Epoll::check_nesting` misses a loop through a set's registrations, or counts
+   the depth above or below one set too many or too few.
+4. `sys_epoll_ctl` or the wait checks in a different order from Linux's.
+
+See: kernel/src/fs/epoll_check.rs; kernel/src/fs/epoll.rs;
+kernel/src/fs/anon.rs; kernel/src/syscall/epoll.rs; kernel/src/sched/wait.rs;
+libs/vfs/src/node.rs poll_changes.
+
 <a id="fx-0901"></a>
 
 ## FX-0901 — the native ABI's objects failed their self-check
@@ -1206,7 +1237,7 @@ running.
    it.
 
 See: kernel/src/block_ring/driver_check.rs; user/blk/src/main.rs;
-docs/BLOCK-RING.md;           docs/ROADMAP.md stage 10.
+docs/BLOCK-RING.md; docs/ROADMAP.md stage 10.
 
 <a id="fx-1006"></a>
 

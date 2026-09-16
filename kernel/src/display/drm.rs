@@ -196,6 +196,16 @@ impl Inode for CardFile {
         }
     }
 
+    /// The events queue's wakes, and the card's, which a driver that goes
+    /// wakes.
+    fn poll_changes(&self) -> Option<u64> {
+        Some(
+            self.readable
+                .wakes()
+                .wrapping_add(self.card.changed.wakes()),
+        )
+    }
+
     /// Put back events a read took but could not deliver, as Linux's
     /// `drm_read` does, so a bad buffer loses no flip.
     fn unread_stream(&self, bytes: &[u8]) {

@@ -344,6 +344,23 @@ fn check_memfd() {
     );
 }
 
+/// Stage 8's epoll check: level, edge and one-shot registrations, sets inside
+/// sets, and the refusals.
+fn check_epoll() {
+    let checked = match fs::epoll_check::run() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE8_EPOLL,
+            "stage 8 epoll self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  epoll    {} events delivered by level, edge and one-shot registrations and a set inside \
+         a set, {} calls refused as Linux refuses them; {} frames leaked",
+        checked.events, checked.refusals, checked.leaked,
+    );
+}
+
 /// Stage 8: build the root from the initramfs, and require it to be what the
 /// build wrote and to store what it is given.
 ///
@@ -412,6 +429,7 @@ fn check_filesystems(view: &BootView<'_>) {
         mapped.bytes, mapped.cut, mapped.copied, mapped.leaked,
     );
     check_memfd();
+    check_epoll();
 
     let pseudo = match fs::procfs::check::run() {
         Ok(pseudo) => pseudo,
@@ -813,7 +831,8 @@ fn check_block_ring() {
         println!("  ring     not checked: {why}");
     } else {
         println!(
-            "  ring     {} calls and HELLOs refused as specified, {} disk published from an              accepted HELLO and unpublished when its driver stopped or died, {} frames leaked",
+            "  ring     {} calls and HELLOs refused as specified, {} disk published from an \
+             accepted HELLO and unpublished when its driver stopped or died, {} frames leaked",
             report.refusals, report.published, report.leaked,
         );
     }

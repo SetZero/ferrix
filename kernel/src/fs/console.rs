@@ -188,4 +188,8 @@ impl Inode for Console {
     fn poll(&self) -> Readiness {
         terminal::poll()
     }
+
+    fn poll_changes(&self) -> Option<u64> {
+        Some(crate::console::input::waiters().wakes())
+    }
 }

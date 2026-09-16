@@ -405,6 +405,16 @@ impl OpenFile {
         }
     }
 
+    /// What the opened object's [`Inode::poll_changes`] answers, or `None`
+    /// for a file opened with `O_PATH`, which nothing can wait on.
+    #[must_use]
+    pub fn poll_changes(&self) -> Option<u64> {
+        if self.path_only {
+            return None;
+        }
+        self.io.poll_changes()
+    }
+
     /// `lseek`.
     ///
     /// # Errors

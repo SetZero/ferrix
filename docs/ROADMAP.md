@@ -3297,6 +3297,36 @@ as `input_event`s on `/dev/input/event0` and are echoed on the console. Two
 processes exchange a sealed memfd over an `AF_UNIX` socket and both see the
 other's writes through `MAP_SHARED`.
 
+**Done — epoll, iteration 2's first kernel row.** `epoll_create1`,
+`epoll_create`, `epoll_ctl`, `epoll_wait`, `epoll_pwait` and `epoll_pwait2`
+answer on all three architectures, with `struct epoll_event` packed to 12
+bytes on x86-64 and 16 elsewhere. A set is an anonymous file on
+`anon_inodefs`, named `anon_inode:[eventpoll]`. Its registrations are keyed by
+the open file and the number, as Linux keys them, and hold the file weakly, so
+closing a number leaves the registration while a `dup` keeps the file open.
+Level-triggered, edge-triggered and one-shot registrations report only the
+events they asked for. A wait asks each file's readiness at the moment it
+waits, and sleeps and asks again as `poll` does. For edge-triggered mode every
+pollable object (pipe, terminal, `/dev/dri/card0`, `AF_UNIX`, `AF_INET`,
+netlink and packet sockets) reports how often its wait queues were woken, and a registration is
+due a report when that count moved or a readiness bit appeared. A set is
+itself pollable, so a Wayland server's set can sit in its toolkit's. A set
+added to itself is `EINVAL`, one that would contain itself `ELOOP`, and a chain
+of sets deeper than `EP_MAX_NESTS` `ELOOP`. A regular file or a directory is
+`EPERM`, and `EPOLLEXCLUSIVE` is refused where Linux refuses it. Not yet:
+`EPOLLRDHUP` and `EPOLLPRI` are never reported, because a file's readiness
+does not say either. A wait wakes within 5 ms of its file becoming ready, not
+at once. The boot check makes sets by number and watches pipes. Level,
+edge-after-drain, one-shot re-armed by `EPOLL_CTL_MOD`, reporting by turns
+with room for one event, a registration outliving its number through a `dup`,
+a set inside a set and a chain of six are each required. Twenty-two refusals
+are checked in Linux's order, and the run is done twice with no frame kept.
+The line reads `epoll    13 events delivered ..., 22 calls refused as Linux
+refuses them; 0 frames leaked`. With edge-triggered mode blind to the wake
+count, the boot panics with "an edge-triggered set did not report more data
+written into a readable pipe". With the loop check looking for nothing, it
+panics with "a set added to a set it holds was not ELOOP".
+
 ---
 
 ## Stage 18 — The compositor  ·  *89 points*

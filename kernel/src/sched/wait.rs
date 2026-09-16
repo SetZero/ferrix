@@ -18,7 +18,7 @@
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use ferrix_sync::IrqSpinLock;
 
@@ -73,6 +73,11 @@ pub(crate) struct WaitQueue {
     /// it runs; one a waker woke is not, however long the processor took to
     /// run it -- so the count is a fact about the waker, not about the host.
     woken: AtomicU32,
+    /// How many times [`WaitQueue::wake_all`] has run, whether or not anyone
+    /// was waiting: a number that moves whenever what the queue waits for may
+    /// have changed, which is what `epoll`'s edge-triggered mode reads as an
+    /// event.
+    wakes: AtomicU64,
 }
 
 impl WaitQueue {
@@ -81,6 +86,7 @@ impl WaitQueue {
         WaitQueue {
             waiters: IrqSpinLock::new(Vec::new()),
             woken: AtomicU32::new(0),
+            wakes: AtomicU64::new(0),
         }
     }
 
@@ -196,8 +202,14 @@ impl WaitQueue {
         self.woken.load(Ordering::Relaxed)
     }
 
+    /// How many times the queue has been woken: see the field.
+    pub(crate) fn wakes(&self) -> u64 {
+        self.wakes.load(Ordering::Relaxed)
+    }
+
     /// Wake everything waiting.
     pub(crate) fn wake_all(&self) {
+        let _ = self.wakes.fetch_add(1, Ordering::Relaxed);
         let waiters = core::mem::take(&mut *self.waiters.lock());
         for task in &waiters {
             super::wake(task);

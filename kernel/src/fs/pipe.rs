@@ -245,6 +245,15 @@ impl Inode for End {
         true
     }
 
+    fn poll_changes(&self) -> Option<u64> {
+        Some(
+            self.pipe
+                .readable
+                .wakes()
+                .wrapping_add(self.pipe.writable.wakes()),
+        )
+    }
+
     fn poll(&self) -> Readiness {
         let buffer = self.pipe.buffer.lock();
         let read = buffer.read_readiness();

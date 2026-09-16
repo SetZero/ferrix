@@ -399,6 +399,8 @@ pub mod x86_64 {
     pub const CLOCK_NANOSLEEP: usize = 230;
     /// Terminate every thread in the process.
     pub const EXIT_GROUP: usize = 231;
+    /// Create an epoll set, the size a hint that is ignored.
+    pub const EPOLL_CREATE: usize = 213;
     /// Wait for events on an epoll set.
     pub const EPOLL_WAIT: usize = 232;
     /// Add, modify or remove a file descriptor in an epoll set.
@@ -490,6 +492,8 @@ pub mod x86_64 {
     pub const OPENAT2: usize = 437;
     /// Check accessibility with flags, the form musl now prefers.
     pub const FACCESSAT2: usize = 439;
+    /// Wait on an epoll set with a signal mask and a nanosecond timeout.
+    pub const EPOLL_PWAIT2: usize = 441;
 
     // -- Filesystem control and extended attributes, from `syscall_64.tbl` --
 
@@ -927,6 +931,8 @@ pub mod aarch64 {
     pub const OPENAT2: usize = 437;
     /// Check accessibility with flags, the form musl now prefers.
     pub const FACCESSAT2: usize = 439;
+    /// Wait on an epoll set with a signal mask and a nanosecond timeout.
+    pub const EPOLL_PWAIT2: usize = 441;
 
     // -- Filesystem control and extended attributes, from the generic `unistd.h` --
 
@@ -1282,6 +1288,8 @@ pub mod arm {
     pub const SCHED_GETAFFINITY: usize = 242;
     /// Terminate every thread in the process.
     pub const EXIT_GROUP: usize = 248;
+    /// Create an epoll set, the size a hint that is ignored.
+    pub const EPOLL_CREATE: usize = 250;
     /// Add, modify or remove a file descriptor in an epoll set.
     pub const EPOLL_CTL: usize = 251;
     /// Wait for events on an epoll set.
@@ -1478,6 +1486,8 @@ pub mod arm {
     pub const OPENAT2: usize = 437;
     /// Check accessibility with flags, the form musl now prefers.
     pub const FACCESSAT2: usize = 439;
+    /// Wait on an epoll set with a signal mask and a nanosecond timeout.
+    pub const EPOLL_PWAIT2: usize = 441;
 
     /// The base of the ARM-private call range, `__ARM_NR_BASE`.
     /// Four registers and two cache operations that no other architecture
@@ -2056,6 +2066,11 @@ pub enum Syscall {
     EpollWait,
     /// Wait on an epoll set with a signal mask.
     EpollPwait,
+    /// Create an epoll set, the size a hint. x86-64 and ARMv7-A only.
+    EpollCreate,
+    /// Wait on an epoll set with a signal mask and a `struct timespec`
+    /// timeout of two 64-bit words on every architecture.
+    EpollPwait2,
     /// Create an eventfd with flags.
     Eventfd2,
     /// Issue a process-wide memory barrier.
@@ -2258,6 +2273,7 @@ fn x86_64_threads_and_time(nr: usize) -> Option<Syscall> {
         x86_64::CLOCK_GETTIME => Syscall::ClockGettime,
         x86_64::CLOCK_NANOSLEEP => Syscall::ClockNanosleep,
         x86_64::EXIT_GROUP => Syscall::ExitGroup,
+        x86_64::EPOLL_CREATE => Syscall::EpollCreate,
         x86_64::EPOLL_WAIT => Syscall::EpollWait,
         x86_64::EPOLL_CTL => Syscall::EpollCtl,
         x86_64::TGKILL => Syscall::Tgkill,
@@ -2312,6 +2328,7 @@ fn x86_64_recent(nr: usize) -> Option<Syscall> {
         x86_64::CLONE3 => Syscall::Clone3,
         x86_64::OPENAT2 => Syscall::Openat2,
         x86_64::FACCESSAT2 => Syscall::Faccessat2,
+        x86_64::EPOLL_PWAIT2 => Syscall::EpollPwait2,
         x86_64::SETXATTR => Syscall::Setxattr,
         x86_64::LSETXATTR => Syscall::Lsetxattr,
         x86_64::FSETXATTR => Syscall::Fsetxattr,
@@ -2617,6 +2634,7 @@ fn aarch64_recent(nr: usize) -> Option<Syscall> {
         aarch64::CLONE3 => Syscall::Clone3,
         aarch64::OPENAT2 => Syscall::Openat2,
         aarch64::FACCESSAT2 => Syscall::Faccessat2,
+        aarch64::EPOLL_PWAIT2 => Syscall::EpollPwait2,
         aarch64::SETXATTR => Syscall::Setxattr,
         aarch64::LSETXATTR => Syscall::Lsetxattr,
         aarch64::FSETXATTR => Syscall::Fsetxattr,
@@ -2892,6 +2910,7 @@ fn arm_ids_and_at_family(nr: usize) -> Option<Syscall> {
         arm::SCHED_SETAFFINITY => Syscall::SchedSetaffinity,
         arm::SCHED_GETAFFINITY => Syscall::SchedGetaffinity,
         arm::EXIT_GROUP => Syscall::ExitGroup,
+        arm::EPOLL_CREATE => Syscall::EpollCreate,
         arm::EPOLL_CTL => Syscall::EpollCtl,
         arm::EPOLL_WAIT => Syscall::EpollWait,
         arm::SET_TID_ADDRESS => Syscall::SetTidAddress,
@@ -2950,6 +2969,7 @@ fn arm_recent(nr: usize) -> Option<Syscall> {
         arm::CLONE3 => Syscall::Clone3,
         arm::OPENAT2 => Syscall::Openat2,
         arm::FACCESSAT2 => Syscall::Faccessat2,
+        arm::EPOLL_PWAIT2 => Syscall::EpollPwait2,
         arm::SETXATTR => Syscall::Setxattr,
         arm::LSETXATTR => Syscall::Lsetxattr,
         arm::FSETXATTR => Syscall::Fsetxattr,

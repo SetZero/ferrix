@@ -203,7 +203,7 @@ pub(crate) fn sys_pselect6(
 /// The signal set at `at`, if `at` is not null.
 ///
 /// The size is only checked when there is a set, as on Linux.
-fn read_sigset(process: &Process, at: u64, size: u64) -> Result<Option<u64>, Errno> {
+pub(crate) fn read_sigset(process: &Process, at: u64, size: u64) -> Result<Option<u64>, Errno> {
     if at == 0 {
         return Ok(None);
     }
@@ -223,7 +223,7 @@ fn read_sigset(process: &Process, at: u64, size: u64) -> Result<Option<u64>, Err
 /// comes back now, so that nothing the program's mask blocks is delivered
 /// under the temporary one. Both changes go through
 /// [`signal::change_blocked`], which hands on what a change newly blocks.
-fn with_sigmask(
+pub(crate) fn with_sigmask(
     thread: &Thread,
     mask: Option<u64>,
     body: impl FnOnce() -> Result<usize, Errno>,
@@ -240,7 +240,7 @@ fn with_sigmask(
 }
 
 /// Read a `struct timespec` of `width` as nanoseconds.
-fn read_timespec(process: &Process, at: u64, width: TimeWidth) -> Result<u64, Errno> {
+pub(crate) fn read_timespec(process: &Process, at: u64, width: TimeWidth) -> Result<u64, Errno> {
     let (seconds, nanos) = read_pair(process, at, width)?;
     let seconds = u64::try_from(seconds).map_err(|_| Errno::EINVAL)?;
     let nanos = u64::try_from(nanos).map_err(|_| Errno::EINVAL)?;

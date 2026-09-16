@@ -44,6 +44,7 @@ const X86_64_ONLY: &[Syscall] = &[
     Syscall::Lchown,
     Syscall::Mknod,
     Syscall::ArchPrctl,
+    Syscall::EpollCreate,
     Syscall::EpollWait,
     Syscall::Getpgrp,
     Syscall::Alarm,
@@ -123,6 +124,11 @@ const SHARED: &[(usize, usize, Syscall)] = &[
     (x86_64::PRLIMIT64, aarch64::PRLIMIT64, Syscall::Prlimit64),
     (x86_64::UNAME, aarch64::UNAME, Syscall::Uname),
     (x86_64::FACCESSAT2, aarch64::FACCESSAT2, Syscall::Faccessat2),
+    (
+        x86_64::EPOLL_PWAIT2,
+        aarch64::EPOLL_PWAIT2,
+        Syscall::EpollPwait2,
+    ),
     (
         x86_64::EPOLL_PWAIT,
         aarch64::EPOLL_PWAIT,
@@ -1601,13 +1607,13 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        234,
-        "the x86-64 table maps 234 calls"
+        236,
+        "the x86-64 table maps 236 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        207,
-        "the AArch64 table maps 207 calls"
+        208,
+        "the AArch64 table maps 208 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -1798,6 +1804,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (241, Syscall::SchedSetaffinity),         // sched_setaffinity
     (242, Syscall::SchedGetaffinity),         // sched_getaffinity
     (248, Syscall::ExitGroup),                // exit_group
+    (250, Syscall::EpollCreate),              // epoll_create
     (251, Syscall::EpollCtl),                 // epoll_ctl
     (252, Syscall::EpollWait),                // epoll_wait
     (256, Syscall::SetTidAddress),            // set_tid_address
@@ -1887,6 +1894,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (435, Syscall::Clone3),                   // clone3
     (437, Syscall::Openat2),                  // openat2
     (439, Syscall::Faccessat2),               // faccessat2
+    (441, Syscall::EpollPwait2),              // epoll_pwait2
 ];
 
 // ---------------------------------------------------------------------------
@@ -2090,7 +2098,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 249, "the ARMv7-A table maps 249 calls");
+    assert_eq!(mapped_arm().len(), 251, "the ARMv7-A table maps 251 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in

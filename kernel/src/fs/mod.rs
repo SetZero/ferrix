@@ -24,12 +24,15 @@
 //! tree and gets `ENOENT` — a real answer — rather than a kernel that has to
 //! decide what to do about a filesystem that does not exist.
 
+pub(crate) mod anon;
 pub(crate) mod block;
 pub(crate) mod btrfs;
 pub(crate) mod btrfs_check;
 pub(crate) mod check;
 pub(crate) mod console;
 pub(crate) mod devfs;
+pub(crate) mod epoll;
+pub(crate) mod epoll_check;
 pub(crate) mod memfd_check;
 pub(crate) mod mmap_check;
 mod pages;

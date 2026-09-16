@@ -384,6 +384,19 @@ pub trait Inode: Send + Sync + fmt::Debug {
         Readiness::ALWAYS
     }
 
+    /// A number that moves whenever what [`Inode::poll`] reports may have
+    /// changed: data arrived, room was made, a peer left. `epoll`'s
+    /// edge-triggered mode reports an object again when it moved, as Linux
+    /// reports one again when the object wakes its wait queue.
+    ///
+    /// `None`, the default, for an object `epoll` refuses to watch: one that
+    /// never makes a caller wait, as Linux refuses a regular file or a
+    /// directory, which have no `poll` operation. An object that overrides
+    /// [`Inode::poll`] to report a state of its own answers `Some`.
+    fn poll_changes(&self) -> Option<u64> {
+        None
+    }
+
     /// Whether this object has no position: a terminal, a pipe. Offsets passed
     /// to it are ignored and `lseek` on it is `ESPIPE`.
     fn is_stream(&self) -> bool {

@@ -59,7 +59,7 @@ use crate::syscall::deliver::{self, StackRecord};
 use crate::syscall::process::Process;
 use crate::syscall::thread::Thread;
 use crate::syscall::time::{self, TimeWidth};
-use crate::syscall::{poll, uaccess};
+use crate::syscall::{epoll, poll, uaccess};
 
 /// The only `sigsetsize` the kernel accepts: one 64-bit word.
 ///
@@ -1005,6 +1005,8 @@ const fn acts_on_a_thread(call: Syscall) -> bool {
             | Syscall::PpollTime64
             | Syscall::Pselect6
             | Syscall::Pselect6Time64
+            | Syscall::EpollPwait
+            | Syscall::EpollPwait2
             | Syscall::RestartSyscall
             | Syscall::Nanosleep
             | Syscall::ClockNanosleep
@@ -1051,6 +1053,8 @@ pub(crate) fn dispatch(
         Syscall::Pselect6 | Syscall::Pselect6Time64 => {
             poll::sys_pselect6(thread, a[0] as i32, [a[1], a[2], a[3]], a[4], a[5], width)
         }
+        Syscall::EpollPwait => epoll::sys_epoll_pwait(thread, *a),
+        Syscall::EpollPwait2 => epoll::sys_epoll_pwait2(thread, *a),
         _ => time::sleep_dispatch(call, a, thread).unwrap_or(Err(Errno::ENOSYS)),
     })
 }

@@ -1267,8 +1267,25 @@ pub const EPOLLOUT: u32 = 0x004;
 pub const EPOLLERR: u32 = 0x008;
 /// Epoll event: the descriptor hung up.
 pub const EPOLLHUP: u32 = 0x010;
+/// Epoll event: the descriptor is not open. Never reported: a closed
+/// descriptor's registration goes with its file.
+pub const EPOLLNVAL: u32 = 0x020;
+/// Epoll event: normal data may be read.
+pub const EPOLLRDNORM: u32 = 0x040;
+/// Epoll event: priority data may be read.
+pub const EPOLLRDBAND: u32 = 0x080;
+/// Epoll event: normal data may be written.
+pub const EPOLLWRNORM: u32 = 0x100;
+/// Epoll event: priority data may be written.
+pub const EPOLLWRBAND: u32 = 0x200;
+/// Epoll event: a message is available; unused by Linux.
+pub const EPOLLMSG: u32 = 0x400;
 /// Epoll event: the peer shut down the writing half.
 pub const EPOLLRDHUP: u32 = 0x2000;
+/// Epoll flag: wake only one of the epoll sets waiting on the same file.
+pub const EPOLLEXCLUSIVE: u32 = 1 << 28;
+/// Epoll flag: hold off system suspend while the event is being handled.
+pub const EPOLLWAKEUP: u32 = 1 << 29;
 /// Epoll flag: report this descriptor once, then disarm it.
 pub const EPOLLONESHOT: u32 = 1 << 30;
 /// Epoll flag: report edges rather than levels.

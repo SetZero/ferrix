@@ -84,6 +84,10 @@ pub(crate) const ARCH: Arch = Arch::Armv7a;
 pub(crate) const STAT_LAYOUT: crate::syscall::stat::StatLayout =
     crate::syscall::stat::StatLayout::Stat64;
 
+/// ARMv7-A's `struct epoll_event`, 16 bytes: not packed, and the EABI aligns
+/// a 64-bit field to 8, so `data` is at offset 8.
+pub(crate) const EPOLL_EVENT_BYTES: usize = 16;
+
 /// The page table descriptor layout this machine uses.
 pub(crate) type PageEncoding = ferrix_paging::armv7a::Armv7a;
 

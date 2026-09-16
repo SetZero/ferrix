@@ -104,6 +104,13 @@ fn check_range(at: u64, len: u64) -> Result<(), UserError> {
     Ok(())
 }
 
+/// Whether `len` bytes from `at` lie in the program's half, without looking
+/// at whether they are mapped: Linux's `access_ok`, which some calls ask
+/// before anything else.
+pub(crate) fn is_user_range(at: u64, len: u64) -> bool {
+    check_range(at, len).is_ok()
+}
+
 /// How much of a page is left from `at`.
 fn to_page_end(at: u64) -> u64 {
     PAGE_SIZE - (at % PAGE_SIZE)

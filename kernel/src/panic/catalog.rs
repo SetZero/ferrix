@@ -902,7 +902,8 @@ pub(crate) static STAGE10_DRIVER: Explanation = Explanation {
          addresses, the IOMMU domain, or the ring's data copy disagree with the device.",
         "The initramfs carries no `/sbin/blk`: `xtask/src/native.rs` no longer lists it.",
     ],
-    see: "kernel/src/block_ring/driver_check.rs; user/blk/src/main.rs; docs/BLOCK-RING.md;           docs/ROADMAP.md stage 10",
+    see: "kernel/src/block_ring/driver_check.rs; user/blk/src/main.rs; docs/BLOCK-RING.md; \
+          docs/ROADMAP.md stage 10",
 };
 
 /// For `check_block_ring` in `main.rs`, when `block_ring::check::run` fails.
@@ -1290,6 +1291,36 @@ pub(crate) static STAGE8_MEMFD: Explanation = Explanation {
           protect; libs/vfs/src/tmpfs.rs add_seals",
 };
 
+/// For `check_epoll` in `main.rs`, when the epoll check fails.
+pub(crate) static STAGE8_EPOLL: Explanation = Explanation {
+    code: "FX-0881",
+    title: "epoll failed its self-check",
+    meaning: "`fs::epoll_check::run` builds a process, makes epoll sets by number and watches \
+              pipes with them. A level-triggered registration must report an unread pipe at every \
+              wait, with the cookie it was added with and only the events it asked for; an \
+              edge-triggered one must report once, not again until more is written, and again \
+              after the pipe was drained and written; a one-shot one must report once and not \
+              again until EPOLL_CTL_MOD. With room for one event, two ready pipes must come by \
+              turns. A registration must outlive its number while a dup keeps the file open and go \
+              with the file. A set holding a set must poll readable and report the inner set's \
+              cookie when the inner set has something; a set added to itself is EINVAL, to a set \
+              it holds ELOOP, and a sixth set in a chain ELOOP. The refusals are Linux's, in \
+              Linux's order, and the run is done twice and must leave no frame behind.",
+    causes: &[
+        "An inode's `poll_changes` does not move when its readiness changes, or a queue it reads \
+         is woken without `WaitQueue::wake_all`, so an edge-triggered registration misses the data \
+         written after a drain.",
+        "`Epoll::delivered` does not clear `due`, disarm a one-shot registration or move a \
+         level-triggered one behind the others.",
+        "`Epoll::check_nesting` misses a loop through a set's registrations, or counts the depth \
+         above or below one set too many or too few.",
+        "`sys_epoll_ctl` or the wait checks in a different order from Linux's.",
+    ],
+    see: "kernel/src/fs/epoll_check.rs; kernel/src/fs/epoll.rs; kernel/src/fs/anon.rs; \
+          kernel/src/syscall/epoll.rs; kernel/src/sched/wait.rs; libs/vfs/src/node.rs \
+          poll_changes",
+};
+
 /// For `check_filesystems` in `main.rs`, when the shared file mapping check
 /// fails.
 pub(crate) static STAGE8_FILE_MAPPINGS: Explanation = Explanation {
@@ -1498,6 +1529,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_PIPES_AND_FILESYSTEM_CALLS,
     &STAGE8_FILE_MAPPINGS,
     &STAGE8_MEMFD,
+    &STAGE8_EPOLL,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,
