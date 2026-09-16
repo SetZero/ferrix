@@ -42,6 +42,7 @@ mod btrfs_disk;
 mod busybox;
 mod cargo;
 mod check;
+mod console;
 mod fat;
 mod flash;
 // The host half of the guest's network, which is a UNIX datagram socket and

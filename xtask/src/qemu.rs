@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::args::Args;
 use crate::btrfs_disk;
-use crate::cargo;
+use crate::console::{self, Console};
 use crate::paths::{self, Arch, Firmware};
 use crate::symbolize::Symbolizer;
 use crate::test_disk;
@@ -46,14 +46,19 @@ const PANIC_REPORT_GRACE: Duration = Duration::from_secs(2);
 const DEBUG_EXIT_SUCCESS: i32 = 33;
 
 /// Boot the image with the serial port attached to this terminal.
+///
+/// Which terminal that is depends on the host: QEMU's own on a POSIX one,
+/// and a socket this program carries by hand on Windows, where
+/// [`crate::console`] says what the difference is for.
 pub(crate) fn run(arch: Arch, image: &Path, args: &Args) -> Result<()> {
-    let (mut command, network) = qemu_command(arch, image, args)?;
+    let console = console::open()?;
+    let (mut command, network) = qemu_command(arch, image, args, &console)?;
     if args.gdb {
         let _ = command.args(["-s", "-S"]);
         println!("  waiting for a debugger on localhost:1234");
     }
     println!("  {arch}: booting (quit with Ctrl-A x)\n");
-    let booted = cargo::run(command, "qemu");
+    let booted = console.attach(command);
     report_network(&network);
     booted
 }
@@ -511,7 +516,7 @@ struct Watched {
 /// report's backtrace addresses are resolved against.
 fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> Result<Watched> {
     let symbols = Symbolizer::open(kernel);
-    let (mut command, network) = qemu_command(arch, image, args)?;
+    let (mut command, network) = qemu_command(arch, image, args, &Console::Owned)?;
     let _ = command.stdout(Stdio::piped()).stderr(Stdio::inherit());
 
     let mut child = command
@@ -659,7 +664,12 @@ fn finish(child: &mut std::process::Child, decided: bool) -> Result<std::process
 }
 
 /// Assemble the QEMU command line for `arch`.
-fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<(Command, Network)> {
+fn qemu_command(
+    arch: Arch,
+    image: &Path,
+    args: &Args,
+    console: &Console,
+) -> Result<(Command, Network)> {
     let binary = paths::which(arch.qemu_binary()).ok_or_else(|| {
         Error::new(format!(
             "{} is not on PATH.\n  Install QEMU (Debian/Ubuntu: `qemu-system-x86` and \
@@ -684,9 +694,9 @@ fn qemu_command(arch: Arch, image: &Path, args: &Args) -> Result<(Command, Netwo
         "none",
         "-monitor",
         "none",
-        "-serial",
-        "stdio",
     ]);
+    // The serial port, which is this machine's whole console.
+    let _ = command.args(console.arguments()?);
     // A guest that reboots on a triple fault turns a crash into an endless
     // loop, which in CI is a timeout with no cause in the log. Not under
     // `--reset`, whose point is that the machine starts again: there a reset
