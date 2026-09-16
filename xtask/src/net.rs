@@ -539,13 +539,17 @@ pub(crate) fn commands(servers: &Servers, curl: bool) -> Vec<Command> {
 /// curl's half of [`commands`]: a file by name and a file byte for byte, as
 /// `wget` fetches them, through a C library, a resolver and a TLS-capable
 /// HTTP stack that are not busybox's.
+///
+/// Each through `sh -c`, because the kernel starts a command's `argv[0]` as a
+/// busybox applet, and curl is a program of its own that the shell finds in
+/// `/bin`.
 fn curl_commands(http: u16, digest: u32) -> Vec<Command> {
     vec![
         Command {
             argv: leak_argv(vec![
-                "curl".to_owned(),
-                "-sS".to_owned(),
-                format!("http://{NAME}:{http}{HELLO_PATH}"),
+                "sh".to_owned(),
+                "-c".to_owned(),
+                format!("curl -sS http://{NAME}:{http}{HELLO_PATH}"),
             ]),
             status: 0,
             expect: Expect::Lines(&[HELLO_BODY]),
