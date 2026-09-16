@@ -126,8 +126,8 @@ fn the_stubs_serve_what_the_commands_expect() {
 #[test]
 fn the_command_list_is_well_formed() {
     let servers = Servers::start().unwrap();
-    let without = commands(&servers, false);
-    let list = commands(&servers, true);
+    let without = commands(&servers, false, false);
+    let list = commands(&servers, true, true);
     assert!(!without.is_empty());
     assert!(
         without
@@ -153,5 +153,6 @@ fn the_command_list_is_well_formed() {
     // The address is the gateway's to give, by DHCP, not the list's to name.
     assert!(joined.contains("udhcpc -i eth0"));
     assert!(joined.contains(&format!("curl -sS http://{NAME}:")));
+    assert!(joined.contains("git clone -q http://127.0.0.1:8080/repo.git"));
     assert!(!joined.contains("10.0.2.15/24"));
 }

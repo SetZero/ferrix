@@ -135,8 +135,9 @@ the tables above. These are the ones POSIX does not require, and several are
 what real programs call. The `netdb` and `ifaddrs` rows — `gethostbyname`,
 `gethostbyaddr`, `hstrerror`, `herror`, `__h_errno_location`, `getifaddrs` and
 `freeifaddrs` — left the list with the name-resolution landing of 2026-09-16,
-which added `ether_*`, `res_*` and the `ns_*` parser beside them, and the
-`sys/epoll` row with the epoll and eventfd wrappers of 2026-09-17:
+which added `ether_*`, `res_*` and the `ns_*` parser beside them, the
+`sys/epoll` row with the epoll and eventfd wrappers of 2026-09-17, and `utime`
+with the git port:
 
 | Area | Functions |
 |---|---|
@@ -157,7 +158,6 @@ which added `ether_*`, `res_*` and the `ns_*` parser beside them, and the
 | string | `strnlen_s` |
 | sys/ptrace | `ptrace` |
 | sys/timeb | `ftime` |
-| utime | `utime` |
 | utmp | `login_tty` |
 
 Ferrousli in turn exports about 170 functions relibc lacks, mostly glibc's

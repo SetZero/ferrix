@@ -3167,6 +3167,23 @@ Its negative control, not committed, on x86-64: with the loader's time flag
 cleared, the guest printed `verified 0` and `untrusted 60`, and `test-net`
 failed on that program.
 
+**Done — git, built against ferrousli.** `ferrousli/tools/ports/zlib` builds
+zlib 1.3.2 and `ferrousli/tools/ports/git` builds git 2.55.0 over it and over
+the curl port's libcurl and Mbed TLS. It is built without Perl, Python, Tcl,
+gettext and iconv, which the image does not have. Its Rust half is off too: cargo
+builds that for the host, against glibc. It uses git's own regex, because
+ferrousli's, like musl's, has no `REG_STARTEND`. The library lacked `utime`
+and `sync_file_range`. The image carries `/usr/bin/git` with `/bin/git`
+linking to it, `git-core` with its links, and the templates, which `xtask`
+now copies as trees. The servers and the scripts that need an interpreter are
+left out.
+
+`test-net` gains a git program with no network outside the guest. It makes a
+repository and a commit, publishes a bare clone for the dumb HTTP protocol with
+busybox's `httpd` on the loopback, and clones it back through
+`git-remote-http` and libcurl. The file and the commit's subject must come
+back.
+
 **Done — btop, and the C++ runtime under it.** `ferrousli/tools/ports/libcxx`
 builds LLVM 23.1.1's libc++, libc++abi and libunwind against ferrousli with
 the host's gcc. `ferrousli/tools/ports/btop` builds btop 1.4.7, a C++23

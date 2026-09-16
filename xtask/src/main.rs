@@ -347,7 +347,8 @@ fn test_net(args: &Args) -> Result<()> {
         // exercise them are added when they do.
         let ports = ports::installed(arch)?;
         let curl = ports.iter().any(|file| file.path == "bin/curl");
-        let programs = net::commands(&servers, curl);
+        let git = ports.iter().any(|file| file.path == "usr/bin/git");
+        let programs = net::commands(&servers, curl, git);
         let commands = vfs::encode(&programs)?;
         let loader = cargo::build_loader(arch, args.release)?;
         let list = paths::build_dir(arch).join("net-commands");

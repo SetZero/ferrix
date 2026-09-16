@@ -428,8 +428,9 @@ fn read_name(query: &[u8], at: usize) -> Option<(String, usize)> {
 /// until the run ends, and lives as long as the process does anyway.
 ///
 /// With `curl`, the image carries the curl built against ferrousli, and it
-/// fetches the same two files `wget` does.
-pub(crate) fn commands(servers: &Servers, curl: bool) -> Vec<Command> {
+/// fetches the same two files `wget` does. With `git`, git makes a commit and
+/// clones it back over HTTP.
+pub(crate) fn commands(servers: &Servers, curl: bool, git: bool) -> Vec<Command> {
     let http = servers.http.port();
     let udp = servers.udp.port();
     let digest = cksum(&big_body());
@@ -544,8 +545,33 @@ pub(crate) fn commands(servers: &Servers, curl: bool) -> Vec<Command> {
     if curl {
         commands.extend(curl_commands(http, digest));
     }
+    if git {
+        commands.push(Command {
+            argv: &["sh", "-c", GIT_PROGRAM],
+            status: 0,
+            expect: Expect::Lines(&["hello from ferrix", "first commit"]),
+        });
+    }
     commands
 }
+
+/// git's program in [`commands`]: a repository made and committed to in the
+/// guest, published as a bare repository for git's dumb HTTP protocol by
+/// busybox's `httpd` on the loopback, and cloned back through
+/// `git-remote-http` and libcurl. The clone's file and its commit's subject
+/// are what it prints.
+const GIT_PROGRAM: &str = concat!(
+    "set -e; export HOME=/tmp GIT_AUTHOR_NAME=ferrix GIT_AUTHOR_EMAIL=ferrix@ferrix.test ",
+    "GIT_COMMITTER_NAME=ferrix GIT_COMMITTER_EMAIL=ferrix@ferrix.test; ",
+    "cd /tmp; git init -q -b main work; cd work; ",
+    "echo 'hello from ferrix' > greeting; git add greeting; git commit -q -m 'first commit'; ",
+    "mkdir -p /tmp/srv; git clone -q --bare /tmp/work /tmp/srv/repo.git; ",
+    "git -C /tmp/srv/repo.git update-server-info; ",
+    "httpd -p 127.0.0.1:8080 -h /tmp/srv; ",
+    "git clone -q http://127.0.0.1:8080/repo.git /tmp/copy; ",
+    "cat /tmp/copy/greeting; git -C /tmp/copy log --format=%s; ",
+    "killall httpd",
+);
 
 /// curl's half of [`commands`]: a file by name and a file byte for byte, as
 /// `wget` fetches them, through a C library, a resolver and a TLS-capable

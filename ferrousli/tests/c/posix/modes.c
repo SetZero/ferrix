@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <utime.h>
 
 #include "check.h"
 
@@ -83,6 +84,19 @@ int main(void)
 	times[1].tv_nsec = 1000000000;
 	errno = 0;
 	CHECK(futimens(fd, times) == -1 && errno == EINVAL);
+
+	/* utime: whole seconds, and now for a null buffer. */
+	struct utimbuf whole = { .actime = 5000, .modtime = 6000 };
+	CHECK(utime("masked", &whole) == 0);
+	CHECK(stat("masked", &st) == 0 && st.st_atim.tv_sec == 5000 && st.st_mtim.tv_sec == 6000);
+	CHECK(st.st_mtim.tv_nsec == 0);
+	CHECK(utime("masked", 0) == 0);
+	CHECK(stat("masked", &st) == 0 && st.st_mtim.tv_sec > 6000);
+
+	/* sync_file_range: every flag on an ordinary file, and a bad one refused. */
+	CHECK(sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER) == 0);
+	errno = 0;
+	CHECK(sync_file_range(fd, 0, 0, 0x80) == -1 && errno == EINVAL);
 
 	CHECK(close(fd) == 0);
 	return t_status;

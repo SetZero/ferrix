@@ -374,7 +374,16 @@ fn build_with_shell(
                     made.push(directory.clone());
                 }
             }
-            archive.file(file.path, file.mode, &file.bytes)?;
+            match &file.content {
+                ports::Content::Bytes(bytes) => archive.file(&file.path, file.mode, bytes)?,
+                ports::Content::Link(target) => archive.symlink(&file.path, target)?,
+                ports::Content::Directory => {
+                    if !made.contains(&file.path) {
+                        archive.directory(&file.path, file.mode)?;
+                        made.push(file.path.clone());
+                    }
+                }
+            }
         }
     }
     archive.finish()
@@ -450,14 +459,19 @@ mod tests {
     fn ports_go_at_their_paths_with_their_directories_only_beside_a_program() {
         let files = [
             ports::File {
-                path: "bin/curl",
+                path: "bin/curl".to_owned(),
                 mode: 0o755,
-                bytes: b"curl".to_vec(),
+                content: ports::Content::Bytes(b"curl".to_vec()),
             },
             ports::File {
-                path: "etc/ssl/certs/ca-certificates.crt",
+                path: "etc/ssl/certs/ca-certificates.crt".to_owned(),
                 mode: 0o644,
-                bytes: b"certificates".to_vec(),
+                content: ports::Content::Bytes(b"certificates".to_vec()),
+            },
+            ports::File {
+                path: "bin/git".to_owned(),
+                mode: 0o777,
+                content: ports::Content::Link("../usr/bin/git".to_owned()),
             },
         ];
         let bytes = build_with_shell(Some(b"program"), &[], None, &files).unwrap();
@@ -468,6 +482,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(bundle.data, b"certificates");
+        let git = archive.find("bin/git").unwrap().unwrap();
+        assert_eq!(git.symlink_target(), Some("../usr/bin/git"));
         let names: Vec<&str> = archive.entries().map(|entry| entry.unwrap().name).collect();
         for directory in ["etc/ssl", "etc/ssl/certs"] {
             assert_eq!(
