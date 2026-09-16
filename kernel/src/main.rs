@@ -655,6 +655,11 @@ fn check_syscalls() {
 /// Stage 7's thread checks, as `check_syscalls` reports them: each line only
 /// when its check ran on this architecture and processor count.
 fn print_threads(report: &syscall::check::Report) {
+    if report.unmap_waited {
+        println!(
+            "  unmap    an unmap on one processor waited for a copy on another to let go of its page"
+        );
+    }
     if let Some(status) = report.threaded {
         println!(
             "  threads  a program's threads ran in its memory and ended alone, one cleared its id as \

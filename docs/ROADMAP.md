@@ -1344,8 +1344,9 @@ that took what it looked at, a record read that found the last record's tail:
   all three architectures. A futex wait reads its word under the table without
   faulting, and retries if another thread unmapped the page in between; `brk`
   and `fork` take a heap lock that may sleep, so a fork never copies a heap
-  half shrunk. Left: the `munmap` race, and `/proc`'s threads with the exit
-  test on three architectures.
+  half shrunk; and an unmap on one processor waits for a copy on another to
+  let go of its page. Left: `/proc`'s threads with the exit test on three
+  architectures.
 * **Three stand-ins, each written down where it lives.** The console is the one
   terminal, its line discipline fed by a thread that looks every twenty
   milliseconds rather than waiting on the receive interrupt, until stage 15

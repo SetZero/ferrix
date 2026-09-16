@@ -71,6 +71,7 @@ pub(crate) mod thread;
 pub(crate) mod time;
 pub(crate) mod tty;
 pub(crate) mod uaccess;
+pub(crate) mod unmap_check;
 
 use core::sync::atomic::{AtomicU32, Ordering};
 

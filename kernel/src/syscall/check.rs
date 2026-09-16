@@ -111,6 +111,9 @@ pub(crate) struct Report {
     pub(crate) started_with: Option<i32>,
     /// Processes the pid registry numbered, found, listed and let go.
     pub(crate) pids: u32,
+    /// Whether an unmap on one processor was seen to wait for a copy holding
+    /// its page on another; `false` with one processor, where it cannot run.
+    pub(crate) unmap_waited: bool,
     /// Futex waiters a wake or a requeue roused: 2 when right.
     pub(crate) futex_woken: usize,
     /// Guest milliseconds each group of checks took, in order: the dispatch
@@ -211,6 +214,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let shared = check_a_shared_mapping_is_shared_across_fork()?;
     let narrowed = check_a_write_after_mprotect_read_only_faults()?;
     check_an_ended_process_closes_its_descriptors()?;
+    let unmap_waited =
+        crate::syscall::unmap_check::check_an_unmap_waits_for_a_copy_holding_its_page()?;
     let execed = check_execve_replaces_the_program()?;
     mark!(7);
     let started_with = check_a_program_is_handed_its_start_argument()?;
@@ -242,6 +247,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         execed,
         started_with,
         pids,
+        unmap_waited,
         futex_woken,
         spent_ms: spent,
     })
