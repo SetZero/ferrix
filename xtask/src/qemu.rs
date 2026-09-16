@@ -556,6 +556,7 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
     // is resetting, and the loader to start again because it did.
     let mut resetting = false;
     let mut restarted = false;
+    let mut closed = false;
     while verdict == Verdict::Silent || (args.reset && verdict == Verdict::Reached && !restarted) {
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             break;
@@ -587,7 +588,11 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
             }
             // The guest closed the serial port: QEMU is on its way out, so stop
             // reading and judge on the exit status below.
-            Err(mpsc::RecvTimeoutError::Disconnected | mpsc::RecvTimeoutError::Timeout) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                closed = true;
+                break;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
         }
     }
 
@@ -601,6 +606,20 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
     // After QEMU has gone, so that the numbers are final and the gateway's
     // thread is not still being fed while they are read.
     report_network(&network);
+
+    // QEMU gone before the guest said what it was waited for is not a timeout,
+    // and every caller would otherwise report one: an argument QEMU refuses
+    // ends it at once, with the reason on the stderr above, and "did not
+    // finish within 600s" sends whoever reads it to look at the guest.
+    if closed && verdict == Verdict::Silent {
+        return Err(Error::new(format!(
+            "{arch}: QEMU exited ({status}) {:.1}s after it started, before the guest printed \
+             `{until}`; QEMU's own error, if it gave one, is above.\n  \
+             Serial output is in {}",
+            started.elapsed().as_secs_f64(),
+            log_path.display()
+        )));
+    }
 
     Ok(Watched {
         lines,
