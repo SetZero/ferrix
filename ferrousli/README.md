@@ -73,7 +73,7 @@ glibc one.
 busybox also calls functions from the three areas allowed to wait: pattern
 matching, a few math functions, and name resolution. Until each is written,
 the library defines a stub that writes that the function is not implemented
-yet and aborts: 15 functions in `src/stubs.rs`. That list only shrinks, and
+yet and aborts: 11 functions in `src/stubs.rs`. That list only shrinks, and
 the busybox Ferrix is tested with must reach none of them.
 
 ## Headers

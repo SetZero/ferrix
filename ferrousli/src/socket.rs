@@ -18,7 +18,7 @@
 //! `send` and `recv` are `sendto` and `recvfrom` without an address. None of
 //! these is a cancellation point yet.
 
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::mem::{offset_of, size_of};
 use core::ptr::null_mut;
 
@@ -448,9 +448,49 @@ pub unsafe extern "C" fn recvmsg(fd: c_int, msg: *mut Msghdr, flags: c_int) -> i
     ret
 }
 
+/// `SIOCATMARK`, from `include/bits/ioctl.h`.
+const SIOCATMARK: c_int = 0x8905;
+
+/// Whether the socket `fd` is at its out-of-band mark: 1 if it is, 0 if it is
+/// not, or -1 with `errno` set. This is musl's `sockatmark.c`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn sockatmark(fd: c_int) -> c_int {
+    let mut mark: c_int = 0;
+    // SAFETY: `SIOCATMARK` writes one `int`, and `mark` is a live local.
+    let ret = unsafe { crate::ioctl::ioctl(fd, SIOCATMARK, (&raw mut mark).addr() as c_ulong) };
+    if ret < 0 { -1 } else { mark }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sockatmark_reports_the_out_of_band_mark_or_fails() {
+        use std::os::fd::AsRawFd;
+
+        // A connected stream socket that has had no urgent data is not at a
+        // mark, and says so rather than failing.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0");
+        let address = listener
+            .as_ref()
+            .ok()
+            .and_then(|listener| listener.local_addr().ok());
+        let (Ok(listener), Some(address)) = (listener, address) else {
+            panic!("no loopback listener");
+        };
+        let Ok(stream) = std::net::TcpStream::connect(address) else {
+            panic!("no loopback connection");
+        };
+        assert_eq!(sockatmark(stream.as_raw_fd()), 0);
+        drop(stream);
+        drop(listener);
+        // A descriptor that is not open fails.
+        assert_eq!(sockatmark(-1), -1);
+        // SAFETY: the pointer is this thread's errno.
+        let error = unsafe { errno::__errno_location().read() };
+        assert_eq!(error, errno::EBADF);
+    }
 
     fn message(len: u32, level: u32, r#type: u32) -> [u8; 16] {
         let mut header = [0xffu8; 16];

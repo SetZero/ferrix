@@ -39,6 +39,7 @@ pub mod ctype;
 pub mod dirent;
 pub mod env;
 pub mod errno;
+pub mod ether;
 pub mod exit;
 pub mod fcntl;
 pub mod float;
@@ -49,6 +50,7 @@ pub mod growable;
 pub mod grp;
 #[cfg(test)]
 mod host_glibc;
+pub mod ifaddrs;
 pub mod inet;
 pub mod ioctl;
 pub mod ipc;

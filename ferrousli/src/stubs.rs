@@ -50,11 +50,7 @@ stubs! {
     atan2
     cos
     dirname
-    ether_aton_r
-    ether_hostton
     exp
-    freeifaddrs
-    getifaddrs
     log
     pow
     regcomp
