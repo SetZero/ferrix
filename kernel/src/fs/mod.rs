@@ -61,6 +61,7 @@ use ferrix_vfs::{
 
 use crate::mm;
 use crate::syscall::time;
+use crate::vmap;
 
 /// The namespace every process resolves paths in.
 static NAMESPACE: Once<Namespace> = Once::new();
@@ -102,12 +103,12 @@ pub(crate) fn new_tmpfs() -> Arc<Tmpfs> {
     )
 }
 
-/// The most [`read_file`] will read: 64 MiB.
+/// The most [`read_file`] and [`read_program`] will read: 64 MiB.
 ///
-/// The whole file is built in kernel heap, which is what loading a program
-/// needs today, and a program naming a file large enough to exhaust the heap
-/// in one call should get `EFBIG` rather than take the kernel's memory with it.
-/// A static busybox is two megabytes; a static `rustc` is well under this.
+/// The whole file is built in kernel memory, which is what loading a program
+/// needs today, and a program naming a file large enough to exhaust it in one
+/// call should get `EFBIG` rather than take the kernel's memory with it. A
+/// static busybox is two megabytes; a static `rustc` is well under this.
 const READ_FILE_LIMIT: u64 = 64 * 1024 * 1024;
 
 /// Read a whole regular file, resolving `path` from `start` -- or from the
@@ -124,18 +125,27 @@ const READ_FILE_LIMIT: u64 = 64 * 1024 * 1024;
 ///
 /// What the path walk refuses; `EISDIR` for a directory and `EACCES` for any
 /// other file that is not a regular one, which is what `execve` reports;
-/// `EFBIG` past [`READ_FILE_LIMIT`]; `ENOMEM` if the heap cannot hold it.
+/// `EFBIG` past [`READ_FILE_LIMIT`]; `ENOMEM` if memory cannot hold it.
 pub(crate) fn read_file(
     ctx: &Context,
     start: Option<&Location>,
     path: &[u8],
 ) -> Result<Vec<u8>, Errno> {
     let at = namespace().resolve(ctx, start, path, true)?;
-    read_location(at)
+    let buffer = read_location(at)?;
+    let mut contents = Vec::new();
+    contents
+        .try_reserve_exact(buffer.len())
+        .map_err(|_| Errno::ENOMEM)?;
+    contents.extend_from_slice(&buffer);
+    Ok(contents)
 }
 
 /// [`read_file`] for a program: its contents, and the absolute path of the
 /// file they were read from, symbolic links resolved.
+///
+/// The contents are a [`vmap::Buffer`] rather than a heap vector, so a program
+/// larger than the heap's largest contiguous allocation can still be read.
 ///
 /// The path is what `/proc/<pid>/exe` reports, and glibc's static startup
 /// reads it back and asserts it is absolute. Taken from the location that was
@@ -150,7 +160,7 @@ pub(crate) fn read_program(
     ctx: &Context,
     start: Option<&Location>,
     path: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>, SetIds), Errno> {
+) -> Result<(vmap::Buffer, Vec<u8>, SetIds), Errno> {
     let ns = namespace();
     let at = ns.resolve(ctx, start, path, true)?;
     let metadata = ns.stat(&at)?.metadata;
@@ -193,7 +203,7 @@ pub(crate) fn set_ids_of(metadata: &ferrix_vfs::Metadata) -> SetIds {
 
 /// The whole of the regular file at `at`: the half of [`read_file`] after the
 /// walk, with every one of its refusals.
-fn read_location(at: Location) -> Result<Vec<u8>, Errno> {
+fn read_location(at: Location) -> Result<vmap::Buffer, Errno> {
     let metadata = namespace().stat(&at)?.metadata;
     match metadata.kind {
         FileType::Regular => {}
@@ -210,9 +220,7 @@ fn read_location(at: Location) -> Result<Vec<u8>, Errno> {
         ..OpenFlags::default()
     };
     let file = OpenFile::new(at, &flags)?;
-    let mut contents = Vec::new();
-    contents.try_reserve_exact(len).map_err(|_| Errno::ENOMEM)?;
-    contents.resize(len, 0);
+    let mut contents = vmap::Buffer::zeroed(len).map_err(|_| Errno::ENOMEM)?;
     let mut done = 0;
     while done < len {
         let slot = contents.get_mut(done..).ok_or(Errno::EIO)?;

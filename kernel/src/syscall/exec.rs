@@ -38,6 +38,7 @@ use crate::syscall::process::{self, Process, Startup};
 use crate::syscall::registry;
 use crate::syscall::uaccess;
 use crate::user::space::{AddressSpace, MMAP_MIN_ADDR, SpaceError};
+use crate::vmap;
 
 /// How much address space a program's stack gets.
 ///
@@ -653,8 +654,8 @@ const DESCRIPTOR_READ_LIMIT: u64 = 64 * 1024 * 1024;
 ///
 /// `EACCES` for anything but a regular file, as Linux answers, and for one
 /// `who` may not execute; `EFBIG` past [`DESCRIPTOR_READ_LIMIT`]; `ENOMEM` if
-/// the heap cannot hold it; and whatever reopening or reading refuses.
-fn read_descriptor(file: &Arc<OpenFile>, who: &Access) -> Result<Vec<u8>, Errno> {
+/// memory cannot hold it; and whatever reopening or reading refuses.
+fn read_descriptor(file: &Arc<OpenFile>, who: &Access) -> Result<vmap::Buffer, Errno> {
     if file.kind() != FileType::Regular {
         return Err(Errno::EACCES);
     }
@@ -673,9 +674,7 @@ fn read_descriptor(file: &Arc<OpenFile>, who: &Access) -> Result<Vec<u8>, Errno>
         return Err(Errno::EFBIG);
     }
     let len = usize::try_from(size).map_err(|_| Errno::EFBIG)?;
-    let mut contents = Vec::new();
-    contents.try_reserve_exact(len).map_err(|_| Errno::ENOMEM)?;
-    contents.resize(len, 0);
+    let mut contents = vmap::Buffer::zeroed(len).map_err(|_| Errno::ENOMEM)?;
     let mut done = 0;
     while done < len {
         let slot = contents.get_mut(done..).ok_or(Errno::EIO)?;
