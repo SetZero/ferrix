@@ -225,31 +225,36 @@ to the host.
 
 ### From a Windows host
 
-`flash`, `watch-serial` and `deploy` do not run on Windows: they find ports
-under `/dev`, set them up with `stty`, and check destinations against
-`/proc/mounts`. Building does, and the rest is done by hand. This is how the
-board was flashed and driven on 2026-09-13:
+`flash`, `watch-serial` and `deploy` run on Windows as they do on Linux. Only
+where they look differs; what the board needs has not changed since it was
+first driven from Windows on 2026-09-13.
 
 1. **The serial port.** The ST-LINK is `USB\VID_0483&PID_3752`, and its virtual
-   COM port shows under *Ports (COM & LPT)* — `COM8` on that machine, 115200
-   8N1, no flow control. Only one program can hold it, and U-Boot autoboots
-   straight into the kernel, so whatever logs the console has to hold the port
+   COM port shows under *Ports (COM & LPT)*: `COM8` on that machine. `xtask`
+   finds it in the registry's list of serial ports, or takes `--port COMn`, and
+   holds it through a PowerShell with .NET's `SerialPort` at 115200 8N1, no
+   flow control, for as long as it watches. Only one program can hold it, and
+   U-Boot autoboots straight into the kernel, so a PuTTY left open on it makes
+   the watch fail to open, and whatever logs the console has to hold the port
    *before* the reset.
-2. **The files.** `cargo xtask build --arch armv7a --init <busybox>` writes
-   `build\armv7a\ferrix.img`; its FAT holds exactly the three files `flash`
-   copies, and 7-Zip extracts them (`7z x build\armv7a\ferrix.img`; it warns of
-   a header error in the image's minimal FAT and extracts correctly). The loader
-   and kernel are byte-identical to
-   `target\armv7-unknown-linux-musleabi\debug\ferrix-boot.efi` and
-   `target\armv7a-none-eabi\debug\ferrix-kernel`; record their SHA-256 sums.
-3. **The card.** At `STM32MP>`, `ums 0 mmc 0`. Windows shows *Linux UMS disk 0*
+2. **The card.** At `STM32MP>`, `ums 0 mmc 0`. Windows shows *Linux UMS disk 0*
    the size of the card and mounts `bootfs` (FAT32, 126 MB) under a drive
    letter. It may offer to format the card's other partitions: cancel, since
-   those are TF-A and the FIP. Copy the three files to the same paths on
-   `bootfs`, run `Write-VolumeCache` on the drive, and check each file's
-   SHA-256 on the card against the recorded one.
-4. **Boot.** Ctrl-C at the console ends mass-storage mode; then the three lines
-   of step 3 below, one at a time.
+   those are TF-A and the FIP. Then
+
+   ```
+   cargo xtask flash --arch armv7a --init <busybox> --to E:\
+   ```
+
+   with that drive's letter. `--to` must be the root of a FAT volume with a
+   drive letter, and one Windows boots from or that is an EFI system partition
+   is refused. Each file is flushed as it is written and the volume with
+   `Write-VolumeCache` at the end. `FERRIX\CMDLINE.TXT`, which only a `--reset`
+   build has, is not copied, on this host or any other: extract it with
+   `7z x build\armv7a\ferrix.img` and copy it by hand.
+3. **Boot.** Ctrl-C at the console ends mass-storage mode; then the three lines
+   of step 3 below, one at a time. `cargo xtask watch-serial` exits 0 when the
+   kernel says `FERRIX-BOOT-OK`.
 
 ## 3. Tell U-Boot to boot it
 

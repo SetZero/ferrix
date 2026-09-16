@@ -108,6 +108,7 @@ grow with the system, so the percentage rises as the OS is written.
 ```
 cargo xtask build     --arch all --release    # bootable images in build/
 cargo xtask run       --arch x86_64           # boot it, serial on your terminal
+cargo xtask run       --arch x86_64 --net     # ...with a network, 10.0.2.15 behind a NAT
 cargo xtask test-boot --arch all              # boot it and assert it came up
 cargo xtask test-boot --accel auto            # ...on the real MMU, where it can
 cargo xtask check                             # every gate CI runs
@@ -118,15 +119,28 @@ cargo xtask check                             # every gate CI runs
 none or when the guest is not the host's architecture. Worth running before
 believing a change to page tables or invalidation, for the reason
 [Reliability](docs/RELIABILITY.md) gives: an interpreted `MMU` has no `TLB`, so
-a stale translation is a bug the default gate structurally cannot see.
+a stale translation is a bug the default gate structurally cannot see. `run`
+uses `auto` unless it is given `--accel` or `--gdb`; the tests keep `tcg`.
+
+`--net` gives the guest a virtio-net card whose other end is `xtask`'s own
+gateway on a loopback UDP socket: DHCP hands out `10.0.2.15`, `10.0.2.2` is the
+host, `10.0.2.3` forwards DNS to the host's resolver, and TCP and UDP to
+anywhere else are relayed through ordinary host sockets. It needs no
+privilege, and works the same on Linux and on Windows.
 
 You need QEMU and UEFI firmware. Debian and Ubuntu: `qemu-system-x86`,
 `qemu-system-arm`, `ovmf`, `qemu-efi-aarch64` and `u-boot-qemu`. Windows:
 `winget install SoftwareFreedomConservancy.QEMU`, which ships the 64-bit
-firmware too but not U-Boot; for ARMv7-A, point `FERRIX_UBOOT` at a `qemu_arm`
-`u-boot.bin`. Nothing else — the FAT32 image is written by `xtask`, so there is
-no `mtools` or `dosfstools` to install and the image is byte-for-byte
-reproducible.
+firmware too but not U-Boot; for ARMv7-A, `sudo apt install u-boot-qemu` in
+WSL's default distribution, where `xtask` looks, or point `FERRIX_UBOOT` at a
+`qemu_arm` `u-boot.bin`. Nothing else — the FAT32 image is written by `xtask`,
+so there is no `mtools` or `dosfstools` to install and the image is
+byte-for-byte reproducible.
+
+`cargo xtask check --ferrousli` gates the C library too, whose tests build and
+run Linux programs. On Windows those steps run in WSL's default distribution,
+which needs rustup and `build-essential` installed inside it; the first step
+says so if they are missing.
 
 ### A busybox shell
 
@@ -219,8 +233,10 @@ powering off.
 
 - Linux: `/dev/ttyACM0`, in the `dialout` group — `cargo xtask watch-serial`
   (which exits 0 on `FERRIX-BOOT-OK`), or `picocom -b 115200 /dev/ttyACM0` to type.
-- Windows: Device Manager → *Ports (COM & LPT)* → *STMicroelectronics STLink
-  Virtual COM Port (COMn)*; open that COM port in PuTTY as *Serial* at 115200.
+- Windows: `cargo xtask watch-serial` finds the ST-LINK's `COMn` itself
+  (`--port COMn` when there are several), or open it in PuTTY as *Serial* at
+  115200 to type — Device Manager → *Ports (COM & LPT)* →
+  *STMicroelectronics STLink Virtual COM Port (COMn)*.
 
 Bytes that arrive the moment the port opens are the ST-LINK's buffer from an
 earlier boot; trust what follows a reset.
@@ -236,12 +252,11 @@ STM32MP> ums 0 mmc 0
   <that mount>`. (`cargo xtask deploy --arch armv7a` builds, flashes and watches
   in one command.)
 - Windows: `bootfs` appears as a drive — cancel any offer to format the card's
-  other partitions, they hold the firmware. `flash` does not run on Windows, so
-  copy by hand: `7z x build\armv7a\ferrix.img -oflash` and copy
-  `EFI\BOOT\BOOTARM.EFI`, `FERRIX\KERNEL.ELF`, `FERRIX\INITRD.IMG` (and
-  `FERRIX\CMDLINE.TXT`, if you built with `--reset`) to the same paths on the
-  drive, then `Write-VolumeCache <letter>` and compare `Get-FileHash` of each copy
-  with its source.
+  other partitions, they hold the firmware — and `cargo xtask flash --arch
+  armv7a --to E:\` with that drive's letter copies the loader, kernel and
+  initramfs, and flushes each one and the volume. `FERRIX\CMDLINE.TXT`, from a
+  `--reset` build, is not among them on either host: copy that one by hand
+  (`7z x build\armv7a\ferrix.img -oflash`). `deploy` works as on Linux.
 
 Press Ctrl-C at the console to end mass-storage mode.
 
