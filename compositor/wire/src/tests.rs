@@ -741,26 +741,26 @@ fn ids_stay_in_the_half_that_made_them() {
 
 #[test]
 fn an_object_map_refuses_what_a_client_may_not_do() {
-    let mut objects = Objects::new();
+    let mut objects: Objects<()> = Objects::new();
     assert!(objects.is_empty());
 
     assert_eq!(
-        objects.insert(ObjectId::NULL, &WL_SURFACE, 1),
+        objects.insert(ObjectId::NULL, &WL_SURFACE, 1, ()),
         Err(ObjectError::Null)
     );
     assert_eq!(
-        objects.insert(ObjectId(ObjectId::SERVER_BASE), &WL_SURFACE, 1),
+        objects.insert(ObjectId(ObjectId::SERVER_BASE), &WL_SURFACE, 1, ()),
         Err(ObjectError::WrongHalf(ObjectId(ObjectId::SERVER_BASE)))
     );
     assert_eq!(
-        objects.insert(ObjectId(4), &WL_SURFACE, 7),
+        objects.insert(ObjectId(4), &WL_SURFACE, 7, ()),
         Err(ObjectError::Version {
             asked: 7,
             offered: 6
         })
     );
     assert_eq!(
-        objects.insert(ObjectId(4), &WL_SURFACE, 0),
+        objects.insert(ObjectId(4), &WL_SURFACE, 0, ()),
         Err(ObjectError::Version {
             asked: 0,
             offered: 6
@@ -768,16 +768,19 @@ fn an_object_map_refuses_what_a_client_may_not_do() {
     );
     assert!(objects.is_empty(), "nothing refused was added");
 
-    objects.insert(ObjectId(4), &WL_SURFACE, 6).expect("made");
+    objects
+        .insert(ObjectId(4), &WL_SURFACE, 6, ())
+        .expect("made");
     assert_eq!(
         objects.get(ObjectId(4)),
         Some(&Entry {
             interface: &WL_SURFACE,
-            version: 6
+            version: 6,
+            data: ()
         })
     );
     assert_eq!(
-        objects.insert(ObjectId(4), &WL_CALLBACK, 1),
+        objects.insert(ObjectId(4), &WL_CALLBACK, 1, ()),
         Err(ObjectError::InUse(ObjectId(4)))
     );
     assert_eq!(objects.len(), 1);
@@ -795,9 +798,9 @@ fn an_object_map_refuses_what_a_client_may_not_do() {
 
 #[test]
 fn the_server_names_its_own_objects_without_reusing_one() {
-    let mut objects = Objects::new();
-    let first = objects.create(&WL_CALLBACK, 1).expect("made");
-    let second = objects.create(&WL_CALLBACK, 1).expect("made");
+    let mut objects: Objects<()> = Objects::new();
+    let first = objects.create(&WL_CALLBACK, 1, ()).expect("made");
+    let second = objects.create(&WL_CALLBACK, 1, ()).expect("made");
     assert_eq!(first, ObjectId(ObjectId::SERVER_BASE));
     assert_eq!(second, ObjectId(ObjectId::SERVER_BASE + 1));
     assert!(first.is_server() && second.is_server());
@@ -806,11 +809,11 @@ fn the_server_names_its_own_objects_without_reusing_one() {
     // a client that kept a stale reference names nothing rather than
     // something new.
     let _ = objects.remove(first).expect("dropped");
-    let third = objects.create(&WL_CALLBACK, 1).expect("made");
+    let third = objects.create(&WL_CALLBACK, 1, ()).expect("made");
     assert_eq!(third, ObjectId(ObjectId::SERVER_BASE + 2));
 
     objects
-        .insert(ObjectId(1), &WL_SURFACE, 1)
+        .insert(ObjectId(1), &WL_SURFACE, 1, ())
         .expect("a client's");
     let ids: Vec<ObjectId> = objects.iter().map(|(id, _)| id).collect();
     assert_eq!(ids, [ObjectId(1), second, third], "in id order");

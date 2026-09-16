@@ -65,6 +65,16 @@ names the part of Hyprland or hyprlang it follows.
   `wl_*_interface` structures and prints them; the tests require the
   generated tables to agree, message for message. Adding a protocol is
   vendoring one XML and adding a line to the generator's `FILES`.
+* **`server`** is what a client's requests do: one `Client` holds a
+  connection's objects, is handed the bytes that arrived and the descriptors
+  with them, and gives back the bytes to send. It holds no socket and no
+  pixel, so object lifetimes, versions and every way a client can break the
+  rules are host-tested. A protocol error is the end of a connection --
+  Wayland has no way to refuse one request and carry on -- so every refusal
+  queues one `wl_display.error` and stops reading. `probe/roundtrip.c`
+  replays the server's answer to a real libwayland client and records the
+  globals it reports, so what the tests check is a conversation an
+  application would actually have.
 * **`render`** draws the frame: a `Canvas` over a `tiny-skia` pixmap with
   `clear`, `fill`, `border` and `composite` (`ARGB8888` source-over,
   `XRGB8888` copied and made opaque), each drawn only inside a `Damage` of

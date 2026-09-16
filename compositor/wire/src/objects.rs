@@ -44,13 +44,21 @@ impl ObjectId {
     }
 }
 
-/// What one live object is: what it speaks and at which version.
+/// What one live object is: what it speaks, at which version, and whatever
+/// the server keeps beside it.
+///
+/// The server's own state for an object rides here rather than in a second
+/// map of its own. Two maps keyed by object id are two maps that can disagree
+/// about which objects exist, and the disagreement shows up as a request
+/// answered for an object the client destroyed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Entry {
+pub struct Entry<T> {
     /// The interface the object was created as.
     pub interface: &'static Interface,
     /// The version it was bound at, never above the interface's own.
     pub version: u32,
+    /// What the server keeps for it.
+    pub data: T,
 }
 
 /// Why an object could not be made, found or dropped.
@@ -83,15 +91,21 @@ pub enum ObjectError {
 /// drops objects in a loop leaves libwayland's client-side array as long as
 /// the highest id it ever held, and ordered iteration is what a test needs
 /// to say what a connection is holding.
-#[derive(Clone, Debug, Default)]
-pub struct Objects {
-    live: BTreeMap<u32, Entry>,
+#[derive(Clone, Debug)]
+pub struct Objects<T> {
+    live: BTreeMap<u32, Entry<T>>,
     /// The next server id to try; ids are not reused until it wraps, so a
     /// stale reference from a client names nothing rather than something new.
     next_server: u32,
 }
 
-impl Objects {
+impl<T> Default for Objects<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Objects<T> {
     /// An empty map. `wl_display` is not in it: the caller adds it with the
     /// interface table it is using.
     #[must_use]
@@ -116,8 +130,13 @@ impl Objects {
 
     /// The object `id` names, if it is live.
     #[must_use]
-    pub fn get(&self, id: ObjectId) -> Option<&Entry> {
+    pub fn get(&self, id: ObjectId) -> Option<&Entry<T>> {
         self.live.get(&id.0)
+    }
+
+    /// The object `id` names, to be changed.
+    pub fn get_mut(&mut self, id: ObjectId) -> Option<&mut Entry<T>> {
+        self.live.get_mut(&id.0)
     }
 
     /// Whether `id` is live.
@@ -136,6 +155,7 @@ impl Objects {
         id: ObjectId,
         interface: &'static Interface,
         version: u32,
+        data: T,
     ) -> Result<(), ObjectError> {
         if id.is_null() {
             return Err(ObjectError::Null);
@@ -143,7 +163,7 @@ impl Objects {
         if !id.is_client() {
             return Err(ObjectError::WrongHalf(id));
         }
-        self.put(id, interface, version)
+        self.put(id, interface, version, data)
     }
 
     /// Make an object of the server's own, as `wl_data_device.data_offer`
@@ -152,6 +172,7 @@ impl Objects {
         &mut self,
         interface: &'static Interface,
         version: u32,
+        data: T,
     ) -> Result<ObjectId, ObjectError> {
         let start = self.next_server;
         loop {
@@ -161,7 +182,7 @@ impl Objects {
                 None => ObjectId::SERVER_BASE,
             };
             if !self.live.contains_key(&id.0) {
-                self.put(id, interface, version)?;
+                self.put(id, interface, version, data)?;
                 return Ok(id);
             }
             if self.next_server == start {
@@ -171,13 +192,20 @@ impl Objects {
     }
 
     /// Drop `id`, giving back what it was.
-    pub fn remove(&mut self, id: ObjectId) -> Result<Entry, ObjectError> {
+    pub fn remove(&mut self, id: ObjectId) -> Result<Entry<T>, ObjectError> {
         self.live.remove(&id.0).ok_or(ObjectError::Unknown(id))
     }
 
     /// Every live id with what it is, in id order.
-    pub fn iter(&self) -> impl Iterator<Item = (ObjectId, &Entry)> {
+    pub fn iter(&self) -> impl Iterator<Item = (ObjectId, &Entry<T>)> {
         self.live.iter().map(|(id, entry)| (ObjectId(*id), entry))
+    }
+
+    /// Every live id with what it is, to be changed, in id order.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (ObjectId, &mut Entry<T>)> {
+        self.live
+            .iter_mut()
+            .map(|(id, entry)| (ObjectId(*id), entry))
     }
 
     fn put(
@@ -185,6 +213,7 @@ impl Objects {
         id: ObjectId,
         interface: &'static Interface,
         version: u32,
+        data: T,
     ) -> Result<(), ObjectError> {
         if version == 0 || version > interface.version {
             return Err(ObjectError::Version {
@@ -195,7 +224,14 @@ impl Objects {
         if self.live.contains_key(&id.0) {
             return Err(ObjectError::InUse(id));
         }
-        let previous = self.live.insert(id.0, Entry { interface, version });
+        let previous = self.live.insert(
+            id.0,
+            Entry {
+                interface,
+                version,
+                data,
+            },
+        );
         debug_assert!(previous.is_none(), "checked just above");
         Ok(())
     }

@@ -62,6 +62,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-server"
+version = "0.1.0"
+dependencies = [
+ "compositor-protocol",
+ "compositor-wire",
+]
+
+[[package]]
 name = "compositor-wire"
 version = "0.1.0"
 

@@ -3722,6 +3722,42 @@ wrong -- `wl_display.error`'s signature disagrees and the comparison fails.
 With `wl_surface.commit`'s opcode changed by hand from 6 to 7, `--check`
 reports `compositor/protocol/src/generated/core.rs is stale` and exits 1.
 
+**Done — the connection, `wl_display` and `wl_registry` (2026-09-17).**
+`compositor/server` is the protocol half of the compositor and holds no
+socket, no descriptor and no pixel: a `Client` is handed the bytes that
+arrived and the descriptors that came with them and gives back the bytes to
+send, so object lifetimes, versions and every way a client can break the
+rules are host-tested, and running it on Ferrix will test the socket rather
+than the protocol. A connection starts as libwayland starts one, with
+`wl_display` as object 1 and nothing else. `sync` makes a `wl_callback`,
+fires it and takes the id back with `wl_display.delete_id`; `get_registry`
+announces every global in order; `bind` checks the name, the version and the
+interface the client named, because a client binding `wl_shm`'s name while
+saying `wl_seat` would otherwise get a `wl_shm` answering seat requests. The
+object map is `compositor/wire`'s, now carrying the server's own state for
+each object, so there is one map of live objects rather than two that can
+disagree about which exist.
+
+A protocol error is the end of a connection -- Wayland has no way to refuse
+one request and carry on -- so every refusal queues one `wl_display.error`
+and stops reading, and nothing after it is answered. Writing that down found
+a defect: `wl_display.error`'s object argument is not nullable, so a client
+that sent a `new_id` of zero would have had its error event silently fail to
+encode and would have seen the socket close with nothing said. The error now
+names `wl_display` where it has no object to name, which is where libwayland
+posts one it cannot attribute.
+
+Twenty-four tests, and the last of them is a real client:
+`probe/roundtrip.sh` runs `examples/transcript.rs` to get the server's answer
+to the conversation every toolkit opens with, replays it to a real libwayland
+client through `probe/roundtrip.c`, and records what the client made of it.
+libwayland reported all six globals with their names and versions and
+`wl_display_roundtrip` returned with no error. The recording is rebuilt by the
+test and compared, so a server that changed its answer cannot leave the
+check passing against a conversation that no longer happens. Its negative
+control, not committed: with `wl_registry.global`'s name and version written
+the other way round, libwayland reports `global 6 wl_compositor 1`.
+
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
 customer's order of 2026-09-16); then the protocol server, the seat, the
