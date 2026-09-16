@@ -87,7 +87,11 @@ clean; a session that edited there blocked every other session's
 fast-forward. Every session works in its own worktree under
 `.claude/worktrees/`, and lands each stable, gated step on `main` the day it
 is green — a worktree is never more than one landing deep, and a 40-point
-milestone is ten landings, not one.
+milestone is ten landings, not one. A landing that moves `main` by
+`git update-ref` must then sync the root checkout — `git reset --hard main`
+there, when it shows nothing of another session's — or land with `git merge
+--ff-only` from a clean root, which does both; a root left behind shows the
+landing as staged deletions, and a commit from it would revert the landing.
 
 **Worktrees.** One landing, one worktree. `git worktree remove` it once its
 branch is on `main`. Check `df -h /` before a landing; after a failed commit
