@@ -352,7 +352,10 @@ mod tests {
         let btop = &PORTS[2];
         assert_eq!(btop.name, "btop");
 
-        assert_eq!(stale(&root, &ferrousli, btop).as_deref(), Some("is not built"));
+        assert_eq!(
+            stale(&root, &ferrousli, btop).as_deref(),
+            Some("is not built")
+        );
 
         for port in ["libcxx", "btop"] {
             std::fs::create_dir_all(root.join(port)).unwrap();
