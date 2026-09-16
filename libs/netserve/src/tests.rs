@@ -386,6 +386,69 @@ fn a_frame_the_queue_will_not_take_waits_and_nothing_else_is_taken() {
     );
 }
 
+/// A driver that will not sleep is a driver that spins, and the case where
+/// that happens is the one where nothing it can do will help: a frame waiting
+/// for the device's queue stops the loop taking any submission, so the ring
+/// stays full and the ring's own answer is `Pending` for ever. Only the
+/// device's interrupt can break it, so the answer must be to sleep.
+#[test]
+fn a_throttled_loop_sleeps_rather_than_spinning_on_a_ring_it_will_not_drain() {
+    let mut bench = Bench::new();
+    bench.nic.full = true;
+    let _held = bench.transmit(b"waiting");
+    let _turn = bench.turn().expect("a turn");
+    assert!(
+        bench.serve.throttled(),
+        "the frame is waiting for the device"
+    );
+
+    // More for the kernel to send, which the loop will not take while the
+    // first frame waits. The ring is not empty, so asking it would answer
+    // `Pending` and the caller would turn again, and again.
+    let _behind = bench.transmit(b"behind it");
+    assert!(
+        matches!(
+            bench
+                .side
+                .prepare_to_sleep(&mut bench.ring)
+                .expect("a ring answer"),
+            ferrix_netring::Wait::Pending(_)
+        ),
+        "the ring has submissions, so on its own it says do not sleep"
+    );
+    let wait = bench
+        .serve
+        .before_sleep(&mut bench.ring, &mut bench.side)
+        .expect("a verdict");
+    assert_eq!(
+        wait,
+        ferrix_netring::Wait::Sleep,
+        "a throttled loop sleeps and waits for the device"
+    );
+
+    // Once the device takes them, the ring decides again.
+    bench.nic.full = false;
+    let turn = bench.turn().expect("a turn");
+    assert_eq!(turn.sent, 2);
+    assert!(!bench.serve.throttled());
+    let wait = bench
+        .serve
+        .before_sleep(&mut bench.ring, &mut bench.side)
+        .expect("a verdict");
+    assert_eq!(wait, ferrix_netring::Wait::Sleep, "and the ring is empty");
+}
+
+/// The loop remembers no more receive slots than a ring can have, so `Serve`
+/// is a few hundred bytes rather than kilobytes on a driver's stack.
+#[test]
+fn the_slot_queue_is_the_rings_own_limit() {
+    assert_eq!(
+        crate::MAX_POSTED,
+        ferrix_netring::layout::MAX_ENTRIES as usize
+    );
+    assert!(size_of::<Serve>() < 2048, "{}", size_of::<Serve>());
+}
+
 #[test]
 fn a_frame_longer_than_the_device_carries_is_answered_rather_than_held() {
     let mut bench = Bench::new();

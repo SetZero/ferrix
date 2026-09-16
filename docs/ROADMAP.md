@@ -2941,6 +2941,15 @@ kernel — which rings only a driver that has said it is going to sleep — neve
 rang it. Frames the *device* delivered still woke it through the interrupt, so
 the interface looked alive and transmitted nothing at all.
 
+That was possible because `libs/netserve` left the handshake to its caller
+while `libs/blkserve` owns it, which is why `user/blk` never had the bug and
+`user/net` did. The handshake is now `netserve`'s too, and with it the rule
+`blkserve` already had: while a frame waits for room in the device's transmit
+queue the answer is always to sleep, whatever the ring holds. Without that
+rule a full transmit queue is a spin rather than a wait — the loop takes no
+submission while a frame waits, so the ring stays full and answers "do not
+sleep" until the device interrupts. A test pins both.
+
 **Done — the `ifreq` ioctls.** rtnetlink is how an interface is configured and
 `kernel/src/net/netlink` answers it, but `if_nametoindex` — which POSIX.1-2024
 specifies, which every program that names an interface goes through, and which

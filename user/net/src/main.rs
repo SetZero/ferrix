@@ -43,7 +43,7 @@ use ferrix_native_abi::types::{DeviceBlock, DeviceInfo, IoMappingSpec};
 use ferrix_netring::control::{HELLO_RIGHTS, Hello, Interface, InterfaceFlags, MAX_MESSAGE};
 use ferrix_netring::driver::DriverSide;
 use ferrix_netring::layout::VERSION;
-use ferrix_netring::{Message, RingMemory};
+use ferrix_netring::{Message, RingMemory, Wait};
 use ferrix_netserve::{Nic, Serve};
 use ferrix_rt::native::channel::{Channel, ReadError};
 use ferrix_rt::native::device::{Device, Interrupt, IoMapping};
@@ -807,18 +807,17 @@ fn serve(
         if turn.busy {
             continue;
         }
-        // Ask to be rung, and look once more: the kernel rings only a driver
-        // that has said it is going to sleep, so a driver that sleeps without
-        // saying so sleeps through every frame it is given. `Wait::Again`
-        // means a submission arrived between the last look and this one.
-        if !matches!(
-            ring.side.prepare_to_sleep(&mut ring.ring),
-            Ok(ferrix_netring::Wait::Sleep)
-        ) {
+        // The handshake is `ferrix-netserve`'s, not this program's: the
+        // kernel rings only a driver that has asked to be rung, and the rule
+        // about a frame waiting for the device's queue belongs with the queue.
+        let wait = serve
+            .before_sleep(&mut ring.ring, &mut ring.side)
+            .map_err(|_| Step::Serve)?;
+        if wait != Wait::Sleep {
             continue;
         }
         let packet = ring.port.wait(Deadline::Never).map_err(|_| Step::Serve)?;
-        ring.side.woke(&mut ring.ring);
+        serve.woke(&mut ring.ring, &mut ring.side);
         match packet.key {
             KEY_CONTROL => {
                 let _ = control.wait_async(

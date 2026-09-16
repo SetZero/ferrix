@@ -49,14 +49,18 @@ mod tests;
 
 use core::fmt;
 
+use ferrix_netring::bell::Wait;
 use ferrix_netring::driver::{Consumed, DriverError, DriverSide};
-use ferrix_netring::layout::{Op, Status, Submission};
+use ferrix_netring::layout::{MAX_ENTRIES, Op, Status, Submission};
 use ferrix_netring::{Corruption, RingMemory};
 use ferrix_virtio_net::{DeviceError, Event, Frame, SubmitError};
 
-/// How many receive slots the loop remembers. The ring cannot post more than
-/// its entries, and the largest ring is 4096.
-pub const MAX_POSTED: usize = 4096;
+/// How many receive slots the loop remembers.
+///
+/// A ring cannot post more slots than it has entries, so this is
+/// [`MAX_ENTRIES`] and not a number of its own: anything larger is an array
+/// nothing can fill, on the stack of a process that has little else on it.
+pub const MAX_POSTED: usize = MAX_ENTRIES as usize;
 
 /// How many submissions or events one turn of the loop moves.
 pub const BATCH: usize = 32;
@@ -221,6 +225,48 @@ impl Serve {
         self.take_submissions(ring, data, side, nic, &mut turn)?;
         self.take_events(ring, data, side, nic, &mut turn)?;
         Ok(turn)
+    }
+
+    /// Whether a frame is waiting for room in the device's transmit queue.
+    #[must_use]
+    pub fn throttled(&self) -> bool {
+        self.pending_len > 0
+    }
+
+    /// Before the caller sleeps on its port: whether it may, or must turn
+    /// again first.
+    ///
+    /// This is in the library and not in the caller because the ring rings
+    /// only a side that has asked to be rung, and a driver that sleeps
+    /// without asking is never woken by the kernel at all. It still wakes on
+    /// its device's interrupt, so it receives frames and answers none of
+    /// them, which reads from outside as a working interface that transmits
+    /// nothing. Leaving that to be remembered once per driver is leaving it
+    /// to be forgotten.
+    ///
+    /// While a frame waits for the device's queue the answer is always to
+    /// sleep, whatever the ring holds: the loop will not take another
+    /// submission until that frame has gone, so only the device's interrupt
+    /// can make progress, and asking the ring would answer `Pending` for ever
+    /// and turn the wait into a spin.
+    ///
+    /// # Errors
+    ///
+    /// The [`Fault`] that stops the loop.
+    pub fn before_sleep<R: RingMemory>(
+        &mut self,
+        ring: &mut R,
+        side: &mut DriverSide,
+    ) -> Result<Wait, Fault> {
+        if self.throttled() {
+            return Ok(Wait::Sleep);
+        }
+        side.prepare_to_sleep(ring).map_err(Fault::Ring)
+    }
+
+    /// On waking: stop asking to be rung, before anything is drained.
+    pub fn woke<R: RingMemory>(&mut self, ring: &mut R, side: &mut DriverSide) {
+        side.woke(ring);
     }
 
     /// Send the frames the device would not take last time, if it will now.
