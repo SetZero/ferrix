@@ -47,35 +47,24 @@ macro_rules! stubs {
 }
 
 stubs! {
-    __h_errno_location
     atan2
     cos
     dirname
     ether_aton_r
     ether_hostton
     exp
-    freeaddrinfo
     freeifaddrs
-    getaddrinfo
     gethostbyaddr
     gethostbyname
     getifaddrs
-    getnameinfo
     getservbyname
     getservbyport
-    hstrerror
     log
-    ns_get16
-    ns_get32
-    ns_initparse
-    ns_name_uncompress
-    ns_parserr
     pow
     regcomp
     regerror
     regexec
     regfree
-    res_mkquery
     sin
 }
 

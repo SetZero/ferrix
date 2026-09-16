@@ -62,6 +62,7 @@ pub mod mntent;
 pub mod mount;
 pub mod multibyte;
 pub mod mutex;
+pub mod netdb;
 pub mod poll;
 pub mod process;
 pub mod pthread;
