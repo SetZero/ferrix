@@ -486,7 +486,7 @@ it.
 | L1 | `libs/linux-abi::input`: the §3.3 ioctls (with a sample length for the sized ones), `EV_VERSION`, `INPUT_MAJOR`, event types and codes, `*_MAX`/`*_CNT`, the clock ids, and `input_event`, `input_id` and `input_absinfo` layouts at both widths. From a committed probe (`probe/input.c`, `input.sh`, `input-64.txt`, `input-32.txt`) compiled on nazuna against `/usr/include/linux/input.h`, pinned by `src/tests/input.rs` | no | 2 |
 | L2 | `libs/virtio::input`: configuration queries and the 8-byte event, hostile-device tests, checked against QEMU 9.2.4, fuzzed, its evdev numbers L1's. Landed (493fd843, 0bfb1de4, and the switch to L1's numbers) | no | 2 |
 | L3 | `libs/inputctl`: §3.2's messages and validation, and `queue`: report assembly, per-open queues, `SYN_DROPPED`, grab, clock conversion, state for `EVIOCGKEY`/`EVIOCGABS`. Host-tested, fuzzed | no | 3 |
-| L4 | `libs/virtio-input`: driver logic over `libs/virtio-blk`'s traits (bring-up, the queries into `HELLO`, keeping the event queue full, filtering, batching), tested against a simulated device that drops short reports as QEMU does | no | 3 |
+| L4 | `libs/virtio-input`: driver logic over `libs/virtio-blk`'s traits (bring-up, the queries into `HELLO`, keeping the event queue full, filtering, batching), tested against a simulated device that drops short reports as QEMU does. Landed | no | 3 |
 | L5 | `user/input`, devmgr's table entry and `start_input`, `INPUT_CONTROL_CREATE`, the core's per-device task; exit: the boot line names each device and its event types | yes | 5 |
 | L6 | devfs `/dev/input/eventN`: subdirectory, character nodes, per-open objects, the ioctl branch and §3.3's subset, `read` and `poll`; Linux's queue size, drop rule, grab and revoke answers, string and bitmap lengths, and `read`'s errors checked against `drivers/input/evdev.c` | yes | 5 |
 | L7 | `compositor/evecho`; `xtask test-input` with QMP `input-send-event` and its negative control; the devices under `run --display` | no | 3 |
@@ -529,7 +529,12 @@ L6 to settle: a full queue keeps `SYN_DROPPED` and the newest event rather
 than only `SYN_DROPPED`; the state changes as each event arrives, since
 whether an event passes depends on it; `read` answers `ENODEV` as soon as the
 device is gone, queued events or not; and `EVIOCGABS` of an undeclared axis
-answers zeros, which the crate leaves to the glue. L4–L7 are open. Of
+answers zeros, which the crate leaves to the glue. L4 is done: `libs/virtio-input`
+is the driver logic over a transport, pinned pages and an event area the
+process hands it, host-tested against a device copying QEMU 9.2.4's keyboard,
+mouse, tablet and multi-touch tables (28 tests) and fuzzed against a real
+session (`virtio_input_driver`, 10,523,605 inputs in ten minutes without a
+failure). Two of its rules are decisions 9 and 10 below. L5–L7 are open. Of
 iteration 2's prerequisites,
 E1–E3 landed (os-26) and E4 landed (the GUI session): iteration 2's
 prerequisites are all in. The roadmap's stage 17 records what E1 and E2 do not yet do as
@@ -563,6 +568,26 @@ Linux does.
    session (os-e5)**, and `docs/DISPLAY.md` §2.3 describes it as iteration 2:
    `GETPLANERESOURCES`, `GETPLANE`, `OBJ_GETPROPERTIES` and `GETPROPERTY`,
    with the primary plane and `type` property Smithay needs (§2.3 here).
+
+**Decided in L4, 2026-09-17, and open to the reader of L5:**
+
+9. **The driver drops what the core would not publish**, rather than
+   forwarding it for the core to refuse. §3.2 has the core refuse a message
+   holding any undeclared event and stay broken after it, so a driver that
+   passed on `SYN_MT_REPORT` or a multi-touch axis its device declared would
+   break its own session at the first touch. It therefore forwards
+   `SYN_REPORT`, `REP_DELAY` and `REP_PERIOD` of a device declaring `EV_REP`,
+   and otherwise only a type and code in the `Capabilities` of the HELLO the
+   core accepted, and counts the rest.
+10. **A report the core would refuse for length is cut, not dropped.** §3.2
+    caps a report at `MAX_REPORT` events. When one reaches a single event
+    short of that, the driver ends it with a `SYN_REPORT` of its own and
+    starts the next with the following event, counting the split. QEMU never
+    does this -- a report longer than its 64-entry queue is one it can never
+    deliver (`virtio_input_send`) -- so only a device outside QEMU's shape
+    meets the rule, and cutting keeps every event where dropping the rest
+    would lose them. The alternative, refusing the device, would turn one
+    over-long report into a dead keyboard.
 
 **For others:**
 

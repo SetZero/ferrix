@@ -35,6 +35,7 @@ ferrix-inputctl = { path = "../libs/inputctl" }
 ferrix-virtio-blk = { path = "../libs/virtio-blk" }
 ferrix-virtio-net = { path = "../libs/virtio-net" }
 ferrix-virtio-gpu = { path = "../libs/virtio-gpu" }
+ferrix-virtio-input = { path = "../libs/virtio-input" }
 ferrix-netwire = { path = "../libs/netwire" }
 ferrix-nettcp = { path = "../libs/nettcp" }
 ferrix-net = { path = "../libs/net" }
@@ -204,6 +205,13 @@ bench = false
 [[bin]]
 name = "virtio_gpu_pipeline"
 path = "fuzz_targets/virtio_gpu_pipeline.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "virtio_input_driver"
+path = "fuzz_targets/virtio_input_driver.rs"
 test = false
 doc = false
 bench = false

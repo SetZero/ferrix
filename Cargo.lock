@@ -365,6 +365,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-virtio-input"
+version = "0.1.0"
+dependencies = [
+ "ferrix-inputctl",
+ "ferrix-linux-abi",
+ "ferrix-virtio",
+]
+
+[[package]]
 name = "ferrix-virtio-net"
 version = "0.1.0"
 dependencies = [

@@ -3403,6 +3403,29 @@ rule to Linux it follows `drivers/input/evdev.c` and `input.c`, and
 `docs/INPUT.md` §5 lists the four places where Linux answers differently from
 the design's first text, for L6 to settle. No kernel code uses it yet.
 
+**Done — L4 of the input iteration, the virtio-input driver (2026-09-17).**
+`libs/virtio-input` is the driver a `user/input` process will run: the logic
+over a [`Transport`], pinned pages and an event area the process hands it, as
+`libs/virtio-gpu` is written. Bring-up negotiates features, reads the device's
+description through L2's configuration queries and builds the event queue, and
+then stops with `FEATURES_OK` set and no buffer posted, because QEMU discards
+every event until `DRIVER_OK` and `docs/INPUT.md` §3.2 has the core judge the
+device before it is set; READY sets it, posts a buffer in every descriptor and
+rings the doorbell, and a device the core refuses never sees it. The event
+queue is kept full before a single event is forwarded, since QEMU drops a
+whole report without a word when a buffer is missing. What the core would not
+publish is dropped here rather than breaking the session, and a report that
+reaches one event short of the core's limit is cut with a `SYN_REPORT` of the
+driver's own and counted: `docs/INPUT.md` §6 decisions 9 and 10. Memory the
+device may still write into comes back `Teardown::Wedged` and is never
+dropped. Its 28 tests run it against a device copying QEMU 9.2.4's keyboard,
+mouse, tablet and multi-touch tables and against devices that lie; the
+`virtio_input_driver` fuzz target plays the device and the glue against a real
+`inputctl` session and requires the core never to refuse a message the batch
+made, no event to be lost or reordered, and every message to fit and to end at
+a report boundary unless it is full. It ran 10,523,605 inputs in ten minutes
+without a failure. No kernel code uses it yet: L5 is the process.
+
 **Estimate, re-baselined by os-f6 on 2026-09-16:** 74 points, from 55. The
 display's iteration 1 took 37, the input iteration is 23 (`docs/INPUT.md`
 §5), and the prerequisites of iteration 2 are 14: nested `epoll` (E1),
@@ -3412,7 +3435,7 @@ session holds.
 Nested `epoll`, `FIONBIO` and the plane objects were not counted before
 `docs/INPUT.md` §2 read Smithay's event loop.
 
-**Still to do:** input L4–L7; `timerfd` (wanted,
+**Still to do:** input L5–L7; `timerfd` (wanted,
 not required, deferred); atomic commit; per-open windows onto the card VMO;
 and the rest of the exit below. E1–E3 (os-26) and E4 are done, so iteration
 2's prerequisites are all in. E1–E3's paragraphs below record

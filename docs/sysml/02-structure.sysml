@@ -1012,6 +1012,25 @@ package FerrixStructure {
                  * the virtio_gpu_pipeline fuzz target requires one reply per
                  * request and no unpin without a pin. */
         }
+        #writtenAhead part virtioInput : LibraryCrate {
+            attribute :>> path = "libs/virtio-input";
+            attribute :>> hostTests = 28;
+            @stage { number = 17; }
+            doc /* The virtio-input driver logic, written ahead of the driver
+                 * process for the input iteration (docs/INPUT.md): bring-up
+                 * that stops at FEATURES_OK so no event is discarded before
+                 * the core has judged the device, the device's description
+                 * read as a HELLO, the event queue kept full because QEMU
+                 * drops a whole report for want of one buffer, and the events
+                 * the device wrote batched into the EVENTS messages the core
+                 * reads. It forwards only what the core would publish and
+                 * drops the rest; it ends a report the core would refuse for
+                 * length and counts the cut; and memory the device may still
+                 * write into is never handed back. The virtio_input_driver
+                 * fuzz target plays a device and the glue against a real
+                 * session, and requires the core never to refuse a message
+                 * the batch made and no event to be lost or reordered. */
+        }
         #writtenAhead part displayctl : LibraryCrate {
             attribute :>> path = "libs/displayctl";
             attribute :>> forbidsUnsafe = true;
