@@ -985,6 +985,22 @@ package FerrixStructure {
                  * used entry and header byte a stranger chose, and requires
                  * every accepted frame to be answered exactly once. */
         }
+        #writtenAhead part displayctl : LibraryCrate {
+            attribute :>> path = "libs/displayctl";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 10;
+            @stage { number = 17; }
+            doc /* The control protocol between the kernel's display core and
+                 * a ring-3 display driver, written ahead of both for the
+                 * compositor's first iteration (docs/DISPLAY.md). Frames do
+                 * not move -- the card VMO's ranges are the device's backing
+                 * -- so there is no ring, only twelve fixed messages decoded
+                 * strictly, and the core's side of the conversation as a
+                 * state machine of fixed capacity that accepts only the reply
+                 * it waits for and stays broken once a driver lies. The
+                 * displayctl fuzz target requires decoding to be exact and
+                 * the session never to accept a flip out of order. */
+        }
         #writtenAhead part pci : LibraryCrate {
             attribute :>> path = "libs/pci";
             attribute :>> forbidsUnsafe = true;

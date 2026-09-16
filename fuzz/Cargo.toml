@@ -30,6 +30,7 @@ ferrix-btrfs = { path = "../libs/btrfs" }
 ferrix-block = { path = "../libs/block", features = ["model"] }
 ferrix-blkring = { path = "../libs/blkring" }
 ferrix-virtio = { path = "../libs/virtio" }
+ferrix-displayctl = { path = "../libs/displayctl" }
 ferrix-virtio-blk = { path = "../libs/virtio-blk" }
 ferrix-virtio-net = { path = "../libs/virtio-net" }
 ferrix-netwire = { path = "../libs/netwire" }
@@ -173,6 +174,13 @@ bench = false
 [[bin]]
 name = "virtio_gpu"
 path = "fuzz_targets/virtio_gpu.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "displayctl"
+path = "fuzz_targets/displayctl.rs"
 test = false
 doc = false
 bench = false

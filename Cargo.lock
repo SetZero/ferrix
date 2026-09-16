@@ -121,6 +121,14 @@ name = "ferrix-devmgr-proto"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-displayctl"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
+]
+
+[[package]]
 name = "ferrix-elf"
 version = "0.1.0"
 

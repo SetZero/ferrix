@@ -1,0 +1,15 @@
+[package]
+name = "ferrix-displayctl"
+description = "The display control protocol between the kernel's display core and a ring-3 display driver"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrix-linux-abi = { workspace = true }
+ferrix-native-abi = { workspace = true }
+
+[lints]
+workspace = true
