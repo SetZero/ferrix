@@ -531,8 +531,8 @@ whether an event passes depends on it; `read` answers `ENODEV` as soon as the
 device is gone, queued events or not; and `EVIOCGABS` of an undeclared axis
 answers zeros, which the crate leaves to the glue. L4–L7 are open. Of
 iteration 2's prerequisites,
-E1–E3 landed (os-26): the kernel side is done except E4, which is in
-progress. The roadmap's stage 17 records what E1 and E2 do not yet do as
+E1–E3 landed (os-26) and E4 landed (the GUI session): iteration 2's
+prerequisites are all in. The roadmap's stage 17 records what E1 and E2 do not yet do as
 Linux does.
 
 ## 6. Decisions and open questions

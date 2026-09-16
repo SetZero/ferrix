@@ -7,7 +7,7 @@ Ferrix in QEMU*, pulled forward from stage 17. Approved by the product owner
 together as one reviewed stack (os-02), since L5 alone would have been dead
 code or the kernel drawing; `cargo xtask test-display` passes on x86-64 and
 AArch64. That is iteration 1. Iteration 2's planes and properties (E4, §2.3)
-are not implemented yet.
+are implemented too, reviewed by os-02.
 
 ## 1. What this is, and what it is not
 
@@ -202,8 +202,8 @@ source is committed this time.
 | `MODE_GETPROPERTY` | E4: property 5, `type`, `DRM_MODE_PROP_ENUM \| DRM_MODE_PROP_IMMUTABLE`, values 0, 1 and 2 named `Overlay`, `Primary` and `Cursor`; another id `ENOENT` |
 
 **Iteration 2's planes and properties (E4, 3 points, the GUI session
-os-e5; decided by os-f6, 2026-09-16; on the branch `e4-planes`, for os-02's
-review).** This table first assumed Smithay's legacy path needs no planes. It
+os-e5; decided by os-f6, 2026-09-16; implemented and reviewed by os-02 the
+same day).** This table first assumed Smithay's legacy path needs no planes. It
 does: `create_surface` enumerates planes even there, reads each plane's
 properties to find `type` and reaches `unreachable!()` for a plane without
 one, and keeps only primary planes when universal planes are refused; with

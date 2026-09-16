@@ -52,7 +52,8 @@ test-display` requiring a compositor's colour pixel for pixel on x86-64 and
 AArch64. Input is designed in `docs/INPUT.md`, and its first two landings,
 evdev's numbers and the virtio-input protocol, are in. `epoll`, `eventfd` and
 `ioctl(FIONBIO)` are in the boot test, so the kernel side of iteration 2's
-prerequisites is done except E4, `card0`'s planes.
+prerequisites is done, and `card0` has the primary plane and `type` property
+Smithay's legacy path needs (E4).
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -3409,11 +3410,10 @@ session holds.
 Nested `epoll`, `FIONBIO` and the plane objects were not counted before
 `docs/INPUT.md` §2 read Smithay's event loop.
 
-**Still to do:** input L4–L7; E4, `card0`'s primary plane and properties
-(the GUI session, in progress, landing after the release); `timerfd` (wanted,
+**Still to do:** input L4–L7; `timerfd` (wanted,
 not required, deferred); atomic commit; per-open windows onto the card VMO;
-and the rest of the exit below. E1–E3 are done (os-26), so the kernel side of
-iteration 2's prerequisites is done except E4. Their paragraphs below record
+and the rest of the exit below. E1–E3 (os-26) and E4 are done, so iteration
+2's prerequisites are all in. E1–E3's paragraphs below record
 what they do not yet do as Linux does: `EPOLLRDHUP` and `EPOLLPRI` are never
 reported, `poll` and epoll waits recheck every 5 ms instead of waking on the
 event (a P2 row in `docs/BACKLOG.md`), and a zero-length write to an eventfd
@@ -3524,8 +3524,7 @@ with `F_GETFD`, passing an unreadable argument to show nothing is read. With
 `FIOCLEX` left unanswered, the boot panics with "FIOCLEX on a pipe was
 refused".
 
-**Done — E4, `card0`'s primary plane, on the branch `e4-planes` for os-02's
-review.** Smithay's legacy path lists planes and reads each one's `type`
+**Done — E4, `card0`'s primary plane (2026-09-16, reviewed by os-02).** Smithay's legacy path lists planes and reads each one's `type`
 property, and has nothing to draw on without a primary plane. `card0` now
 accepts `DRM_CLIENT_CAP_UNIVERSAL_PLANES`, without which Linux's
 `drm_mode_getplane_res` lists only overlay planes; it implies nothing atomic,
