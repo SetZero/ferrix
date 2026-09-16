@@ -547,13 +547,26 @@ impl Stream<'_> {
 
 /// A loopback address with nothing listening on it.
 fn closed_port() -> SocketAddrV4 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = match listener.local_addr().unwrap() {
-        std::net::SocketAddr::V4(address) => address,
-        other => panic!("a listener bound to 127.0.0.1 is not {other}"),
-    };
-    drop(listener);
-    address
+    // Binding a port and letting it go leaves a window in which somebody else
+    // -- another test in this run, or anything on the machine -- can take it,
+    // and then the connection the test expects to be refused succeeds. So the
+    // refusal is confirmed before the address is handed back, and a port that
+    // was taken in the meantime is simply passed over.
+    for _ in 0..32 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = match listener.local_addr().unwrap() {
+            std::net::SocketAddr::V4(address) => address,
+            other => panic!("a listener bound to 127.0.0.1 is not {other}"),
+        };
+        drop(listener);
+        let refused =
+            std::net::TcpStream::connect_timeout(&address.into(), Duration::from_millis(200))
+                .is_err();
+        if refused {
+            return address;
+        }
+    }
+    panic!("no port on the loopback stayed closed long enough to test a refusal");
 }
 
 #[test]
