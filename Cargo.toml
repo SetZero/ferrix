@@ -33,6 +33,7 @@ members = [
     "libs/ustack",
     "libs/virtio",
     "libs/virtio-blk",
+    "libs/virtio-net",
     "libs/vma",
     "libs/paging",
     "libs/procfs",
@@ -101,6 +102,7 @@ ferrix-sync = { path = "libs/sync" }
 ferrix-ustack = { path = "libs/ustack" }
 ferrix-virtio = { path = "libs/virtio" }
 ferrix-virtio-blk = { path = "libs/virtio-blk" }
+ferrix-virtio-net = { path = "libs/virtio-net" }
 ferrix-vma = { path = "libs/vma" }
 ferrix-qr = { path = "libs/qr" }
 ferrix-vfs = { path = "libs/vfs" }
