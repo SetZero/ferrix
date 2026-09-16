@@ -31,7 +31,12 @@ const MIN_FAT32_CLUSTERS: u32 = 65_525;
 
 /// Size of the image we build. Comfortably larger than a kernel, a loader and
 /// an initramfs, and small enough to write in a moment.
-const IMAGE_BYTES: usize = 64 * 1024 * 1024;
+///
+/// 64 MiB held until 2026-09-16, when the unoptimised x86-64 kernel reached
+/// 57.5 MiB and, with busybox's initramfs of 6.7 MiB and the loader beside it,
+/// no longer fitted: `run --init` failed with this file's "image is full".
+/// Doubled rather than nudged, because the kernel grows with every landing.
+const IMAGE_BYTES: usize = 128 * 1024 * 1024;
 
 /// A frozen timestamp — 2026-01-01 00:00:00 — so that two builds of the same
 /// inputs produce the same image.
