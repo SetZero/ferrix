@@ -1307,6 +1307,39 @@ pub(crate) const REAPER_PATIENCE_NANOS: u64 = 20_000_000_000;
 /// does not wait for is a reference the caller holds to a task, a process or
 /// an address space: that is the caller's to drop, and to wait for.
 pub(crate) fn wait_until_reaper_quiet(patience_nanos: u64) -> Result<(), &'static str> {
+    wait_for_reaper(patience_nanos)
+}
+
+/// Wait until `task` has exited and been reaped, so that nothing it holds --
+/// its kernel stack, and through its thread a process and an address space --
+/// comes back after the caller's frame window opens.
+///
+/// For a check that starts a task and counts frames. A task that has answered
+/// the check is not yet gone: it still has to leave, and
+/// [`wait_until_reaper_quiet`] counts only tasks already dead, so without this
+/// its stack is freed inside whichever window opens next, four frames that
+/// window never took. Drop the `Arc<Task>` after this returns.
+///
+/// # Errors
+///
+/// When the task is not dead, or the reaper not quiet, within
+/// `patience_nanos`.
+pub(crate) fn wait_until_gone(task: &Task, patience_nanos: u64) -> Result<(), &'static str> {
+    let deadline = crate::timer::now_nanos().saturating_add(patience_nanos);
+    while !task.is_dead() {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("a task the check started never finished exiting");
+        }
+        sleep_for(GONE_POLL_NANOS);
+    }
+    wait_for_reaper(deadline.saturating_sub(crate::timer::now_nanos()))
+}
+
+/// How often [`wait_until_gone`] looks at its task.
+const GONE_POLL_NANOS: u64 = 1_000_000;
+
+/// [`wait_until_reaper_quiet`]'s body.
+fn wait_for_reaper(patience_nanos: u64) -> Result<(), &'static str> {
     let deadline = crate::timer::now_nanos().saturating_add(patience_nanos);
     loop {
         // Here as well as in the idle loops: a yield never picks this

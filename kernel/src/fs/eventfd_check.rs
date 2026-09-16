@@ -301,6 +301,12 @@ fn check_a_blocked_read_is_woken(counts: &mut Counts) -> Result<(), &'static str
     let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
     let _ = READER_DONE.wait_until_deadline(|| READER_ANSWER.lock().is_some(), deadline);
     let answer = READER_ANSWER.lock().take();
+    if answer.is_none() {
+        return Err("a reader waiting on an eventfd never came back after a write");
+    }
+    // Gone, not only answered: its stack must be back before the window the
+    // second run counts in closes, or opens.
+    crate::sched::wait_until_gone(&reader, crate::sched::REAPER_PATIENCE_NANOS)?;
     drop(reader);
     match answer {
         None => return Err("a reader waiting on an eventfd never came back after a write"),
@@ -438,6 +444,10 @@ fn check_waits_are_woken(
         let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
         let _ = READER_DONE.wait_until_deadline(|| WAITER_ANSWER.lock().is_some(), deadline);
         let answer = WAITER_ANSWER.lock().take();
+        if answer.is_none() {
+            return Err("a poll or epoll_wait never came back after a write");
+        }
+        crate::sched::wait_until_gone(&waiter, crate::sched::REAPER_PATIENCE_NANOS)?;
         drop(waiter);
         if answer != Some(Ok(1)) {
             return Err("a poll or epoll_wait did not answer one ready eventfd after a write");
