@@ -931,6 +931,22 @@ package FerrixStructure {
                  * completion. Private indices, checked reads of the peer's,
                  * the want-bell handshake, and every entry checked when it is
                  * read; corruption is terminal for the side that sees it. */
+        #writtenAhead part netlink : LibraryCrate {
+            attribute :>> path = "libs/netlink";
+            attribute :>> hostTests = 48;
+            doc /* The byte-level half of netlink, over linux-abi's headers:
+                 * walking a buffer of messages and the attributes after each
+                 * fixed header, and building replies into a caller's buffer
+                 * with every length and pad computed rather than taken. Both
+                 * walks refuse a length below the header it introduces, one
+                 * past the end, and the zero that would walk the same message
+                 * for ever, and every step forward is at least a header wide,
+                 * so a walk over any bytes at all ends -- which is what lets
+                 * the kernel read a buffer a program wrote. It allocates
+                 * nothing, so a whole dump is encoded inside the lock over the
+                 * net core. The netlink_walk fuzz target requires the walk to
+                 * end, what it borrows to lie inside the input, and anything
+                 * the builder writes to walk back to what was built. */
         }
         #writtenAhead part pci : LibraryCrate {
             attribute :>> path = "libs/pci";

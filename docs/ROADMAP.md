@@ -2772,9 +2772,11 @@ the UAPI headers. `libs/nettcp` has the TCP state machine over those headers,
 with 30 host tests and the `nettcp_state` fuzz target, and `libs/net` has the
 net core over both — interfaces, routes, neighbours, reassembly, ICMP, UDP and
 the socket table — with 45 host tests and the `net_input` fuzz target; see
-*Written ahead of their stage*. Netlink message encoding and virtio-net's
-device protocol are still to be written, and nothing in the kernel calls any of
-it yet.
+*Written ahead of their stage*. `libs/netlink` has the byte-level half of
+netlink over those headers — walking a buffer of messages and the attributes
+after each one, and building replies into a caller's buffer — with 48 host
+tests and the `netlink_walk` fuzz target. virtio-net's device protocol is the
+one that is still to be written.
 
 **Done — the net core, and `AF_INET` and `AF_INET6` sockets.** `kernel/src/net`
 is `libs/net` behind one lock and a task that drives it. Nothing sleeps inside
@@ -2805,6 +2807,46 @@ left to time out -- over IPv4 and again over IPv6. It reads:
 
 ```
   net      1 interface up, 318 bytes carried over the loopback in both families, 2 connections made and accepted, 3 calls refused as specified
+```
+
+**Done — `AF_NETLINK` route sockets, which is how an interface is
+configured.** Every way of configuring a network on Linux ends at the same
+socket: `ip` uses nothing else, `ifconfig` and `route` use ioctls that are a
+shim over it, and `udhcpc` and a C library's `getifaddrs` read it directly.
+`socket(AF_NETLINK, SOCK_DGRAM | SOCK_RAW, NETLINK_ROUTE)` now opens one,
+`bind` gives it a port identifier, and `sendmsg` and `recvmsg` carry requests
+and replies.
+
+`kernel/src/net/netlink` answers dumps of links, addresses, routes and
+neighbours, and the changes that matter: `RTM_SETLINK` and the `RTM_NEWLINK`
+that `ip link set dev eth0 up` actually sends, `RTM_NEWADDR` and `RTM_DELADDR`,
+`RTM_NEWROUTE` and `RTM_DELROUTE`. An unknown type is `NLMSG_ERROR` with
+`EOPNOTSUPP`, a message too short for the fixed header its type implies is
+`EINVAL`, and a change asked for without `NLM_F_REQUEST` is `EINVAL` — a
+notification is what the kernel sends, not what it takes.
+
+A request is answered before `sendmsg` returns, as `NETLINK_ROUTE` is on
+Linux, which is what lets `rtnl_talk` send and then read with no poll and no
+timeout. Each reply is queued as a datagram of its own rather than packed with
+its siblings, because a netlink datagram that does not fit the buffer offered
+is truncated and the rest dropped — one dump in one datagram would be a reader
+with a small buffer silently losing interfaces. Nothing is encoded inside the
+net core's lock: the buffer is allocated before it is taken and the replies
+copied out after it is dropped.
+
+What is not there is multicast — nothing yet sends a notification when an
+interface changes — and dump filters: a `RTM_GET*` answers with the whole table
+whether or not `NLM_F_DUMP` was set, because the attributes that would narrow
+it are read by nobody. Both wait for the first program that needs them.
+
+The boot check is the path `ip` takes rather than the pieces it is made of: it
+opens a socket, binds it, reads its port back, dumps the links and finds the
+loopback with its flags, adds an address and a route and sees each in the next
+dump, removes them and sees them gone, and requires `EOPNOTSUPP` for a type
+nothing answers and `EINVAL` for a message too short for its header. It reads:
+
+```
+  netlink  1 links, 2 addresses and 2 routes dumped, an address and a route added and taken away again, 2 requests refused as specified
 ```
 
 **The host side already exists, and it is ours.** `cargo xtask run --net`
@@ -2880,6 +2922,9 @@ an IPv6 row overflows.
 
 **Still to do:** the virtio-net driver process itself, `AF_NETLINK` for `ip`,
 and `AF_UNIX` names so that `nc` can carry a stream over a local socket.
+**Still to do:** the virtio-net driver and the ring it speaks over,
+`/proc/net`, and `AF_UNIX` names so that `nc` can carry a stream over a local
+socket.
 
 **Exit:** under `xtask`'s gateway — which is where this criterion's *"under
 QEMU's user-mode network"* now reads — busybox configures `eth0` with `ip` (or
@@ -3109,15 +3154,17 @@ at three in the morning against a machine that reboots on a mistake.
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
 loader's), `frame`, `heap`, `paging` — that is **895 host unit tests, all
+| `libs/netlink` | Networking — reached already, by the `AF_NETLINK` sockets above: walking a buffer of netlink messages and the attributes after each fixed header, and building replies into a caller's buffer with every length and pad computed rather than taken. The walks refuse a length below the header they introduce, one past the end, and the zero that walks the same message for ever, and every step forward is at least a header wide, so a walk over any bytes ends. Its `netlink_walk` fuzz target requires that, requires what a walk borrows to lie inside the input, and requires anything the builder writes to walk back to what was built. | 48 |
+loader's), `frame`, `heap`, `paging` — that is **911 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has sixteen:
+asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has seventeen:
 `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`, `vfs_ops`,
 `pci_walk`, `btrfs_read`, `block_queue`, `cpio_parse`, `fdt_parse`,
-`acpi_tables`, `blkring`, `virtio_blk`, `netwire_parse`, `nettcp_state` and
-`net_input`. Every crate in the table above parses bytes that came from
-outside the system — a disk, a firmware table, an archive a stranger built —
+`acpi_tables`, `blkring`, `virtio_blk`, `netwire_parse`, `nettcp_state`,
+`net_input` and `netlink_walk`. Every crate in the table above parses bytes
+that came from outside the system — a disk, a firmware table, an archive a stranger built —
 which is precisely the population the rule was written for. The fuzz targets
 still owed — `virtio` and `linux-abi` — are owed *before* the consuming stage
 starts, not when it ships.
@@ -3156,6 +3203,15 @@ IP packet inside it, so a header the stack builds that nothing can read is a
 crash rather than a packet on a wire. The reassembly ceiling is asserted after
 every frame, and a host that has been sent nothing but rubbish is required to
 stop talking rather than to keep producing frames for ever.
+
+`netlink_walk` walks the fuzzer's bytes as a buffer of netlink messages and
+each message's payload as attributes, from every fixed-body offset a routing
+message uses. Beyond the absence of a panic it requires the walk to end — a
+buffer of *n* bytes can hold no more than *n*/16 messages, and a walk that
+yields more is walking the same bytes twice, which is the hang the target
+exists to catch — that everything a walk borrows lies inside the input, that an
+error is the last thing a walk yields, and that a message built from a header,
+a body and attributes the fuzzer chose walks back to exactly those.
 
 `fdt_parse` holds the device tree reader to a second walk of the token stream
 written from the specification: a tree the reader accepts must be well formed
