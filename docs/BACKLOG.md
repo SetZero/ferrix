@@ -75,6 +75,14 @@ product owner may ask for the whole row in any case. A boot that fails is a
 result to read, not a reason to retry: only the stage 5 EEVDF-bound message
 was ever a known flake, and it is fixed.
 
+**Nobody works in the root checkout, and landings are small and often
+(customer, 2026-09-16).** The root checkout keeps `main` checked out and
+clean; a session that edited there blocked every other session's
+fast-forward. Every session works in its own worktree under
+`.claude/worktrees/`, and lands each stable, gated step on `main` the day it
+is green — a worktree is never more than one landing deep, and a 40-point
+milestone is ten landings, not one.
+
 **Worktrees.** One landing, one worktree. `git worktree remove` it once its
 branch is on `main`. Check `df -h /` before a landing; after a failed commit
 read `git log -1 --stat` before the next step, because a failed commit leaves
