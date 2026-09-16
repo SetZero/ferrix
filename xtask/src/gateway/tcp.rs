@@ -33,8 +33,8 @@
 //! None of that is a gap to be filled later. The path between the two ends is a
 //! loopback socket to this machine's own kernel: it does not reorder packets,
 //! loses one only when a receive buffer is full, and has no bandwidth-delay
-//! product worth a congestion window. Every one of those mechanisms exists to cope with a
-//! network, and there is no network here. Correctness is the whole requirement,
+//! product worth a congestion window. Every one of those mechanisms exists to
+//! cope with a network, and there is no network here. Correctness is the whole requirement,
 //! and simplicity is how it is met.
 //!
 //! # Out-of-order data
@@ -590,24 +590,20 @@ impl Core {
             finished.push(connected);
         }
         for Connected { key, stream } in finished {
-            let opened = self.settle_connect(key, stream);
-            bump(if opened {
-                &self.counters.tcp_opened
-            } else {
-                &self.counters.tcp_refused
-            });
+            self.settle_connect(key, stream);
         }
         self.service_tcp();
     }
 
-    /// Hand one finished connect to its connection, and say whether it opened.
-    fn settle_connect(&mut self, key: Key, stream: std::io::Result<TcpStream>) -> bool {
+    /// Hand one finished connect to its connection, and count whether it opened.
+    fn settle_connect(&mut self, key: Key, stream: std::io::Result<TcpStream>) {
         let mut out = Vec::new();
         let opened = {
             let Some(connection) = self.tcp.get_mut(&key) else {
                 // The guest reset it, or it timed out, while the connect was in
                 // flight. Dropping the stream closes it.
-                return false;
+                bump(&self.counters.tcp_refused);
+                return;
             };
             // Nagle off: this end already batches by the guest's window, and
             // waiting for an acknowledgment before sending a short request is
@@ -627,10 +623,16 @@ impl Core {
                 }
             }
         };
+        // Counted before the answer goes, so that whoever reads the counters
+        // on seeing the SYN-ACK or the reset reads a count that includes it.
+        bump(if opened {
+            &self.counters.tcp_opened
+        } else {
+            &self.counters.tcp_refused
+        });
         for reply in &out {
             let _ = self.send_outgoing(&key, reply);
         }
-        opened
     }
 
     /// Give every connection its turn, then send what they produced.
