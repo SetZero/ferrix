@@ -2837,9 +2837,20 @@ socket or a permitted ping group, neither of which a build tool can rely on. And
 there is no IPv6, because a half-answered IPv6 is worse than none — a guest that
 receives a router advertisement will prefer the address in it.
 
-**Still to do:** the virtio-net driver and the ring it speaks over, `AF_NETLINK`
-for `ip`, `/proc/net`, and `AF_UNIX` names so that `nc` can carry a stream over
-a local socket.
+**Done — the ring the driver will speak over.** `libs/netring` and
+`docs/NET-RING.md` are the memory the kernel shares with a ring-3 network
+driver. It is the block ring's discipline with its allocator taken out: a frame
+is bounded by the interface's MTU, so the data VMO is `entries` slots of a fixed
+size and a submission names its slot. That removes the whole region-allocation
+half of the protocol and with it the class of bug where a region is reused
+before its completion, which on an untranslated IOMMU domain is a device writing
+into somebody else's packet. The index discipline is `libs/blkring`'s, written a
+second time rather than shared, which `docs/BACKLOG.md` carries as a debt with
+its reason.
+
+**Still to do:** the virtio-net driver and the kernel's end of the ring,
+`AF_NETLINK` for `ip`, `/proc/net`, and `AF_UNIX` names so that `nc` can carry a
+stream over a local socket.
 
 **Exit:** under `xtask`'s gateway — which is where this criterion's *"under
 QEMU's user-mode network"* now reads — busybox configures `eth0` with `ip` (or
@@ -3065,9 +3076,10 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/netwire` | Networking — the headers: Ethernet with one 802.1Q tag, ARP, IPv4 with its options, IPv6 with the extension-header walk, ICMPv4, ICMPv6 and Neighbor Discovery, UDP, and TCP with the options a connection negotiates. Parsed without allocation and emitted into the caller's buffer, with each format's checksum verified where it carries one. Has its fuzz target, which requires every header that parses to emit and parse back unchanged. | 54 |
 | `libs/nettcp` | Networking — the TCP state machine over `libs/netwire`'s headers: the eleven states of RFC 9293 in the standard's order, including simultaneous open and simultaneous close; reassembly of what arrives out of order; window scaling and the maximum segment size; selective acknowledgment blocks for what is missing; Nagle, delayed acknowledgments, silly-window avoidance and the zero-window probe; retransmission timing by RFC 6298 with Karn's algorithm and Linux's bounds; and NewReno slow start, congestion avoidance, fast retransmit and fast recovery. It holds no clock, no socket and no address, so its tests drive two connections against each other across a wire the test loses and delays segments on, at a clock it advances by hand. Has its fuzz target. | 30 |
 | `libs/net` | Networking — the net core over the two above: interfaces and their addresses, one routing table for both families with longest-prefix and metric order, a neighbour cache that answers ARP's question and Neighbor Discovery's the same way and holds the packets waiting for either, IPv4 fragmentation and reassembly bounded so a stranger cannot fill this host's memory, ICMP echo both ways including the unprivileged socket `ping` uses and the unreachable a closed port earns, UDP with Linux's socket-matching order, and TCP connections and listeners. A packet routed to the loopback goes back into the input path instead of out of a driver, so a host talks to itself with no device at all. Has its fuzz target. | 45 |
+| `libs/netring` | Networking — the net ring, `docs/NET-RING.md` in code: the memory the kernel shares with a ring-3 network driver. The block ring's discipline with its allocator removed, because a frame is bounded by the MTU: the data VMO is `entries` slots of a fixed size and a submission names its slot, which takes away the class of bug where a region is reused before its completion — on an untranslated domain, a device writing into somebody else's packet. Private indices, checked reads of the peer's, the want-bell handshake, and every entry checked when it is read; corruption is terminal for the side that sees it. | 32 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **863 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **895 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below

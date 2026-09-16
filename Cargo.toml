@@ -24,6 +24,7 @@ members = [
     "libs/netwire",
     "libs/nettcp",
     "libs/net",
+    "libs/netring",
     "libs/native-abi",
     "libs/native",
     "libs/objects",
@@ -91,6 +92,7 @@ ferrix-native = { path = "libs/native" }
 ferrix-netwire = { path = "libs/netwire" }
 ferrix-nettcp = { path = "libs/nettcp" }
 ferrix-net = { path = "libs/net" }
+ferrix-netring = { path = "libs/netring" }
 ferrix-rt = { path = "user/rt" }
 ferrix-objects = { path = "libs/objects" }
 ferrix-sync = { path = "libs/sync" }

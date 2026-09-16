@@ -240,6 +240,17 @@ nobody has it yet.
 
 ---
 
+## The debt the net ring took on
+
+`libs/netring` and `libs/blkring` keep the same index discipline -- private
+indices, checked reads of the peer's, the want-bell handshake -- and it is
+written twice. Extracting it into a crate both depend on is the right shape and
+was deliberately not done in the landing that added the second copy: it would
+refactor a subsystem that is shipped, fuzzed and on the boot path, in the same
+commit as a new one, and a mistake there is a disk that stops reading. The
+extraction is 3 points and wants a landing of its own, with both rings' tests
+and both fuzz targets as the evidence. | open | 3
+
 ## Decisions
 
 Dated, newest first. A decision here is final until the customer says otherwise.

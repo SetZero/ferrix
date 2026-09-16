@@ -918,6 +918,20 @@ package FerrixStructure {
                  * than out of a driver. The net_input fuzz target drives a
                  * whole host from a stranger's frames. */
         }
+        #writtenAhead part netRing : LibraryCrate {
+            attribute :>> path = "libs/netring";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 32;
+            doc /* The net ring: the memory the kernel shares with a ring-3
+                 * network driver, specified in docs/NET-RING.md. The block
+                 * ring's discipline with its allocator removed: a frame is
+                 * bounded by the MTU, so the data VMO is entries slots of a
+                 * fixed size and a submission names its slot, which takes
+                 * away the class of bug where a region is reused before its
+                 * completion. Private indices, checked reads of the peer's,
+                 * the want-bell handshake, and every entry checked when it is
+                 * read; corruption is terminal for the side that sees it. */
+        }
         #writtenAhead part pci : LibraryCrate {
             attribute :>> path = "libs/pci";
             attribute :>> forbidsUnsafe = true;

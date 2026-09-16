@@ -200,6 +200,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-netring"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
+]
+
+[[package]]
 name = "ferrix-nettcp"
 version = "0.1.0"
 dependencies = [
