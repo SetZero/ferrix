@@ -101,6 +101,7 @@ pub mod kernel;
 pub mod layout;
 mod ring;
 
+#[cfg(test)]
 extern crate alloc;
 
 #[cfg(test)]

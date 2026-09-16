@@ -29,12 +29,12 @@ use alloc::vec::Vec;
 use core::convert::Infallible;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use ferrix_blkring::identity::Location;
 use ferrix_bootinfo::PAGE_SIZE;
-use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, PACKET_SIGNAL};
 use ferrix_net::iface::{IFF_BROADCAST, IFF_MULTICAST, IFF_UP, Interface as NetInterface};
-use ferrix_netring::control::MAX_MESSAGE;
+use ferrix_netring::control::{HELLO_RIGHTS, MAX_MESSAGE, READY_RIGHTS};
 use ferrix_netring::kernel::{Completed, KernelSide, SubmitError};
 use ferrix_netring::{Hello, Message, Op, Refusal, RingMemory, Status, Wait};
 
@@ -50,10 +50,6 @@ use crate::timer;
 use crate::user::vmo::{Held, Vmo};
 
 pub(crate) mod check;
-
-/// The rights the driver's end of the control channel carries.
-pub(crate) const CONTROL_RIGHTS: Rights =
-    Rights(Rights::TRANSFER.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::WAIT.0);
 
 /// How long a ring waits for its driver's HELLO.
 const HELLO_PATIENCE_NANOS: u64 = 10_000_000_000;
@@ -86,6 +82,10 @@ struct Start {
     control: Arc<Endpoint>,
     /// The device, held so it is not given away while a ring serves it.
     device: Arc<DeviceNode>,
+    /// Its PCI location, when it has one, for the PUBLISHED that tells
+    /// `devmgr` the driver did its job. A device that is not a PCI function
+    /// -- the boot check's -- has none, and `devmgr` never started it.
+    location: Option<Location>,
 }
 
 /// Rings whose task has not started yet.
@@ -94,9 +94,10 @@ static STARTING: SpinLock<Vec<Start>> = SpinLock::new(Vec::new());
 /// Devices that have a ring.
 static CLAIMED: SpinLock<Vec<Arc<DeviceNode>>> = SpinLock::new(Vec::new());
 
-/// Every ring's task, so a check counting frames can wait for the ended ones
-/// to have stopped.
-static TASKS: SpinLock<Vec<Arc<Task>>> = SpinLock::new(Vec::new());
+/// Every ring's task by its ring's number, so a check that ended one ring
+/// can wait for that ring's task and no other: a machine with a real network
+/// adapter has a driver's ring running for the life of the machine.
+static TASKS: SpinLock<Vec<(usize, Arc<Task>)>> = SpinLock::new(Vec::new());
 
 /// The next ring's number.
 static NEXT_RING: AtomicUsize = AtomicUsize::new(1);
@@ -107,7 +108,7 @@ static NEXT_RING: AtomicUsize = AtomicUsize::new(1);
 /// # Errors
 ///
 /// [`CreateError`].
-pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateError> {
+pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<(usize, Arc<Endpoint>), CreateError> {
     let (kernel_end, driver_end) = Endpoint::pair().ok_or(CreateError::NoMemory)?;
     let id = NEXT_RING.fetch_add(1, Ordering::Relaxed);
     {
@@ -121,15 +122,16 @@ pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateErro
         id,
         control: kernel_end,
         device: Arc::clone(node),
+        location: crate::block_ring::location_of(node),
     });
     match sched::spawn("net ring", run, id, ferrix_sched::NICE_0_WEIGHT) {
         Ok(task) => {
             let mut tasks = TASKS.lock();
-            tasks.retain(|task| !task.is_dead());
+            tasks.retain(|(_, task)| !task.is_dead());
             if tasks.capacity() == 0 {
                 tasks.reserve(8);
             }
-            tasks.push(task);
+            tasks.push((id, task));
         }
         Err(_) => {
             let _ = take_start(id);
@@ -137,7 +139,7 @@ pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateErro
             return Err(CreateError::NoMemory);
         }
     }
-    Ok(driver_end)
+    Ok((id, driver_end))
 }
 
 /// Take the start a task was spawned for.
@@ -152,17 +154,22 @@ fn unclaim(node: &Arc<DeviceNode>) {
     CLAIMED.lock().retain(|held| !Arc::ptr_eq(held, node));
 }
 
-/// Wait until every ring's task has stopped, or `deadline` passes.
+/// Wait until ring `id`'s task has stopped, or `deadline` passes. A ring
+/// whose task is already forgotten counts as stopped.
 ///
 /// # Errors
 ///
-/// A ring's task still running at the deadline.
-pub(crate) fn wait_until_tasks_stopped(deadline: u64) -> Result<(), &'static str> {
+/// That ring's task still running at the deadline.
+pub(crate) fn wait_until_task_stopped(id: usize, deadline: u64) -> Result<(), &'static str> {
     loop {
         sched::sleep_for(1_000_000);
         let mut tasks = TASKS.lock();
-        if tasks.iter().all(|task| task.is_dead()) {
-            tasks.clear();
+        let stopped = tasks
+            .iter()
+            .find(|(ring, _)| *ring == id)
+            .is_none_or(|(_, task)| task.is_dead());
+        if stopped {
+            tasks.retain(|(ring, task)| *ring != id && !task.is_dead());
             return Ok(());
         }
         drop(tasks);
@@ -268,13 +275,13 @@ fn decode_hello(message: &ChannelMessage) -> Result<Accepted, Refusal> {
     else {
         return Err(Refusal::Handles);
     };
-    let vmo_rights = Rights(Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0 | Rights::TRANSFER.0);
     // Exactly, not at least: a `DUPLICATE` on a VMO would let the kernel's
     // handle be copied, and a missing right would fail later and further away.
-    if *ring_rights != vmo_rights || *data_rights != vmo_rights {
+    let [ring_wanted, data_wanted, port_wanted] = HELLO_RIGHTS;
+    if *ring_rights != ring_wanted || *data_rights != data_wanted {
         return Err(Refusal::Handles);
     }
-    if *port_rights != Rights(Rights::WRITE.0 | Rights::TRANSFER.0) {
+    if *port_rights != port_wanted {
         return Err(Refusal::Handles);
     }
     Ok(Accepted {
@@ -310,8 +317,7 @@ fn take_up(start: &Start, message: &ChannelMessage) -> Result<Serving, Refusal> 
         KernelSide::attach(&ring_memory, ring_bytes(&accepted), data_bytes).map_err(|error| {
             match error {
                 ferrix_netring::AttachError::Header(_) => Refusal::RingTooSmall,
-                ferrix_netring::AttachError::DataTooSmall
-                | ferrix_netring::AttachError::NoMemory => Refusal::DataTooSmall,
+                ferrix_netring::AttachError::DataTooSmall => Refusal::DataTooSmall,
             }
         })?;
 
@@ -341,7 +347,14 @@ fn take_up(start: &Start, message: &ChannelMessage) -> Result<Serving, Refusal> 
             .map_err(|_| Refusal::Malformed)?;
         bytes.get(..written).unwrap_or_default().to_vec()
     };
-    let handed = (Object::Port(Arc::clone(&kernel_port)), Rights::WRITE);
+    // Published from before READY goes out, not after: `devmgr` kills a
+    // driver that has not published by the time it reports, and the driver
+    // may act on READY the instant it is sent.
+    if let Some(location) = start.location {
+        crate::devmgr::published(location);
+    }
+    let [ready_rights] = READY_RIGHTS;
+    let handed = (Object::Port(Arc::clone(&kernel_port)), ready_rights);
     if start
         .control
         .write(ready, 1, || Ok::<Vec<Transfer>, Infallible>(vec![handed]))

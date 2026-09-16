@@ -11,6 +11,9 @@ use crate::layout::{Op, RingLayout, Status, Submission};
 use crate::ring::{Consumer, Producer};
 use crate::{Corruption, RingMemory};
 
+/// How many `u64`s a bitmap of [`crate::layout::MAX_ENTRIES`] slots needs.
+const BITMAP_WORDS: usize = (crate::layout::MAX_ENTRIES as usize).div_ceil(64);
+
 /// Why the kernel would not take up a ring.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AttachError {
@@ -18,8 +21,6 @@ pub enum AttachError {
     Header(crate::layout::HeaderError),
     /// The data VMO is smaller than `entries` slots.
     DataTooSmall,
-    /// There was no memory for the side's own bookkeeping.
-    NoMemory,
 }
 
 /// Why a submission was not made.
@@ -67,14 +68,16 @@ pub struct KernelSide {
     /// This side's end of the completion ring.
     completions: Consumer,
     /// Which slots the driver holds, one bit each.
+    outstanding: [u64; BITMAP_WORDS],
+    /// What each outstanding slot was submitted for.
     ///
-    /// A `Vec` rather than an array of the largest ring: this value is built
-    /// on a kernel stack, and an array for four thousand slots is four
-    /// kilobytes of a sixteen-kilobyte stack, moved once per construction.
-    /// The check that found that was a double fault.
-    outstanding: alloc::vec::Vec<u64>,
-    /// What each outstanding slot was submitted for, for the same reason.
-    ops: alloc::vec::Vec<u8>,
+    /// Both of these are arrays of the largest ring rather than of the ring
+    /// attached, which is only affordable because [`crate::layout::MAX_ENTRIES`]
+    /// is small: two hundred and fifty-six slots make this two hundred and
+    /// eighty-eight bytes, and this value is built on a kernel stack. An
+    /// earlier version allowed four thousand slots and overflowed that stack
+    /// into a double fault.
+    ops: [u8; crate::layout::MAX_ENTRIES as usize],
     /// How many slots are outstanding.
     held: u32,
     /// The corruption this side latched, if it saw one.
@@ -96,22 +99,12 @@ impl KernelSide {
         if data_bytes < layout.data_bytes() {
             return Err(AttachError::DataTooSmall);
         }
-        let words = (layout.entries() as usize).div_ceil(64);
-        let mut outstanding = alloc::vec::Vec::new();
-        outstanding
-            .try_reserve_exact(words)
-            .map_err(|_| AttachError::NoMemory)?;
-        outstanding.resize(words, 0);
-        let mut ops = alloc::vec::Vec::new();
-        ops.try_reserve_exact(layout.entries() as usize)
-            .map_err(|_| AttachError::NoMemory)?;
-        ops.resize(layout.entries() as usize, 0);
         Ok(KernelSide {
             layout,
             submissions: Producer::default(),
             completions: Consumer::default(),
-            outstanding,
-            ops,
+            outstanding: [0; BITMAP_WORDS],
+            ops: [0; crate::layout::MAX_ENTRIES as usize],
             held: 0,
             corrupt: None,
         })
@@ -299,7 +292,7 @@ impl KernelSide {
     /// `docs/NET-RING.md` §7's rule.
     pub fn abandon(&mut self) -> u32 {
         let held = self.held;
-        self.outstanding.fill(0);
+        self.outstanding = [0; BITMAP_WORDS];
         self.held = 0;
         held
     }

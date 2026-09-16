@@ -1,6 +1,6 @@
 [package]
-name = "ferrix-devmgr"
-description = "devmgr: matches the devices the kernel hands it to the drivers it was given, starts each in a job of its own, and quiesces a device whose driver died"
+name = "ferrix-net-driver"
+description = "The virtio-net driver process: the net ring's driver end over a virtio-net PCI device, on ferrix-rt"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,17 +8,18 @@ license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "devmgr"
+name = "net"
 path = "src/main.rs"
 test = false
 bench = false
 
 [dependencies]
-ferrix-blkring.workspace = true
-ferrix-devmgr-proto.workspace = true
 ferrix-native-abi.workspace = true
 ferrix-netring.workspace = true
+ferrix-netserve.workspace = true
 ferrix-rt.workspace = true
+ferrix-virtio.workspace = true
+ferrix-virtio-net.workspace = true
 
 [lints]
 workspace = true

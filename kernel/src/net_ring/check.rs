@@ -103,7 +103,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 
 /// A HELLO whose handles carry the wrong rights is refused.
 fn refuse_a_bad_hello(node: &Arc<DeviceNode>, report: &mut Report) -> Result<(), &'static str> {
-    let control = super::create(node).map_err(|_| "a ring could not be made for a device")?;
+    let (id, control) = super::create(node).map_err(|_| "a ring could not be made for a device")?;
     let driver = Driver::new()?;
     // The VMO handles carry `DUPLICATE`, which the protocol refuses: a
     // duplicable VMO is one the kernel's own handle could be copied from.
@@ -118,12 +118,12 @@ fn refuse_a_bad_hello(node: &Arc<DeviceNode>, report: &mut Report) -> Result<(),
         _ => return Err("a HELLO with duplicable VMOs was not refused for its handles"),
     }
     drop(control);
-    wait_for_tasks()
+    wait_for_task(id)
 }
 
 /// A HELLO as specified is taken up, and the interface works.
 fn serve_a_ring(node: &Arc<DeviceNode>, report: &mut Report) -> Result<(), &'static str> {
-    let control = super::create(node).map_err(|_| "a second ring could not be made")?;
+    let (id, control) = super::create(node).map_err(|_| "a second ring could not be made")?;
     let mut driver = Driver::new()?;
     driver.send_hello(&control, vmo_rights())?;
     match driver.read(&control)? {
@@ -145,7 +145,7 @@ fn serve_a_ring(node: &Arc<DeviceNode>, report: &mut Report) -> Result<(), &'sta
     report.sent = driver.expect_arp_reply()?;
 
     drop(control);
-    wait_for_tasks()?;
+    wait_for_task(id)?;
     if net::core().with(|stack, _| stack.interface(index).is_some()) {
         return Err("the interface outlived the driver that brought it");
     }
@@ -157,9 +157,11 @@ fn vmo_rights() -> Rights {
     Rights(Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0 | Rights::TRANSFER.0)
 }
 
-/// Wait until every ring's task has stopped.
-fn wait_for_tasks() -> Result<(), &'static str> {
-    super::wait_until_tasks_stopped(timer::now_nanos().saturating_add(PATIENCE_NANOS))
+/// Wait until ring `id`'s task has stopped. Only that ring's: on a machine
+/// with a network adapter, the driver's ring runs for the life of the
+/// machine and is nothing to do with the check.
+fn wait_for_task(id: usize) -> Result<(), &'static str> {
+    super::wait_until_task_stopped(id, timer::now_nanos().saturating_add(PATIENCE_NANOS))
 }
 
 /// The index of the interface the ring added, once it is there.

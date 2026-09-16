@@ -41,6 +41,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
 extern crate alloc;
 
 #[cfg(test)]

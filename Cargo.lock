@@ -112,6 +112,7 @@ dependencies = [
  "ferrix-blkring",
  "ferrix-devmgr-proto",
  "ferrix-native-abi",
+ "ferrix-netring",
  "ferrix-rt",
 ]
 
@@ -200,6 +201,18 @@ version = "0.1.0"
 dependencies = [
  "ferrix-nettcp",
  "ferrix-netwire",
+]
+
+[[package]]
+name = "ferrix-net-driver"
+version = "0.1.0"
+dependencies = [
+ "ferrix-native-abi",
+ "ferrix-netring",
+ "ferrix-netserve",
+ "ferrix-rt",
+ "ferrix-virtio",
+ "ferrix-virtio-net",
 ]
 
 [[package]]

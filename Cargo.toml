@@ -57,6 +57,7 @@ members = [
     "user/rt",
     "user/channel-echo",
     "user/blk",
+    "user/net",
     "user/devmgr",
 
     # Host-side build and test driver (`cargo xtask ...`).
@@ -99,6 +100,7 @@ ferrix-netring = { path = "libs/netring" }
 ferrix-netserve = { path = "libs/netserve" }
 ferrix-netlink = { path = "libs/netlink" }
 ferrix-rt = { path = "user/rt" }
+ferrix-net-driver = { path = "user/net" }
 ferrix-objects = { path = "libs/objects" }
 ferrix-sync = { path = "libs/sync" }
 ferrix-ustack = { path = "libs/ustack" }

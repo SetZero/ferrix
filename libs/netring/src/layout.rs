@@ -26,9 +26,14 @@ pub const COMPLETION_LEN: usize = 16;
 /// The fewest entries a ring may have.
 pub const MIN_ENTRIES: u32 = 2;
 
-/// The most, bounding what one drain can hold and what a `u32` index wraps
-/// over.
-pub const MAX_ENTRIES: u32 = 4096;
+/// The most.
+///
+/// Small enough that a [`crate::KernelSide`]'s bookkeeping -- a bit per slot
+/// and a byte per slot -- is under three hundred bytes, so the value can live
+/// on a kernel stack without an allocator. Two hundred and fifty-six slots of
+/// the largest size is sixteen megabytes of data VMO, which is more ring than
+/// any interface this will drive needs.
+pub const MAX_ENTRIES: u32 = 256;
 
 /// The smallest slot, which still holds a minimum Ethernet frame.
 pub const MIN_SLOT_BYTES: u32 = 64;

@@ -22,6 +22,8 @@
 //!    **STOPPED**. A driver that dies is an implicit STOPPED without the
 //!    promise that its device was reset.
 
+use ferrix_native_abi::rights::Rights;
+
 use crate::layout::{
     MAX_ENTRIES, MAX_SLOT_BYTES, MIN_ENTRIES, MIN_SLOT_BYTES, SLOT_ALIGN, VERSION,
 };
@@ -32,6 +34,39 @@ pub const MAX_NAME: usize = 15;
 
 /// The longest message this protocol has.
 pub const MAX_MESSAGE: usize = 64;
+
+/// Exactly the rights each side holds the ring and data VMOs with: read,
+/// write and map, because both sides look at the memory, and the `TRANSFER`
+/// that carried them; never `DUPLICATE`, so the memory a HELLO describes
+/// cannot grow a second owner behind the kernel's back.
+pub const VMO_RIGHTS: Rights =
+    Rights(Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0 | Rights::TRANSFER.0);
+
+/// Exactly the rights each side holds the other's bell port with: it rings
+/// it and was handed it, and it may not read it or wait on it.
+pub const PORT_RIGHTS: Rights = Rights(Rights::WRITE.0 | Rights::TRANSFER.0);
+
+/// HELLO's handles, in order, with exactly the rights each must carry: the
+/// ring VMO, the data VMO, and the driver's bell.
+pub const HELLO_RIGHTS: [Rights; 3] = [VMO_RIGHTS, VMO_RIGHTS, PORT_RIGHTS];
+
+/// READY's handle, with exactly the rights it must carry: the kernel's bell.
+pub const READY_RIGHTS: [Rights; 1] = [Rights::WRITE];
+
+/// Exactly the rights a driver holds its end of the ring's control channel
+/// with: it sends and receives on it, waits on it and was handed it, and
+/// nobody copies it. The kernel inserts the end `net_ring_create` answers
+/// with these, and `devmgr` passes it on unchanged.
+pub const CONTROL_RIGHTS: Rights =
+    Rights(Rights::TRANSFER.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::WAIT.0);
+
+/// Exactly the rights a driver holds its device with: `MANAGE`, for
+/// `vmo_pin`, `interrupt_create` and `io_mapping_create`, and the `TRANSFER`
+/// it arrived with.
+pub const DEVICE_RIGHTS: Rights = Rights(Rights::TRANSFER.0 | Rights::MANAGE.0);
+
+/// START's handles, in order, with exactly the rights each must carry.
+pub const START_RIGHTS: [Rights; 2] = [DEVICE_RIGHTS, CONTROL_RIGHTS];
 
 /// What an interface can do, as the driver reports it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

@@ -1100,14 +1100,14 @@ fn block_ring_create(process: &Process, device: Handle) -> Result<usize, Errno> 
 /// its control channel comes back as a handle.
 fn net_ring_create(process: &Process, device: Handle) -> Result<usize, Errno> {
     let node = device_in(process, device, Rights::MANAGE)?;
-    let driver_end = net_ring::create(&node).map_err(|why| match why {
+    let (_, driver_end) = net_ring::create(&node).map_err(|why| match why {
         net_ring::CreateError::InUse => status::ALREADY_BOUND,
         net_ring::CreateError::NoMemory => status::NO_MEMORY,
     })?;
     insert_new(
         process,
         Object::Channel(driver_end),
-        net_ring::CONTROL_RIGHTS,
+        ferrix_netring::control::CONTROL_RIGHTS,
     )
 }
 
