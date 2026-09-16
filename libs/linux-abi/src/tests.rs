@@ -45,6 +45,7 @@ const X86_64_ONLY: &[Syscall] = &[
     Syscall::Mknod,
     Syscall::ArchPrctl,
     Syscall::EpollCreate,
+    Syscall::Eventfd,
     Syscall::EpollWait,
     Syscall::Getpgrp,
     Syscall::Alarm,
@@ -1607,8 +1608,8 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        236,
-        "the x86-64 table maps 236 calls"
+        237,
+        "the x86-64 table maps 237 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
@@ -1864,6 +1865,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (345, Syscall::Getcpu),                   // getcpu
     (346, Syscall::EpollPwait),               // epoll_pwait
     (348, Syscall::Utimensat),                // utimensat
+    (351, Syscall::Eventfd),                  // eventfd
     (356, Syscall::Eventfd2),                 // eventfd2
     (357, Syscall::EpollCreate1),             // epoll_create1
     (358, Syscall::Dup3),                     // dup3
@@ -2098,7 +2100,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 251, "the ARMv7-A table maps 251 calls");
+    assert_eq!(mapped_arm().len(), 252, "the ARMv7-A table maps 252 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in

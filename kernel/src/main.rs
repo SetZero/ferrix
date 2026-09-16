@@ -361,6 +361,23 @@ fn check_epoll() {
     );
 }
 
+/// Stage 8's eventfd check: counting, the ceiling, a woken reader and an edge
+/// in an epoll set.
+fn check_eventfd() {
+    let checked = match fs::eventfd_check::run() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE8_EVENTFD,
+            "stage 8 eventfd self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  eventfd  {} values read back, a waiting reader woken by a write, {} calls refused as \
+         Linux refuses them; {} frames leaked",
+        checked.reads, checked.refusals, checked.leaked,
+    );
+}
+
 /// Stage 8: build the root from the initramfs, and require it to be what the
 /// build wrote and to store what it is given.
 ///
@@ -430,6 +447,7 @@ fn check_filesystems(view: &BootView<'_>) {
     );
     check_memfd();
     check_epoll();
+    check_eventfd();
 
     let pseudo = match fs::procfs::check::run() {
         Ok(pseudo) => pseudo,

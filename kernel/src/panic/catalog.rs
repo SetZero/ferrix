@@ -1321,6 +1321,32 @@ pub(crate) static STAGE8_EPOLL: Explanation = Explanation {
           poll_changes",
 };
 
+/// For `check_eventfd` in `main.rs`, when the eventfd check fails.
+pub(crate) static STAGE8_EVENTFD: Explanation = Explanation {
+    code: "FX-0882",
+    title: "eventfd failed its self-check",
+    meaning: "`fs::eventfd_check::run` builds a process and makes eventfds by number. One made \
+              with an initial value must read it back and then be empty, EAGAIN when non-blocking; \
+              two writes must add up to one read, and with EFD_SEMAPHORE each read takes one. The \
+              counter stops at u64::MAX - 1: the write past it is EAGAIN, and poll stops answering \
+              writable there. A blocking read must wait, and a write must end the wait by waking \
+              it. Registered edge-triggered in an epoll set, the eventfd must be reported after \
+              each write although it stays readable. A flag eventfd2 does not take, a buffer \
+              shorter than eight bytes, a write of u64::MAX and lseek are refused as Linux refuses \
+              them. The run is done twice and must leave no frame behind.",
+    causes: &[
+        "`EventFd::write_stream` does not wake the readable queue, or `read_stream` the writable \
+         one, so a waiting reader sleeps until its recheck and an edge-triggered registration \
+         misses the second write.",
+        "`fits` lets the counter reach u64::MAX, or `poll` measures writable against a different \
+         limit than a write does.",
+        "`sys_eventfd2` takes a flag Linux refuses, or does not pass EFD_NONBLOCK to the open \
+         file.",
+    ],
+    see: "kernel/src/fs/eventfd_check.rs; kernel/src/fs/eventfd.rs; kernel/src/syscall/eventfd.rs; \
+          kernel/src/fs/anon.rs",
+};
+
 /// For `check_filesystems` in `main.rs`, when the shared file mapping check
 /// fails.
 pub(crate) static STAGE8_FILE_MAPPINGS: Explanation = Explanation {
@@ -1530,6 +1556,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_FILE_MAPPINGS,
     &STAGE8_MEMFD,
     &STAGE8_EPOLL,
+    &STAGE8_EVENTFD,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,

@@ -452,6 +452,8 @@ pub mod x86_64 {
     pub const UTIMENSAT: usize = 280;
     /// Wait on an epoll set with a signal mask.
     pub const EPOLL_PWAIT: usize = 281;
+    /// Create an eventfd with no flags.
+    pub const EVENTFD: usize = 284;
     /// Accept a connection, with flags for the new descriptor.
     pub const ACCEPT4: usize = 288;
     /// Create an eventfd with flags.
@@ -1417,6 +1419,8 @@ pub mod arm {
     /// Set a file's times from two `timespec`s of two `long`s -- 32 bits each
     /// here. [`UTIMENSAT_TIME64`] is the form a time64 musl calls.
     pub const UTIMENSAT: usize = 348;
+    /// Create an eventfd with no flags.
+    pub const EVENTFD: usize = 351;
     /// Create an eventfd with flags.
     pub const EVENTFD2: usize = 356;
     /// Create an epoll set with flags.
@@ -2073,6 +2077,8 @@ pub enum Syscall {
     EpollPwait2,
     /// Create an eventfd with flags.
     Eventfd2,
+    /// Create an eventfd with no flags. x86-64 and ARMv7-A only.
+    Eventfd,
     /// Issue a process-wide memory barrier.
     Membarrier,
     /// Register a restartable sequence area.
@@ -2305,6 +2311,7 @@ fn x86_64_at_family(nr: usize) -> Option<Syscall> {
         x86_64::GET_ROBUST_LIST => Syscall::GetRobustList,
         x86_64::UTIMENSAT => Syscall::Utimensat,
         x86_64::EPOLL_PWAIT => Syscall::EpollPwait,
+        x86_64::EVENTFD => Syscall::Eventfd,
         x86_64::EVENTFD2 => Syscall::Eventfd2,
         x86_64::EPOLL_CREATE1 => Syscall::EpollCreate1,
         x86_64::DUP3 => Syscall::Dup3,
@@ -2949,6 +2956,7 @@ fn arm_recent(nr: usize) -> Option<Syscall> {
         arm::GET_ROBUST_LIST => Syscall::GetRobustList,
         arm::EPOLL_PWAIT => Syscall::EpollPwait,
         arm::UTIMENSAT => Syscall::Utimensat,
+        arm::EVENTFD => Syscall::Eventfd,
         arm::EVENTFD2 => Syscall::Eventfd2,
         arm::EPOLL_CREATE1 => Syscall::EpollCreate1,
         arm::DUP3 => Syscall::Dup3,

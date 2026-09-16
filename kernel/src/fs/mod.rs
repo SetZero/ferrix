@@ -33,6 +33,8 @@ pub(crate) mod console;
 pub(crate) mod devfs;
 pub(crate) mod epoll;
 pub(crate) mod epoll_check;
+pub(crate) mod eventfd;
+pub(crate) mod eventfd_check;
 pub(crate) mod memfd_check;
 pub(crate) mod mmap_check;
 mod pages;

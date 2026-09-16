@@ -3350,6 +3350,28 @@ count, the boot panics with "an edge-triggered set did not report more data
 written into a readable pipe". With the loop check looking for nothing, it
 panics with "a set added to a set it holds was not ELOOP".
 
+**Done — eventfd, iteration 2's second kernel row.** `eventfd2` on all three
+architectures, and the older `eventfd` on x86-64 and ARMv7-A, make a 64-bit
+counter on `anon_inodefs`, named `anon_inode:[eventfd]`. A write adds its
+eight bytes and a read takes the counter, or one with `EFD_SEMAPHORE`. A read
+of zero waits or is `EAGAIN`, and so is a write that would carry the counter to
+`u64::MAX`, the value it never holds. `poll` answers writable exactly while one
+more fits. A buffer shorter than eight bytes and a write of `u64::MAX` are
+`EINVAL`, as in `fs/eventfd.c`, and `EFD_CLOEXEC` and `EFD_NONBLOCK` reach the
+descriptor and the open file. Each read and write wakes the other side's
+queue, which is also what epoll's edge-triggered mode counts. Not yet: a
+zero-length write returns 0 before it reaches the eventfd, where Linux answers
+`EINVAL`, because the write path answers every empty write itself. The boot
+check covers the initial value, adding up, the semaphore, the ceiling and
+`poll` at it. A blocking read must be ended by a write's wake, not the wait's
+5 ms recheck, as the queue's count of wake-ended waits shows. An
+edge-triggered registration must be reported after a second write although
+the counter stayed readable, and eight refusals are checked. The run is done
+twice with no frame kept. The line reads `eventfd  7 values read back, a
+waiting reader woken by a write, 8 calls refused as Linux refuses them; 0
+frames leaked`. With the write's wake removed, the boot panics with "a waiting
+eventfd reader was ended by its recheck, not by the write's wake".
+
 ---
 
 ## Stage 18 — The compositor  ·  *96 points*

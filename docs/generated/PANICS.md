@@ -56,6 +56,7 @@ Causes are listed most likely first.
 | [FX-0870](#fx-0870) | a shared file mapping failed its self-check |
 | [FX-0880](#fx-0880) | memfd_create or its seals failed their self-check |
 | [FX-0881](#fx-0881) | epoll failed its self-check |
+| [FX-0882](#fx-0882) | eventfd failed its self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -1047,6 +1048,32 @@ behind.
 See: kernel/src/fs/epoll_check.rs; kernel/src/fs/epoll.rs;
 kernel/src/fs/anon.rs; kernel/src/syscall/epoll.rs; kernel/src/sched/wait.rs;
 libs/vfs/src/node.rs poll_changes.
+
+<a id="fx-0882"></a>
+
+## FX-0882 — eventfd failed its self-check
+
+`fs::eventfd_check::run` builds a process and makes eventfds by number. One made
+with an initial value must read it back and then be empty, EAGAIN when
+non-blocking; two writes must add up to one read, and with EFD_SEMAPHORE each
+read takes one. The counter stops at u64::MAX - 1: the write past it is EAGAIN,
+and poll stops answering writable there. A blocking read must wait, and a write
+must end the wait by waking it. Registered edge-triggered in an epoll set, the
+eventfd must be reported after each write although it stays readable. A flag
+eventfd2 does not take, a buffer shorter than eight bytes, a write of u64::MAX
+and lseek are refused as Linux refuses them. The run is done twice and must
+leave no frame behind.
+
+1. `EventFd::write_stream` does not wake the readable queue, or `read_stream`
+   the writable one, so a waiting reader sleeps until its recheck and an
+   edge-triggered registration misses the second write.
+2. `fits` lets the counter reach u64::MAX, or `poll` measures writable against a
+   different limit than a write does.
+3. `sys_eventfd2` takes a flag Linux refuses, or does not pass EFD_NONBLOCK to
+   the open file.
+
+See: kernel/src/fs/eventfd_check.rs; kernel/src/fs/eventfd.rs;
+kernel/src/syscall/eventfd.rs; kernel/src/fs/anon.rs.
 
 <a id="fx-0901"></a>
 
