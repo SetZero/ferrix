@@ -9,6 +9,11 @@
 //!   NUL-terminated, and stores its address and the position after the last
 //!   write through the pointers it was given. It can seek, including past the
 //!   end, which leaves zeros.
+//! * `open_wmemstream` is the same over wide characters, from
+//!   `open_wmemstream.c`: the bytes written are decoded with `mbrtowc`, a
+//!   sequence split across writes carried in a conversion state that a seek
+//!   resets, and the size is a count of wide characters. The stream starts
+//!   wide-oriented.
 //! * `fmemopen` reads and writes a fixed buffer. Mode `r` sees the whole
 //!   buffer; `a` starts at the first NUL and always writes at the end; `w+`
 //!   empties the buffer. A write that extends the contents NUL-terminates
@@ -24,10 +29,12 @@
 //! fully buffered, as glibc makes them.
 
 use core::ffi::{c_char, c_int, c_void};
+use core::mem::size_of;
 use core::ptr::null_mut;
 
 use super::file::{self, Backend, File, Inner, Mode, SEEK_CUR, SEEK_END, SEEK_SET};
 use super::open::parse_mode;
+use crate::multibyte::{MbState, WChar, mbrtowc};
 use crate::{errno, malloc, string};
 
 /// The base a `whence` measures from, or `EINVAL`.
@@ -152,6 +159,150 @@ pub unsafe extern "C" fn open_memstream(bufp: *mut *mut c_char, sizep: *mut usiz
     }
     // SAFETY: the caller passes pointers valid for writes.
     unsafe { bufp.write(buf.cast()) };
+    // SAFETY: as above.
+    unsafe { sizep.write(0) };
+    file
+}
+
+/// The state of a stream from `open_wmemstream`.
+#[derive(Debug)]
+pub struct WMemstream {
+    /// Where the program wants the buffer's address.
+    bufp: *mut *mut WChar,
+    /// Where the program wants the size, in wide characters.
+    sizep: *mut usize,
+    /// The buffer, from `malloc`, which the program frees.
+    buf: *mut WChar,
+    /// The position, in wide characters.
+    position: usize,
+    /// The length of the contents, in wide characters.
+    length: usize,
+    /// The buffer's size, in wide characters.
+    space: usize,
+    /// The conversion state of a sequence split across writes.
+    state: MbState,
+}
+
+impl WMemstream {
+    /// Makes room for a wide character at the position and the NUL after it.
+    fn reserve(&mut self) -> Result<(), c_int> {
+        let Some(wanted) = self.position.checked_add(2) else {
+            return Err(errno::ENOMEM);
+        };
+        if wanted <= self.space {
+            return Ok(());
+        }
+        let space = self.space.saturating_mul(2).saturating_add(1).max(wanted);
+        let Some(bytes) = space
+            .checked_mul(size_of::<WChar>())
+            .filter(|&b| b <= isize::MAX as usize)
+        else {
+            return Err(errno::ENOMEM);
+        };
+        // SAFETY: the buffer came from `malloc` or `realloc`.
+        let grown = unsafe { malloc::realloc(self.buf.cast(), bytes) }.cast::<WChar>();
+        if grown.is_null() {
+            return Err(errno::ENOMEM);
+        }
+        let old = self.space * size_of::<WChar>();
+        // SAFETY: the new part of the buffer is `bytes - old` bytes.
+        let _ =
+            unsafe { string::memset(grown.cast::<u8>().wrapping_add(old).cast(), 0, bytes - old) };
+        self.buf = grown;
+        self.space = space;
+        // SAFETY: `open_wmemstream` was given this pointer to store into.
+        unsafe { self.bufp.write(grown) };
+        Ok(())
+    }
+
+    /// Decodes the `len` bytes at `src` into wide characters at the position,
+    /// growing the buffer. A byte sequence that is no character fails with
+    /// `EILSEQ`.
+    ///
+    /// # Safety
+    ///
+    /// `src` must be valid for reads of `len` bytes, outside the buffer.
+    pub unsafe fn write(&mut self, src: *const u8, len: usize) -> Result<usize, c_int> {
+        let mut done = 0;
+        while done < len {
+            self.reserve()?;
+            let mut wc: WChar = 0;
+            // SAFETY: `len - done` bytes remain at `src + done`, and `wc` and
+            // the state are live.
+            let used = unsafe {
+                mbrtowc(
+                    &raw mut wc,
+                    src.wrapping_add(done).cast(),
+                    len - done,
+                    &raw mut self.state,
+                )
+            };
+            match used {
+                usize::MAX => return Err(errno::EILSEQ),
+                // The rest is the start of a character, kept in the state.
+                n if n == usize::MAX - 1 => return Ok(len),
+                n => {
+                    // SAFETY: `reserve` made room at the position.
+                    unsafe { self.buf.wrapping_add(self.position).write(wc) };
+                    self.position += 1;
+                    self.length = self.length.max(self.position);
+                    // SAFETY: `open_wmemstream` was given this pointer.
+                    unsafe { self.sizep.write(self.position) };
+                    // A NUL byte decodes as 0 bytes used but takes one.
+                    done += n.max(1);
+                }
+            }
+        }
+        Ok(len)
+    }
+
+    /// Moves the position, which may pass the end, and forgets any character
+    /// begun but not finished.
+    pub fn seek(&mut self, offset: i64, whence: c_int) -> Result<i64, c_int> {
+        let base = base(whence, self.position, self.length)?;
+        self.position = offset_within(base, offset, isize::MAX as usize / size_of::<WChar>())?;
+        self.state = MbState::new();
+        Ok(self.position as i64)
+    }
+}
+
+/// Opens a wide-oriented stream that writes into a wide buffer it grows,
+/// storing the buffer's address in `*bufp` and the count of wide characters
+/// written in `*sizep`.
+///
+/// # Safety
+///
+/// `bufp` and `sizep` must be valid for writes for as long as the stream is
+/// open.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn open_wmemstream(bufp: *mut *mut WChar, sizep: *mut usize) -> *mut File {
+    if bufp.is_null() || sizep.is_null() {
+        errno::set(errno::EINVAL);
+        return null_mut();
+    }
+    let buf = malloc::calloc(1, size_of::<WChar>()).cast::<WChar>();
+    if buf.is_null() {
+        return null_mut();
+    }
+    let state = WMemstream {
+        bufp,
+        sizep,
+        buf,
+        position: 0,
+        length: 0,
+        space: 1,
+        state: MbState::new(),
+    };
+    let mut inner = Inner::new(Backend::WMemstream(state), false, true, Mode::Unbuffered);
+    inner.orientation = 1;
+    let file = file::allocate(inner);
+    if file.is_null() {
+        // SAFETY: the buffer came from `calloc` and nothing else has it.
+        unsafe { malloc::free(buf.cast()) };
+        return null_mut();
+    }
+    // SAFETY: the caller passes pointers valid for writes.
+    unsafe { bufp.write(buf) };
     // SAFETY: as above.
     unsafe { sizep.write(0) };
     file

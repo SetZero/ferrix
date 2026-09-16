@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 814 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 815 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 7 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 0 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 422 | not there |
+| absent | 421 | not there |
 
-429 interfaces are missing in one of the last four ways. 114 of them are
+428 interfaces are missing in one of the last four ways. 114 of them are
 already written on the three unlanded branches of 2026-09-13
 (`ferrousli-threads`, `ferrousli-math`, `ferrousli-misc`), which were
 committed without a build and are not reviewed.
@@ -39,7 +39,7 @@ new subsystem. Every area's missing names are in the index at the end.
 |---|---|---|---|---|---|
 | Language support and the standard library | 118 | 1 | 0 | 0 | `setkey`, counted with `encrypt`. Landed: `quick_exit` and `at_quick_exit`; `a64l`, `l64a`, `getsubopt`, `secure_getenv` |
 | Strings and characters | 72 | 0 | 0 | 0 | landed: `strcasecmp_l`, `strncasecmp_l` |
-| Wide and multibyte characters | 118 | 7 | 0 | 4 | the `wscanf` family, `fwscanf` to `wscanf` 2; `open_wmemstream` 2. Landed: the `wprintf` family, `fwprintf` to `wprintf`; wide-character stream I/O (`fgetwc`, `fgetws`, `fputwc`, `fputws`, `getwc`, `getwchar`, `putwc`, `putwchar`, `ungetwc`, `fwide`); the `wcstol` and `wcstod` families with `wcstoimax` and `wcstoumax`; `wcsftime`, `wcslcpy`, `wcslcat` |
+| Wide and multibyte characters | 118 | 6 | 0 | 2 | the `wscanf` family, `fwscanf` to `wscanf` 2. Landed: `open_wmemstream`; the `wprintf` family, `fwprintf` to `wprintf`; wide-character stream I/O (`fgetwc`, `fgetws`, `fputwc`, `fputws`, `getwc`, `getwchar`, `putwc`, `putwchar`, `ungetwc`, `fwide`); the `wcstol` and `wcstod` families with `wcstoimax` and `wcstoumax`; `wcsftime`, `wcslcpy`, `wcslcat` |
 | Standard I/O | 70 | 0 | 0 | 0 | landed: `tmpnam` |
 | Math and the floating-point environment | 201 | 155 | 43 | 23 | landing `ferrousli-math`: `fenv.h`, rounding, manipulation, remainders, `fma` 5; the rest of the transcendental functions for `double` and all of them for `float`, the Bessel functions and `signgam` 10; every `long double` form 8. Landed: `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, bit for bit musl's in every rounding mode, and the classifiers for all three types |
 | Complex arithmetic | 69 | 66 | 0 | 8 | `complex.h` over the math library, `creal` and `cimag` as functions |
@@ -58,7 +58,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 5 | 0 | 2 | `dlfcn.h` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **429** | **114** | **121** | |
+| **All** | **1243** | **428** | **114** | **119** | |
 
 ## Present but broken
 
@@ -223,8 +223,8 @@ interface.
 |---|---|---|
 | `<inttypes.h>` | present (2) | `wcstoimax`, `wcstoumax` |
 | `<uchar.h>` | present (4) | `c16rtomb`, `c32rtomb`, `mbrtoc16`, `mbrtoc32` |
-| `<wchar.h>` | present (69) | `btowc`, `fgetwc`, `fgetws`, `fputwc`, `fputws`, `fwide`, `fwprintf`, `getwc`, `getwchar`, `mbrlen`, `mbrtowc`, `mbsinit`, `mbsnrtowcs`, `mbsrtowcs`, `putwc`, `putwchar`, `swprintf`, `ungetwc`, `vfwprintf`, `vswprintf`, `vwprintf`, `wcpcpy`, `wcpncpy`, `wcrtomb`, `wcscasecmp`, `wcscasecmp_l`, `wcscat`, `wcschr`, `wcscmp`, `wcscoll`, `wcscoll_l`, `wcscpy`, `wcscspn`, `wcsdup`, `wcsftime`, `wcslcat`, `wcslcpy`, `wcslen`, `wcsncasecmp`, `wcsncasecmp_l`, `wcsncat`, `wcsncmp`, `wcsncpy`, `wcsnlen`, `wcsnrtombs`, `wcspbrk`, `wcsrchr`, `wcsrtombs`, `wcsspn`, `wcsstr`, `wcstod`, `wcstof`, `wcstok`, `wcstol`, `wcstold`, `wcstoll`, `wcstoul`, `wcstoull`, `wcswidth` (XSI), `wcsxfrm`, `wcsxfrm_l`, `wctob`, `wcwidth` (XSI), `wmemchr`, `wmemcmp`, `wmemcpy`, `wmemmove`, `wmemset`, `wprintf` |
-| `<wchar.h>` | absent (7) | `fwscanf`, `open_wmemstream`, `swscanf`, `vfwscanf`, `vswscanf`, `vwscanf`, `wscanf` |
+| `<wchar.h>` | present (70) | `btowc`, `fgetwc`, `fgetws`, `fputwc`, `fputws`, `fwide`, `fwprintf`, `getwc`, `getwchar`, `mbrlen`, `mbrtowc`, `mbsinit`, `mbsnrtowcs`, `mbsrtowcs`, `open_wmemstream`, `putwc`, `putwchar`, `swprintf`, `ungetwc`, `vfwprintf`, `vswprintf`, `vwprintf`, `wcpcpy`, `wcpncpy`, `wcrtomb`, `wcscasecmp`, `wcscasecmp_l`, `wcscat`, `wcschr`, `wcscmp`, `wcscoll`, `wcscoll_l`, `wcscpy`, `wcscspn`, `wcsdup`, `wcsftime`, `wcslcat`, `wcslcpy`, `wcslen`, `wcsncasecmp`, `wcsncasecmp_l`, `wcsncat`, `wcsncmp`, `wcsncpy`, `wcsnlen`, `wcsnrtombs`, `wcspbrk`, `wcsrchr`, `wcsrtombs`, `wcsspn`, `wcsstr`, `wcstod`, `wcstof`, `wcstok`, `wcstol`, `wcstold`, `wcstoll`, `wcstoul`, `wcstoull`, `wcswidth` (XSI), `wcsxfrm`, `wcsxfrm_l`, `wctob`, `wcwidth` (XSI), `wmemchr`, `wmemcmp`, `wmemcpy`, `wmemmove`, `wmemset`, `wprintf` |
+| `<wchar.h>` | absent (6) | `fwscanf`, `swscanf`, `vfwscanf`, `vswscanf`, `vwscanf`, `wscanf` |
 | `<wctype.h>` | present (36) | `iswalnum`, `iswalnum_l`, `iswalpha`, `iswalpha_l`, `iswblank`, `iswblank_l`, `iswcntrl`, `iswcntrl_l`, `iswctype`, `iswctype_l`, `iswdigit`, `iswdigit_l`, `iswgraph`, `iswgraph_l`, `iswlower`, `iswlower_l`, `iswprint`, `iswprint_l`, `iswpunct`, `iswpunct_l`, `iswspace`, `iswspace_l`, `iswupper`, `iswupper_l`, `iswxdigit`, `iswxdigit_l`, `towctrans`, `towctrans_l`, `towlower`, `towlower_l`, `towupper`, `towupper_l`, `wctrans`, `wctrans_l`, `wctype`, `wctype_l` |
 
 ### Standard I/O

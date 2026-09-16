@@ -58,7 +58,7 @@ use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 use super::lock::RecursiveLock;
-use super::memory::{Cookie, Fmem, Memstream};
+use super::memory::{Cookie, Fmem, Memstream, WMemstream};
 use super::sys;
 use crate::{errno, malloc, string};
 
@@ -107,6 +107,8 @@ pub enum Backend {
     Fd(c_int),
     /// A growing buffer from `open_memstream`.
     Memstream(Memstream),
+    /// A growing wide buffer from `open_wmemstream`.
+    WMemstream(WMemstream),
     /// A fixed buffer from `fmemopen`.
     Fmem(Fmem),
     /// Functions from `fopencookie`.
@@ -125,7 +127,7 @@ impl Backend {
             Self::Closed => Err(errno::EBADF),
             // SAFETY: the caller vouches for the destination.
             Self::Fd(fd) => unsafe { sys::read(*fd, dst, len) },
-            Self::Memstream(_) => Err(errno::EBADF),
+            Self::Memstream(_) | Self::WMemstream(_) => Err(errno::EBADF),
             // SAFETY: as above.
             Self::Fmem(fmem) => Ok(unsafe { fmem.read(dst, len) }),
             // SAFETY: as above.
@@ -152,6 +154,8 @@ impl Backend {
             // SAFETY: as above.
             Self::Memstream(memstream) => unsafe { memstream.write(src, len) },
             // SAFETY: as above.
+            Self::WMemstream(memstream) => unsafe { memstream.write(src, len) },
+            // SAFETY: as above.
             Self::Fmem(fmem) => unsafe { fmem.write(src, len) },
             // SAFETY: as above.
             Self::Cookie(cookie) => return unsafe { cookie.write(src, len) },
@@ -165,6 +169,7 @@ impl Backend {
             Self::Closed => Err(errno::EBADF),
             Self::Fd(fd) => sys::lseek(*fd, offset, whence),
             Self::Memstream(memstream) => memstream.seek(offset, whence),
+            Self::WMemstream(memstream) => memstream.seek(offset, whence),
             Self::Fmem(fmem) => fmem.seek(offset, whence),
             Self::Cookie(cookie) => return cookie.seek(offset, whence),
         };
@@ -174,7 +179,7 @@ impl Backend {
     /// Releases what the backend holds. On failure `errno` is set.
     fn close(&mut self) -> Result<(), ()> {
         let result = match self {
-            Self::Closed | Self::Memstream(_) => Ok(()),
+            Self::Closed | Self::Memstream(_) | Self::WMemstream(_) => Ok(()),
             Self::Fd(fd) => sys::close(*fd),
             Self::Fmem(fmem) => {
                 fmem.close();
