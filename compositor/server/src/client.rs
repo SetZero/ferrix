@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use compositor_protocol::core::{
     self, wl_compositor, wl_display, wl_region, wl_registry, wl_shm, wl_shm_pool, wl_surface,
 };
+use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
 use compositor_wire::{
     Arg, ArgType, Error as WireError, Fd, ObjectError, ObjectId, Objects, Reader, Writer,
 };
@@ -13,6 +14,7 @@ use crate::globals::Globals;
 use crate::role::Role;
 use crate::shm::{Buffer, FORMATS, Pool};
 use crate::surface::{Committed, Rect, Region, Surface};
+use crate::xdg::{Toplevel, XdgRole, XdgSurface};
 
 /// What ended a connection.
 ///
@@ -168,6 +170,30 @@ pub enum Event {
         /// The pool's descriptor and size.
         memory: Pool,
     },
+    /// A surface became a window. The layout has to place it, and the
+    /// compositor has to configure it before the client may attach a buffer.
+    ToplevelCreated {
+        /// The `xdg_toplevel`.
+        toplevel: ObjectId,
+        /// The `wl_surface` under it.
+        surface: ObjectId,
+    },
+    /// A window's title or app id changed, which `hyprctl clients` prints
+    /// and `windowrule` matches on.
+    ToplevelRenamed {
+        /// The `xdg_toplevel`.
+        toplevel: ObjectId,
+    },
+    /// A window asked for a state a tiling compositor answers by
+    /// configuring: `set_maximized`, `set_fullscreen` and their opposites.
+    ToplevelAsked {
+        /// The `xdg_toplevel`.
+        toplevel: ObjectId,
+        /// Whether it asked to be maximized.
+        maximized: bool,
+        /// Whether it asked to be fullscreen.
+        fullscreen: bool,
+    },
     /// A pool grew. Whatever mapped it has to map it again.
     PoolResized {
         /// The `wl_shm_pool` object.
@@ -198,6 +224,11 @@ pub struct Client {
     regions: BTreeMap<ObjectId, Region>,
     pools: BTreeMap<ObjectId, Pool>,
     buffers: BTreeMap<ObjectId, Buffer>,
+    xdg_surfaces: BTreeMap<ObjectId, XdgSurface>,
+    toplevels: BTreeMap<ObjectId, Toplevel>,
+    /// The next configure serial. Serials go up and are never reused, so a
+    /// client's `ack_configure` names one configure and no other.
+    serial: u32,
 }
 
 impl Client {
@@ -223,7 +254,88 @@ impl Client {
             regions: BTreeMap::new(),
             pools: BTreeMap::new(),
             buffers: BTreeMap::new(),
+            xdg_surfaces: BTreeMap::new(),
+            toplevels: BTreeMap::new(),
+            serial: 1,
         }
+    }
+
+    /// The `xdg_surface` `id` names, if it is one.
+    #[must_use]
+    pub fn xdg_surface(&self, id: ObjectId) -> Option<&XdgSurface> {
+        self.xdg_surfaces.get(&id)
+    }
+
+    /// The toplevel `id` names, if it is one.
+    #[must_use]
+    pub fn toplevel(&self, id: ObjectId) -> Option<&Toplevel> {
+        self.toplevels.get(&id)
+    }
+
+    /// Every toplevel, in id order: the windows this client has.
+    pub fn toplevels(&self) -> impl Iterator<Item = (ObjectId, &Toplevel)> {
+        self.toplevels.iter().map(|(id, top)| (*id, top))
+    }
+
+    /// The next serial, which is also this connection's serial for input
+    /// events. Wayland has one serial space per connection.
+    pub fn next_serial(&mut self) -> u32 {
+        let serial = self.serial;
+        self.serial = self.serial.wrapping_add(1).max(1);
+        serial
+    }
+
+    /// Tell a toplevel what size to be and what state it is in.
+    ///
+    /// This is the compositor's half of the configure conversation: the
+    /// layout decides a size, the client draws at it and acks. `states` is
+    /// `xdg_toplevel.state` values, which for a tiling compositor is mostly
+    /// `activated` and the `tiled_*` edges.
+    pub fn configure_toplevel(
+        &mut self,
+        toplevel: ObjectId,
+        width: i32,
+        height: i32,
+        states: &[u32],
+    ) {
+        let Some(top) = self.toplevels.get_mut(&toplevel) else {
+            return;
+        };
+        top.configured = (width, height);
+        let xdg = top.xdg_surface;
+        let packed: Vec<u8> = states
+            .iter()
+            .flat_map(|state| state.to_le_bytes())
+            .collect();
+        let _ = self.out.write(
+            toplevel,
+            xdg_toplevel::event::CONFIGURE,
+            &[ArgType::Int, ArgType::Int, ArgType::Array],
+            &[Arg::Int(width), Arg::Int(height), Arg::Array(&packed)],
+        );
+        let serial = self.next_serial();
+        let _ = self.out.write(
+            xdg,
+            xdg_surface::event::CONFIGURE,
+            &[ArgType::Uint],
+            &[Arg::Uint(serial)],
+        );
+        if let Some(surface) = self.xdg_surfaces.get_mut(&xdg) {
+            surface.configure_sent(serial);
+        }
+    }
+
+    /// Ask a toplevel to close, as `killactive` does.
+    ///
+    /// It is a request, not an order: a client may put up "save your work?"
+    /// and never close. Hyprland's `killactive` sends this and nothing else.
+    pub fn close_toplevel(&mut self, toplevel: ObjectId) {
+        if !self.toplevels.contains_key(&toplevel) {
+            return;
+        }
+        let _ = self
+            .out
+            .write(toplevel, xdg_toplevel::event::CLOSE, &[], &[]);
     }
 
     /// The surface `id` names, if it is one.
@@ -438,6 +550,25 @@ impl Client {
                 // compositor above unmaps it when the last buffer does.
                 let _ = self.pools.remove(&id);
             }
+            Role::XdgSurface => {
+                // xdg_surface.destroy with a role object still live is
+                // `defunct_role_object`; the client is supposed to destroy
+                // the toplevel first. Dropping the toplevel here as well
+                // would hide the client's mistake, so it is refused instead.
+                let _ = self.xdg_surfaces.remove(&id);
+            }
+            Role::XdgToplevel => {
+                if let Some(top) = self.toplevels.remove(&id)
+                    && let Some(xdg) = self.xdg_surfaces.get_mut(&top.xdg_surface)
+                {
+                    xdg.role = None;
+                    // A toplevel that is destroyed and made again has to be
+                    // configured again before it may attach a buffer.
+                    xdg.configured = false;
+                    xdg.sent_configure = false;
+                    xdg.unacked.clear();
+                }
+            }
             Role::Buffer => {
                 let _ = self.buffers.remove(&id);
                 // A buffer a surface is showing that the client destroys
@@ -488,6 +619,9 @@ impl Client {
             Role::Region => self.region_request(sender, opcode, args),
             Role::Shm => self.shm(opcode, args),
             Role::ShmPool => self.shm_pool(sender, opcode, args),
+            Role::XdgWmBase => self.xdg_wm_base(version, opcode, args),
+            Role::XdgSurface => self.xdg_surface_request(sender, version, opcode, args),
+            Role::XdgToplevel => self.xdg_toplevel_request(sender, opcode, args),
             // wl_buffer's only request is `destroy`, which the destructor
             // flag handles; the rest are globals whose roles land after
             // this. A bound object's requests are read, decoded and dropped
@@ -701,6 +835,32 @@ impl Client {
                 }
             }
             wl_surface::request::COMMIT => {
+                // A surface that has been given an `xdg_surface` may not
+                // carry a buffer until it has acked a configure. That is the
+                // rule that stops a client painting at a size the compositor
+                // never agreed to: `xdg_surface`'s description has the
+                // client commit once with nothing attached, take the
+                // configure, ack it, and only then attach.
+                let wants_buffer = self
+                    .surfaces
+                    .get(&sender)
+                    .is_some_and(|state| state.pending.buffer.is_some());
+                let unconfigured = self
+                    .xdg_surfaces
+                    .iter()
+                    .find(|(_, xdg)| xdg.surface == sender)
+                    .filter(|(_, xdg)| !xdg.configured)
+                    .map(|(id, _)| *id);
+                if let Some(xdg) = unconfigured
+                    && wants_buffer
+                {
+                    self.fail(Fatal::Interface {
+                        object: xdg,
+                        code: xdg_surface::error::UNCONFIGURED_BUFFER,
+                        text: "a buffer was attached before a configure was acked".to_owned(),
+                    });
+                    return;
+                }
                 let Some(surface) = self.surfaces.get_mut(&sender) else {
                     return;
                 };
@@ -859,6 +1019,259 @@ impl Client {
                     self.events.push(Event::PoolResized { pool: sender, size });
                 }
             }
+            _ => {}
+        }
+    }
+
+    /// `xdg_wm_base`: `create_positioner`, `get_xdg_surface` and `pong`.
+    fn xdg_wm_base(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        match opcode {
+            xdg_wm_base::request::CREATE_POSITIONER => {
+                let Some(id) = args.first().and_then(Arg::as_object) else {
+                    return;
+                };
+                // A positioner is a bag of numbers a popup reads. Popups are
+                // not placed yet, so it is made and kept alive -- destroying
+                // it would be a protocol error the client did not earn --
+                // and nothing reads it.
+                let _ = self.make(id, &xdg_shell::XDG_POSITIONER, version, Role::XdgPositioner);
+            }
+            xdg_wm_base::request::GET_XDG_SURFACE => {
+                let (Some(id), Some(surface)) = (
+                    args.first().and_then(Arg::as_object),
+                    args.get(1).and_then(Arg::as_object),
+                ) else {
+                    return;
+                };
+                if !self.surfaces.contains_key(&surface) {
+                    self.fail(Fatal::WrongInterface {
+                        object: surface,
+                        wanted: "wl_surface",
+                    });
+                    return;
+                }
+                // A surface that already has a buffer may not be given a
+                // role: `xdg_surface`'s description says it must be unmapped
+                // and have no buffer attached or committed.
+                let has_buffer = self
+                    .surfaces
+                    .get(&surface)
+                    .is_some_and(|state| state.is_mapped() || state.pending.buffer.is_some());
+                if has_buffer {
+                    self.fail(Fatal::Interface {
+                        object: id,
+                        code: xdg_surface::error::UNCONFIGURED_BUFFER,
+                        text: "a surface with a buffer cannot be given a role".to_owned(),
+                    });
+                    return;
+                }
+                if self.xdg_surfaces.values().any(|xdg| xdg.surface == surface) {
+                    self.fail(Fatal::Interface {
+                        object: id,
+                        code: xdg_wm_base::error::ROLE,
+                        text: "that surface already has an xdg_surface".to_owned(),
+                    });
+                    return;
+                }
+                if self.make(id, &xdg_shell::XDG_SURFACE, version, Role::XdgSurface) {
+                    let _ = self.xdg_surfaces.insert(id, XdgSurface::new(surface));
+                }
+            }
+            // `pong` answers the `ping` that asks whether a client is still
+            // there. Nothing pings yet, so an unsolicited pong is ignored
+            // rather than refused: the protocol gives no error for one.
+            xdg_wm_base::request::PONG => {}
+            _ => {}
+        }
+    }
+
+    /// `xdg_surface`: the role requests, the window geometry and the ack.
+    fn xdg_surface_request(
+        &mut self,
+        sender: ObjectId,
+        version: u32,
+        opcode: u16,
+        args: &[Arg<'_>],
+    ) {
+        match opcode {
+            xdg_surface::request::GET_TOPLEVEL => {
+                let Some(id) = args.first().and_then(Arg::as_object) else {
+                    return;
+                };
+                let Some(xdg) = self.xdg_surfaces.get(&sender) else {
+                    return;
+                };
+                if xdg.role.is_some() {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: xdg_surface::error::ALREADY_CONSTRUCTED,
+                        text: "this xdg_surface already has a role".to_owned(),
+                    });
+                    return;
+                }
+                let surface = xdg.surface;
+                if !self.make(id, &xdg_shell::XDG_TOPLEVEL, version, Role::XdgToplevel) {
+                    return;
+                }
+                if let Some(xdg) = self.xdg_surfaces.get_mut(&sender) {
+                    xdg.role = Some(XdgRole::Toplevel(id));
+                }
+                let _ = self.toplevels.insert(
+                    id,
+                    Toplevel {
+                        xdg_surface: sender,
+                        surface,
+                        ..Toplevel::default()
+                    },
+                );
+                self.events.push(Event::ToplevelCreated {
+                    toplevel: id,
+                    surface,
+                });
+            }
+            xdg_surface::request::GET_POPUP => {
+                let Some(id) = args.first().and_then(Arg::as_object) else {
+                    return;
+                };
+                // Popups are not placed yet. The object is made so the
+                // client's ids stay in step and it is told nothing, rather
+                // than the connection being ended for using a protocol the
+                // compositor advertised.
+                let Some(xdg) = self.xdg_surfaces.get(&sender) else {
+                    return;
+                };
+                if xdg.role.is_some() {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: xdg_surface::error::ALREADY_CONSTRUCTED,
+                        text: "this xdg_surface already has a role".to_owned(),
+                    });
+                    return;
+                }
+                if self.make(id, &xdg_shell::XDG_POPUP, version, Role::XdgPopup)
+                    && let Some(xdg) = self.xdg_surfaces.get_mut(&sender)
+                {
+                    xdg.role = Some(XdgRole::Popup(id));
+                }
+            }
+            xdg_surface::request::SET_WINDOW_GEOMETRY => {
+                let numbers: Vec<i32> = (0..4)
+                    .filter_map(|index| args.get(index).and_then(Arg::as_int))
+                    .collect();
+                let [x, y, width, height] = numbers.as_slice() else {
+                    return;
+                };
+                if *width <= 0 || *height <= 0 {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: xdg_surface::error::INVALID_SIZE,
+                        text: format!("a window geometry of {width}x{height}"),
+                    });
+                    return;
+                }
+                if let Some(xdg) = self.xdg_surfaces.get_mut(&sender) {
+                    xdg.geometry = Some((*x, *y, *width, *height));
+                }
+            }
+            xdg_surface::request::ACK_CONFIGURE => {
+                let Some(serial) = args.first().and_then(Arg::as_uint) else {
+                    return;
+                };
+                let acked = self
+                    .xdg_surfaces
+                    .get_mut(&sender)
+                    .is_some_and(|xdg| xdg.ack(serial));
+                if !acked {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: xdg_surface::error::INVALID_SERIAL,
+                        text: format!("serial {serial} was never sent or is already acked"),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `xdg_toplevel`: what a client says about its window.
+    fn xdg_toplevel_request(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        match opcode {
+            xdg_toplevel::request::SET_TITLE | xdg_toplevel::request::SET_APP_ID => {
+                let text = args.first().and_then(Arg::as_str).unwrap_or("").to_owned();
+                let Some(top) = self.toplevels.get_mut(&sender) else {
+                    return;
+                };
+                if opcode == xdg_toplevel::request::SET_TITLE {
+                    top.title = text;
+                } else {
+                    top.app_id = text;
+                }
+                self.events
+                    .push(Event::ToplevelRenamed { toplevel: sender });
+            }
+            xdg_toplevel::request::SET_PARENT => {
+                let Some(parent) = args.first().and_then(Arg::as_object) else {
+                    return;
+                };
+                if !parent.is_null() && !self.toplevels.contains_key(&parent) {
+                    self.fail(Fatal::WrongInterface {
+                        object: parent,
+                        wanted: "xdg_toplevel",
+                    });
+                    return;
+                }
+                if let Some(top) = self.toplevels.get_mut(&sender) {
+                    top.parent = (!parent.is_null()).then_some(parent);
+                }
+            }
+            xdg_toplevel::request::SET_MAX_SIZE | xdg_toplevel::request::SET_MIN_SIZE => {
+                let (Some(width), Some(height)) = (
+                    args.first().and_then(Arg::as_int),
+                    args.get(1).and_then(Arg::as_int),
+                ) else {
+                    return;
+                };
+                if width < 0 || height < 0 {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: xdg_toplevel::error::INVALID_SIZE,
+                        text: format!("a size of {width}x{height}"),
+                    });
+                    return;
+                }
+                let Some(top) = self.toplevels.get_mut(&sender) else {
+                    return;
+                };
+                if opcode == xdg_toplevel::request::SET_MAX_SIZE {
+                    top.max_size = (width, height);
+                } else {
+                    top.min_size = (width, height);
+                }
+            }
+            xdg_toplevel::request::SET_MAXIMIZED
+            | xdg_toplevel::request::UNSET_MAXIMIZED
+            | xdg_toplevel::request::SET_FULLSCREEN
+            | xdg_toplevel::request::UNSET_FULLSCREEN => {
+                let Some(top) = self.toplevels.get_mut(&sender) else {
+                    return;
+                };
+                match opcode {
+                    xdg_toplevel::request::SET_MAXIMIZED => top.maximized = true,
+                    xdg_toplevel::request::UNSET_MAXIMIZED => top.maximized = false,
+                    xdg_toplevel::request::SET_FULLSCREEN => top.fullscreen = true,
+                    _ => top.fullscreen = false,
+                }
+                let (maximized, fullscreen) = (top.maximized, top.fullscreen);
+                self.events.push(Event::ToplevelAsked {
+                    toplevel: sender,
+                    maximized,
+                    fullscreen,
+                });
+            }
+            // `show_window_menu`, `move`, `resize` and `set_minimized` ask
+            // for things a tiling compositor does not do. The protocol says
+            // a compositor may ignore each, and Hyprland ignores the first
+            // three for a tiled window.
             _ => {}
         }
     }

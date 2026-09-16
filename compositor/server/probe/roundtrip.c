@@ -27,12 +27,14 @@
 
 #include <wayland-client.h>
 #include <wayland-client-protocol.h>
+#include "xdg-shell-client-protocol.h"
 
 /* What the registry listener gathers, so the surface half can bind. */
 struct found {
 	int count;
 	struct wl_compositor *compositor;
 	struct wl_shm *shm;
+	struct xdg_wm_base *shell;
 };
 
 static void on_global(void *data, struct wl_registry *registry, uint32_t name,
@@ -47,6 +49,9 @@ static void on_global(void *data, struct wl_registry *registry, uint32_t name,
 	else if (!strcmp(interface, "wl_shm"))
 		found->shm = wl_registry_bind(registry, name,
 					      &wl_shm_interface, version);
+	else if (!strcmp(interface, "xdg_wm_base"))
+		found->shell = wl_registry_bind(registry, name,
+						&xdg_wm_base_interface, version);
 }
 
 static void on_global_remove(void *data, struct wl_registry *registry,
@@ -123,8 +128,8 @@ int main(int argc, char **argv)
 	int result = wl_display_roundtrip(display);
 	printf("roundtrip %d globals %d error %d\n", result, found.count,
 	       wl_display_get_error(display));
-	if (!found.compositor || !found.shm) {
-		fprintf(stderr, "the replay did not carry both globals\n");
+	if (!found.compositor || !found.shm || !found.shell) {
+		fprintf(stderr, "the replay did not carry every global\n");
 		return 1;
 	}
 
@@ -137,6 +142,18 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	struct wl_surface *surface = wl_compositor_create_surface(found.compositor);
+	/* The window half, in the order every toolkit does it: give the
+	 * surface a role, name it, and commit once with nothing attached so
+	 * the compositor may configure it. */
+	struct xdg_surface *shell_surface =
+		xdg_wm_base_get_xdg_surface(found.shell, surface);
+	struct xdg_toplevel *toplevel = xdg_surface_get_toplevel(shell_surface);
+	xdg_toplevel_set_title(toplevel, "probe window");
+	xdg_toplevel_set_app_id(toplevel, "rocks.magical.probe");
+	xdg_toplevel_set_min_size(toplevel, 1, 1);
+	xdg_surface_set_window_geometry(shell_surface, 0, 0, WIDTH, HEIGHT);
+	wl_surface_commit(surface);
+
 	struct wl_region *region = wl_compositor_create_region(found.compositor);
 	wl_region_add(region, 0, 0, WIDTH, HEIGHT);
 	wl_surface_set_opaque_region(surface, region);
@@ -158,6 +175,10 @@ int main(int argc, char **argv)
 		perror("read");
 		return 1;
 	}
+	printf("client-xdg xdg_surface %u toplevel %u title %s app_id %s\n",
+	       wl_proxy_get_id((struct wl_proxy *)shell_surface),
+	       wl_proxy_get_id((struct wl_proxy *)toplevel),
+	       "probe-window", "rocks.magical.probe");
 	printf("client-objects surface %u region %u pool %u buffer %u frame %u\n",
 	       wl_proxy_get_id((struct wl_proxy *)surface),
 	       wl_proxy_get_id((struct wl_proxy *)region),

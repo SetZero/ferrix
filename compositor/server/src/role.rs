@@ -48,6 +48,14 @@ pub enum Role {
     /// A `wl_callback` a `wl_surface.frame` asked for. Unlike the one
     /// `wl_display.sync` makes, it lives until a frame is drawn.
     FrameCallback,
+    /// `xdg_surface`, made by `xdg_wm_base.get_xdg_surface`.
+    XdgSurface,
+    /// `xdg_toplevel`: a window.
+    XdgToplevel,
+    /// `xdg_popup`: a menu anchored to another surface.
+    XdgPopup,
+    /// `xdg_positioner`, which says where a popup goes.
+    XdgPositioner,
 }
 
 impl Role {

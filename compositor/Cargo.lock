@@ -66,7 +66,16 @@ name = "compositor-server"
 version = "0.1.0"
 dependencies = [
  "compositor-protocol",
+ "compositor-socket",
  "compositor-wire",
+]
+
+[[package]]
+name = "compositor-socket"
+version = "0.1.0"
+dependencies = [
+ "compositor-wire",
+ "libc",
 ]
 
 [[package]]

@@ -741,11 +741,19 @@ fn the_probe_names_the_libwayland_it_came_from() {
 #[test]
 fn a_real_client_s_window_setup_is_understood_request_for_request() {
     // `probe/roundtrip.c` drives a real libwayland client through everything
-    // it does to put a picture on screen -- bind, create a surface and a
-    // region, make a pool and a buffer, attach, damage, ask for a frame
-    // callback, set the scale and commit -- and records the bytes it wrote.
-    // This replays them into the server. Nothing in this test writes a
+    // it does to put a window on screen -- bind, give the surface a role,
+    // name it, commit, make a pool and a buffer, attach, damage, ask for a
+    // frame callback, set the scale and commit -- and records the bytes it
+    // wrote. This replays them into the server. Nothing in this test writes a
     // request: every byte is libwayland's.
+    //
+    // The recording is a one-way one: nothing answered the client, so it
+    // never took a configure and never acked. The server therefore reads
+    // every request up to the commit that carries a buffer and refuses that
+    // one with `unconfigured_buffer`, which is the rule that stops a client
+    // painting at a size the compositor never agreed to. The two-way
+    // conversation, where the client is configured and acks, is
+    // `probe/live.c`; the tests for it are at the end of this file.
     let hex = probe_line("client-requests ")
         .strip_prefix("client-requests ")
         .expect("the prefix is there");
@@ -765,8 +773,19 @@ fn a_real_client_s_window_setup_is_understood_request_for_request() {
         .step_by(2)
         .filter_map(|value| value.parse().ok())
         .collect();
-    let [surface, region, pool, buffer, frame] = ids.as_slice() else {
+    let [surface, region, pool, buffer, _frame] = ids.as_slice() else {
         panic!("client-objects should name five: {objects}");
+    };
+    let xdg: Vec<u32> = probe_line("client-xdg ")
+        .split_whitespace()
+        .skip(1)
+        .skip(1)
+        .step_by(2)
+        .take(2)
+        .filter_map(|value| value.parse().ok())
+        .collect();
+    let [xdg_surface, toplevel] = xdg.as_slice() else {
+        panic!("client-xdg should name the xdg_surface and the toplevel");
     };
     let geometry: Vec<i32> = probe_line("client-geometry ")
         .split_whitespace()
@@ -792,10 +811,23 @@ fn a_real_client_s_window_setup_is_understood_request_for_request() {
 
     // One descriptor arrives with the stream: the pool's.
     let consumed = client.read(&bytes, &[Fd(17)]);
-    assert_eq!(consumed, bytes.len(), "every request was understood");
-    assert_eq!(client.fatal(), None, "the server refused a real client");
+    // A message is taken out of the buffer before it is dispatched, so the
+    // commit that is refused is counted among the bytes read. It is the last
+    // message in the recording, so every byte was read.
+    assert_eq!(consumed, bytes.len());
+    assert!(
+        matches!(
+            client.fatal(),
+            Some(Fatal::Interface { code, object, .. })
+                if *code == xdg_shell::xdg_surface::error::UNCONFIGURED_BUFFER
+                    && object.0 == *xdg_surface
+        ),
+        "the refusal should be unconfigured_buffer on the xdg_surface: {:?}",
+        client.fatal()
+    );
 
-    // The pool is the memfd the client sent, at the size it asked for.
+    // Everything before it was understood. The pool is the memfd the client
+    // sent, at the size it asked for.
     let made = client.pool(ObjectId(*pool)).expect("a pool");
     assert_eq!(made.fd, Fd(17), "the descriptor that arrived");
     assert_eq!(made.size, *pool_bytes);
@@ -814,35 +846,36 @@ fn a_real_client_s_window_setup_is_understood_request_for_request() {
         Some((0, usize::try_from(stride * height).expect("fits")))
     );
 
-    // The surface shows that buffer, with the damage, scale and opaque
-    // region the client set, and the commit took them.
+    // The window is there, with the title and app id the client set and the
+    // window geometry it asked for.
+    let top = client.toplevel(ObjectId(*toplevel)).expect("a window");
+    assert_eq!(top.surface, ObjectId(*surface));
+    assert_eq!(top.xdg_surface, ObjectId(*xdg_surface));
+    assert_eq!(top.title, "probe window");
+    assert_eq!(top.app_id, "rocks.magical.probe");
+    assert_eq!(top.min_size, (1, 1));
+    let shell = client
+        .xdg_surface(ObjectId(*xdg_surface))
+        .expect("an xdg_surface");
+    assert_eq!(shell.geometry, Some((0, 0, *width, *height)));
+    assert!(!shell.configured, "nothing answered, so nothing was acked");
+
+    // The first commit -- the one with no buffer, which asks to be
+    // configured -- went through, and the opaque region with it.
     let shown = client.surface(ObjectId(*surface)).expect("a surface");
     assert_eq!(shown.commits, 1);
-    assert!(shown.is_mapped());
-    assert_eq!(shown.current.buffer, Some(ObjectId(*buffer)));
-    assert_eq!(shown.current.scale, 1);
-    assert_eq!(
-        shown.current.buffer_damage,
-        [crate::Rect::new(0, 0, *width, *height).expect("a rectangle")]
-    );
+    assert!(!shown.is_mapped(), "the buffer commit was the refused one");
     assert!(
-        shown.current.opaque.as_ref().is_some_and(|opaque| {
+        shown.pending.opaque.as_ref().is_some_and(|opaque| {
             opaque.contains(0, 0)
                 && opaque.contains(width - 1, height - 1)
                 && !opaque.contains(*width, 0)
         }),
         "the opaque region the client set"
     );
-    // The frame callback the client asked for is owed by this commit.
-    assert_eq!(shown.committed_callbacks, [ObjectId(*frame)]);
-    // And the pending state starts clean for the next commit.
-    assert!(shown.pending.buffer_damage.is_empty());
-    assert_eq!(shown.pending.buffer, Some(ObjectId(*buffer)));
-
-    // The region is live and is the one the surface took a copy of.
     assert!(client.region(ObjectId(*region)).is_some());
 
-    // The compositor above is told what it has to act on.
+    // The compositor above was told what it has to act on.
     let events = client.take_events();
     assert!(
         events.iter().any(|event| matches!(
@@ -851,22 +884,13 @@ fn a_real_client_s_window_setup_is_understood_request_for_request() {
         )),
         "the compositor is told to map the pool"
     );
-    let committed = events
-        .iter()
-        .find_map(|event| match event {
-            Event::SurfaceCommitted {
-                surface: id,
-                change,
-            } if id.0 == *surface => Some(change),
-            _ => None,
-        })
-        .expect("the compositor is told about the commit");
-    assert_eq!(committed.buffer, Some(ObjectId(*buffer)));
     assert!(
-        committed.mapped,
-        "the surface went from nothing to something"
+        events.iter().any(|event| matches!(
+            event,
+            Event::ToplevelCreated { toplevel: made, .. } if made.0 == *toplevel
+        )),
+        "the compositor is told to place the window"
     );
-    assert_eq!(committed.released, None, "nothing to give back yet");
 }
 
 // ---------------------------------------------------------------------------
@@ -1461,4 +1485,320 @@ fn destroying_a_surface_takes_its_state_with_it() {
             role: Role::Surface
         } if *object == ObjectId(3)
     )));
+}
+
+// ---------------------------------------------------------------------------
+// The whole handshake, over a real socket
+//
+// `probe/roundtrip.sh` starts `examples/serve.rs` on a socket and runs
+// `probe/live.c`, a real libwayland client, against it. That conversation is
+// the one every application has when it starts, and it cannot be replayed
+// from a recording: an `xdg_surface.configure` answers a request whose ids
+// the client chose. What the client was told and what the server saw are both
+// recorded, and the tests below require each step of it.
+// ---------------------------------------------------------------------------
+
+/// A line of the probe's live client output, without its prefix.
+fn client_said(text: &str) -> bool {
+    ROUNDTRIP
+        .lines()
+        .any(|line| line.strip_prefix("client ") == Some(text))
+}
+
+/// A line of the probe's live server output, without its prefix.
+fn server_said(text: &str) -> bool {
+    ROUNDTRIP
+        .lines()
+        .any(|line| line.strip_prefix("server ") == Some(text))
+}
+
+/// The live client's `result` line, as fields.
+fn live_result() -> Vec<String> {
+    ROUNDTRIP
+        .lines()
+        .find_map(|line| line.strip_prefix("client result "))
+        .unwrap_or_else(|| panic!("the live client printed no result"))
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn a_real_client_completes_the_whole_window_handshake_over_a_socket() {
+    // It connected and bound what it needed.
+    assert!(client_said("connected"), "the client could not connect");
+    assert!(client_said("bound"), "a global was missing");
+    assert!(server_said("accepted"));
+
+    // wl_shm told it both formats the compositor draws, and no others.
+    assert!(client_said("format 0"), "argb8888 was not announced");
+    assert!(client_said("format 1"), "xrgb8888 was not announced");
+
+    // It made a window and the server saw it, with the title and app id.
+    assert!(server_said("toplevel 8 on surface 3"));
+    assert!(server_said("renamed 8"), "set_title and set_app_id");
+
+    // The first commit carried no buffer, which is what asks to be
+    // configured, and the server configured it.
+    assert!(server_said(
+        "commit 3 buffer None mapped false unmapped false"
+    ));
+    assert!(server_said("configured 8 640 480"));
+
+    // The client was told that size and those states, and acked.
+    assert!(
+        client_said("toplevel-configure 640 480 states 2"),
+        "the configure did not reach the client, or carried other numbers"
+    );
+    assert!(
+        client_said("surface-configure serial 1"),
+        "the xdg_surface.configure did not arrive with its serial"
+    );
+
+    // Only then did it attach a buffer, and the server mapped the surface.
+    assert!(server_said("pool 9 size 4096"), "the memfd did not arrive");
+    assert!(server_said(
+        "commit 3 buffer Some(10) mapped true unmapped false"
+    ));
+
+    // Nothing went wrong on either side.
+    assert!(
+        !ROUNDTRIP
+            .lines()
+            .any(|line| line.contains("protocol error"))
+    );
+    assert!(server_said("client gone"), "the server saw a clean close");
+}
+
+#[test]
+fn the_configure_the_client_took_is_the_one_the_server_sent() {
+    let fields = live_result();
+    let value = |name: &str| -> Option<&str> {
+        let index = fields.iter().position(|field| field == name)?;
+        fields.get(index + 1).map(String::as_str)
+    };
+    assert_eq!(value("configures"), Some("1"), "one configure, acked once");
+    assert_eq!(value("size"), Some("640x480"), "examples/serve.rs's size");
+    // `activated` and `tiled_left` are what a tiling compositor sends, and
+    // are the two states `examples/serve.rs` configures with.
+    assert_eq!(value("activated"), Some("1"));
+    assert_eq!(value("tiled"), Some("1"));
+    assert_eq!(value("formats"), Some("2"));
+    assert_eq!(
+        value("error"),
+        Some("0"),
+        "libwayland reported a protocol error"
+    );
+}
+
+#[test]
+fn a_buffer_before_the_first_ack_is_refused() {
+    // The rule the handshake above exists for. A client that attached before
+    // acking would be painting at a size the compositor never agreed to.
+    let mut client = drawing_client();
+    let mut bytes = bind(2, 4, "xdg_wm_base", 6, 6);
+    // The globals in `client()` are compositor 1, shm 2, seat 3, xdg 4.
+    bytes.extend(create_surface(3));
+    bytes.extend(request(
+        6,
+        xdg_shell::xdg_wm_base::request::GET_XDG_SURFACE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(7)), Arg::Object(ObjectId(3))],
+    ));
+    bytes.extend(request(
+        7,
+        xdg_shell::xdg_surface::request::GET_TOPLEVEL,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(8))],
+    ));
+    bytes.extend(create_pool(9, 4096));
+    bytes.extend(create_buffer(9, 10, 0, 16, 16, 64, 1));
+    bytes.extend(attach(3, 10, 0, 0));
+    bytes.extend(commit(3));
+    let _ = client.read(&bytes, &[Fd(3)]);
+    assert!(
+        matches!(
+            client.fatal(),
+            Some(Fatal::Interface { code, object, .. })
+                if *code == xdg_shell::xdg_surface::error::UNCONFIGURED_BUFFER
+                    && *object == ObjectId(7)
+        ),
+        "a buffer before the first ack was accepted: {:?}",
+        client.fatal()
+    );
+}
+
+#[test]
+fn a_serial_that_was_never_sent_is_refused_and_an_old_one_is_not() {
+    let mut client = drawing_client();
+    let mut bytes = bind(2, 4, "xdg_wm_base", 6, 6);
+    bytes.extend(create_surface(3));
+    bytes.extend(request(
+        6,
+        xdg_shell::xdg_wm_base::request::GET_XDG_SURFACE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(7)), Arg::Object(ObjectId(3))],
+    ));
+    bytes.extend(request(
+        7,
+        xdg_shell::xdg_surface::request::GET_TOPLEVEL,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(8))],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    // Three configures, none acked yet.
+    client.configure_toplevel(ObjectId(8), 100, 200, &[]);
+    client.configure_toplevel(ObjectId(8), 110, 210, &[]);
+    client.configure_toplevel(ObjectId(8), 120, 220, &[]);
+    let waiting = client.xdg_surface(ObjectId(7)).expect("an xdg_surface");
+    assert_eq!(waiting.unacked.len(), 3);
+    let middle = waiting.unacked[1];
+
+    // A client several configures behind acks the one it acted on, and that
+    // drops the older ones with it: `ack_configure`'s own description.
+    let ack = |serial: u32| {
+        request(
+            7,
+            xdg_shell::xdg_surface::request::ACK_CONFIGURE,
+            &[ArgType::Uint],
+            &[Arg::Uint(serial)],
+        )
+    };
+    let bytes = ack(middle);
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let after = client.xdg_surface(ObjectId(7)).expect("an xdg_surface");
+    assert_eq!(after.unacked.len(), 1, "the older ones went with it");
+    assert!(after.configured, "a buffer is allowed now");
+
+    // Acking it again, now that it is gone, is invalid_serial.
+    let bytes = ack(middle);
+    let _ = client.read(&bytes, &[]);
+    assert!(
+        matches!(
+            client.fatal(),
+            Some(Fatal::Interface { code, .. })
+                if *code == xdg_shell::xdg_surface::error::INVALID_SERIAL
+        ),
+        "{:?}",
+        client.fatal()
+    );
+}
+
+#[test]
+fn a_surface_may_be_given_one_role_and_no_second() {
+    let mut client = drawing_client();
+    let mut bytes = bind(2, 4, "xdg_wm_base", 6, 6);
+    bytes.extend(create_surface(3));
+    let get_xdg = |id: u32, surface: u32| {
+        request(
+            6,
+            xdg_shell::xdg_wm_base::request::GET_XDG_SURFACE,
+            &[ArgType::NewId, ArgType::Object { nullable: false }],
+            &[Arg::NewId(ObjectId(id)), Arg::Object(ObjectId(surface))],
+        )
+    };
+    let get_toplevel = |xdg: u32, id: u32| {
+        request(
+            xdg,
+            xdg_shell::xdg_surface::request::GET_TOPLEVEL,
+            &[ArgType::NewId],
+            &[Arg::NewId(ObjectId(id))],
+        )
+    };
+    bytes.extend(get_xdg(7, 3));
+    bytes.extend(get_toplevel(7, 8));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    // A second toplevel on the same xdg_surface.
+    let again = get_toplevel(7, 9);
+    let _ = client.read(&again, &[]);
+    assert!(
+        matches!(
+            client.fatal(),
+            Some(Fatal::Interface { code, .. })
+                if *code == xdg_shell::xdg_surface::error::ALREADY_CONSTRUCTED
+        ),
+        "{:?}",
+        client.fatal()
+    );
+
+    // And a second xdg_surface on the same wl_surface.
+    let mut other = drawing_client();
+    let mut bytes = bind(2, 4, "xdg_wm_base", 6, 6);
+    bytes.extend(create_surface(3));
+    bytes.extend(get_xdg(7, 3));
+    bytes.extend(get_xdg(9, 3));
+    let _ = other.read(&bytes, &[]);
+    assert!(
+        matches!(
+            other.fatal(),
+            Some(Fatal::Interface { code, .. })
+                if *code == xdg_shell::xdg_wm_base::error::ROLE
+        ),
+        "{:?}",
+        other.fatal()
+    );
+}
+
+#[test]
+fn a_window_keeps_the_title_and_app_id_hyprctl_prints() {
+    let mut client = drawing_client();
+    let mut bytes = bind(2, 4, "xdg_wm_base", 6, 6);
+    bytes.extend(create_surface(3));
+    bytes.extend(request(
+        6,
+        xdg_shell::xdg_wm_base::request::GET_XDG_SURFACE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(7)), Arg::Object(ObjectId(3))],
+    ));
+    bytes.extend(request(
+        7,
+        xdg_shell::xdg_surface::request::GET_TOPLEVEL,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(8))],
+    ));
+    for (opcode, text) in [
+        (xdg_shell::xdg_toplevel::request::SET_TITLE, "a window"),
+        (
+            xdg_shell::xdg_toplevel::request::SET_APP_ID,
+            "rocks.magical.test",
+        ),
+    ] {
+        bytes.extend(request(
+            8,
+            opcode,
+            &[ArgType::Str { nullable: false }],
+            &[Arg::Str(Some(text))],
+        ));
+    }
+    bytes.extend(request(
+        8,
+        xdg_shell::xdg_toplevel::request::SET_MAXIMIZED,
+        &[],
+        &[],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let top = client.toplevel(ObjectId(8)).expect("a window");
+    assert_eq!(top.title, "a window");
+    assert_eq!(top.app_id, "rocks.magical.test");
+    assert_eq!(top.surface, ObjectId(3));
+    assert_eq!(top.xdg_surface, ObjectId(7));
+    assert!(top.maximized);
+    assert!(!top.fullscreen);
+    assert_eq!(client.toplevels().count(), 1);
+
+    // And `killactive` asks it to close, which is a request and not an
+    // order: the client may decline.
+    let _ = client.take_outgoing();
+    client.close_toplevel(ObjectId(8));
+    let events = sent(&mut client);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].sender, ObjectId(8));
+    assert_eq!(events[0].opcode, xdg_shell::xdg_toplevel::event::CLOSE);
 }

@@ -3794,6 +3794,43 @@ requires the surface, the region, the pool, the buffer's rectangle and the
 commit to be what the client asked for. Not one byte of that test is written
 by this tree.
 
+**Done — `xdg_shell` and the socket, and a real client's whole handshake
+(2026-09-17).** `xdg_shell` is how a surface becomes a window: the configure
+conversation by which the compositor and the client agree on a size, the
+serials that pin each one, and the toplevel state a tiling layout needs. Its
+rules are the protocol's. A surface may be given one role and no second; a
+client may ack a configure it is several behind on, which drops the older
+ones with it; and a buffer may not be attached at all until a configure has
+been acked, which is the rule that stops a client painting at a size the
+compositor never agreed to. `set_max_size` and `set_min_size` are recorded
+and not obeyed, and `move`, `resize` and `show_window_menu` are ignored, as
+Hyprland ignores them for a tiled window.
+
+`compositor/socket` is the first part of the compositor that has to be on
+Ferrix to be tried: an `AF_UNIX` listener and the `sendmsg`/`recvmsg` control
+messages that carry descriptors, which the standard library has no stable way
+to do. It is the crate's only `unsafe`, split one operation to a block as the
+rest of the tree is, and its tests send a descriptor through a socket pair and
+read the file on the far side to show it is the same open file and not merely
+the same number.
+
+**The whole handshake now runs end to end against a real client.**
+`probe/live.c` is a libwayland client that connects to `examples/serve.rs`
+over a real socket and does what every application does when it starts: bind
+`wl_compositor`, `wl_shm` and `xdg_wm_base`, take `wl_shm`'s formats, make a
+surface, give it an `xdg_surface` and an `xdg_toplevel`, set a title and an
+app id, commit with nothing attached, take the `xdg_toplevel.configure` and
+the `xdg_surface.configure` that follows it, ack the serial, make a pool over
+a `memfd` sent through `SCM_RIGHTS`, cut a buffer, attach, damage, ask for a
+frame callback and commit. The client was configured at 640x480 with
+`activated` and `tiled_left`, acked serial 1, and `wl_display_get_error`
+returned zero; the server mapped the surface. Both sides' output is recorded
+and the tests require each step. Its negative control, not committed: with the
+`xdg_surface.configure` that carries the serial not sent -- the configure
+conversation's last message -- the client never acks, the compositor refuses
+its buffer, and libwayland prints `xdg_surface#7: error 3: a buffer was
+attached before a configure was acked`.
+
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
 customer's order of 2026-09-16); then the protocol server, the seat, the

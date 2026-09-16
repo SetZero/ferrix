@@ -33,20 +33,24 @@
 //! needs to put a picture somewhere: `wl_compositor` and its surfaces and
 //! regions, and `wl_shm` with its pools and buffers. The globals a client can
 //! bind are declared in [`Globals`], and what a bound object is is [`Role`].
-//! `xdg_shell`, which is how a surface becomes a window, and `wl_seat`, which
-//! is how it is typed into, land after this.
+//! `xdg_shell` is here too, which is how a surface becomes a window: the
+//! configure conversation by which the compositor and the client agree on a
+//! size, and the toplevel state a tiling layout needs. `wl_seat`, which is
+//! how a window is typed into, lands after this.
 
 mod client;
 mod globals;
 mod role;
 mod shm;
 mod surface;
+mod xdg;
 
 pub use client::{Client, Event, Fatal, Outgoing};
 pub use globals::{Global, Globals};
 pub use role::Role;
 pub use shm::{Buffer, BufferError, FORMATS, Format, Pool};
 pub use surface::{Committed, Rect, Region, State, Surface};
+pub use xdg::{Toplevel, XdgRole, XdgSurface};
 
 pub use compositor_protocol as protocol;
 pub use compositor_wire as wire;

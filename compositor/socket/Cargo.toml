@@ -1,0 +1,17 @@
+[package]
+name = "compositor-socket"
+description = "The Wayland socket: an AF_UNIX listener and the descriptor passing beside the bytes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Declarations only, as in `blank` and in zinc: `recvmsg` and `sendmsg` with
+# control messages are not in std, and the rest of the socket is.
+libc = "0.2.189"
+compositor-wire = { path = "../wire" }
+
+[lints]
+workspace = true

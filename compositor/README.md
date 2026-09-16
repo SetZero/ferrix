@@ -75,7 +75,18 @@ names the part of Hyprland or hyprlang it follows.
   replays the server's answer to a real libwayland client and records the
   globals it reports, then drives it through everything it does to show a
   window and records the requests it sent, which the tests replay into the
-  server. What the tests check is what an application would actually do.
+  server. `probe/live.c` goes further: it runs a real client against
+  `examples/serve.rs` over a real socket and has the whole two-way
+  conversation -- bind, make a window, take the configure, ack it, attach a
+  buffer and commit. That is the handshake every application performs when it
+  starts, and a compositor that gets any step of it wrong is one no
+  application will run on.
+* **`socket`** is the one crate that has to be on Ferrix to be tried: an
+  `AF_UNIX` listener, and `sendmsg`/`recvmsg` with the `SCM_RIGHTS` control
+  messages that carry a client's descriptors beside its bytes, which the
+  standard library has no stable way to do. A read gives a whole number of
+  bytes and not a whole number of messages, so it keeps what has arrived and
+  hands the server as much as makes messages.
 * **`render`** draws the frame: a `Canvas` over a `tiny-skia` pixmap with
   `clear`, `fill`, `border` and `composite` (`ARGB8888` source-over,
   `XRGB8888` copied and made opaque), each drawn only inside a `Damage` of

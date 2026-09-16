@@ -11,5 +11,9 @@ publish.workspace = true
 compositor-protocol = { path = "../protocol" }
 compositor-wire = { path = "../wire" }
 
+[dev-dependencies]
+# The socket is only needed by `examples/serve.rs`, the probe's other half.
+compositor-socket = { path = "../socket" }
+
 [lints]
 workspace = true
