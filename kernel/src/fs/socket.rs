@@ -774,6 +774,17 @@ impl Socket {
                 // Room in the backlog now, which a `connect` may be waiting
                 // for.
                 self.arrivals.wake_all();
+                // The accepted socket takes `SO_PASSCRED` from the listener,
+                // as `unix_sock_inherit_flags` has it; what its peer sent
+                // before this did not see it set.
+                if self.passes_credentials() {
+                    waiting.socket.options.lock().pass_credentials = true;
+                    waiting
+                        .socket
+                        .receive
+                        .pass_credentials
+                        .store(true, Ordering::Release);
+                }
                 let address = encode_name(waiting.peer.as_ref());
                 return Ok((open(waiting.socket, nonblock)?, address));
             }
@@ -894,8 +905,14 @@ impl Socket {
         if data.is_empty() {
             return Ok(0);
         }
+        // Every piece of a send carries its credentials, when it has some, as
+        // every one of Linux's socket buffers does; the files only the first.
+        let credentials = passed.as_ref().and_then(Passed::credentials);
         let mut done = 0;
         while done < data.len() {
+            if done > 0 && passed.is_none() {
+                *passed = credentials.map(|given| Passed::new(Vec::new(), Some(given)));
+            }
             let rest = data.get(done..).unwrap_or_default();
             let outcome = if peer.is_refused() {
                 WriteOutcome::Broken
@@ -1048,7 +1065,18 @@ impl Socket {
             let rest = out.get_mut(done..).unwrap_or_default();
             // Bound first, so the guard is gone before anything below waits.
             let mut buffer = self.receive.buffer.lock();
-            let outcome = buffer.read(rest, peek);
+            // A peek takes nothing, but reports the credentials of the first
+            // byte it copies, as Linux's does.
+            let peeked = peek
+                .then(|| buffer.first_ancillary().and_then(Passed::credentials))
+                .flatten();
+            let mut outcome = buffer.read(rest, peek);
+            if let ReadOutcome::Read { ancillary, .. } = &mut outcome
+                && ancillary.is_none()
+                && peeked.is_some()
+            {
+                *ancillary = Some(Passed::new(Vec::new(), peeked));
+            }
             if matches!(
                 &outcome,
                 ReadOutcome::Read { ancillary: Some(passed), .. } if passed.carries_sockets()

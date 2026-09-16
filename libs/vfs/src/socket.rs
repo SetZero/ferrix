@@ -451,6 +451,14 @@ impl<A> SocketBuffer<A> {
             .iter()
             .filter_map(|segment| segment.ancillary.as_ref())
     }
+
+    /// The ancillary data that came with the next byte or record a read would
+    /// take, left where it is: what a peek reports without taking it.
+    pub fn first_ancillary(&self) -> Option<&A> {
+        self.segments
+            .front()
+            .and_then(|segment| segment.ancillary.as_ref())
+    }
 }
 
 /// Copy the front of `from` into `to`, as much as fits, and say how much that

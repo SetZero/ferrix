@@ -56,7 +56,7 @@ use ferrix_linux_abi::socket::{
     AF_INET, AF_INET6, AF_MAX, AF_NETLINK, AF_PACKET, AF_UNIX, CmsgHdr, ControlMessages,
     MSG_CMSG_CLOEXEC, MSG_CMSG_COMPAT, MSG_CTRUNC, MSG_OOB, MSG_TRUNC, MsgHdr, SCM_CREDENTIALS,
     SCM_MAX_FD, SCM_RIGHTS, SOCK_CLOEXEC, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_RAW, SOCK_STREAM,
-    SOCK_TYPE_MASK, SOL_SOCKET, UnixAddress, Width, cmsg_align, cmsg_len, cmsg_space,
+    SOCK_TYPE_MASK, SOL_SOCKET, Ucred, UnixAddress, Width, cmsg_align, cmsg_len, cmsg_space,
 };
 use ferrix_net::packet::PacketKind;
 use ferrix_net::socket::Family;
@@ -70,6 +70,7 @@ use crate::net::socket::{self as inet, InetKind, InetSocket};
 use crate::syscall::attributes::int;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
+use crate::syscall::registry;
 use crate::syscall::uaccess;
 
 /// One past the last socket type: `SOCK_MAX` in `linux/net.h`.
@@ -969,12 +970,14 @@ fn iovecs(process: &Process, message: &MsgHdr) -> Result<Vec<(u64, usize)>, Errn
 }
 
 /// A send's control messages, as `__scm_send` reads them: the files an
-/// `SCM_RIGHTS` message names, gathered across every such message, for an
-/// `AF_UNIX` socket to pass. A malformed buffer is `EINVAL`, and so is an
-/// unknown `SOL_SOCKET` message or more than `SCM_MAX_FD` descriptors; a
-/// descriptor that is not open is `EBADF`; messages for other levels are
-/// ignored. Credentials, and descriptors on any other family, are
-/// `EOPNOTSUPP` until they land.
+/// `SCM_RIGHTS` message names, gathered across every such message, and the
+/// credentials an `SCM_CREDENTIALS` message gives, for an `AF_UNIX` socket to
+/// pass. A malformed buffer is `EINVAL`, and so is an unknown `SOL_SOCKET`
+/// message, more than `SCM_MAX_FD` descriptors, or credentials of the wrong
+/// length or naming an invalid id; a descriptor that is not open is `EBADF`;
+/// credentials the sender may not claim are `EPERM`, and a pid no process has
+/// `ESRCH` (see [`check_credentials`]); messages for other levels are ignored.
+/// Descriptors and credentials on any other family are `EOPNOTSUPP`.
 ///
 /// The files are cloned out of the descriptor table under its lock and dropped,
 /// if the send is refused, after it.
@@ -989,6 +992,7 @@ fn control(process: &Process, message: &MsgHdr, socket: &Any) -> Result<Option<P
     let control = copy_in(process, message.control, length)?;
     let mut descriptors: Vec<i32> = Vec::new();
     let mut rights = false;
+    let mut credentials = None;
     for entry in ControlMessages::new(&control, NATIVE) {
         let entry = entry.map_err(|_| Errno::EINVAL)?;
         if entry.level != SOL_SOCKET {
@@ -1010,12 +1014,20 @@ fn control(process: &Process, message: &MsgHdr, socket: &Any) -> Result<Option<P
                         .map(i32::from_le_bytes),
                 );
             }
+            SCM_CREDENTIALS if matches!(socket, Any::Unix(_)) => {
+                let given = (entry.data.len() == Ucred::SIZE)
+                    .then(|| Ucred::from_bytes(entry.data))
+                    .flatten()
+                    .ok_or(Errno::EINVAL)?;
+                check_credentials(process, given)?;
+                credentials = Some(given);
+            }
             SCM_RIGHTS | SCM_CREDENTIALS => return Err(Errno::EOPNOTSUPP),
             _ => return Err(Errno::EINVAL),
         }
     }
     if !rights || descriptors.is_empty() {
-        return Ok(None);
+        return Ok(credentials.map(|given| Passed::new(Vec::new(), Some(given))));
     }
     let mut files = Vec::new();
     files
@@ -1033,7 +1045,45 @@ fn control(process: &Process, message: &MsgHdr, socket: &Any) -> Result<Option<P
         }
     }
     drop(table);
-    Ok(Some(Passed::new(files)))
+    Ok(Some(Passed::new(files, credentials)))
+}
+
+/// Linux's `scm_check_creds`, and the pid lookup `__scm_send` makes after it:
+/// whether `process` may send `given` as its credentials. The ids must be
+/// valid, which `(uid_t)-1` is not; the pid must be its own, and each id one
+/// of its real, effective or saved ids, unless it is privileged (an effective
+/// uid of 0 standing for `CAP_SYS_ADMIN`, `CAP_SETUID` and `CAP_SETGID`, see
+/// `credentials`); and the pid must be a live process's.
+///
+/// # Errors
+///
+/// `EINVAL`, `EPERM` or `ESRCH`, in that order.
+fn check_credentials(process: &Process, given: Ucred) -> Result<(), Errno> {
+    if given.uid == u32::MAX || given.gid == u32::MAX {
+        return Err(Errno::EINVAL);
+    }
+    let own_pid = i32::try_from(process.pid()).is_ok_and(|pid| pid == given.pid);
+    let allowed = process.with_credentials(|ids| {
+        let privileged = ids.privileged();
+        let one_of = |id: u32, of: &crate::syscall::credentials::Ids| {
+            id == of.real || id == of.effective || id == of.saved
+        };
+        (own_pid || privileged)
+            && (privileged || one_of(given.uid, &ids.user))
+            && (privileged || one_of(given.gid, &ids.group))
+    });
+    if !allowed {
+        return Err(Errno::EPERM);
+    }
+    if !own_pid {
+        let found = u32::try_from(given.pid)
+            .ok()
+            .filter(|&pid| pid > 0)
+            .and_then(registry::find);
+        // The reference is let go of here, with the registry unlocked.
+        drop(found.ok_or(Errno::ESRCH)?);
+    }
+    Ok(())
 }
 
 /// Install the files a receive took as the receiver's descriptors, as many as
@@ -1174,7 +1224,8 @@ fn sys_recvmsg(
     let (received, from, passed, control) = match &socket {
         Any::Unix(unix) => {
             let (received, passed) = unix.recv_passing(&mut data, flags, file.status().nonblock)?;
-            (received, None, passed, Vec::new())
+            let control = credentials_control(unix, passed.as_ref())?;
+            (received, None, passed, control)
         }
         _ => {
             let (received, from, control) =
@@ -1204,10 +1255,26 @@ fn sys_recvmsg(
         )?;
     }
     let control_capacity = usize::try_from(message.control_len).unwrap_or(usize::MAX);
-    let (control_used, control_truncated) = match &passed {
-        Some(passed) => deliver_files(process, passed, message.control, control_capacity, flags)?,
-        None => write_control(process, message.control, control_capacity, &control)?,
-    };
+    // Credentials first and then descriptors, in the order `scm_recv` puts
+    // them.
+    let (mut control_used, mut control_truncated) =
+        write_control(process, message.control, control_capacity, &control)?;
+    if let Some(passed) = &passed {
+        let at = if message.control == 0 {
+            0
+        } else {
+            message.control.saturating_add(control_used as u64)
+        };
+        let (used, cut) = deliver_files(
+            process,
+            passed,
+            at,
+            control_capacity.saturating_sub(control_used),
+            flags,
+        )?;
+        control_used = control_used.saturating_add(used);
+        control_truncated |= cut;
+    }
     // Every file not installed is closed here, with the table unlocked.
     drop(passed);
     let truncated = socket.kind() != SocketType::Stream && received.full > received.bytes;
@@ -1224,6 +1291,34 @@ fn sys_recvmsg(
         control_used as u64,
     )?;
     Ok(received_count(&socket, received, flags))
+}
+
+/// The `SCM_CREDENTIALS` message a receive on `socket` reports, when it has
+/// `SO_PASSCRED` set: the credentials the message came with, or no pid and
+/// the overflow ids when it came with none, as `scm_recv` reports an empty
+/// `scm_cookie`.
+fn credentials_control(
+    socket: &Socket,
+    passed: Option<&Passed>,
+) -> Result<Vec<inet::Control>, Errno> {
+    if !socket.passes_credentials() {
+        return Ok(Vec::new());
+    }
+    let credentials = passed
+        .and_then(Passed::credentials)
+        .unwrap_or_else(crate::fs::socket::unknown_credentials);
+    let mut data = Vec::new();
+    data.try_reserve_exact(Ucred::SIZE)
+        .map_err(|_| Errno::ENOMEM)?;
+    data.extend_from_slice(&credentials.to_bytes());
+    let mut control = Vec::new();
+    control.try_reserve_exact(1).map_err(|_| Errno::ENOMEM)?;
+    control.push(inet::Control {
+        level: SOL_SOCKET,
+        kind: SCM_CREDENTIALS,
+        data,
+    });
+    Ok(control)
 }
 
 /// Lay `messages` out one after another in the program's control buffer at
