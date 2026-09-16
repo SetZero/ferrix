@@ -14,8 +14,18 @@
 //! `read`, `write`, `send*` and `recv*`, shut down a direction at a time,
 //! polled, and asked their queue lengths and options; named, listened on,
 //! connected to and accepted from; and descriptors passed with a message
-//! (`SCM_RIGHTS`). Credentials passed with one (`SCM_CREDENTIALS`,
-//! `SO_PASSCRED`) come next.
+//! (`SCM_RIGHTS`), and credentials with one (`SCM_CREDENTIALS`, `SO_PASSCRED`).
+//!
+//! # Credentials
+//!
+//! While either end has `SO_PASSCRED` set, every message carries credentials,
+//! as Linux's `unix_maybe_add_creds` has it: the ones an `SCM_CREDENTIALS`
+//! message gave, which `sendmsg` has checked are the sender's own unless it is
+//! root, or else the sender's pid and real ids. A receive on a socket with the
+//! option set is told them in an `SCM_CREDENTIALS` message, before any
+//! descriptors. A stream keeps a boundary after every message that carries
+//! them, so a read on a stream with the option set ends at each one, where
+//! Linux runs on across messages from one sender.
 //!
 //! # A passed descriptor is an open file in a queue
 //!
@@ -142,17 +152,29 @@ pub(crate) struct Passed {
     files: Vec<Arc<OpenFile>>,
     /// How many of them are `AF_UNIX` sockets, counted in [`IN_FLIGHT`].
     sockets: usize,
+    /// Who sent the message, when it carries that.
+    credentials: Option<Ucred>,
 }
 
 impl Passed {
-    /// Files to pass, counted in flight if any is a socket.
-    pub(crate) fn new(files: Vec<Arc<OpenFile>>) -> Passed {
+    /// Files and credentials to pass, counted in flight if any file is a
+    /// socket.
+    pub(crate) fn new(files: Vec<Arc<OpenFile>>, credentials: Option<Ucred>) -> Passed {
         let sockets = files.iter().filter(|file| is_socket(file)).count();
         if sockets > 0 {
             let _ = IN_FLIGHT.fetch_add(sockets, Ordering::AcqRel);
             moved_in_flight();
         }
-        Passed { files, sockets }
+        Passed {
+            files,
+            sockets,
+            credentials,
+        }
+    }
+
+    /// Who sent the message, if it says.
+    pub(crate) fn credentials(&self) -> Option<Ucred> {
+        self.credentials
     }
 
     /// The files, in the order they were sent.
@@ -258,6 +280,9 @@ struct Channel {
     /// or went. See the module documentation for why the buffer's own state
     /// is not enough.
     refused: AtomicBool,
+    /// Whether this direction's reader has `SO_PASSCRED` set, which its
+    /// writers look at to attach credentials.
+    pass_credentials: AtomicBool,
 }
 
 impl fmt::Debug for Channel {
@@ -276,6 +301,7 @@ impl Channel {
             readable: Arc::new(WaitQueue::new()),
             writable: Arc::new(WaitQueue::new()),
             refused: AtomicBool::new(false),
+            pass_credentials: AtomicBool::new(false),
         })
     }
 
@@ -392,6 +418,31 @@ fn credentials_of(process: &Process) -> Ucred {
     }
 }
 
+/// The credentials a message carries when its sender gave none: the calling
+/// process's pid and real ids, as Linux's `scm_set_cred` takes them, and the
+/// overflow ids for a caller that is no process.
+fn sender_credentials() -> Ucred {
+    process::current().map_or_else(unknown_credentials, |process| {
+        let (uid, gid) =
+            process.with_credentials(|credentials| (credentials.user.real, credentials.group.real));
+        Ucred {
+            pid: i32::try_from(process.pid()).unwrap_or(0),
+            uid,
+            gid,
+        }
+    })
+}
+
+/// What a receive with `SO_PASSCRED` reports for a message that carried no
+/// credentials: no pid, and the overflow ids.
+pub(crate) fn unknown_credentials() -> Ucred {
+    Ucred {
+        pid: 0,
+        uid: OVERFLOW_ID,
+        gid: OVERFLOW_ID,
+    }
+}
+
 /// When a wait with `timeout` nanoseconds of patience must give up; zero
 /// waits forever.
 fn deadline(timeout: u64) -> u64 {
@@ -483,6 +534,11 @@ impl Socket {
         listed.push(Arc::downgrade(&socket));
         drop(listed);
         socket
+    }
+
+    /// Whether it has `SO_PASSCRED` set.
+    pub(crate) fn passes_credentials(&self) -> bool {
+        self.options.lock().pass_credentials
     }
 
     /// Its type.
@@ -799,6 +855,16 @@ impl Socket {
                 SocketType::Stream => self.broken(flags),
                 SocketType::SeqPacket | SocketType::Datagram => Errno::EPIPE,
             });
+        }
+        if options.pass_credentials || peer.pass_credentials.load(Ordering::Acquire) {
+            let credentials = passed
+                .as_ref()
+                .and_then(Passed::credentials)
+                .unwrap_or_else(sender_credentials);
+            match passed.as_mut() {
+                Some(some) => some.credentials = Some(credentials),
+                None => passed = Some(Passed::new(Vec::new(), Some(credentials))),
+            }
         }
         let nonblock = nonblock || flags & MSG_DONTWAIT != 0;
         let deadline = deadline(options.send_timeout);
@@ -1228,7 +1294,11 @@ impl Socket {
                 self.receive.buffer.lock().set_capacity(bytes);
                 self.receive.writable.wake_all();
             }
-            SO_PASSCRED => self.options.lock().pass_credentials = int()? != 0,
+            SO_PASSCRED => {
+                let on = int()? != 0;
+                self.options.lock().pass_credentials = on;
+                self.receive.pass_credentials.store(on, Ordering::Release);
+            }
             SO_RCVTIMEO_OLD => self.options.lock().receive_timeout = read_timeval(value, width)?,
             SO_SNDTIMEO_OLD => self.options.lock().send_timeout = read_timeval(value, width)?,
             SO_RCVTIMEO_NEW => {
