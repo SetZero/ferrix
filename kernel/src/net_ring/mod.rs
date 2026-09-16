@@ -58,7 +58,8 @@ const HELLO_PATIENCE_NANOS: u64 = 10_000_000_000;
 const RECHECK_NANOS: u64 = 20_000_000;
 
 /// The completion port's key for the control channel's signals. Keys 1 and 2
-/// are the ring's own bells.
+/// are the ring's own bells, and 4 is the net core saying frames are waiting
+/// ([`net::TRANSMIT_KEY`]).
 const CONTROL_KEY: u64 = 3;
 
 /// How many completions one drain takes at a time.
@@ -340,6 +341,7 @@ fn take_up(start: &Start, message: &ChannelMessage) -> Result<Serving, Refusal> 
     core.set_carrier(index, flags.carrier);
 
     let kernel_port = Port::new();
+    core.wake_on_transmit(index, &kernel_port);
     let ready = {
         let mut bytes = [0_u8; MAX_MESSAGE];
         let written = Message::Ready

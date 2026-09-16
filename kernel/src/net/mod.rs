@@ -35,14 +35,20 @@ pub(crate) mod netlink;
 pub(crate) mod packet;
 pub(crate) mod socket;
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use ferrix_net::stack::{Config, Millis, Outgoing};
 use ferrix_net::{Interface, Stack};
 use ferrix_sync::Once;
 
+use crate::object::port::Port;
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
+
+/// The key a transmit wake-up is queued on a ring's port with: its bells are 1
+/// and 2 and its control channel 3.
+pub(crate) const TRANSMIT_KEY: u64 = 4;
 
 /// Nanoseconds in a millisecond.
 const NANOS_PER_MILLI: u64 = 1_000_000;
@@ -75,6 +81,11 @@ pub(crate) struct NetCore {
     pending: SpinLock<Pending>,
     /// Woken whenever anything in the stack moved.
     progress: WaitQueue,
+    /// The port each driven interface's ring sleeps on, which hears when
+    /// frames are queued for that interface. Without it a frame waits until
+    /// the ring wakes for its driver or its recheck, up to 20 ms, and every
+    /// acknowledgment of a download pays that.
+    transmit_wakers: SpinLock<Vec<(u32, Arc<Port>)>>,
 }
 
 /// The one net core, made on first use.
@@ -86,6 +97,7 @@ pub(crate) fn core() -> &'static NetCore {
         stack: SpinLock::new(new_stack()),
         pending: SpinLock::new(Pending::default()),
         progress: WaitQueue::new(),
+        transmit_wakers: SpinLock::new(Vec::new()),
     })
 }
 
@@ -113,39 +125,75 @@ impl NetCore {
     /// of the stack and act on it afterwards.
     pub(crate) fn with<T>(&self, body: impl FnOnce(&mut Stack, Millis) -> T) -> T {
         let at = now();
-        let answer = {
+        let (answer, queued_for) = {
             let mut stack = self.stack.lock();
             let answer = body(&mut stack, at);
-            self.take_frames(&mut stack, at);
-            answer
+            (answer, self.take_frames(&mut stack, at))
         };
         self.progress.wake_all();
+        self.wake_transmitters(&queued_for);
         answer
     }
 
     /// Let the clock reach now, and move what that produced.
     fn tick(&self) {
         let at = now();
-        {
+        let queued_for = {
             let mut stack = self.stack.lock();
             stack.on_timer(at);
-            self.take_frames(&mut stack, at);
-        }
+            self.take_frames(&mut stack, at)
+        };
         self.progress.wake_all();
+        self.wake_transmitters(&queued_for);
     }
 
-    /// Empty the stack's egress into the pending queue.
+    /// Empty the stack's egress into the pending queue, and answer which
+    /// interfaces got frames.
     ///
     /// Called with the stack locked, and it allocates nothing the stack has
-    /// not already allocated: the frames are moved, not copied.
-    fn take_frames(&self, stack: &mut Stack, at: Millis) {
+    /// not already allocated but that short list: the frames are moved, not
+    /// copied.
+    fn take_frames(&self, stack: &mut Stack, at: Millis) -> Vec<u32> {
         let mut pending = self.pending.lock();
+        let mut interfaces = Vec::new();
         while let Some(outgoing) = stack.poll_transmit(at) {
             if pending.frames.len() >= MAX_PENDING {
                 pending.dropped += 1;
                 continue;
             }
+            if !interfaces.contains(&outgoing.interface) {
+                interfaces.push(outgoing.interface);
+            }
             pending.frames.push(outgoing);
+        }
+        interfaces
+    }
+
+    /// Have `port` told when frames are queued for `interface`.
+    pub(crate) fn wake_on_transmit(&self, interface: u32, port: &Arc<Port>) {
+        let mut wakers = self.transmit_wakers.lock();
+        wakers.retain(|(index, _)| *index != interface);
+        wakers.push((interface, Arc::clone(port)));
+    }
+
+    /// Ring the port of each interface in `interfaces` that has one, with the
+    /// stack unlocked. A port that already holds a packet is left alone: the
+    /// ring drains everything it finds when it wakes, so one is enough.
+    fn wake_transmitters(&self, interfaces: &[u32]) {
+        if interfaces.is_empty() {
+            return;
+        }
+        let ports: Vec<Arc<Port>> = self
+            .transmit_wakers
+            .lock()
+            .iter()
+            .filter(|(index, _)| interfaces.contains(index))
+            .map(|(_, port)| Arc::clone(port))
+            .collect();
+        for port in ports {
+            if port.is_empty() {
+                let _ = port.queue_user(TRANSMIT_KEY, [0, 0]);
+            }
         }
     }
 
@@ -192,6 +240,9 @@ impl NetCore {
     /// Take an interface away, and drop what was waiting for it.
     pub(crate) fn forget_interface(&self, index: u32) {
         let _ = self.with(|stack, _| stack.remove_interface(index));
+        self.transmit_wakers
+            .lock()
+            .retain(|(interface, _)| *interface != index);
         let mut pending = self.pending.lock();
         pending.frames.retain(|frame| frame.interface != index);
     }
