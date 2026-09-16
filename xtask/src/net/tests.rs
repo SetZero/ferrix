@@ -126,8 +126,16 @@ fn the_stubs_serve_what_the_commands_expect() {
 #[test]
 fn the_command_list_is_well_formed() {
     let servers = Servers::start().unwrap();
-    let list = commands(&servers);
-    assert!(!list.is_empty());
+    let without = commands(&servers, false);
+    let list = commands(&servers, true);
+    assert!(!without.is_empty());
+    assert!(
+        without
+            .iter()
+            .all(|command| !command.argv.join(" ").contains("curl")),
+        "no curl without curl in the image"
+    );
+    assert!(list.len() > without.len(), "curl adds its programs");
     for command in &list {
         assert!(!command.argv.is_empty());
         for arg in command.argv {
@@ -144,5 +152,6 @@ fn the_command_list_is_well_formed() {
     assert!(joined.contains(NAME));
     // The address is the gateway's to give, by DHCP, not the list's to name.
     assert!(joined.contains("udhcpc -i eth0"));
+    assert!(joined.contains(&format!("curl -sS http://{NAME}:")));
     assert!(!joined.contains("10.0.2.15/24"));
 }
