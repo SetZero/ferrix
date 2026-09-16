@@ -301,6 +301,19 @@ jobs:
       - name: Arm the commit hooks
         run: git config core.hooksPath .githooks
 
+      # ferrousli's math tests judge every function against libc-test's
+      # tables, read from a checkout at FERROUSLI_LIBC_TEST, never copied
+      # (ferrousli/src/math/mtest.rs). This is the commit the landings are
+      # gated against; move it here and in mtest.rs together.
+      - name: Fetch libc-test's tables
+        env:
+          LIBC_TEST_COMMIT: 7b95dfa5f5d5ca4d949221e0228ccc290bacc14e
+        run: |
+          git clone --quiet https://repo.or.cz/libc-test.git "$RUNNER_TEMP/libc-test"
+          git -C "$RUNNER_TEMP/libc-test" checkout --quiet --detach "$LIBC_TEST_COMMIT"
+          test "$(git -C "$RUNNER_TEMP/libc-test" rev-parse HEAD)" = "$LIBC_TEST_COMMIT"
+          echo "FERROUSLI_LIBC_TEST=$RUNNER_TEMP/libc-test" >> "$GITHUB_ENV"
+
       - name: cargo xtask check --ferrousli
         run: cargo xtask check --ferrousli
 
