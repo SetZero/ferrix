@@ -515,6 +515,43 @@ struct Watched {
 /// `kernel` is the ELF the image was built from, which is what a panic
 /// report's backtrace addresses are resolved against.
 fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> Result<Watched> {
+    watch_hooked(arch, image, kernel, args, until, None)
+}
+
+/// [`watch`], calling `at_marker` with the lines so far once `until` has been
+/// printed, while QEMU is still running, and returning the lines. A boot that
+/// panicked or never printed `until` is an error, as in `test_boot`.
+pub(crate) fn watch_then(
+    arch: Arch,
+    image: &Path,
+    kernel: &Path,
+    args: &Args,
+    until: &str,
+    mut at_marker: impl FnMut(&[String]) -> Result<()>,
+) -> Result<Vec<String>> {
+    let watched = watch_hooked(arch, image, kernel, args, until, Some(&mut at_marker))?;
+    match watched.verdict {
+        Verdict::Reached => Ok(watched.lines),
+        Verdict::Panicked => Err(panicked(arch, &watched.log)),
+        Verdict::Silent => Err(Error::new(format!(
+            "{arch}: `{until}` was not printed within {}s.\n  Serial output is in {}",
+            args.timeout,
+            watched.log.display()
+        ))),
+    }
+}
+
+/// The hook [`watch_then`] runs at the marker.
+type AtMarker<'a> = &'a mut dyn FnMut(&[String]) -> Result<()>;
+
+fn watch_hooked(
+    arch: Arch,
+    image: &Path,
+    kernel: &Path,
+    args: &Args,
+    until: &str,
+    at_marker: Option<AtMarker<'_>>,
+) -> Result<Watched> {
     let symbols = Symbolizer::open(kernel);
     let (mut command, network) = qemu_command(arch, image, args, &Console::Owned)?;
     let _ = command.stdout(Stdio::piped()).stderr(Stdio::inherit());
@@ -599,6 +636,12 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
     if verdict == Verdict::Panicked {
         take_panic_report(&receiver, &mut log, symbols.as_ref())?;
     }
+    // While QEMU still runs, so the hook can ask it things; a hook that fails
+    // still lets QEMU be stopped and the log be kept.
+    let hooked = match at_marker {
+        Some(hook) if verdict == Verdict::Reached => hook(&lines),
+        _ => Ok(()),
+    };
     let status = finish(&mut child, verdict != Verdict::Silent)?;
     drop(receiver);
     let _ = reader.join();
@@ -621,6 +664,7 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
         )));
     }
 
+    hooked?;
     Ok(Watched {
         lines,
         verdict,
@@ -710,7 +754,11 @@ fn qemu_command(
         "-smp",
         &args.smp.to_string(),
         "-display",
-        "none",
+        if args.display && args.command.as_deref() == Some("run") {
+            "default"
+        } else {
+            "none"
+        },
         "-monitor",
         "none",
     ]);
@@ -813,6 +861,7 @@ fn qemu_command(
         "virtio-rng-pci,disable-legacy=on,iommu_platform=on"
     };
     let _ = command.args(["-device", rng]);
+    attach_display(&mut command, arch, args);
     attach_test_disk(&mut command, arch)?;
     attach_btrfs_disk(&mut command, arch)?;
     let network = attach_network(&mut command, arch, args)?;
@@ -837,6 +886,26 @@ fn qemu_command(
     }
 
     Ok((command, network))
+}
+
+/// The display of iteration 1 (`docs/DISPLAY.md` §3), when `--display` or
+/// `test-display` asks for it: a virtio-gpu device beside the firmware's own
+/// head, so the panic screen keeps the head it has, through the IOMMU like
+/// every other PCI virtio device; and QMP, when a port was picked for it.
+/// ARMv7-A's machine has no virtio-gpu.
+fn attach_display(command: &mut Command, arch: Arch, args: &Args) {
+    if args.display && arch != Arch::Armv7a {
+        let _ = command.args([
+            "-device",
+            &format!(
+                "virtio-gpu-pci,id={},disable-legacy=on,iommu_platform=on,xres=1024,yres=768",
+                crate::display::DEVICE_ID
+            ),
+        ]);
+    }
+    if let Some(port) = args.qmp_port {
+        let _ = command.args(["-qmp", &format!("tcp:127.0.0.1:{port},server=on,wait=off")]);
+    }
 }
 
 /// The MAC address the guest's virtio-net device carries.

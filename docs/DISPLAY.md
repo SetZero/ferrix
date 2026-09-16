@@ -216,16 +216,27 @@ from `BootInfo`. What changes is what a person sees:
 
 ## 3. QEMU and xtask
 
-* **Devices.** `-device virtio-gpu-pci,id=gpu0,disable-legacy=on,iommu_platform=on`
-  on x86-64 and AArch64, only for the display commands and tests, so no
-  existing gate changes. ARMv7-A's machine has no PCI virtio-gpu in this tree's
-  configuration and doesn't take part (the roadmap says so already).
-* **`test-display`.** Boots with `--init` set to the compositor's binary, waits
-  for its marker line on serial, then asks QEMU's QMP socket for
-  `screendump filename=… device=gpu0 format=png`. QMP is a `-qmp unix:` socket
-  on Linux and TCP on Windows. The test decodes the image and compares every
-  pixel. A negative control fills one pixel differently behind a flag and
-  requires the check to fail on exactly that pixel.
+* **Devices.** `-device virtio-gpu-pci,id=gpu0,disable-legacy=on,iommu_platform=on,xres=1024,yres=768`
+  on x86-64 and AArch64, only under `--display` and `test-display`, so no
+  existing gate changes. The size differs from the firmware's usual 1280×800,
+  so the kernel's `display` boot line says which device the firmware drew
+  on. ARMv7-A's machine has no PCI virtio-gpu in this tree's configuration
+  and doesn't take part (the roadmap says so already).
+* **`test-display`.** Builds `compositor/blank` as init and boots it with the
+  device, waits for a line starting `compositor: `, then asks QEMU over QMP
+  (TCP on localhost on every host) for `screendump device=gpu0 head=0` in
+  QEMU's default PPM, and compares every pixel. A negative control, the
+  program built with `negative-control`, fills pixel (0, 0) differently, and
+  the check must fail on exactly that pixel. If the program prints
+  `compositor: failed`, the test stops at once and reports what QEMU's first
+  console showed.
+* **What the first run showed (2026-09-16, before L5 and L6).** On both
+  architectures the program ran as init and failed as it should, with no
+  `/dev/dri/card0`, and the QMP screendump and PPM parse worked. On x86-64 the
+  firmware framebuffer is q35's VGA (`display 1280x800`). **On AArch64 it is
+  the virtio-gpu** (`display 1024x768`): AAVMF's `VirtioGpuDxe` took the boot
+  framebuffer over `ramfb`, which is §2.4's hazard. The fix is decided before
+  L5.
 * **`run --display`** swaps `-display none` for the host's display backend.
   That's how the customer sees each iteration. Input injection
   (`input-send-event`) comes with the input iteration.

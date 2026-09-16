@@ -43,6 +43,7 @@ mod busybox;
 mod cargo;
 mod check;
 mod console;
+mod display;
 mod fat;
 mod flash;
 mod gateway;
@@ -110,6 +111,7 @@ COMMANDS:
     test-shell    Boot with a static busybox built in and require its script's output
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     test-net      Boot with a network device and require busybox to configure it and fetch a file
+    test-display  Boot compositor/blank as init with a virtio-gpu, and require its colour on every pixel
     check         Run every quality gate (fmt, clippy, layering, audits)
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
@@ -129,6 +131,7 @@ OPTIONS:
     --net                                run, test-boot, test-shell, test-vfs: a virtio-net device,
                                          behind xtask's own NAT gateway (10.0.2.2, guest 10.0.2.15);
                                          test-net turns it on whether or not it is given
+    --display                            run, test-boot: a virtio-gpu device; run: and a window showing it
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --zinc                               check: also zinc's fmt, clippy, tests and pty completion test
@@ -219,6 +222,7 @@ fn run() -> Result<()> {
         }
         "test-vfs" => test_vfs(&args),
         "test-net" => test_net(&args),
+        "test-display" => display::test_display(&args),
         "check" => check::run(&args),
         "model-doc" => check::model_doc(),
         "busybox" => busybox::build(args.single_arch()?).map(|_| ()),

@@ -34,6 +34,15 @@ names the part of Hyprland or hyprlang it follows.
   interprets (`windowrule`, `monitor`, `workspace`, `exec-once`, `env`, …),
   with Hyprland's diagnostics. `Config::keyword` is `hyprctl keyword`. Fuzzed
   by `fuzz/fuzz_targets/hyprconf_parse.rs`.
+* **`blank`** is iteration 1 on screen (`docs/DISPLAY.md`): it opens
+  `/dev/dri/card0`, sets the connected connector's preferred mode with the
+  legacy calls, fills a dumb buffer with `0x1E1E2E` and prints
+  `compositor: scanout <mode> <W>x<H> colour 0x1e1e2e`, or
+  `compositor: failed: <why>`, then waits, since it runs as init.
+  `cargo xtask test-display` boots it and checks QEMU's screendump pixel by
+  pixel; the `negative-control` feature draws one pixel wrong for the check
+  to catch. The card code builds on Linux only; the choice of mode and CRTC
+  and the fill are tested on any host.
 
 ## Testing
 

@@ -62,6 +62,12 @@ pub(crate) struct Args {
     /// so that the test says the same thing on a machine with no network.
     /// `None` is the host's own resolver.
     pub(crate) resolver: Option<std::net::SocketAddrV4>,
+    /// `--display`: a virtio-gpu device on the bus, and for `run` a window
+    /// that shows it. `test-display` turns it on.
+    pub(crate) display: bool,
+    /// Where QEMU serves QMP. No flag sets it: `test-display` picks a port to
+    /// ask QEMU for its screendump over.
+    pub(crate) qmp_port: Option<u16>,
 }
 
 impl Args {
@@ -87,6 +93,7 @@ impl Args {
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
                 "--net" => args.net = true,
+                "--display" => args.display = true,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
                 "--smp" => args.smp = number(&mut items, "--smp")?,
                 "--memory" => args.memory = number(&mut items, "--memory")?,
