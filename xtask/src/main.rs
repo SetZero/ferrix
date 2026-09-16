@@ -7,6 +7,7 @@
 //! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS] [--reset] [--net]
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
+//! cargo xtask test-threads --arch all [--timeout SECONDS]
 //! cargo xtask check     [--fast] [--ferrousli] [--zinc] [--miri]
 //! cargo xtask busybox   [--arch x86_64]
 //! cargo xtask flash     [--arch armv7a] [--to MOUNT]
@@ -57,6 +58,7 @@ mod serial;
 mod shell;
 mod symbolize;
 mod test_disk;
+mod threads;
 mod vfs;
 mod wsl;
 mod zinc;
@@ -112,6 +114,7 @@ COMMANDS:
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     test-net      Boot with a network device and require busybox to configure it and fetch a file
     test-display  Boot compositor/blank as init with a virtio-gpu, and require its colour on every pixel
+    test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
     check         Run every quality gate (fmt, clippy, layering, audits)
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
@@ -223,6 +226,7 @@ fn run() -> Result<()> {
         "test-vfs" => test_vfs(&args),
         "test-net" => test_net(&args),
         "test-display" => display::test_display(&args),
+        "test-threads" => threads::test_threads(&args),
         "check" => check::run(&args),
         "model-doc" => check::model_doc(),
         "busybox" => busybox::build(args.single_arch()?).map(|_| ()),

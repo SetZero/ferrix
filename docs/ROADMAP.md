@@ -1346,8 +1346,12 @@ that took what it looked at, a record read that found the last record's tail:
   and `fork` take a heap lock that may sleep, so a fork never copies a heap
   half shrunk; and an unmap on one processor waits for a copy on another to
   let go of its page. `/proc/<pid>/task` lists each thread with its `status`,
-  `stat` and `comm`, and `Threads:` counts them. Left: the exit test on three
-  architectures.
+  `stat` and `comm`, and `Threads:` counts them. And the exit test runs:
+  `cargo xtask test-threads` boots a static musl Rust program of five threads
+  using `std::thread`, `Mutex` and `mpsc` as init on all three architectures,
+  which counts its threads through `/proc/self`, with a build that expects
+  one thread too many failing on that count. It is linked at a fixed address;
+  a static PIE, rustc's default for musl, is not loaded yet.
 * **Three stand-ins, each written down where it lives.** The console is the one
   terminal, its line discipline fed by a thread that looks every twenty
   milliseconds rather than waiting on the receive interrupt, until stage 15

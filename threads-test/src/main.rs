@@ -1,0 +1,157 @@
+//! Stage 7's threads exit test: a static musl Rust program that uses
+//! `std::thread`, `Mutex` and `mpsc` the way `rustc` does, run as init by
+//! `cargo xtask test-threads` on all three architectures.
+//!
+//! Every step prints a line and then `<step> ok`, and the program ends with
+//! `threads: all ok` and status 0, or `threads: FAILED <what>` and status 1.
+//! Built with the `negative-control` feature it expects one thread more under
+//! `/proc/self` than it has, and must fail on exactly that step.
+//!
+//! The steps:
+//!
+//! * **spawn**: four named threads, which each wait at a barrier before they
+//!   do anything, so that all five are alive for the next step;
+//! * **proc**: `/proc/self/status` counts five threads, `/proc/self/task`
+//!   lists five, and each one's `status` names this process in `Tgid`;
+//! * **channel**: once let past the barrier, each thread sends its index;
+//! * **join**: each thread's value comes back through `join`;
+//! * **mutex**: four threads' thousand increments each, under one `Mutex`,
+//!   are all there.
+
+use std::fs;
+use std::sync::{Arc, Barrier, Mutex, mpsc};
+use std::thread;
+
+/// Threads the program spawns besides its main one.
+const THREADS: u64 = 4;
+
+/// Increments each thread makes under the mutex.
+const INCREMENTS: u64 = 1000;
+
+/// The threads `/proc/self` is expected to count: every spawned thread and the
+/// main one, and one more for the negative control.
+const EXPECTED_THREADS: u64 = if cfg!(feature = "negative-control") {
+    THREADS + 2
+} else {
+    THREADS + 1
+};
+
+/// Say what failed and end with status 1.
+fn fail(what: &str) -> ! {
+    println!("threads: FAILED {what}");
+    std::process::exit(1)
+}
+
+/// The value of the `label:` line of a `/proc` status file, trimmed.
+fn field<'a>(status: &'a str, label: &str) -> Option<&'a str> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix(label))
+        .and_then(|rest| rest.strip_prefix(':'))
+        .map(str::trim)
+}
+
+/// The **proc** step: count this process's threads the three ways `/proc`
+/// tells them, while all of them are alive.
+fn check_proc() {
+    let pid = std::process::id().to_string();
+    let status = fs::read_to_string("/proc/self/status")
+        .unwrap_or_else(|_| fail("/proc/self/status could not be read"));
+    let counted = field(&status, "Threads").and_then(|n| n.parse::<u64>().ok());
+    if counted != Some(EXPECTED_THREADS) {
+        println!("threads: /proc/self/status says Threads: {counted:?}");
+        fail("/proc/self/status does not count every thread");
+    }
+
+    let tasks: Vec<String> = fs::read_dir("/proc/self/task")
+        .unwrap_or_else(|_| fail("/proc/self/task could not be listed"))
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    if u64::try_from(tasks.len()).ok() != Some(EXPECTED_THREADS) {
+        println!("threads: /proc/self/task lists {tasks:?}");
+        fail("/proc/self/task does not list every thread");
+    }
+    if !tasks.contains(&pid) {
+        fail("/proc/self/task does not list the main thread under the pid");
+    }
+    for tid in &tasks {
+        let path = format!("/proc/self/task/{tid}/status");
+        let status = fs::read_to_string(&path)
+            .unwrap_or_else(|_| fail("a thread's status under /proc/self/task could not be read"));
+        if field(&status, "Tgid") != Some(pid.as_str()) || field(&status, "Pid") != Some(tid) {
+            println!(
+                "threads: {path} gives Tgid {:?} and Pid {:?}",
+                field(&status, "Tgid"),
+                field(&status, "Pid")
+            );
+            fail("a thread's status does not name its process and itself");
+        }
+    }
+}
+
+fn main() {
+    println!("threads: spawn {THREADS}");
+    let counter = Arc::new(Mutex::new(0_u64));
+    let barrier = Arc::new(Barrier::new(
+        usize::try_from(THREADS + 1).unwrap_or(usize::MAX),
+    ));
+    let (tx, rx) = mpsc::channel();
+    let mut handles = Vec::new();
+    for index in 0..THREADS {
+        let counter = Arc::clone(&counter);
+        let barrier = Arc::clone(&barrier);
+        let tx = tx.clone();
+        let handle = thread::Builder::new()
+            .name(format!("worker-{index}"))
+            .spawn(move || {
+                let _ = barrier.wait();
+                for _ in 0..INCREMENTS {
+                    *counter.lock().unwrap_or_else(|_| fail("a poisoned mutex")) += 1;
+                }
+                tx.send(index)
+                    .unwrap_or_else(|_| fail("a send to a live channel"));
+                index * 10
+            })
+            .unwrap_or_else(|error| {
+                println!("threads: spawn error {error}");
+                fail("thread::spawn")
+            });
+        handles.push(handle);
+    }
+    drop(tx);
+    println!("threads: spawn ok");
+
+    println!("threads: proc");
+    check_proc();
+    println!("threads: proc ok");
+    let _ = barrier.wait();
+
+    println!("threads: channel");
+    let mut received: Vec<u64> = rx.iter().collect();
+    received.sort_unstable();
+    if received != (0..THREADS).collect::<Vec<_>>() {
+        fail("the channel did not carry one message from each thread");
+    }
+    println!("threads: channel ok");
+
+    println!("threads: join");
+    let joined: u64 = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap_or_else(|_| fail("a thread panicked")))
+        .sum();
+    if joined != (0..THREADS).map(|index| index * 10).sum::<u64>() {
+        fail("join did not return each thread's value");
+    }
+    println!("threads: join ok");
+
+    println!("threads: mutex");
+    let total = *counter.lock().unwrap_or_else(|_| fail("a poisoned mutex"));
+    if total != THREADS * INCREMENTS {
+        fail("the mutex lost increments");
+    }
+    println!("threads: mutex ok");
+
+    println!("threads: all ok");
+    std::process::exit(0)
+}
