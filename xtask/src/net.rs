@@ -426,12 +426,15 @@ fn read_name(query: &[u8], at: usize) -> Option<(String, usize)> {
 /// The arguments hold ports the host's kernel chose a moment ago, so the
 /// strings are made here and leaked: the list is built once per run, read
 /// until the run ends, and lives as long as the process does anyway.
-pub(crate) fn commands(servers: &Servers) -> Vec<Command> {
+///
+/// With `curl`, the image carries the curl built against ferrousli, and it
+/// fetches the same two files `wget` does.
+pub(crate) fn commands(servers: &Servers, curl: bool) -> Vec<Command> {
     let http = servers.http.port();
     let udp = servers.udp.port();
     let digest = cksum(&big_body());
 
-    vec![
+    let mut commands = vec![
         // The interface the ring-3 driver brought up, configured by DHCP as a
         // distribution configures one: `udhcpc` asks over packet sockets, and
         // the image's `default.script` applies the lease over rtnetlink with
@@ -536,6 +539,40 @@ pub(crate) fn commands(servers: &Servers) -> Vec<Command> {
             argv: &["sh", "-c", "arp -n; exit 7"],
             status: 7,
             expect: Expect::Shaped(&["* (10.0.2.2) at *on eth0"]),
+        },
+    ];
+    if curl {
+        commands.extend(curl_commands(http, digest));
+    }
+    commands
+}
+
+/// curl's half of [`commands`]: a file by name and a file byte for byte, as
+/// `wget` fetches them, through a C library, a resolver and a TLS-capable
+/// HTTP stack that are not busybox's.
+///
+/// Each through `sh -c`, because the kernel starts a command's `argv[0]` as a
+/// busybox applet, and curl is a program of its own that the shell finds in
+/// `/bin`.
+fn curl_commands(http: u16, digest: u32) -> Vec<Command> {
+    vec![
+        Command {
+            argv: leak_argv(vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                format!("curl -sS http://{NAME}:{http}{HELLO_PATH}"),
+            ]),
+            status: 0,
+            expect: Expect::Lines(&[HELLO_BODY]),
+        },
+        Command {
+            argv: leak_argv(vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                format!("curl -sS http://10.0.2.2:{http}{BIG_PATH} | cksum"),
+            ]),
+            status: 0,
+            expect: Expect::Lines(leak_argv(vec![format!("{digest} {BIG_BYTES}")])),
         },
     ]
 }
