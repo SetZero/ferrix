@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 724 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 725 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 7 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
-| broken | 13 | present, but it fails to link or gives a wrong answer |
+| broken | 12 | present, but it fails to link or gives a wrong answer |
 | stubbed | 16 | defined in `src/stubs.rs`, which ends the program |
 | absent | 483 | not there |
 
-519 interfaces are missing in one of the last four ways. 116 of them are
+518 interfaces are missing in one of the last four ways. 116 of them are
 already written on the three unlanded branches of 2026-09-13
 (`ferrousli-threads`, `ferrousli-math`, `ferrousli-misc`), which were
 committed without a build and are not reviewed.
@@ -45,7 +45,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Complex arithmetic | 69 | 66 | 0 | 8 | `complex.h` over the math library, `creal` and `cimag` as functions |
 | Locales, messages and conversion | 32 | 24 | 0 | 15 | the `gettext` family with `.mo` catalogues 5; `iconv` 5; `catopen`, `catgets`, `catclose` 2; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1 |
 | Files, directories and I/O multiplexing | 46 | 1 | 0 | 1 | `posix_getdents` |
-| Processes, identity and the system | 103 | 11 | 0 | 8 | `confstr`, `pathconf`, `fpathconf` 2; `setresuid`, `setresgid` 1; `nice`, `lockf` 1; `posix_close` 1; `fmtmsg` 1; `encrypt` and `setkey` 2. `crypt`'s DES hash is in the link-breakers |
+| Processes, identity and the system | 103 | 10 | 0 | 8 | `confstr`, `pathconf`, `fpathconf` 2; `setresuid`, `setresgid` 1; `nice`, `lockf` 1; `posix_close` 1; `fmtmsg` 1; `encrypt` and `setkey` 2 |
 | Spawning | 25 | 25 | 0 | 7 | the `posix_spawn` family on `clone(CLONE_VM\|CLONE_VFORK)`, which lets `system` and `popen` stop forking, 5; `_Fork` 1; `fexecve` 1 |
 | Signals and non-local jumps | 28 | 4 | 0 | 2 | `psignal`, `psiginfo` 1; `sig2str`, `str2sig` 1 |
 | Time and clocks | 29 | 4 | 1 | 3 | `getdate` and `getdate_err` 2; `timespec_get` 1. `pthread_getcpuclockid` comes with `ferrousli-threads` |
@@ -57,17 +57,19 @@ new subsystem. Every area's missing names are in the index at the end.
 | Patterns, paths and search | 23 | 22 | 15 | 13 | landing `ferrousli-misc`: `search.h`, `libgen.h`, `glob` 3; `regex.h`, replacing four stubs, 5; `wordexp` 3; `nftw` 2 |
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 5 | 0 | 2 | `dlfcn.h` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here |
-| Across areas | | | | 7 | the link-breakers below 4; POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **519** | **116** | **160** | |
+| Across areas | | | | 4 | the classifier helpers below 1, with the math stubs; POSIX.1-2024's declarations in `include/` 3 |
+| **All** | **1243** | **518** | **116** | **157** | |
 
 ## Present but broken
 
 These look present and are not, which makes them worse than a missing name: a
 program compiles against the header and then fails to link, or runs and gets
-the wrong answer. Four points remain.
+the wrong answer. One is left, 1 point, and it lands with the math stubs.
 
-`assert` was in this list. `__assert_fail` is now defined, so a false assertion
-writes its diagnostic and aborts instead of failing to link.
+`assert` and `crypt` were both in this list. `__assert_fail` is now defined, so
+`assert` links, and `crypt` computes the traditional DES hash, ported from
+musl's `crypt_des.c`, for the two-character salt POSIX requires it to take;
+`$2*$` blowfish still gives `"*"`.
 
 * **`fpclassify`** calls `__fpclassify`, `__fpclassifyf` or `__fpclassifyl` for
   every type, and **`isinf`, `isnan`, `isnormal`, `isfinite` and `signbit`**
@@ -75,10 +77,6 @@ writes its diagnostic and aborts instead of failing to link.
   `isgreaterequal`, `isless`, `islessequal`, `islessgreater` and
   `isunordered`**, whose `long double` forms test `isnan`. None of those four
   helpers exists, so those uses fail to link. 1 point.
-* **`crypt`** gives `"*"`, its failure value, for a salt of two characters from
-  `[a-zA-Z0-9./]`. POSIX leaves the algorithm implementation-defined, but
-  requires `crypt` to take exactly such a salt, and the traditional DES hash is
-  what every other C library computes for it. 3 points.
 
 ## Where Ferrix differs from Linux
 
@@ -289,8 +287,7 @@ interface.
 | `<sys/utsname.h>` | present (1) | `uname` |
 | `<sys/wait.h>` | present (3) | `wait`, `waitid`, `waitpid` |
 | `<syslog.h>` | present (4) | `closelog` (XSI), `openlog` (XSI), `setlogmask` (XSI), `syslog` (XSI) |
-| `<unistd.h>` | present (78) | `_exit`, `access`, `alarm`, `chdir`, `chown`, `close`, `dup`, `dup2`, `dup3`, `environ`, `execl`, `execle`, `execlp`, `execv`, `execve`, `execvp`, `faccessat`, `fchdir`, `fchown`, `fchownat`, `fdatasync` (SIO), `fork`, `fsync` (FSC), `ftruncate`, `getcwd`, `getegid`, `getentropy`, `geteuid`, `getgid`, `getgroups`, `gethostid` (XSI), `gethostname`, `getlogin`, `getlogin_r`, `getopt`, `getpgid`, `getpgrp`, `getpid`, `getppid`, `getresgid` (XSI), `getresuid` (XSI), `getsid`, `getuid`, `lchown`, `link`, `linkat`, `lseek`, `optarg`, `opterr`, `optind`, `optopt`, `pause`, `pipe`, `pipe2`, `pread`, `pwrite`, `read`, `readlink`, `readlinkat`, `rmdir`, `setegid`, `seteuid`, `setgid`, `setpgid`, `setregid` (XSI), `setreuid` (XSI), `setsid`, `setuid`, `sleep`, `swab` (XSI), `symlink`, `symlinkat`, `sync` (XSI), `sysconf`, `truncate`, `unlink`, `unlinkat`, `write` |
-| `<unistd.h>` | broken (1) | `crypt` (XSI): the traditional DES hash (two-character salt) returns "*" |
+| `<unistd.h>` | present (79) | `_exit`, `access`, `alarm`, `chdir`, `chown`, `close`, `crypt` (XSI), `dup`, `dup2`, `dup3`, `environ`, `execl`, `execle`, `execlp`, `execv`, `execve`, `execvp`, `faccessat`, `fchdir`, `fchown`, `fchownat`, `fdatasync` (SIO), `fork`, `fsync` (FSC), `ftruncate`, `getcwd`, `getegid`, `getentropy`, `geteuid`, `getgid`, `getgroups`, `gethostid` (XSI), `gethostname`, `getlogin`, `getlogin_r`, `getopt`, `getpgid`, `getpgrp`, `getpid`, `getppid`, `getresgid` (XSI), `getresuid` (XSI), `getsid`, `getuid`, `lchown`, `link`, `linkat`, `lseek`, `optarg`, `opterr`, `optind`, `optopt`, `pause`, `pipe`, `pipe2`, `pread`, `pwrite`, `read`, `readlink`, `readlinkat`, `rmdir`, `setegid`, `seteuid`, `setgid`, `setpgid`, `setregid` (XSI), `setreuid` (XSI), `setsid`, `setuid`, `sleep`, `swab` (XSI), `symlink`, `symlinkat`, `sync` (XSI), `sysconf`, `truncate`, `unlink`, `unlinkat`, `write` |
 | `<unistd.h>` | absent (9) | `confstr`, `encrypt`, `fpathconf`, `lockf` (XSI), `nice` (XSI), `pathconf`, `posix_close`, `setresgid` (XSI), `setresuid` (XSI) |
 
 ### Spawning
