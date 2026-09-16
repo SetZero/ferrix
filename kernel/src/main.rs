@@ -850,6 +850,7 @@ fn check_net() {
         report.interfaces, report.bytes, report.connections, report.refusals,
     );
     check_net_ring();
+    check_netlink();
 }
 
 /// The net ring, played from both ends with no network device: the whole
@@ -870,6 +871,31 @@ fn check_net_ring() {
         "  netring  {} HELLOs refused as specified, {} slots posted for a driver to fill, \
          {} frames taken up the stack and {} answered back down it",
         report.refusals, report.posted, report.received, report.sent,
+    );
+}
+
+/// `AF_NETLINK`, over the same loopback: the requests `ip` makes are answered
+/// from the net core, and what they changed is in the next dump.
+///
+/// Here, straight after the net core's own check, because it is the same
+/// subsystem reached through a different family: a socket, a buffer of
+/// requests, and the tables `libs/net` holds. Nothing about it touches a
+/// device either.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_netlink() {
+    let report = match net::netlink::check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(catalog::NETLINK, "netlink self-check failed: {problem}"),
+    };
+    if let Some(why) = report.skipped {
+        println!("  netlink  not checked: {why}");
+        return;
+    }
+    println!(
+        "  netlink  {} links, {} addresses and {} routes dumped, an address and a route added \
+         and taken away again, {} requests refused as specified",
+        report.links, report.addresses, report.routes, report.refusals,
     );
 }
 

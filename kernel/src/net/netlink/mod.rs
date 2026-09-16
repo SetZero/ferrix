@@ -32,6 +32,7 @@
 //! the stack's tables and writing bytes, which is the rule
 //! [`crate::net::NetCore::with`] states.
 
+pub(crate) mod check;
 mod route;
 
 use alloc::collections::VecDeque;

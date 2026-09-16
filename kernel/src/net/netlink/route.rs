@@ -18,6 +18,16 @@
 //! `RTM_NEWLINK` on an interface that exists is treated as `RTM_SETLINK`,
 //! because that is the message `ip link set dev eth0 up` actually sends;
 //! creating an interface has nowhere to go and is refused.
+//!
+//! # A get is a dump
+//!
+//! Every `RTM_GET*` answers with the whole table and its `NLMSG_DONE`, whether
+//! or not `NLM_F_DUMP` was set, because there are no filters here yet: the
+//! attributes that narrow a dump to one link or one family are read by nobody.
+//! A reader that asked for one entry therefore has one more message to walk
+//! than it expected, which every netlink reader can do -- it is the same shape
+//! it would get from a kernel whose table holds one row. Filters belong with
+//! the first program that sends one.
 
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::netlink::{

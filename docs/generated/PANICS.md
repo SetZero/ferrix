@@ -65,6 +65,7 @@ Causes are listed most likely first.
 | [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
 | [FX-1150](#fx-1150) | the net core did not carry a packet round its own loopback |
 | [FX-1151](#fx-1151) | the net ring did not carry a frame between the kernel and a driver |
+| [FX-1152](#fx-1152) | AF_NETLINK did not answer the requests `ip` makes |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -1317,6 +1318,40 @@ driver does.
 
 See: kernel/src/net_ring/check.rs; kernel/src/net_ring/mod.rs; libs/netring;
 docs/NET-RING.md.
+
+<a id="fx-1152"></a>
+
+## FX-1152 — AF_NETLINK did not answer the requests `ip` makes
+
+`AF_NETLINK` is how a program configures an interface: `ip` uses nothing else,
+and `ifconfig`, `route`, `udhcpc` and `getifaddrs` all end at the same socket.
+The check opens one, binds it, and requires a dump of the links to hold the
+loopback with its name and its up and loopback flags, an address and a route
+added through it to appear in the next dump and to be gone after they are
+removed, a request nothing answers to earn NLMSG_ERROR with EOPNOTSUPP, and a
+message too short for its fixed header to earn EINVAL -- with every reply
+addressed to the port getsockname reported, which is what libnetlink checks
+before it believes any of it.
+
+1. A reply could not be walked back: `libs/netlink`'s builder and its walk
+   disagree about a length or the padding between messages, which no host test
+   covers if the two changed together.
+2. A dump answered with nothing, or without the loopback: `RTM_GETLINK` no
+   longer reaches the net core's interface list, or `Stack::new` stopped adding
+   the loopback.
+3. An address or a route was accepted and did not appear, or was removed and
+   stayed: the handler read the wrong attribute, or acted on a different
+   interface from the one the message named.
+4. A refusal came back as something else: the order of the checks in
+   `kernel/src/net/netlink/route.rs` changed, so an unknown type is answered
+   before it is refused.
+5. A reply was addressed to another port or another sequence number: the
+   socket's port identifier is not what `getsockname` reports, or a reply no
+   longer echoes the request's sequence number -- which is silent breakage,
+   because a program filters those replies out and then waits for ever.
+
+See: kernel/src/net/netlink/check.rs; kernel/src/net/netlink/route.rs;
+libs/netlink; docs/ROADMAP.md.
 
 <a id="fx-9001"></a>
 

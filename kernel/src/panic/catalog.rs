@@ -825,6 +825,39 @@ pub(crate) static NET_RING: Explanation = Explanation {
           docs/NET-RING.md",
 };
 
+/// For `check_netlink` in `main.rs`, when the netlink self-check fails.
+pub(crate) static NETLINK: Explanation = Explanation {
+    code: "FX-1152",
+    title: "AF_NETLINK did not answer the requests `ip` makes",
+    meaning: "`AF_NETLINK` is how a program configures an interface: `ip` uses nothing else, and \
+              `ifconfig`, `route`, `udhcpc` and `getifaddrs` all end at the same socket. The \
+              check opens one, binds it, and requires a dump of the links to hold the loopback \
+              with its name and its up and loopback flags, an address and a route added through \
+              it to appear in the next dump and to be gone after they are removed, a request \
+              nothing answers to earn NLMSG_ERROR with EOPNOTSUPP, and a message too short for \
+              its fixed header to earn EINVAL -- with every reply addressed to the port \
+              getsockname reported, which is what libnetlink checks before it believes any of \
+              it.",
+    causes: &[
+        "A reply could not be walked back: `libs/netlink`'s builder and its walk disagree about \
+         a length or the padding between messages, which no host test covers if the two changed \
+         together.",
+        "A dump answered with nothing, or without the loopback: `RTM_GETLINK` no longer reaches \
+         the net core's interface list, or `Stack::new` stopped adding the loopback.",
+        "An address or a route was accepted and did not appear, or was removed and stayed: the \
+         handler read the wrong attribute, or acted on a different interface from the one the \
+         message named.",
+        "A refusal came back as something else: the order of the checks in `kernel/src/net/\
+         netlink/route.rs` changed, so an unknown type is answered before it is refused.",
+        "A reply was addressed to another port or another sequence number: the socket's port \
+         identifier is not what `getsockname` reports, or a reply no longer echoes the request's \
+         sequence number -- which is silent breakage, because a program filters those replies \
+         out and then waits for ever.",
+    ],
+    see: "kernel/src/net/netlink/check.rs; kernel/src/net/netlink/route.rs; libs/netlink; \
+          docs/ROADMAP.md",
+};
+
 /// For `check_devmgr` in `main.rs`, when `devmgr::start` fails.
 pub(crate) static STAGE10_DEVMGR: Explanation = Explanation {
     code: "FX-1006",
@@ -1475,6 +1508,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE11_MOUNT,
     &NET_CORE,
     &NET_RING,
+    &NETLINK,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,
