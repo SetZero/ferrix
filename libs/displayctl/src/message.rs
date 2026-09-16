@@ -77,6 +77,10 @@ pub const MAX_BYTES: usize = HELLO_BYTES;
 /// The largest width or height a mode may have: `docs/DISPLAY.md` §2.2.
 pub const MAX_DIMENSION: u32 = 8192;
 
+/// The most pages one buffer may have: 32 MiB, which holds a 4K mode's
+/// `XRGB8888` buffer. A driver sizes its backing lists for this many.
+pub const MAX_BUFFER_PAGES: u64 = 8192;
+
 /// The only pixel format iteration 1 attaches: DRM's `XRGB8888`.
 pub const FORMAT: u32 = FORMAT_XRGB8888;
 
@@ -169,6 +173,9 @@ pub enum Refusal {
     /// The driver answered something the core did not ask. Decided by
     /// [`crate::session::Session`].
     Protocol = 7,
+    /// The firmware's framebuffer is in memory the frame allocator owns
+    /// (`docs/DISPLAY.md` §2.4), so no card is published. Decided by the core.
+    Framebuffer = 8,
 }
 
 impl Refusal {
@@ -183,6 +190,7 @@ impl Refusal {
             5 => Self::Malformed,
             6 => Self::WrongLocation,
             7 => Self::Protocol,
+            8 => Self::Framebuffer,
             _ => return None,
         })
     }
@@ -198,6 +206,7 @@ impl fmt::Display for Refusal {
             Self::Malformed => "malformed HELLO",
             Self::WrongLocation => "HELLO names another device",
             Self::Protocol => "the driver broke the protocol",
+            Self::Framebuffer => "the firmware framebuffer is in memory the kernel reclaims",
         })
     }
 }
@@ -279,7 +288,8 @@ pub enum AttachError {
     Size,
     /// A stride under `width` × 4, or rows that do not fit the range.
     Stride,
-    /// A range that is not whole pages, is empty, or runs past the card VMO.
+    /// A range that is not whole pages, is empty, is longer than
+    /// [`MAX_BUFFER_PAGES`], or runs past the card VMO.
     Range,
 }
 
@@ -303,6 +313,7 @@ impl Attach {
         }
         let end = self.offset.checked_add(self.length);
         if self.length == 0
+            || self.length > MAX_BUFFER_PAGES * PAGE_SIZE
             || !self.offset.is_multiple_of(PAGE_SIZE)
             || !self.length.is_multiple_of(PAGE_SIZE)
             || end.is_none_or(|end| end > card_bytes)

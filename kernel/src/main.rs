@@ -25,6 +25,7 @@ mod block_ring;
 mod console;
 mod device;
 mod devmgr;
+mod display;
 mod early;
 mod fdt;
 mod fs;
@@ -2352,6 +2353,7 @@ fn check_early_mapper(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(
     // the visible part of the framebuffer, which is where a panic is drawn.
     // The PL011 console took the same path a moment ago.
     let framebuffer = info.framebuffer;
+    display::note_boot_framebuffer(framebuffer.is_present(), framebuffer.is_reclaimable());
     // A framebuffer in memory the allocator will hand out again is not drawn
     // on: the panic screen would write into frames that belong to someone
     // else. The panic still goes to serial. `docs/DISPLAY.md` §2.4.

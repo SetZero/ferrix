@@ -87,6 +87,9 @@ enum Slot {
     Attaching(Attach),
     Attached(Attach),
     Detaching(Attach),
+    /// A buffer whose DETACH the device refused: its pages may still be the
+    /// device's, so the id and the slot are never used again.
+    Lost(u32),
 }
 
 impl Slot {
@@ -96,6 +99,7 @@ impl Slot {
             Self::Attaching(attach) | Self::Attached(attach) | Self::Detaching(attach) => {
                 Some(attach.buffer)
             }
+            Self::Lost(buffer) => Some(*buffer),
         }
     }
 }
@@ -184,6 +188,14 @@ impl Session {
     fn in_flight(&self) -> impl Iterator<Item = &InFlight> {
         (0..self.flush_count)
             .filter_map(|offset| self.flushes.get((self.flush_head + offset) % MAX_IN_FLIGHT))
+    }
+
+    /// Whether `buffer`'s ATTACH is waiting for ATTACHED.
+    #[must_use]
+    pub fn is_attaching(&self, buffer: u32) -> bool {
+        self.find(buffer)
+            .and_then(|index| self.slots.get(index))
+            .is_some_and(|slot| matches!(slot, Slot::Attaching(_)))
     }
 
     /// ATTACH a buffer.
@@ -343,7 +355,11 @@ impl Session {
         let Slot::Detaching(_) = *slot else {
             return Err(self.violation());
         };
-        *slot = Slot::Free;
+        *slot = if status == Status::Ok {
+            Slot::Free
+        } else {
+            Slot::Lost(buffer)
+        };
         Ok(Event::Detached { buffer, status })
     }
 }
