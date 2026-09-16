@@ -6,15 +6,29 @@
 //! definitions; the functions do nothing useful. Each slice deletes what it
 //! lands from here, and the last slice deletes the file.
 
-/// `builtin.c`: the builtin table.
+/// `builtin.c`: option parsing, the builtin type and its flags.
 pub(crate) mod builtin {
     use crate::shell::Shell;
 
-    /// A builtin (zsh's `struct builtin`); its handler lands with the table.
-    #[derive(Debug, Clone)]
-    pub(crate) struct Builtin {
-        pub(crate) flags: u32,
-    }
+    pub(crate) const BINF_PLUSOPTS: u32 = 1 << 1;
+    pub(crate) const BINF_PRINTOPTS: u32 = 1 << 2;
+    pub(crate) const BINF_ADDED: u32 = 1 << 3;
+    pub(crate) const BINF_MAGICEQUALS: u32 = 1 << 4;
+    pub(crate) const BINF_PREFIX: u32 = 1 << 5;
+    pub(crate) const BINF_DASH: u32 = 1 << 6;
+    pub(crate) const BINF_BUILTIN: u32 = 1 << 7;
+    pub(crate) const BINF_COMMAND: u32 = 1 << 8;
+    pub(crate) const BINF_EXEC: u32 = 1 << 9;
+    pub(crate) const BINF_NOGLOB: u32 = 1 << 10;
+    pub(crate) const BINF_PSPECIAL: u32 = 1 << 11;
+    pub(crate) const BINF_SKIPINVALID: u32 = 1 << 12;
+    pub(crate) const BINF_KEEPNUM: u32 = 1 << 13;
+    pub(crate) const BINF_SKIPDASH: u32 = 1 << 14;
+    pub(crate) const BINF_DASHDASHVALID: u32 = 1 << 15;
+    pub(crate) const BINF_CLEARENV: u32 = 1 << 16;
+    pub(crate) const BINF_AUTOALL: u32 = 1 << 17;
+    pub(crate) const BINF_HANDLES_OPTS: u32 = 1 << 18;
+    pub(crate) const BINF_ASSIGN: u32 = 1 << 19;
 
     /// `MAX_OPS`: one slot per byte an option letter can be.
     const MAX_OPS: usize = 128;
@@ -22,8 +36,8 @@ pub(crate) mod builtin {
     /// The options a builtin was given (zsh's `struct options`).
     #[derive(Debug, Clone)]
     pub(crate) struct Options {
-        /// Per letter: 0 unset, 1 `-x`, 2 `+x`, and `(n + 1) << 2` plus that
-        /// for an option whose argument is `args[n]`.
+        /// Per letter: 0 unset, 1 `-x`, 2 `+x`, and `(n + 1) << 2` plus that for
+        /// an option whose argument is `args[n]`.
         pub(crate) ind: [u8; MAX_OPS],
         pub(crate) args: Vec<Vec<u8>>,
     }
@@ -70,159 +84,121 @@ pub(crate) mod builtin {
         }
     }
 
+    /// `ASG_ARRAY`: an assignment's value is an array.
+    pub(crate) const ASG_ARRAY: i32 = 1;
+    /// `ASG_KEY_VALUE`: an array assignment in `[key]=value` form.
+    pub(crate) const ASG_KEY_VALUE: i32 = 2;
+
+    /// An assignment among a typeset-family builtin's arguments (zsh's
+    /// `struct asgment`).
+    #[derive(Debug, Clone)]
+    pub(crate) struct Asgment {
+        pub(crate) name: Vec<u8>,
+        pub(crate) flags: i32,
+        pub(crate) scalar: Option<Vec<u8>>,
+        pub(crate) array: Vec<Vec<u8>>,
+    }
+
+    /// A builtin's implementation: name, arguments, options, function id.
+    pub(crate) type HandlerFunc = fn(&mut Shell, &[u8], Vec<Vec<u8>>, &Options, i32) -> i32;
+
+    /// A typeset-family builtin's implementation, which also takes assignments.
+    pub(crate) type AssignFunc =
+        fn(&mut Shell, &[u8], Vec<Vec<u8>>, Vec<Asgment>, &Options, i32) -> i32;
+
+    /// How a builtin is run.
+    #[derive(Clone, Copy)]
+    pub(crate) enum Handler {
+        Plain(HandlerFunc),
+        Assign(AssignFunc),
+        /// A precommand modifier (`command`, `exec`, `noglob`, `-`, `builtin`).
+        Prefix,
+    }
+
+    impl std::fmt::Debug for Handler {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(match self {
+                Handler::Plain(_) => "Plain",
+                Handler::Assign(_) => "Assign",
+                Handler::Prefix => "Prefix",
+            })
+        }
+    }
+
+    /// A builtin (zsh's `struct builtin`).
+    #[derive(Debug, Clone)]
+    pub(crate) struct Builtin {
+        pub(crate) flags: u32,
+        pub(crate) handler: Handler,
+        pub(crate) minargs: i32,
+        pub(crate) maxargs: i32,
+        pub(crate) funcid: i32,
+        pub(crate) optstr: Option<&'static [u8]>,
+        pub(crate) defopts: Option<&'static [u8]>,
+    }
+
+    // The function ids zsh passes to handlers that serve several builtins.
+    pub(crate) const BIN_TYPESET: i32 = 0;
+    pub(crate) const BIN_BG: i32 = 1;
+    pub(crate) const BIN_FG: i32 = 2;
+    pub(crate) const BIN_JOBS: i32 = 3;
+    pub(crate) const BIN_WAIT: i32 = 4;
+    pub(crate) const BIN_DISOWN: i32 = 5;
+    pub(crate) const BIN_BREAK: i32 = 6;
+    pub(crate) const BIN_CONTINUE: i32 = 7;
+    pub(crate) const BIN_EXIT: i32 = 8;
+    pub(crate) const BIN_RETURN: i32 = 9;
+    pub(crate) const BIN_CD: i32 = 10;
+    pub(crate) const BIN_POPD: i32 = 11;
+    pub(crate) const BIN_PUSHD: i32 = 12;
+    pub(crate) const BIN_PRINT: i32 = 13;
+    pub(crate) const BIN_EVAL: i32 = 14;
+    pub(crate) const BIN_SCHED: i32 = 15;
+    pub(crate) const BIN_FC: i32 = 16;
+    pub(crate) const BIN_R: i32 = 17;
+    pub(crate) const BIN_PUSHLINE: i32 = 18;
+    pub(crate) const BIN_LOGOUT: i32 = 19;
+    pub(crate) const BIN_TEST: i32 = 20;
+    pub(crate) const BIN_BRACKET: i32 = 21;
+    pub(crate) const BIN_READONLY: i32 = 22;
+    pub(crate) const BIN_ECHO: i32 = 23;
+    pub(crate) const BIN_DISABLE: i32 = 24;
+    pub(crate) const BIN_ENABLE: i32 = 25;
+    pub(crate) const BIN_PRINTF: i32 = 26;
+    pub(crate) const BIN_COMMAND: i32 = 27;
+    pub(crate) const BIN_UNHASH: i32 = 28;
+    pub(crate) const BIN_UNALIAS: i32 = 29;
+    pub(crate) const BIN_UNFUNCTION: i32 = 30;
+    pub(crate) const BIN_UNSET: i32 = 31;
+    pub(crate) const BIN_EXPORT: i32 = 32;
+
     impl Shell {
         /// zsh's `createbuiltintable`: no builtin has landed.
         pub(crate) fn createbuiltintable(&mut self) {}
-    }
-}
 
-/// `exec.c`: the execution stacks and finding commands.
-pub(crate) mod exec {
-    use crate::shell::Shell;
-
-    pub(crate) const FDT_UNUSED: u8 = 0;
-    pub(crate) const FDT_INTERNAL: u8 = 1;
-    pub(crate) const FDT_EXTERNAL: u8 = 2;
-    pub(crate) const FDT_FLOCK: u8 = 5;
-    pub(crate) const FDT_FLOCK_EXEC: u8 = 6;
-    pub(crate) const FDT_PROC_SUBST: u8 = 7;
-
-    pub(crate) const SFC_SIGNAL: i32 = 2;
-    pub(crate) const SFC_HOOK: i32 = 3;
-    pub(crate) const SFC_SUBST: i32 = 7;
-
-    pub(crate) fn is_executable_file(_us: &[u8]) -> bool {
-        false
-    }
-
-    pub(crate) fn isrelative(s: &[u8]) -> bool {
-        s.first() != Some(&b'/')
-    }
-
-    impl Shell {
-        pub(crate) fn execsave(&mut self) {}
-
-        pub(crate) fn execrestore(&mut self) {}
-
-        pub(crate) fn findcmd(
-            &mut self,
-            _arg0: &[u8],
-            _docopy: bool,
-            _default_path: bool,
-        ) -> Option<Vec<u8>> {
-            None
-        }
-    }
-
-    /// One entry of `$funcstack` and friends (zsh's `struct funcstack`).
-    #[derive(Debug, Clone)]
-    pub(crate) struct Funcstack {
-        pub(crate) name: Vec<u8>,
-        pub(crate) filename: Option<Vec<u8>>,
-        pub(crate) caller: Vec<u8>,
-        pub(crate) flineno: i64,
-        pub(crate) lineno: i64,
-        pub(crate) tp: i32,
-    }
-
-    /// What `execsave` keeps around a trap (zsh's `struct execstack`).
-    #[derive(Debug, Clone, Default)]
-    pub(crate) struct ExecStack {
-        pub(crate) list_pipe_pid: i32,
-        pub(crate) nowait: bool,
-        pub(crate) pline_level: i32,
-        pub(crate) list_pipe_child: bool,
-        pub(crate) list_pipe_job: i32,
-        pub(crate) list_pipe_text: Vec<u8>,
-        pub(crate) lastval: i32,
-        pub(crate) noeval: i32,
-        pub(crate) badcshglob: i32,
-        pub(crate) cmdoutpid: i32,
-        pub(crate) cmdoutval: i32,
-        pub(crate) use_cmdoutval: bool,
-        pub(crate) procsubstpid: i32,
-        pub(crate) trap_return: i32,
-        pub(crate) trap_state: i32,
-        pub(crate) trapisfunc: bool,
-        pub(crate) traplocallevel: i32,
-        pub(crate) noerrs: i32,
-        pub(crate) this_noerrexit: bool,
-        pub(crate) underscore: Vec<u8>,
-    }
-}
-
-/// `exec.c`: command and process substitution.
-pub(crate) mod exec_cmd {
-    use crate::shell::Shell;
-
-    impl Shell {
-        pub(crate) fn getoutput(&mut self, _cmd: &[u8], _qt: bool) -> Option<Vec<Vec<u8>>> {
-            None
-        }
-
-        pub(crate) fn getoutputfile(
-            &mut self,
-            s: &[u8],
-            _start: usize,
-        ) -> (Option<Vec<u8>>, usize) {
-            (None, s.len())
-        }
-
-        pub(crate) fn getproc(&mut self, s: &[u8], _start: usize) -> (Option<Vec<u8>>, usize) {
-            (None, s.len())
-        }
-    }
-}
-
-/// `exec.c`: running strings.
-pub(crate) mod exec_list {
-    use crate::shell::Shell;
-
-    impl Shell {
-        pub(crate) fn execstring_ctx(&mut self, _s: &[u8], _context: &str) -> bool {
-            false
-        }
-
-        pub(crate) fn execode(
-            &mut self,
-            _p: &crate::tables::Eprog,
-            _dont_change_job: bool,
-            _exiting: bool,
-            _context: &str,
-        ) {
-        }
-    }
-}
-
-/// `exec.c`: calling shell functions.
-pub(crate) mod exec_func {
-    use crate::shell::Shell;
-
-    impl Shell {
-        pub(crate) fn doshfunc(
-            &mut self,
-            _shfunc: &crate::tables::Shfunc,
-            _doshargs: Option<Vec<Vec<u8>>>,
-            _noreturnval: bool,
-        ) -> i32 {
-            1
-        }
-
-        pub(crate) fn doshfunc_by_name(
+        pub(crate) fn execbuiltin(
             &mut self,
             _name: &[u8],
-            _args: Vec<Vec<u8>>,
-            _noreturnval: bool,
+            _args: &mut Vec<Vec<u8>>,
+            _assigns: &mut Vec<Asgment>,
+            _bn: &Builtin,
         ) -> i32 {
             1
         }
 
-        pub(crate) fn innermost_function_name(&self) -> Option<Vec<u8>> {
-            None
+        pub(crate) fn bin_command_whence(&mut self, _args: &mut Vec<Vec<u8>>) -> i32 {
+            1
         }
+    }
+}
 
-        pub(crate) fn current_function_traced(&self) -> bool {
-            false
+/// `builtin.c`: the directory builtins.
+pub(crate) mod builtin_dirs {
+    use crate::shell::Shell;
+
+    impl Shell {
+        pub(crate) fn cd_able_vars(&mut self, _s: &[u8]) -> Option<Vec<u8>> {
+            None
         }
     }
 }
@@ -230,18 +206,6 @@ pub(crate) mod exec_func {
 /// `prompt.c`: the colour sequences `Shell` keeps, and prompt expansion.
 pub(crate) mod prompt {
     use crate::shell::Shell;
-
-    impl Shell {
-        pub(crate) fn promptexpand(
-            &mut self,
-            s: &[u8],
-            _ns: bool,
-            _rs: Option<&[u8]>,
-            _rs2: Option<&[u8]>,
-        ) -> (Vec<u8>, u64) {
-            (s.to_vec(), 0)
-        }
-    }
 
     /// One entry of zsh's `fg_bg_sequences`.
     #[derive(Debug, Clone)]
@@ -266,25 +230,23 @@ pub(crate) mod prompt {
             },
         ]
     }
-}
-
-/// `text.c`: the text of parsed code.
-pub(crate) mod text {
-    use crate::ast::{List, Redir};
-    use crate::shell::Shell;
 
     impl Shell {
-        pub(crate) fn getpermtext(&self, _l: &List, _start_indent: bool) -> Vec<u8> {
-            Vec::new()
+        pub(crate) fn promptexpand(
+            &mut self,
+            s: &[u8],
+            _ns: bool,
+            _rs: Option<&[u8]>,
+            _rs2: Option<&[u8]>,
+        ) -> (Vec<u8>, u64) {
+            (s.to_vec(), 0)
         }
 
-        pub(crate) fn getredirtext(&self, _rs: &[Redir]) -> Vec<u8> {
-            Vec::new()
-        }
+        pub(crate) fn printprompt4(&mut self) {}
     }
 }
 
-/// `init.c`: sourcing files and checking jobs before exit.
+/// `init.c`: sourcing files, the terminal, and checking jobs before exit.
 pub(crate) mod init {
     use crate::shell::Shell;
 
@@ -304,5 +266,7 @@ pub(crate) mod init {
         }
 
         pub(crate) fn sourcehome(&mut self, _s: &[u8]) {}
+
+        pub(crate) fn init_io_stdin(&mut self) {}
     }
 }
