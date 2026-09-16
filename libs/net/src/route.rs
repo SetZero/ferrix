@@ -118,6 +118,33 @@ impl Routes {
         self.entries.len() != before
     }
 
+    /// Remove the first route to `destination` that also matches whichever of
+    /// the interface, the gateway and the metric are given, as
+    /// `fib_table_delete` does: what a delete leaves out matches anything, so
+    /// `ip route del default` names only the destination. Answers whether one
+    /// was removed.
+    pub fn remove_matching(
+        &mut self,
+        destination: IpCidr,
+        interface: Option<u32>,
+        gateway: Option<IpAddress>,
+        metric: Option<u32>,
+    ) -> bool {
+        let found = self.entries.iter().position(|existing| {
+            existing.destination == destination
+                && interface.is_none_or(|wanted| existing.interface == wanted)
+                && gateway.is_none_or(|wanted| existing.gateway == Some(wanted))
+                && metric.is_none_or(|wanted| existing.metric == wanted)
+        });
+        match found {
+            Some(at) => {
+                let _ = self.entries.remove(at);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Remove every route that goes by `interface`, which is what taking an
     /// interface down means.
     pub fn remove_interface(&mut self, interface: u32) {

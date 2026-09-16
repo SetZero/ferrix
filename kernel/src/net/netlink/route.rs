@@ -450,25 +450,40 @@ fn change_route(stack: &mut Stack, message: &Message<'_>, add: bool) -> Result<b
         // message rather than from an address that is not there.
         None => IpCidr::new(unspecified(body.family)?, body.dst_len),
     };
+    let metric = attributes
+        .find(RTA_PRIORITY)
+        .and_then(|found| found.as_u32());
+    if !add {
+        // A delete names what it knows and matches anything it leaves out:
+        // `ip route del default` sends no interface and no gateway at all.
+        let interface = match attributes.find(RTA_OIF).and_then(|found| found.as_u32()) {
+            Some(index) => Some(
+                stack
+                    .interface(index)
+                    .map(|found| found.index)
+                    .ok_or(Errno::ENODEV)?,
+            ),
+            None => None,
+        };
+        if !stack
+            .routes_mut()
+            .remove_matching(destination, interface, gateway, metric)
+        {
+            // Linux answers a delete of a route nobody has with ESRCH, and
+            // `ip` prints it as "No such process", which is the message every
+            // Linux user has already seen from `ip route del`.
+            return Err(Errno::ESRCH);
+        }
+        return Ok(false);
+    }
     let interface = route_interface(stack, &attributes, gateway)?;
-    let route = Route {
+    stack.routes_mut().add(Route {
         destination,
         gateway,
         interface,
-        metric: attributes
-            .find(RTA_PRIORITY)
-            .and_then(|found| found.as_u32())
-            .unwrap_or(0),
+        metric: metric.unwrap_or(0),
         origin: origin_of(body.protocol),
-    };
-    if add {
-        stack.routes_mut().add(route);
-    } else if !stack.routes_mut().remove(destination, interface, gateway) {
-        // Linux answers a delete of a route nobody has with ESRCH, and `ip`
-        // prints it as "No such process", which is the message every Linux
-        // user has already seen from `ip route del`.
-        return Err(Errno::ESRCH);
-    }
+    });
     Ok(false)
 }
 

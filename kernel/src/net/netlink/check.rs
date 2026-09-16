@@ -206,15 +206,32 @@ fn routes(netlink: &mut Netlink, report: &mut Report, interface: u32) -> Result<
     if !dump_routes(netlink)?.contains(&PREFIX) {
         return Err("a route added through netlink was not in the next dump");
     }
+    // The delete names only the destination, as `ip route del` sends one,
+    // with no interface and no gateway: what it leaves out matches anything.
+    let destination_only = [Attr::new(RTA_DST, Value::Address(Address::V4(PREFIX)))];
     let removed = netlink.talk(
         RTM_DELROUTE,
         NLM_F_REQUEST | NLM_F_ACK,
         &body.to_bytes(),
-        &attributes,
+        &destination_only,
     )?;
-    acknowledged(&removed, "removing a route through netlink was refused")?;
+    acknowledged(
+        &removed,
+        "removing a route by its destination alone through netlink was refused",
+    )?;
     if dump_routes(netlink)?.contains(&PREFIX) {
         return Err("a route removed through netlink was still in the next dump");
+    }
+    // And a second delete finds nothing, which is ESRCH.
+    let again = netlink.talk(
+        RTM_DELROUTE,
+        NLM_F_REQUEST | NLM_F_ACK,
+        &body.to_bytes(),
+        &destination_only,
+    )?;
+    match error_of(&again) {
+        Ok(code) if code == -i32::from(Errno::ESRCH.0) => report.refusals += 1,
+        _ => return Err("deleting a route that is gone was not refused with ESRCH"),
     }
     Ok(())
 }

@@ -114,3 +114,34 @@ fn the_two_families_do_not_route_each_other() {
     routes.add(route([0, 0, 0, 0], 0, 1, 0));
     assert!(routes.lookup(IpAddress::V6(Ipv6::LOOPBACK)).is_none());
 }
+
+#[test]
+fn a_delete_matches_what_it_names_and_takes_one_route() {
+    let mut routes = Routes::new();
+    let default = IpCidr::new(IpAddress::V4(Ipv4::UNSPECIFIED), 0);
+    let mut by_gateway = route([0, 0, 0, 0], 0, 2, 0);
+    by_gateway.gateway = Some(IpAddress::V4(Ipv4::new([10, 0, 2, 2])));
+    routes.add(by_gateway);
+    routes.add(route([0, 0, 0, 0], 0, 3, 100));
+
+    assert!(
+        !routes.remove_matching(default, Some(9), None, None),
+        "an interface that no default route goes by matches nothing"
+    );
+    assert!(
+        routes.remove_matching(default, None, None, None),
+        "a destination alone matches a default route"
+    );
+    assert_eq!(
+        routes
+            .lookup(IpAddress::V4(Ipv4::new([192, 0, 2, 1])))
+            .map(|hop| hop.interface),
+        Some(3),
+        "and only one was taken, the first"
+    );
+    assert!(routes.remove_matching(default, None, None, Some(100)));
+    assert!(
+        !routes.remove_matching(default, None, None, None),
+        "with both gone there is nothing left to match"
+    );
+}
