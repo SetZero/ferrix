@@ -68,15 +68,9 @@ const BIG_BYTES: usize = 256 * 1024;
 /// The name the DNS stub answers, and the only one it knows.
 const NAME: &str = "ferrix.test";
 
-/// The gateway's own address, which is the guest's default route.
-///
-/// It is the gateway's, and is here rather than in `gateway` because that
-/// module is UNIX-only and this one, with its tests, builds everywhere.
-pub(crate) const GATEWAY_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 2);
-
 /// What the stub answers it with: the gateway, which is the host's loopback,
 /// so a fetch by name and a fetch by address reach the same server.
-const NAME_ANSWER: Ipv4Addr = GATEWAY_IP;
+const NAME_ANSWER: Ipv4Addr = crate::gateway::GATEWAY_IP;
 
 /// How long a stub thread blocks on its socket before looking at the stop
 /// flag. Short enough to shut down promptly, long enough not to spin.

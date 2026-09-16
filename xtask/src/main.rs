@@ -44,9 +44,6 @@ mod cargo;
 mod check;
 mod fat;
 mod flash;
-// The host half of the guest's network, which is a UNIX datagram socket and
-// so has no Windows spelling in `std`. See the module for why it exists at all.
-#[cfg(unix)]
 mod gateway;
 mod initramfs;
 mod native;
