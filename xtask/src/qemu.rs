@@ -782,8 +782,10 @@ fn qemu_command(
                 "q35",
                 // SMEP and SMAP are the two features the kernel relies on to
                 // keep ring 0 out of user pages, so emulate a CPU that has them.
+                // RDRAND and RDSEED too, which the kernel seeds its random
+                // generator from beside firmware's bytes, so that path runs.
                 "-cpu",
-                "qemu64,+pdpe1gb,+smep,+smap",
+                "qemu64,+pdpe1gb,+smep,+smap,+rdrand,+rdseed",
                 // A controlled way for the guest to end the test: writing 0x10
                 // to port 0xF4 exits QEMU with status 33.
                 "-device",

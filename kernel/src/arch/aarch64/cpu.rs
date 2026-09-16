@@ -608,3 +608,40 @@ pub(crate) fn write_cntv_ctl(control: u64) {
         );
     }
 }
+
+/// A 64-bit random number from the CPU's `RNDR` register, tried ten times;
+/// `None` on a core without it, which `ID_AA64ISAR0_EL1` says, or one that
+/// kept reporting failure.
+pub(crate) fn hardware_random() -> Option<u64> {
+    let isar0: u64;
+    // SAFETY: reading an identification register at EL1 changes nothing.
+    unsafe {
+        core::arch::asm!(
+            "mrs {}, id_aa64isar0_el1",
+            out(reg) isar0,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    if (isar0 >> 60) & 0xf == 0 {
+        return None;
+    }
+    for _ in 0..10 {
+        let value: u64;
+        let good: u64;
+        // SAFETY: the identification register says `RNDR` exists. Reading it
+        // sets the condition flags, clear Z meaning the value is good.
+        unsafe {
+            core::arch::asm!(
+                "mrs {value}, s3_3_c2_c4_0",
+                "cset {good}, ne",
+                value = out(reg) value,
+                good = out(reg) good,
+                options(nomem, nostack),
+            );
+        }
+        if good == 1 {
+            return Some(value);
+        }
+    }
+    None
+}

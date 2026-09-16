@@ -1,4 +1,4 @@
-//! The four UEFI protocols the loader uses.
+//! The five UEFI protocols the loader uses.
 //!
 //! As in `tables.rs`, every function pointer of every protocol is declared in
 //! specification order whether or not it is called.
@@ -27,6 +27,33 @@ pub(crate) struct SimpleTextOutput {
     set_cursor_position: usize,
     enable_cursor: usize,
     mode: *mut c_void,
+}
+
+// ---------------------------------------------------------------------------
+// Random numbers — a seed for the kernel's generator
+// ---------------------------------------------------------------------------
+
+/// Identifies [`Rng`].
+pub(crate) const RNG_GUID: Guid = Guid::new(
+    0x3152_bca5,
+    0xeade,
+    0x433d,
+    [0x86, 0x2e, 0xc0, 0x1c, 0xdc, 0x29, 0x1f, 0x44],
+);
+
+/// `EFI_RNG_PROTOCOL`. OVMF provides it over `RDRAND`, and over a virtio-rng
+/// device when there is one; not every firmware does.
+#[repr(C)]
+pub(crate) struct Rng {
+    get_info: usize,
+    /// Fills `value_length` bytes at `value`. A null algorithm is firmware's
+    /// default.
+    pub(crate) get_rng: unsafe extern "efiapi" fn(
+        this: *mut Rng,
+        algorithm: *const Guid,
+        value_length: usize,
+        value: *mut u8,
+    ) -> Status,
 }
 
 // ---------------------------------------------------------------------------

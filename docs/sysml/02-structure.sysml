@@ -790,6 +790,15 @@ package FerrixStructure {
             doc /* Reached at stage 4: SpinLock and IrqSpinLock guard every
                  * shared kernel structure. RwSpinLock still waits. */
         }
+        #implemented part crng : LibraryCrate {
+            attribute :>> path = "libs/crng";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 9;
+            doc /* Reached with curl's HTTPS: ChaCha20 with fast key erasure
+                 * behind getrandom, /dev/urandom and AT_RANDOM, seeded from
+                 * firmware, the CPU and timer jitter. The block function is
+                 * checked against RFC 8439 and OpenSSL's keystream. */
+        }
         #implemented part sched : LibraryCrate {
             attribute :>> path = "libs/sched";
             attribute :>> forbidsUnsafe = true;

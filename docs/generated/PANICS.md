@@ -33,6 +33,7 @@ Causes are listed most likely first.
 | [FX-0303](#fx-0303) | the interrupt controller or the clocks could not be brought up |
 | [FX-0304](#fx-0304) | the timer's interrupt could not be registered |
 | [FX-0305](#fx-0305) | console input could not be set up |
+| [FX-0306](#fx-0306) | the random number generator repeated itself |
 | [FX-0401](#fx-0401) | the processor list could not be read |
 | [FX-0402](#fx-0402) | a secondary processor could not be started |
 | [FX-0403](#fx-0403) | a secondary processor could not build its GDT |
@@ -428,6 +429,23 @@ registration failure means the interrupt number already has a handler.
    devices one interrupt would.
 
 See: kernel/src/console/input.rs check; kernel/src/irq.rs register.
+
+<a id="fx-0306"></a>
+
+## FX-0306 — the random number generator repeated itself
+
+`random::check` reads the generator twice, after `random::init` seeded it from
+firmware, the CPU and timer jitter, and requires the two reads to differ and
+neither to be all zeros. `getrandom`, `/dev/urandom` and every program's
+`AT_RANDOM` read this generator: one that repeats hands every program the same
+stack canary and every TLS session the same key.
+
+1. A change to `libs/crng` that stopped `fill` from replacing the key, so each
+   read starts from the same block; its host tests check the construction.
+2. A change to `random::fill` that no longer takes the lock around the
+   generator, so two reads copied one state.
+
+See: kernel/src/random.rs; libs/crng.
 
 <a id="fx-0401"></a>
 

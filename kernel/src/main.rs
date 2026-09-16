@@ -40,6 +40,7 @@ mod object;
 mod panic;
 mod pci;
 mod power;
+mod random;
 mod sched;
 mod smp;
 mod sync;
@@ -184,13 +185,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
             "stage 3 self-check failed: {problem}"
         ),
     };
-    println!(
-        "  stage 3  {} breakpoints, {} page faults, {} ticks at {} Hz",
-        trap::breakpoint_count(),
-        trap::handled_fault_count(),
-        timer::ticks(),
-        measured,
-    );
+    report_stage3(measured, view.raw());
 
     // Stage 4. It has to be here: after interrupt bring-up, which maps the
     // local APIC x86-64 reads its own identifier from, and before
@@ -1580,6 +1575,54 @@ fn spin_nanos(nanos: u64) {
 /// Report the clocks interrupt bring-up measured, then read what the end of
 /// boot is to do: `power::init` says so on the console, and says it after the
 /// clocks, as it always has.
+/// Say what stage 3 proved, then start the clock and the random generator,
+/// which both read the counter it has just proved.
+fn report_stage3(measured: u64, info: &BootInfo) {
+    println!(
+        "  stage 3  {} breakpoints, {} page faults, {} ticks at {} Hz",
+        trap::breakpoint_count(),
+        trap::handled_fault_count(),
+        timer::ticks(),
+        measured,
+    );
+    report_clock_and_random(info);
+}
+
+/// Start the realtime clock and seed the random generator from what firmware
+/// handed over, and say what each had to go on. After stage 3, because both
+/// read the counter the timer check has just proved.
+fn report_clock_and_random(info: &BootInfo) {
+    match syscall::time::set_boot_time(info) {
+        Some(seconds) => {
+            println!("  clock    {seconds} seconds since the epoch, from firmware's clock");
+        }
+        None => println!("  clock    firmware has no clock: CLOCK_REALTIME starts at the epoch"),
+    }
+    let seeding = random::init(info);
+    let firmware = if seeding.firmware {
+        "firmware"
+    } else {
+        "no firmware"
+    };
+    if seeding.seeded {
+        println!(
+            "  random   seeded with {} bits: {firmware}, {} words from the CPU, timer jitter",
+            seeding.credited, seeding.cpu_words
+        );
+    } else {
+        println!(
+            "  random   NOT SEEDED: {firmware}, {} words from the CPU, only timer jitter; keys made on this boot are guessable",
+            seeding.cpu_words
+        );
+    }
+    if let Err(problem) = random::check() {
+        fatal!(
+            catalog::RANDOM_GENERATOR,
+            "random generator check failed: {problem}"
+        );
+    }
+}
+
 fn report_clocks_and_power(view: &BootView<'_>, clocks: &irq::Report) {
     report_clocks(clocks);
     power::init(view);
