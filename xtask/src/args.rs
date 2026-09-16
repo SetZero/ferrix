@@ -41,7 +41,8 @@ pub(crate) struct Args {
     pub(crate) memory: u32,
     /// `--timeout`, seconds `test-boot` waits for the kernel to report.
     pub(crate) timeout: u64,
-    /// `--accel`, which QEMU accelerator to boot under. `None` means `tcg`.
+    /// `--accel`, which QEMU accelerator to boot under. `None` means `tcg`,
+    /// except to `run`, which asks for `auto` unless it is given `--gdb`.
     pub(crate) accel: Option<String>,
     /// `--to`, the mounted boot partition `flash` writes to. `None` means
     /// "find the only one".

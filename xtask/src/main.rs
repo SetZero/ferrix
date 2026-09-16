@@ -122,7 +122,8 @@ OPTIONS:
     --smp <N>                            Virtual CPUs          [default: 4]
     --memory <MiB>                       Guest memory          [default: 512]
     --timeout <SECONDS>                  test-boot patience    [default: 120]
-    --accel <auto|tcg|whpx|kvm|hvf>      QEMU accelerator      [default: tcg]
+    --accel <auto|tcg|whpx|kvm|hvf>      QEMU accelerator      [default: auto for run
+                                         without --gdb, tcg otherwise]
     --gdb                                Wait for a debugger on :1234
     --net                                run, test-boot, test-shell, test-vfs: a virtio-net device,
                                          behind xtask's own NAT gateway (10.0.2.2, guest 10.0.2.15);
@@ -174,6 +175,19 @@ fn run() -> Result<()> {
         "run" => {
             let arch = args.single_arch()?;
             let (image, _) = build_image(arch, &args)?;
+            // Someone at the console wants the machine in front of them, so
+            // `run` takes whatever hypervisor it has: WHPX on Windows, KVM on
+            // Linux, HVF on macOS, emulation where there is none. The tests
+            // keep `tcg`, for the reason `qemu::accelerator` gives, and so
+            // does a debugging session, whose breakpoints and single steps
+            // `tcg` honours on every host and the hypervisors do not.
+            let args = Args {
+                accel: args
+                    .accel
+                    .clone()
+                    .or_else(|| (!args.gdb).then(|| "auto".to_owned())),
+                ..args
+            };
             qemu::run(arch, &image, &args)
         }
         "test-boot" => {
