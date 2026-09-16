@@ -91,7 +91,7 @@ busybox's does.
 
 | Port | What | Installs |
 |---|---|---|
-| `curl` | curl 8.22.0 over Mbed TLS 3.6.7, and curl.se's extract of Mozilla's CA certificates | `bin/curl`, `etc/ssl/certs/ca-certificates.crt` |
+| `curl` | curl 8.22.0 over Mbed TLS 3.6.7, curl.se's extract of Mozilla's CA certificates, and Mbed TLS's test server for `test-net` | `bin/curl`, `etc/ssl/certs/ca-certificates.crt`, `usr/libexec/ferrix/ssl_server2`, `usr/share/ferrix/tls-test` |
 | `libcxx` | LLVM 23.1.1's libc++, libc++abi and libunwind, the C++ runtime, built with gcc | `include/c++/v1`, `lib/libc++.a`, `lib/libc++abi.a`, `lib/libunwind.a` |
 | `btop` | btop 1.4.7, C++23, over `libcxx` | `bin/btop` |
 
@@ -101,10 +101,10 @@ test-net` fetches with curl as well as with `wget` when curl is there.
 
 curl linked with nothing missing from this library on 2026-09-16. On Linux it
 fetches over HTTPS and refuses a self-signed certificate. On Ferrix it fetches
-over HTTP, and an HTTPS handshake gets as far as checking the certificate,
-which it refuses because the kernel's clock starts at 1970. The kernel's
-`getrandom` is not random yet either. Until both are fixed, HTTPS on Ferrix is
-not secure. `docs/BACKLOG.md` has the row.
+over HTTP and HTTPS. The kernel takes the time of day and a random seed from
+firmware, and `test-net` checks a certificate against Mbed TLS's test server
+inside the guest. The curl port installs that server, `ssl_server2`, in
+`usr/libexec/ferrix`, and its test certificates in `usr/share/ferrix/tls-test`.
 
 btop linked once this library had what libc++ needs: `dl_iterate_phdr`,
 `dladdr`, the message catalogues, the `strtod_l` family, `pathconf`,

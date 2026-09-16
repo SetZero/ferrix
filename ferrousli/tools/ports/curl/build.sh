@@ -7,6 +7,8 @@
 # Installs, under $FERRIX_PORTS (see ../common.sh):
 #   x86_64/bin/curl
 #   x86_64/etc/ssl/certs/ca-certificates.crt
+#   x86_64/usr/libexec/ferrix/ssl_server2, Mbed TLS's test server, with its
+#   test certificate, key and CA in x86_64/usr/share/ferrix/tls-test/
 #
 # Pinned, and refused if their checksums differ:
 #   * curl.se's curl-8.22.0.tar.gz, by the sha256 curl.se/info publishes;
@@ -69,6 +71,17 @@ fi
 cp -r "$mbedtls/include" "$tls/include"
 cp "$mbedtls"/library/libmbed{tls,x509,crypto}.a "$tls/lib/"
 
+step "mbedtls: the test server"
+# Mbed TLS's own test server, for test-net's HTTPS program: it answers
+# https://localhost with the test certificate for "localhost" that its test
+# CA signed, both valid from 2023 and 2019, so a guest whose clock still
+# reads 1970 refuses the connection and one that took firmware's time
+# accepts it.
+if ! make -C "$mbedtls/programs" -j"$jobs" CC="$CC" AR=ar CFLAGS=-O2 ssl/ssl_server2 > "$work/mbedtls-programs.log" 2>&1; then
+    tail -30 "$work/mbedtls-programs.log" >&2
+    fail "mbedtls's ssl_server2 did not build; the log is $work/mbedtls-programs.log"
+fi
+
 step "curl: configure"
 build=$work/build
 rm -rf "$build"
@@ -111,5 +124,10 @@ mkdir -p "$prefix/bin" "$prefix/etc/ssl/certs"
 # Stripped: the image carries it, and nothing on the guest reads its symbols.
 install -m 755 -s "$build/src/curl" "$prefix/bin/curl"
 install -m 644 "$src/$CACERT" "$prefix$CA_BUNDLE"
+mkdir -p "$prefix/usr/libexec/ferrix" "$prefix/usr/share/ferrix/tls-test"
+install -m 755 -s "$mbedtls/programs/ssl/ssl_server2" "$prefix/usr/libexec/ferrix/ssl_server2"
+for f in server5.crt server5.key test-ca2.crt; do
+    install -m 644 "$mbedtls/framework/data_files/$f" "$prefix/usr/share/ferrix/tls-test/$f"
+done
 file "$prefix/bin/curl"
 "$prefix/bin/curl" --version

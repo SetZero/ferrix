@@ -3155,7 +3155,7 @@ read it. A boot says what it had:
   random   seeded with 512 bits: firmware, 8 words from the CPU, timer jitter
 ```
 
-That was OVMF, with RDRAND turned on in `xtask`'s QEMU CPU. AAVMF, and U-Boot's
+That was OVMF with RDRAND turned on in `xtask`'s QEMU CPU. AAVMF, and U-Boot's
 EFI on ARMv7-A, gave both the time and the random bytes too. A machine with no
 firmware protocol and no CPU instruction boots `NOT SEEDED`, in capitals, and
 `getrandom` answers anyway. Linux would block instead, but that wait never ends
@@ -3166,6 +3166,17 @@ boot printed `FERRIX-PANIC random generator check failed: two reads of the
 random generator were the same` under FX-0306. The clock's: with the loader's
 time flag cleared, the boot said `firmware has no clock: CLOCK_REALTIME starts
 at the epoch`.
+
+`test-net` now has an HTTPS program that needs neither the internet nor the
+host. Mbed TLS's own test server, built by the curl port, listens on the
+guest's loopback with its certificate for `localhost`. curl fetches from it
+trusting the test CA, and must see the server's page. It fetches again trusting
+only the Mozilla bundle, and must be refused with 60. The certificate is valid
+from 2023, so a guest whose clock came from anywhere but firmware fails the
+first fetch.
+Its negative control, not committed, on x86-64: with the loader's time flag
+cleared, the guest printed `verified 0` and `untrusted 60`, and `test-net`
+failed on that program.
 
 **Done — btop, and the C++ runtime under it.** `ferrousli/tools/ports/libcxx`
 builds LLVM 23.1.1's libc++, libc++abi and libunwind against ferrousli with
