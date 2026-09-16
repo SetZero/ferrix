@@ -15,6 +15,13 @@ name = "compositor-config"
 version = "0.1.0"
 
 [[package]]
+name = "compositor-layout"
+version = "0.1.0"
+dependencies = [
+ "compositor-config",
+]
+
+[[package]]
 name = "ferrix-linux-abi"
 version = "0.1.0"
 

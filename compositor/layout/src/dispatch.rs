@@ -1,0 +1,145 @@
+//! The dispatchers a binding names, parsed from the strings the
+//! configuration's `Bind` carries.
+//!
+//! Names and argument forms follow Hyprland's `KeybindManager.cpp`. Only
+//! the forms listed on each variant are accepted; anything else, such as a
+//! window selector after a comma or a named workspace, is an
+//! [`Error::BadArgument`] rather than a guess.
+
+use crate::{Error, WorkspaceId};
+
+/// A direction, from `l`, `r`, `u` or `t`, and `d` or `b`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// `l`.
+    Left,
+    /// `r`.
+    Right,
+    /// `u` or `t`.
+    Up,
+    /// `d` or `b`.
+    Down,
+}
+
+impl Direction {
+    /// Parse a direction argument.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim() {
+            "l" => Some(Self::Left),
+            "r" => Some(Self::Right),
+            "u" | "t" => Some(Self::Up),
+            "d" | "b" => Some(Self::Down),
+            _ => None,
+        }
+    }
+}
+
+/// Which workspace a `workspace` or `movetoworkspace` argument names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceTarget {
+    /// `N`: workspace N, from 1.
+    Id(WorkspaceId),
+    /// `+N` or `-N`: the workspace N numbers after or before the current
+    /// one, never below 1, created if need be.
+    Relative(i64),
+    /// `e+N` or `e-N`: N places along the workspaces that exist, in number
+    /// order, wrapping around.
+    Open(i64),
+}
+
+impl WorkspaceTarget {
+    /// Parse a workspace argument.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        let signed = |rest: &str| {
+            if rest.starts_with(['+', '-']) {
+                rest.parse::<i64>().ok()
+            } else {
+                None
+            }
+        };
+        if let Some(rest) = text.strip_prefix('e') {
+            return signed(rest).map(Self::Open);
+        }
+        if let Some(offset) = signed(text) {
+            return Some(Self::Relative(offset));
+        }
+        if !text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        text.parse::<i64>()
+            .ok()
+            .filter(|id| *id >= 1)
+            .map(|id| Self::Id(WorkspaceId(id)))
+    }
+}
+
+/// How a window is fullscreen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FullscreenMode {
+    /// `fullscreen, 0`: the whole monitor, no gaps and no border.
+    Fullscreen,
+    /// `fullscreen, 1`: the workspace's usable area, as a lone tiled window
+    /// would have it, gaps and border kept.
+    Maximized,
+}
+
+/// A dispatcher and its argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dispatcher {
+    /// `movefocus`: focus the neighbour in a direction, or the monitor
+    /// there if there is no window.
+    MoveFocus(Direction),
+    /// `movewindow`: exchange the focused tiled window with its neighbour in
+    /// a direction, or move it to the monitor there if there is no window.
+    MoveWindow(Direction),
+    /// `workspace`: show a workspace, creating it if need be.
+    Workspace(WorkspaceTarget),
+    /// `movetoworkspace`: move the focused window to a workspace and follow
+    /// it there.
+    MoveToWorkspace(WorkspaceTarget),
+    /// `movetoworkspacesilent`: move the focused window to a workspace and
+    /// stay.
+    MoveToWorkspaceSilent(WorkspaceTarget),
+    /// `killactive`: ask the focused window to close.
+    KillActive,
+    /// `togglefloating`: float the focused window, or tile it again.
+    ToggleFloating,
+    /// `fullscreen`: toggle the focused window's fullscreen in a mode.
+    Fullscreen(FullscreenMode),
+}
+
+impl Dispatcher {
+    /// Parse a dispatcher from its name, in any case, and its argument.
+    pub fn parse(name: &str, arg: &str) -> Result<Self, Error> {
+        let name = name.trim().to_ascii_lowercase();
+        let arg = arg.trim();
+        let bad = || Error::BadArgument {
+            dispatcher: name.clone(),
+            arg: arg.to_owned(),
+        };
+        let direction = || Direction::parse(arg).ok_or_else(bad);
+        let workspace = || WorkspaceTarget::parse(arg).ok_or_else(bad);
+        match name.as_str() {
+            "movefocus" => direction().map(Self::MoveFocus),
+            "movewindow" => direction().map(Self::MoveWindow),
+            "workspace" => workspace().map(Self::Workspace),
+            "movetoworkspace" => workspace().map(Self::MoveToWorkspace),
+            "movetoworkspacesilent" => workspace().map(Self::MoveToWorkspaceSilent),
+            // Hyprland's killactive ignores its argument.
+            "killactive" => Ok(Self::KillActive),
+            "togglefloating" => match arg {
+                "" | "active" => Ok(Self::ToggleFloating),
+                _ => Err(bad()),
+            },
+            "fullscreen" => match arg {
+                "" | "0" => Ok(Self::Fullscreen(FullscreenMode::Fullscreen)),
+                "1" => Ok(Self::Fullscreen(FullscreenMode::Maximized)),
+                _ => Err(bad()),
+            },
+            _ => Err(Error::UnknownDispatcher(name.clone())),
+        }
+    }
+}

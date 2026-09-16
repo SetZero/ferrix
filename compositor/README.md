@@ -34,6 +34,14 @@ names the part of Hyprland or hyprlang it follows.
   interprets (`windowrule`, `monitor`, `workspace`, `exec-once`, `env`, …),
   with Hyprland's diagnostics. `Config::keyword` is `hyprctl keyword`. Fuzzed
   by `fuzz/fuzz_targets/hyprconf_parse.rs`.
+* **`layout`** is Hyprland's window management with nothing but rectangles
+  and ids: monitors, workspaces created on demand, the dwindle and master
+  layouts with `gaps_in`, `gaps_out` and `border_size`, floating and
+  fullscreen windows, Hyprland's focus history, and the dispatchers
+  `movefocus`, `movewindow`, `workspace`, `movetoworkspace`(`silent`),
+  `killactive`, `togglefloating` and `fullscreen`, parsed from a `Bind`.
+  Each call returns the changes it caused; `State::layout` gives every
+  visible window's client rectangle.
 * **`blank`** is iteration 1 on screen (`docs/DISPLAY.md`): it opens
   `/dev/dri/card0`, sets the connected connector's preferred mode with the
   legacy calls, fills a dumb buffer with `0x1E1E2E` and prints
