@@ -41,6 +41,7 @@ use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_native_abi::signals::Signals as ObjectSignals;
+use ferrix_sync::{SleepLock, SleepLockGuard};
 use ferrix_vfs::fd::FdTable;
 use ferrix_vfs::{Context, OpenFile};
 use ferrix_vma::VmaFlags;
@@ -103,6 +104,12 @@ pub(crate) struct Process {
     /// global one, for the same reason the address space has its own: two
     /// processes calling `brk` at once should contend for nothing.
     state: SpinLock<State>,
+    /// Held by `brk` from its read of the heap to the unmap of a shrunk tail,
+    /// and by `fork` from its copy of the address space to its copy of the
+    /// heap, so that each sees the other's work whole. A lock that may sleep,
+    /// because both hold it across a shootdown; see [`Process::set_break`].
+    /// Taken before `state`, and never with a spin lock held.
+    heap_lock: SleepLock<()>,
     /// Where its first task enters user mode. Set once, by `exec::load`.
     startup: SpinLock<Option<Startup>>,
     /// Set by the first start, so a process runs one program's task and a
@@ -258,6 +265,7 @@ impl Process {
             files: Arc::new(SpinLock::new(fd::standard_streams())),
             fs: Arc::new(SpinLock::new(fs::namespace().context())),
             state: SpinLock::new(State::default()),
+            heap_lock: SleepLock::new((), &crate::sync::SchedParker),
             startup: SpinLock::new(None),
             start_claimed: AtomicBool::new(false),
             ending: AtomicBool::new(false),
@@ -402,6 +410,29 @@ impl Process {
             .map(|heap| (heap.start, heap.mapped_to))
     }
 
+    /// Copy its address space for `fork`, and make the child from the copy
+    /// with `make`, both under the heap lock: the heap `make` copies out of
+    /// this process then describes the space it was given, not a `brk` half
+    /// done on another thread. Never with a spin lock held.
+    ///
+    /// # Errors
+    ///
+    /// As [`AddressSpace::fork`].
+    pub(crate) fn fork_memory<R>(
+        &self,
+        make: impl FnOnce(Arc<AddressSpace>) -> R,
+    ) -> Result<R, SpaceError> {
+        let _heap = self.heap_lock.lock();
+        let space = self.space.fork()?;
+        Ok(make(space))
+    }
+
+    /// Hold the heap lock, as `brk` and `fork` do: for the check that shows
+    /// each waits for it.
+    pub(crate) fn hold_heap_for_check(&self) -> SleepLockGuard<'_, ()> {
+        self.heap_lock.lock()
+    }
+
     /// Do something with the handle table, under its lock.
     ///
     /// Whatever `change` takes out of the table it should hand back rather
@@ -469,6 +500,7 @@ impl Process {
     ///
     /// `brk(0)` is the query every libc opens with.
     pub(crate) fn set_break(&self, want: u64) -> u64 {
+        let _heap = self.heap_lock.lock();
         let mut state = self.state.lock();
 
         let heap = match state.heap {
@@ -532,16 +564,15 @@ impl Process {
             // spins on; a shootdown may not be asked for under a lock that
             // disables preemption, and `smp` checks that it is not. The
             // range is this heap's own, page-aligned and non-empty, so the
-            // unmap cannot be refused, and nothing else names it: a second
-            // caller that grows the heap meanwhile finds the pages still
-            // mapped and is refused, and one that shrinks it further takes
-            // a range below this one. Unreachable until threads share a
-            // process; then one case is worth knowing: a fork by another
-            // thread inside this window clones the still-mapped tail into a
-            // child whose heap already says it ends here, so that child's
-            // heap can never grow over the tail and the tail lives until it
-            // exits. Harmless, and a `brk` lock that may sleep would close
-            // it.
+            // unmap cannot be refused.
+            //
+            // **Under `heap_lock`, which may sleep.** Between the write and
+            // the unmap the heap says it ends here while the tail is still
+            // mapped. Another thread's `brk` growing into that window would
+            // find the pages mapped and be refused, and another thread's
+            // `fork` would clone the tail into a child whose heap already
+            // ends below it, so that the child's heap could never grow over
+            // it. Both take this lock first, so neither can see the window.
             let _ = self.space.unmap(page_end, old_mapped_to - page_end);
         }
         heap.brk

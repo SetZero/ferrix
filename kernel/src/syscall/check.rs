@@ -215,6 +215,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     mark!(7);
     let started_with = check_a_program_is_handed_its_start_argument()?;
     let futex_woken = check_futexes()?;
+    check_brk_and_fork_wait_for_the_heap_lock()?;
     mark!(8);
     let _ = at;
 
@@ -6446,6 +6447,134 @@ fn futex_waiter(_argument: usize) {
     };
     *FUTEX_ANSWER.lock() = Some(answer);
     FUTEX_ANSWERED.wake_all();
+}
+
+// ---------------------------------------------------------------------------
+// The heap lock
+//
+// `brk` writes the heap's new end before it unmaps a shrunk tail, because the
+// unmap waits for a shootdown and the state lock may not be held across one.
+// A `fork` or a growing `brk` on another thread between the two would see a
+// heap that says it ends below pages still mapped. Both take the heap lock,
+// a lock that may sleep, across the whole of it; this shows each waits for the
+// other. The lock is held here by the check, the way either would hold it,
+// and a task makes the other call: it must not finish while the lock is held,
+// and must finish once it goes. A call that skipped the lock finishes at once,
+// and fails by name.
+// ---------------------------------------------------------------------------
+
+/// Which call the heap task makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeapCall {
+    /// Shrink the heap by `brk`.
+    Shrink,
+    /// Copy the space as `fork` does.
+    Fork,
+}
+
+/// How long the heap task is given to go past the lock, once started, before
+/// the check decides it waited. A call that skipped the lock ends in well
+/// under this even under a slow host.
+const HEAP_HELD_NANOS: u64 = 50_000_000;
+
+/// How long the check waits for its heap task to start or to finish.
+const HEAP_PATIENCE_NANOS: u64 = 30_000_000_000;
+
+/// The failure a `brk` that does not wait for the heap lock produces.
+const BRK_IGNORED_HEAP_LOCK: &str = "a brk shrank the heap while a fork held the heap lock";
+
+/// The failure a `fork` that does not wait for the heap lock produces.
+const FORK_IGNORED_HEAP_LOCK: &str = "a fork copied the space while a brk held the heap lock";
+
+/// What the heap task works on, taken when it starts.
+static HEAP_SUBJECT: crate::sync::SpinLock<Option<(Arc<Process>, HeapCall, u64)>> =
+    crate::sync::SpinLock::new(None);
+
+/// Raised by the heap task just before its call.
+static HEAP_STARTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// What the heap task's call answered: the new break, or the copy's region
+/// count.
+static HEAP_ANSWER: crate::sync::SpinLock<Option<u64>> = crate::sync::SpinLock::new(None);
+
+/// A `brk` waits for a `fork` holding the heap lock, and a `fork` for a `brk`.
+fn check_brk_and_fork_wait_for_the_heap_lock() -> Result<(), &'static str> {
+    let process =
+        process::new_for_check().map_err(|_| "could not make a process for the heap lock check")?;
+    process.set_heap_base(MMAP_MIN_ADDR * 16);
+    let (start, _) = process
+        .heap_range()
+        .ok_or("the heap lock check's process has no heap")?;
+    let grown = start + 4 * PAGE_SIZE;
+    if process.set_break(grown) != grown {
+        return Err("brk did not grow the heap lock check's heap");
+    }
+    let shrunk = start + PAGE_SIZE;
+    let answer = call_past_the_heap_lock(&process, HeapCall::Shrink, shrunk)?;
+    if answer != shrunk {
+        return Err("a brk that waited for the heap lock did not shrink the heap");
+    }
+    let _ = call_past_the_heap_lock(&process, HeapCall::Fork, 0)?;
+    Ok(())
+}
+
+/// Hold `process`'s heap lock, have a task make `call`, require it not to
+/// finish while the lock is held and to finish once it goes. Answers what the
+/// call answered.
+fn call_past_the_heap_lock(
+    process: &Arc<Process>,
+    call: HeapCall,
+    want: u64,
+) -> Result<u64, &'static str> {
+    HEAP_STARTED.store(false, Ordering::SeqCst);
+    *HEAP_ANSWER.lock() = None;
+    *HEAP_SUBJECT.lock() = Some((Arc::clone(process), call, want));
+    let held = process.hold_heap_for_check();
+    let task = crate::sched::spawn("heap-lock", heap_caller, 0, ferrix_sched::NICE_0_WEIGHT)?;
+
+    let deadline = crate::timer::now_nanos().saturating_add(HEAP_PATIENCE_NANOS);
+    while !HEAP_STARTED.load(Ordering::SeqCst) {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("the heap lock check's task never started");
+        }
+        crate::sched::sleep_for(1_000_000);
+    }
+    crate::sched::sleep_for(HEAP_HELD_NANOS);
+    let early = HEAP_ANSWER.lock().is_some();
+    drop(held);
+
+    let deadline = crate::timer::now_nanos().saturating_add(HEAP_PATIENCE_NANOS);
+    while !task.is_dead() {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("the heap lock check's task never finished");
+        }
+        crate::sched::sleep_for(1_000_000);
+    }
+    if early {
+        return Err(match call {
+            HeapCall::Shrink => BRK_IGNORED_HEAP_LOCK,
+            HeapCall::Fork => FORK_IGNORED_HEAP_LOCK,
+        });
+    }
+    HEAP_ANSWER
+        .lock()
+        .take()
+        .ok_or("the heap lock check's task finished without answering")
+}
+
+/// The heap task: one `brk` or one space copy on what [`HEAP_SUBJECT`] names.
+fn heap_caller(_argument: usize) {
+    let Some((process, call, want)) = HEAP_SUBJECT.lock().take() else {
+        return;
+    };
+    HEAP_STARTED.store(true, Ordering::SeqCst);
+    let answer = match call {
+        HeapCall::Shrink => Some(process.set_break(want)),
+        HeapCall::Fork => process
+            .fork_memory(|space| space.region_count() as u64)
+            .ok(),
+    };
+    *HEAP_ANSWER.lock() = answer;
 }
 
 // ---------------------------------------------------------------------------

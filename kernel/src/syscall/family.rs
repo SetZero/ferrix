@@ -332,16 +332,21 @@ fn clone_with(
         return Err(Errno::ENOSYS);
     }
 
-    let space = parent.space().fork().map_err(|_| Errno::ENOMEM)?;
     // Not findable yet. Everything a signal sent to it is judged by -- its
     // dispositions and its thread's mask -- is in place before `kill`, a
-    // process group's signal or `/proc` can reach it.
-    let child = Arc::new(Process::forked(
-        parent,
-        space,
-        flags & CLONE_FILES != 0,
-        flags & CLONE_FS != 0,
-    ));
+    // process group's signal or `/proc` can reach it. Its space and its heap
+    // are copied under the heap lock, so a `brk` on another thread is seen
+    // whole or not at all.
+    let child = parent
+        .fork_memory(|space| {
+            Arc::new(Process::forked(
+                parent,
+                space,
+                flags & CLONE_FILES != 0,
+                flags & CLONE_FS != 0,
+            ))
+        })
+        .map_err(|_| Errno::ENOMEM)?;
     let pid = child.pid();
     if pid == 0 {
         return Err(Errno::EAGAIN);

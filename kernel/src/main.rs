@@ -649,6 +649,7 @@ fn check_syscalls() {
          roused {} waiters, and a wake that roused nobody was caught",
         report.futex_woken,
     );
+    println!("  heap     a brk waited for a fork holding the heap lock, and a fork for a brk");
 }
 
 /// Stage 7's thread checks, as `check_syscalls` reports them: each line only
