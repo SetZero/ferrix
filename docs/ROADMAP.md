@@ -1309,14 +1309,19 @@ break -- `poll` answers from the two queues, and `FIONREAD` and `SIOCOUTQ`
 report what a read would find and what a peer has not taken. `SO_TYPE`,
 `SO_DOMAIN`, `SO_PROTOCOL`, `SO_ERROR`, `SO_ACCEPTCONN`, the buffer sizes
 (kept doubled, as Linux keeps them), `SO_PEERCRED` and the two timeouts read
-back; `getsockname` and `getpeername` answer "unnamed", because a name is the
-next landing and `SCM_RIGHTS` the one after, each `EOPNOTSUPP` until then.
+back; names came in the landing after. `SCM_RIGHTS` passes descriptors: a
+send takes a reference to each named file and queues it with the first byte,
+a receive installs as many as its control buffer has room for and closes the
+rest, flagging `MSG_CTRUNC`, and a file is only ever dropped with the
+descriptor table and the queue unlocked. A socket passed over its own
+connection is not collected yet, and a peek installs nothing where Linux's
+installs duplicates.
 The `unix` boot check drives a pair of each type through `dispatch`, and what
 each call refuses stands beside what it answers -- the families and types
 `AF_UNIX` is not, a call on the console, one on a closed descriptor, a peek
 that took what it looked at, a record read that found the last record's tail:
 
-      unix     a stream pair carried bytes across two writes and a peek left them; records kept their boundaries and MSG_TRUNC their lengths; shutdown ended one direction; a socket reported its type, buffers, credentials and unnamed address
+      unix     a stream pair carried bytes across two writes and a peek left them; records kept their boundaries and MSG_TRUNC their lengths; shutdown ended one direction; a socket reported its type, buffers, credentials and unnamed address; a connection crossed an abstract name and a path, and 6 name calls were refused as specified; a descriptor travelled with a message, kept its file open in the queue, and was closed when a receive had no room for it
 
 **Left, and why it did not block the exit:**
 

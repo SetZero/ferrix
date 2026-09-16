@@ -12,9 +12,23 @@
 //! Sockets made by `socket(AF_UNIX, ...)`, and by `socketpair` connected to each
 //! other: stream, sequenced-packet and datagram, read and written through
 //! `read`, `write`, `send*` and `recv*`, shut down a direction at a time,
-//! polled, and asked their queue lengths and options. Names -- `bind`,
-//! `listen`, `connect`, `accept` -- come next, and descriptor passing after
-//! them; until then a socket made by `socket` is connected to nothing.
+//! polled, and asked their queue lengths and options; named, listened on,
+//! connected to and accepted from; and descriptors passed with a message
+//! (`SCM_RIGHTS`). Credentials passed with one (`SCM_CREDENTIALS`,
+//! `SO_PASSCRED`) come next.
+//!
+//! # A passed descriptor is an open file in a queue
+//!
+//! `SCM_RIGHTS` takes a reference to each open file the sender names and
+//! queues the references with the bytes they were sent with, as [`Passed`]; a
+//! receive that takes those bytes installs them as new descriptors, and one
+//! that cannot -- a plain `read`, or `recvmsg` with no room for them -- drops
+//! them, which closes a file nobody else holds. Dropping one may close a file,
+//! so a [`Passed`] is dropped only with no buffer locked: the buffer hands it
+//! back rather than dropping it, and every path here binds it to a variable
+//! that outlives the guard. A socket passed over its own connection, or two
+//! passed over each other's, keep each other alive while they sit in the
+//! queues; nothing collects such a cycle yet.
 //!
 //! # Never waiting with a buffer locked
 //!
@@ -99,9 +113,17 @@ const NANOS_PER_SECOND: u64 = 1_000_000_000;
 /// Nanoseconds in a microsecond.
 const NANOS_PER_MICRO: u64 = 1_000;
 
-/// What travels beside the bytes of a message. Nothing yet: descriptors and
-/// credentials come with descriptor passing.
-type Ancillary = ();
+/// What travels beside the bytes of a message: the open files an
+/// `SCM_RIGHTS` message passes. See the module documentation for why one is
+/// dropped only with no buffer locked.
+#[derive(Debug, Default)]
+pub(crate) struct Passed {
+    /// The files, in the order the sender named their descriptors.
+    pub(crate) files: Vec<Arc<OpenFile>>,
+}
+
+/// What travels beside the bytes of a message.
+type Ancillary = Passed;
 
 /// The three kinds of `AF_UNIX` socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -665,6 +687,25 @@ impl Socket {
     /// timeout ran out; a restart code or `EINTR` for a signal. A stream that
     /// sent part of `data` first reports the count instead.
     pub(crate) fn send(&self, data: &[u8], flags: u32, nonblock: bool) -> Result<usize, Errno> {
+        self.send_passing(data, flags, nonblock, None)
+    }
+
+    /// [`Socket::send`], with files to pass with the first byte sent.
+    ///
+    /// Files that were not queued -- the send failed, or sent nothing -- are
+    /// dropped on the way out, with no buffer locked.
+    ///
+    /// # Errors
+    ///
+    /// As [`Socket::send`].
+    pub(crate) fn send_passing(
+        &self,
+        data: &[u8],
+        flags: u32,
+        nonblock: bool,
+        passed: Option<Passed>,
+    ) -> Result<usize, Errno> {
+        let mut passed = passed;
         let peer = self.send.lock().clone().ok_or(Errno::ENOTCONN)?;
         let options = *self.options.lock();
         if options.shut_write {
@@ -675,12 +716,16 @@ impl Socket {
         }
         let nonblock = nonblock || flags & MSG_DONTWAIT != 0;
         let deadline = deadline(options.send_timeout);
-        match self.kind {
-            SocketType::Stream => self.send_stream(&peer, data, flags, nonblock, deadline),
-            SocketType::SeqPacket | SocketType::Datagram => {
-                self.send_record(&peer, data, flags, nonblock, deadline)
+        let sent = match self.kind {
+            SocketType::Stream => {
+                self.send_stream(&peer, data, &mut passed, flags, nonblock, deadline)
             }
-        }
+            SocketType::SeqPacket | SocketType::Datagram => {
+                self.send_record(&peer, data, &mut passed, flags, nonblock, deadline)
+            }
+        };
+        drop(passed);
+        sent
     }
 
     /// [`Socket::send`] for a stream.
@@ -688,6 +733,7 @@ impl Socket {
         &self,
         peer: &Channel,
         data: &[u8],
+        passed: &mut Option<Passed>,
         flags: u32,
         nonblock: bool,
         deadline: u64,
@@ -702,11 +748,12 @@ impl Socket {
             let outcome = if peer.is_refused() {
                 WriteOutcome::Broken
             } else {
-                let mut nothing = None;
                 // The guard is named and given back here, so that nothing
-                // below this can wait while the buffer is locked.
+                // below this can wait while the buffer is locked. The files
+                // go with the first bytes queued, and stay with the caller
+                // otherwise.
                 let mut buffer = peer.buffer.lock();
-                let outcome = buffer.write(rest, &mut nothing);
+                let outcome = buffer.write(rest, passed);
                 drop(buffer);
                 outcome
             };
@@ -742,6 +789,7 @@ impl Socket {
         &self,
         peer: &Channel,
         data: &[u8],
+        passed: &mut Option<Passed>,
         flags: u32,
         nonblock: bool,
         deadline: u64,
@@ -756,11 +804,10 @@ impl Socket {
                 }
                 WriteOutcome::Broken
             } else {
-                let mut nothing = None;
                 // The guard is named and given back here, so that nothing
                 // below this can wait while the buffer is locked.
                 let mut buffer = peer.buffer.lock();
-                let outcome = buffer.write(data, &mut nothing);
+                let outcome = buffer.write(data, passed);
                 drop(buffer);
                 outcome
             };
@@ -797,6 +844,29 @@ impl Socket {
         flags: u32,
         nonblock: bool,
     ) -> Result<Received, Errno> {
+        // Files that came with the bytes are dropped here, with no buffer
+        // locked: a receive that cannot install them closes them, as Linux's
+        // `read` on a socket does.
+        self.recv_passing(out, flags, nonblock)
+            .map(|(received, _passed)| received)
+    }
+
+    /// [`Socket::recv`], handing back the files that came with the bytes.
+    ///
+    /// A receive hands back at most one message's files: a stream stops after
+    /// the bytes that brought some, as Linux's `unix_stream_read_generic`
+    /// stops, even under `MSG_WAITALL`. A peek hands back none, which is where
+    /// this differs from Linux, whose peek installs duplicates.
+    ///
+    /// # Errors
+    ///
+    /// As [`Socket::recv`].
+    pub(crate) fn recv_passing(
+        &self,
+        out: &mut [u8],
+        flags: u32,
+        nonblock: bool,
+    ) -> Result<(Received, Option<Passed>), Errno> {
         if self.kind != SocketType::Datagram && self.send.lock().is_none() {
             // `unix_stream_read_generic` answers EINVAL, `unix_seqpacket_recvmsg`
             // ENOTCONN.
@@ -807,7 +877,7 @@ impl Socket {
             });
         }
         if out.is_empty() && self.kind == SocketType::Stream {
-            return Ok(Received { bytes: 0, full: 0 });
+            return Ok((Received { bytes: 0, full: 0 }, None));
         }
         let nonblock = nonblock || flags & MSG_DONTWAIT != 0;
         let peek = flags & MSG_PEEK != 0;
@@ -819,27 +889,37 @@ impl Socket {
             // Bound first, so the guard is gone before anything below waits.
             let outcome = self.receive.buffer.lock().read(rest, peek);
             let refusal = match outcome {
-                ReadOutcome::Read { bytes, full, .. } => {
+                ReadOutcome::Read {
+                    bytes,
+                    full,
+                    ancillary,
+                } => {
                     if !peek {
                         self.receive.writable.wake_all();
                     }
                     if self.kind != SocketType::Stream {
-                        return Ok(Received { bytes, full });
+                        return Ok((Received { bytes, full }, ancillary));
                     }
                     done += bytes;
-                    if wait_all && done < out.len() {
+                    if wait_all && done < out.len() && ancillary.is_none() {
                         continue;
                     }
-                    return Ok(Received {
-                        bytes: done,
-                        full: done,
-                    });
+                    return Ok((
+                        Received {
+                            bytes: done,
+                            full: done,
+                        },
+                        ancillary,
+                    ));
                 }
                 ReadOutcome::EndOfFile => {
-                    return Ok(Received {
-                        bytes: done,
-                        full: done,
-                    });
+                    return Ok((
+                        Received {
+                            bytes: done,
+                            full: done,
+                        },
+                        None,
+                    ));
                 }
                 ReadOutcome::WouldBlock if nonblock => Errno::EAGAIN,
                 ReadOutcome::WouldBlock => match wait(
@@ -852,10 +932,13 @@ impl Socket {
                 },
             };
             return if done > 0 {
-                Ok(Received {
-                    bytes: done,
-                    full: done,
-                })
+                Ok((
+                    Received {
+                        bytes: done,
+                        full: done,
+                    },
+                    None,
+                ))
             } else {
                 Err(refusal)
             };

@@ -9,10 +9,23 @@
 //! and the one every program already handles. The calls on a socket send and
 //! receive, shut it down, name it unnamed, and ask and set its options.
 //!
-//! Naming a socket -- `bind`, `listen`, `connect`, `accept`, and a datagram
-//! sent to a name -- and passing descriptors are `EOPNOTSUPP` on a socket until
-//! they land. On a descriptor that is not a socket every call is `ENOTSOCK`,
-//! and on a closed one `EBADF`, exactly as Linux answers.
+//! An `AF_UNIX` socket is named with `bind`, `listen`, `connect` and `accept`,
+//! and passes descriptors with `SCM_RIGHTS`. Credentials (`SCM_CREDENTIALS`)
+//! and a datagram sent to a name are `EOPNOTSUPP` until they land. On a
+//! descriptor that is not a socket every call is `ENOTSOCK`, and on a closed
+//! one `EBADF`, exactly as Linux answers.
+//!
+//! # Passing descriptors
+//!
+//! `sendmsg` turns an `SCM_RIGHTS` message's descriptors into references to
+//! their open files before anything is sent, and the socket queues them with
+//! the first byte (`crate::fs::socket::Passed`). `recvmsg` installs the ones
+//! that came with the bytes it took as new descriptors, as many as its control
+//! buffer has room for, and writes one `SCM_RIGHTS` message saying which;
+//! what does not fit is closed and the message flagged `MSG_CTRUNC`, as
+//! `scm_detach_fds` does. A file is only ever dropped with the descriptor
+//! table unlocked: the table is given a clone, so the last reference to a file
+//! that could not be installed is the one dropped afterwards.
 //!
 //! # Linux's order
 //!
@@ -39,16 +52,17 @@ use ferrix_linux_abi::inet::{
 use ferrix_linux_abi::netlink::NETLINK_ROUTE;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::socket::{
-    AF_INET, AF_INET6, AF_MAX, AF_NETLINK, AF_PACKET, AF_UNIX, ControlMessages, MSG_CMSG_COMPAT,
-    MSG_OOB, MSG_TRUNC, MsgHdr, SCM_CREDENTIALS, SCM_RIGHTS, SOCK_CLOEXEC, SOCK_DGRAM,
-    SOCK_NONBLOCK, SOCK_RAW, SOCK_STREAM, SOCK_TYPE_MASK, SOL_SOCKET, UnixAddress, Width,
+    AF_INET, AF_INET6, AF_MAX, AF_NETLINK, AF_PACKET, AF_UNIX, CmsgHdr, ControlMessages,
+    MSG_CMSG_CLOEXEC, MSG_CMSG_COMPAT, MSG_CTRUNC, MSG_OOB, MSG_TRUNC, MsgHdr, SCM_CREDENTIALS,
+    SCM_MAX_FD, SCM_RIGHTS, SOCK_CLOEXEC, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_RAW, SOCK_STREAM,
+    SOCK_TYPE_MASK, SOL_SOCKET, UnixAddress, Width, cmsg_len, cmsg_space,
 };
 use ferrix_net::packet::PacketKind;
 use ferrix_net::socket::Family;
 use ferrix_vfs::OpenFile;
 
 use crate::fs;
-use crate::fs::socket::{Received, Socket, SocketType};
+use crate::fs::socket::{Passed, Received, Socket, SocketType};
 use crate::net::netlink::{self as netlink, NetlinkSocket};
 use crate::net::packet::PacketSocket;
 use crate::net::socket::{self as inet, InetKind, InetSocket};
@@ -947,30 +961,128 @@ fn iovecs(process: &Process, message: &MsgHdr) -> Result<Vec<(u64, usize)>, Errn
     Ok(segments)
 }
 
-/// A send's control messages, checked: none may carry descriptors or
-/// credentials until descriptor passing lands, a malformed buffer is `EINVAL`,
-/// and messages for levels other than `SOL_SOCKET` are ignored, as
-/// `__scm_send` ignores them.
-fn check_control(process: &Process, message: &MsgHdr) -> Result<(), Errno> {
+/// A send's control messages, as `__scm_send` reads them: the files an
+/// `SCM_RIGHTS` message names, gathered across every such message, for an
+/// `AF_UNIX` socket to pass. A malformed buffer is `EINVAL`, and so is an
+/// unknown `SOL_SOCKET` message or more than `SCM_MAX_FD` descriptors; a
+/// descriptor that is not open is `EBADF`; messages for other levels are
+/// ignored. Credentials, and descriptors on any other family, are
+/// `EOPNOTSUPP` until they land.
+///
+/// The files are cloned out of the descriptor table under its lock and dropped,
+/// if the send is refused, after it.
+fn control(process: &Process, message: &MsgHdr, socket: &Any) -> Result<Option<Passed>, Errno> {
     if message.control_len == 0 {
-        return Ok(());
+        return Ok(None);
     }
     let length = usize::try_from(message.control_len)
         .ok()
         .filter(|&length| length <= MAX_CONTROL)
         .ok_or(Errno::ENOBUFS)?;
     let control = copy_in(process, message.control, length)?;
+    let mut descriptors: Vec<i32> = Vec::new();
+    let mut rights = false;
     for entry in ControlMessages::new(&control, NATIVE) {
         let entry = entry.map_err(|_| Errno::EINVAL)?;
         if entry.level != SOL_SOCKET {
             continue;
         }
-        return Err(match entry.kind {
-            SCM_RIGHTS | SCM_CREDENTIALS => Errno::EOPNOTSUPP,
-            _ => Errno::EINVAL,
-        });
+        match entry.kind {
+            SCM_RIGHTS if matches!(socket, Any::Unix(_)) => {
+                rights = true;
+                let count = entry.data.len() / size_of::<i32>();
+                if descriptors.len().saturating_add(count) > SCM_MAX_FD {
+                    return Err(Errno::EINVAL);
+                }
+                descriptors.try_reserve(count).map_err(|_| Errno::ENOMEM)?;
+                descriptors.extend(
+                    entry
+                        .data
+                        .chunks_exact(size_of::<i32>())
+                        .filter_map(|bytes| <[u8; 4]>::try_from(bytes).ok())
+                        .map(i32::from_le_bytes),
+                );
+            }
+            SCM_RIGHTS | SCM_CREDENTIALS => return Err(Errno::EOPNOTSUPP),
+            _ => return Err(Errno::EINVAL),
+        }
     }
-    Ok(())
+    if !rights || descriptors.is_empty() {
+        return Ok(None);
+    }
+    let mut files = Vec::new();
+    files
+        .try_reserve_exact(descriptors.len())
+        .map_err(|_| Errno::ENOMEM)?;
+    let table = process.files().lock();
+    for descriptor in descriptors {
+        match table.get(descriptor) {
+            Ok(file) => files.push(Arc::clone(file)),
+            Err(errno) => {
+                drop(table);
+                drop(files);
+                return Err(errno);
+            }
+        }
+    }
+    drop(table);
+    Ok(Some(Passed { files }))
+}
+
+/// Install the files a receive took as the receiver's descriptors, as many as
+/// `capacity` bytes of control buffer at `at` have room for, and write the
+/// `SCM_RIGHTS` message naming them. Answers the control bytes used and whether
+/// any file was left out -- no room, or no descriptor free -- which is
+/// `MSG_CTRUNC`. Every file left out is dropped when `passed` is, after the
+/// table's lock is gone.
+fn deliver_files(
+    process: &Process,
+    passed: &Passed,
+    at: u64,
+    capacity: usize,
+    flags: u32,
+) -> Result<(usize, bool), Errno> {
+    let header = CmsgHdr::size(NATIVE);
+    let room = if at == 0 {
+        0
+    } else {
+        capacity.saturating_sub(header) / size_of::<i32>()
+    };
+    let wanted = passed.files.len().min(room);
+    let mut installed: Vec<i32> = Vec::new();
+    installed
+        .try_reserve_exact(wanted)
+        .map_err(|_| Errno::ENOMEM)?;
+    {
+        let mut table = process.files().lock();
+        for file in passed.files.iter().take(wanted) {
+            match table.insert(Arc::clone(file), flags & MSG_CMSG_CLOEXEC != 0) {
+                Ok(descriptor) => installed.push(descriptor),
+                Err(_) => break,
+            }
+        }
+    }
+    let truncated = installed.len() < passed.files.len();
+    if installed.is_empty() {
+        return Ok((0, truncated));
+    }
+    let data_len = installed.len() * size_of::<i32>();
+    let mut bytes = zeroed(cmsg_len(data_len, NATIVE))?;
+    CmsgHdr {
+        len: cmsg_len(data_len, NATIVE) as u64,
+        level: SOL_SOCKET,
+        kind: SCM_RIGHTS,
+    }
+    .encode(&mut bytes, NATIVE)
+    .ok_or(Errno::EINVAL)?;
+    for (index, descriptor) in installed.iter().enumerate() {
+        let slot = bytes
+            .get_mut(header + index * size_of::<i32>()..header + (index + 1) * size_of::<i32>())
+            .ok_or(Errno::EINVAL)?;
+        slot.copy_from_slice(&descriptor.to_le_bytes());
+    }
+    uaccess::copy_to_user(process.space(), at, &bytes).map_err(|_| Errno::EFAULT)?;
+    Ok((cmsg_space(data_len, NATIVE).min(capacity), truncated))
 }
 
 /// `sendmsg`: the message's buffers gathered into one send.
@@ -996,7 +1108,7 @@ fn sys_sendmsg(
         Some(read_address(process, message.name, name_length)?)
     };
     let segments = iovecs(process, &message)?;
-    check_control(process, &message)?;
+    let passed = control(process, &message, &socket)?;
     let total = segments
         .iter()
         .map(|&(_, length)| length)
@@ -1013,12 +1125,18 @@ fn sys_sendmsg(
         uaccess::copy_from_user(process.space(), base, slot).map_err(|_| Errno::EFAULT)?;
         filled += take;
     }
-    socket.send(&data, flags, file.status().nonblock, destination.as_deref())
+    match (&socket, passed) {
+        (Any::Unix(unix), Some(passed)) => {
+            unix.send_passing(&data, flags, file.status().nonblock, Some(passed))
+        }
+        (_, _) => socket.send(&data, flags, file.status().nonblock, destination.as_deref()),
+    }
 }
 
 /// `recvmsg`: one receive scattered over the message's buffers, with its
-/// length fields and flags written back. No control messages arrive yet, and
-/// a peer without a name reports an address of length zero.
+/// length fields and flags written back, and the descriptors that came with
+/// the bytes installed. A peer without a name reports an address of length
+/// zero.
 fn sys_recvmsg(
     process: &Process,
     descriptor: i32,
@@ -1046,7 +1164,16 @@ fn sys_recvmsg(
         usize::try_from(message.name_len).unwrap_or(0)
     };
     let mut data = zeroed(total)?;
-    let (received, from) = socket.recv(&mut data, flags, file.status().nonblock)?;
+    let (received, from, passed) = match &socket {
+        Any::Unix(unix) => {
+            let (received, passed) = unix.recv_passing(&mut data, flags, file.status().nonblock)?;
+            (received, None, passed)
+        }
+        _ => {
+            let (received, from) = socket.recv(&mut data, flags, file.status().nonblock)?;
+            (received, from, None)
+        }
+    };
     let mut offset = 0;
     for (base, length) in segments {
         if offset >= received.bytes {
@@ -1068,16 +1195,30 @@ fn sys_recvmsg(
             capacity,
         )?;
     }
+    let (control_used, control_truncated) = match &passed {
+        Some(passed) => deliver_files(
+            process,
+            passed,
+            message.control,
+            usize::try_from(message.control_len).unwrap_or(usize::MAX),
+            flags,
+        )?,
+        None => (0, false),
+    };
+    // Every file not installed is closed here, with the table unlocked.
+    drop(passed);
     let truncated = socket.kind() != SocketType::Stream && received.full > received.bytes;
+    let message_flags =
+        if truncated { MSG_TRUNC } else { 0 } | if control_truncated { MSG_CTRUNC } else { 0 };
     uaccess::put_u32(
         process.space(),
         field(MsgHdr::flags_offset(NATIVE)),
-        if truncated { MSG_TRUNC } else { 0 },
+        message_flags,
     )?;
     uaccess::put_word(
         process.space(),
         field(MsgHdr::control_len_offset(NATIVE)),
-        0,
+        control_used as u64,
     )?;
     Ok(received_count(&socket, received, flags))
 }

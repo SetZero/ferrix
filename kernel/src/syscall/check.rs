@@ -24,11 +24,11 @@ use ferrix_bootinfo::{KERNEL_HALF_BASE, PAGE_SIZE};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall as Call;
 use ferrix_linux_abi::socket::{
-    AF_MAX, AF_UNIX, CmsgHdr, MSG_NOSIGNAL, MSG_OOB, MSG_PEEK, MSG_TRUNC, MSG_WAITALL, MsgHdr,
-    SCM_RIGHTS, SHUT_RD, SHUT_WR, SIOCINQ, SIOCOUTQ, SO_ACCEPTCONN, SO_DOMAIN, SO_ERROR,
-    SO_PEERCRED, SO_PROTOCOL, SO_RCVBUF, SO_RCVTIMEO_OLD, SO_TYPE, SOCK_DGRAM, SOCK_NONBLOCK,
-    SOCK_RAW, SOCK_RDM, SOCK_SEQPACKET, SOCK_STREAM, SOCKET_BUFFER_MIN, SOL_SOCKET, Ucred, Width,
-    cmsg_len, cmsg_space,
+    AF_MAX, AF_UNIX, CmsgHdr, MSG_CTRUNC, MSG_NOSIGNAL, MSG_OOB, MSG_PEEK, MSG_TRUNC, MSG_WAITALL,
+    MsgHdr, SCM_CREDENTIALS, SCM_MAX_FD, SCM_RIGHTS, SHUT_RD, SHUT_WR, SIOCINQ, SIOCOUTQ,
+    SO_ACCEPTCONN, SO_DOMAIN, SO_ERROR, SO_PEERCRED, SO_PROTOCOL, SO_RCVBUF, SO_RCVTIMEO_OLD,
+    SO_TYPE, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_RAW, SOCK_RDM, SOCK_SEQPACKET, SOCK_STREAM,
+    SOCKET_BUFFER_MIN, SOL_SOCKET, Ucred, Width, cmsg_len, cmsg_space,
 };
 use ferrix_linux_abi::types::{
     AT_FDCWD, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
@@ -7428,6 +7428,9 @@ const RECEIVED: u64 = 0x200;
 /// Where it builds a `msghdr`, with its iovecs and control buffer after it.
 const MESSAGE: u64 = 0x300;
 
+/// Where a socket check puts a control buffer, as an offset in its page.
+const CONTROL: u64 = 0x600;
+
 /// `AF_UNIX` sockets: what a pair carries, what a socket reports, what the
 /// calls refuse, and what a name carries.
 fn check_unix_sockets(process: &Process, page: u64) -> Result<(), &'static str> {
@@ -7445,7 +7448,8 @@ fn check_unix_sockets(process: &Process, page: u64) -> Result<(), &'static str> 
          records kept their boundaries and MSG_TRUNC their lengths; shutdown ended one \
          direction; a socket reported its type, buffers, credentials and unnamed address; \
          a connection crossed an abstract name and a path, and 6 name calls were refused \
-         as specified"
+         as specified; a descriptor travelled with a message, kept its file open in the \
+         queue, and was closed when a receive had no room for it"
     );
     Ok(())
 }
@@ -8464,7 +8468,7 @@ fn message_answers(
     {
         return Err("a message did not scatter into the buffers it was given");
     }
-    check_a_message_with_descriptors_is_refused(process, page, one)
+    check_descriptors_travel_with_a_message(process, page, (one, other))
 }
 
 /// Write a `msghdr` naming the `count` buffers at `iov` and nothing else.
@@ -8484,63 +8488,260 @@ fn stage_header(process: &Process, header: u64, iov: u64, count: u64) -> Result<
     uaccess::copy_to_user(process.space(), header, staged).map_err(|_| "could not stage a msghdr")
 }
 
-/// A control message carrying descriptors is `EOPNOTSUPP` until the landing
-/// that carries them, and one whose length is shorter than its own header is
-/// `EINVAL`, as `CMSG_OK` failing is on Linux. A buffer too short to hold a
-/// header at all is not that: it holds no message, and Linux sends it.
-fn check_a_message_with_descriptors_is_refused(
+/// What a receive that does not install the descriptor it was sent fails
+/// with, which the negative control requires by name.
+const DESCRIPTOR_NOT_INSTALLED: &str =
+    "recvmsg did not install the descriptor that came with the bytes";
+
+/// Descriptors travel with a message (`SCM_RIGHTS`) on a sequenced-packet pair.
+///
+/// A pipe's write end is sent and the sender's own descriptor for it closed:
+/// the pipe must see no hangup, because the reference in the queue keeps the
+/// file open. The receive must install a new descriptor for that same file,
+/// say so in one `SCM_RIGHTS` message filling the control buffer's
+/// `CMSG_SPACE`, and flag nothing truncated. Sent again and received with no
+/// control buffer, the file must be closed on the way -- the pipe now sees its
+/// hangup -- and the message flagged `MSG_CTRUNC`. Then the refusals: a
+/// descriptor that is not open is `EBADF`, more than `SCM_MAX_FD` is `EINVAL`,
+/// credentials are `EOPNOTSUPP` until they land, and a control message shorter
+/// than its own header is `EINVAL`, as `CMSG_OK` failing is on Linux.
+fn check_descriptors_travel_with_a_message(
     process: &Process,
     page: u64,
-    fd: i32,
+    (one, other): (i32, i32),
 ) -> Result<(), &'static str> {
-    let header = page + MESSAGE;
-    let iov = header + 0x40;
-    let control = header + 0x80;
-    let word = size_of::<usize>() as u64;
-    write_word(process, iov, page + SENT)?;
-    write_word(process, iov + word, 1)?;
-    let mut buffer = alloc::vec![0_u8; cmsg_space(4, width())];
-    let cmsg = CmsgHdr {
-        len: cmsg_len(4, width()) as u64,
-        level: SOL_SOCKET,
-        kind: SCM_RIGHTS,
-    };
-    cmsg.encode(&mut buffer, width())
-        .ok_or("could not build a control message")?;
-    uaccess::copy_to_user(process.space(), control, &buffer)
-        .map_err(|_| "could not stage a control message")?;
-    let send = |control_len: u64| -> Result<usize, Errno> {
-        stage_header(process, header, iov, 1).map_err(|_| Errno::EFAULT)?;
-        let at = header + MsgHdr::control_offset(width()) as u64;
-        uaccess::put_word(process.space(), at, control)?;
-        let at = header + MsgHdr::control_len_offset(width()) as u64;
-        uaccess::put_word(process.space(), at, control_len)?;
-        socket_call(
-            process,
-            Call::Sendmsg,
-            &[as_arg(fd), header, u64::from(MSG_NOSIGNAL), 0, 0, 0],
-        )
-    };
-    refuses(
-        send(buffer.len() as u64),
-        Errno::EOPNOTSUPP,
-        "a message carrying descriptors was not EOPNOTSUPP",
+    // The check holds the read end, and only a weak reference to the write
+    // end: the descriptors and the queue are all that may keep it open.
+    let (reader, writer) =
+        crate::fs::pipe::new_pipe(true, (0, 0)).map_err(|_| "could not make a pipe to pass")?;
+    let sent = Arc::downgrade(&writer);
+    let sent_fd = process
+        .files()
+        .lock()
+        .insert(writer, false)
+        .map_err(|_| "could not give the check a pipe's write end")?;
+    let outcome = a_descriptor_travels(process, page, (one, other), sent_fd, &reader, &sent)
+        .and_then(|installed| {
+            a_descriptor_with_no_room_is_closed(process, page, (one, other), installed, &reader)
+        })
+        .and_then(|()| what_passing_descriptors_refuses(process, page, one));
+    let _ = fd::sys_close(process, sent_fd);
+    outcome
+}
+
+/// The bytes of an `SCM_RIGHTS` message naming `fds`.
+fn rights(fds: &[i32]) -> Vec<u8> {
+    fds.iter().flat_map(|fd| fd.to_le_bytes()).collect()
+}
+
+/// Send `sent_fd` and close it; the queue keeps the file open; the receive
+/// installs a descriptor for the same file. Answers that descriptor.
+fn a_descriptor_travels(
+    process: &Process,
+    page: u64,
+    (one, other): (i32, i32),
+    sent_fd: i32,
+    reader: &Arc<ferrix_vfs::OpenFile>,
+    sent: &alloc::sync::Weak<ferrix_vfs::OpenFile>,
+) -> Result<i32, &'static str> {
+    answers(
+        message_with_control(process, page, one, SCM_RIGHTS, &rights(&[sent_fd]), None),
+        1,
+        "sendmsg with one descriptor did not send its byte",
     )?;
-    let short = CmsgHdr {
-        len: 4,
-        level: SOL_SOCKET,
-        kind: SCM_RIGHTS,
-    };
-    short
-        .encode(&mut buffer, width())
-        .ok_or("could not build a control message")?;
-    uaccess::copy_to_user(process.space(), control, &buffer)
-        .map_err(|_| "could not stage a control message")?;
+    let _ = fd::sys_close(process, sent_fd);
+    if reader.poll().hangup {
+        return Err("a descriptor in a socket's queue did not keep its file open");
+    }
+
+    let capacity = cmsg_space(4, width());
+    let (count, flags, control_len, control) =
+        receive_with_control(process, page, other, capacity)?;
+    if count != 1 {
+        return Err("recvmsg did not receive the byte the descriptor came with");
+    }
+    let header = CmsgHdr::decode(&control, width()).ok_or("could not read a control message")?;
+    if control_len != capacity as u64
+        || header.level != SOL_SOCKET
+        || header.kind != SCM_RIGHTS
+        || header.len != cmsg_len(4, width()) as u64
+    {
+        return Err(DESCRIPTOR_NOT_INSTALLED);
+    }
+    if flags & MSG_CTRUNC != 0 {
+        return Err("a descriptor that fitted its control buffer was flagged MSG_CTRUNC");
+    }
+    let data = control
+        .get(CmsgHdr::size(width())..CmsgHdr::size(width()) + 4)
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .ok_or("a control message had no descriptor in it")?;
+    let installed = i32::from_le_bytes(data);
+    let file = fd::file(process, installed).map_err(|_| DESCRIPTOR_NOT_INSTALLED)?;
+    if !core::ptr::eq(Arc::as_ptr(&file), sent.as_ptr()) {
+        return Err("recvmsg installed a descriptor for another file than the one sent");
+    }
+    Ok(installed)
+}
+
+/// Send `installed` and close it; a receive with no control buffer closes the
+/// file on the way -- the pipe sees its hangup -- and flags `MSG_CTRUNC`.
+fn a_descriptor_with_no_room_is_closed(
+    process: &Process,
+    page: u64,
+    (one, other): (i32, i32),
+    installed: i32,
+    reader: &Arc<ferrix_vfs::OpenFile>,
+) -> Result<(), &'static str> {
+    let sent = message_with_control(process, page, one, SCM_RIGHTS, &rights(&[installed]), None);
+    let _ = fd::sys_close(process, installed);
+    answers(
+        sent,
+        1,
+        "sendmsg with a received descriptor did not send its byte",
+    )?;
+    if reader.poll().hangup {
+        return Err("a descriptor sent a second time did not keep its file open");
+    }
+    let (count, flags, control_len, _) = receive_with_control(process, page, other, 0)?;
+    if count != 1 || control_len != 0 || flags & MSG_CTRUNC == 0 {
+        return Err("a descriptor with no control buffer to go in was not flagged MSG_CTRUNC");
+    }
+    if !reader.poll().hangup {
+        return Err("a descriptor a receive had no room for was not closed");
+    }
+    Ok(())
+}
+
+/// A descriptor that is not open is `EBADF`, more than `SCM_MAX_FD` is
+/// `EINVAL`, credentials are `EOPNOTSUPP` until they land, and a control
+/// message shorter than its own header is `EINVAL`.
+fn what_passing_descriptors_refuses(
+    process: &Process,
+    page: u64,
+    one: i32,
+) -> Result<(), &'static str> {
     refuses(
-        send(buffer.len() as u64),
+        message_with_control(process, page, one, SCM_RIGHTS, &rights(&[-1]), None),
+        Errno::EBADF,
+        "a message naming a closed descriptor was not EBADF",
+    )?;
+    let too_many = alloc::vec![0_i32; SCM_MAX_FD + 1];
+    refuses(
+        message_with_control(process, page, one, SCM_RIGHTS, &rights(&too_many), None),
+        Errno::EINVAL,
+        "a message with more than SCM_MAX_FD descriptors was not EINVAL",
+    )?;
+    refuses(
+        message_with_control(process, page, one, SCM_CREDENTIALS, &[0; 12], None),
+        Errno::EOPNOTSUPP,
+        "a message carrying credentials was not EOPNOTSUPP",
+    )?;
+    refuses(
+        message_with_control(process, page, one, SCM_RIGHTS, &[], Some(4)),
         Errno::EINVAL,
         "a control message shorter than its own header was not EINVAL",
     )
+}
+
+/// `sendmsg` of one byte on `fd` with one `SOL_SOCKET` control message of
+/// `kind` and `data`; `len` overrides its `cmsg_len`.
+fn message_with_control(
+    process: &Process,
+    page: u64,
+    fd: i32,
+    kind: i32,
+    data: &[u8],
+    len: Option<u64>,
+) -> Result<usize, Errno> {
+    let header = page + MESSAGE;
+    let iov = header + 0x40;
+    let control = page + CONTROL;
+    let word = size_of::<usize>() as u64;
+    write_word(process, iov, page + SENT).map_err(|_| Errno::EFAULT)?;
+    write_word(process, iov + word, 1).map_err(|_| Errno::EFAULT)?;
+    let mut buffer = alloc::vec![0_u8; cmsg_space(data.len(), width())];
+    CmsgHdr {
+        len: len.unwrap_or(cmsg_len(data.len(), width()) as u64),
+        level: SOL_SOCKET,
+        kind,
+    }
+    .encode(&mut buffer, width())
+    .ok_or(Errno::EINVAL)?;
+    let body = CmsgHdr::size(width());
+    buffer
+        .get_mut(body..body + data.len())
+        .ok_or(Errno::EINVAL)?
+        .copy_from_slice(data);
+    uaccess::copy_to_user(process.space(), control, &buffer).map_err(|_| Errno::EFAULT)?;
+    stage_header(process, header, iov, 1).map_err(|_| Errno::EFAULT)?;
+    uaccess::put_word(
+        process.space(),
+        header + MsgHdr::control_offset(width()) as u64,
+        control,
+    )?;
+    uaccess::put_word(
+        process.space(),
+        header + MsgHdr::control_len_offset(width()) as u64,
+        buffer.len() as u64,
+    )?;
+    socket_call(
+        process,
+        Call::Sendmsg,
+        &[as_arg(fd), header, u64::from(MSG_NOSIGNAL), 0, 0, 0],
+    )
+}
+
+/// `recvmsg` of up to eight bytes on `fd` with a control buffer of `capacity`
+/// bytes, none if zero. Answers the count, `msg_flags`, `msg_controllen` and
+/// the control buffer's bytes.
+fn receive_with_control(
+    process: &Process,
+    page: u64,
+    fd: i32,
+    capacity: usize,
+) -> Result<(usize, u32, u64, Vec<u8>), &'static str> {
+    let header = page + MESSAGE;
+    let iov = header + 0x40;
+    let control = page + CONTROL;
+    let word = size_of::<usize>() as u64;
+    write_word(process, iov, page + RECEIVED)?;
+    write_word(process, iov + word, 8)?;
+    stage_header(process, header, iov, 1)?;
+    let (at, len) = if capacity == 0 {
+        (0, 0)
+    } else {
+        (control, capacity as u64)
+    };
+    uaccess::put_word(
+        process.space(),
+        header + MsgHdr::control_offset(width()) as u64,
+        at,
+    )
+    .map_err(|_| "could not stage a control buffer")?;
+    uaccess::put_word(
+        process.space(),
+        header + MsgHdr::control_len_offset(width()) as u64,
+        len,
+    )
+    .map_err(|_| "could not stage a control buffer")?;
+    let count = socket_call(process, Call::Recvmsg, &[as_arg(fd), header, 0, 0, 0, 0])
+        .map_err(|_| "recvmsg of a message carrying a descriptor failed")?;
+    let flags = uaccess::get_u32(
+        process.space(),
+        header + MsgHdr::flags_offset(width()) as u64,
+    )
+    .map_err(|_| "could not read msg_flags back")?;
+    let control_len = uaccess::get_word(
+        process.space(),
+        header + MsgHdr::control_len_offset(width()) as u64,
+    )
+    .map_err(|_| "could not read msg_controllen back")?;
+    let mut bytes = alloc::vec![0_u8; capacity];
+    if capacity != 0 {
+        uaccess::copy_from_user(process.space(), control, &mut bytes)
+            .map_err(|_| "could not read a control buffer back")?;
+    }
+    Ok((count, flags, control_len, bytes))
 }
 
 /// A process that ends closes its descriptors then, not when it is reaped.
