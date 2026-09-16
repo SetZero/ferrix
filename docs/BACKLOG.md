@@ -81,6 +81,17 @@ tests and every gate run on nazuna over `ssh nazuna-wg`, in the session's own
 worktree there; WSL on the Windows machine is a convenience for a look, never
 the reference, and a row run there does not count.
 
+**A failing gate's log is kept before any re-run (2026-09-16).** Copy it
+aside first; a re-gate that overwrites it turns a result into a rumour — the
+one full trace of FX-0701 was lost that way.
+
+**One build directory per session on the Linux host (2026-09-16).** Every
+session sets `CARGO_TARGET_DIR=~/.local/share/ferrix/target-<session>` for all
+its worktrees on nazuna and never lets a worktree grow its own `target/`; a
+worktree is removed the moment its landing is in. The root filesystem filled
+twice in one day from per-worktree build output (16 GB each) while the host
+held 24 GB for every session together.
+
 **Nobody works in the root checkout, and landings are small and often
 (customer, 2026-09-16).** The root checkout keeps `main` checked out and
 clean; a session that edited there blocked every other session's
