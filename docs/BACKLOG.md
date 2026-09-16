@@ -75,6 +75,11 @@ product owner may ask for the whole row in any case. A boot that fails is a
 result to read, not a reason to retry: only the stage 5 EEVDF-bound message
 was ever a known flake, and it is fixed.
 
+**Gates run on the Linux host, not in WSL (customer, 2026-09-16).** Builds,
+tests and every gate run on nazuna over `ssh nazuna-wg`, in the session's own
+worktree there; WSL on the Windows machine is a convenience for a look, never
+the reference, and a row run there does not count.
+
 **Nobody works in the root checkout, and landings are small and often
 (customer, 2026-09-16).** The root checkout keeps `main` checked out and
 clean; a session that edited there blocked every other session's
