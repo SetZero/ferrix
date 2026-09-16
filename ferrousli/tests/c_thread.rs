@@ -67,6 +67,11 @@ fn scheduling_policy_priority_and_affinity_are_read_and_set_per_thread() {
 }
 
 #[test]
+fn semaphores_count_time_out_and_are_shared_named_and_unnamed() {
+    check(&Case::named("thread/semaphore"));
+}
+
+#[test]
 fn keys_hold_values_per_thread_and_run_destructors_in_rounds() {
     check(&Case::named("thread/keys"));
 }

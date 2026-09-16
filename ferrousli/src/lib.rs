@@ -86,6 +86,7 @@ pub mod rwlock;
 pub mod scan;
 pub mod sched;
 pub mod select;
+pub mod semaphore;
 #[cfg(not(test))]
 pub mod setjmp;
 pub mod shadow;

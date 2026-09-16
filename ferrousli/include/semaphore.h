@@ -7,6 +7,7 @@ extern "C" {
 #include <features.h>
 
 #define __NEED_time_t
+#define __NEED_clockid_t
 #define __NEED_struct_timespec
 #include <bits/alltypes.h>
 
@@ -28,6 +29,8 @@ int    sem_timedwait(sem_t *__restrict, const struct timespec *__restrict);
 int    sem_trywait(sem_t *);
 int    sem_unlink(const char *);
 int    sem_wait(sem_t *);
+/* Ferrousli, not musl 1.2.5: POSIX.1-2024 adds sem_clockwait. */
+int    sem_clockwait(sem_t *__restrict, clockid_t, const struct timespec *__restrict);
 
 #if _REDIR_TIME64
 __REDIR(sem_timedwait, __sem_timedwait_time64);
