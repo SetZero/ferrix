@@ -326,9 +326,9 @@ package FerrixRoadmap {
              * on all three architectures. */
     }
 
-    #planned requirement <'SN'> stageNetworking : Stage {
+    #implemented requirement <'SN'> stageNetworking : Stage {
         attribute :>> number = 11;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::Done;
         attribute :>> size = "month";
         doc /* Placed after stage 11 without a number of its own, as the
              * ARMv7-A port sits after stage 4. The net core: AF_UNIX, AF_INET
@@ -343,7 +343,10 @@ package FerrixRoadmap {
              * must not ask for. Exit: under that gateway, busybox configures
              * eth0 with ip, route and netstat report through /proc/net, wget
              * fetches a file byte-for-byte, and nc carries a stream over
-             * loopback and an AF_UNIX socket. */
+             * loopback and an AF_UNIX socket. Met: cargo xtask test-net does
+             * all of it on all three architectures, and the AF_UNIX stream
+             * is proven by the stage 7 boot check, because this busybox's nc
+             * has no -U and cannot open a local socket at all. */
     }
 
     #planned requirement <'S12'> stage12BtrfsWrite : Stage {

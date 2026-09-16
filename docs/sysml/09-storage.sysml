@@ -35,8 +35,10 @@ package FerrixStorage {
              * and AF_INET6 sockets over libs/net, AF_NETLINK route sockets
              * and the ifreq ioctls for configuring an interface, /proc/net
              * for the programs that read it, the net ring, and virtio-net as
-             * its first driver, in ring 3. What is left of it is AF_UNIX
-             * names. */
+             * its first driver, in ring 3, with AF_UNIX names under it all.
+             * Its exit criterion is met: cargo xtask test-net configures
+             * eth0, resolves a name and fetches a file byte for byte on
+             * every architecture. */
     }
 
     // -----------------------------------------------------------------------

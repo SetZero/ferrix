@@ -41,7 +41,7 @@ use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::socket::{
     AF_INET, AF_INET6, AF_MAX, AF_NETLINK, AF_UNIX, ControlMessages, MSG_CMSG_COMPAT, MSG_OOB,
     MSG_TRUNC, MsgHdr, SCM_CREDENTIALS, SCM_RIGHTS, SOCK_CLOEXEC, SOCK_DGRAM, SOCK_NONBLOCK,
-    SOCK_RAW, SOCK_STREAM, SOCK_TYPE_MASK, SOCKADDR_UN_SIZE, SOL_SOCKET, UnixAddress, Width,
+    SOCK_RAW, SOCK_STREAM, SOCK_TYPE_MASK, SOL_SOCKET, UnixAddress, Width,
 };
 use ferrix_net::socket::Family;
 use ferrix_vfs::OpenFile;
@@ -246,7 +246,7 @@ impl Any {
     /// which is what Linux reports for one.
     fn local_name(&self) -> Result<Vec<u8>, Errno> {
         match self {
-            Any::Unix(_) => unnamed(),
+            Any::Unix(socket) => Ok(socket.sock_name()),
             Any::Inet(socket) => Ok(socket.local_name()),
             Any::Netlink(socket) => Ok(socket.local_name()),
         }
@@ -255,17 +255,19 @@ impl Any {
     /// The name of its peer.
     fn peer_name(&self) -> Result<Vec<u8>, Errno> {
         match self {
-            Any::Unix(_) => unnamed(),
+            Any::Unix(socket) => socket.peer_sock_name(),
             Any::Inet(socket) => socket.peer_name().ok_or(Errno::ENOTCONN),
             Any::Netlink(_) => Err(Errno::ENOTCONN),
         }
     }
 
     /// Give it a name.
-    fn bind(&self, raw: &[u8]) -> Result<(), Errno> {
+    fn bind(&self, process: &Process, raw: &[u8]) -> Result<(), Errno> {
         match self {
-            // `AF_UNIX` names arrive with the landing after this one.
-            Any::Unix(_) => Err(Errno::EOPNOTSUPP),
+            Any::Unix(socket) => {
+                let address = unix_address(raw)?;
+                socket.bind(&crate::syscall::path::context(process), &address)
+            }
             Any::Inet(socket) => socket.bind(raw),
             Any::Netlink(socket) => socket.bind(raw),
         }
@@ -274,15 +276,20 @@ impl Any {
     /// Start listening.
     fn listen(&self, backlog: i32) -> Result<(), Errno> {
         match self {
-            Any::Unix(_) | Any::Netlink(_) => Err(Errno::EOPNOTSUPP),
+            Any::Unix(socket) => socket.listen(backlog),
+            Any::Netlink(_) => Err(Errno::EOPNOTSUPP),
             Any::Inet(socket) => socket.listen(backlog),
         }
     }
 
     /// Connect to a peer.
-    fn connect(&self, raw: &[u8], nonblock: bool) -> Result<(), Errno> {
+    fn connect(&self, process: &Process, raw: &[u8], nonblock: bool) -> Result<(), Errno> {
         match self {
-            Any::Unix(_) | Any::Netlink(_) => Err(Errno::EOPNOTSUPP),
+            Any::Unix(socket) => {
+                let address = unix_address(raw)?;
+                socket.connect(&crate::syscall::path::context(process), &address, nonblock)
+            }
+            Any::Netlink(_) => Err(Errno::EOPNOTSUPP),
             Any::Inet(socket) => socket.connect(raw, nonblock),
         }
     }
@@ -290,19 +297,17 @@ impl Any {
     /// Take a connection, and say who made it.
     fn accept(&self, nonblock: bool, owner: (u32, u32)) -> Result<(Arc<OpenFile>, Vec<u8>), Errno> {
         match self {
-            Any::Unix(_) | Any::Netlink(_) => Err(Errno::EOPNOTSUPP),
+            Any::Unix(socket) => socket.accept(nonblock),
+            Any::Netlink(_) => Err(Errno::EOPNOTSUPP),
             Any::Inet(socket) => socket.accept(nonblock, owner),
         }
     }
 }
 
-/// The unnamed `AF_UNIX` address, which is a family and nothing else.
-fn unnamed() -> Result<Vec<u8>, Errno> {
-    let mut encoded = [0_u8; SOCKADDR_UN_SIZE + 1];
-    let actual = UnixAddress::Unnamed
-        .encode(&mut encoded)
-        .ok_or(Errno::EINVAL)?;
-    Ok(encoded.get(..actual).unwrap_or_default().to_vec())
+/// The `AF_UNIX` address in the bytes a program passed, which Linux refuses
+/// with `EINVAL` however it is wrong.
+fn unix_address(raw: &[u8]) -> Result<UnixAddress<'_>, Errno> {
+    UnixAddress::parse(raw, raw.len()).map_err(|_| Errno::EINVAL)
 }
 
 /// What a `socket` call asked for.
@@ -406,7 +411,7 @@ pub(crate) fn sys_socket(
     let owner = crate::syscall::path::creator_ids(process);
     let nonblock = kind & SOCK_NONBLOCK != 0;
     let file = match opened {
-        Opened::Unix(socket_type) => fs::socket::new_socket(socket_type, nonblock, owner)?,
+        Opened::Unix(socket_type) => fs::socket::new_socket(socket_type, nonblock, process)?,
         Opened::Inet(family, kind) => InetSocket::open(family, kind, nonblock, owner)?,
         Opened::Netlink(kind) => NetlinkSocket::open(kind, nonblock, owner)?,
     };
@@ -600,7 +605,7 @@ fn read_address(process: &Process, address: u64, length: u64) -> Result<Vec<u8>,
 fn sys_bind(process: &Process, descriptor: i32, address: u64, length: u64) -> Result<usize, Errno> {
     let (_file, socket) = socket_of(process, descriptor)?;
     let raw = read_address(process, address, length)?;
-    socket.bind(&raw)?;
+    socket.bind(process, &raw)?;
     Ok(0)
 }
 
@@ -620,7 +625,7 @@ fn sys_connect(
 ) -> Result<usize, Errno> {
     let (file, socket) = socket_of(process, descriptor)?;
     let raw = read_address(process, address, length)?;
-    socket.connect(&raw, file.status().nonblock)?;
+    socket.connect(process, &raw, file.status().nonblock)?;
     Ok(0)
 }
 

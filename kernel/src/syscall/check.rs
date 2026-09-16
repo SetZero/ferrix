@@ -7213,21 +7213,283 @@ const RECEIVED: u64 = 0x200;
 /// Where it builds a `msghdr`, with its iovecs and control buffer after it.
 const MESSAGE: u64 = 0x300;
 
-/// `AF_UNIX` sockets: what a pair carries, what a socket reports, and what
-/// the calls refuse.
+/// `AF_UNIX` sockets: what a pair carries, what a socket reports, what the
+/// calls refuse, and what a name carries.
 fn check_unix_sockets(process: &Process, page: u64) -> Result<(), &'static str> {
     check_what_the_socket_calls_refuse(process, page)
         .and_then(|()| check_a_stream_pair_carries_bytes(process, page))
         .and_then(|()| check_records_keep_their_boundaries(process, page))
         .and_then(|()| check_shutdown_ends_one_direction(process, page))
         .and_then(|()| check_a_socket_reports_itself(process, page))
-        .and_then(|()| check_a_message_scatters_and_gathers(process, page))?;
+        .and_then(|()| check_a_message_scatters_and_gathers(process, page))
+        .and_then(|()| check_a_name_carries_a_connection(process, page))
+        .and_then(|()| check_a_path_carries_a_connection(process, page))
+        .and_then(|()| check_what_a_name_refuses(process, page))?;
     println!(
         "  unix     a stream pair carried bytes across two writes and a peek left them; \
          records kept their boundaries and MSG_TRUNC their lengths; shutdown ended one \
-         direction; a socket reported its type, buffers, credentials and unnamed address"
+         direction; a socket reported its type, buffers, credentials and unnamed address; \
+         a connection crossed an abstract name and a path, and 6 name calls were refused \
+         as specified"
     );
     Ok(())
+}
+
+/// Where a name check builds a `sockaddr_un`, as an offset in its page.
+const ADDRESS: u64 = 0x400;
+
+/// Where it reads one back.
+const ADDRESS_BACK: u64 = 0x480;
+
+/// Where it puts the length a call reads a name's back through.
+const ADDRESS_LEN: u64 = 0x4F8;
+
+/// The abstract name the check binds. Leading NUL and all, as a program
+/// writes one.
+const ABSTRACT: &[u8] = b"\0ferrix-boot-check";
+
+/// The path it binds, on the tmpfs the boot check already has.
+const SOCKET_PATH: &[u8] = b"/tmp/ferrix-check.sock";
+
+/// Write a `sockaddr_un` for `name` into the page, answering the pointer and
+/// the length a call must be given.
+///
+/// `sun_path` carries exactly the bytes, with no terminator, and the length
+/// is the family plus them -- which is how a program names an abstract socket
+/// and the only way to name one whose bytes hold a NUL.
+fn put_unix_address(process: &Process, at: u64, name: &[u8]) -> Result<(u64, u64), &'static str> {
+    let mut bytes = [0_u8; 2 + 108];
+    let family = AF_UNIX.to_ne_bytes();
+    for (slot, byte) in bytes.iter_mut().zip(family.iter().chain(name.iter())) {
+        *slot = *byte;
+    }
+    let len = 2 + name.len();
+    uaccess::copy_to_user(process.space(), at, bytes.get(..len).unwrap_or_default())
+        .map_err(|_| "could not write a socket address")?;
+    Ok((at, len as u64))
+}
+
+/// A non-blocking `AF_UNIX` socket of `kind`.
+fn unix_socket(process: &Process, kind: u32) -> Result<i32, &'static str> {
+    let made = socket_call(
+        process,
+        Call::Socket,
+        &[
+            u64::from(AF_UNIX),
+            u64::from(kind | SOCK_NONBLOCK),
+            0,
+            0,
+            0,
+            0,
+        ],
+    )
+    .map_err(|_| "a Unix socket could not be made")?;
+    i32::try_from(made).map_err(|_| "a socket got no descriptor")
+}
+
+/// A name, a listener, a connection across it, and a byte through it.
+///
+/// Non-blocking throughout, because a boot check must never be the thing that
+/// waits: the connection completes when it is queued, so the `accept` after
+/// it finds one waiting without anything having to sleep.
+fn check_a_name_carries_a_connection(process: &Process, page: u64) -> Result<(), &'static str> {
+    let server = unix_socket(process, SOCK_STREAM)?;
+    let client = unix_socket(process, SOCK_STREAM)?;
+    let outcome = a_name_carries_a_connection(process, page, server, client);
+    let _ = fd::sys_close(process, client);
+    let _ = fd::sys_close(process, server);
+    outcome
+}
+
+/// [`check_a_name_carries_a_connection`]'s questions.
+fn a_name_carries_a_connection(
+    process: &Process,
+    page: u64,
+    server: i32,
+    client: i32,
+) -> Result<(), &'static str> {
+    let (at, len) = put_unix_address(process, page + ADDRESS, ABSTRACT)?;
+    if socket_call(process, Call::Bind, &[as_arg(server), at, len, 0, 0, 0]) != Ok(0) {
+        return Err("a Unix socket would not take an abstract name");
+    }
+    if socket_call(process, Call::Listen, &[as_arg(server), 4, 0, 0, 0, 0]) != Ok(0) {
+        return Err("a bound Unix socket would not listen");
+    }
+    // What it is bound to, read back: the same bytes, the leading NUL and all.
+    let mut back = [0_u8; 2 + 108];
+    uaccess::copy_to_user(
+        process.space(),
+        page + ADDRESS_LEN,
+        &(len as u32).to_ne_bytes(),
+    )
+    .map_err(|_| "could not write an address length")?;
+    if socket_call(
+        process,
+        Call::Getsockname,
+        &[
+            as_arg(server),
+            page + ADDRESS_BACK,
+            page + ADDRESS_LEN,
+            0,
+            0,
+            0,
+        ],
+    ) != Ok(0)
+    {
+        return Err("getsockname on a bound Unix socket failed");
+    }
+    uaccess::copy_from_user(
+        process.space(),
+        page + ADDRESS_BACK,
+        back.get_mut(..len as usize).ok_or("impossible")?,
+    )
+    .map_err(|_| "could not read a name back")?;
+    if back.get(2..len as usize) != Some(ABSTRACT) {
+        return Err("getsockname did not answer the abstract name that was bound");
+    }
+    if socket_call(process, Call::Connect, &[as_arg(client), at, len, 0, 0, 0]) != Ok(0) {
+        return Err("a Unix socket would not connect to an abstract name");
+    }
+    let taken = socket_call(process, Call::Accept, &[as_arg(server), 0, 0, 0, 0, 0])
+        .map_err(|_| "a queued connection was not there to accept")?;
+    let accepted = i32::try_from(taken).map_err(|_| "accept gave no descriptor")?;
+    let outcome = (|| {
+        answers(
+            socket_send(process, page, client, b"named", 0),
+            5,
+            "a connection over a name would not take five bytes",
+        )?;
+        answers(
+            socket_recv(process, page, accepted, 8, 0),
+            5,
+            "the far end of a named connection did not read five bytes",
+        )
+    })();
+    let _ = fd::sys_close(process, accepted);
+    outcome
+}
+
+/// The same over a path, which is a node in the filesystem rather than a name
+/// in a table of its own.
+fn check_a_path_carries_a_connection(process: &Process, page: u64) -> Result<(), &'static str> {
+    let server = unix_socket(process, SOCK_STREAM)?;
+    let client = unix_socket(process, SOCK_STREAM)?;
+    let outcome = (|| {
+        // Unlinked first, as every program that binds a path does: the node a
+        // bind makes outlives the socket, so a check that ran once has left
+        // one behind and a second bind to it is `EADDRINUSE`.
+        let namespace = crate::fs::namespace();
+        let context = crate::syscall::path::context(process);
+        let _ = namespace.unlink(&context, None, SOCKET_PATH);
+        let (at, len) = put_unix_address(process, page + ADDRESS, SOCKET_PATH)?;
+        if socket_call(process, Call::Bind, &[as_arg(server), at, len, 0, 0, 0]) != Ok(0) {
+            return Err("a Unix socket would not take a path");
+        }
+        // The bind made a node, and it is a socket: that is what a connect
+        // walks to, and what makes the directory's permissions mean something.
+        let made = namespace
+            .resolve(&context, None, SOCKET_PATH, false)
+            .map_err(|_| "a bind to a path left no node behind")?;
+        if namespace
+            .stat(&made)
+            .map_err(|_| "the node a bind made could not be stat'ed")?
+            .metadata
+            .kind
+            != ferrix_vfs::FileType::Socket
+        {
+            return Err("the node a bind made is not a socket");
+        }
+        // The bind made a node, which `stat` sees as a socket: that node is
+        // what a connect walks to, and what makes the directory's permissions
+        // mean something.
+        if socket_call(process, Call::Listen, &[as_arg(server), 1, 0, 0, 0, 0]) != Ok(0) {
+            return Err("a path-bound Unix socket would not listen");
+        }
+        // A second bind to the same path is the name already being a file.
+        let second = unix_socket(process, SOCK_STREAM)?;
+        let taken = socket_call(process, Call::Bind, &[as_arg(second), at, len, 0, 0, 0]);
+        let _ = fd::sys_close(process, second);
+        refuses(
+            taken,
+            Errno::EADDRINUSE,
+            "a second bind to a path was not EADDRINUSE",
+        )?;
+        if socket_call(process, Call::Connect, &[as_arg(client), at, len, 0, 0, 0]) != Ok(0) {
+            return Err("a Unix socket would not connect to a path");
+        }
+        let taken = socket_call(process, Call::Accept, &[as_arg(server), 0, 0, 0, 0, 0])
+            .map_err(|_| "a connection over a path was not there to accept")?;
+        let accepted = i32::try_from(taken).map_err(|_| "accept gave no descriptor")?;
+        let outcome = (|| {
+            answers(
+                socket_send(process, page, accepted, b"path", 0),
+                4,
+                "a connection over a path would not take four bytes",
+            )?;
+            answers(
+                socket_recv(process, page, client, 8, 0),
+                4,
+                "the near end of a path connection did not read four bytes",
+            )
+        })();
+        let _ = fd::sys_close(process, accepted);
+        outcome
+    })();
+    let _ = fd::sys_close(process, client);
+    let _ = fd::sys_close(process, server);
+    outcome
+}
+
+/// What the name calls refuse, each as Linux refuses it.
+fn check_what_a_name_refuses(process: &Process, page: u64) -> Result<(), &'static str> {
+    let socket = unix_socket(process, SOCK_STREAM)?;
+    let outcome = (|| {
+        // A name nobody has bound, in each namespace. A path that is not
+        // there is `ENOENT`; an abstract name that is not there is a
+        // connection refused, because there is no path to be missing.
+        let (at, len) = put_unix_address(process, page + ADDRESS, b"\0ferrix-nobody")?;
+        refuses(
+            socket_call(process, Call::Connect, &[as_arg(socket), at, len, 0, 0, 0]),
+            Errno::ECONNREFUSED,
+            "connecting to an unbound abstract name was not ECONNREFUSED",
+        )?;
+        let (at, len) = put_unix_address(process, page + ADDRESS, b"/tmp/ferrix-nobody.sock")?;
+        refuses(
+            socket_call(process, Call::Connect, &[as_arg(socket), at, len, 0, 0, 0]),
+            Errno::ENOENT,
+            "connecting to a path that is not there was not ENOENT",
+        )?;
+        // A path that is there and is not a socket.
+        let (at, len) = put_unix_address(process, page + ADDRESS, b"/tmp")?;
+        refuses(
+            socket_call(process, Call::Connect, &[as_arg(socket), at, len, 0, 0, 0]),
+            Errno::ECONNREFUSED,
+            "connecting to a path that is not a socket was not ECONNREFUSED",
+        )?;
+        // Listening before binding, and binding twice.
+        refuses(
+            socket_call(process, Call::Listen, &[as_arg(socket), 1, 0, 0, 0, 0]),
+            Errno::EINVAL,
+            "listen on an unbound Unix socket was not EINVAL",
+        )?;
+        let (at, len) = put_unix_address(process, page + ADDRESS, b"\0ferrix-twice")?;
+        if socket_call(process, Call::Bind, &[as_arg(socket), at, len, 0, 0, 0]) != Ok(0) {
+            return Err("a Unix socket would not take a name to bind twice");
+        }
+        refuses(
+            socket_call(process, Call::Bind, &[as_arg(socket), at, len, 0, 0, 0]),
+            Errno::EINVAL,
+            "a second bind on one socket was not EINVAL",
+        )?;
+        // Accepting on a socket that never listened.
+        refuses(
+            socket_call(process, Call::Accept, &[as_arg(socket), 0, 0, 0, 0, 0]),
+            Errno::EINVAL,
+            "accept on a Unix socket that is not listening was not EINVAL",
+        )
+    })();
+    let _ = fd::sys_close(process, socket);
+    outcome
 }
 
 /// One socket call, through the dispatcher every socket call arrives by.
@@ -7490,12 +7752,13 @@ fn check_a_socket_refuses_what_is_still_to_come(
     let pair = socket_pair(process, page, SOCK_STREAM)?;
     let outcome = (|| {
         let fd = as_arg(pair.0);
-        let names = [Call::Bind, Call::Listen, Call::Connect, Call::Accept];
-        for call in names {
-            if socket_call(process, call, &[fd, page, 0, 0, 0, 0]) != Err(Errno::EOPNOTSUPP) {
-                return Err("a name call on a Unix socket was not EOPNOTSUPP");
-            }
-        }
+        // A pair is connected already, so it may neither be given a name nor
+        // listen -- Linux's `unix_bind` and `unix_listen` both refuse.
+        refuses(
+            socket_call(process, Call::Listen, &[fd, 1, 0, 0, 0, 0]),
+            Errno::EINVAL,
+            "listen on a connected Unix socket was not EINVAL",
+        )?;
         refuses(
             socket_call(process, Call::Accept4, &[fd, page, 0, 0x4000, 0, 0]),
             Errno::EINVAL,

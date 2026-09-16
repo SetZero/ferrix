@@ -36,6 +36,7 @@ mod pages;
 pub(crate) mod pipe;
 pub(crate) mod procfs;
 pub(crate) mod socket;
+pub(crate) mod sockname;
 pub(crate) mod terminal;
 
 use alloc::sync::Arc;

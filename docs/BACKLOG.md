@@ -240,26 +240,26 @@ nobody has it yet.
 
 ---
 
-## `su` fails under the musl busybox, and has since the applet landed
+## `su` failed under the musl busybox, and `AF_UNIX` names fixed it
 
-`cargo xtask test-vfs --arch x86_64` with the Alpine musl busybox fails applet
-17, the permissions script: `su: can't set groups: Not supported`, and the
-script never reaches the `id` its expectation begins with. The ferrousli
-busybox passes the same applet, which is why the landing that added it did not
+`cargo xtask test-vfs --arch x86_64` with the Alpine musl busybox failed
+applet 17, the permissions script: `su: can't set groups: Not supported`, and
+the script never reached the `id` its expectation begins with. The ferrousli
+busybox passed the same applet, which is why the landing that added it did not
 see this.
 
-It is **not** a regression: the same failure reproduces on `a643475`, the
+It was never a regression: the same failure reproduced on `a643475`, the
 commit that added the applet. musl's `initgroups` goes through `getgrouplist`,
 which tries an `AF_UNIX` connection to nscd before it reads `/etc/group`, and
-Ferrix answers `connect` on an `AF_UNIX` socket with `EOPNOTSUPP` because
-`AF_UNIX` names have not landed. musl treats that as an error rather than as
+Ferrix answered `connect` on an `AF_UNIX` socket with `EOPNOTSUPP` because
+`AF_UNIX` names had not landed. musl treats that as an error rather than as
 "no nscd" and gives up.
 
-So this closes itself when `AF_UNIX` names land -- `connect` will answer
-`ENOENT` or `ECONNREFUSED` for a socket nobody is listening on, which musl
-falls back from. Until then the gate's musl `test-vfs` run fails on this one
-applet and nothing else, and that is worth knowing rather than rediscovering.
-| open, closes with `AF_UNIX` names | 0
+It closed itself exactly as predicted: `connect` to `/var/run/nscd/socket` now
+answers `ENOENT`, musl falls back to `/etc/group`, and the applet passes. Kept
+here because the reasoning -- a refusal with the wrong errno is a library
+giving up rather than falling back -- is worth having written down the next
+time a C library is surprising. | done | 0
 
 ## The debt the net ring took on
 

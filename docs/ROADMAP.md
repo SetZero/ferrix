@@ -2968,17 +2968,42 @@ and a route and reads them back; `route -n` and `netstat -rn` report through
 megabyte whose `cksum` matches the server's; `nc -u` sends a datagram and reads
 the answer; and `/proc/net/dev` and `arp -n` show what the traffic left behind.
 
-**Still to do:** `AF_UNIX` names, so that `nc` can carry a stream over a local
-socket — the last clause of the exit criterion below, and the reason the musl
-busybox's `su` has never worked (`docs/BACKLOG.md`).
+**Done — `AF_UNIX` names.** `bind`, `listen`, `connect` and `accept` on a
+local socket, over both namespaces Linux has. A pathname is a node in the
+filesystem: `bind` creates an `S_IFSOCK` node exactly as `mknod` would, and
+`kernel/src/fs/sockname` maps that node — its device and inode numbers, not
+the path, because two paths can name one node — to the socket. `connect` walks
+the path like any other, which is what makes the permissions on the
+directories above it mean something. An abstract name, a `sun_path` starting
+with a NUL, is a flat namespace of its own that goes when the socket does. The
+tables hold weak references, so a socket is not kept alive by having a name.
 
-**Exit:** under `xtask`'s gateway — which is where this criterion's *"under
-QEMU's user-mode network"* now reads — busybox configures `eth0` with `ip` (or
-with `udhcpc`, which the gateway's DHCP server is there for), and `route` and
-`netstat` report through `/proc/net`. `wget` fetches a file from a server on
-the host that byte-for-byte matches what it served, and `nc` carries a stream
-over loopback and over an `AF_UNIX` socket. All of it runs in a test of its
-own, for the reason stage 7's exit is one.
+The connection is complete when it is queued rather than when it is accepted,
+as Linux's `unix_stream_connect` has it, so a client may write before the
+server calls `accept`. A socket left behind by a program that died keeps its
+node — Linux does not unlink one either, which is why `unlink` before `bind`
+is the universal idiom — and a `connect` to it is `ECONNREFUSED` rather than
+`ENOENT`: the two answers say different things, and a C library reads them.
+
+Which is how this closed the musl busybox's `su`, open since the applet
+landed. musl's `initgroups` tries an `AF_UNIX` connection to nscd before it
+reads `/etc/group`; `EOPNOTSUPP` is an error it gives up on, and `ENOENT` is
+one it falls back from.
+
+**Exit, and it is met:** under `xtask`'s gateway — which is where this
+criterion's *"under QEMU's user-mode network"* now reads — busybox configures
+`eth0` with `ip`, and `route` and `netstat` report through `/proc/net`. `wget`
+fetches a file from a server on the host that byte-for-byte matches what it
+served. All of it runs in a test of its own, `cargo xtask test-net`, for the
+reason stage 7's exit is one, and it passes on all three architectures.
+
+The criterion's `nc` clause is met by other programs, deliberately: this
+busybox's `nc` has no `-U`, so it cannot open a local socket at all, and a
+criterion written before that was known is not worth bending the code to. A
+stream over `AF_UNIX` — bound to a path and to an abstract name, connected,
+accepted, and carrying bytes each way — is proven by the stage 7 boot check on
+every architecture, and by `su`, which reaches `/etc/group` only because a
+`connect` to a name nobody bound answers the way a C library expects.
 
 ---
 
