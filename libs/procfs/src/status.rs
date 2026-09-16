@@ -85,7 +85,10 @@ pub struct Status<'a> {
     pub umask: u32,
     /// `State`.
     pub state: State,
-    /// `Tgid` and `Pid`, which are one number while a process has one thread.
+    /// `Tgid` and `NStgid`: the process's id.
+    pub tgid: u32,
+    /// `Pid` and `NSpid`: the thread's id, which is the process's for
+    /// `/proc/<pid>/status` and for its main thread's `task/<pid>/status`.
     pub pid: u32,
     /// `PPid`.
     pub ppid: u32,
@@ -113,16 +116,22 @@ pub struct Status<'a> {
 pub fn render(out: &mut Vec<u8>, status: &Status<'_>) {
     out.extend_from_slice(b"Name:\t");
     escape_name(out, status.name);
-    let Status { pid, uid, gid, .. } = *status;
+    let Status {
+        tgid,
+        pid,
+        uid,
+        gid,
+        ..
+    } = *status;
     let [ruid, euid, suid, fsuid] = uid;
     let [rgid, egid, sgid, fsgid] = gid;
     put(
         out,
         format_args!(
-            "\nUmask:\t{:04o}\nState:\t{}\nTgid:\t{pid}\nNgid:\t0\nPid:\t{pid}\nPPid:\t{}\n\
+            "\nUmask:\t{:04o}\nState:\t{}\nTgid:\t{tgid}\nNgid:\t0\nPid:\t{pid}\nPPid:\t{}\n\
              TracerPid:\t0\nUid:\t{ruid}\t{euid}\t{suid}\t{fsuid}\n\
              Gid:\t{rgid}\t{egid}\t{sgid}\t{fsgid}\n\
-             FDSize:\t{}\nGroups:\t \nNStgid:\t{pid}\nNSpid:\t{pid}\n",
+             FDSize:\t{}\nGroups:\t \nNStgid:\t{tgid}\nNSpid:\t{pid}\n",
             status.umask,
             status.state.description(),
             status.ppid,

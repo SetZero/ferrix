@@ -25,7 +25,7 @@ use ferrix_procfs::sysctl;
 use ferrix_vfs::fd::MAX_LIMIT;
 use ferrix_vfs::{Errno, Location, OpenFile, Result};
 
-use super::Kernel;
+use super::{Kernel, ThreadOf};
 use crate::arch;
 use crate::fs;
 use crate::fs::{block, devfs};
@@ -442,6 +442,12 @@ pub(super) fn comm(process: &Process) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// `/proc/<pid>/task/<tid>/comm`: the process's name, since a thread has no
+/// name of its own until `PR_SET_NAME` keeps one per thread.
+pub(super) fn thread_comm(of: &ThreadOf) -> Result<Vec<u8>> {
+    comm(&of.process)
+}
+
 /// `/proc/<pid>/exe`: the path it was started from, or `ENOENT` for a process
 /// nothing was started in.
 pub(super) fn exe(process: &Process) -> Result<Vec<u8>> {
@@ -628,11 +634,31 @@ fn online_cpus() -> u32 {
     })
 }
 
+/// Its threads that have not begun to end, and never fewer than one: a
+/// process the kernel made for a check runs a task without listing a thread,
+/// and every process Linux shows has at least its main thread.
+pub(super) fn thread_count(process: &Process) -> u32 {
+    u32::try_from(process.threads().len())
+        .unwrap_or(u32::MAX)
+        .max(1)
+}
+
 /// `/proc/<pid>/status`.
 ///
 /// `Umask` is the mask the process keeps and `umask` changes. `Uid` and `Gid`
 /// are its real, effective, saved and filesystem ids, in that order.
 pub(super) fn status(process: &Process) -> Result<Vec<u8>> {
+    status_of(process, process.pid())
+}
+
+/// `/proc/<pid>/task/<tid>/status`: the process's, with the thread's own id
+/// in `Pid`.
+pub(super) fn thread_status(of: &ThreadOf) -> Result<Vec<u8>> {
+    status_of(&of.process, of.tid)
+}
+
+/// A status file, for the thread numbered `tid` of `process`.
+fn status_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
     let (uid, gid) = process.with_credentials(|ids| {
         (
             [
@@ -660,7 +686,8 @@ pub(super) fn status(process: &Process) -> Result<Vec<u8>> {
         name: &name,
         umask: process.umask(),
         state: state_of(process),
-        pid: process.pid(),
+        tgid: process.pid(),
+        pid: tid,
         ppid: parent_of(process),
         uid,
         gid,
@@ -669,7 +696,7 @@ pub(super) fn status(process: &Process) -> Result<Vec<u8>> {
         vm_locked: memory.locked / 1024,
         vm_data: memory.data / 1024,
         vm_stack: memory.stack / 1024,
-        threads: 1,
+        threads: thread_count(process),
         cpus: online_cpus(),
     };
     let mut out = Vec::new();
@@ -679,11 +706,22 @@ pub(super) fn status(process: &Process) -> Result<Vec<u8>> {
 
 /// `/proc/<pid>/stat`.
 pub(super) fn stat(process: &Process) -> Result<Vec<u8>> {
+    stat_of(process, process.pid())
+}
+
+/// `/proc/<pid>/task/<tid>/stat`: the process's, with the thread's own id
+/// first, as Linux's per-thread `stat` starts.
+pub(super) fn thread_stat(of: &ThreadOf) -> Result<Vec<u8>> {
+    stat_of(&of.process, of.tid)
+}
+
+/// A stat file, for the thread numbered `tid` of `process`.
+fn stat_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
     let memory = Memory::of(process);
     let comm = process.comm();
     let pid = process.pid();
     let stat = Stat {
-        pid,
+        pid: tid,
         comm: &comm,
         state: state_of(process),
         ppid: parent_of(process),
@@ -701,7 +739,7 @@ pub(super) fn stat(process: &Process) -> Result<Vec<u8>> {
         stime: 0,
         priority: 20,
         nice: 0,
-        threads: 1,
+        threads: thread_count(process),
         start_time: process.started() / (NANOS / CLOCK_TICKS),
         vsize: memory.size,
         rss: process.space().resident_pages(),

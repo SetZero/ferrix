@@ -410,6 +410,7 @@ fn check_proc(process: &Arc<Process>, layout: &Layout) -> Found {
     }
 
     let descriptors = check_descriptors(ns, &ctx, process)?;
+    check_threads(ns, &ctx, &pid)?;
     let listed = check_listing(ns, &ctx, &pid)?;
     let (lines, named) = check_maps(ns, &ctx, process, layout)?;
     drop(descriptors);
@@ -433,6 +434,58 @@ fn check_proc(process: &Arc<Process>, layout: &Layout) -> Found {
         return Err("/proc/partitions is not empty, with no block device to list");
     }
     Ok((listed, lines, named, values))
+}
+
+/// `/proc/<pid>/task`: the check process's one thread is listed under its
+/// pid, as a directory, and its `status` and `stat` name it; `status` counts
+/// one thread. A process of several threads is counted by the threads exit
+/// test, which reads these files from inside one.
+fn check_threads(ns: &Namespace, ctx: &Context, pid: &[u8]) -> Result<(), &'static str> {
+    let listing = list(ns, ctx, b"/proc/self/task")?;
+    let [(only, FileType::Directory, _)] = listing.as_slice() else {
+        return Err("/proc/self/task does not list the process's one thread as a directory");
+    };
+    if only != pid {
+        return Err("/proc/self/task names the process's one thread by another id");
+    }
+
+    let mut id_lines = b"\nTgid:\t".to_vec();
+    id_lines.extend_from_slice(pid);
+    id_lines.extend_from_slice(b"\nNgid:\t0\nPid:\t");
+    id_lines.extend_from_slice(pid);
+    id_lines.push(b'\n');
+    let contains = |haystack: &[u8], needle: &[u8]| {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+    };
+
+    let mut path = b"/proc/self/task/".to_vec();
+    path.extend_from_slice(pid);
+    let mut status = path.clone();
+    status.extend_from_slice(b"/status");
+    let text = read_all(ns, ctx, &status, 64)?;
+    if !contains(&text, &id_lines) {
+        return Err("/proc/self/task/<pid>/status does not give the thread's Tgid and Pid");
+    }
+    if !contains(&text, b"\nThreads:\t1\n") {
+        return Err("/proc/self/task/<pid>/status does not count one thread");
+    }
+    if !contains(
+        &read_all(ns, ctx, b"/proc/self/status", 64)?,
+        b"\nThreads:\t1\n",
+    ) {
+        return Err("/proc/self/status does not count one thread");
+    }
+
+    let mut stat = path;
+    stat.extend_from_slice(b"/stat");
+    let mut first = pid.to_vec();
+    first.extend_from_slice(b" (");
+    if !read_all(ns, ctx, &stat, 64)?.starts_with(&first) {
+        return Err("/proc/self/task/<pid>/stat does not start with the thread's id");
+    }
+    Ok(())
 }
 
 /// `/proc/<pid>/cwd` and `root`: the working directory reads as `getcwd`

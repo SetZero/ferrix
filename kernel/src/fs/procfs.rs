@@ -81,6 +81,15 @@ use crate::syscall::registry;
 /// top-level file describes the kernel rather than a process.
 pub(crate) type Kernel = ();
 
+/// What a file in `/proc/<pid>/task/<tid>` is handed: the process, and which
+/// of its threads the directory is.
+pub(crate) struct ThreadOf {
+    /// The process the thread belongs to.
+    pub(crate) process: Arc<Process>,
+    /// The thread's id.
+    pub(crate) tid: u32,
+}
+
 /// A write into a file in a table: the context, the bytes, and how many
 /// were consumed.
 pub(crate) type WriteFn<T> = fn(&T, &[u8]) -> Result<usize>;
@@ -100,6 +109,9 @@ pub(crate) enum Content<T: 'static> {
     Link(fn(&T) -> Result<Vec<u8>>),
     /// `/proc/<pid>/fd`: a link per open descriptor.
     Descriptors,
+    /// `/proc/<pid>/task`: a directory per thread, each holding
+    /// [`PER_THREAD`].
+    Threads,
     /// A directory whose names are fixed, as the table's are: `/proc/sys` and
     /// the directories under it. Only [`TOP`]'s tree may hold one; see
     /// [`Tree`].
@@ -132,7 +144,9 @@ impl<T> Entry<T> {
         match self.content {
             Content::File { .. } => FileType::Regular,
             Content::Link(_) => FileType::Symlink,
-            Content::Descriptors | Content::Directory { .. } => FileType::Directory,
+            Content::Descriptors | Content::Threads | Content::Directory { .. } => {
+                FileType::Directory
+            }
         }
     }
 }
@@ -288,11 +302,16 @@ static SYS_KERNEL: [Entry<Kernel>; 6] = [
 ];
 
 /// `/proc/<pid>`.
-pub(crate) static PER_PROCESS: [Entry<Process>; 9] = [
+pub(crate) static PER_PROCESS: [Entry<Process>; 10] = [
     Entry {
         name: b"fd",
         permissions: 0o500,
         content: Content::Descriptors,
+    },
+    Entry {
+        name: b"task",
+        permissions: 0o555,
+        content: Content::Threads,
     },
     file(b"status", render::status),
     file(b"comm", render::comm),
@@ -314,6 +333,15 @@ pub(crate) static PER_PROCESS: [Entry<Process>; 9] = [
         permissions: 0o777,
         content: Content::Link(render::root),
     },
+];
+
+/// `/proc/<pid>/task/<tid>`: what a thread has something true to say in. A
+/// thread shares its process's memory, files and ids, so these are the
+/// process's own files with the thread's id where Linux puts one.
+pub(crate) static PER_THREAD: [Entry<ThreadOf>; 3] = [
+    file(b"status", render::thread_status),
+    file(b"stat", render::thread_stat),
+    file(b"comm", render::thread_comm),
 ];
 
 /// Levels of [`TOP`]'s tree a [`Tree`] can name: a byte of its `u32` each.
@@ -355,6 +383,14 @@ const _: () = assert!(
 const _: () = assert!(
     flat(&PER_PROCESS),
     "a process's directory cannot hold a directory"
+);
+const _: () = assert!(
+    flat(&PER_THREAD),
+    "a thread's directory cannot hold a directory"
+);
+const _: () = assert!(
+    PER_THREAD.len() < THREAD_INODE_SPAN as usize,
+    "a thread's directory has more entries than its inode numbers leave room for"
 );
 
 /// Where an entry is in [`TOP`]'s tree: its index at each level plus one, a
@@ -500,7 +536,19 @@ enum Place {
     Entry(u32, usize),
     /// `/proc/<pid>/fd/<fd>`.
     Descriptor(u32, i32),
+    /// `/proc/<pid>/task/<tid>`.
+    Thread(u32, u32),
+    /// `PER_THREAD[index]` of the thread: `/proc/<pid>/task/<tid>/<name>`.
+    ThreadEntry(u32, u32, usize),
 }
+
+/// Where threads' inode numbers start in a process's half: above every
+/// descriptor number a table can hold.
+const THREAD_INODES: u64 = 0x4000_0000;
+
+/// Inode numbers per thread: its directory, then its entries. A tid is below
+/// `registry::PID_MAX`, so every thread's numbers stay below 2^32.
+const THREAD_INODE_SPAN: u64 = 16;
 
 impl Place {
     /// The inode number; see the module documentation.
@@ -512,6 +560,12 @@ impl Place {
             Place::Process(id) => pid(id) | 1,
             Place::Entry(id, index) => pid(id) | (0x100 + index as u64),
             Place::Descriptor(id, fd) => pid(id) | (0x1_0000 + u64::from(fd.unsigned_abs())),
+            Place::Thread(id, tid) => {
+                pid(id) | THREAD_INODES | (u64::from(tid) * THREAD_INODE_SPAN)
+            }
+            Place::ThreadEntry(id, tid, index) => {
+                pid(id) | THREAD_INODES | (u64::from(tid) * THREAD_INODE_SPAN) | (index as u64 + 1)
+            }
         }
     }
 
@@ -527,7 +581,7 @@ impl Place {
     fn kind(self) -> (FileType, u32) {
         let of = |kind: FileType, permissions: u32| (kind, permissions);
         match self {
-            Place::Root | Place::Process(_) => of(FileType::Directory, 0o555),
+            Place::Root | Place::Process(_) | Place::Thread(..) => of(FileType::Directory, 0o555),
             Place::Top(tree) => tree.entry().map_or(of(FileType::Regular, 0), |(entry, _)| {
                 of(entry.kind(), entry.permissions)
             }),
@@ -537,6 +591,11 @@ impl Place {
                     of(entry.kind(), entry.permissions)
                 }),
             Place::Descriptor(..) => of(FileType::Symlink, 0o700),
+            Place::ThreadEntry(_, _, index) => PER_THREAD
+                .get(index)
+                .map_or(of(FileType::Regular, 0), |entry| {
+                    of(entry.kind(), entry.permissions)
+                }),
         }
     }
 }
@@ -586,6 +645,22 @@ impl Node {
                 }
                 _ => Ok(None),
             },
+            Place::ThreadEntry(pid, tid, index) => {
+                match PER_THREAD.get(index).map(|entry| &entry.content) {
+                    Some(Content::File { render, write }) => {
+                        let of = thread_alive(pid, tid)?;
+                        let bytes = render(&of)?;
+                        Ok(Some(Snapshot {
+                            metadata,
+                            bytes,
+                            write: write
+                                .map(|write| -> Writer { Box::new(move |data| write(&of, data)) }),
+                            refusal,
+                        }))
+                    }
+                    _ => Ok(None),
+                }
+            }
             _ => Ok(None),
         }
     }
@@ -595,7 +670,21 @@ impl Node {
         match self.place {
             Place::Top(tree) => tree.entry().is_some_and(|(entry, _)| entry.takes_writes()),
             Place::Entry(_, index) => PER_PROCESS.get(index).is_some_and(Entry::takes_writes),
+            Place::ThreadEntry(_, _, index) => {
+                PER_THREAD.get(index).is_some_and(Entry::takes_writes)
+            }
             _ => false,
+        }
+    }
+
+    /// Whether this node is a process's `task` directory, and whose.
+    fn threads_of(&self) -> Option<u32> {
+        match self.place {
+            Place::Entry(pid, index) => PER_PROCESS
+                .get(index)
+                .filter(|entry| matches!(entry.content, Content::Threads))
+                .map(|_| pid),
+            _ => None,
         }
     }
 
@@ -618,6 +707,32 @@ fn alive(pid: u32) -> Result<Arc<Process>> {
     registry::find(pid).ok_or(Errno::ENOENT)
 }
 
+/// The ids of a process's threads that have not begun to end, in order; its
+/// own pid alone for a process the kernel made without listing a thread, as
+/// `render::thread_count` counts it.
+fn thread_ids(process: &Process) -> Vec<u32> {
+    let mut ids: Vec<u32> = process
+        .threads()
+        .iter()
+        .map(|thread| thread.tid())
+        .collect();
+    if ids.is_empty() {
+        ids.push(process.pid());
+    }
+    ids.sort_unstable();
+    ids
+}
+
+/// Thread `tid` of live process `pid`, or `ENOENT`, as [`alive`] answers for
+/// a process.
+fn thread_alive(pid: u32, tid: u32) -> Result<ThreadOf> {
+    let process = alive(pid)?;
+    if !thread_ids(&process).contains(&tid) {
+        return Err(Errno::ENOENT);
+    }
+    Ok(ThreadOf { process, tid })
+}
+
 impl Inode for Node {
     fn metadata(&self) -> Metadata {
         let (kind, permissions) = self.place.kind();
@@ -626,11 +741,13 @@ impl Inode for Node {
         // process acts as, as Linux's `task_dump_owner` gives them, so a user
         // may list its own descriptors; the rest of /proc is root's.
         let (uid, gid) = match self.place {
-            Place::Process(pid) | Place::Entry(pid, _) | Place::Descriptor(pid, _) => {
-                registry::find(pid).map_or((0, 0), |process| {
-                    process.with_credentials(|ids| (ids.user.effective, ids.group.effective))
-                })
-            }
+            Place::Process(pid)
+            | Place::Entry(pid, _)
+            | Place::Descriptor(pid, _)
+            | Place::Thread(pid, _)
+            | Place::ThreadEntry(pid, ..) => registry::find(pid).map_or((0, 0), |process| {
+                process.with_credentials(|ids| (ids.user.effective, ids.group.effective))
+            }),
             Place::Root | Place::Top(_) => (0, 0),
         };
         Metadata {
@@ -716,6 +833,20 @@ impl Inode for Node {
                     .ok_or(Errno::ENOENT)?;
                 Ok(self.at(Place::Entry(pid, index)))
             }
+            Place::Thread(pid, tid) => {
+                let _ = thread_alive(pid, tid)?;
+                let index = PER_THREAD
+                    .iter()
+                    .position(|entry| entry.name == name)
+                    .ok_or(Errno::ENOENT)?;
+                Ok(self.at(Place::ThreadEntry(pid, tid, index)))
+            }
+            _ if self.threads_of().is_some() => {
+                let pid = self.threads_of().ok_or(Errno::ENOTDIR)?;
+                let tid = number(name).ok_or(Errno::ENOENT)?;
+                let _ = thread_alive(pid, tid)?;
+                Ok(self.at(Place::Thread(pid, tid)))
+            }
             _ => {
                 let pid = self.descriptors_of().ok_or(Errno::ENOTDIR)?;
                 let fd = descriptor_number(name).ok_or(Errno::ENOENT)?;
@@ -742,6 +873,16 @@ impl Inode for Node {
                 let ino = |index| Place::Entry(pid, index).ino();
                 let _ = list_table(&PER_PROCESS, cursor, ino, emit);
                 Ok(())
+            }
+            Place::Thread(pid, tid) => {
+                let _ = thread_alive(pid, tid)?;
+                let ino = |index| Place::ThreadEntry(pid, tid, index).ino();
+                let _ = list_table(&PER_THREAD, cursor, ino, emit);
+                Ok(())
+            }
+            _ if self.threads_of().is_some() => {
+                let pid = self.threads_of().ok_or(Errno::ENOTDIR)?;
+                list_threads(pid, cursor, emit)
             }
             _ => {
                 let pid = self.descriptors_of().ok_or(Errno::ENOTDIR)?;
@@ -821,6 +962,29 @@ fn list_root(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<
             kind: FileType::Directory,
             name: decimal(pid, &mut digits),
             next: PID_CURSORS.saturating_add(pid).saturating_add(1),
+        });
+        if !accepted {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// `/proc/<pid>/task`: a directory per thread, in id order.
+fn list_threads(pid: u32, cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
+    let process = alive(pid)?;
+    let from = cursor.saturating_sub(FIRST_CURSOR);
+    let mut digits = [0_u8; 20];
+    for tid in thread_ids(&process) {
+        let at = u64::from(tid);
+        if at < from {
+            continue;
+        }
+        let accepted = emit(DirEntry {
+            ino: Place::Thread(pid, tid).ino(),
+            kind: FileType::Directory,
+            name: decimal(at, &mut digits),
+            next: FIRST_CURSOR.saturating_add(at).saturating_add(1),
         });
         if !accepted {
             break;

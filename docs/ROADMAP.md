@@ -1345,7 +1345,8 @@ that took what it looked at, a record read that found the last record's tail:
   faulting, and retries if another thread unmapped the page in between; `brk`
   and `fork` take a heap lock that may sleep, so a fork never copies a heap
   half shrunk; and an unmap on one processor waits for a copy on another to
-  let go of its page. Left: `/proc`'s threads with the exit test on three
+  let go of its page. `/proc/<pid>/task` lists each thread with its `status`,
+  `stat` and `comm`, and `Threads:` counts them. Left: the exit test on three
   architectures.
 * **Three stand-ins, each written down where it lives.** The console is the one
   terminal, its line discipline fed by a thread that looks every twenty

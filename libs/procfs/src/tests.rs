@@ -251,6 +251,7 @@ fn status_is_byte_for_byte_what_linux_printed() {
         name: b"python3",
         umask: 0o0002,
         state: State::Running,
+        tgid: 457743,
         pid: 457743,
         ppid: 457739,
         uid: [1000; 4],
@@ -271,11 +272,38 @@ fn status_is_byte_for_byte_what_linux_printed() {
 }
 
 #[test]
+fn a_threads_status_names_its_process_and_itself() {
+    // The same process's second thread, as `task/457750/status` under it
+    // reads: its own id in `Pid` and `NSpid`, the process's in `Tgid` and
+    // `NStgid`, and the process's thread count.
+    let status = Status {
+        name: b"python3",
+        umask: 0o0002,
+        state: State::Sleeping,
+        tgid: 457743,
+        pid: 457750,
+        ppid: 457739,
+        uid: [1000; 4],
+        gid: [1000; 4],
+        fd_size: 64,
+        vm_size: 20428,
+        vm_locked: 0,
+        vm_data: 6724,
+        vm_stack: 136,
+        threads: 2,
+        cpus: 24,
+    };
+    let out = rendered(|out| status::render(out, &status));
+    assert_eq!(show(&out), show(b"Name:\tpython3\nUmask:\t0002\nState:\tS (sleeping)\nTgid:\t457743\nNgid:\t0\nPid:\t457750\nPPid:\t457739\nTracerPid:\t0\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\nFDSize:\t64\nGroups:\t \nNStgid:\t457743\nNSpid:\t457750\nVmSize:\t   20428 kB\nVmLck:\t       0 kB\nVmData:\t    6724 kB\nVmStk:\t     136 kB\nThreads:\t2\nCpus_allowed:\tffffff\nCpus_allowed_list:\t0-23\n"), "status");
+}
+
+#[test]
 fn a_status_name_escapes_newline_and_backslash_only() {
     let status = Status {
         name: b"a\\b\nc\td",
         umask: 0o22,
         state: State::Sleeping,
+        tgid: 1,
         pid: 1,
         ppid: 0,
         uid: [0; 4],
