@@ -3339,6 +3339,20 @@ layout from linux-libc-dev 7.0.0-29.29's headers natively and under
 `qemu-arm`, including the three views of `input_event` a 32-bit libc can
 take, and the tests name each line the module disagrees with.
 
+**Done — L2 of the input iteration, the virtio-input protocol (2026-09-16).**
+`ferrix-virtio::input` asks a device virtio 1.2 §5.8's configuration queries
+(name, serial, ids, property and event bitmaps, each axis's range) and reads
+the 8-byte event. It refuses an answer over 128 bytes or running past the
+configuration block, which QEMU shortens to its longest answer, a structure
+answer shorter than its structure, an axis whose minimum lies above its
+maximum, and a completion that wrote anything but one event. Its tests read
+QEMU 9.2.4's keyboard, mouse, tablet and multi-touch devices whole, beside
+devices that lie, and require the bits QEMU sets to be L1's `KEY_*`,
+`BTN_*`, `REL_*`, `LED_*` and `ABS_MT_*` codes. It no longer writes evdev's
+numbers down itself: `EV_*` and `SYN_REPORT` are L1's, re-exported, so the
+driver and the evdev nodes read one copy the probe pins. Its fuzz target,
+`virtio_input`, ran 50,283,653 inputs in ten minutes without a failure.
+
 **Estimate, re-baselined by os-f6 on 2026-09-16:** 74 points, from 55. The
 display's iteration 1 took 37, the input iteration is 23 (`docs/INPUT.md`
 §5), and the prerequisites of iteration 2 are 14: nested `epoll` (E1),
@@ -3347,8 +3361,7 @@ and properties (E4, `docs/DISPLAY.md` §2.3), which the GUI session holds.
 Nested `epoll`, `FIONBIO` and the plane objects were not counted before
 `docs/INPUT.md` §2 read Smithay's event loop.
 
-**Still to do:** input L2–L7 (the virtio-input protocol half of L2 is on
-`main`; its fuzz run and the switch to L1's numbers remain), E1–E4, `timerfd`
+**Still to do:** input L3–L7, E1–E4, `timerfd`
 (wanted, not required), atomic commit, per-open windows onto the card VMO,
 and the rest of the exit below.
 

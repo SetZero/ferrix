@@ -484,7 +484,7 @@ it.
 | # | Landing | Kernel? | Points |
 |---|---|---|---|
 | L1 | `libs/linux-abi::input`: the §3.3 ioctls (with a sample length for the sized ones), `EV_VERSION`, `INPUT_MAJOR`, event types and codes, `*_MAX`/`*_CNT`, the clock ids, and `input_event`, `input_id` and `input_absinfo` layouts at both widths. From a committed probe (`probe/input.c`, `input.sh`, `input-64.txt`, `input-32.txt`) compiled on nazuna against `/usr/include/linux/input.h`, pinned by `src/tests/input.rs` | no | 2 |
-| L2 | `libs/virtio::input`: configuration queries and the 8-byte event, hostile-device tests, checked against QEMU 9.2.4. On `main` since 493fd843 and 0bfb1de4; what is left is running its fuzz target and taking its evdev numbers from L1 | no | 2 |
+| L2 | `libs/virtio::input`: configuration queries and the 8-byte event, hostile-device tests, checked against QEMU 9.2.4, fuzzed, its evdev numbers L1's. Landed (493fd843, 0bfb1de4, and the switch to L1's numbers) | no | 2 |
 | L3 | `libs/inputctl`: §3.2's messages and validation, and `queue`: report assembly, per-open queues, `SYN_DROPPED`, grab, clock conversion, state for `EVIOCGKEY`/`EVIOCGABS`. Host-tested, fuzzed | no | 3 |
 | L4 | `libs/virtio-input`: driver logic over `libs/virtio-blk`'s traits (bring-up, the queries into `HELLO`, keeping the event queue full, filtering, batching), tested against a simulated device that drops short reports as QEMU does | no | 3 |
 | L5 | `user/input`, devmgr's table entry and `start_input`, `INPUT_CONTROL_CREATE`, the core's per-device task; exit: the boot line names each device and its event types | yes | 5 |
@@ -514,9 +514,13 @@ break down. The product owner re-baselined stage 17 to 74 points on
 **Where the landings stand.** L1 is done: the probe's numbers and layouts
 matched this document's text, and it found `EVIOCSFF` to be a second request
 whose number depends on the width, since `struct ff_effect` holds a pointer.
-L2's `libs/virtio::input` is on `main` (493fd843, 0bfb1de4); what is left of
-it is running its fuzz target and taking its `EV_*` numbers from L1, which
-agree with its own today.
+L2 is done: `libs/virtio::input` landed in 493fd843 and 0bfb1de4, and now
+re-exports L1's `EV_*` and `SYN_REPORT` instead of keeping its own copy, which
+agreed with them. `ferrix-virtio` depends on `ferrix-linux-abi` for that: a
+`no_std` crate with no dependencies that the kernel, `ferrix-rt` and the fuzz
+crate already link. Its tests now also require the bits QEMU's devices set to
+be L1's codes, and its fuzz target ran 50,283,653 inputs in ten minutes on
+nazuna without a failure.
 
 ## 6. Decisions and open questions
 
