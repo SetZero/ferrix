@@ -620,6 +620,7 @@ fn execve_at(
         fd::closed(process, file);
     }
     drop(closed);
+    let _ = crate::fs::socket::collect_cycles();
     process.mark_execed();
 
     // The old program's thread pointer and floating-point state are its own

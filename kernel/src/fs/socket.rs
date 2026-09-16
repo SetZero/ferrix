@@ -28,7 +28,26 @@
 //! back rather than dropping it, and every path here binds it to a variable
 //! that outlives the guard. A socket passed over its own connection, or two
 //! passed over each other's, keep each other alive while they sit in the
-//! queues; nothing collects such a cycle yet.
+//! queues; [`collect_cycles`] finds such sockets and empties their queues.
+//!
+//! # Sockets in flight, and the cycles they make
+//!
+//! A socket whose open file is referred to only from queues can be reached by
+//! no program unless one of those queues can: `collect_cycles` is Linux's
+//! `unix_gc`, run after a descriptor is closed while any socket is in flight.
+//! It walks every socket's receive queue, and the queues of connections still
+//! waiting to be accepted, without taking a reference to anything. A socket is
+//! a candidate when every reference to its open file is one of the queued ones
+//! it counted; a candidate is reachable when some queue that is not a
+//! candidate's holds it, and so is everything a reachable candidate's queue
+//! holds. The rest are emptied, and what their queues held is dropped with no
+//! lock held, after every queue is emptied, so a socket dropped on the way
+//! finds its own queue empty rather than dropping the next one inside its
+//! drop. Every queue and every count is read as it was at one moment only if
+//! nothing carrying a socket was queued or taken off a queue meanwhile, which
+//! [`FLIGHT_EPOCH`] says; a pass that sees it move gives up, and the next close
+//! tries again. A reference taken by a system call in progress only makes a
+//! socket look held, which errs towards keeping it.
 //!
 //! # Never waiting with a buffer locked
 //!
@@ -62,11 +81,12 @@
 use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::sync::Arc;
+use alloc::sync::Weak;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use ferrix_linux_abi::socket::{
     AF_UNIX, Linger, MSG_DONTWAIT, MSG_NOSIGNAL, MSG_PEEK, MSG_WAITALL, SHUT_RD, SHUT_RDWR,
@@ -116,10 +136,69 @@ const NANOS_PER_MICRO: u64 = 1_000;
 /// What travels beside the bytes of a message: the open files an
 /// `SCM_RIGHTS` message passes. See the module documentation for why one is
 /// dropped only with no buffer locked.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Passed {
     /// The files, in the order the sender named their descriptors.
-    pub(crate) files: Vec<Arc<OpenFile>>,
+    files: Vec<Arc<OpenFile>>,
+    /// How many of them are `AF_UNIX` sockets, counted in [`IN_FLIGHT`].
+    sockets: usize,
+}
+
+impl Passed {
+    /// Files to pass, counted in flight if any is a socket.
+    pub(crate) fn new(files: Vec<Arc<OpenFile>>) -> Passed {
+        let sockets = files.iter().filter(|file| is_socket(file)).count();
+        if sockets > 0 {
+            let _ = IN_FLIGHT.fetch_add(sockets, Ordering::AcqRel);
+            moved_in_flight();
+        }
+        Passed { files, sockets }
+    }
+
+    /// The files, in the order they were sent.
+    pub(crate) fn files(&self) -> &[Arc<OpenFile>] {
+        &self.files
+    }
+
+    /// Whether any of them is an `AF_UNIX` socket.
+    fn carries_sockets(&self) -> bool {
+        self.sockets > 0
+    }
+}
+
+impl Drop for Passed {
+    fn drop(&mut self) {
+        if self.sockets > 0 {
+            let _ = IN_FLIGHT.fetch_sub(self.sockets, Ordering::AcqRel);
+            moved_in_flight();
+        }
+    }
+}
+
+/// `AF_UNIX` socket files referred to by a live [`Passed`]: queued, or on
+/// their way into or out of a queue. Nothing to collect while it is zero.
+static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// Moved on whenever a [`Passed`] carrying a socket is made, queued, taken
+/// off a queue or dropped: a pass that sees it move gives up.
+static FLIGHT_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// Whether a pass is running; a second one waits for the next close.
+static COLLECTING: AtomicBool = AtomicBool::new(false);
+
+/// Every `AF_UNIX` socket there is, for the pass to walk. Weak, so being
+/// listed keeps nothing alive; pruned as it grows.
+static SOCKETS: SpinLock<Vec<Weak<Socket>>> = SpinLock::new(Vec::new());
+
+/// Say that what is in flight moved.
+fn moved_in_flight() {
+    let _ = FLIGHT_EPOCH.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Whether `file` is an `AF_UNIX` socket. The reference [`of`] takes is to
+/// the socket, never the file's last, and goes at once.
+fn is_socket(file: &OpenFile) -> bool {
+    of(file).is_some()
 }
 
 /// What travels beside the bytes of a message.
@@ -363,7 +442,7 @@ impl Socket {
     ) -> Arc<Socket> {
         let ino = sockfs().next_ino.fetch_add(1, Ordering::Relaxed);
         let now = fs::clock().now();
-        Arc::new(Socket {
+        let socket = Arc::new(Socket {
             kind,
             receive,
             send: SpinLock::new(send),
@@ -396,7 +475,14 @@ impl Socket {
                 mtime: now,
                 ctime: now,
             },
-        })
+        });
+        let mut listed = SOCKETS.lock();
+        if listed.len().is_power_of_two() {
+            listed.retain(|socket| socket.strong_count() > 0);
+        }
+        listed.push(Arc::downgrade(&socket));
+        drop(listed);
+        socket
     }
 
     /// Its type.
@@ -752,8 +838,12 @@ impl Socket {
                 // below this can wait while the buffer is locked. The files
                 // go with the first bytes queued, and stay with the caller
                 // otherwise.
+                let carried = passed.as_ref().is_some_and(Passed::carries_sockets);
                 let mut buffer = peer.buffer.lock();
                 let outcome = buffer.write(rest, passed);
+                if carried && passed.is_none() {
+                    moved_in_flight();
+                }
                 drop(buffer);
                 outcome
             };
@@ -806,8 +896,12 @@ impl Socket {
             } else {
                 // The guard is named and given back here, so that nothing
                 // below this can wait while the buffer is locked.
+                let carried = passed.as_ref().is_some_and(Passed::carries_sockets);
                 let mut buffer = peer.buffer.lock();
                 let outcome = buffer.write(data, passed);
+                if carried && passed.is_none() {
+                    moved_in_flight();
+                }
                 drop(buffer);
                 outcome
             };
@@ -887,7 +981,15 @@ impl Socket {
         loop {
             let rest = out.get_mut(done..).unwrap_or_default();
             // Bound first, so the guard is gone before anything below waits.
-            let outcome = self.receive.buffer.lock().read(rest, peek);
+            let mut buffer = self.receive.buffer.lock();
+            let outcome = buffer.read(rest, peek);
+            if matches!(
+                &outcome,
+                ReadOutcome::Read { ancillary: Some(passed), .. } if passed.carries_sockets()
+            ) {
+                moved_in_flight();
+            }
+            drop(buffer);
             let refusal = match outcome {
                 ReadOutcome::Read {
                     bytes,
@@ -1429,6 +1531,181 @@ fn encode_name(name: Option<&Name>) -> Vec<u8> {
     let mut encoded = [0_u8; SOCKADDR_UN_SIZE + 1];
     let written = address.encode(&mut encoded).unwrap_or(0);
     encoded.get(..written).unwrap_or_default().to_vec()
+}
+
+/// One socket as a pass over sockets in flight sees it.
+#[derive(Debug)]
+struct Seen {
+    /// The socket, held for the length of the pass.
+    socket: Arc<Socket>,
+    /// The sockets its receive queue holds, and its waiting connections'
+    /// queues, by their index in the pass: once for every time one is queued.
+    holds: Vec<usize>,
+    /// References to its open file, as the last queue that holds it saw them.
+    references: usize,
+    /// How many times a queue holds it.
+    queued: usize,
+}
+
+/// Find the sockets that only queues refer to and that no queue a program can
+/// read holds, and empty their queues: Linux's `unix_gc`. Answers how many
+/// sockets' queues were emptied. See the module documentation.
+///
+/// Called after a descriptor is closed; costs one atomic while nothing that
+/// is a socket is in flight. Must not be called holding a lock.
+pub(crate) fn collect_cycles() -> usize {
+    if IN_FLIGHT.load(Ordering::Acquire) == 0 {
+        return 0;
+    }
+    if COLLECTING.swap(true, Ordering::AcqRel) {
+        return 0;
+    }
+    let collected = collect_once();
+    COLLECTING.store(false, Ordering::Release);
+    collected
+}
+
+/// One pass of [`collect_cycles`].
+fn collect_once() -> usize {
+    let epoch = FLIGHT_EPOCH.load(Ordering::Acquire);
+    let seen = scan();
+    let unreachable = unreachable(&seen);
+    // Nothing carrying a socket moved while the queues were looked at, or the
+    // picture is not one moment's and the next close tries again.
+    if FLIGHT_EPOCH.load(Ordering::Acquire) != epoch {
+        return 0;
+    }
+    let mut dropped: Vec<Passed> = Vec::new();
+    for entry in unreachable.iter().filter_map(|&at| seen.get(at)) {
+        for queue in queues_of(&entry.socket) {
+            let mut buffer = queue.receive.buffer.lock();
+            // Everything queued leaves with the lock held and is dropped after
+            // it, sockets or not.
+            dropped.extend(buffer.drain());
+            drop(buffer);
+            queue.receive.wake_both();
+        }
+    }
+    // The files first, then the pass's own references to the sockets, each with
+    // no lock held: a socket that goes here finds its own queue empty.
+    drop(dropped);
+    drop(seen);
+    unreachable.len()
+}
+
+/// A socket's receive queue and its waiting connections' queues, as sockets.
+fn queues_of(socket: &Arc<Socket>) -> Vec<Arc<Socket>> {
+    let mut queues = vec![Arc::clone(socket)];
+    if let Some(backlog) = socket.listener.lock().as_ref() {
+        queues.extend(
+            backlog
+                .waiting
+                .iter()
+                .map(|waiting| Arc::clone(&waiting.socket)),
+        );
+    }
+    queues
+}
+
+/// Every live socket, with what each one's queues hold and how often each is
+/// held.
+fn scan() -> Vec<Seen> {
+    let sockets: Vec<Arc<Socket>> = {
+        let mut listed = SOCKETS.lock();
+        listed.retain(|socket| socket.strong_count() > 0);
+        listed.iter().filter_map(Weak::upgrade).collect()
+    };
+    let mut seen: Vec<Seen> = sockets
+        .into_iter()
+        .map(|socket| Seen {
+            socket,
+            holds: Vec::new(),
+            references: 0,
+            queued: 0,
+        })
+        .collect();
+    for at in 0..seen.len() {
+        let found = seen
+            .get(at)
+            .map(|entry| held_by(&seen, &entry.socket))
+            .unwrap_or_default();
+        for (held, references) in found {
+            if let Some(entry) = seen.get_mut(at) {
+                entry.holds.push(held);
+            }
+            if let Some(target) = seen.get_mut(held) {
+                target.queued += 1;
+                target.references = references;
+            }
+        }
+    }
+    seen
+}
+
+/// The sockets `socket`'s queues hold, by index in `seen`, each with the
+/// references to its open file as they are now.
+fn held_by(seen: &[Seen], socket: &Arc<Socket>) -> Vec<(usize, usize)> {
+    let mut found = Vec::new();
+    for queue in queues_of(socket) {
+        let buffer = queue.receive.buffer.lock();
+        let files = buffer
+            .ancillary()
+            .filter(|passed| passed.carries_sockets())
+            .flat_map(Passed::files);
+        for file in files {
+            let inode = Arc::as_ptr(file.io()).cast::<()>();
+            let held = seen
+                .iter()
+                .position(|entry| Arc::as_ptr(&entry.socket).cast::<()>() == inode);
+            if let Some(held) = held {
+                found.push((held, Arc::strong_count(file)));
+            }
+        }
+    }
+    found
+}
+
+/// The indices of the sockets only queues refer to that no queue a program
+/// can read holds.
+fn unreachable(seen: &[Seen]) -> Vec<usize> {
+    let candidate: Vec<bool> = seen
+        .iter()
+        .map(|entry| entry.queued > 0 && entry.references == entry.queued)
+        .collect();
+    let is_candidate = |at: usize| candidate.get(at).copied().unwrap_or(false);
+    let mut inside = vec![0_usize; seen.len()];
+    let held_by_candidates = seen
+        .iter()
+        .enumerate()
+        .filter(|&(at, _)| is_candidate(at))
+        .flat_map(|(_, entry)| entry.holds.iter().copied());
+    for held in held_by_candidates {
+        if let Some(count) = inside.get_mut(held) {
+            *count += 1;
+        }
+    }
+    let mut reachable: Vec<bool> = seen
+        .iter()
+        .enumerate()
+        .map(|(at, entry)| is_candidate(at) && entry.queued > inside.get(at).copied().unwrap_or(0))
+        .collect();
+    let mut pending: Vec<usize> = (0..seen.len())
+        .filter(|&at| reachable.get(at).copied().unwrap_or(false))
+        .collect();
+    while let Some(at) = pending.pop() {
+        let holds = seen.get(at).map_or(&[][..], |entry| entry.holds.as_slice());
+        for &held in holds {
+            if is_candidate(held) && reachable.get(held) == Some(&false) {
+                if let Some(mark) = reachable.get_mut(held) {
+                    *mark = true;
+                }
+                pending.push(held);
+            }
+        }
+    }
+    (0..seen.len())
+        .filter(|&at| is_candidate(at) && reachable.get(at) == Some(&false))
+        .collect()
 }
 
 /// The socket an open file reads and writes through, if it is one.

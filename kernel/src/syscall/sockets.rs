@@ -1033,7 +1033,7 @@ fn control(process: &Process, message: &MsgHdr, socket: &Any) -> Result<Option<P
         }
     }
     drop(table);
-    Ok(Some(Passed { files }))
+    Ok(Some(Passed::new(files)))
 }
 
 /// Install the files a receive took as the receiver's descriptors, as many as
@@ -1055,21 +1055,21 @@ fn deliver_files(
     } else {
         capacity.saturating_sub(header) / size_of::<i32>()
     };
-    let wanted = passed.files.len().min(room);
+    let wanted = passed.files().len().min(room);
     let mut installed: Vec<i32> = Vec::new();
     installed
         .try_reserve_exact(wanted)
         .map_err(|_| Errno::ENOMEM)?;
     {
         let mut table = process.files().lock();
-        for file in passed.files.iter().take(wanted) {
+        for file in passed.files().iter().take(wanted) {
             match table.insert(Arc::clone(file), flags & MSG_CMSG_CLOEXEC != 0) {
                 Ok(descriptor) => installed.push(descriptor),
                 Err(_) => break,
             }
         }
     }
-    let truncated = installed.len() < passed.files.len();
+    let truncated = installed.len() < passed.files().len();
     if installed.is_empty() {
         return Ok((0, truncated));
     }
