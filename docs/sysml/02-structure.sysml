@@ -865,7 +865,7 @@ package FerrixStructure {
         #implemented part virtio : LibraryCrate {
             attribute :>> path = "libs/virtio";
             attribute :>> forbidsUnsafe = false;
-            attribute :>> hostTests = 62;
+            attribute :>> hostTests = 81;
             @stage { number = 10; }
         }
         #writtenAhead part netwire : LibraryCrate {
@@ -947,6 +947,24 @@ package FerrixStructure {
                  * net core. The netlink_walk fuzz target requires the walk to
                  * end, what it borrows to lie inside the input, and anything
                  * the builder writes to walk back to what was built. */
+        #writtenAhead part virtioNet : LibraryCrate {
+            attribute :>> path = "libs/virtio-net";
+            attribute :>> hostTests = 22;
+            @stage { number = 10; }
+            doc /* The virtio-net driver logic, written ahead of the network
+                 * device it will drive: bring-up in the order the status
+                 * protocol fixes, a receive queue the driver fills and refills
+                 * because an empty one drops every frame in silence, a
+                 * transmit queue whose buffers stay the caller's until the
+                 * device says it has read them, and a drain that acknowledges
+                 * the interrupt before it starts. It negotiates no checksum,
+                 * segmentation or merge-buffer feature, so a frame is one
+                 * buffer and every header is the twelve bytes VERSION_1 makes
+                 * it. It holds no handle: a transport, pinned pages and a
+                 * header area go in, and frames go each way. The virtio_net
+                 * fuzz target drives it from a device whose every register,
+                 * used entry and header byte a stranger chose, and requires
+                 * every accepted frame to be answered exactly once. */
         }
         #writtenAhead part pci : LibraryCrate {
             attribute :>> path = "libs/pci";

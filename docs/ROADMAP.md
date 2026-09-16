@@ -2777,6 +2777,12 @@ netlink over those headers — walking a buffer of messages and the attributes
 after each one, and building replies into a caller's buffer — with 48 host
 tests and the `netlink_walk` fuzz target. virtio-net's device protocol is the
 one that is still to be written.
+*Written ahead of their stage*. virtio-net is written too, in the two halves
+virtio-blk is split into: `libs/virtio`'s `net` module for the device protocol
+— the configuration block, the feature bits and the header — and
+`libs/virtio-net` for the driver logic over two queues, with 22 host tests and
+the `virtio_net` fuzz target. Netlink message encoding is still to be written,
+and nothing in the kernel calls any of it yet.
 
 **Done — the net core, and `AF_INET` and `AF_INET6` sockets.** `kernel/src/net`
 is `libs/net` behind one lock and a task that drives it. Nothing sleeps inside
@@ -3142,13 +3148,14 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. Has its fuzz target. | 45 |
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 59 |
 | `libs/procfs` | Reached at 8 — the text of `/proc`: the `maps` line padded to its name column at both pointer widths, `meminfo`, `status`, `stat` and `mounts`, pinned byte for byte against lines a real Linux printed, and the `maps` parser the kernel's boot check reads its own output back with. No fuzz target: it arranges the kernel's own numbers rather than parsing a stranger's bytes. | 14 |
-| `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory, and the PCI transport's status protocol, feature negotiation and queue activation. Reached at 10 by the boot check's virtio-rng driver. | 62 |
+| `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory, the PCI transport's status protocol, feature negotiation and queue activation, and each device class's own protocol: virtio-blk's in `blk`, virtio-net's in `net`. Reached at 10 by the boot check's virtio-rng driver. | 81 |
 | `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport, MSI-X messages and the pages of a BAR a driver must not be given. Has its fuzz target and its Miri step already. | 52 |
 | `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
 | `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one; and the reachability walk a send makes before it queues an endpoint. Has its fuzz target and its Miri step. | 24 |
 | `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
 | `libs/netwire` | Networking — the headers: Ethernet with one 802.1Q tag, ARP, IPv4 with its options, IPv6 with the extension-header walk, ICMPv4, ICMPv6 and Neighbor Discovery, UDP, and TCP with the options a connection negotiates. Parsed without allocation and emitted into the caller's buffer, with each format's checksum verified where it carries one. Has its fuzz target, which requires every header that parses to emit and parse back unchanged. | 54 |
 | `libs/nettcp` | Networking — the TCP state machine over `libs/netwire`'s headers: the eleven states of RFC 9293 in the standard's order, including simultaneous open and simultaneous close; reassembly of what arrives out of order; window scaling and the maximum segment size; selective acknowledgment blocks for what is missing; Nagle, delayed acknowledgments, silly-window avoidance and the zero-window probe; retransmission timing by RFC 6298 with Karn's algorithm and Linux's bounds; and NewReno slow start, congestion avoidance, fast retransmit and fast recovery. It holds no clock, no socket and no address, so its tests drive two connections against each other across a wire the test loses and delays segments on, at a clock it advances by hand. Has its fuzz target. | 30 |
+| `libs/virtio-net` | 10, networking — the virtio-net driver logic over the same traits `libs/virtio-blk` uses, so it holds no handle and does no I/O of its own: bring-up in the order the status protocol fixes, both queues sized and activated before `DRIVER_OK`, a receive queue filled at bring-up and refilled as frames are taken — an empty one drops every frame in silence — a transmit queue whose buffers stay the caller's until the device says it has read them, and a drain that acknowledges the interrupt first so a completion landing during it raises another rather than being lost. It negotiates no checksum, segmentation or merge-buffer feature, which is what makes a received frame one buffer and every header the twelve bytes `VIRTIO_F_VERSION_1` makes it. Has its fuzz target. | 22 |
 | `libs/net` | Networking — the net core over the two above: interfaces and their addresses, one routing table for both families with longest-prefix and metric order, a neighbour cache that answers ARP's question and Neighbor Discovery's the same way and holds the packets waiting for either, IPv4 fragmentation and reassembly bounded so a stranger cannot fill this host's memory, ICMP echo both ways including the unprivileged socket `ping` uses and the unreachable a closed port earns, UDP with Linux's socket-matching order, and TCP connections and listeners. A packet routed to the loopback goes back into the input path instead of out of a driver, so a host talks to itself with no device at all. Has its fuzz target. | 45 |
 | `libs/netring` | Networking — the net ring, `docs/NET-RING.md` in code: the memory the kernel shares with a ring-3 network driver. The block ring's discipline with its allocator removed, because a frame is bounded by the MTU: the data VMO is `entries` slots of a fixed size and a submission names its slot, which takes away the class of bug where a region is reused before its completion — on an untranslated domain, a device writing into somebody else's packet. Private indices, checked reads of the peer's, the want-bell handshake, and every entry checked when it is read; corruption is terminal for the side that sees it. | 32 |
 
@@ -3156,6 +3163,7 @@ With the five crates the boot path was built on — `bootinfo`, `elf` (the
 loader's), `frame`, `heap`, `paging` — that is **895 host unit tests, all
 | `libs/netlink` | Networking — reached already, by the `AF_NETLINK` sockets above: walking a buffer of netlink messages and the attributes after each fixed header, and building replies into a caller's buffer with every length and pad computed rather than taken. The walks refuse a length below the header they introduce, one past the end, and the zero that walks the same message for ever, and every step forward is at least a header wide, so a walk over any bytes ends. Its `netlink_walk` fuzz target requires that, requires what a walk borrows to lie inside the input, and requires anything the builder writes to walk back to what was built. | 48 |
 loader's), `frame`, `heap`, `paging` — that is **911 host unit tests, all
+loader's), `frame`, `heap`, `paging` — that is **904 host unit tests, all
 passing**, plus the doc-tests and the 41 of `xtask` itself.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
@@ -3165,6 +3173,9 @@ asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has seventeen:
 `acpi_tables`, `blkring`, `virtio_blk`, `netwire_parse`, `nettcp_state`,
 `net_input` and `netlink_walk`. Every crate in the table above parses bytes
 that came from outside the system — a disk, a firmware table, an archive a stranger built —
+`acpi_tables`, `blkring`, `virtio_blk`, `virtio_net`, `netwire_parse`,
+`nettcp_state` and `net_input`. Every crate in the table above parses bytes that came from
+outside the system — a disk, a firmware table, an archive a stranger built —
 which is precisely the population the rule was written for. The fuzz targets
 still owed — `virtio` and `linux-abi` — are owed *before* the consuming stage
 starts, not when it ships.
@@ -3184,6 +3195,15 @@ and parse back to exactly the same header and payload — TCP's options in
 canonical form, Neighbor Discovery by its message body — while the IPv6
 extension walk stays inside the payload and a checksum summed in two pieces
 equals the checksum of the whole.
+
+`virtio_net` drives the network driver from a device whose every register,
+used entry and header byte the fuzzer chose. Beyond the absence of a panic it
+requires that a `written` the device invented, a header shorter than the
+negotiated length and a descriptor id the driver never handed out each come
+back as a `DeviceError` rather than as a read past the end of a buffer, that
+every frame the driver reports as received lies inside the region it was given,
+and that every frame the caller was allowed to send is answered exactly once —
+by a completion, or by the abandoned list after the reset.
 
 `nettcp_state` drives one connection from a stranger's segments: every field
 of every segment, interleaved with writes, reads, closes and a clock the

@@ -93,13 +93,13 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1445 elements, 157 relations. Model digest `814a7f6e140d746c`.
+13 files, 16 packages, 1448 elements, 157 relations. Model digest `c353a60dd0fcc005`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
 | `#implemented` | 127 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
 | `#inProgress` | 8 | The owning stage has started; part of the element runs. |
-| `#writtenAhead` | 16 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
+| `#writtenAhead` | 17 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
 | `#planned` | 98 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
@@ -2423,7 +2423,7 @@ docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code 
 | `libs/cpio` | `#writtenAhead` | 8 | `forbid` | 45 | The newc reader the initramfs is unpacked with. |
 | `libs/vfs` | `#writtenAhead` | 8 | `forbid` | 59 | Dentries with negative entries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store the kernel supplies, initramfs unpacking and the getdents64 packer. |
 | `libs/procfs` | `#implemented` | 8 | `forbid` | 14 | The text of /proc as pure functions: maps lines padded to their name column at both pointer widths, meminfo, status, stat and mounts, pinned byte for byte against lines a real Linux printed, and the maps parser the kernel's boot check reads its own output… |
-| `libs/virtio` | `#implemented` | 10 | allowed | 62 |  |
+| `libs/virtio` | `#implemented` | 10 | allowed | 81 |  |
 | `libs/netwire` | `#writtenAhead` | — | `forbid` | 54 | The byte-level half of the net core, written ahead of the networking stage: Ethernet with one 802.1Q tag, ARP, IPv4 with its options, IPv6 with the extension-header walk, ICMPv4, ICMPv6 and Neighbor Discovery, UDP, and TCP headers with their negotiated… |
 | `libs/nettcp` | `#writtenAhead` | — | `forbid` | 30 | The TCP state machine, written ahead of the networking stage and above netwire: the eleven states of RFC 9293 in the standard's order, reassembly of what arrives out of order, window scaling, selective acknowledgment blocks, Nagle, delayed acknowledgments,… |
 | `libs/net` | `#writtenAhead` | — | `forbid` | 45 | The net core, written ahead of the networking stage: interfaces and the addresses on them, one routing table for both families, a neighbour cache that answers ARP's question and Neighbor Discovery's the same way, IPv4 fragmentation and reassembly under a… |
@@ -3233,8 +3233,8 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 8 | `FerrixStorage::Devfs` | part | `#planned` |
 | 8 | `FerrixStorage::Procfs` | part | `#planned` |
 | 8 | `FerrixStorage::InitramfsUnpack` | part | `#planned` |
-| 9 | `FerrixStructure::Workspace::netRing::nativeAbi` | part | `#implemented` |
-| 9 | `FerrixStructure::Workspace::netRing::objects` | part | `#implemented` |
+| 9 | `FerrixStructure::Workspace::netRing::netlink::nativeAbi` | part | `#implemented` |
+| 9 | `FerrixStructure::Workspace::netRing::netlink::objects` | part | `#implemented` |
 | 9 | `FerrixObjects::KernelObject` | part | `#planned` |
 | 9 | `FerrixObjects::HandleTable` | part | `#implemented` |
 | 9 | `FerrixObjects::NativeAbi` | part | `#implemented` |
@@ -3242,7 +3242,8 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 10 | `FerrixStructure::X86_64Arch::vtd` | part | `#planned` |
 | 10 | `FerrixStructure::AArch64Arch::smmu` | part | `#planned` |
 | 10 | `FerrixStructure::Workspace::virtio` | part | `#implemented` |
-| 10 | `FerrixStructure::Workspace::netRing::pci` | part | `#writtenAhead` |
+| 10 | `FerrixStructure::Workspace::netRing::netlink::virtioNet` | part | `#writtenAhead` |
+| 10 | `FerrixStructure::Workspace::netRing::netlink::pci` | part | `#writtenAhead` |
 | 10 | `FerrixDrivers::DeviceNode` | part | `#inProgress` |
 | 10 | `FerrixDrivers::DeviceEnumeration` | part | `#inProgress` |
 | 10 | `FerrixDrivers::IommuDomain` | part | `#planned` |
@@ -3252,9 +3253,9 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 10 | `FerrixDrivers::DevMgr` | part | `#planned` |
 | 10 | `FerrixDrivers::VirtioBlkDriver` | part | `#planned` |
 | 10 | `FerrixDrivers::DriverBootstrap` | action | `#planned` |
-| 11 | `FerrixStructure::Workspace::netRing::btrfs` | part | `#writtenAhead` |
-| 11 | `FerrixStructure::Workspace::netRing::btrfsVfs` | part | `#writtenAhead` |
-| 11 | `FerrixStructure::Workspace::netRing::blockQueue` | part | `#writtenAhead` |
+| 11 | `FerrixStructure::Workspace::netRing::netlink::btrfs` | part | `#writtenAhead` |
+| 11 | `FerrixStructure::Workspace::netRing::netlink::btrfsVfs` | part | `#writtenAhead` |
+| 11 | `FerrixStructure::Workspace::netRing::netlink::blockQueue` | part | `#writtenAhead` |
 | 11 | `FerrixStorage::BlockCore` | part | `#planned` |
 | 11 | `FerrixStorage::BtrfsParsing` | part | `#writtenAhead` |
 | 11 | `FerrixStorage::Btrfs` | part | `#planned` |
@@ -3262,7 +3263,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 12 | `FerrixStorage::BtrfsWrite` | part | `#planned` |
 | 12 | `FerrixAssurance::BtrfsCheck` | verification | `#planned` |
 | 12 | `FerrixAssurance::PowerFailInjection` | verification | `#planned` |
-| 13 | `FerrixStructure::Workspace::netRing::seccompBpf` | part | `#planned` |
+| 13 | `FerrixStructure::Workspace::netRing::netlink::seccompBpf` | part | `#planned` |
 | 13 | `FerrixMemory::Reclaim` | part | `#planned` |
 | 13 | `FerrixObjects::LinuxSyscallLayer::seccompCheck` | action | — |
 | 13 | `FerrixIsolation::Namespace` | part | `#planned` |
@@ -3283,7 +3284,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 14 | `FerrixAssurance::CyclicTest` | verification | `#planned` |
 | 15 | `FerrixObjects::PosixIpc` | part | `#planned` |
 
-142 elements across 15 stages.
+143 elements across 15 stages.
 
 ## Figures
 

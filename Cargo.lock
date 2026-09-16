@@ -299,6 +299,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-virtio-net"
+version = "0.1.0"
+dependencies = [
+ "ferrix-virtio",
+]
+
+[[package]]
 name = "ferrix-vma"
 version = "0.1.0"
 

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "814a7f6e140d746c1e734de618fa841a6a5577db6702143dd14f8b083317fd98",
+  "digest": "c353a60dd0fcc005963c9bb537f5f8cc793b2bf14549029e4143991989d66816",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -57,11 +57,11 @@
   ],
   "summary": {
     "packages": 16,
-    "elements": 1445,
+    "elements": 1448,
     "maturity": {
       "implemented": 127,
       "inProgress": 8,
-      "writtenAhead": 16,
+      "writtenAhead": 17,
       "planned": 98
     },
     "deferred": 22,
@@ -4284,7 +4284,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::virtio",
                   "kind": "attribute",
                   "redefines": "hostTests",
-                  "value": "62",
+                  "value": "81",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 868
@@ -4511,620 +4511,657 @@
                         "file": "docs/sysml/02-structure.sysml",
                         "line": 936
                       }
-                    }
-                  ]
-                },
-                {
-                  "name": "pci",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::pci",
-                  "kind": "part",
-                  "type": "LibraryCrate",
-                  "maturity": "writtenAhead",
-                  "stage": 10,
-                  "doc": "PCI configuration space over a ConfigSpace the caller implements: ECAM geometry, headers, BAR decoding and sizing, both capability lists with a visited set, MSI-X, the bus walk without recursion or allocation, and virtio's PCI transport. The pci_walk fuzz target requires every walk to end and sizing to restore every register.",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 951
-                  },
-                  "children": [
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::pci",
-                      "kind": "attribute",
-                      "redefines": "path",
-                      "value": "\"libs/pci\"",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 952
-                      }
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::pci",
-                      "kind": "attribute",
-                      "redefines": "forbidsUnsafe",
-                      "value": "true",
+                      "name": "virtioNet",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::virtioNet",
+                      "kind": "part",
+                      "type": "LibraryCrate",
+                      "maturity": "writtenAhead",
+                      "stage": 10,
+                      "doc": "The virtio-net driver logic, written ahead of the network device it will drive: bring-up in the order the status protocol fixes, a receive queue the driver fills and refills because an empty one drops every frame in silence, a transmit queue whose buffers stay the caller's until the device says it has read them, and a drain that acknowledges the interrupt before it starts. It negotiates no checksum, segmentation or merge-buffer feature, so a frame is one buffer and every header is the twelve bytes VERSION_1 makes it. It holds no handle: a transport, pinned pages and a header area go in, and frames go each way. The virtio_net fuzz target drives it from a device whose every register, used entry and header byte a stranger chose, and requires every accepted frame to be answered exactly once.",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
-                        "line": 953
-                      }
+                        "line": 950
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::virtioNet",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"libs/virtio-net\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 951
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::virtioNet",
+                          "kind": "attribute",
+                          "redefines": "hostTests",
+                          "value": "22",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 952
+                          }
+                        }
+                      ]
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::pci",
-                      "kind": "attribute",
-                      "redefines": "hostTests",
-                      "value": "46",
+                      "name": "pci",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::pci",
+                      "kind": "part",
+                      "type": "LibraryCrate",
+                      "maturity": "writtenAhead",
+                      "stage": 10,
+                      "doc": "PCI configuration space over a ConfigSpace the caller implements: ECAM geometry, headers, BAR decoding and sizing, both capability lists with a visited set, MSI-X, the bus walk without recursion or allocation, and virtio's PCI transport. The pci_walk fuzz target requires every walk to end and sizing to restore every register.",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
-                        "line": 954
-                      }
-                    }
-                  ]
-                },
-                {
-                  "name": "nativeAbi",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::nativeAbi",
-                  "kind": "part",
-                  "type": "LibraryCrate",
-                  "maturity": "implemented",
-                  "stage": 9,
-                  "doc": "The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. One table on every architecture, in 0x1000..=0x1FFF, tested clear of all three Linux tables. No argument wider than a register.",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 963
-                  },
-                  "children": [
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::nativeAbi",
-                      "kind": "attribute",
-                      "redefines": "path",
-                      "value": "\"libs/native-abi\"",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 964
-                      }
+                        "line": 969
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::pci",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"libs/pci\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 970
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::pci",
+                          "kind": "attribute",
+                          "redefines": "forbidsUnsafe",
+                          "value": "true",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 971
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::pci",
+                          "kind": "attribute",
+                          "redefines": "hostTests",
+                          "value": "46",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 972
+                          }
+                        }
+                      ]
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::nativeAbi",
-                      "kind": "attribute",
-                      "redefines": "forbidsUnsafe",
-                      "value": "true",
+                      "name": "nativeAbi",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::nativeAbi",
+                      "kind": "part",
+                      "type": "LibraryCrate",
+                      "maturity": "implemented",
+                      "stage": 9,
+                      "doc": "The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. One table on every architecture, in 0x1000..=0x1FFF, tested clear of all three Linux tables. No argument wider than a register.",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
-                        "line": 965
-                      }
+                        "line": 981
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::nativeAbi",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"libs/native-abi\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 982
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::nativeAbi",
+                          "kind": "attribute",
+                          "redefines": "forbidsUnsafe",
+                          "value": "true",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 983
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::nativeAbi",
+                          "kind": "attribute",
+                          "redefines": "hostTests",
+                          "value": "13",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 984
+                          }
+                        }
+                      ]
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::nativeAbi",
-                      "kind": "attribute",
-                      "redefines": "hostTests",
-                      "value": "13",
+                      "name": "objects",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::objects",
+                      "kind": "part",
+                      "type": "LibraryCrate",
+                      "maturity": "implemented",
+                      "stage": 9,
+                      "doc": "The handle table and the channel message queue, generic over what a handle names. A handle is a slot and a generation, and a slot retires rather than wrap, so a closed handle never resolves again -- which the handle_table fuzz target checks against a model.",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
-                        "line": 966
-                      }
-                    }
-                  ]
-                },
-                {
-                  "name": "objects",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::objects",
-                  "kind": "part",
-                  "type": "LibraryCrate",
-                  "maturity": "implemented",
-                  "stage": 9,
-                  "doc": "The handle table and the channel message queue, generic over what a handle names. A handle is a slot and a generation, and a slot retires rather than wrap, so a closed handle never resolves again -- which the handle_table fuzz target checks against a model.",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 973
-                  },
-                  "children": [
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::objects",
-                      "kind": "attribute",
-                      "redefines": "path",
-                      "value": "\"libs/objects\"",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 974
-                      }
+                        "line": 991
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::objects",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"libs/objects\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 992
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::objects",
+                          "kind": "attribute",
+                          "redefines": "forbidsUnsafe",
+                          "value": "true",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 993
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::objects",
+                          "kind": "attribute",
+                          "redefines": "hostTests",
+                          "value": "24",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 994
+                          }
+                        }
+                      ]
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::objects",
-                      "kind": "attribute",
-                      "redefines": "forbidsUnsafe",
-                      "value": "true",
+                      "name": "btrfs",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::btrfs",
+                      "kind": "part",
+                      "type": "LibraryCrate",
+                      "maturity": "writtenAhead",
+                      "stage": 11,
+                      "doc": "The btrfs read path, allocating nothing: parsing, mount bootstrap, lookup, readdir and read, and zlib, LZO and zstd decoders. Tested against four real mkfs.btrfs images, and fuzzed from them by btrfs_read.",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
-                        "line": 975
-                      }
+                        "line": 1002
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::btrfs",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"libs/btrfs\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1003
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::btrfs",
+                          "kind": "attribute",
+                          "redefines": "forbidsUnsafe",
+                          "value": "true",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1004
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::btrfs",
+                          "kind": "attribute",
+                          "redefines": "hostTests",
+                          "value": "158",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1005
+                          }
+                        }
+                      ]
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::objects",
-                      "kind": "attribute",
-                      "redefines": "hostTests",
-                      "value": "24",
+                      "name": "btrfsVfs",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::btrfsVfs",
+                      "kind": "part",
+                      "type": "LibraryCrate",
+                      "maturity": "writtenAhead",
+                      "stage": 11,
+                      "doc": "btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only, holding no lock across I/O.",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
-                        "line": 976
-                      }
-                    }
-                  ]
-                },
-                {
-                  "name": "btrfs",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::btrfs",
-                  "kind": "part",
-                  "type": "LibraryCrate",
-                  "maturity": "writtenAhead",
-                  "stage": 11,
-                  "doc": "The btrfs read path, allocating nothing: parsing, mount bootstrap, lookup, readdir and read, and zlib, LZO and zstd decoders. Tested against four real mkfs.btrfs images, and fuzzed from them by btrfs_read.",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 984
-                  },
-                  "children": [
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::btrfs",
-                      "kind": "attribute",
-                      "redefines": "path",
-                      "value": "\"libs/btrfs\"",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 985
-                      }
+                        "line": 1012
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::btrfsVfs",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"libs/btrfs-vfs\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1013
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::btrfsVfs",
+                          "kind": "attribute",
+                          "redefines": "forbidsUnsafe",
+                          "value": "true",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1014
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::btrfsVfs",
+                          "kind": "attribute",
+                          "redefines": "hostTests",
+                          "value": "15",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1015
+                          }
+                        }
+                      ]
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::btrfs",
-                      "kind": "attribute",
-                      "redefines": "forbidsUnsafe",
-                      "value": "true",
+                      "name": "blockQueue",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::blockQueue",
+                      "kind": "part",
+                      "type": "LibraryCrate",
+                      "maturity": "writtenAhead",
+                      "stage": 11,
+                      "doc": "The block core's request queue: merging, flush and FUA barriers no request crosses, deadline scheduling. Checked against a model by the block_queue fuzz target.",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
-                        "line": 986
-                      }
+                        "line": 1020
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::blockQueue",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"libs/block\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1021
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::blockQueue",
+                          "kind": "attribute",
+                          "redefines": "forbidsUnsafe",
+                          "value": "true",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1022
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::blockQueue",
+                          "kind": "attribute",
+                          "redefines": "hostTests",
+                          "value": "36",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1023
+                          }
+                        }
+                      ]
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::btrfs",
-                      "kind": "attribute",
-                      "redefines": "hostTests",
-                      "value": "158",
+                      "name": "seccompBpf",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::seccompBpf",
+                      "kind": "part",
+                      "type": "LibraryCrate",
+                      "maturity": "planned",
+                      "stage": 13,
+                      "doc": "The classic-BPF interpreter as a pure function over bytes.",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
-                        "line": 987
-                      }
-                    }
-                  ]
-                },
-                {
-                  "name": "btrfsVfs",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::btrfsVfs",
-                  "kind": "part",
-                  "type": "LibraryCrate",
-                  "maturity": "writtenAhead",
-                  "stage": 11,
-                  "doc": "btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only, holding no lock across I/O.",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 994
-                  },
-                  "children": [
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::btrfsVfs",
-                      "kind": "attribute",
-                      "redefines": "path",
-                      "value": "\"libs/btrfs-vfs\"",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 995
-                      }
+                        "line": 1031
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::seccompBpf",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"libs/seccomp\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1032
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::seccompBpf",
+                          "kind": "attribute",
+                          "redefines": "forbidsUnsafe",
+                          "value": "true",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1033
+                          }
+                        }
+                      ]
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::btrfsVfs",
-                      "kind": "attribute",
-                      "redefines": "forbidsUnsafe",
-                      "value": "true",
+                      "name": "bootCrate",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::bootCrate",
+                      "kind": "part",
+                      "type": "Crate",
+                      "maturity": "implemented",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
-                        "line": 996
-                      }
+                        "line": 1038
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::bootCrate",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"boot\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1039
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::bootCrate",
+                          "kind": "attribute",
+                          "redefines": "kind",
+                          "value": "CrateKind::Loader",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1040
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::bootCrate",
+                          "kind": "attribute",
+                          "redefines": "hostTestable",
+                          "value": "false",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1041
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::bootCrate",
+                          "kind": "attribute",
+                          "redefines": "forbidsUnsafe",
+                          "value": "false",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1042
+                          }
+                        }
+                      ]
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::btrfsVfs",
-                      "kind": "attribute",
-                      "redefines": "hostTests",
-                      "value": "15",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 997
-                      }
-                    }
-                  ]
-                },
-                {
-                  "name": "blockQueue",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::blockQueue",
-                  "kind": "part",
-                  "type": "LibraryCrate",
-                  "maturity": "writtenAhead",
-                  "stage": 11,
-                  "doc": "The block core's request queue: merging, flush and FUA barriers no request crosses, deadline scheduling. Checked against a model by the block_queue fuzz target.",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 1002
-                  },
-                  "children": [
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::blockQueue",
-                      "kind": "attribute",
-                      "redefines": "path",
-                      "value": "\"libs/block\"",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1003
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::blockQueue",
-                      "kind": "attribute",
-                      "redefines": "forbidsUnsafe",
-                      "value": "true",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1004
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::blockQueue",
-                      "kind": "attribute",
-                      "redefines": "hostTests",
-                      "value": "36",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1005
-                      }
-                    }
-                  ]
-                },
-                {
-                  "name": "seccompBpf",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::seccompBpf",
-                  "kind": "part",
-                  "type": "LibraryCrate",
-                  "maturity": "planned",
-                  "stage": 13,
-                  "doc": "The classic-BPF interpreter as a pure function over bytes.",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 1013
-                  },
-                  "children": [
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::seccompBpf",
-                      "kind": "attribute",
-                      "redefines": "path",
-                      "value": "\"libs/seccomp\"",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1014
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::seccompBpf",
-                      "kind": "attribute",
-                      "redefines": "forbidsUnsafe",
-                      "value": "true",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1015
-                      }
-                    }
-                  ]
-                },
-                {
-                  "name": "bootCrate",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::bootCrate",
-                  "kind": "part",
-                  "type": "Crate",
-                  "maturity": "implemented",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 1020
-                  },
-                  "children": [
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::bootCrate",
-                      "kind": "attribute",
-                      "redefines": "path",
-                      "value": "\"boot\"",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1021
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::bootCrate",
-                      "kind": "attribute",
-                      "redefines": "kind",
-                      "value": "CrateKind::Loader",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1022
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::bootCrate",
-                      "kind": "attribute",
-                      "redefines": "hostTestable",
-                      "value": "false",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1023
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::bootCrate",
-                      "kind": "attribute",
-                      "redefines": "forbidsUnsafe",
-                      "value": "false",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1024
-                      }
-                    }
-                  ]
-                },
-                {
-                  "name": "kernelCrate",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::kernelCrate",
-                  "kind": "part",
-                  "type": "Crate",
-                  "maturity": "implemented",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 1026
-                  },
-                  "children": [
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::kernelCrate",
-                      "kind": "attribute",
-                      "redefines": "path",
-                      "value": "\"kernel\"",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1027
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::kernelCrate",
-                      "kind": "attribute",
-                      "redefines": "kind",
-                      "value": "CrateKind::Kernel",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1028
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::kernelCrate",
-                      "kind": "attribute",
-                      "redefines": "hostTestable",
-                      "value": "false",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1029
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::kernelCrate",
-                      "kind": "attribute",
-                      "redefines": "forbidsUnsafe",
-                      "value": "false",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1030
-                      }
-                    }
-                  ]
-                },
-                {
-                  "name": "xtask",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::xtask",
-                  "kind": "part",
-                  "type": "Crate",
-                  "maturity": "implemented",
-                  "doc": "Cross-compiles both halves, writes the FAT32 image with its own writer, converts the ARMv7-A loader ELF to PE32, drives QEMU. Nothing from crates.io.",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 1032
-                  },
-                  "children": [
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::xtask",
-                      "kind": "attribute",
-                      "redefines": "path",
-                      "value": "\"xtask\"",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1033
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::xtask",
-                      "kind": "attribute",
-                      "redefines": "kind",
-                      "value": "CrateKind::HostTool",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1034
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::xtask",
-                      "kind": "attribute",
-                      "redefines": "hostTestable",
-                      "value": "true",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1035
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::xtask",
-                      "kind": "attribute",
-                      "redefines": "forbidsUnsafe",
-                      "value": "true",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1036
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::xtask",
-                      "kind": "attribute",
-                      "redefines": "hostTests",
-                      "value": "41",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1037
-                      }
-                    },
-                    {
-                      "name": "commands",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::xtask::commands",
-                      "kind": "attribute",
-                      "type": "String",
-                      "multiplicity": "7",
-                      "value": "(\"build\", \"run\", \"test-boot\", \"check\", \"flash\", \"watch-serial\", \"deploy\")",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1041
-                      }
-                    }
-                  ]
-                },
-                {
-                  "name": "fuzz",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::fuzz",
-                  "kind": "part",
-                  "type": "Crate",
-                  "maturity": "implemented",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 1043
-                  },
-                  "children": [
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::fuzz",
-                      "kind": "attribute",
-                      "redefines": "path",
-                      "value": "\"fuzz\"",
+                      "name": "kernelCrate",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::kernelCrate",
+                      "kind": "part",
+                      "type": "Crate",
+                      "maturity": "implemented",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
                         "line": 1044
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::kernelCrate",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"kernel\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1045
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::kernelCrate",
+                          "kind": "attribute",
+                          "redefines": "kind",
+                          "value": "CrateKind::Kernel",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1046
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::kernelCrate",
+                          "kind": "attribute",
+                          "redefines": "hostTestable",
+                          "value": "false",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1047
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::kernelCrate",
+                          "kind": "attribute",
+                          "redefines": "forbidsUnsafe",
+                          "value": "false",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1048
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "xtask",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::xtask",
+                      "kind": "part",
+                      "type": "Crate",
+                      "maturity": "implemented",
+                      "doc": "Cross-compiles both halves, writes the FAT32 image with its own writer, converts the ARMv7-A loader ELF to PE32, drives QEMU. Nothing from crates.io.",
+                      "source": {
+                        "file": "docs/sysml/02-structure.sysml",
+                        "line": 1050
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::xtask",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"xtask\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1051
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::xtask",
+                          "kind": "attribute",
+                          "redefines": "kind",
+                          "value": "CrateKind::HostTool",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1052
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::xtask",
+                          "kind": "attribute",
+                          "redefines": "hostTestable",
+                          "value": "true",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1053
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::xtask",
+                          "kind": "attribute",
+                          "redefines": "forbidsUnsafe",
+                          "value": "true",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1054
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::xtask",
+                          "kind": "attribute",
+                          "redefines": "hostTests",
+                          "value": "41",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1055
+                          }
+                        },
+                        {
+                          "name": "commands",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::xtask::commands",
+                          "kind": "attribute",
+                          "type": "String",
+                          "multiplicity": "7",
+                          "value": "(\"build\", \"run\", \"test-boot\", \"check\", \"flash\", \"watch-serial\", \"deploy\")",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1059
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "fuzz",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::fuzz",
+                      "kind": "part",
+                      "type": "Crate",
+                      "maturity": "implemented",
+                      "source": {
+                        "file": "docs/sysml/02-structure.sysml",
+                        "line": 1061
+                      },
+                      "children": [
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::fuzz",
+                          "kind": "attribute",
+                          "redefines": "path",
+                          "value": "\"fuzz\"",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1062
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::fuzz",
+                          "kind": "attribute",
+                          "redefines": "kind",
+                          "value": "CrateKind::FuzzTargets",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1063
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::fuzz",
+                          "kind": "attribute",
+                          "redefines": "hostTestable",
+                          "value": "true",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1064
+                          }
+                        },
+                        {
+                          "name": "",
+                          "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::fuzz",
+                          "kind": "attribute",
+                          "redefines": "forbidsUnsafe",
+                          "value": "false",
+                          "source": {
+                            "file": "docs/sysml/02-structure.sysml",
+                            "line": 1065
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "kernelTargets",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::kernelTargets",
+                      "kind": "attribute",
+                      "type": "String",
+                      "multiplicity": "3",
+                      "value": "(\"x86_64-unknown-none\", \"aarch64-unknown-none-softfloat\", \"armv7a-none-eabi\")",
+                      "source": {
+                        "file": "docs/sysml/02-structure.sysml",
+                        "line": 1075
                       }
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::fuzz",
+                      "name": "loaderTargets",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::loaderTargets",
                       "kind": "attribute",
-                      "redefines": "kind",
-                      "value": "CrateKind::FuzzTargets",
+                      "type": "String",
+                      "multiplicity": "3",
+                      "value": "(\"x86_64-unknown-uefi\", \"aarch64-unknown-uefi\", \"armv7-unknown-linux-musleabi\")",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
-                        "line": 1045
+                        "line": 1076
                       }
                     },
                     {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::fuzz",
+                      "name": "toolchain",
+                      "qualifiedName": "FerrixStructure::Workspace::netRing::netlink::toolchain",
                       "kind": "attribute",
-                      "redefines": "hostTestable",
-                      "value": "true",
+                      "type": "String",
+                      "value": "\"1.97.1\"",
                       "source": {
                         "file": "docs/sysml/02-structure.sysml",
-                        "line": 1046
-                      }
-                    },
-                    {
-                      "name": "",
-                      "qualifiedName": "FerrixStructure::Workspace::netRing::fuzz",
-                      "kind": "attribute",
-                      "redefines": "forbidsUnsafe",
-                      "value": "false",
-                      "source": {
-                        "file": "docs/sysml/02-structure.sysml",
-                        "line": 1047
+                        "line": 1077
                       }
                     }
                   ]
-                },
-                {
-                  "name": "kernelTargets",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::kernelTargets",
-                  "kind": "attribute",
-                  "type": "String",
-                  "multiplicity": "3",
-                  "value": "(\"x86_64-unknown-none\", \"aarch64-unknown-none-softfloat\", \"armv7a-none-eabi\")",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 1057
-                  }
-                },
-                {
-                  "name": "loaderTargets",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::loaderTargets",
-                  "kind": "attribute",
-                  "type": "String",
-                  "multiplicity": "3",
-                  "value": "(\"x86_64-unknown-uefi\", \"aarch64-unknown-uefi\", \"armv7-unknown-linux-musleabi\")",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 1058
-                  }
-                },
-                {
-                  "name": "toolchain",
-                  "qualifiedName": "FerrixStructure::Workspace::netRing::toolchain",
-                  "kind": "attribute",
-                  "type": "String",
-                  "value": "\"1.97.1\"",
-                  "source": {
-                    "file": "docs/sysml/02-structure.sysml",
-                    "line": 1059
-                  }
                 }
               ]
             }
@@ -16943,9 +16980,9 @@
         "sync",
         "vma"
       ],
-      "origin": "FerrixStructure::Workspace::netRing",
+      "origin": "FerrixStructure::Workspace::netRing::netlink",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1051
+      "line": 1069
     },
     {
       "kind": "dependency",
@@ -16955,9 +16992,9 @@
         "elf",
         "paging"
       ],
-      "origin": "FerrixStructure::Workspace::netRing",
+      "origin": "FerrixStructure::Workspace::netRing::netlink",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1052
+      "line": 1070
     },
     {
       "kind": "dependency",
@@ -16965,9 +17002,9 @@
       "targets": [
         "elf"
       ],
-      "origin": "FerrixStructure::Workspace::netRing",
+      "origin": "FerrixStructure::Workspace::netRing::netlink",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1053
+      "line": 1071
     },
     {
       "kind": "dependency",
@@ -16976,9 +17013,9 @@
         "elf",
         "frameCrate"
       ],
-      "origin": "FerrixStructure::Workspace::netRing",
+      "origin": "FerrixStructure::Workspace::netRing::netlink",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1054
+      "line": 1072
     },
     {
       "kind": "import",

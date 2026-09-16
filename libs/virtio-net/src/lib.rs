@@ -45,11 +45,14 @@
 //!
 //! # Every id is answered exactly once
 //!
-//! Every id [`Driver::submit`] accepted is answered exactly once: by an
-//! [`Event::Sent`] from [`Driver::on_interrupt`], or — once the device has
-//! broken the protocol and the driver has stopped trusting it — by
-//! [`Released::abandoned`] after the reset. An id `submit` refused for a
-//! reason of the caller's is not tracked at all.
+//! Every id [`Driver::submit`] accepted — that is, every one it returned
+//! `Ok` for — is answered exactly once: by an [`Event::Sent`] from
+//! [`Driver::on_interrupt`], or — once the device has broken the protocol and
+//! the driver has stopped trusting it — by [`Released::abandoned`] after the
+//! reset. An id `submit` refused is not tracked at all, whether it was refused
+//! for a reason of the caller's or because the device broke the protocol while
+//! the frame was being published: the caller was told synchronously, which is
+//! the whole of the answer it gets.
 //!
 //! # Trust
 //!
@@ -348,8 +351,11 @@ pub enum InitError {
     Device(DeviceError),
 }
 
-/// Why a frame was not accepted. Except for [`SubmitError::Device`], the frame
-/// is not tracked and will not be answered.
+/// Why a frame was not accepted.
+///
+/// A refused frame is never tracked: whichever of these came back, the id is
+/// not in flight, no [`Event::Sent`] will name it and [`Released::abandoned`]
+/// will not either. The error is the answer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SubmitError {
     /// The device has already failed; shut the driver down.
@@ -368,8 +374,9 @@ pub enum SubmitError {
     /// No free header slot or not enough free descriptors now; take some
     /// completions and try again.
     QueueFull,
-    /// The device broke the protocol while the frame was being published. The
-    /// id is tracked and will be reported by [`Released::abandoned`].
+    /// The device broke the protocol while the frame was being published, so
+    /// the driver has failed and will send nothing more. The frame did not go
+    /// out.
     Device(DeviceError),
 }
 
@@ -1108,7 +1115,7 @@ where
     ///
     /// # Errors
     ///
-    /// [`SubmitError`]; only [`SubmitError::Device`] leaves the id tracked.
+    /// [`SubmitError`], none of which leaves the id tracked.
     pub fn submit(&mut self, frame: &Frame) -> Result<(), SubmitError> {
         if self.fault.is_some() {
             return Err(SubmitError::Broken);

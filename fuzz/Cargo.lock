@@ -87,6 +87,7 @@ dependencies = [
  "ferrix-vfs",
  "ferrix-virtio",
  "ferrix-virtio-blk",
+ "ferrix-virtio-net",
  "libfuzzer-sys",
 ]
 
@@ -164,6 +165,13 @@ version = "0.1.0"
 
 [[package]]
 name = "ferrix-virtio-blk"
+version = "0.1.0"
+dependencies = [
+ "ferrix-virtio",
+]
+
+[[package]]
+name = "ferrix-virtio-net"
 version = "0.1.0"
 dependencies = [
  "ferrix-virtio",

@@ -31,6 +31,7 @@ ferrix-block = { path = "../libs/block", features = ["model"] }
 ferrix-blkring = { path = "../libs/blkring" }
 ferrix-virtio = { path = "../libs/virtio" }
 ferrix-virtio-blk = { path = "../libs/virtio-blk" }
+ferrix-virtio-net = { path = "../libs/virtio-net" }
 ferrix-netwire = { path = "../libs/netwire" }
 ferrix-nettcp = { path = "../libs/nettcp" }
 ferrix-net = { path = "../libs/net" }
@@ -102,6 +103,13 @@ bench = false
 [[bin]]
 name = "virtio_blk"
 path = "fuzz_targets/virtio_blk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "virtio_net"
+path = "fuzz_targets/virtio_net.rs"
 test = false
 doc = false
 bench = false
