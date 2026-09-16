@@ -1,4 +1,4 @@
-//! `strftime` and `strftime_l`.
+//! `strftime` and `strftime_l`, and `wcsftime` and `wcsftime_l` beside them.
 //!
 //! The conversions and their numbers follow musl's `src/time/strftime.c`
 //! (MIT), in the C locale, which is the only one this library has:
@@ -31,6 +31,7 @@
 use core::ffi::{CStr, c_char, c_void};
 use core::slice;
 
+use crate::multibyte::{WChar, mbstowcs};
 use crate::tm::{self, Cursor, Number, Tm};
 use crate::tz;
 
@@ -436,6 +437,130 @@ pub unsafe extern "C" fn strftime_l(
 ) -> usize {
     // SAFETY: the caller's contract is `strftime`'s.
     unsafe { strftime(s, max, format_text, tm) }
+}
+
+/// The ASCII byte of a wide character, or `None` for NUL or anything wider.
+fn ascii(wc: WChar) -> Option<u8> {
+    u8::try_from(wc).ok().filter(|&b| b != 0 && b.is_ascii())
+}
+
+/// `strftime` for wide strings: formats `*tm` by `format` into the `max` wide
+/// characters at `s`, and returns the length of the result, not counting its
+/// NUL, or 0 when it does not fit or a conversion is unknown.
+///
+/// As in musl 1.2.5's `time/wcsftime.c` (MIT), a character outside a
+/// conversion is copied as it is, and each conversion is formatted by
+/// [`format`] and widened with `mbstowcs`. A conversion is `%`, then any of
+/// `-`, `_`, `0`, `+`, `^` and `#`, a width, `E` or `O`, then its letter.
+///
+/// # Safety
+///
+/// `s` must be valid for writing `max` wide characters, `format` a
+/// NUL-terminated wide string, and `tm` readable.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn wcsftime(
+    s: *mut WChar,
+    max: usize,
+    format_text: *const WChar,
+    tm: *const Tm,
+) -> usize {
+    if max == 0 {
+        return 0;
+    }
+    // SAFETY: the caller passes a readable `struct tm`.
+    let tm = unsafe { tm.read() };
+    let mut len = 0;
+    let mut at = 0;
+    let push = |len: &mut usize, wc: WChar| {
+        if *len + 1 >= max {
+            return false;
+        }
+        // SAFETY: `*len` is below `max - 1`, inside the caller's buffer.
+        unsafe { s.wrapping_add(*len).write(wc) };
+        *len += 1;
+        true
+    };
+    loop {
+        // SAFETY: the format has not ended before `at`.
+        let wc = unsafe { format_text.wrapping_add(at).read() };
+        if wc == 0 {
+            break;
+        }
+        at += 1;
+        if wc != WChar::from(b'%') {
+            if !push(&mut len, wc) {
+                return 0;
+            }
+            continue;
+        }
+        // The conversion, narrowed, with an `x` after it so that a conversion
+        // whose text is empty still gives a nonzero length.
+        let mut spec = [0u8; 40];
+        let mut n = 1;
+        if let Some(first) = spec.get_mut(0) {
+            *first = b'%';
+        }
+        loop {
+            // SAFETY: the format has not ended before `at`.
+            let Some(byte) = ascii(unsafe { format_text.wrapping_add(at).read() }) else {
+                return 0;
+            };
+            let Some(slot) = spec.get_mut(n).filter(|_| n + 1 < 40) else {
+                return 0;
+            };
+            *slot = byte;
+            n += 1;
+            at += 1;
+            if !matches!(
+                byte,
+                b'-' | b'_' | b'+' | b'^' | b'#' | b'0'..=b'9' | b'E' | b'O'
+            ) {
+                break;
+            }
+        }
+        if let Some(slot) = spec.get_mut(n) {
+            *slot = b'x';
+        }
+        let mut piece = [0u8; PIECE];
+        let written = format(&mut piece, spec.get(..=n).unwrap_or(&[]), &tm);
+        // Drop the `x`: the text ends in a NUL where it was.
+        let Some(sentinel) = written.checked_sub(1).and_then(|x| piece.get_mut(x)) else {
+            return 0;
+        };
+        *sentinel = 0;
+        let mut wide = [0 as WChar; PIECE];
+        // SAFETY: `piece` is NUL-terminated and `wide` has room for `PIECE`
+        // characters.
+        let count = unsafe { mbstowcs(wide.as_mut_ptr(), piece.as_ptr().cast(), PIECE) };
+        let Some(text) = wide.get(..count) else {
+            return 0;
+        };
+        for &wc in text {
+            if !push(&mut len, wc) {
+                return 0;
+            }
+        }
+    }
+    // SAFETY: `len` is below `max`.
+    unsafe { s.wrapping_add(len).write(0) };
+    len
+}
+
+/// [`wcsftime`] in the locale `locale`, which is not read.
+///
+/// # Safety
+///
+/// As [`wcsftime`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn wcsftime_l(
+    s: *mut WChar,
+    max: usize,
+    format_text: *const WChar,
+    tm: *const Tm,
+    _locale: *mut c_void,
+) -> usize {
+    // SAFETY: the caller's contract is `wcsftime`'s.
+    unsafe { wcsftime(s, max, format_text, tm) }
 }
 
 #[cfg(test)]

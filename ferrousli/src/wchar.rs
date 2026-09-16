@@ -150,6 +150,55 @@ pub unsafe extern "C" fn wcsncpy(dest: *mut WChar, src: *const WChar, n: usize) 
     dest
 }
 
+/// Copies at most `n - 1` characters of `src` to `dest` and NUL-terminates it
+/// when `n` is not zero. Returns the length of `src`, so a result of `n` or
+/// more means the copy was cut short. POSIX.1-2024's `wcslcpy`, as `strlcpy`.
+///
+/// # Safety
+///
+/// `src` must be NUL-terminated, `dest` valid for `n` characters, and they must
+/// not overlap.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn wcslcpy(dest: *mut WChar, src: *const WChar, n: usize) -> usize {
+    // SAFETY: the caller passes a NUL-terminated `src`.
+    let len = unsafe { wcslen(src) };
+    if let Some(room) = n.checked_sub(1) {
+        let copy = len.min(room);
+        let mut i = 0;
+        while i < copy {
+            // SAFETY: `i` is below `len`, inside `src`.
+            let wc = unsafe { src.wrapping_add(i).read() };
+            // SAFETY: `i` is below `n - 1`, inside `dest`.
+            unsafe { dest.wrapping_add(i).write(wc) };
+            i += 1;
+        }
+        // SAFETY: `copy` is at most `n - 1`.
+        unsafe { dest.wrapping_add(copy).write(0) };
+    }
+    len
+}
+
+/// Appends `src` to the string in `dest`, whose buffer holds `n` characters,
+/// keeping it NUL-terminated. Returns the length the whole result would have,
+/// so a result of `n` or more means it was cut short. POSIX.1-2024's
+/// `wcslcat`, as `strlcat`.
+///
+/// # Safety
+///
+/// `src` must be NUL-terminated, `dest` valid for `n` characters, and they must
+/// not overlap.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn wcslcat(dest: *mut WChar, src: *const WChar, n: usize) -> usize {
+    // SAFETY: `dest` is valid for `n` characters, and the scan stops at `n`.
+    let used = unsafe { wcsnlen(dest, n) };
+    if used == n {
+        // SAFETY: the caller passes a NUL-terminated `src`.
+        return n + unsafe { wcslen(src) };
+    }
+    // SAFETY: the rest of `dest`'s `n` characters start at its NUL.
+    used + unsafe { wcslcpy(dest.wrapping_add(used), src, n - used) }
+}
+
 /// Appends the wide string `src` to `dest`, and returns `dest`.
 ///
 /// # Safety

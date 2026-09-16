@@ -120,3 +120,8 @@ fn libc_test_wcsstr() {
 fn libc_test_regressions() {
     check(&locale("locale/regressions"));
 }
+
+#[test]
+fn wide_numbers_times_and_bounded_copies() {
+    check(&locale("locale/wide_numbers"));
+}

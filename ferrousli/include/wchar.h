@@ -172,6 +172,9 @@ int wcsncasecmp(const wchar_t *, const wchar_t *, size_t);
 int wcsncasecmp_l(const wchar_t *, const wchar_t *, size_t, locale_t);
 int wcscoll_l(const wchar_t *, const wchar_t *, locale_t);
 size_t wcsxfrm_l(wchar_t *__restrict, const wchar_t *__restrict, size_t, locale_t);
+/* Ferrousli, not musl 1.2.5: POSIX.1-2024 adds wcslcpy and wcslcat. */
+size_t wcslcpy(wchar_t *__restrict, const wchar_t *__restrict, size_t);
+size_t wcslcat(wchar_t *__restrict, const wchar_t *__restrict, size_t);
 #endif
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)

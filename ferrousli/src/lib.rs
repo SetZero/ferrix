@@ -122,6 +122,7 @@ pub mod utsname;
 pub mod va;
 pub mod wait;
 pub mod wchar;
+pub mod wcsto;
 pub mod wctype;
 
 /// A panic inside the library has nothing to unwind into, because every frame
