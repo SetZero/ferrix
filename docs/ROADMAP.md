@@ -2866,7 +2866,11 @@ header it asked for. With the stack's frame tap removed, the boot panics with
 `, 2 through a packet socket`. In a `run --net` guest on Windows, `udhcpc -i
 eth0 -n -q` broadcast its discover and select, got the lease of 10.0.2.15
 from the gateway, and the address, route and resolver it configured fetched
-`http://example.com`.
+`http://example.com`. Since the landing after it, the image carries that
+`default.script`, the interactive shell's `/etc/profile` runs `udhcpc` when
+`eth0` has no address, and `test-net` gets its address the same way: its
+second program is `udhcpc -i eth0 -n -q`, which must print the lease the
+gateway gave.
 
 **Done — `AF_NETLINK` route sockets, which is how an interface is
 configured.** Every way of configuring a network on Linux ends at the same

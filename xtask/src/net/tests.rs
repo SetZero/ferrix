@@ -142,5 +142,7 @@ fn the_command_list_is_well_formed() {
         .collect::<Vec<_>>()
         .join(" ");
     assert!(joined.contains(NAME));
-    assert!(joined.contains("10.0.2.15/24"));
+    // The address is the gateway's to give, by DHCP, not the list's to name.
+    assert!(joined.contains("udhcpc -i eth0"));
+    assert!(!joined.contains("10.0.2.15/24"));
 }

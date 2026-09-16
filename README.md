@@ -127,9 +127,8 @@ gateway on a loopback UDP socket: the guest is `10.0.2.15`, `10.0.2.2` is the
 host, `10.0.2.3` forwards DNS to the host's resolver, and TCP and UDP to
 anywhere else are relayed through ordinary host sockets. It needs no
 privilege, and works the same on Linux and on Windows. With `--init`, the
-shell configures `eth0` itself before its first prompt, so `wget
-http://example.com` works at once. The gateway also answers DHCP, but busybox's
-`udhcpc` and `ping` open raw sockets, which Ferrix does not have yet.
+shell configures `eth0` by DHCP before its first prompt, with busybox's
+`udhcpc`, so `wget http://example.com` and `ping 10.0.2.2` work at once.
 
 You need QEMU and UEFI firmware. Debian and Ubuntu: `qemu-system-x86`,
 `qemu-system-arm`, `ovmf`, `qemu-efi-aarch64` and `u-boot-qemu`. Windows:

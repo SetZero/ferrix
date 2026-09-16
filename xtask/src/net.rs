@@ -432,22 +432,19 @@ pub(crate) fn commands(servers: &Servers) -> Vec<Command> {
     let digest = cksum(&big_body());
 
     vec![
-        // The interface the ring-3 driver brought up, configured as `ip`
-        // configures one: over rtnetlink, and nothing else.
+        // The interface the ring-3 driver brought up, configured by DHCP as a
+        // distribution configures one: `udhcpc` asks over packet sockets, and
+        // the image's `default.script` applies the lease over rtnetlink with
+        // `ip`. Its line names what the gateway offered.
         Command {
             argv: &["ip", "link", "set", "eth0", "up"],
             status: 0,
             expect: Expect::Nothing,
         },
         Command {
-            argv: &["ip", "addr", "add", "10.0.2.15/24", "dev", "eth0"],
+            argv: &["udhcpc", "-i", "eth0", "-n", "-q", "-t", "5", "-T", "2"],
             status: 0,
-            expect: Expect::Nothing,
-        },
-        Command {
-            argv: &["ip", "route", "add", "default", "via", "10.0.2.2"],
-            status: 0,
-            expect: Expect::Nothing,
+            expect: Expect::Shaped(&["eth0: 10.0.2.15/24 by DHCP, router 10.0.2.2, DNS 10.0.2.3"]),
         },
         // Read back, by the three programs that read three different files.
         Command {

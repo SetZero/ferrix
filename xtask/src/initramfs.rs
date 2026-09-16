@@ -202,20 +202,56 @@ pub(crate) const APPLETS: &[&str] = &[
 /// Where zinc, the zsh-compatible shell, goes beside a program.
 pub(crate) const ZINC_PATH: &str = "bin/zinc";
 
+/// Where busybox's `udhcpc` looks for the script it runs as a lease changes.
+const UDHCPC_SCRIPT_PATH: &str = "usr/share/udhcpc/default.script";
+
+/// That script: `udhcpc` runs it with `deconfig` before it asks, and with
+/// `bound` or `renew` and the lease in its environment -- `ip`, `mask` as a
+/// prefix length, `router` and `dns` as lists -- once it has one. Written for
+/// `ip`, which is how every other part of this image configures a network, and
+/// after busybox's own `examples/udhcp/simple.script`.
+const UDHCPC_SCRIPT: &[u8] = b"\
+#!/bin/sh
+# Written by cargo xtask: apply what udhcpc was given to the interface.
+case \"$1\" in
+deconfig)
+\tip link set \"$interface\" up
+\tfor old in $(ip -o -4 addr show dev \"$interface\" | sed -n 's/.* inet \\([^ ]*\\).*/\\1/p'); do
+\t\tip addr del \"$old\" dev \"$interface\"
+\tdone
+\t;;
+bound|renew)
+\tip addr add \"$ip/${mask:-24}\" dev \"$interface\" 2>/dev/null
+\tif [ -n \"$router\" ]; then
+\t\tip route del default dev \"$interface\" 2>/dev/null
+\t\tfor gateway in $router; do
+\t\t\tip route add default via \"$gateway\" dev \"$interface\" && break
+\t\tdone
+\tfi
+\tif [ -n \"$dns\" ]; then
+\t\t: > /etc/resolv.conf
+\t\tfor server in $dns; do
+\t\t\techo \"nameserver $server\" >> /etc/resolv.conf
+\t\tdone
+\tfi
+\techo \"$interface: $ip/${mask:-24} by DHCP, router ${router:-none}, DNS ${dns:-none}\"
+\t;;
+esac
+";
+
 /// `/etc/profile`, which the kernel's interactive shell reads through `ENV`.
 ///
-/// Configures `eth0` for xtask's gateway (`crate::gateway`): its address, the
-/// route through `10.0.2.2`, and the resolver `/etc/resolv.conf` already
-/// names. Only when there is an `eth0` and it has no IPv4 address, so a boot
-/// without `--net` is quiet, a nested `sh -i` changes nothing, and neither
-/// does an interface somebody configured by hand first.
+/// Configures `eth0` by DHCP, as a distribution's network setup would: busybox's
+/// `udhcpc` asks, and [`UDHCPC_SCRIPT`] applies the address, the route and the
+/// resolvers the lease names. Only when there is an `eth0` and it has no IPv4
+/// address, so a boot without `--net` is quiet, a nested `sh -i` changes
+/// nothing, and neither does an interface somebody configured by hand first.
+/// `udhcpc`'s own progress lines go to its standard error and are dropped; the
+/// script's one line says what was configured, and a failure says so too.
 const PROFILE: &[u8] = b"\
-# Written by cargo xtask: configure eth0 for xtask's network gateway, once.
+# Written by cargo xtask: configure eth0 by DHCP, once.
 if ip link show eth0 >/dev/null 2>&1 && ! ip -o addr show eth0 | grep -q ' inet '; then
-\tip link set eth0 up &&
-\tip addr add 10.0.2.15/24 dev eth0 &&
-\tip route add default via 10.0.2.2 &&
-\techo 'eth0: 10.0.2.15/24, default route via 10.0.2.2, DNS 10.0.2.3'
+\tudhcpc -i eth0 -n -q -t 5 -T 2 2>/dev/null || echo 'eth0: no DHCP lease'
 fi
 ";
 
@@ -299,13 +335,15 @@ fn build_with_shell(
         // forwarder, which is where slirp puts one too, so a guest configured
         // by DHCP and a guest configured by hand agree.
         archive.file("etc/resolv.conf", 0o644, b"nameserver 10.0.2.3\n")?;
-        // What the interactive shell runs first, through `ENV`: bring up
-        // `eth0` the way xtask's gateway expects, when there is one and
-        // nothing has configured it. By hand rather than by DHCP, which the
-        // gateway serves but which `udhcpc` cannot ask for yet — it opens a
-        // raw socket, and Ferrix has none. `test-net` configures the same
-        // three things itself and never starts an interactive shell.
+        // What the interactive shell runs first, through `ENV`: `eth0` by
+        // DHCP, when there is one and nothing has configured it, with the
+        // script `udhcpc` runs as the lease comes. `test-net` runs `udhcpc`
+        // itself and never starts an interactive shell.
         archive.file("etc/profile", 0o644, PROFILE)?;
+        for directory in ["usr", "usr/share", "usr/share/udhcpc"] {
+            archive.directory(directory, 0o755)?;
+        }
+        archive.file(UDHCPC_SCRIPT_PATH, 0o755, UDHCPC_SCRIPT)?;
         archive.file(PROGRAM_PATH, 0o755, program)?;
         for applet in APPLETS {
             archive.symlink(&format!("bin/{applet}"), "busybox")?;
