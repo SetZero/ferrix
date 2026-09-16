@@ -274,7 +274,7 @@ package FerrixStructure {
         #planned part pageCache : PageCache;
         #planned part filesystems : Filesystems;
         #planned part blockCore : BlockCore;
-        #planned part netCore : NetCore;
+        #implemented part netCore : NetCore;
         #planned part namespaces : Namespaces;
         #planned part cgroups : Cgroups;
         #planned part seccomp : Seccomp;
@@ -868,7 +868,7 @@ package FerrixStructure {
             attribute :>> hostTests = 81;
             @stage { number = 10; }
         }
-        #writtenAhead part netwire : LibraryCrate {
+        #implemented part netwire : LibraryCrate {
             attribute :>> path = "libs/netwire";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 54;
@@ -882,7 +882,7 @@ package FerrixStructure {
                  * fuzz target requires every header that parses to emit and
                  * parse back unchanged. */
         }
-        #writtenAhead part nettcp : LibraryCrate {
+        #implemented part nettcp : LibraryCrate {
             attribute :>> path = "libs/nettcp";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 30;
@@ -900,7 +900,7 @@ package FerrixStructure {
                  * stranger's segments and requires every header it answers
                  * with to write and parse back. */
         }
-        #writtenAhead part netCore : LibraryCrate {
+        #implemented part netCore : LibraryCrate {
             attribute :>> path = "libs/net";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 45;
@@ -918,7 +918,7 @@ package FerrixStructure {
                  * than out of a driver. The net_input fuzz target drives a
                  * whole host from a stranger's frames. */
         }
-        #writtenAhead part netServe : LibraryCrate {
+        #implemented part netServe : LibraryCrate {
             attribute :>> path = "libs/netserve";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 10;
@@ -935,7 +935,7 @@ package FerrixStructure {
                  * the host with a fake device on one side and the ring's own
                  * kernel end on the other. */
         }
-        #writtenAhead part netRing : LibraryCrate {
+        #implemented part netRing : LibraryCrate {
             attribute :>> path = "libs/netring";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 32;
@@ -948,7 +948,8 @@ package FerrixStructure {
                  * completion. Private indices, checked reads of the peer's,
                  * the want-bell handshake, and every entry checked when it is
                  * read; corruption is terminal for the side that sees it. */
-        #writtenAhead part netlink : LibraryCrate {
+        }
+        #implemented part netlink : LibraryCrate {
             attribute :>> path = "libs/netlink";
             attribute :>> hostTests = 48;
             doc /* The byte-level half of netlink, over linux-abi's headers:
@@ -964,7 +965,8 @@ package FerrixStructure {
                  * net core. The netlink_walk fuzz target requires the walk to
                  * end, what it borrows to lie inside the input, and anything
                  * the builder writes to walk back to what was built. */
-        #writtenAhead part virtioNet : LibraryCrate {
+        }
+        #implemented part virtioNet : LibraryCrate {
             attribute :>> path = "libs/virtio-net";
             attribute :>> hostTests = 22;
             @stage { number = 10; }

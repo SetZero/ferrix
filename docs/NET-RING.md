@@ -131,6 +131,13 @@ Ports are bounded, so a queue can be refused for being full. A bell is a hint
 and any number of them counts as one, so a refusal for being full means a bell
 is already waiting: the call *rang*.
 
+A side that sleeps without setting the flag is never rung. It is worth saying
+plainly, because the first ring-3 driver did exactly that and the result reads
+as a working interface: the driver still woke on its device's interrupt, so it
+received frames and answered none of them, and every frame the kernel gave it
+sat in the ring. Setting the flag is not an optimisation to be skipped when a
+side is in a hurry -- it is the only thing that makes the other side ring.
+
 ## 7. The control channel
 
 1. Whoever starts the driver sends **START**: which device, and where its

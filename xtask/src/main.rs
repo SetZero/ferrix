@@ -127,7 +127,8 @@ OPTIONS:
     --accel <auto|tcg|whpx|kvm|hvf>      QEMU accelerator      [default: tcg]
     --gdb                                Wait for a debugger on :1234
     --net                                run, test-boot, test-shell, test-vfs: a virtio-net device,
-                                         behind xtask's own NAT gateway (10.0.2.2, guest 10.0.2.15)
+                                         behind xtask's own NAT gateway (10.0.2.2, guest 10.0.2.15);
+                                         test-net turns it on whether or not it is given
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --miri                               check: add CI's Miri steps (needs nightly and miri)

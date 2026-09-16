@@ -2926,11 +2926,51 @@ fixed width, 127 for `route` and `udp` and 149 for `tcp`, by Linux's
 `seq_pad`, which pads a short line and leaves a long one alone -- which is why
 an IPv6 row overflows.
 
-**Still to do:** the virtio-net driver process itself, `AF_NETLINK` for `ip`,
-and `AF_UNIX` names so that `nc` can carry a stream over a local socket.
-**Still to do:** the virtio-net driver and the ring it speaks over,
-`/proc/net`, and `AF_UNIX` names so that `nc` can carry a stream over a local
-socket.
+**Done — the driver, in ring 3.** `user/net` is the process that makes a
+virtio-net function an interface. It holds handles and nothing else:
+`libs/virtio-net` drives the device, `libs/netring` speaks the ring,
+`libs/netserve` joins the two, and all three are tested on the host, so the
+program is the eight steps of `docs/NET-RING.md` §7 with a `Step` per failure.
+`devmgr` starts it from a second row in its table, and the net ring's `take_up`
+sends PUBLISHED for the device's PCI location before READY goes out, because a
+driver that has not published by the time `devmgr` reports is killed.
+
+The first end-to-end run found the failure the ring's sleep handshake exists to
+prevent: the driver waited on its port without first asking to be rung, so the
+kernel — which rings only a driver that has said it is going to sleep — never
+rang it. Frames the *device* delivered still woke it through the interrupt, so
+the interface looked alive and transmitted nothing at all.
+
+**Done — the `ifreq` ioctls.** rtnetlink is how an interface is configured and
+`kernel/src/net/netlink` answers it, but `if_nametoindex` — which POSIX.1-2024
+specifies, which every program that names an interface goes through, and which
+musl implements as `ioctl(SIOCGIFINDEX)` over an `AF_UNIX` socket — had nothing
+to talk to, so `ip` could not find a device that was right there.
+`kernel/src/net/ifreq` is the index, the flags, the address, the mask, the
+broadcast and peer addresses, the MTU, the hardware address, the queue length
+and `SIOCGIFCONF`. `sys_ioctl` sends what a socket's own family did not know to
+it whatever the family, as Linux's `sock_ioctl` passes it to `dev_ioctl`, so
+`ifconfig` and `getifaddrs` are answered as well as `ip`.
+
+**Done — `cargo xtask test-net`, the exit criterion as a test.** The servers
+the guest fetches from are threads of `xtask` on ports the host's kernel chose,
+and `10.0.2.2` is the host's loopback as it is under slirp, so the run is
+hermetic: it says the same thing on a machine with no network, and the name it
+resolves is answered by a stub the gateway's forwarder is pointed at for the
+run. The digest is POSIX `cksum`, written out in `xtask/src/net.rs` and checked
+against what the host's own `cksum` prints, because it is the one digest this
+busybox and this build tool can both compute with nothing added to either.
+
+Thirteen programs, on x86-64, AArch64 and ARMv7-A: `ip` configures an address
+and a route and reads them back; `route -n` and `netstat -rn` report through
+`/proc/net/route`; `ping` reaches the gateway; `nslookup` resolves a name;
+`wget` fetches by name through `/etc/resolv.conf` and fetches a quarter of a
+megabyte whose `cksum` matches the server's; `nc -u` sends a datagram and reads
+the answer; and `/proc/net/dev` and `arp -n` show what the traffic left behind.
+
+**Still to do:** `AF_UNIX` names, so that `nc` can carry a stream over a local
+socket — the last clause of the exit criterion below, and the reason the musl
+busybox's `su` has never worked (`docs/BACKLOG.md`).
 
 **Exit:** under `xtask`'s gateway — which is where this criterion's *"under
 QEMU's user-mode network"* now reads — busybox configures `eth0` with `ip` (or
