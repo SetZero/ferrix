@@ -31,6 +31,10 @@ name = "compositor-config"
 version = "0.1.0"
 
 [[package]]
+name = "compositor-wire"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-acpi"
 version = "0.1.0"
 
@@ -79,6 +83,7 @@ name = "ferrix-fuzz"
 version = "0.0.0"
 dependencies = [
  "compositor-config",
+ "compositor-wire",
  "ferrix-acpi",
  "ferrix-blkring",
  "ferrix-block",

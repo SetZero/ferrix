@@ -41,6 +41,7 @@ ferrix-nettcp = { path = "../libs/nettcp" }
 ferrix-net = { path = "../libs/net" }
 ferrix-netlink = { path = "../libs/netlink" }
 compositor-config = { path = "../compositor/config" }
+compositor-wire = { path = "../compositor/wire" }
 
 [[bin]]
 name = "elf_parse"
@@ -212,6 +213,13 @@ bench = false
 [[bin]]
 name = "virtio_input_driver"
 path = "fuzz_targets/virtio_input_driver.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wayland_wire"
+path = "fuzz_targets/wayland_wire.rs"
 test = false
 doc = false
 bench = false

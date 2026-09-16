@@ -55,6 +55,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-wire"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-linux-abi"
 version = "0.1.0"
 

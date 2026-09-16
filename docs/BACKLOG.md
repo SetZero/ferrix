@@ -270,7 +270,7 @@ nobody has it yet.
 | Multi-touch axes (`ABS_MT_*`), force feedback (`EV_FF`, `EVIOCSFF`) and sound (`EV_SND`) on `/dev/input/eventN`. The input core publishes a device without them and its boot line says what was left out; QEMU's keyboard and tablet declare none (`docs/INPUT.md` §3.2, §6, os-f6 2026-09-16) | 17 |
 | Input hotplug: devices exist from boot in the input iteration. A device that arrives or leaves later, and how a compositor learns of it without udev (`inotify` on `/dev/input`, not in Ferrix today, or a rescan) (`docs/INPUT.md` §3.4, §6, os-f6 2026-09-16) | 17 |
 | `card0` is opened by one process at a time, standing in for DRM master (`docs/DISPLAY.md` §5, a written deviation from Linux): Linux's many opens with one master, `SET_MASTER`/`DROP_MASTER` arbitrating between them, and the render node beside it come in stage 19 | 19 |
-| The compositor workspace: Smithay base (assumed), CPU rendering, dwindle and master, `hyprland.conf`, `hyprctl` IPC, two Rust test clients. `hyprland.conf` landed 2026-09-16 (`compositor/config`, 5); layouts and dispatchers next (8). GUI session | 18 |
+| The compositor workspace: the server written from scratch (decided 2026-09-17), CPU rendering, dwindle and master, `hyprland.conf`, `hyprctl` IPC, two Rust test clients. `hyprland.conf` landed 2026-09-16 (`compositor/config`, 5); the layouts and dispatchers landed (8); `compositor/render` landed 2026-09-17 (5). Next, the server: `compositor/wire`, the Wayland wire protocol with no libwayland (8); the object map and `wl_display`/`wl_registry` (5); `wl_shm` over sealed memfds and `wl_compositor`/`wl_surface` (8); `xdg_shell` (8); `wl_seat` with keyboard and pointer (8); the `hyprctl` IPC socket (5); the two test clients (5). GUI session | 18 |
 | GPU path decision, then `renderD128`, dmabuf, GBM, animations, blur and rounding | 19 |
 | The DK1's LTDC display and USB HID as the hardware variant of stage 17 | 17, P3 |
 
@@ -403,6 +403,27 @@ Dated, newest first. A decision here is final until the customer says otherwise.
   until made: Smithay as the compositor base rather than from scratch;
   `xkbcommon` as the one C library at stage 18; Mesa on ferrousli versus a
   Rust GPU path at stage 19.
+* **2026-09-17 (customer, delegated to the GUI session) The compositor
+  server is written from scratch, not on Smithay.** The customer asked for
+  the work to go on without stopping for questions, which settles the open
+  choice of 2026-09-13 above. Smithay's value is its backends -- udev,
+  libinput, libseat, GBM, EGL and its DRM session handling -- and every one
+  of those is C, which `compositor/README.md`'s no-C-device-stack rule
+  already forbids and which this tree has already replaced: `blank` drives
+  `/dev/dri/card0` itself, `libs/virtio-input` is the input driver, and
+  `compositor/render` is the renderer Smithay's own pixman would have been.
+  What would be left of Smithay is `wayland-server`'s marshalling and its
+  protocol handlers, and taking those means every Ferrix system call they
+  make is a dependency's choice rather than this tree's -- on a kernel whose
+  Linux surface is still being filled in, that turns a compositor bug into a
+  hunt through someone else's crate. Writing the wire protocol is about 20
+  points more before the first client, and buys a `no_std`-shaped,
+  host-tested, fuzzed crate in the same shape as `libs/netwire`, `libs/cpio`
+  and `libs/inputctl`. The protocol XML this is written from is on this
+  machine (`/usr/share/wayland/wayland.xml`,
+  `/usr/share/wayland-protocols/`), and so is Hyprland 0.56.2's own source,
+  the behaviour reference. `xkbcommon` stays the one C library allowed at
+  stage 18 and is unaffected; the stage 19 GPU choice is still open.
 * **2026-09-13 (customer)** POSIX.1-2024 compatibility is a goal, on the
   condition that it never breaks Linux compatibility. Ferrix takes POSIX
   through its libc over the Linux ABI (ARCHITECTURE §2), so the goal costs
@@ -576,9 +597,9 @@ each with a row above saying where it stands:
   **Both landed on 2026-09-17**, with the fixes their rows in the
   after-`rustc` table record; the branches can be deleted.
 
-**Waiting on the customer:** Smithay's core crates or from scratch for the
-compositor server (the product owner recommends Smithay core; from scratch
-is about 20 points more before the first client); permission to load this
+**Waiting on the customer:** ~~Smithay's core crates or from scratch for the
+compositor server~~ — settled on 2026-09-17, from scratch, in the decisions
+above; permission to load this
 PC for FX-1151; the QEMU upstream report; the VT-d record's owner.
 
 **For the next machine:** clone from nazuna or `origin` (both at `main`

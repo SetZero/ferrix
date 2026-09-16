@@ -11,15 +11,19 @@ names the part of Hyprland or hyprlang it follows.
 
 ## The plan it is built to
 
-* **Pure cores first.** The configuration, the layouts, the dispatchers and
-  the IPC's request format hold no socket, device or Wayland object, so they
-  are written and tested before the Smithay decision in `docs/BACKLOG.md` is
-  made and carry over whichever way it goes.
+* **Pure cores first.** The configuration, the layouts, the dispatchers, the
+  renderer and the IPC's request format hold no socket and no descriptor, so
+  every one of them is host-tested and fuzzed before anything of it runs on
+  Ferrix. The server is written from scratch rather than on Smithay, decided
+  on 2026-09-17 with the reasoning in `docs/BACKLOG.md`.
 * **No C device stack, ever.** No udev, libinput, libseat, GBM, EGL or
   libwayland, not even on a Linux host: the backend is DRM dumb buffers and
   raw evdev through the ioctl subset Ferrix implements, the protocol server
   is pure Rust, and rendering is on the CPU. `xkbcommon` is the one C
-  library allowed, from stage 18.
+  library allowed, from stage 18. libwayland is linked by one thing and
+  never by the compositor: `wire/probe/wire.c`, a probe that runs on the
+  development host to print the bytes a real implementation sends, the way
+  `libs/linux-abi/probe` prints the kernel's numbers.
 * **Headless pixel tests are the everyday gate.** Rendering into a buffer on
   the host and comparing pixels is the same comparison stage 17 and 18's
   exit tests make against QEMU's screendump.
@@ -42,6 +46,15 @@ names the part of Hyprland or hyprlang it follows.
   `killactive`, `togglefloating` and `fullscreen`, parsed from a `Bind`.
   Each call returns the changes it caused; `State::layout` gives every
   visible window's client rectangle.
+* **`wire`** is Wayland's wire protocol with no libwayland: the message
+  header, every argument type, descriptors travelling beside the bytes
+  rather than in them, and the per-client object map that keeps a client's
+  ids and the server's in their own halves. It holds no socket -- a
+  descriptor is an `i32` and nothing more -- so it is host-tested and
+  fuzzed. `probe/wire.c` drives a real libwayland client and a real
+  libwayland server over socket pairs and prints what they wrote;
+  `probe/wire.txt` is that output, committed, and the tests require this
+  crate to write the same bytes and to read them back.
 * **`render`** draws the frame: a `Canvas` over a `tiny-skia` pixmap with
   `clear`, `fill`, `border` and `composite` (`ARGB8888` source-over,
   `XRGB8888` copied and made opaque), each drawn only inside a `Damage` of

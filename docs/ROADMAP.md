@@ -3572,10 +3572,11 @@ primary plane on the card" on both.
 ## Stage 18 — The compositor  ·  *96 points*
 
 A Wayland compositor in Rust, on `libs/`' side of the tree as its own
-workspace the way ferrousli is, built on the Smithay compositor crates unless
-the customer decides on a compositor written from scratch (an open decision
-recorded in `docs/BACKLOG.md`); the window management, the layouts, the
-configuration and the IPC are written new, in Rust, to Hyprland's shape.
+workspace the way ferrousli is, **written from scratch** rather than on the
+Smithay crates: decided on 2026-09-17, the reasoning in `docs/BACKLOG.md`.
+The wire protocol, the window management, the layouts, the configuration and
+the IPC are all written new, in Rust, to Hyprland's shape; the only C library
+allowed is `xkbcommon`.
 
 * **Protocols:** `wl_compositor`, `wl_subcompositor`, `wl_shm`, `wl_seat`
   with keyboard and pointer (keymaps through `xkbcommon`, the one C library
@@ -3585,8 +3586,10 @@ configuration and the IPC are written new, in Rust, to Hyprland's shape.
 * **Rendering** on the CPU into stage 17's dumb buffers: damage tracking,
   a pixman-shaped Rust rasteriser (`tiny-skia`), one page flip per frame,
   frame callbacks on vblank.
-* **A tiny-skia `Renderer` for Smithay,** whose own CPU renderer is pixman (C)
-  (5 points).
+* **The wire protocol with no libwayland** (`compositor/wire`): the message
+  header, every argument type, descriptor passing over `AF_UNIX`, and the
+  object map, written from `/usr/share/wayland/wayland.xml` and fuzzed
+  (8 points).
 * **XKB data in the image:** a pinned subset of xkeyboard-config, the files
   xkbcommon's keymap compiler reads (2 points).
 * **Hyprland's shape:** the dwindle and master layouts, workspaces, the
@@ -3644,6 +3647,46 @@ to name exactly it. Twenty tests. It holds no Wayland object and no
 descriptor, so it carries over whichever way the compositor-server decision
 goes; its crate docs say how a Smithay `Renderer`/`Frame`/`ImportMem` or a
 server written from scratch wraps it.
+
+**Done — the wire protocol, with no libwayland (2026-09-17).**
+`compositor/wire` is the bottom of the server: the message header, every
+argument type, descriptors travelling beside the bytes rather than in them,
+and the per-client object map that keeps a client's ids and the server's in
+their own halves. It holds no socket and no descriptor -- an `fd` is an `i32`
+here and nothing more -- so it is host-tested and fuzzed as `libs/netwire`
+and `libs/inputctl` are, and the part that has to run on Ferrix to be tried
+is only the socket above it.
+
+It is written from the protocol and from `connection.c`, so by construction
+nothing in it is checked against a real implementation. The check is a probe,
+in the shape `libs/linux-abi/probe` set: `compositor/wire/probe/wire.c`
+drives a real libwayland client and a real libwayland server over socket
+pairs it owns and prints the bytes each wrote, `probe/wire.txt` is that
+output committed with the libwayland version on its first line, and the tests
+require this crate to write the same bytes and to read them back. Fifteen
+message shapes, both directions, every argument type: `new_id`,
+`wl_registry.bind`'s unnamed `new_id` with its interface string, a null
+`object` where the protocol allows one, negative `int`s, a descriptor that is
+not in the byte stream, `array`s of three lengths and `fixed` at 1.5 and
+-2.25. Its negative control, not committed: with a string's length counting
+its bytes without the NUL -- the likeliest way to get the format wrong -- six
+tests fail, `every_message_libwayland_sent_is_written_the_same_way_here`
+among them.
+
+Reading libwayland taught it two things it would not have got right from the
+protocol. It is stricter in one place: a message whose arguments do not use
+every byte its header claimed is refused, where libwayland consumes the rest
+without looking, because that check catches a wrong signature in this crate's
+own tables rather than letting it misread the next message. And it must not
+be stricter in another: the padding after a string or an array is never
+looked at, because `serialize_closure` steps over it and `wl_closure_queue`,
+the path a queued request takes, allocates its buffer with `malloc` -- so a
+real client's padding is uninitialised heap, and a server requiring it to be
+zero would drop clients at random. Thirty tests; the `wayland_wire` fuzz
+target reads a stranger's bytes against a signature it picks and requires a
+failed read to consume nothing, every string it accepts to be UTF-8 without a
+NUL, no descriptor to be invented, and everything the writer builds to read
+back the same. It ran 65,887,144 inputs in ten minutes without a failure.
 
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
