@@ -26,7 +26,7 @@ use ferrix_netring::control::{
     CONTROL_RIGHTS as NET_CONTROL_RIGHTS, DEVICE_RIGHTS as NET_DEVICE_RIGHTS, MAX_MESSAGE,
     Message as NetRing, Start as NetStart,
 };
-use ferrix_rt::native::channel::{self, Channel};
+use ferrix_rt::native::channel::{self, Channel, ReadError};
 use ferrix_rt::native::device::Device;
 use ferrix_rt::native::error::Error;
 use ferrix_rt::native::handle::{Deadline, Object, OwnedHandle};
@@ -194,7 +194,7 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
                 // One at a time: the kernel's PUBLISHED for this disk before
                 // the next driver starts, so disks register in PCI order
                 // and two drivers never race to be vda.
-                let published = await_published(channel, info.location);
+                let published = await_published(channel, &port, info.location, u64::from(count));
                 *slot = Some(Started {
                     location: info.location,
                     device: keep,
@@ -294,26 +294,66 @@ fn receive(channel: &Channel<Kernel>) -> Result<Given, Step> {
     }
 }
 
-/// Wait for the kernel's PUBLISHED for the disk at `location`. A native
-/// program has no clock, so the kernel's patience for REPORT is the deadline:
-/// a driver that never publishes holds devmgr here and the boot says so. A
+/// The port key the kernel's channel is watched under while a driver starts:
+/// above every driver's, which is its index.
+const KEY_KERNEL: u64 = u64::MAX;
+
+/// Wait for the kernel's PUBLISHED for the device at `location`, or for its
+/// driver, watched on `port` under `key`, to exit first: a driver refused
+/// before READY (`docs/DISPLAY.md` §2.4) or failing before it serves never
+/// publishes, and the boot goes on without that device (os-02's review). A
+/// native program has no clock, so a driver that neither publishes nor exits
+/// holds devmgr here until the kernel's patience for REPORT runs out. A
 /// channel that closes or says something else answers `false`.
-fn await_published(channel: &Channel<Kernel>, location: u32) -> bool {
-    loop {
-        let Ok(_) = channel.wait_one(Signals::READABLE | Signals::PEER_CLOSED, Deadline::Never)
-        else {
-            return false;
-        };
+fn await_published(
+    channel: &Channel<Kernel>,
+    port: &Port<Kernel>,
+    location: u32,
+    key: u64,
+) -> bool {
+    // Other drivers' deaths arrive here too; they are queued again after, for
+    // `serve_deaths`.
+    let mut deaths = [None::<u64>; MAX_DEVICES];
+    let mut held = 0_usize;
+    let mut exited = false;
+    let published = loop {
         let mut short = [0_u8; SHORT_BYTES];
-        let Ok(got) = channel.read(&mut short, &mut []) else {
-            return false;
-        };
-        match Message::decode(short.get(..got.bytes).unwrap_or(&[])) {
-            Ok(Message::Published { location: at }) if at == location => return true,
-            Ok(Message::Published { .. }) => {}
-            _ => return false,
+        match channel.read(&mut short, &mut []) {
+            Ok(got) => match Message::decode(short.get(..got.bytes).unwrap_or(&[])) {
+                Ok(Message::Published { location: at }) if at == location => break true,
+                Ok(Message::Published { .. }) => continue,
+                _ => break false,
+            },
+            // A driver that published and then died is still published: the
+            // channel is read once more after its exit before giving up.
+            Err(ReadError::Failed(Error::ShouldWait)) if exited => break false,
+            Err(ReadError::Failed(Error::ShouldWait)) => {}
+            Err(_) => break false,
         }
+        if channel
+            .wait_async(port, Signals::READABLE | Signals::PEER_CLOSED, KEY_KERNEL)
+            .is_err()
+        {
+            break false;
+        }
+        let Ok(packet) = port.wait(Deadline::Never) else {
+            break false;
+        };
+        if packet.key == key {
+            exited = true;
+            continue;
+        }
+        if packet.key != KEY_KERNEL
+            && let Some(slot) = deaths.get_mut(held)
+        {
+            *slot = Some(packet.key);
+            held += 1;
+        }
+    };
+    for died in deaths.into_iter().flatten() {
+        let _ = port.queue(died, [0, 0]);
     }
+    published
 }
 
 /// Deaths, for the life of the machine: quiesce the device, tell the kernel.

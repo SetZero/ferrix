@@ -37,8 +37,10 @@ use ferrix_linux_abi::socket::Width;
 use ferrix_vfs::{Inode, Metadata, Readiness, Result as VfsResult};
 
 use super::{Card, CardError};
+use ferrix_sync::SleepLock;
+
 use crate::sched::WaitQueue;
-use crate::sync::SpinLock;
+use crate::sync::{SchedParker, SpinLock};
 use crate::syscall::process::{self, Process};
 use crate::syscall::uaccess;
 use crate::timer;
@@ -59,6 +61,9 @@ const NATIVE: Width = if size_of::<usize>() == 8 {
 
 /// The most page-flip events kept unread.
 const MAX_EVENTS: usize = 64;
+
+/// The most framebuffers one open may have, as the session caps buffers.
+const MAX_FRAMEBUFFERS: usize = 64;
 
 /// A dumb buffer.
 #[derive(Clone, Copy, Debug)]
@@ -97,11 +102,23 @@ struct OpenState {
 }
 
 /// One open of a card.
-#[derive(Debug)]
 pub(crate) struct CardFile {
     card: Arc<Card>,
     state: SpinLock<OpenState>,
     readable: WaitQueue,
+    /// Held across a whole mode change (`SETCRTC`, `PAGE_FLIP`, `RMFB`), so
+    /// two threads' changes cannot leave `shown` disagreeing with the device.
+    /// A sleep lock: the changes wait for the driver, and no spin lock is
+    /// held while it is taken.
+    modeset: SleepLock<()>,
+}
+
+impl core::fmt::Debug for CardFile {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CardFile")
+            .field("card", &self.card)
+            .finish_non_exhaustive()
+    }
 }
 
 impl CardFile {
@@ -130,6 +147,7 @@ impl CardFile {
                 ..OpenState::default()
             }),
             readable: WaitQueue::new(),
+            modeset: SleepLock::new((), &SchedParker),
         }))
     }
 }
@@ -176,6 +194,19 @@ impl Inode for CardFile {
             hangup: false,
             error: false,
         }
+    }
+
+    /// Put back events a read took but could not deliver, as Linux's
+    /// `drm_read` does, so a bad buffer loses no flip.
+    fn unread_stream(&self, bytes: &[u8]) {
+        let mut state = self.state.lock();
+        for chunk in bytes.chunks_exact(EventVblank::SIZE).rev() {
+            let mut event = [0u8; 32];
+            event.copy_from_slice(chunk);
+            state.events.push_front(event);
+        }
+        drop(state);
+        self.readable.wake_all();
     }
 
     /// Page-flip events, whole records only. A blocking read ends with a
@@ -229,6 +260,7 @@ fn card_error(error: CardError) -> Errno {
     match error {
         CardError::Request(_) => Errno::EINVAL,
         CardError::NoRoom => Errno::ENOMEM,
+        CardError::Busy => Errno::EBUSY,
         CardError::Gone => Errno::ENODEV,
         CardError::TimedOut => Errno::ETIMEDOUT,
     }
@@ -344,10 +376,17 @@ pub(crate) fn ioctl(
         drm::IOCTL_MODE_RMFB => {
             let mut bytes = [0u8; 4];
             uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+            let _modeset = file.modeset.lock();
             remove_framebuffer(file, u32::from_le_bytes(bytes)).map(|()| 0)
         }
-        drm::IOCTL_MODE_SETCRTC => set_crtc(process, file, arg),
-        drm::IOCTL_MODE_PAGE_FLIP => page_flip(process, file, arg),
+        drm::IOCTL_MODE_SETCRTC => {
+            let _modeset = file.modeset.lock();
+            set_crtc(process, file, arg)
+        }
+        drm::IOCTL_MODE_PAGE_FLIP => {
+            let _modeset = file.modeset.lock();
+            page_flip(process, file, arg)
+        }
         drm::IOCTL_MODE_DIRTYFB => dirty_fb(process, file, arg),
         _ => Err(Errno::ENOTTY),
     }
@@ -668,6 +707,9 @@ fn add_framebuffer(
         || pitch != dumb.pitch
     {
         return Err(Errno::EINVAL);
+    }
+    if state.framebuffers.len() >= MAX_FRAMEBUFFERS {
+        return Err(Errno::ENOSPC);
     }
     let id = state.next_framebuffer;
     state.next_framebuffer = id.checked_add(1).ok_or(Errno::ENOMEM)?;

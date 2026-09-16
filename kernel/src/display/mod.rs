@@ -99,7 +99,10 @@ pub(crate) enum CardError {
     Request(RequestError),
     /// The card has no range, or no buffer id, left for the buffer.
     NoRoom,
-    /// The driver is gone, broke the protocol, or stopped reading.
+    /// The driver's channel is full: it is behind, and the request can be
+    /// made again once it has read.
+    Busy,
+    /// The driver is gone or broke the protocol.
     Gone,
     /// The driver did not answer in time.
     TimedOut,
@@ -170,6 +173,9 @@ struct State {
     /// detached as soon as the session allows it.
     orphans: Vec<u32>,
     unwanted: Vec<Unwanted>,
+    /// A closed open's scanout-off that found the channel full, sent as soon
+    /// as there is room, unless a later SCANOUT supersedes it.
+    scanout_off: bool,
 }
 
 impl State {
@@ -222,6 +228,12 @@ impl State {
     /// Detach `buffer`, which nobody holds, now if the session allows it
     /// and as soon as it does otherwise.
     fn let_go(&mut self, control: &Endpoint, buffer: u32) {
+        if !control.peer_has_room() {
+            if !self.orphans.contains(&buffer) {
+                self.orphans.push(buffer);
+            }
+            return;
+        }
         match self.session.detach(buffer) {
             Ok(message) => {
                 self.unwanted.push(Unwanted::Detached(buffer));
@@ -268,10 +280,25 @@ impl State {
             }
             self.events.push(event);
         }
+        self.retry(control);
+        freed
+    }
+
+    /// Send what waited for the session or for room in the channel: a
+    /// closed open's scanout-off, then the orphans' detaches.
+    fn retry(&mut self, control: &Endpoint) {
+        if self.scanout_off
+            && control.peer_has_room()
+            && let Ok(message) = self.session.scanout(0, 0, Rect::default())
+        {
+            self.scanout_off = false;
+            if write(control, self, &message).is_err() {
+                return;
+            }
+        }
         for buffer in core::mem::take(&mut self.orphans) {
             self.let_go(control, buffer);
         }
-        freed
     }
 
     fn forget(&mut self, reply: Unwanted) -> bool {
@@ -282,8 +309,10 @@ impl State {
 }
 
 /// Send `message` to the driver. Called with the card's state locked, so
-/// messages reach the driver in the order the session made them. A driver
-/// whose channel is full has stopped reading: the card is gone.
+/// messages reach the driver in the order the session made them, and only
+/// after [`Endpoint::peer_has_room`] said yes: the kernel is the channel's
+/// only writer, so the write fails only when the driver is gone, and the
+/// card goes with it.
 fn write(control: &Endpoint, state: &mut State, message: &Message) -> Result<(), CardError> {
     let bytes = message.encode().as_bytes().to_vec();
     if control
@@ -346,8 +375,14 @@ impl Card {
         make: impl FnOnce(&mut State) -> Result<(Message, T), CardError>,
     ) -> Result<T, CardError> {
         let mut state = self.state.lock();
-        if state.gone {
+        if state.gone || self.control.peer_closed() {
             return Err(CardError::Gone);
+        }
+        // Before the session commits to the request, which it cannot take
+        // back: a driver that is behind makes the caller try again, not the
+        // card go (os-02's review).
+        if !self.control.peer_has_room() {
+            return Err(CardError::Busy);
         }
         let (message, made) = make(&mut state)?;
         write(&self.control, &mut state, &message)?;
@@ -439,6 +474,7 @@ impl Card {
     /// Show `rect` of `buffer` on `scanout`, or turn it off with buffer 0.
     pub(crate) fn scanout(&self, scanout: u32, buffer: u32, rect: Rect) -> Result<(), CardError> {
         self.send(|state| {
+            state.scanout_off = false;
             let message = state
                 .session
                 .scanout(scanout, buffer, rect)
@@ -488,7 +524,9 @@ impl Card {
         if state.gone {
             return;
         }
-        if let Ok(message) = state.session.scanout(0, 0, Rect::default())
+        if !self.control.peer_has_room() {
+            state.scanout_off = true;
+        } else if let Ok(message) = state.session.scanout(0, 0, Rect::default())
             && write(&self.control, &mut state, &message).is_err()
         {
             return;
@@ -641,13 +679,16 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
             ranges: Vec::new(),
             orphans: Vec::new(),
             unwanted: Vec::new(),
+            scanout_off: false,
         }),
         changed: WaitQueue::new(),
         opened: AtomicBool::new(false),
     });
 
     // Published before READY goes out, as the rings do: devmgr kills a driver
-    // that has not published by the time it reports.
+    // that has not published by the time it reports. A READY that cannot be
+    // written is not taken back: the channel failing means the driver is
+    // gone, and devmgr hears of its death and quiesces the device.
     if let Some(location) = start.location {
         crate::devmgr::published(location);
     }
@@ -683,6 +724,27 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
     Ok(card)
 }
 
+/// Take a range back from a buffer the driver let go of. Nothing the next
+/// buffer's program maps may show what the last one drew, so its pages are
+/// decommitted. A page still pinned is skipped by the decommit: the driver
+/// replied before it unpinned, which a correct one never does, and the range
+/// is kept out of use for good, as a refused detach's is (os-02's review).
+fn reclaim(card: &Card, range: Range) {
+    let (first, pages) = (range.offset / PAGE_SIZE, range.bytes / PAGE_SIZE);
+    let _ = card.vmo.decommit_range(first, pages);
+    if card.vmo.holds_any(first, pages) {
+        crate::console::println!(
+            "  display  card{}: buffer {} is still pinned after its driver let go; \
+             {} pages kept out of use",
+            card.index,
+            range.buffer,
+            pages
+        );
+        return;
+    }
+    card.state.lock().give_back(range.offset, range.bytes);
+}
+
 /// Serve the card until its driver goes.
 fn serve(card: &Card) {
     loop {
@@ -696,6 +758,7 @@ fn serve(card: &Card) {
                 if card.control.signals().intersects(Signals::PEER_CLOSED) {
                     break;
                 }
+                card.state.lock().retry(&card.control);
                 let _ = card.control.waiters().wait_until_deadline(
                     || {
                         card.control
@@ -719,14 +782,7 @@ fn serve(card: &Card) {
             Ok(event) => {
                 let freed = card.state.lock().settle(&card.control, event);
                 if let Some(range) = freed {
-                    // Nothing the next buffer's program maps may show what
-                    // the last one drew. Pages still held for the device
-                    // are skipped, and none should be: the driver unpins
-                    // before it replies.
-                    let _ = card
-                        .vmo
-                        .decommit_range(range.offset / PAGE_SIZE, range.bytes / PAGE_SIZE);
-                    card.state.lock().give_back(range.offset, range.bytes);
+                    reclaim(card, range);
                 }
                 card.changed.wake_all();
             }

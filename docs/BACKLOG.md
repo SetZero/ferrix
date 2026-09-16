@@ -234,6 +234,8 @@ nobody has it yet.
 |---|---|
 | The cost of the 20 µs one-shot armed on every wake onto the caller's processor, measured on pipe and futex paths | ferrix-34 |
 | Per-CPU frame and heap caches, deferred since stage 2 | open, once a workload can measure them |
+| `Inode::ioctl`: `sys_ioctl` special-cases the console, sockets and `/dev/dri/card<N>` by the open object's type; a hook on the inode replaces the three branches (os-02's review of the display stack, 2026-09-16) | open, kernel VFS owner |
+| Checked register offsets in the ring-3 virtio drivers: `Block::read`/`write` in `user/blk` and `user/gpu` assert on a device-controlled `notify_off` × multiplier, and on ARMv7-A `offset + size_of::<T>()` can wrap past the bounds check; one shared checked-offset accessor for both (os-02's review, 2026-09-16) | open, driver owner |
 | ASIDs and PCIDs, so a switch stops invalidating every user entry | open, after threads |
 | `getrandom` seeded from virtio-rng into a real generator; a real-time clock read from the RTC and `/dev/rtc` | open |
 | The debt the roadmap names: fuzz targets for `virtio`, `linux-abi` | open |

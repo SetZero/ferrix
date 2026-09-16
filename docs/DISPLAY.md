@@ -81,6 +81,18 @@ driver sizes its backing lists for.
   it is still in flight, become the card's orphans: the card's task detaches
   each as soon as the session allows. A reply nobody waits for any more is
   dropped.
+* **A driver that is behind is not a dead one.** The kernel is the control
+  channel's only writer and asks for room before the session commits to a
+  request: a full channel answers `EBUSY` to the program, and a closed
+  open's scanout-off and detaches wait for room instead of taking the card
+  down.
+* **A range a driver still pins is never reused.** After the decommit the
+  core asks the card VMO whether any page of the range is still held for
+  the device; one that is means the driver replied before it unpinned, and
+  the range stays out of use for good, with a line on the console.
+* **A driver refused before READY does not stop the boot.** devmgr waits for
+  PUBLISHED or for the driver's exit, whichever comes first, and counts a
+  driver that exits unpublished as failed.
 
 **The size `card0` reports.** `card0`'s inode reports `st_size` equal to the
 card VMO's size, `CARD_BUDGET`. `map_file`'s bounds check, which is what makes
