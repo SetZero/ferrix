@@ -2780,6 +2780,74 @@ a test of its own, for the reason stage 7's exit is one.
 
 ---
 
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points*
+
+Placed after *Networking* without a number of its own, for the same reason:
+nothing on the path to `rustc` needs it, since Rust's `std` targets static
+musl. What needs it is the promise `docs/ARCHITECTURE.md` §2 makes — that
+somebody else's Linux binary runs unchanged — which today holds only for a
+static, fixed-address executable. `kernel/src/syscall/load.rs` refuses
+`ET_DYN` by name (`NeedsRelocation`) and never reads `PT_INTERP`, and nearly
+every binary a distribution ships is a position-independent executable that
+asks for glibc's `ld-linux`. The question of 2026-09-16 that put this here was
+whether Steam could run; the answer began with this section, before the
+32-bit ABI, networking and the display stages it also waits on. The 32-bit
+x86 ABI is not part of it and is not staged.
+
+Three parts, in the order they can be tested:
+
+* **The kernel half, 5 points.** `execve` loads an `ET_DYN` executable at a
+  base of its own — Linux's `ELF_ET_DYN_BASE`, unrandomised until stage 13 —
+  and applies its relative relocations, which `libs/elf` already reads
+  because the UEFI loader relocates itself. A `PT_INTERP` names a second
+  file: the interpreter is loaded at its own base, the entry point is the
+  interpreter's, and the auxiliary vector says the rest — `AT_BASE` for the
+  interpreter, `AT_PHDR`, `AT_PHNUM` and `AT_ENTRY` for the program, plus
+  `AT_RANDOM`, `AT_EXECFN` and `AT_PLATFORM`, whose keys `libs/linux-abi`
+  carries. The interpreter then maps libraries itself, through stage 8's
+  file-backed `mmap` with `MAP_FIXED` and `PROT_EXEC`, and `mprotect`s its
+  `PT_GNU_RELRO` — calls that exist and gain a test that uses them as
+  `ld.so` does. `AT_SYSINFO_EHDR` stays absent: there is no vDSO, and glibc
+  and musl both fall back to the real call.
+* **ferrousli's loader, 21 points.** The fifth item of `ferrousli/README.md`:
+  a dynamic loader in Rust, shipped as ferrousli's `ld.so` with
+  `libferrousli.so` beside `libferrousli.a`. The `PT_DYNAMIC` section, symbol
+  lookup through the GNU hash table, the relocation types of all three
+  architectures (`GLOB_DAT`, `JUMP_SLOT`, the TLS forms, `IRELATIVE`),
+  `PT_TLS` for loaded modules with `__tls_get_addr` and the dynamic thread
+  vector, `DT_INIT_ARRAY` and `DT_FINI_ARRAY` in dependency order,
+  `LD_LIBRARY_PATH` and `DT_RUNPATH`, and `dlfcn.h` — `dlopen`, `dlsym`,
+  `dlclose`, `dlerror`, `dladdr` — which `docs/POSIX-2024.md` lists as
+  ferrousli's dynamic-loading area and does not price. Lazy binding is not
+  in it: everything is bound at load, as `LD_BIND_NOW` does, so there is no
+  resolver trampoline to write per architecture.
+* **glibc's names, 13 points.** The README's "then glibc's symbol versions":
+  `GLIBC_2.2.5` and its successors as `libferrousli.so`'s version
+  definitions, `libc.so.6`, `libm.so.6` and `libpthread.so.0` as its
+  `SONAME`s, and the startup contract glibc's `crt1.o` and `ld-linux` make
+  between them — `_dl_start_user`, `__libc_start_main` with `_dl_fini`,
+  `_rtld_global` where a binary reaches for it. A binary linked against
+  glibc then loads ferrousli in glibc's place, which is what the README
+  calls the destination.
+
+`cargo xtask test-shell` gains `--interpreter` and `--library`, which put
+the named files onto the initramfs beside `--init` at the paths the binary
+asks for, so the test binary is still one the repository does not carry.
+
+**Exit,** in two halves, each a test of its own for the reason stage 7's is:
+
+1. A distribution's dynamic busybox — Debian's, linked against glibc — with
+   its own `ld-linux-x86-64.so.2` and `libc.so.6` on the image, runs stage
+   7's `test-shell` script on x86-64 and AArch64, and the `armhf` pair does
+   the same on ARMv7-A, printing the same lines and exiting 7. This proves
+   the kernel half against a loader nobody here wrote.
+2. The same binary with glibc's files removed and ferrousli's `ld.so` and
+   `libferrousli.so` at their paths, running the same script on all three
+   architectures. This proves the other two parts, and is the README's fifth
+   item in its entirety.
+
+---
+
 ## Stage 12 — btrfs, write  ·  *longer*
 
 Copy-on-write allocation through the extent tree, delayed refs, transaction

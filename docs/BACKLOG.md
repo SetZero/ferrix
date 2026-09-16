@@ -191,6 +191,8 @@ nobody has it yet.
 | Land `ferrousli-math`, work in progress of 2026-09-13 not built since its last change: `fenv.h`, rounding, manipulation, remainders and `fma`, with libc-test's math tables in Rust; 43 interfaces; `fmaf` was rewritten and is untested. Rebases without conflicts. One landing, 5 points | os-50 | ferrousli |
 | Land `ferrousli-misc`'s finished half: `search.h`, `libgen.h` (`dirname` leaves the stubs) and `glob`, whose ENOENT callback check at `glob.c:153` still fails; 15 interfaces. Its `fnmatch.rs` and `dirent.rs` conflicts resolve to develop's copies, which landed. One landing, 3 points | os-50 | ferrousli |
 | `regex.h`, replacing four stubs: the parser and program on `ferrousli-misc` were never compiled, and the exports (`regex.rs`) and the POSIX submatch solver are unwritten. One landing, 5 points | os-50 | ferrousli |
+| The seam, gated: a script beside `scripts/check-asm-budget.py`, with an allowlist of the same shape, refuses a volatile MMIO access or port I/O instruction in `kernel/` outside the sites `docs/ARCHITECTURE.md` §1 and §7 permit: `arch/` (MMU, traps, timers, interrupt controllers, the serial writers), `iommu/`, `pci/` enumeration, `mmio.rs`, `block_ring/`, `early.rs` and the panic framebuffer, and the boot checks; fifteen files hold one today. Each entry carries a reason and a line budget, a stale entry fails, and a new site is argued in a diff. The rule it keeps is that the kernel enumerates devices and drives none, which convention keeps for about six weeks (§9). 3 points | open | 10 |
+| Isolation per platform, written down: a table in `docs/ARCHITECTURE.md` §7 saying for each machine the gates boot and each board whether driver DMA is translated (x86-64 through VT-d, AArch64 through the SMMUv3, ARMv7-A under QEMU bypassed by U-Boot, the DK1 whose STM32MP157 is checked on the board rather than assumed), with the console line that says so. The seam's safety claim is then read per platform, and a platform in degraded trusted mode is named as one. 1 point | open (the DK1 row with the board's owner) | 10 |
 
 ### P2 — quality and performance, on the "fast" half of the goal
 
@@ -210,6 +212,8 @@ nobody has it yet.
 | ferrousli's busybox beyond the gates' applets: the 30 stubs in `ferrousli/src/stubs.rs` (regex for `grep` and `sed` patterns busybox does not handle itself, the math functions `awk` calls, name resolution with interface and Ethernet lookups), each ending the program when an applet reaches it; and `crypt`'s `$2*$` blowfish hash, which returns `"*"` (the traditional DES hash, for the two-character salt POSIX requires, is in P1's link-breakers row) | open |
 | The rest of ferrousli's POSIX.1-2024 gap, by area in `docs/POSIX-2024.md`: 427 interfaces the P1 rows leave, 138 points. The largest parts: the math library beyond `ferrousli-math` (21: the transcendental functions, the Bessel functions, every `long double` form) with `complex.h` (8); locales and messages (15: `gettext`, `iconv`, `catgets`, `strfmon`); wide-character streams and conversions (14); name resolution and the network databases (13); cancellation and the `clock` waits (11); realtime (11: `aio.h`, `mqueue.h`, timers, `shm_open`); `wordexp` and `nftw` (5); spawning (7); and POSIX.1-2024's declarations in musl 1.2.5's headers (3). Each landing updates the document's tables | open (ferrousli, os-50) |
 | `cargo xtask check --ferrousli` cannot pass on Windows: `ferrousli/tools/gen-abi.py` reads `/usr/include/x86_64-linux-gnu/asm/unistd_64.h`, which no Windows host has. Give it a pinned copy of the Linux UAPI numbers in the tree, so the ferrousli gate runs wherever `cargo xtask busybox` now does. 2 points; found landing the native Windows busybox build, 2026-09-14 | open |
+| The seam measured, 1: what the hop to ring 3 costs. Under `test-boot`, the kernel times submit-to-complete on the pattern disk at queue depths 1 and 32, and `blk` times its own device round trip for the same requests, so the difference is the ring, the doorbells and the scheduler between them and nothing else. Beside it, the same QEMU disk read at the same depths by a Linux guest (a stock image, `dd` with `iflag=direct`), as the in-kernel reference the 2026-09-13 decision forbids building in Ferrix. Both numbers, on x86-64 under KVM and on AArch64, go into the roadmap's stage 11 section with the boot line that carried them, and the zero-copy row above is re-costed against them. 5 points | open |
+| The seam measured, 2: how much of a build-like workload crosses it. Counters kept from boot: Linux system calls answered; page-cache pages served from an inode's VMO against pages filled through the ring; ring submissions and completions; printed as one line at the end of `test-vfs`, and of the `rustc` run when stage 16 has one. The claim under test is that the seam is on a cold path for the goal's workload; the row is done when the ratio is in the roadmap's stage 11 section and the decision of 2026-09-16 cites it. 3 points | open |
 
 ### After `rustc` — the compositor's path, unowned until stage 16 is near
 
@@ -243,6 +247,27 @@ nobody has it yet.
 ## Decisions
 
 Dated, newest first. A decision here is final until the customer says otherwise.
+
+* **2026-09-16 (customer)** The architecture stays what `docs/ARCHITECTURE.md`
+  §1 says: a monolithic core, capability seams, device drivers in ring 3.
+  Asked whether Ferrix should be a monolith, a microkernel or a hybrid, the
+  answer is that the seam sits at devices because the goal puts it there:
+  `rustc`'s system calls are `open`, `stat`, `read` and `mmap` on files the
+  page cache already holds, and those stay function calls; only disk traffic
+  crosses to ring 3, batched through a ring behind the page cache, where a
+  hop is amortised over a queue. The hybrid that is "the worst of both
+  worlds" keeps message passing between subsystems and compiles them into
+  one address space; Ferrix passes messages only across the privilege
+  boundary, and in-kernel subsystems call each other. Rust confines the
+  core's memory bugs to its audited `unsafe`, and the IOMMU confines what
+  Rust cannot, a device's DMA. What the shape gives up is restarting a
+  kernel subsystem, which the goal does not need. A full microkernel would
+  make the Linux ABI an emulation layer over servers, against §2; a full
+  monolith would delete stages 9 and 10 and gain nothing on the compiler's
+  path, which crosses no seam. The decision is closed by evidence rather
+  than by argument: the two "seam measured" rows in P2, the seam gate and
+  the per-platform isolation table in P1. Drivers stay in ring 3 and no
+  kernel disk path is built for the measurement (2026-09-13 below).
 
 * **2026-09-14** The busybox built against ferrousli is the primary busybox:
   the userland Ferrix is measured with, first in every `test-shell` and

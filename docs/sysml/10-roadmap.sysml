@@ -341,6 +341,24 @@ package FerrixRoadmap {
              * carries a stream over loopback and an AF_UNIX socket. */
     }
 
+    #planned requirement <'SD'> stageDynamicLinking : Stage {
+        attribute :>> number = 11;
+        attribute :>> status = StageStatus::Planned;
+        attribute :>> size = "39 points";
+        doc /* Placed after Networking without a number of its own: nothing
+             * on rustc's path needs it, since std targets static musl. The
+             * kernel half loads ET_DYN at a base with relative relocations
+             * and honours PT_INTERP with AT_BASE in the auxiliary vector (5
+             * points); ferrousli's loader, ld.so with libferrousli.so,
+             * binds every relocation type of the three architectures at
+             * load, with dynamic TLS and dlfcn.h (21); then glibc's symbol
+             * versions and SONAMEs, so a glibc-linked binary loads
+             * ferrousli in glibc's place (13). No vDSO, no 32-bit ABI. Exit:
+             * a distribution's dynamic glibc busybox runs stage 7's
+             * test-shell script with its own ld-linux, then with ferrousli's
+             * loader in glibc's place, on all three architectures. */
+    }
+
     #planned requirement <'S12'> stage12BtrfsWrite : Stage {
         attribute :>> number = 12;
         attribute :>> status = StageStatus::Planned;
@@ -415,6 +433,7 @@ package FerrixRoadmap {
     dependency from stage10UserspaceDrivers to stage9NativeAbi;
     dependency from stage11BtrfsRead to stage10UserspaceDrivers;
     dependency from stageNetworking to stage11BtrfsRead, stage10UserspaceDrivers;
+    dependency from stageDynamicLinking to stage8Vfs, stage7LinuxAbi;
     dependency from stage12BtrfsWrite to stage11BtrfsRead;
     dependency from stage13Isolation to stage12BtrfsWrite;
     dependency from stage14RealTime to stage13Isolation, stage4Smp;
@@ -459,6 +478,8 @@ package FerrixRoadmap {
     allocate stage10UserspaceDrivers to ferrix.kernel.iommu;
     allocate stage11BtrfsRead to ferrix.kernel.blockCore;
     allocate stageNetworking to ferrix.kernel.netCore;
+    allocate stageDynamicLinking to ferrix.kernel.syscalls;
+    allocate stageDynamicLinking to ferrix.userland;
     allocate stage13Isolation to ferrix.kernel.namespaces;
     allocate stage13Isolation to ferrix.kernel.cgroups;
     allocate stage13Isolation to ferrix.kernel.seccomp;
