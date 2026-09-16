@@ -170,6 +170,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "virtio_gpu"
+path = "fuzz_targets/virtio_gpu.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = true
 # The fuzzer's whole job is to find these, so they must not be compiled out.

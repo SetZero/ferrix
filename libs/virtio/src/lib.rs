@@ -77,6 +77,7 @@
 use core::fmt;
 
 pub mod blk;
+pub mod gpu;
 pub mod net;
 pub mod pci;
 
