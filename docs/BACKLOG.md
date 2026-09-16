@@ -228,6 +228,12 @@ nobody has it yet.
 | GPU path decision, then `renderD128`, dmabuf, GBM, animations, blur and rounding | 19 |
 | The DK1's LTDC display and USB HID as the hardware variant of stage 17 | 17, P3 |
 
+### Networking rows, unowned
+
+| Item | Owner |
+|---|---|
+| Raw sockets: `AF_INET` `SOCK_RAW` (ICMP, for busybox's `ping`) and `AF_PACKET` (for `udhcpc`), both answered `EPERM` today, so `run --net` configures `eth0` from `/etc/profile` instead of DHCP. Networking stage | open |
+
 ### P3 — hardware variants and later stages, unowned
 
 * GICv3 and its redistributors, with a second AArch64 boot configuration
