@@ -75,6 +75,11 @@ build_ferrousli() {
 # a caller that compiles from standard input with `-x c++ -` does not make gcc
 # read crtend.o and the libraries as C++ source.
 #
+# The C++ compilers are the host's g++ when it is gcc 15 or newer, and
+# otherwise clang from LLVM's own release, fetched once: LLVM 23's libc++ uses
+# compiler built-ins older compilers lack (`__builtin_clzg`, `__is_array`), and
+# WSL's Ubuntu 24.04 has gcc 13. The C compiler is always the host's gcc.
+#
 # Empty libm, libpthread and the rest stand in for the libraries a configure
 # script asks for by name: ferrousli is one library, as musl is.
 make_compilers() {
@@ -92,17 +97,25 @@ make_compilers() {
     for l in m crypt resolv rt pthread dl util; do
         [ -f "$stubs/lib$l.a" ] || ar rc "$stubs/lib$l.a"
     done
-    local compiler_include crtbegin crtend
+    local compiler_include crtbegin crtend libgcc_dir
     compiler_include=$(gcc -print-file-name=include)
     crtbegin=$(gcc -print-file-name=crtbeginT.o)
     crtend=$(gcc -print-file-name=crtend.o)
+    libgcc_dir=$(dirname "$(gcc -print-libgcc-file-name)")
+    local cxx_driver=g++ cxx_include=$compiler_include
+    if [ "$(g++ -dumpversion | cut -d. -f1)" -lt 15 ]; then
+        fetch_clang
+        cxx_driver=$clang_bin/clang++
+        cxx_include=$("$clang_bin/clang" -print-resource-dir)/include
+        echo "g++ $(g++ -dumpversion) is older than 15: C++ with $cxx_driver"
+    fi
 
-    local name driver kind
+    local name driver kind include
     for name in ferrousli-cc ferrousli-c++ ferrousli-c++-bare; do
         case $name in
-            ferrousli-cc) driver=gcc kind=c ;;
-            ferrousli-c++) driver=g++ kind=c++ ;;
-            ferrousli-c++-bare) driver=g++ kind=bare ;;
+            ferrousli-cc) driver=gcc kind=c include=$compiler_include ;;
+            ferrousli-c++) driver=$cxx_driver kind=c++ include=$cxx_include ;;
+            ferrousli-c++-bare) driver=$cxx_driver kind=bare include=$cxx_include ;;
         esac
         cat > "$bin/$name" <<EOF
 #!/usr/bin/env bash
@@ -111,7 +124,7 @@ link=1
 for a in "\$@"; do
     case "\$a" in -c|-S|-E|-M|-MM|-r|-print-*|--version|-v|-dumpversion|-dumpmachine) link=0 ;; esac
 done
-common=(-nostdinc -isystem "$ferrousli/include" -isystem "$uapi" -isystem "$compiler_include")
+common=(-nostdinc -isystem "$ferrousli/include" -isystem "$uapi" -isystem "$include")
 cxx=()
 cxxlibs=()
 case $kind in
@@ -131,7 +144,7 @@ if [ $kind != c ]; then
     end=("$crtend")
 fi
 if [ \$link = 1 ]; then
-    exec $driver "\${cxx[@]}" "\${common[@]}" -static -no-pie -nostdlib -L"$stubs" -L"$prefix/lib" \\
+    exec $driver "\${cxx[@]}" "\${common[@]}" -static -no-pie -nostdlib -L"$stubs" -L"$prefix/lib" -L"$libgcc_dir" \\
         "$crt1" "\${begin[@]}" "\$@" -x none "\${cxxlibs[@]}" -Wl,--start-group "$lib" -lgcc -Wl,--end-group "\${end[@]}"
 else
     exec $driver "\${cxx[@]}" "\${common[@]}" "\$@"
@@ -146,6 +159,27 @@ EOF
     echo "$CC"
     echo "$CXX"
     echo "$CXX_BARE"
+}
+
+# LLVM's prebuilt release for x86-64 Linux, pinned by its sha256 as first
+# downloaded on 2026-09-17; LLVM publishes a sigstore bundle beside it rather
+# than a checksum. Only clang and its built-in headers are unpacked, under
+# $ports/llvm, once. Sets $clang_bin.
+LLVM_RELEASE=LLVM-23.1.1-Linux-X64
+LLVM_RELEASE_URL=https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/$LLVM_RELEASE.tar.xz
+LLVM_RELEASE_SHA256=832aeb58d105de1cabc7b982dd2c65de0610f7377df48ae8fc2dd8e97420a15c
+fetch_clang() {
+    clang_bin=$ports/llvm/$LLVM_RELEASE/bin
+    if [ -x "$clang_bin/clang++" ]; then
+        return
+    fi
+    step "clang, for a C++ runtime this gcc cannot build"
+    mkdir -p "$ports/src" "$ports/llvm"
+    fetch "$LLVM_RELEASE_URL" "$ports/src/$LLVM_RELEASE.tar.xz" sha256sum "$LLVM_RELEASE_SHA256"
+    rm -rf "$ports/llvm/$LLVM_RELEASE"
+    tar -xJf "$ports/src/$LLVM_RELEASE.tar.xz" -C "$ports/llvm" --wildcards \
+        "$LLVM_RELEASE/bin/clang*" "$LLVM_RELEASE/lib/clang/*"
+    [ -x "$clang_bin/clang++" ] || fail "$LLVM_RELEASE has no bin/clang++"
 }
 
 # Write the symbols a failed link left undefined, from the logs given, to

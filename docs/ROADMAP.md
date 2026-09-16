@@ -3109,8 +3109,10 @@ one it falls back from.
 **Done — curl, built against ferrousli.** `ferrousli/tools/ports/curl` builds
 curl 8.22.0 over Mbed TLS 3.6.7 as a static x86-64 program against ferrousli,
 from sources pinned by checksum, with curl.se's extract of Mozilla's CA
-certificates. It linked with nothing missing from the library. `cargo xtask
-ports` builds it. Every x86-64 image that carries a busybox carries it at
+certificates. It linked with nothing missing from the library. Every image
+build rebuilds the ports when they are stale, through WSL on Windows, as it
+rebuilds ferrousli's busybox, and `cargo xtask ports` builds them all. Every
+x86-64 image that carries a busybox carries it at
 `/bin/curl`, with the bundle at `/etc/ssl/certs/ca-certificates.crt`. When
 curl is installed, `test-net` adds two programs to its thirteen: curl fetches
 the file by name through `/etc/resolv.conf`, and fetches the quarter megabyte

@@ -95,9 +95,13 @@ busybox's does.
 | `libcxx` | LLVM 23.1.1's libc++, libc++abi and libunwind, the C++ runtime, built with gcc | `include/c++/v1`, `lib/libc++.a`, `lib/libc++abi.a`, `lib/libunwind.a` |
 | `btop` | btop 1.4.7, C++23, over `libcxx` | `bin/btop` |
 
-`cargo xtask ports` runs them in that order, on a Linux host. Every image that carries a
-busybox carries the ports that are installed, on x86_64, and `cargo xtask
-test-net` fetches with curl as well as with `wget` when curl is there.
+Every image that carries a busybox carries the ports, on x86_64, and builds
+them first when they are stale, as `--init ferrousli` builds busybox: never
+built, a file they install gone, or older than ferrousli's sources,
+`common.sh`, their own directory or a port they are built over. On Windows the
+scripts run in WSL's default distribution and the files an image carries are
+copied back. `cargo xtask ports` builds them all, stale or not. `cargo xtask
+test-net` fetches with curl as well as with `wget`.
 
 curl linked with nothing missing from this library on 2026-09-16. On Linux it
 fetches over HTTPS and refuses a self-signed certificate. On Ferrix it fetches
