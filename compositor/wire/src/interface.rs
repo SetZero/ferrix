@@ -12,6 +12,10 @@ pub struct Method {
     /// The interface version it appeared in, as the protocol's `since`. A
     /// client bound at a lower version may not send it.
     pub since: u32,
+    /// Whether the protocol marks it `type="destructor"`: the object is gone
+    /// once it has been handled, and the server sends `wl_display.delete_id`
+    /// so the client may use the number again.
+    pub destructor: bool,
     /// Its arguments, in order.
     pub signature: Signature,
 }

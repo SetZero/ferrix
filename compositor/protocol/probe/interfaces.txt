@@ -1,0 +1,194 @@
+# libwayland 1.24.0
+wl_display 1 request 0 sync n
+wl_display 1 request 1 get_registry n
+wl_display 1 event 0 error ous
+wl_display 1 event 1 delete_id u
+wl_registry 1 request 0 bind usun
+wl_registry 1 request 0 bind any-new-id 3
+wl_registry 1 event 0 global usu
+wl_registry 1 event 1 global_remove u
+wl_callback 1 event 0 done u
+wl_compositor 6 request 0 create_surface n
+wl_compositor 6 request 1 create_region n
+wl_shm_pool 2 request 0 create_buffer niiiiu
+wl_shm_pool 2 request 1 destroy 
+wl_shm_pool 2 request 2 resize i
+wl_shm 2 request 0 create_pool nhi
+wl_shm 2 request 1 release 2
+wl_shm 2 event 0 format u
+wl_buffer 1 request 0 destroy 
+wl_buffer 1 event 0 release 
+wl_data_offer 3 request 0 accept u?s
+wl_data_offer 3 request 1 receive sh
+wl_data_offer 3 request 2 destroy 
+wl_data_offer 3 request 3 finish 3
+wl_data_offer 3 request 4 set_actions 3uu
+wl_data_offer 3 event 0 offer s
+wl_data_offer 3 event 1 source_actions 3u
+wl_data_offer 3 event 2 action 3u
+wl_data_source 3 request 0 offer s
+wl_data_source 3 request 1 destroy 
+wl_data_source 3 request 2 set_actions 3u
+wl_data_source 3 event 0 target ?s
+wl_data_source 3 event 1 send sh
+wl_data_source 3 event 2 cancelled 
+wl_data_source 3 event 3 dnd_drop_performed 3
+wl_data_source 3 event 4 dnd_finished 3
+wl_data_source 3 event 5 action 3u
+wl_data_device 3 request 0 start_drag ?oo?ou
+wl_data_device 3 request 1 set_selection ?ou
+wl_data_device 3 request 2 release 2
+wl_data_device 3 event 0 data_offer n
+wl_data_device 3 event 1 enter uoff?o
+wl_data_device 3 event 2 leave 
+wl_data_device 3 event 3 motion uff
+wl_data_device 3 event 4 drop 
+wl_data_device 3 event 5 selection ?o
+wl_data_device_manager 3 request 0 create_data_source n
+wl_data_device_manager 3 request 1 get_data_device no
+wl_shell 1 request 0 get_shell_surface no
+wl_shell_surface 1 request 0 pong u
+wl_shell_surface 1 request 1 move ou
+wl_shell_surface 1 request 2 resize ouu
+wl_shell_surface 1 request 3 set_toplevel 
+wl_shell_surface 1 request 4 set_transient oiiu
+wl_shell_surface 1 request 5 set_fullscreen uu?o
+wl_shell_surface 1 request 6 set_popup ouoiiu
+wl_shell_surface 1 request 7 set_maximized ?o
+wl_shell_surface 1 request 8 set_title s
+wl_shell_surface 1 request 9 set_class s
+wl_shell_surface 1 event 0 ping u
+wl_shell_surface 1 event 1 configure uii
+wl_shell_surface 1 event 2 popup_done 
+wl_surface 6 request 0 destroy 
+wl_surface 6 request 1 attach ?oii
+wl_surface 6 request 2 damage iiii
+wl_surface 6 request 3 frame n
+wl_surface 6 request 4 set_opaque_region ?o
+wl_surface 6 request 5 set_input_region ?o
+wl_surface 6 request 6 commit 
+wl_surface 6 request 7 set_buffer_transform 2i
+wl_surface 6 request 8 set_buffer_scale 3i
+wl_surface 6 request 9 damage_buffer 4iiii
+wl_surface 6 request 10 offset 5ii
+wl_surface 6 event 0 enter o
+wl_surface 6 event 1 leave o
+wl_surface 6 event 2 preferred_buffer_scale 6i
+wl_surface 6 event 3 preferred_buffer_transform 6u
+wl_seat 10 request 0 get_pointer n
+wl_seat 10 request 1 get_keyboard n
+wl_seat 10 request 2 get_touch n
+wl_seat 10 request 3 release 5
+wl_seat 10 event 0 capabilities u
+wl_seat 10 event 1 name 2s
+wl_pointer 10 request 0 set_cursor u?oii
+wl_pointer 10 request 1 release 3
+wl_pointer 10 event 0 enter uoff
+wl_pointer 10 event 1 leave uo
+wl_pointer 10 event 2 motion uff
+wl_pointer 10 event 3 button uuuu
+wl_pointer 10 event 4 axis uuf
+wl_pointer 10 event 5 frame 5
+wl_pointer 10 event 6 axis_source 5u
+wl_pointer 10 event 7 axis_stop 5uu
+wl_pointer 10 event 8 axis_discrete 5ui
+wl_pointer 10 event 9 axis_value120 8ui
+wl_pointer 10 event 10 axis_relative_direction 9uu
+wl_keyboard 10 request 0 release 3
+wl_keyboard 10 event 0 keymap uhu
+wl_keyboard 10 event 1 enter uoa
+wl_keyboard 10 event 2 leave uo
+wl_keyboard 10 event 3 key uuuu
+wl_keyboard 10 event 4 modifiers uuuuu
+wl_keyboard 10 event 5 repeat_info 4ii
+wl_touch 10 request 0 release 3
+wl_touch 10 event 0 down uuoiff
+wl_touch 10 event 1 up uui
+wl_touch 10 event 2 motion uiff
+wl_touch 10 event 3 frame 
+wl_touch 10 event 4 cancel 
+wl_touch 10 event 5 shape 6iff
+wl_touch 10 event 6 orientation 6if
+wl_output 4 request 0 release 3
+wl_output 4 event 0 geometry iiiiissi
+wl_output 4 event 1 mode uiii
+wl_output 4 event 2 done 2
+wl_output 4 event 3 scale 2i
+wl_output 4 event 4 name 4s
+wl_output 4 event 5 description 4s
+wl_region 1 request 0 destroy 
+wl_region 1 request 1 add iiii
+wl_region 1 request 2 subtract iiii
+wl_subcompositor 1 request 0 destroy 
+wl_subcompositor 1 request 1 get_subsurface noo
+wl_subsurface 1 request 0 destroy 
+wl_subsurface 1 request 1 set_position ii
+wl_subsurface 1 request 2 place_above o
+wl_subsurface 1 request 3 place_below o
+wl_subsurface 1 request 4 set_sync 
+wl_subsurface 1 request 5 set_desync 
+xdg_wm_base 7 request 0 destroy 
+xdg_wm_base 7 request 1 create_positioner n
+xdg_wm_base 7 request 2 get_xdg_surface no
+xdg_wm_base 7 request 3 pong u
+xdg_wm_base 7 event 0 ping u
+xdg_positioner 7 request 0 destroy 
+xdg_positioner 7 request 1 set_size ii
+xdg_positioner 7 request 2 set_anchor_rect iiii
+xdg_positioner 7 request 3 set_anchor u
+xdg_positioner 7 request 4 set_gravity u
+xdg_positioner 7 request 5 set_constraint_adjustment u
+xdg_positioner 7 request 6 set_offset ii
+xdg_positioner 7 request 7 set_reactive 3
+xdg_positioner 7 request 8 set_parent_size 3ii
+xdg_positioner 7 request 9 set_parent_configure 3u
+xdg_surface 7 request 0 destroy 
+xdg_surface 7 request 1 get_toplevel n
+xdg_surface 7 request 2 get_popup n?oo
+xdg_surface 7 request 3 set_window_geometry iiii
+xdg_surface 7 request 4 ack_configure u
+xdg_surface 7 event 0 configure u
+xdg_toplevel 7 request 0 destroy 
+xdg_toplevel 7 request 1 set_parent ?o
+xdg_toplevel 7 request 2 set_title s
+xdg_toplevel 7 request 3 set_app_id s
+xdg_toplevel 7 request 4 show_window_menu ouii
+xdg_toplevel 7 request 5 move ou
+xdg_toplevel 7 request 6 resize ouu
+xdg_toplevel 7 request 7 set_max_size ii
+xdg_toplevel 7 request 8 set_min_size ii
+xdg_toplevel 7 request 9 set_maximized 
+xdg_toplevel 7 request 10 unset_maximized 
+xdg_toplevel 7 request 11 set_fullscreen ?o
+xdg_toplevel 7 request 12 unset_fullscreen 
+xdg_toplevel 7 request 13 set_minimized 
+xdg_toplevel 7 event 0 configure iia
+xdg_toplevel 7 event 1 close 
+xdg_toplevel 7 event 2 configure_bounds 4ii
+xdg_toplevel 7 event 3 wm_capabilities 5a
+xdg_popup 7 request 0 destroy 
+xdg_popup 7 request 1 grab ou
+xdg_popup 7 request 2 reposition 3ou
+xdg_popup 7 event 0 configure iiii
+xdg_popup 7 event 1 popup_done 
+xdg_popup 7 event 2 repositioned 3u
+zxdg_decoration_manager_v1 1 request 0 destroy 
+zxdg_decoration_manager_v1 1 request 1 get_toplevel_decoration no
+zxdg_toplevel_decoration_v1 1 request 0 destroy 
+zxdg_toplevel_decoration_v1 1 request 1 set_mode u
+zxdg_toplevel_decoration_v1 1 request 2 unset_mode 
+zxdg_toplevel_decoration_v1 1 event 0 configure u
+zwlr_layer_shell_v1 5 request 0 get_layer_surface no?ous
+zwlr_layer_shell_v1 5 request 1 destroy 3
+zwlr_layer_surface_v1 5 request 0 set_size uu
+zwlr_layer_surface_v1 5 request 1 set_anchor u
+zwlr_layer_surface_v1 5 request 2 set_exclusive_zone i
+zwlr_layer_surface_v1 5 request 3 set_margin iiii
+zwlr_layer_surface_v1 5 request 4 set_keyboard_interactivity u
+zwlr_layer_surface_v1 5 request 5 get_popup o
+zwlr_layer_surface_v1 5 request 6 ack_configure u
+zwlr_layer_surface_v1 5 request 7 destroy 
+zwlr_layer_surface_v1 5 request 8 set_layer 2u
+zwlr_layer_surface_v1 5 request 9 set_exclusive_edge 5u
+zwlr_layer_surface_v1 5 event 0 configure uuu
+zwlr_layer_surface_v1 5 event 1 closed 

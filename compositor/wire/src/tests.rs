@@ -52,6 +52,7 @@ const WL_CALLBACK: Interface = Interface {
     events: &[Method {
         name: "done",
         since: 1,
+        destructor: false,
         signature: &[ArgType::Uint],
     }],
 };
@@ -63,17 +64,20 @@ const WL_SURFACE: Interface = Interface {
         Method {
             name: "destroy",
             since: 1,
+            destructor: false,
             signature: &[],
         },
         Method {
             name: "attach",
             since: 1,
+            destructor: false,
             signature: ATTACH,
         },
     ],
     events: &[Method {
         name: "enter",
         since: 1,
+        destructor: false,
         signature: &[ArgType::Object { nullable: false }],
     }],
 };

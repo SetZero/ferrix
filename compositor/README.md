@@ -55,6 +55,16 @@ names the part of Hyprland or hyprlang it follows.
   libwayland server over socket pairs and prints what they wrote;
   `probe/wire.txt` is that output, committed, and the tests require this
   crate to write the same bytes and to read them back.
+* **`protocol`** is the interface tables: what each interface's requests and
+  events are called, at which opcode, with which argument types, and every
+  enumeration value. Generated from the protocol XML by
+  `scripts/gen-wayland-protocol.py`, which `cargo xtask check` runs with
+  `--check`. The XML is vendored under `protocol/protocols/` rather than read
+  from the machine, so the tables cannot change under the compositor without
+  a commit. `probe/interfaces.c` links against libwayland's own compiled
+  `wl_*_interface` structures and prints them; the tests require the
+  generated tables to agree, message for message. Adding a protocol is
+  vendoring one XML and adding a line to the generator's `FILES`.
 * **`render`** draws the frame: a `Canvas` over a `tiny-skia` pixmap with
   `clear`, `fill`, `border` and `composite` (`ARGB8888` source-over,
   `XRGB8888` copied and made opaque), each drawn only inside a `Damage` of

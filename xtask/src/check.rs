@@ -50,6 +50,14 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         python_with("scripts/gen-arch-doc.py", &["--check"])
     })?;
 
+    // The compositor's interface tables are generated from the protocol XML
+    // vendored beside them. A table edited by hand is a compositor that reads
+    // a client's message with the wrong signature, which is the kind of bug
+    // that shows up as one misdrawn window an hour later.
+    step("wayland protocol tables", || {
+        python_with("scripts/gen-wayland-protocol.py", &["--check"])
+    })?;
+
     // The panic screen's font is generated from the BDF committed beside it,
     // and a hand edit to either would otherwise drift silently.
     step("font", || python_with("scripts/gen-font.py", &["--check"]))?;
