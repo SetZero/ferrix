@@ -58,6 +58,13 @@ pub(crate) struct Args {
     /// how `test-net` points the guest's DNS at the answers it serves itself,
     /// so that the test says the same thing on a machine with no network.
     /// `None` is the host's own resolver.
+    #[cfg_attr(
+        not(unix),
+        expect(
+            dead_code,
+            reason = "only the UNIX-only gateway reads it; `--net` fails first elsewhere"
+        )
+    )]
     pub(crate) resolver: Option<std::net::SocketAddrV4>,
 }
 

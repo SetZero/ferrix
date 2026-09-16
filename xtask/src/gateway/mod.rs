@@ -83,8 +83,10 @@ use ferrix_netwire::{arp, icmpv4, ipv4};
 
 use crate::{Error, Result};
 
-/// The gateway's own address, which is the guest's default route.
-pub(crate) const GATEWAY_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 2);
+/// The gateway's own address, which is the guest's default route. It is
+/// defined in `net`, which every host compiles, because the DNS stub there
+/// answers with it whether or not this module exists.
+pub(crate) use crate::net::GATEWAY_IP;
 
 /// The address the DNS forwarder answers on.
 pub(crate) const DNS_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 3);

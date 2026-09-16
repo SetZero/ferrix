@@ -17,6 +17,8 @@ publish.workspace = true
 # conversion to PE32. It is already fuzzed and host-tested, and the alternative
 # was a second ELF reader here that nothing fuzzes.
 ferrix-elf.workspace = true
+
+[target.'cfg(unix)'.dependencies]
 # The tree's own header formats, for the host-side network gateway in
 # `gateway/`. The alternative was a second Ethernet, ARP, IPv4, ICMP, UDP and
 # TCP parser in the build tool, disagreeing with the kernel's about a length
