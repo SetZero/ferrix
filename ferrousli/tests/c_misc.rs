@@ -58,3 +58,23 @@ fn basename_takes_the_last_component() {
 fn dirname_drops_the_last_component() {
     check(&Case::named("misc/dirname"));
 }
+
+#[test]
+fn hsearch_finds_and_enters_and_its_table_grows() {
+    check(&Case::named("misc/search_hsearch"));
+}
+
+#[test]
+fn insque_and_remque_link_and_unlink() {
+    check(&Case::named("misc/search_insque"));
+}
+
+#[test]
+fn lsearch_appends_what_lfind_does_not_find() {
+    check(&Case::named("misc/search_lsearch"));
+}
+
+#[test]
+fn the_tsearch_tree_finds_deletes_walks_and_stays_balanced() {
+    check(&Case::named("misc/search_tsearch"));
+}

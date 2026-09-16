@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 922 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 933 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 7 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 0 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 314 | not there |
+| absent | 303 | not there |
 
-321 interfaces are missing in one of the last four ways. 13 of them are
+310 interfaces are missing in one of the last four ways. 2 of them are
 already written on `ferrousli-misc`, the last unlanded branch of 2026-09-13,
 which was committed without a build and is not reviewed. The other two,
 `ferrousli-math` and `ferrousli-threads`, landed on 2026-09-16.
@@ -54,11 +54,11 @@ new subsystem. Every area's missing names are in the index at the end.
 | Realtime: asynchronous I/O, message queues, timers, shared memory | 29 | 29 | 0 | 11 | `aio.h` over threads 3; `mqueue.h` 3; `timer_*` with `SIGEV_THREAD` 3; `shm_open`, `shm_unlink` 1; `clock_getcpuclockid` 1. Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
 | Terminals and devices | 25 | 7 | 0 | 3 | `posix_openpt`, `grantpt`, `unlockpt`, `ptsname`, `ptsname_r`, `ctermid` 2; `posix_devctl` and `<devctl.h>` 1 |
 | Networking and name resolution | 55 | 0 | 0 | 0 | landed: `getaddrinfo`, `getnameinfo`, `freeaddrinfo` and `gai_strerror` over `/etc/hosts` and a DNS stub resolver; the hosts, networks, protocols and services databases; `if_nameindex`, `if_freenameindex`, `if_indextoname`; `in6addr_any`, `in6addr_loopback`, `sockatmark` |
-| Patterns, paths and search | 23 | 16 | 13 | 8 | landing `ferrousli-misc`: `search.h`, `glob` 3; `wordexp` 3; `nftw` 2. Landed: `libgen.h`'s `basename` and `dirname`, and `regex.h`, replacing five stubs |
+| Patterns, paths and search | 23 | 5 | 2 | 6 | landing `ferrousli-misc`: `glob` 1; `wordexp` 3; `nftw` 2. Landed: `search.h`'s hash table, trees, linear search and queues; `libgen.h`'s `basename` and `dirname`, and `regex.h`, replacing five stubs |
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 5 | 0 | 2 | `dlfcn.h` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **321** | **13** | **104** | |
+| **All** | **1243** | **310** | **2** | **102** | |
 
 ## Present but broken
 
@@ -369,7 +369,7 @@ interface.
 | `<glob.h>` | absent, written on ferrousli-misc (2) | `glob`, `globfree` |
 | `<libgen.h>` | present (2) | `basename` (XSI), `dirname` (XSI) |
 | `<regex.h>` | present (4) | `regcomp`, `regerror`, `regexec`, `regfree` |
-| `<search.h>` | absent, written on ferrousli-misc (11) | `hcreate` (XSI), `hdestroy` (XSI), `hsearch` (XSI), `insque` (XSI), `lfind` (XSI), `lsearch` (XSI), `remque` (XSI), `tdelete` (XSI), `tfind` (XSI), `tsearch` (XSI), `twalk` (XSI) |
+| `<search.h>` | present (11) | `hcreate` (XSI), `hdestroy` (XSI), `hsearch` (XSI), `insque` (XSI), `lfind` (XSI), `lsearch` (XSI), `remque` (XSI), `tdelete` (XSI), `tfind` (XSI), `tsearch` (XSI), `twalk` (XSI) |
 | `<wordexp.h>` | absent (2) | `wordexp`, `wordfree` |
 
 ### Users, groups and databases

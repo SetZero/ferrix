@@ -85,6 +85,7 @@ pub mod resource;
 pub mod rwlock;
 pub mod scan;
 pub mod sched;
+pub mod search;
 pub mod select;
 pub mod semaphore;
 #[cfg(not(test))]
