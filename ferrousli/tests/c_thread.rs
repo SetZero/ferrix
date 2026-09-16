@@ -62,6 +62,11 @@ fn barriers_release_rounds_and_spin_locks_guard_a_counter() {
 }
 
 #[test]
+fn scheduling_policy_priority_and_affinity_are_read_and_set_per_thread() {
+    check(&Case::named("thread/sched"));
+}
+
+#[test]
 fn keys_hold_values_per_thread_and_run_destructors_in_rounds() {
     check(&Case::named("thread/keys"));
 }
