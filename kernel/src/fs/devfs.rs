@@ -215,6 +215,15 @@ const BLOCK_INO_BASE: u64 = 1 << 32;
 /// the last static node's.
 const BLOCK_CURSOR_BASE: u64 = FIRST_CURSOR + DEVICES.len() as u64;
 
+/// `/dev/dri`'s inode number.
+const DRI_INO: u64 = 1 << 36;
+
+/// The root's cursor for `/dev/dri`, after every disk's.
+const DRI_CURSOR: u64 = 1 << 48;
+
+/// The name of the directory cards are in.
+const DRI: &[u8] = b"dri";
+
 /// A devfs instance.
 #[derive(Debug)]
 pub(crate) struct Devfs {
@@ -479,6 +488,10 @@ enum Place {
     Device(usize),
     /// A registered disk.
     Block(BlockNode),
+    /// `/dev/dri`, while a card is published.
+    Dri,
+    /// `/dev/dri/card<N>`.
+    Card(u32),
 }
 
 /// A devfs inode.
@@ -496,7 +509,7 @@ impl Node {
     fn device(&self) -> Option<&'static Device> {
         match self.place {
             Place::Device(index) => DEVICES.get(index),
-            Place::Root | Place::Block(_) => None,
+            Place::Root | Place::Block(_) | Place::Dri | Place::Card(_) => None,
         }
     }
 }
@@ -548,6 +561,23 @@ impl Inode for Node {
                 rdev: makedev(disk.major, disk.minor),
                 ..directory
             },
+            (Place::Dri, _) => Metadata {
+                ino: DRI_INO,
+                ..directory
+            },
+            (Place::Card(index), _) => crate::display::card(index).map_or(
+                Metadata {
+                    kind: FileType::CharDevice,
+                    rdev: makedev(crate::display::DRM_MAJOR, index),
+                    ..directory
+                },
+                |card| Metadata {
+                    atime: self.made,
+                    mtime: self.made,
+                    ctime: self.made,
+                    ..card.metadata()
+                },
+            ),
             _ => directory,
         }
     }
@@ -557,7 +587,7 @@ impl Inode for Node {
     }
 
     fn is_stream(&self) -> bool {
-        self.place != Place::Root
+        !matches!(self.place, Place::Root | Place::Dri)
     }
 
     /// Disks are registered and dropped without the VFS being told, so a miss
@@ -575,6 +605,11 @@ impl Inode for Node {
         if let Place::Block(_) = self.place {
             return Err(Errno::ENXIO);
         }
+        if let Place::Card(index) = self.place {
+            let card = crate::display::card(index).ok_or(Errno::ENXIO)?;
+            let file: Arc<dyn Inode> = crate::display::drm::CardFile::open(card)?;
+            return Ok(Some(file));
+        }
         Ok(self
             .device()
             .filter(|device| device.behaviour == Behaviour::Console)
@@ -582,7 +617,7 @@ impl Inode for Node {
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
-        if let Place::Block(_) = self.place {
+        if let Place::Block(_) | Place::Card(_) = self.place {
             return Err(Errno::ENXIO);
         }
         let device = self.device().ok_or(Errno::EISDIR)?;
@@ -601,7 +636,7 @@ impl Inode for Node {
     }
 
     fn write_at(&self, offset: u64, data: &[u8], append: bool) -> Result<(usize, u64)> {
-        if let Place::Block(_) = self.place {
+        if let Place::Block(_) | Place::Card(_) = self.place {
             return Err(Errno::ENXIO);
         }
         let device = self.device().ok_or(Errno::EISDIR)?;
@@ -615,8 +650,22 @@ impl Inode for Node {
     }
 
     fn lookup(&self, name: &[u8]) -> Result<Arc<dyn Inode>> {
+        if self.place == Place::Dri {
+            let index = card_number(name).ok_or(Errno::ENOENT)?;
+            let _card = crate::display::card(index).ok_or(Errno::ENOENT)?;
+            return Ok(Arc::new(Node {
+                place: Place::Card(index),
+                made: self.made,
+            }));
+        }
         if self.place != Place::Root {
             return Err(Errno::ENOTDIR);
+        }
+        if name == DRI && !crate::display::card_indices().is_empty() {
+            return Ok(Arc::new(Node {
+                place: Place::Dri,
+                made: self.made,
+            }));
         }
         if let Some(index) = DEVICES.iter().position(|device| device.name == name) {
             return Ok(node(index, self.made));
@@ -631,6 +680,9 @@ impl Inode for Node {
     /// The static nodes by index, then the disks by serial; the module's
     /// documentation says why that keeps a listing in pieces stable.
     fn read_dir(&self, cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
+        if self.place == Place::Dri {
+            return read_dri(cursor, emit);
+        }
         if self.place != Place::Root {
             return Err(Errno::ENOTDIR);
         }
@@ -665,11 +717,59 @@ impl Inode for Node {
                     .saturating_add(1),
             };
             if !emit(entry) {
-                break;
+                return Ok(());
             }
+        }
+        if cursor <= DRI_CURSOR && !crate::display::card_indices().is_empty() {
+            let _ = emit(DirEntry {
+                ino: DRI_INO,
+                kind: FileType::Directory,
+                name: DRI,
+                next: DRI_CURSOR + 1,
+            });
         }
         Ok(())
     }
+
+    /// A card's pages, which `MODE_MAP_DUMB`'s offsets are into.
+    fn mapping(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        let Place::Card(index) = self.place else {
+            return None;
+        };
+        let card = crate::display::card(index)?;
+        let vmo: Arc<dyn Any + Send + Sync> = Arc::clone(&card.vmo) as Arc<dyn Any + Send + Sync>;
+        Some(vmo)
+    }
+}
+
+/// The card number `card<N>` names, with no leading zero.
+fn card_number(name: &[u8]) -> Option<u32> {
+    let digits = name.strip_prefix(b"card")?;
+    if digits.is_empty() || (digits.len() > 1 && digits.first() == Some(&b'0')) {
+        return None;
+    }
+    core::str::from_utf8(digits).ok()?.parse::<u32>().ok()
+}
+
+/// `/dev/dri`'s listing: every published card, by number.
+fn read_dri(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
+    let first = cursor.saturating_sub(FIRST_CURSOR);
+    for index in crate::display::card_indices() {
+        if u64::from(index) < first {
+            continue;
+        }
+        let name = alloc::format!("card{index}");
+        let entry = DirEntry {
+            ino: (1u64 << 40) + u64::from(index),
+            kind: FileType::CharDevice,
+            name: name.as_bytes(),
+            next: FIRST_CURSOR + u64::from(index) + 1,
+        };
+        if !emit(entry) {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// The inode `DEVICES[index]` is, stamped `made`.

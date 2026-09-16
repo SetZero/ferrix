@@ -399,10 +399,14 @@ fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u
 /// refused unless it is a file.
 ///
 /// `ferrousli` is not a path: it names the busybox `cargo xtask busybox`
-/// installs, built first when it is missing or older than ferrousli.
+/// installs, built first when it is missing or older than ferrousli. Nor is
+/// `blank`, the compositor's first program, which is built here.
 fn program_for(init: &str, arch: Arch) -> Result<PathBuf> {
     if init == busybox::INIT_NAME {
         return busybox::program(arch);
+    }
+    if init == display::INIT_NAME {
+        return display::build_blank(arch, false);
     }
     let program = PathBuf::from(init.replace("{arch}", arch.name()));
     if !program.is_file() {

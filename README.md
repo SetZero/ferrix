@@ -205,6 +205,29 @@ target's own musl and linked by rust-lld, so Windows needs nothing else.
 `cargo xtask test-shell --arch x86_64 --init target/zinc/x86_64-unknown-linux-musl/release/zinc`
 runs stage 7's script with zinc as the first program instead of busybox.
 
+### The display
+
+```
+cargo xtask run --arch x86_64 --display --init blank    # a window showing Ferrix's screen
+cargo xtask test-display --arch x86_64                  # the same, judged pixel by pixel
+```
+
+`--display` puts a virtio-gpu card on the bus, and with `run`, opens QEMU's
+window. The window starts on the firmware's console (VGA on x86-64, ramfb on
+AArch64), where the loader draws; the card is the other console in the
+window's View menu. `--init blank` builds the compositor's first program,
+[`compositor/blank`](compositor/README.md), and boots it as init: it opens
+`/dev/dri/card0` through Ferrix's Linux DRM subset, sets the preferred mode
+(1024×768) and fills the screen with one colour, `#1E1E2E`. Its serial
+line says `compositor: scanout ...`, or why it failed. There is no input and
+no windows yet; [the display design](docs/DISPLAY.md) says what comes next.
+x86-64 and AArch64 only: QEMU's ARMv7-A `virt` machine has no virtio-gpu.
+
+`test-display` boots the same program with QEMU's window off, asks QEMU for a
+screendump over QMP, and requires every pixel to be that colour; then it
+boots a build that draws one pixel wrong and requires the check to catch
+exactly that pixel.
+
 ### On an STM32MP157-DK1 board
 
 The same ARMv7-A image boots the STM32MP157D-DK1 from its SD card, under

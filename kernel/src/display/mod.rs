@@ -49,6 +49,8 @@ use crate::sync::SpinLock;
 use crate::timer;
 use crate::user::vmo::Vmo;
 
+pub(crate) mod drm;
+
 /// Linux's major number for DRM devices.
 pub(crate) const DRM_MAJOR: u32 = 226;
 

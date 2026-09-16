@@ -131,7 +131,7 @@ package FerrixDrivers {
             doc /* Device addresses from the device's IOMMU domain. */
         }
         part channel : Channel {
-            doc /* To the kernel subsystem it serves: block, net, input. */
+            doc /* To the kernel subsystem it serves: block, display, net, input. */
         }
         part ring : SharedRing;
     }
