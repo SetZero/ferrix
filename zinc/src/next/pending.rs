@@ -16,62 +16,63 @@ pub(crate) mod builtin {
         pub(crate) flags: u32,
     }
 
+    /// `MAX_OPS`: one slot per byte an option letter can be.
+    const MAX_OPS: usize = 128;
+
+    /// The options a builtin was given (zsh's `struct options`).
+    #[derive(Debug, Clone)]
+    pub(crate) struct Options {
+        /// Per letter: 0 unset, 1 `-x`, 2 `+x`, and `(n + 1) << 2` plus that
+        /// for an option whose argument is `args[n]`.
+        pub(crate) ind: [u8; MAX_OPS],
+        pub(crate) args: Vec<Vec<u8>>,
+    }
+
+    impl Default for Options {
+        fn default() -> Options {
+            Options {
+                ind: [0; MAX_OPS],
+                args: Vec::new(),
+            }
+        }
+    }
+
+    impl Options {
+        /// `OPT_ISSET`.
+        pub(crate) fn isset(&self, c: u8) -> bool {
+            self.ind.get(usize::from(c)).is_some_and(|&v| v != 0)
+        }
+
+        /// `OPT_MINUS`.
+        pub(crate) fn minus(&self, c: u8) -> bool {
+            self.ind.get(usize::from(c)).is_some_and(|&v| v & 1 != 0)
+        }
+
+        /// `OPT_PLUS`.
+        pub(crate) fn plus(&self, c: u8) -> bool {
+            self.ind.get(usize::from(c)).is_some_and(|&v| v & 2 != 0)
+        }
+
+        /// `OPT_HASARG`.
+        pub(crate) fn hasarg(&self, c: u8) -> bool {
+            self.ind.get(usize::from(c)).is_some_and(|&v| v > 3)
+        }
+
+        /// `OPT_ARG_SAFE`.
+        pub(crate) fn arg(&self, c: u8) -> Option<&[u8]> {
+            let v = *self.ind.get(usize::from(c))?;
+            if v <= 3 {
+                return None;
+            }
+            self.args
+                .get(usize::from(v >> 2).checked_sub(1)?)
+                .map(Vec::as_slice)
+        }
+    }
+
     impl Shell {
         /// zsh's `createbuiltintable`: no builtin has landed.
         pub(crate) fn createbuiltintable(&mut self) {}
-    }
-}
-
-/// `dirs`: named directories and the terminal helpers from `utils.c`.
-pub(crate) mod dirs {
-    use crate::shell::Shell;
-
-    impl Shell {
-        pub(crate) fn xsymlink(&mut self, s: &[u8]) -> Option<Vec<u8>> {
-            Some(s.to_vec())
-        }
-
-        pub(crate) fn get_username(&mut self) -> Vec<u8> {
-            Vec::new()
-        }
-
-        pub(crate) fn finddir_reset(&mut self) {}
-
-        pub(crate) fn adduserdir(
-            &mut self,
-            _s: &[u8],
-            _t: Option<&[u8]>,
-            _flags: u32,
-            _always: bool,
-        ) {
-        }
-
-        pub(crate) fn zbeep(&mut self) {}
-
-        pub(crate) fn getnameddir(&mut self, name: &[u8]) -> Option<Vec<u8>> {
-            self.nameddirtab.get(name).map(|nd| nd.dir.clone())
-        }
-
-        pub(crate) fn oldpwd(&mut self) -> Option<Vec<u8>> {
-            self.getsparam(b"OLDPWD")
-        }
-
-        pub(crate) fn subst_string_by_hook(
-            &mut self,
-            _name: &[u8],
-            _arg1: Option<&[u8]>,
-            _orig: &[u8],
-        ) -> Option<Vec<Vec<u8>>> {
-            None
-        }
-
-        pub(crate) fn substnamedir(&mut self, s: &[u8]) -> Vec<u8> {
-            s.to_vec()
-        }
-
-        pub(crate) fn ttyidle(&self) -> i64 {
-            -1
-        }
     }
 }
 
@@ -79,7 +80,30 @@ pub(crate) mod dirs {
 pub(crate) mod exec {
     use crate::shell::Shell;
 
+    pub(crate) const FDT_UNUSED: u8 = 0;
+    pub(crate) const FDT_INTERNAL: u8 = 1;
+    pub(crate) const FDT_EXTERNAL: u8 = 2;
+    pub(crate) const FDT_FLOCK: u8 = 5;
+    pub(crate) const FDT_FLOCK_EXEC: u8 = 6;
+    pub(crate) const FDT_PROC_SUBST: u8 = 7;
+
+    pub(crate) const SFC_SIGNAL: i32 = 2;
+    pub(crate) const SFC_HOOK: i32 = 3;
+    pub(crate) const SFC_SUBST: i32 = 7;
+
+    pub(crate) fn is_executable_file(_us: &[u8]) -> bool {
+        false
+    }
+
+    pub(crate) fn isrelative(s: &[u8]) -> bool {
+        s.first() != Some(&b'/')
+    }
+
     impl Shell {
+        pub(crate) fn execsave(&mut self) {}
+
+        pub(crate) fn execrestore(&mut self) {}
+
         pub(crate) fn findcmd(
             &mut self,
             _arg0: &[u8],
@@ -158,6 +182,15 @@ pub(crate) mod exec_list {
         pub(crate) fn execstring_ctx(&mut self, _s: &[u8], _context: &str) -> bool {
             false
         }
+
+        pub(crate) fn execode(
+            &mut self,
+            _p: &crate::tables::Eprog,
+            _dont_change_job: bool,
+            _exiting: bool,
+            _context: &str,
+        ) {
+        }
     }
 }
 
@@ -166,6 +199,15 @@ pub(crate) mod exec_func {
     use crate::shell::Shell;
 
     impl Shell {
+        pub(crate) fn doshfunc(
+            &mut self,
+            _shfunc: &crate::tables::Shfunc,
+            _doshargs: Option<Vec<Vec<u8>>>,
+            _noreturnval: bool,
+        ) -> i32 {
+            1
+        }
+
         pub(crate) fn doshfunc_by_name(
             &mut self,
             _name: &[u8],
@@ -182,78 +224,6 @@ pub(crate) mod exec_func {
         pub(crate) fn current_function_traced(&self) -> bool {
             false
         }
-    }
-}
-
-/// `jobs.c`: the job table's types.
-pub(crate) mod jobs {
-    use crate::shell::Shell;
-
-    pub(crate) const MAXJOBS_ALLOC: usize = 50;
-
-    /// A process of a job (zsh's `struct process`).
-    #[derive(Clone)]
-    pub(crate) struct Process {
-        pub(crate) pid: i32,
-        pub(crate) text: Vec<u8>,
-        pub(crate) status: i32,
-        pub(crate) ti: libc::rusage,
-        pub(crate) bgtime: (i64, i64),
-        pub(crate) endtime: (i64, i64),
-    }
-
-    impl std::fmt::Debug for Process {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("Process")
-                .field("pid", &self.pid)
-                .field("status", &self.status)
-                .finish_non_exhaustive()
-        }
-    }
-
-    /// A file to delete or descriptor to close when a job ends.
-    #[derive(Debug, Clone)]
-    pub(crate) enum JobFile {
-        Name(Vec<u8>),
-        Fd(i32),
-    }
-
-    /// Saved terminal state (zsh's `struct ttyinfo`).
-    #[derive(Clone, Copy)]
-    pub(crate) struct TtyInfo {
-        pub(crate) tio: libc::termios,
-        pub(crate) winsize: libc::winsize,
-    }
-
-    impl Default for TtyInfo {
-        fn default() -> TtyInfo {
-            // SAFETY: all-zero termios and winsize are valid values.
-            unsafe { std::mem::zeroed() }
-        }
-    }
-
-    impl std::fmt::Debug for TtyInfo {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("TtyInfo")
-        }
-    }
-
-    /// A job (zsh's `struct job`).
-    #[derive(Debug, Clone, Default)]
-    pub(crate) struct Job {
-        pub(crate) gleader: i32,
-        pub(crate) other: i32,
-        pub(crate) stat: i32,
-        pub(crate) pwd: Option<Vec<u8>>,
-        pub(crate) procs: Vec<Process>,
-        pub(crate) auxprocs: Vec<Process>,
-        pub(crate) filelist: Option<Vec<JobFile>>,
-        pub(crate) stty_in_env: bool,
-        pub(crate) ty: Option<TtyInfo>,
-    }
-
-    impl Shell {
-        pub(crate) fn acquire_pgrp(&mut self) {}
     }
 }
 
@@ -298,146 +268,41 @@ pub(crate) mod prompt {
     }
 }
 
-/// `signals.c`: saved traps and signal queueing.
-pub(crate) mod signals {
-    use crate::shell::Shell;
-    use crate::tables::{Eprog, Shfunc};
-
-    /// A saved trap (zsh's `struct savetrap`).
-    #[derive(Debug, Clone)]
-    pub(crate) struct SaveTrap {
-        pub(crate) sig: usize,
-        pub(crate) flags: i32,
-        pub(crate) local: i32,
-        pub(crate) posix: bool,
-        pub(crate) list: SavedTrapList,
-    }
-
-    #[derive(Debug, Clone)]
-    pub(crate) enum SavedTrapList {
-        None,
-        Func(Vec<u8>, Box<Shfunc>),
-        List(Eprog),
-    }
-
-    pub(crate) const ZEXIT_NORMAL: i32 = 0;
-
-    /// The current `errno`.
-    pub(crate) fn errno() -> i32 {
-        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
-    }
-
-    impl Shell {
-        pub(crate) fn queue_signals(&mut self) {
-            self.queueing_enabled += 1;
-        }
-
-        pub(crate) fn unqueue_signals(&mut self) {
-            self.queueing_enabled = (self.queueing_enabled - 1).max(0);
-        }
-    }
-}
-
-/// `utils.c` and `builtin.c`: errors and the terminal.
-pub(crate) mod sysutil {
-    use crate::jobs::TtyInfo;
-    use crate::shell::Shell;
-
-    /// zsh's `%e`; the glibc wording lands with the module.
-    pub(crate) fn errmsg(e: i32) -> String {
-        std::io::Error::from_raw_os_error(e).to_string()
-    }
-
-    impl Shell {
-        pub(crate) fn errmsg_last(&self) -> String {
-            errmsg(crate::signals::errno())
-        }
-
-        pub(crate) fn attachtty(&mut self, _pgrp: i32) {}
-
-        pub(crate) fn gettyinfo_now(&self) -> TtyInfo {
-            TtyInfo::default()
-        }
-
-        pub(crate) fn settyinfo(&self, _ti: &TtyInfo) {}
-
-        pub(crate) fn adjustwinsize(&mut self, _from: i32) {}
-
-        pub(crate) fn zexit(&mut self, val: i32, _from_where: i32) {
-            self.exit_val = val;
-        }
-    }
-}
-
-/// `hashtable.c`: the command tables' entries.
-pub(crate) mod tables {
-    use std::rc::Rc;
-
+/// `text.c`: the text of parsed code.
+pub(crate) mod text {
     use crate::ast::{List, Redir};
-    use crate::shell::{Shell, Sticky};
+    use crate::shell::Shell;
 
-    pub(crate) const DISABLED: u32 = 1 << 0;
-    pub(crate) const ALIAS_GLOBAL: u32 = 1 << 1;
+    impl Shell {
+        pub(crate) fn getpermtext(&self, _l: &List, _start_indent: bool) -> Vec<u8> {
+            Vec::new()
+        }
 
-    /// A parsed program (zsh's `Eprog`), shared between the places that hold it.
-    #[derive(Debug, Clone)]
-    pub(crate) struct Eprog {
-        pub(crate) list: Rc<List>,
-        pub(crate) flags: u32,
+        pub(crate) fn getredirtext(&self, _rs: &[Redir]) -> Vec<u8> {
+            Vec::new()
+        }
     }
+}
 
-    /// A shell function (zsh's `struct shfunc`).
-    #[derive(Debug, Clone, Default)]
-    pub(crate) struct Shfunc {
-        pub(crate) flags: u32,
-        pub(crate) filename: Option<Vec<u8>>,
-        pub(crate) lineno: i64,
-        pub(crate) funcdef: Option<Eprog>,
-        pub(crate) redir: Option<Rc<Vec<Redir>>>,
-        pub(crate) sticky: Option<Sticky>,
-    }
+/// `init.c`: sourcing files and checking jobs before exit.
+pub(crate) mod init {
+    use crate::shell::Shell;
 
-    /// Where an external command was found (zsh's `struct cmdnam`).
-    #[derive(Debug, Clone)]
-    pub(crate) struct Cmdnam {
-        pub(crate) flags: u32,
-        pub(crate) name: Option<usize>,
-        pub(crate) cmd: Vec<u8>,
-    }
-
-    /// An alias (zsh's `struct alias`).
-    #[derive(Debug, Clone)]
-    pub(crate) struct Alias {
-        pub(crate) flags: u32,
-        pub(crate) text: Vec<u8>,
-        pub(crate) inuse: i32,
-    }
-
-    /// A named directory (zsh's `struct nameddir`).
-    #[derive(Debug, Clone)]
-    pub(crate) struct Nameddir {
-        pub(crate) flags: u32,
-        pub(crate) dir: Vec<u8>,
-        pub(crate) diff: i64,
-    }
-
-    /// A reserved word (zsh's `struct reswd`).
-    #[derive(Debug, Clone)]
-    pub(crate) struct Reswd {
-        pub(crate) flags: u32,
+    /// zsh's `enum source_return`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum SourceReturn {
+        Ok,
+        NotFound,
+        Error,
     }
 
     impl Shell {
-        pub(crate) fn getshfunc(&self, name: &[u8]) -> Option<Shfunc> {
-            self.shfunctab.get(name).cloned()
+        pub(crate) fn checkjobs(&mut self) {}
+
+        pub(crate) fn source(&mut self, _s: &[u8]) -> SourceReturn {
+            SourceReturn::NotFound
         }
 
-        pub(crate) fn cmdnamtab_empty(&mut self) {
-            self.cmdnamtab.clear();
-        }
-
-        pub(crate) fn nicezputs(&self, s: &[u8]) -> Vec<u8> {
-            crate::tok::unmetafy(s)
-        }
+        pub(crate) fn sourcehome(&mut self, _s: &[u8]) {}
     }
 }
