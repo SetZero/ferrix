@@ -3758,6 +3758,42 @@ check passing against a conversation that no longer happens. Its negative
 control, not committed: with `wl_registry.global`'s name and version written
 the other way round, libwayland reports `global 6 wl_compositor 1`.
 
+**Done — surfaces and shared memory (2026-09-17).** `wl_compositor` with
+its surfaces and regions, and `wl_shm` with its pools and buffers: everything
+a client needs to put a picture somewhere, short of a shell to give it a
+window. The double buffering the protocol is built on is written as two
+states of the same shape rather than as dirty flags, since flags are where
+that bug lives: every request but `destroy` and `frame` changes the pending
+state and `commit` makes all of it current at once, taking the damage and the
+frame callbacks and leaving everything a commit did not mention alone. A
+buffer a commit replaced is the client's again and one committed twice is
+not, because a client that committed the same buffer again never got it back.
+An object made by another inherits its version, so a `wl_surface` from a
+`wl_compositor` bound at 4 is never sent `preferred_buffer_scale`, which
+arrived in 6.
+
+**It is stricter than libwayland in one place, on purpose.**
+`wayland-shm.c`'s bounds check reads `stride < width`, comparing bytes with
+pixels: for a four-byte format a client may pass `stride == width`, a quarter
+of the row it needs, and libwayland takes it. The pool then only has to hold
+`stride * height` bytes while a compositor reading `width` pixels from each
+row reads `width * 4` from the last row's start and runs off the end. Here
+the stride must be at least `width * 4` and the arithmetic is checked rather
+than guarded by the division libwayland uses to keep its multiply from
+overflowing. Every real toolkit sends `width * 4` or more, so the rule costs
+nothing and closes an out-of-bounds read. Only `ARGB8888` and `XRGB8888` are
+offered, because a format announced and not drawn is a client rendering a
+frame nobody can show.
+
+Forty-two tests, and one of them is the whole point: `probe/roundtrip.c` now
+drives a real libwayland client through everything it does to show a
+window -- bind, create a surface and a region, make a pool and a buffer,
+attach, damage, ask for a frame callback, set the scale and commit -- and
+records the bytes it wrote. The test replays them into the server and
+requires the surface, the region, the pool, the buffer's rectangle and the
+commit to be what the client asked for. Not one byte of that test is written
+by this tree.
+
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
 customer's order of 2026-09-16); then the protocol server, the seat, the

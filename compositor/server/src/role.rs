@@ -37,6 +37,17 @@ pub enum Role {
     DecorationManager,
     /// `zwlr_layer_shell_v1`.
     LayerShell,
+    /// `wl_surface`, made by `wl_compositor.create_surface`.
+    Surface,
+    /// `wl_region`, made by `wl_compositor.create_region`.
+    Region,
+    /// `wl_shm_pool`, made by `wl_shm.create_pool`.
+    ShmPool,
+    /// `wl_buffer`, made by `wl_shm_pool.create_buffer`.
+    Buffer,
+    /// A `wl_callback` a `wl_surface.frame` asked for. Unlike the one
+    /// `wl_display.sync` makes, it lives until a frame is drawn.
+    FrameCallback,
 }
 
 impl Role {
@@ -47,6 +58,6 @@ impl Role {
     /// track of an id the server already took back or is guessing.
     #[must_use]
     pub const fn takes_requests(self) -> bool {
-        !matches!(self, Self::Callback)
+        !matches!(self, Self::Callback | Self::FrameCallback)
     }
 }

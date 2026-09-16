@@ -7,7 +7,7 @@
 use compositor_protocol::{core, xdg_shell};
 use compositor_wire::{Arg, ArgType, Fd, Header, ObjectId, Reader, Writer};
 
-use crate::{Client, Event, Fatal, Globals, Role};
+use crate::{Client, Event, Fatal, Globals, Role, Surface};
 
 /// The globals a test connection offers: enough that binding, versions and
 /// mistaken interfaces can all be tried.
@@ -736,4 +736,729 @@ fn the_probe_names_the_libwayland_it_came_from() {
         first.starts_with("# libwayland "),
         "probe/roundtrip.txt should say which libwayland wrote it: {first}"
     );
+}
+
+#[test]
+fn a_real_client_s_window_setup_is_understood_request_for_request() {
+    // `probe/roundtrip.c` drives a real libwayland client through everything
+    // it does to put a picture on screen -- bind, create a surface and a
+    // region, make a pool and a buffer, attach, damage, ask for a frame
+    // callback, set the scale and commit -- and records the bytes it wrote.
+    // This replays them into the server. Nothing in this test writes a
+    // request: every byte is libwayland's.
+    let hex = probe_line("client-requests ")
+        .strip_prefix("client-requests ")
+        .expect("the prefix is there");
+    let bytes: Vec<u8> = (0..hex.len() / 2)
+        .map(|index| {
+            u8::from_str_radix(hex.get(index * 2..index * 2 + 2).expect("in range"), 16)
+                .expect("hex")
+        })
+        .collect();
+
+    // The ids libwayland chose, and the buffer it asked for.
+    let objects = probe_line("client-objects ");
+    let ids: Vec<u32> = objects
+        .split_whitespace()
+        .skip(1)
+        .skip(1)
+        .step_by(2)
+        .filter_map(|value| value.parse().ok())
+        .collect();
+    let [surface, region, pool, buffer, frame] = ids.as_slice() else {
+        panic!("client-objects should name five: {objects}");
+    };
+    let geometry: Vec<i32> = probe_line("client-geometry ")
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|value| value.parse().ok())
+        .collect();
+    let [width, height, stride, pool_bytes] = geometry.as_slice() else {
+        panic!("client-geometry should name four");
+    };
+
+    let mut globals = Globals::new();
+    for (interface, version, role) in [
+        (&core::WL_COMPOSITOR, 6, Role::Compositor),
+        (&core::WL_SUBCOMPOSITOR, 1, Role::Subcompositor),
+        (&core::WL_SHM, 1, Role::Shm),
+        (&core::WL_SEAT, 7, Role::Seat),
+        (&core::WL_OUTPUT, 4, Role::Output),
+        (&xdg_shell::XDG_WM_BASE, 6, Role::XdgWmBase),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+
+    // One descriptor arrives with the stream: the pool's.
+    let consumed = client.read(&bytes, &[Fd(17)]);
+    assert_eq!(consumed, bytes.len(), "every request was understood");
+    assert_eq!(client.fatal(), None, "the server refused a real client");
+
+    // The pool is the memfd the client sent, at the size it asked for.
+    let made = client.pool(ObjectId(*pool)).expect("a pool");
+    assert_eq!(made.fd, Fd(17), "the descriptor that arrived");
+    assert_eq!(made.size, *pool_bytes);
+
+    // The buffer is the rectangle the client cut.
+    let cut = client.buffer(ObjectId(*buffer)).expect("a buffer");
+    assert_eq!(cut.pool, ObjectId(*pool));
+    assert_eq!(
+        (cut.width, cut.height, cut.stride),
+        (*width, *height, *stride)
+    );
+    assert_eq!(cut.format, crate::Format::Xrgb8888);
+    assert_eq!(cut.offset, 0);
+    assert_eq!(
+        cut.range(),
+        Some((0, usize::try_from(stride * height).expect("fits")))
+    );
+
+    // The surface shows that buffer, with the damage, scale and opaque
+    // region the client set, and the commit took them.
+    let shown = client.surface(ObjectId(*surface)).expect("a surface");
+    assert_eq!(shown.commits, 1);
+    assert!(shown.is_mapped());
+    assert_eq!(shown.current.buffer, Some(ObjectId(*buffer)));
+    assert_eq!(shown.current.scale, 1);
+    assert_eq!(
+        shown.current.buffer_damage,
+        [crate::Rect::new(0, 0, *width, *height).expect("a rectangle")]
+    );
+    assert!(
+        shown.current.opaque.as_ref().is_some_and(|opaque| {
+            opaque.contains(0, 0)
+                && opaque.contains(width - 1, height - 1)
+                && !opaque.contains(*width, 0)
+        }),
+        "the opaque region the client set"
+    );
+    // The frame callback the client asked for is owed by this commit.
+    assert_eq!(shown.committed_callbacks, [ObjectId(*frame)]);
+    // And the pending state starts clean for the next commit.
+    assert!(shown.pending.buffer_damage.is_empty());
+    assert_eq!(shown.pending.buffer, Some(ObjectId(*buffer)));
+
+    // The region is live and is the one the surface took a copy of.
+    assert!(client.region(ObjectId(*region)).is_some());
+
+    // The compositor above is told what it has to act on.
+    let events = client.take_events();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::PoolCreated { pool: made, .. } if made.0 == *pool
+        )),
+        "the compositor is told to map the pool"
+    );
+    let committed = events
+        .iter()
+        .find_map(|event| match event {
+            Event::SurfaceCommitted {
+                surface: id,
+                change,
+            } if id.0 == *surface => Some(change),
+            _ => None,
+        })
+        .expect("the compositor is told about the commit");
+    assert_eq!(committed.buffer, Some(ObjectId(*buffer)));
+    assert!(
+        committed.mapped,
+        "the surface went from nothing to something"
+    );
+    assert_eq!(committed.released, None, "nothing to give back yet");
+}
+
+// ---------------------------------------------------------------------------
+// Surfaces, regions and shared memory: the rules the protocol states
+// ---------------------------------------------------------------------------
+
+/// A client with `wl_compositor` (4) and `wl_shm` (5) bound, as the probe's
+/// does, and the outgoing bytes and events cleared.
+fn drawing_client() -> Client {
+    let mut client = client();
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_compositor", 6, 4));
+    bytes.extend(bind(2, 2, "wl_shm", 1, 5));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert!(!client.is_finished(), "{:?}", client.fatal());
+    let _ = client.take_outgoing();
+    let _ = client.take_events();
+    client
+}
+
+/// `wl_compositor.create_surface(id)`.
+fn create_surface(id: u32) -> Vec<u8> {
+    request(
+        4,
+        core::wl_compositor::request::CREATE_SURFACE,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(id))],
+    )
+}
+
+/// `wl_shm.create_pool(id, fd, size)`.
+fn create_pool(id: u32, size: i32) -> Vec<u8> {
+    request(
+        5,
+        core::wl_shm::request::CREATE_POOL,
+        &[ArgType::NewId, ArgType::Fd, ArgType::Int],
+        &[Arg::NewId(ObjectId(id)), Arg::Fd(Fd(0)), Arg::Int(size)],
+    )
+}
+
+/// `wl_shm_pool.create_buffer(id, offset, width, height, stride, format)`.
+fn create_buffer(
+    pool: u32,
+    id: u32,
+    offset: i32,
+    width: i32,
+    height: i32,
+    stride: i32,
+    format: u32,
+) -> Vec<u8> {
+    request(
+        pool,
+        core::wl_shm_pool::request::CREATE_BUFFER,
+        &[
+            ArgType::NewId,
+            ArgType::Int,
+            ArgType::Int,
+            ArgType::Int,
+            ArgType::Int,
+            ArgType::Uint,
+        ],
+        &[
+            Arg::NewId(ObjectId(id)),
+            Arg::Int(offset),
+            Arg::Int(width),
+            Arg::Int(height),
+            Arg::Int(stride),
+            Arg::Uint(format),
+        ],
+    )
+}
+
+/// `wl_surface.commit()`.
+fn commit(surface: u32) -> Vec<u8> {
+    request(surface, core::wl_surface::request::COMMIT, &[], &[])
+}
+
+/// `wl_surface.attach(buffer, x, y)`.
+fn attach(surface: u32, buffer: u32, x: i32, y: i32) -> Vec<u8> {
+    request(
+        surface,
+        core::wl_surface::request::ATTACH,
+        &[
+            ArgType::Object { nullable: true },
+            ArgType::Int,
+            ArgType::Int,
+        ],
+        &[Arg::Object(ObjectId(buffer)), Arg::Int(x), Arg::Int(y)],
+    )
+}
+
+#[test]
+fn binding_wl_shm_announces_the_formats_the_compositor_draws() {
+    let mut client = client();
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 2, "wl_shm", 1, 3));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+
+    let formats: Vec<&Sent> = {
+        let events = sent(&mut client);
+        // The globals are announced first; the formats follow the bind.
+        let kept: Vec<Sent> = events
+            .into_iter()
+            .filter(|event| event.sender == ObjectId(3))
+            .collect();
+        assert_eq!(kept.len(), 2, "argb8888 and xrgb8888, and nothing else");
+        assert_eq!(kept[0].args, ["Uint(0)"], "argb8888 is 0");
+        assert_eq!(kept[1].args, ["Uint(1)"], "xrgb8888 is 1");
+        Vec::new()
+    };
+    assert!(formats.is_empty());
+}
+
+#[test]
+fn a_surface_inherits_the_version_its_compositor_was_bound_at() {
+    // The protocol's rule for every object made by another. A client bound
+    // at 4 that was handed a version-6 surface could be sent
+    // `preferred_buffer_scale`, which arrived in 6 and which it cannot read.
+    let mut client = client();
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_compositor", 4, 4));
+    bytes.extend(create_surface(3));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(
+        client.objects().get(ObjectId(3)).map(|entry| entry.version),
+        Some(4)
+    );
+    // And `wl_surface.offset`, which is since 5, is then not a request this
+    // surface has.
+    let offset = request(
+        3,
+        core::wl_surface::request::OFFSET,
+        &[ArgType::Int, ArgType::Int],
+        &[Arg::Int(1), Arg::Int(2)],
+    );
+    let _ = client.read(&offset, &[]);
+    assert_eq!(
+        client.fatal(),
+        Some(&Fatal::NoSuchMethod {
+            object: ObjectId(3),
+            opcode: core::wl_surface::request::OFFSET
+        })
+    );
+}
+
+#[test]
+fn nothing_a_client_says_takes_effect_until_it_commits() {
+    let mut client = drawing_client();
+    let mut bytes = create_surface(3);
+    bytes.extend(create_pool(6, 4096));
+    bytes.extend(create_buffer(6, 7, 0, 16, 16, 64, 1));
+    bytes.extend(attach(3, 7, 0, 0));
+    bytes.extend(request(
+        3,
+        core::wl_surface::request::SET_BUFFER_SCALE,
+        &[ArgType::Int],
+        &[Arg::Int(2)],
+    ));
+    assert_eq!(client.read(&bytes, &[Fd(3)]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let surface = client.surface(ObjectId(3)).expect("a surface");
+    assert!(!surface.is_mapped(), "nothing is shown before a commit");
+    assert_eq!(surface.current.scale, 1, "the scale is still the default");
+    assert_eq!(surface.pending.buffer, Some(ObjectId(7)));
+    assert_eq!(surface.pending.scale, 2);
+    assert_eq!(surface.commits, 0);
+
+    let commit_bytes = commit(3);
+    assert_eq!(client.read(&commit_bytes, &[]), commit_bytes.len());
+    let surface = client.surface(ObjectId(3)).expect("a surface");
+    assert!(surface.is_mapped());
+    assert_eq!(surface.current.scale, 2);
+    assert_eq!(surface.commits, 1);
+}
+
+#[test]
+fn a_commit_takes_the_damage_and_leaves_the_rest() {
+    let mut client = drawing_client();
+    let mut bytes = create_surface(3);
+    bytes.extend(create_pool(6, 4096));
+    bytes.extend(create_buffer(6, 7, 0, 16, 16, 64, 1));
+    bytes.extend(attach(3, 7, 0, 0));
+    bytes.extend(request(
+        3,
+        core::wl_surface::request::DAMAGE,
+        &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
+        &[Arg::Int(1), Arg::Int(2), Arg::Int(3), Arg::Int(4)],
+    ));
+    bytes.extend(request(
+        3,
+        core::wl_surface::request::SET_BUFFER_SCALE,
+        &[ArgType::Int],
+        &[Arg::Int(2)],
+    ));
+    bytes.extend(commit(3));
+    bytes.extend(commit(3));
+    assert_eq!(client.read(&bytes, &[Fd(3)]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let surface = client.surface(ObjectId(3)).expect("a surface");
+    assert_eq!(surface.commits, 2);
+    // The second commit took no damage, because the first consumed it.
+    assert!(surface.current.damage.is_empty());
+    // But the buffer and the scale carried over: a commit that did not
+    // mention them leaves them alone.
+    assert_eq!(surface.current.buffer, Some(ObjectId(7)));
+    assert_eq!(surface.current.scale, 2);
+}
+
+#[test]
+fn attaching_the_null_buffer_unmaps_the_surface() {
+    let mut client = drawing_client();
+    let mut bytes = create_surface(3);
+    bytes.extend(create_pool(6, 4096));
+    bytes.extend(create_buffer(6, 7, 0, 16, 16, 64, 1));
+    bytes.extend(attach(3, 7, 0, 0));
+    bytes.extend(commit(3));
+    assert_eq!(client.read(&bytes, &[Fd(3)]), bytes.len());
+    let _ = client.take_events();
+    assert!(client.surface(ObjectId(3)).is_some_and(Surface::is_mapped));
+
+    let mut down = attach(3, 0, 0, 0);
+    down.extend(commit(3));
+    assert_eq!(client.read(&down, &[]), down.len());
+    let surface = client.surface(ObjectId(3)).expect("a surface");
+    assert!(!surface.is_mapped());
+
+    let change = client
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            Event::SurfaceCommitted { change, .. } => Some(change),
+            _ => None,
+        })
+        .expect("a commit");
+    assert!(change.unmapped);
+    assert_eq!(
+        change.released,
+        Some(ObjectId(7)),
+        "the buffer is the client's again"
+    );
+}
+
+#[test]
+fn the_same_buffer_committed_twice_is_not_released() {
+    // A client that commits the same buffer again never got it back, so
+    // releasing it would tell the client it may draw into memory the
+    // compositor is still showing.
+    let mut client = drawing_client();
+    let mut bytes = create_surface(3);
+    bytes.extend(create_pool(6, 4096));
+    bytes.extend(create_buffer(6, 7, 0, 16, 16, 64, 1));
+    bytes.extend(attach(3, 7, 0, 0));
+    bytes.extend(commit(3));
+    bytes.extend(commit(3));
+    assert_eq!(client.read(&bytes, &[Fd(3)]), bytes.len());
+
+    let released: Vec<Option<ObjectId>> = client
+        .take_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SurfaceCommitted { change, .. } => Some(change.released),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(released, [None, None]);
+}
+
+#[test]
+fn a_new_buffer_releases_the_one_it_replaced() {
+    let mut client = drawing_client();
+    let mut bytes = create_surface(3);
+    bytes.extend(create_pool(6, 8192));
+    bytes.extend(create_buffer(6, 7, 0, 16, 16, 64, 1));
+    bytes.extend(create_buffer(6, 8, 1024, 16, 16, 64, 1));
+    bytes.extend(attach(3, 7, 0, 0));
+    bytes.extend(commit(3));
+    bytes.extend(attach(3, 8, 0, 0));
+    bytes.extend(commit(3));
+    assert_eq!(client.read(&bytes, &[Fd(3)]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let released: Vec<Option<ObjectId>> = client
+        .take_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SurfaceCommitted { change, .. } => Some(change.released),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(released, [None, Some(ObjectId(7))]);
+
+    // And telling the client so is one wl_buffer.release on that object.
+    let _ = client.take_outgoing();
+    client.release_buffer(ObjectId(7));
+    let events = sent(&mut client);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].sender, ObjectId(7));
+    assert_eq!(events[0].opcode, core::wl_buffer::event::RELEASE);
+}
+
+#[test]
+fn a_frame_callback_fires_once_and_takes_its_id_back() {
+    let mut client = drawing_client();
+    let mut bytes = create_surface(3);
+    bytes.extend(request(
+        3,
+        core::wl_surface::request::FRAME,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(9))],
+    ));
+    bytes.extend(commit(3));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    let _ = client.take_outgoing();
+
+    client.fire_frame_callbacks(ObjectId(3), 1234);
+    let events = sent(&mut client);
+    assert_eq!(events.len(), 2, "done, then delete_id");
+    assert_eq!(events[0].sender, ObjectId(9));
+    assert_eq!(events[0].args, ["Uint(1234)"]);
+    assert_eq!(events[1].opcode, core::wl_display::event::DELETE_ID);
+    assert!(!client.objects().contains(ObjectId(9)));
+
+    // Firing again sends nothing: a frame callback fires once.
+    client.fire_frame_callbacks(ObjectId(3), 2345);
+    assert!(client.take_outgoing().bytes.is_empty());
+}
+
+#[test]
+fn a_buffer_must_lie_inside_its_pool() {
+    // libwayland's own check, and one place this is stricter than it: its
+    // `stride < width` compares bytes with pixels, so a four-byte format
+    // with `stride == width` passes there and gives a compositor reading
+    // `width * 4` bytes a row an out-of-bounds read on the last one.
+    let cases: [(i32, i32, i32, i32, &str); 7] = [
+        (0, 16, 16, 63, "a stride below width * 4"),
+        (0, 16, 16, 16, "libwayland's stride == width"),
+        (-1, 16, 16, 64, "a negative offset"),
+        (0, 0, 16, 64, "no width"),
+        (0, 16, 0, 64, "no height"),
+        (0, 16, 65, 64, "past the end of the pool"),
+        (4000, 16, 16, 64, "an offset that pushes it past the end"),
+    ];
+    for (offset, width, height, stride, why) in cases {
+        let mut client = drawing_client();
+        let mut bytes = create_pool(6, 4096);
+        bytes.extend(create_buffer(6, 7, offset, width, height, stride, 1));
+        let _ = client.read(&bytes, &[Fd(3)]);
+        assert!(
+            matches!(
+                client.fatal(),
+                Some(Fatal::Interface { code, .. })
+                    if *code == core::wl_shm::error::INVALID_STRIDE
+            ),
+            "{why} was accepted: {:?}",
+            client.fatal()
+        );
+        assert!(client.buffer(ObjectId(7)).is_none(), "{why}");
+    }
+
+    // And the one that fits exactly is accepted.
+    let mut client = drawing_client();
+    let mut bytes = create_pool(6, 4096);
+    bytes.extend(create_buffer(6, 7, 0, 16, 64, 64, 1));
+    assert_eq!(client.read(&bytes, &[Fd(3)]), bytes.len());
+    assert_eq!(client.fatal(), None, "64 rows of 64 bytes is exactly 4096");
+}
+
+#[test]
+fn a_format_the_compositor_does_not_draw_is_refused() {
+    // Announcing a format and then not drawing it is a client rendering a
+    // frame nobody can show, so only the two mandatory ones are offered and
+    // only those are accepted. 0x36314752 is rgb565.
+    for format in [2u32, 0x3631_4752, u32::MAX] {
+        let mut client = drawing_client();
+        let mut bytes = create_pool(6, 4096);
+        bytes.extend(create_buffer(6, 7, 0, 16, 16, 64, format));
+        let _ = client.read(&bytes, &[Fd(3)]);
+        assert!(
+            matches!(
+                client.fatal(),
+                Some(Fatal::Interface { code, .. })
+                    if *code == core::wl_shm::error::INVALID_FORMAT
+            ),
+            "format {format:#x} was accepted"
+        );
+    }
+}
+
+#[test]
+fn a_pool_may_grow_and_may_not_shrink() {
+    let mut client = drawing_client();
+    let bytes = create_pool(6, 4096);
+    assert_eq!(client.read(&bytes, &[Fd(3)]), bytes.len());
+    let _ = client.take_events();
+
+    let resize = |size: i32| {
+        request(
+            6,
+            core::wl_shm_pool::request::RESIZE,
+            &[ArgType::Int],
+            &[Arg::Int(size)],
+        )
+    };
+    let grow = resize(8192);
+    assert_eq!(client.read(&grow, &[]), grow.len());
+    assert_eq!(client.pool(ObjectId(6)).map(|pool| pool.size), Some(8192));
+    assert_eq!(
+        client.take_events(),
+        [Event::PoolResized {
+            pool: ObjectId(6),
+            size: 8192
+        }]
+    );
+
+    // A shrink is ignored rather than refused: the protocol says the request
+    // can only make a pool bigger, but gives no error code for it, and
+    // libwayland keeps the connection.
+    let shrink = resize(1024);
+    assert_eq!(client.read(&shrink, &[]), shrink.len());
+    assert!(!client.is_finished());
+    assert_eq!(client.pool(ObjectId(6)).map(|pool| pool.size), Some(8192));
+    assert!(client.take_events().is_empty());
+
+    // A buffer past the old size fits after the grow.
+    let bigger = create_buffer(6, 7, 4096, 16, 16, 64, 1);
+    assert_eq!(client.read(&bigger, &[]), bigger.len());
+    assert_eq!(client.fatal(), None);
+}
+
+#[test]
+fn a_pool_of_no_bytes_is_refused() {
+    for size in [0, -1, i32::MIN] {
+        let mut client = drawing_client();
+        let bytes = create_pool(6, size);
+        let _ = client.read(&bytes, &[Fd(3)]);
+        assert!(
+            matches!(
+                client.fatal(),
+                Some(Fatal::Interface { code, .. })
+                    if *code == core::wl_shm::error::INVALID_FD
+            ),
+            "a pool of {size} bytes was accepted"
+        );
+    }
+}
+
+#[test]
+fn attaching_something_that_is_not_a_buffer_ends_the_connection() {
+    let mut client = drawing_client();
+    let mut bytes = create_surface(3);
+    // Object 4 is the wl_compositor, not a buffer.
+    bytes.extend(attach(3, 4, 0, 0));
+    let _ = client.read(&bytes, &[]);
+    assert_eq!(
+        client.fatal(),
+        Some(&Fatal::WrongInterface {
+            object: ObjectId(4),
+            wanted: "wl_buffer"
+        })
+    );
+}
+
+#[test]
+fn a_buffer_the_client_destroys_leaves_the_surface_showing_nothing() {
+    // `wl_buffer`'s description: destroying it while a surface shows it makes
+    // the contents undefined. Every compositor treats that as unmapped
+    // rather than as garbage on screen.
+    let mut client = drawing_client();
+    let mut bytes = create_surface(3);
+    bytes.extend(create_pool(6, 4096));
+    bytes.extend(create_buffer(6, 7, 0, 16, 16, 64, 1));
+    bytes.extend(attach(3, 7, 0, 0));
+    bytes.extend(commit(3));
+    assert_eq!(client.read(&bytes, &[Fd(3)]), bytes.len());
+    assert!(client.surface(ObjectId(3)).is_some_and(Surface::is_mapped));
+
+    let destroy = request(7, core::wl_buffer::request::DESTROY, &[], &[]);
+    assert_eq!(client.read(&destroy, &[]), destroy.len());
+    assert!(!client.is_finished());
+    assert!(client.buffer(ObjectId(7)).is_none());
+    assert!(!client.surface(ObjectId(3)).is_some_and(Surface::is_mapped));
+}
+
+#[test]
+fn a_region_is_the_rectangles_added_less_the_ones_taken_away() {
+    let mut client = drawing_client();
+    let mut bytes = request(
+        4,
+        core::wl_compositor::request::CREATE_REGION,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(3))],
+    );
+    let rect = |opcode: u16, x, y, w, h| {
+        request(
+            3,
+            opcode,
+            &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
+            &[Arg::Int(x), Arg::Int(y), Arg::Int(w), Arg::Int(h)],
+        )
+    };
+    bytes.extend(rect(core::wl_region::request::ADD, 0, 0, 10, 10));
+    bytes.extend(rect(core::wl_region::request::SUBTRACT, 2, 2, 3, 3));
+    // An empty rectangle is dropped rather than refused: the protocol gives
+    // no error for one and libwayland passes it through.
+    bytes.extend(rect(core::wl_region::request::ADD, 0, 0, 0, 5));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let region = client.region(ObjectId(3)).expect("a region");
+    assert!(region.contains(0, 0));
+    assert!(region.contains(9, 9));
+    assert!(!region.contains(2, 2), "subtracted");
+    assert!(!region.contains(4, 4), "subtracted");
+    assert!(region.contains(5, 5), "just past the subtraction");
+    assert!(!region.contains(10, 0), "outside");
+    assert_eq!(region.operations().len(), 2, "the empty one was dropped");
+}
+
+#[test]
+fn a_surface_scale_below_one_and_a_transform_that_is_not_one_are_refused() {
+    for scale in [0, -1, i32::MIN] {
+        let mut client = drawing_client();
+        let mut bytes = create_surface(3);
+        bytes.extend(request(
+            3,
+            core::wl_surface::request::SET_BUFFER_SCALE,
+            &[ArgType::Int],
+            &[Arg::Int(scale)],
+        ));
+        let _ = client.read(&bytes, &[]);
+        assert!(
+            matches!(
+                client.fatal(),
+                Some(Fatal::Interface { code, .. })
+                    if *code == core::wl_surface::error::INVALID_SCALE
+            ),
+            "a scale of {scale} was accepted"
+        );
+    }
+    for transform in [8, 9, i32::MAX, -1] {
+        let mut client = drawing_client();
+        let mut bytes = create_surface(3);
+        bytes.extend(request(
+            3,
+            core::wl_surface::request::SET_BUFFER_TRANSFORM,
+            &[ArgType::Int],
+            &[Arg::Int(transform)],
+        ));
+        let _ = client.read(&bytes, &[]);
+        assert!(
+            matches!(
+                client.fatal(),
+                Some(Fatal::Interface { code, .. })
+                    if *code == core::wl_surface::error::INVALID_TRANSFORM
+            ),
+            "a transform of {transform} was accepted"
+        );
+    }
+    // Every value wl_output.transform does have is taken.
+    for transform in 0..=7 {
+        let mut client = drawing_client();
+        let mut bytes = create_surface(3);
+        bytes.extend(request(
+            3,
+            core::wl_surface::request::SET_BUFFER_TRANSFORM,
+            &[ArgType::Int],
+            &[Arg::Int(transform)],
+        ));
+        assert_eq!(client.read(&bytes, &[]), bytes.len());
+        assert_eq!(client.fatal(), None, "transform {transform}");
+    }
+}
+
+#[test]
+fn destroying_a_surface_takes_its_state_with_it() {
+    let mut client = drawing_client();
+    let mut bytes = create_surface(3);
+    bytes.extend(commit(3));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert!(client.surface(ObjectId(3)).is_some());
+
+    let destroy = request(3, core::wl_surface::request::DESTROY, &[], &[]);
+    assert_eq!(client.read(&destroy, &[]), destroy.len());
+    assert!(client.surface(ObjectId(3)).is_none());
+    assert!(!client.objects().contains(ObjectId(3)));
+    assert!(client.take_events().iter().any(|event| matches!(
+        event,
+        Event::Destroyed {
+            object,
+            role: Role::Surface
+        } if *object == ObjectId(3)
+    )));
 }

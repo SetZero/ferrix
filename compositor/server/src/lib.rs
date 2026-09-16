@@ -29,18 +29,24 @@
 //!
 //! # What is here and what is not
 //!
-//! `wl_display` and `wl_registry` are here. The globals a client can bind are
-//! declared in [`Globals`], and binding one is answered by the role table in
-//! [`Role`]; the roles that draw -- surfaces, buffers, shells -- land after
-//! this.
+//! `wl_display` and `wl_registry` are here, and with them the objects a client
+//! needs to put a picture somewhere: `wl_compositor` and its surfaces and
+//! regions, and `wl_shm` with its pools and buffers. The globals a client can
+//! bind are declared in [`Globals`], and what a bound object is is [`Role`].
+//! `xdg_shell`, which is how a surface becomes a window, and `wl_seat`, which
+//! is how it is typed into, land after this.
 
 mod client;
 mod globals;
 mod role;
+mod shm;
+mod surface;
 
 pub use client::{Client, Event, Fatal, Outgoing};
 pub use globals::{Global, Globals};
 pub use role::Role;
+pub use shm::{Buffer, BufferError, FORMATS, Format, Pool};
+pub use surface::{Committed, Rect, Region, State, Surface};
 
 pub use compositor_protocol as protocol;
 pub use compositor_wire as wire;

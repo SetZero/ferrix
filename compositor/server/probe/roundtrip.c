@@ -22,17 +22,31 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 
 #include <wayland-client.h>
+#include <wayland-client-protocol.h>
+
+/* What the registry listener gathers, so the surface half can bind. */
+struct found {
+	int count;
+	struct wl_compositor *compositor;
+	struct wl_shm *shm;
+};
 
 static void on_global(void *data, struct wl_registry *registry, uint32_t name,
 		      const char *interface, uint32_t version)
 {
-	(void)registry;
-	int *count = data;
+	struct found *found = data;
 	printf("global %u %s %u\n", name, interface, version);
-	(*count)++;
+	found->count++;
+	if (!strcmp(interface, "wl_compositor"))
+		found->compositor = wl_registry_bind(
+			registry, name, &wl_compositor_interface, version);
+	else if (!strcmp(interface, "wl_shm"))
+		found->shm = wl_registry_bind(registry, name,
+					      &wl_shm_interface, version);
 }
 
 static void on_global_remove(void *data, struct wl_registry *registry,
@@ -42,6 +56,11 @@ static void on_global_remove(void *data, struct wl_registry *registry,
 	(void)registry;
 	printf("global_remove %u\n", name);
 }
+
+/* The window the probe pretends to draw. */
+#define WIDTH 16
+#define HEIGHT 16
+#define POOL_BYTES 4096
 
 static const struct wl_registry_listener listener = {
 	.global = on_global,
@@ -95,17 +114,64 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	int count = 0;
+	struct found found = { 0 };
 	struct wl_registry *registry = wl_display_get_registry(display);
-	wl_registry_add_listener(registry, &listener, &count);
+	wl_registry_add_listener(registry, &listener, &found);
 
 	/* Sends wl_display.sync as object 3 and waits for its callback, which
 	 * is the message the replayed answer ends with. */
 	int result = wl_display_roundtrip(display);
-	printf("roundtrip %d globals %d error %d\n", result, count,
+	printf("roundtrip %d globals %d error %d\n", result, found.count,
 	       wl_display_get_error(display));
+	if (!found.compositor || !found.shm) {
+		fprintf(stderr, "the replay did not carry both globals\n");
+		return 1;
+	}
 
-	wl_registry_destroy(registry);
+	/* Everything a client does to put a picture on screen, none of which
+	 * needs an answer: the server's side of it is what the crate's tests
+	 * replay these bytes into. */
+	int memory = memfd_create("probe-pool", MFD_CLOEXEC);
+	if (memory < 0 || ftruncate(memory, POOL_BYTES) < 0) {
+		perror("memfd_create");
+		return 1;
+	}
+	struct wl_surface *surface = wl_compositor_create_surface(found.compositor);
+	struct wl_region *region = wl_compositor_create_region(found.compositor);
+	wl_region_add(region, 0, 0, WIDTH, HEIGHT);
+	wl_surface_set_opaque_region(surface, region);
+	struct wl_shm_pool *pool =
+		wl_shm_create_pool(found.shm, memory, POOL_BYTES);
+	struct wl_buffer *buffer = wl_shm_pool_create_buffer(
+		pool, 0, WIDTH, HEIGHT, WIDTH * 4, WL_SHM_FORMAT_XRGB8888);
+	wl_surface_attach(surface, buffer, 0, 0);
+	wl_surface_damage_buffer(surface, 0, 0, WIDTH, HEIGHT);
+	struct wl_callback *frame = wl_surface_frame(surface);
+	wl_surface_set_buffer_scale(surface, 1);
+	wl_surface_commit(surface);
+	wl_display_flush(display);
+
+	/* What the client wrote, which is what a server has to understand. */
+	unsigned char out[8192];
+	ssize_t wrote = read(pair[0], out, sizeof out);
+	if (wrote < 0) {
+		perror("read");
+		return 1;
+	}
+	printf("client-objects surface %u region %u pool %u buffer %u frame %u\n",
+	       wl_proxy_get_id((struct wl_proxy *)surface),
+	       wl_proxy_get_id((struct wl_proxy *)region),
+	       wl_proxy_get_id((struct wl_proxy *)pool),
+	       wl_proxy_get_id((struct wl_proxy *)buffer),
+	       wl_proxy_get_id((struct wl_proxy *)frame));
+	printf("client-geometry %d %d %d %u\n", WIDTH, HEIGHT, WIDTH * 4,
+	       (unsigned)POOL_BYTES);
+	printf("client-requests ");
+	for (ssize_t i = 0; i < wrote; i++)
+		printf("%02x", out[i]);
+	printf("\n");
+
+	close(memory);
 	wl_display_disconnect(display);
 	free(bytes);
 	return 0;

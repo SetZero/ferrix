@@ -73,8 +73,9 @@ names the part of Hyprland or hyprlang it follows.
   Wayland has no way to refuse one request and carry on -- so every refusal
   queues one `wl_display.error` and stops reading. `probe/roundtrip.c`
   replays the server's answer to a real libwayland client and records the
-  globals it reports, so what the tests check is a conversation an
-  application would actually have.
+  globals it reports, then drives it through everything it does to show a
+  window and records the requests it sent, which the tests replay into the
+  server. What the tests check is what an application would actually do.
 * **`render`** draws the frame: a `Canvas` over a `tiny-skia` pixmap with
   `clear`, `fill`, `border` and `composite` (`ARGB8888` source-over,
   `XRGB8888` copied and made opaque), each drawn only inside a `Damage` of
