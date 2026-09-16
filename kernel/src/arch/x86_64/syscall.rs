@@ -291,6 +291,18 @@ ferrix_resume_user:
     options(att_syntax)
 );
 
+/// Where the `LSTAR` entry point is: what `IA32_LSTAR` holds, and what the
+/// system call window check puts a breakpoint on.
+///
+/// The one place outside the assembly that names the symbol. Two `extern`
+/// declarations of one symbol with different types are merged by the release
+/// profile's link-time optimisation into one of them and a renamed
+/// `ferrix_syscall_stub.1` nothing defines, which is how the release build
+/// stopped linking once the window check declared it as a `static`.
+pub(super) fn stub_address() -> u64 {
+    ferrix_syscall_stub as *const () as usize as u64
+}
+
 unsafe extern "C" {
     /// The `LSTAR` entry point, defined in the block above.
     fn ferrix_syscall_stub();
@@ -516,7 +528,7 @@ pub(crate) unsafe fn init() {
     unsafe { cpu::write_msr(IA32_STAR, star) };
 
     // SAFETY: the address of a function in the kernel's own text.
-    unsafe { cpu::write_msr(IA32_LSTAR, ferrix_syscall_stub as *const () as usize as u64) };
+    unsafe { cpu::write_msr(IA32_LSTAR, stub_address()) };
     // SAFETY: a mask of flag bits.
     unsafe { cpu::write_msr(IA32_FMASK, FMASK) };
 

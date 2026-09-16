@@ -219,9 +219,6 @@ fn hits(slot: usize) -> u64 {
 }
 
 unsafe extern "C" {
-    /// `LSTAR`'s target, whose first instruction is `swapgs` on the program's
-    /// stack.
-    static ferrix_syscall_stub: [u8; 0];
     /// The trampoline's `sysretq`, after the `swapgs` back, still on the
     /// program's stack.
     static ferrix_syscall_sysret: [u8; 0];
@@ -380,7 +377,11 @@ fn run_with_window_breakpoints(cpu: usize) -> Result<i32, &'static str> {
     )
     .map_err(|_| "the system call window program could not be loaded")?;
 
-    let entry = (&raw const ferrix_syscall_stub) as u64;
+    // `LSTAR`'s target, whose first instruction is `swapgs` on the program's
+    // stack. Taken from `syscall`, whose declaration is the symbol's only one:
+    // a second, of another type, is renamed `.1` by the release profile's link
+    // and left undefined.
+    let entry = super::syscall::stub_address();
     let sysret = (&raw const ferrix_syscall_sysret) as u64;
     // SAFETY: an instruction of the trampoline, not in the paranoid entry nor
     // on an IST stack, which is what a `#DB` there needs; unarmed until DR7.
