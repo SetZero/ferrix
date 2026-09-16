@@ -1,5 +1,6 @@
 //! `math.h`: so far `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for
-//! `double`.
+//! `double`, and the classification functions the header's macros call for
+//! every type.
 //!
 //! # Where the code comes from
 //!
@@ -103,6 +104,7 @@
 //! exceptions of every table case in both the debug and the release build.
 
 pub mod atan;
+pub mod classify;
 pub mod exp;
 pub mod log;
 #[cfg(test)]
