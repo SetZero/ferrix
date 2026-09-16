@@ -55,6 +55,14 @@ name = "ferrix-cpio"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-displayctl"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
+]
+
+[[package]]
 name = "ferrix-elf"
 version = "0.1.0"
 
@@ -76,6 +84,7 @@ dependencies = [
  "ferrix-block",
  "ferrix-btrfs",
  "ferrix-cpio",
+ "ferrix-displayctl",
  "ferrix-elf",
  "ferrix-fdt",
  "ferrix-frame",
@@ -92,6 +101,7 @@ dependencies = [
  "ferrix-vfs",
  "ferrix-virtio",
  "ferrix-virtio-blk",
+ "ferrix-virtio-gpu",
  "ferrix-virtio-net",
  "libfuzzer-sys",
 ]
@@ -172,6 +182,14 @@ version = "0.1.0"
 name = "ferrix-virtio-blk"
 version = "0.1.0"
 dependencies = [
+ "ferrix-virtio",
+]
+
+[[package]]
+name = "ferrix-virtio-gpu"
+version = "0.1.0"
+dependencies = [
+ "ferrix-displayctl",
  "ferrix-virtio",
 ]
 
