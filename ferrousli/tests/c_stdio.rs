@@ -178,3 +178,8 @@ fn wide_characters_read_and_write_utf_8_and_report_bad_sequences() {
 fn wprintf_counts_wide_characters_and_writes_utf_8() {
     check(&stdio("stdio/wprintf"));
 }
+
+#[test]
+fn open_wmemstream_grows_a_wide_buffer_counting_characters() {
+    check(&stdio("stdio/wmemstream"));
+}

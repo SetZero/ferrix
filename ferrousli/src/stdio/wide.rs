@@ -14,8 +14,8 @@
 //! * The first wide read or write makes the stream wide-oriented, which
 //!   `fwide` reports. The byte functions do not orient a stream, as in musl.
 //!
-//! The `wprintf` family is in [`super::wprintf`]. The `wscanf` family and
-//! `open_wmemstream` are not here yet.
+//! The `wprintf` family is in [`super::wprintf`], and `open_wmemstream` in
+//! [`super::memory`]. The `wscanf` family is not here yet.
 
 use core::ffi::{c_char, c_int};
 use core::ptr::null_mut;

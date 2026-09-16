@@ -25,7 +25,7 @@
 //!
 //! # Not here yet
 //!
-//! The `wscanf` family, `open_wmemstream`, `fgetln`, `gets`, `tempnam`, `ctermid` and `cuserid`.
+//! The `wscanf` family, `fgetln`, `gets`, `tempnam`, `ctermid` and `cuserid`.
 //! `scanf` is in [`scanf`], `popen` and `pclose` in [`crate::spawn`], and
 //! `tmpnam` in [`crate::temp`]; `rename` and `renameat` are with the other file
 //! system calls.
