@@ -11,7 +11,7 @@
 //! * [`printf`] formats, [`float`] converts floating point exactly, and
 //!   [`fortify`] has glibc's checked entry points.
 //! * [`wide`] reads and writes wide characters and wide strings, and orients
-//!   streams with `fwide`.
+//!   streams with `fwide`; [`wprintf`] formats wide output.
 //!
 //! # No glibc `FILE` layout
 //!
@@ -25,8 +25,7 @@
 //!
 //! # Not here yet
 //!
-//! The formatted wide functions (`fwprintf`, `fwscanf` and their relatives),
-//! `open_wmemstream`, `fgetln`, `gets`, `tempnam`, `ctermid` and `cuserid`.
+//! The `wscanf` family, `open_wmemstream`, `fgetln`, `gets`, `tempnam`, `ctermid` and `cuserid`.
 //! `scanf` is in [`scanf`], `popen` and `pclose` in [`crate::spawn`], and
 //! `tmpnam` in [`crate::temp`]; `rename` and `renameat` are with the other file
 //! system calls.
@@ -44,6 +43,7 @@ mod sys;
 #[cfg(test)]
 mod tests;
 pub mod wide;
+pub mod wprintf;
 
 pub use file::{File, exit_flush};
 

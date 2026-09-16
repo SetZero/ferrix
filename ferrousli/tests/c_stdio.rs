@@ -173,3 +173,8 @@ fn scanf_reads_numbers_strings_and_sets_from_strings_and_streams() {
 fn wide_characters_read_and_write_utf_8_and_report_bad_sequences() {
     check(&stdio("stdio/wide"));
 }
+
+#[test]
+fn wprintf_counts_wide_characters_and_writes_utf_8() {
+    check(&stdio("stdio/wprintf"));
+}

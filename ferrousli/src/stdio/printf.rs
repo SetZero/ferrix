@@ -93,6 +93,18 @@ pub trait Sink {
     fn failed(&self) -> bool {
         false
     }
+
+    /// Whether this sink takes wide characters, for the `wprintf` family: its
+    /// `%c` and `%s` then count and write characters with [`Sink::write_wide`],
+    /// and everything else still comes as ASCII bytes through [`Sink::write`].
+    fn wide(&self) -> bool {
+        false
+    }
+
+    /// Takes wide characters. Only a [`Sink::wide`] sink is given any.
+    fn write_wide(&mut self, wcs: &[i32]) {
+        let _ = wcs;
+    }
 }
 
 /// Output into a string of known room, counting nothing past it.
@@ -781,9 +793,122 @@ unsafe fn run(
             width,
             precision,
         };
-        // SAFETY: the argument is what the directive names.
-        count += unsafe { convert(sink, &directive, &spec, arg, count, saved_errno) }?;
+        count += if sink.wide() && matches!(directive.conversion, b'c' | b's') {
+            // SAFETY: the argument is what the directive names.
+            unsafe { wide_text(sink, &directive, &spec, arg, count) }?
+        } else {
+            // SAFETY: the argument is what the directive names.
+            unsafe { convert(sink, &directive, &spec, arg, count, saved_errno) }?
+        };
     }
+}
+
+/// Writes `wcs` to a wide sink in chunks as a field of `len` characters.
+fn wide_field(
+    sink: &mut dyn Sink,
+    spec: &Spec,
+    len: usize,
+    count: usize,
+    mut next: impl FnMut() -> i32,
+) -> Result<usize, c_int> {
+    let total = begin(sink, spec, len, count)?;
+    let mut chunk = [0_i32; 64];
+    let mut done = 0;
+    while done < len {
+        let take = (len - done).min(chunk.len());
+        for slot in chunk.iter_mut().take(take) {
+            *slot = next();
+        }
+        sink.write_wide(chunk.get(..take).unwrap_or_default());
+        done += take;
+    }
+    end(sink, spec, len, total);
+    Ok(total)
+}
+
+/// `%c`, `%lc`, `%s` and `%ls` for the `wprintf` family, as musl 1.2.5's
+/// `stdio/vfwprintf.c` (MIT) writes them: widths and precisions count wide
+/// characters; `%c` is a byte made wide with `btowc`; `%s` is a multibyte
+/// string decoded with `mbrtowc`, one that is no string failing with
+/// `EILSEQ`; `%lc` and `%ls` are written as they are.
+///
+/// # Safety
+///
+/// The argument must be what the directive names; a pointer must be valid for
+/// its conversion.
+unsafe fn wide_text(
+    sink: &mut dyn Sink,
+    directive: &Directive,
+    spec: &Spec,
+    arg: Arg,
+    count: usize,
+) -> Result<usize, c_int> {
+    let word = arg.word();
+    let long = directive.length == Length::Long;
+    if directive.conversion == b'c' {
+        let wc = if long {
+            word as i32
+        } else {
+            let wc = crate::multibyte::btowc(word as u8 as c_int);
+            if wc == crate::multibyte::WEOF {
+                return Err(errno::EILSEQ);
+            }
+            wc as i32
+        };
+        let mut once = Some(wc);
+        return wide_field(sink, spec, 1, count, || once.take().unwrap_or(0));
+    }
+    if word == 0 {
+        return text(sink, spec, null_text(spec), count);
+    }
+    let limit = spec.precision.unwrap_or(usize::MAX);
+    if long {
+        let s = with_exposed_provenance_mut::<i32>(word as usize);
+        let mut len = 0;
+        // SAFETY: the caller vouches for the wide string; no NUL came before.
+        while len < limit && unsafe { s.wrapping_add(len).read_unaligned() } != 0 {
+            len += 1;
+        }
+        let mut at = 0;
+        return wide_field(sink, spec, len, count, || {
+            // SAFETY: these characters were read above.
+            let wc = unsafe { s.wrapping_add(at).read_unaligned() };
+            at += 1;
+            wc
+        });
+    }
+    // A multibyte string: count its characters up to the precision, then
+    // decode them again as they are written.
+    let s = with_exposed_provenance_mut::<u8>(word as usize).cast_const();
+    let decode = |at: usize| -> Result<(i32, usize), c_int> {
+        let mut wc = 0_i32;
+        let mut state = crate::multibyte::MbState::new();
+        // SAFETY: the caller vouches for the string, and `at` is at or before
+        // its NUL; at most four bytes are read, and never past the NUL.
+        let used = unsafe {
+            crate::multibyte::mbrtowc(&raw mut wc, s.wrapping_add(at).cast(), 4, &raw mut state)
+        };
+        if used >= usize::MAX - 1 {
+            return Err(errno::EILSEQ);
+        }
+        Ok((wc, used))
+    };
+    let mut len = 0;
+    let mut at = 0;
+    while len < limit {
+        let (wc, used) = decode(at)?;
+        if wc == 0 {
+            break;
+        }
+        at += used;
+        len += 1;
+    }
+    let mut at = 0;
+    wide_field(sink, spec, len, count, || {
+        let (wc, used) = decode(at).unwrap_or((0, 1));
+        at += used;
+        wc
+    })
 }
 
 /// The value of a signed integer argument of `length`.
