@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn sin_rounds_as_musl_does_upward_and_downward() {
-        use crate::math::mtest::fenv::{FE_DOWNWARD, FE_INEXACT, FE_UPWARD};
+        use crate::fenv::{FE_DOWNWARD, FE_INEXACT, FE_UPWARD};
         // musl 1.2.5's results. Each differed by an ulp in the release build
         // while LLVM could turn `a - v * S1` into `a + v * -S1`.
         let cases = [

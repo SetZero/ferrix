@@ -31,80 +31,11 @@
 use core::ffi::c_int;
 use std::path::PathBuf;
 
-use self::fenv::{
+use crate::fenv::{
     FE_DIVBYZERO, FE_DOWNWARD, FE_INEXACT, FE_INVALID, FE_OVERFLOW, FE_TONEAREST, FE_TOWARDZERO,
     FE_UNDERFLOW, FE_UPWARD, feclearexcept, fesetround, fetestexcept,
 };
 use crate::math::support::{hex_f32, hex_f64, hexf32, hexf64, parse_hex};
-
-/// The part of `fenv.h` these checks need, until the library has `fenv.h`.
-///
-/// `float` and `double` arithmetic runs on SSE, so its exception flags and
-/// rounding mode are MXCSR's, and nothing tested here touches the x87. The
-/// constants are `include/bits/fenv.h`'s. MXCSR is per thread, as each test is.
-pub(crate) mod fenv {
-    use core::arch::asm;
-    use core::ffi::c_int;
-
-    pub(crate) const FE_INVALID: c_int = 1;
-    pub(crate) const FE_DIVBYZERO: c_int = 4;
-    pub(crate) const FE_OVERFLOW: c_int = 8;
-    pub(crate) const FE_UNDERFLOW: c_int = 16;
-    pub(crate) const FE_INEXACT: c_int = 32;
-    pub(crate) const FE_TONEAREST: c_int = 0;
-    pub(crate) const FE_DOWNWARD: c_int = 0x400;
-    pub(crate) const FE_UPWARD: c_int = 0x800;
-    pub(crate) const FE_TOWARDZERO: c_int = 0xc00;
-
-    /// MXCSR's six exception flags.
-    const FLAGS: u32 = 0x3f;
-    /// MXCSR's rounding control, which is the x87's shifted left by 3.
-    const ROUNDING: u32 = 0x6000;
-
-    fn mxcsr() -> u32 {
-        let mut value = 0u32;
-        // SAFETY: `stmxcsr` writes four bytes to the local it is given.
-        unsafe {
-            asm!(
-                "stmxcsr dword ptr [{}]",
-                in(reg) &raw mut value,
-                options(nostack, preserves_flags),
-            );
-        }
-        value
-    }
-
-    fn set_mxcsr(value: u32) {
-        // SAFETY: `ldmxcsr` reads four bytes from the local it is given, whose
-        // value came from `stmxcsr` with only flag or rounding bits changed.
-        unsafe {
-            asm!(
-                "ldmxcsr dword ptr [{}]",
-                in(reg) &raw const value,
-                options(nostack, preserves_flags),
-            );
-        }
-    }
-
-    pub(crate) fn feclearexcept(excepts: c_int) -> c_int {
-        set_mxcsr(mxcsr() & !(excepts.cast_unsigned() & FLAGS));
-        0
-    }
-
-    pub(crate) fn fetestexcept(excepts: c_int) -> c_int {
-        (mxcsr() & excepts.cast_unsigned() & FLAGS).cast_signed()
-    }
-
-    pub(crate) fn fesetround(round: c_int) -> c_int {
-        match round {
-            FE_TONEAREST | FE_DOWNWARD | FE_UPWARD | FE_TOWARDZERO => {
-                set_mxcsr((mxcsr() & !ROUNDING) | round.cast_unsigned() << 3);
-                0
-            }
-            _ => -1,
-        }
-    }
-}
 
 /// Rounding to nearest, as the tables write it.
 pub(crate) const RN: c_int = FE_TONEAREST;

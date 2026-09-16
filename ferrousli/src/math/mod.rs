@@ -103,12 +103,20 @@
 //! `x + toint - toint` survives as written. The unit tests check the
 //! exceptions of every table case in both the debug and the release build.
 
+#[cfg(target_arch = "x86_64")]
+#[path = "x86_64.rs"]
+pub(crate) mod arch;
 pub mod atan;
 pub mod classify;
 pub mod exp;
+pub mod fma;
 pub mod log;
+pub mod manipulate;
 #[cfg(test)]
 pub(crate) mod mtest;
 pub mod pow;
+pub mod remainder;
+pub mod rounding;
+pub mod sqrt;
 pub(crate) mod support;
 pub mod trig;

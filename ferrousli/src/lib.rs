@@ -43,6 +43,7 @@ pub mod errno;
 pub mod ether;
 pub mod exit;
 pub mod fcntl;
+pub mod fenv;
 pub mod float;
 pub mod fnmatch;
 pub mod futex;
