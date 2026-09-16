@@ -207,6 +207,10 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     )?;
     report_address_space(&memory, &space, switch);
 
+    // After the address space is built from `first_look`: asking firmware
+    // for its graphics outputs allocates, which changes the map.
+    let framebuffer = report_framebuffer(services.framebuffer(&first_look));
+
     write_boot_info(
         &services,
         &kernel.image,
@@ -217,6 +221,7 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
         Carried {
             device_tree,
             initrd,
+            framebuffer,
         },
     );
 
@@ -224,7 +229,7 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     console::shutdown();
     let map = leave_firmware(&services, map_buffer)?;
     let regions = record_memory_map(&map, info_area);
-    finish_boot_info(info_area, regions, direct);
+    finish_boot_info(info_area, regions, direct, &map);
 
     // The Arm architectures turn the MMU off in the middle of the switch, so
     // anything still dirty in a cache would vanish. No-op on x86-64.
@@ -380,6 +385,8 @@ struct Carried {
     device_tree: Option<(Allocation, u64)>,
     /// The initramfs, on an image that carries one.
     initrd: Option<(Allocation, u64)>,
+    /// The framebuffer [`Services::framebuffer`] chose, if any.
+    framebuffer: Option<Framebuffer>,
 }
 
 /// Where firmware's ACPI root system description pointer is, or zero.
@@ -406,6 +413,7 @@ fn write_boot_info(
     let Carried {
         device_tree,
         initrd,
+        framebuffer,
     } = carried;
     let cmdline_len = load_cmdline(services, info_area);
     let info = BootInfo {
@@ -431,7 +439,7 @@ fn write_boot_info(
         loader_alias_len: space.loader_alias.map_or(0, |(_, len)| len),
         boot_stack_top: direct.address(stack.address + stack.len),
         boot_stack_size: stack.len,
-        framebuffer: services.framebuffer().unwrap_or(Framebuffer::NONE),
+        framebuffer: framebuffer.unwrap_or(Framebuffer::NONE),
         initrd_phys: initrd.map_or(0, |(file, _)| file.address),
         initrd_len: initrd.map_or(0, |(_, len)| len),
         rsdp: firmware_rsdp(services),
@@ -449,6 +457,25 @@ fn write_boot_info(
     // SAFETY: `info_area` is our own allocation of BOOT_INFO_BYTES, identity
     // mapped, and larger than one BootInfo.
     unsafe { ptr::write_volatile(info_area.address as *mut BootInfo, info) };
+}
+
+/// Say which framebuffer the loader chose, of how many graphics outputs, and
+/// whether the kernel will draw a panic on it; and pass the choice on.
+fn report_framebuffer((framebuffer, outputs): (Option<Framebuffer>, usize)) -> Option<Framebuffer> {
+    if let Some(chosen) = framebuffer {
+        println!(
+            "  framebuffer {}x{} at {:#x}, of {outputs} graphics outputs, {}",
+            chosen.width,
+            chosen.height,
+            chosen.phys,
+            if chosen.is_reclaimable() {
+                "in memory the kernel reclaims: no panic screen"
+            } else {
+                "outside the allocator's memory"
+            }
+        );
+    }
+    framebuffer
 }
 
 /// Take the final memory map and leave boot services.
@@ -543,7 +570,7 @@ fn record_memory_map(map: &MemoryMap, info_area: Allocation) -> u64 {
 }
 
 /// Point the boot info at the memory map now that it exists.
-fn finish_boot_info(info_area: Allocation, regions: u64, direct: DirectMap) {
+fn finish_boot_info(info_area: Allocation, regions: u64, direct: DirectMap, map: &MemoryMap) {
     let info = info_area.address as *mut BootInfo;
     // SAFETY: `write_boot_info` put a BootInfo here, and nothing else refers to
     // it.
@@ -552,6 +579,16 @@ fn finish_boot_info(info_area: Allocation, regions: u64, direct: DirectMap) {
     // has to be the virtual one.
     value.regions = direct.address(info_area.address + REGIONS_OFFSET);
     value.regions_len = regions;
+    // Again from the final map, which is the one the frame allocator walks,
+    // so what the kernel reads is what the allocator will do.
+    if value.framebuffer.is_present() {
+        let owned = ferrix_bootinfo::allocator_owns(
+            map.entries().map(|descriptor| load::describe(&descriptor)),
+            value.framebuffer.phys,
+            value.framebuffer.size,
+        );
+        value.framebuffer.reclaimable = u32::from(owned);
+    }
     // SAFETY: as above.
     unsafe { ptr::write_volatile(info, value) };
 }

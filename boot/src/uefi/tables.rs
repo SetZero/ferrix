@@ -186,7 +186,13 @@ pub(crate) struct BootServices {
 
     // Library services.
     protocols_per_handle: usize,
-    locate_handle_buffer: usize,
+    pub(crate) locate_handle_buffer: unsafe extern "efiapi" fn(
+        search_type: u32,
+        protocol: *const Guid,
+        search_key: *mut c_void,
+        count: *mut usize,
+        buffer: *mut *mut Handle,
+    ) -> Status,
     pub(crate) locate_protocol: unsafe extern "efiapi" fn(
         protocol: *const Guid,
         registration: *mut c_void,

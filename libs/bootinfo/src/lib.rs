@@ -56,7 +56,9 @@ pub const BOOTINFO_MAGIC: u64 = 0x4645_5252_4958_4249;
 /// has the same layout on every word width. Version 3 added the loader's
 /// identity mapping of its own image inside the kernel's tree, which a board
 /// whose RAM is above the split needs and which the kernel has to take down.
-pub const BOOTINFO_VERSION: u32 = 3;
+/// Version 4 added [`Framebuffer::reclaimable`], because firmware can leave a
+/// framebuffer in boot-services memory the kernel hands out again.
+pub const BOOTINFO_VERSION: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // Virtual memory layout
@@ -708,6 +710,17 @@ pub struct Framebuffer {
     pub stride: u32,
     /// Pixel layout.
     pub format: PixelFormat,
+    /// Nonzero when the framebuffer lies in memory the frame allocator will
+    /// own: boot-services data, as UEFI's virtio-gpu driver allocates its
+    /// framebuffer, rather than a reserved region or a device's aperture.
+    /// Pixels written there land in frames the kernel has handed to someone
+    /// else, and once a driver owns the device nobody sees them, so the panic
+    /// screen draws only when this is 0, and the display core reads the same
+    /// field before it publishes a card. The loader sets it from the final
+    /// memory map with [`allocator_owns`].
+    pub reclaimable: u32,
+    /// Zero.
+    pub reserved: u32,
 }
 
 impl Framebuffer {
@@ -719,6 +732,8 @@ impl Framebuffer {
         height: 0,
         stride: 0,
         format: PixelFormat::Unknown,
+        reclaimable: 0,
+        reserved: 0,
     };
 
     /// True if there is a framebuffer to draw on.
@@ -726,6 +741,26 @@ impl Framebuffer {
     pub const fn is_present(&self) -> bool {
         self.phys != 0 && self.width != 0 && self.height != 0
     }
+
+    /// True if the framebuffer lies in memory the frame allocator will own.
+    #[must_use]
+    pub const fn is_reclaimable(&self) -> bool {
+        self.reclaimable != 0
+    }
+}
+
+/// Whether the frame allocator will own any page of `len` bytes at `base`,
+/// given the memory map `regions`: whether any region of a kind it claims at
+/// boot or after early boot overlaps the range. A range no region describes,
+/// such as a device's aperture, is not the allocator's.
+pub fn allocator_owns(regions: impl IntoIterator<Item = MemRegion>, base: u64, len: u64) -> bool {
+    let end = base.saturating_add(len);
+    regions.into_iter().any(|region| {
+        let region_end = region.base.saturating_add(region.len);
+        (region.kind.is_free_at_boot() || region.kind.is_reclaimable())
+            && region.base < end
+            && base < region_end
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -739,7 +774,7 @@ impl Framebuffer {
 /// tables the loader installed before jumping to the kernel, which is to say
 /// inside the direct map at [`PHYSMAP_BASE`]. Fields named `_phys` are
 /// physical. None of them is a pointer type, so the structure is the same
-/// 224 bytes on every word width.
+/// 232 bytes on every word width.
 ///
 /// Read it through [`BootInfo::validate`] rather than field by field.
 #[repr(C)]
@@ -830,7 +865,7 @@ pub struct BootInfo {
 // field whose size follows the pointer width would break it, and the loader
 // and the host tests would then disagree about a layout neither of them sees.
 const _: () = assert!(
-    size_of::<BootInfo>() == 224,
+    size_of::<BootInfo>() == 232,
     "BootInfo must be laid out identically on every word width"
 );
 const _: () = assert!(
@@ -1303,6 +1338,38 @@ mod tests {
             unsafe { info.validate() }.unwrap_err(),
             BootInfoError::PhysmapMismatch
         );
+    }
+
+    #[test]
+    fn a_framebuffer_in_memory_the_allocator_claims_is_reclaimable() {
+        let region = |base: u64, len: u64, kind| MemRegion {
+            base,
+            len,
+            kind,
+            reserved: 0,
+        };
+        let map = [
+            region(0x4000_0000, 0x1000_0000, MemKind::Usable),
+            region(0x5000_0000, 0x0100_0000, MemKind::Reserved),
+            region(0x5100_0000, 0x0010_0000, MemKind::Loader),
+            region(0x5200_0000, 0x0010_0000, MemKind::Kernel),
+        ];
+        // Boot-services data became Usable: VirtioGpuDxe's framebuffer.
+        assert!(allocator_owns(map, 0x4800_0000, 0x30_0000));
+        // A reserved region: ramfb's.
+        assert!(!allocator_owns(map, 0x5000_0000, 0x30_0000));
+        // No region at all: a BAR, as q35's VGA.
+        assert!(!allocator_owns(map, 0x8000_0000, 0x100_0000));
+        // Loader data is reclaimed after early boot; the kernel image is not.
+        assert!(allocator_owns(map, 0x5100_0000, 0x1000));
+        assert!(!allocator_owns(map, 0x5200_0000, 0x1000));
+        // A range that only touches a Usable region's end is not inside it,
+        // and one that straddles into it is.
+        assert!(!allocator_owns(map, 0x5000_0000, 0));
+        assert!(allocator_owns(map, 0x4FFF_F000, 0x2000));
+        assert!(!allocator_owns([], 0x4800_0000, 0x1000));
+
+        assert!(!Framebuffer::NONE.is_reclaimable());
     }
 
     #[test]

@@ -18,6 +18,45 @@ use crate::uefi::protocols::{
 use crate::uefi::tables::{AllocateType, BootServices, MemoryDescriptor, MemoryType, SystemTable};
 use crate::uefi::{Guid, Handle, Status};
 
+/// `LocateHandleBuffer`'s search by protocol.
+const BY_PROTOCOL: u32 = 2;
+
+/// The linear framebuffer behind a graphics output, if it has one.
+fn describe_output(graphics: *mut GraphicsOutput) -> Option<ferrix_bootinfo::Framebuffer> {
+    // SAFETY: firmware returned a live `GraphicsOutput`.
+    let output = unsafe { &*graphics };
+    if output.mode.is_null() {
+        return None;
+    }
+    // SAFETY: checked non-null just above, and firmware owns it.
+    let mode = unsafe { *output.mode };
+    if mode.info.is_null() {
+        return None;
+    }
+    // SAFETY: as above, for the mode's info block.
+    let info = unsafe { *mode.info };
+
+    use crate::uefi::protocols::GraphicsPixelFormat;
+    let format = match info.pixel_format {
+        GraphicsPixelFormat::BLUE_GREEN_RED_RESERVED => ferrix_bootinfo::PixelFormat::Bgrx8888,
+        GraphicsPixelFormat::RED_GREEN_BLUE_RESERVED => ferrix_bootinfo::PixelFormat::Rgbx8888,
+        // A bit-mask or blt-only mode is a framebuffer the kernel cannot
+        // treat as an array of pixels, so report it as no framebuffer.
+        _ => ferrix_bootinfo::PixelFormat::Unknown,
+    };
+
+    Some(ferrix_bootinfo::Framebuffer {
+        phys: mode.framebuffer_base,
+        size: mode.framebuffer_size as u64,
+        width: info.horizontal_resolution,
+        height: info.vertical_resolution,
+        stride: info.pixels_per_scan_line,
+        format,
+        reclaimable: 0,
+        reserved: 0,
+    })
+}
+
 /// Longest path the loader will open, in UCS-2 units including the terminator.
 const MAX_PATH: usize = 128;
 
@@ -464,55 +503,72 @@ impl Services {
         Ok(interface.cast::<T>())
     }
 
-    /// The framebuffer firmware left configured, if any.
+    /// The framebuffer to hand the kernel, and how many graphics outputs
+    /// firmware offered.
+    ///
+    /// Every graphics output is looked at, not just the first firmware
+    /// returns, because firmware can offer more than one and the first is not
+    /// always the one to keep. On QEMU's AArch64 machine with a virtio-gpu,
+    /// AAVMF's `VirtioGpuDxe` offers one whose framebuffer is boot-services
+    /// data, which the kernel's frame allocator hands out again, beside
+    /// `ramfb`'s, which is reserved. One whose framebuffer the allocator will
+    /// not own is preferred; [`ferrix_bootinfo::allocator_owns`] decides over
+    /// `map`, and the choice's `reclaimable` says what it found.
     ///
     /// A machine with no graphics output is not an error: the serial console is
     /// the one the boot test reads.
-    pub(crate) fn framebuffer(&self) -> Option<ferrix_bootinfo::Framebuffer> {
-        let mut interface: *mut c_void = ptr::null_mut();
-        // SAFETY: all three arguments are live locals or constants.
+    pub(crate) fn framebuffer(
+        &self,
+        map: &MemoryMap,
+    ) -> (Option<ferrix_bootinfo::Framebuffer>, usize) {
+        let mut count = 0usize;
+        let mut handles: *mut Handle = ptr::null_mut();
+        // SAFETY: all out-parameters are live locals; the GUID is a constant.
         let status = unsafe {
-            (self.boot().locate_protocol)(
+            (self.boot().locate_handle_buffer)(
+                BY_PROTOCOL,
                 &GRAPHICS_OUTPUT_GUID,
                 ptr::null_mut(),
-                &raw mut interface,
+                &raw mut count,
+                &raw mut handles,
             )
         };
-        if !status.is_success() || interface.is_null() {
-            return None;
+        if !status.is_success() || handles.is_null() {
+            return (None, 0);
         }
 
-        let graphics = interface.cast::<GraphicsOutput>();
-        // SAFETY: firmware returned a live `GraphicsOutput`.
-        let output = unsafe { &*graphics };
-        if output.mode.is_null() {
-            return None;
+        let mut chosen: Option<ferrix_bootinfo::Framebuffer> = None;
+        let mut outputs = 0;
+        for index in 0..count {
+            // SAFETY: `index` is below the count firmware wrote with the
+            // buffer, so the offset stays inside it.
+            let slot = unsafe { handles.add(index) };
+            // SAFETY: firmware filled every one of those `count` slots.
+            let handle = unsafe { *slot };
+            let Ok(graphics) =
+                self.protocol::<GraphicsOutput>(handle, &GRAPHICS_OUTPUT_GUID, "graphics output")
+            else {
+                continue;
+            };
+            let Some(mut candidate) = describe_output(graphics) else {
+                continue;
+            };
+            outputs += 1;
+            let owned = ferrix_bootinfo::allocator_owns(
+                map.entries()
+                    .map(|descriptor| crate::load::describe(&descriptor)),
+                candidate.phys,
+                candidate.size,
+            );
+            candidate.reclaimable = u32::from(owned);
+            let better = chosen.is_none_or(|current| current.is_reclaimable() && !owned);
+            if better {
+                chosen = Some(candidate);
+            }
         }
-        // SAFETY: checked non-null just above, and firmware owns it.
-        let mode = unsafe { *output.mode };
-        if mode.info.is_null() {
-            return None;
-        }
-        // SAFETY: as above, for the mode's info block.
-        let info = unsafe { *mode.info };
-
-        use crate::uefi::protocols::GraphicsPixelFormat;
-        let format = match info.pixel_format {
-            GraphicsPixelFormat::BLUE_GREEN_RED_RESERVED => ferrix_bootinfo::PixelFormat::Bgrx8888,
-            GraphicsPixelFormat::RED_GREEN_BLUE_RESERVED => ferrix_bootinfo::PixelFormat::Rgbx8888,
-            // A bit-mask or blt-only mode is a framebuffer the kernel cannot
-            // treat as an array of pixels, so report it as no framebuffer.
-            _ => ferrix_bootinfo::PixelFormat::Unknown,
-        };
-
-        Some(ferrix_bootinfo::Framebuffer {
-            phys: mode.framebuffer_base,
-            size: mode.framebuffer_size as u64,
-            width: info.horizontal_resolution,
-            height: info.vertical_resolution,
-            stride: info.pixels_per_scan_line,
-            format,
-        })
+        // SAFETY: firmware allocated `handles` from pool for us to free.
+        let _ = unsafe { (self.boot().free_pool)(handles.cast::<u8>()) };
+        (chosen, outputs)
     }
 
     /// Look up a configuration table by GUID.

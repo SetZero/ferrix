@@ -2142,8 +2142,15 @@ fn report(view: &BootView<'_>) {
 
     if info.framebuffer.is_present() {
         println!(
-            "  display  {}x{}, stride {}",
-            info.framebuffer.width, info.framebuffer.height, info.framebuffer.stride
+            "  display  {}x{}, stride {}{}",
+            info.framebuffer.width,
+            info.framebuffer.height,
+            info.framebuffer.stride,
+            if info.framebuffer.is_reclaimable() {
+                ", in memory the allocator owns: panics go to serial only"
+            } else {
+                ""
+            }
         );
     }
     if info.rsdp != 0 {
@@ -2345,7 +2352,10 @@ fn check_early_mapper(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(
     // the visible part of the framebuffer, which is where a panic is drawn.
     // The PL011 console took the same path a moment ago.
     let framebuffer = info.framebuffer;
-    if framebuffer.is_present() {
+    // A framebuffer in memory the allocator will hand out again is not drawn
+    // on: the panic screen would write into frames that belong to someone
+    // else. The panic still goes to serial. `docs/DISPLAY.md` §2.4.
+    if framebuffer.is_present() && !framebuffer.is_reclaimable() {
         let at = vmap::FRAMEBUFFER_WINDOW;
         let len = framebuffer_bytes(&framebuffer).min(vmap::FRAMEBUFFER_WINDOW_SIZE);
         if memory.map_device(at, framebuffer.phys, len).is_err() {

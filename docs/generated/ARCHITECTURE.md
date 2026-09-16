@@ -95,7 +95,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1463 elements, 160 relations. Model digest `86baf959b4cf8b55`.
+13 files, 16 packages, 1464 elements, 160 relations. Model digest `4eb0120ff4be1542`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -674,12 +674,12 @@ The hand-off ABI, the two address layouts, the loader's sequence, the kernel's b
 
 ### The hand-off
 
-Version 3. Every type is repr(C); the kernel refuses to start if the magic or version disagree. Addresses are u64 on every width so the layout is one layout. The kernel validates it once through BootInfo::validate into a BootView whose accessors are safe.
+Version 4. Every type is repr(C); the kernel refuses to start if the magic or version disagree. Addresses are u64 on every width so the layout is one layout. The kernel validates it once through BootInfo::validate into a BootView whose accessors are safe.
 
 | Field | Type | Value | Note |
 | --- | --- | --- | --- |
 | `magic` | `String` | `FERRIXBI` |  |
-| `version` | `Natural` | `3` |  |
+| `version` | `Natural` | `4` |  |
 | `arch` | `Arch` |  |  |
 | `regions` | `MemRegion` |  | Sorted, non-overlapping, describing the loader's own allocations — without which the frame allocator would hand out the frames holding its own page tables. |
 | `physmapBase` | `Natural` |  |  |

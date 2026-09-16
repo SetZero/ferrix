@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "86baf959b4cf8b55547c03d21e09b55eb70503c4c2ea4dff2607b70c6fc50353",
+  "digest": "4eb0120ff4be1542ee86d0ddf545a5f47cdabd6a4df999b5e0a222e7f000641d",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -57,7 +57,7 @@
   ],
   "summary": {
     "packages": 16,
-    "elements": 1463,
+    "elements": 1464,
     "maturity": {
       "implemented": 137,
       "inProgress": 8,
@@ -5574,6 +5574,7 @@
           "qualifiedName": "FerrixBoot::Framebuffer",
           "kind": "attribute",
           "definition": true,
+          "doc": "True when the framebuffer is in memory the frame allocator will own (UEFI virtio-gpu's boot-services framebuffer): the panic screen does not draw on it and the display core reads it before publishing a card.",
           "source": {
             "file": "docs/sysml/03-boot.sysml",
             "line": 51
@@ -5638,6 +5639,16 @@
                 "file": "docs/sysml/03-boot.sysml",
                 "line": 57
               }
+            },
+            {
+              "name": "reclaimable",
+              "qualifiedName": "FerrixBoot::Framebuffer::reclaimable",
+              "kind": "attribute",
+              "type": "Boolean",
+              "source": {
+                "file": "docs/sysml/03-boot.sysml",
+                "line": 62
+              }
             }
           ]
         },
@@ -5648,10 +5659,10 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 1,
-          "doc": "Version 3. Every type is repr(C); the kernel refuses to start if the magic or version disagree. Addresses are u64 on every width so the layout is one layout. The kernel validates it once through BootInfo::validate into a BootView whose accessors are safe.",
+          "doc": "Version 4. Every type is repr(C); the kernel refuses to start if the magic or version disagree. Addresses are u64 on every width so the layout is one layout. The kernel validates it once through BootInfo::validate into a BootView whose accessors are safe.",
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 60
+            "line": 65
           },
           "children": [
             {
@@ -5662,7 +5673,7 @@
               "value": "\"FERRIXBI\"",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 67
+                "line": 72
               }
             },
             {
@@ -5670,10 +5681,10 @@
               "qualifiedName": "FerrixBoot::BootInfo::version",
               "kind": "attribute",
               "type": "Natural",
-              "value": "3",
+              "value": "4",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 68
+                "line": 73
               }
             },
             {
@@ -5683,7 +5694,7 @@
               "type": "Arch",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 69
+                "line": 74
               }
             },
             {
@@ -5695,7 +5706,7 @@
               "doc": "Sorted, non-overlapping, describing the loader's own allocations — without which the frame allocator would hand out the frames holding its own page tables.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 70
+                "line": 75
               }
             },
             {
@@ -5705,7 +5716,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 75
+                "line": 80
               }
             },
             {
@@ -5716,7 +5727,7 @@
               "doc": "The direct map begins at the lowest RAM address rather than at zero: a gibibyte in on QEMU's Arm machines.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 76
+                "line": 81
               }
             },
             {
@@ -5726,7 +5737,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 80
+                "line": 85
               }
             },
             {
@@ -5736,7 +5747,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 81
+                "line": 86
               }
             },
             {
@@ -5746,7 +5757,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 82
+                "line": 87
               }
             },
             {
@@ -5756,7 +5767,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 83
+                "line": 88
               }
             },
             {
@@ -5766,7 +5777,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 84
+                "line": 89
               }
             },
             {
@@ -5776,7 +5787,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 85
+                "line": 90
               }
             },
             {
@@ -5786,7 +5797,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 86
+                "line": 91
               }
             },
             {
@@ -5796,7 +5807,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 87
+                "line": 92
               }
             },
             {
@@ -5806,7 +5817,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 88
+                "line": 93
               }
             },
             {
@@ -5817,7 +5828,7 @@
               "value": "65536",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 89
+                "line": 94
               }
             },
             {
@@ -5827,7 +5838,7 @@
               "type": "Framebuffer",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 90
+                "line": 95
               }
             },
             {
@@ -5837,7 +5848,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 91
+                "line": 96
               }
             },
             {
@@ -5847,7 +5858,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 92
+                "line": 97
               }
             },
             {
@@ -5857,7 +5868,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 93
+                "line": 98
               }
             },
             {
@@ -5867,7 +5878,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 94
+                "line": 99
               }
             },
             {
@@ -5878,7 +5889,7 @@
               "doc": "The device tree is copied into memory of its own kind, DeviceTree, so it outlives the reclaim of firmware's copy; stage 10 enumerates devices from the same bytes.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 95
+                "line": 100
               }
             },
             {
@@ -5888,7 +5899,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 100
+                "line": 105
               }
             },
             {
@@ -5899,7 +5910,7 @@
               "doc": "key=value options and bare flags, one grammar (option_in, flag_in) whether the loader filled this in or the kernel read /chosen/bootargs from the device tree, which is where the Arm boards carry it. Options today: console=pl011|stm32, nosmp (describe_cpus returns the boot CPU only), noactlr.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 101
+                "line": 106
               }
             }
           ]
@@ -5911,7 +5922,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 114
+            "line": 119
           },
           "children": [
             {
@@ -5921,7 +5932,7 @@
               "type": "String",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 115
+                "line": 120
               }
             },
             {
@@ -5931,7 +5942,7 @@
               "type": "String",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 116
+                "line": 121
               }
             },
             {
@@ -5941,7 +5952,7 @@
               "type": "String",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 117
+                "line": 122
               }
             }
           ]
@@ -5954,7 +5965,7 @@
           "doc": "libs/bootinfo::Layout. Both instances are checked for overlap at compile time on every build, whichever one the build uses.",
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 120
+            "line": 125
           },
           "children": [
             {
@@ -5964,7 +5975,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 123
+                "line": 128
               }
             },
             {
@@ -5974,7 +5985,7 @@
               "type": "AddressRange",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 124
+                "line": 129
               }
             },
             {
@@ -5984,7 +5995,7 @@
               "type": "AddressRange",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 125
+                "line": 130
               }
             },
             {
@@ -5994,7 +6005,7 @@
               "type": "AddressRange",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 126
+                "line": 131
               }
             },
             {
@@ -6004,7 +6015,7 @@
               "type": "AddressRange",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 127
+                "line": 132
               }
             },
             {
@@ -6015,7 +6026,7 @@
               "doc": "The front of the vmap area held back for fixed windows — the framebuffer and the demand-paging test window — before the arena begins.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 128
+                "line": 133
               }
             }
           ]
@@ -6029,7 +6040,7 @@
           "doc": "Shared by x86-64 and AArch64: four-level tables over 48-bit addresses. x86-64 needs the image in the top 2 GiB for the kernel code model; AArch64 uses it anyway, because one layout is one set of bugs instead of two.",
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 135
+            "line": 140
           },
           "children": [
             {
@@ -6040,7 +6051,7 @@
               "value": "64",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 140
+                "line": 145
               }
             },
             {
@@ -6051,7 +6062,7 @@
               "value": "AddressRange(base = \"0x0000_0000_0000_0000\", limit = \"0x0000_7FFF_FFFF_FFFF\", purpose = \"user\")",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 141
+                "line": 146
               }
             },
             {
@@ -6062,7 +6073,7 @@
               "value": "AddressRange(base = \"0xFFFF_8000_0000_0000\", limit = \"0xFFFF_FEFF_FFFF_FFFF\", purpose = \"direct map of all physical RAM\")",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 142
+                "line": 147
               }
             },
             {
@@ -6073,7 +6084,7 @@
               "value": "AddressRange(base = \"0xFFFF_FF00_0000_0000\", limit = \"0xFFFF_FFEF_FFFF_FFFF\", purpose = \"kernel vmap: MMIO, guard-paged stacks\")",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 143
+                "line": 148
               }
             },
             {
@@ -6084,7 +6095,7 @@
               "value": "AddressRange(base = \"0xFFFF_FFFF_8000_0000\", limit = \"0xFFFF_FFFF_FFFF_FFFF\", purpose = \"the kernel image\")",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 144
+                "line": 149
               }
             },
             {
@@ -6095,7 +6106,7 @@
               "value": "\"0x1_0000_0000\"",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 145
+                "line": 150
               }
             }
           ]
@@ -6109,7 +6120,7 @@
           "doc": "ARMv7-A: a 2/2 split, TTBR0 translating the lower half and TTBR1 the upper, three-level LPAE tables. The user half is the larger because a 32-bit process wants it; the direct map gets what the vmap area and the image leave, and its size is the ceiling on RAM the kernel can use.",
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 148
+            "line": 153
           },
           "children": [
             {
@@ -6120,7 +6131,7 @@
               "value": "32",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 154
+                "line": 159
               }
             },
             {
@@ -6131,7 +6142,7 @@
               "value": "AddressRange(base = \"0x0000_0000\", limit = \"0x7FFF_FFFF\", purpose = \"user\")",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 155
+                "line": 160
               }
             },
             {
@@ -6142,7 +6153,7 @@
               "value": "AddressRange(base = \"0x8000_0000\", limit = \"0x9FFF_FFFF\", purpose = \"kernel vmap\")",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 156
+                "line": 161
               }
             },
             {
@@ -6153,7 +6164,7 @@
               "value": "AddressRange(base = \"0xA000_0000\", limit = \"0xEFFF_FFFF\", purpose = \"direct map of RAM, 1.25 GiB\")",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 157
+                "line": 162
               }
             },
             {
@@ -6164,7 +6175,7 @@
               "value": "AddressRange(base = \"0xF000_0000\", limit = \"0xFFFF_FFFF\", purpose = \"the kernel image\")",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 158
+                "line": 163
               }
             },
             {
@@ -6175,7 +6186,7 @@
               "value": "\"0x0400_0000\"",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 159
+                "line": 164
               }
             }
           ]
@@ -6188,7 +6199,7 @@
           "value": "4096",
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 162
+            "line": 167
           }
         },
         {
@@ -6199,7 +6210,7 @@
           "value": "512",
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 163
+            "line": 168
           }
         },
         {
@@ -6283,7 +6294,7 @@
           ],
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 169
+            "line": 174
           },
           "children": [
             {
@@ -6296,7 +6307,7 @@
               "type": "BootInfo",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 173
+                "line": 178
               }
             },
             {
@@ -6309,7 +6320,7 @@
               "doc": "Firmware's con_out, until console::shutdown just before ExitBootServices.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 176
+                "line": 181
               }
             },
             {
@@ -6321,7 +6332,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 180
+                "line": 185
               }
             },
             {
@@ -6334,7 +6345,7 @@
               "doc": "Read /FERRIX/KERNEL.ELF from the volume the loader came from, parse it with libs/elf, copy the segments to their link address. Malformed segments are refused here rather than discovered by the MMU.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 181
+                "line": 186
               }
             },
             {
@@ -6347,7 +6358,7 @@
               "doc": "Boot stack (64 KiB), boot info (64 KiB, around 2700 regions of room), memory map buffer.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 187
+                "line": 192
               }
             },
             {
@@ -6360,7 +6371,7 @@
               "doc": "libs/paging Mapper: the image at its link address, the direct map from the lowest RAM address, and an identity plan for the loader's own code so the instruction after the switch is fetchable. The loader also maps itself where the kernel can reach it, so the kernel can drop the map rather than abandon a table.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 191
+                "line": 196
               }
             },
             {
@@ -6372,7 +6383,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 199
+                "line": 204
               }
             },
             {
@@ -6385,7 +6396,7 @@
               "doc": "Fetch the memory map one last time and call ExitBootServices. Past this line firmware is gone: no allocation, no console, no protocols.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 200
+                "line": 205
               }
             },
             {
@@ -6398,7 +6409,7 @@
               "doc": "Translate UEFI descriptors into MemRegion[] behind the boot info, tagging the loader's own allocations.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 205
+                "line": 210
               }
             },
             {
@@ -6411,7 +6422,7 @@
               "doc": "The Arm architectures turn the MMU off in the middle of the switch, so anything dirty in a cache would vanish. No-op on x86-64.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 209
+                "line": 214
               }
             },
             {
@@ -6424,7 +6435,7 @@
               "doc": "Install the new tables and jump to _start with the boot info pointer in the direct map.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 214
+                "line": 219
               }
             }
           ]
@@ -6439,7 +6450,7 @@
           "doc": "kernel/src/early.rs: a pool of sixteen page tables carved from the kernel image, enough to map a console and a framebuffer before there is an allocator. On AArch64 the console is an MMIO register that has to be mapped as device memory before a byte can go out.",
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 225
+            "line": 230
           },
           "children": [
             {
@@ -6450,7 +6461,7 @@
               "value": "16",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 232
+                "line": 237
               }
             },
             {
@@ -6459,7 +6470,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 233
+                "line": 238
               }
             },
             {
@@ -6468,7 +6479,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 234
+                "line": 239
               }
             },
             {
@@ -6477,7 +6488,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 235
+                "line": 240
               }
             }
           ]
@@ -6616,7 +6627,7 @@
           ],
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 238
+            "line": 243
           },
           "children": [
             {
@@ -6629,7 +6640,7 @@
               "type": "BootInfo",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 243
+                "line": 248
               }
             },
             {
@@ -6642,7 +6653,7 @@
               "doc": "Magic, version, arch and layout constants. No console yet, so a mismatch halts silently: there is no valid way to make one.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 246
+                "line": 251
               }
             },
             {
@@ -6654,7 +6665,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 250
+                "line": 255
               }
             },
             {
@@ -6666,7 +6677,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 251
+                "line": 256
               }
             },
             {
@@ -6679,7 +6690,7 @@
               "type": "Stage1SelfCheck",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 252
+                "line": 257
               }
             },
             {
@@ -6692,7 +6703,7 @@
               "doc": "Before anything can fault: until this runs the CPU still points at firmware's handlers, which stopped existing at ExitBootServices.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 253
+                "line": 258
               }
             },
             {
@@ -6705,7 +6716,7 @@
               "doc": "mm::init: carve the per-frame array from the largest usable region inside the direct map, hand every usable frame to the buddy, start the heap.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 258
+                "line": 263
               }
             },
             {
@@ -6717,7 +6728,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 263
+                "line": 268
               }
             },
             {
@@ -6730,7 +6741,7 @@
               "type": "Stage2SelfCheck",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 264
+                "line": 269
               }
             },
             {
@@ -6743,7 +6754,7 @@
               "type": "Stage3TrapCheck",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 265
+                "line": 270
               }
             },
             {
@@ -6756,7 +6767,7 @@
               "doc": "arch::init_interrupts: controller and clocks, reported as \"clock\" and \"irqs\" lines.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 266
+                "line": 271
               }
             },
             {
@@ -6768,7 +6779,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 270
+                "line": 275
               }
             },
             {
@@ -6780,7 +6791,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 271
+                "line": 276
               }
             },
             {
@@ -6793,7 +6804,7 @@
               "type": "Stage3TimerCheck",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 272
+                "line": 277
               }
             },
             {
@@ -6806,7 +6817,7 @@
               "type": "Stage4BringUp",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 273
+                "line": 278
               }
             },
             {
@@ -6820,7 +6831,7 @@
               "doc": "After stage 4 because it needs every processor it will schedule on, before finishMemory because the task stacks it takes and gives back are mappings the sweep has to see settled.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 274
+                "line": 279
               }
             },
             {
@@ -6834,7 +6845,7 @@
               "doc": "Stage 6 so far: a reservation costs nothing until it is touched, and every frame an object was given comes back when it is dropped — the leak that would otherwise kill the machine an hour into a rustc build.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 280
+                "line": 285
               }
             },
             {
@@ -6847,7 +6858,7 @@
               "type": "FinishMemory",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 287
+                "line": 292
               }
             },
             {
@@ -6859,7 +6870,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 288
+                "line": 293
               }
             },
             {
@@ -6871,7 +6882,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 289
+                "line": 294
               }
             }
           ]
@@ -6927,7 +6938,7 @@
           ],
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 293
+            "line": 298
           },
           "children": [
             {
@@ -6939,7 +6950,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 297
+                "line": 302
               }
             },
             {
@@ -6951,7 +6962,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 298
+                "line": 303
               }
             },
             {
@@ -6964,7 +6975,7 @@
               "doc": "Kernel, PageTables and BootInfo regions must all be present.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 299
+                "line": 304
               }
             },
             {
@@ -6977,7 +6988,7 @@
               "doc": "Read the kernel's own first bytes through the image mapping and through the direct map; they must agree.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 302
+                "line": 307
               }
             },
             {
@@ -6990,7 +7001,7 @@
               "doc": "Translating the kernel image agrees with the loader; a new device mapping (the framebuffer, where one exists) takes effect.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 306
+                "line": 311
               }
             }
           ]
@@ -7033,7 +7044,7 @@
           ],
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 314
+            "line": 319
           },
           "children": [
             {
@@ -7046,7 +7057,7 @@
               "doc": "4096 blocks of orders 0..4 allocated and freed in an order that forces coalescing; the free count must return exactly to where it started. Uses no heap on purpose.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 317
+                "line": 322
               }
             },
             {
@@ -7059,7 +7070,7 @@
               "doc": "A Box, a Vec grown through reallocations, a BTreeMap of two thousand entries; heap_allocated must return to zero.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 322
+                "line": 327
               }
             },
             {
@@ -7072,7 +7083,7 @@
               "doc": "Written through and read back; two allocations separated by guard pages; the pages either side translate to nothing; a kernel stack 16-byte aligned, writable at both ends, guarded beyond each; freeing returns every frame.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 326
+                "line": 331
               }
             }
           ]
@@ -7109,7 +7120,7 @@
           ],
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 335
+            "line": 340
           },
           "children": [
             {
@@ -7122,7 +7133,7 @@
               "doc": "A canary in a register the frame saves and restores must come back intact; that proves the path restores rather than merely arrives.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 338
+                "line": 343
               }
             },
             {
@@ -7135,7 +7146,7 @@
               "doc": "Three pages touched out of order in an unmapped window; each fault maps the address and the instruction retries. Pages read back what was written, are zeroed, and cost exactly one frame each plus one per table level for the first fault.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 343
+                "line": 348
               }
             }
           ]
@@ -7172,7 +7183,7 @@
           ],
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 352
+            "line": 357
           },
           "children": [
             {
@@ -7185,7 +7196,7 @@
               "doc": "Arm once, wait for the tick, then require the count not to move for ten further intervals. Catches a level-triggered timer acknowledged but not disarmed, which re-enters forever.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 355
+                "line": 360
               }
             },
             {
@@ -7198,7 +7209,7 @@
               "doc": "Count 1000 interrupts and measure the elapsed time with the counter, not by multiplying ticks by the programmed rate. Against a requested 1000 Hz the three report 998 to 999.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 360
+                "line": 365
               }
             }
           ]
@@ -7247,7 +7258,7 @@
           ],
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 368
+            "line": 373
           },
           "children": [
             {
@@ -7260,7 +7271,7 @@
               "doc": "MADT local APIC / x2APIC / GIC CPU interface entries, or the device tree's /cpus; checked for duplicates and required to include the processor reading them.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 371
+                "line": 376
               }
             },
             {
@@ -7272,7 +7283,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 376
+                "line": 381
               }
             },
             {
@@ -7285,7 +7296,7 @@
               "doc": "Unless nosmp was given, in which case one is described. On ARMv7-A the coherency line reports how many cores had ACTLR.SMP set.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 377
+                "line": 382
               }
             },
             {
@@ -7298,7 +7309,7 @@
               "doc": "On every processor at once: a hundred rounds of IPI-woken work; a page remapped twenty times with every processor required to read the new frame; a hundred grace periods against readers, with retired objects poisoned rather than freed; then the contended counter.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 382
+                "line": 387
               }
             }
           ]
@@ -7354,7 +7365,7 @@
           ],
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 392
+            "line": 397
           },
           "children": [
             {
@@ -7367,7 +7378,7 @@
               "doc": "One domain holding every CPU in Throughput mode, a queue and an idle task per processor, the boot thread adopted as a task.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 396
+                "line": 401
               }
             },
             {
@@ -7380,7 +7391,7 @@
               "doc": "A task can be created, run, and cleaned up after.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 401
+                "line": 406
               }
             },
             {
@@ -7393,7 +7404,7 @@
               "doc": "The task is off the run queue and the processor is free, and it comes back when it said it would.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 404
+                "line": 409
               }
             },
             {
@@ -7406,7 +7417,7 @@
               "doc": "All spawned on one processor, so the others get any only by stealing; bounded work to completion; every stack back.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 408
+                "line": 413
               }
             },
             {
@@ -7419,7 +7430,7 @@
               "doc": "Twelve spinners, three per processor, one of each three at a different weight, inside a measured window. Each task's service, in nanoseconds of the stage 3 clock, must stay within EEVDF's bound of its weighted share: a slice plus the worst overrun the scheduler actually served, both printed.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 412
+                "line": 417
               }
             }
           ]
@@ -7475,7 +7486,7 @@
           ],
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 422
+            "line": 427
           },
           "children": [
             {
@@ -7487,7 +7498,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 430
+                "line": 435
               }
             },
             {
@@ -7499,7 +7510,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 431
+                "line": 436
               }
             },
             {
@@ -7512,7 +7523,7 @@
               "doc": "A null dereference in kernel code must fault rather than find the first page of physical memory.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 432
+                "line": 437
               }
             },
             {
@@ -7525,7 +7536,7 @@
               "doc": "Walk every live leaf through Mapper::for_each_leaf; none may be writable and executable. Reports what it swept, because a sweep that walks nothing also finds nothing.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 436
+                "line": 441
               }
             },
             {
@@ -7538,7 +7549,7 @@
               "doc": "The loader's own memory and the ACPI-reclaim regions go to the buddy: 2 to 4 MiB on a 512 MiB QEMU machine.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 441
+                "line": 446
               }
             }
           ]
@@ -7551,7 +7562,7 @@
           "doc": "Why the kernel was entered, in terms all three architectures share. Each arch module classifies its own frame into this and the policy is written once.",
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 452
+            "line": 457
           },
           "children": [
             {
@@ -7560,7 +7571,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 456
+                "line": 461
               }
             },
             {
@@ -7569,7 +7580,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 457
+                "line": 462
               }
             },
             {
@@ -7578,7 +7589,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 458
+                "line": 463
               }
             },
             {
@@ -7587,7 +7598,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 459
+                "line": 464
               }
             },
             {
@@ -7596,7 +7607,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 460
+                "line": 465
               }
             },
             {
@@ -7605,7 +7616,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 461
+                "line": 466
               }
             }
           ]
@@ -7617,7 +7628,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 464
+            "line": 469
           },
           "children": [
             {
@@ -7627,7 +7638,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 465
+                "line": 470
               }
             },
             {
@@ -7637,7 +7648,7 @@
               "type": "Boolean",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 466
+                "line": 471
               }
             },
             {
@@ -7647,7 +7658,7 @@
               "type": "Boolean",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 467
+                "line": 472
               }
             },
             {
@@ -7657,7 +7668,7 @@
               "type": "Boolean",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 468
+                "line": 473
               }
             },
             {
@@ -7668,7 +7679,7 @@
               "doc": "A mapping existed but denied the access, versus no mapping at all: protection violation versus not-yet-faulted-in.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 469
+                "line": 474
               }
             },
             {
@@ -7678,7 +7689,7 @@
               "type": "Boolean",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 473
+                "line": 478
               }
             }
           ]
@@ -7690,7 +7701,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 476
+            "line": 481
           },
           "children": [
             {
@@ -7700,7 +7711,7 @@
               "type": "TrapKind",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 477
+                "line": 482
               }
             },
             {
@@ -7711,7 +7722,7 @@
               "multiplicity": "0..1",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 478
+                "line": 483
               }
             },
             {
@@ -7722,7 +7733,7 @@
               "multiplicity": "0..1",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 479
+                "line": 484
               }
             }
           ]
@@ -7737,7 +7748,7 @@
           "doc": "One dispatch path above every architecture, reached only through the facade: classify the frame, act, and on return let the entry stub restore the interrupted context.",
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 482
+            "line": 487
           },
           "children": [
             {
@@ -7747,7 +7758,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 487
+                "line": 492
               }
             },
             {
@@ -7757,7 +7768,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 488
+                "line": 493
               }
             },
             {
@@ -7770,7 +7781,7 @@
               "type": "Dispatch",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 489
+                "line": 494
               }
             }
           ]
@@ -7819,7 +7830,7 @@
           ],
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 492
+            "line": 497
           },
           "children": [
             {
@@ -7832,7 +7843,7 @@
               "type": "Trap",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 493
+                "line": 498
               }
             },
             {
@@ -7842,7 +7853,7 @@
               "doc": "Count it and advance past the instruction.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 494
+                "line": 499
               }
             },
             {
@@ -7852,7 +7863,7 @@
               "type": "HandlePageFault",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 497
+                "line": 502
               }
             },
             {
@@ -7862,7 +7873,7 @@
               "doc": "Acknowledge in arch, then irq::dispatch by number.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 498
+                "line": 503
               }
             },
             {
@@ -7873,7 +7884,7 @@
               "doc": "Reserved: stage 7 gives this a body.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 501
+                "line": 506
               }
             },
             {
@@ -7883,7 +7894,7 @@
               "doc": "Anything else is a kernel bug at this stage: print the frame and halt with FERRIX-PANIC.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 505
+                "line": 510
               }
             },
             {
@@ -7892,7 +7903,7 @@
               "kind": "clause",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 511
+                "line": 516
               }
             },
             {
@@ -7901,7 +7912,7 @@
               "kind": "clause",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 512
+                "line": 517
               }
             },
             {
@@ -7910,7 +7921,7 @@
               "kind": "clause",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 513
+                "line": 518
               }
             },
             {
@@ -7919,7 +7930,7 @@
               "kind": "clause",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 514
+                "line": 519
               }
             },
             {
@@ -7928,7 +7939,7 @@
               "kind": "clause",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 515
+                "line": 520
               }
             }
           ]
@@ -7975,7 +7986,7 @@
           ],
           "source": {
             "file": "docs/sysml/03-boot.sysml",
-            "line": 518
+            "line": 523
           },
           "children": [
             {
@@ -7988,7 +7999,7 @@
               "type": "PageFault",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 523
+                "line": 528
               }
             },
             {
@@ -7998,7 +8009,7 @@
               "doc": "Allocate a zeroed frame, map it at the faulting page, return so the instruction retries.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 524
+                "line": 529
               }
             },
             {
@@ -8007,7 +8018,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 528
+                "line": 533
               }
             },
             {
@@ -8016,7 +8027,7 @@
               "kind": "clause",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 531
+                "line": 536
               }
             },
             {
@@ -8025,7 +8036,7 @@
               "kind": "clause",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 532
+                "line": 537
               }
             },
             {
@@ -8037,7 +8048,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 533
+                "line": 538
               }
             },
             {
@@ -8049,7 +8060,7 @@
               ],
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
-                "line": 534
+                "line": 539
               }
             }
           ]

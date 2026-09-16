@@ -196,23 +196,29 @@ from `BootInfo`. What changes is what a person sees:
   console keeps its last frame. The panic is **not lost, but it's on the
   other head**. Serial carries it as always, and the screendump test names
   the virtio-gpu device explicitly.
-* **QEMU, AArch64.** The same, with `ramfb` as the firmware's head.
-* **The hazard to rule out first.** If the firmware binds virtio-gpu itself
-  (OVMF and AAVMF have `VirtioGpuDxe`), its GOP framebuffer is *guest RAM*
-  backing a virtio-gpu resource, not a BAR. The driver's device reset
-  orphans it, and if those frames are in a boot-services region the frame
-  allocator reclaimed, a panic would draw over memory the kernel has handed
-  out. Iteration 1 checks it: the core refuses to publish `card0` if
-  `BootInfo.framebuffer.phys` lies in memory the frame allocator owns, and the
-  boot line says which. The QEMU arguments keep VGA or ramfb first so the
-  firmware picks them. If that check ever fires, the fix is to reserve those
-  frames at boot, which is mm's call, not this document's.
-* **Real hardware with one display controller** (the DK1's LTDC, P3): once a
-  driver reprograms the controller, the firmware framebuffer isn't scanned
-  out, and **a panic's picture is lost; serial is not**. That's acceptable for
-  iteration 1 and written down here. The alternative, a driver-independent
-  "restore scanout" in the kernel, is drawing by another name, and
-  ARCHITECTURE §1 rules it out.
+* **QEMU, AArch64.** The same, with `ramfb` as the firmware's head, once the
+  loader chooses it (below).
+* **The hazard, which the first run found.** If the firmware binds the
+  virtio-gpu itself (OVMF and AAVMF have `VirtioGpuDxe`), its framebuffer is
+  *guest RAM* in boot-services data, which the frame allocator hands out
+  again, not a BAR or a reserved region. AAVMF does exactly that on AArch64
+  (§3). A panic would then draw over frames that belong to someone else, and
+  once the driver resets the device nobody would see it.
+* **The rule (os-f6, 2026-09-16).** The loader looks at every graphics
+  output, not only the first, and prefers one whose framebuffer the
+  allocator will not own (`ramfb`'s reserved pages, the VGA BAR) over one it
+  will (`VirtioGpuDxe`'s), and its boot line says which it took. It writes
+  `BootInfo.framebuffer.reclaimable` (BootInfo version 4) from the final
+  memory map with `ferrix_bootinfo::allocator_owns`. That one field has two
+  readers: the panic screen draws only when it is 0, and the display core
+  refuses to publish `card0` over a framebuffer where it is 1. Nothing is
+  reserved to protect a picture nobody would see.
+* **Real hardware with one display controller** (the DK1's LTDC, P3): the
+  firmware's framebuffer is the one that controller scans out, so once a
+  driver takes it over **a panic's picture is lost and serial is not**; where
+  that framebuffer is reclaimable RAM, the flag is 1 and the panic goes to
+  serial only. The alternative, a driver-independent "restore scanout" in the
+  kernel, is drawing by another name, and ARCHITECTURE §1 rules it out.
 
 ## 3. QEMU and xtask
 

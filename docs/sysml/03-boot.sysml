@@ -55,17 +55,22 @@ package FerrixBoot {
         attribute height : Natural;
         attribute stride : Natural;
         attribute format : PixelFormat;
+        doc /* True when the framebuffer is in memory the frame allocator will
+             * own (UEFI virtio-gpu's boot-services framebuffer): the panic
+             * screen does not draw on it and the display core reads it
+             * before publishing a card. */
+        attribute reclaimable : Boolean;
     }
 
     #implemented item def BootInfo {
         @stage { number = 1; }
-        doc /* Version 3. Every type is repr(C); the kernel refuses to start if
+        doc /* Version 4. Every type is repr(C); the kernel refuses to start if
              * the magic or version disagree. Addresses are u64 on every width
              * so the layout is one layout. The kernel validates it once
              * through BootInfo::validate into a BootView whose accessors are
              * safe. */
         attribute magic : String = "FERRIXBI";
-        attribute version : Natural = 3;
+        attribute version : Natural = 4;
         attribute arch : Arch;
         attribute regions : MemRegion[1..*] ordered {
             doc /* Sorted, non-overlapping, describing the loader's own
