@@ -799,6 +799,19 @@ pub(crate) fn reset_signals() {
     }
 }
 
+/// True if `path` (unmetafied) is a regular file this process may execute.
+pub(crate) fn is_executable(path: &[u8]) -> bool {
+    let Ok(c) = CString::new(path) else {
+        return false;
+    };
+    // SAFETY: c is NUL-terminated.
+    if unsafe { libc::access(c.as_ptr(), libc::X_OK) } != 0 {
+        return false;
+    }
+    use std::os::unix::ffi::OsStrExt;
+    std::fs::metadata(std::ffi::OsStr::from_bytes(path)).is_ok_and(|m| m.is_file())
+}
+
 /// Find `name` on `$PATH`.
 pub(crate) fn find_program(sh: &Shell, name: &[u8]) -> Option<Vec<u8>> {
     if name.contains(&b'/') {

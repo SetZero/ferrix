@@ -76,6 +76,11 @@ pub(crate) fn is_builtin(name: &[u8]) -> bool {
     BUILTINS.contains(&name)
 }
 
+/// Every builtin's name, for completion.
+pub(crate) fn names() -> &'static [&'static [u8]] {
+    BUILTINS
+}
+
 fn out(sh: &Shell, fd: i32, bytes: &[u8]) -> i32 {
     let _ = sh;
     i32::from(!write_fd(fd, &tok::unmetafy(bytes)))

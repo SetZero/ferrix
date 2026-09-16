@@ -28,6 +28,7 @@ mod qual;
 mod regex;
 mod shell;
 mod tok;
+mod zle;
 
 use std::os::unix::ffi::OsStrExt;
 
@@ -116,12 +117,13 @@ fn read_line() -> Option<Vec<u8>> {
 
 fn interactive_loop(sh: &mut Shell) -> ! {
     let mut buffer: Vec<u8> = Vec::new();
+    let mut editor = zle::Editor::default();
     sh.at_prompt = true;
     loop {
         let which: &[u8] = if buffer.is_empty() { b"PS1" } else { b"PS2" };
         let ps = sh.get(which).map(|v| v.joined()).unwrap_or_default();
-        let _ok = exec::write_fd(2, &tok::unmetafy(&prompt::expand(sh, &ps)));
-        let Some(line) = read_line() else {
+        let prompt = prompt::expand(sh, &ps);
+        let Some(line) = editor.read_line(sh, &prompt) else {
             if !buffer.is_empty() {
                 exec::run_string(sh, &buffer);
             }
@@ -133,6 +135,7 @@ fn interactive_loop(sh: &mut Shell) -> ! {
             continue;
         }
         let text = std::mem::take(&mut buffer);
+        editor.add_history(&tok::unmetafy(&text));
         exec::run_string(sh, &text);
         sh.at_prompt = true;
         reap(sh);
