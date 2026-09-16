@@ -1,9 +1,10 @@
 //! `math.h`: so far `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`,
-//! `exp`, `exp2`, `expm1`, `log`, `log2`, `log10`, `log1p` and `pow` for
-//! `double`, `sinf`, `cosf`, `tanf`, `asinf`, `acosf`, `atanf`, `atan2f`,
-//! `expf`, `exp2f`, `expm1f`, `logf`, `log2f`, `log10f`, `log1pf` and `powf`
-//! for `float`, and the classification functions the header's macros call for
-//! every type.
+//! `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `exp`, `exp2`, `expm1`,
+//! `log`, `log2`, `log10`, `log1p`, `pow` and `hypot` for `double`, `sinf`,
+//! `cosf`, `tanf`, `asinf`, `acosf`, `atanf`, `atan2f`, `sinhf`, `coshf`,
+//! `tanhf`, `asinhf`, `acoshf`, `atanhf`, `expf`, `exp2f`, `expm1f`, `logf`,
+//! `log2f`, `log10f`, `log1pf`, `powf` and `hypotf` for `float`, and the
+//! classification functions the header's macros call for every type.
 //!
 //! # Where the code comes from
 //!
@@ -72,6 +73,10 @@
 //! `barrier`. And its vectoriser may pair two unrelated `float` divisions in
 //! one `divps`, whose two unused lanes divide 0 by 0 and raise invalid, so a
 //! function whose division it paired that way is never inlined.
+//! The hyperbolic functions and `hypot`, `sinh` to `hypotf`, were compared
+//! the same way, and that found one more: LLVM turns `a - C / b`, for a
+//! constant `C`, into `a + -C / b`, which rounds the quotient the other way,
+//! so where musl subtracts such a quotient, it goes through `barrier` too.
 //!
 //! # Errors
 //!
@@ -116,17 +121,22 @@
 //! exceptions of every table case in both the debug and the release build.
 
 pub mod acos;
+pub mod acosh;
 #[cfg(target_arch = "x86_64")]
 #[path = "x86_64.rs"]
 pub(crate) mod arch;
 pub mod asin;
+pub mod asinh;
 pub mod atan;
+pub mod atanh;
 pub mod classify;
+pub mod cosh;
 pub mod exp;
 pub mod exp2;
 pub mod expf;
 pub mod expm1;
 pub mod fma;
+pub mod hypot;
 pub mod log;
 pub mod log10;
 pub mod log1p;
@@ -139,8 +149,10 @@ pub mod pow;
 pub mod powf;
 pub mod remainder;
 pub mod rounding;
+pub mod sinh;
 pub mod sqrt;
 pub(crate) mod support;
 pub mod tan;
+pub mod tanh;
 pub mod trig;
 pub mod trigf;
