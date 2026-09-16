@@ -282,7 +282,8 @@ fn switch_violation(start: u64, end: u64, sites: &[u64]) -> Option<String> {
         .find(|&&site| site < end && site + 4 > start)
         .map(|site| {
             format!(
-                "the switch block {start:#x}..{end:#x} holds a relocation at {site:#x},                  so a copy of it would not run: every reference in it must be PC-relative"
+                "the switch block {start:#x}..{end:#x} holds a relocation at {site:#x}, \
+                 so a copy of it would not run: every reference in it must be PC-relative"
             )
         })
 }

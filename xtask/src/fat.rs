@@ -410,7 +410,8 @@ fn geometry(total_sectors: u32) -> Result<(u32, u32, u32)> {
     }
 
     Err(Error::new(format!(
-        "cannot lay out a FAT32 filesystem in {total_sectors} sectors;          FAT32 needs at least {MIN_FAT32_CLUSTERS} clusters"
+        "cannot lay out a FAT32 filesystem in {total_sectors} sectors; \
+         FAT32 needs at least {MIN_FAT32_CLUSTERS} clusters"
     )))
 }
 
