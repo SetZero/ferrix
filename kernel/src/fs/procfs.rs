@@ -206,8 +206,39 @@ fn sysrq_trigger(_: &Kernel, data: &[u8]) -> Result<usize> {
     Ok(data.len())
 }
 
+/// A directory of `/proc` whose files only report, so a write to one is
+/// `EACCES` rather than a missing handler.
+const fn reporting_directory(
+    name: &'static [u8],
+    entries: &'static [Entry<Kernel>],
+) -> Entry<Kernel> {
+    Entry {
+        name,
+        permissions: 0o555,
+        content: Content::Directory {
+            entries,
+            refusal: Errno::EACCES,
+        },
+    }
+}
+
+/// `/proc/net`: what `route`, `netstat`, `arp` and `ifconfig` read.
+///
+/// On Linux this is a symbolic link to `/proc/self/net`, because each network
+/// namespace has its own. Ferrix has one network namespace, so it is a
+/// directory; a program that follows the link finds the same files either way.
+static NET: [Entry<Kernel>; 7] = [
+    file(b"arp", render::net_arp),
+    file(b"dev", render::net_dev),
+    file(b"route", render::net_route),
+    file(b"tcp", render::net_tcp),
+    file(b"tcp6", render::net_tcp6),
+    file(b"udp", render::net_udp),
+    file(b"udp6", render::net_udp6),
+];
+
 /// `/proc`, less the process directories that follow these in a listing.
-pub(crate) static TOP: [Entry<Kernel>; 11] = [
+pub(crate) static TOP: [Entry<Kernel>; 12] = [
     Entry {
         name: b"self",
         permissions: 0o777,
@@ -217,6 +248,7 @@ pub(crate) static TOP: [Entry<Kernel>; 11] = [
     file(b"filesystems", render::filesystems),
     file(b"meminfo", render::meminfo),
     file(b"mounts", render::mounts),
+    reporting_directory(b"net", &NET),
     file(b"stat", render::kstat),
     file(b"partitions", render::partitions),
     file(b"uptime", render::uptime),

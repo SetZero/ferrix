@@ -2867,9 +2867,19 @@ and a frame out through the whole stack. It reads:
   netring  1 HELLOs refused as specified, 4 slots posted for a driver to fill, 1 frames taken up the stack and 1 answered back down it
 ```
 
+**Done — `/proc/net`.** `libs/procfs` gains `dev`, `route`, `tcp`, `tcp6`,
+`udp`, `udp6` and `arp`, each pinned in its tests against a line copied from a
+running Linux, because `route`, `netstat`, `arp` and `ifconfig` read these
+files with `sscanf` and fixed columns and a field one column off is a program
+that reads the wrong number confidently. Two details that look like mistakes
+and are not: the addresses are the network-order bytes read as a host-order
+number, so `10.0.0.0` prints as `0000000A`; and the lines are padded to a
+fixed width, 127 for `route` and `udp` and 149 for `tcp`, by Linux's
+`seq_pad`, which pads a short line and leaves a long one alone -- which is why
+an IPv6 row overflows.
+
 **Still to do:** the virtio-net driver process itself, `AF_NETLINK` for `ip`,
-`/proc/net`, and `AF_UNIX` names so that `nc` can carry a stream over a local
-socket.
+and `AF_UNIX` names so that `nc` can carry a stream over a local socket.
 
 **Exit:** under `xtask`'s gateway — which is where this criterion's *"under
 QEMU's user-mode network"* now reads — busybox configures `eth0` with `ip` (or

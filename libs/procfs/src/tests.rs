@@ -692,3 +692,216 @@ fn a_string_write_stops_at_a_newline_or_nul_and_is_cut_at_the_limit() {
     let long = [b'x'; 70];
     assert_eq!(sysctl::stored(&long, 64), &long[..64]);
 }
+
+// ---------------------------------------------------------------------------
+// /proc/net
+//
+// Every expected line below was taken from a running Linux and pasted here.
+// ---------------------------------------------------------------------------
+
+/// The text a renderer wrote, as a string.
+fn net_text(body: impl FnOnce(&mut Vec<u8>)) -> alloc::string::String {
+    show(&rendered(body))
+}
+
+#[test]
+fn proc_net_dev_is_the_two_headers_and_a_row_per_interface() {
+    use crate::net::{Device, DeviceCounters, dev};
+    let text = net_text(|out| {
+        dev(
+            out,
+            &[Device {
+                name: b"lo",
+                counters: DeviceCounters {
+                    received_bytes: 42_232_032,
+                    received: 230_764,
+                    sent_bytes: 42_232_032,
+                    sent: 230_764,
+                    ..DeviceCounters::default()
+                },
+            }],
+        );
+    });
+    let mut lines = text.lines();
+    assert_eq!(
+        lines.next(),
+        Some("Inter-|   Receive                                                |  Transmit")
+    );
+    assert_eq!(
+        lines.next(),
+        Some(
+            " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed"
+        )
+    );
+    assert_eq!(
+        lines.next(),
+        Some(
+            "    lo: 42232032  230764    0    0    0     0          0         0 42232032  230764    0    0    0     0       0          0"
+        )
+    );
+    assert_eq!(lines.next(), None);
+}
+
+#[test]
+fn proc_net_route_prints_its_addresses_in_host_order() {
+    use crate::net::{Route, route};
+    let text = net_text(|out| {
+        route(
+            out,
+            &[Route {
+                interface: b"eno2",
+                destination: [0, 0, 0, 0],
+                gateway: [192, 168, 8, 1],
+                flags: 0x0003,
+                metric: 100,
+                mask: [0, 0, 0, 0],
+                mtu: 0,
+            }],
+        );
+    });
+    let mut lines = text.lines();
+    let header = lines.next().expect("a header");
+    assert!(header.starts_with("Iface\tDestination\tGateway \tFlags"));
+    assert_eq!(header.len(), 127, "every line is padded to 127 characters");
+    let row = lines.next().expect("a row");
+    assert!(
+        row.starts_with("eno2\t00000000\t0108A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0"),
+        "the row reads {row:?}"
+    );
+    assert_eq!(row.len(), 127);
+}
+
+#[test]
+fn a_gateway_is_the_network_order_bytes_read_as_a_host_order_number() {
+    use crate::net::hex_v4;
+    // 192.168.8.1 is 0x0108A8C0 in these files, which is the reverse of what
+    // it looks like it should be, and is what every reader expects.
+    assert_eq!(hex_v4([192, 168, 8, 1]), 0x0108_A8C0);
+    assert_eq!(hex_v4([127, 0, 0, 1]), 0x0100_007F);
+    assert_eq!(hex_v4([0, 0, 0, 0]), 0);
+    assert_eq!(hex_v4([255, 255, 255, 0]), 0x00FF_FFFF);
+}
+
+#[test]
+fn proc_net_tcp_is_the_line_linux_prints() {
+    use crate::net::{Endpoint, Socket, tcp};
+    let text = net_text(|out| {
+        tcp(
+            out,
+            &[Socket {
+                slot: 0,
+                local: Endpoint::V4([192, 168, 122, 1], 53),
+                remote: Endpoint::V4([0, 0, 0, 0], 0),
+                state: 10,
+                transmit_queue: 0,
+                receive_queue: 0,
+                uid: 0,
+                inode: 12_183,
+            }],
+        );
+    });
+    let mut lines = text.lines();
+    let header = lines.next().expect("a header");
+    assert!(header.starts_with("  sl  local_address rem_address   st tx_queue rx_queue"));
+    assert_eq!(header.len(), 149, "tcp pads to Linux's TMPSZ - 1");
+    let row = lines.next().expect("a row");
+    assert_eq!(
+        row.trim_end(),
+        "   0: 017AA8C0:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 12183 1 0000000000000000 100 0 0 10 0"
+    );
+    assert_eq!(row.len(), 149);
+}
+
+#[test]
+fn an_ipv6_socket_prints_four_words_of_eight_digits() {
+    use crate::net::{Endpoint, Socket, tcp};
+    let loopback = [0_u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+    let text = net_text(|out| {
+        tcp(
+            out,
+            &[Socket {
+                slot: 3,
+                local: Endpoint::V6(loopback, 0x1F90),
+                remote: Endpoint::V6([0; 16], 0),
+                state: 1,
+                transmit_queue: 0,
+                receive_queue: 0,
+                uid: 0,
+                inode: 1,
+            }],
+        );
+    });
+    let row = text.lines().nth(1).expect("a row");
+    assert!(
+        row.starts_with("   3: 00000000000000000000000001000000:1F90 "),
+        "the row reads {row:?}"
+    );
+}
+
+#[test]
+fn proc_net_udp_has_a_wider_slot_column_than_tcp() {
+    use crate::net::{Endpoint, Socket, udp};
+    let text = net_text(|out| {
+        udp(
+            out,
+            &[Socket {
+                slot: 4_616,
+                local: Endpoint::V4([0, 0, 0, 0], 0x14E9),
+                remote: Endpoint::V4([0, 0, 0, 0], 0),
+                state: 7,
+                transmit_queue: 0,
+                receive_queue: 0,
+                uid: 119,
+                inode: 18_207,
+            }],
+        );
+    });
+    let row = text.lines().nth(1).expect("a row");
+    assert!(
+        row.starts_with(
+            " 4616: 00000000:14E9 00000000:0000 07 00000000:00000000 00:00000000 00000000   119        0 18207 2 "
+        ),
+        "the row reads {row:?}"
+    );
+}
+
+#[test]
+fn proc_net_arp_is_the_line_arp_reads() {
+    use crate::net::{Neighbour, arp};
+    let text = net_text(|out| {
+        arp(
+            out,
+            &[Neighbour {
+                address: [172, 18, 0, 4],
+                flags: 2,
+                hardware: [0xA2, 0xCE, 0xDE, 0xA5, 0xF8, 0x63],
+                interface: b"br-d4b21d68bf63",
+            }],
+        );
+    });
+    let mut lines = text.lines();
+    assert_eq!(
+        lines.next(),
+        Some("IP address       HW type     Flags       HW address            Mask     Device")
+    );
+    assert_eq!(
+        lines.next(),
+        Some(
+            "172.18.0.4       0x1         0x2         a2:ce:de:a5:f8:63     *        br-d4b21d68bf63"
+        )
+    );
+}
+
+#[test]
+fn a_file_with_no_rows_is_its_header_and_nothing_else() {
+    use crate::net::{Device, Neighbour, Route, Socket, arp, dev, route, tcp, udp};
+    let no_devices: &[Device<'_>] = &[];
+    let no_routes: &[Route<'_>] = &[];
+    let no_sockets: &[Socket] = &[];
+    let no_neighbours: &[Neighbour<'_>] = &[];
+    assert_eq!(net_text(|out| dev(out, no_devices)).lines().count(), 2);
+    assert_eq!(net_text(|out| route(out, no_routes)).lines().count(), 1);
+    assert_eq!(net_text(|out| tcp(out, no_sockets)).lines().count(), 1);
+    assert_eq!(net_text(|out| udp(out, no_sockets)).lines().count(), 1);
+    assert_eq!(net_text(|out| arp(out, no_neighbours)).lines().count(), 1);
+}

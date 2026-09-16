@@ -11,11 +11,13 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use ferrix_bootinfo::{Arch, PAGE_SIZE};
+use ferrix_net::IpAddress;
 use ferrix_procfs::filesystems::{self, Filesystem};
 use ferrix_procfs::kstat::{self, CpuTimes, Kstat};
 use ferrix_procfs::maps::{self, Mapping, Width};
 use ferrix_procfs::meminfo::{self, Meminfo};
 use ferrix_procfs::mounts::{self, Mount};
+use ferrix_procfs::net as procfs_net;
 use ferrix_procfs::partitions::{self, Partition};
 use ferrix_procfs::stat::{self, Stat};
 use ferrix_procfs::status::{self, State, Status};
@@ -727,5 +729,238 @@ pub(super) fn stat(process: &Process) -> Result<Vec<u8>> {
     };
     let mut out = Vec::new();
     stat::render(&mut out, &stat);
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// /proc/net
+//
+// Every one of these asks the net core for what it knows and hands it to
+// `libs/procfs`, which is where the formats are pinned. Nothing here decides a
+// column.
+// ---------------------------------------------------------------------------
+
+/// `/proc/net/dev`.
+pub(super) fn net_dev(_: &Kernel) -> Result<Vec<u8>> {
+    let devices: Vec<(Vec<u8>, procfs_net::DeviceCounters)> =
+        crate::net::core().with(|stack, _| {
+            stack
+                .interfaces()
+                .iter()
+                .map(|interface| {
+                    let counters = interface.counters;
+                    (
+                        interface.name.as_bytes().to_vec(),
+                        procfs_net::DeviceCounters {
+                            received_bytes: counters.received_bytes,
+                            received: counters.received,
+                            received_errors: counters.received_errors,
+                            received_dropped: counters.received_dropped,
+                            multicast: 0,
+                            sent_bytes: counters.sent_bytes,
+                            sent: counters.sent,
+                            sent_errors: counters.sent_errors,
+                            sent_dropped: counters.sent_dropped,
+                        },
+                    )
+                })
+                .collect()
+        });
+    let rows: Vec<procfs_net::Device<'_>> = devices
+        .iter()
+        .map(|(name, counters)| procfs_net::Device {
+            name,
+            counters: *counters,
+        })
+        .collect();
+    let mut out = Vec::new();
+    procfs_net::dev(&mut out, &rows);
+    Ok(out)
+}
+
+/// `/proc/net/route`, which is IPv4 only, as it is on Linux.
+pub(super) fn net_route(_: &Kernel) -> Result<Vec<u8>> {
+    let rows: Vec<(Vec<u8>, procfs_net::Route<'static>)> = crate::net::core().with(|stack, _| {
+        stack
+            .routes()
+            .entries()
+            .iter()
+            .filter_map(|route| {
+                let IpAddress::V4(destination) = route.destination.address() else {
+                    return None;
+                };
+                let interface = stack.interface(route.interface)?;
+                let gateway = match route.gateway {
+                    Some(IpAddress::V4(address)) => address.octets(),
+                    _ => [0; 4],
+                };
+                // RTF_UP is 1 and RTF_GATEWAY 2, which is what `route` prints
+                // as `U` and `UG`.
+                let flags = 1 | u16::from(route.gateway.is_some()) << 1;
+                Some((
+                    interface.name.as_bytes().to_vec(),
+                    procfs_net::Route {
+                        interface: b"",
+                        destination: destination.octets(),
+                        gateway,
+                        flags,
+                        metric: route.metric,
+                        mask: mask_of(route.destination.prefix_len()),
+                        mtu: interface.mtu,
+                    },
+                ))
+            })
+            .collect()
+    });
+    let rows: Vec<procfs_net::Route<'_>> = rows
+        .iter()
+        .map(|(name, route)| procfs_net::Route {
+            interface: name,
+            ..*route
+        })
+        .collect();
+    let mut out = Vec::new();
+    procfs_net::route(&mut out, &rows);
+    Ok(out)
+}
+
+/// The netmask a prefix length names, in network order.
+fn mask_of(prefix_len: u8) -> [u8; 4] {
+    let bits = u32::from(prefix_len).min(32);
+    let mask = if bits == 0 {
+        0
+    } else {
+        u32::MAX << (32 - bits)
+    };
+    mask.to_be_bytes()
+}
+
+/// `/proc/net/tcp`.
+pub(super) fn net_tcp(_: &Kernel) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    procfs_net::tcp(&mut out, &inet_sockets(true, false));
+    Ok(out)
+}
+
+/// `/proc/net/tcp6`.
+pub(super) fn net_tcp6(_: &Kernel) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    procfs_net::tcp(&mut out, &inet_sockets(true, true));
+    Ok(out)
+}
+
+/// `/proc/net/udp`.
+pub(super) fn net_udp(_: &Kernel) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    procfs_net::udp(&mut out, &inet_sockets(false, false));
+    Ok(out)
+}
+
+/// `/proc/net/udp6`.
+pub(super) fn net_udp6(_: &Kernel) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    procfs_net::udp(&mut out, &inet_sockets(false, true));
+    Ok(out)
+}
+
+/// The sockets of one protocol and one family, as rows.
+fn inet_sockets(stream: bool, six: bool) -> Vec<procfs_net::Socket> {
+    crate::net::core().with(|stack, _| {
+        stack
+            .sockets()
+            .filter(|(_, socket)| {
+                let is_stream = matches!(
+                    socket,
+                    ferrix_net::Socket::Stream(_) | ferrix_net::Socket::Listen(_)
+                );
+                let is_six = matches!(socket.family(), ferrix_net::Family::V6);
+                is_stream == stream && is_six == six
+            })
+            .enumerate()
+            .map(|(slot, (id, socket))| socket_row(slot, id, socket))
+            .collect()
+    })
+}
+
+/// One socket as a row.
+fn socket_row(
+    slot: usize,
+    id: ferrix_net::SocketId,
+    socket: &ferrix_net::Socket,
+) -> procfs_net::Socket {
+    let remote = socket.remote().unwrap_or(ferrix_net::Endpoint::new(
+        socket.local().address.unspecified(),
+        0,
+    ));
+    let (state, transmit, receive) = match socket {
+        ferrix_net::Socket::Stream(stream) => (
+            stream.connection.state().procfs_code(),
+            stream.connection.send_queued() as u32,
+            stream.connection.receive_queued() as u32,
+        ),
+        // Linux reports a listening TCP socket as `TCP_LISTEN` and an
+        // unconnected UDP one as `TCP_CLOSE`, which is 7 -- the same number a
+        // closed stream has.
+        ferrix_net::Socket::Listen(listener) if listener.backlog > 0 => (10, 0, 0),
+        ferrix_net::Socket::Listen(_) => (7, 0, 0),
+        ferrix_net::Socket::Udp(datagram) | ferrix_net::Socket::Icmp(datagram) => {
+            (7, 0, datagram.queued() as u32)
+        }
+    };
+    procfs_net::Socket {
+        slot,
+        local: endpoint_row(socket.local()),
+        remote: endpoint_row(remote),
+        state,
+        transmit_queue: transmit,
+        receive_queue: receive,
+        uid: 0,
+        inode: u64::from(id.0),
+    }
+}
+
+/// An endpoint as the file spells it.
+fn endpoint_row(endpoint: ferrix_net::Endpoint) -> procfs_net::Endpoint {
+    match endpoint.address {
+        IpAddress::V4(address) => procfs_net::Endpoint::V4(address.octets(), endpoint.port),
+        IpAddress::V6(address) => procfs_net::Endpoint::V6(address.octets(), endpoint.port),
+    }
+}
+
+/// `/proc/net/arp`.
+pub(super) fn net_arp(_: &Kernel) -> Result<Vec<u8>> {
+    let rows: Vec<(Vec<u8>, procfs_net::Neighbour<'static>)> =
+        crate::net::core().with(|stack, _| {
+            stack
+                .neighbors()
+                .entries()
+                .iter()
+                .filter_map(|entry| {
+                    let IpAddress::V4(address) = entry.address else {
+                        return None;
+                    };
+                    let mac = entry.mac?;
+                    let interface = stack.interface(entry.interface)?;
+                    Some((
+                        interface.name.as_bytes().to_vec(),
+                        procfs_net::Neighbour {
+                            address: address.octets(),
+                            flags: u32::from(entry.state.nud()),
+                            hardware: mac,
+                            interface: b"",
+                        },
+                    ))
+                })
+                .collect()
+        });
+    let rows: Vec<procfs_net::Neighbour<'_>> = rows
+        .iter()
+        .map(|(name, entry)| procfs_net::Neighbour {
+            interface: name,
+            ..*entry
+        })
+        .collect();
+    let mut out = Vec::new();
+    procfs_net::arp(&mut out, &rows);
     Ok(out)
 }

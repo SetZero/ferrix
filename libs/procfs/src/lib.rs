@@ -27,6 +27,8 @@
 //! * [`mounts`] — `/proc/mounts`, with the octal escapes a mount point with a
 //!   space in it needs.
 //! * [`filesystems`] — `/proc/filesystems`, the types `mount -t` takes.
+//! * [`net`] — `/proc/net`: `dev`, `route`, `tcp`, `udp` and `arp`, which
+//!   `route`, `netstat` and `ifconfig` read with `sscanf` and fixed columns.
 //! * [`partitions`] — `/proc/partitions`.
 //! * [`sysctl`] — the values under `/proc/sys`, and what a write to a string
 //!   one stores.
@@ -41,6 +43,7 @@ pub mod kstat;
 pub mod maps;
 pub mod meminfo;
 pub mod mounts;
+pub mod net;
 pub mod partitions;
 pub mod stat;
 pub mod status;
