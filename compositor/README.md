@@ -42,6 +42,17 @@ names the part of Hyprland or hyprlang it follows.
   `killactive`, `togglefloating` and `fullscreen`, parsed from a `Bind`.
   Each call returns the changes it caused; `State::layout` gives every
   visible window's client rectangle.
+* **`render`** draws the frame: a `Canvas` over a `tiny-skia` pixmap with
+  `clear`, `fill`, `border` and `composite` (`ARGB8888` source-over,
+  `XRGB8888` copied and made opaque), each drawn only inside a `Damage` of
+  disjoint rectangles; `present` into an `XRGB8888` target of any stride;
+  `render` of one monitor from `layout`'s output with `config`'s border
+  colours; and `damage_between` two layouts. The two pattern clients the
+  stage 18 tests run are drawn here too, so the tests and the clients draw
+  the same thing. Its gate is a committed expected image compared byte for
+  byte (`tests/data/*.xrle`, written only with `COMPOSITOR_RENDER_BLESS=1`;
+  `COMPOSITOR_RENDER_PPM=<dir>` dumps the frames to look at) with a
+  one-pixel negative control.
 * **`blank`** is iteration 1 on screen (`docs/DISPLAY.md`): it opens
   `/dev/dri/card0`, sets the connected connector's preferred mode with the
   legacy calls, fills a dumb buffer with `0x1E1E2E` and prints

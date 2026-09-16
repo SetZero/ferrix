@@ -3627,6 +3627,24 @@ changes it caused. Host-tested; where it departs from Hyprland (no cursor, so
 `force_split` 0 takes the second half; pseudotiling; floating `movewindow`)
 its crate docs say so.
 
+**Done — the renderer, the last of the pure crates.** `compositor/render`
+draws a frame into the `XRGB8888` dumb buffer stage 17 gives it, on the CPU,
+with no C: a `Canvas` over a `tiny-skia` pixmap (pinned at `=0.12.0`, default
+features off, no build script) with `clear`, `fill`, `border` and `composite`
+-- `ARGB8888` source-over, `XRGB8888` copied and made opaque -- each drawn
+only inside a `Damage` of disjoint rectangles, so a translucent client blends
+every pixel once. `present` writes into a target of any stride, `render` draws
+one monitor from `compositor/layout`'s output with `compositor/config`'s
+border colours, and `damage_between` two layouts is the region a frame has to
+redraw. The everyday gate is pixel comparison on the host: the two pattern
+clients stage 18's tests will run are drawn in code, and a run-length expected
+image of them tiled dwindle-style at 1024x768 is committed and compared byte
+for byte, with a negative control that alters one pixel and requires the check
+to name exactly it. Twenty tests. It holds no Wayland object and no
+descriptor, so it carries over whichever way the compositor-server decision
+goes; its crate docs say how a Smithay `Renderer`/`Frame`/`ImportMem` or a
+server written from scratch wraps it.
+
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
 customer's order of 2026-09-16); then the protocol server, the seat, the

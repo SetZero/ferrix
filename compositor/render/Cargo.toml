@@ -1,0 +1,22 @@
+[package]
+name = "compositor-render"
+description = "The compositor's software renderer: tiny-skia drawing frames for XRGB8888 dumb buffers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+compositor-config = { path = "../config" }
+compositor-layout = { path = "../layout" }
+# The rasteriser: pure Rust with no build script. Pinned exactly, since the
+# committed expected images are byte-exact and a new tiny-skia may round a
+# blend differently. Default features are off because `png-format` pulls in
+# `png` and its compression crates, which a renderer drawing into memory does
+# not need; `std` and `simd` add no crates. What it brings: arrayref,
+# arrayvec, bytemuck, cfg-if, log, strict-num and tiny-skia-path.
+tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", "simd"] }
+
+[lints]
+workspace = true
