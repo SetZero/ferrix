@@ -484,6 +484,111 @@ Dated, newest first. A decision here is final until the customer says otherwise.
 
 ---
 
+## Wind-down of 2026-09-17, about 00:10: the fleet moves to another machine
+
+The customer wound the fleet down after the release to move it to another
+PC. `main` is b4665bfd, on nazuna and on `origin`; the tag
+`stage-11.1-network-display-and-threads` is on 06336c60 (notes in
+`docs/RELEASES.md`), verified whole on nazuna (15 gates, five boots at
+stages 1-11, no panic). Everything below the tag landed after it, on the
+same day, each on its own gate:
+
+* **CI, red for two days, fixed forward in four landings:** the release
+  kernel links again (one declaration of the system-call entry; `cargo
+  xtask build --arch all --release` joined the gate table's kernel row);
+  `cargo xtask host-test`/`host-clippy`/`host-doctest`/`host-doc` are the
+  one source of the host commands and `ci.yml` calls them (17 broken doc
+  links fixed on the way); the ferrousli job fetches musl's libc-test at
+  the pinned commit; xtask passes `-global arm-smmuv3.stage=2` so QEMU
+  before 9.2 faults the SMMU check, with a skip line otherwise. The run on
+  f577541e is the first with all four; read its result before anything
+  else on the next machine (`gh run list --branch main`).
+* **The customer's panic under WHPX** (`run --init ferrousli --net --zinc
+  --display` on Windows): `/sbin/blk` died at its first common-config read
+  with a reserved-bit fault at address 0. Root cause is QEMU 11.1's own
+  MMIO emulator under WHPX (`whpx_handle_mmio` walks the guest page tables
+  itself; with more than one vCPU its walk returns "not mapped" for a
+  mapping that exists, and `MMU_TRANSLATE_PAGE_NOT_MAPPED` is turned into
+  error code 12; CR2 is never synced). Ferrix's tables and CR3 were
+  verified correct at the fault. Workaround landed: WHPX without `--smp`
+  runs one processor and says so. The upstream report is written from the
+  row; filing it is the customer's. `driver_check` now names a driver that
+  died instead of "not in the registry".
+* **The compositor's kernel side is complete:** epoll with nesting,
+  eventfd, `FIONBIO`/`FIOCLEX`/`FIONCLEX`, waits that wake on the event
+  (no 5 ms recheck any more: `docs/RELEASES.md`'s known limit is out of
+  date since c2129a68), card0's primary plane and properties with
+  `UNIVERSAL_PLANES` accepted; ferrousli's epoll/eventfd wrappers; input
+  L1-L3. Iteration 2 (two tiled pattern clients) waits on one decision.
+* **ferrousli:** complex.h double and float, the musl NaN/flags fixes;
+  `docs/POSIX-2024.md` at 1040 present, 203 missing, 74 points.
+* **zinc-next:** the zsh runtime port, 35.7k lines, on `main` in five
+  slices (19 of 40 points), `check --zinc` building and testing it with
+  `--features next`. Sized for what is left (21): builtins B1 jobs and
+  flow control 2, B2 parameters and options 3, B3 input and output 3, B4
+  commands and functions 3; then the history ring and file 3, ZLE 3,
+  completion and modules 3, the swap to zinc 1. B1 starts with the
+  `BIN_FG` numbering fix.
+* **Ports (os-12, session ended):** the firmware clock and ChaCha20
+  `getrandom` (BootInfo v5) landed; the ports auto-build in xtask (5), the
+  hermetic HTTPS `test-net` program (3) and git (12) are on the side refs
+  below.
+* **Flakes met and closed:** FX-0882 (the eventfd check's own reader
+  reaped inside its window; `sched::wait_until_gone`, the mm task-gone row
+  is now os-26's for the other sites). **Open:** FX-1004 (quiesce at a
+  driver's death, 1 in 11 x86_64 boots, os-02, 2); FX-1151 (the net ring's
+  control channel closed, 2 of 9 one-processor WHPX boots, both while the
+  customer's own guest ran on the same PC: a contention lead, 0 of 18
+  clean boots with reason prints; reproducing it under load on the
+  customer's PC is theirs to allow); `net_ring::run()` double unclaim
+  (os-02, 1); the VT-d stale record (P0, unowned).
+
+**Side refs on nazuna** (`refs/heads/<session>/<name>`, fetch with
+`git fetch nazuna-wg:Documents/projects/os/ferrix 'refs/heads/*:refs/remotes/nazuna/*'`),
+each with a row above saying where it stands:
+
+* `os-02/unix-creds` a19de2d3: `AF_UNIX` 3c, `SCM_CREDENTIALS`/`SO_PASSCRED`
+  (2), written but never built: the parse and its checks, the reply before
+  `SCM_RIGHTS`, credentials per piece of a split send and on peek, `accept`
+  inheriting the option; missing the build, a host test, the boot check
+  with its control, the doc and the rows. The commit message lists the
+  steps. `os-02/fx0701-diag` 24ec0d30 is diagnostics only, not for landing.
+  `os-02/smmu`, `os-02/dead`, `os-02/unix-gc` are pre-rebase copies of
+  landed commits: delete.
+* os-05: nothing on a branch; the builtins slice B1 had no code yet.
+* `os-12/ports-curl-btop` a117ee4d and `os-12/ports-autobuild` 1dd0e503,
+  pushed by the product owner from the session's local worktrees after it
+  ended: the hermetic HTTPS `test-net` program and the xtask ports
+  auto-build (staleness per port, a build lock, the Linux path, Windows
+  through WSL), state unreported; read the commits before trusting them.
+* `os-a8/long-double` 8cc17d0e: the x87 long double foundation
+  (`ferrousli/src/math/ld80.rs`, 954 lines), not in `mod.rs`, never
+  compiled, no tests; the commit message has the plan (10 points for the
+  59 math and 20 complex long double forms). `os-a8/kept-os02-stub-462f7714`
+  pins a superseded os-02 commit: delete.
+* `os-26/fx1151-diag` 61bb2204: the reason-print build for FX-1151, not
+  for `main`; its logs are on the Windows PC under
+  `~/.local/share/ferrix/logs/os-26-whpx/`. The 15-site task-gone
+  conversion (2) and the `AF_PACKET` gaps have no branch.
+* `os-e5/input-l4` e42623ea (input L4, `libs/virtio-input` driver logic,
+  17 tests written) and `os-e5/compositor-render` 5e2a9d12 (the tiny-skia
+  renderer, 21 tests, golden image not yet blessed): both never compiled;
+  their rows in the after-`rustc` table say the next machine's first step.
+
+**Waiting on the customer:** Smithay's core crates or from scratch for the
+compositor server (the product owner recommends Smithay core; from scratch
+is about 20 points more before the first client); permission to load this
+PC for FX-1151; the QEMU upstream report; the VT-d record's owner.
+
+**For the next machine:** clone from nazuna or `origin` (both at `main`
+b4665bfd), keep `nazuna-wg` as the gate host, one `CARGO_TARGET_DIR` per
+worktree being built (two trees in one dir leave an xtask binary that
+carries the other tree's path: that invalidated one release verify and one
+gate today), `~/.local/share/ferrix/po-verify.sh <commit>` for a whole
+matrix, and the points ledger is in the product owner's memory
+(`ferrix-points-ledger`), where today's ~120 points after the tag are
+timed.
+
 ## The day of 2026-09-14: everything unfinished landed, and `main` moved
 
 The fleet went quiet on 2026-09-13 at about 22:30 and was renamed by a
