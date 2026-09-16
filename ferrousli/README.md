@@ -92,8 +92,10 @@ busybox's does.
 | Port | What | Installs |
 |---|---|---|
 | `curl` | curl 8.22.0 over Mbed TLS 3.6.7, and curl.se's extract of Mozilla's CA certificates | `bin/curl`, `etc/ssl/certs/ca-certificates.crt` |
+| `libcxx` | LLVM 23.1.1's libc++, libc++abi and libunwind, the C++ runtime, built with gcc | `include/c++/v1`, `lib/libc++.a`, `lib/libc++abi.a`, `lib/libunwind.a` |
+| `btop` | btop 1.4.7, C++23, over `libcxx` | `bin/btop` |
 
-`cargo xtask ports` runs them, on a Linux host. Every image that carries a
+`cargo xtask ports` runs them in that order, on a Linux host. Every image that carries a
 busybox carries the ports that are installed, on x86_64, and `cargo xtask
 test-net` fetches with curl as well as with `wget` when curl is there.
 
@@ -103,6 +105,12 @@ over HTTP, and an HTTPS handshake gets as far as checking the certificate,
 which it refuses because the kernel's clock starts at 1970. The kernel's
 `getrandom` is not random yet either. Until both are fixed, HTTPS on Ferrix is
 not secure. `docs/BACKLOG.md` has the row.
+
+btop linked once this library had what libc++ needs: `dl_iterate_phdr`,
+`dladdr`, the message catalogues, the `strtod_l` family, `pathconf`,
+`copy_file_range`, `getloadavg`, and thread cancellation, which btop uses to
+stop a stalled collector. On Ferrix it draws its CPU, memory, network and
+process panels in the serial console, refreshing them.
 
 ## Headers
 
@@ -116,7 +124,7 @@ x86-64, static programs linked at a fixed address.
 | Area | There | Not yet |
 |---|---|---|
 | Startup | `_start`, `__libc_start_main`, `environ`, the auxiliary vector, `.preinit_array` and `.init_array` | position-independent static programs |
-| Threads | a control block in glibc's layout for every thread, static TLS, the stack protector's canary; `pthread_create`, `pthread_join`, `pthread_detach`, `pthread_exit`, attributes, names, `gettid`, `pthread_sigqueue`; mutexes, including recursive, error-checking, robust and priority-inheriting ones; condition variables, read-write locks, keys and `pthread_once`; barriers, private and process-shared, and spin locks; scheduling policy, priority and affinity per thread, `sched.h`'s policy calls, `pthread_getcpuclockid`; semaphores, unnamed, process-shared and named in `/dev/shm`, with `sem_clockwait`; C11's `threads.h` over the `pthread.h` objects; a futex lock for the library's own state | cancellation, `pthread_atfork`, `set*id` across threads |
+| Threads | a control block in glibc's layout for every thread, static TLS, the stack protector's canary; `pthread_create`, `pthread_join`, `pthread_detach`, `pthread_exit`, attributes, names, `gettid`, `pthread_sigqueue`; mutexes, including recursive, error-checking, robust and priority-inheriting ones; condition variables, read-write locks, keys and `pthread_once`; barriers, private and process-shared, and spin locks; scheduling policy, priority and affinity per thread, `sched.h`'s policy calls, `pthread_getcpuclockid`; semaphores, unnamed, process-shared and named in `/dev/shm`, with `sem_clockwait`; C11's `threads.h` over the `pthread.h` objects; a futex lock for the library's own state; cancellation, deferred and asynchronous, with `pthread_cancel`, `pthread_testcancel` and musl's cancellation points on the blocking calls, the library's own internal uses of them guarded | `pthread_atfork`, `set*id` across threads |
 | Memory | the `malloc` family, on `mmap`, with size classes and integrity checks | returning empty regions to the kernel |
 | `stdlib.h` | `exit`, `_Exit`, `atexit` without a limit, `abort`, the environment functions; `strtol` and `strtod` families, correctly rounded for `float`, `double` and x87 `long double`, with glibc's `__isoc23_` names; `qsort`, `qsort_r`, `bsearch`; `abs` and `div` families; `rand`, `random` and `rand48` families; `quick_exit` and `at_quick_exit`; `secure_getenv`, `a64l`, `l64a` and `getsubopt` | `ecvt`, `fcvt`, `gcvt`; NaN payloads and rounding modes in parsing |
 | `assert.h` | `assert`, whose `__assert_fail` writes musl's message straight to standard error and aborts | |
@@ -125,17 +133,17 @@ x86-64, static programs linked at a fixed address.
 | `math.h`, `fenv.h` | the floating-point environment; rounding (`rint`, `nearbyint`, `lrint`, `lround` and the rest), manipulation (`frexp`, `ldexp`, `scalbn`, `logb`, `modf`, `nextafter`, `nan`), `fmod`, `remainder`, `remquo` and `fma` for `double` and `float`; the hyperbolic functions and `hypot` for `double` and `float`; `tan`, `asin`, `acos` and `atan` for `double`, and the trigonometric functions for `float`; `exp2`, `expm1`, `log2`, `log10` and `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, ported from musl and giving its bits and exceptions in every rounding mode; `fpclassify`, `isinf`, `isnan`, `isnormal`, `isfinite`, `signbit`, `isunordered` and the comparison macros for `float`, `double` and x87 `long double`; `math_errhandling` is `MATH_ERREXCEPT`, as in musl | the rest of `math.h`, the `float` transcendental and `long double` functions, `errno` set by math functions as glibc does |
 | `string.h`, `strings.h` | everything, with word-at-a-time scans and two-way `strstr` and `memmem`; `strcoll_l`, `strxfrm_l`, `strcasecmp_l` and `strncasecmp_l` | |
 | `ctype.h` | the C locale, glibc's `__ctype_b_loc` tables, and the `_l` forms | |
-| `locale.h`, `langinfo.h` | `setlocale`, `localeconv`, `newlocale`, `duplocale`, `freelocale`, `uselocale`, `nl_langinfo`; musl's C and C.UTF-8 locales, any other name behaving as UTF-8 | message catalogues, glibc's `locale_t` layout |
+| `locale.h`, `langinfo.h` | `setlocale`, `localeconv`, `newlocale`, `duplocale`, `freelocale`, `uselocale`, `nl_langinfo`; musl's C and C.UTF-8 locales, any other name behaving as UTF-8; `nl_types.h`'s message catalogues, `catopen`, `catgets` and `catclose`, reading `gencat`'s files as musl does; `strtod_l`, `strtof_l` and `strtold_l` | glibc's `locale_t` layout |
 | Multibyte and wide characters | UTF-8 conversion in `stdlib.h`, `wchar.h` and `uchar.h`, strict as musl's; `wctype.h`'s classes, case mappings and `wcwidth` from musl's Unicode 12.1 tables, with every difference from glibc recorded; `wchar.h`'s string and memory functions, with `wcslcpy` and `wcslcat`; the `wcstol` and `wcstod` families, `wcstoimax` and `wcstoumax`, through the narrow parsers; `wcsftime`; wide-character stream I/O, `fgetwc` to `ungetwc` and `fwide`, with glibc's `_unlocked` names; the `wprintf` family, through the narrow formatter; the `wscanf` family, through the narrow scanner; `open_wmemstream` | `iconv` |
 | Error text | `strerror`, `strerror_l`, `strerror_r` (XSI), `__xpg_strerror_r`, `strsignal` | glibc's GNU `strerror_r` |
-| `unistd.h` | files, directories and links, `pipe` and `dup`, identities, `fork` on `clone`, `execve`, `execv`, `execvp`, `sleep`, `alarm`, `sysconf`, `isatty`, `syscall`; `chown` and its `l`, `f` and `at` forms, `utimes`, `gethostid` | `getcwd(NULL, 0)`, `set*id` across threads |
+| `unistd.h` | files, directories and links, `pipe` and `dup`, identities, `fork` on `clone`, `execve`, `execv`, `execvp`, `sleep`, `alarm`, `sysconf`, `isatty`, `syscall`; `chown` and its `l`, `f` and `at` forms, `utimes`, `gethostid`; `pathconf` and `fpathconf`, from musl's table; `copy_file_range` | `getcwd(NULL, 0)`, `set*id` across threads |
 | `fcntl.h`, `sys/stat.h`, `sys/mman.h` | every function, with glibc's `*64` and `__xstat` names | |
 | Mounts and file systems | `mount`, `umount`, `umount2`, `pivot_root`, `chroot`, `swapon`, `swapoff`, `sync`, `syncfs`, `readahead`; `statfs`, `statvfs` and their `f` forms, with glibc's `64` names; `mntent.h`'s `setmntent`, `getmntent`, `getmntent_r`, `endmntent` and `hasmntopt`, with octal escapes | `addmntent` |
 | Sockets and addresses | `socket`, `socketpair`, `bind`, `connect`, `listen`, `accept`, `accept4`, `getsockname`, `getpeername`, `getsockopt`, `setsockopt`, `shutdown`, `send`, `sendto`, `sendmsg`, `recv`, `recvfrom`, `recvmsg`, `sockatmark`; `inet_aton`, `inet_addr`, `inet_ntoa`, `inet_ntop`, `inet_pton`, the byte order functions, `in6addr_any`, `in6addr_loopback` | `inet_network`, `inet_makeaddr`, `inet_netof`, `inet_lnaof` |
 | Name resolution | `getaddrinfo`, `freeaddrinfo`, `getnameinfo`, `gai_strerror`; `gethostbyname`, `gethostbyname2`, `gethostbyaddr` and their `_r` forms, `getservbyname`, `getservbyport` and theirs, `h_errno`, `hstrerror`, `herror`; the hosts, networks, protocols and services databases; the stub resolver over `/etc/resolv.conf`, `res_query`, `res_send`, `dn_expand` and the `ns_` parser | a hosts-file cache, `/etc/nsswitch.conf`, DNSSEC |
 | Interfaces and hardware addresses | `if_nametoindex`, `if_indextoname`, `if_nameindex`, `if_freenameindex`; `getifaddrs` and `freeifaddrs` over route netlink, falling back to `SIOCGIFCONF`; the `ether_` conversions and `/etc/ethers` | interface statistics through `ifa_data` |
 | System V IPC | shared memory, semaphores and message queues, every function | `ftok` |
-| Linux's own calls | `prctl`, `capget`, `capset`, `personality`, `setns`, `unshare`, `reboot`, `klogctl`, `inotify_init`, `inotify_init1`, `inotify_add_watch`, `inotify_rm_watch`, `sendfile`, `sysinfo`, `flock`; `sched_yield`, `sched_getaffinity`, `sched_setaffinity`, `CPU_COUNT` | `epoll`, `eventfd`, `signalfd`, `timerfd` |
+| Linux's own calls | `prctl`, `capget`, `capset`, `personality`, `setns`, `unshare`, `reboot`, `klogctl`, `inotify_init`, `inotify_init1`, `inotify_add_watch`, `inotify_rm_watch`, `sendfile`, `sysinfo`, `getloadavg`, `flock`; `sched_yield`, `sched_getaffinity`, `sched_setaffinity`, `CPU_COUNT` | `epoll`, `eventfd`, `signalfd`, `timerfd` |
 | `termios.h` | every function: attributes, the `cf*speed` calls, `cfmakeraw`, `tcdrain`, `tcflow`, `tcflush`, `tcsendbreak`, `tcgetsid`, and POSIX.1-2024's `tcgetwinsize` and `tcsetwinsize`; `unistd.h`'s `tcgetpgrp`, `tcsetpgrp`, `ttyname` and `ttyname_r` | `posix_openpt` and the rest of the pseudo-terminal calls |
 | Running programs and temporary files | `system`, `popen`, `pclose`, `execl`, `execle`, `execlp`, `daemon`; `mkstemp`, `mkostemp`, `mkstemps`, `mkostemps` and their `64` names, `mkdtemp`, `mktemp`; `realpath` | `posix_spawn`, so `system` and `popen` fork |
 | Users and groups | `getpwnam`, `getpwuid`, `getpwent`, `setpwent`, `endpwent`, `getpwnam_r`, `getpwuid_r`; `getgrnam`, `getgrgid`, `getgrent`, `setgrent`, `endgrent`, `getgrnam_r`, `getgrgid_r`, `getgrouplist`, `initgroups`; `getspnam_r`; `getlogin`, `getlogin_r`; `getusershell`, `setusershell`, `endusershell` | nscd, `fgetpwent` and `putpwent`, the rest of `shadow.h` |
@@ -157,12 +165,11 @@ x86-64, static programs linked at a fixed address.
 | `regex.h` | `regcomp`, `regexec`, `regerror`, `regfree`: basic and extended expressions with musl's grammar, `REG_ICASE`, `REG_NEWLINE`, `REG_NOSUB`, `REG_NOTBOL`, `REG_NOTEOL`, back-references, and POSIX's leftmost-longest match with its submatches, found by simulating the whole automaton at once rather than backtracking | multibyte characters and collating elements, which wait for a locale other than C |
 | `errno.h` | `__errno_location`, per thread | |
 | `sys/auxv.h` | `getauxval` | |
-| C++ runtime | `__cxa_atexit`, and `__cxa_finalize` for a static program | |
+| C++ runtime | `__cxa_atexit`, and `__cxa_finalize` for a static program; `dl_iterate_phdr` and `dladdr` over the program's own headers, which libunwind finds unwind tables by. LLVM's libc++, libc++abi and libunwind build against it (`tools/ports/libcxx`) | `__cxa_thread_atexit_impl`, which libc++abi does without |
 
 ## Next
 
-1. In progress: **thread cancellation** and **the rest of the math
-   library**.
+1. In progress: **the rest of the math library**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
 3. **`long double` math and `complex.h`.**
