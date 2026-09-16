@@ -31,9 +31,9 @@
 //!   scaling and no timestamps.
 //!
 //! None of that is a gap to be filled later. The path between the two ends is a
-//! UNIX datagram socket to this machine's own kernel: it does not lose packets,
-//! it does not reorder them, and it has no bandwidth-delay product worth a
-//! congestion window. Every one of those mechanisms exists to cope with a
+//! loopback socket to this machine's own kernel: it does not reorder packets,
+//! loses one only when a receive buffer is full, and has no bandwidth-delay
+//! product worth a congestion window. Every one of those mechanisms exists to cope with a
 //! network, and there is no network here. Correctness is the whole requirement,
 //! and simplicity is how it is met.
 //!

@@ -1,4 +1,4 @@
-//! A user-mode network backend for the guest: a NAT gateway on a UNIX socket.
+//! A user-mode network backend for the guest: a NAT gateway on a UDP socket.
 //!
 //! # Why this exists rather than `-netdev user`
 //!
@@ -21,15 +21,28 @@
 //! What is always available is a datagram socket:
 //!
 //! ```text
-//! -netdev dgram,id=net0,local.type=unix,local.path=A,remote.type=unix,remote.path=B
+//! -netdev dgram,id=net0,local.type=inet,local.host=127.0.0.1,local.port=0,
+//!                       remote.type=inet,remote.host=127.0.0.1,remote.port=P
 //! -device virtio-net-pci,netdev=net0,mac=...
 //! ```
 //!
-//! QEMU binds `A`, and sends every Ethernet frame the guest transmits to `B` as
-//! one datagram. So this module binds `B`, and sends the guest's answers back to
-//! `A`. Nothing here needs a raw socket, a tun device or a capability: outside
-//! the guest network it speaks through ordinary host `UdpSocket`s and
+//! This module binds a UDP socket on the loopback, at a port `P` the host's
+//! kernel chooses, and QEMU sends every Ethernet frame the guest transmits to it
+//! as one datagram. QEMU's own end is bound to port 0, so it too gets a free
+//! port, and the gateway learns it from the first frame that arrives: the guest
+//! always speaks first, with a DHCP discover or an ARP request, so there is
+//! never an answer with nowhere to go. From then on only that one address is
+//! listened to. Nothing here needs a raw socket, a tun device or a capability:
+//! outside the guest network it speaks through ordinary host `UdpSocket`s and
 //! `TcpStream`s, the same ones any program gets.
+//!
+//! UDP on the loopback rather than a UNIX datagram socket, which this was first
+//! written on, because it is the one datagram socket every host has: Windows'
+//! `std` has no `UnixDatagram`, and Windows has no datagram flavour of `AF_UNIX`
+//! for it to wrap. What the change costs is that a loopback datagram can be
+//! dropped when a receive buffer is full, where a UNIX one blocks its sender;
+//! `tcp` retransmits on a timer, and every other protocol here is one the guest
+//! already retries.
 //!
 //! # The network it presents
 //!
@@ -54,7 +67,9 @@
 //!   `net.ipv4.ping_group_range` and so are not something a build tool can rely
 //!   on. `ping 10.0.2.2` works; `ping 1.1.1.1` does not.
 //! * **UDP** — one host socket per guest flow, with an idle timeout. A datagram
-//!   to `10.0.2.3:53` goes to the resolver named in the host's `/etc/resolv.conf`.
+//!   to `10.0.2.3:53` goes to the host's own resolver: the first in
+//!   `/etc/resolv.conf`, or on Windows the first the network configuration
+//!   names; see [`host_resolver`].
 //! * **TCP** — terminated here and re-opened as an ordinary host `TcpStream`,
 //!   with the payload relayed between the two; see [`tcp`](self::tcp).
 //! * **Fragments** — refused, in both directions. The MTU is 1500 and nothing
@@ -71,10 +86,9 @@ mod udp;
 mod tests;
 
 use std::collections::BTreeMap;
-use std::net::{Ipv4Addr, SocketAddrV4};
-use std::path::{Path, PathBuf};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -83,10 +97,8 @@ use ferrix_netwire::{arp, icmpv4, ipv4};
 
 use crate::{Error, Result};
 
-/// The gateway's own address, which is the guest's default route. It is
-/// defined in `net`, which every host compiles, because the DNS stub there
-/// answers with it whether or not this module exists.
-pub(crate) use crate::net::GATEWAY_IP;
+/// The gateway's own address, which is the guest's default route.
+pub(crate) const GATEWAY_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 2);
 
 /// The address the DNS forwarder answers on.
 pub(crate) const DNS_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 3);
@@ -137,12 +149,12 @@ const TTL: u8 = 64;
 /// How long the serving thread waits for a frame before turning to its timers.
 ///
 /// Every host socket is polled once per turn, so this is also the worst-case
-/// latency the loop adds on the way back from the host. The path is a UNIX
-/// socket to this machine's own kernel; five milliseconds of it is nothing
+/// latency the loop adds on the way back from the host. The path is a
+/// loopback socket to this machine's own kernel; five milliseconds of it is nothing
 /// beside the guest's own emulated interrupt latency.
 const TURN: Duration = Duration::from_millis(5);
 
-/// The resolver used when `/etc/resolv.conf` names none that can be read.
+/// The resolver used when the host names none that can be read.
 const FALLBACK_RESOLVER: Ipv4Addr = Ipv4Addr::new(1, 1, 1, 1);
 
 /// Where the host's resolvers are listed.
@@ -221,63 +233,42 @@ impl From<ferrix_netwire::Error> for Error {
     }
 }
 
-/// Distinguishes one run's socket directory from the next's, so that two
-/// gateways in one process — `--arch all` boots three machines in turn — never
-/// collide, and a directory left behind by a killed run is never reused.
-static NEXT_RUN: AtomicU32 = AtomicU32::new(0);
-
-/// A running gateway: the thread, the sockets it owns, and the counters.
+/// A running gateway: the thread, the socket it owns, and the counters.
 ///
-/// Dropping it stops the thread and removes the socket files. The QEMU process
-/// it serves must therefore be waited for, or killed, before the handle goes.
+/// Dropping it stops the thread and closes the socket. The QEMU process it
+/// serves must therefore be waited for, or killed, before the handle goes.
 #[derive(Debug)]
 pub(crate) struct Gateway {
     /// Set to stop the serving thread at the end of its next turn.
     stop: Arc<AtomicBool>,
     /// The thread, taken and joined by [`Gateway::drop`].
     thread: Option<JoinHandle<()>>,
-    /// The directory holding both socket files, removed with them.
-    directory: PathBuf,
-    /// The path QEMU binds, and this gateway sends to.
-    qemu_socket: PathBuf,
-    /// The path this gateway binds, and QEMU sends to.
-    host_socket: PathBuf,
+    /// Where the gateway's socket is bound, and QEMU sends to.
+    address: SocketAddrV4,
     /// What the thread saw.
     counters: Arc<Counters>,
 }
 
 impl Gateway {
-    /// Bind the sockets under `parent` and start serving.
+    /// Bind the socket and start serving.
     ///
-    /// The socket files go in a directory of their own so that removing them
-    /// cannot remove anything else, and so that the names are the same on every
-    /// run; only the directory carries the run number.
+    /// The port is the host kernel's choice, so two gateways in one process —
+    /// `--arch all` boots three machines in turn — never collide, and neither
+    /// does one left behind by a run that was killed.
     ///
     /// `resolver` is where `10.0.2.3:53` forwards to, or the host's own when
     /// it is `None`. A test that must answer a name the same way on every
     /// machine, with or without a network, passes its own.
-    pub(crate) fn start(parent: &Path, resolver: Option<SocketAddrV4>) -> Result<Gateway> {
-        let run = NEXT_RUN.fetch_add(1, Ordering::Relaxed);
-        let directory = parent.join(format!("ferrix-net-{}-{run}", std::process::id()));
-        std::fs::create_dir_all(&directory).map_err(|error| {
-            Error::new(format!(
-                "could not make the gateway's socket directory {}: {error}",
-                directory.display()
-            ))
-        })?;
-        let qemu_socket = directory.join("net-qemu.sock");
-        let host_socket = directory.join("net-host.sock");
-        // Paths left behind by a run that was killed rather than dropped: a
-        // bind refuses to replace a file that is there, whether or not anything
-        // is listening on it.
-        let _ = std::fs::remove_file(&host_socket);
-        let _ = std::fs::remove_file(&qemu_socket);
-
-        let core = Core::bind(
-            &host_socket,
-            &qemu_socket,
-            resolver.unwrap_or_else(default_resolver),
-        )?;
+    pub(crate) fn start(resolver: Option<SocketAddrV4>) -> Result<Gateway> {
+        let core = Core::bind(resolver.unwrap_or_else(default_resolver))?;
+        let address = match core.socket.local_addr()? {
+            SocketAddr::V4(address) => address,
+            SocketAddr::V6(_) => {
+                return Err(Error::new(
+                    "the gateway's socket, bound to 127.0.0.1, reports an IPv6 address",
+                ));
+            }
+        };
         let counters = Arc::clone(&core.counters);
         let stop = Arc::new(AtomicBool::new(false));
         let signal = Arc::clone(&stop);
@@ -288,21 +279,15 @@ impl Gateway {
         Ok(Gateway {
             stop,
             thread: Some(thread),
-            directory,
-            qemu_socket,
-            host_socket,
+            address,
             counters,
         })
     }
 
-    /// The path QEMU is told to bind as its `local.path`.
-    pub(crate) fn qemu_socket(&self) -> &Path {
-        &self.qemu_socket
-    }
-
-    /// The path QEMU is told to send to as its `remote.path`.
-    pub(crate) fn host_socket(&self) -> &Path {
-        &self.host_socket
+    /// The address QEMU is told to send to, as its `remote.host` and
+    /// `remote.port`.
+    pub(crate) fn address(&self) -> SocketAddrV4 {
+        self.address
     }
 
     /// What the gateway has seen so far.
@@ -317,11 +302,6 @@ impl Drop for Gateway {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
-        let _ = std::fs::remove_file(&self.host_socket);
-        // QEMU's end. QEMU unlinks nothing on exit, and a stale file would stop
-        // the next run's QEMU from binding the same name.
-        let _ = std::fs::remove_file(&self.qemu_socket);
-        let _ = std::fs::remove_dir(&self.directory);
     }
 }
 
@@ -335,9 +315,13 @@ fn serve(mut core: Core, stop: &AtomicBool) {
     let mut frame = [0_u8; MAX_FRAME];
     while !stop.load(Ordering::Relaxed) {
         // An error is the turn's timeout, which is how the timers below get
-        // to run, or a datagram too long for the buffer, which is not a frame
-        // this link could ever have carried.
-        if let Ok(len) = core.socket.recv(&mut frame) {
+        // to run; a datagram too long for the buffer, which is not a frame
+        // this link could ever have carried; or, on Windows, the report that
+        // an earlier send found no socket at QEMU's address, which is QEMU
+        // having exited and is not this thread's to act on.
+        if let Ok((len, from)) = core.socket.recv_from(&mut frame)
+            && core.is_guest(from)
+        {
             bump(&core.counters.frames_in);
             if let Some(bytes) = frame.get(..len) {
                 // A frame whose bytes the guest chose. Nothing it can send is
@@ -357,10 +341,11 @@ fn serve(mut core: Core, stop: &AtomicBool) {
 /// Everything the serving thread owns.
 #[derive(Debug)]
 struct Core {
-    /// Bound to the host path; QEMU's frames arrive here.
-    socket: std::os::unix::net::UnixDatagram,
-    /// QEMU's path, where answers go.
-    guest_socket: PathBuf,
+    /// Bound to the loopback; QEMU's frames arrive here.
+    socket: UdpSocket,
+    /// QEMU's address, where answers go: learned from the first frame, and
+    /// the only address listened to after it.
+    guest_socket: Option<SocketAddr>,
     /// The guest's MAC, learned from the first thing it sends.
     guest_mac: Option<Mac>,
     /// Host sockets standing in for the guest's UDP flows.
@@ -384,17 +369,13 @@ struct Core {
 
 impl Core {
     /// Bind the host socket and prepare the tables.
-    fn bind(host_socket: &Path, guest_socket: &Path, resolver: SocketAddrV4) -> Result<Core> {
-        let socket = std::os::unix::net::UnixDatagram::bind(host_socket).map_err(|error| {
-            Error::new(format!(
-                "could not bind the gateway socket {}: {error}",
-                host_socket.display()
-            ))
-        })?;
+    fn bind(resolver: SocketAddrV4) -> Result<Core> {
+        let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+            .map_err(|error| Error::new(format!("could not bind the gateway socket: {error}")))?;
         socket.set_read_timeout(Some(TURN))?;
         Ok(Core {
             socket,
-            guest_socket: guest_socket.to_path_buf(),
+            guest_socket: None,
             guest_mac: None,
             udp: BTreeMap::new(),
             tcp: BTreeMap::new(),
@@ -407,6 +388,15 @@ impl Core {
             next_iss: 0x1000_0000,
             counters: Arc::new(Counters::default()),
         })
+    }
+
+    /// Whether a datagram from `from` is the guest's.
+    ///
+    /// The first sender is taken to be QEMU, since nothing else knows the port
+    /// before QEMU is started with it; anything from elsewhere afterwards is
+    /// some other program on the loopback, and is not a frame at all.
+    fn is_guest(&mut self, from: SocketAddr) -> bool {
+        *self.guest_socket.get_or_insert(from) == from
     }
 
     /// Dispatch one frame from the guest.
@@ -569,10 +559,13 @@ impl Core {
         put(&mut frame, at, payload)?;
         let len = (at + payload.len()).max(MIN_FRAME);
         let bytes = frame.get(..len).ok_or(ferrix_netwire::Error::NoSpace)?;
-        // A send that fails is a guest that has gone: QEMU has not bound its
-        // path yet, or has exited. Neither is this thread's to report, and
-        // neither should stop it serving whatever is still open.
-        if self.socket.send_to(bytes, &self.guest_socket).is_ok() {
+        // A send that fails is a guest that has gone: QEMU has exited. That is
+        // not this thread's to report, and should not stop it serving whatever
+        // is still open. With no guest address yet there is nobody to send to,
+        // which only a host socket answering before the guest spoke can cause.
+        if let Some(guest) = self.guest_socket
+            && self.socket.send_to(bytes, guest).is_ok()
+        {
             bump(&self.counters.frames_out);
         }
         Ok(())
@@ -602,22 +595,55 @@ fn default_resolver() -> SocketAddrV4 {
     SocketAddrV4::new(host_resolver(), udp::DNS_PORT)
 }
 
-/// The first IPv4 resolver `/etc/resolv.conf` names, or [`FALLBACK_RESOLVER`].
+/// The host's first IPv4 resolver, or [`FALLBACK_RESOLVER`].
 ///
-/// Read once, at start. A file that cannot be read, names no resolver, or names
-/// only IPv6 ones is not an error: the fallback is a public resolver, and a
-/// gateway that refused to start because of `resolv.conf` would be a build tool
-/// that refuses to boot a kernel because the host's DNS is unusual.
+/// Read once, at start: from `/etc/resolv.conf`, or on Windows, which has no
+/// such file, from the network configuration. A resolver that cannot be found,
+/// or only IPv6 ones, is not an error: the fallback is a public resolver, and a
+/// gateway that refused to start because of the host's DNS settings would be a
+/// build tool that refuses to boot a kernel because the host's DNS is unusual.
 fn host_resolver() -> Ipv4Addr {
-    let Ok(text) = std::fs::read_to_string(RESOLV_CONF) else {
-        return FALLBACK_RESOLVER;
+    let text = if cfg!(windows) {
+        windows_resolvers()
+    } else {
+        std::fs::read_to_string(RESOLV_CONF).ok()
     };
+    text.as_deref()
+        .and_then(first_nameserver)
+        .unwrap_or(FALLBACK_RESOLVER)
+}
+
+/// The first IPv4 `nameserver` line in resolv.conf's syntax.
+fn first_nameserver(text: &str) -> Option<Ipv4Addr> {
     text.lines()
         .filter_map(|line| line.split_whitespace().collect::<Vec<_>>().try_into().ok())
-        .filter_map(|[keyword, address]: [&str; 2]| match keyword {
+        .find_map(|[keyword, address]: [&str; 2]| match keyword {
             "nameserver" => address.parse::<Ipv4Addr>().ok(),
             _ => None,
         })
-        .next()
-        .unwrap_or(FALLBACK_RESOLVER)
+}
+
+/// Windows' resolvers, written as resolv.conf lines.
+///
+/// Through PowerShell, for `stty`'s reason in `serial.rs`: the alternative is
+/// a binding to the IP Helper API, and this runs once per boot. Only interfaces
+/// with a default gateway count, in the order Windows ranks them, so that a
+/// virtual adapter nothing routes through — Hyper-V's, WSL's, a VPN that is
+/// down — does not come first. Printed one address per line with a keyword in
+/// front, so the output is the same whatever the display language.
+fn windows_resolvers() -> Option<String> {
+    let script = "Get-NetIPConfiguration | Where-Object IPv4DefaultGateway | \
+                  Sort-Object { $_.NetIPv4Interface.InterfaceMetric } | \
+                  ForEach-Object { $_.DNSServer } | Where-Object AddressFamily -eq 2 | \
+                  ForEach-Object { $_.ServerAddresses } | \
+                  ForEach-Object { \"nameserver $_\" }";
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }

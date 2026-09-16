@@ -12,7 +12,6 @@
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, UdpSocket};
-use std::os::unix::net::UnixDatagram;
 use std::time::Duration;
 
 use ferrix_netwire::checksum::Pseudo;
@@ -33,8 +32,8 @@ const SILENCE: Duration = Duration::from_millis(250);
 
 /// The gateway, and the socket QEMU would have bound.
 struct Guest {
-    /// Bound to the gateway's `qemu_socket`, connected to its `host_socket`.
-    socket: UnixDatagram,
+    /// Bound to a free loopback port, as QEMU's is, and connected to the gateway.
+    socket: UdpSocket,
     /// The gateway under test. Dropped last, which stops its thread.
     gateway: Gateway,
 }
@@ -42,9 +41,9 @@ struct Guest {
 impl Guest {
     /// Start a gateway and take QEMU's place on the other end of it.
     fn start() -> Guest {
-        let gateway = Gateway::start(&std::env::temp_dir(), None).unwrap();
-        let socket = UnixDatagram::bind(gateway.qemu_socket()).unwrap();
-        socket.connect(gateway.host_socket()).unwrap();
+        let gateway = Gateway::start(None).unwrap();
+        let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).unwrap();
+        socket.connect(gateway.address()).unwrap();
         socket.set_read_timeout(Some(PATIENCE)).unwrap();
         Guest { socket, gateway }
     }
@@ -696,4 +695,31 @@ fn segments_a_response_too_large_for_one_packet() {
         received == body,
         "and in the order it wrote them, with no segment lost or repeated"
     );
+}
+
+/// The host's resolver is the first IPv4 `nameserver`, whatever surrounds it.
+#[test]
+fn takes_the_first_ipv4_nameserver() {
+    let text = "# generated\nsearch lan\nnameserver fe80::1\nnameserver 192.168.1.1\n\
+                nameserver 10.0.0.1\n";
+    assert_eq!(
+        super::first_nameserver(text),
+        Some(Ipv4Addr::new(192, 168, 1, 1))
+    );
+    assert_eq!(super::first_nameserver("options ndots:1\n"), None);
+}
+
+/// Windows has no `resolv.conf`, so the query that stands in for it has to run,
+/// and print only lines the parser reads: a quoting mistake on the way to
+/// PowerShell prints an error instead, or nothing.
+#[cfg(windows)]
+#[test]
+fn asks_windows_for_its_resolvers() {
+    let text = super::windows_resolvers().expect("the PowerShell query runs");
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        assert!(
+            line.starts_with("nameserver "),
+            "the query printed {line:?}"
+        );
+    }
 }

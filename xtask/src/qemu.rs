@@ -825,17 +825,11 @@ fn qemu_command(
 /// QEMU's own default for the first NIC, kept so that a guest driver, a DHCP
 /// lease and a packet capture all name the guest the same way whether the
 /// frames went through this gateway or through anything else.
-#[cfg(unix)]
 const GUEST_MAC: &str = "52:54:00:12:34:56";
 
-/// What `--net` leaves behind for the caller to hold: on a UNIX host, the
-/// gateway serving the guest's wire.
-#[cfg(unix)]
+/// What `--net` leaves behind for the caller to hold: the gateway serving the
+/// guest's wire.
 type Network = Option<crate::gateway::Gateway>;
-
-/// And on a host with no `UnixDatagram` in `std`, nothing that can exist.
-#[cfg(not(unix))]
-type Network = Option<std::convert::Infallible>;
 
 /// Give the guest a network device, or deliberately no network at all.
 ///
@@ -851,8 +845,8 @@ type Network = Option<std::convert::Infallible>;
 /// — which is alarming, unrelated to us, and exactly the kind of noise that
 /// trains people to skim the boot log.
 ///
-/// With `--net` the device is a virtio-net on PCI whose backend is a pair of
-/// UNIX datagram sockets, with `xtask`'s own gateway on the other end of them;
+/// With `--net` the device is a virtio-net on PCI whose backend is a UDP socket
+/// on the loopback, with `xtask`'s own gateway on the other end of it;
 /// `gateway` says why that rather than `-netdev user`. `-netdev` is enough on
 /// its own to stop QEMU adding its default device, so `-net none` is not also
 /// passed: QEMU warns about mixing the two families.
@@ -860,13 +854,12 @@ type Network = Option<std::convert::Infallible>;
 /// The same virtio flags as every other device this tool attaches, and the same
 /// ARMv7-A exception: U-Boot 2025.10's virtio-pci driver fails a heap assertion
 /// and resets when a device offers `VIRTIO_F_ACCESS_PLATFORM`.
-#[cfg(unix)]
 fn attach_network(command: &mut Command, arch: Arch, args: &Args) -> Result<Network> {
     if !args.net {
         let _ = command.args(["-net", "none"]);
         return Ok(None);
     }
-    let gateway = crate::gateway::Gateway::start(&gateway_directory(), args.resolver)?;
+    let gateway = crate::gateway::Gateway::start(args.resolver)?;
     println!(
         "  {arch}: network through xtask's gateway: guest {}, gateway {}, DNS {}",
         crate::gateway::GUEST_IP,
@@ -876,9 +869,12 @@ fn attach_network(command: &mut Command, arch: Arch, args: &Args) -> Result<Netw
     let _ = command.args([
         "-netdev",
         &format!(
-            "dgram,id=net0,local.type=unix,local.path={},remote.type=unix,remote.path={}",
-            display(gateway.qemu_socket()),
-            display(gateway.host_socket())
+            concat!(
+                "dgram,id=net0,local.type=inet,local.host=127.0.0.1,local.port=0,",
+                "remote.type=inet,remote.host={},remote.port={}"
+            ),
+            gateway.address().ip(),
+            gateway.address().port()
         ),
     ]);
     let flags = if arch == Arch::Armv7a {
@@ -893,39 +889,12 @@ fn attach_network(command: &mut Command, arch: Arch, args: &Args) -> Result<Netw
     Ok(Some(gateway))
 }
 
-/// The same, where `std` has no UNIX datagram socket to build the backend on.
-#[cfg(not(unix))]
-fn attach_network(command: &mut Command, _arch: Arch, args: &Args) -> Result<Network> {
-    if args.net {
-        return Err(Error::new(
-            "--net needs a UNIX datagram socket for QEMU's `dgram` backend, which this \
-             platform's std does not have",
-        ));
-    }
-    let _ = command.args(["-net", "none"]);
-    Ok(None)
-}
-
-/// Where the gateway's socket files go.
-///
-/// The temporary directory rather than `build/`, and for one reason: a UNIX
-/// socket address is a `sun_path` of 108 bytes including its terminator, and a
-/// checkout under a worktree under a home directory spends most of that before
-/// the file name starts. QEMU's error for a name that does not fit is about a
-/// path being too long, which reads as a bug in this tool rather than as an
-/// operating system limit.
-#[cfg(unix)]
-fn gateway_directory() -> PathBuf {
-    std::env::temp_dir()
-}
-
 /// Say what the gateway saw, once the guest has stopped talking to it.
 ///
 /// A network test that fails says the guest never got an address, or never
 /// resolved a name. Which of those is a driver that never transmitted and which
 /// is a gateway that dropped what it was given is not visible from the guest's
 /// side at all, and is exactly what these counters answer.
-#[cfg(unix)]
 fn report_network(network: &Network) {
     if let Some(gateway) = network {
         println!("  gateway: {}", gateway.counters().report());
@@ -934,10 +903,6 @@ fn report_network(network: &Network) {
         }
     }
 }
-
-/// The same, where there is never a gateway to report on.
-#[cfg(not(unix))]
-fn report_network(_network: &Network) {}
 
 /// Attach the test disk as a second virtio device on PCI: a block device, for
 /// stage 10's ring-3 driver to read sectors from.
