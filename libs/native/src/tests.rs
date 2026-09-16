@@ -899,6 +899,7 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = device.interrupt(0);
     let _ = device.block_ring();
     let _ = device.net_ring();
+    let _ = device.display_control();
     let _ = device.info();
     let _ = device.quiesce();
     let _ = pending::create_process(&job, &vmo, "x");

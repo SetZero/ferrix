@@ -376,6 +376,31 @@ fn a_frame_from_attach_to_detach() {
         Ok(Message::Attach(buffer(7, 0))),
         "id free again"
     );
+    assert!(
+        session
+            .receive(&Message::Attached {
+                buffer: 7,
+                status: Status::Ok
+            })
+            .is_ok()
+    );
+    assert!(session.detach(7).is_ok());
+    assert_eq!(
+        session.receive(&Message::Detached {
+            buffer: 7,
+            status: Status::DeviceRefused
+        }),
+        Ok(Event::Detached {
+            buffer: 7,
+            status: Status::DeviceRefused
+        })
+    );
+    assert_eq!(
+        session.attach(buffer(7, 0)),
+        Err(RequestError::InUse),
+        "a refused detach loses the id for good"
+    );
+    assert_eq!(session.detach(7), Err(RequestError::NotAttached));
 
     assert_eq!(session.stop(), Ok(Message::Stop));
     assert_eq!(session.attach(buffer(8, 0)), Err(RequestError::Closed));

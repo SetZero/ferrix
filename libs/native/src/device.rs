@@ -135,7 +135,20 @@ impl<S: Syscall> Device<S> {
         self.ring(nr::NET_RING_CREATE)
     }
 
-    /// The body both rings share: one call, one handle back.
+    /// Ask the kernel for the display control channel on this device: the
+    /// driver's end, over which HELLO goes next (`docs/DISPLAY.md` §2.2).
+    /// Needs `MANAGE`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::WrongType`] for a handle that is not a device,
+    /// [`Error::AccessDenied`] without `MANAGE`, and the kernel's refusal for
+    /// a device that already has one.
+    pub fn display_control(&self) -> Result<Channel<S>, Error> {
+        self.ring(nr::DISPLAY_CONTROL_CREATE)
+    }
+
+    /// The body every control channel shares: one call, one handle back.
     fn ring(&self, number: usize) -> Result<Channel<S>, Error> {
         let value = Call::new(number)
             .value(register(self.handle()))
