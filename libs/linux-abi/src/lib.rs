@@ -37,6 +37,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod drm;
 pub mod errno;
 pub mod hwcap;
 pub mod inet;

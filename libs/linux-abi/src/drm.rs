@@ -1,0 +1,763 @@
+//! DRM/KMS: the ioctls, constants and structures a software-rendered
+//! compositor uses on `/dev/dri/card0`.
+//!
+//! This is the subset `docs/DISPLAY.md` §2.3 answers in iteration 1 of the
+//! display: the legacy mode-setting calls, dumb buffers, page flips and the
+//! event records read back from the card. Atomic commit, planes, properties,
+//! GEM names, PRIME and render nodes are later.
+//!
+//! # Where the numbers come from
+//!
+//! `include/uapi/drm/drm.h`, `drm_mode.h` and `drm_fourcc.h`, which every
+//! architecture takes unchanged. `probe/drm.c` prints every number and layout
+//! below from those headers, natively for 64-bit and under `qemu-arm` for
+//! ARMv7-A, into `probe/drm-64.txt` and `probe/drm-32.txt`; the tests read
+//! both files and require this module to agree with every line.
+//!
+//! # One structure has a width
+//!
+//! DRM's structures carry user pointers as `__u64`, so they are the same at
+//! both widths, with one exception: `struct drm_version` holds three `size_t`
+//! lengths and three `char *` pointers, which makes it 64 bytes on 64-bit and
+//! 36 on ARMv7-A, and `DRM_IOCTL_VERSION`, whose number encodes the size,
+//! differs with it. [`Version`] takes a [`Width`].
+//!
+//! # Reading and writing
+//!
+//! Every structure is read from and written into the bytes the ioctl's
+//! argument points at, little-endian, returning `None` rather than
+//! panicking when the buffer is short. What the fields mean is the kernel's
+//! business; nothing here validates a value.
+
+use crate::socket::Width;
+use crate::wire;
+
+// ---------------------------------------------------------------------------
+// ioctls
+// ---------------------------------------------------------------------------
+
+/// `DRM_IOCTL_VERSION` on 64-bit: `_IOWR('d', 0x00, struct drm_version)`.
+pub const IOCTL_VERSION_64: u32 = 0xC040_6400;
+/// `DRM_IOCTL_VERSION` on ARMv7-A, where `struct drm_version` is 36 bytes.
+pub const IOCTL_VERSION_32: u32 = 0xC024_6400;
+/// `DRM_IOCTL_GET_CAP`.
+pub const IOCTL_GET_CAP: u32 = 0xC010_640C;
+/// `DRM_IOCTL_SET_CLIENT_CAP`.
+pub const IOCTL_SET_CLIENT_CAP: u32 = 0x4010_640D;
+/// `DRM_IOCTL_SET_MASTER`, which takes no argument.
+pub const IOCTL_SET_MASTER: u32 = 0x641E;
+/// `DRM_IOCTL_DROP_MASTER`, which takes no argument.
+pub const IOCTL_DROP_MASTER: u32 = 0x641F;
+/// `DRM_IOCTL_MODE_GETRESOURCES`.
+pub const IOCTL_MODE_GETRESOURCES: u32 = 0xC040_64A0;
+/// `DRM_IOCTL_MODE_GETCRTC`.
+pub const IOCTL_MODE_GETCRTC: u32 = 0xC068_64A1;
+/// `DRM_IOCTL_MODE_SETCRTC`.
+pub const IOCTL_MODE_SETCRTC: u32 = 0xC068_64A2;
+/// `DRM_IOCTL_MODE_GETENCODER`.
+pub const IOCTL_MODE_GETENCODER: u32 = 0xC014_64A6;
+/// `DRM_IOCTL_MODE_GETCONNECTOR`.
+pub const IOCTL_MODE_GETCONNECTOR: u32 = 0xC050_64A7;
+/// `DRM_IOCTL_MODE_ADDFB`.
+pub const IOCTL_MODE_ADDFB: u32 = 0xC01C_64AE;
+/// `DRM_IOCTL_MODE_RMFB`, whose argument is a bare `unsigned int`.
+pub const IOCTL_MODE_RMFB: u32 = 0xC004_64AF;
+/// `DRM_IOCTL_MODE_PAGE_FLIP`.
+pub const IOCTL_MODE_PAGE_FLIP: u32 = 0xC018_64B0;
+/// `DRM_IOCTL_MODE_DIRTYFB`.
+pub const IOCTL_MODE_DIRTYFB: u32 = 0xC018_64B1;
+/// `DRM_IOCTL_MODE_CREATE_DUMB`.
+pub const IOCTL_MODE_CREATE_DUMB: u32 = 0xC020_64B2;
+/// `DRM_IOCTL_MODE_MAP_DUMB`.
+pub const IOCTL_MODE_MAP_DUMB: u32 = 0xC010_64B3;
+/// `DRM_IOCTL_MODE_DESTROY_DUMB`.
+pub const IOCTL_MODE_DESTROY_DUMB: u32 = 0xC004_64B4;
+/// `DRM_IOCTL_MODE_ADDFB2`.
+pub const IOCTL_MODE_ADDFB2: u32 = 0xC068_64B8;
+
+/// `DRM_IOCTL_VERSION` at `width`.
+#[must_use]
+pub const fn ioctl_version(width: Width) -> u32 {
+    match width {
+        Width::Bits32 => IOCTL_VERSION_32,
+        Width::Bits64 => IOCTL_VERSION_64,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities
+// ---------------------------------------------------------------------------
+
+/// `DRM_CAP_DUMB_BUFFER`: dumb buffers can be created.
+pub const CAP_DUMB_BUFFER: u64 = 0x1;
+/// `DRM_CAP_VBLANK_HIGH_CRTC`.
+pub const CAP_VBLANK_HIGH_CRTC: u64 = 0x2;
+/// `DRM_CAP_DUMB_PREFERRED_DEPTH`.
+pub const CAP_DUMB_PREFERRED_DEPTH: u64 = 0x3;
+/// `DRM_CAP_DUMB_PREFER_SHADOW`.
+pub const CAP_DUMB_PREFER_SHADOW: u64 = 0x4;
+/// `DRM_CAP_PRIME`.
+pub const CAP_PRIME: u64 = 0x5;
+/// `DRM_CAP_TIMESTAMP_MONOTONIC`: event timestamps are `CLOCK_MONOTONIC`.
+pub const CAP_TIMESTAMP_MONOTONIC: u64 = 0x6;
+/// `DRM_CAP_ASYNC_PAGE_FLIP`.
+pub const CAP_ASYNC_PAGE_FLIP: u64 = 0x7;
+/// `DRM_CAP_CURSOR_WIDTH`.
+pub const CAP_CURSOR_WIDTH: u64 = 0x8;
+/// `DRM_CAP_CURSOR_HEIGHT`.
+pub const CAP_CURSOR_HEIGHT: u64 = 0x9;
+/// `DRM_CAP_ADDFB2_MODIFIERS`.
+pub const CAP_ADDFB2_MODIFIERS: u64 = 0x10;
+/// `DRM_CAP_PAGE_FLIP_TARGET`.
+pub const CAP_PAGE_FLIP_TARGET: u64 = 0x11;
+/// `DRM_CAP_CRTC_IN_VBLANK_EVENT`: the event's `crtc_id` is filled in.
+pub const CAP_CRTC_IN_VBLANK_EVENT: u64 = 0x12;
+/// `DRM_CAP_SYNCOBJ`.
+pub const CAP_SYNCOBJ: u64 = 0x13;
+/// `DRM_CAP_SYNCOBJ_TIMELINE`.
+pub const CAP_SYNCOBJ_TIMELINE: u64 = 0x14;
+/// `DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP`.
+pub const CAP_ATOMIC_ASYNC_PAGE_FLIP: u64 = 0x15;
+
+/// `DRM_CLIENT_CAP_STEREO_3D`.
+pub const CLIENT_CAP_STEREO_3D: u64 = 1;
+/// `DRM_CLIENT_CAP_UNIVERSAL_PLANES`.
+pub const CLIENT_CAP_UNIVERSAL_PLANES: u64 = 2;
+/// `DRM_CLIENT_CAP_ATOMIC`.
+pub const CLIENT_CAP_ATOMIC: u64 = 3;
+/// `DRM_CLIENT_CAP_ASPECT_RATIO`.
+pub const CLIENT_CAP_ASPECT_RATIO: u64 = 4;
+/// `DRM_CLIENT_CAP_WRITEBACK_CONNECTORS`.
+pub const CLIENT_CAP_WRITEBACK_CONNECTORS: u64 = 5;
+/// `DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT`.
+pub const CLIENT_CAP_CURSOR_PLANE_HOTSPOT: u64 = 6;
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+
+/// `DRM_EVENT_VBLANK`.
+pub const EVENT_VBLANK: u32 = 0x01;
+/// `DRM_EVENT_FLIP_COMPLETE`: a page flip asked for with
+/// [`PAGE_FLIP_EVENT`] finished.
+pub const EVENT_FLIP_COMPLETE: u32 = 0x02;
+/// `DRM_EVENT_CRTC_SEQUENCE`.
+pub const EVENT_CRTC_SEQUENCE: u32 = 0x03;
+
+// ---------------------------------------------------------------------------
+// Modes, connectors, encoders
+// ---------------------------------------------------------------------------
+
+/// `DRM_DISPLAY_MODE_LEN`: a mode's name field.
+pub const DISPLAY_MODE_LEN: usize = 32;
+/// `DRM_MODE_TYPE_PREFERRED`.
+pub const MODE_TYPE_PREFERRED: u32 = 1 << 3;
+/// `DRM_MODE_TYPE_USERDEF`.
+pub const MODE_TYPE_USERDEF: u32 = 1 << 5;
+/// `DRM_MODE_TYPE_DRIVER`.
+pub const MODE_TYPE_DRIVER: u32 = 1 << 6;
+/// `DRM_MODE_FLAG_PHSYNC`.
+pub const MODE_FLAG_PHSYNC: u32 = 1 << 0;
+/// `DRM_MODE_FLAG_NHSYNC`.
+pub const MODE_FLAG_NHSYNC: u32 = 1 << 1;
+/// `DRM_MODE_FLAG_PVSYNC`.
+pub const MODE_FLAG_PVSYNC: u32 = 1 << 2;
+/// `DRM_MODE_FLAG_NVSYNC`.
+pub const MODE_FLAG_NVSYNC: u32 = 1 << 3;
+
+/// `connection` of a connector with something attached: the kernel's
+/// `connector_status_connected`, which `drm_mode.h` refers to but does not
+/// export, so the probe cannot print it.
+pub const CONNECTION_CONNECTED: u32 = 1;
+/// `connector_status_disconnected`.
+pub const CONNECTION_DISCONNECTED: u32 = 2;
+/// `connector_status_unknown`.
+pub const CONNECTION_UNKNOWN: u32 = 3;
+/// `subpixel` when the order is unknown: the kernel's `SubPixelUnknown`,
+/// likewise not exported.
+pub const SUBPIXEL_UNKNOWN: u32 = 0;
+
+/// `DRM_MODE_CONNECTOR_Unknown`.
+pub const CONNECTOR_UNKNOWN: u32 = 0;
+/// `DRM_MODE_CONNECTOR_VIRTUAL`: what virtio-gpu reports.
+pub const CONNECTOR_VIRTUAL: u32 = 15;
+/// `DRM_MODE_ENCODER_NONE`.
+pub const ENCODER_NONE: u32 = 0;
+/// `DRM_MODE_ENCODER_VIRTUAL`.
+pub const ENCODER_VIRTUAL: u32 = 5;
+
+// ---------------------------------------------------------------------------
+// Framebuffers and flips
+// ---------------------------------------------------------------------------
+
+/// `DRM_MODE_FB_INTERLACED`.
+pub const FB_INTERLACED: u32 = 1 << 0;
+/// `DRM_MODE_FB_MODIFIERS`: `modifier` in `drm_mode_fb_cmd2` is valid.
+pub const FB_MODIFIERS: u32 = 1 << 1;
+/// `DRM_MODE_PAGE_FLIP_EVENT`: queue an event when the flip completes.
+pub const PAGE_FLIP_EVENT: u32 = 0x01;
+/// `DRM_MODE_PAGE_FLIP_ASYNC`.
+pub const PAGE_FLIP_ASYNC: u32 = 0x02;
+/// `DRM_MODE_PAGE_FLIP_TARGET_ABSOLUTE`.
+pub const PAGE_FLIP_TARGET_ABSOLUTE: u32 = 0x4;
+/// `DRM_MODE_PAGE_FLIP_TARGET_RELATIVE`.
+pub const PAGE_FLIP_TARGET_RELATIVE: u32 = 0x8;
+/// `DRM_MODE_FB_DIRTY_MAX_CLIPS`.
+pub const FB_DIRTY_MAX_CLIPS: u32 = 256;
+
+/// The fourcc code of `a`, `b`, `c`, `d`: `fourcc_code` in `drm_fourcc.h`.
+#[must_use]
+pub const fn fourcc(a: u8, b: u8, c: u8, d: u8) -> u32 {
+    u32::from_le_bytes([a, b, c, d])
+}
+
+/// `DRM_FORMAT_XRGB8888`: `[31:0] x:R:G:B`, little-endian. The one format the
+/// display answers in iteration 1, and what virtio-gpu calls
+/// `B8G8R8X8_UNORM`.
+pub const FORMAT_XRGB8888: u32 = fourcc(b'X', b'R', b'2', b'4');
+/// `DRM_FORMAT_ARGB8888`.
+pub const FORMAT_ARGB8888: u32 = fourcc(b'A', b'R', b'2', b'4');
+/// `DRM_FORMAT_XBGR8888`.
+pub const FORMAT_XBGR8888: u32 = fourcc(b'X', b'B', b'2', b'4');
+/// `DRM_FORMAT_ABGR8888`.
+pub const FORMAT_ABGR8888: u32 = fourcc(b'A', b'B', b'2', b'4');
+
+// ---------------------------------------------------------------------------
+// Layouts
+// ---------------------------------------------------------------------------
+
+/// A fixed-size field of a structure: read from and written into bytes at
+/// an offset, little-endian.
+pub trait Field: Sized + Copy {
+    /// Its size in bytes.
+    const SIZE: usize;
+    /// All zeroes.
+    const ZERO: Self;
+    /// Read it from `bytes` at `at`.
+    fn get(bytes: &[u8], at: usize) -> Option<Self>;
+    /// Write it into `out` at `at`.
+    fn put(self, out: &mut [u8], at: usize) -> Option<()>;
+}
+
+macro_rules! integer_field {
+    ($($type:ty),*) => {$(
+        impl Field for $type {
+            const SIZE: usize = size_of::<$type>();
+            const ZERO: Self = 0;
+            fn get(bytes: &[u8], at: usize) -> Option<Self> {
+                wire::array(bytes, at).map(<$type>::from_le_bytes)
+            }
+            fn put(self, out: &mut [u8], at: usize) -> Option<()> {
+                wire::put(out, at, &self.to_le_bytes())
+            }
+        }
+    )*};
+}
+
+integer_field!(u8, u16, u32, u64, i32);
+
+impl<T: Field, const N: usize> Field for [T; N] {
+    const SIZE: usize = T::SIZE * N;
+    const ZERO: Self = [T::ZERO; N];
+    fn get(bytes: &[u8], at: usize) -> Option<Self> {
+        let mut value = Self::ZERO;
+        for (index, slot) in value.iter_mut().enumerate() {
+            *slot = T::get(bytes, at.checked_add(index.checked_mul(T::SIZE)?)?)?;
+        }
+        Some(value)
+    }
+    fn put(self, out: &mut [u8], at: usize) -> Option<()> {
+        for (index, item) in self.into_iter().enumerate() {
+            item.put(out, at.checked_add(index.checked_mul(T::SIZE)?)?)?;
+        }
+        Some(())
+    }
+}
+
+/// A structure with one layout at every width, whose `sizeof` is its
+/// [`Field::SIZE`].
+pub trait Layout: Field {
+    /// Its name in the UAPI headers, without `struct`.
+    const C_NAME: &'static str;
+    /// Every field's name in the headers and its `offsetof`, in order.
+    const FIELDS: &'static [(&'static str, usize)];
+    /// Read it from the start of `bytes`.
+    fn read(bytes: &[u8]) -> Option<Self>;
+    /// Write it into the start of `out`.
+    fn write(&self, out: &mut [u8]) -> Option<()>;
+}
+
+/// Define a structure, its [`Layout`] and its [`Field`] impl from its fields'
+/// types and offsets. A field named `r#type` is `type` in C.
+macro_rules! layout {
+    (
+        $(#[$meta:meta])*
+        $name:ident = $c_name:literal, $size:literal {
+            $($(#[$field_meta:meta])* $field:ident : $type:ty = $offset:literal / $c_field:literal,)*
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct $name {
+            $($(#[$field_meta])* pub $field: $type,)*
+        }
+
+        impl Layout for $name {
+            const C_NAME: &'static str = $c_name;
+            const FIELDS: &'static [(&'static str, usize)] = &[$(($c_field, $offset),)*];
+            fn read(bytes: &[u8]) -> Option<Self> {
+                if bytes.len() < $size {
+                    return None;
+                }
+                Some(Self { $($field: <$type as Field>::get(bytes, $offset)?,)* })
+            }
+            fn write(&self, out: &mut [u8]) -> Option<()> {
+                if out.len() < $size {
+                    return None;
+                }
+                $(Field::put(self.$field, out, $offset)?;)*
+                Some(())
+            }
+        }
+
+        impl Field for $name {
+            const SIZE: usize = $size;
+            const ZERO: Self = Self { $($field: <$type as Field>::ZERO,)* };
+            fn get(bytes: &[u8], at: usize) -> Option<Self> {
+                Self::read(bytes.get(at..)?)
+            }
+            fn put(self, out: &mut [u8], at: usize) -> Option<()> {
+                self.write(out.get_mut(at..)?)
+            }
+        }
+    };
+}
+
+layout! {
+    /// `struct drm_get_cap`: `DRM_IOCTL_GET_CAP`'s argument.
+    GetCap = "drm_get_cap", 16 {
+        /// Which capability, a `DRM_CAP_*`.
+        capability: u64 = 0 / "capability",
+        /// Its value, filled in by the kernel.
+        value: u64 = 8 / "value",
+    }
+}
+
+layout! {
+    /// `struct drm_set_client_cap`: `DRM_IOCTL_SET_CLIENT_CAP`'s argument.
+    SetClientCap = "drm_set_client_cap", 16 {
+        /// Which capability, a `DRM_CLIENT_CAP_*`.
+        capability: u64 = 0 / "capability",
+        /// The value asked for.
+        value: u64 = 8 / "value",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_modeinfo`: one display mode.
+    ModeInfo = "drm_mode_modeinfo", 68 {
+        /// Pixel clock in kHz.
+        clock: u32 = 0 / "clock",
+        /// Visible width.
+        hdisplay: u16 = 4 / "hdisplay",
+        /// Horizontal sync start.
+        hsync_start: u16 = 6 / "hsync_start",
+        /// Horizontal sync end.
+        hsync_end: u16 = 8 / "hsync_end",
+        /// Horizontal total.
+        htotal: u16 = 10 / "htotal",
+        /// Horizontal skew.
+        hskew: u16 = 12 / "hskew",
+        /// Visible height.
+        vdisplay: u16 = 14 / "vdisplay",
+        /// Vertical sync start.
+        vsync_start: u16 = 16 / "vsync_start",
+        /// Vertical sync end.
+        vsync_end: u16 = 18 / "vsync_end",
+        /// Vertical total.
+        vtotal: u16 = 20 / "vtotal",
+        /// Vertical scan.
+        vscan: u16 = 22 / "vscan",
+        /// Refresh rate in Hz.
+        vrefresh: u32 = 24 / "vrefresh",
+        /// `DRM_MODE_FLAG_*`.
+        flags: u32 = 28 / "flags",
+        /// `DRM_MODE_TYPE_*`.
+        r#type: u32 = 32 / "type",
+        /// The name, NUL-padded, such as `1280x800`.
+        name: [u8; 32] = 36 / "name",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_card_res`: `DRM_IOCTL_MODE_GETRESOURCES`'s argument.
+    /// The pointers are user addresses of `u32` arrays the kernel fills when
+    /// the counts the caller passed are large enough.
+    CardRes = "drm_mode_card_res", 64 {
+        /// Where to write framebuffer ids.
+        fb_id_ptr: u64 = 0 / "fb_id_ptr",
+        /// Where to write CRTC ids.
+        crtc_id_ptr: u64 = 8 / "crtc_id_ptr",
+        /// Where to write connector ids.
+        connector_id_ptr: u64 = 16 / "connector_id_ptr",
+        /// Where to write encoder ids.
+        encoder_id_ptr: u64 = 24 / "encoder_id_ptr",
+        /// Framebuffers: capacity in, count out.
+        count_fbs: u32 = 32 / "count_fbs",
+        /// CRTCs: capacity in, count out.
+        count_crtcs: u32 = 36 / "count_crtcs",
+        /// Connectors: capacity in, count out.
+        count_connectors: u32 = 40 / "count_connectors",
+        /// Encoders: capacity in, count out.
+        count_encoders: u32 = 44 / "count_encoders",
+        /// Smallest framebuffer width.
+        min_width: u32 = 48 / "min_width",
+        /// Largest framebuffer width.
+        max_width: u32 = 52 / "max_width",
+        /// Smallest framebuffer height.
+        min_height: u32 = 56 / "min_height",
+        /// Largest framebuffer height.
+        max_height: u32 = 60 / "max_height",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_crtc`: `DRM_IOCTL_MODE_GETCRTC` and `SETCRTC`.
+    Crtc = "drm_mode_crtc", 104 {
+        /// User address of the `u32` connector ids to drive.
+        set_connectors_ptr: u64 = 0 / "set_connectors_ptr",
+        /// How many ids are there.
+        count_connectors: u32 = 8 / "count_connectors",
+        /// The CRTC.
+        crtc_id: u32 = 12 / "crtc_id",
+        /// The framebuffer to scan out; 0 keeps the current one on `SETCRTC`
+        /// with a mode, and turns the CRTC off without one.
+        fb_id: u32 = 16 / "fb_id",
+        /// Horizontal offset into the framebuffer.
+        x: u32 = 20 / "x",
+        /// Vertical offset into the framebuffer.
+        y: u32 = 24 / "y",
+        /// Gamma table size.
+        gamma_size: u32 = 28 / "gamma_size",
+        /// Whether `mode` is set.
+        mode_valid: u32 = 32 / "mode_valid",
+        /// The mode.
+        mode: ModeInfo = 36 / "mode",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_get_encoder`: `DRM_IOCTL_MODE_GETENCODER`.
+    GetEncoder = "drm_mode_get_encoder", 20 {
+        /// The encoder.
+        encoder_id: u32 = 0 / "encoder_id",
+        /// `DRM_MODE_ENCODER_*`.
+        encoder_type: u32 = 4 / "encoder_type",
+        /// The CRTC it is attached to, or 0.
+        crtc_id: u32 = 8 / "crtc_id",
+        /// A bit per CRTC index it can drive.
+        possible_crtcs: u32 = 12 / "possible_crtcs",
+        /// A bit per encoder index it can clone.
+        possible_clones: u32 = 16 / "possible_clones",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_get_connector`: `DRM_IOCTL_MODE_GETCONNECTOR`.
+    GetConnector = "drm_mode_get_connector", 80 {
+        /// Where to write encoder ids.
+        encoders_ptr: u64 = 0 / "encoders_ptr",
+        /// Where to write `struct drm_mode_modeinfo` records.
+        modes_ptr: u64 = 8 / "modes_ptr",
+        /// Where to write property ids.
+        props_ptr: u64 = 16 / "props_ptr",
+        /// Where to write property values.
+        prop_values_ptr: u64 = 24 / "prop_values_ptr",
+        /// Modes: capacity in, count out.
+        count_modes: u32 = 32 / "count_modes",
+        /// Properties: capacity in, count out.
+        count_props: u32 = 36 / "count_props",
+        /// Encoders: capacity in, count out.
+        count_encoders: u32 = 40 / "count_encoders",
+        /// The encoder currently attached, or 0.
+        encoder_id: u32 = 44 / "encoder_id",
+        /// The connector, as the caller asked.
+        connector_id: u32 = 48 / "connector_id",
+        /// `DRM_MODE_CONNECTOR_*`.
+        connector_type: u32 = 52 / "connector_type",
+        /// Its index among connectors of that type, from 1.
+        connector_type_id: u32 = 56 / "connector_type_id",
+        /// [`CONNECTION_CONNECTED`] and its siblings.
+        connection: u32 = 60 / "connection",
+        /// Physical width in millimetres.
+        mm_width: u32 = 64 / "mm_width",
+        /// Physical height in millimetres.
+        mm_height: u32 = 68 / "mm_height",
+        /// Subpixel order.
+        subpixel: u32 = 72 / "subpixel",
+        /// Padding.
+        pad: u32 = 76 / "pad",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_fb_cmd`: `DRM_IOCTL_MODE_ADDFB`.
+    FbCmd = "drm_mode_fb_cmd", 28 {
+        /// The new framebuffer's id, filled in by the kernel.
+        fb_id: u32 = 0 / "fb_id",
+        /// Width.
+        width: u32 = 4 / "width",
+        /// Height.
+        height: u32 = 8 / "height",
+        /// Bytes per row.
+        pitch: u32 = 12 / "pitch",
+        /// Bits per pixel.
+        bpp: u32 = 16 / "bpp",
+        /// Colour depth.
+        depth: u32 = 20 / "depth",
+        /// The buffer's handle.
+        handle: u32 = 24 / "handle",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_fb_cmd2`: `DRM_IOCTL_MODE_ADDFB2`.
+    FbCmd2 = "drm_mode_fb_cmd2", 104 {
+        /// The new framebuffer's id, filled in by the kernel.
+        fb_id: u32 = 0 / "fb_id",
+        /// Width.
+        width: u32 = 4 / "width",
+        /// Height.
+        height: u32 = 8 / "height",
+        /// A `DRM_FORMAT_*` fourcc.
+        pixel_format: u32 = 12 / "pixel_format",
+        /// `DRM_MODE_FB_*`.
+        flags: u32 = 16 / "flags",
+        /// A buffer handle per plane.
+        handles: [u32; 4] = 20 / "handles",
+        /// Bytes per row per plane.
+        pitches: [u32; 4] = 36 / "pitches",
+        /// Offset into the buffer per plane.
+        offsets: [u32; 4] = 52 / "offsets",
+        /// A format modifier per plane, when [`FB_MODIFIERS`] is set.
+        modifier: [u64; 4] = 72 / "modifier",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_crtc_page_flip`: `DRM_IOCTL_MODE_PAGE_FLIP`.
+    CrtcPageFlip = "drm_mode_crtc_page_flip", 24 {
+        /// The CRTC.
+        crtc_id: u32 = 0 / "crtc_id",
+        /// The framebuffer to show next.
+        fb_id: u32 = 4 / "fb_id",
+        /// `DRM_MODE_PAGE_FLIP_*`.
+        flags: u32 = 8 / "flags",
+        /// Must be zero.
+        reserved: u32 = 12 / "reserved",
+        /// Returned in the completion event.
+        user_data: u64 = 16 / "user_data",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_fb_dirty_cmd`: `DRM_IOCTL_MODE_DIRTYFB`.
+    FbDirtyCmd = "drm_mode_fb_dirty_cmd", 24 {
+        /// The framebuffer.
+        fb_id: u32 = 0 / "fb_id",
+        /// `DRM_MODE_FB_DIRTY_*`.
+        flags: u32 = 4 / "flags",
+        /// Fill colour, for the fill flag.
+        color: u32 = 8 / "color",
+        /// How many clip rectangles.
+        num_clips: u32 = 12 / "num_clips",
+        /// User address of the `struct drm_clip_rect` array.
+        clips_ptr: u64 = 16 / "clips_ptr",
+    }
+}
+
+layout! {
+    /// `struct drm_clip_rect`: a damaged rectangle, `x2` and `y2` exclusive.
+    ClipRect = "drm_clip_rect", 8 {
+        /// Left.
+        x1: u16 = 0 / "x1",
+        /// Top.
+        y1: u16 = 2 / "y1",
+        /// Right, exclusive.
+        x2: u16 = 4 / "x2",
+        /// Bottom, exclusive.
+        y2: u16 = 6 / "y2",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_create_dumb`: `DRM_IOCTL_MODE_CREATE_DUMB`.
+    CreateDumb = "drm_mode_create_dumb", 32 {
+        /// Height in pixels.
+        height: u32 = 0 / "height",
+        /// Width in pixels.
+        width: u32 = 4 / "width",
+        /// Bits per pixel.
+        bpp: u32 = 8 / "bpp",
+        /// Must be zero.
+        flags: u32 = 12 / "flags",
+        /// The new buffer's handle, filled in by the kernel.
+        handle: u32 = 16 / "handle",
+        /// Bytes per row, filled in by the kernel.
+        pitch: u32 = 20 / "pitch",
+        /// Bytes in all, filled in by the kernel.
+        size: u64 = 24 / "size",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_map_dumb`: `DRM_IOCTL_MODE_MAP_DUMB`.
+    MapDumb = "drm_mode_map_dumb", 16 {
+        /// The buffer.
+        handle: u32 = 0 / "handle",
+        /// Padding.
+        pad: u32 = 4 / "pad",
+        /// The offset to pass to `mmap`, filled in by the kernel.
+        offset: u64 = 8 / "offset",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_destroy_dumb`: `DRM_IOCTL_MODE_DESTROY_DUMB`.
+    DestroyDumb = "drm_mode_destroy_dumb", 4 {
+        /// The buffer.
+        handle: u32 = 0 / "handle",
+    }
+}
+
+layout! {
+    /// `struct drm_event`: the header of every record `read` returns.
+    Event = "drm_event", 8 {
+        /// `DRM_EVENT_*`.
+        r#type: u32 = 0 / "type",
+        /// The whole record's length, header included.
+        length: u32 = 4 / "length",
+    }
+}
+
+layout! {
+    /// `struct drm_event_vblank`: a vblank or flip-complete record.
+    EventVblank = "drm_event_vblank", 32 {
+        /// The header.
+        base: Event = 0 / "base",
+        /// The `user_data` the page flip passed.
+        user_data: u64 = 8 / "user_data",
+        /// Seconds of the timestamp.
+        tv_sec: u32 = 16 / "tv_sec",
+        /// Microseconds of the timestamp.
+        tv_usec: u32 = 20 / "tv_usec",
+        /// The vblank counter.
+        sequence: u32 = 24 / "sequence",
+        /// The CRTC, when [`CAP_CRTC_IN_VBLANK_EVENT`] is set.
+        crtc_id: u32 = 28 / "crtc_id",
+    }
+}
+
+/// `struct drm_version`: `DRM_IOCTL_VERSION`'s argument, whose lengths and
+/// pointers are `size_t` and `char *`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Version {
+    /// Major version.
+    pub version_major: i32,
+    /// Minor version.
+    pub version_minor: i32,
+    /// Patch level.
+    pub version_patchlevel: i32,
+    /// Capacity of `name` in, the name's length out.
+    pub name_len: u64,
+    /// User address of the name buffer.
+    pub name: u64,
+    /// Capacity of `date` in, its length out.
+    pub date_len: u64,
+    /// User address of the date buffer.
+    pub date: u64,
+    /// Capacity of `desc` in, its length out.
+    pub desc_len: u64,
+    /// User address of the description buffer.
+    pub desc: u64,
+}
+
+impl Version {
+    /// The C name.
+    pub const C_NAME: &'static str = "drm_version";
+
+    /// `sizeof(struct drm_version)` at `width`.
+    #[must_use]
+    pub const fn size(width: Width) -> usize {
+        match width {
+            Width::Bits32 => 36,
+            Width::Bits64 => 64,
+        }
+    }
+
+    /// Every field's name and `offsetof` at `width`, in order: three `int`s,
+    /// then three length and pointer pairs, each a word, aligned to a word.
+    #[must_use]
+    pub const fn fields(width: Width) -> [(&'static str, usize); 9] {
+        let word = width.bytes();
+        let base = 3 * 4 + (word - 3 * 4 % word) % word;
+        [
+            ("version_major", 0),
+            ("version_minor", 4),
+            ("version_patchlevel", 8),
+            ("name_len", base),
+            ("name", base + word),
+            ("date_len", base + 2 * word),
+            ("date", base + 3 * word),
+            ("desc_len", base + 4 * word),
+            ("desc", base + 5 * word),
+        ]
+    }
+
+    /// Read it from the start of `bytes`.
+    #[must_use]
+    pub fn read(width: Width, bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < Self::size(width) {
+            return None;
+        }
+        let [_, _, _, name_len, name, date_len, date, desc_len, desc] = Self::fields(width);
+        let word = |(_, at): (&str, usize)| width.word(bytes, at);
+        Some(Self {
+            version_major: i32::get(bytes, 0)?,
+            version_minor: i32::get(bytes, 4)?,
+            version_patchlevel: i32::get(bytes, 8)?,
+            name_len: word(name_len)?,
+            name: word(name)?,
+            date_len: word(date_len)?,
+            date: word(date)?,
+            desc_len: word(desc_len)?,
+            desc: word(desc)?,
+        })
+    }
+
+    /// Write it into the start of `out`. A length or pointer too wide for a
+    /// 32-bit word is refused rather than cut.
+    pub fn write(&self, width: Width, out: &mut [u8]) -> Option<()> {
+        if out.len() < Self::size(width) {
+            return None;
+        }
+        let [_, _, _, name_len, name, date_len, date, desc_len, desc] = Self::fields(width);
+        self.version_major.put(out, 0)?;
+        self.version_minor.put(out, 4)?;
+        self.version_patchlevel.put(out, 8)?;
+        for ((_, at), value) in [
+            (name_len, self.name_len),
+            (name, self.name),
+            (date_len, self.date_len),
+            (date, self.date),
+            (desc_len, self.desc_len),
+            (desc, self.desc),
+        ] {
+            match width {
+                Width::Bits32 => u32::try_from(value).ok()?.put(out, at)?,
+                Width::Bits64 => value.put(out, at)?,
+            }
+        }
+        Some(())
+    }
+}
