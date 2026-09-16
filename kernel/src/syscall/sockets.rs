@@ -36,17 +36,19 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::inet::{
     IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_TCP, IPPROTO_UDP, SOCKADDR_STORAGE_SIZE,
 };
+use ferrix_linux_abi::netlink::NETLINK_ROUTE;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::socket::{
-    AF_INET, AF_INET6, AF_MAX, AF_UNIX, ControlMessages, MSG_CMSG_COMPAT, MSG_OOB, MSG_TRUNC,
-    MsgHdr, SCM_CREDENTIALS, SCM_RIGHTS, SOCK_CLOEXEC, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_RAW,
-    SOCK_STREAM, SOCK_TYPE_MASK, SOCKADDR_UN_SIZE, SOL_SOCKET, UnixAddress, Width,
+    AF_INET, AF_INET6, AF_MAX, AF_NETLINK, AF_UNIX, ControlMessages, MSG_CMSG_COMPAT, MSG_OOB,
+    MSG_TRUNC, MsgHdr, SCM_CREDENTIALS, SCM_RIGHTS, SOCK_CLOEXEC, SOCK_DGRAM, SOCK_NONBLOCK,
+    SOCK_RAW, SOCK_STREAM, SOCK_TYPE_MASK, SOCKADDR_UN_SIZE, SOL_SOCKET, UnixAddress, Width,
 };
 use ferrix_net::socket::Family;
 use ferrix_vfs::OpenFile;
 
 use crate::fs;
 use crate::fs::socket::{Received, Socket, SocketType};
+use crate::net::netlink::{self as netlink, NetlinkSocket};
 use crate::net::socket::{self as inet, InetKind, InetSocket};
 use crate::syscall::attributes::int;
 use crate::syscall::fd;
@@ -133,6 +135,8 @@ enum Any {
     Unix(Arc<Socket>),
     /// An `AF_INET` or `AF_INET6` socket.
     Inet(Arc<InetSocket>),
+    /// An `AF_NETLINK` socket.
+    Netlink(Arc<NetlinkSocket>),
 }
 
 impl Any {
@@ -144,6 +148,9 @@ impl Any {
                 InetKind::Stream => SocketType::Stream,
                 InetKind::Datagram | InetKind::Echo => SocketType::Datagram,
             },
+            // `SOCK_RAW` and `SOCK_DGRAM` are the same socket on netlink, and
+            // both carry records.
+            Any::Netlink(_) => SocketType::Datagram,
         }
     }
 
@@ -152,6 +159,9 @@ impl Any {
         match self {
             Any::Unix(socket) => socket.is_connected(),
             Any::Inet(socket) => socket.is_connected(),
+            // A netlink socket has no peer: it talks to the kernel, which is
+            // not a socket `getpeername` can name.
+            Any::Netlink(_) => false,
         }
     }
 
@@ -160,6 +170,7 @@ impl Any {
         match self {
             Any::Unix(socket) => socket.shutdown(how),
             Any::Inet(socket) => socket.shutdown(how),
+            Any::Netlink(socket) => socket.shutdown(how),
         }
     }
 
@@ -174,6 +185,10 @@ impl Any {
         match self {
             Any::Unix(socket) => socket.send(data, flags, nonblock),
             Any::Inet(socket) => socket.send(data, flags, nonblock, to),
+            // Every netlink request is answered as it is made, so neither the
+            // flags that ask not to wait nor the descriptor's own change
+            // anything.
+            Any::Netlink(socket) => socket.send(data, to),
         }
     }
 
@@ -195,6 +210,15 @@ impl Any {
                     from,
                 )
             }),
+            Any::Netlink(socket) => socket.recv(out, flags, nonblock).map(|(taken, from)| {
+                (
+                    Received {
+                        bytes: taken.bytes,
+                        full: taken.full,
+                    },
+                    from,
+                )
+            }),
         }
     }
 
@@ -203,6 +227,7 @@ impl Any {
         match self {
             Any::Unix(socket) => socket.get_option(level, name, width),
             Any::Inet(socket) => socket.get_option(level, name, width),
+            Any::Netlink(socket) => socket.get_option(level, name, width),
         }
     }
 
@@ -211,6 +236,7 @@ impl Any {
         match self {
             Any::Unix(socket) => socket.set_option(level, name, value, width),
             Any::Inet(socket) => socket.set_option(level, name, value, width),
+            Any::Netlink(socket) => socket.set_option(level, name, value, width),
         }
     }
 
@@ -222,6 +248,7 @@ impl Any {
         match self {
             Any::Unix(_) => unnamed(),
             Any::Inet(socket) => Ok(socket.local_name()),
+            Any::Netlink(socket) => Ok(socket.local_name()),
         }
     }
 
@@ -230,6 +257,7 @@ impl Any {
         match self {
             Any::Unix(_) => unnamed(),
             Any::Inet(socket) => socket.peer_name().ok_or(Errno::ENOTCONN),
+            Any::Netlink(_) => Err(Errno::ENOTCONN),
         }
     }
 
@@ -239,13 +267,14 @@ impl Any {
             // `AF_UNIX` names arrive with the landing after this one.
             Any::Unix(_) => Err(Errno::EOPNOTSUPP),
             Any::Inet(socket) => socket.bind(raw),
+            Any::Netlink(socket) => socket.bind(raw),
         }
     }
 
     /// Start listening.
     fn listen(&self, backlog: i32) -> Result<(), Errno> {
         match self {
-            Any::Unix(_) => Err(Errno::EOPNOTSUPP),
+            Any::Unix(_) | Any::Netlink(_) => Err(Errno::EOPNOTSUPP),
             Any::Inet(socket) => socket.listen(backlog),
         }
     }
@@ -253,7 +282,7 @@ impl Any {
     /// Connect to a peer.
     fn connect(&self, raw: &[u8], nonblock: bool) -> Result<(), Errno> {
         match self {
-            Any::Unix(_) => Err(Errno::EOPNOTSUPP),
+            Any::Unix(_) | Any::Netlink(_) => Err(Errno::EOPNOTSUPP),
             Any::Inet(socket) => socket.connect(raw, nonblock),
         }
     }
@@ -261,7 +290,7 @@ impl Any {
     /// Take a connection, and say who made it.
     fn accept(&self, nonblock: bool, owner: (u32, u32)) -> Result<(Arc<OpenFile>, Vec<u8>), Errno> {
         match self {
-            Any::Unix(_) => Err(Errno::EOPNOTSUPP),
+            Any::Unix(_) | Any::Netlink(_) => Err(Errno::EOPNOTSUPP),
             Any::Inet(socket) => socket.accept(nonblock, owner),
         }
     }
@@ -283,6 +312,8 @@ enum Opened {
     Unix(SocketType),
     /// An `AF_INET` or `AF_INET6` socket of this kind.
     Inet(Family, InetKind),
+    /// An `AF_NETLINK` socket of this type.
+    Netlink(u32),
 }
 
 /// Only `SOCK_NONBLOCK` and `SOCK_CLOEXEC` may accompany a type, or be given
@@ -310,6 +341,9 @@ fn socket_type(family: i32, kind: u32, protocol: i32) -> Result<Opened, Errno> {
     }
     if family == i32::from(AF_INET6) {
         return inet_type(Family::V6, kind, protocol);
+    }
+    if family == i32::from(AF_NETLINK) {
+        return netlink_type(kind, protocol);
     }
     if family != i32::from(AF_UNIX) {
         return Err(Errno::EAFNOSUPPORT);
@@ -344,6 +378,23 @@ fn inet_type(family: Family, kind: u32, protocol: i32) -> Result<Opened, Errno> 
     }
 }
 
+/// The `AF_NETLINK` socket a type and a protocol name.
+///
+/// `netlink_create` takes `SOCK_RAW` and `SOCK_DGRAM` and nothing else, and
+/// makes no distinction between them: a netlink socket carries records
+/// whichever was asked for. `NETLINK_ROUTE` is the one protocol this kernel
+/// has; the others are `EPROTONOSUPPORT`, which is what Linux answers for a
+/// family built without them.
+fn netlink_type(kind: u32, protocol: i32) -> Result<Opened, Errno> {
+    if kind != SOCK_DGRAM && kind != SOCK_RAW {
+        return Err(Errno::ESOCKTNOSUPPORT);
+    }
+    if protocol != NETLINK_ROUTE {
+        return Err(Errno::EPROTONOSUPPORT);
+    }
+    Ok(Opened::Netlink(kind))
+}
+
 /// `socket`.
 pub(crate) fn sys_socket(
     process: &Process,
@@ -357,6 +408,7 @@ pub(crate) fn sys_socket(
     let file = match opened {
         Opened::Unix(socket_type) => fs::socket::new_socket(socket_type, nonblock, owner)?,
         Opened::Inet(family, kind) => InetSocket::open(family, kind, nonblock, owner)?,
+        Opened::Netlink(kind) => NetlinkSocket::open(kind, nonblock, owner)?,
     };
     let descriptor = process
         .files()
@@ -384,8 +436,9 @@ pub(crate) fn sys_socketpair(
     let socket_type = match socket_type(family, kind, protocol)? {
         Opened::Unix(socket_type) => socket_type,
         // `inet_socketpair` is `sock_no_socketpair`: the internet families
-        // have no way to make two connected sockets without a listener.
-        Opened::Inet(_, _) => return Err(Errno::EOPNOTSUPP),
+        // have no way to make two connected sockets without a listener, and
+        // `netlink_ops` leaves the call at the same refusal.
+        Opened::Inet(_, _) | Opened::Netlink(_) => return Err(Errno::EOPNOTSUPP),
     };
     let (one, other) = fs::socket::new_pair(socket_type, kind & SOCK_NONBLOCK != 0, process)?;
     let (first, second) = install_pair(process, one, other, kind & SOCK_CLOEXEC != 0)?;
@@ -454,8 +507,11 @@ fn socket_of(process: &Process, descriptor: i32) -> Result<(Arc<OpenFile>, Any),
     if let Some(socket) = fs::socket::of(&file) {
         return Ok((file, Any::Unix(socket)));
     }
-    let socket = inet::of(&file).ok_or(Errno::ENOTSOCK)?;
-    Ok((file, Any::Inet(socket)))
+    if let Some(socket) = inet::of(&file) {
+        return Ok((file, Any::Inet(socket)));
+    }
+    let socket = netlink::of(&file).ok_or(Errno::ENOTSOCK)?;
+    Ok((file, Any::Netlink(socket)))
 }
 
 /// A length a program gave for a buffer it passes by pointer: `EINVAL` if it
@@ -625,6 +681,11 @@ fn sys_shutdown(process: &Process, descriptor: i32, how: u32) -> Result<usize, E
 /// waits for names.
 fn check_destination(socket: &Any, length: u64) -> Result<(), Errno> {
     if length == 0 {
+        return Ok(());
+    }
+    if let Any::Netlink(_) = socket {
+        // Every netlink send may name the kernel, whatever the socket's type;
+        // `netlink_sendmsg` reads the address and refuses only what it holds.
         return Ok(());
     }
     if let Any::Inet(_) = socket {
