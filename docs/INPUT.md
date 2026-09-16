@@ -499,7 +499,7 @@ input iteration does not wait for them:
 |---|---|---|---|
 | E1 | `epoll_create1`, `epoll_ctl` with `EPOLLET` and `EPOLLONESHOT`, `epoll_pwait` and `epoll_wait`, on every pollable file; an epoll descriptor pollable in turn. Landed (os-26, d047480d) | yes | 8 |
 | E2 | `eventfd2` with `EFD_CLOEXEC`, `EFD_NONBLOCK`, `EFD_SEMAPHORE`. Landed with `eventfd` (os-26, 9ed8808f) | yes | 2 |
-| E3 | `ioctl(FIONBIO)` (and `FIOCLEX`/`FIONCLEX`) on every descriptor. `FIONBIO` landed (os-26, 2dbeadbf); `FIOCLEX` and `FIONCLEX` are not answered yet | yes | 1 |
+| E3 | `ioctl(FIONBIO)` (and `FIOCLEX`/`FIONCLEX`) on every descriptor. `FIONBIO` landed (os-26, 2dbeadbf); `FIOCLEX` and `FIONCLEX` landed after it | yes | 1 |
 | E4 | `card0`'s primary plane and properties: `GETPLANERESOURCES`, `GETPLANE`, `OBJ_GETPROPERTIES`, `GETPROPERTY`, from `probe/drm.c` extended. In progress (GUI session) | yes | 3 |
 | E5 | `timerfd_create`, `timerfd_settime`, `timerfd_gettime` (wanted, not required) | yes | 3 |
 |  | **Required for iteration 2 (E1–E4)** |  | **14** |

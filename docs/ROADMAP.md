@@ -3451,6 +3451,15 @@ same to an `AF_UNIX` socket. With the request left unanswered, the boot panics
 with "FIONBIO on a pipe was refused". With E1 to E3 in, the kernel side of
 iteration 2 is done.
 
+**Done — `FIOCLEX` and `FIONCLEX`, E3's other two requests.** Rust's standard
+library sets close-on-exec with `ioctl(FIOCLEX)` in its fallback paths, and E3
+promised both. They are answered for every file beside `FIONBIO`, set and clear
+the descriptor's close-on-exec flag as `F_SETFD` does, and read no argument.
+The stage 8 pipe check sets and clears the flag through them and reads it back
+with `F_GETFD`, passing an unreadable argument to show nothing is read. With
+`FIOCLEX` left unanswered, the boot panics with "FIOCLEX on a pipe was
+refused".
+
 ---
 
 ## Stage 18 — The compositor  ·  *96 points*

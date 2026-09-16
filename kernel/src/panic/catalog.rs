@@ -1239,7 +1239,8 @@ pub(crate) static STAGE8_PIPES_AND_FILESYSTEM_CALLS: Explanation = Explanation {
               empty and non-blocking and EPIPE with no reader, and pipe2 must close both \
               descriptors again when it cannot hand them back. ioctl(FIONBIO) must set and clear \
               O_NONBLOCK on a pipe and on an AF_UNIX socket, and be EFAULT for an unreadable \
-              argument. A FIFO under /tmp must be one \
+              argument; FIOCLEX and FIONCLEX must set and clear close-on-exec. A FIFO under \
+              /tmp must be one \
               pipe for its openers. statfs of /tmp must decode TMPFS_MAGIC, and statfs64 must \
               take 84 and musl's 88 as its size. truncate and fallocate must grow a file and \
               fallocate never shrink one, and sendfile must copy a file with and without an \

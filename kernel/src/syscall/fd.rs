@@ -29,9 +29,9 @@ use alloc::vec::Vec;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     AT_FDCWD, F_ADD_SEALS, F_DUPFD, F_DUPFD_CLOEXEC, F_GET_SEALS, F_GETFD, F_GETFL, F_SETFD,
-    F_SETFL, FD_CLOEXEC, FIONBIO, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_EXCL, O_NONBLOCK,
-    O_PATH, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, SEEK_CUR, SEEK_DATA, SEEK_END, SEEK_HOLE,
-    SEEK_SET,
+    F_SETFL, FD_CLOEXEC, FIOCLEX, FIONBIO, FIONCLEX, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT,
+    O_EXCL, O_NONBLOCK, O_PATH, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, SEEK_CUR, SEEK_DATA, SEEK_END,
+    SEEK_HOLE, SEEK_SET,
 };
 use ferrix_vfs::fd::FdTable;
 use ferrix_vfs::{FileType, Location, OpenFile, OpenFlags, Whence};
@@ -451,7 +451,8 @@ fn fionbio(process: &Process, file: &OpenFile, arg: u64) -> Result<usize, Errno>
     Ok(0)
 }
 
-/// `ioctl`: `EBADF` for a closed descriptor, `FIONBIO` for any file, the
+/// `ioctl`: `EBADF` for a closed descriptor, `FIONBIO`, `FIOCLEX` and
+/// `FIONCLEX` for any file, the
 /// terminal requests for the console, and `ENOTTY` for every other file,
 /// which is what Linux answers for a descriptor that is not a terminal. See
 /// `crate::syscall::tty`.
@@ -462,10 +463,14 @@ pub(crate) fn sys_ioctl(
     arg: u64,
 ) -> Result<usize, Errno> {
     let file = file(process, fd)?;
-    // Answered before the file is asked, as `do_vfs_ioctl` answers it, so a
-    // pipe, a socket and a terminal all take it.
-    if request == FIONBIO {
-        return fionbio(process, &file, arg);
+    // Answered before the file is asked, as `do_vfs_ioctl` answers them, so a
+    // pipe, a socket and a terminal all take them. `FIOCLEX` and `FIONCLEX`
+    // read no argument: they change the descriptor, as `F_SETFD` does.
+    match request {
+        FIONBIO => return fionbio(process, &file, arg),
+        FIOCLEX => return sys_fcntl(process, fd, F_SETFD, u64::from(FD_CLOEXEC)),
+        FIONCLEX => return sys_fcntl(process, fd, F_SETFD, 0),
+        _ => {}
     }
     // By what reads and writes reach, not by what `fstat` reports: `/dev/tty`
     // is a devfs node of its own that opens the console, and busybox's shell

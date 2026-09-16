@@ -1412,6 +1412,10 @@ pub const FIONREAD: u32 = 0x541B;
 /// Set or clear `O_NONBLOCK` from the `int` the argument points at: any
 /// file, not only a terminal.
 pub const FIONBIO: u32 = 0x5421;
+/// Clear the descriptor's close-on-exec flag: any file.
+pub const FIONCLEX: u32 = 0x5450;
+/// Set the descriptor's close-on-exec flag: any file.
+pub const FIOCLEX: u32 = 0x5451;
 /// The same request as [`FIONREAD`], under its terminal name.
 pub const TIOCINQ: u32 = FIONREAD;
 /// Give up the controlling terminal.

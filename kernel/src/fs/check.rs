@@ -24,9 +24,9 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
     AT_FDCWD, AT_REMOVEDIR, F_GETFD, F_GETFL, FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE,
-    FD_CLOEXEC, FIONBIO, MAP_ANONYMOUS, MAP_PRIVATE, MS_NODEV, MS_NOEXEC, MS_NOSUID, MS_RELATIME,
-    O_APPEND, O_CLOEXEC, O_CREAT, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, PROT_READ,
-    PROT_WRITE, SEEK_CUR,
+    FD_CLOEXEC, FIOCLEX, FIONBIO, FIONCLEX, MAP_ANONYMOUS, MAP_PRIVATE, MS_NODEV, MS_NOEXEC,
+    MS_NOSUID, MS_RELATIME, O_APPEND, O_CLOEXEC, O_CREAT, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC,
+    O_WRONLY, PROT_READ, PROT_WRITE, SEEK_CUR,
 };
 use ferrix_vfs::pipe::PIPEFS_MAGIC;
 use ferrix_vfs::tmpfs::{PageSource, Pages, Storage, TMPFS_MAGIC};
@@ -829,6 +829,7 @@ fn check_a_pipe_refuses_as_linux_does(process: &Process, page: u64) -> Result<()
 /// blocking it makes a read of the empty pipe `EAGAIN` and `F_GETFL` report
 /// `O_NONBLOCK`, and with zero it clears the flag again; on an `AF_UNIX`
 /// socket it does the same; and an unreadable argument is `EFAULT`.
+/// `FIOCLEX` and `FIONCLEX` set and clear close-on-exec, reading nothing.
 fn check_fionbio_reaches_pipes_and_sockets(
     process: &Process,
     page: u64,
@@ -864,6 +865,27 @@ fn check_fionbio_reaches_pipes_and_sockets(
         fd::sys_ioctl(process, reader, FIONBIO, KERNEL_ADDRESS),
         Errno::EFAULT,
         "FIONBIO with an unreadable argument was not EFAULT",
+    )?;
+    // The close-on-exec pair read no argument, so an unreadable one is fine.
+    answers(
+        fd::sys_ioctl(process, reader, FIOCLEX, KERNEL_ADDRESS),
+        0,
+        "FIOCLEX on a pipe was refused",
+    )?;
+    answers(
+        fd::sys_fcntl(process, reader, F_GETFD, 0),
+        FD_CLOEXEC as usize,
+        "FIOCLEX did not set close-on-exec",
+    )?;
+    answers(
+        fd::sys_ioctl(process, reader, FIONCLEX, KERNEL_ADDRESS),
+        0,
+        "FIONCLEX on a pipe was refused",
+    )?;
+    answers(
+        fd::sys_fcntl(process, reader, F_GETFD, 0),
+        0,
+        "FIONCLEX did not clear close-on-exec",
     )?;
     answers(
         fd::sys_close(process, reader),
