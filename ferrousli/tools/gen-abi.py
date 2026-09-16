@@ -58,6 +58,7 @@ clock_settime clock_gettime clock_getres clock_nanosleep exit_group tgkill
 openat mkdirat fchownat newfstatat unlinkat renameat linkat symlinkat
 readlinkat fchmodat faccessat pselect6 ppoll utimensat dup3 pipe2 prlimit64
 renameat2 getrandom memfd_create execveat statx clone3 faccessat2
+epoll_create1 epoll_ctl epoll_pwait epoll_pwait2 eventfd2
 fadvise64 fallocate mlock munlock mlockall munlockall getpriority setpriority
 waitid preadv pwritev mknodat setresuid setresgid fchmodat2 copy_file_range
 set_robust_list get_robust_list sched_setparam sched_getparam

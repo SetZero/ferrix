@@ -266,6 +266,16 @@ pub const STATX: usize = 332;
 pub const CLONE3: usize = 435;
 /// `faccessat2`.
 pub const FACCESSAT2: usize = 439;
+/// `epoll_create1`.
+pub const EPOLL_CREATE1: usize = 291;
+/// `epoll_ctl`.
+pub const EPOLL_CTL: usize = 233;
+/// `epoll_pwait`.
+pub const EPOLL_PWAIT: usize = 281;
+/// `epoll_pwait2`.
+pub const EPOLL_PWAIT2: usize = 441;
+/// `eventfd2`.
+pub const EVENTFD2: usize = 290;
 /// `fadvise64`.
 pub const FADVISE64: usize = 221;
 /// `fallocate`.
