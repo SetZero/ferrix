@@ -161,6 +161,14 @@ name = "ferrix-heap"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-inputctl"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
+]
+
+[[package]]
 name = "ferrix-kernel"
 version = "0.1.0"
 dependencies = [

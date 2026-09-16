@@ -12,6 +12,7 @@ members = [
     "libs/blkserve",
     "libs/devmgr-proto",
     "libs/displayctl",
+    "libs/inputctl",
     "libs/bootinfo",
     "libs/elf",
     "libs/fbtext",
@@ -85,6 +86,7 @@ ferrix-blkring = { path = "libs/blkring" }
 ferrix-blkserve = { path = "libs/blkserve" }
 ferrix-devmgr-proto = { path = "libs/devmgr-proto" }
 ferrix-displayctl = { path = "libs/displayctl" }
+ferrix-inputctl = { path = "libs/inputctl" }
 ferrix-bootinfo = { path = "libs/bootinfo" }
 ferrix-elf = { path = "libs/elf" }
 ferrix-fbtext = { path = "libs/fbtext" }
