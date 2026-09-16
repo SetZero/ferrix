@@ -26,7 +26,7 @@
 //!
 //! `busybox` builds busybox against ferrousli, on Linux or natively on Windows,
 //! and installs it for `--init ferrousli`, which names that binary instead of a
-//! path.
+//! path and rebuilds it when it is older than ferrousli.
 
 // AUDIT: this is a command-line build tool. Its output *is* stdout and stderr,
 // and routing it through a logging facade would make `cargo xtask build` read
@@ -138,7 +138,7 @@ OPTIONS:
     --port <DEVICE>                      watch-serial: e.g. /dev/ttyACM0
     --init <PATH|ferrousli>              The busybox; {arch} is replaced. build, run, flash, deploy: [or FERRIX_INIT]
                                          start `sh -i`, with the applets linked in /bin.
-                                         `ferrousli`: the x86_64 busybox `cargo xtask busybox` installed
+                                         `ferrousli`: the x86_64 busybox built against ferrousli, rebuilt when stale
     -h, --help                           This message
 ";
 
@@ -390,7 +390,7 @@ fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u
 /// refused unless it is a file.
 ///
 /// `ferrousli` is not a path: it names the busybox `cargo xtask busybox`
-/// installed, and is refused if there is none.
+/// installs, built first when it is missing or older than ferrousli.
 fn program_for(init: &str, arch: Arch) -> Result<PathBuf> {
     if init == busybox::INIT_NAME {
         return busybox::program(arch);

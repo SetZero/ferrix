@@ -36,9 +36,9 @@ userland Ferrix is measured with, and the one every `test-shell` and
 has no default program. Alpine's static musl busybox and the host's glibc
 busybox stay required in every gate that names them, as the compatibility
 checks: a failure on any of the three fails the gate, and nothing was dropped
-when ferrousli's joined. `--init ferrousli` runs whatever `cargo xtask busybox`
-last installed, so on a base whose `ferrousli/` differs from the one the
-binary was built from, rebuild it first.
+when ferrousli's joined. `--init ferrousli` rebuilds the busybox first when
+it is missing or older than anything under `ferrousli/` it is built from, so
+the binary a gate runs is the base's.
 
 **After the fast-forward,** the lander boots `develop` itself once on x86_64
 under `--accel kvm` and reports the hash together with that result, so a bad

@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 use crate::paths::Arch;
 use crate::{Error, Result, cargo};
@@ -72,20 +73,100 @@ fn refuse_other_than_x86_64(arch: Arch) -> Result<()> {
     }
 }
 
-/// `--init ferrousli`: the installed busybox for `arch`.
+/// What a busybox built against ferrousli is made from, relative to
+/// `ferrousli/`: the library and its entry object, and the pinned busybox
+/// sources and configuration the build scripts use.
+const INPUTS: &[&str] = &[
+    "Cargo.toml",
+    "Cargo.lock",
+    "build.rs",
+    "crt",
+    "include",
+    "src",
+    "tools/busybox",
+];
+
+/// The newest modification time of any file under `path`, a file or a
+/// directory; `None` if there is nothing there.
+fn newest(path: &Path) -> Option<SystemTime> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_dir() {
+        return meta.modified().ok();
+    }
+    std::fs::read_dir(path)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| newest(&entry.path()))
+        .max()
+}
+
+/// Why the busybox at `program` must be built before it is used, or `None`
+/// when it is newer than everything it is built from under `ferrousli`.
+fn stale(program: &Path, ferrousli: &Path) -> Option<&'static str> {
+    let Some(built) = std::fs::metadata(program)
+        .ok()
+        .filter(std::fs::Metadata::is_file)
+        .and_then(|meta| meta.modified().ok())
+    else {
+        return Some("is not built");
+    };
+    let sources = INPUTS
+        .iter()
+        .filter_map(|input| newest(&ferrousli.join(input)))
+        .max();
+    sources
+        .is_some_and(|sources| sources > built)
+        .then_some("is older than ferrousli's sources")
+}
+
+/// `--init ferrousli`: the installed busybox for `arch`, built first when it is
+/// missing or older than ferrousli, so what boots is the tree as it stands.
 ///
-/// Never built from here, and never another busybox in its place: a missing
-/// binary is an error naming the command that builds it.
+/// Never another busybox in its place: a build that fails is the error.
 pub(crate) fn program(arch: Arch) -> Result<PathBuf> {
     refuse_other_than_x86_64(arch)?;
-    let program = installed(&root()?, arch);
-    if !program.is_file() {
-        return Err(Error::new(format!(
-            "no ferrousli busybox at {}; build it with `cargo xtask busybox`",
-            program.display()
-        )));
+    let root = root()?;
+    let program = installed(&root, arch);
+    let ferrousli = crate::paths::workspace_root().join("ferrousli");
+    if stale(&program, &ferrousli).is_none() {
+        return Ok(program);
     }
-    Ok(program)
+    // Another checkout may be building into the same directory: wait for
+    // it, then look again, since what it installed may be current.
+    let _lock = lock_builds(&root)?;
+    match stale(&program, &ferrousli) {
+        Some(reason) => {
+            println!("  ferrousli's busybox {reason}; building it");
+            build_locked(arch, &root)
+        }
+        None => Ok(program),
+    }
+}
+
+/// Hold the install directory's build lock until the file is dropped.
+///
+/// Every checkout on the machine builds into the one directory, removing and
+/// unpacking the sources and headers as it goes, so two builds at once break
+/// each other; this makes the second wait for the first.
+fn lock_builds(root: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(root)
+        .map_err(|error| Error::new(format!("creating {}: {error}", root.display())))?;
+    let path = root.join("build.lock");
+    let file = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|error| Error::new(format!("opening {}: {error}", path.display())))?;
+    if file.try_lock().is_err() {
+        println!(
+            "  waiting for another busybox build to finish ({})",
+            path.display()
+        );
+        file.lock()
+            .map_err(|error| Error::new(format!("locking {}: {error}", path.display())))?;
+    }
+    Ok(file)
 }
 
 /// Git for Windows' bash for a `git` at `git`: the launcher `bin/bash.exe` in
@@ -124,6 +205,13 @@ fn git_bash() -> Result<PathBuf> {
 pub(crate) fn build(arch: Arch) -> Result<PathBuf> {
     refuse_other_than_x86_64(arch)?;
     let root = root()?;
+    let _lock = lock_builds(&root)?;
+    build_locked(arch, &root)
+}
+
+/// [`build`], with the build lock already held.
+fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
+    let root = root.to_path_buf();
     let program = installed(&root, arch);
     let ferrousli = crate::paths::workspace_root().join("ferrousli");
 
@@ -189,6 +277,39 @@ mod tests {
             assert!(program(arch).is_err(), "{arch}");
             assert!(build(arch).is_err(), "{arch}");
         }
+    }
+
+    #[test]
+    fn a_busybox_older_than_ferrousli_is_rebuilt() {
+        let dir = std::env::temp_dir().join(format!("xtask-busybox-stale-{}", std::process::id()));
+        let ferrousli = dir.join("ferrousli");
+        std::fs::create_dir_all(ferrousli.join("src")).unwrap();
+        let program = dir.join("busybox.static");
+        assert_eq!(stale(&program, &ferrousli), Some("is not built"));
+
+        let source = ferrousli.join("src").join("lib.rs");
+        std::fs::write(&source, "").unwrap();
+        std::fs::write(&program, "").unwrap();
+        let old = SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert_eq!(stale(&program, &ferrousli), None);
+
+        std::fs::File::options()
+            .write(true)
+            .open(&program)
+            .unwrap()
+            .set_modified(old - std::time::Duration::from_secs(60))
+            .unwrap();
+        assert_eq!(
+            stale(&program, &ferrousli),
+            Some("is older than ferrousli's sources")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
