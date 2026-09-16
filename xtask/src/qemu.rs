@@ -204,6 +204,21 @@ const BEHIND_IOMMU: &str = " PCI functions behind one";
 /// not follow.
 const UNRESOLVED: &str = " unresolved";
 
+/// The `virt` machine the Arm architectures boot, with an `SMMUv3` for stage
+/// 10's IOMMU domains, and stage 2 on it, which those domains are made of.
+///
+/// `virt` turns stage 2 on by default only from QEMU 9.2 ("Default to
+/// two-stage SMMU from virt-9.2"); from 8.1, when the device gained it, to 9.1
+/// it offers stage 1 alone unless asked. 9.2's machine sets "nested" itself,
+/// after the global, so asking changes nothing there. Before 8.1 the property
+/// does not exist and QEMU refuses it.
+const VIRT_MACHINE: [&str; 4] = [
+    "-global",
+    "arm-smmuv3.stage=2",
+    "-machine",
+    "virt,iommu=smmuv3",
+];
+
 /// Why a boot that reached the marker still failed IOMMU discovery, if it did.
 ///
 /// Every machine this tool boots has an IOMMU it configured — `intel-iommu` on
@@ -233,6 +248,9 @@ fn iommu_problem(lines: &[String]) -> Option<String> {
 /// What stage 10's PCI check prints after the number of writes outside a
 /// translated domain that its unit faulted.
 const FAULTED: &str = " out-of-domain writes faulted";
+
+/// What the kernel prints when it leaves an `SMMUv3` alone for having no stage 2.
+const NO_STAGE_2: &str = "left alone: it has no AArch64 stage 2";
 
 /// What stage 10's devmgr line ends with.
 const DEVMGR_FAILED: &str = " failed";
@@ -272,6 +290,18 @@ fn devmgr_problem(lines: &[String]) -> Option<String> {
 /// criterion states as degraded trusted mode — so it is not asked.
 fn fault_problem(arch: Arch, lines: &[String]) -> Option<String> {
     if arch == Arch::Armv7a {
+        return None;
+    }
+    // A QEMU whose SMMUv3 offers no stage 2 leaves the unit alone, and the
+    // kernel says so and why: there is no translated domain for a write to
+    // fault in. That is the QEMU's, not the kernel's, and the check says what
+    // it needs rather than failing.
+    if let Some(line) = lines.iter().find(|line| line.contains(NO_STAGE_2)) {
+        println!(
+            "  {arch}: the out-of-domain write check was skipped: the SMMUv3 offers no stage 2 \
+             (`{}`), which needs QEMU 8.1 or later",
+            line.trim()
+        );
         return None;
     }
     let Some(line) = lines.iter().find(|line| line.contains(FAULTED)) else {
@@ -823,10 +853,7 @@ fn qemu_command(
             } else {
                 "cortex-a7"
             };
-            let _ = command.args([
-                // An SMMUv3 for stage 10's IOMMU domains.
-                "-machine",
-                "virt,iommu=smmuv3",
+            let _ = command.args(VIRT_MACHINE).args([
                 "-cpu",
                 cpu,
                 "-drive",

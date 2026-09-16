@@ -134,7 +134,8 @@ privilege, and works the same on Linux and on Windows. With `--init`, the
 shell configures `eth0` by DHCP before its first prompt, with busybox's
 `udhcpc`, so `wget http://example.com` and `ping 10.0.2.2` work at once.
 
-You need QEMU and UEFI firmware. Debian and Ubuntu: `qemu-system-x86`,
+You need QEMU 8.1 or later, for the AArch64 SMMUv3's stage 2, and UEFI
+firmware. Debian and Ubuntu: `qemu-system-x86`,
 `qemu-system-arm`, `ovmf`, `qemu-efi-aarch64` and `u-boot-qemu`. Windows:
 `winget install SoftwareFreedomConservancy.QEMU`, which ships the 64-bit
 firmware too but not U-Boot; for ARMv7-A, `sudo apt install u-boot-qemu` in
