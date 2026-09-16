@@ -57,6 +57,7 @@ mod shell;
 mod symbolize;
 mod test_disk;
 mod vfs;
+mod wsl;
 mod zinc;
 
 use std::path::PathBuf;

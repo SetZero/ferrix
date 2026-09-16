@@ -219,14 +219,23 @@ pub(crate) fn find_firmware(arch: Arch) -> Result<Firmware> {
 /// Find U-Boot's build for QEMU's 32-bit Arm `virt` machine.
 ///
 /// Debian and Ubuntu ship it in `u-boot-qemu`; Fedora spells the directory
-/// without the hyphen.
+/// without the hyphen. QEMU's Windows build ships none, so on Windows the same
+/// directories are looked for inside WSL's default distribution, where
+/// `sudo apt install u-boot-qemu` puts the same file a Linux host would use.
 fn find_uboot() -> Result<Firmware> {
-    let roots = [
+    const DIRECTORIES: [&str; 3] = [
         "/usr/lib/u-boot/qemu_arm",
         "/usr/share/u-boot/qemu_arm",
         "/usr/share/uboot/qemu_arm",
-    ]
-    .map(PathBuf::from);
+    ];
+    let roots: Vec<PathBuf> = if cfg!(windows) {
+        DIRECTORIES
+            .iter()
+            .filter_map(|directory| crate::wsl::path(directory))
+            .collect()
+    } else {
+        DIRECTORIES.map(PathBuf::from).to_vec()
+    };
 
     find_in(&roots, &["u-boot.bin"])
         .map(Firmware::Bios)
@@ -234,7 +243,8 @@ fn find_uboot() -> Result<Firmware> {
             Error::new(format!(
                 "could not find U-Boot for QEMU's 32-bit Arm `virt` machine.\n  \
                  Looked for u-boot.bin under:\n{}\n  \
-                 Install it (Debian/Ubuntu: `u-boot-qemu`) or set FERRIX_UBOOT.",
+                 Install it (Debian/Ubuntu, or on Windows inside WSL: `u-boot-qemu`) \
+                 or set FERRIX_UBOOT.",
                 listing(&roots)
             ))
         })

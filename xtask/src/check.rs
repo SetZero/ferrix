@@ -151,13 +151,23 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 /// Off by default: building the library and its C programs twice is minutes,
 /// and most landings cannot affect it. `docs/BACKLOG.md` says which landings
 /// must pass it.
+///
+/// On Windows every cargo step runs in WSL, for the reason `crate::wsl`
+/// gives: the tests start Linux executables. The generated-ABI check reads
+/// headers in the tree and runs natively.
 fn ferrousli(root: &std::path::Path) -> Result<()> {
     let dir = root.join("ferrousli");
     let in_ferrousli = |arguments: &[&str]| {
+        if cfg!(windows) {
+            return crate::wsl::cargo(&dir, arguments);
+        }
         let mut command = Command::new(cargo_binary());
         let _ = command.current_dir(&dir).args(arguments);
         command
     };
+    if cfg!(windows) {
+        step("ferrousli: WSL", crate::wsl::require_toolchain)?;
+    }
 
     step("ferrousli: generated ABI", || {
         python_with("ferrousli/tools/gen-abi.py", &["--check"])
