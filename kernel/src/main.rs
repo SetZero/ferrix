@@ -34,6 +34,7 @@ mod irq;
 mod mm;
 mod mmio;
 mod net;
+mod net_ring;
 mod object;
 mod panic;
 mod pci;
@@ -847,6 +848,28 @@ fn check_net() {
         "  net      {} interface up, {} bytes carried over the loopback in both families, \
          {} connections made and accepted, {} calls refused as specified",
         report.interfaces, report.bytes, report.connections, report.refusals,
+    );
+    check_net_ring();
+}
+
+/// The net ring, played from both ends with no network device: the whole
+/// kernel side of an interface, from the control handshake to a frame in and a
+/// frame out.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_net_ring() {
+    let report = match net_ring::check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(catalog::NET_RING, "net ring self-check failed: {problem}"),
+    };
+    if let Some(why) = report.skipped {
+        println!("  netring  not checked: {why}");
+        return;
+    }
+    println!(
+        "  netring  {} HELLOs refused as specified, {} slots posted for a driver to fill, \
+         {} frames taken up the stack and {} answered back down it",
+        report.refusals, report.posted, report.received, report.sent,
     );
 }
 

@@ -49,6 +49,7 @@ use ferrix_vma::VmaFlags;
 
 use crate::block_ring;
 use crate::device::DeviceNode;
+use crate::net_ring;
 use crate::object::channel::{self, ChannelMessage, Endpoint, ReadError, WriteFailure};
 use crate::object::interrupt::{Interrupt, InterruptError};
 use crate::object::io_mapping::{IoMapping, IoMappingError};
@@ -160,6 +161,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::InterruptBind => interrupt_bind(process, handle(a[0]), handle(a[1]), a[2]),
         NativeCall::IoMappingCreate => io_mapping_create(process, handle(a[0]), a[1]),
         NativeCall::BlockRingCreate => block_ring_create(process, handle(a[0])),
+        NativeCall::NetRingCreate => net_ring_create(process, handle(a[0])),
         NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
         NativeCall::DeviceQuiesce => device_quiesce(process, handle(a[0])),
         NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1]),
@@ -1088,6 +1090,24 @@ fn block_ring_create(process: &Process, device: Handle) -> Result<usize, Errno> 
         process,
         Object::Channel(driver_end),
         block_ring::CONTROL_RIGHTS,
+    )
+}
+
+/// `net_ring_create`.
+///
+/// The same shape as `block_ring_create` and for the same reason: a ring is
+/// made for a device the caller holds with `MANAGE`, and the driver's end of
+/// its control channel comes back as a handle.
+fn net_ring_create(process: &Process, device: Handle) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::MANAGE)?;
+    let driver_end = net_ring::create(&node).map_err(|why| match why {
+        net_ring::CreateError::InUse => status::ALREADY_BOUND,
+        net_ring::CreateError::NoMemory => status::NO_MEMORY,
+    })?;
+    insert_new(
+        process,
+        Object::Channel(driver_end),
+        net_ring::CONTROL_RIGHTS,
     )
 }
 

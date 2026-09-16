@@ -64,6 +64,7 @@ Causes are listed most likely first.
 | [FX-1006](#fx-1006) | devmgr could not be started, or did not report |
 | [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
 | [FX-1150](#fx-1150) | the net core did not carry a packet round its own loopback |
+| [FX-1151](#fx-1151) | the net ring did not carry a frame between the kernel and a driver |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -1284,6 +1285,38 @@ and again over IPv6.
 
 See: kernel/src/net/check.rs; kernel/src/net/mod.rs; libs/net; libs/nettcp;
 docs/ROADMAP.md.
+
+<a id="fx-1151"></a>
+
+## FX-1151 — the net ring did not carry a frame between the kernel and a driver
+
+`docs/NET-RING.md` is the memory the kernel shares with a ring-3 network driver.
+The check plays the driver: it makes the two VMOs and the port a driver makes,
+writes the ring header, sends HELLO, and answers submissions by hand, so the
+whole kernel side is exercised on a machine with no network adapter. It requires
+a HELLO whose handles carry the wrong rights to be refused, one as specified to
+be answered with READY and its completion port, the interface to appear in the
+net core with the name, address and MTU the HELLO gave it, every free slot to be
+posted for the driver to fill, an ARP request written into a slot to be answered
+with an ARP reply in a slot the kernel submits, and the interface to go when the
+driver does.
+
+1. A HELLO with duplicable VMO handles was accepted: the exact-rights check in
+   `net_ring::decode_hello` was loosened, and the kernel's handle to a driver's
+   memory can now be copied.
+2. No slot was posted: `Serving::post_receives` stopped filling the ring, which
+   is a driver with no buffers and an interface that silently drops every
+   packet.
+3. The ARP request was not answered: it never reached `libs/net`'s input path,
+   the interface has no address, or the reply was queued for an interface nobody
+   drains.
+4. The interface outlived its driver: `Serving::finish` no longer takes it out
+   of the net core, so a route can still point at a device that is gone.
+5. The ring's task did not stop when the control channel closed, which a frame
+   count taken after the check would then see as a leak.
+
+See: kernel/src/net_ring/check.rs; kernel/src/net_ring/mod.rs; libs/netring;
+docs/NET-RING.md.
 
 <a id="fx-9001"></a>
 

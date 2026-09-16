@@ -795,6 +795,36 @@ pub(crate) static NET_CORE: Explanation = Explanation {
           docs/ROADMAP.md",
 };
 
+/// For `check_net_ring` in `main.rs`, when the net ring's self-check fails.
+pub(crate) static NET_RING: Explanation = Explanation {
+    code: "FX-1151",
+    title: "the net ring did not carry a frame between the kernel and a driver",
+    meaning: "`docs/NET-RING.md` is the memory the kernel shares with a ring-3 network driver. \
+              The check plays the driver: it makes the two VMOs and the port a driver makes, \
+              writes the ring header, sends HELLO, and answers submissions by hand, so the whole \
+              kernel side is exercised on a machine with no network adapter. It requires a HELLO \
+              whose handles carry the wrong rights to be refused, one as specified to be answered \
+              with READY and its completion port, the interface to appear in the net core with \
+              the name, address and MTU the HELLO gave it, every free slot to be posted for the \
+              driver to fill, an ARP request written into a slot to be answered with an ARP \
+              reply in a slot the kernel submits, and the interface to go when the driver does.",
+    causes: &[
+        "A HELLO with duplicable VMO handles was accepted: the exact-rights check in \
+         `net_ring::decode_hello` was loosened, and the kernel's handle to a driver's memory \
+         can now be copied.",
+        "No slot was posted: `Serving::post_receives` stopped filling the ring, which is a \
+         driver with no buffers and an interface that silently drops every packet.",
+        "The ARP request was not answered: it never reached `libs/net`'s input path, the \
+         interface has no address, or the reply was queued for an interface nobody drains.",
+        "The interface outlived its driver: `Serving::finish` no longer takes it out of the net \
+         core, so a route can still point at a device that is gone.",
+        "The ring's task did not stop when the control channel closed, which a frame count \
+         taken after the check would then see as a leak.",
+    ],
+    see: "kernel/src/net_ring/check.rs; kernel/src/net_ring/mod.rs; libs/netring; \
+          docs/NET-RING.md",
+};
+
 /// For `check_devmgr` in `main.rs`, when `devmgr::start` fails.
 pub(crate) static STAGE10_DEVMGR: Explanation = Explanation {
     code: "FX-1006",
@@ -1444,6 +1474,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE10_DEVMGR,
     &STAGE11_MOUNT,
     &NET_CORE,
+    &NET_RING,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,

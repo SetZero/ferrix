@@ -119,7 +119,25 @@ impl<S: Syscall> Device<S> {
     /// [`Error::AccessDenied`] without `MANAGE`, and the kernel's refusal
     /// for a device that already has a ring.
     pub fn block_ring(&self) -> Result<Channel<S>, Error> {
-        let value = Call::new(nr::BLOCK_RING_CREATE)
+        self.ring(nr::BLOCK_RING_CREATE)
+    }
+
+    /// Ask the kernel for a net ring on this device: the driver's end of the
+    /// ring's control channel, over which HELLO goes next
+    /// (`docs/NET-RING.md` §7). Needs `MANAGE`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::WrongType`] for a handle that is not a device,
+    /// [`Error::AccessDenied`] without `MANAGE`, and the kernel's refusal for
+    /// a device that already has a ring.
+    pub fn net_ring(&self) -> Result<Channel<S>, Error> {
+        self.ring(nr::NET_RING_CREATE)
+    }
+
+    /// The body both rings share: one call, one handle back.
+    fn ring(&self, number: usize) -> Result<Channel<S>, Error> {
+        let value = Call::new(number)
             .value(register(self.handle()))
             .make(self.syscall());
         let handle = decode_handle(value)?;

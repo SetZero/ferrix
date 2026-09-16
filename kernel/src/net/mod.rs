@@ -34,8 +34,8 @@ pub(crate) mod socket;
 
 use alloc::vec::Vec;
 
-use ferrix_net::Stack;
 use ferrix_net::stack::{Config, Millis, Outgoing};
+use ferrix_net::{Interface, Stack};
 use ferrix_sync::Once;
 
 use crate::sched::WaitQueue;
@@ -154,6 +154,58 @@ impl NetCore {
     /// How many frames are waiting for a driver.
     pub(crate) fn queued(&self) -> usize {
         self.pending.lock().frames.len()
+    }
+
+    /// Take the frames waiting for an interface's driver.
+    ///
+    /// The driver asks for these when it has room. A frame for an interface
+    /// whose driver has gone is dropped by [`NetCore::forget_interface`], not
+    /// left to grow the queue.
+    pub(crate) fn take_outgoing(&self, interface: u32, want: usize) -> Vec<Vec<u8>> {
+        let mut pending = self.pending.lock();
+        let mut mine = Vec::new();
+        let mut kept = Vec::with_capacity(pending.frames.len());
+        for outgoing in pending.frames.drain(..) {
+            if outgoing.interface == interface && mine.len() < want {
+                mine.push(outgoing.frame);
+            } else {
+                kept.push(outgoing);
+            }
+        }
+        pending.frames = kept;
+        mine
+    }
+
+    /// Hand a frame that arrived to the stack.
+    pub(crate) fn receive(&self, interface: u32, frame: &[u8]) {
+        self.with(|stack, at| stack.receive(interface, frame, at));
+    }
+
+    /// Add an interface, and answer the index it was given.
+    pub(crate) fn add_interface(&self, interface: Interface) -> u32 {
+        self.with(|stack, _| stack.add_interface(interface))
+    }
+
+    /// Take an interface away, and drop what was waiting for it.
+    pub(crate) fn forget_interface(&self, index: u32) {
+        let _ = self.with(|stack, _| stack.remove_interface(index));
+        let mut pending = self.pending.lock();
+        pending.frames.retain(|frame| frame.interface != index);
+    }
+
+    /// Say whether an interface's link is up.
+    pub(crate) fn set_carrier(&self, index: u32, up: bool) {
+        self.with(|stack, _| {
+            if let Some(interface) = stack.interface_mut(index) {
+                if up {
+                    interface.flags |=
+                        ferrix_net::iface::IFF_RUNNING | ferrix_net::iface::IFF_LOWER_UP;
+                } else {
+                    interface.flags &=
+                        !(ferrix_net::iface::IFF_RUNNING | ferrix_net::iface::IFF_LOWER_UP);
+                }
+            }
+        });
     }
 
     /// Where a socket waits.

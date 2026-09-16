@@ -2848,9 +2848,28 @@ into somebody else's packet. The index discipline is `libs/blkring`'s, written a
 second time rather than shared, which `docs/BACKLOG.md` carries as a debt with
 its reason.
 
-**Still to do:** the virtio-net driver and the kernel's end of the ring,
-`AF_NETLINK` for `ip`, `/proc/net`, and `AF_UNIX` names so that `nc` can carry a
-stream over a local socket.
+**Done — the kernel's end of the ring.** `kernel/src/net_ring` is one task per
+ring: it waits for the driver's HELLO, checks the rights every handle carries
+exactly rather than at least, holds the two VMOs, adds the interface to the net
+core, and answers READY with its completion port. Then it posts half the ring
+for the driver to fill and keeps the other half for frames the net core wants
+sent — posting *every* free slot is the mistake that leaves an interface
+receiving for ever and never answering, and the first end-to-end check of this
+path found it.
+
+The check plays the driver, so the whole kernel side runs on a machine with no
+network adapter: it makes the VMOs and the port a driver makes, sends HELLO,
+and answers submissions by hand. An ARP request written into a posted slot
+comes back as an ARP reply in a slot the kernel submits, which is a frame in
+and a frame out through the whole stack. It reads:
+
+```
+  netring  1 HELLOs refused as specified, 4 slots posted for a driver to fill, 1 frames taken up the stack and 1 answered back down it
+```
+
+**Still to do:** the virtio-net driver process itself, `AF_NETLINK` for `ip`,
+`/proc/net`, and `AF_UNIX` names so that `nc` can carry a stream over a local
+socket.
 
 **Exit:** under `xtask`'s gateway — which is where this criterion's *"under
 QEMU's user-mode network"* now reads — busybox configures `eth0` with `ip` (or

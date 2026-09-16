@@ -204,6 +204,24 @@ impl Stack {
             .find(|interface| interface.index == index)
     }
 
+    /// Take an interface away, with its routes and everything the neighbour
+    /// cache learned over it.
+    ///
+    /// Answers whether there was one. A socket bound to one of its addresses
+    /// is left alone: it keeps its name and stops receiving, which is what a
+    /// program sees when a cable is pulled.
+    pub fn remove_interface(&mut self, index: u32) -> bool {
+        let before = self.interfaces.len();
+        self.interfaces.retain(|interface| interface.index != index);
+        if self.interfaces.len() == before {
+            return false;
+        }
+        self.routes.remove_interface(index);
+        self.neighbors.remove_interface(index);
+        self.egress.retain(|outgoing| outgoing.interface != index);
+        true
+    }
+
     /// The interface with that name.
     #[must_use]
     pub fn interface_by_name(&self, name: &[u8]) -> Option<&Interface> {
