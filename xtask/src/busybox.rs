@@ -76,7 +76,7 @@ fn refuse_other_than_x86_64(arch: Arch) -> Result<()> {
 /// What a busybox built against ferrousli is made from, relative to
 /// `ferrousli/`: the library and its entry object, and the pinned busybox
 /// sources and configuration the build scripts use.
-const INPUTS: &[&str] = &[
+pub(crate) const INPUTS: &[&str] = &[
     "Cargo.toml",
     "Cargo.lock",
     "build.rs",
@@ -88,7 +88,7 @@ const INPUTS: &[&str] = &[
 
 /// The newest modification time of any file under `path`, a file or a
 /// directory; `None` if there is nothing there.
-fn newest(path: &Path) -> Option<SystemTime> {
+pub(crate) fn newest(path: &Path) -> Option<SystemTime> {
     let meta = std::fs::metadata(path).ok()?;
     if !meta.is_dir() {
         return meta.modified().ok();
@@ -148,7 +148,7 @@ pub(crate) fn program(arch: Arch) -> Result<PathBuf> {
 /// Every checkout on the machine builds into the one directory, removing and
 /// unpacking the sources and headers as it goes, so two builds at once break
 /// each other; this makes the second wait for the first.
-fn lock_builds(root: &Path) -> Result<std::fs::File> {
+pub(crate) fn lock_builds(root: &Path) -> Result<std::fs::File> {
     std::fs::create_dir_all(root)
         .map_err(|error| Error::new(format!("creating {}: {error}", root.display())))?;
     let path = root.join("build.lock");
@@ -160,7 +160,7 @@ fn lock_builds(root: &Path) -> Result<std::fs::File> {
         .map_err(|error| Error::new(format!("opening {}: {error}", path.display())))?;
     if file.try_lock().is_err() {
         println!(
-            "  waiting for another busybox build to finish ({})",
+            "  waiting for another build into this directory to finish ({})",
             path.display()
         );
         file.lock()
