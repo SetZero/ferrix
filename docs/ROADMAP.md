@@ -3260,8 +3260,10 @@ through the Linux ABI so that Rust's existing compositor crates run unchanged.
 * **An input core and a virtio-input driver in ring 3,** exposed as evdev:
   `/dev/input/event*` with `EVIOCGBIT`, `EVIOCGNAME`, `EVIOCGABS` and the
   `input_event` stream, keyboard, mouse and tablet as QEMU offers them.
-* **The calls a Rust event loop needs:** `epoll_create1`/`epoll_ctl`/`epoll_wait`,
-  `eventfd2`, `timerfd_create`/`timerfd_settime`, `signalfd4`, `memfd_create`
+* **The calls a Rust event loop needs:** `epoll_create1`/`epoll_ctl`/`epoll_pwait`,
+  with an epoll descriptor another epoll can wait on, `eventfd2`, `FIONBIO`,
+  `timerfd_create`/`timerfd_settime` (called by `polling`, which tolerates
+  their absence), `memfd_create`
   with sealing, and `AF_UNIX` sockets with `SCM_RIGHTS`, pulled forward from
   the networking stage because Wayland is a Unix socket carrying descriptors
   and `wl_shm` is a sealed memfd mapped by both sides. The `AF_INET` half
@@ -3350,7 +3352,7 @@ panics with "a set added to a set it holds was not ELOOP".
 
 ---
 
-## Stage 18 — The compositor  ·  *89 points*
+## Stage 18 — The compositor  ·  *96 points*
 
 A Wayland compositor in Rust, on `libs/`' side of the tree as its own
 workspace the way ferrousli is, built on the Smithay compositor crates unless
