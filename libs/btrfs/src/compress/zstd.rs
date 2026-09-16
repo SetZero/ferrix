@@ -7,8 +7,8 @@
 //! many literals, then copy this many bytes from that far back". The lengths
 //! and offsets are FSE-coded, and both the Huffman and FSE tables can be
 //! carried over from the previous block of the same frame. The submodules
-//! follow that structure: [`literals`] and [`huffman`], [`sequences`] and
-//! [`fse`], with [`bits`] underneath and [`window`] as the destination.
+//! follow that structure: `literals` and `huffman`, `sequences` and
+//! `fse`, with `bits` underneath and `window` as the destination.
 //!
 //! # One frame, then stop
 //!

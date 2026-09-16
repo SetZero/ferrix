@@ -69,7 +69,7 @@
 //!   `/etc/resolv.conf`, or on Windows the first the network configuration
 //!   names; see [`host_resolver`].
 //! * **TCP** — terminated here and re-opened as an ordinary host `TcpStream`,
-//!   with the payload relayed between the two; see [`tcp`](self::tcp).
+//!   with the payload relayed between the two; see [`tcp`].
 //! * **Fragments** — refused, in both directions. The MTU is 1500 and nothing
 //!   here fragments; an over-long relayed datagram is dropped and counted.
 //! * **IPv6** — not offered. The guest has no stack pointed at it yet, and a

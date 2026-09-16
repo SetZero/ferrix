@@ -207,19 +207,19 @@ jobs:
       # they are left out of every host step and linted per target below.
       - name: Clippy (host libraries and xtask)
         if: runner.os == 'Linux'
-        run: cargo clippy --workspace --exclude ferrix-kernel --exclude ferrix-boot --exclude ferrix-rt --exclude ferrix-channel-echo --all-targets -- -D warnings
+        run: cargo xtask host-clippy
 
       - name: Clippy (native runtime and programs, x86_64)
         if: runner.os == 'Linux'
-        run: cargo clippy -p ferrix-rt -p ferrix-channel-echo --target x86_64-unknown-none -- -D warnings
+        run: cargo xtask native-clippy --arch x86_64
 
       - name: Clippy (native runtime and programs, AArch64)
         if: runner.os == 'Linux'
-        run: cargo clippy -p ferrix-rt -p ferrix-channel-echo --target aarch64-unknown-none-softfloat -- -D warnings
+        run: cargo xtask native-clippy --arch aarch64
 
       - name: Clippy (native runtime and programs, ARMv7-A)
         if: runner.os == 'Linux'
-        run: cargo clippy -p ferrix-rt -p ferrix-channel-echo --target armv7a-none-eabi -- -D warnings
+        run: cargo xtask native-clippy --arch armv7a
 
       - name: Clippy (kernel, x86_64)
         if: runner.os == 'Linux'
@@ -251,19 +251,17 @@ jobs:
       # The freestanding crates cannot run tests -- there is no host to run
       # them on -- which is exactly why the algorithmic core lives in libs/.
       - name: Tests
-        run: cargo test --workspace --exclude ferrix-kernel --exclude ferrix-boot --exclude ferrix-rt --exclude ferrix-channel-echo --all-targets
+        run: cargo xtask host-test
 
       # `cargo test --all-targets` skips doctests; the lint config denies
       # broken intra-doc links, so run them too.
       - name: Doc tests
         if: runner.os == 'Linux'
-        run: cargo test --workspace --exclude ferrix-kernel --exclude ferrix-boot --exclude ferrix-rt --exclude ferrix-channel-echo --doc
+        run: cargo xtask host-doctest
 
       - name: Documentation builds without warnings
         if: runner.os == 'Linux'
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --exclude ferrix-kernel --exclude ferrix-boot --exclude ferrix-rt --exclude ferrix-channel-echo --no-deps
+        run: cargo xtask host-doc
 
   # ----------------------------------------------------------------
   # ferrousli, the C library in Rust, is a cargo workspace of its own,

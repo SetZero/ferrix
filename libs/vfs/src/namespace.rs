@@ -373,7 +373,7 @@ impl Namespace {
     ///
     /// # Errors
     ///
-    /// As [`Namespace::walk`], and `ENOENT` if the last component is missing.
+    /// As `Namespace::walk`, and `ENOENT` if the last component is missing.
     pub fn resolve(
         &self,
         ctx: &Context,

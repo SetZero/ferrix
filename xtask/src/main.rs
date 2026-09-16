@@ -62,6 +62,7 @@ mod symbolize;
 mod test_disk;
 mod threads;
 mod vfs;
+mod workspace;
 mod wsl;
 mod zinc;
 
@@ -117,7 +118,12 @@ COMMANDS:
     test-net      Boot with a network device and require busybox to configure it and fetch a file
     test-display  Boot compositor/blank as init with a virtio-gpu, and require its colour on every pixel
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
-    check         Run every quality gate (fmt, clippy, layering, audits)
+    check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
+    host-clippy   check's host clippy step alone, as CI runs it
+    host-test     check's host test step alone, as CI runs it
+    host-doctest  check's doc test step alone, as CI runs it
+    host-doc      check's documentation step alone, as CI runs it
+    native-clippy check's clippy of the native programs for --arch, as CI runs it
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
     ports         Build the programs ported onto ferrousli (x86_64: curl, btop), which images carry beside busybox
@@ -231,6 +237,16 @@ fn run() -> Result<()> {
         "test-display" => display::test_display(&args),
         "test-threads" => threads::test_threads(&args),
         "check" => check::run(&args),
+        "host-clippy" => check::host_clippy(),
+        "host-test" => check::host_test(),
+        "host-doctest" => check::host_doctest(),
+        "host-doc" => check::host_doc(),
+        "native-clippy" => {
+            for arch in args.arches()? {
+                check::native_clippy(arch)?;
+            }
+            Ok(())
+        }
         "model-doc" => check::model_doc(),
         "busybox" => busybox::build(args.single_arch()?).map(|_| ()),
         "ports" => ports::build(args.single_arch()?),

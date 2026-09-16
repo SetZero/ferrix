@@ -20,7 +20,7 @@
 //! * the device is a handle, cloned for each operation, so how concurrent reads
 //!   meet is the device's business — in the kernel, the block core's queue;
 //! * metadata read through it is kept in a bounded cache every handle shares
-//!   ([`cache`]), whose lock is held to look an entry up or add one, never
+//!   (`cache`), whose lock is held to look an entry up or add one, never
 //!   across the read that fills it;
 //! * the [`Volume`] does not change after mount and is shared freely;
 //! * working memory comes from a pool whose lock is held to take a set of

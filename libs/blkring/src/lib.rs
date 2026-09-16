@@ -88,7 +88,7 @@
 //!   carried is an I/O error.
 //! * **Corruption is terminal.** The side that sees it latches, and every later
 //!   call reports it. The kernel fails everything outstanding with EIO, which
-//!   [`KernelSide::drain`] enumerates, and treats the driver as dead. A driver
+//!   [`KernelSide::end`] enumerates, and treats the driver as dead. A driver
 //!   resets its device and stops.
 //!
 //! One rule the protocol needs and does not otherwise state is kept here,
@@ -293,7 +293,7 @@ pub trait RingMemory {
 /// Detected by either side, and terminal for it: the side latches and reports
 /// the same corruption from every later call. What to do next depends on who
 /// saw it. The kernel fails every outstanding request with EIO
-/// ([`KernelSide::drain`]) and treats the driver as dead; a driver resets its
+/// ([`KernelSide::end`]) and treats the driver as dead; a driver resets its
 /// device and stops.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Corruption {

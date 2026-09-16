@@ -5,7 +5,7 @@
 //! holding the length of the whole compressed extent *including those four
 //! bytes*, then one or more segments. A segment is a `u32` length and that
 //! many bytes of LZO1X, and each is the compression of at most one sector of
-//! the file. The stream itself is decoded by [`lzo1x`]; this module is the
+//! the file. The stream itself is decoded by `lzo1x`; this module is the
 //! framing around it.
 //!
 //! ```text

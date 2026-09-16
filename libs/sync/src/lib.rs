@@ -243,7 +243,7 @@ impl<T: ?Sized> SpinLock<T> {
     /// `clippy::mut_from_ref` is the right lint to fire here, and this is the
     /// one place that answers it rather than obeys it: exclusivity does not
     /// come from the `&self`, it comes from the ticket queue having served
-    /// this caller and nobody else. That is the same guarantee [`lock`] rests
+    /// this caller and nobody else. That is the same guarantee [`lock`](Self::lock) rests
     /// on; it simply cannot be spelled in the signature, because the guard
     /// that would carry it is exactly what a context switch cannot use.
     ///

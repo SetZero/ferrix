@@ -1,7 +1,7 @@
 //! A connection: its counters, its buffers, and what a program does to it.
 //!
-//! The segment-by-segment behaviour is in [`crate::input`] and
-//! [`crate::output`]; this module holds the state those two work on, the
+//! The segment-by-segment behaviour is in `crate::input` and
+//! `crate::output`; this module holds the state those two work on, the
 //! constructors, and the calls a socket layer makes -- write, read, close,
 //! abort -- none of which touch the wire.
 

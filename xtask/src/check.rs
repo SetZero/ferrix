@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 use crate::args::Args;
 use crate::cargo::{self, cargo as cargo_binary};
 use crate::paths::{self, Arch};
+use crate::workspace;
 use crate::{Error, Result};
 
 /// Run the gate set.
@@ -71,30 +72,10 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // a `_start`, a panic handler, a linker script. The host can build none of
     // them, so they are linted per target below, and what of them can be
     // tested lives in `libs/native`.
-    step("clippy (host)", || {
-        let mut arguments = vec!["--workspace"];
-        arguments.extend(
-            FREESTANDING
-                .iter()
-                .flat_map(|&package| ["--exclude", package]),
-        );
-        arguments.push("--all-targets");
-        clippy(&arguments)
-    })?;
-
-    step("tests", || {
-        let mut command = Command::new(cargo_binary());
-        let _ = command
-            .current_dir(&root)
-            .args(["test", "--workspace"])
-            .args(
-                FREESTANDING
-                    .iter()
-                    .flat_map(|&package| ["--exclude", package]),
-            )
-            .arg("--all-targets");
-        cargo::run(command, "cargo test")
-    })?;
+    step("clippy (host)", host_clippy)?;
+    step("tests", host_test)?;
+    step("doc tests", host_doctest)?;
+    step("documentation", host_doc)?;
 
     compositor(&root)?;
 
@@ -132,12 +113,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         })?;
         step(
             &format!("clippy (native runtime and programs, {arch})"),
-            || {
-                let mut arguments: Vec<&str> =
-                    NATIVE.iter().flat_map(|&package| ["-p", package]).collect();
-                arguments.extend(["--target", arch.kernel_target()]);
-                clippy(&arguments)
-            },
+            || native_clippy(arch),
         )?;
     }
 
@@ -300,29 +276,77 @@ pub(crate) fn model_doc() -> Result<()> {
     python_with("scripts/gen-arch-doc.py", &[])
 }
 
-/// The native runtime and the programs built on it: freestanding, so linted
-/// once per kernel target rather than for the host.
-const NATIVE: &[&str] = &[
-    "ferrix-rt",
-    "ferrix-channel-echo",
-    "ferrix-blk",
-    "ferrix-net-driver",
-    "ferrix-gpu",
-    "ferrix-devmgr",
-];
+// The host half of the gate, one function per CI step. `cargo xtask check`
+// runs them and CI calls them by name (`cargo xtask host-test` and the rest),
+// so the two cannot disagree about which members the host builds: both ask
+// `workspace::members`.
 
-/// Every workspace member the host cannot build: the loader, the kernel, and
-/// [`NATIVE`].
-const FREESTANDING: &[&str] = &[
-    "ferrix-kernel",
-    "ferrix-boot",
-    "ferrix-rt",
-    "ferrix-channel-echo",
-    "ferrix-blk",
-    "ferrix-net-driver",
-    "ferrix-gpu",
-    "ferrix-devmgr",
-];
+/// The workspace's members, sorted.
+fn sorted_members() -> Result<workspace::Members> {
+    workspace::members(&paths::workspace_root())
+}
+
+/// `cargo clippy` over every host member, every target: `cargo xtask host-clippy`.
+pub(crate) fn host_clippy() -> Result<()> {
+    let excludes = sorted_members()?.excludes();
+    let mut arguments: Vec<&str> = vec!["--workspace"];
+    arguments.extend(excludes.iter().map(String::as_str));
+    arguments.push("--all-targets");
+    clippy(&arguments)
+}
+
+/// `cargo test` over every host member, every target: `cargo xtask host-test`.
+pub(crate) fn host_test() -> Result<()> {
+    host_cargo(&["test"], &["--all-targets"], &[], "cargo test")
+}
+
+/// The doc tests `--all-targets` skips: `cargo xtask host-doctest`.
+pub(crate) fn host_doctest() -> Result<()> {
+    host_cargo(&["test"], &["--doc"], &[], "cargo test --doc")
+}
+
+/// The documentation, warnings denied, as the lint config denies broken
+/// intra-doc links: `cargo xtask host-doc`.
+pub(crate) fn host_doc() -> Result<()> {
+    host_cargo(
+        &["doc"],
+        &["--no-deps"],
+        &[("RUSTDOCFLAGS", "-D warnings")],
+        "cargo doc",
+    )
+}
+
+/// `cargo clippy` over the native runtime and programs for `arch`'s kernel
+/// target: `cargo xtask native-clippy --arch ARCH`.
+pub(crate) fn native_clippy(arch: Arch) -> Result<()> {
+    let native = sorted_members()?.native;
+    let mut arguments: Vec<&str> = native
+        .iter()
+        .flat_map(|package| ["-p", package.as_str()])
+        .collect();
+    arguments.extend(["--target", arch.kernel_target()]);
+    clippy(&arguments)
+}
+
+/// `cargo <command> --workspace` without the freestanding members, then
+/// `extra`, with `environment` set.
+fn host_cargo(
+    command: &[&str],
+    extra: &[&str],
+    environment: &[(&str, &str)],
+    what: &str,
+) -> Result<()> {
+    let excludes = sorted_members()?.excludes();
+    let mut process = Command::new(cargo_binary());
+    let _ = process
+        .current_dir(paths::workspace_root())
+        .args(command)
+        .arg("--workspace")
+        .args(&excludes)
+        .args(extra)
+        .envs(environment.iter().copied());
+    cargo::run(process, what)
+}
 
 /// The crates CI's Miri job interprets, in its order.
 ///

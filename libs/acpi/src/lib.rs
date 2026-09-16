@@ -190,7 +190,7 @@ pub enum AcpiError {
         /// Byte offset of the entry within the table.
         offset: usize,
     },
-    /// The MADT describes more entries than [`MAX_MADT_ENTRIES`], so the walk
+    /// The MADT describes more entries than `MAX_MADT_ENTRIES`, so the walk
     /// was cut short rather than run for an unbounded time at boot.
     TooManyEntries,
 }
@@ -1795,7 +1795,7 @@ impl<'a> Hpet<'a> {
     ///
     /// # Errors
     ///
-    /// [`AcpiError::WrongSignature`] if it is not an HPET, and
+    /// [`AcpiError::BadSignature`] if it is not an HPET, and
     /// [`AcpiError::TooShort`] if it does not reach the end of the fixed
     /// fields.
     pub fn parse(table: Table<'a>) -> Result<Self, AcpiError> {
