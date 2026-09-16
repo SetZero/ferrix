@@ -1336,8 +1336,16 @@ pub(crate) static STAGE8_EVENTFD: Explanation = Explanation {
               it. Registered edge-triggered in an epoll set, the eventfd must be reported after \
               each write although it stays readable. A flag eventfd2 does not take, a buffer \
               shorter than eight bytes, a write of u64::MAX and lseek are refused as Linux refuses \
-              them. The run is done twice and must leave no frame behind.",
+              them. A poll and an epoll_wait waiting on an eventfd in tasks of their own must be \
+              ended by a write's wake, and a 300 ms poll on a quiet eventfd must look at most 12 \
+              times, sleeping on its queues rather than looking every 5 ms. The run is done twice \
+              and must leave no frame behind.",
     causes: &[
+        "A pollable inode's `poll_queues` names a queue other than the one its changes wake, or \
+         `WaitQueue::wait_on_any` does not put the task on every queue, so a poll or an \
+         epoll_wait is ended by its recheck.",
+        "`Sources::recheck` does not trust queues every file vouched for, or an inode answers \
+         `false` from `poll_queues`, so a quiet wait looks every 5 ms.",
         "`EventFd::write_stream` does not wake the readable queue, or `read_stream` the writable \
          one, so a waiting reader sleeps until its recheck and an edge-triggered registration \
          misses the second write.",
@@ -1346,7 +1354,8 @@ pub(crate) static STAGE8_EVENTFD: Explanation = Explanation {
         "`sys_eventfd2` takes a flag Linux refuses, or does not pass EFD_NONBLOCK to the open \
          file.",
     ],
-    see: "kernel/src/fs/eventfd_check.rs; kernel/src/fs/eventfd.rs; kernel/src/syscall/eventfd.rs; \
+    see: "kernel/src/fs/eventfd_check.rs; kernel/src/fs/eventfd.rs; kernel/src/fs/wake.rs; \
+          kernel/src/sched/wait.rs; kernel/src/syscall/eventfd.rs; \
           kernel/src/fs/anon.rs",
 };
 

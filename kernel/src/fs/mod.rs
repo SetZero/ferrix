@@ -43,6 +43,7 @@ pub(crate) mod procfs;
 pub(crate) mod socket;
 pub(crate) mod sockname;
 pub(crate) mod terminal;
+pub(crate) mod wake;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;

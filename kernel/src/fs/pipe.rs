@@ -82,10 +82,10 @@ pub(crate) struct Pipe {
     buffer: SpinLock<PipeBuffer>,
     /// Woken when a read may no longer wait: bytes arrived, an end opened, or
     /// the last writer left.
-    readable: WaitQueue,
+    readable: Arc<WaitQueue>,
     /// Woken when a write may no longer wait: room was made, an end opened, or
     /// the last reader left.
-    writable: WaitQueue,
+    writable: Arc<WaitQueue>,
     /// Read ends ever opened. Changed only under `buffer`'s lock, so a FIFO
     /// opener can read it consistently with the count of ends open.
     readers_opened: AtomicU64,
@@ -107,8 +107,8 @@ impl Pipe {
     fn new() -> Arc<Pipe> {
         Arc::new(Pipe {
             buffer: SpinLock::new(PipeBuffer::new(PIPE_CAPACITY)),
-            readable: WaitQueue::new(),
-            writable: WaitQueue::new(),
+            readable: Arc::new(WaitQueue::new()),
+            writable: Arc::new(WaitQueue::new()),
             readers_opened: AtomicU64::new(0),
             writers_opened: AtomicU64::new(0),
         })
@@ -242,6 +242,12 @@ impl Inode for End {
     }
 
     fn is_stream(&self) -> bool {
+        true
+    }
+
+    fn poll_queues(&self, visit: &mut dyn FnMut(ferrix_vfs::WakeSource)) -> bool {
+        visit(fs::wake::shared(&self.pipe.readable));
+        visit(fs::wake::shared(&self.pipe.writable));
         true
     }
 

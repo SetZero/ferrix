@@ -3440,6 +3440,30 @@ waiting reader woken by a write, 8 calls refused as Linux refuses them; 0
 frames leaked`. With the write's wake removed, the boot panics with "a waiting
 eventfd reader was ended by its recheck, not by the write's wake".
 
+**Done — waits that wake on the event.** `poll`, `ppoll`, `select`,
+`pselect6` and the epoll waits used to sleep 5 ms and look again, so a
+compositor's frame loop and every idle client paid two hundred wake-ups a
+second and up to 5 ms of latency. Now each pollable object names the wait
+queues it wakes when its readiness changes, through `Inode::poll_queues`:
+pipes, `AF_UNIX`, `AF_INET`, packet and netlink sockets, eventfds, the
+terminal, `/dev/dri/card0` and epoll sets. An epoll set names its registered
+files' queues and a queue of its own that `epoll_ctl` wakes. A wait sleeps on
+all of them at once, as Linux's `poll_wait` does, and a wake of any ends it.
+It still looks again by itself in case a wake is missing, every second when
+every watched object vouches that each change wakes a queue, and every 5 ms
+otherwise. The terminal vouches only when its input is interrupt-driven. A
+readiness question to the net core no longer wakes the stack's waiters: a
+socket wait that asked from inside its own wait used to wake itself, and two
+such waits woke each other. The eventfd check now runs a `poll` and an
+`epoll_wait` in tasks of their own, which a write must end by its wake. A
+300 ms `poll` on a quiet eventfd must look at most 12 times, where looking
+every 5 ms takes about 120. Three controls, each run and each failing the
+boot. With waits that never trust their queues, it panics with "a poll on a
+quiet eventfd kept looking instead of sleeping on its queues" after 119 looks.
+With an eventfd naming no queue, it panics with the same. With an eventfd
+naming only its writable queue, it panics with "a waiting poll was ended by
+looking again, not by the write's wake".
+
 **Done — `ioctl(FIONBIO)`, iteration 2's third kernel row.** `FIONBIO` is
 answered for every file before any file-specific request, as `do_vfs_ioctl`
 answers it. The `int` its argument points at sets `O_NONBLOCK` when not zero

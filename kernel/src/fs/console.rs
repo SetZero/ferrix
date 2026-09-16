@@ -192,4 +192,11 @@ impl Inode for Console {
     fn poll_changes(&self) -> Option<u64> {
         Some(crate::console::input::waiters().wakes())
     }
+
+    /// The input ring's queue, which its receive interrupt wakes: to be
+    /// trusted only when there is one, since polled input wakes nobody.
+    fn poll_queues(&self, visit: &mut dyn FnMut(ferrix_vfs::WakeSource)) -> bool {
+        visit(fs::wake::lent(crate::console::input::waiters()));
+        crate::console::input::interrupt_driven()
+    }
 }

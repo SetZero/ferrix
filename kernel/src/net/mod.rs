@@ -135,6 +135,16 @@ impl NetCore {
         answer
     }
 
+    /// Run `body` with the stack locked and read only, waking nobody.
+    ///
+    /// For a readiness question. [`NetCore::with`] wakes everyone waiting on
+    /// the stack, which is right after a change and wrong for a look: a wait
+    /// that asks whether its socket is ready from inside its own wait would
+    /// wake itself, and two such waits would wake each other forever.
+    pub(crate) fn look<T>(&self, body: impl FnOnce(&Stack) -> T) -> T {
+        body(&self.stack.lock())
+    }
+
     /// Let the clock reach now, and move what that produced.
     fn tick(&self) {
         let at = now();

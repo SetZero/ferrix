@@ -56,6 +56,7 @@ use ferrix_linux_abi::types::{
 use ferrix_vfs::{Errno, Inode, Metadata, OpenFile, Readiness};
 
 use crate::fs;
+use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
 
 /// How deep sets may nest: Linux's `EP_MAX_NESTS`. A chain may hold this many
@@ -129,6 +130,9 @@ pub(crate) struct Epoll {
     state: SpinLock<State>,
     /// Itself, so a registration in another set can name it weakly.
     this: Weak<Epoll>,
+    /// Woken when a registration is added, changed or removed, so a wait on
+    /// the set sees a file added while it sleeps, as `ep_insert` wakes one.
+    changed: Arc<WaitQueue>,
 }
 
 impl fmt::Debug for Epoll {
@@ -146,6 +150,7 @@ pub(crate) fn create() -> Result<Arc<OpenFile>, Errno> {
     let set = Arc::new_cyclic(|this| Epoll {
         state: SpinLock::new(State::default()),
         this: this.clone(),
+        changed: Arc::new(WaitQueue::new()),
     });
     fs::anon::open(set, NAME, false)
 }
@@ -232,6 +237,7 @@ impl Epoll {
         if let Some(inner) = nested {
             inner.state.lock().parents.push(self.this.clone());
         }
+        self.changed.wake_all();
         Ok(())
     }
 
@@ -248,6 +254,13 @@ impl Epoll {
         file: &Arc<OpenFile>,
         interest: Interest,
     ) -> Result<(), Errno> {
+        self.change(fd, file, interest)?;
+        self.changed.wake_all();
+        Ok(())
+    }
+
+    /// [`Epoll::modify`]'s change, under the lock.
+    fn change(&self, fd: i32, file: &Arc<OpenFile>, interest: Interest) -> Result<(), Errno> {
         let key = key_of(file);
         let seen = look(&Arc::downgrade(file)).unwrap_or((0, 0));
         let mut state = self.state.lock();
@@ -296,6 +309,7 @@ impl Epoll {
                 let _ = state.parents.remove(at);
             }
         }
+        self.changed.wake_all();
         Ok(())
     }
 
@@ -471,6 +485,23 @@ impl Inode for Epoll {
             hangup: false,
             error: false,
         }
+    }
+
+    /// Its own queue, and every registered file's.
+    fn poll_queues(&self, visit: &mut dyn FnMut(ferrix_vfs::WakeSource)) -> bool {
+        visit(fs::wake::shared(&self.changed));
+        let files: Vec<Arc<OpenFile>> = self
+            .state
+            .lock()
+            .items
+            .iter()
+            .filter_map(|item| item.file.upgrade())
+            .collect();
+        let mut trusted = true;
+        for file in files {
+            trusted &= file.poll_queues(visit);
+        }
+        trusted
     }
 
     /// The set's own changes, and every file's in it.

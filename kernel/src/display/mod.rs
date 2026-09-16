@@ -133,7 +133,7 @@ pub(crate) struct Card {
     scanouts: usize,
     control: Arc<Endpoint>,
     state: SpinLock<State>,
-    changed: WaitQueue,
+    changed: Arc<WaitQueue>,
     /// Whether an open holds the card: one at a time.
     pub(crate) opened: AtomicBool,
 }
@@ -681,7 +681,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
             unwanted: Vec::new(),
             scanout_off: false,
         }),
-        changed: WaitQueue::new(),
+        changed: Arc::new(WaitQueue::new()),
         opened: AtomicBool::new(false),
     });
 

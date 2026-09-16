@@ -224,6 +224,30 @@ impl Readiness {
     };
 }
 
+/// A queue an object wakes when what [`Inode::poll`] reports may have
+/// changed, as [`Inode::poll_queues`] names it.
+///
+/// Opaque here: the queue is the kernel's, which this crate cannot name, so
+/// it is handed over as `Any` for the kernel to recognise. A queue that lives
+/// as long as the kernel is lent; one that lives inside an object that can go
+/// is shared, so a wait holds it for as long as it waits.
+#[derive(Clone)]
+pub enum WakeSource {
+    /// A queue that is never freed.
+    Static(&'static (dyn Any + Send + Sync)),
+    /// A queue held by reference count.
+    Shared(Arc<dyn Any + Send + Sync>),
+}
+
+impl fmt::Debug for WakeSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            WakeSource::Static(_) => "WakeSource::Static",
+            WakeSource::Shared(_) => "WakeSource::Shared",
+        })
+    }
+}
+
 /// What `statfs` reports about a mounted filesystem.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StatFs {
@@ -395,6 +419,18 @@ pub trait Inode: Send + Sync + fmt::Debug {
     /// [`Inode::poll`] to report a state of its own answers `Some`.
     fn poll_changes(&self) -> Option<u64> {
         None
+    }
+
+    /// The queues this object wakes when its readiness may have changed, each
+    /// handed to `visit`, so a `poll` or `epoll_wait` can sleep on them rather
+    /// than asking again every few milliseconds.
+    ///
+    /// Answers whether every change to what [`Inode::poll`] reports wakes one
+    /// of them. A wait may then sleep long between its own looks; when not --
+    /// the default, which names no queue -- it keeps looking often.
+    fn poll_queues(&self, visit: &mut dyn FnMut(WakeSource)) -> bool {
+        let _ = visit;
+        false
     }
 
     /// Whether this object has no position: a terminal, a pipe. Offsets passed

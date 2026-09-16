@@ -105,7 +105,7 @@ struct OpenState {
 pub(crate) struct CardFile {
     card: Arc<Card>,
     state: SpinLock<OpenState>,
-    readable: WaitQueue,
+    readable: Arc<WaitQueue>,
     /// Held across a whole mode change (`SETCRTC`, `PAGE_FLIP`, `RMFB`), so
     /// two threads' changes cannot leave `shown` disagreeing with the device.
     /// A sleep lock: the changes wait for the driver, and no spin lock is
@@ -146,7 +146,7 @@ impl CardFile {
                 next_framebuffer: 1,
                 ..OpenState::default()
             }),
-            readable: WaitQueue::new(),
+            readable: Arc::new(WaitQueue::new()),
             modeset: SleepLock::new((), &SchedParker),
         }))
     }
@@ -198,6 +198,12 @@ impl Inode for CardFile {
 
     /// The events queue's wakes, and the card's, which a driver that goes
     /// wakes.
+    fn poll_queues(&self, visit: &mut dyn FnMut(ferrix_vfs::WakeSource)) -> bool {
+        visit(crate::fs::wake::shared(&self.readable));
+        visit(crate::fs::wake::shared(&self.card.changed));
+        true
+    }
+
     fn poll_changes(&self) -> Option<u64> {
         Some(
             self.readable

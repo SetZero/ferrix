@@ -94,7 +94,7 @@ pub use file::{OpenFile, OpenFlags, Whence};
 pub use namespace::{Context, DEFAULT_CACHE, Location, Mount, Namespace, RenameMode, Stat};
 pub use node::{
     Clock, DirEntry, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, Readiness,
-    SetAttributes, StatFs, Timespec,
+    SetAttributes, StatFs, Timespec, WakeSource,
 };
 
 /// The result every operation here returns: a value, or the error number a

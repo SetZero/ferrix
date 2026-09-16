@@ -372,8 +372,9 @@ fn check_eventfd() {
         ),
     };
     println!(
-        "  eventfd  {} values read back, a waiting reader woken by a write, {} calls refused as \
-         Linux refuses them; {} frames leaked",
+        "  eventfd  {} values read back, a waiting reader, poll and epoll_wait each woken by a \
+         write, a quiet poll asleep on its queues, {} calls refused as Linux refuses them; {} \
+         frames leaked",
         checked.reads, checked.refusals, checked.leaked,
     );
 }

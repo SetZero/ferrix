@@ -3,14 +3,11 @@
 //!
 //! # How a wait waits
 //!
-//! By asking again. Each descriptor's [`OpenFile::poll`] says what it is ready
-//! for right now, and a call with nothing ready sleeps a few milliseconds and
-//! asks again, until something is, the timeout passes, or the caller is ended.
-//! That is not how Linux does it -- a file registers the waiter and wakes it
-//! -- and it costs a wake-up per slice while a program waits. It is also all
-//! that anything here needs yet: a regular file is always ready, the console
-//! drains its UART when asked, and nothing that can be unready without a waker
-//! exists until pipes do, which is when files learn to wake a waiter.
+//! Each descriptor's [`OpenFile::poll`] says what it is ready for right now.
+//! A call with nothing ready sleeps on the wait queues of every file it
+//! watches, as Linux's `poll_wait` does, and asks again when one is woken, the
+//! timeout passes or a signal wakes the caller. [`crate::fs::wake`] says how
+//! the queues are gathered and how long a wait trusts them.
 //!
 //! # Two encodings of one question
 //!
@@ -36,7 +33,7 @@ use alloc::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
 
-use crate::sched;
+use crate::fs::wake::Sources;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
 use crate::syscall::signal;
@@ -68,9 +65,6 @@ const POLLFD_BYTES: usize = 8;
 const WORD_BYTES: usize = size_of::<usize>();
 /// Bits in one.
 const WORD_BITS: usize = WORD_BYTES * 8;
-
-/// How long a wait with nothing ready sleeps before asking again.
-const SLICE_NANOS: u64 = 5_000_000;
 
 /// Nanoseconds in a second, in a millisecond and in a microsecond.
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
@@ -365,10 +359,12 @@ fn now() -> u64 {
 }
 
 /// Ask `scan` until it counts something ready or `deadline` passes, and
-/// return its last count.
+/// return its last count, sleeping in between on the wait queues of the
+/// files `fds` name.
 fn wait_for(
     process: &Process,
     deadline: Option<u64>,
+    fds: &[i32],
     mut scan: impl FnMut() -> Result<usize, Errno>,
 ) -> Result<usize, Errno> {
     loop {
@@ -384,8 +380,18 @@ fn wait_for(
         if process.signal_pending() {
             return Err(Errno::ERESTARTNOHAND);
         }
-        let slice = now().saturating_add(SLICE_NANOS);
-        sched::sleep_until(deadline.map_or(slice, |at| at.min(slice)));
+        // Gathered afresh each time round: a descriptor closed or replaced
+        // while this slept names another file, or none, now.
+        let mut sources = Sources::new();
+        for &fd in fds {
+            if let Ok(file) = fd::file(process, fd) {
+                sources.add(&file);
+            }
+        }
+        let _ = sources.wait(
+            || scan().map_or(true, |ready| ready > 0) || process.signal_pending(),
+            deadline.unwrap_or(u64::MAX),
+        );
     }
 }
 
@@ -401,7 +407,16 @@ fn wait(process: &Process, fds: u64, nfds: u64, deadline: Option<u64>) -> Result
     if !entries.is_empty() {
         uaccess::copy_from_user(process.space(), fds, &mut entries).map_err(|_| Errno::EFAULT)?;
     }
-    let ready = wait_for(process, deadline, || scan(process, &mut entries))?;
+    let watched: Vec<i32> = entries
+        .chunks_exact(POLLFD_BYTES)
+        .filter_map(|entry| {
+            entry
+                .first_chunk::<4>()
+                .map(|bytes| i32::from_le_bytes(*bytes))
+        })
+        .filter(|&fd| fd >= 0)
+        .collect();
+    let ready = wait_for(process, deadline, &watched, || scan(process, &mut entries))?;
     if !entries.is_empty() {
         uaccess::copy_to_user(process.space(), fds, &entries).map_err(|_| Errno::EFAULT)?;
     }
@@ -506,7 +521,11 @@ fn select(
     }
 
     let mut answer = [vec![0_u8; bytes], vec![0_u8; bytes], vec![0_u8; bytes]];
-    let ready = wait_for(process, deadline, || {
+    let fds: Vec<i32> = (0..count)
+        .filter(|&number| wanted.iter().flatten().any(|set| bit(set, number)))
+        .filter_map(|number| i32::try_from(number).ok())
+        .collect();
+    let ready = wait_for(process, deadline, &fds, || {
         scan_sets(process, count, &wanted, &mut answer)
     })?;
     for (&at, set) in sets.iter().zip(&answer) {

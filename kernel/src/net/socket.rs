@@ -221,7 +221,7 @@ impl InetSocket {
 
     /// What it can do right now.
     pub(crate) fn readiness(&self) -> Readiness {
-        let ready = net::core().with(|stack, _| stack.readiness(self.id));
+        let ready = net::core().look(|stack| stack.readiness(self.id));
         Readiness {
             readable: ready.readable,
             writable: ready.writable,
@@ -951,6 +951,11 @@ impl Inode for InetSocket {
     /// readiness reads wakes.
     fn poll_changes(&self) -> Option<u64> {
         Some(net::core().progress().wakes())
+    }
+
+    fn poll_queues(&self, visit: &mut dyn FnMut(ferrix_vfs::WakeSource)) -> bool {
+        visit(fs::wake::lent(net::core().progress()));
+        true
     }
 
     fn read_stream(&self, buf: &mut [u8], nonblock: bool) -> ferrix_vfs::Result<usize> {

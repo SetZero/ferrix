@@ -42,9 +42,9 @@ pub(crate) struct EventFd {
     /// `EFD_SEMAPHORE`: a read takes one.
     semaphore: bool,
     /// Woken when a read may no longer wait: the counter went above zero.
-    readable: WaitQueue,
+    readable: Arc<WaitQueue>,
     /// Woken when a write may no longer wait: a read took from the counter.
-    writable: WaitQueue,
+    writable: Arc<WaitQueue>,
 }
 
 impl fmt::Debug for EventFd {
@@ -69,8 +69,8 @@ pub(crate) fn create(
     let eventfd = Arc::new(EventFd {
         count: SpinLock::new(u64::from(initial)),
         semaphore,
-        readable: WaitQueue::new(),
-        writable: WaitQueue::new(),
+        readable: Arc::new(WaitQueue::new()),
+        writable: Arc::new(WaitQueue::new()),
     });
     fs::anon::open(eventfd, NAME, nonblock)
 }
@@ -142,6 +142,12 @@ impl Inode for EventFd {
             hangup: false,
             error: count == u64::MAX,
         }
+    }
+
+    fn poll_queues(&self, visit: &mut dyn FnMut(ferrix_vfs::WakeSource)) -> bool {
+        visit(fs::wake::shared(&self.readable));
+        visit(fs::wake::shared(&self.writable));
+        true
     }
 
     fn poll_changes(&self) -> Option<u64> {

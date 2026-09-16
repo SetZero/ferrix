@@ -1064,19 +1064,28 @@ and poll stops answering writable there. A blocking read must wait, and a write
 must end the wait by waking it. Registered edge-triggered in an epoll set, the
 eventfd must be reported after each write although it stays readable. A flag
 eventfd2 does not take, a buffer shorter than eight bytes, a write of u64::MAX
-and lseek are refused as Linux refuses them. The run is done twice and must
-leave no frame behind.
+and lseek are refused as Linux refuses them. A poll and an epoll_wait waiting on
+an eventfd in tasks of their own must be ended by a write's wake, and a 300 ms
+poll on a quiet eventfd must look at most 12 times, sleeping on its queues
+rather than looking every 5 ms. The run is done twice and must leave no frame
+behind.
 
-1. `EventFd::write_stream` does not wake the readable queue, or `read_stream`
+1. A pollable inode's `poll_queues` names a queue other than the one its changes
+   wake, or `WaitQueue::wait_on_any` does not put the task on every queue, so a
+   poll or an epoll_wait is ended by its recheck.
+2. `Sources::recheck` does not trust queues every file vouched for, or an inode
+   answers `false` from `poll_queues`, so a quiet wait looks every 5 ms.
+3. `EventFd::write_stream` does not wake the readable queue, or `read_stream`
    the writable one, so a waiting reader sleeps until its recheck and an
    edge-triggered registration misses the second write.
-2. `fits` lets the counter reach u64::MAX, or `poll` measures writable against a
+4. `fits` lets the counter reach u64::MAX, or `poll` measures writable against a
    different limit than a write does.
-3. `sys_eventfd2` takes a flag Linux refuses, or does not pass EFD_NONBLOCK to
+5. `sys_eventfd2` takes a flag Linux refuses, or does not pass EFD_NONBLOCK to
    the open file.
 
 See: kernel/src/fs/eventfd_check.rs; kernel/src/fs/eventfd.rs;
-kernel/src/syscall/eventfd.rs; kernel/src/fs/anon.rs.
+kernel/src/fs/wake.rs; kernel/src/sched/wait.rs; kernel/src/syscall/eventfd.rs;
+kernel/src/fs/anon.rs.
 
 <a id="fx-0901"></a>
 

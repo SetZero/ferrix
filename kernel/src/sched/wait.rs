@@ -80,6 +80,15 @@ pub(crate) struct WaitQueue {
     wakes: AtomicU64,
 }
 
+/// Count a wait ended on each of `queues` whose wake took the task off it.
+fn count_wakes(queues: &[&WaitQueue], drained: &[bool]) {
+    for (queue, was) in queues.iter().zip(drained) {
+        if *was {
+            let _ = queue.woken.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 impl WaitQueue {
     /// A queue with nobody on it.
     pub(crate) const fn new() -> WaitQueue {
@@ -186,6 +195,64 @@ impl WaitQueue {
             // for the paths that leave without being drained: the recheck
             // timer, and the condition coming true.
             drained = !self.unqueue(task.id);
+        }
+    }
+
+    /// Block until `ready` is true or `deadline` passes, woken by a wake of
+    /// any of `queues`, and otherwise looking again every `recheck`
+    /// nanoseconds. Answers whether `ready` was the reason.
+    ///
+    /// [`WaitQueue::wait_until_deadline`] for several queues at once, in the
+    /// same order and for the same reasons: on every queue and the deadline
+    /// set before the task is marked blocked, the last look after, and off
+    /// every queue on the way out. A wake of one queue leaves the task listed
+    /// on the others until then, and a second wake of a task already runnable
+    /// changes nothing. A wait that one of the queues' wakes ended counts on
+    /// that queue, as a single queue's does.
+    ///
+    /// `recheck` is how long the wait trusts its queues. `poll` and
+    /// `epoll_wait` pass a long one when every file they watch wakes a queue
+    /// on every change, so a program waiting on quiet files is not woken
+    /// every few milliseconds to find them still quiet.
+    pub(crate) fn wait_on_any(
+        queues: &[&WaitQueue],
+        mut ready: impl FnMut() -> bool,
+        deadline: u64,
+        recheck: u64,
+    ) -> bool {
+        let mut drained: Vec<bool> = alloc::vec![false; queues.len()];
+        loop {
+            if ready() {
+                count_wakes(queues, &drained);
+                return true;
+            }
+            if crate::timer::now_nanos() >= deadline {
+                return false;
+            }
+            let Some(task) = super::current() else {
+                core::hint::spin_loop();
+                continue;
+            };
+            let slice = crate::timer::now_nanos().saturating_add(recheck);
+            let wake_at = if slice < deadline { slice } else { deadline };
+            task.set_sleep_deadline(wake_at);
+            for queue in queues {
+                queue.waiters.lock().push(Arc::clone(&task));
+            }
+            task.set_state(BLOCKED);
+            if ready() {
+                task.set_state(RUNNABLE);
+                let _ = task.take_sleep_deadline();
+                for queue in queues {
+                    let _ = queue.unqueue(task.id);
+                }
+                return true;
+            }
+            super::block();
+            let _ = task.take_sleep_deadline();
+            for (queue, was) in queues.iter().zip(drained.iter_mut()) {
+                *was = !queue.unqueue(task.id);
+            }
         }
     }
 

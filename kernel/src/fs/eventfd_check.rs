@@ -24,6 +24,7 @@ use ferrix_linux_abi::types::{
 };
 use ferrix_vfs::{Errno, OpenFile};
 
+use crate::fs;
 use crate::fs::eventfd::{self, VALUE_BYTES};
 use crate::mm;
 use crate::sched::WaitQueue;
@@ -31,7 +32,7 @@ use crate::sync::SpinLock;
 use crate::syscall::check as syscall_check;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
-use crate::syscall::{epoll, fd, file, uaccess};
+use crate::syscall::{epoll, fd, file, poll, uaccess};
 
 /// Where a value to write is staged, and where reads land.
 const AT_VALUE: u64 = 0;
@@ -45,6 +46,24 @@ const AT_EVENTS: u64 = 64;
 const PATIENCE_NANOS: u64 = 2_000_000_000;
 /// How long a reader must still be waiting before the write, in nanoseconds.
 const STILL_WAITING_NANOS: u64 = 20_000_000;
+
+/// How long the quiet poll waits.
+const QUIET_POLL_MILLIS: i32 = 300;
+/// The most looks a quiet poll may take in that time: a wait trusting its
+/// queues takes two or three, one looking every 5 ms about a hundred and
+/// twenty.
+const QUIET_POLL_LOOKS: u64 = 12;
+/// The waiting `poll` or `epoll_wait`'s own timeout, far past the patience.
+const WAITER_TIMEOUT_MILLIS: i32 = 10_000;
+
+/// What the waiting `poll` or `epoll_wait` watches: the process, its page, the
+/// descriptor, and which call.
+static WAITER_SUBJECT: SpinLock<Option<Subject>> = SpinLock::new(None);
+
+/// What a waiting task is to wait on.
+type Subject = (Arc<Process>, u64, i32, HowWaits);
+/// What it answered.
+static WAITER_ANSWER: SpinLock<Option<Result<usize, Errno>>> = SpinLock::new(None);
 
 /// The eventfd the waiting reader reads.
 static READER_FILE: SpinLock<Option<Arc<OpenFile>>> = SpinLock::new(None);
@@ -94,7 +113,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 }
 
 /// One run.
-fn check_once(process: &Process) -> Result<Counts, &'static str> {
+fn check_once(process: &Arc<Process>) -> Result<Counts, &'static str> {
     let page = memory::sys_mmap(
         process,
         &MmapRequest {
@@ -113,7 +132,9 @@ fn check_once(process: &Process) -> Result<Counts, &'static str> {
     let outcome = check_counting(process, page, &mut counts)
         .and_then(|()| check_the_ceiling(process, page, &mut counts))
         .and_then(|()| check_a_blocked_read_is_woken(&mut counts))
-        .and_then(|()| check_edges_in_epoll(process, page, &mut counts));
+        .and_then(|()| check_edges_in_epoll(process, page, &mut counts))
+        .and_then(|()| check_a_quiet_poll_sleeps(process, page))
+        .and_then(|()| check_waits_are_woken(process, page, &mut counts));
     for fd in 3..32 {
         let _ = fd::sys_close(process, fd);
     }
@@ -348,6 +369,136 @@ fn check_edges_in_epoll(
     counts.reads += 1;
     closed(process, set)?;
     closed(process, counter)
+}
+
+/// A `poll` on a quiet eventfd sleeps on its queues through its whole
+/// timeout, looking at the eventfd a handful of times, not every 5 ms.
+fn check_a_quiet_poll_sleeps(process: &Process, page: u64) -> Result<(), &'static str> {
+    let counter = create(process, 0, 0)?;
+    stage_pollfd(process, page, counter)?;
+    let before = fs::wake::looks();
+    if poll::sys_poll(process, page + AT_EVENT, 1, QUIET_POLL_MILLIS) != Ok(0) {
+        return Err("a poll on a quiet eventfd did not time out with zero");
+    }
+    let looked = fs::wake::looks().saturating_sub(before);
+    if looked > QUIET_POLL_LOOKS {
+        crate::console::println!(
+            "  eventfd  a {QUIET_POLL_MILLIS} ms poll on a quiet eventfd looked {looked} times"
+        );
+        return Err("a poll on a quiet eventfd kept looking instead of sleeping on its queues");
+    }
+    closed(process, counter)
+}
+
+/// A `poll` and an `epoll_wait` waiting on an eventfd, each in a task of its
+/// own, are ended by a write's wake, not by their own looking again.
+fn check_waits_are_woken(
+    process: &Arc<Process>,
+    page: u64,
+    counts: &mut Counts,
+) -> Result<(), &'static str> {
+    for how in [HowWaits::Poll, HowWaits::Epoll] {
+        let counter = create(process, 0, 0)?;
+        let file = fd::file(process, counter).map_err(|_| "the eventfd is gone")?;
+        let inner = eventfd::of(&file).ok_or("an eventfd is not one")?;
+        let target = match how {
+            HowWaits::Poll => {
+                stage_pollfd(process, page, counter)?;
+                counter
+            }
+            HowWaits::Epoll => {
+                let set = descriptor(
+                    epoll::sys_epoll_create1(process, 0),
+                    "epoll_create1 was refused",
+                )?;
+                uaccess::copy_to_user(
+                    process.space(),
+                    page + AT_EVENT,
+                    &epoll::encode(EPOLLIN, 0x77),
+                )
+                .map_err(|_| "could not stage an epoll event")?;
+                if epoll::sys_epoll_ctl(process, set, EPOLL_CTL_ADD, counter, page + AT_EVENT)
+                    != Ok(0)
+                {
+                    return Err("an eventfd could not be added to an epoll set");
+                }
+                set
+            }
+        };
+        *WAITER_ANSWER.lock() = None;
+        *WAITER_SUBJECT.lock() = Some((Arc::clone(process), page, target, how));
+        let ended_before = inner.waits_ended_by_a_wake();
+        let waiter =
+            crate::sched::spawn("poll-waiter", poll_waiter, 0, ferrix_sched::NICE_0_WEIGHT)?;
+        crate::sched::sleep_for(STILL_WAITING_NANOS);
+        if WAITER_ANSWER.lock().is_some() {
+            return Err("a poll or epoll_wait on an empty eventfd did not wait");
+        }
+        write_value(process, page, counter, 1)?;
+        let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+        let _ = READER_DONE.wait_until_deadline(|| WAITER_ANSWER.lock().is_some(), deadline);
+        let answer = WAITER_ANSWER.lock().take();
+        drop(waiter);
+        if answer != Some(Ok(1)) {
+            return Err("a poll or epoll_wait did not answer one ready eventfd after a write");
+        }
+        if inner.waits_ended_by_a_wake() == ended_before {
+            return Err(match how {
+                HowWaits::Poll => {
+                    "a waiting poll was ended by looking again, not by the write's wake"
+                }
+                HowWaits::Epoll => {
+                    "a waiting epoll_wait was ended by looking again, not by the write's wake"
+                }
+            });
+        }
+        counts.reads += 1;
+        drop(file);
+        if how == HowWaits::Epoll {
+            closed(process, target)?;
+        }
+        closed(process, counter)?;
+    }
+    Ok(())
+}
+
+/// Which call the waiting task makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HowWaits {
+    /// `poll` on the eventfd.
+    Poll,
+    /// `epoll_wait` on a set holding it.
+    Epoll,
+}
+
+/// The waiting task: one `poll` or `epoll_wait` on what [`WAITER_SUBJECT`]
+/// names, with a timeout far past the check's patience.
+fn poll_waiter(_argument: usize) {
+    let subject = WAITER_SUBJECT.lock().take();
+    let answer = match subject {
+        Some((process, page, _, HowWaits::Poll)) => {
+            poll::sys_poll(&process, page + AT_EVENT, 1, WAITER_TIMEOUT_MILLIS)
+        }
+        Some((process, page, target, HowWaits::Epoll)) => {
+            epoll::sys_epoll_wait(&process, target, page + AT_EVENTS, 4, WAITER_TIMEOUT_MILLIS)
+        }
+        None => Err(Errno::ESRCH),
+    };
+    *WAITER_ANSWER.lock() = Some(answer);
+    READER_DONE.wake_all();
+}
+
+/// Stage a `struct pollfd` asking `fd` for `POLLIN` where [`AT_EVENT`] is.
+fn stage_pollfd(process: &Process, page: u64, fd: i32) -> Result<(), &'static str> {
+    let mut entry = [0_u8; 8];
+    for (slot, byte) in entry.iter_mut().zip(fd.to_le_bytes()) {
+        *slot = byte;
+    }
+    for (slot, byte) in entry.iter_mut().skip(4).zip(poll::POLLIN.to_le_bytes()) {
+        *slot = byte;
+    }
+    uaccess::copy_to_user(process.space(), page + AT_EVENT, &entry)
+        .map_err(|_| "could not stage a pollfd")
 }
 
 /// `eventfd2(initial, flags)` by number, as a descriptor.

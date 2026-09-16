@@ -452,6 +452,11 @@ impl Inode for NetlinkSocket {
         Some(net::core().progress().wakes())
     }
 
+    fn poll_queues(&self, visit: &mut dyn FnMut(ferrix_vfs::WakeSource)) -> bool {
+        visit(fs::wake::lent(net::core().progress()));
+        true
+    }
+
     fn read_stream(&self, buf: &mut [u8], nonblock: bool) -> ferrix_vfs::Result<usize> {
         self.recv(buf, 0, nonblock)
             .map(|(received, _from)| received.bytes)

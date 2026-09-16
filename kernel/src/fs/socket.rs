@@ -171,10 +171,10 @@ struct Channel {
     buffer: SpinLock<SocketBuffer<Ancillary>>,
     /// Woken when a read may no longer wait: data arrived, or the writer left
     /// or shut this direction down.
-    readable: WaitQueue,
+    readable: Arc<WaitQueue>,
     /// Woken when a write may no longer wait: room was made, or the reader
     /// left or shut this direction down.
-    writable: WaitQueue,
+    writable: Arc<WaitQueue>,
     /// Whether this direction takes no more writes: its reader shut it down,
     /// or went. See the module documentation for why the buffer's own state
     /// is not enough.
@@ -194,8 +194,8 @@ impl Channel {
     fn new(kind: SocketType) -> Arc<Channel> {
         Arc::new(Channel {
             buffer: SpinLock::new(SocketBuffer::new(kind.buffer_kind(), SOCKET_BUFFER_DEFAULT)),
-            readable: WaitQueue::new(),
-            writable: WaitQueue::new(),
+            readable: Arc::new(WaitQueue::new()),
+            writable: Arc::new(WaitQueue::new()),
             refused: AtomicBool::new(false),
         })
     }
@@ -254,7 +254,7 @@ pub(crate) struct Socket {
     listener: SpinLock<Option<Backlog>>,
     /// Woken when the backlog changes: an `accept` waits here for a
     /// connection, and a `connect` waits here for room.
-    arrivals: WaitQueue,
+    arrivals: Arc<WaitQueue>,
     /// What `stat` reports through it.
     metadata: Metadata,
 }
@@ -379,7 +379,7 @@ impl Socket {
             bound: SpinLock::new(None),
             peer_name: SpinLock::new(None),
             listener: SpinLock::new(None),
-            arrivals: WaitQueue::new(),
+            arrivals: Arc::new(WaitQueue::new()),
             metadata: Metadata {
                 ino,
                 kind: FileType::Socket,
@@ -1235,6 +1235,18 @@ impl Inode for Socket {
 
     fn poll(&self) -> Readiness {
         self.readiness()
+    }
+
+    /// Every queue its readiness reads, as [`Inode::poll_changes`] sums them.
+    fn poll_queues(&self, visit: &mut dyn FnMut(ferrix_vfs::WakeSource)) -> bool {
+        visit(fs::wake::shared(&self.receive.readable));
+        visit(fs::wake::shared(&self.receive.writable));
+        if let Some(peer) = self.send.lock().as_ref() {
+            visit(fs::wake::shared(&peer.readable));
+            visit(fs::wake::shared(&peer.writable));
+        }
+        visit(fs::wake::shared(&self.arrivals));
+        true
     }
 
     /// Every queue its readiness reads: its own direction's two, its peer's

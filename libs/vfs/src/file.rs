@@ -415,6 +415,15 @@ impl OpenFile {
         self.io.poll_changes()
     }
 
+    /// What the opened object's [`Inode::poll_queues`] answers: nothing, and
+    /// `false`, for a file opened with `O_PATH`.
+    pub fn poll_queues(&self, visit: &mut dyn FnMut(crate::WakeSource)) -> bool {
+        if self.path_only {
+            return false;
+        }
+        self.io.poll_queues(visit)
+    }
+
     /// `lseek`.
     ///
     /// # Errors
