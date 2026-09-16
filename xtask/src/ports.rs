@@ -45,6 +45,26 @@ pub(crate) const FILES: &[Installed] = &[
         port: "curl",
     },
     Installed {
+        path: "usr/libexec/ferrix/ssl_server2",
+        mode: 0o755,
+        port: "curl",
+    },
+    Installed {
+        path: "usr/share/ferrix/tls-test/server5.crt",
+        mode: 0o644,
+        port: "curl",
+    },
+    Installed {
+        path: "usr/share/ferrix/tls-test/server5.key",
+        mode: 0o644,
+        port: "curl",
+    },
+    Installed {
+        path: "usr/share/ferrix/tls-test/test-ca2.crt",
+        mode: 0o644,
+        port: "curl",
+    },
+    Installed {
         path: "bin/btop",
         mode: 0o755,
         port: "btop",

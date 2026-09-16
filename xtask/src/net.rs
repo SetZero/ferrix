@@ -574,8 +574,22 @@ fn curl_commands(http: u16, digest: u32) -> Vec<Command> {
             status: 0,
             expect: Expect::Lines(leak_argv(vec![format!("{digest} {BIG_BYTES}")])),
         },
+        // HTTPS, inside the guest: Mbed TLS's test server on the loopback
+        // with its certificate for `localhost`, and curl trusting its test
+        // CA. The certificates' validity starts in 2023 and 2019, so this
+        // passes only on a guest whose clock came from firmware; a guest at
+        // 1970 is refused with curl's 60. The second fetch trusts only the
+        // image's Mozilla bundle, which must refuse the test CA.
+        Command {
+            argv: &["sh", "-c", HTTPS_PROGRAM],
+            status: 0,
+            expect: Expect::Lines(&["verified 1", "untrusted 60"]),
+        },
     ]
 }
+
+/// [`curl_commands`]' HTTPS program.
+const HTTPS_PROGRAM: &str = "T=/usr/share/ferrix/tls-test; /usr/libexec/ferrix/ssl_server2 server_port=4433 crt_file=$T/server5.crt key_file=$T/server5.key >/dev/null 2>&1 & sleep 3; echo verified $(curl -sS --cacert $T/test-ca2.crt https://localhost:4433/ | grep -c 'Successful connection'); curl -sS -o /dev/null https://localhost:4433/ 2>/dev/null; echo untrusted $?; kill $!";
 
 /// Leak owned strings into the `'static` slice a [`Command`] holds, for its
 /// arguments and for the lines it must print.
