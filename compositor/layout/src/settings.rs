@@ -102,6 +102,10 @@ pub struct Settings {
     /// `general:border_size`, not negative: reserved inside the gap on every
     /// edge of a window that is not fullscreen.
     pub border_size: i64,
+    /// `general:no_focus_fallback`: when `movefocus` finds no window and no
+    /// monitor in its direction, do nothing rather than wrap around to the
+    /// far edge of the monitor.
+    pub no_focus_fallback: bool,
     /// The dwindle layout's options.
     pub dwindle: DwindleSettings,
     /// The master layout's options.
@@ -148,6 +152,7 @@ impl Settings {
             gaps_in: config.gaps("general:gaps_in").unwrap_or(Gaps::all(5)),
             gaps_out: config.gaps("general:gaps_out").unwrap_or(Gaps::all(20)),
             border_size: config.int("general:border_size").unwrap_or(1).max(0),
+            no_focus_fallback: config.bool("general:no_focus_fallback").unwrap_or(false),
             dwindle: DwindleSettings {
                 preserve_split: config.bool("dwindle:preserve_split").unwrap_or(false),
                 force_split,

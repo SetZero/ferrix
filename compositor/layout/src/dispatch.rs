@@ -38,13 +38,14 @@ impl Direction {
 /// Which workspace a `workspace` or `movetoworkspace` argument names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceTarget {
-    /// `N`: workspace N, from 1.
+    /// `N`: workspace N; 0 means 1, as Hyprland clamps it.
     Id(WorkspaceId),
     /// `+N` or `-N`: the workspace N numbers after or before the current
     /// one, never below 1, created if need be.
     Relative(i64),
-    /// `e+N` or `e-N`: N places along the workspaces that exist, in number
-    /// order, wrapping around.
+    /// `e+N` or `e-N`: N places along the workspaces that exist on every
+    /// monitor, in number order, wrapping around (`m+N`, the same on the
+    /// focused monitor only, is not accepted).
     Open(i64),
 }
 
@@ -71,8 +72,7 @@ impl WorkspaceTarget {
         }
         text.parse::<i64>()
             .ok()
-            .filter(|id| *id >= 1)
-            .map(|id| Self::Id(WorkspaceId(id)))
+            .map(|id| Self::Id(WorkspaceId(id.max(1))))
     }
 }
 
@@ -81,8 +81,9 @@ impl WorkspaceTarget {
 pub enum FullscreenMode {
     /// `fullscreen, 0`: the whole monitor, no gaps and no border.
     Fullscreen,
-    /// `fullscreen, 1`: the workspace's usable area, as a lone tiled window
-    /// would have it, gaps and border kept.
+    /// `fullscreen, 1`: the workspace's work area, as a lone tiled window
+    /// would have it, gaps and border kept. As in Hyprland, the other
+    /// windows on the workspace are hidden in this mode too.
     Maximized,
 }
 
@@ -90,10 +91,13 @@ pub enum FullscreenMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dispatcher {
     /// `movefocus`: focus the neighbour in a direction, or the monitor
-    /// there if there is no window.
+    /// there if there is no window, or else, unless
+    /// `general:no_focus_fallback` is set, the window at the far edge of
+    /// the focused monitor.
     MoveFocus(Direction),
-    /// `movewindow`: exchange the focused tiled window with its neighbour in
-    /// a direction, or move it to the monitor there if there is no window.
+    /// `movewindow`: move the focused tiled window past its neighbour in a
+    /// direction, the way the layout does it, or to the monitor there if
+    /// there is no window.
     MoveWindow(Direction),
     /// `workspace`: show a workspace, creating it if need be.
     Workspace(WorkspaceTarget),

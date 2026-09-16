@@ -15,6 +15,13 @@
 //! between several neighbours by recency, as `binds:focus_preferred_method`
 //! 0 does.
 //!
+//! A fullscreen window, in either mode, hides every other window on its
+//! workspace, as Hyprland's `setFullscreenFadeAnimation` fades them to
+//! nothing. Hyprland leaves visible the floating windows opened or raised
+//! over it (`m_createdOverFullscreen`); here they stay hidden, and a new
+//! window opens behind the fullscreen one. The direction searches skip the
+//! hidden windows, where Hyprland's find them on other monitors.
+//!
 //! Every public method that changes anything returns the [`Change`]s it
 //! caused. The ones only a caller can act on (a close request, a window
 //! moved, floated or made fullscreen) are reported as they happen; which
@@ -23,7 +30,7 @@
 //! after, so none can be forgotten.
 
 use std::collections::BTreeMap;
-use std::f64::consts::PI;
+use std::f64::consts::{FRAC_PI_2, PI};
 
 use compositor_config::{Bind, Config};
 
@@ -138,6 +145,23 @@ impl Tiling {
         }
     }
 
+    /// Add `new` at a point, as the dwindle layout puts back a window
+    /// `movewindow` took out; the master layout adds it as it would a new
+    /// one.
+    fn insert_at(
+        &mut self,
+        new: WindowId,
+        point: (f64, f64),
+        toward: Option<Direction>,
+        area: Area,
+        settings: &Settings,
+    ) {
+        match self {
+            Self::Dwindle(dwindle) => dwindle.insert_at(new, point, toward, area, settings),
+            Self::Master(master) => master.insert(new, None, settings),
+        }
+    }
+
     fn remove(&mut self, window: WindowId) {
         match self {
             Self::Dwindle(dwindle) => dwindle.remove(window),
@@ -145,10 +169,11 @@ impl Tiling {
         }
     }
 
+    /// Exchange two windows' places in the master layout; the dwindle
+    /// layout never exchanges windows.
     fn swap(&mut self, a: WindowId, b: WindowId) {
-        match self {
-            Self::Dwindle(dwindle) => dwindle.swap(a, b),
-            Self::Master(master) => master.swap(a, b),
+        if let Self::Master(master) = self {
+            master.swap(a, b);
         }
     }
 
@@ -209,6 +234,21 @@ struct Snapshot {
     focus: Option<WindowId>,
     monitor: Option<MonitorId>,
     layout: Vec<MonitorLayout>,
+}
+
+/// A window a direction search can find.
+#[derive(Debug, Clone, Copy)]
+struct Candidate {
+    window: WindowId,
+    workspace: WorkspaceId,
+    /// Where the layout put it: its slot if tiled, its rectangle if
+    /// floating, the monitor if fullscreen. Hyprland's `m_position` and
+    /// `m_size`.
+    placed: Rect,
+    /// `placed` as the searches compare it; see [`ideal_box`].
+    ideal: Rect,
+    floating: bool,
+    fullscreen: bool,
 }
 
 /// Monitors, workspaces, windows and focus.
@@ -497,7 +537,7 @@ impl State {
     fn retile(&mut self) {
         let outputs = &self.outputs;
         for ws in self.workspaces.values_mut() {
-            let area = Area::of(usable(outputs, ws.monitor));
+            let area = Area::of(work_area(outputs, ws.monitor, &self.settings));
             let windows = ws.tiling.windows();
             ws.tiling = Tiling::new(self.settings.layout);
             let mut previous = None;
@@ -540,21 +580,27 @@ impl State {
         self.dispatch_str(&bind.dispatcher, &bind.arg)
     }
 
+    /// Hyprland's `moveFocusTo`.
     fn move_focus(&mut self, direction: Direction) -> Vec<Change> {
-        let target = self
-            .focused_window()
-            .and_then(|window| self.neighbour(window, direction));
-        match target {
-            Some(target) => self.focus(target),
-            None => {
-                if let Some(monitor) = self.monitor_towards(direction) {
-                    self.focused_monitor = Some(monitor);
-                }
+        let Some(window) = self.focused_window() else {
+            if let Some(monitor) = self.monitor_towards(direction) {
+                self.focused_monitor = Some(monitor);
             }
+            return Vec::new();
+        };
+        if let Some(target) = self.window_in_direction(window, direction) {
+            self.focus(target);
+        } else if let Some(monitor) = self.monitor_towards(direction) {
+            self.focused_monitor = Some(monitor);
+        } else if !self.settings.no_focus_fallback
+            && let Some(target) = self.wrapped(window, direction)
+        {
+            self.focus(target);
         }
         Vec::new()
     }
 
+    /// Hyprland's `moveActiveTo`, for a tiled window.
     fn move_window(&mut self, direction: Direction) -> Vec<Change> {
         let Some(window) = self.focused_window() else {
             return Vec::new();
@@ -565,41 +611,8 @@ impl State {
         if self.is_floating(window) || self.fullscreen(from).is_some() {
             return Vec::new();
         }
-        if let Some(other) = self.tiled_neighbour(window, direction) {
-            let Some(to) = self.workspace_of(other) else {
-                return Vec::new();
-            };
-            if self.fullscreen(to).is_some() {
-                return Vec::new();
-            }
-            // On one workspace this exchanges the two; across two, each
-            // workspace's tree renames its window to the other.
-            let workspaces = if from == to {
-                vec![from]
-            } else {
-                vec![from, to]
-            };
-            for workspace in workspaces {
-                if let Some(ws) = self.workspaces.get_mut(&workspace) {
-                    ws.tiling.swap(window, other);
-                }
-            }
-            if from == to {
-                return Vec::new();
-            }
-            let _window = self.windows.insert(window, to);
-            let _other = self.windows.insert(other, from);
-            self.focus(window);
-            return vec![
-                Change::MoveToWorkspace {
-                    window,
-                    workspace: to,
-                },
-                Change::MoveToWorkspace {
-                    window: other,
-                    workspace: from,
-                },
-            ];
+        if let Some(other) = self.window_in_direction(window, direction) {
+            return self.move_past(window, other, direction);
         }
         let Some(to) = self
             .monitor_towards(direction)
@@ -613,6 +626,81 @@ impl State {
             window,
             workspace: to,
         }]
+    }
+
+    /// Move the tiled `window` in `direction`, where the neighbour search
+    /// found `other`: the layouts' `moveWindowTo`, `moveTargetInDirection`
+    /// from Hyprland 0.54.
+    ///
+    /// The master layout exchanges the two on one workspace and sends the
+    /// window to the other's workspace across two. The dwindle layout takes
+    /// the window out and puts it back in at a point one pixel past its
+    /// edge, on the active workspace of whichever monitor that point is on.
+    fn move_past(
+        &mut self,
+        window: WindowId,
+        other: WindowId,
+        direction: Direction,
+    ) -> Vec<Change> {
+        let (Some(from), Some(beyond)) = (self.workspace_of(window), self.workspace_of(other))
+        else {
+            return Vec::new();
+        };
+        let lone_sibling = match self.workspaces.get(&from).map(|ws| &ws.tiling) {
+            Some(Tiling::Dwindle(dwindle)) => dwindle.faces_lone_sibling(window, direction),
+            _ => {
+                if self.fullscreen(beyond).is_some() {
+                    return Vec::new();
+                }
+                if from == beyond {
+                    if let Some(ws) = self.workspaces.get_mut(&from) {
+                        ws.tiling.swap(window, other);
+                    }
+                    return Vec::new();
+                }
+                self.move_window_to(window, beyond);
+                self.focus(window);
+                return vec![Change::MoveToWorkspace {
+                    window,
+                    workspace: beyond,
+                }];
+            }
+        };
+        let Some(ideal) = self
+            .candidates()
+            .into_iter()
+            .find(|candidate| candidate.window == window)
+            .map(|candidate| candidate.ideal)
+        else {
+            return Vec::new();
+        };
+        let point = focal_point(ideal, direction);
+        let Some(to) = self
+            .monitor_at(point)
+            .and_then(|monitor| self.active_workspace(monitor))
+        else {
+            return Vec::new();
+        };
+        if self.fullscreen(to).is_some() {
+            return Vec::new();
+        }
+        let toward = (from == to && lone_sibling).then_some(direction);
+        let area = Area::of(self.work_area_of(to));
+        self.detach(window);
+        let settings = self.settings;
+        if let Some(ws) = self.workspaces.get_mut(&to) {
+            ws.tiling.insert_at(window, point, toward, area, &settings);
+        }
+        let _previous = self.windows.insert(window, to);
+        self.focus(window);
+        if from == to {
+            Vec::new()
+        } else {
+            vec![Change::MoveToWorkspace {
+                window,
+                workspace: to,
+            }]
+        }
     }
 
     fn switch_workspace(&mut self, target: WorkspaceTarget) -> Vec<Change> {
@@ -658,7 +746,7 @@ impl State {
             .and_then(|monitor| self.output(monitor))
             .map(|output| output.monitor.rect)
             .unwrap_or_default();
-        let area = Area::of(self.usable_area(workspace));
+        let area = Area::of(self.work_area_of(workspace));
         let beside = self.recent_tiled(workspace);
         if !floating && !self.floating_rects.contains_key(&window) {
             // A window floated for the first time is centred at half the
@@ -728,124 +816,208 @@ impl State {
 
     // -- Neighbours -----------------------------------------------------------
 
-    /// The window `movefocus` goes to from `window`.
-    fn neighbour(&self, window: WindowId, direction: Direction) -> Option<WindowId> {
-        let fullscreen = self
-            .workspace_of(window)
-            .and_then(|workspace| self.fullscreen(workspace))
-            .is_some_and(|(id, _)| id == window);
-        if self.is_floating(window) && !fullscreen {
-            self.floating_neighbour(window, direction)
-        } else {
-            self.tiled_neighbour(window, direction)
-        }
-    }
-
-    /// The boxes the neighbour search compares, for the workspaces the
-    /// monitors show: each tiled window's slot, gaps not taken off, as
-    /// Hyprland compares `getWindowIdealBoundingBoxIgnoreReserved`, or the
-    /// monitor for a fullscreen window, which hides the rest.
-    fn tiled_boxes(&self) -> Vec<(WindowId, Rect)> {
-        let mut boxes = Vec::new();
+    /// The windows the direction searches look at: those on the workspaces
+    /// the monitors show, less the ones a fullscreen window hides, in
+    /// monitor order, tiled before floating.
+    fn candidates(&self) -> Vec<Candidate> {
+        let mut out = Vec::new();
         for output in &self.outputs {
             let Some(ws) = self.workspaces.get(&output.active) else {
                 continue;
             };
+            let monitor = &output.monitor;
             if let Some((window, _)) = ws.fullscreen {
-                boxes.push((window, output.monitor.rect));
+                out.push(Candidate {
+                    window,
+                    workspace: output.active,
+                    placed: monitor.rect,
+                    ideal: monitor.rect,
+                    floating: ws.floating.contains(&window),
+                    fullscreen: true,
+                });
                 continue;
             }
-            let area = Area::of(geometry::inset(
-                output.monitor.rect,
-                output.monitor.reserved,
-            ));
-            boxes.extend(
-                ws.tiling
-                    .slots(area, &self.settings)
-                    .into_iter()
-                    .map(|(window, slot)| (window, slot.round())),
+            let work = geometry::work_area(monitor, &self.settings);
+            let tiled = ws
+                .tiling
+                .slots(Area::of(work), &self.settings)
+                .into_iter()
+                .map(|(window, slot)| (window, slot.round(), false));
+            let floating = ws.floating.iter().filter_map(|&window| {
+                self.floating_rects
+                    .get(&window)
+                    .map(|rect| (window, rect.translate(monitor.rect.x, monitor.rect.y), true))
+            });
+            out.extend(
+                tiled
+                    .chain(floating)
+                    .map(|(window, placed, floating)| Candidate {
+                        window,
+                        workspace: output.active,
+                        placed,
+                        ideal: ideal_box(placed, monitor.rect, work),
+                        floating,
+                        fullscreen: false,
+                    }),
             );
         }
-        boxes
+        out
     }
 
-    /// Hyprland's search for a tiled window's neighbour: a window whose
-    /// opposite edge touches this one's and overlaps it along that edge;
-    /// among several, the most recently focused.
-    fn tiled_neighbour(&self, window: WindowId, direction: Direction) -> Option<WindowId> {
-        let boxes = self.tiled_boxes();
-        let (_, from) = boxes.iter().find(|(id, _)| *id == window)?;
-        let from = *from;
-        let mut best: Option<(Option<usize>, WindowId)> = None;
-        for &(candidate, to) in &boxes {
-            if candidate == window {
-                continue;
+    /// Hyprland's `CCompositor::getWindowInDirection` from a window: the
+    /// search from its box, by edges for a tiled window and by angles for a
+    /// floating one.
+    fn window_in_direction(&self, window: WindowId, direction: Direction) -> Option<WindowId> {
+        let candidates = self.candidates();
+        let from = candidates
+            .iter()
+            .find(|candidate| candidate.window == window)?;
+        self.search(
+            &candidates,
+            from.ideal,
+            from.workspace,
+            direction,
+            window,
+            from.floating,
+        )
+    }
+
+    /// What `movefocus` wraps around to when it finds neither a window nor
+    /// a monitor: the search again, from a line one pixel outside the
+    /// focused monitor's opposite edge. A window that already spans the
+    /// monitor along the direction has nothing to wrap to.
+    fn wrapped(&self, window: WindowId, direction: Direction) -> Option<WindowId> {
+        let candidates = self.candidates();
+        let from = candidates
+            .iter()
+            .find(|candidate| candidate.window == window)?;
+        let output = self.output(self.workspace_monitor(from.workspace)?)?;
+        let (monitor, placed) = (output.monitor.rect, from.placed);
+        let spans = match direction {
+            Direction::Left | Direction::Right => {
+                sticks(placed.x, monitor.x) && sticks(placed.width, monitor.width)
             }
-            let touches = match direction {
-                Direction::Left => sticks(from.x, to.right()),
-                Direction::Right => sticks(from.right(), to.x),
-                Direction::Up => sticks(from.y, to.bottom()),
-                Direction::Down => sticks(from.bottom(), to.y),
-            };
-            let length = match direction {
-                Direction::Left | Direction::Right => {
-                    overlap(from.y, from.bottom(), to.y, to.bottom())
-                }
-                Direction::Up | Direction::Down => overlap(from.x, from.right(), to.x, to.right()),
-            };
-            if !touches || length <= 0 {
-                continue;
+            Direction::Up | Direction::Down => {
+                sticks(placed.y, monitor.y) && sticks(placed.height, monitor.height)
             }
-            let recency = self.history.iter().position(|id| *id == candidate);
-            if best.is_none_or(|(best_recency, _)| recency > best_recency) {
-                best = Some((recency, candidate));
-            }
+        };
+        if spans {
+            return None;
         }
-        best.map(|(_, candidate)| candidate)
+        let line = match direction {
+            Direction::Left => Rect::new(monitor.right(), monitor.y, 1, monitor.height),
+            Direction::Right => {
+                Rect::new(monitor.x.saturating_sub(1), monitor.y, 1, monitor.height)
+            }
+            Direction::Up => Rect::new(monitor.x, monitor.bottom(), monitor.width, 1),
+            Direction::Down => Rect::new(monitor.x, monitor.y.saturating_sub(1), monitor.width, 1),
+        };
+        self.search(
+            &candidates,
+            line,
+            output.active,
+            direction,
+            window,
+            from.floating,
+        )
     }
 
-    /// Hyprland's search for a floating window's neighbour: the nearest
-    /// floating window whose centre lies within 0.3 pi of the direction.
-    fn floating_neighbour(&self, window: WindowId, direction: Direction) -> Option<WindowId> {
-        let (from_x, from_y) = geometry::center(self.floating_rect(window)?);
+    /// Hyprland's `getWindowInDirection` from a box on `workspace`, never
+    /// finding `ignore`. From a workspace with a fullscreen window only
+    /// other fullscreen windows are found.
+    ///
+    /// By edges: a tiled or fullscreen window whose box's opposite edge
+    /// touches this one's and overlaps it along that edge, the most recently
+    /// focused of several (`binds:focus_preferred_method` 0).
+    ///
+    /// By angles: among floating and fullscreen windows whose centre lies
+    /// within a right angle of the direction, the nearest of those within
+    /// 0.3 pi of it if there are any, else the one at the smallest angle.
+    /// As in Hyprland, distances are compared in whole pixels.
+    fn search(
+        &self,
+        candidates: &[Candidate],
+        from: Rect,
+        workspace: WorkspaceId,
+        direction: Direction,
+        ignore: WindowId,
+        by_angle: bool,
+    ) -> Option<WindowId> {
+        let fullscreen = self.fullscreen(workspace);
+        let eligible = candidates.iter().filter(|candidate| {
+            candidate.window != ignore && (fullscreen.is_none() || candidate.fullscreen)
+        });
+        if !by_angle {
+            let mut leader: Option<(usize, WindowId)> = None;
+            for candidate in
+                eligible.filter(|candidate| !candidate.floating || candidate.fullscreen)
+            {
+                let to = candidate.ideal;
+                let touches = match direction {
+                    Direction::Left => sticks(from.x, to.right()),
+                    Direction::Right => sticks(from.right(), to.x),
+                    Direction::Up => sticks(from.y, to.bottom()),
+                    Direction::Down => sticks(from.bottom(), to.y),
+                };
+                let length = match direction {
+                    Direction::Left | Direction::Right => {
+                        overlap(from.y, from.bottom(), to.y, to.bottom())
+                    }
+                    Direction::Up | Direction::Down => {
+                        overlap(from.x, from.right(), to.x, to.right())
+                    }
+                };
+                if !touches || length <= 0 {
+                    continue;
+                }
+                // A window never focused is not in the history, and
+                // Hyprland's index of -1 for it never leads.
+                let Some(recency) = self.history.iter().position(|id| *id == candidate.window)
+                else {
+                    continue;
+                };
+                if leader.is_none_or(|(best, _)| recency > best) {
+                    leader = Some((recency, candidate.window));
+                }
+            }
+            return leader.map(|(_, window)| window);
+        }
+        let threshold = 0.3 * PI;
+        let (from_x, from_y) = geometry::center(from);
         let (dx, dy) = match direction {
             Direction::Left => (-1.0, 0.0),
             Direction::Right => (1.0, 0.0),
             Direction::Up => (0.0, -1.0),
             Direction::Down => (0.0, 1.0),
         };
-        let mut best: Option<(f64, WindowId)> = None;
-        for output in &self.outputs {
-            let Some(ws) = self.workspaces.get(&output.active) else {
-                continue;
-            };
-            if ws.fullscreen.is_some() {
+        let mut leader: Option<(f64, WindowId)> = None;
+        let mut best_angle = 2.0 * PI;
+        for candidate in eligible.filter(|candidate| candidate.floating || candidate.fullscreen) {
+            let (x, y) = geometry::center(candidate.placed);
+            let (vx, vy) = (x - from_x, y - from_y);
+            let distance = vx.hypot(vy);
+            let angle = ((vx * dx + vy * dy) / distance).clamp(-1.0, 1.0).acos();
+            if angle > FRAC_PI_2 {
                 continue;
             }
-            for &candidate in &ws.floating {
-                let Some(rect) = self.floating_rect(candidate) else {
-                    continue;
-                };
-                if candidate == window {
-                    continue;
-                }
-                let (x, y) = geometry::center(rect);
-                let (vx, vy) = (x - from_x, y - from_y);
-                let distance = vx.hypot(vy);
-                if distance <= 0.0 || !distance.is_finite() {
-                    continue;
-                }
-                let angle = ((vx * dx + vy * dy) / distance).clamp(-1.0, 1.0).acos();
-                if angle < 0.3 * PI && best.is_none_or(|(nearest, _)| distance < nearest) {
-                    best = Some((distance, candidate));
-                }
+            let nearer = leader.is_some_and(|(nearest, _)| distance < nearest);
+            if (best_angle < threshold && nearer && angle < threshold)
+                || (angle < best_angle && best_angle > threshold)
+                || leader.is_none()
+            {
+                leader = Some((distance.trunc(), candidate.window));
+                best_angle = angle;
             }
         }
-        best.map(|(_, candidate)| candidate)
+        leader
+            .map(|(_, window)| window)
+            .or_else(|| fullscreen.map(|(window, _)| window))
     }
 
     /// The monitor whose edge touches the focused monitor's in `direction`,
-    /// the one sharing the longest stretch of it if several do.
+    /// the one sharing the longest stretch of it if several do. One that
+    /// meets it only at a corner counts, as in Hyprland's
+    /// `getMonitorInDirection`.
     fn monitor_towards(&self, direction: Direction) -> Option<MonitorId> {
         let from = self.output(self.focused_monitor?)?.monitor.rect;
         let mut best: Option<(i64, MonitorId)> = None;
@@ -872,11 +1044,30 @@ impl State {
                     overlap(from.x, from.right(), to.x, to.right()),
                 ),
             };
-            if touches && length > 0 && best.is_none_or(|(longest, _)| length > longest) {
+            if touches && best.is_none_or(|(longest, _)| length > longest) {
                 best = Some((length, output.monitor.id));
             }
         }
         best.map(|(_, monitor)| monitor)
+    }
+
+    /// The monitor a point is on, or else the nearest one: Hyprland's
+    /// `getMonitorFromVector`.
+    fn monitor_at(&self, (x, y): (f64, f64)) -> Option<MonitorId> {
+        let mut nearest: Option<(f64, MonitorId)> = None;
+        for output in &self.outputs {
+            let rect = Area::of(output.monitor.rect);
+            if x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h {
+                return Some(output.monitor.id);
+            }
+            let dx = (rect.x - x).max(x - (rect.x + rect.w)).max(0.0);
+            let dy = (rect.y - y).max(y - (rect.y + rect.h)).max(0.0);
+            let distance = dx * dx + dy * dy;
+            if nearest.is_none_or(|(best, _)| distance < best) {
+                nearest = Some((distance, output.monitor.id));
+            }
+        }
+        nearest.map(|(_, monitor)| monitor)
     }
 
     // -- Internals ------------------------------------------------------------
@@ -959,18 +1150,12 @@ impl State {
             })
     }
 
-    /// A workspace's usable area: its monitor less the reserved strips.
-    fn usable_area(&self, workspace: WorkspaceId) -> Rect {
+    /// A workspace's work area: its monitor less the reserved strips and
+    /// `gaps_out`.
+    fn work_area_of(&self, workspace: WorkspaceId) -> Rect {
         self.workspace_monitor(workspace)
-            .map(|monitor| usable(&self.outputs, monitor))
+            .map(|monitor| work_area(&self.outputs, monitor, &self.settings))
             .unwrap_or_default()
-    }
-
-    /// A floating window's rectangle in global coordinates.
-    fn floating_rect(&self, window: WindowId) -> Option<Rect> {
-        let rect = self.floating_rects.get(&window)?;
-        let (x, y) = self.origin(self.workspace_of(window)?);
-        Some(rect.translate(x, y))
     }
 
     fn first_free_workspace(&self) -> WorkspaceId {
@@ -1002,7 +1187,7 @@ impl State {
     /// workspace's most recently focused tiled window, or floating at the
     /// rectangle it has.
     fn attach(&mut self, window: WindowId, workspace: WorkspaceId, floating: bool) {
-        let area = Area::of(self.usable_area(workspace));
+        let area = Area::of(self.work_area_of(workspace));
         let beside = self.recent_tiled(workspace);
         let Some(ws) = self.workspaces.get_mut(&workspace) else {
             return;
@@ -1112,7 +1297,7 @@ impl State {
     fn settle(&mut self) {
         let outputs = &self.outputs;
         for ws in self.workspaces.values_mut() {
-            let area = Area::of(usable(outputs, ws.monitor));
+            let area = Area::of(work_area(outputs, ws.monitor, &self.settings));
             ws.tiling.settle(area, &self.settings);
         }
     }
@@ -1129,7 +1314,7 @@ impl State {
         let Some(ws) = self.workspaces.get(&output.active) else {
             return Vec::new();
         };
-        let area = geometry::inset(output.monitor.rect, output.monitor.reserved);
+        let area = geometry::work_area(&output.monitor, &self.settings);
         let border = self.settings.border_size;
         let place =
             |window: WindowId, rect: Rect, border: i64, floating: bool, fullscreen: bool| Placed {
@@ -1172,13 +1357,56 @@ impl State {
     }
 }
 
-/// The usable area of `monitor` among `outputs`, empty if it is not there.
-fn usable(outputs: &[Output], monitor: MonitorId) -> Rect {
+/// The work area of `monitor` among `outputs`, empty if it is not there.
+fn work_area(outputs: &[Output], monitor: MonitorId, settings: &Settings) -> Rect {
     outputs
         .iter()
         .find(|output| output.monitor.id == monitor)
-        .map(|output| geometry::inset(output.monitor.rect, output.monitor.reserved))
+        .map(|output| geometry::work_area(&output.monitor, settings))
         .unwrap_or_default()
+}
+
+/// A window's box as Hyprland's direction searches see it,
+/// `getWindowIdealBoundingBoxIgnoreReserved`: where the layout placed it,
+/// grown out to the monitor's edge on each side where it meets the edge of
+/// the work area, so that windows on two monitors side by side touch across
+/// the gaps and reserved strips between them.
+fn ideal_box(placed: Rect, monitor: Rect, work: Rect) -> Rect {
+    let mut ideal = placed;
+    if placed.y == work.y {
+        ideal.y = monitor.y;
+        ideal.height = ideal
+            .height
+            .saturating_add(work.y.saturating_sub(monitor.y));
+    }
+    if placed.x == work.x {
+        ideal.x = monitor.x;
+        ideal.width = ideal.width.saturating_add(work.x.saturating_sub(monitor.x));
+    }
+    if placed.right() == work.right() {
+        ideal.width = ideal
+            .width
+            .saturating_add(monitor.right().saturating_sub(work.right()));
+    }
+    if placed.bottom() == work.bottom() {
+        ideal.height = ideal
+            .height
+            .saturating_add(monitor.bottom().saturating_sub(work.bottom()));
+    }
+    ideal
+}
+
+/// The point one pixel past the middle of a box's edge in `direction`,
+/// which Hyprland's `focalPointForDir` aims a moved window at.
+fn focal_point(ideal: Rect, direction: Direction) -> (f64, f64) {
+    let (x, y) = (ideal.x as f64, ideal.y as f64);
+    let (width, height) = (ideal.width as f64, ideal.height as f64);
+    match direction {
+        Direction::Up => (x + width / 2.0, y - 1.0),
+        Direction::Down => (x + width / 2.0, y + height + 1.0),
+        Direction::Left => (x - 1.0, y + height / 2.0),
+        Direction::Right => (x + width + 1.0, y + height / 2.0),
+    }
 }
 
 /// Whether two lists of placements put the same windows in the same places,

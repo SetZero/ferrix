@@ -14,7 +14,9 @@
 //! Hyprland is the reference: the dwindle tree follows `DwindleLayout.cpp`,
 //! the master layout `MasterLayout.cpp`, the neighbour search
 //! `CCompositor::getWindowInDirection`, and the gap and border arithmetic
-//! `applyNodeDataToWindow`. Each module says where it departs.
+//! `applyNodeDataToWindow`, as of Hyprland 0.53. Where 0.54 moved these into
+//! `src/layout/algorithm` and changed what they do, as it did for
+//! `movewindow`, this crate follows 0.54. Each module says where it departs.
 //!
 //! Every change goes through [`State`]'s methods, and each returns the
 //! [`Change`]s it caused, so the caller redraws, reconfigures or emits IPC
@@ -25,8 +27,11 @@
 //! What is not handled yet: `dwindle:pseudotile` (the option is left unread
 //! and every tiled window fills its slot), the master layout's `center`
 //! orientation (it lays out as `left`), `master:new_on_active`,
-//! `binds:workspace_back_and_forth`, special and named workspaces, window
-//! selectors as dispatcher arguments, and resizing splits.
+//! `binds:workspace_back_and_forth`, `binds:window_direction_monitor_fallback`
+//! (always on, its default), `binds:movefocus_cycles_fullscreen`, special and
+//! named workspaces, window selectors as dispatcher arguments, resizing
+//! splits, and `movewindow` on a floating window, which in Hyprland pushes it
+//! against the monitor's edge and here does nothing.
 
 #![forbid(unsafe_code)]
 

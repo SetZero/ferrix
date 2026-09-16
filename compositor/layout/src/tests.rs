@@ -86,6 +86,7 @@ fn settings_default_to_hyprlands_defaults() {
     assert_eq!(settings.gaps_in, Gaps::all(5));
     assert_eq!(settings.gaps_out, Gaps::all(20));
     assert_eq!(settings.border_size, 1);
+    assert!(!settings.no_focus_fallback);
     assert!(!settings.dwindle.preserve_split);
     assert_eq!(settings.dwindle.force_split, ForceSplit::Auto);
     assert!((settings.dwindle.split_width_multiplier - 1.0).abs() < f64::EPSILON);
@@ -99,7 +100,7 @@ fn settings_default_to_hyprlands_defaults() {
 #[test]
 fn settings_are_read_from_the_configuration_and_clamped() {
     let settings = Settings::from_config(&config(
-        "general {\n  layout = master\n  gaps_in = 1 2 3 4\n  gaps_out = 7\n  border_size = 3\n}\n\
+        "general {\n  layout = master\n  gaps_in = 1 2 3 4\n  gaps_out = 7\n  border_size = 3\n  no_focus_fallback = 1\n}\n\
          dwindle {\n  preserve_split = true\n  force_split = 2\n  split_width_multiplier = 1.5\n  default_split_ratio = 5\n}\n\
          master {\n  mfact = 0.01\n  new_status = master\n  new_on_top = 1\n  orientation = bottom\n}\n",
     ));
@@ -115,6 +116,7 @@ fn settings_are_read_from_the_configuration_and_clamped() {
     );
     assert_eq!(settings.gaps_out, Gaps::all(7));
     assert_eq!(settings.border_size, 3);
+    assert!(settings.no_focus_fallback);
     assert!(settings.dwindle.preserve_split);
     assert_eq!(settings.dwindle.force_split, ForceSplit::Second);
     assert!((settings.dwindle.split_width_multiplier - 1.5).abs() < f64::EPSILON);
@@ -323,13 +325,30 @@ fn gaps_follow_css_order_per_side() {
         [(1, r(42, 12, 1920 - 42 - 22, 1080 - 12 - 32))]
     );
     open(&mut state, &[2]);
-    // The left window's right edge takes gaps_in's right (2), the right
-    // window's left edge gaps_in's left (4).
+    // The work area, 40 to 1900, splits at 970. The left window's right
+    // edge takes gaps_in's right (2), the right window's left edge gaps_in's
+    // left (4).
     assert_eq!(
         rects(&state),
         [
-            (1, r(42, 12, 960 - 42 - 4, 1036)),
-            (2, r(960 + 6, 12, 960 - 6 - 22, 1036))
+            (1, r(42, 12, 970 - 2 - 2 - 42, 1036)),
+            (2, r(970 + 4 + 2, 12, 1900 - 2 - 976, 1036))
+        ]
+    );
+}
+
+#[test]
+fn splits_divide_the_area_inside_gaps_out() {
+    // As Hyprland's work area does: with a ratio of 1.5 the first child
+    // gets 1.5 times half of 1880, not of 1920, and the outer edges of both
+    // windows are gaps_out from the monitor's.
+    let mut state = setup("dwindle:default_split_ratio = 1.5\n");
+    open(&mut state, &[1, 2]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, r(21, 21, 20 + 1410 - 6 - 21, 1038)),
+            (2, r(20 + 1410 + 6, 21, 1899 - 1436, 1038))
         ]
     );
 }
@@ -548,12 +567,13 @@ fn master_closing_the_master_promotes_the_first_stack_window() {
 fn master_gaps_and_borders() {
     let mut state = setup("general:layout = master\n");
     open(&mut state, &[1, 2, 3]);
+    // The master takes 0.55 of the 1880 wide work area: 1034.
     assert_eq!(
         rects(&state),
         [
-            (1, r(21, 21, 1056 - 27, 1038)),
-            (2, r(1056 + 6, 21, 864 - 27, 540 - 27)),
-            (3, r(1056 + 6, 540 + 6, 864 - 27, 540 - 27))
+            (1, r(21, 21, 1054 - 6 - 21, 1038)),
+            (2, r(1054 + 6, 21, 1899 - 1060, 540 - 6 - 21)),
+            (3, r(1054 + 6, 540 + 6, 1899 - 1060, 1059 - 546))
         ]
     );
 }
@@ -579,9 +599,13 @@ fn changing_the_layout_retiles_in_the_old_order() {
 // -- movefocus and movewindow -------------------------------------------------
 
 /// Four windows in a 2x2 grid: 1 top left, 2 top right, 3 bottom right,
-/// 4 bottom left.
+/// 4 bottom left, with 1 focused.
 fn grid() -> State {
-    let mut state = setup("");
+    grid_with("")
+}
+
+fn grid_with(text: &str) -> State {
+    let mut state = setup(text);
     open(&mut state, &[1, 2, 3]);
     focus(&mut state, 1);
     open(&mut state, &[4]);
@@ -616,8 +640,29 @@ fn movefocus_walks_the_grid() {
 }
 
 #[test]
-fn movefocus_with_nowhere_to_go_changes_nothing() {
+fn movefocus_wraps_around_the_monitor() {
+    // Nothing left of 1 and no monitor there: the search starts again from
+    // the monitor's right edge, where 2 and 3 are, and 3 was focused more
+    // recently.
     let mut state = grid();
+    let changes = dispatch(&mut state, "movefocus", "l");
+    assert_eq!(changes, [Change::Focus(Some(WindowId(3)))]);
+    // Down from 3 wraps to the top edge, where 1 was focused more recently
+    // than 2.
+    let _changes = dispatch(&mut state, "movefocus", "d");
+    assert_eq!(focused(&state), Some(1));
+
+    // A window as wide as the monitor has nothing to wrap to.
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    let _changes = dispatch(&mut state, "togglefloating", "");
+    focus(&mut state, 1);
+    assert_eq!(dispatch(&mut state, "movefocus", "r"), []);
+}
+
+#[test]
+fn movefocus_with_nowhere_to_go_and_no_focus_fallback_changes_nothing() {
+    let mut state = grid_with("general:no_focus_fallback = true\n");
     assert_eq!(dispatch(&mut state, "movefocus", "l"), []);
     assert_eq!(dispatch(&mut state, "movefocus", "u"), []);
     assert_eq!(focused(&state), Some(1));
@@ -640,31 +685,64 @@ fn movefocus_prefers_the_most_recently_focused_neighbour() {
 }
 
 #[test]
-fn movewindow_swaps_with_the_neighbour_and_keeps_focus() {
+fn movewindow_puts_the_window_back_past_its_neighbour() {
     let mut state = grid();
+    // The point one pixel right of 1 is in 2's slot, on its left half: 1
+    // comes out, 4 takes its place, and 1 splits 2's slot on the left.
     let changes = dispatch(&mut state, "movewindow", "r");
     assert_eq!(changes, [Change::Layout(M1)]);
     assert_eq!(
         rects(&state),
         [
-            (1, r(966, 21, 933, 513)),
-            (2, r(21, 21, 933, 513)),
+            (1, r(966, 21, 1424 - 966, 513)),
+            (2, r(1436, 21, 1899 - 1436, 513)),
             (3, r(966, 546, 933, 513)),
-            (4, r(21, 546, 933, 513))
+            (4, r(21, 21, 933, 1038))
         ]
     );
     assert_eq!(focused(&state), Some(1));
+
+    // Down, into the left half of 3's slot.
     let _changes = dispatch(&mut state, "movewindow", "d");
     assert_eq!(
         rects(&state),
         [
-            (1, r(966, 546, 933, 513)),
-            (2, r(21, 21, 933, 513)),
-            (3, r(966, 21, 933, 513)),
-            (4, r(21, 546, 933, 513))
+            (1, r(966, 546, 1424 - 966, 513)),
+            (2, r(966, 21, 933, 513)),
+            (3, r(1436, 546, 1899 - 1436, 513)),
+            (4, r(21, 21, 933, 1038))
+        ]
+    );
+
+    // Right again: 3 is 1's sibling and a lone window that way, so 1 lands
+    // on its far side, which is an exchange.
+    let _changes = dispatch(&mut state, "movewindow", "r");
+    assert_eq!(
+        rects(&state),
+        [
+            (1, r(1436, 546, 1899 - 1436, 513)),
+            (2, r(966, 21, 933, 513)),
+            (3, r(966, 546, 1424 - 966, 513)),
+            (4, r(21, 21, 933, 1038))
         ]
     );
     assert_eq!(dispatch(&mut state, "movewindow", "r"), []);
+}
+
+#[test]
+fn movewindow_to_a_lone_sibling_exchanges_the_two() {
+    let mut state = setup(&format!("{BARE}dwindle:default_split_ratio = 1.5\n"));
+    open(&mut state, &[1, 2]);
+    assert_eq!(
+        rects(&state),
+        [(1, r(0, 0, 1440, 1080)), (2, r(1440, 0, 480, 1080))]
+    );
+    let _changes = dispatch(&mut state, "movewindow", "l");
+    assert_eq!(
+        rects(&state),
+        [(1, r(1440, 0, 480, 1080)), (2, r(0, 0, 1440, 1080))]
+    );
+    assert_eq!(focused(&state), Some(2));
 }
 
 #[test]
@@ -723,10 +801,22 @@ fn movefocus_and_movewindow_cross_monitors() {
     assert_eq!(focused(&state), Some(1));
     assert_eq!(state.focused_monitor(), Some(M1));
 
-    // Window 1's right edge touches window 2's left edge: they swap.
-    let _changes = dispatch(&mut state, "movewindow", "r");
-    assert_eq!(rects_on(&state, M1), [(2, r(0, 0, 1920, 1080))]);
-    assert_eq!(rects_on(&state, M2), [(1, r(1920, 0, 1280, 1024))]);
+    // Window 1's right edge touches window 2's left edge. The point one
+    // pixel past it is on the left half of 2's slot on the other monitor, so
+    // 1 moves there and splits it; 2 stays.
+    let changes = dispatch(&mut state, "movewindow", "r");
+    assert_eq!(
+        changes[0],
+        Change::MoveToWorkspace {
+            window: WindowId(1),
+            workspace: WorkspaceId(2)
+        }
+    );
+    assert_eq!(rects_on(&state, M1), []);
+    assert_eq!(
+        rects_on(&state, M2),
+        [(1, r(1920, 0, 640, 1024)), (2, r(2560, 0, 640, 1024))]
+    );
     assert_eq!(state.workspace_of(WindowId(1)), Some(WorkspaceId(2)));
     assert_eq!(focused(&state), Some(1));
     assert_eq!(state.focused_monitor(), Some(M2));
@@ -743,6 +833,57 @@ fn movefocus_and_movewindow_cross_monitors() {
     );
     assert_eq!(rects_on(&state, M1), [(1, r(0, 0, 1920, 1080))]);
     assert_eq!(state.focused_monitor(), Some(M1));
+}
+
+#[test]
+fn movewindow_in_the_master_layout_sends_the_window_across_monitors() {
+    let mut state = setup(&format!("{BARE}general:layout = master\n"));
+    let _changes = state.add_monitor(monitor(M2, 1920, 0, 1280, 1024)).unwrap();
+    open(&mut state, &[1]);
+    let _changes = dispatch(&mut state, "workspace", "2");
+    open(&mut state, &[2]);
+    focus(&mut state, 1);
+    let _changes = dispatch(&mut state, "movewindow", "r");
+    assert_eq!(rects_on(&state, M1), []);
+    // 1 joins 2's workspace as a new window would: in the stack.
+    assert_eq!(
+        rects_on(&state, M2),
+        [(2, r(1920, 0, 704, 1024)), (1, r(2624, 0, 576, 1024))]
+    );
+    assert_eq!(focused(&state), Some(1));
+}
+
+#[test]
+fn the_neighbour_search_reaches_across_gaps_and_reserved_strips() {
+    // Windows are compared by their slots grown out to the monitor's edge
+    // wherever they meet the work area's, as Hyprland's
+    // getWindowIdealBoundingBoxIgnoreReserved does, so the 20 pixel gaps
+    // and a 30 pixel bar between the two do not hide 2 from 1.
+    let mut state = setup("");
+    let _changes = state
+        .add_monitor(Monitor {
+            id: M2,
+            rect: r(1920, 0, 1280, 1024),
+            reserved: Gaps {
+                top: 0,
+                right: 0,
+                bottom: 0,
+                left: 30,
+            },
+        })
+        .unwrap();
+    open(&mut state, &[1]);
+    let _changes = dispatch(&mut state, "workspace", "2");
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects_on(&state, M2),
+        [(2, r(1920 + 51, 21, 1280 - 72, 982))]
+    );
+    focus(&mut state, 1);
+    let _changes = dispatch(&mut state, "movefocus", "r");
+    assert_eq!(focused(&state), Some(2));
+    let _changes = dispatch(&mut state, "movefocus", "l");
+    assert_eq!(focused(&state), Some(1));
 }
 
 #[test]
@@ -1026,7 +1167,11 @@ fn movefocus_between_floating_windows_goes_by_angle_and_distance() {
     assert_eq!(focused(&state), Some(3));
     let _changes = dispatch(&mut state, "movefocus", "r");
     assert_eq!(focused(&state), Some(2));
-    assert_eq!(dispatch(&mut state, "movefocus", "d"), []);
+    // Nothing lies within 0.3 pi of straight down from 2, so the window at
+    // the smallest angle within a right angle of it wins: 3, below and far
+    // to the left, over 1, which is exactly left.
+    let _changes = dispatch(&mut state, "movefocus", "d");
+    assert_eq!(focused(&state), Some(3));
     let _changes = dispatch(&mut state, "movefocus", "u");
     assert_eq!(focused(&state), Some(4));
 }
@@ -1176,6 +1321,11 @@ fn dispatchers_parse_hyprlands_forms() {
         parse("fullscreen", "1"),
         Ok(Dispatcher::Fullscreen(FullscreenMode::Maximized))
     );
+    // Hyprland clamps a workspace number to 1.
+    assert_eq!(
+        parse("workspace", "0"),
+        Ok(Dispatcher::Workspace(WorkspaceTarget::Id(WorkspaceId(1))))
+    );
 }
 
 #[test]
@@ -1189,7 +1339,6 @@ fn bad_dispatchers_and_arguments_are_errors_not_panics() {
         ("movefocus", "left"),
         ("movewindow", "x"),
         ("workspace", ""),
-        ("workspace", "0"),
         ("workspace", "-0x1"),
         ("workspace", "name:web"),
         ("workspace", "special"),

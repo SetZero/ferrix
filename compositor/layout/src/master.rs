@@ -93,7 +93,7 @@ impl Master {
             .filter(|id| Some(*id) != self.master)
     }
 
-    /// Each window's box, when the workspace's usable area is `area`.
+    /// Each window's box, when the workspace's work area is `area`.
     pub(crate) fn slots(&self, area: Area, settings: &Settings) -> Vec<(WindowId, Area)> {
         let Some(master) = self.master else {
             return Vec::new();

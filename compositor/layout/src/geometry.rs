@@ -3,8 +3,8 @@
 
 use compositor_config::Gaps;
 
-use crate::Rect;
 use crate::settings::Settings;
+use crate::{Monitor, Rect};
 
 /// A box with fractional edges, as Hyprland's `CBox` is while a layout
 /// divides a workspace, so that a split of an odd width does not lose a
@@ -82,26 +82,34 @@ pub(crate) fn inset(rect: Rect, gaps: Gaps) -> Rect {
     }
 }
 
+/// A monitor's work area: its rectangle less the strips layer-shell
+/// surfaces reserve and less `general:gaps_out`, Hyprland's
+/// `workAreaOnWorkspace` (`CSpace::recheckWorkArea` from 0.54). Tiled windows
+/// divide this, so `gaps_out` is between the outermost windows and the
+/// monitor's edge whatever the split ratios.
+pub(crate) fn work_area(monitor: &Monitor, settings: &Settings) -> Rect {
+    inset(inset(monitor.rect, monitor.reserved), settings.gaps_out)
+}
+
 /// The client area of a tiled window whose slot is `slot` on a workspace
-/// whose usable area is `area`: Hyprland's `applyNodeDataToWindow`. An edge
-/// of the slot on the edge of the area gets `gaps_out`, any other edge
-/// `gaps_in`, and every edge the border inside that.
+/// whose work area is `area`: Hyprland's `applyNodeDataToWindow`
+/// (`CWindowTarget::updatePos` from 0.54). An edge of the slot on the work
+/// area's edge, which already has `gaps_out` taken off, gets nothing more;
+/// any other edge gets `gaps_in`. The border is a decoration that reserves
+/// its space (`CHyprBorderDecoration` asks for `reserved`), so it comes off
+/// every edge inside that, and the client is configured to what is left.
 pub(crate) fn client(slot: Rect, area: Rect, settings: &Settings) -> Rect {
-    let side = |touches: bool, outer: i64, inner: i64| {
-        (if touches { outer } else { inner }).saturating_add(settings.border_size)
+    let side = |touches: bool, inner: i64| {
+        (if touches { 0 } else { inner }).saturating_add(settings.border_size)
     };
-    let (outer, inner) = (settings.gaps_out, settings.gaps_in);
+    let inner = settings.gaps_in;
     inset(
         slot,
         Gaps {
-            top: side(sticks(slot.y, area.y), outer.top, inner.top),
-            right: side(sticks(slot.right(), area.right()), outer.right, inner.right),
-            bottom: side(
-                sticks(slot.bottom(), area.bottom()),
-                outer.bottom,
-                inner.bottom,
-            ),
-            left: side(sticks(slot.x, area.x), outer.left, inner.left),
+            top: side(sticks(slot.y, area.y), inner.top),
+            right: side(sticks(slot.right(), area.right()), inner.right),
+            bottom: side(sticks(slot.bottom(), area.bottom()), inner.bottom),
+            left: side(sticks(slot.x, area.x), inner.left),
         },
     )
 }
