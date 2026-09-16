@@ -20,7 +20,7 @@
 
 use std::path::Path;
 
-use crate::native;
+use crate::{native, ports};
 use crate::{Error, Result};
 
 /// Every timestamp in the archive: 2026-01-01 00:00:00 UTC, the same instant
@@ -257,11 +257,13 @@ fi
 
 /// The archive every image carries: the tree's native programs in `/sbin`,
 /// and `program` at `/bin/busybox` when one is given, with `zinc` at
-/// `/bin/zinc` and `/bin/zsh` beside it when that is given too.
+/// `/bin/zinc` and `/bin/zsh` beside it when that is given too, and the
+/// installed `ports` at their own paths.
 pub(crate) fn build(
     program: Option<&Path>,
     natives: &[native::Built],
     zinc: Option<&[u8]>,
+    ports: &[ports::File],
 ) -> Result<Vec<u8>> {
     let program = program
         .map(|path| {
@@ -269,13 +271,13 @@ pub(crate) fn build(
                 .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
         })
         .transpose()?;
-    build_with_shell(program.as_deref(), natives, zinc)
+    build_with_shell(program.as_deref(), natives, zinc, ports)
 }
 
 /// [`build`], with the program's bytes rather than its path and no zinc.
 #[cfg(test)]
 fn build_with(program: Option<&[u8]>, natives: &[native::Built]) -> Result<Vec<u8>> {
-    build_with_shell(program, natives, None)
+    build_with_shell(program, natives, None, &[])
 }
 
 /// [`build`], with the program's bytes rather than its path.
@@ -283,6 +285,7 @@ fn build_with_shell(
     program: Option<&[u8]>,
     natives: &[native::Built],
     zinc: Option<&[u8]>,
+    ports: &[ports::File],
 ) -> Result<Vec<u8>> {
     let mut archive = Newc::new();
     archive.directory(".", 0o755)?;
@@ -354,6 +357,25 @@ fn build_with_shell(
             archive.file(ZINC_PATH, 0o755, zinc)?;
             archive.symlink("bin/zsh", "zinc")?;
         }
+        // The ports, beside a program for the same reason. `bin` and `etc`
+        // are made above; any other directory a port's file is in is made
+        // the first time a file needs it.
+        let mut made = vec!["bin".to_owned(), "etc".to_owned()];
+        for file in ports {
+            let mut directory = String::new();
+            let parents = file.path.split('/').collect::<Vec<_>>();
+            for name in parents.iter().take(parents.len().saturating_sub(1)) {
+                if !directory.is_empty() {
+                    directory.push('/');
+                }
+                directory.push_str(name);
+                if !made.contains(&directory) {
+                    archive.directory(&directory, 0o755)?;
+                    made.push(directory.clone());
+                }
+            }
+            archive.file(file.path, file.mode, &file.bytes)?;
+        }
     }
     archive.finish()
 }
@@ -365,8 +387,8 @@ mod tests {
     #[test]
     fn the_archive_is_the_same_bytes_every_time() {
         assert_eq!(
-            build(None, &[], None).unwrap(),
-            build(None, &[], None).unwrap()
+            build(None, &[], None, &[]).unwrap(),
+            build(None, &[], None, &[]).unwrap()
         );
         let program: &[u8] = b"\x7fELF not really";
         assert_eq!(
@@ -405,8 +427,8 @@ mod tests {
 
     #[test]
     fn zinc_goes_in_bin_as_zinc_and_zsh_only_beside_a_program() {
-        let with = build_with_shell(Some(b"program"), &[], Some(b"shell")).unwrap();
-        let without = build_with_shell(None, &[], Some(b"shell")).unwrap();
+        let with = build_with_shell(Some(b"program"), &[], Some(b"shell"), &[]).unwrap();
+        let without = build_with_shell(None, &[], Some(b"shell"), &[]).unwrap();
         assert!(
             with.windows(ZINC_PATH.len())
                 .any(|w| w == ZINC_PATH.as_bytes()),
@@ -425,8 +447,48 @@ mod tests {
     }
 
     #[test]
+    fn ports_go_at_their_paths_with_their_directories_only_beside_a_program() {
+        let files = [
+            ports::File {
+                path: "bin/curl",
+                mode: 0o755,
+                bytes: b"curl".to_vec(),
+            },
+            ports::File {
+                path: "etc/ssl/certs/ca-certificates.crt",
+                mode: 0o644,
+                bytes: b"certificates".to_vec(),
+            },
+        ];
+        let bytes = build_with_shell(Some(b"program"), &[], None, &files).unwrap();
+        let archive = ferrix_cpio::Archive::new(&bytes);
+        assert_eq!(archive.find("bin/curl").unwrap().unwrap().data, b"curl");
+        let bundle = archive
+            .find("etc/ssl/certs/ca-certificates.crt")
+            .unwrap()
+            .unwrap();
+        assert_eq!(bundle.data, b"certificates");
+        let names: Vec<&str> = archive.entries().map(|entry| entry.unwrap().name).collect();
+        for directory in ["etc/ssl", "etc/ssl/certs"] {
+            assert_eq!(
+                names.iter().filter(|name| **name == directory).count(),
+                1,
+                "{directory} is made once"
+            );
+        }
+        let without = build_with_shell(None, &[], None, &files).unwrap();
+        assert!(
+            ferrix_cpio::Archive::new(&without)
+                .find("bin/curl")
+                .unwrap()
+                .is_none(),
+            "without a program the archive is the one the boot check reads"
+        );
+    }
+
+    #[test]
     fn without_a_program_bin_is_empty() {
-        let bytes = build(None, &[], None).unwrap();
+        let bytes = build(None, &[], None, &[]).unwrap();
         let archive = ferrix_cpio::Archive::new(&bytes);
         assert!(archive.find(PROGRAM_PATH).unwrap().is_none());
         assert!(
@@ -453,7 +515,7 @@ mod tests {
             "its directory is made"
         );
         assert!(
-            build(None, &[], None)
+            build(None, &[], None, &[])
                 .unwrap()
                 .windows(4)
                 .all(|window| window != b"sbin"),
@@ -487,7 +549,7 @@ mod tests {
 
     #[test]
     fn the_archive_reads_back_with_the_kernels_own_reader() {
-        let bytes = build(None, &[], None).unwrap();
+        let bytes = build(None, &[], None, &[]).unwrap();
         let archive = ferrix_cpio::Archive::new(&bytes);
         let names: Vec<&str> = archive.entries().map(|entry| entry.unwrap().name).collect();
         assert_eq!(names.first(), Some(&"."));

@@ -10,6 +10,7 @@
 //! cargo xtask test-threads --arch all [--timeout SECONDS]
 //! cargo xtask check     [--fast] [--ferrousli] [--zinc] [--miri]
 //! cargo xtask busybox   [--arch x86_64]
+//! cargo xtask ports     [--arch x86_64]
 //! cargo xtask flash     [--arch armv7a] [--to MOUNT]
 //! cargo xtask watch-serial            [--port DEVICE] [--timeout SECONDS]
 //! cargo xtask deploy    [--arch armv7a] [--to MOUNT] [--port DEVICE]
@@ -53,6 +54,7 @@ mod native;
 mod net;
 mod paths;
 mod pe;
+mod ports;
 mod qemu;
 mod serial;
 mod shell;
@@ -118,6 +120,7 @@ COMMANDS:
     check         Run every quality gate (fmt, clippy, layering, audits)
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
+    ports         Build the programs ported onto ferrousli (x86_64: curl), which images carry beside busybox
     flash         Copy the loader and kernel onto a board's boot partition
     watch-serial  Watch a real serial port for the kernel's boot report
     deploy        flash, then watch-serial: one command for a board
@@ -230,6 +233,7 @@ fn run() -> Result<()> {
         "check" => check::run(&args),
         "model-doc" => check::model_doc(),
         "busybox" => busybox::build(args.single_arch()?).map(|_| ()),
+        "ports" => ports::build(args.single_arch()?),
         "flash" => {
             let arch = args.single_arch()?;
             let (loader, kernel, initramfs) = build_board_files(arch, &args)?;
@@ -276,7 +280,12 @@ fn test_vfs(args: &Args) -> Result<()> {
         // zinc too: the permissions commands run a set-user-id copy of it,
         // which is the one program in the image that shows an effective id.
         let shell = zinc::build(arch)?;
-        let initramfs = initramfs::build(Some(&program), &natives, shell.as_deref())?;
+        let initramfs = initramfs::build(
+            Some(&program),
+            &natives,
+            shell.as_deref(),
+            &ports::installed(arch)?,
+        )?;
         let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
         if let Err(error) = qemu::test_vfs(arch, &image, &kernel, args) {
             eprintln!("\n  {error}");
@@ -310,8 +319,6 @@ fn test_net(args: &Args) -> Result<()> {
     })?;
     let servers = net::Servers::start()?;
     println!("  host: {}", servers.describe());
-    let programs = net::commands(&servers);
-    let commands = vfs::encode(&programs)?;
     let args = Args {
         net: true,
         resolver: Some(servers.dns()),
@@ -320,12 +327,18 @@ fn test_net(args: &Args) -> Result<()> {
     let mut failed = Vec::new();
     for arch in args.arches()? {
         let program = program_for(init, arch)?;
+        // The ports ride along where they are built, and the programs that
+        // exercise them are added when they do.
+        let ports = ports::installed(arch)?;
+        let curl = ports.iter().any(|file| file.path == "bin/curl");
+        let programs = net::commands(&servers, curl);
+        let commands = vfs::encode(&programs)?;
         let loader = cargo::build_loader(arch, args.release)?;
         let list = paths::build_dir(arch).join("net-commands");
         vfs::write_if_changed(&list, &commands)?;
         let kernel = cargo::build_kernel_with_commands(arch, args.release, &list)?;
         let natives = native::build(arch, args.release)?;
-        let initramfs = initramfs::build(Some(&program), &natives, None)?;
+        let initramfs = initramfs::build(Some(&program), &natives, None, &ports)?;
         let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
         if let Err(error) = qemu::test_net(arch, &image, &kernel, &programs, &args) {
             eprintln!("\n  {error}");
@@ -370,7 +383,12 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
     let shell = zinc::build(arch)?;
-    let initramfs = initramfs::build(Some(&program), &natives, shell.as_deref())?;
+    let initramfs = initramfs::build(
+        Some(&program),
+        &natives,
+        shell.as_deref(),
+        &ports::installed(arch)?,
+    )?;
     let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, image_cmdline(args))?;
     Ok((image, kernel))
 }
@@ -386,12 +404,17 @@ fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u
     let natives = native::build(arch, args.release)?;
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
-        return Ok((loader, kernel, initramfs::build(None, &natives, None)?));
+        return Ok((loader, kernel, initramfs::build(None, &natives, None, &[])?));
     };
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
     let shell = zinc::build(arch)?;
-    let initramfs = initramfs::build(Some(&program), &natives, shell.as_deref())?;
+    let initramfs = initramfs::build(
+            Some(&program),
+            &natives,
+            shell.as_deref(),
+            &ports::installed(arch)?,
+        )?;
     Ok((loader, kernel, initramfs))
 }
 
