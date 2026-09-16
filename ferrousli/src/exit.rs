@@ -185,6 +185,59 @@ pub extern "C" fn _Exit(status: c_int) -> ! {
     syscall::exit_group(status)
 }
 
+/// How many `at_quick_exit` handlers there is room for: the 32 C requires.
+/// Past that, registering fails, as in musl.
+const QUICK_CAPACITY: usize = 32;
+
+static QUICK_LOCK: SpinLock = SpinLock::new();
+/// Each entry is a handler `at_quick_exit` took, stored as a data pointer.
+static QUICK: [AtomicPtr<()>; QUICK_CAPACITY] =
+    [const { AtomicPtr::new(null_mut()) }; QUICK_CAPACITY];
+/// How many `QUICK` entries are registered and not yet run.
+static QUICK_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Registers `func` to be called by `quick_exit`. Returns -1 for a null
+/// function or when all 32 slots are taken, and 0 otherwise.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn at_quick_exit(func: Option<unsafe extern "C" fn()>) -> c_int {
+    let Some(func) = func else {
+        return -1;
+    };
+    let _guard = QUICK_LOCK.lock();
+    let count = QUICK_COUNT.load(Ordering::Relaxed);
+    let Some(slot) = QUICK.get(count) else {
+        return -1;
+    };
+    slot.store(func as *mut (), Ordering::Relaxed);
+    QUICK_COUNT.store(count + 1, Ordering::Relaxed);
+    0
+}
+
+/// Takes the newest `at_quick_exit` handler off its list, if there is one.
+fn take_quick() -> Option<*mut ()> {
+    let _guard = QUICK_LOCK.lock();
+    let last = QUICK_COUNT.load(Ordering::Relaxed).checked_sub(1)?;
+    QUICK_COUNT.store(last, Ordering::Relaxed);
+    QUICK.get(last).map(|slot| slot.load(Ordering::Relaxed))
+}
+
+/// Ends the process with `status` after the `at_quick_exit` handlers, newest
+/// first, and nothing else: C says `quick_exit` runs no `atexit` handler, no
+/// destructor and flushes no stream. musl's `quick_exit.c` (MIT) is the model;
+/// as there, a handler may register another, which runs next, so the lock is
+/// not held while one runs.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn quick_exit(status: c_int) -> ! {
+    while let Some(func) = take_quick() {
+        // SAFETY: only `at_quick_exit` stores entries, and only
+        // `unsafe extern "C" fn()`s.
+        let func = unsafe { transmute::<*mut (), unsafe extern "C" fn()>(func) };
+        // SAFETY: the program registered it to be called at `quick_exit`.
+        unsafe { func() };
+    }
+    _Exit(status)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -5,6 +5,7 @@
 
 use core::ffi::{c_char, c_int, c_long, c_longlong, c_void};
 
+use crate::locale::Locale;
 use crate::string::{memmove, memset, strchr, strrchr};
 
 /// Copies `n` bytes from `src` to `dest`, which may overlap. The arguments are
@@ -86,6 +87,40 @@ pub unsafe extern "C" fn strncasecmp(a: *const c_char, b: *const c_char, n: usiz
         i += 1;
     }
     0
+}
+
+/// [`strcasecmp`] in `locale`. Every locale here folds case as the C locale
+/// does, as in musl, so the locale is not read.
+///
+/// # Safety
+///
+/// As for [`strcasecmp`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strcasecmp_l(
+    a: *const c_char,
+    b: *const c_char,
+    locale: *mut Locale,
+) -> c_int {
+    let _ = locale;
+    // SAFETY: the caller's contract is `strcasecmp`'s.
+    unsafe { strcasecmp(a, b) }
+}
+
+/// [`strncasecmp`] in `locale`, which is not read, as for [`strcasecmp_l`].
+///
+/// # Safety
+///
+/// As for [`strncasecmp`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strncasecmp_l(
+    a: *const c_char,
+    b: *const c_char,
+    n: usize,
+    locale: *mut Locale,
+) -> c_int {
+    let _ = locale;
+    // SAFETY: the caller's contract is `strncasecmp`'s.
+    unsafe { strncasecmp(a, b, n) }
 }
 
 /// The position of the lowest set bit of `i`, counting from 1, or 0 if none is.

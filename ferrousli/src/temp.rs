@@ -10,8 +10,10 @@
 //!
 //! `mktemp` only picks a name that did not exist when it looked, which another
 //! program can take before the caller uses it. It is here because programs
-//! still call it. glibc's `*64` names are the same functions.
+//! still call it, and so is `stdio.h`'s `tmpnam`, which has the same flaw and
+//! is obsolescent in POSIX.1-2024. glibc's `*64` names are the same functions.
 
+use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_int};
 use core::ptr::null_mut;
 
@@ -246,6 +248,65 @@ pub unsafe extern "C" fn mktemp(template: *mut c_char) -> *mut c_char {
     unsafe { template.write(0) };
     errno::set(errno::EEXIST);
     template
+}
+
+/// `L_tmpnam`, from `include/stdio.h`: the size of a buffer `tmpnam` fills.
+const L_TMPNAM: usize = 20;
+
+/// The buffer `tmpnam` returns when given none.
+#[derive(Debug)]
+struct NameBuffer(UnsafeCell<[u8; L_TMPNAM]>);
+
+// SAFETY: C documents `tmpnam`'s own result as static storage the next call
+// overwrites, and a program calling it from two threads at once as passing its
+// own buffers, as with musl's.
+unsafe impl Sync for NameBuffer {}
+
+/// What `tmpnam` returns for a null buffer.
+static NAME: NameBuffer = NameBuffer(UnsafeCell::new([0; L_TMPNAM]));
+
+/// A name under `/tmp` that no file had when it looked, copied into `buffer`,
+/// or into static storage the next call overwrites when `buffer` is null.
+/// Returns where it was written, or null if 100 names were all taken.
+///
+/// musl's `stdio/tmpnam.c` (MIT): `/tmp/tmpnam_` and six letters, each tried
+/// with `readlink`, which fails with `ENOENT` only when nothing has the name.
+///
+/// # Safety
+///
+/// `buffer` must be null or valid for writes of `L_tmpnam` (20) bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn tmpnam(buffer: *mut c_char) -> *mut c_char {
+    let mut name = *b"/tmp/tmpnam_XXXXXX\0";
+    let mut probe = [0u8; 1];
+    for _ in 0..TRIES {
+        // SAFETY: bytes 12 to 17 of `name` are the six writable `X`s.
+        unsafe { random_name(name.as_mut_ptr().wrapping_add(12).cast()) };
+        // SAFETY: `name` is NUL-terminated, and `probe` has room for the one
+        // byte the call may write.
+        let ret = unsafe {
+            syscall::syscall3(
+                nr::READLINK,
+                name.as_ptr().addr(),
+                probe.as_mut_ptr().addr(),
+                1,
+            )
+        };
+        if errno::decode(ret) == Err(errno::ENOENT) {
+            let out = if buffer.is_null() {
+                NAME.0.get().cast::<c_char>()
+            } else {
+                buffer
+            };
+            for (offset, byte) in name.into_iter().enumerate() {
+                // SAFETY: `name` is 19 bytes with its NUL, and `out` has room
+                // for 20.
+                unsafe { out.wrapping_add(offset).write(byte as c_char) };
+            }
+            return out;
+        }
+    }
+    null_mut()
 }
 
 #[cfg(test)]

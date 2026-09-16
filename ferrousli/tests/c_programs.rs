@@ -57,6 +57,15 @@ fn exit_runs_handlers_newest_first_then_destructors() {
 }
 
 #[test]
+fn quick_exit_runs_only_its_own_handlers_newest_first() {
+    check(&Case {
+        stdout: "main\nsecond\nlate\nfirst\n",
+        ending: Ending::Code(7),
+        ..Case::named("quick_exit")
+    });
+}
+
+#[test]
 fn the_auxiliary_vector_reaches_getauxval() {
     check(&Case::named("auxv"));
 }

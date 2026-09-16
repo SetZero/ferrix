@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 777 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 786 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 7 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 0 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 459 | not there |
+| absent | 450 | not there |
 
-466 interfaces are missing in one of the last four ways. 114 of them are
+457 interfaces are missing in one of the last four ways. 114 of them are
 already written on the three unlanded branches of 2026-09-13
 (`ferrousli-threads`, `ferrousli-math`, `ferrousli-misc`), which were
 committed without a build and are not reviewed.
@@ -37,10 +37,10 @@ new subsystem. Every area's missing names are in the index at the end.
 
 | Area | Interfaces | Missing | On a branch | Points | What the points buy |
 |---|---|---|---|---|---|
-| Language support and the standard library | 118 | 7 | 0 | 2 | `quick_exit` and `at_quick_exit` 1; `a64l`, `l64a`, `getsubopt`, `secure_getenv` 1. `setkey` is counted with `encrypt` |
-| Strings and characters | 72 | 2 | 0 | 1 | `strcasecmp_l`, `strncasecmp_l` |
+| Language support and the standard library | 118 | 1 | 0 | 0 | `setkey`, counted with `encrypt`. Landed: `quick_exit` and `at_quick_exit`; `a64l`, `l64a`, `getsubopt`, `secure_getenv` |
+| Strings and characters | 72 | 0 | 0 | 0 | landed: `strcasecmp_l`, `strncasecmp_l` |
 | Wide and multibyte characters | 118 | 35 | 0 | 14 | wide-character streams (`fgetwc` to `vwscanf`, `fwide`, `ungetwc`) 8; the `wcstol` and `wcstod` families with `wcstoimax` and `wcstoumax` 3; `open_wmemstream` 2; `wcsftime`, `wcslcpy`, `wcslcat` 1 |
-| Standard I/O | 70 | 1 | 0 | 1 | `tmpnam` |
+| Standard I/O | 70 | 0 | 0 | 0 | landed: `tmpnam` |
 | Math and the floating-point environment | 201 | 155 | 43 | 23 | landing `ferrousli-math`: `fenv.h`, rounding, manipulation, remainders, `fma` 5; the rest of the transcendental functions for `double` and all of them for `float`, the Bessel functions and `signgam` 10; every `long double` form 8. Landed: `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, bit for bit musl's in every rounding mode, and the classifiers for all three types |
 | Complex arithmetic | 69 | 66 | 0 | 8 | `complex.h` over the math library, `creal` and `cimag` as functions |
 | Locales, messages and conversion | 32 | 24 | 0 | 15 | the `gettext` family with `.mo` catalogues 5; `iconv` 5; `catopen`, `catgets`, `catclose` 2; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1 |
@@ -58,7 +58,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 5 | 0 | 2 | `dlfcn.h` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **466** | **114** | **135** | |
+| **All** | **1243** | **457** | **114** | **131** | |
 
 ## Present but broken
 
@@ -205,8 +205,8 @@ interface.
 | `<inttypes.h>` | present (4) | `imaxabs`, `imaxdiv`, `strtoimax`, `strtoumax` |
 | `<stdarg.h>` | present (4) | `va_arg`, `va_copy`, `va_end`, `va_start` |
 | `<stdatomic.h>` | present (29) | `atomic_compare_exchange_strong`, `atomic_compare_exchange_strong_explicit`, `atomic_compare_exchange_weak`, `atomic_compare_exchange_weak_explicit`, `atomic_exchange`, `atomic_exchange_explicit`, `atomic_fetch_add`, `atomic_fetch_add_explicit`, `atomic_fetch_and`, `atomic_fetch_and_explicit`, `atomic_fetch_or`, `atomic_fetch_or_explicit`, `atomic_fetch_sub`, `atomic_fetch_sub_explicit`, `atomic_fetch_xor`, `atomic_fetch_xor_explicit`, `atomic_flag_clear`, `atomic_flag_clear_explicit`, `atomic_flag_test_and_set`, `atomic_flag_test_and_set_explicit`, `atomic_init`, `atomic_is_lock_free`, `atomic_load`, `atomic_load_explicit`, `atomic_signal_fence`, `atomic_store`, `atomic_store_explicit`, `atomic_thread_fence`, `kill_dependency` |
-| `<stdlib.h>` | present (60) | `_Exit`, `abort`, `abs`, `aligned_alloc`, `atexit`, `atof`, `atoi`, `atol`, `atoll`, `bsearch`, `calloc`, `div`, `drand48` (XSI), `erand48` (XSI), `exit`, `free`, `getenv`, `initstate` (XSI), `jrand48` (XSI), `labs`, `lcong48` (XSI), `ldiv`, `llabs`, `lldiv`, `lrand48` (XSI), `malloc`, `mblen`, `mbstowcs`, `mbtowc`, `mkdtemp`, `mkostemp`, `mkstemp`, `mrand48` (XSI), `nrand48` (XSI), `posix_memalign` (ADV), `putenv` (XSI), `qsort`, `qsort_r`, `rand`, `random` (XSI), `realloc`, `reallocarray`, `realpath`, `seed48` (XSI), `setenv`, `setstate` (XSI), `srand`, `srand48` (XSI), `srandom` (XSI), `strtod`, `strtof`, `strtol`, `strtold`, `strtoll`, `strtoul`, `strtoull`, `system`, `unsetenv`, `wcstombs`, `wctomb` |
-| `<stdlib.h>` | absent (7) | `a64l` (XSI), `at_quick_exit`, `getsubopt`, `l64a` (XSI), `quick_exit`, `secure_getenv`, `setkey` |
+| `<stdlib.h>` | present (66) | `_Exit`, `a64l` (XSI), `abort`, `abs`, `aligned_alloc`, `at_quick_exit`, `atexit`, `atof`, `atoi`, `atol`, `atoll`, `bsearch`, `calloc`, `div`, `drand48` (XSI), `erand48` (XSI), `exit`, `free`, `getenv`, `getsubopt`, `initstate` (XSI), `jrand48` (XSI), `l64a` (XSI), `labs`, `lcong48` (XSI), `ldiv`, `llabs`, `lldiv`, `lrand48` (XSI), `malloc`, `mblen`, `mbstowcs`, `mbtowc`, `mkdtemp`, `mkostemp`, `mkstemp`, `mrand48` (XSI), `nrand48` (XSI), `posix_memalign` (ADV), `putenv` (XSI), `qsort`, `qsort_r`, `quick_exit`, `rand`, `random` (XSI), `realloc`, `reallocarray`, `realpath`, `secure_getenv`, `seed48` (XSI), `setenv`, `setstate` (XSI), `srand`, `srand48` (XSI), `srandom` (XSI), `strtod`, `strtof`, `strtol`, `strtold`, `strtoll`, `strtoul`, `strtoull`, `system`, `unsetenv`, `wcstombs`, `wctomb` |
+| `<stdlib.h>` | absent (1) | `setkey` |
 
 ### Strings and characters
 
@@ -214,8 +214,7 @@ interface.
 |---|---|---|
 | `<ctype.h>` | present (28) | `isalnum`, `isalnum_l`, `isalpha`, `isalpha_l`, `isblank`, `isblank_l`, `iscntrl`, `iscntrl_l`, `isdigit`, `isdigit_l`, `isgraph`, `isgraph_l`, `islower`, `islower_l`, `isprint`, `isprint_l`, `ispunct`, `ispunct_l`, `isspace`, `isspace_l`, `isupper`, `isupper_l`, `isxdigit`, `isxdigit_l`, `tolower`, `tolower_l`, `toupper`, `toupper_l` |
 | `<string.h>` | present (37) | `memccpy` (XSI), `memchr`, `memcmp`, `memcpy`, `memmem`, `memmove`, `memset`, `stpcpy`, `stpncpy`, `strcat`, `strchr`, `strcmp`, `strcoll`, `strcoll_l`, `strcpy`, `strcspn`, `strdup`, `strerror`, `strerror_l`, `strerror_r`, `strlcat`, `strlcpy`, `strlen`, `strncat`, `strncmp`, `strncpy`, `strndup`, `strnlen`, `strpbrk`, `strrchr`, `strsignal`, `strspn`, `strstr`, `strtok`, `strtok_r`, `strxfrm`, `strxfrm_l` |
-| `<strings.h>` | present (5) | `ffs` (XSI), `ffsl` (XSI), `ffsll` (XSI), `strcasecmp`, `strncasecmp` |
-| `<strings.h>` | absent (2) | `strcasecmp_l`, `strncasecmp_l` |
+| `<strings.h>` | present (7) | `ffs` (XSI), `ffsl` (XSI), `ffsll` (XSI), `strcasecmp`, `strcasecmp_l`, `strncasecmp`, `strncasecmp_l` |
 
 ### Wide and multibyte characters
 
@@ -231,8 +230,7 @@ interface.
 
 | Header | Status | Interfaces |
 |---|---|---|
-| `<stdio.h>` | present (69) | `asprintf`, `clearerr`, `dprintf`, `fclose`, `fdopen`, `feof`, `ferror`, `fflush`, `fgetc`, `fgetpos`, `fgets`, `fileno`, `flockfile`, `fmemopen`, `fopen`, `fprintf`, `fputc`, `fputs`, `fread`, `freopen`, `fscanf`, `fseek`, `fseeko`, `fsetpos`, `ftell`, `ftello`, `ftrylockfile`, `funlockfile`, `fwrite`, `getc`, `getc_unlocked`, `getchar`, `getchar_unlocked`, `getdelim`, `getline`, `open_memstream`, `pclose`, `perror`, `popen`, `printf`, `putc`, `putc_unlocked`, `putchar`, `putchar_unlocked`, `puts`, `remove`, `rename`, `renameat`, `rewind`, `scanf`, `setbuf`, `setvbuf`, `snprintf`, `sprintf`, `sscanf`, `stderr`, `stdin`, `stdout`, `tmpfile`, `ungetc`, `vasprintf`, `vdprintf`, `vfprintf`, `vfscanf`, `vprintf`, `vscanf`, `vsnprintf`, `vsprintf`, `vsscanf` |
-| `<stdio.h>` | absent (1) | `tmpnam` (OB) |
+| `<stdio.h>` | present (70) | `asprintf`, `clearerr`, `dprintf`, `fclose`, `fdopen`, `feof`, `ferror`, `fflush`, `fgetc`, `fgetpos`, `fgets`, `fileno`, `flockfile`, `fmemopen`, `fopen`, `fprintf`, `fputc`, `fputs`, `fread`, `freopen`, `fscanf`, `fseek`, `fseeko`, `fsetpos`, `ftell`, `ftello`, `ftrylockfile`, `funlockfile`, `fwrite`, `getc`, `getc_unlocked`, `getchar`, `getchar_unlocked`, `getdelim`, `getline`, `open_memstream`, `pclose`, `perror`, `popen`, `printf`, `putc`, `putc_unlocked`, `putchar`, `putchar_unlocked`, `puts`, `remove`, `rename`, `renameat`, `rewind`, `scanf`, `setbuf`, `setvbuf`, `snprintf`, `sprintf`, `sscanf`, `stderr`, `stdin`, `stdout`, `tmpfile`, `tmpnam` (OB), `ungetc`, `vasprintf`, `vdprintf`, `vfprintf`, `vfscanf`, `vprintf`, `vscanf`, `vsnprintf`, `vsprintf`, `vsscanf` |
 
 ### Math and the floating-point environment
 
@@ -240,7 +238,6 @@ interface.
 |---|---|---|
 | `<fenv.h>` | absent, written on ferrousli-math (11) | `feclearexcept`, `fegetenv`, `fegetexceptflag`, `fegetround`, `feholdexcept`, `feraiseexcept`, `fesetenv`, `fesetexceptflag`, `fesetround`, `fetestexcept`, `feupdateenv` |
 | `<math.h>` | present (46) | `atan2`, `cbrt`, `cbrtf`, `ceil`, `ceilf`, `copysign`, `copysignf`, `cos`, `exp`, `fabs`, `fabsf`, `fdim`, `fdimf`, `floor`, `floorf`, `fma`, `fmaf`, `fmax`, `fmaxf`, `fmin`, `fminf`, `fmod`, `fmodf`, `fpclassify`, `isfinite`, `isgreater`, `isgreaterequal`, `isinf`, `isless`, `islessequal`, `islessgreater`, `isnan`, `isnormal`, `isunordered`, `log`, `pow`, `rint`, `rintf`, `round`, `roundf`, `signbit`, `sin`, `sqrt`, `sqrtf`, `trunc`, `truncf` |
-| `<math.h>` | broken (12) | `fpclassify`: expands to __fpclassify, __fpclassifyf or __fpclassifyl, all absent: fails to link; `isfinite`: long double form calls __fpclassifyl, absent: fails to link; `isgreater`: long double form goes through isunordered and isnan to __fpclassifyl, absent: fails to link; `isgreaterequal`: long double form goes through isunordered and isnan to __fpclassifyl, absent: fails to link; `isinf`: long double form calls __fpclassifyl, absent: fails to link; `isless`: long double form goes through isunordered and isnan to __fpclassifyl, absent: fails to link; `islessequal`: long double form goes through isunordered and isnan to __fpclassifyl, absent: fails to link; `islessgreater`: long double form goes through isunordered and isnan to __fpclassifyl, absent: fails to link; `isnan`: long double form calls __fpclassifyl, absent: fails to link; `isnormal`: long double form calls __fpclassifyl, absent: fails to link; `isunordered`: long double form goes through isunordered and isnan to __fpclassifyl, absent: fails to link; `signbit`: long double form calls __signbitl, absent: fails to link |
 | `<math.h>` | absent (112) | `acos`, `acosf`, `acosh`, `acoshf`, `acoshl`, `acosl`, `asin`, `asinf`, `asinh`, `asinhf`, `asinhl`, `asinl`, `atan`, `atan2f`, `atan2l`, `atanf`, `atanh`, `atanhf`, `atanhl`, `atanl`, `cbrtl`, `ceill`, `copysignl`, `cosf`, `cosh`, `coshf`, `coshl`, `cosl`, `erf`, `erfc`, `erfcf`, `erfcl`, `erff`, `erfl`, `exp2`, `exp2f`, `exp2l`, `expf`, `expl`, `expm1`, `expm1f`, `expm1l`, `fabsl`, `fdiml`, `floorl`, `fmal`, `fmaxl`, `fminl`, `fmodl`, `frexpl`, `hypot`, `hypotf`, `hypotl`, `ilogbl`, `j0` (XSI), `j1` (XSI), `jn` (XSI), `ldexpl`, `lgamma`, `lgammaf`, `lgammal`, `llrintl`, `llroundl`, `log10`, `log10f`, `log10l`, `log1p`, `log1pf`, `log1pl`, `log2`, `log2f`, `log2l`, `logbl`, `logf`, `logl`, `lrintl`, `lroundl`, `modfl`, `nanl`, `nearbyintl`, `nextafterl`, `nexttoward`, `nexttowardf`, `nexttowardl`, `powf`, `powl`, `remainderl`, `remquol`, `rintl`, `roundl`, `scalblnl`, `scalbnl`, `signgam` (XSI), `sinf`, `sinh`, `sinhf`, `sinhl`, `sinl`, `sqrtl`, `tan`, `tanf`, `tanh`, `tanhf`, `tanhl`, `tanl`, `tgamma`, `tgammaf`, `tgammal`, `truncl`, `y0` (XSI), `y1` (XSI), `yn` (XSI) |
 | `<math.h>` | absent, written on ferrousli-math (32) | `frexp`, `frexpf`, `ilogb`, `ilogbf`, `ldexp`, `ldexpf`, `llrint`, `llrintf`, `llround`, `llroundf`, `logb`, `logbf`, `lrint`, `lrintf`, `lround`, `lroundf`, `modf`, `modff`, `nan`, `nanf`, `nearbyint`, `nearbyintf`, `nextafter`, `nextafterf`, `remainder`, `remainderf`, `remquo`, `remquof`, `scalbln`, `scalblnf`, `scalbn`, `scalbnf` |
 

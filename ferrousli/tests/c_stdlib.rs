@@ -89,6 +89,11 @@ fn temporary_files_and_directories_get_exclusive_names() {
 }
 
 #[test]
+fn radix_64_suboptions_secure_getenv_locale_comparison_and_tmpnam() {
+    check(&Case::named("stdlib/posix_misc"));
+}
+
+#[test]
 fn realpath_resolves_links_dots_and_the_working_directory() {
     check(&Case::named("stdlib/realpath"));
 }
