@@ -1012,7 +1012,7 @@ fn move_handle(from: &Process, to: &Process, handle: Handle) -> Result<Handle, E
 
 /// The device node a handle names, if it carries `needed`.
 fn device_in(process: &Process, device: Handle, needed: Rights) -> Result<Arc<DeviceNode>, Errno> {
-    process.with_handles(|table| {
+    let node = process.with_handles(|table| {
         let (object, rights) = table.get(device).map_err(table_error)?;
         let Object::Device(node) = object else {
             return Err(status::WRONG_TYPE);
@@ -1021,7 +1021,8 @@ fn device_in(process: &Process, device: Handle, needed: Rights) -> Result<Arc<De
             return Err(status::ACCESS_DENIED);
         }
         Ok(Arc::clone(node))
-    })
+    })?;
+    Ok(node)
 }
 
 /// `interrupt_create`.
@@ -1030,6 +1031,10 @@ fn device_in(process: &Process, device: Handle, needed: Rights) -> Result<Arc<De
 /// interrupt" and cannot name a line its device does not have.
 fn interrupt_create(process: &Process, device: Handle, index: u64) -> Result<usize, Errno> {
     let node = device_in(process, device, Rights::MANAGE)?;
+    // Taking a device's interrupt is what its driver does, and devmgr and a
+    // quiesce never do: noted, so that a check waiting for the driver's work
+    // can say how the driver ended.
+    crate::devmgr::note_driver(&node, process);
     let vector = usize::try_from(index)
         .ok()
         .and_then(|index| node.vector(index))
@@ -1065,6 +1070,8 @@ fn interrupt_ack(process: &Process, interrupt: Handle) -> Result<usize, Errno> {
 /// whole purpose of the call.
 fn io_mapping_create(process: &Process, device: Handle, spec: u64) -> Result<usize, Errno> {
     let node = device_in(process, device, Rights::MANAGE)?;
+    // Mapping a device's registers, likewise (see `interrupt_create`).
+    crate::devmgr::note_driver(&node, process);
     let phys = read_u64(process, spec)?;
     let len = read_u64(process, spec.checked_add(8).ok_or(status::FAULT)?)?;
     let aperture = node.aperture(phys, len).ok_or(status::ACCESS_DENIED)?;

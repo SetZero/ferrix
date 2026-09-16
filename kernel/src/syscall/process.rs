@@ -634,6 +634,11 @@ impl Process {
             .then(|| self.exit.status.load(Ordering::Acquire))
     }
 
+    /// A reference to how it ends, which outlives it.
+    pub(crate) fn exit_record(&self) -> Arc<Exit> {
+        Arc::clone(&self.exit)
+    }
+
     /// The queue woken, once, when it has ended and let go of what it held --
     /// for a waiter that has its own condition to check alongside
     /// [`Process::is_released`].
@@ -1482,6 +1487,18 @@ impl Exit {
     /// [`Exit::is_terminated`] is true.
     pub(crate) fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
+    }
+
+    /// Its exit status, once it has terminated.
+    pub(crate) fn status(&self) -> Option<i32> {
+        self.is_terminated()
+            .then(|| self.status.load(Ordering::Acquire))
+    }
+
+    /// The signal that ended it, if one did.
+    pub(crate) fn signal(&self) -> Option<u32> {
+        let signal = self.ended_by.load(Ordering::Acquire);
+        (self.is_terminated() && signal != 0).then_some(signal)
     }
 
     /// The queue woken as it lets go of what it held; see

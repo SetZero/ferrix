@@ -142,7 +142,8 @@ pub(crate) fn run(started_by_devmgr: bool) -> Result<Report, &'static str> {
         let mut first = None;
         for index in 0..nodes.len() {
             let rdev = makedev(VIRTIO_BLK_MAJOR, u32::try_from(index).unwrap_or(0) * 16);
-            let disk = published_by_devmgr(rdev)?;
+            let location = nodes.get(index).and_then(|node| super::location_of(node));
+            let disk = published_by_devmgr(rdev, location)?;
             if first.is_none() {
                 first = Some(disk);
             }
@@ -339,16 +340,58 @@ fn published(side: &Side, child: Handle, rdev: u64) -> Result<Arc<dyn BlockDevic
 }
 
 /// The disk `devmgr`'s driver published, or why not within the patience.
-fn published_by_devmgr(rdev: u64) -> Result<Arc<dyn BlockDevice>, &'static str> {
+fn published_by_devmgr(
+    rdev: u64,
+    location: Option<ferrix_blkring::Location>,
+) -> Result<Arc<dyn BlockDevice>, &'static str> {
     let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
     loop {
         if let Some(disk) = fs::devfs::block_device(rdev) {
             return Ok(disk);
         }
+        // A driver that died is named, with how it died, rather than left to
+        // look like a disk that never came.
+        if let Some((status, signal)) = location.and_then(crate::devmgr::driver_ending) {
+            let raw = location.map_or(0, ferrix_blkring::Location::raw);
+            match signal {
+                Some(signal) => crate::console::println!(
+                    "  driver   the blk driver of {raw:#010x} was ended by signal {signal} \
+                     before publishing its disk"
+                ),
+                None => crate::console::println!(
+                    "  driver   the blk driver of {raw:#010x} exited with status {status} \
+                     ({}) before publishing its disk",
+                    blk_step(status)
+                ),
+            }
+            return Err(DRIVER_DIED);
+        }
         if timer::now_nanos() >= deadline {
             return Err("a disk devmgr reported started is not in the registry");
         }
         sched::sleep_for(2_000_000);
+    }
+}
+
+/// What the check fails with when a driver devmgr started died before its disk
+/// was published; the line before it says how.
+const DRIVER_DIED: &str = "a blk driver devmgr started died before publishing its disk";
+
+/// The step `/sbin/blk`'s exit status names: its `Step` enum, in
+/// `user/blk/src/main.rs`, whose numbers are its exit statuses.
+fn blk_step(status: i32) -> &'static str {
+    match status {
+        1 => "at its start",
+        2 => "checking its identity",
+        3 => "mapping its registers",
+        4 => "making, pinning or mapping memory",
+        5 => "bringing the device up",
+        6 => "setting up the ring",
+        7 => "arranging its events",
+        8 => "serving a broken ring or device",
+        9 => "stopping a device that would not reset",
+        10 => "on its control channel",
+        _ => "at no step it names",
     }
 }
 
