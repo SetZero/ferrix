@@ -124,6 +124,8 @@ pub const AF_INET: u16 = 2;
 pub const AF_INET6: u16 = 10;
 /// The kernel's own message bus, which `ip` and `udev` speak.
 pub const AF_NETLINK: u16 = 16;
+/// Frames on a link, below IP: what a DHCP client and `tcpdump` open.
+pub const AF_PACKET: u16 = 17;
 /// One past the highest family the kernel knows.
 ///
 /// Linux's own `AF_MAX` is 46, since `AF_MCTP` took 45. musl 1.2.5 still has
@@ -233,6 +235,19 @@ pub const SHUT_RDWR: u32 = 2;
 
 /// The level of options that belong to the socket rather than a protocol.
 pub const SOL_SOCKET: i32 = 1;
+
+// ---------------------------------------------------------------------------
+// AF_PACKET
+// ---------------------------------------------------------------------------
+
+/// Options of packet sockets.
+pub const SOL_PACKET: i32 = 263;
+/// `struct sockaddr_ll`: family, protocol, interface index, hardware type,
+/// packet type, address length and an eight-byte address.
+pub const SOCKADDR_LL_SIZE: usize = 20;
+/// Where `sll_addr` starts in a `sockaddr_ll`, which is how long one naming
+/// no address is.
+pub const SOCKADDR_LL_ADDR_OFFSET: usize = 12;
 
 /// Record debugging information, for protocols that keep any.
 pub const SO_DEBUG: i32 = 1;

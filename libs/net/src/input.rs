@@ -65,6 +65,7 @@ impl Stack {
             self.counters.not_ours += 1;
             return;
         }
+        self.tap_frame(interface, &header, frame, payload);
         match header.ethertype {
             ethertype::ARP => self.arp_input(interface, payload, header.source, now),
             ethertype::IPV4 => self.ipv4_input(interface, payload, now),

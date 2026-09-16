@@ -392,7 +392,7 @@ impl Stack {
     }
 
     /// Count a frame against an interface.
-    fn count_sent(&mut self, interface: u32, bytes: usize) {
+    pub(crate) fn count_sent(&mut self, interface: u32, bytes: usize) {
         if let Some(link) = self.interface_mut(interface) {
             link.counters.sent += 1;
             link.counters.sent_bytes += bytes as u64;

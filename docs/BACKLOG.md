@@ -244,7 +244,7 @@ nobody has it yet.
 
 | Item | Owner |
 |---|---|
-| Raw sockets: `AF_INET` `SOCK_RAW` landed 2026-09-16 (busybox's `ping` works); left are `AF_PACKET` `SOCK_DGRAM` and `SOCK_RAW` bound to an interface, for `udhcpc`, after which `run --net` configures `eth0` by DHCP instead of from `/etc/profile`, and `AF_INET6` `SOCK_RAW` for `ping6`. Networking stage | os-26 |
+| Raw sockets: `AF_INET` `SOCK_RAW` and `AF_PACKET` landed 2026-09-16 (busybox's `ping` and `udhcpc` work); left are `run --net` and `test-net` configuring `eth0` by DHCP instead of from `/etc/profile` and by hand, and `AF_INET6` `SOCK_RAW` for `ping6`. Networking stage | os-26 |
 
 ### P3 — hardware variants and later stages, unowned
 

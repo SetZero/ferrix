@@ -2840,6 +2840,34 @@ refused, a control that panics the boot when the privilege check is removed.
 The line now ends `, 3 packets read by raw sockets`, and `test-net`'s `ping`
 passes with the busybox built against ferrousli.
 
+**Done — `AF_PACKET` sockets, for `udhcpc`.** A DHCP client has to hear an
+offer for an address its interface does not have yet, which IP drops, so it
+listens below IP: busybox's `udhcpc` opens `socket(AF_PACKET, SOCK_DGRAM,
+htons(ETH_P_IP))`, binds it to the interface with a `sockaddr_ll`, and reads
+IPv4 packets with the link header taken off; it sends through another, naming
+the broadcast hardware address. Packet sockets now open for root, in both
+types: `SOCK_RAW` reads and writes whole frames, `SOCK_DGRAM` payloads with
+the stack putting the header on. Each is handed a copy of every frame of its
+protocol, or of every protocol with `ETH_P_ALL`, that an Ethernet interface
+takes in, on the interface it is bound to or on all of them, with the
+sender's hardware address and whether the frame was to this host, the
+broadcast or a group. `packet_create` asks for the capability before the
+type, and that order is kept: uid 1000 is `EPERM` even for a stream packet
+socket. Not yet: frames this host sends are not copied back to `ETH_P_ALL`
+sockets, a packet socket on the loopback carries nothing, `SOL_PACKET`
+options are `ENOPROTOOPT` — `udhcpc`'s `PACKET_AUXDATA` among them, which it
+takes quietly — and no BPF filter attaches, which busybox 1.37 compiles out.
+The net ring's boot check binds a packet socket for ARP to its pretend
+driver's interface: it must read the ARP request the driver delivers, with a
+`sockaddr_ll` naming the sender, the interface and the broadcast, and a frame
+it sends to the peer must be the next one the kernel submits, with the link
+header it asked for. With the stack's frame tap removed, the boot panics with
+"a packet socket bound for ARP did not read the ARP request". The line ends
+`, 2 through a packet socket`. In a `run --net` guest on Windows, `udhcpc -i
+eth0 -n -q` broadcast its discover and select, got the lease of 10.0.2.15
+from the gateway, and the address, route and resolver it configured fetched
+`http://example.com`.
+
 **Done — `AF_NETLINK` route sockets, which is how an interface is
 configured.** Every way of configuring a network on Linux ends at the same
 socket: `ip` uses nothing else, `ifconfig` and `route` use ioctls that are a

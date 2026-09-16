@@ -457,6 +457,8 @@ pub(crate) fn sys_ioctl(
         socket.ioctl(process, request, arg)
     } else if let Some(socket) = crate::net::socket::of(&file) {
         socket.ioctl(process, request, arg)
+    } else if let Some(socket) = crate::net::packet::of(&file) {
+        socket.ioctl(process, request, arg)
     } else {
         return Err(Errno::ENOTTY);
     };

@@ -56,6 +56,7 @@ pub mod iface;
 mod input;
 pub mod neighbor;
 mod output;
+pub mod packet;
 mod poll;
 pub mod ports;
 pub mod rand;

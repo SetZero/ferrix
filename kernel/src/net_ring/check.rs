@@ -20,6 +20,9 @@
 //! * an ARP request for the interface's address, written into a slot and
 //!   completed, is answered with an ARP reply in a slot the kernel submits --
 //!   which is a frame in and a frame out, through the whole stack;
+//! * a packet socket bound to the interface for ARP reads that request, with
+//!   the `sockaddr_ll` of its sender, and a frame it sends is the next one the
+//!   kernel submits, addressed as the socket said;
 //! * closing the driver's end takes the interface away again.
 
 use alloc::sync::Arc;
@@ -83,6 +86,8 @@ pub(crate) struct Report {
     pub(crate) received: u32,
     /// How many frames the kernel asked to have sent.
     pub(crate) sent: u32,
+    /// How many frames went through a packet socket, in and out.
+    pub(crate) packet_frames: u32,
 }
 
 /// Run the check.
@@ -141,8 +146,11 @@ fn serve_a_ring(node: &Arc<DeviceNode>, report: &mut Report) -> Result<(), &'sta
     if report.posted == 0 {
         return Err("the kernel posted no slot for the driver to fill");
     }
+    let listener = packet_socket(index)?;
     report.received = driver.deliver_arp_request()?;
-    report.sent = driver.expect_arp_reply()?;
+    report.sent = driver.expect_transmission(check_arp_reply)?;
+    report.packet_frames += read_the_request(&listener, index)?;
+    report.packet_frames += send_a_frame(&listener, index, &mut driver)?;
 
     drop(control);
     wait_for_task(id)?;
@@ -150,6 +158,115 @@ fn serve_a_ring(node: &Arc<DeviceNode>, report: &mut Report) -> Result<(), &'sta
         return Err("the interface outlived the driver that brought it");
     }
     Ok(())
+}
+
+/// The Ethernet protocol the check's own frame names, one of the two IEEE
+/// set aside for local experiments.
+const EXPERIMENTAL_ETHERTYPE: u16 = 0x88B5;
+
+/// What the check's packet socket sends.
+const PACKET_BODY: &[u8] = b"a frame a packet socket wrote";
+
+/// A `SOCK_DGRAM` packet socket for ARP, bound to the ring's interface, as
+/// `udhcpc` binds one for IPv4.
+fn packet_socket(index: u32) -> Result<Arc<net::packet::PacketSocket>, &'static str> {
+    let file = net::packet::PacketSocket::open(
+        ferrix_net::packet::PacketKind::Datagram,
+        ethertype::ARP.to_be(),
+        false,
+        (0, 0),
+    )
+    .map_err(|_| "a packet socket could not be opened")?;
+    let socket = net::packet::of(&file).ok_or("a packet socket's open file does not hold one")?;
+    socket
+        .bind(&link_name(index, ethertype::ARP, [0; 6]))
+        .map_err(|_| "a packet socket could not be bound to the ring's interface")?;
+    Ok(socket)
+}
+
+/// A `sockaddr_ll` naming an interface, a protocol and a hardware address.
+fn link_name(index: u32, protocol: u16, address: [u8; 6]) -> Vec<u8> {
+    let mut name = vec![0_u8; ferrix_linux_abi::socket::SOCKADDR_LL_SIZE];
+    let fields: [(usize, &[u8]); 5] = [
+        (0, &ferrix_linux_abi::socket::AF_PACKET.to_ne_bytes()),
+        (2, &protocol.to_be_bytes()),
+        (4, &index.to_ne_bytes()),
+        (11, &[6]),
+        (12, &address),
+    ];
+    for (at, field) in fields {
+        if let Some(slot) = name.get_mut(at..at + field.len()) {
+            slot.copy_from_slice(field);
+        }
+    }
+    name
+}
+
+/// The packet socket read the ARP request the driver delivered: its payload
+/// without the link header, from the peer's hardware address, to the
+/// broadcast, on this interface.
+fn read_the_request(
+    socket: &Arc<net::packet::PacketSocket>,
+    index: u32,
+) -> Result<u32, &'static str> {
+    let mut out = [0_u8; 128];
+    let (received, name) = socket
+        .recv(&mut out, 0, true)
+        .map_err(|_| "a packet socket bound for ARP did not read the ARP request")?;
+    let Some(name) = name else {
+        return Err("a packet socket's receive named no sender");
+    };
+    let request = arp_request();
+    if out.get(..received.bytes) != request.get(ethernet::HEADER_LEN..) {
+        return Err("a SOCK_DGRAM packet socket read something other than the frame's payload");
+    }
+    let expected = {
+        let mut name = link_name(index, ethertype::ARP, THEIR_MAC);
+        let hatype = 1_u16.to_ne_bytes();
+        name.get_mut(8..10)
+            .ok_or("a sockaddr_ll is too short")?
+            .copy_from_slice(&hatype);
+        // PACKET_BROADCAST.
+        *name.get_mut(10).ok_or("a sockaddr_ll is too short")? = 1;
+        name
+    };
+    if name != expected {
+        return Err("a packet socket named the ARP request's sender wrongly");
+    }
+    Ok(1)
+}
+
+/// A frame the packet socket sends to the peer is the next transmission, with
+/// the link header the stack put on it.
+fn send_a_frame(
+    socket: &Arc<net::packet::PacketSocket>,
+    index: u32,
+    driver: &mut Driver,
+) -> Result<u32, &'static str> {
+    let sent = socket
+        .send(
+            PACKET_BODY,
+            Some(&link_name(index, EXPERIMENTAL_ETHERTYPE, THEIR_MAC)),
+        )
+        .map_err(|_| "a packet socket could not send a frame on the ring's interface")?;
+    if sent != PACKET_BODY.len() {
+        return Err("a packet socket sent its frame short");
+    }
+    driver.expect_transmission(|frame| {
+        let Ok((header, payload)) = ethernet::Header::parse(frame) else {
+            return Err("a packet socket's frame is not an Ethernet frame");
+        };
+        if header.ethertype != EXPERIMENTAL_ETHERTYPE
+            || header.source != OUR_MAC
+            || header.destination != THEIR_MAC
+        {
+            return Err("a packet socket's frame has another link header than it asked for");
+        }
+        if payload.get(..PACKET_BODY.len()) != Some(PACKET_BODY) {
+            return Err("a packet socket's frame carries something else");
+        }
+        Ok(())
+    })
 }
 
 /// The rights a VMO handle carries at handoff.
@@ -395,8 +512,12 @@ impl Driver {
         Ok(1)
     }
 
-    /// Wait for the kernel to submit the ARP reply, and check it is one.
-    fn expect_arp_reply(&mut self) -> Result<u32, &'static str> {
+    /// Wait for the kernel to submit a frame for sending, and check it with
+    /// `check`.
+    fn expect_transmission(
+        &mut self,
+        check: impl Fn(&[u8]) -> Result<(), &'static str>,
+    ) -> Result<u32, &'static str> {
         let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
         loop {
             let mut taken = [Submission {
@@ -413,7 +534,7 @@ impl Driver {
                     self.posted.push(entry.slot);
                     continue;
                 }
-                return self.check_reply(entry);
+                return self.check_reply(entry, &check);
             }
             if timer::now_nanos() >= deadline {
                 return Err("the kernel never answered the ARP request");
@@ -422,9 +543,12 @@ impl Driver {
         }
     }
 
-    /// The frame the kernel asked to have sent is an ARP reply for our
-    /// address, from our hardware address, to the asker.
-    fn check_reply(&mut self, entry: &Submission) -> Result<u32, &'static str> {
+    /// The frame the kernel asked to have sent passes `check`.
+    fn check_reply(
+        &mut self,
+        entry: &Submission,
+        check: impl Fn(&[u8]) -> Result<(), &'static str>,
+    ) -> Result<u32, &'static str> {
         let offset = self
             .side
             .layout()
@@ -434,7 +558,7 @@ impl Driver {
         if !self.data.copy_out(offset as u64, &mut frame) {
             return Err("a transmission ran past its slot");
         }
-        let outcome = check_arp_reply(&frame);
+        let outcome = check(&frame);
         self.side
             .complete(&mut self.ring, entry.slot, entry.length, Status::Ok)
             .map_err(|_| "the completion ring would not take the transmission")?;

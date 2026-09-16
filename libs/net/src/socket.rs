@@ -67,6 +67,10 @@ pub enum Error {
     PortUnreachable,
     /// The connection timed out.
     TimedOut,
+    /// No such interface, or none named where one had to be.
+    NoDevice,
+    /// The interface is down.
+    NetworkDown,
 }
 
 /// Which directions a shutdown closes.

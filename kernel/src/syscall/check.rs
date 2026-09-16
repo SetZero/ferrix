@@ -7172,6 +7172,26 @@ fn check_what_uid_1000_is_told(user: &Arc<Process>, page: u64) -> Result<(), &'s
         Errno::EPROTONOSUPPORT,
         "uid 1000's raw socket at protocol zero was not EPROTONOSUPPORT",
     )?;
+    // A packet socket too, and there the capability is asked before the type:
+    // `packet_create` refuses a stream packet socket to uid 1000 with EPERM.
+    refuses(
+        socket_call(
+            user,
+            Call::Socket,
+            &[17, u64::from(SOCK_DGRAM), 0x0008, 0, 0, 0],
+        ),
+        Errno::EPERM,
+        "uid 1000 opened a packet socket",
+    )?;
+    refuses(
+        socket_call(
+            user,
+            Call::Socket,
+            &[17, u64::from(SOCK_STREAM), 0, 0, 0, 0],
+        ),
+        Errno::EPERM,
+        "uid 1000's stream packet socket was refused for its type before its capability",
+    )?;
 
     let space = crate::user::space::AddressSpace::new()
         .map_err(|_| "no address space for the credential check's child")?;
@@ -7847,6 +7867,9 @@ fn check_what_the_socket_calls_refuse(process: &Process, page: u64) -> Result<()
 /// `IPPROTO_MAX` is `EINVAL` before any lookup.
 fn check_the_internet_families_open(process: &Process) -> Result<(), &'static str> {
     const INET: u64 = 2;
+    const PACKET: u64 = 17;
+    // `htons(ETH_P_IP)` as a little-endian machine passes it.
+    const ETH_P_IP_NETWORK_ORDER: u64 = 0x0008;
     const INET6: u64 = 10;
     const TCP: u64 = 6;
     const UDP: u64 = 17;
@@ -7864,6 +7887,8 @@ fn check_the_internet_families_open(process: &Process) -> Result<(), &'static st
         [INET, datagram, ICMP, 0, 0, 0],
         [INET, raw, ICMP, 0, 0, 0],
         [INET, raw, 255, 0, 0, 0],
+        [PACKET, datagram, ETH_P_IP_NETWORK_ORDER, 0, 0, 0],
+        [PACKET, raw, 0, 0, 0, 0],
         [INET6, stream, 0, 0, 0, 0],
         [INET6, datagram, 0, 0, 0, 0],
     ] {
@@ -7884,6 +7909,11 @@ fn check_the_internet_families_open(process: &Process) -> Result<(), &'static st
         socket([INET, raw, 263, 0, 0, 0]),
         Errno::EINVAL,
         "a raw socket at IPPROTO_MAX was not EINVAL",
+    )?;
+    refuses(
+        socket([PACKET, stream, 0, 0, 0, 0]),
+        Errno::ESOCKTNOSUPPORT,
+        "a stream packet socket was not ESOCKTNOSUPPORT",
     )?;
     refuses(
         socket([INET, stream, UDP, 0, 0, 0]),

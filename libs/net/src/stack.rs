@@ -102,6 +102,9 @@ pub struct Stack {
     pub(crate) neighbors: Neighbors,
     /// Every socket, by identifier.
     pub(crate) sockets: BTreeMap<u32, Socket>,
+    /// The packet sockets, which share identifiers with [`Stack::sockets`]
+    /// and are kept apart because they have no IP address to be found by.
+    pub(crate) packets: BTreeMap<u32, crate::packet::PacketSocket>,
     /// The next identifier to hand out.
     next_id: u32,
     /// The unpredictability initial sequence numbers and ports come from.
@@ -133,6 +136,7 @@ impl Stack {
             routes: Routes::new(),
             neighbors: Neighbors::new(),
             sockets: BTreeMap::new(),
+            packets: BTreeMap::new(),
             next_id: 1,
             random: Random::new(0),
             egress: VecDeque::new(),
@@ -359,10 +363,20 @@ impl Stack {
 
     /// Put a socket in the table and answer its identifier.
     pub(crate) fn install_socket(&mut self, socket: Socket) -> SocketId {
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1).max(1);
-        let _ = self.sockets.insert(id, socket);
-        SocketId(id)
+        let id = self.allocate_id();
+        let _ = self.sockets.insert(id.0, socket);
+        id
+    }
+
+    /// The next identifier no socket of either table holds.
+    pub(crate) fn allocate_id(&mut self) -> SocketId {
+        loop {
+            let id = self.next_id;
+            self.next_id = self.next_id.wrapping_add(1).max(1);
+            if !self.sockets.contains_key(&id) && !self.packets.contains_key(&id) {
+                return SocketId(id);
+            }
+        }
     }
 
     /// The socket, if it is there.
@@ -386,6 +400,9 @@ impl Stack {
     /// Close a socket. A connected stream is reset unless it was closed
     /// cleanly first, which is what Linux does to an unread socket.
     pub fn close(&mut self, id: SocketId) {
+        if self.packets.remove(&id.0).is_some() {
+            return;
+        }
         let Some(socket) = self.sockets.remove(&id.0) else {
             return;
         };
@@ -428,6 +445,9 @@ impl Stack {
     /// What the socket can do right now.
     #[must_use]
     pub fn readiness(&self, id: SocketId) -> Readiness {
+        if let Some(packet) = self.packets.get(&id.0) {
+            return packet.readiness();
+        }
         self.sockets
             .get(&id.0)
             .map_or(Readiness::default(), Socket::readiness)

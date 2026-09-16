@@ -813,6 +813,8 @@ pub(crate) const fn errno(error: Error) -> Errno {
         Error::Invalid => Errno::EINVAL,
         Error::NoMemory => Errno::ENOBUFS,
         Error::TimedOut => Errno::ETIMEDOUT,
+        Error::NoDevice => Errno::ENODEV,
+        Error::NetworkDown => Errno::ENETDOWN,
     }
 }
 

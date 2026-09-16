@@ -876,8 +876,9 @@ fn check_net_ring() {
     }
     println!(
         "  netring  {} HELLOs refused as specified, {} slots posted for a driver to fill, \
-         {} frames taken up the stack and {} answered back down it",
-        report.refusals, report.posted, report.received, report.sent,
+         {} frames taken up the stack and {} answered back down it, \
+         {} through a packet socket",
+        report.refusals, report.posted, report.received, report.sent, report.packet_frames,
     );
 }
 
