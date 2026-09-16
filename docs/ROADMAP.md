@@ -3524,6 +3524,25 @@ with `F_GETFD`, passing an unreadable argument to show nothing is read. With
 `FIOCLEX` left unanswered, the boot panics with "FIOCLEX on a pipe was
 refused".
 
+**Done — E4, `card0`'s primary plane, on the branch `e4-planes` for os-02's
+review.** Smithay's legacy path lists planes and reads each one's `type`
+property, and has nothing to draw on without a primary plane. `card0` now
+accepts `DRM_CLIENT_CAP_UNIVERSAL_PLANES`, without which Linux's
+`drm_mode_getplane_res` lists only overlay planes; it implies nothing atomic,
+and atomic stays refused. It lists one primary plane, id 4, whose `GETPLANE`
+gives `XRGB8888`, `possible_crtcs` 1 and the CRTC and framebuffer last shown.
+`OBJ_GETPROPERTIES` gives the plane its immutable `type` enum, property 5, at
+`Primary`, and the CRTC and the connector no properties; `GETPROPERTY` names
+the values `Overlay`, `Primary` and `Cursor`. Each follows Linux's
+`drm_plane.c`, `drm_mode_object.c` and `drm_property.c`, read before the code
+(`docs/DISPLAY.md` §2.3). Framebuffer ids now start at 32, so no id names two
+objects. The numbers come from the extended `probe/drm.c`. `compositor/blank`
+reads the planes after its modeset as Smithay does, and `cargo xtask
+test-display` requires its marker line to end in `plane <id> Primary` on
+x86-64 and AArch64. With the plane's `type` value set to `Overlay`, the line
+ends in `plane 4 Overlay` and the test fails with "the program found no
+primary plane on the card" on both.
+
 ---
 
 ## Stage 18 — The compositor  ·  *96 points*
