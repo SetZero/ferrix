@@ -181,12 +181,14 @@ pub unsafe extern "C" fn clock_nanosleep(
     // SAFETY: the kernel reads `req` and writes `rem` only when it is not
     // null; the caller vouches for both.
     let ret = unsafe {
-        syscall::syscall4(
+        crate::cancel::syscall_cp(
             nr::CLOCK_NANOSLEEP,
             clock as usize,
             flags as usize,
             req.addr(),
             rem.addr(),
+            0,
+            0,
         )
     };
     match errno::decode(ret) {
@@ -248,7 +250,7 @@ pub extern "C" fn usleep(useconds: c_uint) -> c_int {
 pub extern "C" fn pause() -> c_int {
     // SAFETY: with no descriptors, no timeout and no mask, the kernel reads
     // and writes nothing.
-    let ret = unsafe { syscall::syscall6(nr::PPOLL, 0, 0, 0, 0, KERNEL_SIGSET_SIZE, 0) };
+    let ret = unsafe { crate::cancel::syscall_cp(nr::PPOLL, 0, 0, 0, 0, KERNEL_SIGSET_SIZE, 0) };
     errno::from_syscall(ret) as c_int
 }
 

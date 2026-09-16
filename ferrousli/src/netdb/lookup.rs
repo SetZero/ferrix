@@ -690,6 +690,8 @@ fn probe(
     dpolicy: &Policy,
     dscope: c_int,
 ) -> (c_int, c_int) {
+    // Cancellation waits until this is finished, as in musl.
+    let _cancel = cancel::disable();
     let fd = socket(family, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
     if fd < 0 {
         return (0, 0);

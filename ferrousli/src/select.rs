@@ -9,7 +9,7 @@ use core::ffi::{c_int, c_long, c_ulong, c_void};
 use core::mem::size_of;
 
 use crate::errno;
-use crate::syscall::{self, nr};
+use crate::syscall::nr;
 use crate::time::{self, KERNEL_SIGSET_SIZE, Timespec, Timeval};
 
 /// C's `fd_set`: `FD_SETSIZE`, 1024, bits in unsigned longs. The kernel
@@ -79,7 +79,7 @@ unsafe fn raw_pselect(
     // SAFETY: the caller vouches for the sets and the mask. The timeout is a
     // live copy or null, and `sigset` a live local the kernel only reads.
     let ret = unsafe {
-        syscall::syscall6(
+        crate::cancel::syscall_cp(
             nr::PSELECT6,
             count as usize,
             read.addr(),

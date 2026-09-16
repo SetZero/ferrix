@@ -409,6 +409,8 @@ fn open_or_create(
     mode: c_uint,
     value: c_uint,
 ) -> Result<(u64, *mut Sem), c_int> {
+    // Cancellation waits until this is finished, as in musl.
+    let _cancel = cancel::disable();
     let exclusive = flags == O_CREAT | O_EXCL;
     if exclusive {
         // SAFETY: the kernel only reads the NUL-terminated path.
