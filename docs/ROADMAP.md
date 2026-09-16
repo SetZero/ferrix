@@ -3360,6 +3360,15 @@ numbers down itself: `EV_*` and `SYN_REPORT` are L1's, re-exported, so the
 driver and the evdev nodes read one copy the probe pins. Its fuzz target,
 `virtio_input`, ran 50,283,653 inputs in ten minutes without a failure.
 
+**Done — L3 of the input iteration, the input control protocol and evdev's
+queues (2026-09-16).** `libs/inputctl` holds `docs/INPUT.md` §3.2's messages
+between the kernel's input core and a ring-3 driver, the core's side of that
+conversation, and §3.1's per-open queue, host-tested (23 tests) and fuzzed
+(3,038,857 inputs in ten minutes without a failure). Where the design left a
+rule to Linux it follows `drivers/input/evdev.c` and `input.c`, and
+`docs/INPUT.md` §5 lists the four places where Linux answers differently from
+the design's first text, for L6 to settle. No kernel code uses it yet.
+
 **Estimate, re-baselined by os-f6 on 2026-09-16:** 74 points, from 55. The
 display's iteration 1 took 37, the input iteration is 23 (`docs/INPUT.md`
 §5), and the prerequisites of iteration 2 are 14: nested `epoll` (E1),
@@ -3369,7 +3378,7 @@ session holds.
 Nested `epoll`, `FIONBIO` and the plane objects were not counted before
 `docs/INPUT.md` §2 read Smithay's event loop.
 
-**Still to do:** input L3–L7; E4, `card0`'s primary plane and properties
+**Still to do:** input L4–L7; E4, `card0`'s primary plane and properties
 (the GUI session, in progress, landing after the release); `timerfd` (wanted,
 not required, deferred); atomic commit; per-open windows onto the card VMO;
 and the rest of the exit below. E1–E3 are done (os-26), so the kernel side of

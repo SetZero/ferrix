@@ -520,9 +520,9 @@ agreed with them. `ferrix-virtio` depends on `ferrix-linux-abi` for that: a
 `no_std` crate with no dependencies that the kernel, `ferrix-rt` and the fuzz
 crate already link. Its tests now also require the bits QEMU's devices set to
 be L1's codes, and its fuzz target ran 50,283,653 inputs in ten minutes on
-nazuna without a failure. L3 is on a branch, gated, and waits for the
-product owner to land it: `libs/inputctl` with §3.2's messages, the core's
-session and §3.1's queue, host-tested and fuzzed. Where this document left a
+nazuna without a failure. L3 is done, landed on 2026-09-16 as 3aa79e19 to
+456719d6: `libs/inputctl` with §3.2's messages, the core's session and §3.1's
+queue, host-tested and fuzzed. Where this document left a
 rule to Linux, it follows `drivers/input/evdev.c` and `input.c`, and it
 records four places where they answer differently from the text above, for
 L6 to settle: a full queue keeps `SYN_DROPPED` and the newest event rather
