@@ -3212,6 +3212,22 @@ configuration and the IPC are written new, in Rust, to Hyprland's shape.
   that draws a given pattern, and a small terminal emulator over the
   console's pty, both static, both under `cargo xtask` like busybox.
 
+**Done — the configuration, before the Smithay decision needs making.**
+`compositor/` is a workspace of its own, gated by `cargo xtask check`. Its
+first crate, `compositor/config`, parses `hyprland.conf` as hyprlang does:
+categories and the `category:key` shorthand, `$variables`, `##` escapes,
+`source`, Hyprland's option types and defaults for the options the compositor
+implements (integers that are also booleans and colours, floats, gradients,
+CSS gaps), `bind` with all fourteen flag letters, `unbind` and submaps, and
+the keywords later parts interpret, with Hyprland's diagnostics and the rest
+of the file still applied past a bad line. `Config::keyword` is `hyprctl
+keyword`. Host-tested and fuzzed (`hyprconf_parse`).
+
+**Still to do, in the order visible iterations need it.** Iteration 1, a
+blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
+customer's order of 2026-09-16); then the layout and dispatcher core, the
+protocol server, the seat, the IPC, the clients.
+
 **Exit:** in a test of its own on x86-64 and AArch64, the compositor starts
 from a `hyprland.conf`, `exec-once` launches two pattern clients, they tile
 dwindle-style with the configured gaps and borders, a keybind sent through

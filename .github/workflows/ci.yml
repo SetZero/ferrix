@@ -296,6 +296,7 @@ jobs:
           workspaces: |
             . -> target
             ferrousli -> target
+            compositor -> target
 
       # `cargo xtask check` first asks whether the commit hooks are armed,
       # which is local configuration a fresh checkout does not have.

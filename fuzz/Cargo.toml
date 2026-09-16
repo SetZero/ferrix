@@ -36,6 +36,7 @@ ferrix-netwire = { path = "../libs/netwire" }
 ferrix-nettcp = { path = "../libs/nettcp" }
 ferrix-net = { path = "../libs/net" }
 ferrix-netlink = { path = "../libs/netlink" }
+compositor-config = { path = "../compositor/config" }
 
 [[bin]]
 name = "elf_parse"
@@ -158,6 +159,13 @@ bench = false
 [[bin]]
 name = "netlink_walk"
 path = "fuzz_targets/netlink_walk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hyprconf_parse"
+path = "fuzz_targets/hyprconf_parse.rs"
 test = false
 doc = false
 bench = false

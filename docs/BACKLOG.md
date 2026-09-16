@@ -230,7 +230,8 @@ nobody has it yet.
 |---|---|
 | Display core + ring-3 virtio-gpu driver, `/dev/dri/card0` with dumb buffers, atomic page flip and vblank; `xtask` reading QEMU's screendump | 17 |
 | Input core + ring-3 virtio-input driver as evdev; QEMU monitor input injection in `xtask` | 17 |
-| The compositor workspace: Smithay base (assumed), CPU rendering, dwindle and master, `hyprland.conf`, `hyprctl` IPC, two Rust test clients | 18 |
+| Iteration 1, the customer's order of 2026-09-16: a blank screen on Ferrix in QEMU. A first cut of stage 17: virtio-gpu 2D in `libs/virtio` (8), a ring-3 virtio-gpu driver started by devmgr (8), a minimal `/dev/dri/card0` with one dumb buffer, legacy `SETCRTC` and `PAGE_FLIP` (13), the compositor binary filling it (2), and `xtask` reading QEMU's screendump (3); 34 points, design pass to os-f6 and os-26 before kernel code. GUI session | 17 |
+| The compositor workspace: Smithay base (assumed), CPU rendering, dwindle and master, `hyprland.conf`, `hyprctl` IPC, two Rust test clients. `hyprland.conf` landed 2026-09-16 (`compositor/config`, 5); layouts and dispatchers next (8). GUI session | 18 |
 | GPU path decision, then `renderD128`, dmabuf, GBM, animations, blur and rounding | 19 |
 | The DK1's LTDC display and USB HID as the hardware variant of stage 17 | 17, P3 |
 

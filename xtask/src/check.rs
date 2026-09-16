@@ -96,6 +96,8 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         cargo::run(command, "cargo test")
     })?;
 
+    compositor(&root)?;
+
     if args.ferrousli {
         ferrousli(&root)?;
     }
@@ -262,6 +264,34 @@ fn zinc(root: &std::path::Path) -> Result<()> {
             command
         };
         cargo::run(command, "zinc/tests/pty_completion.py")
+    })
+}
+
+/// The compositor's gates.
+///
+/// `compositor/` is a workspace of its own, like ferrousli, so the steps
+/// above never reach it. Unlike ferrousli's, these are on by default: its
+/// crates so far are pure Rust that builds and tests on any host in seconds.
+/// When a crate needs a Linux host they move behind WSL the way ferrousli's
+/// did.
+fn compositor(root: &std::path::Path) -> Result<()> {
+    let dir = root.join("compositor");
+    let in_compositor = |arguments: &[&str]| {
+        let mut command = Command::new(cargo_binary());
+        let _ = command.current_dir(&dir).args(arguments);
+        command
+    };
+    step("compositor: formatting", || {
+        cargo::run(in_compositor(&["fmt", "--check"]), "cargo fmt (compositor)")
+    })?;
+    step("compositor: clippy", || {
+        cargo::run(
+            in_compositor(&["clippy", "--all-targets", "--", "-D", "warnings"]),
+            "cargo clippy (compositor)",
+        )
+    })?;
+    step("compositor: tests", || {
+        cargo::run(in_compositor(&["test"]), "cargo test (compositor)")
     })
 }
 

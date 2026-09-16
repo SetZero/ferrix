@@ -1,0 +1,11 @@
+$mainMod = SUPER
+general {
+    gaps_in = 5 10
+    col.active_border = rgba(33ccffee) rgba(00ff99ee) 45deg
+}
+bind = $mainMod, Q, exec, kitty # c
+bindm = SUPER, mouse:272, movewindow
+submap = resize
+binde = , right, resizeactive, 10 0
+submap = reset
+source = x.conf

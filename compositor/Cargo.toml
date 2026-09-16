@@ -1,0 +1,68 @@
+# The compositor: a Hyprland-shaped Wayland compositor, written in Rust, for
+# Ferrix (docs/ROADMAP.md stages 17 to 19).
+#
+# A workspace of its own, not a member of Ferrix's, for the reason zinc and
+# ferrousli are: it is a Linux user program built with std, speaking only the
+# Linux ABI, and the Ferrix workspace's dependency policy is written for a
+# kernel. It is developed on a Linux host and cross-built for the initramfs.
+#
+# The crates that come first are pure: they hold no socket, no device and no
+# Wayland object, so they are the part of the compositor that does not depend
+# on the Smithay decision recorded in docs/BACKLOG.md.
+[workspace]
+resolver = "3"
+members = ["config"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Matches Ferrix's rust-toolchain.toml, which rustup finds from here.
+rust-version = "1.97"
+license = "MIT"
+publish = false
+
+# ---------------------------------------------------------------------------
+# Lints
+#
+# The Ferrix discipline. A panic in a compositor takes every client's windows
+# with it, so the ways of reaching one are denied and a bad line in a
+# configuration file is a diagnostic, never an abort.
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+unused_results = "deny"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+multiple_unsafe_ops_per_block = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+allow_attributes_without_reason = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+uninlined_format_args = "warn"
+semicolon_if_nothing_returned = "warn"
+doc_markdown = "warn"
+
+[profile.dev]
+overflow-checks = true
+
+[profile.release]
+overflow-checks = true

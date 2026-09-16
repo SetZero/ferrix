@@ -1,0 +1,5 @@
+general:border_size = 2
+bind = SUPER, Q, killactive,
+exec-once = a=b
+env = A, b
+unbind = SUPER, Q
