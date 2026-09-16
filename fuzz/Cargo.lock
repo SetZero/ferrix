@@ -88,6 +88,7 @@ dependencies = [
  "ferrix-elf",
  "ferrix-fdt",
  "ferrix-frame",
+ "ferrix-inputctl",
  "ferrix-linux-abi",
  "ferrix-native-abi",
  "ferrix-net",
@@ -104,6 +105,14 @@ dependencies = [
  "ferrix-virtio-gpu",
  "ferrix-virtio-net",
  "libfuzzer-sys",
+]
+
+[[package]]
+name = "ferrix-inputctl"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
 ]
 
 [[package]]
