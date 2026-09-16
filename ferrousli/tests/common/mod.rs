@@ -135,16 +135,51 @@ fn flat(name: &str) -> String {
     name.replace('/', "-")
 }
 
-/// Compiles `case` at optimisation level `opt`, and returns the program.
+/// A directory of one build's own under `CARGO_TARGET_TMPDIR`, holding the
+/// program and the directory it runs in, removed when this is dropped.
 ///
-/// Every build gets a name of its own. Tests run in parallel, and two of them
-/// running one program with different arguments would otherwise write the same
-/// file while the other is executing it.
-pub(crate) fn build(case: &Case, opt: &str) -> PathBuf {
-    static BUILDS: AtomicUsize = AtomicUsize::new(0);
+/// A test drops it when it returns and when it panics, so a run leaves nothing
+/// behind; before this, every run of the suite left a program and its files
+/// for each case at each optimisation level, gigabytes a day on a build host.
+#[derive(Debug)]
+pub(crate) struct Scratch {
+    /// The directory.
+    pub(crate) path: PathBuf,
+}
+
+impl Scratch {
+    /// A new, empty directory for `case` at `opt`.
+    ///
+    /// Tests run in parallel, and two of them running one program with
+    /// different arguments would otherwise write the same file while the other
+    /// is executing it, so each gets a name no other build in any process
+    /// shares. `CARGO_TARGET_TMPDIR` itself is created if something removed
+    /// it: cargo only makes it when it builds the tests.
+    fn new(case: &Case, opt: &str) -> Self {
+        static BUILDS: AtomicUsize = AtomicUsize::new(0);
+        let serial = BUILDS.fetch_add(1, Ordering::Relaxed);
+        let path = scratch().join(format!(
+            "{}{opt}-{}-{serial}",
+            flat(case.name),
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create the build's directory");
+        Self { path }
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// Compiles `case` at optimisation level `opt` into `dir`, and returns the
+/// program.
+pub(crate) fn build(case: &Case, opt: &str, dir: &Scratch) -> PathBuf {
     let source = manifest().join("tests/c").join(format!("{}.c", case.name));
-    let serial = BUILDS.fetch_add(1, Ordering::Relaxed);
-    let out = scratch().join(format!("{}{opt}-{serial}", flat(case.name)));
+    let out = dir.path.join(flat(case.name));
     let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
     let output = Command::new(cc)
         .args([
@@ -246,13 +281,14 @@ fn run(program: &Path, case: &Case, dir: &Path, label: &str) -> Finished {
     }
 }
 
-/// Builds `case` at `-O0` and `-O2`, runs each, and checks what it did.
+/// Builds `case` at `-O0` and `-O2`, runs each, and checks what it did. The
+/// program and everything it wrote are removed afterwards, pass or fail.
 pub(crate) fn check(case: &Case) {
     for opt in ["-O0", "-O2"] {
-        let program = build(case, opt);
+        let scratch = Scratch::new(case, opt);
+        let program = build(case, opt, &scratch);
         let label = format!("{}{opt}", case.name);
-        let dir = program.with_extension("dir");
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = scratch.path.join("run");
         std::fs::create_dir_all(&dir).expect("create the program's directory");
 
         let finished = run(&program, case, &dir, &label);
