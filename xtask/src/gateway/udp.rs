@@ -128,9 +128,9 @@ impl Core {
     /// `10.0.2.3:53` goes to the resolver, wherever that is. The gateway's own
     /// address is the host's loopback, as [`super::host_of`] explains.
     /// Everything else goes where the guest addressed it.
-    fn target_of(&self, seen: SocketAddrV4) -> SocketAddrV4 {
+    fn target_of(&mut self, seen: SocketAddrV4) -> SocketAddrV4 {
         if *seen.ip() == DNS_IP && seen.port() == DNS_PORT {
-            self.resolver
+            *self.resolver.get_or_insert_with(super::default_resolver)
         } else {
             super::host_of(seen)
         }

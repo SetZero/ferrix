@@ -260,7 +260,7 @@ impl Gateway {
     /// it is `None`. A test that must answer a name the same way on every
     /// machine, with or without a network, passes its own.
     pub(crate) fn start(resolver: Option<SocketAddrV4>) -> Result<Gateway> {
-        let core = Core::bind(resolver.unwrap_or_else(default_resolver))?;
+        let core = Core::bind(resolver)?;
         let address = match core.socket.local_addr()? {
             SocketAddr::V4(address) => address,
             SocketAddr::V6(_) => {
@@ -359,8 +359,11 @@ struct Core {
     ),
     /// The resolver `10.0.2.3:53` forwards to, with its port: a test serves
     /// its own answers from a socket the kernel gave a free port, and asking
-    /// it on 53 would reach nothing.
-    resolver: SocketAddrV4,
+    /// it on 53 would reach nothing. `None` until the guest first asks, when
+    /// nobody named one: finding the host's own costs a PowerShell start on
+    /// Windows, which a gateway whose guest never resolves a name, like most
+    /// of this module's tests, should not pay.
+    resolver: Option<SocketAddrV4>,
     /// The initial send sequence number the next connection takes.
     next_iss: u32,
     /// What has happened.
@@ -369,7 +372,7 @@ struct Core {
 
 impl Core {
     /// Bind the host socket and prepare the tables.
-    fn bind(resolver: SocketAddrV4) -> Result<Core> {
+    fn bind(resolver: Option<SocketAddrV4>) -> Result<Core> {
         let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .map_err(|error| Error::new(format!("could not bind the gateway socket: {error}")))?;
         socket.set_read_timeout(Some(TURN))?;
