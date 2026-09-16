@@ -42,6 +42,7 @@
 //! that large is larger than any socket buffer and refused regardless.
 
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::is_user_address;
@@ -55,7 +56,7 @@ use ferrix_linux_abi::socket::{
     AF_INET, AF_INET6, AF_MAX, AF_NETLINK, AF_PACKET, AF_UNIX, CmsgHdr, ControlMessages,
     MSG_CMSG_CLOEXEC, MSG_CMSG_COMPAT, MSG_CTRUNC, MSG_OOB, MSG_TRUNC, MsgHdr, SCM_CREDENTIALS,
     SCM_MAX_FD, SCM_RIGHTS, SOCK_CLOEXEC, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_RAW, SOCK_STREAM,
-    SOCK_TYPE_MASK, SOL_SOCKET, UnixAddress, Width, cmsg_len, cmsg_space,
+    SOCK_TYPE_MASK, SOL_SOCKET, UnixAddress, Width, cmsg_align, cmsg_len, cmsg_space,
 };
 use ferrix_net::packet::PacketKind;
 use ferrix_net::socket::Family;
@@ -139,6 +140,10 @@ pub(crate) fn dispatch(
     Some(answer)
 }
 
+/// What a receive took, the encoded address it came from if the socket names
+/// one, and the control messages that come with it.
+type Taken = (Received, Option<Vec<u8>>, Vec<inet::Control>);
+
 /// A socket reached through a descriptor, whatever family it is.
 ///
 /// The syscall layer is one set of checks in Linux's order, and only the last
@@ -215,22 +220,22 @@ impl Any {
         }
     }
 
-    /// Receive, and say where it came from.
-    fn recv(
-        &self,
-        out: &mut [u8],
-        flags: u32,
-        nonblock: bool,
-    ) -> Result<(Received, Option<Vec<u8>>), Errno> {
+    /// Receive, and say where it came from and what control messages come
+    /// with it.
+    fn recv(&self, out: &mut [u8], flags: u32, nonblock: bool) -> Result<Taken, Errno> {
         match self {
-            Any::Unix(socket) => socket.recv(out, flags, nonblock).map(|taken| (taken, None)),
+            Any::Unix(socket) => socket
+                .recv(out, flags, nonblock)
+                .map(|taken| (taken, None, Vec::new())),
             Any::Inet(socket) => socket.recv(out, flags, nonblock).map(|(taken, from)| {
+                let control = socket.control_messages(&taken);
                 (
                     Received {
                         bytes: taken.bytes,
                         full: taken.full,
                     },
                     from,
+                    control,
                 )
             }),
             Any::Netlink(socket) => socket.recv(out, flags, nonblock).map(|(taken, from)| {
@@ -240,6 +245,7 @@ impl Any {
                         full: taken.full,
                     },
                     from,
+                    Vec::new(),
                 )
             }),
             Any::Packet(socket) => socket.recv(out, flags, nonblock).map(|(taken, from)| {
@@ -249,6 +255,7 @@ impl Any {
                         full: taken.full,
                     },
                     from,
+                    Vec::new(),
                 )
             }),
         }
@@ -446,9 +453,9 @@ fn inet_type(family: Family, kind: u32, protocol: i32) -> Result<Opened, Errno> 
         (SOCK_DGRAM, 0 | IPPROTO_UDP) => Ok(Opened::Inet(family, InetKind::Datagram)),
         (SOCK_DGRAM, given) if given == echo => Ok(Opened::Inet(family, InetKind::Echo)),
         (SOCK_RAW, 0) => Err(Errno::EPROTONOSUPPORT),
-        (SOCK_RAW, given) => match (family, u8::try_from(given)) {
-            (Family::V4, Ok(protocol)) => Ok(Opened::Inet(family, InetKind::Raw { protocol })),
-            _ => Err(Errno::EPROTONOSUPPORT),
+        (SOCK_RAW, given) => match u8::try_from(given) {
+            Ok(protocol) => Ok(Opened::Inet(family, InetKind::Raw { protocol })),
+            Err(_) => Err(Errno::EPROTONOSUPPORT),
         },
         (SOCK_STREAM | SOCK_DGRAM, _) => Err(Errno::EPROTONOSUPPORT),
         _ => Err(Errno::ESOCKTNOSUPPORT),
@@ -910,7 +917,7 @@ fn sys_recvfrom(
         buffer_length(process, address_length)?
     };
     let mut data = zeroed(clamped(length))?;
-    let (received, from) = socket.recv(&mut data, flags, file.status().nonblock)?;
+    let (received, from, _control) = socket.recv(&mut data, flags, file.status().nonblock)?;
     let taken = data.get(..received.bytes).unwrap_or_default();
     uaccess::copy_to_user(process.space(), buffer, taken).map_err(|_| Errno::EFAULT)?;
     if address != 0 {
@@ -1164,14 +1171,15 @@ fn sys_recvmsg(
         usize::try_from(message.name_len).unwrap_or(0)
     };
     let mut data = zeroed(total)?;
-    let (received, from, passed) = match &socket {
+    let (received, from, passed, control) = match &socket {
         Any::Unix(unix) => {
             let (received, passed) = unix.recv_passing(&mut data, flags, file.status().nonblock)?;
-            (received, None, passed)
+            (received, None, passed, Vec::new())
         }
         _ => {
-            let (received, from) = socket.recv(&mut data, flags, file.status().nonblock)?;
-            (received, from, None)
+            let (received, from, control) =
+                socket.recv(&mut data, flags, file.status().nonblock)?;
+            (received, from, None, control)
         }
     };
     let mut offset = 0;
@@ -1195,15 +1203,10 @@ fn sys_recvmsg(
             capacity,
         )?;
     }
+    let control_capacity = usize::try_from(message.control_len).unwrap_or(usize::MAX);
     let (control_used, control_truncated) = match &passed {
-        Some(passed) => deliver_files(
-            process,
-            passed,
-            message.control,
-            usize::try_from(message.control_len).unwrap_or(usize::MAX),
-            flags,
-        )?,
-        None => (0, false),
+        Some(passed) => deliver_files(process, passed, message.control, control_capacity, flags)?,
+        None => write_control(process, message.control, control_capacity, &control)?,
     };
     // Every file not installed is closed here, with the table unlocked.
     drop(passed);
@@ -1221,6 +1224,49 @@ fn sys_recvmsg(
         control_used as u64,
     )?;
     Ok(received_count(&socket, received, flags))
+}
+
+/// Lay `messages` out one after another in the program's control buffer at
+/// `control`, `capacity` bytes long, as `put_cmsg` does: a message that does
+/// not fit whole is cut to what does, and one whose header does not fit is
+/// left out, each saying `MSG_CTRUNC`. Answers the bytes used, padding
+/// included, which is what `msg_controllen` reads afterwards, and whether any
+/// message was cut.
+fn write_control(
+    process: &Process,
+    control: u64,
+    capacity: usize,
+    messages: &[inet::Control],
+) -> Result<(usize, bool), Errno> {
+    let header = CmsgHdr::size(NATIVE);
+    let mut used = 0_usize;
+    let mut cut = false;
+    for message in messages {
+        let left = capacity.saturating_sub(used);
+        if control == 0 || left < header {
+            cut = true;
+            continue;
+        }
+        let whole = cmsg_len(message.data.len(), NATIVE);
+        let length = whole.min(left);
+        cut |= length < whole;
+        let mut bytes = vec![0_u8; length];
+        CmsgHdr {
+            len: length as u64,
+            level: message.level,
+            kind: message.kind,
+        }
+        .encode(&mut bytes, NATIVE)
+        .ok_or(Errno::EINVAL)?;
+        let data_at = cmsg_align(header, NATIVE);
+        for (slot, byte) in bytes.iter_mut().skip(data_at).zip(message.data.iter()) {
+            *slot = *byte;
+        }
+        uaccess::copy_to_user(process.space(), control.saturating_add(used as u64), &bytes)
+            .map_err(|_| Errno::EFAULT)?;
+        used = used.saturating_add(cmsg_space(message.data.len(), NATIVE).min(left));
+    }
+    Ok((used, cut))
 }
 
 /// `getsockopt`: the option's value, cut to the length the program offers,

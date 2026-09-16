@@ -469,6 +469,17 @@ pub(crate) fn commands(servers: &Servers) -> Vec<Command> {
             status: 0,
             expect: Expect::Shaped(&["2 packets transmitted, 2 packets received*"]),
         },
+        // And IPv6 over the loopback, by the raw ICMPv6 socket `ping6` opens:
+        // the hop limit it prints came in a control message, and a stack that
+        // sent none would print -1.
+        Command {
+            argv: &["ping6", "-c", "2", "-W", "5", "::1"],
+            status: 0,
+            expect: Expect::Shaped(&[
+                "# bytes from ::1: seq=0 ttl=64 time=*",
+                "2 packets transmitted, 2 packets received*",
+            ]),
+        },
         // A name, through the C library's resolver and the gateway's
         // forwarder, over UDP.
         Command {

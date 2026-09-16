@@ -7922,6 +7922,7 @@ fn check_the_internet_families_open(process: &Process) -> Result<(), &'static st
     const TCP: u64 = 6;
     const UDP: u64 = 17;
     const ICMP: u64 = 1;
+    const ICMPV6: u64 = 58;
     let stream = u64::from(SOCK_STREAM);
     let datagram = u64::from(SOCK_DGRAM);
     let raw = u64::from(SOCK_RAW);
@@ -7939,6 +7940,7 @@ fn check_the_internet_families_open(process: &Process) -> Result<(), &'static st
         [PACKET, raw, 0, 0, 0, 0],
         [INET6, stream, 0, 0, 0, 0],
         [INET6, datagram, 0, 0, 0, 0],
+        [INET6, raw, ICMPV6, 0, 0, 0],
     ] {
         let Ok(opened) = socket(arguments) else {
             return Err("an internet socket a program may open was refused");
@@ -7952,6 +7954,11 @@ fn check_the_internet_families_open(process: &Process) -> Result<(), &'static st
         socket([INET, raw, 0, 0, 0, 0]),
         Errno::EPROTONOSUPPORT,
         "a raw socket at protocol zero was not EPROTONOSUPPORT",
+    )?;
+    refuses(
+        socket([INET6, raw, 0, 0, 0, 0]),
+        Errno::EPROTONOSUPPORT,
+        "an IPv6 raw socket at protocol zero was not EPROTONOSUPPORT",
     )?;
     refuses(
         socket([INET, raw, 263, 0, 0, 0]),

@@ -5,5 +5,6 @@ mod datagrams;
 mod harness;
 mod packets;
 mod raw;
+mod raw_v6;
 mod routing;
 mod streams;

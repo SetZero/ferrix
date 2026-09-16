@@ -263,7 +263,7 @@ nobody has it yet.
 
 | Item | Owner |
 |---|---|
-| `AF_INET6` `SOCK_RAW`, for busybox's `ping6`: `AF_INET` raw sockets and `AF_PACKET` landed 2026-09-16, and `run --net` and `test-net` configure `eth0` by DHCP. Networking stage | os-26 |
+| `AF_PACKET` gaps: frames this host sends copied to `ETH_P_ALL` sockets (`PACKET_OUTGOING`), packet sockets on the loopback, and classic BPF (`SO_ATTACH_FILTER`, `SO_DETACH_FILTER`). Raw sockets in both families and `AF_PACKET` landed 2026-09-16. Networking stage | os-26 |
 
 ### P3 — hardware variants and later stages, unowned
 

@@ -2886,6 +2886,35 @@ from the gateway, and the address, route and resolver it configured fetched
 second program is `udhcpc -i eth0 -n -q`, which must print the lease the
 gateway gave.
 
+**Done — raw IPv6 sockets, for `ping6`.** busybox's `ping6` opens
+`socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6)`, requires `ICMP6_FILTER` to be
+accepted, asks for `IPV6_CHECKSUM` at `SOL_RAW`, and prints the hop limit from
+a control message. `SOCK_RAW` now opens in `AF_INET6` too, on the same terms
+as in `AF_INET`. An IPv6 raw socket reads what follows the header and its
+extensions, not the header, as RFC 3542 says. It matches peer, address and
+device as an IPv4 one does. A message whose checksum at the socket's
+`IPV6_CHECKSUM` offset does not verify is dropped, and `ICMP6_FILTER`'s eight
+words hold back the ICMPv6 types they block. On send the stack writes that
+checksum over the pseudo-header, always at offset 2 for ICMPv6. The option is
+`EINVAL` at `SOL_IPV6` on an ICMPv6 socket and for an odd offset, and a
+negative offset turns it off. `recvmsg` now writes control messages as
+`put_cmsg` does, with `MSG_CTRUNC` for one that does not fit. The first ones
+are the hop limit: `IPV6_RECVHOPLIMIT` gives an `IPV6_HOPLIMIT` message and
+`IPV6_2292HOPLIMIT`, which musl hands `ping6`, one of that older type, on any
+IPv6 datagram socket. Every received datagram now carries its hop limit. The
+stack's echo replies over IPv6 went out with hop limit 255, the Neighbor
+Discovery value, and now carry the stack's default of 64, as Linux's do. Not
+yet: `IPPROTO_RAW` in IPv6 opens but its sends are `EINVAL`, because the
+program's own IPv6 header is not taken. The boot check pings `::1` through a
+raw ICMPv6 socket with the checksum left zero. It requires the reply without
+a header, with a checksum that verifies and with `IPV6_2292HOPLIMIT` 64. A
+second socket that passes only requests must read the request and not the
+reply. With the filter disabled, the boot panics with "ICMP6_FILTER let the
+echo reply it blocks through". The line now ends `, 7 calls refused as
+specified, 6 packets read by raw sockets`, and `test-net` runs `ping6 -c 2 ::1`,
+which must print `ttl=64`: a stack that sent no control message would print
+-1.
+
 **Done — `AF_NETLINK` route sockets, which is how an interface is
 configured.** Every way of configuring a network on Linux ends at the same
 socket: `ip` uses nothing else, `ifconfig` and `route` use ioctls that are a

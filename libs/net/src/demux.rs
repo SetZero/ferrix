@@ -20,6 +20,10 @@ use crate::stack::{Millis, Stack};
 /// find the socket.
 const QUOTE_BYTES: usize = 8;
 
+/// Where a packet arrived, and how: its interface, source, destination and
+/// hop limit.
+pub(crate) type Arrived = (u32, IpAddress, IpAddress, u8);
+
 impl Stack {
     /// The datagram socket a packet to `local` from `remote` belongs to.
     pub(crate) fn find_datagram_socket(
@@ -62,26 +66,25 @@ impl Stack {
     }
 
     /// Deliver an ICMPv4 echo reply to the socket that sent the request.
+    ///
+    /// `arrived` is the interface, the source, the destination and the hop
+    /// limit of the packet that carried it.
     pub(crate) fn deliver_echo(
         &mut self,
-        interface: u32,
-        source: IpAddress,
-        destination: IpAddress,
+        arrived: Arrived,
         whole: &[u8],
         message: &icmpv4::Message<'_>,
     ) {
         let Some((identifier, _)) = message.header.echo_fields() else {
             return;
         };
-        self.deliver_echo_to(interface, source, destination, whole, identifier);
+        self.deliver_echo_to(arrived, whole, identifier);
     }
 
     /// Deliver an ICMPv6 echo reply the same way.
     pub(crate) fn deliver_echo_v6(
         &mut self,
-        interface: u32,
-        source: IpAddress,
-        destination: IpAddress,
+        arrived: Arrived,
         whole: &[u8],
         message: &icmpv6::Message<'_>,
     ) {
@@ -92,19 +95,13 @@ impl Stack {
         let Some(identifier) = identifier else {
             return;
         };
-        self.deliver_echo_to(interface, source, destination, whole, identifier);
+        self.deliver_echo_to(arrived, whole, identifier);
     }
 
     /// Put an echo reply in the queue of the socket whose port is its
     /// identifier, which is how Linux's unprivileged ping socket works.
-    fn deliver_echo_to(
-        &mut self,
-        interface: u32,
-        source: IpAddress,
-        destination: IpAddress,
-        whole: &[u8],
-        identifier: u16,
-    ) {
+    fn deliver_echo_to(&mut self, arrived: Arrived, whole: &[u8], identifier: u16) {
+        let (interface, source, destination, hop_limit) = arrived;
         let local = Endpoint::new(destination, identifier);
         let remote = Endpoint::new(source, identifier);
         let Some(id) = self.find_datagram_socket(local, remote, true) else {
@@ -116,6 +113,7 @@ impl Stack {
                 remote,
                 local: destination,
                 interface,
+                hop_limit,
                 payload: whole.to_vec(),
             });
             if kept {

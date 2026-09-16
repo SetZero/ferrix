@@ -206,6 +206,7 @@ impl PacketSocket {
                         Received {
                             bytes: frame.bytes,
                             full: frame.bytes + frame.truncated,
+                            hop_limit: None,
                         },
                         Some(name),
                     ));

@@ -106,6 +106,9 @@ pub struct Datagram {
     pub local: IpAddress,
     /// Which interface it arrived on.
     pub interface: u32,
+    /// The hop limit or time to live it arrived with, which
+    /// `IPV6_RECVHOPLIMIT` reports.
+    pub hop_limit: u8,
     /// The payload.
     pub payload: Vec<u8>,
 }
@@ -244,6 +247,10 @@ impl DatagramSocket {
 /// to addresses only. What arrives is a copy, taken beside the stack's own
 /// handling of the packet, so an echo request both reaches a raw ICMP socket
 /// and is answered.
+///
+/// An IPv4 one reads packets with their header, as `raw(7)` says; an IPv6 one
+/// reads only what follows the header and its extensions, as RFC 3542 says,
+/// and has the stack compute the checksum at [`RawSocket::checksum`].
 #[derive(Debug)]
 pub struct RawSocket {
     /// The queue, the addresses and the options.
@@ -256,6 +263,13 @@ pub struct RawSocket {
     pub header_included: bool,
     /// `ICMP_FILTER`: one bit per ICMP type, set for a type not to deliver.
     pub icmp_filter: u32,
+    /// `ICMP6_FILTER`: one bit per ICMPv6 type, set for a type not to deliver,
+    /// the lowest bit of the first word for type 0.
+    pub icmp6_filter: [u32; 8],
+    /// `IPV6_CHECKSUM`: where in what an IPv6 socket sends the stack writes the
+    /// checksum, and where in what it receives the stack checks one. Always
+    /// 2 for ICMPv6, which RFC 3542 says the stack sums whatever is asked.
+    pub checksum: Option<usize>,
 }
 
 impl RawSocket {
@@ -271,7 +285,24 @@ impl RawSocket {
             protocol,
             header_included: protocol == Self::IPPROTO_RAW,
             icmp_filter: 0,
+            icmp6_filter: [0; 8],
+            checksum: (matches!(family, Family::V6) && protocol == Self::IPPROTO_ICMPV6)
+                .then_some(2),
         }
+    }
+
+    /// ICMPv6's protocol number, the one whose checksum is always computed.
+    pub const IPPROTO_ICMPV6: u8 = 58;
+
+    /// Whether `ICMP6_FILTER` lets a message of ICMPv6 type `kind` through.
+    #[must_use]
+    pub fn passes_icmp6(&self, kind: u8) -> bool {
+        let word = self
+            .icmp6_filter
+            .get(usize::from(kind >> 5))
+            .copied()
+            .unwrap_or(0);
+        word & (1 << (kind & 31)) == 0
     }
 }
 

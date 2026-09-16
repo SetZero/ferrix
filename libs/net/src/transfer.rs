@@ -24,6 +24,8 @@ pub struct Received {
     pub truncated: usize,
     /// Who sent it, for a socket that is not connected.
     pub remote: Option<Endpoint>,
+    /// The hop limit it arrived with, for a datagram.
+    pub hop_limit: Option<u8>,
 }
 
 impl Stack {
@@ -208,6 +210,10 @@ impl Stack {
     /// `raw_send_hdrinc` fills in: the total length, the checksum, an
     /// identification left zero and a source left zero. That packet goes out
     /// whole, to where the call named, which need not be where the header does.
+    ///
+    /// An IPv6 socket always writes only the payload, and the stack puts the
+    /// checksum at the offset `IPV6_CHECKSUM` names, as `rawv6_send_hdrinc`
+    /// is not offered: `IPPROTO_RAW` in IPv6 is `EINVAL` on send.
     fn send_raw(
         &mut self,
         id: crate::socket::SocketId,
@@ -222,18 +228,39 @@ impl Stack {
             return Err(Error::ShutDown);
         }
         let destination = normalise(to.or(raw.datagram.remote).ok_or(Error::NotConnected)?).address;
-        if destination.is_unspecified() || !destination.is_v4() {
+        let v6 = matches!(raw.datagram.family, crate::socket::Family::V6);
+        if destination.is_unspecified() || destination.is_v4() == v6 {
             return Err(Error::Invalid);
         }
         let options = raw.datagram.options;
         let bound = raw.datagram.local.address;
         let protocol = raw.protocol;
         let header_included = raw.header_included;
+        let checksum = raw.checksum;
         let source = if bound.is_unspecified() {
             self.source_for(destination)?
         } else {
             bound
         };
+        if v6 {
+            if header_included {
+                return Err(Error::Invalid);
+            }
+            let mut packet = data.to_vec();
+            if let Some(offset) = checksum {
+                put_checksum(&mut packet, offset, source, destination, protocol)?;
+            }
+            self.send_ip(
+                source,
+                destination,
+                protocol,
+                &packet,
+                options.hop_limit,
+                options.device,
+                now,
+            )?;
+            return Ok(data.len());
+        }
         if !header_included {
             self.send_ip(
                 source,
@@ -359,6 +386,7 @@ impl Stack {
                 let copied = copy(out, &datagram.payload);
                 let truncated = datagram.payload.len().saturating_sub(copied);
                 let remote = datagram.remote;
+                let hop_limit = datagram.hop_limit;
                 if !peek {
                     let _ = socket.take();
                 }
@@ -366,6 +394,7 @@ impl Stack {
                     bytes: copied,
                     truncated,
                     remote: Some(remote),
+                    hop_limit: Some(hop_limit),
                 })
             }
             Socket::Stream(stream) => {
@@ -382,6 +411,7 @@ impl Stack {
                         bytes: taken,
                         truncated: 0,
                         remote: Some(stream.remote),
+                        hop_limit: None,
                     });
                 }
                 if let Some(error) = Stack::stream_error(&stream.connection) {
@@ -396,11 +426,32 @@ impl Stack {
                     bytes: 0,
                     truncated: 0,
                     remote: Some(stream.remote),
+                    hop_limit: None,
                 })
             }
             Socket::Listen(_) => Err(Error::NotConnected),
         }
     }
+}
+
+/// Write the checksum of an IPv6 upper-layer `packet` from `source` to
+/// `destination` at `offset`, the field zeroed while summing, as
+/// `rawv6_push_pending_frames` does. A packet too short to hold the field is
+/// `EINVAL`, as there.
+fn put_checksum(
+    packet: &mut [u8],
+    offset: usize,
+    source: IpAddress,
+    destination: IpAddress,
+    protocol: u8,
+) -> Result<(), Error> {
+    if offset.checked_add(2).is_none_or(|end| end > packet.len()) {
+        return Err(Error::Invalid);
+    }
+    put(packet, offset, &[0, 0])?;
+    let sum = crate::input::upper_layer_sum(packet, source, destination, protocol)
+        .ok_or(Error::TooLarge)?;
+    put(packet, offset, &sum.to_be_bytes())
 }
 
 /// Overwrite `field.len()` bytes of `packet` at `at`.

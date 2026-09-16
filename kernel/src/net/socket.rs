@@ -21,8 +21,9 @@ use core::fmt;
 
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::inet::{
-    ICMP_FILTER, IP_HDRINCL, IP_TOS, IP_TTL, IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_TCP,
-    IPPROTO_UDP, IPV6_UNICAST_HOPS, IPV6_V6ONLY, InetAddress, SOCKADDR_STORAGE_SIZE, SOL_IP,
+    ICMP_FILTER, ICMPV6_FILTER, IP_HDRINCL, IP_TOS, IP_TTL, IPPROTO_ICMP, IPPROTO_ICMPV6,
+    IPPROTO_TCP, IPPROTO_UDP, IPV6_2292HOPLIMIT, IPV6_CHECKSUM, IPV6_HOPLIMIT, IPV6_RECVHOPLIMIT,
+    IPV6_UNICAST_HOPS, IPV6_V6ONLY, InetAddress, SOCKADDR_STORAGE_SIZE, SOL_ICMPV6, SOL_IP,
     SOL_IPV6, SOL_RAW, SOL_TCP, TCP_MAXSEG, TCP_NODELAY,
 };
 use ferrix_linux_abi::socket::{
@@ -97,6 +98,11 @@ struct Options {
     receive_buffer: usize,
     /// `SO_KEEPALIVE`, kept and reported; nothing probes yet.
     keepalive: bool,
+    /// `IPV6_RECVHOPLIMIT`: each datagram comes with an `IPV6_HOPLIMIT`
+    /// control message.
+    hop_limit_messages: bool,
+    /// `IPV6_2292HOPLIMIT`: the same, in RFC 2292's type.
+    hop_limit_messages_2292: bool,
 }
 
 /// An `AF_INET` or `AF_INET6` socket.
@@ -137,6 +143,20 @@ pub(crate) struct Received {
     pub(crate) bytes: usize,
     /// What the whole record held, which `MSG_TRUNC` answers with.
     pub(crate) full: usize,
+    /// The hop limit a datagram arrived with.
+    pub(crate) hop_limit: Option<u8>,
+}
+
+/// One control message a receive hands back, before it is laid out in the
+/// program's buffer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Control {
+    /// `cmsg_level`.
+    pub(crate) level: i32,
+    /// `cmsg_type`.
+    pub(crate) kind: i32,
+    /// What follows the header.
+    pub(crate) data: Vec<u8>,
 }
 
 impl InetSocket {
@@ -182,6 +202,8 @@ impl InetSocket {
                 send_buffer: SOCKET_BUFFER_DEFAULT,
                 receive_buffer: SOCKET_BUFFER_DEFAULT,
                 keepalive: false,
+                hop_limit_messages: false,
+                hop_limit_messages_2292: false,
             }),
         });
         fs::socket::open_on_sockfs(socket, ino, nonblock)
@@ -365,6 +387,7 @@ impl InetSocket {
                         Received {
                             bytes: received.bytes,
                             full,
+                            hop_limit: received.hop_limit,
                         },
                         from,
                     ));
@@ -381,6 +404,36 @@ impl InetSocket {
                 deadline,
             )?;
         }
+    }
+
+    /// The control messages a receive that answered `received` hands back,
+    /// in the order `ip6_datagram_recv_specific_ctl` puts them: RFC 3542's
+    /// hop limit, then RFC 2292's. Each is an `int`.
+    pub(crate) fn control_messages(&self, received: &Received) -> Vec<Control> {
+        let options = *self.options.lock();
+        let mut messages = Vec::new();
+        let Some(hop_limit) = received.hop_limit else {
+            return messages;
+        };
+        if matches!(self.family, Family::V4) || self.kind.is_stream() {
+            return messages;
+        }
+        let data = i32::from(hop_limit).to_ne_bytes().to_vec();
+        if options.hop_limit_messages {
+            messages.push(Control {
+                level: SOL_IPV6,
+                kind: IPV6_HOPLIMIT,
+                data: data.clone(),
+            });
+        }
+        if options.hop_limit_messages_2292 {
+            messages.push(Control {
+                level: SOL_IPV6,
+                kind: IPV6_2292HOPLIMIT,
+                data,
+            });
+        }
+        messages
     }
 
     /// The name it is bound to, encoded as a `sockaddr`.
@@ -486,6 +539,8 @@ impl InetSocket {
             (SOL_SOCKET, SO_SNDTIMEO_OLD | SO_SNDTIMEO_NEW) => {
                 Ok(fs::socket::timeval(options.send_timeout, width))
             }
+            (SOL_ICMPV6, ICMPV6_FILTER) => self
+                .icmp6_filter(|filter| filter.iter().flat_map(|word| word.to_ne_bytes()).collect()),
             _ => Ok(self.option_value(level, name)?.to_le_bytes().to_vec()),
         }
     }
@@ -519,6 +574,13 @@ impl InetSocket {
             (SOL_IP, IP_HDRINCL) => self.with_raw(|raw| i32::from(raw.header_included)),
             (SOL_RAW, ICMP_FILTER) => self.icmp_filter().map(u32::cast_signed),
             (SOL_IPV6, IPV6_V6ONLY) => Ok(i32::from(self.stack_options().v6_only)),
+            (SOL_IPV6, IPV6_RECVHOPLIMIT) if matches!(self.family, Family::V6) => {
+                Ok(i32::from(options.hop_limit_messages))
+            }
+            (SOL_IPV6, IPV6_2292HOPLIMIT) if matches!(self.family, Family::V6) => {
+                Ok(i32::from(options.hop_limit_messages_2292))
+            }
+            (SOL_RAW | SOL_IPV6, IPV6_CHECKSUM) => self.checksum_offset(level),
             (SOL_TCP, TCP_NODELAY) => Ok(i32::from(self.nodelay())),
             (SOL_TCP, TCP_MAXSEG) => Ok(self.segment_size()),
             _ => Err(Errno::ENOPROTOOPT),
@@ -564,6 +626,9 @@ impl InetSocket {
         if (level, name) == (SOL_RAW, ICMP_FILTER) {
             return self.set_icmp_filter(value);
         }
+        if (level, name) == (SOL_ICMPV6, ICMPV6_FILTER) {
+            return self.set_icmp6_filter(value);
+        }
         let number = read_int(value)?;
         match (level, name) {
             (SOL_SOCKET, SO_SNDBUF) => {
@@ -606,6 +671,19 @@ impl InetSocket {
                 self.with_options(|options| options.v6_only = number != 0);
                 Ok(())
             }
+            (SOL_IPV6, IPV6_RECVHOPLIMIT | IPV6_2292HOPLIMIT) => {
+                if matches!(self.family, Family::V4) {
+                    return Err(Errno::ENOPROTOOPT);
+                }
+                let mut options = self.options.lock();
+                if name == IPV6_RECVHOPLIMIT {
+                    options.hop_limit_messages = number != 0;
+                } else {
+                    options.hop_limit_messages_2292 = number != 0;
+                }
+                Ok(())
+            }
+            (SOL_RAW | SOL_IPV6, IPV6_CHECKSUM) => self.set_checksum_offset(level, number),
             (SOL_TCP, TCP_NODELAY) => {
                 self.set_nodelay(number != 0);
                 Ok(())
@@ -658,8 +736,12 @@ impl InetSocket {
     /// # Errors
     ///
     /// `EOPNOTSUPP` on a raw socket of another protocol, as `raw_geticmpfilter`
-    /// answers, and `ENOPROTOOPT` on a socket that is not raw.
+    /// answers, and `ENOPROTOOPT` on a socket that is not raw or not IPv4,
+    /// whose `SOL_RAW` has `IPV6_CHECKSUM` alone.
     fn icmp_filter(&self) -> Result<u32, Errno> {
+        if matches!(self.family, Family::V6) {
+            return Err(Errno::ENOPROTOOPT);
+        }
         self.with_raw(|raw| {
             (raw.protocol == ICMP_PROTOCOL)
                 .then_some(raw.icmp_filter)
@@ -670,6 +752,9 @@ impl InetSocket {
     /// Set `ICMP_FILTER`: at most four bytes are read, as `raw_seticmpfilter`
     /// reads them, and fewer leave the remaining bits zero.
     fn set_icmp_filter(&self, value: &[u8]) -> Result<(), Errno> {
+        if matches!(self.family, Family::V6) {
+            return Err(Errno::ENOPROTOOPT);
+        }
         let mut mask = [0_u8; 4];
         for (slot, byte) in mask.iter_mut().zip(value.iter()) {
             *slot = *byte;
@@ -679,6 +764,92 @@ impl InetSocket {
                 return Err(Errno::EOPNOTSUPP);
             }
             raw.icmp_filter = u32::from_ne_bytes(mask);
+            Ok(())
+        })?
+    }
+
+    /// Read `ICMP6_FILTER` through `body`, on a raw ICMPv6 socket.
+    ///
+    /// # Errors
+    ///
+    /// `EOPNOTSUPP` on a raw IPv6 socket of another protocol, as
+    /// `rawv6_geticmpfilter` answers, and `ENOPROTOOPT` on any other socket,
+    /// whose `SOL_ICMPV6` is `ipv6_getsockopt`'s and has nothing.
+    fn icmp6_filter<T>(&self, body: impl FnOnce(&[u32; 8]) -> T) -> Result<T, Errno> {
+        if matches!(self.family, Family::V4) {
+            return Err(Errno::ENOPROTOOPT);
+        }
+        self.with_raw(|raw| {
+            if raw.protocol != ICMPV6_PROTOCOL {
+                return Err(Errno::EOPNOTSUPP);
+            }
+            Ok(body(&raw.icmp6_filter))
+        })?
+    }
+
+    /// Set `ICMP6_FILTER`: at most its 32 bytes are read, and fewer leave the
+    /// rest of the filter as it was, as `rawv6_seticmpfilter` copies them.
+    fn set_icmp6_filter(&self, value: &[u8]) -> Result<(), Errno> {
+        if matches!(self.family, Family::V4) {
+            return Err(Errno::ENOPROTOOPT);
+        }
+        self.with_raw(|raw| {
+            if raw.protocol != ICMPV6_PROTOCOL {
+                return Err(Errno::EOPNOTSUPP);
+            }
+            let mut bytes: Vec<u8> = raw
+                .icmp6_filter
+                .iter()
+                .flat_map(|word| word.to_ne_bytes())
+                .collect();
+            for (slot, byte) in bytes.iter_mut().zip(value.iter()) {
+                *slot = *byte;
+            }
+            for (word, chunk) in raw.icmp6_filter.iter_mut().zip(bytes.chunks_exact(4)) {
+                if let Ok(four) = <[u8; 4]>::try_from(chunk) {
+                    *word = u32::from_ne_bytes(four);
+                }
+            }
+            Ok(())
+        })?
+    }
+
+    /// `IPV6_CHECKSUM` as it reads: the offset, or -1 for none.
+    ///
+    /// # Errors
+    ///
+    /// `ENOPROTOOPT` on a socket that is not a raw IPv6 one, and at
+    /// `SOL_IPV6` on an ICMPv6 one, which `rawv6_getsockopt` hands to
+    /// `ipv6_getsockopt` there.
+    fn checksum_offset(&self, level: i32) -> Result<i32, Errno> {
+        if matches!(self.family, Family::V4) {
+            return Err(Errno::ENOPROTOOPT);
+        }
+        self.with_raw(|raw| {
+            if level == SOL_IPV6 && raw.protocol == ICMPV6_PROTOCOL {
+                return Err(Errno::ENOPROTOOPT);
+            }
+            Ok(raw
+                .checksum
+                .map_or(-1, |offset| i32::try_from(offset).unwrap_or(i32::MAX)))
+        })?
+    }
+
+    /// Set `IPV6_CHECKSUM`: a negative offset turns the checksum off, and an
+    /// odd one is `EINVAL`, as is the option at `SOL_IPV6` on an ICMPv6
+    /// socket, whose checksum RFC 3542 says a program may not turn off.
+    fn set_checksum_offset(&self, level: i32, offset: i32) -> Result<(), Errno> {
+        if matches!(self.family, Family::V4) {
+            return Err(Errno::ENOPROTOOPT);
+        }
+        self.with_raw(|raw| {
+            if level == SOL_IPV6 && raw.protocol == ICMPV6_PROTOCOL {
+                return Err(Errno::EINVAL);
+            }
+            if offset > 0 && offset & 1 != 0 {
+                return Err(Errno::EINVAL);
+            }
+            raw.checksum = usize::try_from(offset).ok();
             Ok(())
         })?
     }
@@ -820,6 +991,9 @@ pub(crate) const fn errno(error: Error) -> Errno {
 
 /// ICMP's protocol number, as a raw socket's protocol holds it.
 const ICMP_PROTOCOL: u8 = IPPROTO_ICMP as u8;
+
+/// ICMPv6's protocol number as a raw socket holds it.
+const ICMPV6_PROTOCOL: u8 = IPPROTO_ICMPV6 as u8;
 
 /// An option's value as the `int` most of them are.
 fn read_int(value: &[u8]) -> Result<i32, Errno> {

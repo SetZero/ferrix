@@ -112,6 +112,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         7_781,
     )?;
     raw_icmp(&mut report)?;
+    raw_icmpv6(&mut report)?;
     raw_header_included(&mut report, 7_782)?;
 
     // Nothing here leaves this host, so nothing should be waiting for a
@@ -295,6 +296,9 @@ const RAW_IDENTIFIER: u16 = 0x5245;
 /// ICMP's protocol number.
 const ICMP: u8 = 1;
 
+/// ICMPv6's.
+const ICMPV6: u8 = 58;
+
 /// A raw ICMP socket reads what `ping` needs, and `ICMP_FILTER` holds back
 /// exactly the type it names.
 ///
@@ -351,6 +355,142 @@ fn raw_icmp(report: &mut Report) -> Result<(), &'static str> {
         return Err("ICMP_FILTER let the echo reply it names through");
     }
     report.refusals += 1;
+    Ok(())
+}
+
+/// `ping6` over the loopback, as busybox does it: a raw ICMPv6 socket sends an
+/// echo request with its checksum left zero, and reads the reply as the
+/// ICMPv6 message alone, its checksum written by the stack, with the hop limit
+/// it arrived with as an `IPV6_2292HOPLIMIT` control message.
+///
+/// The filtered socket is the negative control, as in [`raw_icmp`]: it reads
+/// the request, so it was not deaf, and not the reply its `ICMP6_FILTER`
+/// blocks. `IPV6_CHECKSUM` at `SOL_IPV6` on an ICMPv6 socket and an odd offset
+/// are refused, as RFC 3542 and `do_rawv6_setsockopt` refuse them.
+fn raw_icmpv6(report: &mut Report) -> Result<(), &'static str> {
+    use ferrix_linux_abi::inet::{IPV6_2292HOPLIMIT, SOL_IPV6};
+    use ferrix_netwire::icmpv6::kind::{ECHO_REPLY, ECHO_REQUEST};
+
+    let loopback = encode(IpAddress::V6(Ipv6::LOOPBACK), 0);
+    let ping = socket(Family::V6, InetKind::Raw { protocol: ICMPV6 })?;
+    let filtered = socket(Family::V6, InetKind::Raw { protocol: ICMPV6 })?;
+    set_up_ping6(report, &ping, &filtered)?;
+
+    let mut request = alloc::vec![ECHO_REQUEST, 0, 0, 0];
+    request.extend_from_slice(&RAW_IDENTIFIER.to_be_bytes());
+    request.extend_from_slice(&[0, 1]);
+    request.extend_from_slice(BODY);
+    let sent = ping
+        .send(&request, 0, false, Some(&loopback))
+        .map_err(|_| "a raw ICMPv6 socket could not send an echo request")?;
+    if sent != request.len() {
+        return Err("a raw ICMPv6 socket sent its echo request short");
+    }
+
+    let mut reply_seen = false;
+    loop {
+        let mut out = [0_u8; 256];
+        let (received, _) = match ping.recv(&mut out, 0, true) {
+            Ok(taken) => taken,
+            Err(Errno::EAGAIN) => break,
+            Err(_) => return Err("a raw ICMPv6 socket's receive failed"),
+        };
+        report.raw_packets += 1;
+        let message = out.get(..received.bytes).unwrap_or_default();
+        let sum = {
+            let pseudo = ferrix_netwire::checksum::Pseudo::V6 {
+                source: Ipv6::LOOPBACK.octets(),
+                destination: Ipv6::LOOPBACK.octets(),
+            };
+            let mut sum = pseudo
+                .sum(ICMPV6, message.len())
+                .ok_or("a raw ICMPv6 message too long to sum")?;
+            sum.add_bytes(message);
+            sum.finish()
+        };
+        if sum != 0 {
+            return Err("a raw ICMPv6 socket read a message whose checksum does not verify");
+        }
+        if message.first() != Some(&ECHO_REPLY) {
+            continue;
+        }
+        if message.get(4..6) != Some(RAW_IDENTIFIER.to_be_bytes().as_slice())
+            || message.get(8..) != Some(BODY)
+        {
+            return Err("a raw ICMPv6 socket's echo reply lost its identifier or body");
+        }
+        let expected = super::socket::Control {
+            level: SOL_IPV6,
+            kind: IPV6_2292HOPLIMIT,
+            data: 64_i32.to_ne_bytes().to_vec(),
+        };
+        if ping.control_messages(&received) != alloc::vec![expected] {
+            return Err("an echo reply did not come with its hop limit, 64, as IPV6_2292HOPLIMIT");
+        }
+        reply_seen = true;
+    }
+    if !reply_seen {
+        return Err("a raw ICMPv6 socket did not read the echo reply off the loopback");
+    }
+
+    let held_back = drain(&filtered)?;
+    report.raw_packets += held_back.len();
+    let kinds: Vec<u8> = held_back
+        .iter()
+        .filter_map(|message| message.first().copied())
+        .collect();
+    if !kinds.contains(&ECHO_REQUEST) {
+        return Err("a raw ICMPv6 socket letting only requests through read nothing at all");
+    }
+    if kinds.contains(&ECHO_REPLY) {
+        return Err("ICMP6_FILTER let the echo reply it blocks through");
+    }
+    report.refusals += 1;
+    Ok(())
+}
+
+/// The options [`raw_icmpv6`] sets as `ping6` sets them: `IPV6_CHECKSUM` 2 at
+/// `SOL_RAW` and the two refusals beside it, and `IPV6_2292HOPLIMIT` on the
+/// pinging socket; an `ICMP6_FILTER` passing only requests on the other.
+fn set_up_ping6(
+    report: &mut Report,
+    ping: &Arc<InetSocket>,
+    filtered: &Arc<InetSocket>,
+) -> Result<(), &'static str> {
+    use ferrix_linux_abi::inet::{
+        ICMPV6_FILTER, IPV6_2292HOPLIMIT, IPV6_CHECKSUM, SOL_ICMPV6, SOL_IPV6, SOL_RAW,
+    };
+    use ferrix_linux_abi::socket::Width;
+    use ferrix_netwire::icmpv6::kind::ECHO_REQUEST;
+
+    let two = 2_i32.to_ne_bytes();
+    ping.set_option(SOL_RAW, IPV6_CHECKSUM, &two, Width::Bits64)
+        .map_err(|_| "IPV6_CHECKSUM 2 at SOL_RAW was refused on a raw ICMPv6 socket")?;
+    if ping.set_option(SOL_IPV6, IPV6_CHECKSUM, &two, Width::Bits64) != Err(Errno::EINVAL) {
+        return Err("IPV6_CHECKSUM at SOL_IPV6 on a raw ICMPv6 socket was not EINVAL");
+    }
+    if ping.set_option(SOL_RAW, IPV6_CHECKSUM, &3_i32.to_ne_bytes(), Width::Bits64)
+        != Err(Errno::EINVAL)
+    {
+        return Err("an odd IPV6_CHECKSUM offset was not EINVAL");
+    }
+    report.refusals += 2;
+    ping.set_option(
+        SOL_IPV6,
+        IPV6_2292HOPLIMIT,
+        &1_i32.to_ne_bytes(),
+        Width::Bits64,
+    )
+    .map_err(|_| "IPV6_2292HOPLIMIT was refused on an IPv6 socket")?;
+    // Block everything, then let the request through: `ICMP6_FILTER_SETPASS`.
+    let mut blocks = [u32::MAX; 8];
+    if let Some(word) = blocks.get_mut(usize::from(ECHO_REQUEST >> 5)) {
+        *word &= !(1 << (ECHO_REQUEST & 31));
+    }
+    let filter: Vec<u8> = blocks.iter().flat_map(|word| word.to_ne_bytes()).collect();
+    filtered
+        .set_option(SOL_ICMPV6, ICMPV6_FILTER, &filter, Width::Bits64)
+        .map_err(|_| "ICMP6_FILTER was refused on a raw ICMPv6 socket")?;
     Ok(())
 }
 

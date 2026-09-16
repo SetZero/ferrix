@@ -88,6 +88,11 @@ pub const SOL_RAW: i32 = 255;
 /// type, set for a type the socket is not to receive.
 pub const ICMP_FILTER: i32 = 1;
 
+/// At [`SOL_ICMPV6`] on a raw ICMPv6 socket: `struct icmp6_filter`, eight
+/// 32-bit words with one bit per ICMPv6 type, set for a type the socket is
+/// not to receive. `<netinet/icmp6.h>` calls it `ICMP6_FILTER`.
+pub const ICMPV6_FILTER: i32 = 1;
+
 // ---------------------------------------------------------------------------
 // IPv4 options, at SOL_IP
 // ---------------------------------------------------------------------------
@@ -150,6 +155,14 @@ pub const INADDR_LOOPBACK: u32 = 0x7f00_0001;
 
 /// Turn an IPv6 socket into an IPv4 one.
 pub const IPV6_ADDRFORM: i32 = 1;
+/// At [`SOL_RAW`], or at [`SOL_IPV6`] on a socket that is not ICMPv6: the
+/// offset in a raw socket's messages at which the kernel writes and checks
+/// the checksum, or -1 for none.
+pub const IPV6_CHECKSUM: i32 = 7;
+/// RFC 2292's [`IPV6_RECVHOPLIMIT`], still offered, whose control message is
+/// of this type too; musl's headers give it to a program that asks for
+/// `IPV6_HOPLIMIT` the old way.
+pub const IPV6_2292HOPLIMIT: i32 = 8;
 /// The hop limit sent unicast packets carry.
 pub const IPV6_UNICAST_HOPS: i32 = 16;
 /// The interface multicast sends leave by.

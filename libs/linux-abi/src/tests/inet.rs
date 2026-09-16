@@ -65,6 +65,9 @@ fn protocols_levels_and_ipv4_options_match_the_headers() {
 fn ipv6_and_tcp_options_match_the_headers() {
     for (value, expected, name) in [
         (inet::IPV6_ADDRFORM, 1, "IPV6_ADDRFORM"),
+        (inet::IPV6_CHECKSUM, 7, "IPV6_CHECKSUM"),
+        (inet::IPV6_2292HOPLIMIT, 8, "IPV6_2292HOPLIMIT"),
+        (inet::ICMPV6_FILTER, 1, "ICMPV6_FILTER"),
         (inet::IPV6_UNICAST_HOPS, 16, "IPV6_UNICAST_HOPS"),
         (inet::IPV6_MULTICAST_IF, 17, "IPV6_MULTICAST_IF"),
         (inet::IPV6_MULTICAST_HOPS, 18, "IPV6_MULTICAST_HOPS"),

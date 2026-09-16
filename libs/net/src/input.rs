@@ -134,6 +134,7 @@ impl Stack {
                 destination,
                 packet.header.protocol,
                 packet.payload,
+                packet.header.ttl,
                 now,
             );
             return;
@@ -164,6 +165,7 @@ impl Stack {
             destination,
             packet.header.protocol,
             &whole,
+            packet.header.ttl,
             now,
         );
     }
@@ -196,14 +198,83 @@ impl Stack {
             self.counters.malformed += 1;
             return;
         }
+        let hop_limit = packet.header.hop_limit;
+        self.raw_input_v6(
+            interface,
+            (source, destination),
+            upper.protocol,
+            upper.bytes,
+            hop_limit,
+        );
         self.transport_input(
             interface,
             source,
             destination,
             upper.protocol,
             upper.bytes,
+            hop_limit,
             now,
         );
+    }
+
+    /// Give a copy of what an IPv6 packet carries to every raw socket that
+    /// asks for it, as `ipv6_raw_deliver` does: the upper-layer message alone,
+    /// without the header or its extensions, which RFC 3542 leaves out.
+    ///
+    /// A raw socket takes it on the terms [`Stack::raw_input_v4`] gives, and
+    /// two more: a message whose checksum at the socket's `IPV6_CHECKSUM`
+    /// offset does not verify is not delivered, and an ICMPv6 socket skips the
+    /// types its `ICMP6_FILTER` blocks.
+    fn raw_input_v6(
+        &mut self,
+        interface: u32,
+        (source, destination): (IpAddress, IpAddress),
+        protocol: u8,
+        message: &[u8],
+        hop_limit: u8,
+    ) {
+        let kind = message.first().copied();
+        let mut delivered = false;
+        for socket in self.sockets.values_mut() {
+            let Socket::Raw(raw) = socket else {
+                continue;
+            };
+            let datagram = &raw.datagram;
+            let wanted = raw.protocol == protocol
+                && matches!(datagram.family, crate::socket::Family::V6)
+                && (datagram.local.address.is_unspecified()
+                    || datagram.local.address == destination)
+                && datagram
+                    .remote
+                    .is_none_or(|remote| remote.address == source)
+                && datagram
+                    .options
+                    .device
+                    .is_none_or(|device| device == interface);
+            if !wanted {
+                continue;
+            }
+            if raw.checksum.is_some()
+                && upper_layer_sum(message, source, destination, protocol) != Some(0)
+            {
+                continue;
+            }
+            if protocol == crate::socket::RawSocket::IPPROTO_ICMPV6
+                && kind.is_some_and(|kind| !raw.passes_icmp6(kind))
+            {
+                continue;
+            }
+            delivered |= raw.datagram.deliver(Datagram {
+                remote: Endpoint::new(source, 0),
+                local: destination,
+                interface,
+                hop_limit,
+                payload: message.to_vec(),
+            });
+        }
+        if delivered {
+            self.counters.delivered += 1;
+        }
     }
 
     /// Give a copy of an IPv4 packet that reached this host to every raw
@@ -256,6 +327,7 @@ impl Stack {
                 remote: Endpoint::new(source, 0),
                 local: destination,
                 interface,
+                hop_limit: packet.get(8).copied().unwrap_or(0),
                 payload: packet.to_vec(),
             });
         }
@@ -293,6 +365,10 @@ impl Stack {
     }
 
     /// A transport payload, by protocol number.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "what a packet's header said, which each protocol below reads part of"
+    )]
     fn transport_input(
         &mut self,
         interface: u32,
@@ -300,17 +376,19 @@ impl Stack {
         destination: IpAddress,
         protocol: u8,
         payload: &[u8],
+        hop_limit: u8,
         now: Millis,
     ) {
+        let addresses = (source, destination);
         match (protocol, source) {
             (ipv4::protocol::ICMP, IpAddress::V4(_)) => {
-                self.icmpv4_input(interface, source, destination, payload, now);
+                self.icmpv4_input(interface, addresses, payload, hop_limit, now);
             }
             (icmpv6::PROTOCOL, IpAddress::V6(_)) => {
-                self.icmpv6_input(interface, source, destination, payload, now);
+                self.icmpv6_input(interface, addresses, payload, hop_limit, now);
             }
             (udp::PROTOCOL, _) => {
-                self.udp_input(interface, source, destination, payload, now);
+                self.udp_input(interface, addresses, payload, hop_limit, now);
             }
             (tcp::PROTOCOL, _) => {
                 self.tcp_input(interface, source, destination, payload, now);
@@ -323,9 +401,9 @@ impl Stack {
     fn udp_input(
         &mut self,
         interface: u32,
-        source: IpAddress,
-        destination: IpAddress,
+        (source, destination): (IpAddress, IpAddress),
         payload: &[u8],
+        hop_limit: u8,
         now: Millis,
     ) {
         let pseudo = pseudo_of(source, destination);
@@ -347,6 +425,7 @@ impl Stack {
             remote,
             local: destination,
             interface,
+            hop_limit,
             payload: datagram.payload.to_vec(),
         });
         if kept {
@@ -358,9 +437,9 @@ impl Stack {
     fn icmpv4_input(
         &mut self,
         interface: u32,
-        source: IpAddress,
-        destination: IpAddress,
+        (source, destination): (IpAddress, IpAddress),
         payload: &[u8],
+        hop_limit: u8,
         now: Millis,
     ) {
         let Ok(message) = icmpv4::Header::parse(payload) else {
@@ -372,7 +451,8 @@ impl Stack {
                 self.echo_reply_v4(source, destination, &message, now);
             }
             icmpv4::kind::ECHO_REPLY => {
-                self.deliver_echo(interface, source, destination, payload, &message);
+                let arrived = (interface, source, destination, hop_limit);
+                self.deliver_echo(arrived, payload, &message);
             }
             icmpv4::kind::DESTINATION_UNREACHABLE => {
                 self.report_v4_error(message.body, message.header.code);
@@ -423,9 +503,9 @@ impl Stack {
     fn icmpv6_input(
         &mut self,
         interface: u32,
-        source: IpAddress,
-        destination: IpAddress,
+        (source, destination): (IpAddress, IpAddress),
         payload: &[u8],
+        hop_limit: u8,
         now: Millis,
     ) {
         let (IpAddress::V6(from), IpAddress::V6(to)) = (source, destination) else {
@@ -442,7 +522,8 @@ impl Stack {
         match message.kind {
             icmpv6::kind::ECHO_REQUEST => self.echo_reply_v6(source, destination, &message, now),
             icmpv6::kind::ECHO_REPLY => {
-                self.deliver_echo_v6(interface, source, destination, payload, &message);
+                let arrived = (interface, source, destination, hop_limit);
+                self.deliver_echo_v6(arrived, payload, &message);
             }
             icmpv6::kind::DESTINATION_UNREACHABLE => {
                 self.report_v6_error(message.body, message.code);
@@ -482,7 +563,18 @@ impl Stack {
         {
             return;
         }
-        let _ = self.send_ip(from, source, icmpv6::PROTOCOL, &packet, 255, None, now);
+        // The stack's own hop limit, as `icmpv6_echo_reply` takes the route's
+        // default: 255 is for Neighbor Discovery, which must not be routed.
+        let hop_limit = self.config.hop_limit;
+        let _ = self.send_ip(
+            from,
+            source,
+            icmpv6::PROTOCOL,
+            &packet,
+            hop_limit,
+            None,
+            now,
+        );
     }
 
     /// Neighbor Discovery: learn from it, and answer a solicitation for one of
@@ -605,6 +697,21 @@ impl Stack {
             link.counters.received_errors += 1;
         }
     }
+}
+
+/// The internet checksum of an upper-layer `message` from `source` to
+/// `destination`, its pseudo-header included: zero for one that carries a
+/// correct checksum, and the checksum to write for one whose field is zero.
+/// `None` for a message longer than the pseudo-header's length can say.
+pub(crate) fn upper_layer_sum(
+    message: &[u8],
+    source: IpAddress,
+    destination: IpAddress,
+    protocol: u8,
+) -> Option<u16> {
+    let mut sum = pseudo_of(source, destination).sum(protocol, message.len())?;
+    sum.add_bytes(message);
+    Some(sum.finish())
 }
 
 /// The pseudo-header a transport checksum is taken over.

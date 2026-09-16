@@ -286,7 +286,11 @@ impl NetlinkSocket {
             let _ = state.queue.pop_front();
             state.queued = state.queued.saturating_sub(full);
         }
-        Some(Received { bytes: taken, full })
+        Some(Received {
+            bytes: taken,
+            full,
+            hop_limit: None,
+        })
     }
 
     /// Queue each message of `replies` as a datagram of its own.
