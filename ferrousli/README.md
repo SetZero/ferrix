@@ -70,12 +70,11 @@ this library does not have yet. Ferrix's `cargo xtask test-shell --init` and
 `test-vfs` are to run the installed binary, beside Alpine's musl build and the
 glibc one.
 
-busybox also calls functions from the one area still allowed to wait: a few
-math functions. Until each is written, the library defines a stub that writes
-that the function is not implemented yet and aborts, and there are
-6 functions in `src/stubs.rs`. That list only shrinks — name resolution and
-pattern matching left it on 2026-09-16 — and the busybox Ferrix is tested with
-must reach none.
+busybox links against this library with nothing stubbed. Its applets also
+call name resolution, pattern matching and a few math functions, and for a
+while each of those was a stub that wrote that the function was not
+implemented yet and aborted, listed in `src/stubs.rs`. The last of them were
+replaced by the real functions on 2026-09-16, and the file is gone.
 
 ## Headers
 
@@ -95,6 +94,7 @@ x86-64, static programs linked at a fixed address.
 | `assert.h` | `assert`, whose `__assert_fail` writes musl's message straight to standard error and aborts | |
 | `endian.h` | all 12 host, big-endian and little-endian conversions, both as macros and callable functions | |
 | `stdatomic.h` | C atomic types, memory orders, fences, compare-exchange, exchange, load, store, fetch operations and flags over the compiler's atomic builtins | |
+| `math.h` | `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, ported from musl and giving its bits and exceptions in every rounding mode; `math_errhandling` is `MATH_ERREXCEPT`, as in musl | the classification functions the header's macros call, the rest of `math.h`, the `float` and `long double` functions, `fenv.h`, `errno` set by math functions as glibc does |
 | `string.h`, `strings.h` | everything, with word-at-a-time scans and two-way `strstr` and `memmem`; `strcoll_l` and `strxfrm_l` | `strcasecmp_l`, `strncasecmp_l` |
 | `ctype.h` | the C locale, glibc's `__ctype_b_loc` tables, and the `_l` forms | |
 | `locale.h`, `langinfo.h` | `setlocale`, `localeconv`, `newlocale`, `duplocale`, `freelocale`, `uselocale`, `nl_langinfo`; musl's C and C.UTF-8 locales, any other name behaving as UTF-8 | message catalogues, glibc's `locale_t` layout |
@@ -132,7 +132,8 @@ x86-64, static programs linked at a fixed address.
 ## Next
 
 1. In progress: **`glob` and `search.h`**, **thread
-   cancellation, semaphores and C11 threads**, and **the math library**.
+   cancellation, semaphores and C11 threads**, and **the rest of the math
+   library**.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
 3. **`long double` math and `complex.h`.**
