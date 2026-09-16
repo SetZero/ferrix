@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 684 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 712 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 19 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 12 | present, but it fails to link or gives a wrong answer |
-| stubbed | 16 | defined in `src/stubs.rs`, which ends the program |
-| absent | 512 | not there |
+| stubbed | 11 | defined in `src/stubs.rs`, which ends the program |
+| absent | 489 | not there |
 
-559 interfaces are missing in one of the last four ways. 116 of them are
+531 interfaces are missing in one of the last four ways. 116 of them are
 already written on the three unlanded branches of 2026-09-13
 (`ferrousli-threads`, `ferrousli-math`, `ferrousli-misc`), which were
 committed without a build and are not reviewed.
@@ -53,12 +53,12 @@ new subsystem. Every area's missing names are in the index at the end.
 | Memory mapping and System V IPC | 21 | 1 | 0 | 1 | `ftok` |
 | Realtime: asynchronous I/O, message queues, timers, shared memory | 29 | 29 | 0 | 11 | `aio.h` over threads 3; `mqueue.h` 3; `timer_*` with `SIGEV_THREAD` 3; `shm_open`, `shm_unlink` 1; `clock_getcpuclockid` 1. Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
 | Terminals and devices | 25 | 7 | 0 | 3 | `posix_openpt`, `grantpt`, `unlockpt`, `ptsname`, `ptsname_r`, `ctermid` 2; `posix_devctl` and `<devctl.h>` 1 |
-| Networking and name resolution | 55 | 28 | 0 | 13 | `getaddrinfo`, `getnameinfo`, `freeaddrinfo`, `gai_strerror` over `/etc/hosts` and a DNS stub resolver, replacing five stubs, 8; the hosts, networks, protocols and services databases 3; `if_nameindex`, `if_freenameindex`, `if_indextoname` 1; `in6addr_any`, `in6addr_loopback`, `sockatmark` 1 |
+| Networking and name resolution | 55 | 0 | 0 | 0 | landed: `getaddrinfo`, `getnameinfo`, `freeaddrinfo` and `gai_strerror` over `/etc/hosts` and a DNS stub resolver; the hosts, networks, protocols and services databases; `if_nameindex`, `if_freenameindex`, `if_indextoname`; `in6addr_any`, `in6addr_loopback`, `sockatmark` |
 | Patterns, paths and search | 23 | 22 | 15 | 13 | landing `ferrousli-misc`: `search.h`, `libgen.h`, `glob` 3; `regex.h`, replacing four stubs, 5; `wordexp` 3; `nftw` 2 |
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 5 | 0 | 2 | `dlfcn.h` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here |
 | Across areas | | | | 4 | the classifier helpers below 1, with the math stubs; POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **559** | **116** | **160** | |
+| **All** | **1243** | **531** | **116** | **147** | |
 
 ## Present but broken
 
@@ -130,12 +130,15 @@ POSIX.1-2024.
 
 For comparison, os-08 checked relibc (master 1490c4d) the same way: every
 `extern "C"` function outside its Redox-only files against the same archive.
-relibc has 398 functions ferrousli lacks. Most are in the tables above. These
-are the ones POSIX does not require, and several are what real programs call:
+relibc had 398 functions ferrousli lacked when that was measured. Most are in
+the tables above. These are the ones POSIX does not require, and several are
+what real programs call. The `netdb` and `ifaddrs` rows — `gethostbyname`,
+`gethostbyaddr`, `hstrerror`, `herror`, `__h_errno_location`, `getifaddrs` and
+`freeifaddrs` — left the list with the name-resolution landing of 2026-09-16,
+which added `ether_*`, `res_*` and the `ns_*` parser beside them:
 
 | Area | Functions |
 |---|---|
-| netdb | `__h_errno_location`, `gethostbyaddr`, `gethostbyname`, `herror`, `hstrerror` |
 | pthread | `pthread_getconcurrency`, `pthread_setconcurrency` |
 | unistd | `brk`, `getdtablesize`, `getpass`, `getwd`, `sbrk`, `ualarm` |
 | stdlib | `ecvt`, `fcvt`, `gcvt`, `ttyslot` |
@@ -146,7 +149,6 @@ are the ones POSIX does not require, and several are what real programs call:
 | arpa/inet | `inet_lnaof`, `inet_makeaddr`, `inet_netof`, `inet_network` |
 | shadow | `endspent`, `getspent`, `getspnam`, `setspent` |
 | dirent | `fdclosedir` |
-| ifaddrs | `freeifaddrs`, `getifaddrs` |
 | pty | `forkpty`, `openpty` |
 | cxa.rs | `__cxa_thread_atexit_impl` |
 | dl-tls | `__tls_get_addr` |
@@ -362,13 +364,10 @@ interface.
 | Header | Status | Interfaces |
 |---|---|---|
 | `<arpa/inet.h>` | present (8) | `htonl`, `htons`, `inet_addr` (OB), `inet_ntoa` (OB), `inet_ntop`, `inet_pton`, `ntohl`, `ntohs` |
-| `<net/if.h>` | present (1) | `if_nametoindex` |
-| `<net/if.h>` | absent (3) | `if_freenameindex`, `if_indextoname`, `if_nameindex` |
-| `<netdb.h>` | stubbed (5) | `freeaddrinfo`, `getaddrinfo`, `getnameinfo`, `getservbyname`, `getservbyport` |
-| `<netdb.h>` | absent (17) | `endhostent`, `endnetent`, `endprotoent`, `endservent`, `gai_strerror`, `gethostent`, `getnetbyaddr`, `getnetbyname`, `getnetent`, `getprotobyname`, `getprotobynumber`, `getprotoent`, `getservent`, `sethostent`, `setnetent`, `setprotoent`, `setservent` |
-| `<netinet/in.h>` | absent (2) | `in6addr_any` (IP6), `in6addr_loopback` (IP6) |
-| `<sys/socket.h>` | present (18) | `accept`, `accept4`, `bind`, `connect`, `getpeername`, `getsockname`, `getsockopt`, `listen`, `recv`, `recvfrom`, `recvmsg`, `send`, `sendmsg`, `sendto`, `setsockopt`, `shutdown`, `socket`, `socketpair` |
-| `<sys/socket.h>` | absent (1) | `sockatmark` |
+| `<net/if.h>` | present (4) | `if_freenameindex`, `if_indextoname`, `if_nameindex`, `if_nametoindex` |
+| `<netdb.h>` | present (22) | `endhostent`, `endnetent`, `endprotoent`, `endservent`, `freeaddrinfo`, `gai_strerror`, `getaddrinfo`, `gethostent`, `getnameinfo`, `getnetbyaddr`, `getnetbyname`, `getnetent`, `getprotobyname`, `getprotobynumber`, `getprotoent`, `getservbyname`, `getservbyport`, `getservent`, `sethostent`, `setnetent`, `setprotoent`, `setservent` |
+| `<netinet/in.h>` | present (2) | `in6addr_any` (IP6), `in6addr_loopback` (IP6) |
+| `<sys/socket.h>` | present (19) | `accept`, `accept4`, `bind`, `connect`, `getpeername`, `getsockname`, `getsockopt`, `listen`, `recv`, `recvfrom`, `recvmsg`, `send`, `sendmsg`, `sendto`, `setsockopt`, `shutdown`, `sockatmark`, `socket`, `socketpair` |
 
 ### Patterns, paths and search
 
