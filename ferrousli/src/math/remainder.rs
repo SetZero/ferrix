@@ -9,36 +9,58 @@
 //! `remainder.c` and `remainderf.c` (MIT; see [`crate::math`] for the notice).
 
 use core::ffi::c_int;
+use core::hint::black_box;
 
 use crate::math::support::{barrier, barrierf};
+
+/// Whether the `double` with bits `uy` is a NaN, as musl's `isnan` tests it:
+/// on the bits, which the callers take through `black_box`, or LLVM compiles
+/// the test as `ucomisd y, y`, raising denormal for a subnormal `y` where musl
+/// raises nothing.
+#[inline]
+const fn nan_bits(uy: u64) -> bool {
+    uy << 1 > 0x7ff << 53
+}
+
+/// [`nan_bits`] for `float`.
+#[inline]
+const fn nan_bitsf(uy: u32) -> bool {
+    uy << 1 > 0xff << 24
+}
 
 /// NaN from `x * y` divided by itself, raising the invalid exception, for the
 /// arguments that have no remainder, as musl computes it. The barrier keeps
 /// the division from being folded away.
 #[inline(never)]
 fn undefined(x: f64, y: f64) -> f64 {
-    let product = x * y;
+    // `mulsd` with `x` as the destination, as GCC compiles musl's `x*y`, so
+    // that of two NaNs `x`'s comes back; LLVM would pick either.
+    let product = crate::complex::mul(x, y);
     product / barrier(product)
 }
 
 /// [`undefined`] for `float`.
 #[inline(never)]
 fn undefinedf(x: f32, y: f32) -> f32 {
-    let product = x * y;
+    // As in [`undefined`], with `mulss`. The callers pass the operands in the
+    // order GCC put them: `fmodf`'s the other way round.
+    let product = crate::complex::mulf(x, y);
     product / barrierf(product)
 }
 
 /// `x - n*y` for the integer `n` that is `x/y` truncated, with `x`'s sign.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn fmod(x: f64, y: f64) -> f64 {
-    let ux = x.to_bits();
-    let mut uy = y.to_bits();
+    // The bits go through `black_box`: LLVM would test them for zero with
+    // `ucomisd`, which raises denormal for a subnormal argument.
+    let ux = black_box(x.to_bits());
+    let mut uy = black_box(y.to_bits());
     let mut ex = (ux >> 52 & 0x7ff) as i32;
     let mut ey = (uy >> 52 & 0x7ff) as i32;
     let sx = ux >> 63;
     let mut uxi = ux;
 
-    if uy << 1 == 0 || y.is_nan() || ex == 0x7ff {
+    if uy << 1 == 0 || nan_bits(uy) || ex == 0x7ff {
         return undefined(x, y);
     }
     if uxi << 1 <= uy << 1 {
@@ -109,15 +131,17 @@ pub extern "C" fn fmod(x: f64, y: f64) -> f64 {
 /// [`fmod`] for `float`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn fmodf(x: f32, y: f32) -> f32 {
-    let ux = x.to_bits();
-    let mut uy = y.to_bits();
+    // The bits go through `black_box`: LLVM would test them for zero with
+    // `ucomisd`, which raises denormal for a subnormal argument.
+    let ux = black_box(x.to_bits());
+    let mut uy = black_box(y.to_bits());
     let mut ex = (ux >> 23 & 0xff) as i32;
     let mut ey = (uy >> 23 & 0xff) as i32;
     let sx = ux & 0x8000_0000;
     let mut uxi = ux;
 
-    if uy << 1 == 0 || y.is_nan() || ex == 0xff {
-        return undefinedf(x, y);
+    if uy << 1 == 0 || nan_bitsf(uy) || ex == 0xff {
+        return undefinedf(y, x);
     }
     if uxi << 1 <= uy << 1 {
         if uxi << 1 == uy << 1 {
@@ -187,15 +211,17 @@ pub extern "C" fn fmodf(x: f32, y: f32) -> f32 {
 /// `x - n*y` for the integer `n` nearest `x/y`, ties to even, and the low 31
 /// bits of `n` with its sign.
 fn remquo_parts(x: f64, y: f64) -> (f64, c_int) {
-    let ux = x.to_bits();
-    let mut uy = y.to_bits();
+    // The bits go through `black_box`: LLVM would test them for zero with
+    // `ucomisd`, which raises denormal for a subnormal argument.
+    let ux = black_box(x.to_bits());
+    let mut uy = black_box(y.to_bits());
     let mut ex = (ux >> 52 & 0x7ff) as i32;
     let mut ey = (uy >> 52 & 0x7ff) as i32;
     let sx = ux >> 63 != 0;
     let sy = uy >> 63 != 0;
     let mut uxi = ux;
 
-    if uy << 1 == 0 || y.is_nan() || ex == 0x7ff {
+    if uy << 1 == 0 || nan_bits(uy) || ex == 0x7ff {
         return (undefined(x, y), 0);
     }
     if ux << 1 == 0 {
@@ -279,15 +305,17 @@ fn remquo_parts(x: f64, y: f64) -> (f64, c_int) {
 
 /// [`remquo_parts`] for `float`.
 fn remquof_parts(x: f32, y: f32) -> (f32, c_int) {
-    let ux = x.to_bits();
-    let mut uy = y.to_bits();
+    // The bits go through `black_box`: LLVM would test them for zero with
+    // `ucomisd`, which raises denormal for a subnormal argument.
+    let ux = black_box(x.to_bits());
+    let mut uy = black_box(y.to_bits());
     let mut ex = (ux >> 23 & 0xff) as i32;
     let mut ey = (uy >> 23 & 0xff) as i32;
     let sx = ux >> 31 != 0;
     let sy = uy >> 31 != 0;
     let mut uxi = ux;
 
-    if uy << 1 == 0 || y.is_nan() || ex == 0xff {
+    if uy << 1 == 0 || nan_bitsf(uy) || ex == 0xff {
         return (undefinedf(x, y), 0);
     }
     if ux << 1 == 0 {

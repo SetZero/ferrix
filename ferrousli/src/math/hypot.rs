@@ -90,7 +90,9 @@ pub extern "C" fn hypotf(x: f32, y: f32) -> f32 {
         return y;
     }
     if ux >= 0xff << 23 || uy == 0 || ux - uy >= 25 << 23 {
-        return x + y;
+        // GCC compiles musl's `x + y` as `addss` with `y` as the destination,
+        // so where both are NaNs musl returns `y`'s; LLVM may pick either.
+        return crate::complex::addf(y, x);
     }
 
     let mut z = 1.0;
