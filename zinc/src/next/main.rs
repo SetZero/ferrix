@@ -27,7 +27,9 @@ mod parsectl;
 #[path = "../tok.rs"]
 mod tok;
 
+mod glob;
 mod hashtable;
+mod hist;
 mod math;
 mod misc;
 mod modules;
@@ -39,9 +41,10 @@ mod pending;
 mod shell;
 mod signames;
 mod sort;
+mod subst;
 mod utils;
 
-use pending::{builtin, exec, hist, jobs, prompt, signals, sysutil, tables};
+use pending::{builtin, exec, jobs, prompt, signals, sysutil, tables};
 
 fn main() {
     let mut sh = shell::Shell::new();

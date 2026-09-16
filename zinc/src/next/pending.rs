@@ -48,14 +48,48 @@ pub(crate) mod dirs {
 
         pub(crate) fn zbeep(&mut self) {}
 
+        pub(crate) fn getnameddir(&mut self, name: &[u8]) -> Option<Vec<u8>> {
+            self.nameddirtab.get(name).map(|nd| nd.dir.clone())
+        }
+
+        pub(crate) fn oldpwd(&mut self) -> Option<Vec<u8>> {
+            self.getsparam(b"OLDPWD")
+        }
+
+        pub(crate) fn subst_string_by_hook(
+            &mut self,
+            _name: &[u8],
+            _arg1: Option<&[u8]>,
+            _orig: &[u8],
+        ) -> Option<Vec<Vec<u8>>> {
+            None
+        }
+
+        pub(crate) fn substnamedir(&mut self, s: &[u8]) -> Vec<u8> {
+            s.to_vec()
+        }
+
         pub(crate) fn ttyidle(&self) -> i64 {
             -1
         }
     }
 }
 
-/// `exec.c`: the execution stacks.
+/// `exec.c`: the execution stacks and finding commands.
 pub(crate) mod exec {
+    use crate::shell::Shell;
+
+    impl Shell {
+        pub(crate) fn findcmd(
+            &mut self,
+            _arg0: &[u8],
+            _docopy: bool,
+            _default_path: bool,
+        ) -> Option<Vec<u8>> {
+            None
+        }
+    }
+
     /// One entry of `$funcstack` and friends (zsh's `struct funcstack`).
     #[derive(Debug, Clone)]
     pub(crate) struct Funcstack {
@@ -93,6 +127,40 @@ pub(crate) mod exec {
     }
 }
 
+/// `exec.c`: command and process substitution.
+pub(crate) mod exec_cmd {
+    use crate::shell::Shell;
+
+    impl Shell {
+        pub(crate) fn getoutput(&mut self, _cmd: &[u8], _qt: bool) -> Option<Vec<Vec<u8>>> {
+            None
+        }
+
+        pub(crate) fn getoutputfile(
+            &mut self,
+            s: &[u8],
+            _start: usize,
+        ) -> (Option<Vec<u8>>, usize) {
+            (None, s.len())
+        }
+
+        pub(crate) fn getproc(&mut self, s: &[u8], _start: usize) -> (Option<Vec<u8>>, usize) {
+            (None, s.len())
+        }
+    }
+}
+
+/// `exec.c`: running strings.
+pub(crate) mod exec_list {
+    use crate::shell::Shell;
+
+    impl Shell {
+        pub(crate) fn execstring_ctx(&mut self, _s: &[u8], _context: &str) -> bool {
+            false
+        }
+    }
+}
+
 /// `exec.c`: calling shell functions.
 pub(crate) mod exec_func {
     use crate::shell::Shell;
@@ -114,29 +182,6 @@ pub(crate) mod exec_func {
         pub(crate) fn current_function_traced(&self) -> bool {
             false
         }
-    }
-}
-
-/// `hist.c`: case modification and the history file.
-pub(crate) mod hist {
-    use crate::shell::Shell;
-
-    pub(crate) const CASMOD_NONE: i32 = 0;
-    pub(crate) const CASMOD_UPPER: i32 = 1;
-    pub(crate) const CASMOD_LOWER: i32 = 2;
-    pub(crate) const CASMOD_CAPS: i32 = 3;
-    pub(crate) const HFILE_USE_OPTIONS: i32 = 0x8000;
-
-    impl Shell {
-        pub(crate) fn casemodify(&self, s: &[u8], _how: i32) -> Vec<u8> {
-            s.to_vec()
-        }
-
-        pub(crate) fn saveandpophiststack(&mut self, _pop_through: i32, _writeflags: i32) -> bool {
-            false
-        }
-
-        pub(crate) fn resizehistents(&mut self) {}
     }
 }
 
@@ -212,8 +257,22 @@ pub(crate) mod jobs {
     }
 }
 
-/// `prompt.c`: the colour sequences `Shell` keeps.
+/// `prompt.c`: the colour sequences `Shell` keeps, and prompt expansion.
 pub(crate) mod prompt {
+    use crate::shell::Shell;
+
+    impl Shell {
+        pub(crate) fn promptexpand(
+            &mut self,
+            s: &[u8],
+            _ns: bool,
+            _rs: Option<&[u8]>,
+            _rs2: Option<&[u8]>,
+        ) -> (Vec<u8>, u64) {
+            (s.to_vec(), 0)
+        }
+    }
+
     /// One entry of zsh's `fg_bg_sequences`.
     #[derive(Debug, Clone)]
     pub(crate) struct ColourSeq {
@@ -261,6 +320,8 @@ pub(crate) mod signals {
         List(Eprog),
     }
 
+    pub(crate) const ZEXIT_NORMAL: i32 = 0;
+
     /// The current `errno`.
     pub(crate) fn errno() -> i32 {
         std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
@@ -273,17 +334,6 @@ pub(crate) mod signals {
 
         pub(crate) fn unqueue_signals(&mut self) {
             self.queueing_enabled = (self.queueing_enabled - 1).max(0);
-        }
-    }
-}
-
-/// `subst.c`: single-word substitution.
-pub(crate) mod subst {
-    use crate::shell::Shell;
-
-    impl Shell {
-        pub(crate) fn singsub(&mut self, s: &[u8]) -> Vec<u8> {
-            s.to_vec()
         }
     }
 }
@@ -312,6 +362,10 @@ pub(crate) mod sysutil {
         pub(crate) fn settyinfo(&self, _ti: &TtyInfo) {}
 
         pub(crate) fn adjustwinsize(&mut self, _from: i32) {}
+
+        pub(crate) fn zexit(&mut self, val: i32, _from_where: i32) {
+            self.exit_val = val;
+        }
     }
 }
 
