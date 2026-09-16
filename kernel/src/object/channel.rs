@@ -199,6 +199,15 @@ impl Endpoint {
         }
     }
 
+    /// Whether the other end's queue has room for one more message. Only
+    /// meaningful to an end nobody else writes from, which the answer then
+    /// stays true for until it writes: a reader only makes room.
+    pub(crate) fn peer_has_room(&self) -> bool {
+        self.peer
+            .upgrade()
+            .is_some_and(|peer| !peer.inbox.lock().is_full())
+    }
+
     /// Take the next message, if it fits.
     ///
     /// A message carrying channel endpoints is taken only when the caller

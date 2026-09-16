@@ -338,6 +338,13 @@ pub trait Inode: Send + Sync + fmt::Debug {
         self.read_at(0, buf)
     }
 
+    /// Take back `bytes`, the start of what the last [`Inode::read_stream`]
+    /// gave, which could not be delivered to the reader. The default drops
+    /// them: most streams cannot put data back.
+    fn unread_stream(&self, bytes: &[u8]) {
+        let _ = bytes;
+    }
+
     /// Write to an object with no position; see [`Inode::read_stream`].
     ///
     /// A write that would wait with `nonblock` set answers the count it

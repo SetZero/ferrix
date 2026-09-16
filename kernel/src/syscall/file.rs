@@ -227,6 +227,9 @@ fn read_into(
         let arrived = slot.get(..got).ok_or(Errno::EIO)?;
         let at = buf.checked_add(done).ok_or(Errno::EFAULT)?;
         if uaccess::copy_to_user(process.space(), at, arrived).is_err() {
+            if stream {
+                file.io().unread_stream(arrived);
+            }
             unread(file, position, got);
             if done > 0 {
                 break;

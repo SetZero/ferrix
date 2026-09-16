@@ -668,6 +668,14 @@ impl Vmo {
         given
     }
 
+    /// Whether any page of `first..first + pages` is held in place for a
+    /// device: what [`Vmo::decommit_range`] skipped, and a range that must not
+    /// be handed to anyone else.
+    pub(crate) fn holds_any(&self, first: u64, pages: u64) -> bool {
+        let end = first.saturating_add(pages);
+        self.pages.lock().held.range(first..end).next().is_some()
+    }
+
     /// Phase one of [`Vmo::decommit_range`]: take every committed page in
     /// `first..first + pages` that is not held out of the list.
     ///
