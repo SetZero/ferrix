@@ -308,6 +308,8 @@ pub const SETRESGID: usize = 119;
 pub const FCHMODAT2: usize = 452;
 /// `copy_file_range`.
 pub const COPY_FILE_RANGE: usize = 326;
+/// `sync_file_range`.
+pub const SYNC_FILE_RANGE: usize = 277;
 /// `set_robust_list`.
 pub const SET_ROBUST_LIST: usize = 273;
 /// `get_robust_list`.

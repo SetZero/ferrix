@@ -63,10 +63,12 @@ fn boot(arch: Arch, term: &Path, ctl: &Path, args: &Args) -> Result<Vec<String>>
     let kernel = crate::cargo::build_kernel_with_init(arch, args.release, term, &script)?;
     let natives = crate::native::build(arch, args.release)?;
     let carried = [crate::ports::File {
-        path: CTL_PATH,
+        path: CTL_PATH.to_owned(),
         mode: 0o755,
-        bytes: std::fs::read(ctl)
-            .map_err(|error| Error::new(format!("reading {}: {error}", ctl.display())))?,
+        content: crate::ports::Content::Bytes(
+            std::fs::read(ctl)
+                .map_err(|error| Error::new(format!("reading {}: {error}", ctl.display())))?,
+        ),
     }];
     let initramfs = crate::initramfs::build(None, &natives, None, &carried)?;
     let image = crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;

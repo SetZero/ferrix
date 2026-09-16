@@ -94,6 +94,8 @@ busybox's does.
 | `curl` | curl 8.22.0 over Mbed TLS 3.6.7, curl.se's extract of Mozilla's CA certificates, and Mbed TLS's test server for `test-net` | `bin/curl`, `etc/ssl/certs/ca-certificates.crt`, `usr/libexec/ferrix/ssl_server2`, `usr/share/ferrix/tls-test` |
 | `libcxx` | LLVM 23.1.1's libc++, libc++abi and libunwind, the C++ runtime, built with gcc | `include/c++/v1`, `lib/libc++.a`, `lib/libc++abi.a`, `lib/libunwind.a` |
 | `btop` | btop 1.4.7, C++23, over `libcxx` | `bin/btop` |
+| `zlib` | zlib 1.3.2, for git | `include/zlib.h`, `lib/libz.a` |
+| `git` | git 2.55.0 over `zlib` and `curl`'s libcurl, without Perl, Python, Tcl, gettext, iconv or its Rust half | `usr/bin/git` with a `bin/git` link, `usr/libexec/git-core`, `usr/share/git-core/templates` |
 
 `cargo xtask ports` runs them in that order, on a Linux host. Every image that carries a
 busybox carries the ports that are installed, on x86_64, and `cargo xtask
@@ -138,7 +140,7 @@ x86-64, static programs linked at a fixed address.
 | Multibyte and wide characters | UTF-8 conversion in `stdlib.h`, `wchar.h` and `uchar.h`, strict as musl's; `wctype.h`'s classes, case mappings and `wcwidth` from musl's Unicode 12.1 tables, with every difference from glibc recorded; `wchar.h`'s string and memory functions, with `wcslcpy` and `wcslcat`; the `wcstol` and `wcstod` families, `wcstoimax` and `wcstoumax`, through the narrow parsers; `wcsftime`; wide-character stream I/O, `fgetwc` to `ungetwc` and `fwide`, with glibc's `_unlocked` names; the `wprintf` family, through the narrow formatter; the `wscanf` family, through the narrow scanner; `open_wmemstream` | `iconv` |
 | Error text | `strerror`, `strerror_l`, `strerror_r` (XSI), `__xpg_strerror_r`, `strsignal` | glibc's GNU `strerror_r` |
 | `unistd.h` | files, directories and links, `pipe` and `dup`, identities, `fork` on `clone`, `execve`, `execv`, `execvp`, `sleep`, `alarm`, `sysconf`, `isatty`, `syscall`; `chown` and its `l`, `f` and `at` forms, `utimes`, `gethostid`; `pathconf` and `fpathconf`, from musl's table; `copy_file_range` | `getcwd(NULL, 0)`, `set*id` across threads |
-| `fcntl.h`, `sys/stat.h`, `sys/mman.h` | every function, with glibc's `*64` and `__xstat` names | |
+| `fcntl.h`, `sys/stat.h`, `sys/mman.h` | every function, with glibc's `*64` and `__xstat` names; `utime.h`'s `utime`; Linux's `sync_file_range` | |
 | Mounts and file systems | `mount`, `umount`, `umount2`, `pivot_root`, `chroot`, `swapon`, `swapoff`, `sync`, `syncfs`, `readahead`; `statfs`, `statvfs` and their `f` forms, with glibc's `64` names; `mntent.h`'s `setmntent`, `getmntent`, `getmntent_r`, `endmntent` and `hasmntopt`, with octal escapes | `addmntent` |
 | Sockets and addresses | `socket`, `socketpair`, `bind`, `connect`, `listen`, `accept`, `accept4`, `getsockname`, `getpeername`, `getsockopt`, `setsockopt`, `shutdown`, `send`, `sendto`, `sendmsg`, `recv`, `recvfrom`, `recvmsg`, `sockatmark`; `inet_aton`, `inet_addr`, `inet_ntoa`, `inet_ntop`, `inet_pton`, the byte order functions, `in6addr_any`, `in6addr_loopback` | `inet_network`, `inet_makeaddr`, `inet_netof`, `inet_lnaof` |
 | Name resolution | `getaddrinfo`, `freeaddrinfo`, `getnameinfo`, `gai_strerror`; `gethostbyname`, `gethostbyname2`, `gethostbyaddr` and their `_r` forms, `getservbyname`, `getservbyport` and theirs, `h_errno`, `hstrerror`, `herror`; the hosts, networks, protocols and services databases; the stub resolver over `/etc/resolv.conf`, `res_query`, `res_send`, `dn_expand` and the `ns_` parser | a hosts-file cache, `/etc/nsswitch.conf`, DNSSEC |

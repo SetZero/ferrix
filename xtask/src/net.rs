@@ -33,6 +33,7 @@
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -56,6 +57,22 @@ const HELLO_PATH: &str = "/hello";
 
 /// The path that serves [`big_body`].
 const BIG_PATH: &str = "/big";
+
+/// Where the repository [`make_repository`] writes is served from.
+const GIT_REPO_PATH: &str = "/repo.git";
+
+/// The one file in it, and what is in that file.
+const GIT_FILE: &str = "greeting";
+
+/// What is in it, which the guest prints after cloning.
+const GIT_CONTENT: &str = "hello from ferrix";
+
+/// Its one commit's subject, which the guest prints after cloning.
+const GIT_SUBJECT: &str = "first commit";
+
+/// The author and committer date of that commit, so the repository this
+/// writes is the same on every host and in every run.
+const GIT_DATE: &str = "2026-01-01T00:00:00+00:00";
 
 /// How long the body at [`BIG_PATH`] is.
 ///
@@ -178,10 +195,16 @@ impl Servers {
         echo.set_read_timeout(Some(TURN))?;
         let udp = local_v4(echo.local_addr()?)?;
 
+        // The repository the guest clones over HTTP, written before anything
+        // can ask for it. It costs a few files and one process per run, and
+        // having it always means the HTTP stub answers the same paths whether
+        // or not this run tests git.
+        let repository = make_repository()?;
+
         let stop = Arc::new(AtomicBool::new(false));
         let threads = vec![
             spawn("ferrix-net-http", &stop, move |signal| {
-                serve_http(&listener, signal);
+                serve_http(&listener, signal, &repository);
             })?,
             spawn("ferrix-net-dns", &stop, move |signal| {
                 serve_datagrams(&resolver, signal, answer_query);
@@ -255,10 +278,10 @@ fn spawn(
 ///
 /// One at a time, because the guest fetches one at a time, and a stub that
 /// forked a thread per connection would be a stub with a shutdown problem.
-fn serve_http(listener: &TcpListener, stop: &AtomicBool) {
+fn serve_http(listener: &TcpListener, stop: &AtomicBool, repository: &Path) {
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
-            Ok((stream, _)) => answer_http(stream),
+            Ok((stream, _)) => answer_http(stream, repository),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(TURN);
             }
@@ -268,7 +291,7 @@ fn serve_http(listener: &TcpListener, stop: &AtomicBool) {
 }
 
 /// Read one request and write its answer.
-fn answer_http(mut stream: TcpStream) {
+fn answer_http(mut stream: TcpStream, repository: &Path) {
     // Blocking, whatever the listener is. The listener is non-blocking so the
     // accept loop can look at its stop flag, and on Windows a socket `accept`
     // returns inherits that; Linux's does not. Left non-blocking, the first
@@ -289,21 +312,117 @@ fn answer_http(mut stream: TcpStream) {
         }
     }
     let body = match path_of(&request) {
-        Some(path) if path == HELLO_PATH => format!("{HELLO_BODY}\n").into_bytes(),
-        Some(path) if path == BIG_PATH => big_body(),
-        _ => {
-            let _ = stream.write_all(b"HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n");
-            return;
-        }
+        Some(path) if path == HELLO_PATH => Some(format!("{HELLO_BODY}\n").into_bytes()),
+        Some(path) if path == BIG_PATH => Some(big_body()),
+        // Anything else may be a file of the repository below `/repo.git`,
+        // which git asks for one at a time over its dumb HTTP protocol.
+        Some(path) => repository_file(repository, &path),
+        None => None,
+    };
+    let Some(body) = body else {
+        let _ = stream.write_all(b"HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        return;
     };
     let head = format!(
-        "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.0 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     let _ = stream.write_all(head.as_bytes());
     let _ = stream.write_all(&body);
     let _ = stream.flush();
     let _ = stream.shutdown(std::net::Shutdown::Write);
+}
+
+/// The bytes of `path` inside the served repository, or `None`.
+///
+/// Only paths under [`GIT_REPO_PATH`] are served, and only names made of the
+/// characters git asks for, so a request can never name a file outside the
+/// directory: no component is `..`, and the whole of what is left is joined
+/// beneath it. A query string is cut off first, which is what makes git's
+/// probe for the smart protocol -- `info/refs?service=git-upload-pack` --
+/// arrive as `info/refs`, the file the dumb protocol reads.
+fn repository_file(repository: &Path, path: &str) -> Option<Vec<u8>> {
+    let rest = path.split('?').next()?.strip_prefix(GIT_REPO_PATH)?;
+    let rest = rest.strip_prefix('/')?;
+    let mut file = repository.to_path_buf();
+    for part in rest.split('/') {
+        let named = !part.is_empty()
+            && part != "."
+            && part != ".."
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.');
+        if !named {
+            return None;
+        }
+        file.push(part);
+    }
+    std::fs::read(file).ok()
+}
+
+/// Make the repository the guest clones, under the workspace's `build`.
+///
+/// The host's own git writes it, since it is the far end of the conversation
+/// and not what is being tested: a work tree with one file and one commit, a
+/// bare clone of that, and `update-server-info`, which writes the two files
+/// -- `info/refs` and `objects/info/packs` -- that let a plain file server
+/// stand in for a git server. Author and committer are fixed, so the same
+/// commit comes out on every host and the subject the guest prints is the
+/// subject this made.
+fn make_repository() -> Result<PathBuf> {
+    // Once for the process, however many runs it starts: the repository is
+    // the same bytes every time and nothing writes to it afterwards, and two
+    // runs at once -- which the unit tests do -- would otherwise take turns
+    // deleting the directory the other was serving.
+    static MADE: std::sync::OnceLock<std::result::Result<PathBuf, String>> =
+        std::sync::OnceLock::new();
+    match MADE.get_or_init(|| write_repository().map_err(|error| error.to_string())) {
+        Ok(path) => Ok(path.clone()),
+        Err(message) => Err(Error::new(message.clone())),
+    }
+}
+
+/// Write it, as [`make_repository`] describes.
+fn write_repository() -> Result<PathBuf> {
+    let directory = crate::paths::workspace_root().join("build").join("net-git");
+    let _ = std::fs::remove_dir_all(&directory);
+    let work = directory.join("work");
+    let bare = directory.join("repo.git");
+    std::fs::create_dir_all(&work)
+        .map_err(|error| Error::new(format!("making {}: {error}", work.display())))?;
+    std::fs::write(work.join(GIT_FILE), format!("{GIT_CONTENT}\n"))
+        .map_err(|error| Error::new(format!("writing {GIT_FILE}: {error}")))?;
+    let git = |arguments: &[&str]| -> Result<()> {
+        let mut command = std::process::Command::new("git");
+        let _ = command
+            .args(arguments)
+            .current_dir(&directory)
+            .env("GIT_AUTHOR_NAME", "ferrix")
+            .env("GIT_AUTHOR_EMAIL", "ferrix@ferrix.test")
+            .env("GIT_AUTHOR_DATE", GIT_DATE)
+            .env("GIT_COMMITTER_NAME", "ferrix")
+            .env("GIT_COMMITTER_EMAIL", "ferrix@ferrix.test")
+            .env("GIT_COMMITTER_DATE", GIT_DATE)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+        let output = command
+            .output()
+            .map_err(|error| Error::new(format!("running git {}: {error}", arguments.join(" "))))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(Error::new(format!(
+            "git {} failed: {}",
+            arguments.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    };
+    git(&["-C", "work", "init", "-q", "-b", "main"])?;
+    git(&["-C", "work", "add", GIT_FILE])?;
+    git(&["-C", "work", "commit", "-q", "-m", GIT_SUBJECT])?;
+    git(&["clone", "-q", "--bare", "work", "repo.git"])?;
+    git(&["-C", "repo.git", "update-server-info"])?;
+    Ok(bare)
 }
 
 /// The path out of a request's first line, `GET <path> HTTP/1.x`.
@@ -428,8 +547,9 @@ fn read_name(query: &[u8], at: usize) -> Option<(String, usize)> {
 /// until the run ends, and lives as long as the process does anyway.
 ///
 /// With `curl`, the image carries the curl built against ferrousli, and it
-/// fetches the same two files `wget` does.
-pub(crate) fn commands(servers: &Servers, curl: bool) -> Vec<Command> {
+/// fetches the same two files `wget` does. With `git`, git makes a commit and
+/// clones it back over HTTP.
+pub(crate) fn commands(servers: &Servers, curl: bool, git: bool) -> Vec<Command> {
     let http = servers.http.port();
     let udp = servers.udp.port();
     let digest = cksum(&big_body());
@@ -544,7 +664,55 @@ pub(crate) fn commands(servers: &Servers, curl: bool) -> Vec<Command> {
     if curl {
         commands.extend(curl_commands(http, digest));
     }
+    if git {
+        commands.push(git_command(http));
+    }
     commands
+}
+
+/// git's command in [`commands`]: [`git_program`], and the four lines it
+/// prints -- the file and the subject out of the local clone, and the same
+/// two out of the one fetched over HTTP.
+fn git_command(http: u16) -> Command {
+    Command {
+        argv: leak_argv(vec!["sh".to_owned(), "-c".to_owned(), git_program(http)]),
+        status: 0,
+        expect: Expect::Lines(&[GIT_CONTENT, GIT_SUBJECT, GIT_CONTENT, GIT_SUBJECT]),
+    }
+}
+
+/// git's program in [`commands`], in two halves.
+///
+/// First git's own: a repository made in the guest, a file added and
+/// committed, and a bare clone of it made over the local transport, which
+/// runs `git-upload-pack` as a program of its own -- so the object database,
+/// the index, the commit and one of git's two transports are all the guest's.
+///
+/// `GIT_PAGER=cat` because the guest's console is a terminal, and git
+/// sends `log` through a pager on one: without it the subject arrives
+/// wrapped in the cursor movements busybox's pager drew it with.
+/// It prints the file and the subject out of that clone.
+///
+/// Then the network's: the same two lines out of a clone of the repository
+/// this process serves at [`GIT_REPO_PATH`], fetched over HTTP through the
+/// gateway by `git-remote-http` and the libcurl built against ferrousli.
+///
+/// The far end is served here rather than in the guest because neither
+/// busybox on the image has the `httpd` applet -- Alpine builds it into
+/// `busybox-extras`, and the musl busybox the gates run is Alpine's, which
+/// cannot be reconfigured from this tree.
+fn git_program(http: u16) -> String {
+    format!(
+        "set -e; export HOME=/tmp GIT_AUTHOR_NAME=ferrix GIT_AUTHOR_EMAIL=ferrix@ferrix.test \
+         GIT_COMMITTER_NAME=ferrix GIT_COMMITTER_EMAIL=ferrix@ferrix.test GIT_PAGER=cat; \
+         cd /tmp; git init -q -b main work; cd work; \
+         echo '{GIT_CONTENT}' > {GIT_FILE}; git add {GIT_FILE}; git commit -q -m '{GIT_SUBJECT}'; \
+         git clone -q --bare /tmp/work /tmp/bare.git; \
+         git clone -q /tmp/bare.git /tmp/local; \
+         cat /tmp/local/{GIT_FILE}; git -C /tmp/local log --format=%s; \
+         git clone -q http://10.0.2.2:{http}{GIT_REPO_PATH} /tmp/fetched; \
+         cat /tmp/fetched/{GIT_FILE}; git -C /tmp/fetched log --format=%s"
+    )
 }
 
 /// curl's half of [`commands`]: a file by name and a file byte for byte, as

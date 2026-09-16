@@ -489,3 +489,46 @@ unsafe fn utimes_at(path: *const c_char, times: *const Timeval, flags: c_int) ->
     // local.
     unsafe { utimensat(AT_FDCWD, path, specs.as_ptr(), flags) }
 }
+
+/// `struct utimbuf`, from `utime.h`: an access and a modification time in
+/// whole seconds.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Utimbuf {
+    /// The access time.
+    pub actime: i64,
+    /// The modification time.
+    pub modtime: i64,
+}
+
+const _: () = assert!(size_of::<Utimbuf>() == 16);
+
+/// Sets `path`'s access and modification times to those in `*times`, or to
+/// now if `times` is null, as `utimensat` does, following symbolic links.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string, and `times` null or valid for a
+/// read of a `struct utimbuf`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn utime(path: *const c_char, times: *const Utimbuf) -> c_int {
+    if times.is_null() {
+        // SAFETY: the caller passes a NUL-terminated string.
+        return unsafe { utimensat(AT_FDCWD, path, null(), 0) };
+    }
+    // SAFETY: the caller vouches for a `struct utimbuf`.
+    let given = unsafe { times.read() };
+    let specs = [
+        Timespec {
+            tv_sec: given.actime,
+            tv_nsec: 0,
+        },
+        Timespec {
+            tv_sec: given.modtime,
+            tv_nsec: 0,
+        },
+    ];
+    // SAFETY: the caller passes a NUL-terminated string, and `specs` is a live
+    // local.
+    unsafe { utimensat(AT_FDCWD, path, specs.as_ptr(), 0) }
+}

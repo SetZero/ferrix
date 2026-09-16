@@ -1013,15 +1013,15 @@ fn build_image(
     let mut carried = Vec::new();
     for (path, program) in programs.carried() {
         carried.push(crate::ports::File {
-            path,
+            path: path.to_owned(),
             mode: 0o755,
-            bytes: read(program)?,
+            content: crate::ports::Content::Bytes(read(program)?),
         });
     }
     carried.push(crate::ports::File {
-        path: CONFIG_PATH,
+        path: CONFIG_PATH.to_owned(),
         mode: 0o644,
-        bytes: config.as_bytes().to_vec(),
+        content: crate::ports::Content::Bytes(config.as_bytes().to_vec()),
     });
     // Whatever the caller wants beside them, which is how `run-compositor`
     // puts a shell on the image without changing the archive every gate boot
@@ -1307,9 +1307,9 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     let mut extra = Vec::new();
     if let Some(zinc) = crate::zinc::build(arch)? {
         extra.push(crate::ports::File {
-            path: crate::initramfs::ZINC_PATH,
+            path: crate::initramfs::ZINC_PATH.to_owned(),
             mode: 0o755,
-            bytes: zinc,
+            content: crate::ports::Content::Bytes(zinc),
         });
     }
     let (image, _) = build_image(arch, &programs, &config, extra, args)?;

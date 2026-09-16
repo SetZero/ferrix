@@ -147,14 +147,14 @@ fn boot_and_type(arch: Arch, program: &Path, client: &Path, args: &Args) -> Resu
         .map_err(|error| Error::new(format!("reading {}: {error}", client.display())))?;
     let carried = [
         crate::ports::File {
-            path: CLIENT_PATH,
+            path: CLIENT_PATH.to_owned(),
             mode: 0o755,
-            bytes,
+            content: crate::ports::Content::Bytes(bytes),
         },
         crate::ports::File {
-            path: CONFIG_PATH,
+            path: CONFIG_PATH.to_owned(),
             mode: 0o644,
-            bytes: CONFIG.as_bytes().to_vec(),
+            content: crate::ports::Content::Bytes(CONFIG.as_bytes().to_vec()),
         },
     ];
     let initramfs = crate::initramfs::build(None, &natives, None, &carried)?;

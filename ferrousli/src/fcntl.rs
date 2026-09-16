@@ -200,6 +200,24 @@ pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, arg: c_ulong) -> c_int {
 /// `F_SETLKW`: set a record lock, waiting for it.
 const F_SETLKW: c_int = 7;
 
+/// Starts, waits for or both, as `flags` says, writing the `len` bytes of
+/// `fd` from `offset` to storage. Linux's own call; git uses it to flush a
+/// pack's pages before it renames the pack into place.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn sync_file_range(fd: c_int, offset: i64, len: i64, flags: c_uint) -> c_int {
+    // SAFETY: `sync_file_range` reads no memory.
+    let ret = unsafe {
+        syscall::syscall4(
+            nr::SYNC_FILE_RANGE,
+            fd as usize,
+            offset as usize,
+            len as usize,
+            flags as usize,
+        )
+    };
+    errno::from_syscall(ret) as c_int
+}
+
 /// Advises the kernel how `len` bytes of `fd` from `offset` will be used.
 /// Returns the error number rather than setting `errno`.
 #[cfg_attr(not(test), unsafe(no_mangle))]

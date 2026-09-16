@@ -404,7 +404,16 @@ fn build_with_shell(
                 made.push(directory.clone());
             }
         }
-        archive.file(file.path, file.mode, &file.bytes)?;
+        match &file.content {
+            ports::Content::Bytes(bytes) => archive.file(&file.path, file.mode, bytes)?,
+            ports::Content::Link(target) => archive.symlink(&file.path, target)?,
+            ports::Content::Directory => {
+                if !made.contains(&file.path) {
+                    archive.directory(&file.path, file.mode)?;
+                    made.push(file.path.clone());
+                }
+            }
+        }
     }
     archive.finish()
 }
@@ -418,15 +427,16 @@ mod tests {
         // `cargo xtask test-compositor` boots the compositor as init, with no
         // busybox at all, and its clients have to be in the archive. They were
         // not until this moved out of the branch that needs a program.
+        let program: &[u8] = b"\x7fELF not really";
         let carried = [ports::File {
-            path: "bin/pattern",
+            path: "bin/pattern".to_owned(),
             mode: 0o755,
-            bytes: b"\x7fELF not really".to_vec(),
+            content: ports::Content::Bytes(program.to_vec()),
         }];
         let bytes = build(None, &[], None, &carried).unwrap();
         let archive = ferrix_cpio::Archive::new(&bytes);
         let found = archive.find("bin/pattern").unwrap().unwrap();
-        assert_eq!(found.data, carried[0].bytes);
+        assert_eq!(found.data, program);
         assert_eq!(found.mode & 0o777, 0o755, "it has to be runnable");
         // And an archive that was asked for none is the one it always was,
         // which is what keeps the boot check's bytes the same.
@@ -508,14 +518,19 @@ mod tests {
     fn ports_go_at_their_paths_with_their_directories_made_once() {
         let files = [
             ports::File {
-                path: "bin/curl",
+                path: "bin/curl".to_owned(),
                 mode: 0o755,
-                bytes: b"curl".to_vec(),
+                content: ports::Content::Bytes(b"curl".to_vec()),
             },
             ports::File {
-                path: "etc/ssl/certs/ca-certificates.crt",
+                path: "etc/ssl/certs/ca-certificates.crt".to_owned(),
                 mode: 0o644,
-                bytes: b"certificates".to_vec(),
+                content: ports::Content::Bytes(b"certificates".to_vec()),
+            },
+            ports::File {
+                path: "bin/git".to_owned(),
+                mode: 0o777,
+                content: ports::Content::Link("../usr/bin/git".to_owned()),
             },
         ];
         let bytes = build_with_shell(Some(b"program"), &[], None, &files).unwrap();
@@ -526,6 +541,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(bundle.data, b"certificates");
+        let git = archive.find("bin/git").unwrap().unwrap();
+        assert_eq!(git.symlink_target(), Some("../usr/bin/git"));
         let names: Vec<&str> = archive.entries().map(|entry| entry.unwrap().name).collect();
         for directory in ["etc/ssl", "etc/ssl/certs"] {
             assert_eq!(
