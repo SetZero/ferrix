@@ -2807,15 +2807,47 @@ left to time out -- over IPv4 and again over IPv6. It reads:
   net      1 interface up, 318 bytes carried over the loopback in both families, 2 connections made and accepted, 3 calls refused as specified
 ```
 
+**The host side already exists, and it is ours.** `cargo xtask run --net`
+attaches a virtio-net device whose backend is `xtask/src/gateway/`: a NAT
+gateway in the build tool, on the guest network `10.0.2.0/24` with the gateway
+at `10.0.2.2`, DNS at `10.0.2.3` and the guest at `10.0.2.15` — slirp's numbers,
+so that every habit and every piece of QEMU documentation carries over. It
+answers ARP and ICMP echo for its own addresses, offers the guest its address
+over DHCP, relays UDP through one ephemeral host socket per flow with
+`10.0.2.3:53` forwarded to the host's resolver, and terminates TCP, re-opening
+each connection as an ordinary host `TcpStream`. Twelve host tests speak to it
+over the socket pair QEMU would use, so the half of the path that is ours is
+covered by `cargo test` with no QEMU and no network at all.
+
+**Why it is written rather than QEMU's own.** `-netdev user` is slirp, and
+slirp is an optional build-time dependency: the QEMU this was developed against
+was built without it, and says so — *network backend 'user' is not compiled
+into this binary*. The two ways round that both want privilege a build tool
+should not ask for. `-netdev tap` needs `CAP_NET_ADMIN` or a setuid helper, and
+the usual escape — a `tap` inside an unprivileged user namespace — is refused
+outright on a host whose `AppArmor` policy blocks those namespaces, as Ubuntu's
+now does. What is always available is QEMU's `dgram` backend, which hands every
+Ethernet frame to a UNIX datagram socket; the other end of that pair is a
+network backend anyone can write, and this is it. No raw socket, no tun device,
+no capability, and the same behaviour on every developer's machine.
+
+Two things it does not do, both for the same reason. ICMP echo is answered only
+for `10.0.2.2` and `10.0.2.3`, never forwarded: originating ICMP needs a raw
+socket or a permitted ping group, neither of which a build tool can rely on. And
+there is no IPv6, because a half-answered IPv6 is worse than none — a guest that
+receives a router advertisement will prefer the address in it.
+
 **Still to do:** the virtio-net driver and the ring it speaks over, `AF_NETLINK`
 for `ip`, `/proc/net`, and `AF_UNIX` names so that `nc` can carry a stream over
 a local socket.
 
-**Exit:** under QEMU's user-mode network, busybox configures `eth0` with `ip`,
-and `route` and `netstat` report through `/proc/net`. `wget` fetches a file
-from a server on the host that byte-for-byte matches what it served, and `nc`
-carries a stream over loopback and over an `AF_UNIX` socket. All of it runs in
-a test of its own, for the reason stage 7's exit is one.
+**Exit:** under `xtask`'s gateway — which is where this criterion's *"under
+QEMU's user-mode network"* now reads — busybox configures `eth0` with `ip` (or
+with `udhcpc`, which the gateway's DHCP server is there for), and `route` and
+`netstat` report through `/proc/net`. `wget` fetches a file from a server on
+the host that byte-for-byte matches what it served, and `nc` carries a stream
+over loopback and over an `AF_UNIX` socket. All of it runs in a test of its
+own, for the reason stage 7's exit is one.
 
 ---
 
