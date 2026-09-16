@@ -3338,10 +3338,25 @@ the keywords later parts interpret, with Hyprland's diagnostics and the rest
 of the file still applied past a bad line. `Config::keyword` is `hyprctl
 keyword`. Host-tested and fuzzed (`hyprconf_parse`).
 
+**Done — the layout and dispatcher core.** `compositor/layout` is Hyprland's
+window management as rectangles and ids, checked against Hyprland's source:
+monitors, workspaces made and dropped on demand, the dwindle tree (split
+direction, `preserve_split`, `force_split`, split ratio) and the master layout
+(`mfact`, orientations, `new_status`, `new_on_top`) dividing the work area
+inside `gaps_out`, `gaps_in` and borders between windows, floating and
+fullscreen windows, the focus history, and `movefocus` (edge search, angle
+search for floating windows, wrap-around), `movewindow` (dwindle's take-out
+and put-back at the focal point, across monitors too), `workspace` and
+`movetoworkspace`(`silent`) with `N`, `+N` and `e+N`, `killactive`,
+`togglefloating` and `fullscreen`, run from a `Bind`. Every call returns the
+changes it caused. Host-tested; where it departs from Hyprland (no cursor, so
+`force_split` 0 takes the second half; pseudotiling; floating `movewindow`)
+its crate docs say so.
+
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
-customer's order of 2026-09-16); then the layout and dispatcher core, the
-protocol server, the seat, the IPC, the clients.
+customer's order of 2026-09-16); then the protocol server, the seat, the
+IPC, the clients.
 
 **Exit:** in a test of its own on x86-64 and AArch64, the compositor starts
 from a `hyprland.conf`, `exec-once` launches two pattern clients, they tile
