@@ -25,7 +25,7 @@ These add to `docs/CONVENTIONS.md`, which still governs commits.
 | Only `ferrousli/` | `cargo xtask check --ferrousli`, then `cargo xtask busybox` and, with the busybox it built, `test-shell` and `test-vfs` on x86_64 with `--init ferrousli`, so the binary the gates run never lags the library |
 | Only `zinc/` | `cargo xtask check --fast --zinc`: zinc's formatting, clippy, unit tests and the pty completion test (`zinc/tests/pty_completion.py`); a change to what zinc does at boot also runs `test-boot` on x86_64 |
 | `libs/` only, and no crate the kernel builds | `cargo xtask check`, and one boot: `test-boot --arch armv7a --smp 2` |
-| Anything the image contains: `kernel/`, `boot/`, a kernel-side crate in `libs/`, `xtask` | `cargo xtask check`, then `test-boot` on x86_64, aarch64, armv7a at four processors and armv7a at `--smp 2`; a stage 7 or 8 change also runs `test-shell` on x86_64 with the ferrousli busybox (`--init ferrousli`), the musl busybox *and* the host's glibc busybox (`/usr/bin/busybox`), and `test-vfs` on x86_64 with the ferrousli busybox and the musl one. The whole of that, plus KVM, is what moves `main` |
+| Anything the image contains: `kernel/`, `boot/`, a kernel-side crate in `libs/`, `xtask` | `cargo xtask check`, then `test-boot` on x86_64, aarch64, armv7a at four processors and armv7a at `--smp 2`; a stage 7 or 8 change also runs `test-shell` on x86_64 with the ferrousli busybox (`--init ferrousli`), the musl busybox *and* the host's glibc busybox (`/usr/bin/busybox`), and `test-vfs` on x86_64 with the ferrousli busybox and the musl one; a stage 7 change also runs `test-threads --arch all`, the Rust `std::thread` program (since 5fd2ab09). The whole of that, plus KVM, is what moves `main` |
 | User mode, page tables, TLB, SMP or the scheduler | The row above, and x86_64 under `--accel kvm` |
 
 Then fast-forward `develop` only if it is still the commit rebased onto.
@@ -49,7 +49,8 @@ merge is seen by the one who made it.
 moves only by the product owner, fast-forward, to a `develop` commit that has
 passed the whole matrix from a clean worktree on the product owner's own run:
 the four boots, x86_64 under KVM, `test-shell` with the ferrousli, the musl
-and the glibc busybox, and `test-vfs` with the ferrousli and the musl busybox;
+and the glibc busybox, `test-vfs` with the ferrousli and the musl busybox, and
+`test-threads --arch all`;
 at least every two hours while `develop` moves. So
 `main` is always a working tree by construction, and a failure the customer
 finds on it is fixed forward on `develop` and re-verified before `main`
@@ -90,7 +91,13 @@ session sets `CARGO_TARGET_DIR=~/.local/share/ferrix/target-<session>` for all
 its worktrees on nazuna and never lets a worktree grow its own `target/`; a
 worktree is removed the moment its landing is in. The root filesystem filled
 twice in one day from per-worktree build output (16 GB each) while the host
-held 24 GB for every session together.
+held 24 GB for every session together. One target directory serves one tree at a time: a second tree built
+concurrently by the same session gets `target-<session>-2`, because Cargo
+names a workspace member's artifacts without its path and two trees at
+different commits clobber each other. After moving `main` here, push it to
+the host as well — `git push nazuna-wg:Documents/projects/os/ferrix
+main:main`, whose checkout updates in place — so no worktree there is ever
+made from a stale `main`.
 
 **Nobody works in the root checkout, and landings are small and often
 (customer, 2026-09-16).** The root checkout keeps `main` checked out and
