@@ -195,6 +195,24 @@ impl Canvas {
     /// [`Format::Xrgb8888`]. Where the surface is smaller than `rect`,
     /// nothing is drawn.
     pub fn composite(&mut self, surface: &Surface<'_>, rect: Rect, damage: &Damage) {
+        self.composite_with(surface, rect, 0, 1.0, damage);
+    }
+
+    /// The same, with Hyprland's two window decorations applied.
+    ///
+    /// `rounding` is `decoration:rounding`: the corners are cut to that
+    /// radius, and `opacity` is `decoration:active_opacity` and its
+    /// relatives, which multiply the surface's alpha as it is drawn. An
+    /// opacity of 1 and a rounding of 0 is [`Canvas::composite`] exactly,
+    /// including its copy for an opaque surface.
+    pub fn composite_with(
+        &mut self,
+        surface: &Surface<'_>,
+        rect: Rect,
+        rounding: i64,
+        opacity: f32,
+        damage: &Damage,
+    ) {
         let area = Rect::new(
             rect.x,
             rect.y,
@@ -204,14 +222,69 @@ impl Canvas {
         if is_empty(area) {
             return;
         }
-        let clips = self.clips(area, damage);
+        let opacity = opacity.clamp(0.0, 1.0);
+        if opacity == 0.0 {
+            return;
+        }
+        let clips = if rounding > 0 {
+            self.rounded_clips(area, rounding, damage)
+        } else {
+            self.clips(area, damage)
+        };
         if clips.is_empty() {
             return;
         }
         match surface.format() {
-            Format::Xrgb8888 => self.copy(surface, rect, &clips),
-            Format::Argb8888 => self.blend(surface, rect, &clips),
+            // The copy is the fast path and the exact one, and it is only
+            // exact at full opacity: anything else has to be blended.
+            Format::Xrgb8888 if opacity >= 1.0 => self.copy(surface, rect, &clips),
+            _ => self.blend(surface, rect, opacity, &clips),
         }
+    }
+
+    /// The parts of `rect` inside `damage` and the canvas, with its corners
+    /// cut to `radius`.
+    ///
+    /// A row at a time: the two rows of corners each become one span, and
+    /// everything between them is a single rectangle. Anti-aliasing is off
+    /// here as everywhere else in this crate, so a pixel is in or out, and a
+    /// row's inset is the circle's at that row's centre, rounded to the
+    /// nearest pixel.
+    fn rounded_clips(&self, rect: Rect, radius: i64, damage: &Damage) -> Vec<Rect> {
+        let radius = radius.min(rect.width / 2).min(rect.height / 2).max(0);
+        if radius == 0 {
+            return self.clips(rect, damage);
+        }
+        let mut spans = Vec::with_capacity((radius * 2 + 1) as usize);
+        for row in 0..radius {
+            let inset = corner_inset(radius, row);
+            let width = rect.width.saturating_sub(inset.saturating_mul(2));
+            if width <= 0 {
+                continue;
+            }
+            spans.push(Rect::new(rect.x + inset, rect.y + row, width, 1));
+            spans.push(Rect::new(rect.x + inset, rect.bottom() - row - 1, width, 1));
+        }
+        let middle = rect.height.saturating_sub(radius.saturating_mul(2));
+        if middle > 0 {
+            spans.push(Rect::new(rect.x, rect.y + radius, rect.width, middle));
+        }
+        spans
+            .into_iter()
+            .flat_map(|span| self.clips(span, damage))
+            .collect()
+    }
+
+    /// Fill `rect` with `color` and its corners cut to `radius`: the shape a
+    /// rounded window's border is drawn as, before its surface is put inside
+    /// it.
+    pub fn fill_rounded(&mut self, rect: Rect, radius: i64, color: Color, damage: &Damage) {
+        if color.alpha() == 0 || is_empty(rect) {
+            return;
+        }
+        let clips = self.rounded_clips(rect, radius, damage);
+        let paint = paint(Shader::SolidColor(skia_color(color)), BlendMode::SourceOver);
+        self.fill_clips(&clips, &paint);
     }
 
     /// Copy an `XRGB8888` surface drawn at `rect` into `clips`, making each
@@ -245,11 +318,29 @@ impl Canvas {
     /// `clips`, through tiny-skia's pattern shader with nearest sampling at
     /// a whole-pixel offset, so each canvas pixel takes exactly one surface
     /// pixel.
-    fn blend(&mut self, surface: &Surface<'_>, rect: Rect, clips: &[Rect]) {
+    fn blend(&mut self, surface: &Surface<'_>, rect: Rect, opacity: f32, clips: &[Rect]) {
         // `wl_shm`'s bytes are blue, green, red, alpha: canvas order. A
         // padded buffer is gathered into tight rows first.
         let gathered: Vec<u8>;
-        let bytes = if let Some(tight) = surface.tight() {
+        let bytes = if surface.format() == Format::Xrgb8888 {
+            // An opaque surface's fourth byte is the X byte, which a client
+            // leaves at whatever it likes; read as alpha it would make the
+            // window blotchy. It is forced to `0xFF` so the shader sees the
+            // opaque pixels the format promises.
+            gathered = (0..surface.height())
+                .filter_map(|y| surface.row(y))
+                .flat_map(|row| row.chunks(4))
+                .flat_map(|pixel| {
+                    [
+                        pixel.first().copied().unwrap_or(0),
+                        pixel.get(1).copied().unwrap_or(0),
+                        pixel.get(2).copied().unwrap_or(0),
+                        0xFF,
+                    ]
+                })
+                .collect();
+            &gathered
+        } else if let Some(tight) = surface.tight() {
             tight
         } else {
             gathered = (0..surface.height())
@@ -266,7 +357,7 @@ impl Canvas {
             pixmap,
             SpreadMode::Pad,
             FilterQuality::Nearest,
-            1.0,
+            opacity,
             tiny_skia::Transform::from_translate(rect.x as f32, rect.y as f32),
         );
         let paint = paint(shader, BlendMode::SourceOver);
@@ -317,4 +408,27 @@ fn copy_opaque(dst: &mut [u8], src: &[u8]) {
             (*b, *g, *r, *x) = (*sb, *sg, *sr, 0xFF);
         }
     }
+}
+
+/// How far a rounded corner's row is inset from the rectangle's edge.
+///
+/// `row` counts from the corner's own edge, so row 0 is the outermost and
+/// `radius - 1` the innermost. The inset is the circle's at that row's
+/// centre -- `radius - sqrt(radius² - dy²)` with `dy` the distance from the
+/// circle's centre to the row's middle -- rounded to the nearest pixel,
+/// because coverage here is all or nothing.
+fn corner_inset(radius: i64, row: i64) -> i64 {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a radius is a few dozen pixels; the loss is beyond any of them"
+    )]
+    let (radius_f, row_f) = (radius as f64, row as f64);
+    let dy = radius_f - row_f - 0.5;
+    let dx = (radius_f * radius_f - dy * dy).max(0.0).sqrt();
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the value is between zero and the radius, which is an i64 already"
+    )]
+    let inset = (radius_f - dx).round() as i64;
+    inset.clamp(0, radius)
 }

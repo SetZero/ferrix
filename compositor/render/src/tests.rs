@@ -213,6 +213,110 @@ fn a_bar_takes_its_strip_and_the_windows_tile_under_it() {
     );
 }
 
+/// The same two clients with Hyprland's two decorations on: corners cut to
+/// `decoration:rounding` and the unfocused window at
+/// `decoration:inactive_opacity`.
+fn decorated_frame() -> Vec<u8> {
+    let (_, layout) = two_clients();
+    let buffers = client_buffers(&layout);
+    let config = parse(
+        "test",
+        "decoration:rounding = 12\ndecoration:inactive_opacity = 0.6\n",
+        &mut NoSources,
+    )
+    .config;
+    let style = Style::from_config(&config);
+    assert_eq!(style.rounding, 12);
+    assert!((style.inactive_opacity - 0.6).abs() < 0.001);
+    assert!((style.active_opacity - 1.0).abs() < f32::EPSILON);
+
+    let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+    let full = Damage::full(WIDTH, HEIGHT);
+    let _ = render(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        &style,
+        &surfaces(&buffers),
+        &full,
+    );
+    canvas.data().to_vec()
+}
+
+#[test]
+fn rounding_and_opacity_make_a_different_picture() {
+    let frame = decorated_frame();
+    golden::check("decorated-two-clients", WIDTH, HEIGHT, &frame);
+
+    // The corner of the focused window: outside the rounding it is the
+    // background, inside it the border. With no rounding both are border.
+    let plain = two_client_frame();
+    let differing = frame
+        .chunks(4)
+        .zip(plain.chunks(4))
+        .filter(|(one, other)| one != other)
+        .count();
+    assert!(differing > 0, "the decorations changed nothing");
+}
+
+/// A rounded window's very corner is not the window: the rounding cut it
+/// away, and what shows there is whatever is behind. Along the same edge,
+/// away from the corner, the border is drawn as it always was.
+#[test]
+fn a_rounded_corner_shows_what_is_behind_it() {
+    let (_, layout) = two_clients();
+    // The focused window, so the border on its edge is the active colour.
+    let placed = layout
+        .windows
+        .iter()
+        .find(|placed| placed.focused)
+        .copied()
+        .unwrap();
+    let border = placed.border.max(0);
+    let outer_x = (placed.rect.x - border) as u32;
+    let outer_y = (placed.rect.y - border) as u32;
+    let middle = outer_x + (placed.rect.width / 2) as u32;
+
+    let bytes = decorated_frame();
+    let at = |x: u32, y: u32| -> u32 {
+        let start = ((y * WIDTH + x) * 4) as usize;
+        u32::from_le_bytes([
+            bytes[start],
+            bytes[start + 1],
+            bytes[start + 2],
+            bytes[start + 3],
+        ])
+    };
+    let background = shown(Style::default().background.0 & 0x00FF_FFFF);
+    assert_eq!(at(outer_x, outer_y), background, "the corner was not cut");
+    assert_eq!(
+        at(outer_x, outer_y + 1),
+        background,
+        "the row below the corner was not cut either"
+    );
+    // The same edge, away from the corner: the border, one pixel of it,
+    // which is `general:border_size`'s default.
+    assert_eq!(
+        at(middle, outer_y),
+        shown(0x00FF_FFFF),
+        "the border is not on the edge"
+    );
+
+    // With no rounding the corner is the border, which is what makes the
+    // check above worth having.
+    let square = two_client_frame();
+    let start = ((outer_y * WIDTH + outer_x) * 4) as usize;
+    assert_eq!(
+        u32::from_le_bytes([
+            square[start],
+            square[start + 1],
+            square[start + 2],
+            square[start + 3],
+        ]),
+        shown(0x00FF_FFFF)
+    );
+}
+
 #[test]
 fn two_pattern_clients_tiled_by_dwindle_match_the_expected_image() {
     golden::check("dwindle-two-clients", WIDTH, HEIGHT, &two_client_frame());

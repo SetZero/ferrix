@@ -4158,6 +4158,18 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Begun — rounded corners and opacity (2026-09-17).** `decoration:rounding`
+cuts a window's corners and the border follows them, at the window's rounding
+plus the border's width as Hyprland draws it; `decoration:active_opacity`,
+`inactive_opacity` and `fullscreen_opacity` multiply the surface's alpha as
+it is drawn. Anti-aliasing stays off, as everywhere in this renderer: a row's
+inset is the circle's at that row's centre rounded to the nearest pixel, so
+coverage is all or nothing and every frame is exact. `cargo xtask
+test-compositor` boots a third time with both set and requires the picture
+`compositor/render`'s own tests bless, and a test pins what a rounded corner
+must show: the compositor's background where the corner was cut, and the
+border along the same edge away from it.
+
 Those are shaders. This stage brings the GPU: virtio-gpu's 3D commands
 through a render node (`/dev/dri/renderD128`), `zwp_linux_dmabuf`, GBM-shaped
 buffer allocation, and either Mesa's virgl and Venus drivers built on

@@ -8,8 +8,8 @@ use compositor_layout::{MonitorLayout, Placed, WindowId};
 
 use crate::{Canvas, Color, Damage, Rect, Surface};
 
-/// The colours a frame is drawn in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The colours a frame is drawn in, and the decorations it is drawn with.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Style {
     /// What shows where no window is: Hyprland's `misc:background_color`,
     /// which `compositor/config` does not read yet, at its default.
@@ -20,6 +20,17 @@ pub struct Style {
     /// Every other window's border: the first colour of
     /// `general:col.inactive_border`.
     pub inactive_border: Color,
+    /// `decoration:rounding`: how far a window's corners are cut, in pixels.
+    /// Zero is a square window, which is Hyprland's default.
+    pub rounding: i64,
+    /// `decoration:active_opacity`: how much of the focused window shows.
+    pub active_opacity: f32,
+    /// `decoration:inactive_opacity`: the same for every other window.
+    pub inactive_opacity: f32,
+    /// `decoration:fullscreen_opacity`: the same for a fullscreen one, which
+    /// Hyprland keeps apart because a translucent fullscreen window shows
+    /// the background and nothing else.
+    pub fullscreen_opacity: f32,
 }
 
 impl Style {
@@ -36,10 +47,34 @@ impl Style {
                 .and_then(|gradient| gradient.colors.first().copied())
                 .unwrap_or(Color(default))
         };
+        let opacity = |name: &str| {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "an opacity is between zero and one; `f32` holds it"
+            )]
+            let value = config.float(name).unwrap_or(1.0) as f32;
+            value.clamp(0.0, 1.0)
+        };
         Self {
             background: Self::BACKGROUND,
             active_border: first("general:col.active_border", 0xFFFF_FFFF),
             inactive_border: first("general:col.inactive_border", 0xFF44_4444),
+            rounding: config.int("decoration:rounding").unwrap_or(0).max(0),
+            active_opacity: opacity("decoration:active_opacity"),
+            inactive_opacity: opacity("decoration:inactive_opacity"),
+            fullscreen_opacity: opacity("decoration:fullscreen_opacity"),
+        }
+    }
+
+    /// How much of a window shows, by what it is.
+    #[must_use]
+    pub const fn opacity(&self, focused: bool, fullscreen: bool) -> f32 {
+        if fullscreen {
+            self.fullscreen_opacity
+        } else if focused {
+            self.active_opacity
+        } else {
+            self.inactive_opacity
         }
     }
 }
@@ -49,6 +84,8 @@ impl Default for Style {
         Self::from_config(&Config::default())
     }
 }
+
+impl Eq for Style {}
 
 /// A window's client rectangle with its border around it, in the layout's
 /// global coordinates.
@@ -127,9 +164,37 @@ pub fn render_with_layers(
         } else {
             style.inactive_border
         };
-        canvas.border(rect, placed.border, color, damage);
+        // A rounded window's border follows its corners, so it cannot be
+        // four strips: Hyprland draws the outer rounding as the window's
+        // plus the border's width, and the surface goes inside it. A square
+        // window keeps the four strips, which blend a translucent border
+        // once at the corners.
+        if style.rounding > 0 {
+            let outer = Rect::new(
+                rect.x.saturating_sub(placed.border.max(0)),
+                rect.y.saturating_sub(placed.border.max(0)),
+                rect.width
+                    .saturating_add(placed.border.max(0).saturating_mul(2)),
+                rect.height
+                    .saturating_add(placed.border.max(0).saturating_mul(2)),
+            );
+            canvas.fill_rounded(
+                outer,
+                style.rounding.saturating_add(placed.border.max(0)),
+                color,
+                damage,
+            );
+        } else {
+            canvas.border(rect, placed.border, color, damage);
+        }
         if let Some(surface) = surfaces.get(&placed.window) {
-            canvas.composite(surface, rect, damage);
+            canvas.composite_with(
+                surface,
+                rect,
+                style.rounding,
+                style.opacity(placed.focused, placed.fullscreen),
+                damage,
+            );
         }
     }
     for layer in layers.iter().filter(|layer| layer.above) {

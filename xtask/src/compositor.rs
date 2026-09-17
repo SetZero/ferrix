@@ -103,6 +103,23 @@ const BAR_EXPECTED: (&str, &str) = (
     "compositor/render/tests/data/layer-bar-two-clients.xrle",
 );
 
+/// The picture Hyprland's two window decorations make, which the third boot
+/// requires.
+const DECORATED_EXPECTED: (&str, &str) = (
+    "corners cut and the unfocused window see-through",
+    "compositor/render/tests/data/decorated-two-clients.xrle",
+);
+
+/// The configuration the third boot is given: the same two windows, with
+/// `decoration:rounding` and `decoration:inactive_opacity` set.
+const DECORATED_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+decoration:rounding = 12
+decoration:inactive_opacity = 0.6
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+";
+
 /// The configuration the second boot is given: a bar through
 /// `zwlr_layer_shell_v1`, and the same two windows.
 ///
@@ -467,30 +484,33 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
              and every window"
         );
 
-        // A second boot: a bar through `zwlr_layer_shell_v1`, and the
-        // windows tiling in what its exclusive zone leaves. Without this
-        // protocol a Hyprland setup does not start at all, and a compositor
-        // that places a bar badly puts the windows over it.
-        let (screens, _) = boot_and_dump(
-            arch,
-            &program,
-            &client,
-            &ctl,
-            BAR_CONFIG,
-            &[BAR_EXPECTED],
-            &[],
-            args,
-        )?;
-        let Some(screen) = screens.first() else {
-            return Err(Error::new(format!(
-                "{arch}: the bar boot took no screendump"
-            )));
-        };
-        println!(
-            "  {arch}: a bar reserved its strip and the windows tiled under it, every one of {} \
-             pixels",
-            screen.width * screen.height
-        );
+        // Two more boots, each with a configuration of its own: a bar
+        // through `zwlr_layer_shell_v1`, and Hyprland's two window
+        // decorations. Each is a boot rather than another picture in the
+        // first, because both change every picture and the three states
+        // above are the stage's exit criterion.
+        for (what, config, wanted) in [
+            (
+                "a bar reserved its strip and the windows tiled under it",
+                BAR_CONFIG,
+                BAR_EXPECTED,
+            ),
+            (
+                "rounded corners and a see-through window",
+                DECORATED_CONFIG,
+                DECORATED_EXPECTED,
+            ),
+        ] {
+            let (screens, _) =
+                boot_and_dump(arch, &program, &client, &ctl, config, &[wanted], &[], args)?;
+            let Some(screen) = screens.first() else {
+                return Err(Error::new(format!("{arch}: {what}: no screendump")));
+            };
+            println!(
+                "  {arch}: {what}, every one of {} pixels",
+                screen.width * screen.height
+            );
+        }
     }
     Ok(())
 }
