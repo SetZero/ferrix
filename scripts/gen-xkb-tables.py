@@ -266,28 +266,32 @@ def formatted(text, beside=None):
     rustfmt would otherwise fail to resolve: it follows them, so the index
     module has to be formatted where its children are.
     """
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".rs", dir=beside, delete=False
-    ) as handle:
-        handle.write(text)
-        handle.flush()
+    # The file is written and closed before rustfmt is handed its name, and
+    # closed before it is deleted. Windows refuses to unlink a file that is
+    # still open, so doing either inside the `with` fails there with
+    # `WinError 32` and the generator cannot be run on that host at all --
+    # which is where `cargo xtask check`'s xkb step was failing.
+    handle = tempfile.NamedTemporaryFile(
+        "w", suffix=".rs", dir=beside, delete=False, encoding="utf-8", newline="\n"
+    )
+    written = pathlib.Path(handle.name)
+    try:
+        with handle:
+            handle.write(text)
         result = subprocess.run(
-            ["rustfmt", "--edition", "2024", "--emit", "files", handle.name],
+            ["rustfmt", "--edition", "2024", "--emit", "files", str(written)],
             capture_output=True,
             text=True,
             check=False,
         )
-        formatted_text = None
-        try:
-            if result.returncode != 0:
-                raise SystemExit(f"rustfmt refused the generated code:\n{result.stderr}")
-            formatted_text = pathlib.Path(handle.name).read_text(encoding="utf-8")
-        finally:
-            # `beside` is the generated directory itself, and a temporary
-            # file left there is a module the crate would try to compile.
-            pathlib.Path(handle.name).unlink(missing_ok=True)
-            pathlib.Path(handle.name).with_suffix(".rs.bk").unlink(missing_ok=True)
-        return formatted_text
+        if result.returncode != 0:
+            raise SystemExit(f"rustfmt refused the generated code:\n{result.stderr}")
+        return written.read_text(encoding="utf-8")
+    finally:
+        # `beside` is the generated directory itself, and a temporary file
+        # left there is a module the crate would try to compile.
+        written.unlink(missing_ok=True)
+        written.with_suffix(".rs.bk").unlink(missing_ok=True)
 
 
 def main():
