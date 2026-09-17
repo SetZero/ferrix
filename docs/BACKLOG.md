@@ -25,7 +25,7 @@ These add to `docs/CONVENTIONS.md`, which still governs commits.
 | Only `ferrousli/` | `cargo xtask check --ferrousli`, then `cargo xtask busybox` and, with the busybox it built, `test-shell` and `test-vfs` on x86_64 with `--init ferrousli`, so the binary the gates run never lags the library; then `cargo xtask uutils`, which links uutils/coreutils against it and is the larger consumer of the two, since it brings Rust's whole `std` with it; a change to `ferrousli/tools/ports/` also runs `cargo xtask ports` and `test-net --arch x86_64 --init ferrousli`, which fetches with the curl it built |
 | Only `zinc/` | `cargo xtask check --fast --zinc`: zinc's formatting, clippy, unit tests and the pty completion test (`zinc/tests/pty_completion.py`); a change to what zinc does at boot also runs `test-boot` on x86_64 |
 | `libs/` only, and no crate the kernel builds | `cargo xtask check`, and one boot: `test-boot --arch armv7a --smp 2` |
-| Anything the image contains: `kernel/`, `boot/`, a kernel-side crate in `libs/`, `xtask` | `cargo xtask check`, then `cargo xtask build --arch all --release`, since CI builds and boots the release profile and no other gate does, then `test-boot` on x86_64, aarch64, armv7a at four processors and armv7a at `--smp 2`; a stage 7 or 8 change also runs `test-shell` on x86_64 with the ferrousli busybox (`--init ferrousli`), the musl busybox *and* the host's glibc busybox (`/usr/bin/busybox`), and `test-vfs` on x86_64 with the ferrousli busybox and the musl one; a stage 7 change also runs `test-threads --arch all`, the Rust `std::thread` program (since 5fd2ab09). The whole of that, plus KVM, is what moves `main` |
+| Anything the image contains: `kernel/`, `boot/`, a kernel-side crate in `libs/`, `xtask` | `cargo xtask check`, then `cargo xtask build --arch all --release`, since CI builds and boots the release profile and no other gate does, then `test-boot` on x86_64, aarch64, armv7a at four processors and armv7a at `--smp 2`; a stage 7 or 8 change also runs `test-shell` on x86_64 with no `--init`, which runs zinc, the image's shell, and then with the ferrousli busybox (`--init ferrousli`), the musl busybox *and* the host's glibc busybox (`/usr/bin/busybox`), and `test-vfs` on x86_64 with the ferrousli busybox and the musl one; a stage 7 change also runs `test-threads --arch all`, the Rust `std::thread` program (since 5fd2ab09). The whole of that, plus KVM, is what moves `main` |
 | User mode, page tables, TLB, SMP or the scheduler | The row above, and x86_64 under `--accel kvm` |
 
 Then fast-forward `develop` only if it is still the commit rebased onto.
@@ -295,6 +295,20 @@ nobody has it yet.
   panic path.
 
 ---
+
+## `splice` and `copy_file_range` are answered `ENOSYS`, and uutils asks
+
+uutils/coreutils reaches for both before falling back: `cat` and `cp` take a
+kernel-side copy where there is one. Every `test-vfs` boot since uutils owned
+`/bin` reports them, four to six times a run, as `syscall number 275` and
+`number 326` in no table. Nothing fails — the fallbacks are correct — but the
+lines are noise in every log, and a copy through user space is the slow path
+for exactly the programs a userland uses most.
+
+busybox never asked for either, which is the point: `std` and the crates
+above it are a much larger consumer of the kernel than busybox was, and what
+they need shows up at run time. 3 points, and the control is the absence of
+those two lines from a `test-vfs` log.
 
 ## `su` failed under the musl busybox, and `AF_UNIX` names fixed it
 

@@ -163,6 +163,40 @@ So D3 stands as the product owner set it: one build, against ferrousli, no
 musl C library anywhere. Only the *triple* changed, and with it the reason for
 the triple, which is now written down where it is used.
 
+## 3b. What S4 found
+
+**zinc's output is busybox's, to the byte.** Of the eighteen `sh -c` scripts
+in `test-vfs`, seventeen passed unchanged when `/bin/sh` became zinc, and
+`test-shell`'s transcript did not move at all. The one that changed was the
+permissions row, and what changed there were five *utilities'* messages, not
+the shell's. `test-vfs` now carries two rows of its own that say which shell
+`/bin/sh` is — `$ZSH_VERSION` from inside it and `readlink /bin/sh` from
+outside — because nothing else in the file would have noticed if it quietly
+went back.
+
+**uutils says what GNU says, and that is a real difference, not only
+wording.** Three examples from the one row that moved:
+
+| busybox | uutils |
+|---|---|
+| `rm: can't remove 'X': Operation not permitted` | `rm: cannot remove 'X': Permission denied` |
+| `chmod: X: Operation not permitted` | `chmod: Operation not permitted (os error 1)` |
+| `hostname: sethostname: Operation not permitted` | `hostname: failed to set hostname: Permission denied` |
+
+The first is not a rewording: the kernel refuses that removal with `EPERM`,
+because `/tmp` is sticky and the file is another user's, and busybox said so.
+uutils says "Permission denied", which is `EACCES`. The second and third name
+no file at all, and the second reads as a Rust error rather than a C one.
+They are recorded as they are rather than tidied behind a `*`, so that the
+day they improve, the gate says so.
+
+**uutils asks the kernel for calls busybox never did.** `splice` (275) and
+`copy_file_range` (326) are both answered `ENOSYS`, and uutils falls back and
+gets the right answer — `cat` and `cp` reach for them first. This is §7's
+prediction arriving on schedule: `std` is a much larger consumer than busybox
+was, and what it needs shows up at run time rather than at link time.
+`docs/BACKLOG.md` has the row.
+
 ## 4. Where each part of the userland comes from
 
 | Source | Pinned at | Gives |
@@ -209,19 +243,23 @@ its table row in `docs/BACKLOG.md` names.
 | S1 | **Done.** ferrousli gained the 17: `posix_spawn` and its eight, `pthread_atfork`, `splice`, `lutimes`, `__res_init`, `gnu_get_libc_version`, three `_chk` functions, the two versioned `termios` names, `dlsym` and the rest of `dlfcn.h`, `_dl_find_object`, and a weak `rust_eh_personality`. `execvpe` and `errno::get` came with `posix_spawn`, and the `.init_array` constructors now get `argc`, `argv` and `envp` as glibc and musl pass them | 8 | `check --ferrousli` passes; uutils links with 0 undefined symbols |
 | S2 | **Done.** `ferrousli/tools/uutils/` (`sources.sh`, `build.sh`, `build-windows.sh`) and `cargo xtask uutils`. What it shares with busybox moved to `xtask/src/ferrousli.rs`, which is what stays when S8 deletes `busybox.rs`. The staleness rule is written and unused until S3 calls it | 5 | builds on Linux and on Windows; the Windows-built binary runs on Linux |
 | S3 | **Done.** Every image that carries a program carries `/bin/coreutils`, with each of the 106 utility names linked in `/usr/bin` — not `/bin`, which stays busybox's, so no gate runs a different program than it did. Three `test-vfs` rows, reported as a group of their own, run uutils on Ferrix for the first time | 3 | the three rows pass on Ferrix: the multicall form, the symlink dispatch, and a file read |
-| S4 | **`/bin/sh` is zinc, in one landing**: the kernel (which hardcodes `/bin/busybox` and `sh -i` in `init.rs`), `test-shell`'s transcript, and `test-vfs`'s 18 `sh -c` scripts, all re-recorded together. It cannot be split — between any two of those landings `main` is red | 13 | the whole matrix: a kernel change, so the release build and the four boots |
-| S5 | *Folded into S4.* The `test-vfs` rows break the moment the shell changes, so they are re-recorded in the same landing | — | — |
+| S4 | **Done, and it did split.** Three commits, each green: init resolves a command's program through `/bin` instead of always running busybox; `/bin/sh` is zinc; the hundred names uutils provides are uutils'. busybox keeps what neither has | 13 → **6** | the whole matrix; `test-vfs` gained a group that says which shell `/bin/sh` is |
+| S5 | *Folded into S4, and nearly free.* One row of eighteen needed re-recording | — | — |
 | S6 | findutils, diffutils, procps and util-linux built and installed the same way | 5 | `test-vfs`'s rows that need them |
 | S7 | `git` as a ferrousli port, beside `curl` and `btop` | 8 | it clones and commits on Ferrix |
 | S8 | busybox deleted: `tools/busybox/`, `xtask/src/busybox.rs`, the UAPI headers, ferrousli's three `<linux/*>` pass-throughs, the applet list | 3 | the whole matrix, once §5 is empty |
 
-S1, S2 and S3 have landed and §3a is settled. What is left is **S4, the
-one that matters**: it is the landing that makes uutils and zinc the
-userland rather than passengers in the image, and it is 13 points in one
-piece. S6 and S7 can go in parallel with it. S8 is blocked on §5 and is not
-scheduled.
+S1 to S5 have landed. uutils and zinc **are** the userland now, not
+passengers in the image. What is left is S6 (the rest of the family), S7
+(`git`), and S8, which is blocked on §5 and is not scheduled.
 
-**23 points left of S4-S7.**
+**13 points left of S6-S7.**
+
+S4 was quoted at 13 and cost about 6, for one reason worth writing down: I
+said it could not be split, and it split into three. The claim that held
+was the narrow one — a flip and its re-recording belong in one commit —
+and I read it as the whole of S4. Flipping the shell and flipping the
+utilities are two flips, each self-consistent.
 
 **Total, S1–S7: 42 points**, of which S1, S2 and S3 are done. S8 is 3 more, whenever §5 empties.
 

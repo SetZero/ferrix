@@ -32,6 +32,7 @@ pub(crate) mod sha2;
 
 use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_int};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::string::strlen;
 
@@ -246,6 +247,63 @@ pub unsafe extern "C" fn crypt_r(
     let out = unsafe { core::slice::from_raw_parts_mut(buffer.cast::<u8>(), 256) };
     // SAFETY: the caller promises NUL-terminated strings.
     unsafe { hash_into(key, setting, out) }
+}
+
+/// The raw 64 key bits installed by `setkey`. This interface is explicitly not
+/// required to be thread-safe, but an atomic keeps concurrent C calls from
+/// creating a Rust data race.
+static BLOCK_KEY: AtomicU64 = AtomicU64::new(0);
+
+/// Packs 64 bytes whose low bits represent a DES bit string, most-significant
+/// bit first, into a machine value.
+///
+/// # Safety
+///
+/// `bits` must point to an array of at least 64 bytes.
+unsafe fn pack_bits(bits: *const c_char) -> u64 {
+    let mut value = 0_u64;
+    for index in 0..64 {
+        // SAFETY: the caller promises 64 readable bytes.
+        let bit = unsafe { bits.wrapping_add(index).read() }.cast_unsigned() & 1;
+        value = (value << 1) | u64::from(bit);
+    }
+    value
+}
+
+/// Installs the 64-bit DES key represented as 64 bytes containing bit values.
+///
+/// # Safety
+///
+/// `key` must point to an array of at least 64 bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn setkey(key: *const c_char) {
+    // SAFETY: the caller provides the array described by this function.
+    BLOCK_KEY.store(unsafe { pack_bits(key) }, Ordering::Relaxed);
+}
+
+/// Encrypts or decrypts a 64-byte DES bit array in place under the key most
+/// recently passed to [`setkey`]. A zero `direction` encrypts; nonzero
+/// decrypts.
+///
+/// # Safety
+///
+/// `block` must point to an array of at least 64 writable bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn encrypt(block: *mut c_char, direction: c_int) {
+    // SAFETY: the caller promises a readable 64-byte array.
+    let input = unsafe { pack_bits(block) }.to_be_bytes();
+    let key = BLOCK_KEY.load(Ordering::Relaxed).to_be_bytes();
+    let mut expanded = des::expand_key(&key);
+    if direction != 0 {
+        expanded = expanded.reversed();
+    }
+    let output = des::cipher(&input, &expanded);
+    let value = u64::from_be_bytes(output);
+    for index in 0..64 {
+        let bit = ((value >> (63 - index)) & 1) as c_char;
+        // SAFETY: the caller promises 64 writable bytes.
+        unsafe { block.wrapping_add(index).write(bit) };
+    }
 }
 
 #[cfg(test)]

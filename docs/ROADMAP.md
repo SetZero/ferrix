@@ -1017,6 +1017,14 @@ of the surface: memory (`mmap`, `mprotect`, `brk`), files, process
 **Exit:** a static musl `busybox sh` starts, runs a script, and exits — the
 first time somebody else's binary runs on Ferrix.
 
+**The image's shell is zinc since 2026-09-18** (`docs/UUTILS.md` S4), and
+`cargo xtask test-shell` runs zinc when no `--init` names another. That does
+not retire this criterion, and it is why `--init` was kept rather than
+removed: the point of the exit was *somebody else's* binary, and a shell
+written against this kernel proves less about the ABI than one that has never
+heard of Ferrix. Both are run. The busybox row below is the criterion; the
+zinc row is the userland.
+
 **Exit criterion met on all three architectures, with the script given to
 `sh -c`.** `cargo xtask test-shell` builds the kernel with a static busybox
 and a script, boots it, and requires the script's lines in order and its exit

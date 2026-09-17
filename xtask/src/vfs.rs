@@ -293,19 +293,29 @@ pub(crate) const APPLETS: &[Command] = &[
         status: 9,
         expect: Expect::Shaped(&[
             "uid=1000(ferrix) gid=1000(ferrix)*",
-            "cat: can't open '/tmp/dac-private': Permission denied",
+            "cat: /tmp/dac-private: Permission denied",
             "owned by 1000 1000",
-            "rm: can't remove '/tmp/dac-private': Operation not permitted",
-            "chmod: /tmp/dac-private: Operation not permitted",
-            "ls: can't open '/tmp/dac-closed': Permission denied",
+            // The errno differs from the one busybox reported here, not only
+            // the wording: the kernel refuses this with `EPERM`, because
+            // `/tmp` is sticky and the file is not this user's, and busybox
+            // said so. uutils says "Permission denied". What the row is for
+            // holds either way -- the removal was refused -- and the errno
+            // the kernel returns is checked where it is decided, in
+            // `kernel/src/fs`.
+            "rm: cannot remove '/tmp/dac-private': Permission denied",
+            // Two of uutils' messages name no file, and read as a Rust error
+            // rather than a C one. Recorded as they are rather than tidied
+            // with a `*`, so that the day they improve, this says so.
+            "chmod: Operation not permitted (os error 1)",
+            "ls: cannot open directory '/tmp/dac-closed': Permission denied",
             "*permission denied: /tmp/dac-noexec",
             "proc self owned by 1000 1000",
             "listed its own descriptors",
             "Uid:*1000*1000*1000*1000",
             "set-user-id gives uid 1000 euid 0",
-            "hostname: *Operation not permitted",
+            "hostname: failed to set hostname: Permission denied",
             "*kill 1 failed: operation not permitted",
-            "mknod: *Operation not permitted",
+            "mknod: Operation not permitted (os error 1)",
             "login shell *zsh in /home/ferrix as 1000",
             "root still reads: secret",
         ]),
@@ -775,6 +785,33 @@ pub(crate) fn judge(
     }
 }
 
+/// Which shell `/bin/sh` is, reported apart from everything else.
+///
+/// When zinc took `/bin/sh` over from busybox, every other command in this
+/// file passed unchanged: zinc's output for these scripts is busybox's, down
+/// to the byte. That is the result worth having and also the reason for these
+/// two rows -- nothing else here would notice if `/bin/sh` quietly went back
+/// to being busybox's.
+///
+/// `ZSH_VERSION` is set in zsh and in zinc, and in no POSIX shell; `${x:+y}`
+/// gives `y` only when `x` is set, so the line says `zsh` under zinc and
+/// `shell:` alone under anything else. The second row asks the filesystem the
+/// same question from the other end.
+///
+/// Every architecture runs these: zinc is built for all three.
+pub(crate) const SHELL: &[Command] = &[
+    Command {
+        argv: &["sh", "-c", "echo \"shell: ${ZSH_VERSION:+zsh}\"; exit 3"],
+        status: 3,
+        expect: Expect::Lines(&["shell: zsh"]),
+    },
+    Command {
+        argv: &["sh", "-c", "readlink /bin/sh; exit 4"],
+        status: 4,
+        expect: Expect::Lines(&["zinc"]),
+    },
+];
+
 /// uutils/coreutils, run from the same boot as the applets above and reported
 /// apart from them, on the one architecture the image carries it on.
 ///
@@ -783,9 +820,9 @@ pub(crate) fn judge(
 ///
 /// * the multicall binary called by its own name, which picks the utility from
 ///   the second argument;
-/// * the same binary reached through a symlink in `/usr/bin`, which picks it
-///   from `argv[0]` instead -- the dispatch `docs/UUTILS.md` §3a is about, and
-///   the thing that does not work in a static binary on the `-gnu` target;
+/// * the same binary reached through its name in `/bin`, which picks it from
+///   `argv[0]` instead -- the dispatch `docs/UUTILS.md` §3a is about, and the
+///   thing that does not work in a static binary on the `-gnu` target;
 /// * a file read through the btrfs fixture the boot check mounted, by the same
 ///   command an applet above runs, so the two implementations answer the same
 ///   question about the same file.
@@ -801,25 +838,26 @@ pub(crate) const UTILITIES: &[Command] = &[
         expect: Expect::Lines(&["uutils: hello"]),
     },
     Command {
-        argv: &["sh", "-c", "/usr/bin/uname -sm; exit 4"],
+        argv: &["sh", "-c", "uname -sm; exit 4"],
         status: 4,
         expect: Expect::Lines(&["Ferrix x86_64"]),
     },
     Command {
-        argv: &["sh", "-c", "/usr/bin/wc -c < /mnt/big.txt; exit 5"],
+        argv: &["sh", "-c", "wc -c < /mnt/big.txt; exit 5"],
         status: 5,
         expect: Expect::Lines(&["140000"]),
     },
 ];
 
 /// The commands the kernel is built to run on `arch`, in order: the
-/// criterion's three, the applets, and uutils where the image carries it.
+/// criterion's three, the applets, which shell `/bin/sh` is, and uutils where
+/// the image carries it.
 ///
 /// Only x86-64 carries uutils, because ferrousli is built for x86-64 only, so
 /// only x86-64 runs the rows that need it. Every architecture runs everything
 /// that came before.
 pub(crate) fn commands(arch: crate::paths::Arch) -> Vec<Command> {
-    let mut all = [COMMANDS, APPLETS].concat();
+    let mut all = [COMMANDS, APPLETS, SHELL].concat();
     if carries_utilities(arch) {
         all.extend_from_slice(UTILITIES);
     }

@@ -37,7 +37,7 @@ new subsystem. Every area's missing names are in the index at the end.
 
 | Area | Interfaces | Missing | On a branch | Points | What the points buy |
 |---|---|---|---|---|---|
-| Language support and the standard library | 118 | 1 | 0 | 0 | `setkey`, counted with `encrypt`. Landed: `quick_exit` and `at_quick_exit`; `a64l`, `l64a`, `getsubopt`, `secure_getenv` |
+| Language support and the standard library | 118 | 0 | 0 | 0 | landed: `quick_exit` and `at_quick_exit`; `a64l`, `l64a`, `getsubopt`, `secure_getenv`; `setkey`, with `encrypt` below it |
 | Strings and characters | 72 | 0 | 0 | 0 | landed: `strcasecmp_l`, `strncasecmp_l` |
 | Wide and multibyte characters | 118 | 0 | 0 | 0 | landed: the `wscanf` family, `fwscanf` to `wscanf`; `open_wmemstream`; the `wprintf` family, `fwprintf` to `wprintf`; wide-character stream I/O (`fgetwc`, `fgetws`, `fputwc`, `fputws`, `getwc`, `getwchar`, `putwc`, `putwchar`, `ungetwc`, `fwide`); the `wcstol` and `wcstod` families with `wcstoimax` and `wcstoumax`; `wcsftime`, `wcslcpy`, `wcslcat` |
 | Standard I/O | 70 | 0 | 0 | 0 | landed: `tmpnam` |
@@ -45,7 +45,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Complex arithmetic | 69 | 22 | 0 | 2 | the `long double complex` forms, after the rest of `long double` math 2. Landed: every `double complex` and `float complex` function, `creal` and `cimag` among them as functions, bit for bit musl's |
 | Locales, messages and conversion | 32 | 21 | 0 | 13 | the `gettext` family with `.mo` catalogues 5; `iconv` 5; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1. Landed: `catopen`, `catgets`, `catclose` |
 | Files, directories and I/O multiplexing | 46 | 1 | 0 | 1 | `posix_getdents` |
-| Processes, identity and the system | 103 | 8 | 0 | 7 | `confstr` 1; `setresuid`, `setresgid` 1; `nice`, `lockf` 1; `posix_close` 1; `fmtmsg` 1; `encrypt` and `setkey` 2. Landed: `pathconf`, `fpathconf` |
+| Processes, identity and the system | 103 | 6 | 0 | 5 | `confstr` 1; `setresuid`, `setresgid` 1; `nice`, `lockf` 1; `posix_close` 1; `fmtmsg` 1. Landed: `pathconf`, `fpathconf`; `encrypt` and `setkey`, DES through the bit-array interface, checked against FIPS 46-3's own vector |
 | Spawning | 25 | 25 | 0 | 7 | the `posix_spawn` family on `clone(CLONE_VM\|CLONE_VFORK)`, which lets `system` and `popen` stop forking, 5; `_Fork` 1; `fexecve` 1 |
 | Signals and non-local jumps | 28 | 4 | 0 | 2 | `psignal`, `psiginfo` 1; `sig2str`, `str2sig` 1 |
 | Time and clocks | 29 | 3 | 0 | 3 | `getdate` and `getdate_err` 2; `timespec_get` 1 |
@@ -206,8 +206,7 @@ interface.
 | `<inttypes.h>` | present (4) | `imaxabs`, `imaxdiv`, `strtoimax`, `strtoumax` |
 | `<stdarg.h>` | present (4) | `va_arg`, `va_copy`, `va_end`, `va_start` |
 | `<stdatomic.h>` | present (29) | `atomic_compare_exchange_strong`, `atomic_compare_exchange_strong_explicit`, `atomic_compare_exchange_weak`, `atomic_compare_exchange_weak_explicit`, `atomic_exchange`, `atomic_exchange_explicit`, `atomic_fetch_add`, `atomic_fetch_add_explicit`, `atomic_fetch_and`, `atomic_fetch_and_explicit`, `atomic_fetch_or`, `atomic_fetch_or_explicit`, `atomic_fetch_sub`, `atomic_fetch_sub_explicit`, `atomic_fetch_xor`, `atomic_fetch_xor_explicit`, `atomic_flag_clear`, `atomic_flag_clear_explicit`, `atomic_flag_test_and_set`, `atomic_flag_test_and_set_explicit`, `atomic_init`, `atomic_is_lock_free`, `atomic_load`, `atomic_load_explicit`, `atomic_signal_fence`, `atomic_store`, `atomic_store_explicit`, `atomic_thread_fence`, `kill_dependency` |
-| `<stdlib.h>` | present (66) | `_Exit`, `a64l` (XSI), `abort`, `abs`, `aligned_alloc`, `at_quick_exit`, `atexit`, `atof`, `atoi`, `atol`, `atoll`, `bsearch`, `calloc`, `div`, `drand48` (XSI), `erand48` (XSI), `exit`, `free`, `getenv`, `getsubopt`, `initstate` (XSI), `jrand48` (XSI), `l64a` (XSI), `labs`, `lcong48` (XSI), `ldiv`, `llabs`, `lldiv`, `lrand48` (XSI), `malloc`, `mblen`, `mbstowcs`, `mbtowc`, `mkdtemp`, `mkostemp`, `mkstemp`, `mrand48` (XSI), `nrand48` (XSI), `posix_memalign` (ADV), `putenv` (XSI), `qsort`, `qsort_r`, `quick_exit`, `rand`, `random` (XSI), `realloc`, `reallocarray`, `realpath`, `secure_getenv`, `seed48` (XSI), `setenv`, `setstate` (XSI), `srand`, `srand48` (XSI), `srandom` (XSI), `strtod`, `strtof`, `strtol`, `strtold`, `strtoll`, `strtoul`, `strtoull`, `system`, `unsetenv`, `wcstombs`, `wctomb` |
-| `<stdlib.h>` | absent (1) | `setkey` |
+| `<stdlib.h>` | present (67) | `_Exit`, `a64l` (XSI), `abort`, `abs`, `aligned_alloc`, `at_quick_exit`, `atexit`, `atof`, `atoi`, `atol`, `atoll`, `bsearch`, `calloc`, `div`, `drand48` (XSI), `erand48` (XSI), `exit`, `free`, `getenv`, `getsubopt`, `initstate` (XSI), `jrand48` (XSI), `l64a` (XSI), `labs`, `lcong48` (XSI), `ldiv`, `llabs`, `lldiv`, `lrand48` (XSI), `malloc`, `mblen`, `mbstowcs`, `mbtowc`, `mkdtemp`, `mkostemp`, `mkstemp`, `mrand48` (XSI), `nrand48` (XSI), `posix_memalign`, `putenv` (XSI), `qsort`, `qsort_r`, `quick_exit`, `rand`, `random` (XSI), `realloc`, `reallocarray`, `realpath`, `secure_getenv`, `seed48` (XSI), `setenv`, `setkey` (XSI), `setstate` (XSI), `srand`, `srand48` (XSI), `srandom` (XSI), `strtod`, `strtof`, `strtol`, `strtold`, `strtoll`, `strtoul`, `strtoull`, `system`, `unsetenv`, `wcstombs`, `wctomb` |
 
 ### Strings and characters
 
@@ -283,8 +282,8 @@ interface.
 | `<sys/utsname.h>` | present (1) | `uname` |
 | `<sys/wait.h>` | present (3) | `wait`, `waitid`, `waitpid` |
 | `<syslog.h>` | present (4) | `closelog` (XSI), `openlog` (XSI), `setlogmask` (XSI), `syslog` (XSI) |
-| `<unistd.h>` | present (81) | `_exit`, `access`, `alarm`, `chdir`, `chown`, `close`, `crypt` (XSI), `dup`, `dup2`, `dup3`, `environ`, `execl`, `execle`, `execlp`, `execv`, `execve`, `execvp`, `faccessat`, `fchdir`, `fchown`, `fchownat`, `fdatasync` (SIO), `fork`, `fpathconf`, `fsync` (FSC), `ftruncate`, `getcwd`, `getegid`, `getentropy`, `geteuid`, `getgid`, `getgroups`, `gethostid` (XSI), `gethostname`, `getlogin`, `getlogin_r`, `getopt`, `getpgid`, `getpgrp`, `getpid`, `getppid`, `getresgid` (XSI), `getresuid` (XSI), `getsid`, `getuid`, `lchown`, `link`, `linkat`, `lseek`, `optarg`, `opterr`, `optind`, `optopt`, `pathconf`, `pause`, `pipe`, `pipe2`, `pread`, `pwrite`, `read`, `readlink`, `readlinkat`, `rmdir`, `setegid`, `seteuid`, `setgid`, `setpgid`, `setregid` (XSI), `setreuid` (XSI), `setsid`, `setuid`, `sleep`, `swab` (XSI), `symlink`, `symlinkat`, `sync` (XSI), `sysconf`, `truncate`, `unlink`, `unlinkat`, `write` |
-| `<unistd.h>` | absent (7) | `confstr`, `encrypt`, `lockf` (XSI), `nice` (XSI), `posix_close`, `setresgid` (XSI), `setresuid` (XSI) |
+| `<unistd.h>` | present (82) | `_exit`, `access`, `alarm`, `chdir`, `chown`, `close`, `crypt` (XSI), `dup`, `dup2`, `dup3`, `encrypt` (XSI), `environ`, `execl`, `execle`, `execlp`, `execv`, `execve`, `execvp`, `faccessat`, `fchdir`, `fchown`, `fchownat`, `fdatasync`, `fork`, `fpathconf`, `fsync`, `ftruncate`, `getcwd`, `getegid`, `getentropy`, `geteuid`, `getgid`, `getgroups`, `gethostid` (XSI), `gethostname`, `getlogin`, `getlogin_r`, `getopt`, `getpgid`, `getpgrp`, `getpid`, `getppid`, `getresgid` (XSI), `getresuid` (XSI), `getsid`, `getuid`, `lchown`, `link`, `linkat`, `lseek`, `optarg`, `opterr`, `optind`, `optopt`, `pathconf`, `pause`, `pipe`, `pipe2`, `pread`, `pwrite`, `read`, `readlink`, `readlinkat`, `rmdir`, `setegid`, `seteuid`, `setgid`, `setpgid`, `setregid` (XSI), `setreuid` (XSI), `setsid`, `setuid`, `sleep`, `swab` (XSI), `symlink`, `symlinkat`, `sync` (XSI), `sysconf`, `truncate`, `unlink`, `unlinkat`, `write` |
+| `<unistd.h>` | absent (6) | `confstr`, `lockf` (XSI), `nice` (XSI), `posix_close`, `setresgid` (XSI), `setresuid` (XSI) |
 
 ### Spawning
 
