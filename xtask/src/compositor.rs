@@ -1030,6 +1030,18 @@ fn boot_and_dump(
         Ok(())
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    // A machine that stopped is not a boot that passed, whatever its screen
+    // showed first. The pictures are judged as they are taken, and a kernel
+    // that panics a moment after the last one matched had a right picture on
+    // a dead machine: three boots did exactly that and said they had passed,
+    // the night the compositor first drew on several threads, before a
+    // fourth stopped early enough to spoil its picture.
+    if let Some(line) = said.iter().find(|line| line.contains("FERRIX-PANIC")) {
+        return Err(Error::new(format!(
+            "{arch}: the kernel stopped while the compositor ran: {}",
+            line.trim()
+        )));
+    }
     Ok((taken, said))
 }
 

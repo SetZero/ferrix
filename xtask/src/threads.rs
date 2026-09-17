@@ -34,6 +34,7 @@ const STEPS: &[&str] = &[
     "threads: channel ok",
     "threads: join ok",
     "threads: mutex ok",
+    "threads: copy ok",
     "threads: all ok",
 ];
 

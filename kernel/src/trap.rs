@@ -238,8 +238,30 @@ fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {
     // read-only copy-on-write page is exactly the fault that must copy, and
     // filtering on `!present` here would send that instruction back to fault
     // for ever.
+    //
+    // Open while it is resolved, for a fault a program's own instruction
+    // took. Resolving one may have to wait for another processor: a write to
+    // a copy-on-write page replaces a translation every processor running
+    // the same address space may have cached, and the shootdown that takes
+    // it back is answered by an interrupt. A program with one thread is on
+    // one processor and never waits for another, which is how this stood
+    // until a program forked and then started threads -- the compositor,
+    // drawing a frame a band a core -- and the fault masked the one
+    // interrupt its own shootdown was waiting for. A trap from user mode
+    // holds no kernel lock, which is what lets `user_fault_as` and
+    // `deliver::return_to_user` open them from this same dispatch; the
+    // address was read out of the processor before any of this, and they are
+    // masked again before anything else here runs.
     let resolved = if fault.user {
-        resolve_user_fault(&fault)
+        let open = frame.came_from_user();
+        if open {
+            arch::enable_interrupts();
+        }
+        let resolved = resolve_user_fault(&fault);
+        if open {
+            arch::disable_interrupts();
+        }
+        resolved
     } else {
         Err(None)
     };

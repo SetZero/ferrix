@@ -16,9 +16,17 @@
 //! * **channel**: once let past the barrier, each thread sends its index;
 //! * **join**: each thread's value comes back through `join`;
 //! * **mutex**: four threads' thousand increments each, under one `Mutex`,
-//!   are all there.
+//!   are all there;
+//! * **copy**: after a fork has made this process's memory copy-on-write,
+//!   and while four threads keep the other processors busy in this address
+//!   space, the main one writes to sixty-four pages, each of which the
+//!   kernel has to make writable again and take back from every processor
+//!   that may have the old translation cached. A page fault that waits for
+//!   other processors with interrupts masked stops the machine here, which
+//!   is how a compositor drawing on several threads found it.
 
 use std::fs;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
 
@@ -35,6 +43,58 @@ const EXPECTED_THREADS: u64 = if cfg!(feature = "negative-control") {
 } else {
     THREADS + 1
 };
+
+/// A page, as every architecture this runs on has them.
+const PAGE: usize = 4096;
+
+/// How many pages the **copy** step writes to.
+const COPIED: usize = 64;
+
+/// The **copy** step: write to memory a child was given a copy-on-write view
+/// of, with the other processors busy in this address space the whole time.
+///
+/// The child is a program that does not exist. Starting it fails, and
+/// nothing here needs it to succeed: the kernel has forked by then, and
+/// every page this process had is read-only in its tables until it is
+/// written to again, which is what `std::process::Command` does to any
+/// program that starts another -- a compositor starting its clients, which
+/// is where this was found.
+fn check_copies() {
+    let mut pages = vec![1_u8; COPIED * PAGE];
+    let _ = std::process::Command::new("/threads-test-has-no-such-program").spawn();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let busy: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    std::hint::spin_loop();
+                }
+            })
+        })
+        .collect();
+    for page in pages.chunks_mut(PAGE) {
+        if let Some(first) = page.first_mut() {
+            *first = 2;
+        }
+        thread::yield_now();
+    }
+    stop.store(true, Ordering::Relaxed);
+    for handle in busy {
+        handle
+            .join()
+            .unwrap_or_else(|_| fail("a busy thread panicked"));
+    }
+    let written = pages
+        .chunks(PAGE)
+        .filter(|page| page.first() == Some(&2) && page.get(1) == Some(&1))
+        .count();
+    if written != COPIED {
+        println!("threads: {written} of {COPIED} pages kept what was written to them");
+        fail("a page written to after a fork did not keep what it held and what was written");
+    }
+}
 
 /// Say what failed and end with status 1.
 fn fail(what: &str) -> ! {
@@ -151,6 +211,10 @@ fn main() {
         fail("the mutex lost increments");
     }
     println!("threads: mutex ok");
+
+    println!("threads: copy");
+    check_copies();
+    println!("threads: copy ok");
 
     println!("threads: all ok");
     std::process::exit(0)
