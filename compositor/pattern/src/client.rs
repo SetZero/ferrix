@@ -6,7 +6,8 @@ use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 use compositor_protocol::core::{
-    self, wl_compositor, wl_display, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    self, wl_compositor, wl_display, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm,
+    wl_shm_pool, wl_surface,
 };
 use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
 use compositor_render::Pattern;
@@ -32,13 +33,19 @@ mod id {
     pub(super) const TOPLEVEL: ObjectId = ObjectId(9);
     pub(super) const POOL: ObjectId = ObjectId(10);
     pub(super) const BUFFER: ObjectId = ObjectId(11);
+    pub(super) const SEAT: ObjectId = ObjectId(12);
+    pub(super) const KEYBOARD: ObjectId = ObjectId(13);
+    pub(super) const POINTER: ObjectId = ObjectId(14);
 }
 
 /// How long to run before giving up, so a test can never hang.
 ///
 /// A real client runs until it is closed; this one runs until the compositor
-/// goes away, which closes the socket, or until this passes.
-const DEADLINE: Duration = Duration::from_secs(15);
+/// goes away, which closes the socket, or until this passes. Long enough that
+/// it is never what ends a test: it is a window under a compositor's control,
+/// and a window that vanished on its own would look like a compositor that
+/// closed it.
+const DEADLINE: Duration = Duration::from_secs(600);
 
 /// Connect, make a window, draw `pattern` in it, and keep drawing until the
 /// compositor goes away.
@@ -97,7 +104,10 @@ pub fn run_on(path: &std::path::Path, pattern: Pattern, title: &str) -> Result<S
         drawn: 0,
         shared: None,
         buffer_size: (0, 0),
+        buffer_format: None,
         released: 0,
+        keys: 0,
+        seat: false,
     };
 
     let started = Instant::now();
@@ -118,8 +128,8 @@ pub fn run_on(path: &std::path::Path, pattern: Pattern, title: &str) -> Result<S
     }
 
     Ok(format!(
-        "pattern: {:?} {}x{} frames {} title {}",
-        state.pattern, state.width, state.height, state.drawn, state.title
+        "pattern: {:?} {}x{} frames {} keys {} title {}",
+        state.pattern, state.width, state.height, state.drawn, state.keys, state.title
     ))
 }
 
@@ -136,7 +146,16 @@ struct Client {
     drawn: u32,
     shared: Option<Shared>,
     buffer_size: (i32, i32),
+    /// The format the live buffer is in, since a pattern change changes it
+    /// and a buffer may not be reinterpreted.
+    buffer_format: Option<u32>,
     released: u32,
+    /// How many keys have been pressed, which also says which pattern is
+    /// drawn: the client draws a different one after each key, so that a key
+    /// arriving is visible on the screen and not only in a log line.
+    keys: u32,
+    /// Whether the seat has been bound and asked for its objects.
+    seat: bool,
 }
 
 impl Client {
@@ -175,6 +194,9 @@ impl Client {
             id::SURFACE => &core::WL_SURFACE,
             id::XDG_SURFACE => &xdg_shell::XDG_SURFACE,
             id::TOPLEVEL => &xdg_shell::XDG_TOPLEVEL,
+            id::SEAT => &core::WL_SEAT,
+            id::KEYBOARD => &core::WL_KEYBOARD,
+            id::POINTER => &core::WL_POINTER,
             id::SHELL => &xdg_shell::XDG_WM_BASE,
             id::BUFFER => &core::WL_BUFFER,
             _ => return None,
@@ -246,9 +268,127 @@ impl Client {
             id::BUFFER if opcode == core::wl_buffer::event::RELEASE => {
                 self.released = self.released.saturating_add(1);
             }
+            id::SEAT if opcode == wl_seat::event::CAPABILITIES => {
+                self.seat(args.first().and_then(Arg::as_uint).unwrap_or(0), out);
+            }
+            id::KEYBOARD => self.keyboard(opcode, args, out)?,
+            id::POINTER => self.pointer(opcode, args),
             _ => {}
         }
         Ok(())
+    }
+
+    /// Ask the seat for the objects it says it has.
+    ///
+    /// A client may only ask for a capability the seat announced, so this
+    /// waits for `wl_seat.capabilities` rather than asking on binding. A seat
+    /// that announces nothing leaves the client with no keyboard, which is a
+    /// machine with nothing plugged in.
+    fn seat(&mut self, capabilities: u32, out: &mut Writer) {
+        if self.seat {
+            return;
+        }
+        self.seat = true;
+        for (bit, id, opcode) in [
+            (
+                wl_seat::capability::KEYBOARD,
+                id::KEYBOARD,
+                wl_seat::request::GET_KEYBOARD,
+            ),
+            (
+                wl_seat::capability::POINTER,
+                id::POINTER,
+                wl_seat::request::GET_POINTER,
+            ),
+        ] {
+            if capabilities & bit == 0 {
+                continue;
+            }
+            request(out, id::SEAT, opcode, &[ArgType::NewId], &[Arg::NewId(id)]);
+        }
+        say(&format!("pattern: seat capabilities {capabilities:#x}"));
+    }
+
+    /// What the keyboard said. Every event is printed, because this client is
+    /// how `cargo xtask test-seat` sees what reached a window.
+    fn keyboard(&mut self, opcode: u16, args: &[Arg<'_>], out: &mut Writer) -> Result<(), String> {
+        match opcode {
+            wl_keyboard::event::KEYMAP => {
+                let format = args.first().and_then(Arg::as_uint).unwrap_or(0);
+                let size = args.get(2).and_then(Arg::as_uint).unwrap_or(0);
+                say(&format!("pattern: keymap format {format} size {size}"));
+            }
+            wl_keyboard::event::ENTER => {
+                say("pattern: keyboard enter");
+            }
+            wl_keyboard::event::LEAVE => {
+                say("pattern: keyboard leave");
+            }
+            wl_keyboard::event::KEY => {
+                let code = args.get(2).and_then(Arg::as_uint).unwrap_or(0);
+                let state = args.get(3).and_then(Arg::as_uint).unwrap_or(0);
+                say(&format!("pattern: key {code} state {state}"));
+                if state == wl_keyboard::key_state::PRESSED {
+                    // Draw something else, so that a key arriving shows on
+                    // the screen and not only in this line.
+                    self.keys = self.keys.saturating_add(1);
+                    self.pattern = if self.keys % 2 == 1 {
+                        Pattern::Gradient
+                    } else {
+                        Pattern::Checkerboard
+                    };
+                    self.draw(out)?;
+                }
+            }
+            wl_keyboard::event::MODIFIERS => {
+                let depressed = args.get(1).and_then(Arg::as_uint).unwrap_or(0);
+                let locked = args.get(3).and_then(Arg::as_uint).unwrap_or(0);
+                say(&format!(
+                    "pattern: modifiers depressed {depressed:#x} locked {locked:#x}"
+                ));
+            }
+            wl_keyboard::event::REPEAT_INFO => {
+                let rate = args.first().and_then(Arg::as_int).unwrap_or(0);
+                let delay = args.get(1).and_then(Arg::as_int).unwrap_or(0);
+                say(&format!("pattern: repeat {rate} after {delay}"));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// What the pointer said.
+    fn pointer(&mut self, opcode: u16, args: &[Arg<'_>]) {
+        match opcode {
+            wl_pointer::event::ENTER => say("pattern: pointer enter"),
+            wl_pointer::event::LEAVE => say("pattern: pointer leave"),
+            wl_pointer::event::MOTION => {
+                let (x, y) = (
+                    args.get(1).and_then(Arg::as_fixed),
+                    args.get(2).and_then(Arg::as_fixed),
+                );
+                if let (Some(x), Some(y)) = (x, y) {
+                    say(&format!(
+                        "pattern: pointer at {} {}",
+                        x.to_int(),
+                        y.to_int()
+                    ));
+                }
+            }
+            wl_pointer::event::BUTTON => {
+                let button = args.get(2).and_then(Arg::as_uint).unwrap_or(0);
+                let state = args.get(3).and_then(Arg::as_uint).unwrap_or(0);
+                say(&format!("pattern: button {button} state {state}"));
+            }
+            wl_pointer::event::AXIS => {
+                let axis = args.get(1).and_then(Arg::as_uint).unwrap_or(0);
+                let value = args.get(2).and_then(Arg::as_fixed);
+                if let Some(value) = value {
+                    say(&format!("pattern: axis {axis} by {}", value.to_int()));
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Bind what a window needs, and ask for one.
@@ -256,15 +396,22 @@ impl Client {
         if self.bound {
             return Ok(());
         }
-        for (interface, id, want) in [
-            ("wl_compositor", id::COMPOSITOR, 6u32),
-            ("wl_shm", id::SHM, 1),
-            ("xdg_wm_base", id::SHELL, 6),
+        // `wl_seat` is wanted and not required: a compositor with nothing
+        // plugged in may offer none, and a client that refused to start over
+        // it would be a client that only runs on a machine with a keyboard.
+        for (interface, id, want, required) in [
+            ("wl_compositor", id::COMPOSITOR, 6u32, true),
+            ("wl_shm", id::SHM, 1, true),
+            ("xdg_wm_base", id::SHELL, 6, true),
+            ("wl_seat", id::SEAT, 7, false),
         ] {
-            let (name, offered) = *self
-                .globals
-                .get(interface)
-                .ok_or_else(|| format!("the compositor offers no {interface}"))?;
+            let offer = self.globals.get(interface).copied();
+            if offer.is_none() && !required {
+                say(&format!("pattern: the compositor offers no {interface}"));
+                continue;
+            }
+            let (name, offered) =
+                offer.ok_or_else(|| format!("the compositor offers no {interface}"))?;
             let version = want.min(offered);
             out.write(
                 id::REGISTRY,
@@ -337,7 +484,13 @@ impl Client {
 
         // A pool is made once and grown if the window does; the buffer is
         // made afresh each size, as a client that never keeps two.
-        let fresh = self.shared.is_none() || self.buffer_size != (width, height);
+        // A pattern change changes the format, and a `wl_buffer` cannot be
+        // reinterpreted: it is made afresh for a new format as for a new
+        // size.
+        let format = self.pattern.format().wl_shm();
+        let fresh = self.shared.is_none()
+            || self.buffer_size != (width, height)
+            || self.buffer_format != Some(format);
         if fresh {
             // The ids are fixed, so the old objects have to go before the
             // new ones can take their numbers. A server is right to refuse a
@@ -382,10 +535,11 @@ impl Client {
                     Arg::Int(width),
                     Arg::Int(height),
                     Arg::Int(stride),
-                    Arg::Uint(self.pattern.format().wl_shm()),
+                    Arg::Uint(format),
                 ],
             );
             self.buffer_size = (width, height);
+            self.buffer_format = Some(format);
         }
 
         // The pattern itself, drawn by `compositor/render` so the client and
@@ -424,6 +578,17 @@ impl Client {
         self.drawn = self.drawn.saturating_add(1);
         Ok(())
     }
+}
+
+/// Say a line on the standard output, flushed: this client runs as a child
+/// of the compositor with the console for its output, and a line held in a
+/// buffer is a line a test never sees.
+fn say(line: &str) {
+    use std::io::Write as _;
+
+    let mut out = io::stdout();
+    let _ = writeln!(out, "{line}");
+    let _ = out.flush();
 }
 
 /// Queue one request.

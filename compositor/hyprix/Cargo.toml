@@ -16,7 +16,10 @@ name = "hyprix"
 path = "src/main.rs"
 
 [dependencies]
+# The evdev nodes the seat reads, and the rule for a program started as init.
 compositor-evecho = { path = "../evecho" }
+# The keymap the seat hands every client.
+compositor-xkb = { path = "../xkb" }
 compositor-config = { path = "../config" }
 compositor-drm = { path = "../drm" }
 compositor-ipc = { path = "../ipc" }
@@ -26,6 +29,8 @@ compositor-render = { path = "../render" }
 compositor-server = { path = "../server" }
 compositor-socket = { path = "../socket" }
 compositor-wire = { path = "../wire" }
+# The evdev numbers the devices report.
+ferrix-linux-abi = { path = "../../libs/linux-abi" }
 # Declarations only: `mmap` of a client's pool, and `pause`.
 libc = "0.2.189"
 

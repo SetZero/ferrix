@@ -1,0 +1,282 @@
+//! The input devices, and what their events mean.
+//!
+//! `compositor/evecho` opens a `/dev/input/eventN` and reads whole
+//! `input_event`s. This turns those into the [`Input`]s the seat understands:
+//! evdev's relative axes into pixels, its absolute axes into a fraction of
+//! the device's own range, its keys and buttons apart, and its `SYN_REPORT`
+//! into the end of a group.
+//!
+//! # Why absolute axes are a fraction
+//!
+//! A tablet reports where it is in its own units -- QEMU's virtio-tablet in
+//! 0 to 32767 -- and only the device knows what its range is, through
+//! `EVIOCGABS`. The seat knows how big the screen is. So the conversion is
+//! here, where the range is, and the seat multiplies by the screen: a device
+//! with another range then needs no change anywhere else.
+//!
+//! # What is left out
+//!
+//! Touch is not forwarded: `wl_touch` would need the whole multi-touch
+//! protocol, and the seat announces no touch capability, so a client would
+//! never be given an object to send it on. `EV_MSC` scan codes, `EV_SW`
+//! switches and `EV_LED` are dropped, which is what libinput does with them
+//! for a Wayland seat.
+
+use std::io;
+use std::path::Path;
+
+use compositor_evecho::{Device, event_nodes};
+use ferrix_linux_abi::input::{
+    ABS_X, ABS_Y, BTN_MISC, EV_ABS, EV_KEY, EV_REL, EV_SYN, Event, KEY_MAX, REL_HWHEEL, REL_WHEEL,
+    REL_X, REL_Y, SYN_REPORT,
+};
+
+use crate::seat::Input;
+
+/// How far one wheel click scrolls, in surface coordinates.
+///
+/// libinput reports a wheel click as 15 units, which is what every toolkit
+/// expects one to be, and `wl_pointer.axis` carries that distance.
+const WHEEL_STEP: f64 = 15.0;
+
+/// A device's absolute axes: what its range is, and where it last said it
+/// was.
+///
+/// Its own value, and not part of [`Open`], so that the conversion from a
+/// device's units to a fraction of the screen is tested without a device.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Axes {
+    /// The range of `ABS_X` and `ABS_Y`, for a device that has them.
+    range: Option<((i32, i32), (i32, i32))>,
+    /// Where it last said it was: a report may carry one axis and not the
+    /// other, and the pointer has to go somewhere in both.
+    at: (i32, i32),
+}
+
+/// One open device, with what its absolute axes are worth.
+#[derive(Debug)]
+struct Open {
+    device: Device,
+    node: String,
+    axes: Axes,
+}
+
+/// Every device the compositor reads.
+#[derive(Debug, Default)]
+pub struct Devices {
+    open: Vec<Open>,
+    events: Vec<Event>,
+}
+
+impl Devices {
+    /// Open every `/dev/input/eventN` and take it for this compositor.
+    ///
+    /// A device that cannot be opened is one device, not a failure: a machine
+    /// with a keyboard and a device the compositor cannot read should still
+    /// have a keyboard. The reasons are returned so the caller can say them.
+    ///
+    /// # Errors
+    ///
+    /// Only a `/dev/input` that cannot be read at all, which is a machine
+    /// whose kernel published no input devices.
+    pub fn open() -> io::Result<(Self, Vec<String>)> {
+        let mut devices = Self::default();
+        let mut refused = Vec::new();
+        for path in event_nodes()? {
+            match Self::take(&path) {
+                Ok(open) => devices.open.push(open),
+                Err(error) => refused.push(format!("{}: {error}", path.display())),
+            }
+        }
+        Ok((devices, refused))
+    }
+
+    fn take(path: &Path) -> io::Result<Open> {
+        let device = Device::open(path)?;
+        // A compositor grabs its devices so that a key it acts on does not
+        // also reach whatever else is reading the node. A refusal is not
+        // fatal: another reader having the grab is a machine where both see
+        // the keys, which is worse than one but better than none.
+        let _ = device.grab(true);
+        let range = if device.reports(EV_ABS) {
+            match (device.axis(ABS_X), device.axis(ABS_Y)) {
+                (Ok(x), Ok(y)) => Some(((x.minimum, x.maximum), (y.minimum, y.maximum))),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let node = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        Ok(Open {
+            device,
+            node,
+            axes: Axes { range, at: (0, 0) },
+        })
+    }
+
+    /// What each device is, for the compositor's log line.
+    #[must_use]
+    pub fn describe(&self) -> Vec<String> {
+        self.open
+            .iter()
+            .map(|open| format!("{} {}", open.node, open.device.description().name))
+            .collect()
+    }
+
+    /// How many devices are open.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.open.len()
+    }
+
+    /// Whether none is.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.open.is_empty()
+    }
+
+    /// Whether any device reports keys, and whether any reports a pointer:
+    /// the two `wl_seat.capability` bits.
+    #[must_use]
+    pub fn capabilities(&self) -> (bool, bool) {
+        let mut keyboard = false;
+        let mut pointer = false;
+        for open in &self.open {
+            let description = open.device.description();
+            // A device with keys and no axes is a keyboard; one with axes is
+            // a pointer, and its buttons are the pointer's. libinput decides
+            // the same way for a device with no `INPUT_PROP_*` to go on.
+            let axes = description.types.contains(&EV_REL) || description.types.contains(&EV_ABS);
+            if axes {
+                pointer = true;
+            } else if description.types.contains(&EV_KEY) {
+                keyboard = true;
+            }
+        }
+        (keyboard, pointer)
+    }
+
+    /// Read whatever is waiting on every device, in the order it arrived.
+    ///
+    /// Nothing waiting is an empty answer, not an error: this is called every
+    /// time round the compositor's loop.
+    pub fn read(&mut self) -> Vec<Input> {
+        let mut inputs = Vec::new();
+        for open in &mut self.open {
+            self.events.clear();
+            // Nothing waiting is `Ok(0)`; an error is a device that has gone,
+            // and the next pass will find it gone too.
+            if open.device.read_events(&mut self.events).is_err() {
+                continue;
+            }
+            for event in &self.events {
+                if let Some(input) = translate(&mut open.axes, *event) {
+                    inputs.push(input);
+                }
+            }
+        }
+        inputs
+    }
+}
+
+/// One evdev event as an [`Input`], or nothing for one the seat has no use
+/// for.
+fn translate(axes: &mut Axes, event: Event) -> Option<Input> {
+    match event.r#type {
+        EV_KEY => Some(key_or_button(event)),
+        EV_REL => relative(event),
+        EV_ABS => axes.absolute(event),
+        // The end of a report. `wl_pointer.frame` groups the events the
+        // compositor sent, and the compositor sends one after each read, so
+        // the sync itself carries nothing up.
+        EV_SYN if event.code == SYN_REPORT => None,
+        _ => None,
+    }
+}
+
+/// A key, or a pointer button.
+///
+/// evdev puts both under `EV_KEY` and tells them apart by the code:
+/// `BTN_MISC` (0x100) and above are buttons, which is where
+/// `input.h`'s own comment draws the line, and what `wl_pointer.button`
+/// carries.
+fn key_or_button(event: Event) -> Input {
+    let pressed = event.value != 0;
+    if event.code >= BTN_MISC && event.code <= KEY_MAX && is_pointer_button(event.code) {
+        return Input::Button {
+            button: u32::from(event.code),
+            pressed,
+        };
+    }
+    Input::Key {
+        code: event.code,
+        pressed,
+        // evdev repeats a held key as value 2.
+        repeat: event.value == 2,
+    }
+}
+
+/// Whether a code above `BTN_MISC` is a button a pointer has.
+///
+/// The mouse buttons and the extra ones beside them, which is the range
+/// libinput forwards to `wl_pointer`. `BTN_TOUCH` and the tool buttons a
+/// tablet reports are not pointer buttons and would click a window on a pen
+/// coming near it.
+const fn is_pointer_button(code: u16) -> bool {
+    // BTN_MISC..BTN_JOYSTICK: the mouse and the generic buttons.
+    code >= BTN_MISC && code < 0x120
+}
+
+fn relative(event: Event) -> Option<Input> {
+    let value = f64::from(event.value);
+    match event.code {
+        REL_X => Some(Input::Motion { dx: value, dy: 0.0 }),
+        REL_Y => Some(Input::Motion { dx: 0.0, dy: value }),
+        REL_WHEEL => Some(Input::Axis {
+            axis: compositor_protocol::core::wl_pointer::axis::VERTICAL_SCROLL,
+            // A wheel click up is a negative movement of the surface's
+            // content, which is the opposite sign from evdev's.
+            value: -value * WHEEL_STEP,
+        }),
+        REL_HWHEEL => Some(Input::Axis {
+            axis: compositor_protocol::core::wl_pointer::axis::HORIZONTAL_SCROLL,
+            value: value * WHEEL_STEP,
+        }),
+        _ => None,
+    }
+}
+
+impl Axes {
+    /// One `EV_ABS` event as a fraction of the device's own range.
+    fn absolute(&mut self, event: Event) -> Option<Input> {
+        let ((min_x, max_x), (min_y, max_y)) = self.range?;
+        match event.code {
+            ABS_X => self.at.0 = event.value,
+            ABS_Y => self.at.1 = event.value,
+            // A multi-touch axis, or one the compositor has no use for.
+            _ => return None,
+        }
+        Some(Input::Absolute {
+            x: fraction(self.at.0, min_x, max_x),
+            y: fraction(self.at.1, min_y, max_y),
+        })
+    }
+}
+
+/// Where `value` lies in `minimum..=maximum`, as 0 to 1.
+///
+/// A device whose range is empty -- which QEMU's keyboard reports for an axis
+/// it does not have -- is the left edge rather than a division by zero.
+fn fraction(value: i32, minimum: i32, maximum: i32) -> f64 {
+    let span = f64::from(maximum) - f64::from(minimum);
+    if span <= 0.0 {
+        return 0.0;
+    }
+    ((f64::from(value) - f64::from(minimum)) / span).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests;

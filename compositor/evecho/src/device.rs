@@ -92,7 +92,11 @@ impl Device {
     ///
     /// The device is opened read-write and, if that is refused, read-only:
     /// the `evdev` crate's order, since writing is only for LEDs and force
-    /// feedback.
+    /// feedback. It is opened non-blocking as well, and
+    /// [`Device::read_events`] answers nothing rather than waiting: a
+    /// compositor reads its devices once round a loop that also has clients
+    /// and a screen in it, and a blocking read of a keyboard nobody is typing
+    /// on stops all three.
     ///
     /// # Errors
     ///
@@ -257,10 +261,15 @@ impl Device {
     /// A read returns whole events; a partial one is the kernel breaking its
     /// own contract and is refused rather than guessed at.
     ///
+    /// Nothing waiting is `Ok(0)`, not an error: the device is non-blocking,
+    /// and a caller that reads round a loop asks far more often than a person
+    /// types.
+    ///
     /// # Errors
     ///
-    /// Whatever `read` said, `EAGAIN` included when the device is
-    /// non-blocking and has nothing.
+    /// Whatever `read` said, except that `EAGAIN` is nothing waiting. A
+    /// device that has gone answers `ENODEV`, which is how a caller learns it
+    /// has.
     pub fn read_events(&self, out: &mut Vec<Event>) -> io::Result<usize> {
         let size = Event::size(WIDTH);
         let mut bytes = vec![0u8; size * BATCH];
@@ -268,7 +277,11 @@ impl Device {
         let read =
             unsafe { libc::read(self.fd.as_raw_fd(), bytes.as_mut_ptr().cast(), bytes.len()) };
         if read < 0 {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::WouldBlock {
+                return Ok(0);
+            }
+            return Err(error);
         }
         let read = usize::try_from(read).unwrap_or(0);
         if read % size != 0 {
@@ -355,7 +368,7 @@ fn bit(bits: &[u8], index: u16) -> bool {
 fn open_rw_then_ro(path: &CString) -> io::Result<OwnedFd> {
     for flags in [libc::O_RDWR, libc::O_RDONLY] {
         // SAFETY: `path` is NUL-terminated and the flags are constants.
-        let fd = unsafe { libc::open(path.as_ptr(), flags | libc::O_CLOEXEC) };
+        let fd = unsafe { libc::open(path.as_ptr(), flags | libc::O_CLOEXEC | libc::O_NONBLOCK) };
         if fd >= 0 {
             // SAFETY: `fd` is a descriptor `open` just gave and nothing else
             // owns.

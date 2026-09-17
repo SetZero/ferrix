@@ -617,6 +617,14 @@ impl Watching<'_> {
     /// answer and did not get one reports that itself, since only it knows
     /// what it was waiting for.
     ///
+    /// **The stamp on a line read here is when it was read, not when it
+    /// arrived.** The reader thread buffers into a channel the whole time,
+    /// and a hook that sleeps -- for a screen to settle, say -- comes back to
+    /// find everything the guest said in the meantime and stamps it now. Two
+    /// lines the guest printed a millisecond apart can therefore show seconds
+    /// apart in the transcript, and that is the hook's pause and not the
+    /// guest's.
+    ///
     /// # Errors
     ///
     /// Only a log that could not be written.

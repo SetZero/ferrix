@@ -13,9 +13,13 @@ use compositor_socket::{Connection, Listener, RecvError};
 use compositor_wire::ObjectId;
 
 use crate::backend::{Backend, Headless};
+use crate::deliver::Focus;
+use crate::devices::Devices;
 use crate::frame::Source;
+use crate::keymap::Keymap;
 use crate::options::Options;
 use crate::pool::Mapping;
+use crate::seat::Seat;
 
 /// One connection: the protocol side, the socket, and the memory it shared.
 #[derive(Debug)]
@@ -33,6 +37,11 @@ impl Slot {
     /// The protocol side of this connection.
     pub const fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// The same, to be sent to: the seat's events go out through it.
+    pub const fn client_mut(&mut self) -> &mut Client {
+        &mut self.client
     }
 
     /// The pools this connection has shared, by object.
@@ -81,6 +90,71 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // line. A name with a slash in it is an absolute path either way.
     let display = resolve_display(&options.display);
     let listener = Listener::bind(&display).map_err(|error| format!("the socket: {error}"))?;
+
+    // The seat, but only for a compositor that owns the screen.
+    //
+    // Taking a device means grabbing it, and a grab takes the keyboard away
+    // from whatever else is reading it. A `--headless` compositor is one
+    // running beside something else -- a test on a build machine, a nested
+    // session -- and it has no business taking that machine's keyboard. So
+    // the devices go with the screen: the card has them, memory does not.
+    //
+    // A compositor that owns the screen and finds no devices is not a
+    // failure either; it is a machine with nothing plugged in, so what is
+    // missing is said and the loop goes on.
+    let mut devices = if options.headless.is_some() {
+        Devices::default()
+    } else {
+        match Devices::open() {
+            Ok((devices, refused)) => {
+                for reason in refused {
+                    report(&format!("hyprix: {reason}"));
+                }
+                devices
+            }
+            Err(error) => {
+                report(&format!("hyprix: no input devices: {error}"));
+                Devices::default()
+            }
+        }
+    };
+    let (has_keyboard, has_pointer) = devices.capabilities();
+    let mut capabilities = 0;
+    if has_keyboard {
+        capabilities |= core::wl_seat::capability::KEYBOARD;
+    }
+    if has_pointer {
+        capabilities |= core::wl_seat::capability::POINTER;
+    }
+    // The keymap is made whether or not there is a keyboard: a client that
+    // binds one on a seat that announced none is already refused, and a
+    // machine whose keyboard arrives later should not need a new file.
+    let keymap = match Keymap::new() {
+        Ok(keymap) => Some(keymap),
+        Err(error) => {
+            report(&format!("hyprix: no keymap: {error}"));
+            None
+        }
+    };
+    let mut seat = Seat::new(&config, width, height);
+    let mut focus = Focus::new();
+    let repeat = (
+        i32::try_from(config.int("input:repeat_rate").unwrap_or(25)).unwrap_or(25),
+        i32::try_from(config.int("input:repeat_delay").unwrap_or(600)).unwrap_or(600),
+    );
+    let follow_mouse = config.int("input:follow_mouse").unwrap_or(1) != 0;
+    {
+        let (live, unresolved) = seat.binds();
+        for reason in unresolved {
+            report(&format!("hyprix: a bind was dropped: {reason}"));
+        }
+        let named = devices.describe();
+        report(&format!(
+            "hyprix: seat {} devices [{}], {live} binds",
+            devices.len(),
+            named.join(", ")
+        ));
+    }
 
     let mut state = State::new(settings);
     let _ = state
@@ -150,16 +224,19 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 Ok(connection) => slots.push(Slot {
                     client: {
                         let mut client = Client::new(globals());
-                        // What the screen is, and what the seat has. There is
-                        // no input path yet -- stage 17's L5 to L7 are the
-                        // kernel side -- so the seat announces nothing rather
-                        // than handing out a keyboard that never sends a key.
+                        // What the screen is, and what the seat has: only
+                        // the capabilities there are devices for, since a
+                        // client may not ask for one the seat did not
+                        // announce and should not wait for keys that will
+                        // never come.
                         client.set_output(compositor_server::Output {
                             width: i32::try_from(width).unwrap_or(0),
                             height: i32::try_from(height).unwrap_or(0),
                             ..compositor_server::Output::default()
                         });
-                        client.set_seat_capabilities(0);
+                        client.set_seat_capabilities(capabilities);
+                        client.set_keymap(keymap.as_ref().map(Keymap::handed));
+                        client.set_repeat_info(repeat.0, repeat.1);
                         client
                     },
                     connection,
@@ -187,6 +264,39 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         }
 
         let mut changed = false;
+
+        // Input, before the clients are read: a key that fires a dispatcher
+        // changes the layout, and a window told its new size in the same pass
+        // draws once rather than twice.
+        let now = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+        let mut actions = Vec::new();
+        for input in devices.read() {
+            actions.extend(seat.input(input));
+        }
+        if !actions.is_empty() {
+            let done = crate::deliver::deliver(
+                &actions,
+                &mut focus,
+                &state,
+                &mut slots,
+                &sources,
+                now,
+                follow_mouse,
+            );
+            for (name, argument) in done.dispatch {
+                if dispatch(&name, &argument, &mut state, &mut slots, &sources) {
+                    changed = true;
+                }
+            }
+            // `follow_mouse`: the pointer moved onto a window that is not
+            // focused, so focus it.
+            if let Some(window) = done.focus
+                && state.focus_window(window).is_ok()
+            {
+                changed = true;
+            }
+        }
+
         for index in 0..slots.len() {
             if serve(
                 &mut slots,
@@ -219,6 +329,15 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         if changed {
             reconfigure(&mut slots, &state);
         }
+        // The keyboard follows the layout's focus, and a window that has just
+        // arrived is what the layout focused.
+        focus.follow_layout(
+            &state,
+            &mut slots,
+            &sources,
+            seat.keyboard().pressed(),
+            seat.keyboard().modifiers(),
+        );
 
         // A connection that ended takes its windows with it.
         for index in 0..slots.len() {
@@ -434,19 +553,7 @@ fn run_ipc(
 ) -> bool {
     match reply {
         compositor_ipc::Reply::Dispatch { name, argument } => {
-            match state.dispatch_str(name, argument) {
-                Ok(changes) => {
-                    // `killactive` asks a window to close, which is the
-                    // client's to obey; the layout says which window.
-                    for change in &changes {
-                        if let compositor_layout::Change::Close(window) = change {
-                            close(*window, slots, sources);
-                        }
-                    }
-                    !changes.is_empty()
-                }
-                Err(_) => false,
-            }
+            dispatch(name, argument, state, slots, sources)
         }
         compositor_ipc::Reply::Keyword { name, value } => {
             if config.keyword(name, value).is_err() {
@@ -459,6 +566,31 @@ fn run_ipc(
         }
         compositor_ipc::Reply::Reload | compositor_ipc::Reply::Text(_) => false,
     }
+}
+
+/// Run one dispatcher, and say whether the layout changed.
+///
+/// The one path for both: `hyprctl dispatch movefocus l` and a keybind of the
+/// same name do the same thing, because Hyprland's do and because two paths
+/// would drift.
+fn dispatch(
+    name: &str,
+    argument: &str,
+    state: &mut State,
+    slots: &mut [Slot],
+    sources: &BTreeMap<WindowId, Source>,
+) -> bool {
+    let Ok(changes) = state.dispatch_str(name, argument) else {
+        return false;
+    };
+    // `killactive` asks a window to close, which is the client's to obey;
+    // the layout says which window.
+    for change in &changes {
+        if let compositor_layout::Change::Close(window) = change {
+            close(*window, slots, sources);
+        }
+    }
+    !changes.is_empty()
 }
 
 /// Ask the window's client to close it.

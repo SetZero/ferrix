@@ -11,13 +11,15 @@
 //! which is §3.4's rule: read the directory, there is nothing else to ask.
 //! The names are [`names`], and they are the part that is host-tested, since
 //! a host has no Ferrix node to open.
+//!
+//! Every call here is a Unix one, so the crate builds anywhere `libc` does;
+//! on a machine with no `/dev/input` there is simply nothing to open, which
+//! is what [`event_nodes`] answers.
 
-#[cfg(target_os = "linux")]
 mod device;
 pub mod init;
 pub mod names;
 
-#[cfg(target_os = "linux")]
 pub use device::{Description, Device, INPUT_DIR, event_nodes};
 
 /// One line for an event, as `evecho` prints it and a test reads it.

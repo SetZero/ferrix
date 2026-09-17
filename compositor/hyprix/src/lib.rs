@@ -22,9 +22,13 @@
 
 pub mod backend;
 pub mod control;
+pub mod deliver;
+pub mod devices;
 pub mod frame;
+pub mod keymap;
 pub mod options;
 pub mod pool;
+pub mod seat;
 pub mod state;
 
 pub use options::Options;
