@@ -92,6 +92,7 @@ mod backdrop;
 mod blur;
 mod buffer;
 mod canvas;
+mod cores;
 pub mod cursor;
 mod damage;
 mod frame;

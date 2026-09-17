@@ -73,10 +73,14 @@
 //!   than six million calls to `powf` ([`prepared`]).
 //!
 //! What is left is the tap itself, and a software dual-Kawase cannot go
-//! much under 16 million of them for a screen. Past this the levers are a
+//! much under 16 million of them for a screen. Past that the levers were a
 //! renderer that spreads its rows over cores, explicit vector arithmetic,
-//! or the GPU -- each a decision about what this compositor is, rather than
-//! an arithmetic one, and none of them taken here.
+//! or the GPU. The first is taken: every stage here writes its rows through
+//! [`crate::cores`], which is 85 ms down to about 20 on twelve cores with
+//! the same bytes out, and one thread and the old 85 where there is one
+//! core.
+
+use crate::cores::bands;
 
 /// What `decoration:blur` asks for: the shape of the blur, and the grading
 /// over it.
@@ -342,16 +346,32 @@ fn pass<const HEIGHTS: usize, const TAPS: usize>(
     heights: &[f32; HEIGHTS],
     taps: &[Tap; TAPS],
     scale: f32,
-    each: impl Fn([f32; 4]) -> [f32; 4],
+    each: impl Fn([f32; 4]) -> [f32; 4] + Sync,
+) {
+    let width = to.width;
+    bands(&mut to.pixels, width, |first, band| {
+        pass_rows(from, band, (first, width), heights, taps, scale, &each);
+    });
+}
+
+/// The rows of a pass from `first` on, `band.len() / width` of them: what
+/// one thread of [`pass`] does.
+fn pass_rows<const HEIGHTS: usize, const TAPS: usize>(
+    from: &Plane,
+    band: &mut [[f32; 4]],
+    (first, width): (usize, usize),
+    heights: &[f32; HEIGHTS],
+    taps: &[Tap; TAPS],
+    scale: f32,
+    each: &impl Fn([f32; 4]) -> [f32; 4],
 ) {
     let total: f32 = taps.iter().map(|tap| tap.weight).sum();
-    let (width, height) = (to.width, to.height);
     // The mixed rows, in one block rather than a vector of vectors: the
     // taps read them at every pixel, and a row behind a pointer of its own
     // is a pointer followed twenty million times.
     let stride = from.width.max(1);
     let mut mixed = vec![[0.0_f32; 4]; stride.saturating_mul(heights.len())];
-    for y in 0..height {
+    for (y, row) in (first..).zip(band.chunks_exact_mut(width.max(1))) {
         #[expect(
             clippy::cast_precision_loss,
             reason = "a position inside a buffer at most a screen tall"
@@ -364,10 +384,6 @@ fn pass<const HEIGHTS: usize, const TAPS: usize>(
         for (slot, row) in sources.iter_mut().zip(mixed.chunks_exact(stride)) {
             *slot = row;
         }
-        let start = y.saturating_mul(width);
-        let Some(row) = to.pixels.get_mut(start..start.saturating_add(width)) else {
-            continue;
-        };
         for (x, slot) in row.iter_mut().enumerate() {
             #[expect(clippy::cast_precision_loss, reason = "as above")]
             let sx = (x as f32 + 0.5) * scale;
@@ -533,6 +549,26 @@ fn finish(plane: &mut Plane, block: &Block, settings: &Blur) {
     if noise == 0.0 && brightness == 1.0 {
         return;
     }
+    let width = plane.width;
+    bands(&mut plane.pixels, width, |first, band| {
+        finish_rows(
+            band,
+            first.saturating_mul(width),
+            width,
+            block,
+            (noise, brightness),
+        );
+    });
+}
+
+/// [`finish`] over the pixels from `start` on, counted along the plane.
+fn finish_rows(
+    band: &mut [[f32; 4]],
+    start: usize,
+    width: usize,
+    block: &Block,
+    (noise, brightness): (f32, f32),
+) {
     // A canvas is at most `MAX_SIZE` pixels on a side, so its size is exact
     // in the `u16` this reads it through and in the float that divides by
     // it.
@@ -540,8 +576,7 @@ fn finish(plane: &mut Plane, block: &Block, settings: &Blur) {
         f64::from(block.screen.0.max(1)),
         f64::from(block.screen.1.max(1)),
     );
-    let width = plane.width;
-    for (index, pixel) in plane.pixels.iter_mut().enumerate() {
+    for (index, pixel) in (start..).zip(band.iter_mut()) {
         // The shader's `v_texcoord` at this fragment: where the pixel's
         // centre is on the monitor, from 0 to 1.
         let coord = |along: usize, from: i64, size: f64| -> f32 {
@@ -780,14 +815,19 @@ pub(crate) fn blur(pixels: &mut [u8], block: &Block, settings: &Blur) {
     // of one channel of one pixel, so they are a table rather than a pass.
     let graded = prepared(settings);
     let mut plane = Plane::new(width, height);
-    for (slot, bytes) in plane.pixels.iter_mut().zip(pixels.chunks_exact(4)) {
-        let colour = |at: usize| {
-            let byte = bytes.get(at).copied().unwrap_or(0);
-            graded.get(usize::from(byte)).copied().unwrap_or(0.0)
-        };
-        let alpha = f32::from(bytes.get(3).copied().unwrap_or(0)) / 255.0;
-        *slot = [colour(0), colour(1), colour(2), alpha];
-    }
+    let source: &[u8] = pixels;
+    bands(&mut plane.pixels, width, |first, band| {
+        let from = first.saturating_mul(width).saturating_mul(4);
+        let bytes = source.get(from..).unwrap_or(&[]);
+        for (slot, bytes) in band.iter_mut().zip(bytes.chunks_exact(4)) {
+            let colour = |at: usize| {
+                let byte = bytes.get(at).copied().unwrap_or(0);
+                graded.get(usize::from(byte)).copied().unwrap_or(0.0)
+            };
+            let alpha = f32::from(bytes.get(3).copied().unwrap_or(0)) / 255.0;
+            *slot = [colour(0), colour(1), colour(2), alpha];
+        }
+    });
 
     // Down, keeping each level's size so the way back up lands on it.
     let mut sizes = Vec::with_capacity(settings.passes as usize);
@@ -801,17 +841,25 @@ pub(crate) fn blur(pixels: &mut [u8], block: &Block, settings: &Blur) {
     }
     finish(&mut plane, block, settings);
 
-    for (value, bytes) in plane.pixels.iter().zip(pixels.chunks_exact_mut(4)) {
-        for (channel, slot) in bytes.iter_mut().enumerate() {
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "a channel between zero and one becomes a byte"
-            )]
-            let byte =
-                (value.get(channel).copied().unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8;
-            *slot = byte;
+    let blurred = &plane.pixels;
+    bands(pixels, width.saturating_mul(4), |first, band| {
+        let values = blurred.get(first.saturating_mul(width)..).unwrap_or(&[]);
+        for (value, bytes) in values.iter().zip(band.chunks_exact_mut(4)) {
+            written(*value, bytes);
         }
+    });
+}
+
+/// One blurred pixel as the four bytes it is written back as.
+fn written(value: [f32; 4], bytes: &mut [u8]) {
+    for (channel, slot) in value.into_iter().zip(bytes.iter_mut()) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a channel between zero and one becomes a byte"
+        )]
+        let byte = (channel.clamp(0.0, 1.0) * 255.0).round() as u8;
+        *slot = byte;
     }
 }
 

@@ -740,9 +740,59 @@ fn window(
     // `decorate false`: no border and no shadow, for a window that draws
     // its own frame.
     let width = if own.decorate { width } else { 0 };
+    // What is behind a window that can be seen through, blurred. Only for a
+    // window that can be: blurring behind an opaque one costs a pyramid of
+    // passes and changes not one pixel of the frame. A surface in a format
+    // with alpha may be translucent anywhere, and a window drawn at less
+    // than full opacity is translucent everywhere.
+    // `opaque`: the window is drawn as if every pixel were opaque, so
+    // there is nothing to see behind it and nothing to blur.
+    let translucent = !own.opaque
+        && (surfaces
+            .get(&placed.window)
+            .is_some_and(|surface| surface.format() == Format::Argb8888)
+            || opacity < 1.0);
+    let blur = style.blur.filter(|_| own.blur && translucent);
     // The shadow first, under the border and the window: Hyprland draws it
     // as a decoration behind them and does not cut the window's own shape
     // out of it.
+    //
+    // Neither does this, where any of it can be seen. But a shadow is a
+    // power and a blend a pixel over a box larger than the window, twelve
+    // milliseconds of a full-screen one, and under two kinds of window all
+    // of that but the rim is written over before the frame is done: one
+    // whose blur is copied out of the backdrop, which replaces every pixel
+    // inside the window's shape, and one whose own pixels are copied in
+    // opaque. There the shadow is drawn where it shows -- outside the
+    // window's rectangle drawn in by its corners' radius, which is inside
+    // its shape whatever the corners' curve.
+    let overwritten = (blur.is_some_and(|blur| blur.size > 0 && blur.passes > 0)
+        && backdrop
+            .as_deref()
+            .is_some_and(|behind| behind.fits(canvas)))
+        || surfaces.get(&placed.window).is_some_and(|surface| {
+            (own.opaque || surface.format() == Format::Xrgb8888)
+                && opacity >= 1.0
+                && i64::from(surface.width()) == rect.width
+                && i64::from(surface.height()) == rect.height
+        });
+    let seen;
+    let shadowed = if overwritten {
+        let inset = rounding
+            .radius
+            .min(rect.width / 2)
+            .min(rect.height / 2)
+            .max(0);
+        seen = damage.without(Rect::new(
+            rect.x.saturating_add(inset),
+            rect.y.saturating_add(inset),
+            rect.width.saturating_sub(inset.saturating_mul(2)),
+            rect.height.saturating_sub(inset.saturating_mul(2)),
+        ));
+        &seen
+    } else {
+        damage
+    };
     if let Some(shadow) = style.shadow.as_ref().filter(|_| own.shadow && own.decorate) {
         canvas.shadow(
             Rect::new(
@@ -755,7 +805,7 @@ fn window(
                 rounding,
                 ..*shadow
             },
-            damage,
+            shadowed,
         );
     }
     // A rounded window's border follows its corners, so it cannot be four
@@ -786,21 +836,7 @@ fn window(
     } else {
         canvas.border_gradient(rect, width, gradient, damage);
     }
-    // What is behind a window that can be seen through, blurred. Only for a
-    // window that can be: blurring behind an opaque one costs a pyramid of
-    // passes and changes not one pixel of the frame. A surface in a format
-    // with alpha may be translucent anywhere, and a window drawn at less
-    // than full opacity is translucent everywhere.
-    // `opaque`: the window is drawn as if every pixel were opaque, so
-    // there is nothing to see behind it and nothing to blur.
-    let translucent = !own.opaque
-        && (surfaces
-            .get(&placed.window)
-            .is_some_and(|surface| surface.format() == Format::Argb8888)
-            || opacity < 1.0);
-    if let Some(blur) = style.blur.filter(|_| own.blur)
-        && translucent
-    {
+    if let Some(blur) = blur {
         match backdrop {
             Some(behind) => behind.blur_onto(canvas, rect, rounding, &blur, damage),
             None => canvas.blur(rect, rounding, &blur, damage),

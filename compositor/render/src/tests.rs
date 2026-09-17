@@ -2988,3 +2988,53 @@ fn only_a_window_over_the_desktop_alone_reads_the_backdrop() {
     assert!(!reads_backdrop(&windows, 0, &dimmed));
     assert!(!reads_backdrop(&windows, 1, &dimmed));
 }
+
+/// A frame is the same bytes on one thread as on seven.
+///
+/// The blur's passes, a surface blended onto the frame and one copied into
+/// it are each cut into bands of rows and drawn a band a thread
+/// (`crate::cores`). Every expected image in this file says the bands come
+/// out right on whatever machine ran the tests; this says it of the two
+/// numbers of threads a machine cannot be relied on to have, with every
+/// effect on and a wallpaper behind, so that each of the three is large
+/// enough to be cut up.
+#[test]
+fn a_frame_is_the_same_bytes_on_one_thread_as_on_seven() {
+    let style = graded_style();
+    let mut frames = [1, 7].map(|threads| {
+        crate::cores::tests::force(threads);
+        let frame = graded_frame(&style);
+        crate::cores::tests::force(1);
+        frame
+    });
+    let seven = frames.last_mut().map(std::mem::take).unwrap();
+    assert!(
+        frames[0] == seven,
+        "seven threads drew another frame than one"
+    );
+}
+
+/// A region less a hole is every pixel of it outside the hole and none
+/// inside, which is what lets a shadow be drawn only where it shows.
+#[test]
+fn a_region_less_a_hole_is_what_is_left() {
+    let region: Damage = [Rect::new(0, 0, 100, 60), Rect::new(200, 0, 10, 10)]
+        .into_iter()
+        .collect();
+    let hole = Rect::new(20, 10, 60, 30);
+    let left = region.without(hole);
+    assert_eq!(left.area(), region.area() - 60 * 30);
+    for (x, y, inside) in [
+        (19, 10, true),
+        (20, 10, false),
+        (79, 39, false),
+        (80, 39, true),
+    ] {
+        assert_eq!(left.contains(x, y), inside, "at {x},{y}");
+    }
+    assert!(
+        left.contains(205, 5),
+        "a rectangle the hole never touched went with it"
+    );
+    assert_eq!(region.without(Rect::new(500, 500, 5, 5)), region);
+}

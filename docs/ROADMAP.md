@@ -4394,6 +4394,16 @@ changed with `DRM_IOCTL_MODE_DIRTYFB` rather than two flipped whole. The
 pointer boot sweeps the pointer through four hundred places and holds both:
 160 frames for the sweep before, 60 after, and the last picture exact.
 
+And a wallpaper that moves -- `mpvpaper` behind a translucent terminal,
+which changes everything behind the windows every frame -- took each part
+of a frame in turn. A window's shadow is drawn where it shows rather than
+under the whole of a window that is about to be written over it (12.8 ms to
+0.6); and `compositor_render`'s large operations, every pass of the blur
+and a surface blended or copied in, are cut into bands of rows drawn a band
+a thread, which is the same bytes on one thread as on sixteen (the blur 85
+ms to 20, the terminal 7.0 to 1.1, the video 5.8 to 1.1). A frame that owes
+a whole blur is 22 ms, which is a 30 fps video kept up with.
+
 **Done — the rest of Hyprland's dispatcher table (2026-09-17).**
 Twenty-seven names in Hyprland's `m_dispMap` had no answer here; every one
 of them does now. The split is by what they touch. `compositor/layout`

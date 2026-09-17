@@ -1,7 +1,9 @@
 //! The frame being drawn: a tiny-skia pixmap in the canvas byte order the
 //! crate docs describe, and the drawing operations clipped to damage.
 
-use tiny_skia::{BlendMode, FilterQuality, Paint, Pattern, Pixmap, PixmapRef, Shader, SpreadMode};
+use tiny_skia::{
+    BlendMode, FilterQuality, Paint, Pattern, Pixmap, PixmapMut, PixmapRef, Shader, SpreadMode,
+};
 
 use crate::blur::{Block, Blur};
 use crate::damage::{bounding, intersect, is_empty};
@@ -142,6 +144,52 @@ impl Canvas {
                 .collect(),
             None => Vec::new(),
         }
+    }
+
+    /// Draw into `clips` a band of rows at a time, the bands spread over the
+    /// machine's cores ([`crate::cores`]).
+    ///
+    /// `draw` is given a band's bytes, the canvas row the band begins at,
+    /// and the parts of `clips` inside it with that row taken off, so that
+    /// it draws into the band as into a canvas of its own. A few pixels are
+    /// one band, which is the whole canvas, and no thread is started.
+    fn in_bands(&mut self, clips: &[Rect], draw: impl Fn(&mut [u8], i64, &[Rect]) + Sync) {
+        let area: usize = clips
+            .iter()
+            .map(|clip| index(clip.width) * index(clip.height))
+            .sum();
+        let threads = crate::cores::threads_for(area);
+        let Some(covered) = bounding(clips).filter(|_| threads > 1) else {
+            draw(self.pixmap.data_mut(), 0, clips);
+            return;
+        };
+        let stride = index(i64::from(self.width())) * 4;
+        let tall = index(covered.height).div_ceil(threads).max(1);
+        let Some(rows) = self
+            .pixmap
+            .data_mut()
+            .get_mut(index(covered.y) * stride..index(covered.bottom()) * stride)
+        else {
+            return;
+        };
+        std::thread::scope(|scope| {
+            for (at, band) in rows.chunks_mut(tall * stride).enumerate() {
+                let top = covered.y + i64::try_from(at * tall).unwrap_or(0);
+                let inside = Rect::new(
+                    covered.x,
+                    top,
+                    covered.width,
+                    i64::try_from(band.len() / stride.max(1)).unwrap_or(0),
+                );
+                let local: Vec<Rect> = clips
+                    .iter()
+                    .filter_map(|&clip| intersect(clip, inside))
+                    .map(|clip| clip.translate(0, top.saturating_neg()))
+                    .collect();
+                let draw = &draw;
+                let _ = scope.spawn(move || draw(band, top, &local));
+            }
+        });
     }
 
     /// Fill each of `clips` with `paint` and record it.
@@ -763,25 +811,18 @@ impl Canvas {
     /// pixel opaque.
     fn copy(&mut self, surface: &Surface<'_>, rect: Rect, clips: &[Rect]) {
         let width = index(i64::from(self.width()));
-        for &clip in clips {
-            let len = index(clip.width) * 4;
-            let from = index(clip.x.saturating_sub(rect.x)) * 4;
-            for y in clip.y..clip.bottom() {
-                let Some(row) = u32::try_from(y.saturating_sub(rect.y))
-                    .ok()
-                    .and_then(|row| surface.row(row))
-                else {
-                    continue;
-                };
-                let start = (index(y) * width + index(clip.x)) * 4;
-                let (Some(src), Some(dst)) = (
-                    row.get(from..from + len),
-                    self.pixmap.data_mut().get_mut(start..start + len),
-                ) else {
-                    continue;
-                };
-                copy_opaque(dst, src);
+        self.in_bands(clips, |band, top, local| {
+            for &clip in local {
+                copy_rows(
+                    band,
+                    width,
+                    surface,
+                    rect.translate(0, top.saturating_neg()),
+                    clip,
+                );
             }
+        });
+        for &clip in clips {
             self.damage.add(clip);
         }
     }
@@ -830,18 +871,33 @@ impl Canvas {
         let Some(pixmap) = PixmapRef::from_bytes(bytes, width, height) else {
             return;
         };
-        let shader = Pattern::new(
-            pixmap,
-            SpreadMode::Pad,
-            FilterQuality::Nearest,
-            opacity,
-            tiny_skia::Transform::from_translate(
-                rect.x.saturating_add(part.x) as f32,
-                rect.y.saturating_add(part.y) as f32,
-            ),
-        );
-        let paint = paint(shader, BlendMode::SourceOver);
-        self.fill_clips(clips, &paint);
+        // A band at a time, each with the pattern moved up by where the
+        // band begins: the same surface pixel lands on the same canvas
+        // pixel through the same arithmetic, whoever draws the row.
+        let across = self.width();
+        let at = (rect.x.saturating_add(part.x), rect.y.saturating_add(part.y));
+        self.in_bands(clips, |band, top, local| {
+            let rows = u32::try_from(band.len() / (index(i64::from(across)) * 4)).unwrap_or(0);
+            let Some(mut band) = PixmapMut::from_bytes(band, across, rows) else {
+                return;
+            };
+            let shader = Pattern::new(
+                pixmap,
+                SpreadMode::Pad,
+                FilterQuality::Nearest,
+                opacity,
+                tiny_skia::Transform::from_translate(at.0 as f32, at.1.saturating_sub(top) as f32),
+            );
+            let paint = paint(shader, BlendMode::SourceOver);
+            for &clip in local {
+                if let Some(rect) = skia_rect(clip) {
+                    band.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+                }
+            }
+        });
+        for &clip in clips {
+            self.damage.add(clip);
+        }
     }
 
     /// Copy each of `clips` out of `other`, which must be this canvas's
@@ -905,6 +961,28 @@ impl Canvas {
             }
         }
         Ok(())
+    }
+}
+
+/// Copy the part of `surface`, drawn at `rect`, that `clip` covers into
+/// `data`, rows `width` pixels wide whose first is the row `rect` and `clip`
+/// count from.
+fn copy_rows(data: &mut [u8], width: usize, surface: &Surface<'_>, rect: Rect, clip: Rect) {
+    let len = index(clip.width) * 4;
+    let from = index(clip.x.saturating_sub(rect.x)) * 4;
+    for y in clip.y..clip.bottom() {
+        let Some(row) = u32::try_from(y.saturating_sub(rect.y))
+            .ok()
+            .and_then(|row| surface.row(row))
+        else {
+            continue;
+        };
+        let start = (index(y) * width + index(clip.x)) * 4;
+        if let (Some(src), Some(dst)) =
+            (row.get(from..from + len), data.get_mut(start..start + len))
+        {
+            copy_opaque(dst, src);
+        }
     }
 }
 

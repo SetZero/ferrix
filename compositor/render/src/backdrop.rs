@@ -68,6 +68,59 @@ fn place(at: usize) -> i64 {
     i64::try_from(at).unwrap_or(0).saturating_mul(TILE)
 }
 
+/// What blurring `region` costs: the pixels read, which is the region and
+/// a kernel's `reach` on every side of it.
+fn cost(region: Rect, reach: i64) -> i64 {
+    let around = reach.saturating_mul(2);
+    region
+        .width
+        .saturating_add(around)
+        .saturating_mul(region.height.saturating_add(around))
+}
+
+/// The smallest rectangle holding both.
+fn both(one: Rect, other: Rect) -> Rect {
+    bounding(&[one, other]).unwrap_or(one)
+}
+
+/// The first two of `regions` that are cheaper blurred as one than apart.
+fn cheaper_together(regions: &[Rect], reach: i64) -> Option<(usize, usize)> {
+    regions.iter().enumerate().find_map(|(at, &one)| {
+        let other = regions
+            .iter()
+            .skip(at.saturating_add(1))
+            .position(|&other| {
+                cost(both(one, other), reach) <= cost(one, reach).saturating_add(cost(other, reach))
+            })?;
+        Some((at, at.saturating_add(1).saturating_add(other)))
+    })
+}
+
+/// `tiles` gathered into the regions it is cheapest to blur them as.
+///
+/// A blur reads a kernel's reach around what it writes, so a tile blurred
+/// alone costs twenty-five times its own pixels at the usual size and
+/// passes, and two tiles side by side cost barely more than one: tiles near
+/// each other belong in one blur. But not every tile in one. A wallpaper
+/// that moves, moves here and there -- an eye, a strand of hair, a
+/// particle -- and one box round all of it is the whole window, blurred
+/// every frame for a few tiles' worth of change. So two regions are joined
+/// whenever reading their one box costs no more than reading each, until no
+/// two are; whatever order they are joined in, each blur writes the pixels
+/// a blur of the whole window would.
+fn gathered(tiles: Vec<Rect>, reach: i64) -> Vec<Rect> {
+    let mut regions = tiles;
+    regions.sort_unstable_by_key(|tile| (tile.y, tile.x));
+    regions.dedup();
+    while let Some((one, other)) = cheaper_together(&regions, reach) {
+        let joined = regions.swap_remove(other);
+        if let Some(region) = regions.get_mut(one) {
+            *region = both(*region, joined);
+        }
+    }
+    regions
+}
+
 impl Backdrop {
     /// A backdrop for a `width` × `height` canvas, with nothing blurred yet.
     ///
@@ -95,6 +148,13 @@ impl Backdrop {
     #[must_use]
     pub const fn blurs(&self) -> u64 {
         self.blurs
+    }
+
+    /// Whether this is `canvas`'s backdrop: one of its size, which is the
+    /// one [`Backdrop::blur_onto`] copies out of rather than blurring the
+    /// frame as it stands.
+    pub(crate) fn fits(&self, canvas: &Canvas) -> bool {
+        (canvas.width(), canvas.height()) == (self.sharp.width(), self.sharp.height())
     }
 
     /// How many tiles across and down a canvas is.
@@ -234,30 +294,60 @@ impl Backdrop {
         }
         let (columns, _) = Self::tiles_of(&self.sharp);
         let stale: Vec<Rect> = clips.iter().flat_map(|&clip| self.stale_in(clip)).collect();
-        // One blur over all of them. Two stale corners of a window cost the
-        // whole window this once, and nothing the next time: every tile in
-        // the box comes out fresh.
-        let Some(region) =
-            bounding(&stale).and_then(|region| intersect(region, self.sharp.bounds()))
-        else {
-            return;
-        };
-        self.blurred.blur_from(
-            Some(&self.sharp),
-            region,
-            Rounding::none(),
-            blur,
-            &Damage::from(region),
-        );
-        self.blurs = self.blurs.saturating_add(1);
+        for region in gathered(stale, blur.reach()) {
+            let Some(region) = intersect(region, self.sharp.bounds()) else {
+                continue;
+            };
+            self.blurred.blur_from(
+                Some(&self.sharp),
+                region,
+                Rounding::none(),
+                blur,
+                &Damage::from(region),
+            );
+            self.blurs = self.blurs.saturating_add(1);
+            let ((from_x, to_x), (from_y, to_y)) = self.tiles_in(region);
+            for y in from_y..to_y {
+                if let Some(flags) = self.fresh.get_mut(y * columns + from_x..y * columns + to_x) {
+                    flags.fill(true);
+                }
+            }
+        }
         // What a canvas records of what was drawn on it is for a frame to
         // present, and this one is never presented.
         let _ = self.blurred.take_damage();
-        let ((from_x, to_x), (from_y, to_y)) = self.tiles_in(region);
-        for y in from_y..to_y {
-            if let Some(flags) = self.fresh.get_mut(y * columns + from_x..y * columns + to_x) {
-                flags.fill(true);
-            }
-        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tile, by its place in the grid.
+    fn tile(x: i64, y: i64) -> Rect {
+        Rect::new(x * TILE, y * TILE, TILE, TILE)
+    }
+
+    /// Tiles side by side are one blur, tiles a screen apart are two, and a
+    /// screen full of them is one again: each blur reads a reach around what
+    /// it writes, and that is what decides.
+    #[test]
+    fn tiles_are_gathered_into_the_blurs_that_read_least() {
+        let reach = Blur::new(8, 3).reach();
+
+        let beside = gathered(vec![tile(3, 3), tile(4, 3), tile(3, 4), tile(3, 3)], reach);
+        assert_eq!(beside, [Rect::new(3 * TILE, 3 * TILE, 2 * TILE, 2 * TILE)]);
+
+        let mut apart = gathered(vec![tile(0, 0), tile(28, 15)], reach);
+        apart.sort_unstable_by_key(|region| region.x);
+        assert_eq!(apart, [tile(0, 0), tile(28, 15)]);
+
+        let everywhere: Vec<Rect> = (0..17)
+            .flat_map(|y| (0..30).map(move |x| tile(x, y)))
+            .collect();
+        assert_eq!(
+            gathered(everywhere, reach),
+            [Rect::new(0, 0, 30 * TILE, 17 * TILE)]
+        );
     }
 }

@@ -245,11 +245,8 @@ which is why it is a note and not a fix.
 
 ### 2.5 What is left
 
-* **A wallpaper that changes every frame** (`mpvpaper`) changes what is
-  behind every window every frame, and the blur of it is owed every frame:
-  95 ms behind a full-screen window. No tracking can move that. What could:
-  a cheaper kernel, or blurring on another thread -- the second only where
-  there is a second core, which under `whpx` there is not.
+* **A wallpaper that changes every frame** (`mpvpaper`) is what §2.6 is
+  about: it keeps up with a 30 fps video now, and costs cores to do it.
 * **A floating translucent window, and a blurred bar,** are still redrawn
   whole when touched. A bar is 8.6 ms. A large floating terminal is the case
   that would be felt.
@@ -259,6 +256,56 @@ which is why it is a note and not a fix.
 * **`composite_scaled` still gathers a whole surface**, for a window
   part-way through an animation. The whole window is damaged then, so it is
   proportionate; it is also 3 ms a window a frame.
+
+### 2.6 A wallpaper that moves
+
+`mpvpaper` behind a full-screen translucent `foot`, the customer's own
+desktop. Everything behind the windows is new every frame of the video, so
+the backdrop buys nothing for that frame and every part of drawing it is on
+the path. Timed a stage at a time, 1920x1080, release:
+
+| stage | before | after | how |
+|---|---|---|---|
+| the window's shadow | 12.8 ms | 0.6 ms | drawn where it shows |
+| the terminal, blended | 7.0 ms | 1.1 ms | in bands, a band a thread |
+| the video, copied in | 5.8 ms | 1.1 ms | the same |
+| the blur, when all of the wallpaper changed | 85 ms | 20 ms | the same, every pass |
+
+* **The shadow** is a power and a blend a pixel over a box larger than the
+  window, and under a window whose blur is copied out of the backdrop, or
+  whose own pixels are copied in opaque, all of it but the rim is written
+  over before the frame is done. `Damage::without` takes the window's
+  inside out of what the shadow is drawn into. Hyprland draws it whole
+  because a GPU does not care.
+* **`crate::cores`** cuts an operation's rows into bands and draws a band a
+  thread: every pass of the blur, a surface blended in, a surface copied
+  in. No row of any of them reads another row of the same one, so the bytes
+  are the same on one thread as on sixteen -- every expected image says so
+  on the machine that runs it and
+  `a_frame_is_the_same_bytes_on_one_thread_as_on_seven` on any. Every
+  processor of a small machine, half of a large one's to at most eight:
+  past eight, on twelve cores, a thread bought a millisecond for a core.
+  Ferrix answers `sched_getaffinity`, so a guest draws on as many threads
+  as it was given processors, and on one under `whpx`, which gives it one.
+* **The stale tiles are blurred in the groups that read least**
+  (`gathered` in `backdrop.rs`) rather than in one box round all of them: a
+  clock on a wallpaper is a clock's worth of blur under a window however
+  far from it something else moved.
+
+Measured end to end the run is one of two, and which it is changes from run
+to run of the *same* binary -- `mpvpaper` on `llvmpipe` sometimes hands over
+frames that differ everywhere and sometimes frames that are the same bytes
+under the window, and what decides that was not found. So both: about
+**3.8 ms a frame where the wallpaper under the window did not change (14 ms
+on one thread), and about 22 ms where all of it did** (on one thread that
+is the 85 ms of blur and 26 of everything else in the table), which is
+every frame of a 30 fps video with a third of the time to spare. Between two frames of the video a pointer's or a key's frame costs
+what it did in §2.3, because the blur it needs is the one just made.
+
+What it costs is cores: four or so of twelve while every frame owes a
+blur. That is what a software dual-Kawase is; the next lever is the tap's
+own arithmetic (the bilinear weights of a pass repeat every two pixels
+across and are worked out again for each), and after that the GPU.
 
 ---
 

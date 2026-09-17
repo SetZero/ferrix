@@ -125,6 +125,18 @@ impl Damage {
         }
     }
 
+    /// The region less `hole`.
+    #[must_use]
+    pub fn without(&self, hole: Rect) -> Self {
+        Self {
+            rects: self
+                .rects
+                .iter()
+                .flat_map(|&rect| subtract(rect, hole))
+                .collect(),
+        }
+    }
+
     /// Empty the region.
     pub fn clear(&mut self) {
         self.rects.clear();
