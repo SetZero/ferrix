@@ -59,8 +59,9 @@ far end over QMP and requiring them back out of the nodes on both
 architectures, and a negative control that must fail. `epoll`, `eventfd` and
 `ioctl(FIONBIO)` are in the boot test, so the kernel side of iteration 2's
 prerequisites is done, and `card0` has the primary plane and `type` property
-Smithay's legacy path needs (E4). What is left of stage 17 is the seat: the
-compositor does not yet read those nodes.
+Smithay's legacy path needs (E4). The compositor reads those nodes now, so
+stage 17 is met: `cargo xtask test-seat` types into a window on Ferrix from
+QEMU's far end.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -3892,10 +3893,10 @@ and the first run showed exactly that. And the server refused the client's
 own second pool for reusing an object id it had not destroyed, which was the
 client's bug and the server being right.
 
-What is left of this stage: `wl_seat`, so a window can be typed into; the
-`hyprctl` IPC; and the screen itself, which is `compositor/blank`'s DRM path
-moved behind `hyprix`'s backend so the same frame goes to `/dev/dri/card0`
-under QEMU.
+What was left of this stage at that point: `wl_seat`, so a window can be
+typed into; the `hyprctl` IPC; and the screen itself, which is
+`compositor/blank`'s DRM path moved behind `hyprix`'s backend so the same
+frame goes to `/dev/dri/card0` under QEMU. All three have landed since.
 
 **Done — a real toolkit runs on it (2026-09-17).** `compositor/pattern` is
 written against the same crates the server is, so a test with it shows the two
@@ -3918,10 +3919,10 @@ the pattern client could never have found:
   0x0+0x0@0Hz`: a client with no mode has no size to scale against. It now
   sends geometry, mode, scale, name, description and the `done` that says the
   description is whole, and only the ones the version bound can read.
-* `wl_seat` announced nothing, which it still does, because there is no input
-  path until stage 17's L5 to L7 land. A client may only ask for a capability
-  the seat announced, so asking is `missing_capability` rather than a
-  keyboard that never sends a key.
+* `wl_seat` announced nothing, because there was no input path until stage
+  17's L5 to L7 landed. A client may only ask for a capability the seat
+  announced, so asking was `missing_capability` rather than a keyboard that
+  never sends a key. It announces what there are devices for now.
 
 With those, `foot` gets a window, works out its cell size from the mode this
 compositor gave it, draws its terminal over 690,820 of the screen's 786,432
@@ -3998,9 +3999,56 @@ change -- but the boot check asks for no files at all, so what kept its bytes
 the same was the empty list and never the branch. The files go in either way
 now, and the test that named the old rule says the new one.
 
-What this stage still owes: `wl_seat`, so a window can be typed into, which
-waits on the input iteration's L5 to L7; the event socket a bar subscribes
-to; and a terminal client, which waits on a pty.
+**Done — the seat: a window that can be typed into (2026-09-17).** The input
+iteration landed the nodes; this is the compositor reading them. `hyprix`
+opens every `/dev/input/eventN` through `compositor/evecho`, grabs it, and
+turns its events into `wl_keyboard` and `wl_pointer` ones: `enter` and
+`leave` as the layout's focus moves and as the pointer crosses a window,
+`key` with evdev's own code, `modifiers` with the masks the keymap declares,
+`motion`, `button`, `axis` and the `frame` that groups them, and
+`repeat_info` from `input:repeat_rate` and `input:repeat_delay`.
+
+The keymap is a real one. `compositor/xkb` carries the text libxkbcommon
+itself printed for the `evdev` rules with the `us` layout -- 34,205 bytes,
+from a committed probe -- and hands it to each client in a sealed `memfd`, as
+Smithay's `SealedFile` does. The same probe asks libxkbcommon's own state
+machine what each key holds and what each lock leaves locked, so which key is
+`Shift` and which is `Caps Lock` is a property of the keymap here as it is
+there, and the bits in `wl_keyboard.modifiers` are the indices that keymap
+gives rather than constants somebody wrote down.
+
+Keybinds fire. A bind matches when the key matches and the held modifiers are
+*exactly* the bind's, Caps Lock and Num Lock excepted -- which is what lets
+`SUPER, Q` and `SUPER SHIFT, Q` be two different binds -- and it eats its
+key, release included, because a client told a key came up that it was never
+told went down has that key stuck down for ever. The `r`, `e`, `n` and `i`
+flags, `code:NN`, `mouse:NNN` and the wheel directions all resolve, and one
+dispatcher path serves both a bind and `hyprctl dispatch`.
+
+`cargo xtask test-seat` is the proof, on x86-64 and AArch64: QEMU's
+`input-send-event` puts a key in at the far end of a `virtio-keyboard-pci`,
+and the test requires the client to report the keymap it was handed, the
+focus it was given, the pointer's position in its own coordinates, the button,
+and the evdev code of the key -- and then requires the screendump taken after
+the key to differ from the one before, because the client redraws on a key.
+Then it presses `SUPER Q` against a carried `hyprland.conf` holding
+`bind = SUPER, Q, killactive`, and requires the window to close and the
+screen to be the compositor's background and nothing else. 712,932 of 786,432
+pixels changed on the key; every one of them was the background after the
+bind.
+
+Two things this found. A `wl_keyboard` is usually asked for in the same burst
+of requests that maps the window, so an `enter` sent when the layout focuses
+that window can reach no object at all; the server now says whether an
+`enter` arrived and the compositor asks again until it does, because a focus
+remembered but never delivered is a window that can never be typed into. And
+a compositor may not open its devices blocking: the first version read the
+keyboard once round a loop that also had the clients and the screen in it,
+and stopped all three until somebody typed.
+
+What this stage still owes: the event socket a bar subscribes to; a terminal
+client, which waits on a pty; and the two-client keybind states its exit
+criterion names.
 
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the

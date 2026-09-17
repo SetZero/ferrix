@@ -568,6 +568,13 @@ wrong answer rather than a failing test:
   `EVIOCGNAME` held the session across the copy. The text is now copied out
   of the session first.
 
+The compositor reads those nodes as of the same day: `compositor/xkb` carries
+libxkbcommon's own keymap for the `us` layout from a committed probe,
+`hyprix` opens every node through `compositor/evecho` and turns its events
+into `wl_keyboard` and `wl_pointer` ones, and `cargo xtask test-seat` types
+into a window on Ferrix from QEMU's far end and fires a Hyprland keybind.
+`docs/ROADMAP.md` stage 18 records it.
+
 Of iteration 2's prerequisites,
 E1–E3 landed (os-26) and E4 landed (the GUI session): iteration 2's
 prerequisites are all in. The roadmap's stage 17 records what E1 and E2 do not yet do as
