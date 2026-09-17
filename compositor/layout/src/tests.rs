@@ -2852,3 +2852,51 @@ fn the_scratchpad_can_be_hidden_when_the_workspace_changes() {
     let _second = dispatch(&mut hidden, "workspace", "2");
     assert!(hidden.special_on(M1).is_none());
 }
+
+/// `special_scale_factor` draws a scratchpad's windows smaller than the
+/// slot the layout gave them, centred in it.
+///
+/// What makes the scratchpad look like something *over* the screen rather
+/// than another workspace: `CWindowTarget::applyToWindow` shrinks a
+/// special workspace's window about its own middle.
+#[test]
+fn the_scratchpads_windows_are_drawn_smaller_than_their_slot() {
+    let mut state = setup(&format!("{BARE}dwindle:special_scale_factor = 0.8\n"));
+    open(&mut state, &[1, 2]);
+    let _over = dispatch(&mut state, "togglespecialworkspace", "");
+    focus(&mut state, 2);
+    let _moved = dispatch(&mut state, "movetoworkspace", "special");
+    assert_eq!(
+        rects_on(&state, M1),
+        [
+            (1, r(0, 0, 1920, 1080)),
+            // 80% of the monitor, centred: 1536x864 at 192,108.
+            (2, r(192, 108, 1536, 864))
+        ]
+    );
+}
+
+/// `misc:close_special_on_empty`: a scratchpad whose last window has gone
+/// stops being shown.
+///
+/// Otherwise an empty overlay is left over the screen for a person to
+/// dismiss by hand, which is not what they asked for by closing the window.
+#[test]
+fn the_scratchpad_closes_when_its_last_window_goes() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    let _over = dispatch(&mut state, "togglespecialworkspace", "");
+    let _moved = dispatch(&mut state, "movetoworkspace", "special");
+    assert!(state.special_on(M1).is_some());
+    let _gone = state.window_gone(WindowId(1)).expect("the window");
+    assert!(state.special_on(M1).is_none());
+
+    // And with the option off it stays, which is a person asking for it to.
+    let mut kept = setup(&format!("{BARE}misc:close_special_on_empty = false\n"));
+    open(&mut kept, &[1]);
+    let _over = dispatch(&mut kept, "togglespecialworkspace", "");
+    let _moved = dispatch(&mut kept, "movetoworkspace", "special");
+    assert!(kept.special_on(M1).is_some());
+    let _gone = kept.window_gone(WindowId(1)).expect("the window");
+    assert!(kept.special_on(M1).is_some());
+}

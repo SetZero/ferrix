@@ -11,8 +11,7 @@ use crate::{Blur, Canvas, Color, Damage, Format, Gradient, Rect, Shadow, Surface
 /// The colours a frame is drawn in, and the decorations it is drawn with.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Style {
-    /// What shows where no window is: Hyprland's `misc:background_color`,
-    /// which `compositor/config` does not read yet, at its default.
+    /// What shows where no window is: Hyprland's `misc:background_color`.
     pub background: Color,
     /// The focused window's border: `general:col.active_border`, whole.
     ///
@@ -115,7 +114,13 @@ impl Style {
         };
         let rounding = config.int("decoration:rounding").unwrap_or(0).max(0);
         Self {
-            background: Self::BACKGROUND,
+            // Hyprland stores a colour as an integer and reads this one
+            // as a colour rather than a gradient, so the first stop of
+            // whatever was written is what it is.
+            background: config
+                .gradient("misc:background_color")
+                .and_then(|written| written.colors.first().copied())
+                .unwrap_or(Self::BACKGROUND),
             active_border: border("general:col.active_border", 0xFFFF_FFFF),
             inactive_border: border("general:col.inactive_border", 0xFF44_4444),
             rounding,

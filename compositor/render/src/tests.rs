@@ -2268,6 +2268,25 @@ fn the_grading_changes_the_blurred_pixels_and_no_others() {
     assert_eq!(stray, 0, "{stray} pixels outside the blur changed");
 }
 
+/// `misc:background_color` is what shows where no window is.
+///
+/// Hyprland's default is a very dark grey and a person who sets it expects
+/// the colour they wrote, not a constant compiled into the compositor.
+#[test]
+fn the_background_is_the_colour_the_configuration_names() {
+    assert_eq!(Style::default().background, Style::BACKGROUND);
+    let parsed = parse(
+        "t.conf",
+        "misc:background_color = rgb(203040)\n",
+        &mut NoSources,
+    );
+    assert_eq!(parsed.diagnostics, []);
+    assert_eq!(
+        Style::from_config(&parsed.config).background,
+        Color(0xFF20_3040)
+    );
+}
+
 /// A configuration's five grading values reach the style, and a
 /// configuration that says nothing gets Hyprland's own.
 ///

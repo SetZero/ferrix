@@ -677,7 +677,18 @@ impl State {
                 previous: None,
                 special: None,
             };
-            windows.extend(self.placements(&over, focus));
+            // `special_scale_factor`: a window on the scratchpad is drawn
+            // that much of the size the layout gave it, centred in its
+            // slot, so that the scratchpad looks like something *over* the
+            // screen rather than another workspace
+            // (`CWindowTarget::applyToWindow`).
+            let scale = self.settings_at(special).special_scale_factor;
+            windows.extend(self.placements(&over, focus).into_iter().map(|mut placed| {
+                if !placed.fullscreen && scale < 1.0 {
+                    placed.rect = shrunk(placed.rect, scale);
+                }
+                placed
+            }));
         }
         windows
     }
@@ -929,10 +940,25 @@ impl State {
             return Err(Error::UnknownWindow(window));
         }
         Ok(self.run(|state| {
+            let was_on = state.windows.get(&window).copied();
             state.ungroup(window);
             state.detach(window);
             state.history.retain(|id| *id != window);
             let _rect = state.floating_rects.remove(&window);
+            // `misc:close_special_on_empty`: a scratchpad whose last window
+            // has gone stops being shown, rather than leaving an empty
+            // overlay over the screen for a person to dismiss by hand.
+            if state.settings.close_special_on_empty
+                && let Some(workspace) = was_on
+                && Self::is_special(workspace)
+                && state.windows(workspace).is_empty()
+            {
+                state
+                    .outputs
+                    .iter_mut()
+                    .filter(|output| output.special == Some(workspace))
+                    .for_each(|output| output.special = None);
+            }
             Vec::new()
         }))
     }
@@ -3316,6 +3342,28 @@ impl State {
 }
 
 /// The work area of `monitor` among `outputs`, empty if it is not there.
+/// `rect` scaled about its own middle, rounded to whole pixels.
+///
+/// `CWindowTarget::applyToWindow`'s `calcPos + (calcSize - calcSize *
+/// factor) / 2`, which is what puts a scratchpad's window inside the slot
+/// the layout gave it with a margin all round.
+fn shrunk(rect: Rect, factor: f64) -> Rect {
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        reason = "a window's pixels are far inside f64's exact range"
+    )]
+    let scaled = |value: i64| (value as f64 * factor).round() as i64;
+    let (width, height) = (scaled(rect.width), scaled(rect.height));
+    Rect::new(
+        rect.x.saturating_add(rect.width.saturating_sub(width) / 2),
+        rect.y
+            .saturating_add(rect.height.saturating_sub(height) / 2),
+        width.max(1),
+        height.max(1),
+    )
+}
+
 fn work_area(outputs: &[Output], monitor: MonitorId, settings: &Settings) -> Rect {
     outputs
         .iter()

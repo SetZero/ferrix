@@ -137,6 +137,17 @@ pub struct Settings {
     /// `binds:hide_special_on_workspace_change`: the scratchpad goes away
     /// when the workspace under it changes.
     pub hide_special_on_workspace_change: bool,
+    /// `misc:close_special_on_empty`: a special workspace whose last window
+    /// has gone stops being shown.
+    pub close_special_on_empty: bool,
+    /// `dwindle:special_scale_factor` and `master:special_scale_factor`: a
+    /// window on a special workspace is drawn this much of the size the
+    /// layout gave it, centred in that slot, so the scratchpad looks like
+    /// something over the screen rather than another workspace.
+    ///
+    /// One number rather than two, because only the layout in force is ever
+    /// asked and a person who sets one sets the other.
+    pub special_scale_factor: f64,
 }
 
 impl Default for Settings {
@@ -203,6 +214,15 @@ impl Settings {
             hide_special_on_workspace_change: config
                 .bool("binds:hide_special_on_workspace_change")
                 .unwrap_or(false),
+            close_special_on_empty: config.bool("misc:close_special_on_empty").unwrap_or(true),
+            special_scale_factor: finite(
+                config.float(match layout {
+                    Layout::Master => "master:special_scale_factor",
+                    Layout::Dwindle => "dwindle:special_scale_factor",
+                }),
+                1.0,
+            )
+            .clamp(0.0, 1.0),
             dwindle: DwindleSettings {
                 preserve_split: config.bool("dwindle:preserve_split").unwrap_or(false),
                 force_split,
