@@ -475,6 +475,95 @@ would learn of it without udev (an `inotify` watch on `/dev/input`), is §6.
 * **`run --display`** adds the same two devices, so the customer can type at
   and point into whatever the compositor of that iteration shows.
 
+## 4a. The keymap: every level, and several layouts
+
+Added 2026-09-17. What a key means is the keymap's business, and until this
+the tables carried two levels of one layout -- so a German keyboard could not
+type `@`, `|`, `~`, `[`, `]`, `{`, `}` or a backslash, all of which are on
+`AltGr`, and `input:kb_layout = de,us` matched no shipped layout at all and
+fell back to `us`.
+
+**What Hyprland does, which is less than it looks.** Hyprland compiles one
+keymap per keyboard, sends it to clients, feeds `xkb_state_update_key` on
+every real key transition, serializes depressed/latched/locked/group, and
+forwards raw evdev keycodes. It never calls `xkb_state_key_get_syms`,
+`xkb_keymap_num_levels_for_key` or `xkb_state_key_get_utf8`: levels are the
+client's business, resolved against the keymap it was handed. `kb_layout =
+de,us` goes to libxkbcommon verbatim -- **no comma splitting** -- and comes
+back as one keymap with two groups, so a layout switch changes only the group
+index in `wl_keyboard.modifiers` and sends no new keymap
+(`IKeyboard.cpp:66-73`, `Seat.cpp:377-380`). Hyprland's own comma-splitting
+code, `IKeyboard::updateXKBTranslationState(nullptr)` at `IKeyboard.cpp:228`,
+is unreachable in 0.56.2 and must not be ported: it would break the
+correspondence between the group index and the keymap clients hold.
+
+**So the compositor's job is a correct keymap and correct serialization**,
+and that is what this is.
+
+* **Every level is in the tables.** `compositor/xkb/probe/keymap.c` prints,
+  for each key, every group and every level: the keysyms, and the modifier
+  masks that select each level (`xkb_keymap_key_get_mods_for_level`). So
+  `Key::level` is a lookup rather than an implementation of XKB's key types.
+  The rule is libxkbcommon's and it is not "the mask that matches": the
+  active modifiers are first narrowed to the ones the key's type declares --
+  every modifier named at any of its levels -- and a combination that then
+  matches nothing is **level zero**, never nothing at all. `de` has 64 keys
+  deeper than two levels, `us` 17.
+* **A client reads the keymap it was handed.** `compositor/term` is a client,
+  and it read the first shipped table whatever the keymap said, so
+  `kb_layout = de` gave it an American keyboard. There is no libxkbcommon
+  here to compile with, so `compositor_xkb::groups_of` reads the group names
+  out of the text -- `name[1]="German"` is what libxkbcommon's own printer
+  writes -- and matches them against the tables the binary carries.
+  `Layout::label` is that name, generated from the same probe output.
+  The keymap is **mapped** read-only, not read: a descriptor that arrives
+  over a socket shares the sender's file offset, so reading it would leave
+  the next client's keymap empty.
+* **Several layouts are one keymap with a group each.**
+  `compositor_xkb::layouts` reads `input:kb_layout` and `input:kb_variant` as
+  comma-separated lists side by side, capped at XKB's four groups, and
+  `compositor_xkb::merged` assembles the shipped single-group keymaps into
+  one multi-group text. The assembly is checked against libxkbcommon: for
+  `us,de` all 1285 level records of a real `de,us` keymap are reproduced
+  exactly, and for `de,us` all but two -- `<KPDL>` and `<LSGT>` gain a second
+  group the real keymap leaves single, because a compiled keymap does not
+  record that `us` inherited those keys from `pc(pc105)`. Both values are
+  what those keys type in `us`, and `merge/tests.rs` pins the list.
+* **A switch moves the group and nothing else.** `hyprctl switchxkblayout
+  <device> <next|prev|index>` with Hyprland's own grammar: device selectors
+  `main`/`active`/`current`, `all`, or a normalised name; a 0-based index
+  that is range-checked; `next`/`prev` that wrap **by modulus**, which is
+  what Hyprland relies on -- it asks for the index after the last one and
+  lets libxkbcommon bring it back, so a state that refused an out-of-range
+  index would stop `next` cycling. It is a hyprctl command and **not** a
+  keybind dispatcher; a bind reaches it with `exec, hyprctl …`. A real change
+  posts `activelayout>><device>,<layout name>` on the event socket.
+* **A bind resolves against group zero, at level one.** Hyprland resolves
+  binds against a state it never gives a group or a modifier
+  (`CKeybindManager::m_xkbTranslationState`), so a bind stays on the physical
+  key group zero puts it on, whatever layout is being typed in, and no bind
+  of Hyprland's resolves above the first level either. `bind = , at` is one
+  Hyprland would not resolve, and neither does this; `code:NN` names such a
+  key.
+
+**The one deliberate divergence: `grp:` options.** `kb_options =
+grp:alt_shift_toggle` works in Hyprland because the option is passed to
+libxkbcommon and the toggle ends up in the keymap's own compat section, which
+`xkb_state_update_key` then acts on. This compositor cannot compile a compat
+section at runtime, so a `grp:` toggle has to be implemented in
+`compositor/xkb`'s own state rather than read out of the keymap. Same
+behaviour, different mechanism, and it is the reason a shipped keymap carries
+no `grp:` option: the keymaps are generated without one, and the toggles are
+code. **Not yet implemented** -- `hyprctl switchxkblayout` is the way to
+switch today, and a `grp:` line is read and carried without effect.
+
+**Also not implemented, and not planned:** compose and dead keys. Hyprland
+has no compose support at all and needs none, because it forwards keycodes
+and produces no text; a dead key is an ordinary keycode and the client's own
+`xkb_compose_state` handles it. `compositor/xkb::character` therefore answers
+`None` for `dead_circumflex` rather than the spacing character it resembles,
+so a client that cannot compose types nothing rather than the wrong thing.
+
 ## 5. Landings and points
 
 Each is a small landing on main, gated on nazuna. The first four touch no
