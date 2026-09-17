@@ -97,3 +97,8 @@ fn radix_64_suboptions_secure_getenv_locale_comparison_and_tmpnam() {
 fn realpath_resolves_links_dots_and_the_working_directory() {
     check(&Case::named("stdlib/realpath"));
 }
+
+#[test]
+fn setkey_and_encrypt_do_des_on_the_bit_arrays_posix_gives_them() {
+    check(&Case::named("stdlib/setkey"));
+}
