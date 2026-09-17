@@ -97,6 +97,23 @@ pub enum WorkspaceTarget {
     /// `special:special`, which is what `togglespecialworkspace` with no
     /// argument toggles.
     Special(String),
+    /// `name:NAME`: a workspace by the name it was given, made with the
+    /// first free number if it does not exist yet.
+    Named(String),
+    /// `previous`, and `previous_per_monitor` which is the same thing on a
+    /// compositor whose history is per monitor: the workspace the monitor
+    /// showed before this one.
+    Previous,
+    /// `empty`, `emptym`, `emptyn`: the lowest-numbered workspace with
+    /// nothing on it. `m` keeps to the focused monitor and `n` counts up
+    /// from the workspace it is showing rather than from one.
+    Empty {
+        /// `emptyn`: start counting above the workspace shown now.
+        after_current: bool,
+    },
+    /// `next`: the workspace one above the one shown now, whether or not
+    /// it exists. `+1` in every way but the name.
+    Next,
 }
 
 impl WorkspaceTarget {
@@ -118,6 +135,23 @@ impl WorkspaceTarget {
         }
         if let Some(name) = text.strip_prefix("special:") {
             return (!name.is_empty()).then(|| Self::Special(name.to_owned()));
+        }
+        if let Some(name) = text.strip_prefix("name:") {
+            return (!name.is_empty()).then(|| Self::Named(name.to_owned()));
+        }
+        // `previous` and `prev`, as `getWorkspaceIDNameFromString` reads
+        // them; `_per_monitor` after either is the same here, because this
+        // compositor's history is a monitor's own.
+        if text.starts_with("prev") {
+            return Some(Self::Previous);
+        }
+        if let Some(rest) = text.strip_prefix("empty") {
+            return Some(Self::Empty {
+                after_current: rest.contains('n'),
+            });
+        }
+        if text == "next" {
+            return Some(Self::Next);
         }
         if let Some(rest) = text.strip_prefix('e') {
             return signed(rest).map(Self::Open);

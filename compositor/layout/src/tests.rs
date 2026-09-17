@@ -1497,7 +1497,7 @@ fn bad_dispatchers_and_arguments_are_errors_not_panics() {
         ("movewindow", "x"),
         ("workspace", ""),
         ("workspace", "-0x1"),
-        ("workspace", "name:web"),
+        ("workspace", "name:"),
         ("workspace", "special:"),
         ("workspace", "e"),
         ("workspace", "e1"),
@@ -2775,4 +2775,80 @@ fn a_workspace_rule_chooses_that_workspaces_layout() {
         state.settings_at(WorkspaceId(1)).master.orientation,
         Orientation::Left
     );
+}
+
+/// The workspace names a dispatcher can be given beyond a number.
+///
+/// `previous`, `name:`, `empty` and `next` are all
+/// `getWorkspaceIDNameFromString`'s, and each one is a line a person
+/// writes: `bind = SUPER, Tab, workspace, previous` is the commonest
+/// keybind in any Hyprland configuration after the numbers themselves.
+#[test]
+fn a_workspace_can_be_named_rather_than_numbered() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+
+    // `previous`: where the monitor was before.
+    let _second = dispatch(&mut state, "workspace", "2");
+    assert_eq!(state.current_workspace(), Some(WorkspaceId(2)));
+    let _back = dispatch(&mut state, "workspace", "previous");
+    assert_eq!(state.current_workspace(), Some(WorkspaceId(1)));
+    let _forth = dispatch(&mut state, "workspace", "prev");
+    assert_eq!(state.current_workspace(), Some(WorkspaceId(2)));
+
+    // `next`: one above, whether or not it exists.
+    let _next = dispatch(&mut state, "workspace", "next");
+    assert_eq!(state.current_workspace(), Some(WorkspaceId(3)));
+
+    // `empty`: the lowest-numbered workspace with nothing on it, which is
+    // 2 here because 1 has the window.
+    let _empty = dispatch(&mut state, "workspace", "empty");
+    assert_eq!(state.current_workspace(), Some(WorkspaceId(2)));
+    // `emptyn` counts up from the one shown now instead.
+    let _after = dispatch(&mut state, "workspace", "emptyn");
+    assert_eq!(state.current_workspace(), Some(WorkspaceId(3)));
+
+    // `name:`: a workspace by the name it was given, and the first free
+    // number for a name nothing carries yet.
+    let _renamed = dispatch(&mut state, "renameworkspace", "3 web");
+    let _elsewhere = dispatch(&mut state, "workspace", "1");
+    let _named = dispatch(&mut state, "workspace", "name:web");
+    assert_eq!(state.current_workspace(), Some(WorkspaceId(3)));
+}
+
+/// `binds:workspace_back_and_forth`: asking for the workspace that is
+/// already shown goes to the one before it.
+///
+/// One key both there and back, which is what the option is for. Without
+/// it the same key twice is the same workspace twice.
+#[test]
+fn workspace_back_and_forth_returns_to_the_one_before() {
+    let mut plain = setup(BARE);
+    let _second = dispatch(&mut plain, "workspace", "2");
+    let _again = dispatch(&mut plain, "workspace", "2");
+    assert_eq!(plain.current_workspace(), Some(WorkspaceId(2)));
+
+    let mut both = setup(&format!("{BARE}binds:workspace_back_and_forth = true\n"));
+    let _second = dispatch(&mut both, "workspace", "2");
+    let _again = dispatch(&mut both, "workspace", "2");
+    assert_eq!(both.current_workspace(), Some(WorkspaceId(1)));
+}
+
+/// `binds:hide_special_on_workspace_change`: the scratchpad goes away when
+/// the workspace under it changes.
+#[test]
+fn the_scratchpad_can_be_hidden_when_the_workspace_changes() {
+    let mut kept = setup(BARE);
+    let _over = dispatch(&mut kept, "togglespecialworkspace", "");
+    assert!(kept.special_on(M1).is_some());
+    let _second = dispatch(&mut kept, "workspace", "2");
+    assert!(kept.special_on(M1).is_some(), "it stays by default");
+
+    let mut hidden = setup(&format!(
+        "{BARE}binds:hide_special_on_workspace_change = true\n"
+    ));
+    let _over = dispatch(&mut hidden, "togglespecialworkspace", "");
+    assert!(hidden.special_on(M1).is_some());
+    let _second = dispatch(&mut hidden, "workspace", "2");
+    assert!(hidden.special_on(M1).is_none());
 }

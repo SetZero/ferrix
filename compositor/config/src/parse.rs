@@ -259,7 +259,15 @@ pub(crate) fn apply(
             return Err(format!("{key} is only valid in a configuration file"));
         }
         _ => {
-            if let Some(letters) = key.strip_prefix("bind") {
+            // `bind` and its flags -- `bindl`, `bindrm`, `bindel` -- but not
+            // `binds:workspace_back_and_forth`, which is an option in the
+            // `binds` category and begins with the same four letters. A
+            // keyword never has a colon in it and an option always does, so
+            // the colon is what tells them apart; without this a person's
+            // `binds:` line is answered `invalid flag :`.
+            if let Some(letters) = key.strip_prefix("bind")
+                && !key.contains(':')
+            {
                 if let Some(bind) = bind::parse(letters, value, submap)? {
                     config.binds.push(bind);
                 }

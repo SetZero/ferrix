@@ -273,6 +273,9 @@ impl Workspace {
 struct Output {
     monitor: Monitor,
     active: WorkspaceId,
+    /// What it showed before `active`, which is what `workspace previous`
+    /// and `binds:workspace_back_and_forth` go to.
+    previous: Option<WorkspaceId>,
     special: Option<WorkspaceId>,
 }
 
@@ -671,6 +674,7 @@ impl State {
             let over = Output {
                 monitor: output.monitor.clone(),
                 active: special,
+                previous: None,
                 special: None,
             };
             windows.extend(self.placements(&over, focus));
@@ -773,6 +777,7 @@ impl State {
             state.outputs.push(Output {
                 monitor,
                 active,
+                previous: None,
                 special: None,
             });
             if state.focused_monitor.is_none() {
@@ -2337,7 +2342,16 @@ impl State {
             .iter_mut()
             .find(|output| output.monitor.id == monitor)
         {
+            if output.active != workspace {
+                output.previous = Some(output.active);
+            }
             output.active = workspace;
+            // `binds:hide_special_on_workspace_change`: the scratchpad goes
+            // away when the workspace under it changes, which is what
+            // `Actions::changeWorkspace` does with it.
+            if self.settings.hide_special_on_workspace_change {
+                output.special = None;
+            }
         }
         self.focused_monitor = Some(monitor);
     }
@@ -2348,7 +2362,39 @@ impl State {
         let current = self.current_workspace()?;
         match target {
             WorkspaceTarget::Special(name) => Some(self.special_id(&name)),
+            // `binds:workspace_back_and_forth`: asking for the workspace
+            // that is already shown goes to the one before it instead,
+            // which is what makes one key both there and back.
+            WorkspaceTarget::Id(id) if id == current && self.settings.workspace_back_and_forth => {
+                self.previous_workspace().or(Some(id))
+            }
             WorkspaceTarget::Id(id) => Some(id),
+            WorkspaceTarget::Previous => self.previous_workspace(),
+            // `name:NAME`: the workspace that has that name, or the first
+            // free number, which is what `getWorkspaceIDNameFromString`
+            // does with a name nothing carries yet.
+            WorkspaceTarget::Named(name) => Some(
+                self.names
+                    .iter()
+                    .find(|(_, held)| **held == name)
+                    .map(|(id, _)| *id)
+                    .unwrap_or_else(|| self.first_free_workspace()),
+            ),
+            WorkspaceTarget::Next => Some(WorkspaceId(current.0.saturating_add(1).max(1))),
+            WorkspaceTarget::Empty { after_current } => {
+                let from = if after_current { current.0 } else { 0 };
+                let mut id = from.saturating_add(1).max(1);
+                // The lowest-numbered workspace with nothing on it, which
+                // is either one that does not exist or one that is empty.
+                while self
+                    .workspaces
+                    .get(&WorkspaceId(id))
+                    .is_some_and(|ws| !ws.is_empty())
+                {
+                    id = id.saturating_add(1);
+                }
+                Some(WorkspaceId(id))
+            }
             WorkspaceTarget::Relative(offset) => {
                 Some(WorkspaceId(current.0.saturating_add(offset).max(1)))
             }
@@ -2363,6 +2409,14 @@ impl State {
     }
 
     // -- Monitors -------------------------------------------------------------
+
+    /// The workspace the focused monitor showed before this one.
+    fn previous_workspace(&self) -> Option<WorkspaceId> {
+        self.outputs
+            .iter()
+            .find(|output| Some(output.monitor.id) == self.focused_monitor)?
+            .previous
+    }
 
     /// The monitor a dispatcher's argument names, by
     /// `CMonitorQueryCore::fromConfigString`'s rules.

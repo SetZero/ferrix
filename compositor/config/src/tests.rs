@@ -1459,3 +1459,33 @@ fn the_rules_that_match_a_workspace_are_gathered() {
     assert_eq!(rules_for(&rules, 7, "code").gaps_in, Some(Gaps::all(1)));
     assert_eq!(rules_for(&rules, 2, "2"), WorkspaceRule::default());
 }
+
+/// A `binds:` option is an option, not a `bind` with flags.
+///
+/// `bind` takes its flags as letters glued to the keyword -- `bindl`,
+/// `bindrm`, `bindel` -- and Hyprland also has a whole option category
+/// called `binds`. The two begin with the same four letters, so a parser
+/// that reached for the bind first answered `binds:workspace_back_and_forth`
+/// with `invalid flag :` and dropped the line. A keyword never has a colon
+/// in it and an option always does, which is what tells them apart.
+#[test]
+fn a_binds_option_is_not_a_bind_with_flags() {
+    let parsed = parse(
+        "t.conf",
+        "binds:workspace_back_and_forth = true\n\
+         binds:hide_special_on_workspace_change = 1\n\
+         bindl = , XF86AudioPlay, exec, playerctl play-pause\n",
+        &mut NoSources,
+    );
+    assert_eq!(parsed.diagnostics, []);
+    assert_eq!(
+        parsed.config.bool("binds:workspace_back_and_forth"),
+        Some(true)
+    );
+    assert_eq!(
+        parsed.config.bool("binds:hide_special_on_workspace_change"),
+        Some(true)
+    );
+    assert_eq!(parsed.config.binds.len(), 1, "and the bind is still a bind");
+    assert!(parsed.config.binds[0].flags.locked);
+}

@@ -130,6 +130,13 @@ pub struct Settings {
     pub dwindle: DwindleSettings,
     /// The master layout's options.
     pub master: MasterSettings,
+    /// `binds:workspace_back_and_forth`: asking for the workspace that is
+    /// already shown goes to the one before it instead, which is what makes
+    /// one key both there and back.
+    pub workspace_back_and_forth: bool,
+    /// `binds:hide_special_on_workspace_change`: the scratchpad goes away
+    /// when the workspace under it changes.
+    pub hide_special_on_workspace_change: bool,
 }
 
 impl Default for Settings {
@@ -190,6 +197,12 @@ impl Settings {
             gaps_out: config.gaps("general:gaps_out").unwrap_or(Gaps::all(20)),
             border_size: config.int("general:border_size").unwrap_or(1).max(0),
             no_focus_fallback: config.bool("general:no_focus_fallback").unwrap_or(false),
+            workspace_back_and_forth: config
+                .bool("binds:workspace_back_and_forth")
+                .unwrap_or(false),
+            hide_special_on_workspace_change: config
+                .bool("binds:hide_special_on_workspace_change")
+                .unwrap_or(false),
             dwindle: DwindleSettings {
                 preserve_split: config.bool("dwindle:preserve_split").unwrap_or(false),
                 force_split,
