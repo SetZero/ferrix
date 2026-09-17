@@ -18,9 +18,12 @@ Sizes are order-of-magnitude, in the sense of "a weekend / a week / a month /
 longer". This is a long program of work: stages 1–8 are a conventional kernel
 bring-up, 9–14 are the parts this design chose to do properly, 15–16 are the
 goal, and 17–19 are the goal after it: a Hyprland-shaped Wayland compositor,
-written in Rust, running on Ferrix (decided 2026-09-13). Nobody should read
-the table as a schedule; from that date sizes for new work are story points,
-measured into time only after the fact.
+written in Rust, running on Ferrix (decided 2026-09-13). From that date
+sizes for new work are story points, measured into time only after the fact
+-- and since 2026-09-18, at the customer's word, measured *forward* as well:
+the forecast after *Where it stands* turns the pointed remainder into
+roundabout dates at the velocity that was counted, and is redone at each
+count. The dates are what the arithmetic says, not promises.
 
 **Where it stands:** stages 0–11 are done and in the boot test on all three
 architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-11`.
@@ -68,6 +71,49 @@ stage 17 is met: `cargo xtask test-seat` types into a window on Ferrix from
 QEMU's far end.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
+
+**Velocity, and a forecast (counted 2026-09-18).** Over the four days of the
+points era that the fleet ran, 2026-09-14 to -17, about 445 points landed:
+131, 34, 66 and 214, which is ≈ 111 a calendar day and ≈ 150 a day the fleet
+was running, with 8–10 sessions, 15–20 points a session-day, and 21 points a
+queue-hour on both days that were measured finely. Every estimate under 8
+held, and stages 17 and 18 came in at the sizes they were given
+(`docs/BACKLOG.md`, *Velocity*). The forecast below assumes a fleet of that
+size running every day from 2026-09-19, at between 100 and 150 points a day,
+and the order the decisions of 2026-09-18 set: the rest of stage 19 with the
+GPU first, then what Steam stands on. Stages 12 to 16 were sized in words
+before points existed; the points beside them here are first guesses made
+for this forecast and not an owner's estimate, and are replaced the day a
+session sizes them.
+
+| what | points | lands, roundabout |
+|---|---|---|
+| Stage 19: the GPU path, Path A (`docs/GPU.md` §3) | 52 | 2026-09-19 |
+| Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
+| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 | 2026-09-20 to -21 |
+| Stage 12, btrfs write | *longer* ≈ 60 | 2026-09-21 to -22 |
+| Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | 2026-09-22 to -23 |
+| Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
+| Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | 2026-09-24 to -25 |
+| Stage 14, real-time domains | *month* ≈ 40 | 2026-09-25 to -26 |
+| Stage 15, a real userland | *week* ≈ 20; most of it landed as zinc and uutils | 2026-09-26 |
+| Stage 16, `rustc` | *the goal* ≈ 40 | 2026-09-26 to -27 |
+| Stage 20, self-hosting | *longer*, unsized | after 16 |
+| Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | when the customer wants bare metal |
+
+Three things bend these dates, and each is named where it happens:
+
+* **The kind of work.** The velocity was measured on tables, system calls
+  and a renderer, where every estimate held. The GPU path is unknowns in
+  every step and XWayland is a server; either may take the time the table
+  gives it twice over, and the first days of the forecast are the ones that
+  would show it.
+* **The fleet.** The number is a fleet's. One session alone does 15–20 a
+  day, and the same table then reads in weeks rather than days.
+* **Unsized stages.** A word like *month* was written for one person before
+  points existed; the guess beside it is only so that a date can be put
+  down at all. Stage 21 and the rest of 22 have no date because they have
+  no size.
 
 ---
 
