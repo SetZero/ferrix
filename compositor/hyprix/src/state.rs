@@ -345,13 +345,13 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // window of every monitor -- so it is made only when there is a
         // plugin to answer.
         if !plugins.is_empty() {
-            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins);
+            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
             asked.extend(plugins.poll(&snapshot));
         }
         if let Some(control) = control.as_ref()
             && let Some(mut stream) = control.accept()
         {
-            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins);
+            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
             match crate::control::serve(&mut stream, &snapshot, &mut plugins) {
                 Ok(todo) => asked.extend(todo),
                 Err(_) => {
@@ -366,12 +366,21 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // Input, before the clients are read: a key that fires a dispatcher
         // changes the layout, and a window told its new size in the same pass
         // draws once rather than twice.
+        //
+        // One input at a time, each carried out before the next is read.
+        // That matters for anything a dispatcher changes about what the
+        // *next* key means: `submap` is the whole of that, and a batch of
+        // events turned into actions all at once would judge every key in it
+        // against the map that was in force before the first. On a machine
+        // fast enough to see each key on its own the two are the same; under
+        // emulation a whole sequence arrives in one read, which is where
+        // this was found.
         let now = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
-        let mut actions = Vec::new();
         for input in devices.read() {
-            actions.extend(seat.input(input));
-        }
-        if !actions.is_empty() {
+            let actions = seat.input(input);
+            if actions.is_empty() {
+                continue;
+            }
             let done = crate::deliver::deliver(
                 &actions,
                 &mut focus,
@@ -389,6 +398,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &mut slots,
                     &sources,
                     listener.path(),
+                    &mut seat,
                     &mut plugins,
                     report,
                 ) {
@@ -428,6 +438,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut slots,
                 &sources,
                 listener.path(),
+                &mut seat,
                 &mut plugins,
                 report,
             ) {
@@ -484,7 +495,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // The event socket, from the same description `hyprctl` answers
         // from: a bar and a script must not be told two different things.
         if events.is_some() || !plugins.is_empty() {
-            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins);
+            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
             if let Some(socket) = events.as_mut() {
                 socket.publish(&snapshot);
             }
@@ -1034,12 +1045,13 @@ fn run_ipc(
     slots: &mut [Slot],
     sources: &BTreeMap<WindowId, Source>,
     socket: &std::path::Path,
+    seat: &mut Seat,
     plugins: &mut crate::plugins::Plugins,
     report: &mut dyn FnMut(&str),
 ) -> bool {
     match reply {
         compositor_ipc::Reply::Dispatch { name, argument } => dispatch(
-            name, argument, state, slots, sources, socket, plugins, report,
+            name, argument, state, slots, sources, socket, seat, plugins, report,
         ),
         compositor_ipc::Reply::Keyword { name, value } => {
             if config.keyword(name, value).is_err() {
@@ -1065,9 +1077,13 @@ fn run_ipc(
 /// opens a terminal -- `bind = SUPER, Return, exec, foot` -- and it changes
 /// no layout by itself: the window arrives later, through the socket, like
 /// any other client's.
+///
+/// `submap` is here for the same reason: which binds are in force is the
+/// seat's and not the tiling's, and it moves no window either. Both are in
+/// Hyprland's one dispatcher table, and so in this one.
 #[expect(
     clippy::too_many_arguments,
-    reason = "a dispatcher may reach the layout, a client, a program or a plugin"
+    reason = "a dispatcher may reach the layout, a client, a program, the seat or a plugin"
 )]
 fn dispatch(
     name: &str,
@@ -1076,6 +1092,7 @@ fn dispatch(
     slots: &mut [Slot],
     sources: &BTreeMap<WindowId, Source>,
     socket: &std::path::Path,
+    seat: &mut Seat,
     plugins: &mut crate::plugins::Plugins,
     report: &mut dyn FnMut(&str),
 ) -> bool {
@@ -1083,6 +1100,24 @@ fn dispatch(
         match start(argument, socket) {
             Ok(pid) => report(&format!("hyprix: started {argument} as {pid}")),
             Err(error) => report(&format!("hyprix: {argument} did not start: {error}")),
+        }
+        return false;
+    }
+    if name.eq_ignore_ascii_case("submap") {
+        // No layout change either way: the picture is the same and only the
+        // keyboard has moved. The event socket is told from the snapshot,
+        // which carries the submap.
+        match seat.enter_submap(argument) {
+            Ok(true) => {
+                let name = seat.submap();
+                if name.is_empty() {
+                    report("hyprix: the global keymap");
+                } else {
+                    report(&format!("hyprix: submap {name}"));
+                }
+            }
+            Ok(false) => {}
+            Err(why) => report(&format!("hyprix: {why}")),
         }
         return false;
     }

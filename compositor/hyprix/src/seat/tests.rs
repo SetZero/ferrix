@@ -283,10 +283,110 @@ fn a_wheel_bind_fires_on_the_direction_it_asked_for() {
     assert!(matches!(up.first(), Some(Action::Axis { .. })), "{up:?}");
 }
 
+/// A submap's binds are live objects -- they have to be, or entering the
+/// map would find nothing -- but none of them fires in the global map.
 #[test]
 fn a_bind_in_a_submap_is_not_in_the_global_map() {
-    let seat = seat("submap = resize\nbind = , Q, exit\nsubmap = reset\n");
-    assert_eq!(seat.binds().0, 0);
+    let mut seat = seat("submap = resize\nbind = , Q, exit\nsubmap = reset\n");
+    assert_eq!(seat.binds().0, 1, "the bind was resolved");
+    assert_eq!(seat.submap(), "", "the global map is the one in force");
+    assert!(
+        press(&mut seat, KEY_Q)
+            .iter()
+            .all(|action| !matches!(action, Action::Dispatch { .. })),
+        "a submap's bind fired in the global map"
+    );
+}
+
+/// And the other way round: in the submap, the submap's bind fires and the
+/// global one does not. That is what makes `submap` a mode rather than a
+/// prefix, and it is the whole of the feature.
+#[test]
+fn entering_a_submap_swaps_which_binds_fire() {
+    let mut seat = seat(
+        "bind = , A, killactive\n\
+         submap = resize\n\
+         bind = , A, resizeactive, 10 0\n\
+         submap = reset\n",
+    );
+    let fired = |actions: &[Action]| {
+        actions.iter().find_map(|action| match action {
+            Action::Dispatch { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+    };
+    assert_eq!(
+        fired(&press(&mut seat, KEY_A)).as_deref(),
+        Some("killactive")
+    );
+    let _ = release(&mut seat, KEY_A);
+
+    assert_eq!(seat.enter_submap("resize"), Ok(true));
+    assert_eq!(seat.submap(), "resize");
+    assert_eq!(
+        fired(&press(&mut seat, KEY_A)).as_deref(),
+        Some("resizeactive"),
+        "the global bind fired inside the submap"
+    );
+    let _ = release(&mut seat, KEY_A);
+
+    assert_eq!(seat.enter_submap("reset"), Ok(true));
+    assert_eq!(seat.submap(), "");
+    assert_eq!(
+        fired(&press(&mut seat, KEY_A)).as_deref(),
+        Some("killactive")
+    );
+}
+
+/// The `u` flag is how the bind that leaves a submap is written once: it
+/// fires whichever map is in force.
+#[test]
+fn a_universal_bind_fires_in_every_map() {
+    let mut seat = seat(
+        "submap = resize\n\
+         bindu = , Q, submap, reset\n\
+         submap = reset\n",
+    );
+    let fires = |seat: &mut Seat| {
+        let actions = press(seat, KEY_Q);
+        let fired = actions
+            .iter()
+            .any(|action| matches!(action, Action::Dispatch { .. }));
+        let _ = release(seat, KEY_Q);
+        fired
+    };
+    assert!(fires(&mut seat), "the universal bind did not fire globally");
+    assert_eq!(seat.enter_submap("resize"), Ok(true));
+    assert!(
+        fires(&mut seat),
+        "the universal bind did not fire in the map"
+    );
+}
+
+/// `setSubmap` refuses a name nothing was bound in, and this refuses it with
+/// the same sentence: entering one would leave a keyboard on which nothing
+/// works and no bind written to get out of it.
+#[test]
+fn a_submap_nothing_was_bound_in_is_refused() {
+    let mut seat = seat("submap = resize\nbind = , Q, exit\nsubmap = reset\n");
+    assert_eq!(
+        seat.enter_submap("resiez"),
+        Err("Cannot set submap resiez, submap doesn't exist (wasn't registered!)".to_owned())
+    );
+    assert_eq!(seat.submap(), "", "the refused name was entered anyway");
+    // Leaving always works, even from the global map, where it changes
+    // nothing and so is not announced.
+    assert_eq!(seat.enter_submap("reset"), Ok(false));
+}
+
+/// A reload takes the binds away, so it takes the map in force away too: a
+/// submap the new configuration does not have is one nothing could leave.
+#[test]
+fn reading_the_configuration_again_leaves_the_submap() {
+    let mut seat = seat("submap = resize\nbind = , Q, exit\nsubmap = reset\n");
+    assert_eq!(seat.enter_submap("resize"), Ok(true));
+    seat.set_binds(&config("bind = , Q, exit\n"));
+    assert_eq!(seat.submap(), "");
 }
 
 /// The modifier is usually let go before the key is, so the release cannot be

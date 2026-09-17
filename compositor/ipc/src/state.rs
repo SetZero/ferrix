@@ -107,6 +107,9 @@ pub struct Snapshot {
     pub active_window: Option<u64>,
     /// The workspace the focused monitor shows.
     pub active_workspace: i32,
+    /// The submap in force, empty for the global map, which is what
+    /// `hyprctl submap` prints and what the `submap` event carries.
+    pub submap: String,
 }
 
 /// One plugin, as `hyprctl plugin list` prints it.

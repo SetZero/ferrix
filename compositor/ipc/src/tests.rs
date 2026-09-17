@@ -311,6 +311,7 @@ fn snapshot() -> Snapshot {
         ],
         active_window: Some(1),
         active_workspace: 1,
+        submap: String::new(),
     }
 }
 
@@ -550,6 +551,23 @@ fn monitors_and_workspaces_carry_what_a_bar_reads() {
 
     let value = json("j/activeworkspace");
     assert_eq!(value.get("id").and_then(parse::Value::number), Some(1.0));
+}
+
+/// `submapRequest`: the name on a line, `default` for the global map, and a
+/// bare JSON string rather than an object.
+#[test]
+fn the_submap_is_asked_for_by_name() {
+    assert_eq!(text("submap"), "default\n");
+    assert_eq!(text("j/submap"), "\"default\"\n");
+
+    let mut inside = snapshot();
+    inside.submap = "resize".to_owned();
+    let asked = |line: &str| match answer(&Request::parse(line), &inside, Version::default()) {
+        Reply::Text(text) => text,
+        other => panic!("{line:?} asked for {other:?}"),
+    };
+    assert_eq!(asked("submap"), "resize\n");
+    assert_eq!(asked("j/submap"), "\"resize\"\n");
 }
 
 #[test]
@@ -883,7 +901,35 @@ fn watched(windows: &[Window], active: Option<u64>) -> Snapshot {
         windows: windows.to_vec(),
         active_window: active,
         active_workspace: 1,
+        submap: String::new(),
     }
+}
+
+/// Entering a submap and leaving it are each one event, and the name is the
+/// payload -- empty for the global map, which is how a bar knows the mode
+/// has ended.
+#[test]
+fn entering_and_leaving_a_submap_is_each_one_event() {
+    let mut watcher = Watcher::new();
+    let _ = watcher.changed(&watched(&[watched_window(1, "one")], Some(1)));
+
+    let mut inside = watched(&[watched_window(1, "one")], Some(1));
+    inside.submap = "resize".to_owned();
+    let events = watcher.changed(&inside);
+    assert_eq!(events, vec![Event::Submap("resize".to_owned())]);
+    assert_eq!(
+        events.first().map(Event::lines),
+        Some(vec!["submap>>resize\n".to_owned()])
+    );
+
+    assert!(watcher.changed(&inside).is_empty(), "nothing changed");
+
+    let out = watched(&[watched_window(1, "one")], Some(1));
+    assert_eq!(
+        watcher.changed(&out),
+        vec![Event::Submap(String::new())],
+        "leaving says so with an empty payload"
+    );
 }
 
 /// A bar that connected before the compositor finished starting has to be

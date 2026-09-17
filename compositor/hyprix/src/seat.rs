@@ -19,6 +19,22 @@
 //! A bind consumes its key: the focused client is not told about it. The `n`
 //! flag says not to, and the `i` flag says to fire whatever modifiers are
 //! held.
+//!
+//! # Submaps
+//!
+//! `submap = resize` in the configuration puts every bind after it in a map
+//! of its own, and `submap = reset` goes back to the global one. Only one
+//! map is in force at a time: while a submap is entered, the global binds do
+//! not fire and the submap's do, which is what makes `submap = resize` a
+//! mode a person is in rather than a prefix. The `u` flag is the exception
+//! Hyprland gives it -- a bind with `u` fires in every map, so that the one
+//! that leaves a submap can be written once.
+//!
+//! The map is entered by the `submap` dispatcher, which is the compositor's
+//! and not the layout's: `bind = SUPER, R, submap, resize` goes in, and
+//! `submap, reset` comes back out. A name no bind was written in is refused
+//! with Hyprland's own sentence rather than entered, because a submap with
+//! nothing in it is a keyboard that has stopped answering.
 
 use compositor_config::{Config, Key, Mods};
 use compositor_xkb::{Keyboard, Modifiers, generated};
@@ -136,6 +152,10 @@ struct Bound {
     non_consuming: bool,
     /// `i`: fire whatever modifiers are held.
     ignore_mods: bool,
+    /// The submap it belongs to, `None` for the global map.
+    submap: Option<String>,
+    /// `u`: fires whichever map is in force.
+    universal: bool,
     dispatcher: String,
     argument: String,
 }
@@ -164,6 +184,10 @@ pub struct Seat {
     pointer: (f64, f64),
     /// The screen, which the pointer may not leave.
     screen: (f64, f64),
+    /// The submap in force, `None` for the global map.
+    submap: Option<String>,
+    /// Every submap a bind was written in, whether or not its key resolved.
+    submaps: Vec<String>,
     /// Binds that have not been resolved, with the reason, for the log.
     unresolved: Vec<String>,
     /// Keys whose press a bind ate, so that their release is eaten too.
@@ -186,6 +210,8 @@ impl Seat {
             // The pointer starts in the middle, as Hyprland's does.
             pointer: (f64::from(width) / 2.0, f64::from(height) / 2.0),
             screen: (f64::from(width), f64::from(height)),
+            submap: None,
+            submaps: Vec::new(),
             unresolved: Vec::new(),
             eaten: Vec::new(),
         };
@@ -197,11 +223,16 @@ impl Seat {
     pub fn set_binds(&mut self, config: &Config) {
         self.binds.clear();
         self.unresolved.clear();
+        // A reload takes away the map that was in force, as it takes away
+        // the binds: a submap the new configuration does not have is one
+        // nothing could leave.
+        self.submap = None;
+        self.submaps.clear();
         for bind in &config.binds {
-            // A bind in a submap is not in the global map, and submaps are
-            // not entered yet; one bound here would fire when it should not.
-            if bind.submap.is_some() {
-                continue;
+            if let Some(submap) = &bind.submap
+                && !self.submaps.iter().any(|known| known == submap)
+            {
+                self.submaps.push(submap.clone());
             }
             let Some(trigger) = trigger_of(&bind.key) else {
                 self.unresolved
@@ -215,6 +246,8 @@ impl Seat {
                 repeat: bind.flags.repeat,
                 non_consuming: bind.flags.non_consuming,
                 ignore_mods: bind.flags.ignore_mods,
+                submap: bind.submap.clone(),
+                universal: bind.flags.submap_universal,
                 dispatcher: bind.dispatcher.clone(),
                 argument: bind.arg.clone(),
             });
@@ -225,6 +258,44 @@ impl Seat {
     #[must_use]
     pub fn binds(&self) -> (usize, &[String]) {
         (self.binds.len(), &self.unresolved)
+    }
+
+    /// The submap in force, empty for the global map.
+    ///
+    /// Empty rather than `None` because that is what `hyprctl submap` prints
+    /// and what the event socket carries.
+    #[must_use]
+    pub fn submap(&self) -> &str {
+        self.submap.as_deref().unwrap_or("")
+    }
+
+    /// Enter `name`, or leave the submap for `reset` or an empty name.
+    ///
+    /// Gives whether the map changed, which is when the event socket is told,
+    /// or the sentence `setSubmap` refuses with. A name no bind was written
+    /// in does not exist: entering it would leave a keyboard on which
+    /// nothing but the universal binds work and no way written to get out.
+    ///
+    /// # Errors
+    ///
+    /// `Cannot set submap <name>, submap doesn't exist (wasn't registered!)`,
+    /// which is Hyprland's own sentence.
+    pub fn enter_submap(&mut self, name: &str) -> Result<bool, String> {
+        let name = name.trim();
+        let wanted = if name.is_empty() || name == "reset" {
+            None
+        } else if self.submaps.iter().any(|known| known == name) {
+            Some(name.to_owned())
+        } else {
+            return Err(format!(
+                "Cannot set submap {name}, submap doesn't exist (wasn't registered!)"
+            ));
+        };
+        if wanted == self.submap {
+            return Ok(false);
+        }
+        self.submap = wanted;
+        Ok(true)
     }
 
     /// The keys held and the locks on, for `wl_keyboard.enter`.
@@ -308,6 +379,7 @@ impl Seat {
         self.binds
             .iter()
             .filter(|bind| bind.trigger == trigger)
+            .filter(|bind| self.in_force(bind))
             .filter(|bind| bind.ignore_mods || bind.mods == held)
             .filter(|bind| if bind.release { !pressed } else { pressed })
             .filter(|bind| !repeat || bind.repeat)
@@ -323,7 +395,13 @@ impl Seat {
         self.binds
             .iter()
             .filter(|bind| bind.trigger == trigger)
+            .filter(|bind| self.in_force(bind))
             .all(|bind| bind.non_consuming)
+    }
+
+    /// Whether a bind is in the map that is in force.
+    fn in_force(&self, bind: &Bound) -> bool {
+        bind.universal || bind.submap == self.submap
     }
 
     fn move_to(&mut self, x: f64, y: f64) -> Vec<Action> {

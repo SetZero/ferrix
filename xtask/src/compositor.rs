@@ -323,6 +323,77 @@ exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
 ";
 
+/// The six pictures the submap boot requires, and the five keys between
+/// them.
+///
+/// `L` is bound in the submap and nowhere else, so the only picture that
+/// changes is the one after it is pressed *inside* the map. The pictures
+/// before and after it say that entering a submap and leaving one move no
+/// window, which is what a mode is.
+const SUBMAP_EXPECTED: [(&str, &str); 6] = [
+    (
+        "tiled",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "still tiled, now inside the submap",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "still tiled, with the submap naming itself",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "the windows swapped by a key bound only in the submap",
+        "compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+    ),
+    (
+        "still swapped, with the submap left",
+        "compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+    ),
+    (
+        "still swapped, with the global map naming itself",
+        "compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+    ),
+];
+
+/// The keys the submap boot presses between its pictures.
+///
+/// `C` is asked twice, and each time after the map it names has been in
+/// force for a whole picture: `hyprctl` is a program the compositor starts,
+/// and under emulation it takes long enough to connect that asking on one
+/// key and changing the map on the next would be a race rather than a test.
+const SUBMAP_BINDS: [(&str, &[&str]); 5] = [
+    ("SUPER R, which enters the submap", &["meta_l", "r"]),
+    ("C, which asks which map is in force", &["c"]),
+    ("L, which is bound only in the submap", &["l"]),
+    ("Escape, the universal bind that leaves it", &["esc"]),
+    ("C again, now that the submap has been left", &["c"]),
+];
+
+/// The configuration the twelfth boot is given: a submap.
+///
+/// `C` is bound in both maps to the same thing -- asking which map is in
+/// force -- so the transcript says `resize` and then `default` from one key.
+/// `L` is bound only in the submap, so it is the key that proves the gating:
+/// pressed inside the map it swaps the windows, and it is bound to the same
+/// two dispatchers the plugin boot sends, so the picture it makes is the one
+/// already blessed for a swap. `Escape` carries the `u` flag, which is how
+/// the bind that leaves a submap is written once.
+const SUBMAP_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/hyprctl subscribe
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+bind = SUPER, R, submap, resize
+bind = , C, exec, /bin/hyprctl submap
+submap = resize
+bind = , L, exec, /bin/hyprctl --batch dispatch movefocus l ; dispatch movewindow r
+bind = , C, exec, /bin/hyprctl submap
+bindu = , Escape, submap, reset
+submap = reset
+";
+
 /// What the clipboard boot copies, and the picture it makes while it does.
 ///
 /// The two windows are the ordinary tiled pair: the clipboard has nothing to
@@ -642,14 +713,7 @@ fn boot_and_dump(
         if !binds.is_empty() {
             ask_the_sockets(&mut qmp, watching, arch)?;
         }
-        if !wanted.awaiting.is_empty() {
-            let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
-                wanted
-                    .awaiting
-                    .iter()
-                    .all(|want| lines.iter().any(|line| line.contains(want)))
-            })?;
-        }
+        wait_for(watching, wanted.awaiting)?;
         // Whatever else the guest said by now, so that what is checked
         // against the transcript is what the boot actually printed rather
         // than what had been read when the last picture matched.
@@ -664,6 +728,24 @@ fn boot_and_dump(
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
     Ok((taken, said))
+}
+
+/// Read the guest until every line in `awaiting` has been said, or the time
+/// is up.
+///
+/// Giving up quietly is right: what is required of the lines is the caller's
+/// to say, and a failure there prints the whole transcript, which is more
+/// use than "the wait timed out".
+fn wait_for(watching: &mut Watching<'_>, awaiting: &[&str]) -> Result<()> {
+    if awaiting.is_empty() {
+        return Ok(());
+    }
+    let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
+        awaiting
+            .iter()
+            .all(|want| lines.iter().any(|line| line.contains(want)))
+    })?;
+    Ok(())
 }
 
 /// Build the bootable image for one boot: the compositor as init, the
@@ -863,94 +945,11 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             continue;
         }
         let programs = Programs::build(arch)?;
-        let (screens, said) = boot_and_dump(
-            arch,
-            &programs,
-            CONFIG,
-            &Wanted {
-                states: &EXPECTED,
-                others: &[],
-                moving: None,
-                awaiting: &[],
-            },
-            &BINDS,
-            args,
-        )?;
-        if screens.len() != EXPECTED.len() {
-            return Err(Error::new(format!(
-                "{arch}: {} of {} states were reached",
-                screens.len(),
-                EXPECTED.len()
-            )));
-        }
-        // The three pictures must be three pictures. A compositor that
-        // ignored both keybinds would pass every comparison above if the
-        // expected images happened to be the same file, and this is the
-        // check that says they are not.
-        for (one, other) in [(0, 1), (1, 2), (0, 2)] {
-            let (Some(first), Some(second)) = (screens.get(one), screens.get(other)) else {
-                continue;
-            };
-            if first.pixels == second.pixels {
-                return Err(Error::new(format!(
-                    "{arch}: states {one} and {other} are the same picture"
-                )));
+        for (name, boot) in BOOTS {
+            if wanted(args, name) {
+                boot(arch, &programs, args)?;
             }
         }
-
-        the_sockets_said(arch, &said)?;
-
-        // Two more boots, each with a configuration of its own: a bar
-        // through `zwlr_layer_shell_v1`, and Hyprland's two window
-        // decorations. Each is a boot rather than another picture in the
-        // first, because both change every picture and the three states
-        // above are the stage's exit criterion.
-        for (what, config, wanted) in [
-            (
-                "a bar reserved its strip and the windows tiled under it",
-                BAR_CONFIG,
-                BAR_EXPECTED,
-            ),
-            (
-                "rounded corners, a shadow, a dimmed window and a blurred background",
-                DECORATED_CONFIG,
-                DECORATED_EXPECTED,
-            ),
-            (
-                "a monitor at scale 2, tiling in logical pixels and drawing in the screen's own",
-                SCALED_CONFIG,
-                SCALED_EXPECTED,
-            ),
-        ] {
-            let (screens, _) = boot_and_dump(
-                arch,
-                &programs,
-                config,
-                &Wanted {
-                    states: &[wanted],
-                    others: &[],
-                    moving: None,
-                    awaiting: &[],
-                },
-                &[],
-                args,
-            )?;
-            let Some(screen) = screens.first() else {
-                return Err(Error::new(format!("{arch}: {what}: no screendump")));
-            };
-            println!(
-                "  {arch}: {what}, every one of {} pixels",
-                screen.width * screen.height
-            );
-        }
-
-        test_groups(arch, &programs, args)?;
-        test_monitors(arch, &programs, args)?;
-        test_plugins(arch, &programs, args)?;
-        test_animation(arch, &programs, args)?;
-        test_terminal(arch, &programs, args)?;
-        test_rules(arch, &programs, args)?;
-        test_clipboard(arch, &programs, args)?;
     }
     Ok(())
 }
@@ -1026,6 +1025,227 @@ fn test_rules(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         "  {arch}: a window rule floated a window at the size and place it names, every one of \
          {} pixels",
         screen.width * screen.height
+    );
+    Ok(())
+}
+
+/// What the guest printed on a transcript line, without whatever the
+/// watcher put in front of it.
+///
+/// The lines the watcher keeps are the guest's own; the timestamp and the
+/// `|` are added when one is printed. Both forms are stripped here, because
+/// a check that matched a whole line in one and not the other would pass or
+/// fail on where the line came from rather than on what it said.
+fn said_on_its_own(line: &str) -> &str {
+    line.split_once("| ").map_or(line, |(_, rest)| rest).trim()
+}
+
+/// Every boot `test-compositor` makes, in the order it makes them.
+///
+/// A table rather than a list of calls so that `--boot <name>` can pick one:
+/// each takes minutes under emulation and there are fourteen of them, so a
+/// change to one is otherwise an hour a try.
+type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
+const BOOTS: [(&str, Boot); 12] = [
+    ("dispatchers", test_dispatchers),
+    ("bar", test_bar),
+    ("decorations", test_decorations),
+    ("scale", test_scale),
+    ("groups", test_groups),
+    ("monitors", test_monitors),
+    ("plugins", test_plugins),
+    ("animation", test_animation),
+    ("terminal", test_terminal),
+    ("rules", test_rules),
+    ("clipboard", test_clipboard),
+    ("submap", test_submap),
+];
+
+/// Whether `--boot` asked for this one.
+fn wanted(args: &Args, name: &str) -> bool {
+    args.boot
+        .as_ref()
+        .is_none_or(|asked| name.contains(asked.as_str()))
+}
+
+/// The first boot: the three states stage 18's exit asks for, and what
+/// `hyprctl` and the event socket said while they were reached.
+fn test_dispatchers(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        programs,
+        CONFIG,
+        &Wanted {
+            states: &EXPECTED,
+            others: &[],
+            moving: None,
+            awaiting: &[],
+        },
+        &BINDS,
+        args,
+    )?;
+    if screens.len() != EXPECTED.len() {
+        return Err(Error::new(format!(
+            "{arch}: {} of {} states were reached",
+            screens.len(),
+            EXPECTED.len()
+        )));
+    }
+    // The three pictures must be three pictures. A compositor that
+    // ignored both keybinds would pass every comparison above if the
+    // expected images happened to be the same file, and this is the
+    // check that says they are not.
+    for (one, other) in [(0, 1), (1, 2), (0, 2)] {
+        let (Some(first), Some(second)) = (screens.get(one), screens.get(other)) else {
+            continue;
+        };
+        if first.pixels == second.pixels {
+            return Err(Error::new(format!(
+                "{arch}: states {one} and {other} are the same picture"
+            )));
+        }
+    }
+
+    the_sockets_said(arch, &said)?;
+    Ok(())
+}
+
+/// The second boot: a bar through `zwlr_layer_shell_v1`.
+fn test_bar(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    one_picture(
+        arch,
+        programs,
+        args,
+        "a bar reserved its strip and the windows tiled under it",
+        BAR_CONFIG,
+        BAR_EXPECTED,
+    )
+}
+
+/// The third boot: Hyprland's two window decorations.
+fn test_decorations(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    one_picture(
+        arch,
+        programs,
+        args,
+        "rounded corners, a shadow, a dimmed window and a blurred background",
+        DECORATED_CONFIG,
+        DECORATED_EXPECTED,
+    )
+}
+
+/// The sixth boot: a monitor at `scale = 2`.
+fn test_scale(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    one_picture(
+        arch,
+        programs,
+        args,
+        "a monitor at scale 2, tiling in logical pixels and drawing in the screen's own",
+        SCALED_CONFIG,
+        SCALED_EXPECTED,
+    )
+}
+
+/// A boot with a configuration of its own, one picture and no keys.
+///
+/// Each is a boot rather than another picture in the first, because each
+/// changes every picture and the first boot's three states are the stage's
+/// exit criterion.
+fn one_picture(
+    arch: Arch,
+    programs: &Programs,
+    args: &Args,
+    what: &str,
+    config: &str,
+    wanted: (&str, &str),
+) -> Result<()> {
+    let (screens, _) = boot_and_dump(
+        arch,
+        programs,
+        config,
+        &Wanted {
+            states: &[wanted],
+            others: &[],
+            moving: None,
+            awaiting: &[],
+        },
+        &[],
+        args,
+    )?;
+    let Some(screen) = screens.first() else {
+        return Err(Error::new(format!("{arch}: {what}: no screendump")));
+    };
+    println!(
+        "  {arch}: {what}, every one of {} pixels",
+        screen.width * screen.height
+    );
+    Ok(())
+}
+
+/// A twelfth boot: a submap, which is Hyprland's modal keybinding.
+///
+/// The one key that changes a picture here is `L`, and it changes one only
+/// while the submap is entered: bound in the map and nowhere else, it does
+/// nothing before `SUPER R` and nothing after `Escape`. `C` is bound in both
+/// maps to `hyprctl submap`, so the same key names the map it is in, and the
+/// event socket says when each was entered and left.
+fn test_submap(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        programs,
+        SUBMAP_CONFIG,
+        &Wanted {
+            states: &SUBMAP_EXPECTED,
+            others: &[],
+            moving: None,
+            awaiting: &["submap>>resize", "hyprix: the global keymap", "default"],
+        },
+        &SUBMAP_BINDS,
+        args,
+    )?;
+    if screens.len() != SUBMAP_EXPECTED.len() {
+        return Err(Error::new(format!(
+            "{arch}: {} of {} pictures were taken",
+            screens.len(),
+            SUBMAP_EXPECTED.len()
+        )));
+    }
+    // The tiled pictures and the swapped ones must not be the same picture,
+    // or every comparison above would pass on a compositor that ignored
+    // every key.
+    if let (Some(before), Some(after)) = (screens.first(), screens.get(3))
+        && before.pixels == after.pixels
+    {
+        return Err(Error::new(format!(
+            "{arch}: the key bound in the submap changed nothing"
+        )));
+    }
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    // One key, two answers: the map it was pressed in. The whole line, not
+    // a substring, because `resize` is in the configuration's own text and a
+    // substring would match a diagnostic quoting it.
+    let said_alone = |wanted: &str| said.iter().any(|line| said_on_its_own(line) == wanted);
+    for wanted in ["default", "resize"] {
+        if !said_alone(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: `hyprctl submap` never printed `{wanted}` on its own line"
+            )));
+        }
+    }
+    // And the socket announced both, the leaving with an empty payload.
+    if !has("submap>>resize") {
+        return Err(Error::new(format!(
+            "{arch}: nothing on the event socket said the submap was entered"
+        )));
+    }
+    if !said_alone("submap>>") {
+        return Err(Error::new(format!(
+            "{arch}: nothing on the event socket said the submap was left"
+        )));
+    }
+    println!(
+        "  {arch}: one key did nothing in the global map and swapped the windows in the submap, \
+         and `hyprctl submap` named each map from inside the guest"
     );
     Ok(())
 }

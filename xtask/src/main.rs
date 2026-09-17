@@ -163,6 +163,7 @@ OPTIONS:
     --init <PATH|ferrousli>              The busybox; {arch} is replaced. build, run, flash, deploy: [or FERRIX_INIT]
                                          start `sh -i`, with the applets linked in /bin.
                                          `ferrousli`: the x86_64 busybox built against ferrousli, rebuilt when stale
+    --boot <NAME>                        test-compositor: only the boots whose name holds this
     -h, --help                           This message
 ";
 

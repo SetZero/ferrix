@@ -4193,6 +4193,37 @@ grid, printed a row at a time.
 /bin/hyprctl` and requires the picture the terminal makes, pixel for pixel,
 on x86-64 and on AArch64.
 
+**Done — submaps (2026-09-17).** Hyprland's modal keybinding: `submap =
+resize` puts every bind after it in a map of its own, `submap = reset` goes
+back to the global one, and the `submap` dispatcher moves between them while
+the compositor runs. Only one map is in force at a time -- while a submap is
+entered the global binds do not fire and the submap's do -- which is what
+makes it a mode a person is *in* rather than a prefix they hold.
+
+The configuration already parsed the keyword and the `u` flag, and every
+bind written in a submap was being dropped on the floor, so a `hyprland.conf`
+with a resize mode in it started a compositor where those keys did nothing
+and nothing said why. They are kept now and gated at match time.
+
+The details are `setSubmap`'s. A name nothing was bound in is refused with
+Hyprland's own sentence -- `Cannot set submap <name>, submap doesn't exist
+(wasn't registered!)` -- rather than entered, because entering one leaves a
+keyboard on which nothing works and no bind written to get out of it. The
+`u` flag fires whichever map is in force, which is how the bind that leaves
+a submap is written once. Reading the configuration again leaves the map, as
+it must: a submap the new file does not have is one nothing could leave.
+`hyprctl submap` prints the name or `default`, and in JSON a bare string, as
+`submapRequest` does; the event socket says `submap>>resize` on entering and
+`submap>>` on leaving. What is not done is the per-submap `reset` target
+0.56 added, which leaves a map automatically after any bind in it fires.
+
+`cargo xtask test-compositor` boots a twelfth time with `L` bound in the
+submap and nowhere else: it does nothing before `SUPER R` is pressed, swaps
+the windows after it, and does nothing again once `Escape` has left the map,
+with `C` bound in both maps to `hyprctl submap` so that one key names the
+map it was pressed in -- `default`, then `resize` -- and the event socket
+carrying both changes. On x86-64 and on AArch64.
+
 **Done — the clipboard (2026-09-17).** Copy and paste between two programs,
 which is `wl_data_device_manager`'s selection and the thing a person notices
 is missing before anything else on this list.

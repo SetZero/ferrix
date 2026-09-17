@@ -201,9 +201,11 @@ pub fn snapshot(
     clients: &[crate::state::Slot],
     sources: &BTreeMap<WindowId, Source>,
     plugins: &crate::plugins::Plugins,
+    submap: &str,
 ) -> Snapshot {
     let mut snapshot = Snapshot {
         plugins: plugins.listed(),
+        submap: submap.to_owned(),
         ..Snapshot::default()
     };
     // One monitor a screen, in the order they were added, which is the order

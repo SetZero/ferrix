@@ -438,6 +438,10 @@ impl Watcher {
             });
         }
 
+        if before.submap != now.submap {
+            events.push(Event::Submap(now.submap.clone()));
+        }
+
         if before.active_window != now.active_window {
             events.push(Event::ActiveWindow(now.active().map(|window| WindowRef {
                 address: window.address,

@@ -82,6 +82,13 @@ pub(crate) struct Args {
     /// Where QEMU serves QMP. No flag sets it: `test-display` picks a port to
     /// ask QEMU for its screendump over.
     pub(crate) qmp_port: Option<u16>,
+    /// `--boot <name>`: run only the boots of `test-compositor` whose name
+    /// holds this, rather than all of them.
+    ///
+    /// Each boot takes minutes under emulation and there are fourteen, so a
+    /// change to one of them is otherwise an hour a try. The gate runs them
+    /// all; this is for the person writing one.
+    pub(crate) boot: Option<String>,
 }
 
 impl Args {
@@ -122,6 +129,7 @@ impl Args {
                 "--to" => args.to = Some(value(&mut items, "--to")?),
                 "--port" => args.port = Some(value(&mut items, "--port")?),
                 "--init" => args.init = Some(value(&mut items, "--init")?),
+                "--boot" => args.boot = Some(value(&mut items, "--boot")?),
                 other if other.starts_with('-') => {
                     return Err(Error::new(format!("unknown option `{other}`")));
                 }

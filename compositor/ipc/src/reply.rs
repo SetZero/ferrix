@@ -68,6 +68,20 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
         "clients" => text(clients(flags, snapshot)),
         "activewindow" => text(active_window(flags, snapshot)),
         "activeworkspace" => text(active_workspace(flags, snapshot)),
+        // `submapRequest`: the name, or `default` for the global map, and in
+        // JSON a bare string rather than an object.
+        "submap" => {
+            let name = if snapshot.submap.is_empty() {
+                "default"
+            } else {
+                &snapshot.submap
+            };
+            text(if flags.format() == Format::Json {
+                format!("\"{name}\"\n")
+            } else {
+                format!("{name}\n")
+            })
+        }
         "splash" => text("a compositor, on an operating system, in Rust\n".to_owned()),
         "dispatch" => {
             let (name, argument) = split(&request.argument);
