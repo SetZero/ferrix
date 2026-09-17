@@ -286,6 +286,7 @@ fn an_unreadable_keymap_falls_back_to_the_first_layout() {
         name: "broken",
         variant: "",
         source: "this test",
+        label: "Broken",
         keymap: "not a keymap",
         keys: &[],
     };
