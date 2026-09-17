@@ -61,13 +61,39 @@ pub fn fits(width: usize, height: usize, scale: usize) -> (usize, usize) {
     )
 }
 
+/// One row of a grid as it was painted: its cells, and the column the cursor
+/// was drawn on if it was on this row.
+///
+/// What a terminal that draws only what changed has to know about what was
+/// there before: a row is painted again when this differs from the row it
+/// would paint now, and at no other time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Painted {
+    cells: Vec<crate::grid::Cell>,
+    cursor: Option<usize>,
+}
+
+impl Painted {
+    /// Row `row` of `grid`, as [`draw_rows`] would paint it now.
+    #[must_use]
+    pub fn of(grid: &Grid, row: usize) -> Self {
+        let (columns, _) = grid.size();
+        Self {
+            cells: (0..columns)
+                .filter_map(|column| grid.cell(column, row).copied())
+                .collect(),
+            cursor: (grid.cursor_visible() && grid.cursor().1 == row).then(|| grid.cursor().0),
+        }
+    }
+}
+
 /// Draw `grid` into `pixels`, a `width` by `height` buffer of `XRGB8888`
 /// with `stride` bytes a row.
 ///
 /// The whole buffer is painted: the background first, then a glyph a cell,
-/// then the cursor over the cell it is on. A terminal that drew only what
-/// changed would need to know what was there before, and this one is handed
-/// a fresh buffer whenever the window is resized.
+/// then the cursor over the cell it is on. This is for a buffer that holds
+/// nothing yet, which is what a terminal is handed whenever its window is
+/// resized; [`draw_rows`] is for one that holds the frame before.
 pub fn draw(
     pixels: &mut [u8],
     (width, height): (usize, usize),
@@ -76,24 +102,65 @@ pub fn draw(
     colours: &Colours,
     scale: usize,
 ) {
-    let scale = scale.max(1);
     // `wl_shm`'s `XRGB8888` is little-endian, which is blue, green, red and
     // a byte nothing reads: `fbtext`'s `Bgrx`.
+    if let Some(mut surface) = Surface::new(pixels, width, height, stride / 4, PixelOrder::Bgrx) {
+        surface.fill(colours.background);
+    }
+    let (_, rows) = grid.size();
+    draw_rows(
+        pixels,
+        (width, height),
+        stride,
+        grid,
+        colours,
+        scale,
+        0..rows,
+    );
+}
+
+/// Where row `row` is in a buffer at `scale`: its top and its height, in
+/// buffer pixels.
+#[must_use]
+pub fn row_span(row: usize, scale: usize) -> (usize, usize) {
+    let tall = CELL.1 * scale.max(1);
+    (row * tall, tall)
+}
+
+/// Paint `rows` of `grid` again, over whatever the buffer holds: each row's
+/// background, then its glyphs, then the cursor if it is on it.
+///
+/// A key typed into a shell changes one row of sixty-four. Painting all of
+/// them, and telling the compositor all of the window changed, makes every
+/// letter a whole window for the terminal to paint, for the compositor to
+/// draw again and for the card to send to the screen -- which on a guest
+/// with one processor was most of a second a letter.
+pub fn draw_rows(
+    pixels: &mut [u8],
+    (width, height): (usize, usize),
+    stride: usize,
+    grid: &Grid,
+    colours: &Colours,
+    scale: usize,
+    rows: core::ops::Range<usize>,
+) {
+    let scale = scale.max(1);
     let Some(mut surface) = Surface::new(pixels, width, height, stride / 4, PixelOrder::Bgrx)
     else {
         return;
     };
-    surface.fill(colours.background);
-    let (columns, rows) = grid.size();
-    for row in 0..rows {
+    let (columns, _) = grid.size();
+    for row in rows {
+        let (top, tall) = row_span(row, scale);
+        if top >= height {
+            break;
+        }
+        surface.fill_rect(0, top, width, tall.min(height - top), colours.background);
         for column in 0..columns {
             let Some(cell) = grid.cell(column, row) else {
                 continue;
             };
-            let (x, y) = (column * CELL.0 * scale, row * CELL.1 * scale);
-            if y >= height {
-                break;
-            }
+            let (x, y) = (column * CELL.0 * scale, top);
             // The cursor is a block the text is drawn out of, which is what
             // a terminal with no blinking draws.
             let on_cursor = grid.cursor_visible() && grid.cursor() == (column, row);

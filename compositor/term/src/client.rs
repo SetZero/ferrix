@@ -73,6 +73,9 @@ struct Terminal {
     buffer_size: (i32, i32),
     /// Whether the grid has changed since the last frame.
     dirty: bool,
+    /// What each row of the buffer was last painted as, which is what says
+    /// which rows have to be painted again.
+    painted: Vec<paint::Painted>,
     /// Whether the seat has been asked for its keyboard.
     seat: bool,
     /// The modifiers in force, as `wl_keyboard.modifiers` reports them:
@@ -154,6 +157,7 @@ pub fn run(
         shared: None,
         buffer_size: (0, 0),
         dirty: true,
+        painted: Vec::new(),
         seat: false,
         modifiers: 0,
         group: 0,
@@ -577,7 +581,8 @@ impl Terminal {
         let len = usize::try_from(stride.saturating_mul(height))
             .map_err(|_| "a window too large to draw".to_owned())?;
 
-        if self.shared.is_none() || self.buffer_size != (width, height) {
+        let fresh = self.shared.is_none() || self.buffer_size != (width, height);
+        if fresh {
             if self.shared.is_some() {
                 request(out, id::BUFFER, core::wl_buffer::request::DESTROY, &[], &[]);
                 request(out, id::POOL, wl_shm_pool::request::DESTROY, &[], &[]);
@@ -622,19 +627,56 @@ impl Terminal {
             self.buffer_size = (width, height);
         }
 
+        // What each row would be painted as now, against what the buffer
+        // holds: the rows that differ are the rows that are painted and the
+        // rows the compositor is told about. A buffer made just now holds
+        // nothing, so all of it is painted and all of it is damage.
+        let (_, rows) = self.grid.size();
+        let now: Vec<paint::Painted> = (0..rows)
+            .map(|row| paint::Painted::of(&self.grid, row))
+            .collect();
+        let whole = fresh || self.painted.len() != now.len();
+        let changed: Vec<usize> = (0..rows)
+            .filter(|&row| whole || self.painted.get(row) != now.get(row))
+            .collect();
+        let scale_px = usize::try_from(scale).unwrap_or(1);
         if let Some(shared) = self.shared.as_mut() {
-            let (wide, tall) = (
+            let size = (
                 usize::try_from(width).unwrap_or(0),
                 usize::try_from(height).unwrap_or(0),
             );
-            paint::draw(
-                shared.bytes_mut(),
-                (wide, tall),
-                usize::try_from(stride).unwrap_or(0),
-                &self.grid,
-                &self.colours,
-                usize::try_from(scale).unwrap_or(1),
-            );
+            let stride = usize::try_from(stride).unwrap_or(0);
+            if whole {
+                paint::draw(
+                    shared.bytes_mut(),
+                    size,
+                    stride,
+                    &self.grid,
+                    &self.colours,
+                    scale_px,
+                );
+            } else {
+                for &row in &changed {
+                    paint::draw_rows(
+                        shared.bytes_mut(),
+                        size,
+                        stride,
+                        &self.grid,
+                        &self.colours,
+                        scale_px,
+                        row..row.saturating_add(1),
+                    );
+                }
+            }
+        }
+        self.painted = now;
+        // Nothing to show: the grid was marked changed and no row of it is
+        // another picture -- a bell, a colour set and unset, a cursor moved
+        // and moved back -- and a commit with no damage is a frame for
+        // nobody.
+        if changed.is_empty() {
+            self.dirty = false;
+            return Ok(());
         }
         request(
             out,
@@ -654,13 +696,37 @@ impl Terminal {
             ],
             &[Arg::Object(id::BUFFER), Arg::Int(0), Arg::Int(0)],
         );
-        request(
-            out,
-            id::SURFACE,
-            wl_surface::request::DAMAGE_BUFFER,
-            &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
-            &[Arg::Int(0), Arg::Int(0), Arg::Int(width), Arg::Int(height)],
-        );
+        // The damage: all of the buffer, or each run of changed rows as one
+        // rectangle the buffer's width.
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        for &row in &changed {
+            let (top, tall) = paint::row_span(row, scale_px);
+            match spans.last_mut() {
+                Some((from, to)) if *to == top => *to = top.saturating_add(tall),
+                _ => spans.push((top, top.saturating_add(tall))),
+            }
+        }
+        if whole {
+            spans = vec![(0, usize::try_from(height).unwrap_or(0))];
+        }
+        for (from, to) in spans {
+            let (top, tall) = (
+                i32::try_from(from).unwrap_or(0),
+                i32::try_from(to.saturating_sub(from)).unwrap_or(0),
+            );
+            request(
+                out,
+                id::SURFACE,
+                wl_surface::request::DAMAGE_BUFFER,
+                &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
+                &[
+                    Arg::Int(0),
+                    Arg::Int(top),
+                    Arg::Int(width),
+                    Arg::Int(tall.min(height.saturating_sub(top))),
+                ],
+            );
+        }
         request(out, id::SURFACE, wl_surface::request::COMMIT, &[], &[]);
         self.drawn = self.drawn.saturating_add(1);
         self.dirty = false;

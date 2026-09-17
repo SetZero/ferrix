@@ -95,6 +95,7 @@ mod canvas;
 mod cores;
 pub mod cursor;
 mod damage;
+mod exact;
 mod frame;
 mod gradient;
 mod patterns;

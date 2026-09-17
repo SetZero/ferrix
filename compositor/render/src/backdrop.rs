@@ -235,7 +235,7 @@ impl Backdrop {
             ) else {
                 continue;
             };
-            if source == target {
+            if crate::exact::same(source, target) {
                 continue;
             }
             target.copy_from_slice(source);
