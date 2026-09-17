@@ -59,6 +59,10 @@ mod character;
 
 pub use character::character;
 
+mod merge;
+
+pub use merge::merged;
+
 mod state;
 
 pub use state::{Keyboard, Modifiers};
