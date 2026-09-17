@@ -1249,13 +1249,21 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
 ///
 /// The gate's `CONFIG` is written for a screendump -- two clients, and binds
 /// a test presses -- and a person sitting in front of the window wants the
-/// rest of what a keyboard is for. Every dispatcher named here is one
-/// `compositor/layout` has; `RETURN` opens zinc on a pseudoterminal, which is
-/// the shell this project has and `run-compositor` carries at `/bin/zinc`.
+/// rest of what a keyboard is for. So this one opens a terminal as its first
+/// `exec-once`: the boot ends at a shell prompt rather than at a picture,
+/// which is what somebody who asked to watch the compositor asked for.
+///
+/// Every dispatcher named here is one `compositor/layout` has. `SUPER+P`
+/// starts a `compositor/pattern` client, which is how the tiling a gate boot
+/// shows is reached from a configuration that starts none.
 const RUN_CONFIG: &str = "# Written into the initramfs by `cargo xtask run-compositor`.
 # `--config <PATH>` carries a real `hyprland.conf` instead of this one.
-exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+# A terminal first, because a screen somebody is watching is one they want to
+# type into: `/bin/term` runs a program on a pseudoterminal and `/bin/zinc`
+# is the shell, with the busybox applets the image carries beside it. The
+# pattern clients a gate boot tiles are a keybind away rather than started
+# here -- at 640x480 a third window leaves the shell too little room.
+exec-once = /bin/term /bin/zinc
 bind = SUPER, RETURN, exec, /bin/term /bin/zinc
 bind = SUPER, P, exec, /bin/pattern gradient another
 bind = SUPER, Q, killactive
