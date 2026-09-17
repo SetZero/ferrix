@@ -2969,3 +2969,37 @@ fn movefocus_can_be_kept_off_the_next_monitor() {
     let _moved = dispatch(&mut kept, "movefocus", "r");
     assert_eq!(kept.focused_monitor(), Some(M1));
 }
+
+/// `general:float_gaps`: a floating window is centred inside its own work
+/// area, which Hyprland keeps apart from the tiled one.
+///
+/// A floating window is put where a person wants it and often wants no
+/// margin at all, which is why the default is zero rather than `gaps_out`;
+/// a side written negative means "use `gaps_out`".
+#[test]
+fn a_floating_window_is_centred_in_its_own_work_area() {
+    let settings = "general:gaps_out = 20\ngeneral:border_size = 0\ngeneral:gaps_in = 0\n";
+    // No float gaps by default, so the window is centred on the whole
+    // monitor: 960x540 at 480,270.
+    let mut plain = setup(settings);
+    open(&mut plain, &[1]);
+    let _floated = dispatch(&mut plain, "togglefloating", "");
+    let _centred = dispatch(&mut plain, "centerwindow", "");
+    assert_eq!(rects(&plain), [(1, r(480, 270, 960, 540))]);
+
+    // With float gaps of 100 the area is 1720x880 at 100,100, so the same
+    // window is centred at 480,270 again -- the middle does not move -- but
+    // a side gap that is not even does.
+    let mut uneven = setup(&format!("{settings}general:float_gaps = 0 200 0 0\n"));
+    open(&mut uneven, &[1]);
+    let _floated = dispatch(&mut uneven, "togglefloating", "");
+    let _centred = dispatch(&mut uneven, "centerwindow", "");
+    assert_eq!(rects(&uneven), [(1, r(380, 270, 960, 540))]);
+
+    // A negative side means `gaps_out`, which is 20 here.
+    let mut fallback = setup(&format!("{settings}general:float_gaps = -1\n"));
+    open(&mut fallback, &[1]);
+    let _floated = dispatch(&mut fallback, "togglefloating", "");
+    let _centred = dispatch(&mut fallback, "centerwindow", "");
+    assert_eq!(rects(&fallback), [(1, r(480, 270, 960, 540))]);
+}

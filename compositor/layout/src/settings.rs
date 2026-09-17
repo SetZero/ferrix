@@ -119,6 +119,12 @@ pub struct Settings {
     /// `general:gaps_out`: the gap on each window edge that faces the
     /// monitor's edge.
     pub gaps_out: Gaps,
+    /// `general:float_gaps`: the same for a *floating* window, which
+    /// Hyprland keeps apart -- a floating window is put where a person
+    /// wants it and often wants no margin at all, which is why the default
+    /// is zero rather than `gaps_out`. A side written negative means "use
+    /// `gaps_out`", which is what `CSpace::recheckWorkArea` does with one.
+    pub float_gaps: Gaps,
     /// `general:border_size`, not negative: reserved inside the gap on every
     /// edge of a window that is not fullscreen.
     pub border_size: i64,
@@ -218,6 +224,15 @@ impl Settings {
             layout,
             gaps_in: config.gaps("general:gaps_in").unwrap_or(Gaps::all(5)),
             gaps_out: config.gaps("general:gaps_out").unwrap_or(Gaps::all(20)),
+            float_gaps: {
+                let written = config.gaps("general:float_gaps").unwrap_or(Gaps::all(0));
+                let out = config.gaps("general:gaps_out").unwrap_or(Gaps::all(20));
+                if written.top < 0 || written.right < 0 || written.bottom < 0 || written.left < 0 {
+                    out
+                } else {
+                    written
+                }
+            },
             border_size: config.int("general:border_size").unwrap_or(1).max(0),
             no_focus_fallback: config.bool("general:no_focus_fallback").unwrap_or(false),
             workspace_back_and_forth: config

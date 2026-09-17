@@ -1333,7 +1333,7 @@ impl State {
                 .map(|output| output.monitor.rect)
                 .unwrap_or_default()
         } else {
-            self.work_area_of(workspace)
+            self.float_work_area_of(workspace)
         };
         let Some(rect) = self.floating_rects.get(&window).copied() else {
             return Vec::new();
@@ -2241,6 +2241,16 @@ impl State {
 
     /// A workspace's work area: its monitor less the reserved strips and
     /// `gaps_out`.
+    /// The same for a *floating* window, which Hyprland keeps apart:
+    /// `general:float_gaps` rather than `general:gaps_out`.
+    fn float_work_area_of(&self, workspace: WorkspaceId) -> Rect {
+        let mut settings = self.settings_at(workspace);
+        settings.gaps_out = settings.float_gaps;
+        self.workspace_monitor(workspace)
+            .map(|monitor| work_area(&self.outputs, monitor, &settings))
+            .unwrap_or_default()
+    }
+
     fn work_area_of(&self, workspace: WorkspaceId) -> Rect {
         self.workspace_monitor(workspace)
             .map(|monitor| work_area(&self.outputs, monitor, &self.settings_at(workspace)))
