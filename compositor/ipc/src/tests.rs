@@ -265,6 +265,12 @@ fn snapshot() -> Snapshot {
             special_workspace: None,
             scale: 1.0,
             focused: true,
+            description: "Headless output 1".to_owned(),
+            make: "Ferrix".to_owned(),
+            model: "hyprix".to_owned(),
+            serial: String::new(),
+            reserved: (0, 0, 0, 0),
+            dpms: true,
         }],
         workspaces: vec![Workspace {
             id: 1,

@@ -182,12 +182,11 @@ impl Client {
             &[ArgType::Str { nullable: false }],
             &[Arg::Str(Some(&screen.name))],
         );
-        let description = format!("{} ({}x{})", screen.name, screen.width, screen.height);
         let _ = self.out.write(
             id,
             zxdg_output_v1::event::DESCRIPTION,
             &[ArgType::Str { nullable: false }],
-            &[Arg::Str(Some(&description))],
+            &[Arg::Str(Some(&screen.description))],
         );
         let _ = self.out.write(id, zxdg_output_v1::event::DONE, &[], &[]);
     }

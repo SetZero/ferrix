@@ -85,6 +85,10 @@ fn ioctls(width: Width) -> Vec<(&'static str, u64)> {
             "DRM_IOCTL_MODE_GETPROPERTY",
             drm::IOCTL_MODE_GETPROPERTY.into(),
         ),
+        (
+            "DRM_IOCTL_MODE_GETPROPBLOB",
+            drm::IOCTL_MODE_GETPROPBLOB.into(),
+        ),
     ]
 }
 
@@ -250,6 +254,7 @@ fn expected(width: Width) -> BTreeMap<String, u64> {
     lines.extend(layouts::<drm::GetPlane>());
     lines.extend(layouts::<drm::ObjGetProperties>());
     lines.extend(layouts::<drm::GetProperty>());
+    lines.extend(layouts::<drm::GetBlob>());
     lines.extend(layouts::<drm::PropertyEnum>());
     lines.extend(layouts::<drm::Event>());
     lines.extend(layouts::<drm::EventVblank>());
@@ -361,6 +366,7 @@ fn every_structure_reads_and_writes_back() {
     round_trip::<drm::GetPlane>();
     round_trip::<drm::ObjGetProperties>();
     round_trip::<drm::GetProperty>();
+    round_trip::<drm::GetBlob>();
     round_trip::<drm::PropertyEnum>();
     round_trip::<drm::Event>();
     round_trip::<drm::EventVblank>();

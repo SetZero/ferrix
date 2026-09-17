@@ -102,11 +102,30 @@ impl MonitorRule {
         })
     }
 
-    /// Whether this rule is the one for `monitor`: its name, or the rule
-    /// with no name at all.
+    /// Whether this rule is the one for a monitor called `name` that
+    /// describes itself as `description`.
+    ///
+    /// Three forms, which are `CMonitor::matchesStaticSelector`'s: a rule
+    /// with no name at all is every monitor's, a rule beginning `desc:`
+    /// matches the *start* of the description, and any other name is the
+    /// connector's, exactly.
+    ///
+    /// The prefix is Hyprland's and it matters: a description is the make,
+    /// the model and the serial, and `desc:Dell Inc. DELL P2418D` names
+    /// every Dell P2418D on the machine while the serial after it names
+    /// one.
     #[must_use]
-    pub fn matches(&self, monitor: &str) -> bool {
-        self.name.is_empty() || self.name == monitor
+    pub fn matches(&self, name: &str, description: &str) -> bool {
+        if self.name.is_empty() {
+            return true;
+        }
+        match self.name.strip_prefix("desc:") {
+            Some(wanted) => {
+                let wanted = wanted.trim();
+                !wanted.is_empty() && description.starts_with(wanted)
+            }
+            None => self.name == name,
+        }
     }
 
     /// The scale as a number: `auto` is 1, and a scale at or below zero is

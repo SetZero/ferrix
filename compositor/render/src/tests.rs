@@ -85,6 +85,8 @@ fn two_clients_on(size: (u32, u32), settings: Settings) -> (State, MonitorLayout
             id: MonitorId(1),
             rect: Rect::new(0, 0, i64::from(size.0), i64::from(size.1)),
             reserved: Gaps::all(0),
+            description: String::new(),
+            made: <(String, String, String)>::default(),
         })
         .unwrap();
     let _ = state.open_window(CHECKERBOARD).unwrap();
@@ -194,6 +196,8 @@ fn scaled_frame() -> (Vec<u8>, Placed) {
             // The logical size: what the screen is, divided by the scale.
             rect: Rect::new(0, 0, i64::from(WIDTH) / 2, i64::from(HEIGHT) / 2),
             reserved: Gaps::all(0),
+            description: String::new(),
+            made: <(String, String, String)>::default(),
         })
         .unwrap();
     let _ = state.open_window(CHECKERBOARD).unwrap();
@@ -285,6 +289,8 @@ fn two_monitor_frames() -> (Vec<u8>, Vec<u8>) {
                 id: MonitorId(index),
                 rect: Rect::new(x, 0, i64::from(WIDTH), i64::from(HEIGHT)),
                 reserved: Gaps::all(0),
+                description: String::new(),
+                made: <(String, String, String)>::default(),
             })
             .unwrap();
     }
@@ -590,6 +596,8 @@ fn bar_and_two_clients_frame() -> Vec<u8> {
             id: MonitorId(1),
             rect: monitor,
             reserved: Gaps::all(0),
+            description: String::new(),
+            made: <(String, String, String)>::default(),
         })
         .unwrap();
     let _ = state.set_reserved(MonitorId(1), reserved).unwrap();
@@ -1670,6 +1678,8 @@ fn a_layout_on_a_monitor_away_from_the_origin_is_drawn_in_its_coordinates() {
             id: MonitorId(7),
             rect: Rect::new(1920, 100, 200, 100),
             reserved: Gaps::all(0),
+            description: String::new(),
+            made: <(String, String, String)>::default(),
         })
         .unwrap();
     let _ = state.open_window(WindowId(3)).unwrap();

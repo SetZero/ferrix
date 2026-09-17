@@ -13,10 +13,12 @@
 
 #[cfg(target_os = "linux")]
 mod card;
+mod edid;
 pub mod modeset;
 
 #[cfg(target_os = "linux")]
 pub use card::{Card, Dumb, Plan, cards, plan, planes, plans, rename, show};
+pub use edid::{Edid, registered};
 
 #[cfg(test)]
 mod tests;

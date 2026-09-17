@@ -479,6 +479,20 @@ pub fn describe_all(
                 .map(|id| (i32::try_from(id.0).unwrap_or(0), state.workspace_name(id))),
             scale: monitor.scale,
             focused: Some(monitor.id) == state.focused_monitor(),
+            description: monitor.description.clone(),
+            make: monitor.made.0.clone(),
+            model: monitor.made.1.clone(),
+            serial: monitor.made.2.clone(),
+            // Hyprland's order: left, top, right, bottom.
+            reserved: (
+                i32::try_from(monitor.reserved.left).unwrap_or(0),
+                i32::try_from(monitor.reserved.top).unwrap_or(0),
+                i32::try_from(monitor.reserved.right).unwrap_or(0),
+                i32::try_from(monitor.reserved.bottom).unwrap_or(0),
+            ),
+            // `dpms` is the compositor's, not the layout's; the snapshot
+            // that has it fills it in.
+            dpms: true,
         });
     }
 

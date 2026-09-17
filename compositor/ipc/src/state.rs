@@ -116,6 +116,22 @@ pub struct Monitor {
     pub scale: f64,
     /// Whether it holds the focus.
     pub focused: bool,
+    /// What the monitor says it is: the make, the model and the serial with
+    /// spaces between them. Hyprland calls this the *short* description and
+    /// prints it under `description`; it is what a `monitor = desc:` line
+    /// and a bar's own `"output"` setting match on.
+    pub description: String,
+    /// The three parts of it, which Hyprland prints apart as well.
+    pub make: String,
+    /// The same.
+    pub model: String,
+    /// The same.
+    pub serial: String,
+    /// What the layer surfaces reserved on each side, in Hyprland's order:
+    /// left, top, right, bottom.
+    pub reserved: (i32, i32, i32, i32),
+    /// Whether `dpms` has it on.
+    pub dpms: bool,
 }
 
 /// Everything an answer is written from.

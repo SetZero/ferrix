@@ -27,6 +27,8 @@ fn monitor(id: MonitorId, x: i64, y: i64, width: i64, height: i64) -> Monitor {
         id,
         rect: Rect::new(x, y, width, height),
         reserved: Gaps::all(0),
+        description: String::new(),
+        made: <(String, String, String)>::default(),
     }
 }
 
@@ -373,6 +375,8 @@ fn reserved_strips_are_outside_the_tiled_area() {
                 bottom: 0,
                 left: 0,
             },
+            description: String::new(),
+            made: <(String, String, String)>::default(),
         })
         .unwrap();
     open(&mut state, &[1]);
@@ -879,6 +883,8 @@ fn the_neighbour_search_reaches_across_gaps_and_reserved_strips() {
                 bottom: 0,
                 left: 30,
             },
+            description: String::new(),
+            made: <(String, String, String)>::default(),
         })
         .unwrap();
     open(&mut state, &[1]);
@@ -1443,6 +1449,8 @@ fn extreme_geometry_does_not_panic() {
             id: M1,
             rect: r(i64::MAX, i64::MIN, i64::MAX, 0),
             reserved: Gaps::all(i64::MIN),
+            description: String::new(),
+            made: <(String, String, String)>::default(),
         })
         .unwrap();
     open(&mut state, &[1, 2, 3]);

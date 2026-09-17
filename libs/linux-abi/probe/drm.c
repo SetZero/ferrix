@@ -49,6 +49,7 @@ int main(void)
 	VALUE(DRM_IOCTL_MODE_GETPLANE);
 	VALUE(DRM_IOCTL_MODE_OBJ_GETPROPERTIES);
 	VALUE(DRM_IOCTL_MODE_GETPROPERTY);
+	VALUE(DRM_IOCTL_MODE_GETPROPBLOB);
 
 	/* Capabilities, and the client capabilities a client may ask for. */
 	VALUE(DRM_CAP_DUMB_BUFFER);
@@ -291,6 +292,11 @@ int main(void)
 	FIELD(drm_mode_obj_get_properties, count_props);
 	FIELD(drm_mode_obj_get_properties, obj_id);
 	FIELD(drm_mode_obj_get_properties, obj_type);
+
+	SIZE(drm_mode_get_blob);
+	FIELD(drm_mode_get_blob, blob_id);
+	FIELD(drm_mode_get_blob, length);
+	FIELD(drm_mode_get_blob, data);
 
 	SIZE(drm_mode_get_property);
 	FIELD(drm_mode_get_property, values_ptr);

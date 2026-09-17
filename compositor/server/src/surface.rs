@@ -327,6 +327,14 @@ pub struct Output {
     /// The name a person sees, as `hyprctl monitors` prints it, and as the
     /// connector is called: `DP-1`, `Virtual-1`.
     pub name: String,
+    /// What the monitor says it is, as `wl_output.description` and
+    /// `zxdg_output_v1.description` carry it: the make, the model and the
+    /// serial, with the connector's name in brackets after them.
+    ///
+    /// A bar that is told to be on one screen matches on this -- waybar's
+    /// `"output"` is a description, not a connector -- so a compositor that
+    /// sent a fixed sentence here is one whose person's bar never appears.
+    pub description: String,
 }
 
 impl Default for Output {
@@ -339,6 +347,7 @@ impl Default for Output {
             refresh: 60_000,
             scale: 1,
             name: "HEADLESS-1".to_owned(),
+            description: "Headless output 1 (HEADLESS-1)".to_owned(),
         }
     }
 }

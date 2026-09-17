@@ -4,9 +4,9 @@ use std::ffi::CStr;
 use std::io;
 
 use ferrix_linux_abi::drm::{
-    self, CardRes, CreateDumb, Crtc, CrtcPageFlip, FbCmd2, Field, GetConnector, GetEncoder,
-    GetPlane, GetPlaneRes, GetProperty, Layout, MapDumb, ModeInfo, ObjGetProperties, PropertyEnum,
-    SetClientCap,
+    self, CardRes, CreateDumb, Crtc, CrtcPageFlip, FbCmd2, Field, GetBlob, GetConnector,
+    GetEncoder, GetPlane, GetPlaneRes, GetProperty, Layout, MapDumb, ModeInfo, ObjGetProperties,
+    PropertyEnum, SetClientCap,
 };
 
 use crate::modeset;
@@ -119,6 +119,10 @@ pub struct Plan {
     pub mode: ModeInfo,
     /// The monitor's name, made from the connector's type and number.
     pub name: String,
+    /// What the monitor says it is: its `EDID`, read. `None` for a
+    /// connector with no `EDID` property or a blob that is not one -- a
+    /// virtual screen has neither.
+    pub edid: Option<crate::Edid>,
 }
 
 impl Plan {
@@ -250,6 +254,10 @@ pub fn plans(card: &Card) -> io::Result<Vec<Plan>> {
             crtc_index,
             mode,
             name: connector_name(&connector),
+            // A connector that will not say what it is gets no
+            // description, which is one monitor a `desc:` rule cannot
+            // name -- not a card the compositor refuses to open.
+            edid: connector_edid(card, connector_id).ok().flatten(),
         });
     }
     Ok(found)
@@ -436,6 +444,57 @@ pub fn planes(card: &Card) -> io::Result<Vec<modeset::Plane>> {
         });
     }
     Ok(planes)
+}
+
+/// What connector `id` says it is: its `EDID` property's blob, read.
+///
+/// `None` where the connector has no `EDID` property, where its value is
+/// zero -- which is a connector with nothing plugged in, or a virtual one
+/// that has nothing to say -- or where the bytes are not an EDID.
+fn connector_edid(card: &Card, id: u32) -> io::Result<Option<crate::Edid>> {
+    let mut request = ObjGetProperties {
+        obj_id: id,
+        obj_type: drm::MODE_OBJECT_CONNECTOR,
+        ..ObjGetProperties::ZERO
+    };
+    card.ioctl(drm::IOCTL_MODE_OBJ_GETPROPERTIES, &mut request)?;
+    let mut properties = vec![0u32; request.count_props as usize];
+    let mut values = vec![0u64; request.count_props as usize];
+    request.props_ptr = address(&mut properties);
+    request.prop_values_ptr = address(&mut values);
+    card.ioctl(drm::IOCTL_MODE_OBJ_GETPROPERTIES, &mut request)?;
+
+    for (&property_id, &value) in properties.iter().zip(&values) {
+        let mut property = GetProperty {
+            prop_id: property_id,
+            ..GetProperty::ZERO
+        };
+        card.ioctl(drm::IOCTL_MODE_GETPROPERTY, &mut property)?;
+        if modeset::c_name(&property.name) != "EDID" {
+            continue;
+        }
+        let Ok(blob_id) = u32::try_from(value) else {
+            return Ok(None);
+        };
+        if blob_id == 0 {
+            return Ok(None);
+        }
+        // Twice, as every counted DRM call is: once for the length, once
+        // for the bytes.
+        let mut blob = GetBlob {
+            blob_id,
+            ..GetBlob::ZERO
+        };
+        card.ioctl(drm::IOCTL_MODE_GETPROPBLOB, &mut blob)?;
+        if blob.length == 0 {
+            return Ok(None);
+        }
+        let mut bytes = vec![0u8; blob.length as usize];
+        blob.data = address(&mut bytes);
+        card.ioctl(drm::IOCTL_MODE_GETPROPBLOB, &mut blob)?;
+        return Ok(crate::Edid::parse(&bytes));
+    }
+    Ok(None)
 }
 
 /// The name of plane `id`'s `type` value in the property's enum list, if the

@@ -292,6 +292,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 rect: screen.rect,
                 reserved: compositor_layout::Gaps::default(),
                 scale: screen.scale,
+                description: screen.description.clone(),
+                made: screen.made.clone(),
             })
             .map_err(|error| format!("the monitor: {error:?}"))?;
     }
@@ -2229,6 +2231,12 @@ struct Screen {
     rect: Rect,
     /// What it is called: the connector's name.
     name: String,
+    /// What the monitor says it is: its make, model and serial, which a
+    /// `monitor = desc:` line, `hyprctl monitors`, `wl_output.description`
+    /// and a bar's own `"output"` setting all match on.
+    description: String,
+    /// The three parts of it, which `hyprctl monitors` prints apart.
+    made: (String, String, String),
     /// How many buffer pixels one logical pixel is: `monitor = ..., 2`.
     scale: f64,
 }
@@ -2247,10 +2255,16 @@ impl Screen {
         let mut id = 0u32;
         for backend in backends {
             let name = backend.name();
+            let description = backend.description();
             // The last rule that names this monitor, or the last rule with
             // no name at all: Hyprland reads the file top to bottom and a
-            // later line wins.
-            let rule = rules.iter().rev().find(|rule| rule.matches(&name));
+            // later line wins. A rule names a monitor by its connector or
+            // by `desc:` and its description, and a person writes the
+            // second because a connector's name moves when a cable does.
+            let rule = rules
+                .iter()
+                .rev()
+                .find(|rule| rule.matches(&name, &description));
             if rule.is_some_and(|rule| rule.disabled) {
                 continue;
             }
@@ -2271,6 +2285,8 @@ impl Screen {
             id = id.saturating_add(1);
             screens.push(Self {
                 name,
+                description,
+                made: backend.made(),
                 backend,
                 canvas,
                 monitor: MonitorId(id),
@@ -2334,6 +2350,13 @@ impl Screen {
             height: i32::try_from(height).unwrap_or(0),
             scale,
             name: self.name.clone(),
+            // Aquamarine's, which is what a client reads: the description,
+            // and the connector in brackets after it.
+            description: if self.description.is_empty() {
+                self.name.clone()
+            } else {
+                format!("{} ({})", self.description, self.name)
+            },
             ..compositor_server::Output::default()
         }
     }

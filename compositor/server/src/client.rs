@@ -4447,10 +4447,7 @@ impl Client {
         if version >= 4 {
             for (opcode, text) in [
                 (wl_output::event::NAME, mode.name.as_str()),
-                (
-                    wl_output::event::DESCRIPTION,
-                    "the Ferrix compositor's output",
-                ),
+                (wl_output::event::DESCRIPTION, mode.description.as_str()),
             ] {
                 let _ = self.out.write(
                     id,

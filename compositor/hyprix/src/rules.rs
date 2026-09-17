@@ -368,6 +368,8 @@ mod tests {
                 id: MonitorId(1),
                 rect: Rect::new(0, 0, 1920, 1080),
                 reserved: compositor_config::Gaps::all(0),
+                description: String::new(),
+                made: <(String, String, String)>::default(),
             })
             .expect("a monitor");
         let _opened = state.open_window(WindowId(1)).expect("a window");

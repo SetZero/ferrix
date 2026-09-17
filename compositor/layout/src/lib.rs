@@ -145,6 +145,17 @@ pub struct Monitor {
     /// pixels they work in -- but it is part of what a monitor is, and
     /// `hyprctl monitors` prints it.
     pub scale: f64,
+    /// What the monitor says it is: its make, model and serial with spaces
+    /// between them, out of its `EDID`.
+    ///
+    /// Nothing in the layouts reads this either, and it is part of what a
+    /// monitor is for the same reason `scale` is: a `monitor = desc:` line
+    /// and a bar's own `"output"` setting name a monitor by it, because a
+    /// connector's name moves when a cable does and a description does not.
+    pub description: String,
+    /// The three parts of it -- the make, the model and the serial -- which
+    /// `hyprctl monitors` prints apart as well as together.
+    pub made: (String, String, String),
 }
 
 /// What a request to the layouts could not do.

@@ -332,10 +332,15 @@ impl Client {
                 &[Arg::NewId(head)],
             );
         }
-        let description = format!("{} ({}x{})", output.name, output.width, output.height);
+        // The description a monitor gives of itself, which is what every
+        // other protocol here carries and what a person's configuration
+        // names it by.
         for (event, text) in [
             (zwlr_output_head_v1::event::NAME, output.name.clone()),
-            (zwlr_output_head_v1::event::DESCRIPTION, description),
+            (
+                zwlr_output_head_v1::event::DESCRIPTION,
+                output.description.clone(),
+            ),
             (zwlr_output_head_v1::event::MAKE, "Ferrix".to_owned()),
             (zwlr_output_head_v1::event::MODEL, "hyprix".to_owned()),
             (

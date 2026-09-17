@@ -206,6 +206,8 @@ fn one_window() -> compositor_layout::MonitorLayout {
             rect: Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT)),
             reserved: compositor_layout::Gaps::all(0),
             scale: 1.0,
+            description: String::new(),
+            made: <(String, String, String)>::default(),
         })
         .expect("a monitor");
     let _ = state.open_window(WindowId(1)).expect("a window");

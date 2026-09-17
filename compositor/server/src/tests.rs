@@ -2811,6 +2811,7 @@ fn desktop_client() -> Client {
         refresh: 60_000,
         scale: 2,
         name: "DP-3".to_owned(),
+        description: "Dell Inc. DELL P2418D MY3ND91J09CT (DP-3)".to_owned(),
     }]);
     let mut bytes = get_registry(2);
     bytes.extend(bind(2, 1, "wl_compositor", 6, 4));
@@ -2861,7 +2862,7 @@ fn xdg_output_says_the_logical_size_and_the_name() {
             // window's rectangle is in.
             vec!["Int(1280)".to_owned(), "Int(720)".to_owned()],
             vec!["Str(Some(\"DP-3\"))".to_owned()],
-            vec!["Str(Some(\"DP-3 (2560x1440)\"))".to_owned()],
+            vec!["Str(Some(\"Dell Inc. DELL P2418D MY3ND91J09CT (DP-3)\"))".to_owned()],
             vec![],
         ],
         "position, size, name, description, done"
@@ -3444,6 +3445,7 @@ fn watching_client() -> Client {
         refresh: 60_000,
         scale: 1,
         name: "DP-1".to_owned(),
+        description: "Dell Inc. DELL U2415 XKV0P9BE2GLU (DP-1)".to_owned(),
     }]);
     let mut bytes = get_registry(2);
     bytes.extend(bind(2, 1, "wl_compositor", 6, 4));

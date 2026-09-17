@@ -872,14 +872,34 @@ fn a_monitor_line_is_a_name_a_mode_a_place_and_a_scale() {
     // rule for whatever monitor there is.
     let any = MonitorRule::parse(", preferred, auto, 1").unwrap();
     assert!(any.name.is_empty());
-    assert!(any.matches("Virtual-1"));
-    assert!(any.matches("DP-3"));
+    assert!(any.matches("Virtual-1", ""));
+    assert!(any.matches("DP-3", "Dell Inc. DELL P2418D MY3ND91J09CT"));
     assert_eq!(any.mode, Mode::Preferred);
     assert_eq!(any.position, Position::Auto);
 
     // A named rule is that monitor's and no other's.
-    assert!(rule.matches("Virtual-1"));
-    assert!(!rule.matches("Virtual-2"));
+    assert!(rule.matches("Virtual-1", ""));
+    assert!(!rule.matches("Virtual-2", ""));
+
+    // `desc:` matches the start of what the monitor says it is, which is
+    // how a real configuration names a screen: a connector's name moves
+    // when a cable does and a description does not. The prefix matters --
+    // the make and the model name every one of that model on the machine,
+    // and the serial after them names one.
+    let described =
+        MonitorRule::parse("desc:Dell Inc. DELL P2418D MY3ND91J09CT, preferred, 0x0, 1").unwrap();
+    assert!(described.matches("DP-3", "Dell Inc. DELL P2418D MY3ND91J09CT"));
+    assert!(!described.matches("DP-3", "Dell Inc. DELL P2418D XXXXXXXXXXX"));
+    assert!(
+        !described.matches("desc:Dell Inc. DELL P2418D MY3ND91J09CT", ""),
+        "a `desc:` rule is not a connector called that"
+    );
+    let model = MonitorRule::parse("desc:Dell Inc. DELL P2418D, preferred, auto, 1").unwrap();
+    assert!(
+        model.matches("DP-3", "Dell Inc. DELL P2418D MY3ND91J09CT"),
+        "the make and the model name every one of that model"
+    );
+    assert!(!model.matches("DP-3", "Lenovo Group Limited R27qe Gen2 UTP03KBB"));
 
     // A position without a refresh rate, and `auto` for the scale.
     let placed = MonitorRule::parse("DP-1, 2560x1440, 1920x0, auto").unwrap();

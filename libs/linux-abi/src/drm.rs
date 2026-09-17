@@ -78,6 +78,8 @@ pub const IOCTL_MODE_DESTROY_DUMB: u32 = 0xC004_64B4;
 pub const IOCTL_MODE_ADDFB2: u32 = 0xC068_64B8;
 /// `DRM_IOCTL_MODE_GETPROPERTY`.
 pub const IOCTL_MODE_GETPROPERTY: u32 = 0xC040_64AA;
+/// `DRM_IOCTL_MODE_GETPROPBLOB`.
+pub const IOCTL_MODE_GETPROPBLOB: u32 = 0xC010_64AC;
 /// `DRM_IOCTL_MODE_GETPLANERESOURCES`.
 pub const IOCTL_MODE_GETPLANERESOURCES: u32 = 0xC010_64B5;
 /// `DRM_IOCTL_MODE_GETPLANE`.
@@ -657,6 +659,23 @@ layout! {
         count_values: u32 = 56 / "count_values",
         /// Enum records: capacity in, count out.
         count_enum_blobs: u32 = 60 / "count_enum_blobs",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_get_blob`: `DRM_IOCTL_MODE_GETPROPBLOB`.
+    ///
+    /// How a connector's `EDID` property is read: the property's value is a
+    /// blob id, and this hands back the bytes. The call is made twice, as
+    /// every counted DRM call is -- once with no buffer to learn the
+    /// length, once with one that size.
+    GetBlob = "drm_mode_get_blob", 16 {
+        /// The blob, as the property's value named it.
+        blob_id: u32 = 0 / "blob_id",
+        /// Its length: capacity in, count out.
+        length: u32 = 4 / "length",
+        /// Where to write the bytes.
+        data: u64 = 8 / "data",
     }
 }
 

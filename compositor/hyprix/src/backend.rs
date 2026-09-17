@@ -33,6 +33,21 @@ pub trait Backend: core::fmt::Debug {
     /// What the monitor on it is called: the connector's name, which
     /// `hyprctl monitors`, a `monitor =` line and `focusmonitor` all use.
     fn name(&self) -> String;
+
+    /// What the monitor says it is: its make, model and serial with spaces
+    /// between them, which is Hyprland's `m_shortDescription`.
+    ///
+    /// The thing `monitor = desc:...`, `hyprctl monitors`,
+    /// `wl_output.description` and a bar's own `"output"` setting all match
+    /// on. A connector's *name* moves when a cable does and a description
+    /// does not, which is why a person writes the description.
+    fn description(&self) -> String;
+
+    /// The three parts of that description, for `hyprctl monitors`, which
+    /// prints them apart as well as together.
+    fn made(&self) -> (String, String, String) {
+        (String::new(), String::new(), String::new())
+    }
 }
 
 /// A screen that is only memory: the everyday one, and the one a test reads.
@@ -93,6 +108,12 @@ impl Backend for Headless {
     fn name(&self) -> String {
         // What Hyprland's own headless backend calls its output.
         "HEADLESS-1".to_owned()
+    }
+
+    fn description(&self) -> String {
+        // Hyprland's headless backend gives its outputs this description,
+        // and a configuration written for one matches on it.
+        "Headless output 1".to_owned()
     }
 }
 
@@ -247,6 +268,28 @@ impl Backend for Drm {
 
     fn name(&self) -> String {
         self.plan.name.clone()
+    }
+
+    fn description(&self) -> String {
+        self.plan
+            .edid
+            .as_ref()
+            .map(|edid| edid.describe(compositor_drm::registered))
+            .unwrap_or_default()
+    }
+
+    fn made(&self) -> (String, String, String) {
+        self.plan
+            .edid
+            .as_ref()
+            .map_or_else(Default::default, |edid| {
+                (
+                    compositor_drm::registered(&edid.manufacturer)
+                        .unwrap_or_else(|| edid.manufacturer.clone()),
+                    edid.model.clone(),
+                    edid.serial.clone(),
+                )
+            })
     }
 }
 

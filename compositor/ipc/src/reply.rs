@@ -887,10 +887,10 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
             out.object();
             out.number("id", i64::from(monitor.id));
             out.string("name", &monitor.name);
-            out.string("description", &monitor.name);
-            out.string("make", "Ferrix");
-            out.string("model", "hyprix");
-            out.string("serial", "");
+            out.string("description", &monitor.description);
+            out.string("make", &monitor.make);
+            out.string("model", &monitor.model);
+            out.string("serial", &monitor.serial);
             out.number("width", i64::from(monitor.width));
             out.number("height", i64::from(monitor.height));
             out.field_refresh(monitor.refresh);
@@ -918,9 +918,29 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
                     .map_or("", |(_, name)| name.as_str()),
             );
             out.end('}');
+            let (left, top, right, bottom) = monitor.reserved;
+            out.bare("reserved", &format!("[{left}, {top}, {right}, {bottom}]"));
             out.field_scale(monitor.scale);
+            // No monitor here is turned; `wl_output.transform` is always
+            // `normal` and this is the number for it.
+            out.number("transform", 0);
             out.boolean("focused", monitor.focused);
-            out.boolean("dpmsStatus", true);
+            out.boolean("dpmsStatus", monitor.dpms);
+            // Nothing here does variable refresh, tearing or direct
+            // scanout, and a monitor is never disabled once it is in the
+            // list: a disabled one is left out when the screens are made.
+            out.boolean("vrr", false);
+            out.boolean("activelyTearing", false);
+            out.boolean("disabled", false);
+            out.string("currentFormat", "XRGB8888");
+            out.string("mirrorOf", "none");
+            out.bare(
+                "availableModes",
+                &format!(
+                    "[\"{}x{}@{:.5}Hz\"]",
+                    monitor.width, monitor.height, monitor.refresh
+                ),
+            );
             out.end('}');
         }
         out.end(']');
@@ -930,7 +950,7 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
     for monitor in monitors {
         let _ = writeln!(
             text,
-            "Monitor {} (ID {}):\n\t{}x{}@{:.5} at {}x{}\n\tactive workspace: {} ({})\n\tspecial workspace: {} ({})\n\tscale: {:.2}\n\tfocused: {}\n",
+            "Monitor {} (ID {}):\n\t{}x{}@{:.5} at {}x{}\n\tdescription: {}\n\tmake: {}\n\tmodel: {}\n\tserial: {}\n\tactive workspace: {} ({})\n\tspecial workspace: {} ({})\n\treserved: {} {} {} {}\n\tscale: {:.2}\n\ttransform: 0\n\tfocused: {}\n\tdpmsStatus: {}\n\tvrr: false\n\tactivelyTearing: false\n\tdisabled: false\n\tcurrentFormat: XRGB8888\n\tmirrorOf: none\n",
             monitor.name,
             monitor.id,
             monitor.width,
@@ -938,6 +958,10 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
             monitor.refresh,
             monitor.at.0,
             monitor.at.1,
+            monitor.description,
+            monitor.make,
+            monitor.model,
+            monitor.serial,
             monitor.active_workspace,
             monitor.active_workspace_name,
             monitor.special_workspace.as_ref().map_or(0, |(id, _)| *id),
@@ -945,8 +969,13 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
                 .special_workspace
                 .as_ref()
                 .map_or("", |(_, name)| name.as_str()),
+            monitor.reserved.0,
+            monitor.reserved.1,
+            monitor.reserved.2,
+            monitor.reserved.3,
             monitor.scale,
             if monitor.focused { "yes" } else { "no" },
+            monitor.dpms,
         );
     }
     text

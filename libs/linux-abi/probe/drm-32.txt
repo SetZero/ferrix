@@ -20,6 +20,7 @@ DRM_IOCTL_MODE_GETPLANERESOURCES 3222299829
 DRM_IOCTL_MODE_GETPLANE 3223348406
 DRM_IOCTL_MODE_OBJ_GETPROPERTIES 3223348409
 DRM_IOCTL_MODE_GETPROPERTY 3225445546
+DRM_IOCTL_MODE_GETPROPBLOB 3222299820
 DRM_CAP_DUMB_BUFFER 1
 DRM_CAP_VBLANK_HIGH_CRTC 2
 DRM_CAP_DUMB_PREFERRED_DEPTH 3
@@ -232,6 +233,10 @@ offsetof.drm_mode_obj_get_properties.prop_values_ptr 8
 offsetof.drm_mode_obj_get_properties.count_props 16
 offsetof.drm_mode_obj_get_properties.obj_id 20
 offsetof.drm_mode_obj_get_properties.obj_type 24
+sizeof.drm_mode_get_blob 16
+offsetof.drm_mode_get_blob.blob_id 0
+offsetof.drm_mode_get_blob.length 4
+offsetof.drm_mode_get_blob.data 8
 sizeof.drm_mode_get_property 64
 offsetof.drm_mode_get_property.values_ptr 0
 offsetof.drm_mode_get_property.enum_blob_ptr 8
