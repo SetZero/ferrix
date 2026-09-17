@@ -76,6 +76,7 @@ static FALLBACK: generated::Layout = generated::Layout {
     name: "us",
     variant: "",
     source: "no generated keymap",
+    label: "none",
     keymap: "",
     keys: &[],
 };
@@ -157,6 +158,60 @@ pub fn layouts(names: &str, variants: &str) -> Vec<(&'static generated::Layout, 
         .collect()
 }
 
+/// The shipped layouts a keymap's own text names, in group order.
+///
+/// A client of any other compositor compiles the keymap it is handed and
+/// asks libxkbcommon what each key means. This compositor's own clients --
+/// the terminal above all -- cannot: libxkbcommon is not on the machine, and
+/// the tables here are what they read instead. So they need to know *which*
+/// tables, and the keymap says: libxkbcommon's own printer writes
+/// `name[1]="German";` in `xkb_symbols`, one line a group, and
+/// [`generated::Layout::label`] is that name.
+///
+/// This is how a client follows `input:kb_layout` rather than always
+/// reading the first table, and how it follows a keymap with several groups:
+/// the group index in `wl_keyboard.modifiers` indexes what this returns.
+///
+/// A group whose name is not one this compositor ships is skipped rather
+/// than guessed at, and a keymap that names none gives an empty list -- a
+/// caller falls back to the default, which is what it did before it asked.
+#[must_use]
+pub fn groups_of(keymap: &str) -> Vec<&'static generated::Layout> {
+    let mut named: Vec<(usize, &'static generated::Layout)> = Vec::new();
+    for line in keymap.lines() {
+        // `name[1]="German";`, and not `level_name[1]= "Any";`, which is why
+        // the test is on the whole first word.
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("name[") else {
+            continue;
+        };
+        let Some((index, rest)) = rest.split_once(']') else {
+            continue;
+        };
+        let Ok(index) = index.trim().parse::<usize>() else {
+            continue;
+        };
+        let Some(label) = rest
+            .trim_start()
+            .trim_start_matches('=')
+            .trim()
+            .strip_prefix('"')
+            .and_then(|rest| rest.split('"').next())
+        else {
+            continue;
+        };
+        if let Some(layout) = generated::LAYOUTS
+            .iter()
+            .find(|layout| layout.label == label)
+        {
+            named.push((index, layout));
+        }
+    }
+    // The group numbering in the text is one-based and need not be in order.
+    named.sort_by_key(|(index, _)| *index);
+    named.into_iter().map(|(_, layout)| layout).collect()
+}
+
 /// How many groups a keymap may have.
 ///
 /// XKB's own limit, which libxkbcommon spells `XKB_MAX_GROUPS` and enforces
@@ -169,6 +224,28 @@ pub const MAX_GROUPS: usize = 4;
 /// What XKB adds to an evdev keycode to get its own.
 pub const XKB_OFFSET: u32 = 8;
 
+/// What a key makes at one of its levels.
+///
+/// A level is not "how many shifts": on a German keyboard level two is
+/// `AltGr` (`Mod5`) and on every keyboard the function keys have a level that
+/// `Control+Alt` reaches. So each level carries the modifier masks that
+/// select it, as `xkb_keymap_key_get_mods_for_level` reported them, and
+/// choosing a level is a lookup rather than an implementation of XKB's key
+/// types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Level {
+    /// The keysyms it makes, which is usually one and is empty for a level
+    /// the keymap leaves blank -- keycodes 196 to 199 have an empty first
+    /// level and `Alt_L` on their second, and an empty level is not the end
+    /// of a key's levels.
+    pub keysyms: &'static [&'static str],
+    /// Every modifier mask that selects this level. More than one because a
+    /// mask names the modifiers the key's *type* cares about together with
+    /// the combinations of the ones it ignores, so `FK01`'s first level is
+    /// reached by nothing, by `Control` and by `Mod1` alike.
+    pub masks: &'static [u32],
+}
+
 /// One key of the keymap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Key {
@@ -176,14 +253,67 @@ pub struct Key {
     pub code: u16,
     /// Its name in the keymap, such as `AD01`.
     pub name: &'static str,
-    /// The keysym it makes with nothing held, such as `q`.
-    pub plain: Option<&'static str>,
-    /// The keysym it makes with `Shift` held, such as `Q`.
-    pub shifted: Option<&'static str>,
+    /// Every level it has, the plainest first.
+    pub levels: &'static [Level],
     /// The modifiers held down while this key is held.
     pub held: u32,
     /// The modifiers it leaves locked once pressed and released.
     pub locked: u32,
+}
+
+impl Key {
+    /// The keysym it makes with nothing held, such as `q`.
+    #[must_use]
+    pub fn plain(&self) -> Option<&'static str> {
+        self.keysym_at(0)
+    }
+
+    /// The keysym it makes with `Shift` held, such as `Q`.
+    #[must_use]
+    pub fn shifted(&self) -> Option<&'static str> {
+        self.keysym_at(1)
+    }
+
+    /// The first keysym of level `level`, if the key has that level and the
+    /// level is not blank.
+    #[must_use]
+    pub fn keysym_at(&self, level: usize) -> Option<&'static str> {
+        self.levels
+            .get(level)
+            .and_then(|level| level.keysyms.first().copied())
+    }
+
+    /// Which level `modifiers` selects.
+    ///
+    /// The rule is libxkbcommon's, and it is not "the mask that matches":
+    /// XKB first narrows the active modifiers to the ones this key's type
+    /// declares -- every modifier named at any of its levels -- and a
+    /// combination that then matches nothing is level zero rather than
+    /// nothing at all. So `Shift+Mod4` on a key whose type knows only
+    /// `Shift` is the shifted level, and `Mod5` on a key with no third level
+    /// is the plain one.
+    #[must_use]
+    pub fn level(&self, modifiers: u32) -> usize {
+        let declared = self
+            .levels
+            .iter()
+            .flat_map(|level| level.masks.iter())
+            .fold(0, |all, mask| all | mask);
+        let wanted = modifiers & declared;
+        self.levels
+            .iter()
+            .position(|level| level.masks.contains(&wanted))
+            .unwrap_or(0)
+    }
+
+    /// The keysym `modifiers` makes of this key.
+    ///
+    /// `None` for a key that makes nothing at that level, which is what a
+    /// modifier itself does.
+    #[must_use]
+    pub fn keysym(&self, modifiers: u32) -> Option<&'static str> {
+        self.keysym_at(self.level(modifiers))
+    }
 }
 
 /// The key with this evdev code in the default keymap, if it has one.
@@ -203,6 +333,13 @@ pub fn key(code: u16) -> Option<&'static Key> {
 /// with nothing held and with `Shift` held, and then against the keymap's own
 /// name for the key, which is what lets `bind = , Escape, ...` and a bind on
 /// a key with no keysym both resolve.
+///
+/// The levels above those two are deliberately not searched. Hyprland
+/// resolves a bind against a state with no modifiers applied at all
+/// (`CKeybindManager::m_xkbTranslationState`, never given a mask), so no bind
+/// of its resolves above the first level either, and a bind on `bracketleft`
+/// -- `AltGr+8` on a German keyboard -- is one Hyprland would not resolve
+/// and neither does this. `code:NN` names such a key.
 #[must_use]
 pub fn code_of(name: &str) -> Option<u16> {
     generated::LAYOUTS
@@ -228,7 +365,7 @@ impl generated::Layout {
             |candidate: Option<&str>| candidate.is_some_and(|text| text.eq_ignore_ascii_case(name));
         self.keys
             .iter()
-            .find(|key| matches(key.plain) || matches(key.shifted) || matches(Some(key.name)))
+            .find(|key| matches(key.plain()) || matches(key.shifted()) || matches(Some(key.name)))
             .map(|key| key.code)
     }
 

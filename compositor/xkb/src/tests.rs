@@ -55,8 +55,8 @@ fn the_keymap_numbers_keys_eight_above_evdev() {
 #[test]
 fn a_key_is_found_by_its_code_and_by_its_keysyms_name() {
     let q = key(KEY_Q).expect("Q");
-    assert_eq!(q.plain, Some("q"));
-    assert_eq!(q.shifted, Some("Q"));
+    assert_eq!(q.plain(), Some("q"));
+    assert_eq!(q.shifted(), Some("Q"));
     assert_eq!(code_of("q"), Some(KEY_Q));
     assert_eq!(code_of("Q"), Some(KEY_Q));
     assert_eq!(code_of("Return"), Some(KEY_ENTER));
@@ -136,8 +136,8 @@ fn a_configuration_picks_the_keymap_it_names() {
     // The letters are the keyboard's, which is the only thing that matters.
     let (german, _) = layout("de", "nodeadkeys");
     let (american, _) = layout("us", "");
-    assert_eq!(german.key(KEY_Y).and_then(|key| key.plain), Some("z"));
-    assert_eq!(american.key(KEY_Y).and_then(|key| key.plain), Some("y"));
+    assert_eq!(german.key(KEY_Y).and_then(|key| key.plain()), Some("z"));
+    assert_eq!(american.key(KEY_Y).and_then(|key| key.plain()), Some("y"));
     assert_eq!(german.code_of("z"), Some(KEY_Y));
     assert_eq!(american.code_of("z"), Some(KEY_Z));
     assert!(
@@ -349,6 +349,138 @@ fn a_layout_that_is_not_shipped_says_so_inside_a_list() {
 fn at_most_four_groups_are_taken() {
     let asked = super::layouts("de,us,fr,gb,us", "");
     assert_eq!(asked.len(), super::MAX_GROUPS);
-    let names = asked.iter().map(|(layout, _)| layout.name).collect::<Vec<_>>();
+    let names = asked
+        .iter()
+        .map(|(layout, _)| layout.name)
+        .collect::<Vec<_>>();
     assert_eq!(names, ["de", "us", "fr", "gb"]);
+}
+
+/// `AltGr` is the third level, and on a German keyboard it is where the
+/// characters a shell is written with live. A table that stopped at `Shift`
+/// could not reach any of them, which is what this is here to keep.
+///
+/// The codes are `q`, `8`, the key beside the left shift, and the one right
+/// of `ü`; the keysyms are libxkbcommon's own names for what they make.
+#[test]
+fn altgr_reaches_the_third_level_of_a_german_keyboard() {
+    const KEY_8: u16 = 9;
+    const KEY_PLUS: u16 = 27;
+    const KEY_LSGT: u16 = 86;
+    const ALTGR: u32 = generated::MOD5;
+
+    let (german, exact) = layout("de", "");
+    assert!(exact);
+    let made = |code, modifiers| german.key(code).and_then(|key| key.keysym(modifiers));
+
+    assert_eq!(made(KEY_Q, 0), Some("q"));
+    assert_eq!(made(KEY_Q, generated::SHIFT), Some("Q"));
+    assert_eq!(made(KEY_Q, ALTGR), Some("at"));
+
+    assert_eq!(made(KEY_8, 0), Some("8"));
+    assert_eq!(made(KEY_8, generated::SHIFT), Some("parenleft"));
+    assert_eq!(made(KEY_8, ALTGR), Some("bracketleft"));
+
+    assert_eq!(made(KEY_LSGT, ALTGR), Some("bar"));
+    assert_eq!(made(KEY_PLUS, ALTGR), Some("asciitilde"));
+
+    // And the characters they are, which is what a terminal writes.
+    assert_eq!(super::character("at"), Some('@'));
+    assert_eq!(super::character("bar"), Some('|'));
+    assert_eq!(super::character("asciitilde"), Some('~'));
+    assert_eq!(super::character("bracketleft"), Some('['));
+}
+
+/// A modifier the key's type does not care about does not change its level.
+///
+/// XKB narrows the active modifiers to the ones the key declares before
+/// looking a level up, so `Shift` with `Super` held is still the shifted
+/// level. A lookup that asked for an exact mask would fall back to the plain
+/// level instead and type the wrong character for anybody holding a
+/// modifier a bind uses.
+#[test]
+fn a_modifier_the_key_ignores_does_not_change_its_level() {
+    const KEY_8: u16 = 9;
+    let (german, _) = layout("de", "");
+    let made = |modifiers| german.key(KEY_8).and_then(|key| key.keysym(modifiers));
+
+    assert_eq!(made(generated::SHIFT), Some("parenleft"));
+    assert_eq!(made(generated::SHIFT | generated::MOD4), Some("parenleft"));
+    assert_eq!(
+        made(generated::SHIFT | generated::CONTROL),
+        Some("parenleft")
+    );
+    assert_eq!(made(generated::MOD5 | generated::MOD4), Some("bracketleft"));
+    // A combination that selects nothing is the plain level, never nothing.
+    assert_eq!(made(generated::MOD3), Some("8"));
+    assert_eq!(made(generated::MOD4), Some("8"));
+}
+
+/// Every key of every shipped layout answers something at every level it
+/// declares, and `level` never points past the levels there are. A generated
+/// table that lost a level to a parsing slip would show up here rather than
+/// as a key that types nothing.
+#[test]
+fn every_level_of_every_layout_is_reachable_by_its_own_mask() {
+    for layout in &generated::LAYOUTS {
+        for key in layout.keys {
+            for (index, level) in key.levels.iter().enumerate() {
+                for mask in level.masks {
+                    assert_eq!(
+                        key.level(*mask),
+                        index,
+                        "{}: {} at {mask:#x} should be level {index}",
+                        layout.name,
+                        key.name
+                    );
+                }
+            }
+            // A mask no level names is the plain level.
+            assert!(key.level(u32::MAX) < key.levels.len().max(1));
+        }
+    }
+}
+
+/// The levels beyond the second are not searched for a bind, because
+/// Hyprland does not search them either: it resolves a bind against a state
+/// with no modifiers applied, so no bind of its reaches a third level. A
+/// person who wants such a key writes `code:NN`.
+#[test]
+fn a_bind_does_not_resolve_to_a_third_level_keysym() {
+    let (german, _) = layout("de", "");
+    // `at` is AltGr+q on this keymap, and naming it resolves nothing.
+    assert_eq!(german.code_of("at"), None);
+    // While the two levels a bind may name resolve as they always did.
+    assert_eq!(german.code_of("q"), Some(KEY_Q));
+    assert_eq!(german.code_of("Q"), Some(KEY_Q));
+}
+
+/// A client reads the layouts out of the keymap it was handed, which is how
+/// the built-in terminal follows `input:kb_layout` instead of always reading
+/// the first table. `name[1]="German"` is libxkbcommon's own line.
+#[test]
+fn a_keymaps_own_text_names_its_layouts() {
+    let (german, _) = layout("de", "");
+    let named = super::groups_of(german.keymap);
+    assert_eq!(named.len(), 1);
+    assert_eq!((named[0].name, named[0].variant), ("de", ""));
+
+    let (american, _) = layout("us", "");
+    let named = super::groups_of(american.keymap);
+    assert_eq!(named.len(), 1);
+    assert_eq!(named[0].name, "us");
+
+    // Group order is the numbering in the text, not the order of the lines.
+    let two = "xkb_symbols \"x\" {\n\tname[2]=\"English (US)\";\n\tname[1]=\"German\";\n};\n";
+    let named = super::groups_of(two);
+    assert_eq!(
+        named.iter().map(|layout| layout.name).collect::<Vec<_>>(),
+        ["de", "us"]
+    );
+
+    // A name this compositor does not ship is skipped, not guessed at, and
+    // a keymap that names none leaves the caller its own default.
+    assert!(super::groups_of("\tname[1]=\"Klingon\";\n").is_empty());
+    assert!(super::groups_of("\tlevel_name[1]= \"Any\";\n").is_empty());
+    assert!(super::groups_of("").is_empty());
 }

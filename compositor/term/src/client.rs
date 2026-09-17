@@ -8,6 +8,7 @@
 //! grid of characters, and a byte written to the pseudoterminal.
 
 use std::collections::BTreeMap;
+use std::os::fd::FromRawFd;
 use std::time::{Duration, Instant};
 
 use compositor_protocol::core::{
@@ -74,17 +75,29 @@ struct Terminal {
     dirty: bool,
     /// Whether the seat has been asked for its keyboard.
     seat: bool,
-    /// The modifiers held, as `wl_keyboard.modifiers` reports them.
+    /// The modifiers in force, as `wl_keyboard.modifiers` reports them:
+    /// depressed, latched and locked together, which is what selects a
+    /// key's level -- `Caps Lock` is locked and reaches the shifted level
+    /// just as `Shift` does.
     modifiers: u32,
+    /// The layout group in force, which indexes `layouts`.
+    group: usize,
+    /// The layouts of the keymap the compositor handed this client, in
+    /// group order. Empty until `wl_keyboard.keymap` arrives, and empty
+    /// afterwards if the keymap named no layout this client ships tables
+    /// for -- in which case the default table is read, as it always was.
+    layouts: Vec<&'static compositor_xkb::generated::Layout>,
     /// When the program finished, if it has.
     finished: Option<Instant>,
 }
 
-/// Which bits `wl_keyboard.modifiers` uses for shift and control.
+/// Which bit `wl_keyboard.modifiers` uses for control.
 ///
 /// The compositor's keymap is `compositor/xkb`'s, whose modifier order is
-/// libxkbcommon's own: shift is bit 0 and control bit 2.
-const SHIFT: u32 = 1;
+/// libxkbcommon's own: control is bit 2. Shift needs no constant here any
+/// more -- which level a key is read at is the keymap's business, and
+/// `Key::keysym` answers it from every mask the key declares rather than
+/// from this one bit.
 const CONTROL: u32 = 1 << 2;
 
 /// Run a terminal on `socket`, with `program` on the pseudoterminal.
@@ -143,6 +156,8 @@ pub fn run(
         dirty: true,
         seat: false,
         modifiers: 0,
+        group: 0,
+        layouts: Vec::new(),
         finished: None,
     };
 
@@ -399,8 +414,16 @@ impl Terminal {
     /// What the keyboard said, turned into what the program reads.
     fn key_event(&mut self, opcode: u16, args: &[Arg<'_>]) -> Result<(), String> {
         match opcode {
+            wl_keyboard::event::KEYMAP => {
+                self.read_keymap(args);
+            }
             wl_keyboard::event::MODIFIERS => {
-                self.modifiers = args.get(1).and_then(Arg::as_uint).unwrap_or(0);
+                // depressed, latched, locked, group: a level is selected by
+                // all three masks together, and the group says which of the
+                // keymap's layouts the key is read in.
+                let mask = |at| args.get(at).and_then(Arg::as_uint).unwrap_or(0);
+                self.modifiers = mask(1) | mask(2) | mask(3);
+                self.group = usize::try_from(mask(4)).unwrap_or(0);
             }
             wl_keyboard::event::KEY => {
                 let code = args.get(2).and_then(Arg::as_uint).unwrap_or(0);
@@ -415,17 +438,53 @@ impl Terminal {
         Ok(())
     }
 
+    /// Take the keymap the compositor handed this client and work out which
+    /// of the shipped tables it is.
+    ///
+    /// `wl_keyboard.keymap` carries a descriptor and a length, and a client
+    /// of any other compositor would map it and compile the text with
+    /// libxkbcommon. There is no libxkbcommon here, so what is read out of
+    /// the text is the name of each of its groups, which
+    /// `compositor_xkb::groups_of` matches against the tables this client
+    /// was built with. Without this the terminal read the first table
+    /// whatever the keymap said, so a person with `input:kb_layout = de`
+    /// typed an American keyboard's letters into it.
+    fn read_keymap(&mut self, args: &[Arg<'_>]) {
+        let Some(fd) = args.get(1).and_then(Arg::as_fd) else {
+            return;
+        };
+        let size = args.get(2).and_then(Arg::as_uint).unwrap_or(0) as usize;
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd.0) };
+        let mut text = String::new();
+        // The length counts the terminating NUL, which is not part of the
+        // text: a client that keeps it hands a NUL to its own parser.
+        if std::io::Read::read_to_string(&mut file, &mut text).is_ok() {
+            let end = text.find('\0').unwrap_or(text.len()).min(size);
+            self.layouts = compositor_xkb::groups_of(&text[..end]);
+        }
+    }
+
+    /// The table a key is read in: the group in force, or the default.
+    fn table(&self) -> Option<&'static compositor_xkb::generated::Layout> {
+        self.layouts
+            .get(self.group)
+            .or_else(|| self.layouts.first())
+            .copied()
+    }
+
     /// Send what the key with this evdev code types.
     fn typed(&mut self, code: u32) {
         let Ok(code) = u16::try_from(code) else {
             return;
         };
-        let Some(key) = compositor_xkb::key(code) else {
-            return;
+        // Every level, not only the shifted one: on a German keyboard `@`,
+        // `|`, `~`, `[`, `]`, `{`, `}` and the backslash are all on the
+        // third level, which `AltGr` reaches.
+        let key = match self.table() {
+            Some(layout) => layout.key(code),
+            None => compositor_xkb::key(code),
         };
-        let shifted = self.modifiers & SHIFT != 0;
-        let keysym = if shifted { key.shifted } else { key.plain };
-        let Some(keysym) = keysym else {
+        let Some(keysym) = key.and_then(|key| key.keysym(self.modifiers)) else {
             return;
         };
         let control = self.modifiers & CONTROL != 0;

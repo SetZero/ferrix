@@ -71,6 +71,11 @@ pub struct Layout {
     pub variant: &'static str,
     /// The probe's own line, which names the libxkbcommon it came from.
     pub source: &'static str,
+    /// What the keymap calls this layout, such as `German`.
+    ///
+    /// libxkbcommon's own name for the group, which is what
+    /// `hyprctl devices` reports as a keyboard's `active_keymap`.
+    pub label: &'static str,
     /// The text a client compiles, which `wl_keyboard.keymap` carries.
     pub keymap: &'static str,
     /// Every key it names, in order of evdev code.
@@ -83,6 +88,7 @@ pub static LAYOUTS: [Layout; 5] = [
         name: "us",
         variant: "",
         source: us::SOURCE,
+        label: "English (US)",
         keymap: include_str!("../keymaps/us.xkb"),
         keys: &us::KEYS,
     },
@@ -90,6 +96,7 @@ pub static LAYOUTS: [Layout; 5] = [
         name: "de",
         variant: "",
         source: de::SOURCE,
+        label: "German",
         keymap: include_str!("../keymaps/de.xkb"),
         keys: &de::KEYS,
     },
@@ -97,6 +104,7 @@ pub static LAYOUTS: [Layout; 5] = [
         name: "de",
         variant: "nodeadkeys",
         source: de_nodeadkeys::SOURCE,
+        label: "German (no dead keys)",
         keymap: include_str!("../keymaps/de-nodeadkeys.xkb"),
         keys: &de_nodeadkeys::KEYS,
     },
@@ -104,6 +112,7 @@ pub static LAYOUTS: [Layout; 5] = [
         name: "fr",
         variant: "",
         source: fr::SOURCE,
+        label: "French",
         keymap: include_str!("../keymaps/fr.xkb"),
         keys: &fr::KEYS,
     },
@@ -111,6 +120,7 @@ pub static LAYOUTS: [Layout; 5] = [
         name: "gb",
         variant: "",
         source: gb::SOURCE,
+        label: "English (UK)",
         keymap: include_str!("../keymaps/gb.xkb"),
         keys: &gb::KEYS,
     },
