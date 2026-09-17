@@ -155,7 +155,8 @@ OPTIONS:
     --accel <auto|tcg|whpx|kvm|hvf>      QEMU accelerator      [default: auto for run
                                          without --gdb, tcg otherwise]
     --gdb                                Wait for a debugger on :1234
-    --net                                run, test-boot, test-shell, test-vfs: a virtio-net device,
+    --net                                run, test-boot, test-shell, test-vfs, run-compositor:
+                                         a virtio-net device,
                                          behind xtask's own NAT gateway (10.0.2.2, guest 10.0.2.15);
                                          test-net turns it on whether or not it is given
     --display                            run, test-boot: a virtio-gpu device; run: and a window showing it

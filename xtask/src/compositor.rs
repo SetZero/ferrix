@@ -1380,6 +1380,40 @@ bind = SUPER, C, exec, /bin/hyprctl clients
 bind = SUPER, W, exec, /bin/hyprctl activewindow
 ";
 
+/// `config` with the interface brought up, when `--net` asked for one.
+///
+/// `--net` puts a virtio-net device on the bus and xtask's own gateway behind
+/// it, and that is all it does: the guest has a device and no address, so a
+/// name does not resolve and `ping` answers `bad address` for want of a
+/// route rather than for want of a resolver. Every boot check that uses the
+/// network runs `udhcpc` first, from its init script; a watched boot has no
+/// init script, so the same command goes in as an `exec-once`. It is the
+/// busybox applet, so it needs the busybox this boot carries: without one
+/// there is nothing to run and the line would be a diagnostic at boot rather
+/// than an address.
+///
+/// The address, the route and `/etc/resolv.conf` all come from the lease.
+/// What answers the names is the gateway's own resolver at `10.0.2.3`, which
+/// forwards what it does not serve to this host's.
+fn with_network(config: String, args: &Args) -> String {
+    if !args.net {
+        return config;
+    }
+    let mut config = config;
+    if !config.ends_with('\n') {
+        config.push('\n');
+    }
+    config.push_str("# Appended by `cargo xtask run-compositor --net`:\n");
+    config.push_str(&format!("exec-once = /bin/{DHCP}\n"));
+    println!("  network: the guest runs `{DHCP}` for its address");
+    config
+}
+
+/// What brings the interface up, which is what every boot check that uses
+/// the network runs before it: busybox's client, the tries and the timeout
+/// `initramfs`'s own profile gives it.
+const DHCP: &str = "udhcpc -i eth0 -n -q -t 5 -T 2";
+
 /// `config` with the layouts `--layout` and `--variant` asked for.
 ///
 /// Appended rather than substituted, and appended to a person's own file as
@@ -1519,7 +1553,7 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
             .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
         None => RUN_CONFIG.to_owned(),
     };
-    let config = with_layout(config, args);
+    let config = with_network(with_layout(config, args), args);
     let programs = Programs::build(arch)?;
     let mut carried = Carried::wanted(arch, args)?;
     // A wallpaper, from this machine's own and from nowhere else:
