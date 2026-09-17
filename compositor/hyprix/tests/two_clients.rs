@@ -936,3 +936,155 @@ fn animations_can_be_turned_off() {
         distinct.len()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Plugins
+//
+// A plugin is a program the compositor starts, which connects to the control
+// socket, says what it is, and adds a dispatcher. `compositor/plug` is the
+// one Ferrix carries; this speaks the same protocol from a thread, which is
+// what lets a host test press the dispatcher and look at the frame.
+// ---------------------------------------------------------------------------
+
+/// Run the compositor with two clients and a plugin, and give back the last
+/// frame, the compositor's line, and what `hyprctl plugin list` said.
+fn with_a_plugin(name: &str) -> (Vec<u8>, String, String) {
+    let work = workspace(name);
+    let socket = work.join("wayland");
+    let frames = work.join("frames");
+    let runtime = work.join("runtime");
+    let instance = runtime.join("hypr").join("ferrix-test");
+    std::fs::create_dir_all(&instance).expect("an instance directory");
+    let requests = instance.join(compositor_ipc::REQUEST_SOCKET);
+
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        instance: Some(instance.to_string_lossy().into_owned()),
+        dump: Some(frames.clone()),
+        deadline: Some(8000),
+        ..Options::default()
+    };
+
+    let socket_for_clients = socket.clone();
+    let listed = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let said = std::sync::Arc::clone(&listed);
+    let clients = std::thread::spawn(move || {
+        for _ in 0..400 {
+            if socket_for_clients.exists() && requests.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut handles = Vec::new();
+        for (pattern, title) in [(Pattern::Checkerboard, "one"), (Pattern::Gradient, "two")] {
+            let path = socket_for_clients.clone();
+            handles.push(std::thread::spawn(move || {
+                connect(&path, pattern, title, Shape::Window)
+            }));
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        // The plugin: the protocol `compositor/plug` speaks, from here.
+        let plugin = std::os::unix::net::UnixStream::connect(&requests)
+            .expect("the plugin connects to the control socket");
+        let mut reading = plugin.try_clone().expect("the plugin's connection");
+        let mut writing = plugin;
+        let mut say = move |line: &str| {
+            use std::io::Write as _;
+            writing
+                .write_all(line.as_bytes())
+                .expect("the plugin writes");
+            writing.flush().expect("the plugin flushes");
+        };
+        say("[[PLUGIN]]swap,ferrix,1.0,swaps the focused window with its neighbour\n");
+        say("handle swapthem\n");
+        std::thread::sleep(Duration::from_millis(500));
+
+        // `hyprctl plugin list` sees it, and `hyprctl dispatch swapthem`
+        // reaches it: a dispatcher the layout has never heard of.
+        if let Ok(text) = compositor_ctl::ask(&requests, "plugin list") {
+            said.lock().expect("the answer").push_str(&text);
+        }
+        let _ = compositor_ctl::ask(&requests, "dispatch swapthem");
+
+        // The plugin answers `dispatch movewindow r`, which the compositor
+        // runs on its next pass; this reads the line and sends it, as the
+        // program does.
+        let mut reply = String::new();
+        {
+            use std::io::Read as _;
+            reading
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .expect("a read timeout");
+            // Until the dispatch arrives: the two `ok`s for the hello and
+            // the registration come first, and each may be a read of its
+            // own.
+            for _ in 0..8 {
+                let mut buffer = [0u8; 512];
+                match reading.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        reply.push_str(&String::from_utf8_lossy(buffer.get(..read).unwrap_or(&[])));
+                    }
+                    Err(_) => {}
+                }
+                if reply.contains("dispatch>>") {
+                    break;
+                }
+            }
+        }
+        if reply.contains("dispatch>>swapthem") {
+            // What `compositor/plug` sends: the two dispatchers that
+            // exchange the windows, as one batch.
+            say("[[BATCH]]dispatch movefocus l ; dispatch movewindow r\n");
+        }
+        std::thread::sleep(Duration::from_millis(500));
+
+        let mut lines = vec![format!("plugin heard {}", reply.trim())];
+        for handle in handles {
+            lines.push(
+                handle
+                    .join()
+                    .unwrap_or_else(|_| "a client panicked".to_owned()),
+            );
+        }
+        lines.join("; ")
+    });
+
+    let line = hyprix::run(&options).expect("the compositor ran");
+    let clients = clients.join().expect("the clients finished");
+    let frame = last_frame(&frames);
+    let listed = listed.lock().expect("the answer").clone();
+    (frame, format!("{line} | {clients}"), listed)
+}
+
+/// A plugin adds a dispatcher, the compositor hands it the dispatch, and what
+/// the plugin asks for in return is what the screen shows.
+#[test]
+fn a_plugin_adds_a_dispatcher_and_the_compositor_hands_it_over() {
+    let (frame, report, listed) = with_a_plugin("plugin");
+    assert!(!report.contains("a client panicked"), "{report}");
+
+    // `hyprctl plugin list` names it, in Hyprland's own shape.
+    assert!(listed.contains("Plugin swap by ferrix:"), "{listed}");
+    assert!(listed.contains("Dispatchers: swapthem"), "{listed}");
+
+    // The compositor handed the dispatcher over rather than refusing it.
+    assert!(
+        report.contains("dispatch>>swapthem"),
+        "the plugin was not given its dispatcher: {report}"
+    );
+
+    // And what the plugin asked for happened: `movewindow r` with the focus
+    // on the gradient swaps the two, which is the picture the renderer's own
+    // tests bless for that state.
+    let want = image(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../render/tests/data/dwindle-two-clients-swapped.xrle"),
+    );
+    let (differing, first) = compare(&frame, &want);
+    assert_eq!(
+        differing, 0,
+        "the plugin's dispatcher did not swap the windows; first difference {first:?}"
+    );
+}

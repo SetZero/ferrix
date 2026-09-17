@@ -219,6 +219,18 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         None => None,
     };
 
+    // The plugins: programs the compositor starts and talks to over the
+    // control socket. Started before `exec-once`, because a plugin that adds
+    // a dispatcher should be there before anything presses it, and after the
+    // sockets, because it connects to one as soon as it runs.
+    let mut plugins = crate::plugins::Plugins::new();
+    for command in &config.plugins {
+        match start(command, listener.path()) {
+            Ok(pid) => report(&format!("hyprix: plugin {command} started as {pid}")),
+            Err(error) => report(&format!("hyprix: plugin {command} did not start: {error}")),
+        }
+    }
+
     // `exec-once` from the configuration, then anything --exec added --
     // after the sockets, because a bar started by `exec-once` looks for them
     // as soon as it runs and a compositor that binds them later has started
@@ -290,14 +302,20 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             }
         }
 
-        // `hyprctl`: one request a connection, answered and closed.
+        // `hyprctl`: one request a connection, answered and closed -- unless
+        // the connection opens with `[[PLUGIN]]`, which is a plugin and is
+        // kept.
         let mut asked: Vec<compositor_ipc::Reply> = Vec::new();
+        {
+            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins);
+            asked.extend(plugins.poll(&snapshot));
+        }
         if let Some(control) = control.as_ref()
             && let Some(mut stream) = control.accept()
         {
-            let snapshot = crate::control::snapshot(&state, &slots, &sources);
-            match crate::control::serve(&mut stream, &snapshot) {
-                Ok(todo) => asked = todo,
+            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins);
+            match crate::control::serve(&mut stream, &snapshot, &mut plugins) {
+                Ok(todo) => asked.extend(todo),
                 Err(_) => {
                     // A client that went away mid-request is not the
                     // compositor's problem.
@@ -333,6 +351,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &mut slots,
                     &sources,
                     listener.path(),
+                    &mut plugins,
                     report,
                 ) {
                     changed = true;
@@ -368,6 +387,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut slots,
                 &sources,
                 listener.path(),
+                &mut plugins,
                 report,
             ) {
                 changed = true;
@@ -418,9 +438,13 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
 
         // The event socket, from the same description `hyprctl` answers
         // from: a bar and a script must not be told two different things.
-        if let Some(socket) = events.as_mut() {
-            let snapshot = crate::control::snapshot(&state, &slots, &sources);
-            socket.publish(&snapshot);
+        {
+            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins);
+            if let Some(socket) = events.as_mut() {
+                socket.publish(&snapshot);
+            }
+            // A plugin that subscribed hears the same lines a bar does.
+            plugins.tell(&snapshot);
         }
 
         most = most.max(sources.len());
@@ -844,12 +868,13 @@ fn run_ipc(
     slots: &mut [Slot],
     sources: &BTreeMap<WindowId, Source>,
     socket: &std::path::Path,
+    plugins: &mut crate::plugins::Plugins,
     report: &mut dyn FnMut(&str),
 ) -> bool {
     match reply {
-        compositor_ipc::Reply::Dispatch { name, argument } => {
-            dispatch(name, argument, state, slots, sources, socket, report)
-        }
+        compositor_ipc::Reply::Dispatch { name, argument } => dispatch(
+            name, argument, state, slots, sources, socket, plugins, report,
+        ),
         compositor_ipc::Reply::Keyword { name, value } => {
             if config.keyword(name, value).is_err() {
                 return false;
@@ -874,6 +899,10 @@ fn run_ipc(
 /// opens a terminal -- `bind = SUPER, Return, exec, foot` -- and it changes
 /// no layout by itself: the window arrives later, through the socket, like
 /// any other client's.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a dispatcher may reach the layout, a client, a program or a plugin"
+)]
 fn dispatch(
     name: &str,
     argument: &str,
@@ -881,6 +910,7 @@ fn dispatch(
     slots: &mut [Slot],
     sources: &BTreeMap<WindowId, Source>,
     socket: &std::path::Path,
+    plugins: &mut crate::plugins::Plugins,
     report: &mut dyn FnMut(&str),
 ) -> bool {
     if name.eq_ignore_ascii_case("exec") {
@@ -890,8 +920,18 @@ fn dispatch(
         }
         return false;
     }
-    let Ok(changes) = state.dispatch_str(name, argument) else {
-        return false;
+    let changes = match state.dispatch_str(name, argument) {
+        Ok(changes) => changes,
+        // A name the layout does not know may be a plugin's: Hyprland's
+        // `addDispatcher` puts a plugin's name in the same table a keybind
+        // and `hyprctl dispatch` look in, and this is that table's last
+        // entry. The plugin acts by sending requests back, so nothing has
+        // changed yet.
+        Err(compositor_layout::Error::UnknownDispatcher(_)) => {
+            let _ = plugins.dispatch(name, argument);
+            return false;
+        }
+        Err(_) => return false,
     };
     // `killactive` asks a window to close, which is the client's to obey;
     // the layout says which window.

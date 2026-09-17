@@ -1,0 +1,18 @@
+[package]
+name = "compositor-plug"
+description = "An example plugin: a program the compositor starts, which adds a dispatcher of its own"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "plug"
+path = "src/main.rs"
+
+[dependencies]
+compositor-ctl = { path = "../ctl" }
+
+[lints]
+workspace = true

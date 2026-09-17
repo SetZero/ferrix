@@ -248,6 +248,7 @@ mod parse {
 /// has.
 fn snapshot() -> Snapshot {
     Snapshot {
+        plugins: Vec::new(),
         monitors: vec![Monitor {
             id: 0,
             name: "HEADLESS-1".to_owned(),
@@ -861,6 +862,7 @@ fn watched_window(address: u64, title: &str) -> Window {
 
 fn watched(windows: &[Window], active: Option<u64>) -> Snapshot {
     Snapshot {
+        plugins: Vec::new(),
         monitors: vec![Monitor {
             id: 0,
             name: "HEADLESS-1".to_owned(),
@@ -1193,4 +1195,55 @@ fn a_group_made_and_joined_in_one_pass_is_both_events() {
         events.iter().flat_map(Event::lines).collect::<Vec<_>>(),
         ["togglegroup>>1,2\n", "moveintogroup>>1\n"]
     );
+}
+
+/// `hyprctl plugin list`, in the shape Hyprland prints it: the name, the
+/// author, the handle, the version and the description, and the JSON with
+/// those fields under those names. From `HyprCtl.cpp`'s `dispatchPlugin`.
+#[test]
+fn the_plugins_are_listed_as_hyprland_lists_them() {
+    let mut snap = snapshot();
+    snap.plugins = vec![crate::Plugin {
+        name: "swap".to_owned(),
+        author: "ferrix".to_owned(),
+        version: "1.0".to_owned(),
+        description: "swaps the two windows".to_owned(),
+        handle: 0x2a,
+        dispatchers: vec!["swapthem".to_owned()],
+    }];
+    let ask = |snap: &Snapshot, line: &str| -> String {
+        match answer(&Request::parse(line), snap, Version::default()) {
+            Reply::Text(text) => text,
+            other => panic!("{line:?} asked for {other:?}"),
+        }
+    };
+    let readable = ask(&snap, "plugin list");
+    assert!(readable.contains("Plugin swap by ferrix:"), "{readable}");
+    assert!(readable.contains("\tHandle: 2a\n"), "{readable}");
+    assert!(readable.contains("\tVersion: 1.0\n"), "{readable}");
+    assert!(
+        readable.contains("\tDescription: swaps the two windows\n"),
+        "{readable}"
+    );
+    // What Hyprland has no line for, because its plugins add dispatchers to
+    // the compositor's own table and this one's keep them.
+    assert!(readable.contains("\tDispatchers: swapthem\n"), "{readable}");
+
+    let value = parse::parse(&ask(&snap, "j/plugin list")).expect("the JSON parses");
+    let listed = value.items();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].get("name").and_then(parse::Value::text),
+        Some("swap")
+    );
+    assert_eq!(
+        listed[0].get("handle").and_then(parse::Value::text),
+        Some("2a")
+    );
+
+    // No plugins is Hyprland's own sentence, and an unknown option its own
+    // word.
+    snap.plugins.clear();
+    assert_eq!(ask(&snap, "plugin list"), "no plugins loaded\n");
+    assert_eq!(ask(&snap, "plugin load /tmp/x.so"), "unknown opt\n");
 }

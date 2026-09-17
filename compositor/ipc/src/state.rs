@@ -95,6 +95,8 @@ pub struct Monitor {
 /// Everything an answer is written from.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Snapshot {
+    /// The plugins that are loaded.
+    pub plugins: Vec<Plugin>,
     /// The monitors.
     pub monitors: Vec<Monitor>,
     /// The workspaces that exist.
@@ -105,6 +107,29 @@ pub struct Snapshot {
     pub active_window: Option<u64>,
     /// The workspace the focused monitor shows.
     pub active_workspace: i32,
+}
+
+/// One plugin, as `hyprctl plugin list` prints it.
+///
+/// Hyprland's plugins are shared objects it loads into itself and this
+/// compositor's are programs it talks to, but what a plugin *says about
+/// itself* is the same: `PLUGIN_INIT` returns a name, an author, a version
+/// and a description, and this is that.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Plugin {
+    /// What it calls itself.
+    pub name: String,
+    /// Who wrote it.
+    pub author: String,
+    /// Its version.
+    pub version: String,
+    /// What it says it does.
+    pub description: String,
+    /// The compositor's handle for it, which Hyprland prints as the address
+    /// of the loaded object and this prints as the connection's number.
+    pub handle: u64,
+    /// The dispatchers it has registered, in the order it registered them.
+    pub dispatchers: Vec<String>,
 }
 
 impl Snapshot {

@@ -87,10 +87,12 @@ const EXPECTED: [(&str, &str); 3] = [
     ),
 ];
 
-/// Where the clients, the control program and the configuration go in the
-/// initramfs, which is what the compositor's `exec-once` and the binds name.
+/// Where the clients, the control program, the plugin and the configuration
+/// go in the initramfs, which is what the compositor's `exec-once`, its
+/// `plugin` line and the binds name.
 const CLIENT_PATH: &str = "bin/pattern";
 const CTL_PATH: &str = "bin/hyprctl";
+const PLUG_PATH: &str = "bin/plug";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
 /// The instance the control socket is under, which `hyprctl` finds by
@@ -217,6 +219,35 @@ exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
 ";
 
+/// The two pictures the plugin boot requires: the windows tiled, then
+/// exchanged by a dispatcher the plugin added.
+const PLUGIN_EXPECTED: [(&str, &str); 2] = [
+    (
+        "tiled",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "the windows swapped by the plugin's own dispatcher",
+        "compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+    ),
+];
+
+/// The keybind the plugin boot presses between its two pictures: a
+/// dispatcher no part of the compositor knows, which the plugin added.
+const PLUGIN_BINDS: [(&str, &[&str]); 1] = [("SUPER P", &["meta_l", "p"])];
+
+/// The configuration the seventh boot is given: a plugin, and a keybind
+/// naming the dispatcher it adds.
+const PLUGIN_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+plugin = /bin/plug
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+bind = SUPER, P, swapthem
+bind = SUPER, C, exec, /bin/hyprctl --batch plugin list ; clients
+bind = SUPER, W, exec, /bin/hyprctl activewindow
+";
+
 /// The configuration the second boot is given: a bar through
 /// `zwlr_layer_shell_v1`, and the same two windows.
 ///
@@ -315,41 +346,13 @@ fn boot_and_dump(
     program: &Path,
     client: &Path,
     ctl: &Path,
+    plug: &Path,
     config: &str,
     wanted: &Wanted<'_>,
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
-    let loader = crate::cargo::build_loader(arch, args.release)?;
-    // One argument a line: a script has no quoting, and `Options::unshell`
-    // says so. `--instance` is what puts the control socket where `hyprctl`
-    // looks for it.
-    let script = format!("--config\n/{CONFIG_PATH}\n--instance\n{INSTANCE}");
-    let kernel = crate::cargo::build_kernel_with_init(arch, args.release, program, &script)?;
-    let natives = crate::native::build(arch, args.release)?;
-    let read = |path: &Path| -> Result<Vec<u8>> {
-        std::fs::read(path)
-            .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
-    };
-    let carried = [
-        crate::ports::File {
-            path: CLIENT_PATH,
-            mode: 0o755,
-            bytes: read(client)?,
-        },
-        crate::ports::File {
-            path: CTL_PATH,
-            mode: 0o755,
-            bytes: read(ctl)?,
-        },
-        crate::ports::File {
-            path: CONFIG_PATH,
-            mode: 0o644,
-            bytes: config.as_bytes().to_vec(),
-        },
-    ];
-    let initramfs = crate::initramfs::build(None, &natives, None, &carried)?;
-    let image = crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
+    let (image, kernel) = build_image(arch, program, [client, ctl, plug], config, args)?;
 
     let port = free_port()?;
     let mut qemu_args = args.clone();
@@ -433,6 +436,57 @@ fn boot_and_dump(
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
     Ok((taken, said))
+}
+
+/// Build the bootable image for one boot: the compositor as init, the
+/// client, `hyprctl` and the plugin in the initramfs, and the configuration
+/// beside them.
+fn build_image(
+    arch: Arch,
+    program: &Path,
+    programs: [&Path; 3],
+    config: &str,
+    args: &Args,
+) -> Result<(PathBuf, PathBuf)> {
+    let loader = crate::cargo::build_loader(arch, args.release)?;
+    // One argument a line: a script has no quoting, and `Options::unshell`
+    // says so. `--instance` is what puts the control socket where `hyprctl`
+    // looks for it.
+    let script = format!("--config\n/{CONFIG_PATH}\n--instance\n{INSTANCE}");
+    let kernel = crate::cargo::build_kernel_with_init(arch, args.release, program, &script)?;
+    let natives = crate::native::build(arch, args.release)?;
+    let read = |path: &Path| -> Result<Vec<u8>> {
+        std::fs::read(path)
+            .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
+    };
+    let [client, ctl, plug] = programs;
+    let carried = [
+        crate::ports::File {
+            path: CLIENT_PATH,
+            mode: 0o755,
+            bytes: read(client)?,
+        },
+        crate::ports::File {
+            path: CTL_PATH,
+            mode: 0o755,
+            bytes: read(ctl)?,
+        },
+        crate::ports::File {
+            path: PLUG_PATH,
+            mode: 0o755,
+            bytes: read(plug)?,
+        },
+        crate::ports::File {
+            path: CONFIG_PATH,
+            mode: 0o644,
+            bytes: config.as_bytes().to_vec(),
+        },
+    ];
+    let initramfs = crate::initramfs::build(None, &natives, None, &carried)?;
+    // The kernel as well as the image: the watcher symbolises a panic's
+    // addresses out of it.
+    let image = crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
+    Ok((image, kernel))
 }
 
 /// Print the line the compositor said when its screen came up.
@@ -551,11 +605,13 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
         let program = build(arch, "hyprix", "hyprix")?;
         let client = build(arch, "compositor-pattern", "pattern")?;
         let ctl = build(arch, "compositor-ctl", "hyprctl")?;
+        let plug = build(arch, "compositor-plug", "plug")?;
         let (screens, said) = boot_and_dump(
             arch,
             &program,
             &client,
             &ctl,
+            &plug,
             CONFIG,
             &Wanted {
                 states: &EXPECTED,
@@ -615,6 +671,7 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
                 &program,
                 &client,
                 &ctl,
+                &plug,
                 config,
                 &Wanted {
                     states: &[wanted],
@@ -632,8 +689,9 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             );
         }
 
-        test_groups(arch, &program, &client, &ctl, args)?;
-        test_monitors(arch, &program, &client, &ctl, args)?;
+        test_groups(arch, &program, &client, &ctl, &plug, args)?;
+        test_monitors(arch, &program, &client, &ctl, &plug, args)?;
+        test_plugins(arch, &program, &client, &ctl, &plug, args)?;
     }
     Ok(())
 }
@@ -644,12 +702,20 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
 /// The keybind sends the focused window to the second monitor, and each
 /// screen is then required to be the picture `compositor/render`'s own tests
 /// bless for it: one window each, neither monitor drawing the other's.
-fn test_monitors(arch: Arch, program: &Path, client: &Path, ctl: &Path, args: &Args) -> Result<()> {
+fn test_monitors(
+    arch: Arch,
+    program: &Path,
+    client: &Path,
+    ctl: &Path,
+    plug: &Path,
+    args: &Args,
+) -> Result<()> {
     let (screens, said) = boot_and_dump(
         arch,
         program,
         client,
         ctl,
+        plug,
         MONITOR_CONFIG,
         &Wanted {
             states: &MONITOR_EXPECTED,
@@ -676,6 +742,66 @@ fn test_monitors(arch: Arch, program: &Path, client: &Path, ctl: &Path, args: &A
         )));
     }
     monitors_were_said(arch, &said)
+}
+
+/// A seventh boot: a plugin, and a keybind naming a dispatcher it added.
+///
+/// Nothing in the compositor knows `swapthem`: the layout refuses it, and it
+/// reaches the plugin because the plugin registered it. What the plugin asks
+/// for in return is what the screen then shows, which is the whole of the
+/// extension point.
+fn test_plugins(
+    arch: Arch,
+    program: &Path,
+    client: &Path,
+    ctl: &Path,
+    plug: &Path,
+    args: &Args,
+) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        program,
+        client,
+        ctl,
+        plug,
+        PLUGIN_CONFIG,
+        &Wanted {
+            states: &PLUGIN_EXPECTED,
+            others: &[],
+        },
+        &PLUGIN_BINDS,
+        args,
+    )?;
+    let (Some(tiled), Some(swapped)) = (screens.first(), screens.get(1)) else {
+        return Err(Error::new(format!(
+            "{arch}: the plugin boot took no pictures"
+        )));
+    };
+    if tiled.pixels == swapped.pixels {
+        return Err(Error::new(format!(
+            "{arch}: the plugin's dispatcher changed nothing"
+        )));
+    }
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    for wanted in [
+        // The plugin said what it is, and the compositor lists it.
+        "plug: loaded, swapthem added",
+        "Plugin swap by ferrix:",
+        "Dispatchers: swapthem",
+        // And it was handed the dispatcher the keybind pressed.
+        "plug: dispatched swapthem",
+    ] {
+        if !has(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: the plugin boot did not say `{wanted}`"
+            )));
+        }
+    }
+    println!(
+        "  {arch}: a plugin added `swapthem`, was handed the keybind's dispatch, and swapped the \
+         windows with it"
+    );
+    Ok(())
 }
 
 /// What the two-monitor boot's `hyprctl` and event socket must have said:
@@ -768,12 +894,20 @@ fn the_sockets_said(arch: Arch, said: &[String]) -> Result<()> {
 /// Two pictures rather than one, because a group that changed nothing would
 /// match the tiled image and pass: the second must be the group's, and the
 /// two must differ.
-fn test_groups(arch: Arch, program: &Path, client: &Path, ctl: &Path, args: &Args) -> Result<()> {
+fn test_groups(
+    arch: Arch,
+    program: &Path,
+    client: &Path,
+    ctl: &Path,
+    plug: &Path,
+    args: &Args,
+) -> Result<()> {
     let (screens, said) = boot_and_dump(
         arch,
         program,
         client,
         ctl,
+        plug,
         GROUP_CONFIG,
         &Wanted {
             states: &GROUPED_EXPECTED,

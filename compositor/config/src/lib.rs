@@ -64,6 +64,9 @@ pub struct Config {
     pub window_rules: Vec<Raw>,
     /// `layerrule` lines, in order.
     pub layer_rules: Vec<Raw>,
+    /// `plugin` lines, in order: the programs the compositor starts and
+    /// gives its control socket to.
+    pub plugins: Vec<String>,
     /// `monitor` lines, in order.
     pub monitors: Vec<Raw>,
     /// `workspace` lines, in order.
@@ -91,6 +94,7 @@ impl Default for Config {
             binds: Vec::new(),
             window_rules: Vec::new(),
             layer_rules: Vec::new(),
+            plugins: Vec::new(),
             monitors: Vec::new(),
             workspaces: Vec::new(),
             animations: Vec::new(),

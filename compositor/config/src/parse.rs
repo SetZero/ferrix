@@ -225,6 +225,13 @@ pub(crate) fn apply(
         "monitor" => config.monitors.push(raw(key)),
         "workspace" => config.workspaces.push(raw(key)),
         "animation" | "bezier" => config.animations.push(raw(key)),
+        // Hyprland's `plugin` names a shared object it loads into itself.
+        // Ferrix has no dynamic loader and this compositor loads no code
+        // into its own address space, so a plugin here is a program it
+        // starts and talks to over the control socket; `docs/COMPOSITOR.md`
+        // says why. The keyword is the same one, so a person's `plugin =`
+        // line is where they expect it.
+        "plugin" => config.plugins.push(value.to_owned()),
         "exec-once" => config.exec_once.push(value.to_owned()),
         "exec" => config.exec.push(value.to_owned()),
         "exec-shutdown" => config.exec_shutdown.push(value.to_owned()),

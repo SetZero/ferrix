@@ -111,6 +111,7 @@ impl Drop for Control {
 pub fn serve(
     stream: &mut UnixStream,
     snapshot: &Snapshot,
+    plugins: &mut crate::plugins::Plugins,
 ) -> std::io::Result<Vec<compositor_ipc::Reply>> {
     let mut line = String::new();
     let mut buffer = [0u8; 4096];
@@ -118,6 +119,15 @@ pub fn serve(
     // than a buffer is one nothing sends.
     let read = stream.read(&mut buffer)?;
     line.push_str(&String::from_utf8_lossy(buffer.get(..read).unwrap_or(&[])));
+
+    // A connection that opens with `[[PLUGIN]]` is a plugin, and is kept
+    // rather than answered and closed.
+    if line.trim_start().starts_with(crate::plugins::MARKER) {
+        let kept = stream.try_clone()?;
+        if plugins.take(kept, &line) {
+            return Ok(Vec::new());
+        }
+    }
 
     let mut todo = Vec::new();
     let mut answer = String::new();
@@ -146,8 +156,12 @@ pub fn snapshot(
     state: &State,
     clients: &[crate::state::Slot],
     sources: &BTreeMap<WindowId, Source>,
+    plugins: &crate::plugins::Plugins,
 ) -> Snapshot {
-    let mut snapshot = Snapshot::default();
+    let mut snapshot = Snapshot {
+        plugins: plugins.listed(),
+        ..Snapshot::default()
+    };
     // One monitor a screen, in the order they were added, which is the order
     // `hyprctl monitors` prints and the order `focusmonitor +1` walks.
     for monitor in state.monitors() {

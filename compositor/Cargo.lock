@@ -95,6 +95,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-plug"
+version = "0.1.0"
+dependencies = [
+ "compositor-ctl",
+]
+
+[[package]]
 name = "compositor-protocol"
 version = "0.1.0"
 dependencies = [

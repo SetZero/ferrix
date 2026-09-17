@@ -4,7 +4,7 @@ use core::fmt::Write;
 
 use crate::json::Json;
 use crate::request::{Flags, Format, Request};
-use crate::state::{Monitor, Snapshot, Window, Workspace};
+use crate::state::{Monitor, Plugin, Snapshot, Window, Workspace};
 
 /// What the compositor calls itself in `hyprctl version`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -78,11 +78,55 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
             Reply::Keyword { name, value }
         }
         "reload" => Reply::Reload,
+        // `hyprctl plugin list`, and nothing else: Hyprland's `load` and
+        // `unload` take a shared object, and this compositor's plugins are
+        // programs it starts.
+        "plugin" => text(match request.argument.trim() {
+            "list" => plugins(flags, &snapshot.plugins),
+            _ => "unknown opt\n".to_owned(),
+        }),
         // Hyprland answers an unknown command with a line rather than by
         // closing the connection, so a program asking for something newer
         // keeps working for everything else it asks.
         other => text(format!("unknown request {other}\n")),
     }
+}
+
+/// `hyprctl plugin list`, in Hyprland's own shape.
+fn plugins(flags: Flags, plugins: &[Plugin]) -> String {
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.array();
+        for plugin in plugins {
+            out.object();
+            out.string("name", &plugin.name);
+            out.string("author", &plugin.author);
+            out.string("handle", &format!("{:x}", plugin.handle));
+            out.string("version", &plugin.version);
+            out.string("description", &plugin.description);
+            out.end('}');
+        }
+        out.end(']');
+        return finish(out, flags);
+    }
+    if plugins.is_empty() {
+        return "no plugins loaded\n".to_owned();
+    }
+    let mut text = String::new();
+    for plugin in plugins {
+        let _ = writeln!(
+            text,
+            "\nPlugin {} by {}:\n\tHandle: {:x}\n\tVersion: {}\n\tDescription: {}",
+            plugin.name, plugin.author, plugin.handle, plugin.version, plugin.description
+        );
+        // What Hyprland has no line for, because its plugins add their
+        // dispatchers to the compositor's own table and this one's keep
+        // them: the dispatchers a `dispatch` is handed to this plugin for.
+        if !plugin.dispatchers.is_empty() {
+            let _ = writeln!(text, "\tDispatchers: {}", plugin.dispatchers.join(", "));
+        }
+    }
+    text
 }
 
 /// A command's argument split into its first word and the rest.

@@ -4158,6 +4158,40 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Begun — plugins (2026-09-17).** A plugin is a program the compositor
+starts and talks to, not a shared object it loads into itself. Hyprland's
+plugins are C++ objects `dlopen`ed into the compositor, which hook its own
+functions; Ferrix's programs are statically linked and there is no dynamic
+loader to `dlopen` with, so a plugin that is a shared object is a plugin that
+cannot be loaded on the operating system this compositor is for. The other
+half of the reason is that a `dlopen`ed plugin takes the compositor down with
+it when it dereferences a bad pointer, and one at the end of a socket cannot.
+
+The keyword is Hyprland's: `plugin = /bin/plug` starts the program, after the
+sockets are bound and before `exec-once`. The plugin connects to the same
+`.socket.sock` every `hyprctl` connects to and keeps the connection:
+
+* `[[PLUGIN]]name,author,version,description` -- what `PLUGIN_INIT` returns
+  in Hyprland, in one line;
+* `handle <dispatcher>` -- Hyprland's `addDispatcher`: from then on
+  `dispatch <name>`, from a keybind or from `hyprctl`, is written to the
+  plugin as `dispatch>><name>,<argument>` rather than refused as unknown;
+* `subscribe` -- `registerCallbackDynamic`: the lines `.socket2.sock`
+  carries, on this connection;
+* anything else -- an ordinary request, so a plugin asks `clients` and runs
+  `dispatch movewindow r` the way a bar does.
+
+`hyprctl plugin list` prints them in Hyprland's own shape, with a
+`Dispatchers:` line Hyprland has no need for. A plugin that goes takes its
+dispatchers with it and the compositor carries on.
+
+`compositor/plug` is the example: it adds `swapthem`, and answers it with the
+two dispatchers that exchange the focused window with its neighbour.
+`cargo xtask test-compositor` boots a seventh time with `plugin = /bin/plug`
+and `bind = SUPER, P, swapthem` -- a dispatcher nothing in the compositor
+knows -- and requires the picture a swap makes, pixel for pixel, on x86-64
+and on AArch64.
+
 **Begun — scaled monitors (2026-09-17).** `monitor = name, resolution,
 position, scale` is read: the name (empty for every monitor no other rule
 names), `disable`, the resolution as `preferred` or `WxH[@R]`, the position
@@ -4356,8 +4390,8 @@ Vulkan driver exists — the choice is the customer's, recorded in
 software fallback with a stated frame-time bound, so the compositor is never
 GPU-only.
 
-**What this stage still owes, in the order it is worth doing.** The
-plugin-shaped extension points. And the GPU, which is the largest thing left
+**What this stage still owes, in the order it is worth doing.** The GPU,
+which is the largest thing left
 in this tree: virtio-gpu's 3D commands through a render node,
 `zwp_linux_dmabuf`, GBM-shaped allocation, and a driver stack -- Mesa's virgl
 and Venus on ferrousli, or a Rust path over Vulkan -- that does not exist on

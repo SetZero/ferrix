@@ -11,7 +11,7 @@
 # on the Smithay decision recorded in docs/BACKLOG.md.
 [workspace]
 resolver = "3"
-members = ["anim", "blank", "config", "ctl", "drm", "evecho", "hyprix", "ipc", "layout", "pattern", "protocol", "render", "server", "socket", "wire", "xkb"]
+members = ["anim", "blank", "config", "ctl", "drm", "evecho", "hyprix", "ipc", "layout", "pattern", "plug", "protocol", "render", "server", "socket", "wire", "xkb"]
 
 [workspace.package]
 version = "0.1.0"
