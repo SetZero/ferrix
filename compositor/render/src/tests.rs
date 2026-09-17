@@ -89,10 +89,19 @@ fn surfaces(
         .collect()
 }
 
-/// The two clients' frame, presented into a dumb-buffer-shaped target with
-/// no padding, as bytes.
-fn two_client_frame() -> Vec<u8> {
-    let (_, layout) = two_clients();
+/// The two clients' frame after the dispatchers in `after` have run,
+/// presented into a dumb-buffer-shaped target with no padding, as bytes.
+///
+/// The dispatchers are `compositor/layout`'s own, by the names a keybind
+/// writes, so the picture a keybind makes and the picture this blesses come
+/// from one piece of code.
+fn frame_after(after: &[(&str, &str)]) -> Vec<u8> {
+    let (mut state, mut layout) = two_clients();
+    for (name, argument) in after {
+        let changes = state.dispatch_str(name, argument).unwrap();
+        assert!(!changes.is_empty(), "{name} {argument} changed nothing");
+        layout = state.layout().remove(0);
+    }
     let buffers = client_buffers(&layout);
     let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
     let full = Damage::full(WIDTH, HEIGHT);
@@ -112,9 +121,62 @@ fn two_client_frame() -> Vec<u8> {
     bytes
 }
 
+/// The frame with nothing dispatched: the second window opened is the
+/// focused one, which dwindle puts on the right.
+fn two_client_frame() -> Vec<u8> {
+    frame_after(&[])
+}
+
 #[test]
 fn two_pattern_clients_tiled_by_dwindle_match_the_expected_image() {
     golden::check("dwindle-two-clients", WIDTH, HEIGHT, &two_client_frame());
+}
+
+/// `movefocus l`: the same two windows in the same places, with the active
+/// border on the other one.
+///
+/// This is the state `cargo xtask test-compositor` requires from a
+/// screendump after sending the keybind through QEMU, so it is blessed here
+/// -- by calling the renderer with rectangles from the layout -- and compared
+/// there, where the picture came from two programs talking Wayland.
+#[test]
+fn moving_the_focus_moves_the_active_border_and_nothing_else() {
+    let moved = frame_after(&[("movefocus", "l")]);
+    golden::check("dwindle-two-clients-focus-left", WIDTH, HEIGHT, &moved);
+
+    // Only the borders differ from the tiled frame: a `movefocus` that moved
+    // a window would be a different picture and a different bug.
+    let tiled = two_client_frame();
+    let differing = moved
+        .chunks(4)
+        .zip(tiled.chunks(4))
+        .filter(|(one, other)| one != other)
+        .count();
+    assert!(differing > 0, "the active border did not move");
+    assert!(
+        differing < (WIDTH as usize) * (HEIGHT as usize) / 4,
+        "{differing} pixels changed for a border's worth of colour; a window moved"
+    );
+}
+
+/// `movewindow r` with the focus on the left window: the two swap places,
+/// which is the other keybind stage 18's exit criterion names.
+#[test]
+fn moving_a_window_swaps_the_two_of_them() {
+    let swapped = frame_after(&[("movefocus", "l"), ("movewindow", "r")]);
+    golden::check("dwindle-two-clients-swapped", WIDTH, HEIGHT, &swapped);
+
+    // The patterns changed sides, so far more than a border differs.
+    let tiled = two_client_frame();
+    let differing = swapped
+        .chunks(4)
+        .zip(tiled.chunks(4))
+        .filter(|(one, other)| one != other)
+        .count();
+    assert!(
+        differing > (WIDTH as usize) * (HEIGHT as usize) / 4,
+        "only {differing} pixels changed; the windows did not swap"
+    );
 }
 
 #[test]

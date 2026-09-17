@@ -56,6 +56,12 @@ pub struct Toplevel {
     pub fullscreen: bool,
     /// The last size the compositor configured it at.
     pub configured: (i32, i32),
+    /// The states the last configure carried, in the order they were sent.
+    ///
+    /// Kept beside the size because a configure is both: a window that has
+    /// just been focused is the same size and a different state, and a client
+    /// that is not told has a title bar that never lights up.
+    pub states: Vec<u32>,
 }
 
 /// A `wl_surface` that has been given the beginnings of a window.

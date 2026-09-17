@@ -361,6 +361,7 @@ impl Client {
             return;
         };
         top.configured = (width, height);
+        top.states = states.to_vec();
         let xdg = top.xdg_surface;
         let packed: Vec<u8> = states
             .iter()

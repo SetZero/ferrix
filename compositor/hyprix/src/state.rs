@@ -284,7 +284,15 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 follow_mouse,
             );
             for (name, argument) in done.dispatch {
-                if dispatch(&name, &argument, &mut state, &mut slots, &sources) {
+                if dispatch(
+                    &name,
+                    &argument,
+                    &mut state,
+                    &mut slots,
+                    &sources,
+                    listener.path(),
+                    report,
+                ) {
                     changed = true;
                 }
             }
@@ -317,6 +325,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut style,
                 &mut slots,
                 &sources,
+                listener.path(),
+                report,
             ) {
                 changed = true;
             }
@@ -542,6 +552,10 @@ fn open_screen() -> Result<Box<dyn Backend>, String> {
 /// dispatch movefocus l` and a keybind of the same name do the same thing.
 /// `keyword` changes one option while the compositor runs, which is what
 /// `hyprctl keyword general:gaps_in 10` is for.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a request may change any of the compositor's parts, and passing one struct would only move the list"
+)]
 fn run_ipc(
     reply: &compositor_ipc::Reply,
     state: &mut State,
@@ -550,10 +564,12 @@ fn run_ipc(
     style: &mut Style,
     slots: &mut [Slot],
     sources: &BTreeMap<WindowId, Source>,
+    socket: &std::path::Path,
+    report: &mut dyn FnMut(&str),
 ) -> bool {
     match reply {
         compositor_ipc::Reply::Dispatch { name, argument } => {
-            dispatch(name, argument, state, slots, sources)
+            dispatch(name, argument, state, slots, sources, socket, report)
         }
         compositor_ipc::Reply::Keyword { name, value } => {
             if config.keyword(name, value).is_err() {
@@ -573,13 +589,28 @@ fn run_ipc(
 /// The one path for both: `hyprctl dispatch movefocus l` and a keybind of the
 /// same name do the same thing, because Hyprland's do and because two paths
 /// would drift.
+///
+/// `exec` is answered here rather than by the layout, because starting a
+/// program is the compositor's to do and not the tiling's. It is how a person
+/// opens a terminal -- `bind = SUPER, Return, exec, foot` -- and it changes
+/// no layout by itself: the window arrives later, through the socket, like
+/// any other client's.
 fn dispatch(
     name: &str,
     argument: &str,
     state: &mut State,
     slots: &mut [Slot],
     sources: &BTreeMap<WindowId, Source>,
+    socket: &std::path::Path,
+    report: &mut dyn FnMut(&str),
 ) -> bool {
+    if name.eq_ignore_ascii_case("exec") {
+        match start(argument, socket) {
+            Ok(pid) => report(&format!("hyprix: started {argument} as {pid}")),
+            Err(error) => report(&format!("hyprix: {argument} did not start: {error}")),
+        }
+        return false;
+    }
     let Ok(changes) = state.dispatch_str(name, argument) else {
         return false;
     };
@@ -636,15 +667,19 @@ fn reconfigure(slots: &mut [Slot], state: &State) {
             let Some((width, height, focused)) = sizes.get(&window).copied() else {
                 continue;
             };
+            // The states as well as the size: a window that has just been
+            // focused is the same size and a different state, and a client
+            // that is not told has a title bar that never lights up.
+            let wanted = states(focused);
             let already = slot
                 .client
                 .toplevel(toplevel)
-                .is_some_and(|top| top.configured == (width, height));
+                .is_some_and(|top| top.configured == (width, height) && top.states == wanted);
             if already {
                 continue;
             }
             slot.client
-                .configure_toplevel(toplevel, width, height, &states(focused));
+                .configure_toplevel(toplevel, width, height, &wanted);
         }
     }
 }
