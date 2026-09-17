@@ -57,6 +57,13 @@
 #include "keyboard-shortcuts-inhibit-client-protocol.h"
 #include "virtual-keyboard-client-protocol.h"
 #include "wlr-virtual-pointer-client-protocol.h"
+#include "ext-foreign-toplevel-list-client-protocol.h"
+#include "wlr-gamma-control-client-protocol.h"
+#include "wlr-output-power-management-client-protocol.h"
+#include "wlr-data-control-client-protocol.h"
+#include "ext-data-control-client-protocol.h"
+#include "wlr-output-management-client-protocol.h"
+#include "ext-workspace-client-protocol.h"
 
 static void print_messages(const struct wl_interface *interface,
 			   const char *kind, const struct wl_message *messages,
@@ -222,6 +229,35 @@ int main(void)
 		/* wlr-virtual-pointer-unstable-v1.xml */
 		&zwlr_virtual_pointer_v1_interface,
 		&zwlr_virtual_pointer_manager_v1_interface,
+		/* ext-foreign-toplevel-list-v1.xml */
+		&ext_foreign_toplevel_list_v1_interface,
+		&ext_foreign_toplevel_handle_v1_interface,
+		/* wlr-gamma-control-unstable-v1.xml */
+		&zwlr_gamma_control_manager_v1_interface,
+		&zwlr_gamma_control_v1_interface,
+		/* wlr-output-power-management-unstable-v1.xml */
+		&zwlr_output_power_manager_v1_interface,
+		&zwlr_output_power_v1_interface,
+		/* wlr-data-control-unstable-v1.xml */
+		&zwlr_data_control_manager_v1_interface,
+		&zwlr_data_control_device_v1_interface,
+		&zwlr_data_control_source_v1_interface,
+		&zwlr_data_control_offer_v1_interface,
+		/* ext-data-control-v1.xml */
+		&ext_data_control_manager_v1_interface,
+		&ext_data_control_device_v1_interface,
+		&ext_data_control_source_v1_interface,
+		&ext_data_control_offer_v1_interface,
+		/* wlr-output-management-unstable-v1.xml */
+		&zwlr_output_manager_v1_interface,
+		&zwlr_output_head_v1_interface,
+		&zwlr_output_mode_v1_interface,
+		&zwlr_output_configuration_v1_interface,
+		&zwlr_output_configuration_head_v1_interface,
+		/* ext-workspace-v1.xml */
+		&ext_workspace_manager_v1_interface,
+		&ext_workspace_group_handle_v1_interface,
+		&ext_workspace_handle_v1_interface,
 	};
 
 	printf("# libwayland %s\n", WAYLAND_VERSION);

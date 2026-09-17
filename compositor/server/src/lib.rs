@@ -47,7 +47,8 @@ mod surface;
 mod xdg;
 
 pub use client::{
-    Client, Constraint, Event, Fatal, ForeignRequest, ForeignToplevel, Injected, Outgoing, Typed,
+    Client, Configuration, Constraint, Event, Fatal, Flavour, ForeignRequest, ForeignToplevel,
+    GAMMA_SIZE, Injected, Manager, Outgoing, Typed, Wanted, Workspace, WorkspaceRequest,
 };
 pub use globals::{Global, Globals};
 pub use layer::{Anchors, Layer, LayerSurface, Margin};

@@ -12,12 +12,13 @@ use std::collections::BTreeMap;
 use compositor_wire::{ArgType, Interface};
 
 use crate::{
-    GLOBALS, alpha_modifier, content_type, core, cursor_shape, foreign_toplevel, fractional_scale,
-    idle_inhibit, idle_notify, input_method, kde_decoration, layer_shell, pointer_constraints,
-    pointer_gestures, presentation, primary_selection, relative_pointer, screencopy, session_lock,
-    shortcuts_inhibit, single_pixel, system_bell, text_input, toplevel_icon, toplevel_tag,
-    viewporter, virtual_keyboard, virtual_pointer, xdg_activation, xdg_decoration, xdg_dialog,
-    xdg_output, xdg_shell,
+    GLOBALS, alpha_modifier, content_type, core, cursor_shape, data_control, ext_data_control,
+    ext_workspace, foreign_list, foreign_toplevel, fractional_scale, gamma_control, idle_inhibit,
+    idle_notify, input_method, kde_decoration, layer_shell, output_management, output_power,
+    pointer_constraints, pointer_gestures, presentation, primary_selection, relative_pointer,
+    screencopy, session_lock, shortcuts_inhibit, single_pixel, system_bell, text_input,
+    toplevel_icon, toplevel_tag, viewporter, virtual_keyboard, virtual_pointer, xdg_activation,
+    xdg_decoration, xdg_dialog, xdg_output, xdg_shell,
 };
 
 /// The probe's output: one line per message, and one more per unnamed
@@ -119,6 +120,28 @@ fn tables() -> Vec<&'static Interface> {
         &virtual_keyboard::ZWP_VIRTUAL_KEYBOARD_V1,
         &virtual_pointer::ZWLR_VIRTUAL_POINTER_MANAGER_V1,
         &virtual_pointer::ZWLR_VIRTUAL_POINTER_V1,
+        &foreign_list::EXT_FOREIGN_TOPLEVEL_LIST_V1,
+        &foreign_list::EXT_FOREIGN_TOPLEVEL_HANDLE_V1,
+        &gamma_control::ZWLR_GAMMA_CONTROL_MANAGER_V1,
+        &gamma_control::ZWLR_GAMMA_CONTROL_V1,
+        &output_power::ZWLR_OUTPUT_POWER_MANAGER_V1,
+        &output_power::ZWLR_OUTPUT_POWER_V1,
+        &data_control::ZWLR_DATA_CONTROL_MANAGER_V1,
+        &data_control::ZWLR_DATA_CONTROL_DEVICE_V1,
+        &data_control::ZWLR_DATA_CONTROL_SOURCE_V1,
+        &data_control::ZWLR_DATA_CONTROL_OFFER_V1,
+        &ext_data_control::EXT_DATA_CONTROL_MANAGER_V1,
+        &ext_data_control::EXT_DATA_CONTROL_DEVICE_V1,
+        &ext_data_control::EXT_DATA_CONTROL_SOURCE_V1,
+        &ext_data_control::EXT_DATA_CONTROL_OFFER_V1,
+        &output_management::ZWLR_OUTPUT_MANAGER_V1,
+        &output_management::ZWLR_OUTPUT_HEAD_V1,
+        &output_management::ZWLR_OUTPUT_MODE_V1,
+        &output_management::ZWLR_OUTPUT_CONFIGURATION_V1,
+        &output_management::ZWLR_OUTPUT_CONFIGURATION_HEAD_V1,
+        &ext_workspace::EXT_WORKSPACE_MANAGER_V1,
+        &ext_workspace::EXT_WORKSPACE_GROUP_HANDLE_V1,
+        &ext_workspace::EXT_WORKSPACE_HANDLE_V1,
     ]
 }
 

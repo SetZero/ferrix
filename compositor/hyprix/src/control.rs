@@ -547,6 +547,35 @@ fn toplevel_of(client: &Client, surface: ObjectId) -> Option<(String, String)> {
         .map(|(_, top)| (top.title.clone(), top.app_id.clone()))
 }
 
+/// Every workspace as `ext-workspace-v1` describes one.
+///
+/// The group is the monitor's place in the snapshot's list, which is what
+/// `publish_workspaces` makes one group each of.
+#[must_use]
+pub fn workspaces(snapshot: &Snapshot) -> Vec<compositor_server::Workspace> {
+    snapshot
+        .workspaces
+        .iter()
+        .map(|workspace| compositor_server::Workspace {
+            id: i64::from(workspace.id),
+            name: workspace.name.clone(),
+            group: snapshot
+                .monitors
+                .iter()
+                .position(|monitor| monitor.name == workspace.monitor)
+                .unwrap_or(0),
+            active: snapshot
+                .monitors
+                .iter()
+                .any(|monitor| monitor.active_workspace == workspace.id),
+            // Nothing sets urgency on a workspace yet: `xdg_activation`
+            // makes a *window* urgent, and which workspace that is is the
+            // layout's to say once there is a rule that asks.
+            urgent: false,
+        })
+        .collect()
+}
+
 /// The event socket: connections that are written to and never read.
 ///
 /// A bar connects once and stays connected for the session, so the

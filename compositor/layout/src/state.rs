@@ -571,6 +571,39 @@ impl State {
         }))
     }
 
+    /// Move a monitor, or change how much of it a logical pixel is.
+    ///
+    /// The workspaces stay where they are: moving a screen in the space all
+    /// screens share is not unplugging it, and a window on it is still on
+    /// it. That is what `wlr-randr --output DP-1 --pos 1920,0` means, and
+    /// what a settings panel sends through
+    /// `zwlr_output_configuration_v1.apply`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownMonitor`] for a monitor that is not there.
+    pub fn move_monitor(
+        &mut self,
+        monitor: MonitorId,
+        rect: Rect,
+        scale: f64,
+    ) -> Result<Vec<Change>, Error> {
+        if self.output(monitor).is_none() {
+            return Err(Error::UnknownMonitor(monitor));
+        }
+        Ok(self.run(|state| {
+            if let Some(output) = state
+                .outputs
+                .iter_mut()
+                .find(|output| output.monitor.id == monitor)
+            {
+                output.monitor.rect = rect;
+                output.monitor.scale = scale;
+            }
+            Vec::new()
+        }))
+    }
+
     /// Add a monitor. It shows the lowest-numbered workspace left without a
     /// monitor by an unplug, taking all of those, or else the lowest number
     /// not in use. The first monitor gets focus.

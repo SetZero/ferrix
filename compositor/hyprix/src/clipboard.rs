@@ -19,10 +19,25 @@ use compositor_wire::{Fd, ObjectId};
 pub struct Selection {
     /// Which connection owns it.
     pub client: usize,
-    /// Its `wl_data_source`.
+    /// Its `wl_data_source`, or its data-control source.
     pub source: ObjectId,
     /// The types it can give the data in, in the order it offered them.
     pub mimes: Vec<String>,
+    /// Which protocol the owner set it through, which is the one it is
+    /// asked for the data through: a clipboard manager's source hears
+    /// `send` on its own interface and not on `wl_data_source`'s.
+    pub through: Through,
+}
+
+/// Which protocol a selection was set or asked for through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Through {
+    /// `wl_data_device` or `zwp_primary_selection_device_v1`: a client with
+    /// a window, told only while it has the keyboard.
+    Window,
+    /// `zwlr_data_control_device_v1` or `ext_data_control_device_v1`: a
+    /// clipboard manager, which has no window and is told regardless.
+    Manager,
 }
 
 /// Which of the two selections a call is about.
@@ -89,6 +104,7 @@ impl Clipboard {
         client: usize,
         source: Option<ObjectId>,
         mimes: Vec<String>,
+        through: Through,
     ) {
         let held = match which {
             Which::Clipboard => &mut self.selection,
@@ -98,15 +114,21 @@ impl Clipboard {
             && (previous.client != client || Some(previous.source) != source)
             && let Some(slot) = clients.get_mut(previous.client)
         {
-            match which {
-                Which::Clipboard => slot.client_mut().cancel_selection(previous.source),
-                Which::Primary => slot.client_mut().cancel_primary(previous.source),
+            match (previous.through, which) {
+                (Through::Manager, _) => slot.client_mut().control_cancel(previous.source),
+                (Through::Window, Which::Clipboard) => {
+                    slot.client_mut().cancel_selection(previous.source);
+                }
+                (Through::Window, Which::Primary) => {
+                    slot.client_mut().cancel_primary(previous.source);
+                }
             }
         }
         *held = source.map(|source| Selection {
             client,
             source,
             mimes,
+            through,
         });
         if held.is_some() {
             self.copied = self.copied.saturating_add(1);
@@ -133,6 +155,13 @@ impl Clipboard {
                     slot.client_mut().offer_primary(&mimes);
                 }
                 _ => {}
+            }
+            // And every clipboard manager, whether or not it has a window
+            // or the keyboard. That is the whole difference between the two
+            // protocols.
+            if slot.client().watches_clipboard() {
+                slot.client_mut()
+                    .control_offer_selection(which == Which::Primary, &mimes);
             }
         }
     }
@@ -163,12 +192,31 @@ impl Clipboard {
         }
     }
 
+    /// Tell one clipboard manager what both selections hold, which is what
+    /// a manager that has just made a device is owed.
+    pub fn offer_both_to(&self, clients: &mut [crate::state::Slot], client: usize) {
+        for which in [Which::Clipboard, Which::Primary] {
+            let mimes = self
+                .held(which)
+                .map(|selection| selection.mimes.clone())
+                .unwrap_or_default();
+            if let Some(slot) = clients.get_mut(client) {
+                slot.client_mut()
+                    .control_offer_selection(which == Which::Primary, &mimes);
+            }
+        }
+    }
+
     /// A client pasted: the descriptor goes to whoever copied.
     ///
     /// Gives whether it went anywhere. A paste through an offer that is no
     /// longer the selection is dropped, which leaves the pasting client
     /// reading a pipe nothing writes to -- and its own end is closed here,
     /// so that read ends rather than hangs.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a paste names both selections, both protocols, who asked, through what, for which type, and the pipe"
+    )]
     pub fn pasted(
         &mut self,
         which: Which,
@@ -177,15 +225,21 @@ impl Clipboard {
         offer: ObjectId,
         mime: &str,
         fd: Fd,
+        through: Through,
     ) -> bool {
         let Some(selection) = self.held(which).cloned() else {
             close(fd);
             return false;
         };
-        let current = clients.get(asking).is_some_and(|slot| match which {
-            Which::Clipboard => slot.client().holds_offer(offer),
-            Which::Primary => slot.client().holds_primary_offer(offer),
-        });
+        let current = clients
+            .get(asking)
+            .is_some_and(|slot| match (through, which) {
+                // A manager's offer is the compositor's to remember, so the
+                // check is the same one and the device holds it.
+                (Through::Manager, _) => slot.client().holds_control_offer(offer),
+                (Through::Window, Which::Clipboard) => slot.client().holds_offer(offer),
+                (Through::Window, Which::Primary) => slot.client().holds_primary_offer(offer),
+            });
         if !current {
             close(fd);
             return false;
@@ -194,11 +248,16 @@ impl Clipboard {
             close(fd);
             return false;
         };
-        match which {
-            Which::Clipboard => owner
-                .client_mut()
-                .send_selection(selection.source, mime, fd),
-            Which::Primary => owner.client_mut().send_primary(selection.source, mime, fd),
+        match (selection.through, which) {
+            (Through::Manager, _) => owner.client_mut().control_send(selection.source, mime, fd),
+            (Through::Window, Which::Clipboard) => {
+                owner
+                    .client_mut()
+                    .send_selection(selection.source, mime, fd);
+            }
+            (Through::Window, Which::Primary) => {
+                owner.client_mut().send_primary(selection.source, mime, fd);
+            }
         }
         // Sent now rather than at the end of the pass: the descriptor is
         // closed on the next line, and one let go of before the message
@@ -277,6 +336,7 @@ mod tests {
                 client,
                 Some(ObjectId(7)),
                 vec!["text/plain".to_owned()],
+                super::Through::Window,
             );
         }
         clipboard

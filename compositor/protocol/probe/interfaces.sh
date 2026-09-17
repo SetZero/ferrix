@@ -58,6 +58,13 @@ scan "$protocols/pointer-gestures-unstable-v1.xml" pointer-gestures
 scan "$protocols/keyboard-shortcuts-inhibit-unstable-v1.xml" keyboard-shortcuts-inhibit
 scan "$protocols/virtual-keyboard-unstable-v1.xml" virtual-keyboard
 scan "$protocols/wlr-virtual-pointer-unstable-v1.xml" wlr-virtual-pointer
+scan "$protocols/ext-foreign-toplevel-list-v1.xml" ext-foreign-toplevel-list
+scan "$protocols/wlr-gamma-control-unstable-v1.xml" wlr-gamma-control
+scan "$protocols/wlr-output-power-management-unstable-v1.xml" wlr-output-power-management
+scan "$protocols/wlr-data-control-unstable-v1.xml" wlr-data-control
+scan "$protocols/ext-data-control-v1.xml" ext-data-control
+scan "$protocols/wlr-output-management-unstable-v1.xml" wlr-output-management
+scan "$protocols/ext-workspace-v1.xml" ext-workspace
 
 gcc -O0 -Wall -Werror -I"$work" \
     $(pkg-config --cflags wayland-client) \

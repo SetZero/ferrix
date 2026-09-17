@@ -3292,3 +3292,412 @@ fn a_virtual_device_reports_input_for_the_seat() {
         ]
     );
 }
+
+// -- What a taskbar, a clipboard manager and a settings panel ask ------------
+
+/// A connection with the screen and clipboard-manager globals bound:
+/// `wl_seat` is 13, `wl_output` 14, the managers 15 upwards, and a test's
+/// own objects start at 20.
+fn watching_client() -> Client {
+    let mut globals = globals();
+    for (interface, version, role) in [
+        (&core::WL_OUTPUT, 4, Role::Output),
+        (
+            &compositor_protocol::foreign_list::EXT_FOREIGN_TOPLEVEL_LIST_V1,
+            1,
+            Role::ForeignList,
+        ),
+        (
+            &compositor_protocol::gamma_control::ZWLR_GAMMA_CONTROL_MANAGER_V1,
+            1,
+            Role::GammaControlManager,
+        ),
+        (
+            &compositor_protocol::output_power::ZWLR_OUTPUT_POWER_MANAGER_V1,
+            1,
+            Role::OutputPowerManager,
+        ),
+        (
+            &compositor_protocol::data_control::ZWLR_DATA_CONTROL_MANAGER_V1,
+            2,
+            Role::DataControlManager(crate::Flavour::Wlr),
+        ),
+        (
+            &compositor_protocol::output_management::ZWLR_OUTPUT_MANAGER_V1,
+            4,
+            Role::OutputManager,
+        ),
+        (
+            &compositor_protocol::ext_workspace::EXT_WORKSPACE_MANAGER_V1,
+            1,
+            Role::WorkspaceManager,
+        ),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+    client.set_outputs(vec![crate::Output {
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+        refresh: 60_000,
+        scale: 1,
+        name: "DP-1".to_owned(),
+    }]);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_compositor", 6, 4));
+    bytes.extend(bind(2, 5, "wl_output", 4, 14));
+    for (name, interface, version, id) in [
+        (6u32, "ext_foreign_toplevel_list_v1", 1u32, 15u32),
+        (7, "zwlr_gamma_control_manager_v1", 1, 16),
+        (8, "zwlr_output_power_manager_v1", 1, 17),
+        (9, "zwlr_data_control_manager_v1", 2, 18),
+        (11, "ext_workspace_manager_v1", 1, 19),
+    ] {
+        bytes.extend(bind(2, name, interface, version, id));
+    }
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert!(!client.is_finished(), "{:?}", client.fatal());
+    let _ = client.take_outgoing();
+    let _ = client.take_events();
+    client
+}
+
+/// The events one interface sent, which is how a test tells two events
+/// that share an opcode apart.
+fn sent_by(client: &mut Client, interface: &str) -> Vec<Sent> {
+    let told = sent(client);
+    told.into_iter()
+        .filter(|event| {
+            client
+                .objects()
+                .get(event.sender)
+                .is_some_and(|entry| entry.interface.name == interface)
+        })
+        .collect()
+}
+
+/// One window, as a bar sees it.
+fn a_window(window: u64, title: &str) -> crate::ForeignToplevel {
+    crate::ForeignToplevel {
+        window,
+        title: title.to_owned(),
+        app_id: "rocks.magical.pattern".to_owned(),
+        activated: false,
+        fullscreen: false,
+        maximized: false,
+        minimized: false,
+    }
+}
+
+/// `ext-foreign-toplevel-list-v1` names each window once, says nothing when
+/// nothing changed, and closes a handle whose window has gone.
+#[test]
+fn the_newer_window_list_names_each_window_once() {
+    let mut client = watching_client();
+    assert!(client.lists_toplevels());
+
+    client.list_toplevels(&[a_window(1, "one"), a_window(2, "two")]);
+    let told = sent(&mut client);
+    let titles: Vec<String> = told
+        .iter()
+        .filter(|event| {
+            event.opcode
+                == compositor_protocol::foreign_list::ext_foreign_toplevel_handle_v1::event::TITLE
+        })
+        .filter_map(|event| event.args.first().cloned())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "Str(Some(\"one\"))".to_owned(),
+            "Str(Some(\"two\"))".to_owned()
+        ]
+    );
+    // The identifier is the compositor's own handle, in hex.
+    assert!(
+        told.iter().any(|event| event.args == ["Str(Some(\"2\"))"]),
+        "the second window's identifier"
+    );
+
+    // Nothing changed, so nothing is said.
+    client.list_toplevels(&[a_window(1, "one"), a_window(2, "two")]);
+    assert_eq!(sent(&mut client), []);
+
+    // One window gone: its handle is closed and nothing else is said.
+    client.list_toplevels(&[a_window(1, "one")]);
+    let told = sent(&mut client);
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(
+        told.first().map(|event| event.opcode),
+        Some(compositor_protocol::foreign_list::ext_foreign_toplevel_handle_v1::event::CLOSED)
+    );
+}
+
+/// `zwlr_gamma_control_v1` says how big a ramp is at once -- a client that
+/// was not told cannot write one -- and hands the descriptor up.
+#[test]
+fn a_gamma_control_is_told_its_size_and_hands_the_ramps_up() {
+    let mut client = watching_client();
+    let mut bytes = request(
+        16,
+        compositor_protocol::gamma_control::zwlr_gamma_control_manager_v1::request::GET_GAMMA_CONTROL,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(20)), Arg::Object(ObjectId(14))],
+    );
+    bytes.extend(request(
+        20,
+        compositor_protocol::gamma_control::zwlr_gamma_control_v1::request::SET_GAMMA,
+        &[ArgType::Fd],
+        &[Arg::Fd(Fd(7))],
+    ));
+    assert_eq!(client.read(&bytes, &[Fd(7)]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let told = sent(&mut client);
+    assert_eq!(
+        told.iter()
+            .find(|event| event.sender == ObjectId(20))
+            .map(|event| event.args.clone()),
+        Some(vec![format!("Uint({})", crate::GAMMA_SIZE)])
+    );
+    assert!(
+        client.take_events().iter().any(|event| matches!(
+            event,
+            Event::Gamma {
+                output: 0,
+                table: Some(Fd(7))
+            }
+        )),
+        "the descriptor goes up for the compositor to read"
+    );
+}
+
+/// `zwlr_output_power_v1` turns a screen off, and is told what it is now.
+#[test]
+fn output_power_turns_a_screen_off() {
+    let mut client = watching_client();
+    let mut bytes = request(
+        17,
+        compositor_protocol::output_power::zwlr_output_power_manager_v1::request::GET_OUTPUT_POWER,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(20)), Arg::Object(ObjectId(14))],
+    );
+    bytes.extend(request(
+        20,
+        compositor_protocol::output_power::zwlr_output_power_v1::request::SET_MODE,
+        &[ArgType::Uint],
+        &[Arg::Uint(
+            compositor_protocol::output_power::zwlr_output_power_v1::mode::OFF,
+        )],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        client.take_events().iter().any(|event| matches!(
+            event,
+            Event::OutputPower {
+                output: 0,
+                on: false
+            }
+        )),
+        "the compositor is asked to turn it off"
+    );
+
+    client.output_powered(0, false);
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .find(|event| event.sender == ObjectId(20))
+            .map(|event| event.args.clone()),
+        Some(vec![format!(
+            "Uint({})",
+            compositor_protocol::output_power::zwlr_output_power_v1::mode::OFF
+        )])
+    );
+}
+
+/// A clipboard manager is told what both selections hold whether or not it
+/// has a window, which is the whole difference from `wl_data_device`.
+#[test]
+fn a_clipboard_manager_is_told_without_a_window() {
+    let mut client = watching_client();
+    let bytes = request(
+        18,
+        compositor_protocol::data_control::zwlr_data_control_manager_v1::request::GET_DATA_DEVICE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(20)), Arg::Object(ObjectId(3))],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(client.watches_clipboard());
+    assert!(
+        client
+            .take_events()
+            .iter()
+            .any(|event| matches!(event, Event::DataControlBound { .. })),
+        "the compositor is told to offer it both selections"
+    );
+    let _ = sent(&mut client);
+
+    // This client has no surface, no keyboard and no focus, and is told.
+    client.control_offer_selection(false, &["text/plain".to_owned()]);
+    let told = sent(&mut client);
+    let offer = told
+        .iter()
+        .find(|event| {
+            event.sender == ObjectId(20)
+                && event.opcode
+                    == compositor_protocol::data_control::zwlr_data_control_device_v1::event::DATA_OFFER
+        })
+        .expect("an offer was made");
+    assert_eq!(offer.args.len(), 1);
+    assert!(
+        told.iter().any(|event| {
+            event.opcode
+                == compositor_protocol::data_control::zwlr_data_control_device_v1::event::SELECTION
+        }),
+        "and named as the selection"
+    );
+}
+
+/// `zwlr_output_manager_v1` publishes every screen with its mode, and
+/// refuses a configuration made against a serial that is no longer current.
+#[test]
+fn output_management_publishes_the_screens_and_refuses_a_stale_serial() {
+    let mut client = watching_client();
+    let bytes = bind(2, 10, "zwlr_output_manager_v1", 4, 21);
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let told = sent(&mut client);
+    // The screen's name and its mode's size, which is what `wlr-randr`
+    // prints.
+    assert!(
+        told.iter()
+            .any(|event| event.args == ["Str(Some(\"DP-1\"))"]),
+        "the screen's name: {told:?}"
+    );
+    assert!(
+        told.iter()
+            .any(|event| event.args == ["Int(1920)", "Int(1080)"]),
+        "its mode's size: {told:?}"
+    );
+    let serial = told
+        .iter()
+        .rev()
+        .find(|event| {
+            event.sender == ObjectId(21)
+                && event.opcode
+                    == compositor_protocol::output_management::zwlr_output_manager_v1::event::DONE
+        })
+        .and_then(|event| event.args.first().cloned())
+        .expect("a serial");
+    assert_eq!(serial, "Uint(1)", "the first publication");
+
+    // A configuration against a serial that is not the current one is
+    // cancelled, which is this protocol's one safety rule.
+    let bytes = request(
+        21,
+        compositor_protocol::output_management::zwlr_output_manager_v1::request::CREATE_CONFIGURATION,
+        &[ArgType::NewId, ArgType::Uint],
+        &[Arg::NewId(ObjectId(22)), Arg::Uint(99)],
+    );
+    let mut bytes = bytes;
+    bytes.extend(request(
+        22,
+        compositor_protocol::output_management::zwlr_output_configuration_v1::request::APPLY,
+        &[],
+        &[],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .filter(|event| event.sender == ObjectId(22))
+            .map(|event| event.opcode)
+            .collect::<Vec<u16>>(),
+        [compositor_protocol::output_management::zwlr_output_configuration_v1::event::CANCELLED]
+    );
+}
+
+/// `ext-workspace-v1` publishes one group a monitor and every workspace in
+/// it, with the shown one marked.
+#[test]
+fn the_workspace_list_names_each_workspace_and_marks_the_shown_one() {
+    let mut client = watching_client();
+    assert!(client.watches_workspaces());
+    client.publish_workspaces(
+        1,
+        &[
+            crate::Workspace {
+                id: 1,
+                name: "1".to_owned(),
+                group: 0,
+                active: true,
+                urgent: false,
+            },
+            crate::Workspace {
+                id: 2,
+                name: "browsing".to_owned(),
+                group: 0,
+                active: false,
+                urgent: false,
+            },
+        ],
+    );
+    let told = sent_by(&mut client, "ext_workspace_handle_v1");
+    let names: Vec<String> = told
+        .iter()
+        .filter(|event| {
+            event.opcode == compositor_protocol::ext_workspace::ext_workspace_handle_v1::event::NAME
+        })
+        .filter_map(|event| event.args.first().cloned())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Str(Some(\"1\"))".to_owned(),
+            "Str(Some(\"browsing\"))".to_owned()
+        ]
+    );
+    let states: Vec<String> = told
+        .iter()
+        .filter(|event| {
+            event.opcode
+                == compositor_protocol::ext_workspace::ext_workspace_handle_v1::event::STATE
+        })
+        .filter_map(|event| event.args.first().cloned())
+        .collect();
+    assert_eq!(
+        states,
+        [
+            format!(
+                "Uint({})",
+                compositor_protocol::ext_workspace::ext_workspace_handle_v1::state::ACTIVE
+            ),
+            "Uint(0)".to_owned()
+        ],
+        "the shown one is marked and the other is not"
+    );
+    // And nothing is said a second time.
+    client.publish_workspaces(
+        1,
+        &[crate::Workspace {
+            id: 1,
+            name: "1".to_owned(),
+            group: 0,
+            active: true,
+            urgent: false,
+        }],
+    );
+    let told = sent(&mut client);
+    assert!(
+        told.iter().any(|event| {
+            event.opcode
+                == compositor_protocol::ext_workspace::ext_workspace_handle_v1::event::REMOVED
+        }),
+        "the workspace that went is removed: {told:?}"
+    );
+}

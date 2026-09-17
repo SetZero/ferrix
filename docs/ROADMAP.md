@@ -4267,6 +4267,52 @@ copied sat waiting to be asked -- once in about ten boots, whenever a
 clipboard client happened to exit before another pasted. `Clipboard::renumber`
 is host-tested, and the test fails without the fix.
 
+**Done — what a taskbar, a clipboard manager, a night-light and a settings
+panel ask (2026-09-17).** Seven more protocols, each bound by a program
+people run rather than chosen from a list.
+
+`ext-foreign-toplevel-list-v1` is the window list as the newer specification
+has it -- the same job `zwlr_foreign_toplevel_v1` does with the acting-on-a-
+window half taken out, and the one a taskbar written this year binds. Both
+are published from the same list each pass.
+
+`wlr-data-control` and `ext-data-control` are the clipboard as a *manager*
+sees it. `wl_data_device` gives a client the selection only while it has the
+keyboard, which is right for an application and wrong for `cliphist` or
+`wl-paste --watch`: they have no window at all. Both selections are carried
+to them whether or not anything is focused, and a manager can set either as
+well as read it. They are the same protocol twice -- wlroots wrote the first
+and the `ext` namespace standardised it -- so they are one module with a
+table of interfaces, the way `compositor/clip` is one program with a flag.
+
+`wlr-gamma-control` is `gammastep` and `hyprsunset`. The client hands over
+three ramps on a descriptor and every pixel is looked up in its channel's
+ramp on the way to the screen. On hardware the connector does that; here the
+screen is memory, so the compositor does it once a frame over the pixels it
+drew -- the same picture by a slower road.
+
+`wlr-output-power-management` is `wlopm`, which is the `dpms` dispatcher
+reached from a program instead of a keybind.
+
+`wlr-output-management` is `kanshi` and `wlr-randr`: every screen with its
+mode, its position and its scale, published with a serial, and a whole
+arrangement taken back at once. A configuration made against a stale serial
+is `cancelled` rather than applied, which is the one part of that protocol a
+compositor must not skip. Moving a screen is carried out --
+`State::move_monitor` keeps the workspaces where they are, because moving a
+screen is not unplugging it.
+
+`ext-workspace-v1` is the workspace numbers a bar draws, one group a
+monitor, which until now every Hyprland bar read out of `hyprctl`.
+
+**The eighteenth boot.** `zwp_virtual_keyboard_v1` had no proof that a
+client's keys reach the seat, and that is the whole point of the protocol.
+So: one key starts `/bin/vkbd`, `vkbd` types `SUPER Q` on the Wayland
+socket, the bind fires, and `closewindow, title:^(one)$` closes the window
+that expression names. The screen must be the picture `compositor/render`
+blesses for the window that is left. Two new things in one picture -- a
+client acting as a device, and a dispatcher picking a window out by title.
+
 **Done — a terminal (2026-09-17).** Stage 18's exit asked for one, and it
 needed pseudoterminals the kernel did not have. It has them now:
 `/dev/ptmx` gives a master, `TIOCGPTN` says which pair it is, `TIOCSPTLCK`

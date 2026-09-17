@@ -207,6 +207,45 @@ pub enum Role {
     GesturePinch,
     /// `zwp_pointer_gesture_hold_v1`.
     GestureHold,
+    /// `ext_foreign_toplevel_list_v1`: the window list as the newer
+    /// specification has it.
+    ForeignList,
+    /// `ext_foreign_toplevel_handle_v1`: one window in it, made by the
+    /// *server*.
+    ForeignListHandle,
+    /// `zwlr_gamma_control_manager_v1`: a night-light.
+    GammaControlManager,
+    /// `zwlr_gamma_control_v1`: one screen's ramps.
+    GammaControl,
+    /// `zwlr_output_power_manager_v1`: `wlopm`.
+    OutputPowerManager,
+    /// `zwlr_output_power_v1`: one screen's power.
+    OutputPower,
+    /// `zwlr_data_control_manager_v1` or `ext_data_control_manager_v1`: a
+    /// clipboard manager, which has no window and is told anyway.
+    DataControlManager(crate::client::Flavour),
+    /// The device either makes.
+    DataControlDevice,
+    /// The source either makes.
+    DataControlSource,
+    /// The offer the *server* makes for either.
+    DataControlOffer,
+    /// `zwlr_output_manager_v1`: `kanshi` and `wlr-randr`.
+    OutputManager,
+    /// `zwlr_output_head_v1`: one screen, made by the server.
+    OutputHead,
+    /// `zwlr_output_mode_v1`: one of its modes, the same.
+    OutputMode,
+    /// `zwlr_output_configuration_v1`: an arrangement being built.
+    OutputConfiguration,
+    /// `zwlr_output_configuration_head_v1`: one screen in it.
+    OutputConfigurationHead,
+    /// `ext_workspace_manager_v1`: the workspace numbers a bar draws.
+    WorkspaceManager,
+    /// `ext_workspace_group_handle_v1`: one monitor's workspaces.
+    WorkspaceGroup,
+    /// `ext_workspace_handle_v1`: one workspace.
+    WorkspaceHandle,
 }
 
 impl Role {

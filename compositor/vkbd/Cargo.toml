@@ -1,0 +1,22 @@
+[package]
+name = "compositor-vkbd"
+description = "A client that types: the virtual keyboard and pointer protocols from a program's side"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "vkbd"
+path = "src/main.rs"
+
+[dependencies]
+compositor-evecho = { path = "../evecho" }
+compositor-protocol = { path = "../protocol" }
+compositor-socket = { path = "../socket" }
+compositor-wire = { path = "../wire" }
+compositor-xkb = { path = "../xkb" }
+
+[lints]
+workspace = true

@@ -37,6 +37,82 @@ pub struct Output<'a> {
     /// Where the pointer is and what it looks like, or `None` for a screen
     /// with no pointer on it.
     pub cursor: Option<Cursor>,
+    /// The ramps a night-light set on this screen, if one did.
+    pub gamma: Option<Gamma>,
+}
+
+/// A night-light's three ramps, one entry a level.
+///
+/// `zwlr_gamma_control_v1` hands the compositor a descriptor holding three
+/// tables of sixteen-bit entries -- red, then green, then blue -- and every
+/// level a pixel can have is looked up in its channel's table on the way to
+/// the screen. That is what `gammastep` and `hyprsunset` do to make an
+/// evening screen warmer.
+///
+/// A real compositor hands the table to the connector and the hardware does
+/// the lookup. This one has no such hardware -- the screen is memory -- so
+/// the lookup is done here, once a frame, over the pixels that were drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Gamma {
+    /// One byte a level, taken from the top half of the protocol's
+    /// sixteen: the screen is eight bits a channel.
+    ramps: [[u8; SIZE]; 3],
+}
+
+/// How many entries each ramp has, which is what the client was told.
+const SIZE: usize = 256;
+
+impl Gamma {
+    /// Read the three ramps off a descriptor, or `None` if they are not
+    /// there.
+    ///
+    /// The descriptor is this compositor's once the client has sent it, and
+    /// is closed here whatever it held.
+    #[must_use]
+    pub fn read(fd: compositor_wire::Fd) -> Option<Self> {
+        use std::io::Read as _;
+        use std::os::fd::FromRawFd as _;
+        #[expect(
+            unsafe_code,
+            reason = "AUDIT: the descriptor arrived on this compositor's own socket and is claimed; File takes it and closes it"
+        )]
+        // SAFETY: a descriptor this process received and owns, claimed from
+        // the connection so nothing else will close it.
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd.0) };
+        let mut bytes = [0u8; SIZE * 3 * 2];
+        file.read_exact(&mut bytes).ok()?;
+        let mut ramps = [[0u8; SIZE]; 3];
+        for (channel, ramp) in ramps.iter_mut().enumerate() {
+            for (level, entry) in ramp.iter_mut().enumerate() {
+                // Little-endian sixteen-bit, which is what a client writes
+                // from a `uint16_t` array; the screen keeps the top byte.
+                let at = (channel * SIZE + level) * 2 + 1;
+                *entry = bytes.get(at).copied().unwrap_or(0);
+            }
+        }
+        Some(Self { ramps })
+    }
+
+    /// Put one screen's pixels through the ramps, in place.
+    ///
+    /// The buffer is `XRGB8888` or `ARGB8888`; either way the three colour
+    /// bytes are the low three of each little-endian word and the fourth is
+    /// left alone.
+    pub fn apply(&self, buffer: &mut [u8]) {
+        for pixel in buffer.chunks_exact_mut(4) {
+            for (at, channel) in [(2usize, 0usize), (1, 1), (0, 2)] {
+                let Some(ramp) = self.ramps.get(channel) else {
+                    continue;
+                };
+                let Some(byte) = pixel.get_mut(at) else {
+                    continue;
+                };
+                if let Some(mapped) = ramp.get(usize::from(*byte)) {
+                    *byte = *mapped;
+                }
+            }
+        }
+    }
 }
 
 /// The pointer, as the frame draws it.
@@ -157,7 +233,9 @@ fn draw_windows(
         styles,
         scale,
         cursor,
+        gamma,
     } = target;
+    let gamma = *gamma;
     let cursor = *cursor;
     let (origin, scale) = (*origin, *scale);
     // The layout, the decorations and the layer surfaces are all in logical
@@ -253,6 +331,12 @@ fn draw_windows(
     canvas
         .present(&mut target, damage)
         .map_err(|error| format!("the frame does not fit the screen: {error:?}"))?;
+    // The night-light's ramps, over what was drawn: on hardware the
+    // connector does this, and here the compositor does -- the same picture
+    // by a slower road.
+    if let Some(gamma) = gamma {
+        gamma.apply(backend.buffer());
+    }
     backend.present().map_err(|error| error.to_string())
 }
 

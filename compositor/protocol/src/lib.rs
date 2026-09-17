@@ -77,6 +77,19 @@
 //! * **`virtual_keyboard`** and **`virtual_pointer`** are a client acting
 //!   as a device: `wtype`, `ydotool` and every on-screen keyboard.
 //!
+//! * **`foreign_list`** is `ext-foreign-toplevel-list-v1`: the window list
+//!   as the newer specification has it, which is the one a taskbar written
+//!   this year binds.
+//! * **`gamma_control`** is what `gammastep` and `hyprsunset` use to make
+//!   the screen warmer at night, and **`output_power`** is `wlopm` turning
+//!   a screen off.
+//! * **`data_control`** and **`ext_data_control`** are the clipboard as a
+//!   *manager* sees it: `cliphist` and `wl-paste --watch` have no window at
+//!   all and must be told every time anything is copied. They are the same
+//!   protocol twice, wlroots' and the standardised one.
+//! * **`output_management`** is `kanshi` and `wlr-randr` arranging the
+//!   screens, and **`ext_workspace`** is the workspace numbers a bar draws.
+//!
 //! The list of protocols is `FILES` in the generator. Adding one is vendoring
 //! its XML, adding a line there and a module to `generated/mod.rs`, and
 //! naming its interfaces in `probe/interfaces.c` and `probe/interfaces.sh`,
@@ -87,12 +100,13 @@ mod generated;
 
 pub use compositor_wire::Interface;
 pub use generated::{
-    alpha_modifier, content_type, core, cursor_shape, foreign_toplevel, fractional_scale,
-    idle_inhibit, idle_notify, input_method, kde_decoration, layer_shell, pointer_constraints,
-    pointer_gestures, presentation, primary_selection, relative_pointer, screencopy, session_lock,
-    shortcuts_inhibit, single_pixel, system_bell, text_input, toplevel_icon, toplevel_tag,
-    viewporter, virtual_keyboard, virtual_pointer, xdg_activation, xdg_decoration, xdg_dialog,
-    xdg_output, xdg_shell,
+    alpha_modifier, content_type, core, cursor_shape, data_control, ext_data_control,
+    ext_workspace, foreign_list, foreign_toplevel, fractional_scale, gamma_control, idle_inhibit,
+    idle_notify, input_method, kde_decoration, layer_shell, output_management, output_power,
+    pointer_constraints, pointer_gestures, presentation, primary_selection, relative_pointer,
+    screencopy, session_lock, shortcuts_inhibit, single_pixel, system_bell, text_input,
+    toplevel_icon, toplevel_tag, viewporter, virtual_keyboard, virtual_pointer, xdg_activation,
+    xdg_decoration, xdg_dialog, xdg_output, xdg_shell,
 };
 
 /// Every interface the compositor offers as a global, with the version it
@@ -138,6 +152,13 @@ pub const GLOBALS: &[&Interface] = &[
     &shortcuts_inhibit::ZWP_KEYBOARD_SHORTCUTS_INHIBIT_MANAGER_V1,
     &virtual_keyboard::ZWP_VIRTUAL_KEYBOARD_MANAGER_V1,
     &virtual_pointer::ZWLR_VIRTUAL_POINTER_MANAGER_V1,
+    &foreign_list::EXT_FOREIGN_TOPLEVEL_LIST_V1,
+    &gamma_control::ZWLR_GAMMA_CONTROL_MANAGER_V1,
+    &output_power::ZWLR_OUTPUT_POWER_MANAGER_V1,
+    &data_control::ZWLR_DATA_CONTROL_MANAGER_V1,
+    &ext_data_control::EXT_DATA_CONTROL_MANAGER_V1,
+    &output_management::ZWLR_OUTPUT_MANAGER_V1,
+    &ext_workspace::EXT_WORKSPACE_MANAGER_V1,
 ];
 
 #[cfg(test)]

@@ -41,10 +41,19 @@ use compositor_wire::{
 };
 use compositor_xkb::Modifiers;
 
+mod control;
 mod desktop;
 mod input;
+mod outputs;
+mod screen;
+mod workspaces;
 
+pub use control::{Flavour, Manager};
 pub use input::{Constraint, Injected};
+pub use outputs::Configuration;
+pub use outputs::Wanted;
+pub use screen::GAMMA_SIZE;
+pub use workspaces::{Workspace, WorkspaceRequest};
 
 use crate::globals::Globals;
 use crate::layer::{Anchors, Layer, LayerSurface, Margin};
@@ -202,6 +211,66 @@ pub enum Event {
     /// A virtual device asked the seat to do something, which the
     /// compositor hands on as if a real one had reported it.
     Injected(Injected),
+    /// `zwlr_gamma_control_v1.set_gamma`: the three ramps on a descriptor,
+    /// or `None` where the control was destroyed and the screen goes back
+    /// to what it was.
+    Gamma {
+        /// Which screen, by its place in the outputs.
+        output: usize,
+        /// The descriptor the ramps are on.
+        table: Option<Fd>,
+    },
+    /// `zwlr_output_power_v1.set_mode`: turn a screen off or on.
+    OutputPower {
+        /// Which screen.
+        output: usize,
+        /// Whether it is to be on.
+        on: bool,
+    },
+    /// A clipboard manager made a device, which is owed both selections at
+    /// once whether or not it has the keyboard.
+    DataControlBound {
+        /// The device.
+        device: ObjectId,
+    },
+    /// A clipboard manager put something on a selection.
+    DataControlSelection {
+        /// Its source, or `None` for giving the selection up.
+        source: Option<ObjectId>,
+        /// Whether it is the primary selection.
+        primary: bool,
+        /// The types the source offered.
+        mimes: Vec<String>,
+    },
+    /// A clipboard manager asked for what is on a selection.
+    DataControlPaste {
+        /// The offer it asked through.
+        offer: ObjectId,
+        /// The type it asked for.
+        mime: String,
+        /// The pipe to write it to.
+        fd: Fd,
+        /// Whether it is the primary selection.
+        primary: bool,
+    },
+    /// A program asked for the screens to be arranged.
+    OutputConfigured {
+        /// The configuration, which is owed `succeeded` or `failed`.
+        configuration: ObjectId,
+        /// Whether it only asked whether the arrangement would work.
+        testing: bool,
+        /// What it asks each screen to become.
+        heads: Vec<(usize, Wanted)>,
+    },
+    /// A bar asked for something to be done to a workspace.
+    WorkspaceAsked {
+        /// Which workspace, by the number the compositor calls it.
+        workspace: i64,
+        /// What it asked for.
+        what: WorkspaceRequest,
+    },
+    /// `ext_workspace_manager_v1.commit`: carry out what was asked.
+    WorkspacesCommitted,
     /// `xdg_system_bell_v1.ring`: the terminal bell, for the surface that
     /// rang it or for the whole seat.
     Bell {
@@ -598,6 +667,40 @@ pub struct Client {
     virtual_keyboards: Vec<ObjectId>,
     /// The `zwlr_virtual_pointer_v1`s it has made.
     virtual_pointers: Vec<ObjectId>,
+    /// The `ext_foreign_toplevel_list_v1`s it has bound and not stopped.
+    lists: Vec<ObjectId>,
+    /// The handle it holds for each window in that list.
+    list_handles: BTreeMap<u64, ObjectId>,
+    /// What each of those handles was last told.
+    list_told: BTreeMap<u64, ForeignToplevel>,
+    /// Which screen each `zwlr_gamma_control_v1` is on.
+    gammas: BTreeMap<ObjectId, usize>,
+    /// Which screen each `zwlr_output_power_v1` is on.
+    powers: BTreeMap<ObjectId, usize>,
+    /// The data-control devices it has made, with the offers each holds.
+    control_devices: BTreeMap<ObjectId, Manager>,
+    /// The types each data-control source has offered.
+    control_sources: BTreeMap<ObjectId, Vec<String>>,
+    /// The `zwlr_output_manager_v1`s it has bound and not stopped.
+    output_managers: Vec<ObjectId>,
+    /// The head it holds for each screen.
+    heads: BTreeMap<usize, ObjectId>,
+    /// The arrangements it is building.
+    configurations: BTreeMap<ObjectId, Configuration>,
+    /// Which configuration and screen each configuration head is for.
+    configuration_heads: BTreeMap<ObjectId, (ObjectId, usize)>,
+    /// The serial the screens were last published with. A configuration
+    /// made against an older one is refused, which is this protocol's one
+    /// safety rule.
+    output_serial: u32,
+    /// The `ext_workspace_manager_v1`s it has bound and not stopped.
+    workspace_managers: Vec<ObjectId>,
+    /// The group it holds for each monitor.
+    workspace_groups: BTreeMap<usize, ObjectId>,
+    /// The handle it holds for each workspace.
+    workspace_handles: BTreeMap<i64, ObjectId>,
+    /// What each of those was last told.
+    workspace_told: BTreeMap<i64, Workspace>,
     /// The next configure serial. Serials go up and are never reused, so a
     /// client's `ack_configure` names one configure and no other.
     serial: u32,
@@ -752,6 +855,22 @@ impl Client {
             shortcut_inhibitors: BTreeMap::new(),
             virtual_keyboards: Vec::new(),
             virtual_pointers: Vec::new(),
+            lists: Vec::new(),
+            list_handles: BTreeMap::new(),
+            list_told: BTreeMap::new(),
+            gammas: BTreeMap::new(),
+            powers: BTreeMap::new(),
+            control_devices: BTreeMap::new(),
+            control_sources: BTreeMap::new(),
+            output_managers: Vec::new(),
+            heads: BTreeMap::new(),
+            configurations: BTreeMap::new(),
+            configuration_heads: BTreeMap::new(),
+            output_serial: 0,
+            workspace_managers: Vec::new(),
+            workspace_groups: BTreeMap::new(),
+            workspace_handles: BTreeMap::new(),
+            workspace_told: BTreeMap::new(),
             serial: 1,
         }
     }
@@ -1494,6 +1613,10 @@ impl Client {
             other => {
                 self.forget_desktop(id, other);
                 self.forget_input(id, other);
+                self.forget_screen(id, other);
+                self.forget_control(id, other);
+                self.forget_outputs(id, other);
+                self.forget_workspaces(id, other);
             }
         }
         // wl_display.delete_id is what lets a client reuse an id without
@@ -1580,7 +1703,11 @@ impl Client {
             // protocol allows.
             other => {
                 let _ = self.desktop(sender, other, version, opcode, args)
-                    || self.input(sender, other, version, opcode, args);
+                    || self.input(sender, other, version, opcode, args)
+                    || self.screen(sender, other, version, opcode, args)
+                    || self.control(sender, other, version, opcode, args)
+                    || self.outputs(sender, other, version, opcode, args)
+                    || self.workspaces(sender, other, opcode);
             }
         }
     }
@@ -1708,6 +1835,22 @@ impl Client {
             // `show_toplevels` works out that this one has been told
             // nothing yet.
             self.managers.push(id);
+        }
+        // The three lists the server itself fills, each owed everything
+        // that already exists the moment it is bound.
+        match global.role {
+            Role::ForeignList => self.lists.push(id),
+            Role::WorkspaceManager => self.workspace_managers.push(id),
+            Role::OutputManager => {
+                self.output_managers.push(id);
+                // `zwlr_output_manager_v1` has no roundtrip of its own: a
+                // manager that binds and hears nothing waits for ever, so
+                // the screens go out at once. The compositor publishes
+                // them again whenever they change.
+                let outputs = self.outputs.clone();
+                self.publish_outputs(&outputs);
+            }
+            _ => {}
         }
         self.events.push(Event::Bound {
             object: id,

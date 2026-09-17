@@ -421,3 +421,123 @@ zwlr_virtual_pointer_v1 2 request 8 destroy
 zwlr_virtual_pointer_manager_v1 2 request 0 create_virtual_pointer ?on
 zwlr_virtual_pointer_manager_v1 2 request 1 destroy 
 zwlr_virtual_pointer_manager_v1 2 request 2 create_virtual_pointer_with_output 2?o?on
+ext_foreign_toplevel_list_v1 1 request 0 stop 
+ext_foreign_toplevel_list_v1 1 request 1 destroy 
+ext_foreign_toplevel_list_v1 1 event 0 toplevel n
+ext_foreign_toplevel_list_v1 1 event 1 finished 
+ext_foreign_toplevel_handle_v1 1 request 0 destroy 
+ext_foreign_toplevel_handle_v1 1 event 0 closed 
+ext_foreign_toplevel_handle_v1 1 event 1 done 
+ext_foreign_toplevel_handle_v1 1 event 2 title s
+ext_foreign_toplevel_handle_v1 1 event 3 app_id s
+ext_foreign_toplevel_handle_v1 1 event 4 identifier s
+zwlr_gamma_control_manager_v1 1 request 0 get_gamma_control no
+zwlr_gamma_control_manager_v1 1 request 1 destroy 
+zwlr_gamma_control_v1 1 request 0 set_gamma h
+zwlr_gamma_control_v1 1 request 1 destroy 
+zwlr_gamma_control_v1 1 event 0 gamma_size u
+zwlr_gamma_control_v1 1 event 1 failed 
+zwlr_output_power_manager_v1 1 request 0 get_output_power no
+zwlr_output_power_manager_v1 1 request 1 destroy 
+zwlr_output_power_v1 1 request 0 set_mode u
+zwlr_output_power_v1 1 request 1 destroy 
+zwlr_output_power_v1 1 event 0 mode u
+zwlr_output_power_v1 1 event 1 failed 
+zwlr_data_control_manager_v1 2 request 0 create_data_source n
+zwlr_data_control_manager_v1 2 request 1 get_data_device no
+zwlr_data_control_manager_v1 2 request 2 destroy 
+zwlr_data_control_device_v1 2 request 0 set_selection ?o
+zwlr_data_control_device_v1 2 request 1 destroy 
+zwlr_data_control_device_v1 2 request 2 set_primary_selection 2?o
+zwlr_data_control_device_v1 2 event 0 data_offer n
+zwlr_data_control_device_v1 2 event 1 selection ?o
+zwlr_data_control_device_v1 2 event 2 finished 
+zwlr_data_control_device_v1 2 event 3 primary_selection 2?o
+zwlr_data_control_source_v1 1 request 0 offer s
+zwlr_data_control_source_v1 1 request 1 destroy 
+zwlr_data_control_source_v1 1 event 0 send sh
+zwlr_data_control_source_v1 1 event 1 cancelled 
+zwlr_data_control_offer_v1 1 request 0 receive sh
+zwlr_data_control_offer_v1 1 request 1 destroy 
+zwlr_data_control_offer_v1 1 event 0 offer s
+ext_data_control_manager_v1 1 request 0 create_data_source n
+ext_data_control_manager_v1 1 request 1 get_data_device no
+ext_data_control_manager_v1 1 request 2 destroy 
+ext_data_control_device_v1 1 request 0 set_selection ?o
+ext_data_control_device_v1 1 request 1 destroy 
+ext_data_control_device_v1 1 request 2 set_primary_selection ?o
+ext_data_control_device_v1 1 event 0 data_offer n
+ext_data_control_device_v1 1 event 1 selection ?o
+ext_data_control_device_v1 1 event 2 finished 
+ext_data_control_device_v1 1 event 3 primary_selection ?o
+ext_data_control_source_v1 1 request 0 offer s
+ext_data_control_source_v1 1 request 1 destroy 
+ext_data_control_source_v1 1 event 0 send sh
+ext_data_control_source_v1 1 event 1 cancelled 
+ext_data_control_offer_v1 1 request 0 receive sh
+ext_data_control_offer_v1 1 request 1 destroy 
+ext_data_control_offer_v1 1 event 0 offer s
+zwlr_output_manager_v1 4 request 0 create_configuration nu
+zwlr_output_manager_v1 4 request 1 stop 
+zwlr_output_manager_v1 4 event 0 head n
+zwlr_output_manager_v1 4 event 1 done u
+zwlr_output_manager_v1 4 event 2 finished 
+zwlr_output_head_v1 4 request 0 release 3
+zwlr_output_head_v1 4 event 0 name s
+zwlr_output_head_v1 4 event 1 description s
+zwlr_output_head_v1 4 event 2 physical_size ii
+zwlr_output_head_v1 4 event 3 mode n
+zwlr_output_head_v1 4 event 4 enabled i
+zwlr_output_head_v1 4 event 5 current_mode o
+zwlr_output_head_v1 4 event 6 position ii
+zwlr_output_head_v1 4 event 7 transform i
+zwlr_output_head_v1 4 event 8 scale f
+zwlr_output_head_v1 4 event 9 finished 
+zwlr_output_head_v1 4 event 10 make 2s
+zwlr_output_head_v1 4 event 11 model 2s
+zwlr_output_head_v1 4 event 12 serial_number 2s
+zwlr_output_head_v1 4 event 13 adaptive_sync 4u
+zwlr_output_mode_v1 3 request 0 release 3
+zwlr_output_mode_v1 3 event 0 size ii
+zwlr_output_mode_v1 3 event 1 refresh i
+zwlr_output_mode_v1 3 event 2 preferred 
+zwlr_output_mode_v1 3 event 3 finished 
+zwlr_output_configuration_v1 4 request 0 enable_head no
+zwlr_output_configuration_v1 4 request 1 disable_head o
+zwlr_output_configuration_v1 4 request 2 apply 
+zwlr_output_configuration_v1 4 request 3 test 
+zwlr_output_configuration_v1 4 request 4 destroy 
+zwlr_output_configuration_v1 4 event 0 succeeded 
+zwlr_output_configuration_v1 4 event 1 failed 
+zwlr_output_configuration_v1 4 event 2 cancelled 
+zwlr_output_configuration_head_v1 4 request 0 set_mode o
+zwlr_output_configuration_head_v1 4 request 1 set_custom_mode iii
+zwlr_output_configuration_head_v1 4 request 2 set_position ii
+zwlr_output_configuration_head_v1 4 request 3 set_transform i
+zwlr_output_configuration_head_v1 4 request 4 set_scale f
+zwlr_output_configuration_head_v1 4 request 5 set_adaptive_sync 4u
+ext_workspace_manager_v1 1 request 0 commit 
+ext_workspace_manager_v1 1 request 1 stop 
+ext_workspace_manager_v1 1 event 0 workspace_group n
+ext_workspace_manager_v1 1 event 1 workspace n
+ext_workspace_manager_v1 1 event 2 done 
+ext_workspace_manager_v1 1 event 3 finished 
+ext_workspace_group_handle_v1 1 request 0 create_workspace s
+ext_workspace_group_handle_v1 1 request 1 destroy 
+ext_workspace_group_handle_v1 1 event 0 capabilities u
+ext_workspace_group_handle_v1 1 event 1 output_enter o
+ext_workspace_group_handle_v1 1 event 2 output_leave o
+ext_workspace_group_handle_v1 1 event 3 workspace_enter o
+ext_workspace_group_handle_v1 1 event 4 workspace_leave o
+ext_workspace_group_handle_v1 1 event 5 removed 
+ext_workspace_handle_v1 1 request 0 destroy 
+ext_workspace_handle_v1 1 request 1 activate 
+ext_workspace_handle_v1 1 request 2 deactivate 
+ext_workspace_handle_v1 1 request 3 assign o
+ext_workspace_handle_v1 1 request 4 remove 
+ext_workspace_handle_v1 1 event 0 id s
+ext_workspace_handle_v1 1 event 1 name s
+ext_workspace_handle_v1 1 event 2 coordinates a
+ext_workspace_handle_v1 1 event 3 state u
+ext_workspace_handle_v1 1 event 4 capabilities u
+ext_workspace_handle_v1 1 event 5 removed 

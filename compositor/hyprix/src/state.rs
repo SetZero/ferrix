@@ -10,7 +10,7 @@ use compositor_protocol::{core, xdg_shell};
 use compositor_render::{Canvas, Damage, Style};
 use compositor_server::{Client, Event, ForeignRequest, Globals, Rect as ServerRect, Role};
 
-use crate::clipboard::Which;
+use crate::clipboard::{Through, Which};
 use compositor_socket::{Connection, Listener, RecvError};
 use compositor_wire::{Fd, ObjectId};
 
@@ -334,6 +334,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // looked at, the drag a `bindm` started, whether `exit` was asked for,
     // and whether `toggleswallow` is on.
     let mut dpms: BTreeMap<String, bool> = BTreeMap::new();
+    // The ramps a night-light set on each screen, by its place in the
+    // list: `zwlr_gamma_control_v1`.
+    let mut gammas: BTreeMap<usize, crate::frame::Gamma> = BTreeMap::new();
     let mut urgent: Vec<WindowId> = Vec::new();
     let mut drag: Option<crate::act::Drag> = None;
     let mut quit = false;
@@ -563,6 +566,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             }
         }
 
+        // What the screen protocols asked for this pass, drained below: a
+        // client's own borrow holds the screens and the layout, and each of
+        // these reaches one of them.
+        let mut asks = ScreenAsks::default();
         for index in 0..slots.len() {
             if serve(
                 &mut slots,
@@ -578,12 +585,25 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &screens,
                 &mut urgent,
                 &mut injected,
+                &mut asks,
                 focus_on_activate,
                 report,
             )? {
                 changed = true;
             }
         }
+        // What the screen protocols asked for, now that every client's own
+        // borrow is over: each of these reaches the screens or the layout.
+        changed |= carry_out(
+            &mut asks,
+            &mut slots,
+            &mut screens,
+            &mut state,
+            &mut gammas,
+            &mut dpms,
+            report,
+        );
+
         // The screenshots asked for in this pass, now that the screens are
         // in reach again.
         for shot in shots.drain(..) {
@@ -785,8 +805,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // The event socket and the bars, from the same description
         // `hyprctl` answers from: a bar and a script must not be told two
         // different things.
-        let watched = slots.iter().any(|slot| slot.client().watches_toplevels());
-        if events.is_some() || !plugins.is_empty() || watched {
+        let watched = slots
+            .iter()
+            .any(|slot| slot.client().watches_toplevels() || slot.client().lists_toplevels());
+        let workspaces_watched = slots.iter().any(|slot| slot.client().watches_workspaces());
+        if events.is_some() || !plugins.is_empty() || watched || workspaces_watched {
             let snapshot = crate::control::snapshot(
                 &state,
                 &slots,
@@ -805,9 +828,22 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             }
             // A plugin that subscribed hears the same lines a bar does.
             plugins.tell(&snapshot);
+            if workspaces_watched {
+                // `ext-workspace-v1`: the workspace numbers a bar draws,
+                // one group a monitor.
+                let listed = crate::control::workspaces(&snapshot);
+                let groups = snapshot.monitors.len();
+                for slot in &mut slots {
+                    slot.client_mut().publish_workspaces(groups, &listed);
+                }
+            }
             if watched {
                 let windows = crate::control::toplevels(&snapshot);
                 for slot in &mut slots {
+                    // The newer list as well as the wlroots one: a taskbar
+                    // written this year binds `ext-foreign-toplevel-list-v1`
+                    // and one written three years ago binds the other.
+                    slot.client_mut().list_toplevels(&windows);
                     slot.client_mut().show_toplevels(&windows);
                 }
             }
@@ -859,6 +895,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     // The pointer, unless the session is locked: a lock
                     // screen draws its own and the compositor's arrow over
                     // it would be two pointers.
+                    // The ramps a night-light set on this screen, applied
+                    // to the pixels on their way out.
+                    gamma: gammas.get(&which).copied(),
                     cursor: (lock.is_none() && devices.has_pointer() && seat.pointer_used()).then(
                         || {
                             let (x, y) = seat.pointer();
@@ -981,6 +1020,7 @@ fn serve(
     screens: &[Screen],
     urgent: &mut Vec<WindowId>,
     injected: &mut Vec<crate::seat::Input>,
+    asks: &mut ScreenAsks,
     taking_focus: bool,
     report: &mut dyn FnMut(&str),
 ) -> Result<bool, String> {
@@ -1001,8 +1041,12 @@ fn serve(
     let mut changed = false;
     // The clipboard's, kept until the client's own borrow is over: telling
     // every client what the selection holds needs them all.
-    let mut selection: Vec<(Which, Option<ObjectId>, Vec<String>)> = Vec::new();
-    let mut wanted: Vec<(Which, ObjectId, String, Fd)> = Vec::new();
+    let mut selection: Vec<(Which, Option<ObjectId>, Vec<String>, Through)> = Vec::new();
+    let mut wanted: Vec<(Which, ObjectId, String, Fd, Through)> = Vec::new();
+    // Clipboard managers that have just made a device, which are owed both
+    // selections at once whether or not they have a window.
+    let mut watching: Vec<ObjectId> = Vec::new();
+
     let mut made_device: Vec<Which> = Vec::new();
     // A cursor shape a client named, and a window it asked to be raised.
     let mut shaped: Option<u32> = None;
@@ -1066,20 +1110,91 @@ fn serve(
                 // The clipboard. What one client copied is the compositor's
                 // to remember and to offer to the others; the data never
                 // passes through it.
+                // A clipboard manager: it has no window and no keyboard,
+                // and is told what both selections hold anyway. That is the
+                // whole of what `wlr-data-control` and `ext-data-control`
+                // are, and why `cliphist` works.
+                Event::DataControlBound { device } => watching.push(device),
+                Event::DataControlSelection {
+                    source,
+                    primary,
+                    mimes,
+                } => selection.push((
+                    if primary {
+                        Which::Primary
+                    } else {
+                        Which::Clipboard
+                    },
+                    source,
+                    mimes.clone(),
+                    Through::Manager,
+                )),
+                Event::DataControlPaste {
+                    offer,
+                    mime,
+                    fd,
+                    primary,
+                } => {
+                    claimed += 1;
+                    wanted.push((
+                        if primary {
+                            Which::Primary
+                        } else {
+                            Which::Clipboard
+                        },
+                        offer,
+                        mime.clone(),
+                        fd,
+                        Through::Manager,
+                    ));
+                }
+                // A night-light's three ramps, on a descriptor. The
+                // compositor reads them here and applies them to the
+                // pixels on their way out; `None` is the control going
+                // away, which puts the screen back.
+                Event::Gamma { output, table } => {
+                    if table.is_some() {
+                        claimed += 1;
+                    }
+                    asks.ramps.push((index, output, table));
+                }
+                // `wlopm` turning a screen off, which is what the `dpms`
+                // dispatcher does from a keybind.
+                Event::OutputPower { output, on } => asks.powered.push((index, output, on)),
+                // `wlr-randr` and `kanshi` arranging the screens.
+                Event::OutputConfigured {
+                    configuration,
+                    testing,
+                    heads,
+                } => asks.arranged.push((
+                    index,
+                    Arrangement {
+                        configuration,
+                        testing,
+                        heads,
+                    },
+                )),
+                // A bar clicking a workspace number.
+                Event::WorkspaceAsked { workspace, what } => {
+                    asks.workspaces.push((workspace, what));
+                }
+                // The requests are carried out as they arrive, so the end
+                // of a batch is nothing to do.
+                Event::WorkspacesCommitted => {}
                 Event::DataDeviceMade { .. } => made_device.push(Which::Clipboard),
                 Event::PrimaryDeviceMade { .. } => made_device.push(Which::Primary),
                 Event::SelectionSet { source, mimes } => {
-                    selection.push((Which::Clipboard, source, mimes.clone()));
+                    selection.push((Which::Clipboard, source, mimes.clone(), Through::Window));
                 }
                 Event::PrimarySet { source, mimes } => {
-                    selection.push((Which::Primary, source, mimes.clone()));
+                    selection.push((Which::Primary, source, mimes.clone(), Through::Window));
                 }
                 Event::SelectionWanted { offer, mime, fd } => {
-                    wanted.push((Which::Clipboard, offer, mime.clone(), fd));
+                    wanted.push((Which::Clipboard, offer, mime.clone(), fd, Through::Window));
                     claimed += 1;
                 }
                 Event::PrimaryWanted { offer, mime, fd } => {
-                    wanted.push((Which::Primary, offer, mime.clone(), fd));
+                    wanted.push((Which::Primary, offer, mime.clone(), fd, Through::Window));
                     claimed += 1;
                 }
                 // A client naming its cursor rather than drawing one, and a
@@ -1236,13 +1351,16 @@ fn serve(
     for which in made_device {
         clipboard.offer_to(which, slots, index);
     }
-    for (which, source, mimes) in selection {
+    for _device in watching {
+        clipboard.offer_both_to(slots, index);
+    }
+    for (which, source, mimes, through) in selection {
         let held = mimes.len();
         let name = match which {
             Which::Clipboard => "selection",
             Which::Primary => "primary selection",
         };
-        clipboard.copied(which, slots, index, source, mimes);
+        clipboard.copied(which, slots, index, source, mimes, through);
         if source.is_some() {
             report(&format!(
                 "hyprix: the {name} is {held} type(s) from client {index}"
@@ -1326,8 +1444,8 @@ fn serve(
             if modal { "" } else { "no longer " }
         ));
     }
-    for (which, offer, mime, fd) in wanted {
-        if clipboard.pasted(which, slots, index, offer, &mime, fd) {
+    for (which, offer, mime, fd, through) in wanted {
+        if clipboard.pasted(which, slots, index, offer, &mime, fd, through) {
             report(&format!(
                 "hyprix: client {index} pasted {mime}, on a pipe to whoever copied"
             ));
@@ -2260,6 +2378,170 @@ fn cursor_shown(slots: &[Slot], focus: &Focus) -> bool {
         .is_none_or(|slot| !slot.client().said_cursor() || slot.client().cursor().is_some())
 }
 
+/// Carry out what the screen protocols asked for.
+///
+/// Each of these reaches the screens or the layout, and a client's own
+/// borrow holds both -- so they are queued while the clients are read and
+/// done here. Gives whether the screen has to be drawn again.
+fn carry_out(
+    asks: &mut ScreenAsks,
+    slots: &mut [Slot],
+    screens: &mut [Screen],
+    state: &mut State,
+    gammas: &mut BTreeMap<usize, crate::frame::Gamma>,
+    dpms: &mut BTreeMap<String, bool>,
+    report: &mut dyn FnMut(&str),
+) -> bool {
+    let mut changed = false;
+    for (client, output, table) in asks.ramps.drain(..) {
+        match table.and_then(crate::frame::Gamma::read) {
+            Some(gamma) => {
+                let _ = gammas.insert(output, gamma);
+                report(&format!(
+                    "hyprix: a night-light set screen {output}'s ramps"
+                ));
+            }
+            None => {
+                let _ = gammas.remove(&output);
+                report(&format!(
+                    "hyprix: screen {output}'s ramps are the plain ones"
+                ));
+            }
+        }
+        let _ = client;
+        changed = true;
+    }
+    for (client, output, on) in asks.powered.drain(..) {
+        let Some(name) = screens.get(output).map(|screen| screen.name.clone()) else {
+            continue;
+        };
+        let _ = dpms.insert(name, !on);
+        if let Some(slot) = slots.get_mut(client) {
+            slot.client_mut().output_powered(output, on);
+        }
+        report(&format!(
+            "hyprix: screen {output} is {}",
+            if on { "on" } else { "off" }
+        ));
+        changed = true;
+    }
+    let mut arranged = false;
+    for (client, arrangement) in asks.arranged.drain(..) {
+        let done = arrange(&arrangement, screens, state, report);
+        if let Some(slot) = slots.get_mut(client) {
+            slot.client_mut()
+                .output_configured(arrangement.configuration, done);
+        }
+        arranged |= done && !arrangement.testing;
+    }
+    if arranged {
+        // The screens moved, so every client's `wl_output` and every
+        // `zwlr_output_head_v1` is stale. Both are the compositor's to
+        // send again, and a manager that was not told would arrange
+        // against yesterday's screens.
+        let outputs: Vec<compositor_server::Output> = screens.iter().map(Screen::output).collect();
+        for slot in slots.iter_mut() {
+            slot.client_mut().set_outputs(outputs.clone());
+            slot.client_mut().publish_outputs(&outputs);
+        }
+        changed = true;
+    }
+    for (workspace, what) in asks.workspaces.drain(..) {
+        // `deactivate` is a workspace asking to stop being shown, which on
+        // a compositor where a monitor always shows one is nothing to do.
+        if what != compositor_server::WorkspaceRequest::Activate {
+            continue;
+        }
+        let made = state.dispatch_str("workspace", &workspace.to_string());
+        changed |= made.is_ok_and(|changes| !changes.is_empty());
+        report(&format!("hyprix: a bar asked for workspace {workspace}"));
+    }
+    changed
+}
+
+/// Move and scale the screens one arrangement names.
+///
+/// Gives whether it could be done. A head asking for a mode this compositor
+/// does not have, or to be turned off, is refused: the screens here are
+/// whatever the card has and the compositor does not choose them.
+fn arrange(
+    arrangement: &Arrangement,
+    screens: &mut [Screen],
+    state: &mut State,
+    report: &mut dyn FnMut(&str),
+) -> bool {
+    for (which, wanted) in &arrangement.heads {
+        let Some(screen) = screens.get(*which) else {
+            return false;
+        };
+        if !wanted.on {
+            report("hyprix: a program asked for a screen to be turned off, which `dpms` does");
+            return false;
+        }
+        if let Some((width, height)) = wanted.size
+            && (i64::from(width), i64::from(height)) != (screen.rect.width, screen.rect.height)
+        {
+            report("hyprix: a program asked for a mode this screen does not have");
+            return false;
+        }
+    }
+    if arrangement.testing {
+        return true;
+    }
+    for (which, wanted) in &arrangement.heads {
+        let Some(screen) = screens.get_mut(*which) else {
+            continue;
+        };
+        if let Some((x, y)) = wanted.at {
+            screen.rect = Rect::new(
+                i64::from(x),
+                i64::from(y),
+                screen.rect.width,
+                screen.rect.height,
+            );
+        }
+        if let Some(scale) = wanted.scale
+            && scale.to_f64() > 0.0
+        {
+            screen.scale = scale.to_f64();
+        }
+        let (rect, scale, monitor) = (screen.rect, screen.scale, screen.monitor);
+        let _ = state.move_monitor(monitor, rect, scale);
+        report(&format!(
+            "hyprix: screen {which} is at {},{} at scale {scale}",
+            rect.x, rect.y
+        ));
+    }
+    true
+}
+
+/// What the screen protocols asked for in one pass, carried out once every
+/// client's own borrow is over: each reaches the screens or the layout, and
+/// a client's borrow holds both.
+#[derive(Debug, Default)]
+struct ScreenAsks {
+    /// A night-light's ramps: which client asked, which screen, and the
+    /// descriptor they are on -- `None` for a control that went away.
+    ramps: Vec<(usize, usize, Option<Fd>)>,
+    /// `wlopm`: which client, which screen, and whether it is to be on.
+    powered: Vec<(usize, usize, bool)>,
+    /// `wlr-randr`: which client, and what it asked for.
+    arranged: Vec<(usize, Arrangement)>,
+    /// A bar clicking a workspace number.
+    workspaces: Vec<(i64, compositor_server::WorkspaceRequest)>,
+}
+
+/// One arrangement of the screens a program asked for.
+#[derive(Clone, Debug)]
+struct Arrangement {
+    /// The `zwlr_output_configuration_v1`, which is owed an answer.
+    configuration: ObjectId,
+    /// Whether it only asked whether the arrangement would work.
+    testing: bool,
+    /// What each screen is to become, by its place in the outputs.
+    heads: Vec<(usize, compositor_server::Wanted)>,
+}
+
 /// The input method for the seat, while a program is one.
 #[derive(Clone, Copy, Debug)]
 struct Method {
@@ -3113,6 +3395,51 @@ fn globals(outputs: usize) -> Globals {
             &compositor_protocol::virtual_pointer::ZWLR_VIRTUAL_POINTER_MANAGER_V1,
             2,
             Role::VirtualPointerManager,
+        ),
+        // The window list as the newer specification has it, which is the
+        // one a taskbar written this year binds. The wlroots list stays:
+        // one written three years ago binds that.
+        (
+            &compositor_protocol::foreign_list::EXT_FOREIGN_TOPLEVEL_LIST_V1,
+            1,
+            Role::ForeignList,
+        ),
+        // A night-light, and a program that turns a screen off.
+        (
+            &compositor_protocol::gamma_control::ZWLR_GAMMA_CONTROL_MANAGER_V1,
+            1,
+            Role::GammaControlManager,
+        ),
+        (
+            &compositor_protocol::output_power::ZWLR_OUTPUT_POWER_MANAGER_V1,
+            1,
+            Role::OutputPowerManager,
+        ),
+        // The clipboard as a *manager* sees it: `cliphist` and `wl-paste
+        // --watch` have no window at all and are told anyway. Twice, because
+        // the protocol is wlroots' and the standardised one and programs
+        // bind whichever they were written against.
+        (
+            &compositor_protocol::data_control::ZWLR_DATA_CONTROL_MANAGER_V1,
+            2,
+            Role::DataControlManager(compositor_server::Flavour::Wlr),
+        ),
+        (
+            &compositor_protocol::ext_data_control::EXT_DATA_CONTROL_MANAGER_V1,
+            1,
+            Role::DataControlManager(compositor_server::Flavour::Ext),
+        ),
+        // `kanshi` and `wlr-randr` arranging the screens, and the workspace
+        // numbers a bar draws.
+        (
+            &compositor_protocol::output_management::ZWLR_OUTPUT_MANAGER_V1,
+            4,
+            Role::OutputManager,
+        ),
+        (
+            &compositor_protocol::ext_workspace::EXT_WORKSPACE_MANAGER_V1,
+            1,
+            Role::WorkspaceManager,
         ),
         // Typing through an input method: the application's half and the
         // method's own. Offering both is what lets an on-screen keyboard or

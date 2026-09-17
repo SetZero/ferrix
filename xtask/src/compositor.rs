@@ -105,6 +105,7 @@ const CLIP_PATH: &str = "bin/clip";
 const LSWT_PATH: &str = "bin/lswt";
 const SHOT_PATH: &str = "bin/shot";
 const LOCK_PATH: &str = "bin/lock";
+const VKBD_PATH: &str = "bin/vkbd";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
 /// The instance the control socket is under, which `hyprctl` finds by
@@ -731,6 +732,8 @@ struct Programs {
     shot: PathBuf,
     /// `lock`, which locks the screen as `hyprlock` does.
     lock: PathBuf,
+    /// `vkbd`, which types as `wtype` does.
+    vkbd: PathBuf,
 }
 
 impl Programs {
@@ -746,11 +749,12 @@ impl Programs {
             lswt: build(arch, "compositor-lswt", "lswt")?,
             shot: build(arch, "compositor-shot", "shot")?,
             lock: build(arch, "compositor-lock", "lock")?,
+            vkbd: build(arch, "compositor-vkbd", "vkbd")?,
         })
     }
 
     /// The ones the initramfs carries, each with the path it goes at.
-    fn carried(&self) -> [(&'static str, &Path); 8] {
+    fn carried(&self) -> [(&'static str, &Path); 9] {
         [
             (CLIENT_PATH, self.client.as_path()),
             (CTL_PATH, self.ctl.as_path()),
@@ -760,6 +764,7 @@ impl Programs {
             (LSWT_PATH, self.lswt.as_path()),
             (SHOT_PATH, self.shot.as_path()),
             (LOCK_PATH, self.lock.as_path()),
+            (VKBD_PATH, self.vkbd.as_path()),
         ]
     }
 }
@@ -1320,7 +1325,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are fourteen of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 17] = [
+const BOOTS: [(&str, Boot); 18] = [
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
     ("decorations", test_decorations),
@@ -1338,6 +1343,7 @@ const BOOTS: [(&str, Boot); 17] = [
     ("lock", test_lock),
     ("menu", test_menu),
     ("pointer", test_pointer),
+    ("typing", test_typing),
 ];
 
 /// Whether `--boot` asked for this one.
@@ -1754,6 +1760,94 @@ fn test_screenshot(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         "  {arch}: a program on the guest took a screenshot through `zwlr_screencopy_v1` and \
          every one of its {} pixels is the one the renderer blesses",
         screen.width * screen.height
+    );
+    Ok(())
+}
+
+/// The two pictures the typing boot requires, and the key between them.
+///
+/// Nothing a person does closes a window here. `V` starts a program, and
+/// that program types `SUPER Q` through `zwp_virtual_keyboard_v1` -- so the
+/// key that fires the bind comes from a *client*, on the Wayland socket, and
+/// not from a device at all.
+const TYPING_EXPECTED: [(&str, &str); 2] = [
+    (
+        "tiled",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "one window left, closed by a key another program typed",
+        "compositor/render/tests/data/one-client-alone.xrle",
+    ),
+];
+
+/// No modifier, for the reason `TASKBAR_BINDS` gives.
+const TYPING_BINDS: [(&str, &[&str]); 1] =
+    [("V, which starts a program that types SUPER Q", &["v"])];
+
+/// The configuration the eighteenth boot is given.
+///
+/// `closewindow` takes one of Hyprland's window expressions rather than a
+/// direction, so the key the other program types closes the window *named*
+/// `one` -- whichever is focused. Two new things in one picture: a client
+/// acting as a keyboard, and a dispatcher that picks a window out by title.
+const TYPING_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+bind = , V, exec, /bin/vkbd SUPER Q
+bind = SUPER, Q, closewindow, title:^(one)$
+";
+
+/// An eighteenth boot: a program that types, through
+/// `zwp_virtual_keyboard_v1`.
+///
+/// `wtype`, `ydotool` and every on-screen keyboard are clients that act as a
+/// device: what they report has to reach the seat as a person's input does,
+/// keybinds and all. That is the whole point of the protocol and the one
+/// thing a test can check from outside -- so this boot presses one key that
+/// starts `/bin/vkbd`, and `vkbd` types the chord that fires a bind.
+///
+/// The bind is `closewindow, title:^(one)$`, which names its window with one
+/// of Hyprland's window expressions. So the picture proves two things at
+/// once: the key crossed from a client into the seat, and the compositor
+/// picked a window out by its title.
+fn test_typing(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        programs,
+        TYPING_CONFIG,
+        &Wanted {
+            states: &TYPING_EXPECTED,
+            others: &[],
+            moving: None,
+            pointer: None,
+            awaiting: &["vkbd: typed"],
+        },
+        &TYPING_BINDS,
+        args,
+    )?;
+    let Some(last) = screens.last() else {
+        return Err(Error::new(format!(
+            "{arch}: the typing boot took no picture"
+        )));
+    };
+    for wanted in [
+        "vkbd: typed SUPER Q",
+        // And the window that went is the one the expression named.
+        "the compositor asked the Checkerboard window called one to close",
+    ] {
+        if !said.iter().any(|line| line.contains(wanted)) {
+            return Err(Error::new(format!(
+                "{arch}: the typing boot never said `{wanted}`"
+            )));
+        }
+    }
+    println!(
+        "  {arch}: a program typed SUPER Q through `zwp_virtual_keyboard_v1`, the bind fired, \
+         and `closewindow title:^(one)$` closed the window it named -- every one of {} pixels \
+         the renderer's own picture of the window that is left",
+        last.width * last.height
     );
     Ok(())
 }
