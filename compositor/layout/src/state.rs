@@ -455,6 +455,21 @@ impl State {
                 Layout::Dwindle
             };
         }
+        // `layoutopt:<name>:<value>`: one of the layout's own options for
+        // this workspace alone. Hyprland's `defaultOrientation` reads the
+        // workspace rule's before it reads `master:orientation`, which is
+        // how a person keeps one workspace's master on top.
+        for (name, value) in &rule.layout_options {
+            match name.as_str() {
+                "orientation" => settings.master.orientation = Settings::orientation_of(value),
+                "mfact" => {
+                    if let Ok(mfact) = value.parse::<f64>() {
+                        settings.master.mfact = mfact.clamp(0.05, 0.95);
+                    }
+                }
+                _ => {}
+            }
+        }
         settings
     }
 
@@ -2904,11 +2919,14 @@ impl State {
         } else {
             named
         };
+        // The order `buildOrientationCycleVectorFromEOperation` walks,
+        // which is the enum's own: left, top, right, bottom, centre.
         let round = [
             Orientation::Left,
             Orientation::Top,
             Orientation::Right,
             Orientation::Bottom,
+            Orientation::Center,
         ];
         let at = round
             .iter()
@@ -2920,9 +2938,7 @@ impl State {
             "right" => Some(Orientation::Right),
             "top" | "up" => Some(Orientation::Top),
             "bottom" | "down" => Some(Orientation::Bottom),
-            // Hyprland lays `center` out as `left` here, as this layout
-            // says in its own description.
-            "center" => Some(Orientation::Left),
+            "center" => Some(Orientation::Center),
             "next" | "cycle" => along(1),
             "prev" => along(round.len() - 1),
             _ => None,

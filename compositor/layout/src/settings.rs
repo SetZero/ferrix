@@ -34,8 +34,7 @@ pub enum ForceSplit {
 /// Where the master layout puts its master: `master:orientation`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Orientation {
-    /// `left`, the default, and what `center` and unknown names fall back
-    /// to.
+    /// `left`, the default, and what an unknown name falls back to.
     #[default]
     Left,
     /// `right`.
@@ -44,6 +43,13 @@ pub enum Orientation {
     Top,
     /// `bottom`.
     Bottom,
+    /// `center`: the master in the middle of the screen with the stack in
+    /// two columns beside it, once there are
+    /// [`MasterSettings::slave_count_for_center`] of them. Below that many
+    /// it is [`MasterSettings::center_fallback`] instead, which is what
+    /// keeps one window from being a narrow strip in the middle of an empty
+    /// screen.
+    Center,
 }
 
 /// What a new window becomes in the master layout: `master:new_status`.
@@ -72,6 +78,10 @@ pub struct DwindleSettings {
     /// `dwindle:default_split_ratio`, clamped to 0.1 to 1.9 as Hyprland
     /// does: the first child of a split gets this times half the box.
     pub default_split_ratio: f64,
+    /// `dwindle:split_bias = 1`, which Hyprland calls `current`: the split
+    /// favours the window that was already there rather than whichever of
+    /// the two ends up first.
+    pub split_bias_current: bool,
 }
 
 /// The master layout's options.
@@ -86,6 +96,16 @@ pub struct MasterSettings {
     pub new_on_top: bool,
     /// `master:orientation`.
     pub orientation: Orientation,
+    /// `master:slave_count_for_center_master`: how many windows there have
+    /// to be in the stack before `center` centres the master.
+    pub slave_count_for_center: usize,
+    /// `master:center_master_fallback`: which orientation `center` is until
+    /// there are that many. `right` also decides which column takes the odd
+    /// window when the stack is an odd number.
+    pub center_fallback: Orientation,
+    /// `master:always_keep_position`: one window alone keeps the master's
+    /// share of the screen rather than filling it.
+    pub always_keep_position: bool,
 }
 
 /// Everything the layouts read from the configuration.
@@ -124,6 +144,21 @@ fn finite(value: Option<f64>, default: f64) -> f64 {
 }
 
 impl Settings {
+    /// The orientation `name` names, `left` for anything else.
+    ///
+    /// Hyprland's `defaultOrientation`: the four sides and `center`, and
+    /// every other word is `left`.
+    #[must_use]
+    pub fn orientation_of(name: &str) -> Orientation {
+        match name.trim() {
+            "right" => Orientation::Right,
+            "top" => Orientation::Top,
+            "bottom" => Orientation::Bottom,
+            "center" => Orientation::Center,
+            _ => Orientation::Left,
+        }
+    }
+
     /// Read the options from `config`.
     #[must_use]
     pub fn from_config(config: &Config) -> Self {
@@ -136,11 +171,13 @@ impl Settings {
             Some(2) => ForceSplit::Second,
             _ => ForceSplit::Auto,
         };
-        let orientation = match config.str("master:orientation") {
-            Some("right") => Orientation::Right,
-            Some("top") => Orientation::Top,
-            Some("bottom") => Orientation::Bottom,
-            _ => Orientation::Left,
+        let named = |name: Option<&str>| name.map_or(Orientation::Left, Self::orientation_of);
+        let orientation = named(config.str("master:orientation"));
+        // `center` is not a fallback for itself: Hyprland's own list of
+        // fallbacks is the four sides, and anything else is `left`.
+        let center_fallback = match config.str("master:center_master_fallback") {
+            Some("center") | None => Orientation::Left,
+            other => named(other),
         };
         let new_status = match config.str("master:new_status") {
             Some("master") => NewStatus::Master,
@@ -157,6 +194,7 @@ impl Settings {
                 preserve_split: config.bool("dwindle:preserve_split").unwrap_or(false),
                 force_split,
                 split_width_multiplier: finite(config.float("dwindle:split_width_multiplier"), 1.0),
+                split_bias_current: config.int("dwindle:split_bias").unwrap_or(0) == 1,
                 default_split_ratio: finite(config.float("dwindle:default_split_ratio"), 1.0)
                     .clamp(0.1, 1.9),
             },
@@ -165,6 +203,14 @@ impl Settings {
                 new_status,
                 new_on_top: config.bool("master:new_on_top").unwrap_or(false),
                 orientation,
+                slave_count_for_center: usize::try_from(
+                    config
+                        .int("master:slave_count_for_center_master")
+                        .unwrap_or(2),
+                )
+                .unwrap_or(2),
+                center_fallback,
+                always_keep_position: config.bool("master:always_keep_position").unwrap_or(false),
             },
         }
     }

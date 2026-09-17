@@ -134,11 +134,26 @@ fn settings_are_read_from_the_configuration_and_clamped() {
     assert_eq!(settings.master.orientation, Orientation::Bottom);
 
     let fallback = Settings::from_config(&config(
-        "general:layout = spiral\ngeneral:border_size = -4\nmaster:orientation = center\n",
+        "general:layout = spiral\ngeneral:border_size = -4\nmaster:orientation = sideways\n",
     ));
     assert_eq!(fallback.layout, Layout::Dwindle);
     assert_eq!(fallback.border_size, 0);
     assert_eq!(fallback.master.orientation, Orientation::Left);
+
+    // `center` is its own orientation, with the two settings that decide
+    // when it takes and which way it leans until it does.
+    let centred = Settings::from_config(&config(
+        "master:orientation = center\n\
+         master:slave_count_for_center_master = 3\n\
+         master:center_master_fallback = right\n",
+    ));
+    assert_eq!(centred.master.orientation, Orientation::Center);
+    assert_eq!(centred.master.slave_count_for_center, 3);
+    assert_eq!(centred.master.center_fallback, Orientation::Right);
+    // And `center` is not a fallback for itself; Hyprland's own list is the
+    // four sides, and anything else is `left`.
+    let circular = Settings::from_config(&config("master:center_master_fallback = center\n"));
+    assert_eq!(circular.master.center_fallback, Orientation::Left);
 }
 
 // -- Dwindle ------------------------------------------------------------------
@@ -232,6 +247,34 @@ fn dwindle_force_split_puts_the_new_window_first() {
     assert_eq!(
         rects(&state),
         [(1, r(0, 0, 960, 1080)), (2, r(960, 0, 960, 1080))]
+    );
+}
+
+/// `dwindle:split_bias = 1`: the split's ratio favours the window that was
+/// already there rather than whichever of the two ends up first.
+///
+/// Only visible together with a ratio that is not one and a `force_split`
+/// that puts the new window first: with `split_bias = 0` the first child
+/// takes the larger share whichever window it is, and with `1` the share
+/// follows the old window across.
+#[test]
+fn dwindle_split_bias_favours_the_window_that_was_there() {
+    let settings = "dwindle:default_split_ratio = 1.5\ndwindle:force_split = 1\n";
+    // `0`, the default: the new window is first and takes 1.5 halves.
+    let mut directional = setup(&format!("{BARE}{settings}"));
+    open(&mut directional, &[1, 2]);
+    assert_eq!(
+        rects(&directional),
+        [(1, r(1440, 0, 480, 1080)), (2, r(0, 0, 1440, 1080))]
+    );
+
+    // `1`: the ratio is turned over, so the share stays with the window
+    // that was already on the screen.
+    let mut current = setup(&format!("{BARE}{settings}dwindle:split_bias = 1\n"));
+    open(&mut current, &[1, 2]);
+    assert_eq!(
+        rects(&current),
+        [(1, r(480, 0, 1440, 1080)), (2, r(0, 0, 480, 1080))]
     );
 }
 
@@ -422,6 +465,105 @@ fn master_left() {
             (2, r(1056, 0, 864, 540)),
             (3, r(1056, 540, 864, 540))
         ]
+    );
+}
+
+/// `master:orientation = center`: the master in the middle, the stack in two
+/// columns beside it, once there are enough of them.
+///
+/// Below `slave_count_for_center_master` it is the fallback orientation
+/// instead, which is what keeps one window from being a narrow strip in the
+/// middle of an empty screen
+/// (`CMasterAlgorithm::recalculateSpace`).
+#[test]
+fn master_center() {
+    let mut state = master("center");
+    // One window fills the screen, as it does in every orientation.
+    open(&mut state, &[1]);
+    assert_eq!(rects(&state), [(1, r(0, 0, 1920, 1080))]);
+
+    // One window in the stack is below `slave_count_for_center_master`,
+    // which defaults to two, so this is the fallback: `left`.
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects(&state),
+        [(1, r(0, 0, 1056, 1080)), (2, r(1056, 0, 864, 1080))]
+    );
+
+    // Two in the stack, and the master goes to the middle with one column
+    // either side. `mfact` is 0.55, so the master is 1056 wide and the
+    // columns 432 each.
+    open(&mut state, &[3]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, r(432, 0, 1056, 1080)),
+            (2, r(0, 0, 432, 1080)),
+            (3, r(1488, 0, 432, 1080))
+        ]
+    );
+
+    // The odd window goes to the column the fallback does not name, so
+    // with the default `left` fallback the left column takes two of three.
+    open(&mut state, &[4]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, r(432, 0, 1056, 1080)),
+            (2, r(0, 0, 432, 540)),
+            (3, r(1488, 0, 432, 1080)),
+            (4, r(0, 540, 432, 540))
+        ]
+    );
+}
+
+/// `master:center_master_fallback = right` leans the other way: it is the
+/// orientation below the threshold, and the right column takes the odd
+/// window above it.
+#[test]
+fn master_center_leaning_right() {
+    let mut state = setup(&format!(
+        "{BARE}general:layout = master\n\
+         master:orientation = center\n\
+         master:center_master_fallback = right\n\
+         master:slave_count_for_center_master = 3\n"
+    ));
+    open(&mut state, &[1, 2]);
+    assert_eq!(
+        rects(&state),
+        [(1, r(864, 0, 1056, 1080)), (2, r(0, 0, 864, 1080))],
+        "one in the stack: the fallback, which is `right`"
+    );
+
+    // Three in the stack reaches the threshold, and the right column takes
+    // two of the three.
+    open(&mut state, &[3, 4]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, r(432, 0, 1056, 1080)),
+            (2, r(1488, 0, 432, 540)),
+            (3, r(0, 0, 432, 1080)),
+            (4, r(1488, 540, 432, 540))
+        ]
+    );
+}
+
+/// `master:always_keep_position`: one window alone keeps the master's share
+/// of the screen rather than filling it, so that opening a second does not
+/// move the first.
+#[test]
+fn master_keeps_its_position_when_it_is_alone() {
+    let mut state = setup(&format!(
+        "{BARE}general:layout = master\nmaster:always_keep_position = true\n"
+    ));
+    open(&mut state, &[1]);
+    assert_eq!(rects(&state), [(1, r(0, 0, 1056, 1080))]);
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects(&state),
+        [(1, r(0, 0, 1056, 1080)), (2, r(1056, 0, 864, 1080))],
+        "the first window did not move"
     );
 }
 
@@ -2609,15 +2751,28 @@ fn a_persistent_workspace_exists_with_nothing_on_it() {
     assert!(state.windows(WorkspaceId(5)).is_empty());
 }
 
-/// `layout:master` on one workspace leaves every other one dwindle.
+/// `layout:master` on one workspace leaves every other one dwindle, and
+/// `layoutopt:` sets that layout's own options there.
+///
+/// Hyprland's `defaultOrientation` reads the workspace rule's `layoutopt`
+/// before it reads `master:orientation`, which is how a person keeps one
+/// workspace's master on top and every other one's on the left.
 #[test]
 fn a_workspace_rule_chooses_that_workspaces_layout() {
     let mut state = setup(BARE);
-    let rules = ["2, layout:master"]
+    let rules = ["2, layout:master, layoutopt:orientation:top, layoutopt:mfact:0.7"]
         .iter()
         .map(|line| compositor_config::WorkspaceRule::parse(line).expect("a rule"))
         .collect();
     let _changes = state.set_workspace_rules(rules);
     assert_eq!(state.settings_at(WorkspaceId(1)).layout, Layout::Dwindle);
-    assert_eq!(state.settings_at(WorkspaceId(2)).layout, Layout::Master);
+    let second = state.settings_at(WorkspaceId(2));
+    assert_eq!(second.layout, Layout::Master);
+    assert_eq!(second.master.orientation, Orientation::Top);
+    assert!((second.master.mfact - 0.7).abs() < f64::EPSILON);
+    // And the general options are untouched on every other workspace.
+    assert_eq!(
+        state.settings_at(WorkspaceId(1)).master.orientation,
+        Orientation::Left
+    );
 }

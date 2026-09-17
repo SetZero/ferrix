@@ -260,9 +260,19 @@ impl Node {
                     Place::Configured | Place::Point(..) => !side_by_side,
                 };
                 let (first, second) = if new_first { (new, old) } else { (old, new) };
+                // `dwindle:split_bias`: which of the two the split ratio
+                // favours. `0` is directional and gives it to whichever
+                // ends up first; `1` is `current` and gives it to the
+                // window that was already there, by turning the ratio over
+                // when the new one took first place
+                // (`CDwindleAlgorithm::onWindowCreatedTiling`).
+                let mut ratio = settings.dwindle.default_split_ratio;
+                if settings.dwindle.split_bias_current && new_first {
+                    ratio = 2.0 - ratio;
+                }
                 *self = Self::Split(Box::new(Split {
                     stacked,
-                    ratio: settings.dwindle.default_split_ratio,
+                    ratio,
                     first: Self::Leaf(first),
                     second: Self::Leaf(second),
                 }));

@@ -169,15 +169,80 @@ impl Master {
             return Vec::new();
         };
         let stack: Vec<WindowId> = self.stack().collect();
+        let mfact = settings.master.mfact;
+        // `center` is only centred once the stack is long enough; below
+        // that it is the fallback orientation, which is what keeps one
+        // window from being a narrow strip in the middle of an empty
+        // screen (`CMasterAlgorithm::recalculateSpace`).
+        let centred = settings.master.orientation == Orientation::Center
+            && stack.len() >= settings.master.slave_count_for_center;
+        let orientation = match settings.master.orientation {
+            Orientation::Center if !centred => settings.master.center_fallback,
+            other => other,
+        };
         if stack.is_empty() {
+            // `master:always_keep_position`: the master keeps its share of
+            // the screen rather than filling it, so that opening a second
+            // window does not move the first.
+            if !centred && settings.master.always_keep_position {
+                let width = area.w * mfact;
+                let x = match orientation {
+                    Orientation::Right => area.x + area.w - width,
+                    Orientation::Center => area.x + (area.w - width) / 2.0,
+                    _ => area.x,
+                };
+                return vec![(
+                    master,
+                    Area {
+                        x,
+                        w: width,
+                        ..area
+                    },
+                )];
+            }
             return vec![(master, area)];
         }
-        let mfact = settings.master.mfact;
         let mut out = Vec::with_capacity(stack.len().saturating_add(1));
-        match settings.master.orientation {
+        match orientation {
+            Orientation::Center => {
+                // The master in the middle, and the stack in two columns
+                // beside it. The columns alternate from the fallback side,
+                // and the odd window goes to the other one:
+                // `centerSlaveColumns`.
+                let width = area.w * mfact;
+                let beside = (area.w - width) / 2.0;
+                out.push((
+                    master,
+                    Area {
+                        x: area.x + beside,
+                        w: width,
+                        ..area
+                    },
+                ));
+                let right_first = settings.master.center_fallback == Orientation::Right;
+                let (mut left, mut right) = (Vec::new(), Vec::new());
+                for (at, &window) in stack.iter().enumerate() {
+                    if (at % 2 == 0) == right_first {
+                        right.push(window);
+                    } else {
+                        left.push(window);
+                    }
+                }
+                share(&left, Area { w: beside, ..area }, true, &mut out);
+                share(
+                    &right,
+                    Area {
+                        x: area.x + beside + width,
+                        w: area.w - beside - width,
+                        ..area
+                    },
+                    true,
+                    &mut out,
+                );
+            }
             Orientation::Left | Orientation::Right => {
                 let width = area.w * mfact;
-                let left = settings.master.orientation == Orientation::Left;
+                let left = orientation == Orientation::Left;
                 let (master_x, stack_x) = if left {
                     (area.x, area.x + width)
                 } else {
@@ -200,7 +265,7 @@ impl Master {
             }
             Orientation::Top | Orientation::Bottom => {
                 let height = area.h * mfact;
-                let top = settings.master.orientation == Orientation::Top;
+                let top = orientation == Orientation::Top;
                 let (master_y, stack_y) = if top {
                     (area.y, area.y + height)
                 } else {
