@@ -1,0 +1,22 @@
+[package]
+name = "compositor-ctl"
+description = "hyprctl: one request on the compositor's control socket, and its answer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "hyprctl"
+path = "src/main.rs"
+
+[lib]
+name = "compositor_ctl"
+path = "src/lib.rs"
+
+[dependencies]
+compositor-ipc = { path = "../ipc" }
+
+[lints]
+workspace = true

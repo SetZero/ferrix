@@ -349,16 +349,55 @@ fn a_real_toolkit_gets_a_window_and_draws_in_it() {
 /// What `probe/hyprctl.sh` recorded.
 const HYPRCTL: &str = include_str!("../probe/hyprctl.txt");
 
-/// What `hyprctl <command>` printed, up to the next command.
-fn hyprctl(command: &str) -> &'static str {
-    let marker = format!("\n$ hyprctl {command}\n");
+/// What `<client> <command>` printed, up to the next command of either
+/// client's.
+fn recorded(client: &str, command: &str) -> &'static str {
+    let marker = format!("\n$ {client} {command}\n");
     let start = HYPRCTL
         .find(&marker)
-        .unwrap_or_else(|| panic!("{command:?} is not in probe/hyprctl.txt"))
+        .unwrap_or_else(|| panic!("{client} {command:?} is not in probe/hyprctl.txt"))
         + marker.len();
     let rest = HYPRCTL.get(start..).unwrap_or("");
-    let end = rest.find("\n$ hyprctl ").unwrap_or(rest.len());
-    rest.get(..end).unwrap_or("")
+    let end = rest.find("\n$ ").unwrap_or(rest.len());
+    rest.get(..end).unwrap_or("").trim_end()
+}
+
+/// What Hyprland's own `hyprctl <command>` printed.
+fn hyprctl(command: &str) -> &'static str {
+    recorded("hyprctl", command)
+}
+
+/// What `compositor/ctl`'s `hyprctl <command>` printed.
+fn ours(command: &str) -> &'static str {
+    recorded("ours", command)
+}
+
+/// Every read-only command the probe ran through both clients must have got
+/// one answer.
+///
+/// That is the whole claim `compositor/ctl` makes: a script written for
+/// `hyprctl` works when the program it calls is ours, which is what Ferrix's
+/// image carries because Hyprland's is not on it. The two ran against one
+/// compositor in one session, so even the window addresses are comparable.
+#[test]
+fn our_client_and_hyprlands_get_one_answer() {
+    for command in [
+        "version",
+        "monitors",
+        "workspaces",
+        "activewindow",
+        "-j activewindow",
+        "clients",
+        "-j clients",
+        "nonsense",
+    ] {
+        assert_eq!(
+            ours(command),
+            hyprctl(command),
+            "`{command}` was answered differently"
+        );
+        assert!(!ours(command).is_empty(), "`{command}` answered nothing");
+    }
 }
 
 #[test]
@@ -422,10 +461,9 @@ fn an_option_changed_at_hyprctl_re_tiles_every_window() {
     // still say `ok`.
     let before = hyprctl("-j activewindow");
     assert!(before.contains("\"size\": [485, 726]"), "before: {before}");
-    let after = HYPRCTL
-        .rsplit_once("\n$ hyprctl -j clients\n")
-        .map(|(_, rest)| rest)
-        .expect("a -j clients after the keyword");
+    // The `-j clients` the probe ran after the keyword, which is the only
+    // one: the ones before it were `activewindow`.
+    let after = hyprctl("-j clients");
     assert!(
         after.contains("\"size\": [450, 726]"),
         "the windows were not re-tiled:\n{after}"

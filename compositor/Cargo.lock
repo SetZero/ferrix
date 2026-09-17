@@ -39,6 +39,13 @@ name = "compositor-config"
 version = "0.1.0"
 
 [[package]]
+name = "compositor-ctl"
+version = "0.1.0"
+dependencies = [
+ "compositor-ipc",
+]
+
+[[package]]
 name = "compositor-drm"
 version = "0.1.0"
 dependencies = [
