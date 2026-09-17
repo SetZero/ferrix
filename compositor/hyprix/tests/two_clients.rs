@@ -1088,3 +1088,73 @@ fn a_plugin_adds_a_dispatcher_and_the_compositor_hands_it_over() {
         "the plugin's dispatcher did not swap the windows; first difference {first:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The clipboard
+//
+// Wayland's clipboard is a promise: the program that copied keeps the data,
+// and the compositor passes a pipe from whoever pastes to whoever copied.
+// What is tested is that the two ends meet -- text put in by one process
+// comes out of another, with the compositor in between and never holding it.
+// ---------------------------------------------------------------------------
+
+/// What the copying client puts on the clipboard.
+const COPIED: &str = "a line that crossed the clipboard";
+
+#[test]
+fn what_one_client_copies_another_pastes() {
+    let work = workspace("clipboard");
+    let socket = work.join("wayland");
+
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        deadline: Some(8000),
+        ..Options::default()
+    };
+
+    let for_clients = socket.clone();
+    let clients = std::thread::spawn(move || {
+        for _ in 0..400 {
+            if for_clients.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // The copy stays alive to answer, as every Wayland clipboard owner
+        // must; the paste runs beside it.
+        let copying = for_clients.clone();
+        let copier = std::thread::spawn(move || {
+            compositor_clip::copy(&copying, COPIED, Duration::from_secs(6))
+        });
+        // A moment for the selection to be set before anything asks for it:
+        // a paste that arrives first is told there is nothing, which is
+        // true.
+        std::thread::sleep(Duration::from_millis(400));
+        let pasted = compositor_clip::paste(&for_clients);
+        let copied = copier.join().unwrap_or_else(|_| Err("panicked".to_owned()));
+        (copied, pasted)
+    });
+
+    let line = hyprix::run(&options).expect("the compositor ran");
+    let (copied, pasted) = clients.join().expect("the clients finished");
+    // Both, before either is unwrapped: a failure in one usually explains
+    // the other.
+    assert!(
+        copied.is_ok() && pasted.is_ok(),
+        "the copy said {copied:?} and the paste said {pasted:?}; the compositor said {line}"
+    );
+    let copied = copied.expect("the copy");
+    let pasted = pasted.expect("the paste");
+
+    assert_eq!(pasted, COPIED, "what came out is not what went in");
+    assert!(
+        copied.contains("asked for 1 times"),
+        "the copying client was asked for its data once: {copied}"
+    );
+    // And the compositor counted both halves.
+    assert!(
+        line.contains("copied 1 pasted 1"),
+        "the compositor's line does not say what the clipboard did: {line}"
+    );
+}

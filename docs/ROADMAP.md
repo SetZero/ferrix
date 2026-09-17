@@ -4193,6 +4193,53 @@ grid, printed a row at a time.
 /bin/hyprctl` and requires the picture the terminal makes, pixel for pixel,
 on x86-64 and on AArch64.
 
+**Done — the clipboard (2026-09-17).** Copy and paste between two programs,
+which is `wl_data_device_manager`'s selection and the thing a person notices
+is missing before anything else on this list.
+
+Wayland's clipboard is a promise and not a buffer, and the implementation is
+shaped by that: the program that copies keeps the data and says which types
+it can give it in; the compositor remembers *who* that is and tells every
+client with a `wl_data_device` what is on offer; a program that pastes asks
+for a type and hands over a pipe, and the compositor passes that pipe to
+whoever copied, who writes to it and closes it. No byte of what is copied
+ever passes through the compositor, which is the point -- a selection can be
+a gigabyte of video and the compositor's memory does not move.
+
+`wl_data_device_manager`, `wl_data_device`, `wl_data_source` and
+`wl_data_offer` are all four implemented for the selection. The offer is a
+server-side object, as it must be: the compositor makes it, names it in
+`wl_data_device.data_offer`, sends an `offer` event per type and then
+`selection`, which is the order libwayland's own clients rely on. A client
+that copies while another holds the selection is given it and the previous
+owner is sent `cancelled`; a client that goes away while holding it clears
+it. Drag-and-drop is the other half of the same four interfaces and is not
+done: nothing here is dragged.
+
+`compositor/clip` is `wl-copy` and `wl-paste`, neither of which is on Ferrix:
+`clip copy <text>` offers the text as `text/plain;charset=utf-8` and stays
+alive to answer, because it must; `clip paste` waits to be told what the
+selection holds, asks for it on a pipe it makes, and prints what comes back.
+
+Getting it right was a question of who owns a descriptor. One that arrives
+over a socket is owned by `compositor/socket`'s `Connection` until a message
+claims it, and a claim is what `Connection::consume`'s second argument says:
+a program that reads an event carrying a descriptor and then forgets to say
+so has the same descriptor owned twice, closed twice, and -- since Rust 1.86
+checks -- aborts the process. Two places had it wrong and both are fixed:
+`compositor/clip` now claims what `Reader::descriptors_taken` counted, and
+the compositor no longer claims for the two clipboard events that carry no
+descriptor at all.
+
+`cargo xtask test-compositor` boots an eleventh time with `exec-once =
+/bin/clip copy ...` and `exec-once = /bin/clip paste` beside the two windows,
+and requires that the compositor say it took the selection and passed the
+pipe on, that the copying program say it was asked for its data exactly once,
+that the pasting program print the text the other one copied, and that the
+windows still be drawn pixel for pixel while all of that happens -- on x86-64
+and on AArch64. A host test in `compositor/hyprix` runs the same two programs
+against the compositor in one process.
+
 **Begun — plugins (2026-09-17).** A plugin is a program the compositor
 starts and talks to, not a shared object it loads into itself. Hyprland's
 plugins are C++ objects `dlopen`ed into the compositor, which hook its own

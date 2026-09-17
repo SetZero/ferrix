@@ -12,7 +12,8 @@
 [workspace]
 resolver = "3"
 members = [
-    "anim", "blank", "config", "ctl", "drm", "evecho", "hyprix", "ipc", "layout",
+    "anim", "blank", "clip", "config", "ctl", "drm", "evecho", "hyprix", "ipc",
+    "layout",
     "pattern", "plug", "protocol", "regex", "render", "server", "shm", "socket",
     "term", "wire", "xkb",
 ]

@@ -94,6 +94,7 @@ const CLIENT_PATH: &str = "bin/pattern";
 const CTL_PATH: &str = "bin/hyprctl";
 const PLUG_PATH: &str = "bin/plug";
 const TERM_PATH: &str = "bin/term";
+const CLIP_PATH: &str = "bin/clip";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
 /// The instance the control socket is under, which `hyprctl` finds by
@@ -300,12 +301,13 @@ dispatch movewindow r
 
 /// The picture a window rule makes, which the tenth boot requires.
 const RULED_EXPECTED: [(&str, &str); 1] = [(
-    "a window floating where a rule put it, over the one that has the tiling",
+    "a window floating where a rule put it, each drawn as its own rules say",
     "compositor/render/tests/data/ruled-two-clients.xrle",
 )];
 
 /// The configuration the tenth boot is given: the same two clients, with
-/// rules that float one of them at a size and a place.
+/// rules that float one of them at a size and a place, and give each of
+/// them something of its own to be drawn with.
 ///
 /// The form is Hyprland 0.56's: fields with a name and a value, and
 /// `match:` in front of the ones the window must be.
@@ -314,9 +316,40 @@ const RULED_CONFIG: &str = "\
 windowrule = float, match:title ^(two)$
 windowrule = size 400 300, match:title ^(two)$
 windowrule = move 200 150, match:title ^(two)$
+windowrule = opacity 0.6, match:title ^(two)$
+windowrule = rounding 12, match:title ^(one)$
+windowrule = no_shadow, match:title ^(one)$
 exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
 ";
+
+/// What the clipboard boot copies, and the picture it makes while it does.
+///
+/// The two windows are the ordinary tiled pair: the clipboard has nothing to
+/// draw, and the picture is there so that a boot which copied and pasted on
+/// a compositor that had stopped drawing would still be caught.
+const CLIPBOARD_TEXT: &str = "the clipboard went through the compositor";
+const CLIPBOARD_EXPECTED: [(&str, &str); 1] = [(
+    "the windows tiled while one program copied and another pasted",
+    "compositor/render/tests/data/dwindle-two-clients.xrle",
+)];
+
+/// The configuration the eleventh boot is given: two windows, a program
+/// that copies and a program that pastes.
+///
+/// Neither `clip` has a window: a Wayland clipboard needs a connection and
+/// nothing else. The copy is started first, but the order does not matter --
+/// a paste waits for the compositor to say what the selection holds, which
+/// is what every `wl-paste` does.
+fn clipboard_config() -> String {
+    format!(
+        "# Carried into the initramfs by `cargo xtask test-compositor`.\n\
+         exec-once = /bin/pattern checkerboard one\n\
+         exec-once = /bin/pattern gradient two\n\
+         exec-once = /bin/clip copy {CLIPBOARD_TEXT}\n\
+         exec-once = /bin/clip paste\n"
+    )
+}
 
 /// The picture a terminal makes, which the ninth boot requires.
 const TERMINAL_EXPECTED: [(&str, &str); 1] = [(
@@ -379,6 +412,54 @@ const BINDS: [(&str, &[&str]); 2] = [
     ("SUPER SHIFT L", &["meta_l", "shift", "l"]),
 ];
 
+/// Every program a boot carries: the compositor the kernel starts as init,
+/// and the ones the initramfs holds for it to `exec`.
+///
+/// One value rather than a parameter apiece, because each boot below passes
+/// the whole set through unchanged and a program added for one boot would
+/// otherwise be a new argument in every signature between here and
+/// `build_image`.
+#[derive(Clone, Debug)]
+struct Programs {
+    /// The compositor itself.
+    hyprix: PathBuf,
+    /// The test client that draws a pattern in a window.
+    client: PathBuf,
+    /// `hyprctl`.
+    ctl: PathBuf,
+    /// The plugin.
+    plug: PathBuf,
+    /// The terminal emulator.
+    term: PathBuf,
+    /// `clip`, the copy-and-paste program.
+    clip: PathBuf,
+}
+
+impl Programs {
+    /// Build them all for `arch`.
+    fn build(arch: Arch) -> Result<Self> {
+        Ok(Self {
+            hyprix: build(arch, "hyprix", "hyprix")?,
+            client: build(arch, "compositor-pattern", "pattern")?,
+            ctl: build(arch, "compositor-ctl", "hyprctl")?,
+            plug: build(arch, "compositor-plug", "plug")?,
+            term: build(arch, "compositor-term", "term")?,
+            clip: build(arch, "compositor-clip", "clip")?,
+        })
+    }
+
+    /// The ones the initramfs carries, each with the path it goes at.
+    fn carried(&self) -> [(&'static str, &Path); 5] {
+        [
+            (CLIENT_PATH, self.client.as_path()),
+            (CTL_PATH, self.ctl.as_path()),
+            (PLUG_PATH, self.plug.as_path()),
+            (TERM_PATH, self.term.as_path()),
+            (CLIP_PATH, self.clip.as_path()),
+        ]
+    }
+}
+
 /// Build one of the compositor's programs for `arch`, and say where it is.
 fn build(arch: Arch, package: &str, binary: &str) -> Result<PathBuf> {
     let target = crate::display::target(arch).ok_or_else(|| {
@@ -417,6 +498,14 @@ struct Wanted<'a> {
     /// A window sliding: the keybind that starts it and the picture it ends
     /// in, with every distinct screendump along the way kept.
     moving: Option<Moving<'a>>,
+    /// Lines the boot is waited for before its transcript is taken.
+    ///
+    /// A picture can be right before the guest has finished saying what it
+    /// did -- a program that prints when it exits has not exited yet -- and
+    /// a boot that only drained for a moment would judge a transcript that
+    /// was merely early. What is required of the lines is still the
+    /// caller's; this only says which ones are worth waiting for.
+    awaiting: &'a [&'a str],
 }
 
 /// A window on its way somewhere: what starts it, and where it stops.
@@ -439,23 +528,15 @@ impl Wanted<'_> {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a boot is a program, its clients, a configuration and what to require of it"
-)]
 fn boot_and_dump(
     arch: Arch,
-    program: &Path,
-    client: &Path,
-    ctl: &Path,
-    plug: &Path,
-    term: &Path,
+    programs: &Programs,
     config: &str,
     wanted: &Wanted<'_>,
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
-    let (image, kernel) = build_image(arch, program, [client, ctl, plug, term], config, args)?;
+    let (image, kernel) = build_image(arch, programs, config, args)?;
 
     let port = free_port()?;
     let mut qemu_args = args.clone();
@@ -561,6 +642,14 @@ fn boot_and_dump(
         if !binds.is_empty() {
             ask_the_sockets(&mut qmp, watching, arch)?;
         }
+        if !wanted.awaiting.is_empty() {
+            let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
+                wanted
+                    .awaiting
+                    .iter()
+                    .all(|want| lines.iter().any(|line| line.contains(want)))
+            })?;
+        }
         // Whatever else the guest said by now, so that what is checked
         // against the transcript is what the boot actually printed rather
         // than what had been read when the last picture matched.
@@ -582,8 +671,7 @@ fn boot_and_dump(
 /// beside them.
 fn build_image(
     arch: Arch,
-    program: &Path,
-    programs: [&Path; 4],
+    programs: &Programs,
     config: &str,
     args: &Args,
 ) -> Result<(PathBuf, PathBuf)> {
@@ -592,40 +680,26 @@ fn build_image(
     // says so. `--instance` is what puts the control socket where `hyprctl`
     // looks for it.
     let script = format!("--config\n/{CONFIG_PATH}\n--instance\n{INSTANCE}");
-    let kernel = crate::cargo::build_kernel_with_init(arch, args.release, program, &script)?;
+    let kernel =
+        crate::cargo::build_kernel_with_init(arch, args.release, &programs.hyprix, &script)?;
     let natives = crate::native::build(arch, args.release)?;
     let read = |path: &Path| -> Result<Vec<u8>> {
         std::fs::read(path)
             .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
     };
-    let [client, ctl, plug, term] = programs;
-    let carried = [
-        crate::ports::File {
-            path: CLIENT_PATH,
+    let mut carried = Vec::new();
+    for (path, program) in programs.carried() {
+        carried.push(crate::ports::File {
+            path,
             mode: 0o755,
-            bytes: read(client)?,
-        },
-        crate::ports::File {
-            path: CTL_PATH,
-            mode: 0o755,
-            bytes: read(ctl)?,
-        },
-        crate::ports::File {
-            path: PLUG_PATH,
-            mode: 0o755,
-            bytes: read(plug)?,
-        },
-        crate::ports::File {
-            path: TERM_PATH,
-            mode: 0o755,
-            bytes: read(term)?,
-        },
-        crate::ports::File {
-            path: CONFIG_PATH,
-            mode: 0o644,
-            bytes: config.as_bytes().to_vec(),
-        },
-    ];
+            bytes: read(program)?,
+        });
+    }
+    carried.push(crate::ports::File {
+        path: CONFIG_PATH,
+        mode: 0o644,
+        bytes: config.as_bytes().to_vec(),
+    });
     let initramfs = crate::initramfs::build(None, &natives, None, &carried)?;
     // The kernel as well as the image: the watcher symbolises a panic's
     // addresses out of it.
@@ -788,23 +862,16 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             println!("  {arch}: no virtio-gpu in QEMU's machine; skipped");
             continue;
         }
-        let program = build(arch, "hyprix", "hyprix")?;
-        let client = build(arch, "compositor-pattern", "pattern")?;
-        let ctl = build(arch, "compositor-ctl", "hyprctl")?;
-        let plug = build(arch, "compositor-plug", "plug")?;
-        let term = build(arch, "compositor-term", "term")?;
+        let programs = Programs::build(arch)?;
         let (screens, said) = boot_and_dump(
             arch,
-            &program,
-            &client,
-            &ctl,
-            &plug,
-            &term,
+            &programs,
             CONFIG,
             &Wanted {
                 states: &EXPECTED,
                 others: &[],
                 moving: None,
+                awaiting: &[],
             },
             &BINDS,
             args,
@@ -857,16 +924,13 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
         ] {
             let (screens, _) = boot_and_dump(
                 arch,
-                &program,
-                &client,
-                &ctl,
-                &plug,
-                &term,
+                &programs,
                 config,
                 &Wanted {
                     states: &[wanted],
                     others: &[],
                     moving: None,
+                    awaiting: &[],
                 },
                 &[],
                 args,
@@ -880,12 +944,13 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             );
         }
 
-        test_groups(arch, &program, &client, &ctl, &plug, &term, args)?;
-        test_monitors(arch, &program, &client, &ctl, &plug, &term, args)?;
-        test_plugins(arch, &program, &client, &ctl, &plug, &term, args)?;
-        test_animation(arch, &program, &client, &ctl, &plug, &term, args)?;
-        test_terminal(arch, &program, &client, &ctl, &plug, &term, args)?;
-        test_rules(arch, &program, &client, &ctl, &plug, &term, args)?;
+        test_groups(arch, &programs, args)?;
+        test_monitors(arch, &programs, args)?;
+        test_plugins(arch, &programs, args)?;
+        test_animation(arch, &programs, args)?;
+        test_terminal(arch, &programs, args)?;
+        test_rules(arch, &programs, args)?;
+        test_clipboard(arch, &programs, args)?;
     }
     Ok(())
 }
@@ -896,27 +961,16 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
 /// The keybind sends the focused window to the second monitor, and each
 /// screen is then required to be the picture `compositor/render`'s own tests
 /// bless for it: one window each, neither monitor drawing the other's.
-fn test_monitors(
-    arch: Arch,
-    program: &Path,
-    client: &Path,
-    ctl: &Path,
-    plug: &Path,
-    term: &Path,
-    args: &Args,
-) -> Result<()> {
+fn test_monitors(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
         arch,
-        program,
-        client,
-        ctl,
-        plug,
-        term,
+        programs,
         MONITOR_CONFIG,
         &Wanted {
             states: &MONITOR_EXPECTED,
             others: &MONITOR_OTHERS,
             moving: None,
+            awaiting: &[],
         },
         &MONITOR_BINDS,
         args,
@@ -946,27 +1000,16 @@ fn test_monitors(
 /// Nothing is pressed: the rules are in the configuration and the
 /// compositor applies them as the windows map, so what is required is the
 /// picture they make.
-fn test_rules(
-    arch: Arch,
-    program: &Path,
-    client: &Path,
-    ctl: &Path,
-    plug: &Path,
-    term: &Path,
-    args: &Args,
-) -> Result<()> {
+fn test_rules(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
         arch,
-        program,
-        client,
-        ctl,
-        plug,
-        term,
+        programs,
         RULED_CONFIG,
         &Wanted {
             states: &RULED_EXPECTED,
             others: &[],
             moving: None,
+            awaiting: &[],
         },
         &[],
         args,
@@ -987,6 +1030,76 @@ fn test_rules(
     Ok(())
 }
 
+/// An eleventh boot: the clipboard, between two programs that have no
+/// window.
+///
+/// `/bin/clip copy` offers text as `text/plain;charset=utf-8` and stays
+/// alive to answer, as Wayland's clipboard requires: the data lives in the
+/// program that copied it and the compositor holds only the promise.
+/// `/bin/clip paste` is told what the selection holds, asks for the text on
+/// a pipe it makes, and prints what comes back. Nothing but the pipe joins
+/// the two processes, and the compositor is what passed it across.
+fn test_clipboard(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    // The copying program prints when it leaves, which is a moment after it
+    // has answered: the boot is waited for that line rather than drained for
+    // a fixed time, which under emulation is a coin toss.
+    let asked = format!(
+        "clip: copied {} bytes, asked for 1 times",
+        CLIPBOARD_TEXT.len()
+    );
+    let pasted = format!("clip: pasted {CLIPBOARD_TEXT}");
+    let (screens, said) = boot_and_dump(
+        arch,
+        programs,
+        &clipboard_config(),
+        &Wanted {
+            states: &CLIPBOARD_EXPECTED,
+            others: &[],
+            moving: None,
+            awaiting: &[asked.as_str(), pasted.as_str()],
+        },
+        &[],
+        args,
+    )?;
+    let Some(screen) = screens.first() else {
+        return Err(Error::new(format!(
+            "{arch}: the clipboard boot took no picture"
+        )));
+    };
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    for wanted in [
+        // The compositor took the selection and handed the pipe on.
+        "hyprix: the selection is 1 type(s) from client",
+        "pasted text/plain;charset=utf-8, on a pipe to whoever copied",
+    ] {
+        if !has(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: the clipboard boot did not say `{wanted}`"
+            )));
+        }
+    }
+    // The copying program was asked for its data exactly once, which is the
+    // paste and nothing else.
+    if !has(&asked) {
+        return Err(Error::new(format!(
+            "{arch}: the copying program did not say `{asked}`"
+        )));
+    }
+    // And what came out of one program is what went into the other.
+    if !has(&pasted) {
+        return Err(Error::new(format!(
+            "{arch}: nothing pasted `{CLIPBOARD_TEXT}`"
+        )));
+    }
+    println!(
+        "  {arch}: one program copied {} bytes and another pasted them back, on a pipe the \
+         compositor passed between them, with the windows still drawn in every one of {} pixels",
+        CLIPBOARD_TEXT.len(),
+        screen.width * screen.height
+    );
+    Ok(())
+}
+
 /// A ninth boot: a terminal, with a program running in it.
 ///
 /// The whole path at once: the compositor starts `compositor/term`, which
@@ -996,27 +1109,16 @@ fn test_rules(
 /// puts that in a `wl_shm` buffer the compositor composes into the frame.
 /// Every pixel of that frame is compared against the one
 /// `compositor/term`'s own test blesses.
-fn test_terminal(
-    arch: Arch,
-    program: &Path,
-    client: &Path,
-    ctl: &Path,
-    plug: &Path,
-    term: &Path,
-    args: &Args,
-) -> Result<()> {
+fn test_terminal(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
         arch,
-        program,
-        client,
-        ctl,
-        plug,
-        term,
+        programs,
         TERMINAL_CONFIG,
         &Wanted {
             states: &TERMINAL_EXPECTED,
             others: &[],
             moving: None,
+            awaiting: &[],
         },
         &[],
         args,
@@ -1050,27 +1152,16 @@ fn test_terminal(
 /// under the software fallback. This is that: the decorated picture, a
 /// keybind, every distinct picture until the windows have changed places,
 /// and the compositor's own frame times from the same boot.
-fn test_animation(
-    arch: Arch,
-    program: &Path,
-    client: &Path,
-    ctl: &Path,
-    plug: &Path,
-    term: &Path,
-    args: &Args,
-) -> Result<()> {
+fn test_animation(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
         arch,
-        program,
-        client,
-        ctl,
-        plug,
-        term,
+        programs,
         ANIMATED_CONFIG,
         &Wanted {
             states: &ANIMATED_EXPECTED,
             others: &[],
             moving: Some(ANIMATED_MOVING),
+            awaiting: &[],
         },
         &[],
         args,
@@ -1151,27 +1242,16 @@ fn frames_were_inside_the_bound(arch: Arch, said: &[String]) -> Result<()> {
 /// reaches the plugin because the plugin registered it. What the plugin asks
 /// for in return is what the screen then shows, which is the whole of the
 /// extension point.
-fn test_plugins(
-    arch: Arch,
-    program: &Path,
-    client: &Path,
-    ctl: &Path,
-    plug: &Path,
-    term: &Path,
-    args: &Args,
-) -> Result<()> {
+fn test_plugins(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
         arch,
-        program,
-        client,
-        ctl,
-        plug,
-        term,
+        programs,
         PLUGIN_CONFIG,
         &Wanted {
             states: &PLUGIN_EXPECTED,
             others: &[],
             moving: None,
+            awaiting: &[],
         },
         &PLUGIN_BINDS,
         args,
@@ -1298,27 +1378,16 @@ fn the_sockets_said(arch: Arch, said: &[String]) -> Result<()> {
 /// Two pictures rather than one, because a group that changed nothing would
 /// match the tiled image and pass: the second must be the group's, and the
 /// two must differ.
-fn test_groups(
-    arch: Arch,
-    program: &Path,
-    client: &Path,
-    ctl: &Path,
-    plug: &Path,
-    term: &Path,
-    args: &Args,
-) -> Result<()> {
+fn test_groups(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
         arch,
-        program,
-        client,
-        ctl,
-        plug,
-        term,
+        programs,
         GROUP_CONFIG,
         &Wanted {
             states: &GROUPED_EXPECTED,
             others: &[],
             moving: None,
+            awaiting: &[],
         },
         &GROUP_BINDS,
         args,

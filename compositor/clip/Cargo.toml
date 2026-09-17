@@ -1,0 +1,27 @@
+[package]
+name = "compositor-clip"
+description = "The clipboard from a program's side: copy what is on the command line, or paste what is there"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "clip"
+path = "src/main.rs"
+
+[lib]
+name = "compositor_clip"
+path = "src/lib.rs"
+
+[dependencies]
+compositor-evecho = { path = "../evecho" }
+compositor-protocol = { path = "../protocol" }
+compositor-socket = { path = "../socket" }
+compositor-wire = { path = "../wire" }
+# Declarations only: the pipe a paste reads through.
+libc = "0.2.189"
+
+[lints]
+workspace = true

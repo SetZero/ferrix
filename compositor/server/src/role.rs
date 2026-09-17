@@ -70,6 +70,9 @@ pub enum Role {
     DataDevice,
     /// `wl_data_source`, made by `wl_data_device_manager.create_data_source`.
     DataSource,
+    /// `wl_data_offer`, made by the *server* when it tells a client what the
+    /// selection holds.
+    DataOffer,
 }
 
 impl Role {

@@ -3,8 +3,9 @@
 use std::collections::BTreeMap;
 
 use compositor_protocol::core::{
-    self, wl_compositor, wl_data_device_manager, wl_display, wl_output, wl_region, wl_registry,
-    wl_seat, wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface, wl_surface,
+    self, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source,
+    wl_display, wl_output, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_subcompositor,
+    wl_subsurface, wl_surface,
 };
 use compositor_protocol::layer_shell::{self, zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
@@ -197,6 +198,32 @@ pub enum Event {
         /// The `zwlr_layer_surface_v1`.
         layer_surface: ObjectId,
     },
+    /// A client made a `wl_data_device`. Whatever the selection holds has
+    /// to be offered to it, since a client that binds after a copy must
+    /// still be able to paste.
+    DataDeviceMade {
+        /// The `wl_data_device`.
+        device: ObjectId,
+    },
+    /// A client set the selection: it copied something. The compositor
+    /// remembers which client and which source, and offers it to the
+    /// others.
+    SelectionSet {
+        /// The `wl_data_source`, or `None` for a selection being cleared.
+        source: Option<ObjectId>,
+        /// The types it offered, in order.
+        mimes: Vec<String>,
+    },
+    /// A client asked for the selection's data on a descriptor: it pasted.
+    /// The compositor passes the descriptor to whoever owns the selection.
+    SelectionWanted {
+        /// The `wl_data_offer` it asked through.
+        offer: ObjectId,
+        /// The type it asked for.
+        mime: String,
+        /// Where the data is to be written.
+        fd: Fd,
+    },
     /// A window's title or app id changed, which `hyprctl clients` prints
     /// and `windowrule` matches on.
     ToplevelRenamed {
@@ -256,6 +283,15 @@ pub struct Client {
     /// milliseconds. Hyprland's `input:repeat_rate` and `input:repeat_delay`
     /// defaults.
     repeat: (i32, i32),
+    /// The types each of this client's `wl_data_source`s has offered, in
+    /// the order it offered them.
+    sources: BTreeMap<ObjectId, Vec<String>>,
+    /// The `wl_data_device`s it has made, which is where a selection is
+    /// announced.
+    devices: Vec<ObjectId>,
+    /// The `wl_data_offer` this client was last given, if it still has one:
+    /// a new selection replaces it, as the protocol says.
+    offer: Option<ObjectId>,
     /// What each `wl_output` says its screen is, one to a monitor and in
     /// the order the globals advertise them.
     outputs: Vec<Output>,
@@ -298,6 +334,9 @@ impl Client {
             capabilities: 0,
             keymap: None,
             repeat: (25, 600),
+            sources: BTreeMap::new(),
+            devices: Vec::new(),
+            offer: None,
             outputs: vec![Output::default()],
             output_objects: BTreeMap::new(),
             serial: 1,
@@ -1077,6 +1116,9 @@ impl Client {
             Role::Subsurface => self.subsurface_request(sender, opcode, args),
             Role::Seat => self.seat(version, opcode, args),
             Role::DataDeviceManager => self.data_device_manager(version, opcode, args),
+            Role::DataSource => self.data_source_request(sender, opcode, args),
+            Role::DataDevice => self.data_device_request(opcode, args),
+            Role::DataOffer => self.data_offer_request(sender, opcode, args),
             Role::XdgWmBase => self.xdg_wm_base(version, opcode, args),
             Role::XdgSurface => self.xdg_surface_request(sender, version, opcode, args),
             Role::XdgToplevel => self.xdg_toplevel_request(sender, opcode, args),
@@ -1847,7 +1889,9 @@ impl Client {
         };
         match opcode {
             wl_data_device_manager::request::CREATE_DATA_SOURCE => {
-                let _ = self.make(id, &core::WL_DATA_SOURCE, version, Role::DataSource);
+                if self.make(id, &core::WL_DATA_SOURCE, version, Role::DataSource) {
+                    let _previous = self.sources.insert(id, Vec::new());
+                }
             }
             wl_data_device_manager::request::GET_DATA_DEVICE => {
                 let Some(seat) = args.get(1).and_then(Arg::as_object) else {
@@ -1864,10 +1908,77 @@ impl Client {
                     });
                     return;
                 }
-                let _ = self.make(id, &core::WL_DATA_DEVICE, version, Role::DataDevice);
+                if self.make(id, &core::WL_DATA_DEVICE, version, Role::DataDevice) {
+                    self.devices.push(id);
+                    self.events.push(Event::DataDeviceMade { device: id });
+                }
             }
             _ => {}
         }
+    }
+
+    /// `wl_data_source`: the types a client is offering, and the object
+    /// going away.
+    ///
+    /// A source is made before it is offered and offered before it is set as
+    /// the selection, so the types are collected here and read when
+    /// `set_selection` arrives.
+    fn data_source_request(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        // `set_actions` is drag-and-drop's, which this compositor does not
+        // do: a client that asks is not refused, since the protocol allows
+        // the request on a selection source too.
+        if opcode != wl_data_source::request::OFFER {
+            return;
+        }
+        let Some(mime) = args.first().and_then(Arg::as_str) else {
+            return;
+        };
+        let offered = self.sources.entry(sender).or_default();
+        if !offered.iter().any(|known| known == mime) {
+            offered.push(mime.to_owned());
+        }
+    }
+
+    /// `wl_data_device`: the selection, and the drag this compositor does
+    /// not do.
+    fn data_device_request(&mut self, opcode: u16, args: &[Arg<'_>]) {
+        // `start_drag` is drag-and-drop's. Nothing is dragged here, and a
+        // client that asks is answered with nothing rather than an error:
+        // the protocol's own answer to a drag that does not start is no
+        // `enter` and no `drop`.
+        if opcode != wl_data_device::request::SET_SELECTION {
+            return;
+        }
+        // A null source clears the selection, which is what a client sends
+        // when it no longer owns what it copied.
+        let source = args.first().and_then(Arg::as_object);
+        let mimes = source
+            .and_then(|source| self.sources.get(&source).cloned())
+            .unwrap_or_default();
+        self.events.push(Event::SelectionSet {
+            source: source.filter(|source| !source.is_null()),
+            mimes,
+        });
+    }
+
+    /// `wl_data_offer`: what a client does with the selection it was told
+    /// about.
+    fn data_offer_request(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        // `accept` and `finish` are the drag's; `set_actions` too.
+        if opcode != wl_data_offer::request::RECEIVE {
+            return;
+        }
+        let (Some(mime), Some(fd)) = (
+            args.first().and_then(Arg::as_str),
+            args.get(1).and_then(Arg::as_fd),
+        ) else {
+            return;
+        };
+        self.events.push(Event::SelectionWanted {
+            offer: sender,
+            mime: mime.to_owned(),
+            fd,
+        });
     }
 
     /// `xdg_wm_base`: `create_positioner`, `get_xdg_surface` and `pong`.
@@ -2199,6 +2310,100 @@ impl Client {
         if version >= 2 {
             let _ = self.out.write(id, wl_output::event::DONE, &[], &[]);
         }
+    }
+
+    /// Tell this client what the selection holds.
+    ///
+    /// The server makes a `wl_data_offer` of its own -- an id out of the
+    /// server's half of the space, which is what that half is for -- says
+    /// which types it has, and then names it as the selection. That is the
+    /// order `wl_data_device`'s description gives, and a client that reads
+    /// them in any other order sees an offer for a selection it has not been
+    /// told about.
+    ///
+    /// An empty `mimes` clears the selection, which is what a client sees
+    /// when whoever copied has gone.
+    pub fn offer_selection(&mut self, mimes: &[String]) {
+        if self.devices.is_empty() {
+            return;
+        }
+        // The offer this client had is replaced, as the protocol says a new
+        // selection replaces the last.
+        let offer = if mimes.is_empty() {
+            None
+        } else {
+            let version = self
+                .devices
+                .first()
+                .and_then(|device| self.objects.get(*device))
+                .map_or(3, |entry| entry.version);
+            let Ok(offer) = self
+                .objects
+                .create(&core::WL_DATA_OFFER, version, Role::DataOffer)
+            else {
+                return;
+            };
+            Some(offer)
+        };
+        let devices = self.devices.clone();
+        for device in devices {
+            if let Some(offer) = offer {
+                let _ = self.out.write(
+                    device,
+                    wl_data_device::event::DATA_OFFER,
+                    &[ArgType::NewId],
+                    &[Arg::NewId(offer)],
+                );
+                for mime in mimes {
+                    let _ = self.out.write(
+                        offer,
+                        wl_data_offer::event::OFFER,
+                        &[ArgType::Str { nullable: false }],
+                        &[Arg::Str(Some(mime))],
+                    );
+                }
+            }
+            let _ = self.out.write(
+                device,
+                wl_data_device::event::SELECTION,
+                &[ArgType::Object { nullable: true }],
+                &[Arg::Object(offer.unwrap_or(ObjectId::NULL))],
+            );
+        }
+        self.offer = offer;
+    }
+
+    /// Whether `offer` is the offer this client was last given.
+    #[must_use]
+    pub fn holds_offer(&self, offer: ObjectId) -> bool {
+        self.offer == Some(offer)
+    }
+
+    /// Ask this client's source for the selection's data on `fd`.
+    ///
+    /// The client writes what it copied and closes the descriptor; whoever
+    /// pasted reads until end of file. Nothing here touches the data.
+    pub fn send_selection(&mut self, source: ObjectId, mime: &str, fd: Fd) {
+        let _ = self.out.write(
+            source,
+            wl_data_source::event::SEND,
+            &[ArgType::Str { nullable: false }, ArgType::Fd],
+            &[Arg::Str(Some(mime)), Arg::Fd(fd)],
+        );
+    }
+
+    /// Tell this client's source that it is no longer the selection.
+    pub fn cancel_selection(&mut self, source: ObjectId) {
+        let _ = self
+            .out
+            .write(source, wl_data_source::event::CANCELLED, &[], &[]);
+    }
+
+    /// Whether this client has a `wl_data_device`, which is what a client
+    /// that can paste has.
+    #[must_use]
+    pub fn has_data_device(&self) -> bool {
+        !self.devices.is_empty()
     }
 
     /// Give a fresh `wl_keyboard` the keymap, or say there is none.

@@ -10,7 +10,7 @@ use compositor_protocol::{core, xdg_shell};
 use compositor_render::{Canvas, Damage, Style};
 use compositor_server::{Client, Event, Globals, Role};
 use compositor_socket::{Connection, Listener, RecvError};
-use compositor_wire::ObjectId;
+use compositor_wire::{Fd, ObjectId};
 
 use crate::backend::{Backend, Headless};
 use crate::deliver::Focus;
@@ -40,6 +40,28 @@ impl Slot {
     /// The protocol side of this connection.
     pub const fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// Send whatever this client has queued, now.
+    ///
+    /// The loop sends at the end of every pass, and that is soon enough for
+    /// everything but a descriptor: the clipboard hands a client a pipe and
+    /// then has to let go of it, and a descriptor let go of before the
+    /// message carrying it has been sent is a descriptor the client never
+    /// gets. Gives whether the connection is still there.
+    pub fn flush(&mut self) -> bool {
+        let outgoing = self.client.take_outgoing();
+        if outgoing.bytes.is_empty() {
+            return !self.gone;
+        }
+        if self
+            .connection
+            .send(&outgoing.bytes, &outgoing.descriptors)
+            .is_err()
+        {
+            self.gone = true;
+        }
+        !self.gone
     }
 
     /// The same, to be sent to: the seat's events go out through it.
@@ -96,6 +118,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut screens = Screen::all(backends, &rules)?;
     // The `windowrule` lines, which are applied when a window maps.
     let mut window_rules = crate::rules::Rules::new(&config, report);
+    // The clipboard: what one client copied, for the others to paste.
+    let mut clipboard = crate::clipboard::Clipboard::new();
     if !window_rules.is_empty() {
         report(&format!("hyprix: {} window rules", window_rules.len()));
     }
@@ -388,6 +412,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut sources,
                 &mut next_window,
                 &mut window_rules,
+                &mut clipboard,
                 report,
             )? {
                 changed = true;
@@ -446,6 +471,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     window_rules.window_gone(window);
                     changed = true;
                 }
+                clipboard.client_gone(&mut slots, index);
                 if slots.get(index).is_some_and(|slot| !slot.layers.is_empty()) {
                     // Its bars go with it, and the space they reserved comes
                     // back to the windows.
@@ -546,9 +572,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let (subscribers, told) = events
         .as_ref()
         .map_or((0, 0), crate::control::Events::counts);
+    let (copied, pasted) = clipboard.counts();
     Ok(format!(
         "hyprix: {} {display} frames {drawn} windows {} most {most} subscribers {subscribers} \
-         events {told} slowest frame {} us",
+         events {told} copied {copied} pasted {pasted} slowest frame {} us",
         described(&screens),
         sources.len(),
         slowest.as_micros()
@@ -558,6 +585,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
 /// Read what one connection sent and act on it.
 ///
 /// Gives whether the layout changed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "what a client says reaches the layout, the rules and the clipboard, and passing one \
+              struct would only move the list"
+)]
 fn serve(
     slots: &mut [Slot],
     index: usize,
@@ -565,6 +597,7 @@ fn serve(
     sources: &mut BTreeMap<WindowId, Source>,
     next_window: &mut u32,
     rules: &mut crate::rules::Rules,
+    clipboard: &mut crate::clipboard::Clipboard,
     report: &mut dyn FnMut(&str),
 ) -> Result<bool, String> {
     let Some(slot) = slots.get_mut(index) else {
@@ -582,6 +615,11 @@ fn serve(
     let arrived = slot.connection.fds();
     let consumed = slot.client.read(slot.connection.bytes(), &arrived);
     let mut changed = false;
+    // The clipboard's, kept until the client's own borrow is over: telling
+    // every client what the selection holds needs them all.
+    let mut selection: Option<(Option<ObjectId>, Vec<String>)> = None;
+    let mut wanted: Vec<(ObjectId, String, Fd)> = Vec::new();
+    let mut made_device = false;
     if consumed > 0 {
         let events = slot.client.take_events();
         let mut claimed = 0;
@@ -616,6 +654,17 @@ fn serve(
                     changed = true;
                 }
                 Event::LayerSurfaceChanged { .. } => changed = true,
+                // The clipboard. What one client copied is the compositor's
+                // to remember and to offer to the others; the data never
+                // passes through it.
+                Event::DataDeviceMade { .. } => made_device = true,
+                Event::SelectionSet { source, mimes } => {
+                    selection = Some((source, mimes.clone()));
+                }
+                Event::SelectionWanted { offer, mime, fd } => {
+                    wanted.push((offer, mime.clone(), fd));
+                    claimed += 1;
+                }
                 Event::ToplevelCreated { toplevel, .. } => {
                     let window = WindowId(u64::from(*next_window));
                     *next_window = next_window.saturating_add(1);
@@ -665,6 +714,34 @@ fn serve(
         slot.connection.consume(consumed, claimed);
     }
 
+    // Now that the client's own borrow is over: what it copied goes to
+    // every other client, and what it pasted goes to whoever copied.
+    if made_device {
+        clipboard.offer_to(slots, index);
+    }
+    if let Some((source, mimes)) = selection {
+        let held = mimes.len();
+        clipboard.copied(slots, index, source, mimes);
+        if source.is_some() {
+            report(&format!(
+                "hyprix: the selection is {held} type(s) from client {index}"
+            ));
+        } else {
+            report("hyprix: the selection was given up");
+        }
+    }
+    for (offer, mime, fd) in wanted {
+        if clipboard.pasted(slots, index, offer, &mime, fd) {
+            report(&format!(
+                "hyprix: client {index} pasted {mime}, on a pipe to whoever copied"
+            ));
+        } else {
+            report("hyprix: a paste asked for a selection that is not there any more");
+        }
+    }
+    let Some(slot) = slots.get_mut(index) else {
+        return Ok(changed);
+    };
     let outgoing = slot.client.take_outgoing();
     if !outgoing.bytes.is_empty()
         && slot

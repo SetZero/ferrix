@@ -139,6 +139,26 @@ names the part of Hyprland or hyprlang it follows.
   rather than a toolkit, that draws one of `render`'s test patterns. It is
   what the compositor's tests put on screen, and it exercises the same crates
   from the client's side.
+* **`term`** is the terminal: a character grid with the escape sequences a
+  shell and its programs actually send, drawn with `libs/fbtext`'s Spleen
+  font into a `wl_shm` buffer. It starts a program on a pseudoterminal with
+  the slave for its session and its three descriptors, and `--headless` runs
+  one with no window at all, which is what `cargo xtask test-pty` boots.
+* **`clip`** is `wl-copy` and `wl-paste`, neither of which is on Ferrix:
+  `clip copy <text>` offers text as `text/plain;charset=utf-8` and stays
+  alive to answer -- Wayland's clipboard is a promise, and the data lives in
+  the program that made it -- and `clip paste` asks for the selection on a
+  pipe and prints what comes back. Between them they are the compositor's
+  clipboard tested with no window and no screen.
+* **`ctl`** is `hyprctl`, over `ipc`'s request shape; **`plug`** is the
+  example plugin, a program the compositor starts and talks to rather than a
+  shared object it loads; **`anim`** is Hyprland's bezier curves and its
+  animation tree, holding no window and no clock; **`regex`** is the RE2
+  subset a `windowrule` matches with, which counts its steps rather than
+  backtracking for ever; **`xkb`** turns a keycode into a keysym; and
+  **`evecho`** is evdev with no libinput -- the input backend the seat reads
+  its devices through, and the argument splitting an `exec` line needs where
+  there is no shell to do it.
 
 ## Testing
 

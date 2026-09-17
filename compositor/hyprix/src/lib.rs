@@ -22,6 +22,7 @@
 
 pub mod animate;
 pub mod backend;
+pub mod clipboard;
 pub mod control;
 pub mod deliver;
 pub mod devices;

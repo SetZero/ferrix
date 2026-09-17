@@ -42,6 +42,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-clip"
+version = "0.1.0"
+dependencies = [
+ "compositor-evecho",
+ "compositor-protocol",
+ "compositor-socket",
+ "compositor-wire",
+ "libc",
+]
+
+[[package]]
 name = "compositor-config"
 version = "0.1.0"
 dependencies = [
@@ -187,6 +198,7 @@ name = "hyprix"
 version = "0.1.0"
 dependencies = [
  "compositor-anim",
+ "compositor-clip",
  "compositor-config",
  "compositor-ctl",
  "compositor-drm",

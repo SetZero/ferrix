@@ -41,6 +41,8 @@ libc = "0.2.189"
 compositor-pattern = { path = "../pattern" }
 # And a subscriber on the event socket, which is what a bar is.
 compositor-ctl = { path = "../ctl" }
+# The two halves of a clipboard, for the copy-and-paste test.
+compositor-clip = { path = "../clip" }
 
 [lints]
 workspace = true
