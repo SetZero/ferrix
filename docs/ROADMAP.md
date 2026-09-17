@@ -3867,6 +3867,39 @@ What is left of this stage: `wl_seat`, so a window can be typed into; the
 moved behind `hyprix`'s backend so the same frame goes to `/dev/dri/card0`
 under QEMU.
 
+**Done — a real toolkit runs on it (2026-09-17).** `compositor/pattern` is
+written against the same crates the server is, so a test with it shows the two
+halves of this tree agree -- not that the protocol is right. `foot`, a
+Wayland terminal built against libwayland and every other compositor, knows
+nothing about this one, and running it found four gaps in an afternoon that
+the pattern client could never have found:
+
+* `wl_data_device_manager` was not offered at all, and the toolkit refused to
+  start without it. The objects are made now and no selection is ever sent,
+  which is exactly what a client sees when nobody has copied anything. A
+  compositor that advertises it and then does not answer `get_data_device` is
+  worse than one that does not advertise it, because the client only finds
+  out at its first copy.
+* `wl_subcompositor` was advertised and `get_subsurface` was not answered, so
+  the toolkit's first window died on `wl_subsurface#15: error 0: object 15 is
+  not live`. Every toolkit makes subsurfaces -- a title bar, a shadow, a
+  cursor -- so this was every toolkit.
+* `wl_output` described nothing, and the toolkit printed `(null):
+  0x0+0x0@0Hz`: a client with no mode has no size to scale against. It now
+  sends geometry, mode, scale, name, description and the `done` that says the
+  description is whole, and only the ones the version bound can read.
+* `wl_seat` announced nothing, which it still does, because there is no input
+  path until stage 17's L5 to L7 land. A client may only ask for a capability
+  the seat announced, so asking is `missing_capability` rather than a
+  keyboard that never sends a key.
+
+With those, `foot` gets a window, works out its cell size from the mode this
+compositor gave it, draws its terminal over 690,820 of the screen's 786,432
+pixels, and exits by choice with no protocol error.
+`compositor/hyprix/probe/real-client.sh` records the run and the test requires
+each step of it; the record summarises the busiest frame rather than
+committing a picture of somebody else's font rendering.
+
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
 customer's order of 2026-09-16); then the protocol server, the seat, the

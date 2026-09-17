@@ -1,0 +1,22 @@
+# foot foot version: 1.25.0 +pgo +ime +graphemes -assertions
+client info: main.c:420: version: 1.25.0 +pgo +ime +graphemes -assertions
+client info: main.c:427: arch: Linux x86_64/64-bit
+client info: main.c:444: locale: en_US.UTF-8
+client warn: wayland.c:1777: compositor does not implement the primary selection interface
+client warn: wayland.c:1780: compositor does not implement XDG activation, bell.urgent will fall back to coloring the window margins red
+client warn: wayland.c:1786: compositor does not implement fractional scaling
+client warn: wayland.c:1789: compositor does not implement server-side cursors, falling back to client-side cursors
+client warn: wayland.c:1794: compositor does not implement the XDG toplevel icon protocol
+client warn: wayland.c:1799: text input interface not implemented by compositor; IME will be disabled
+client info: wayland.c:1808: HEADLESS-1: 1024x768+0x0@60Hz hyprix 0.00" scale=1, DPI=0.00/0.00 (physical/scaled)
+client info: shm.c:1090: using 8-bit RGB surfaces
+client warn: wayland.c:2061: no decoration manager available - using CSDs unconditionally
+client info: terminal.c:856: cell width=10, height=19
+client info: terminal.c:706: using <n> rendering threads
+client info: terminal.c:1511: gamma-correct blending: disabled
+client info: main.c:696: goodbye
+client hyprix: headless 1024x768 <work>/wayland frames 6 windows 0 most 1
+frame frames 6
+frame size 1024x768
+frame colours 4
+frame not-background 690820

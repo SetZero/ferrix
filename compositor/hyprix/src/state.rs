@@ -80,6 +80,10 @@ pub fn run(options: &Options) -> Result<String, String> {
     let mut sources: BTreeMap<WindowId, Source> = BTreeMap::new();
     let mut next_window = 1u32;
     let mut drawn = 0u32;
+    // The most windows at once, not the count at the end: a client that ran
+    // and closed leaves none behind, and "it never got a window" and "it got
+    // one and gave it back" are not the same thing for a test to read.
+    let mut most = 0usize;
     let started = Instant::now();
     let deadline = options.deadline.map(Duration::from_millis);
 
@@ -99,7 +103,20 @@ pub fn run(options: &Options) -> Result<String, String> {
         while let Ok(Some(stream)) = listener.accept() {
             match Connection::new(stream) {
                 Ok(connection) => slots.push(Slot {
-                    client: Client::new(globals()),
+                    client: {
+                        let mut client = Client::new(globals());
+                        // What the screen is, and what the seat has. There is
+                        // no input path yet -- stage 17's L5 to L7 are the
+                        // kernel side -- so the seat announces nothing rather
+                        // than handing out a keyboard that never sends a key.
+                        client.set_output(compositor_server::Output {
+                            width: i32::try_from(width).unwrap_or(0),
+                            height: i32::try_from(height).unwrap_or(0),
+                            ..compositor_server::Output::default()
+                        });
+                        client.set_seat_capabilities(0);
+                        client
+                    },
                     connection,
                     pools: BTreeMap::new(),
                     windows: Vec::new(),
@@ -145,6 +162,7 @@ pub fn run(options: &Options) -> Result<String, String> {
         }
         slots.retain(|slot| !slot.gone);
 
+        most = most.max(sources.len());
         if changed || drawn == 0 {
             let outputs = state.layout();
             let Some(output) = outputs.first() else {
@@ -172,7 +190,7 @@ pub fn run(options: &Options) -> Result<String, String> {
     }
 
     Ok(format!(
-        "hyprix: {} {} frames {drawn} windows {}",
+        "hyprix: {} {} frames {drawn} windows {} most {most}",
         backend.describe(),
         options.display,
         sources.len()
@@ -367,6 +385,7 @@ fn globals() -> Globals {
         (&core::WL_SHM, 1, Role::Shm),
         (&core::WL_SEAT, 7, Role::Seat),
         (&core::WL_OUTPUT, 4, Role::Output),
+        (&core::WL_DATA_DEVICE_MANAGER, 3, Role::DataDeviceManager),
         (&xdg_shell::XDG_WM_BASE, 6, Role::XdgWmBase),
     ] {
         let _ = globals.add(interface, version, role);

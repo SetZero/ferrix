@@ -227,7 +227,7 @@ fn two_clients_are_tiled_and_drawn_exactly_as_the_renderer_says() {
         &[(Pattern::Checkerboard, "one"), (Pattern::Gradient, "two")],
     );
     assert!(
-        report.contains("windows 2"),
+        report.contains("most 2"),
         "the compositor should have had two windows: {report}"
     );
     assert!(
@@ -249,10 +249,89 @@ fn the_comparison_would_notice_a_different_frame() {
     // wrong. One client rather than two is a different picture, and the
     // comparison must say so.
     let (frame, report) = run("one-client", &[(Pattern::Checkerboard, "only")]);
-    assert!(report.contains("windows 1"), "{report}");
+    assert!(report.contains("most 1"), "{report}");
     let (differing, _) = compare(&frame, &expected());
     assert!(
         differing > 0,
         "one window drew the same picture as two, which cannot be right"
     );
+}
+
+// ---------------------------------------------------------------------------
+// A real toolkit
+//
+// The test above proves that this tree's two halves agree with each other.
+// `probe/real-client.sh` proves the other thing: that an application written
+// against libwayland and every other compositor, which knows nothing about
+// this one, gets a window and draws in it. Every gap it found -- the
+// clipboard's objects, subsurfaces, an output that described itself -- was
+// one the pattern client could never have found, because the pattern client
+// is written against the same crates the server is.
+// ---------------------------------------------------------------------------
+
+/// What `probe/real-client.sh` recorded.
+const REAL_CLIENT: &str = include_str!("../probe/real-client.txt");
+
+/// A `frame <name> <value>` line from the record.
+fn frame_value(name: &str) -> Option<&'static str> {
+    REAL_CLIENT
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("frame {name} ")))
+}
+
+#[test]
+fn a_real_toolkit_gets_a_window_and_draws_in_it() {
+    assert!(
+        REAL_CLIENT
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("# foot ")),
+        "probe/real-client.txt should say which client wrote it"
+    );
+
+    // It read the output's mode. A compositor whose wl_output describes
+    // nothing gets `(null): 0x0+0x0@0Hz` here, which is what the first run
+    // printed.
+    assert!(
+        REAL_CLIENT.contains("HEADLESS-1: 1024x768+0x0@60Hz hyprix"),
+        "the client did not read the output's mode:\n{REAL_CLIENT}"
+    );
+    // It worked out its own geometry from it, which means the mode was
+    // usable and not merely present.
+    assert!(
+        REAL_CLIENT.contains("cell width=10, height=19"),
+        "the client did not lay out its terminal"
+    );
+    // And it ended by choice rather than by a protocol error.
+    assert!(
+        REAL_CLIENT.contains("client info: main.c:696: goodbye"),
+        "the client did not exit cleanly"
+    );
+    assert!(
+        !REAL_CLIENT.contains("Protocol error"),
+        "the compositor refused a real client:\n{REAL_CLIENT}"
+    );
+    assert!(
+        !REAL_CLIENT.contains("Broken pipe"),
+        "the compositor went away before the client did"
+    );
+    assert!(
+        REAL_CLIENT.contains("most 1"),
+        "the compositor never gave the client a window"
+    );
+
+    // And it drew: most of the screen is its window rather than the
+    // compositor's background.
+    assert_eq!(frame_value("size"), Some("1024x768"));
+    let drawn: u64 = frame_value("not-background")
+        .and_then(|value| value.parse().ok())
+        .expect("a count of drawn pixels");
+    assert!(
+        drawn > 600_000,
+        "only {drawn} pixels of 786432 were the client's window"
+    );
+    let colours: u32 = frame_value("colours")
+        .and_then(|value| value.parse().ok())
+        .expect("a count of colours");
+    assert!(colours > 1, "the frame is one flat colour, so nothing drew");
 }

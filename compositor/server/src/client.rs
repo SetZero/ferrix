@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use compositor_protocol::core::{
-    self, wl_compositor, wl_display, wl_region, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    self, wl_compositor, wl_data_device_manager, wl_display, wl_output, wl_region, wl_registry,
+    wl_seat, wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface, wl_surface,
 };
 use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
 use compositor_wire::{
@@ -13,7 +14,7 @@ use compositor_wire::{
 use crate::globals::Globals;
 use crate::role::Role;
 use crate::shm::{Buffer, FORMATS, Pool};
-use crate::surface::{Committed, Rect, Region, Surface};
+use crate::surface::{Committed, Output, Rect, Region, Subsurface, Surface};
 use crate::xdg::{Toplevel, XdgRole, XdgSurface};
 
 /// What ended a connection.
@@ -226,6 +227,13 @@ pub struct Client {
     buffers: BTreeMap<ObjectId, Buffer>,
     xdg_surfaces: BTreeMap<ObjectId, XdgSurface>,
     toplevels: BTreeMap<ObjectId, Toplevel>,
+    subsurfaces: BTreeMap<ObjectId, Subsurface>,
+    /// What the seat announces: `wl_seat.capability` bits.
+    capabilities: u32,
+    /// The keymap every `wl_keyboard` is sent, if there is one.
+    keymap: Option<(Fd, u32)>,
+    /// What `wl_output` says the screen is.
+    output: Output,
     /// The next configure serial. Serials go up and are never reused, so a
     /// client's `ack_configure` names one configure and no other.
     serial: u32,
@@ -256,8 +264,41 @@ impl Client {
             buffers: BTreeMap::new(),
             xdg_surfaces: BTreeMap::new(),
             toplevels: BTreeMap::new(),
+            subsurfaces: BTreeMap::new(),
+            capabilities: 0,
+            keymap: None,
+            output: Output::default(),
             serial: 1,
         }
+    }
+
+    /// Say what the seat has, before any client binds it.
+    ///
+    /// A client may only ask for a capability the seat announced, so a
+    /// compositor with no input yet announces none rather than handing out a
+    /// keyboard that will never send a key.
+    pub const fn set_seat_capabilities(&mut self, capabilities: u32) {
+        self.capabilities = capabilities;
+    }
+
+    /// The keymap every `wl_keyboard` is given: a descriptor and its length.
+    ///
+    /// The same descriptor goes to every keyboard, which is what libwayland's
+    /// own compositors do: the file is read-only and each client maps its own
+    /// copy.
+    pub const fn set_keymap(&mut self, keymap: Option<(Fd, u32)>) {
+        self.keymap = keymap;
+    }
+
+    /// Say what the screen is, before any client binds `wl_output`.
+    pub const fn set_output(&mut self, output: Output) {
+        self.output = output;
+    }
+
+    /// The subsurface `id` names, if it is one.
+    #[must_use]
+    pub fn subsurface(&self, id: ObjectId) -> Option<&Subsurface> {
+        self.subsurfaces.get(&id)
     }
 
     /// The `xdg_surface` `id` names, if it is one.
@@ -542,6 +583,11 @@ impl Client {
             Role::Region => {
                 let _ = self.regions.remove(&id);
             }
+            Role::Subsurface => {
+                // The surface keeps its buffer and loses its place: the
+                // protocol's "the wl_surface is unmapped".
+                let _ = self.subsurfaces.remove(&id);
+            }
             Role::ShmPool => {
                 // The protocol keeps the pool's memory alive while buffers
                 // cut from it live: "the mmapped memory will be released
@@ -619,6 +665,10 @@ impl Client {
             Role::Region => self.region_request(sender, opcode, args),
             Role::Shm => self.shm(opcode, args),
             Role::ShmPool => self.shm_pool(sender, opcode, args),
+            Role::Subcompositor => self.subcompositor(opcode, args),
+            Role::Subsurface => self.subsurface_request(sender, opcode, args),
+            Role::Seat => self.seat(version, opcode, args),
+            Role::DataDeviceManager => self.data_device_manager(version, opcode, args),
             Role::XdgWmBase => self.xdg_wm_base(version, opcode, args),
             Role::XdgSurface => self.xdg_surface_request(sender, version, opcode, args),
             Role::XdgToplevel => self.xdg_toplevel_request(sender, opcode, args),
@@ -702,6 +752,27 @@ impl Client {
         }
         if !self.make(id, global.interface, version, global.role) {
             return;
+        }
+        if global.role == Role::Seat {
+            // libwayland's own seats send these from the bind handler, and
+            // every toolkit gathers them during its first roundtrip.
+            let _ = self.out.write(
+                id,
+                wl_seat::event::CAPABILITIES,
+                &[ArgType::Uint],
+                &[Arg::Uint(self.capabilities)],
+            );
+            if version >= 2 {
+                let _ = self.out.write(
+                    id,
+                    wl_seat::event::NAME,
+                    &[ArgType::Str { nullable: false }],
+                    &[Arg::Str(Some("seat0"))],
+                );
+            }
+        }
+        if global.role == Role::Output {
+            self.describe_output(id, version);
         }
         if global.role == Role::Shm {
             // libwayland's wl_shm sends its formats from the bind handler,
@@ -884,7 +955,7 @@ impl Client {
                     });
                     return;
                 };
-                if transform > core::wl_output::transform::FLIPPED_270 {
+                if transform > wl_output::transform::FLIPPED_270 {
                     self.fail(Fatal::Interface {
                         object: sender,
                         code: wl_surface::error::INVALID_TRANSFORM,
@@ -1018,6 +1089,177 @@ impl Client {
                 if pool.resize(size) {
                     self.events.push(Event::PoolResized { pool: sender, size });
                 }
+            }
+            _ => {}
+        }
+    }
+
+    /// `wl_subcompositor`: `get_subsurface`.
+    ///
+    /// A subsurface is a surface placed relative to another and committed
+    /// with it. Every toolkit makes them -- for a title bar, a shadow, a
+    /// cursor -- so a compositor that advertises `wl_subcompositor` and does
+    /// not answer this refuses every such client at its first window.
+    fn subcompositor(&mut self, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != wl_subcompositor::request::GET_SUBSURFACE {
+            return;
+        }
+        let (Some(id), Some(surface), Some(parent)) = (
+            args.first().and_then(Arg::as_object),
+            args.get(1).and_then(Arg::as_object),
+            args.get(2).and_then(Arg::as_object),
+        ) else {
+            return;
+        };
+        for (object, name) in [(surface, "wl_surface"), (parent, "wl_surface")] {
+            if !self.surfaces.contains_key(&object) {
+                self.fail(Fatal::WrongInterface {
+                    object,
+                    wanted: name,
+                });
+                return;
+            }
+        }
+        if surface == parent {
+            self.fail(Fatal::Interface {
+                object: id,
+                code: wl_subcompositor::error::BAD_SURFACE,
+                text: "a surface cannot be its own parent".to_owned(),
+            });
+            return;
+        }
+        // A surface that already has a role may not be given another, as for
+        // `xdg_surface`.
+        if self.subsurfaces.values().any(|sub| sub.surface == surface)
+            || self.xdg_surfaces.values().any(|xdg| xdg.surface == surface)
+        {
+            self.fail(Fatal::Interface {
+                object: id,
+                code: wl_subcompositor::error::BAD_SURFACE,
+                text: "that surface already has a role".to_owned(),
+            });
+            return;
+        }
+        if self.make(id, &core::WL_SUBSURFACE, 1, Role::Subsurface) {
+            let _ = self.subsurfaces.insert(
+                id,
+                Subsurface {
+                    surface,
+                    parent,
+                    position: (0, 0),
+                    synchronised: true,
+                },
+            );
+        }
+    }
+
+    /// `wl_subsurface`: where it sits and how it commits.
+    ///
+    /// The position is kept and the stacking is not: a subsurface is drawn
+    /// with its parent, and this compositor draws a window's own surface
+    /// only, so `place_above` and `place_below` change nothing yet. They are
+    /// taken rather than refused, since the protocol allows them.
+    fn subsurface_request(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        let Some(sub) = self.subsurfaces.get_mut(&sender) else {
+            return;
+        };
+        match opcode {
+            wl_subsurface::request::SET_POSITION => {
+                let (Some(x), Some(y)) = (
+                    args.first().and_then(Arg::as_int),
+                    args.get(1).and_then(Arg::as_int),
+                ) else {
+                    return;
+                };
+                sub.position = (x, y);
+            }
+            wl_subsurface::request::SET_SYNC => sub.synchronised = true,
+            wl_subsurface::request::SET_DESYNC => sub.synchronised = false,
+            _ => {}
+        }
+    }
+
+    /// `wl_seat`: the keyboard, the pointer and the touchscreen.
+    ///
+    /// A client may only ask for a capability the seat announced, and this
+    /// one announces what [`Client::set_seat_capabilities`] was told. Asking
+    /// for one it did not is `missing_capability`, which is what the protocol
+    /// says and what keeps a client from waiting for events that will never
+    /// come.
+    fn seat(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        let Some(id) = args.first().and_then(Arg::as_object) else {
+            return;
+        };
+        let (interface, role, capability, what) = match opcode {
+            wl_seat::request::GET_POINTER => (
+                &core::WL_POINTER,
+                Role::Pointer,
+                wl_seat::capability::POINTER,
+                "pointer",
+            ),
+            wl_seat::request::GET_KEYBOARD => (
+                &core::WL_KEYBOARD,
+                Role::Keyboard,
+                wl_seat::capability::KEYBOARD,
+                "keyboard",
+            ),
+            wl_seat::request::GET_TOUCH => (
+                &core::WL_TOUCH,
+                Role::Touch,
+                wl_seat::capability::TOUCH,
+                "touch",
+            ),
+            _ => return,
+        };
+        if self.capabilities & capability == 0 {
+            self.fail(Fatal::Interface {
+                object: id,
+                code: wl_seat::error::MISSING_CAPABILITY,
+                text: format!("this seat has no {what}"),
+            });
+            return;
+        }
+        if !self.make(id, interface, version, role) {
+            return;
+        }
+        if role == Role::Keyboard {
+            self.send_keymap(id);
+        }
+    }
+
+    /// `wl_data_device_manager`: the clipboard's objects.
+    ///
+    /// The objects are made and nothing is ever offered through them. A
+    /// compositor without a clipboard that does not advertise the global at
+    /// all is one that toolkits refuse to start on -- which is how this came
+    /// to be written -- and one that advertises it and then does not answer
+    /// `get_data_device` is worse, because the client only finds out at its
+    /// first copy. `wl_data_device.selection` is never sent, which is exactly
+    /// what a client sees when no other client has ever copied anything.
+    fn data_device_manager(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        let Some(id) = args.first().and_then(Arg::as_object) else {
+            return;
+        };
+        match opcode {
+            wl_data_device_manager::request::CREATE_DATA_SOURCE => {
+                let _ = self.make(id, &core::WL_DATA_SOURCE, version, Role::DataSource);
+            }
+            wl_data_device_manager::request::GET_DATA_DEVICE => {
+                let Some(seat) = args.get(1).and_then(Arg::as_object) else {
+                    return;
+                };
+                if self
+                    .objects
+                    .get(seat)
+                    .is_none_or(|entry| entry.data != Role::Seat)
+                {
+                    self.fail(Fatal::WrongInterface {
+                        object: seat,
+                        wanted: "wl_seat",
+                    });
+                    return;
+                }
+                let _ = self.make(id, &core::WL_DATA_DEVICE, version, Role::DataDevice);
             }
             _ => {}
         }
@@ -1273,6 +1515,121 @@ impl Client {
             // a compositor may ignore each, and Hyprland ignores the first
             // three for a tiled window.
             _ => {}
+        }
+    }
+
+    /// Tell a fresh `wl_output` what the screen is.
+    ///
+    /// Every client reads these: a toolkit with no mode has no size to scale
+    /// against, and foot reports `(null): 0x0+0x0@0Hz` for an output that
+    /// sent none. The `done` at the end is what says the description is
+    /// whole, and a client waits for it.
+    fn describe_output(&mut self, id: ObjectId, version: u32) {
+        let mode = self.output;
+        let _ = self.out.write(
+            id,
+            wl_output::event::GEOMETRY,
+            &[
+                ArgType::Int,
+                ArgType::Int,
+                ArgType::Int,
+                ArgType::Int,
+                ArgType::Int,
+                ArgType::Str { nullable: false },
+                ArgType::Str { nullable: false },
+                ArgType::Int,
+            ],
+            &[
+                Arg::Int(mode.x),
+                Arg::Int(mode.y),
+                // A size in millimetres. Nothing here has a physical screen,
+                // and a zero is what every headless compositor sends: a
+                // client reads it as "unknown" and uses the scale instead.
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(wl_output::subpixel::UNKNOWN.cast_signed()),
+                Arg::Str(Some("Ferrix")),
+                Arg::Str(Some("hyprix")),
+                Arg::Int(wl_output::transform::NORMAL.cast_signed()),
+            ],
+        );
+        let _ = self.out.write(
+            id,
+            wl_output::event::MODE,
+            &[ArgType::Uint, ArgType::Int, ArgType::Int, ArgType::Int],
+            &[
+                Arg::Uint(wl_output::mode::CURRENT | wl_output::mode::PREFERRED),
+                Arg::Int(mode.width),
+                Arg::Int(mode.height),
+                // Millihertz, as the protocol counts it.
+                Arg::Int(mode.refresh),
+            ],
+        );
+        if version >= 2 {
+            let _ = self.out.write(
+                id,
+                wl_output::event::SCALE,
+                &[ArgType::Int],
+                &[Arg::Int(mode.scale)],
+            );
+        }
+        if version >= 4 {
+            for (opcode, text) in [
+                (wl_output::event::NAME, mode.name),
+                (
+                    wl_output::event::DESCRIPTION,
+                    "the Ferrix compositor's output",
+                ),
+            ] {
+                let _ = self.out.write(
+                    id,
+                    opcode,
+                    &[ArgType::Str { nullable: false }],
+                    &[Arg::Str(Some(text))],
+                );
+            }
+        }
+        if version >= 2 {
+            let _ = self.out.write(id, wl_output::event::DONE, &[], &[]);
+        }
+    }
+
+    /// Give a fresh `wl_keyboard` the keymap, or say there is none.
+    ///
+    /// `wl_keyboard.keymap` must be sent before anything else, and a client
+    /// that is given `no_keymap` knows it will be told raw keycodes it cannot
+    /// name. That is what a compositor with no keymap yet should say, rather
+    /// than sending a descriptor that is not one.
+    fn send_keymap(&mut self, id: ObjectId) {
+        let signature = &[ArgType::Uint, ArgType::Fd, ArgType::Uint];
+        match self.keymap {
+            Some((fd, size)) => {
+                let _ = self.out.write(
+                    id,
+                    core::wl_keyboard::event::KEYMAP,
+                    signature,
+                    &[
+                        Arg::Uint(core::wl_keyboard::keymap_format::XKB_V1),
+                        Arg::Fd(fd),
+                        Arg::Uint(size),
+                    ],
+                );
+            }
+            None => {
+                // The protocol has no way to send nothing, so `no_keymap`
+                // goes with a descriptor the client will not map and a size
+                // of zero. libwayland's own compositors do the same.
+                let _ = self.out.write(
+                    id,
+                    core::wl_keyboard::event::KEYMAP,
+                    signature,
+                    &[
+                        Arg::Uint(core::wl_keyboard::keymap_format::NO_KEYMAP),
+                        Arg::Fd(Fd(-1)),
+                        Arg::Uint(0),
+                    ],
+                );
+            }
         }
     }
 

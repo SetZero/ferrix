@@ -49,7 +49,7 @@ pub use client::{Client, Event, Fatal, Outgoing};
 pub use globals::{Global, Globals};
 pub use role::Role;
 pub use shm::{Buffer, BufferError, FORMATS, Format, Pool};
-pub use surface::{Committed, Rect, Region, State, Surface};
+pub use surface::{Committed, Output, Rect, Region, State, Subsurface, Surface};
 pub use xdg::{Toplevel, XdgRole, XdgSurface};
 
 pub use compositor_protocol as protocol;

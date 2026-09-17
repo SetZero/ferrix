@@ -56,6 +56,18 @@ pub enum Role {
     XdgPopup,
     /// `xdg_positioner`, which says where a popup goes.
     XdgPositioner,
+    /// `wl_subsurface`, made by `wl_subcompositor.get_subsurface`.
+    Subsurface,
+    /// `wl_pointer`, made by `wl_seat.get_pointer`.
+    Pointer,
+    /// `wl_keyboard`, made by `wl_seat.get_keyboard`.
+    Keyboard,
+    /// `wl_touch`, made by `wl_seat.get_touch`.
+    Touch,
+    /// `wl_data_device`, made by `wl_data_device_manager.get_data_device`.
+    DataDevice,
+    /// `wl_data_source`, made by `wl_data_device_manager.create_data_source`.
+    DataSource,
 }
 
 impl Role {

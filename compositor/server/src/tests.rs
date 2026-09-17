@@ -1802,3 +1802,288 @@ fn a_window_keeps_the_title_and_app_id_hyprctl_prints() {
     assert_eq!(events[0].sender, ObjectId(8));
     assert_eq!(events[0].opcode, xdg_shell::xdg_toplevel::event::CLOSE);
 }
+
+// ---------------------------------------------------------------------------
+// The interfaces a real toolkit asks for
+//
+// Every one of these was written because `compositor/hyprix/probe/
+// real-client.sh` ran a third-party terminal against the compositor and it
+// stopped: first because `wl_data_device_manager` was not offered at all,
+// then because `wl_subcompositor.get_subsurface` was offered and not
+// answered, then because `wl_output` described nothing. A client written
+// against this tree's own crates would not have found any of them.
+// ---------------------------------------------------------------------------
+
+/// A client with `wl_subcompositor` (6), `wl_seat` (7), `wl_output` (8) and
+/// `wl_data_device_manager` (9) bound beside the two `drawing_client` has.
+fn full_client(capabilities: u32) -> Client {
+    let mut globals = Globals::new();
+    for (interface, version, role) in [
+        (&core::WL_COMPOSITOR, 6, Role::Compositor),
+        (&core::WL_SHM, 1, Role::Shm),
+        (&core::WL_SEAT, 7, Role::Seat),
+        (&xdg_shell::XDG_WM_BASE, 6, Role::XdgWmBase),
+        (&core::WL_SUBCOMPOSITOR, 1, Role::Subcompositor),
+        (&core::WL_OUTPUT, 4, Role::Output),
+        (&core::WL_DATA_DEVICE_MANAGER, 3, Role::DataDeviceManager),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+    client.set_seat_capabilities(capabilities);
+    client.set_output(crate::Output {
+        width: 1024,
+        height: 768,
+        ..crate::Output::default()
+    });
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_compositor", 6, 4));
+    bytes.extend(bind(2, 2, "wl_shm", 1, 5));
+    bytes.extend(bind(2, 5, "wl_subcompositor", 1, 6));
+    bytes.extend(bind(2, 3, "wl_seat", 7, 7));
+    bytes.extend(bind(2, 6, "wl_output", 4, 8));
+    bytes.extend(bind(2, 7, "wl_data_device_manager", 3, 9));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    client
+}
+
+#[test]
+fn a_fresh_output_is_told_what_the_screen_is() {
+    let mut client = full_client(0);
+    let events: Vec<Sent> = sent(&mut client)
+        .into_iter()
+        .filter(|event| event.sender == ObjectId(8))
+        .collect();
+    let opcodes: Vec<u16> = events.iter().map(|event| event.opcode).collect();
+    assert_eq!(
+        opcodes,
+        [
+            core::wl_output::event::GEOMETRY,
+            core::wl_output::event::MODE,
+            core::wl_output::event::SCALE,
+            core::wl_output::event::NAME,
+            core::wl_output::event::DESCRIPTION,
+            core::wl_output::event::DONE,
+        ],
+        "a client waits for `done` and reads everything before it"
+    );
+    // The mode is the screen: a client with none has no size to scale
+    // against, and a real toolkit printed `(null): 0x0+0x0@0Hz` for one.
+    let mode = &events[1].args;
+    assert_eq!(mode[1], "Int(1024)");
+    assert_eq!(mode[2], "Int(768)");
+    assert_eq!(
+        mode[3], "Int(60000)",
+        "millihertz, as the protocol counts it"
+    );
+    assert_eq!(
+        events[0].args[7],
+        format!("Int({})", core::wl_output::transform::NORMAL),
+    );
+    assert_eq!(
+        events[2].args,
+        ["Int(1)"],
+        "one buffer pixel per logical one"
+    );
+    assert_eq!(events[3].args, ["Str(Some(\"HEADLESS-1\"))"]);
+}
+
+#[test]
+fn an_output_bound_at_version_one_is_not_sent_what_it_cannot_read() {
+    // `scale` arrived in 2, `name` and `description` in 4, and `done` in 2.
+    // A client bound at 1 that was sent them would read them with the wrong
+    // signatures.
+    let mut globals = Globals::new();
+    assert!(globals.add(&core::WL_OUTPUT, 4, Role::Output).is_some());
+    let mut client = Client::new(globals);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_output", 1, 3));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    let opcodes: Vec<u16> = sent(&mut client)
+        .into_iter()
+        .filter(|event| event.sender == ObjectId(3))
+        .map(|event| event.opcode)
+        .collect();
+    assert_eq!(
+        opcodes,
+        [
+            core::wl_output::event::GEOMETRY,
+            core::wl_output::event::MODE
+        ]
+    );
+}
+
+#[test]
+fn a_fresh_seat_says_what_it_has_and_refuses_what_it_does_not() {
+    // With nothing, a client is told nothing and may ask for nothing.
+    let mut empty = full_client(0);
+    let capabilities: Vec<Sent> = sent(&mut empty)
+        .into_iter()
+        .filter(|event| event.sender == ObjectId(7))
+        .collect();
+    assert_eq!(capabilities.len(), 2, "capabilities and a name");
+    assert_eq!(capabilities[0].args, ["Uint(0)"]);
+    assert_eq!(capabilities[1].args, ["Str(Some(\"seat0\"))"]);
+
+    let ask =
+        |opcode: u16, id: u32| request(7, opcode, &[ArgType::NewId], &[Arg::NewId(ObjectId(id))]);
+    let keyboard = ask(core::wl_seat::request::GET_KEYBOARD, 10);
+    let _ = empty.read(&keyboard, &[]);
+    assert!(
+        matches!(
+            empty.fatal(),
+            Some(Fatal::Interface { code, .. })
+                if *code == core::wl_seat::error::MISSING_CAPABILITY
+        ),
+        "a seat with no keyboard handed one out: {:?}",
+        empty.fatal()
+    );
+
+    // With a keyboard and a pointer, both are made, and the keyboard is given
+    // its keymap before anything else.
+    let both = core::wl_seat::capability::KEYBOARD | core::wl_seat::capability::POINTER;
+    let mut seated = full_client(both);
+    let _ = sent(&mut seated);
+    let mut bytes = ask(core::wl_seat::request::GET_KEYBOARD, 10);
+    bytes.extend(ask(core::wl_seat::request::GET_POINTER, 11));
+    assert_eq!(seated.read(&bytes, &[]), bytes.len());
+    assert_eq!(seated.fatal(), None);
+    assert_eq!(
+        seated.objects().get(ObjectId(10)).map(|entry| entry.data),
+        Some(Role::Keyboard)
+    );
+    assert_eq!(
+        seated.objects().get(ObjectId(11)).map(|entry| entry.data),
+        Some(Role::Pointer)
+    );
+
+    let events = sent(&mut seated);
+    assert_eq!(events.len(), 1, "the keymap, and nothing else yet");
+    assert_eq!(events[0].sender, ObjectId(10));
+    assert_eq!(events[0].opcode, core::wl_keyboard::event::KEYMAP);
+    // With no keymap the compositor says so rather than sending a descriptor
+    // that is not one.
+    assert_eq!(
+        events[0].args[0],
+        format!("Uint({})", core::wl_keyboard::keymap_format::NO_KEYMAP)
+    );
+    assert_eq!(events[0].args[2], "Uint(0)");
+
+    // Touch is still refused, since the seat did not announce it.
+    let touch = ask(core::wl_seat::request::GET_TOUCH, 12);
+    let _ = seated.read(&touch, &[]);
+    assert!(seated.is_finished());
+}
+
+#[test]
+fn a_subsurface_is_a_surface_placed_against_another() {
+    let mut client = full_client(0);
+    let _ = sent(&mut client);
+    let mut bytes = create_surface(3);
+    bytes.extend(create_surface(10));
+    let get_sub = |id: u32, surface: u32, parent: u32| {
+        request(
+            6,
+            core::wl_subcompositor::request::GET_SUBSURFACE,
+            &[
+                ArgType::NewId,
+                ArgType::Object { nullable: false },
+                ArgType::Object { nullable: false },
+            ],
+            &[
+                Arg::NewId(ObjectId(id)),
+                Arg::Object(ObjectId(surface)),
+                Arg::Object(ObjectId(parent)),
+            ],
+        )
+    };
+    bytes.extend(get_sub(11, 10, 3));
+    bytes.extend(request(
+        11,
+        core::wl_subsurface::request::SET_POSITION,
+        &[ArgType::Int, ArgType::Int],
+        &[Arg::Int(4), Arg::Int(-9)],
+    ));
+    bytes.extend(request(
+        11,
+        core::wl_subsurface::request::SET_DESYNC,
+        &[],
+        &[],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let sub = client.subsurface(ObjectId(11)).expect("a subsurface");
+    assert_eq!(sub.surface, ObjectId(10));
+    assert_eq!(sub.parent, ObjectId(3));
+    assert_eq!(sub.position, (4, -9));
+    assert!(!sub.synchronised, "set_desync");
+
+    // A surface may not be its own parent, nor take a second role.
+    let mut same = full_client(0);
+    let mut bytes = create_surface(3);
+    bytes.extend(get_sub(11, 3, 3));
+    let _ = same.read(&bytes, &[]);
+    assert!(
+        matches!(
+            same.fatal(),
+            Some(Fatal::Interface { code, .. })
+                if *code == core::wl_subcompositor::error::BAD_SURFACE
+        ),
+        "{:?}",
+        same.fatal()
+    );
+
+    let mut twice = full_client(0);
+    let mut bytes = create_surface(3);
+    bytes.extend(create_surface(10));
+    bytes.extend(get_sub(11, 10, 3));
+    bytes.extend(get_sub(12, 10, 3));
+    let _ = twice.read(&bytes, &[]);
+    assert!(twice.is_finished(), "a second role on one surface");
+}
+
+#[test]
+fn the_clipboards_objects_are_made_even_though_nothing_is_ever_offered() {
+    // A toolkit that does not find `wl_data_device_manager` refuses to start,
+    // which is how this came to be written. The objects exist and no
+    // selection is ever sent, which is what a client sees when nobody has
+    // copied anything.
+    let mut client = full_client(0);
+    let mut bytes = request(
+        9,
+        core::wl_data_device_manager::request::CREATE_DATA_SOURCE,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(10))],
+    );
+    bytes.extend(request(
+        9,
+        core::wl_data_device_manager::request::GET_DATA_DEVICE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(11)), Arg::Object(ObjectId(7))],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert_eq!(
+        client.objects().get(ObjectId(11)).map(|entry| entry.data),
+        Some(Role::DataDevice)
+    );
+
+    // A data device asked for on something that is not a seat is refused.
+    let mut wrong = full_client(0);
+    let bytes = request(
+        9,
+        core::wl_data_device_manager::request::GET_DATA_DEVICE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(11)), Arg::Object(ObjectId(4))],
+    );
+    let _ = wrong.read(&bytes, &[]);
+    assert_eq!(
+        wrong.fatal(),
+        Some(&Fatal::WrongInterface {
+            object: ObjectId(4),
+            wanted: "wl_seat"
+        })
+    );
+}

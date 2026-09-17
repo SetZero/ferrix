@@ -141,3 +141,9 @@ calling the renderer with rectangles, the other by two programs talking
 Wayland to a server that works those rectangles out from their requests -- so
 a difference between them is a real one. A second test runs one client
 instead of two and requires the comparison to notice.
+
+`hyprix/probe/real-client.sh` is the other half: it runs `foot`, a Wayland
+terminal built against libwayland and every other compositor, and records
+what it said. A client written against this tree's own crates can only show
+that the two halves agree; a toolkit that knows nothing about this one is
+what finds the protocols it does not offer.

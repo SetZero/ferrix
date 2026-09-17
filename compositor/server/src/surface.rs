@@ -261,3 +261,53 @@ impl Surface {
         std::mem::take(&mut self.committed_callbacks)
     }
 }
+
+/// A `wl_subsurface`: a surface placed relative to another.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Subsurface {
+    /// The surface that was given the role.
+    pub surface: ObjectId,
+    /// The surface it is placed against.
+    pub parent: ObjectId,
+    /// Where its top-left sits in the parent's coordinates.
+    pub position: (i32, i32),
+    /// Whether its commits wait for the parent's, which is the state a
+    /// subsurface starts in.
+    pub synchronised: bool,
+}
+
+/// What `wl_output` tells a client the screen is.
+///
+/// A client with no mode has no size to scale against, so every field here
+/// is one some toolkit reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Output {
+    /// Where the screen is in the space all screens share.
+    pub x: i32,
+    /// The same.
+    pub y: i32,
+    /// In pixels.
+    pub width: i32,
+    /// In pixels.
+    pub height: i32,
+    /// Refresh in millihertz, as the protocol counts it.
+    pub refresh: i32,
+    /// Buffer pixels per logical pixel.
+    pub scale: i32,
+    /// The name a person sees, as `hyprctl monitors` prints it.
+    pub name: &'static str,
+}
+
+impl Default for Output {
+    fn default() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            refresh: 60_000,
+            scale: 1,
+            name: "HEADLESS-1",
+        }
+    }
+}
