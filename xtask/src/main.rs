@@ -68,6 +68,7 @@ mod test_disk;
 mod threads;
 mod uutils;
 mod vfs;
+mod wallpaper;
 mod window;
 mod workspace;
 mod wsl;
@@ -120,6 +121,7 @@ COMMANDS:
     build         Compile the loader and kernel and write a bootable image
     run           Boot the image under QEMU, attached to the terminal
     run-compositor  Boot compositor/hyprix as init with a virtio-gpu, on a screen this host can show
+    wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
     test-boot     Boot the image under QEMU and assert the kernel came up
     test-shell    Boot with a static busybox built in and require its script's output
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
@@ -164,6 +166,12 @@ OPTIONS:
                                          takes it: `de`, or `de,us` for two a switch moves between
     --variant <LIST>                     run-compositor: their variants, as input:kb_variant
                                          takes them: `nodeadkeys,` is one for the first layout only
+    --wallpaper <NAME>                   run-compositor: which kept wallpaper to show, by part of its
+                                         name, or `none`; one of them, another each run, otherwise
+    --from <WHERE>                       wallpapers: where the pictures are, a directory here or
+                                         <host>:<directory> for one `ssh` reaches
+    --size <W>x<H>                       run-compositor: the guest's screen; wallpapers: the screen
+                                         to cut pictures for (1920x1080 for both)
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --zinc                               check: also zinc's fmt, clippy, tests and pty completion test
@@ -263,6 +271,7 @@ fn run() -> Result<()> {
         "test-net" => test_net(&args),
         "test-display" => display::test_display(&args),
         "run-compositor" => compositor::run_compositor(&args),
+        "wallpapers" => wallpaper::import(&args),
         "test-compositor" => compositor::test_compositor(&args),
         "test-input" => input::test_input(&args),
         "test-seat" => seat::test_seat(&args),

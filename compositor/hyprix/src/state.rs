@@ -152,13 +152,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // The screens: memory when `--headless` asked for one, and every
     // connected connector of every card otherwise. A card's size is the
     // mode's, not the compositor's to choose.
-    let backends: Vec<Box<dyn Backend>> = match options.headless {
-        Some((width, height)) => vec![Box::new(Headless::new(width, height))],
-        None => open_screens()?,
-    };
     // The `monitor =` lines, which say where a monitor goes, how it is
-    // scaled and whether it is used at all. A line that cannot be read is
-    // said and the rest apply, as everywhere else in the configuration.
+    // scaled, which of its modes it is set to and whether it is used at all.
+    // A line that cannot be read is said and the rest apply, as everywhere
+    // else in the configuration. Read before the screens are opened, because
+    // the mode is set when one is.
     let mut rules = Vec::new();
     for raw in &config.monitors {
         match MonitorRule::parse(&raw.value) {
@@ -166,6 +164,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             Err(why) => report(&format!("hyprix: monitor = {}: {why}", raw.value)),
         }
     }
+    let backends: Vec<Box<dyn Backend>> = match options.headless {
+        Some((width, height)) => vec![Box::new(Headless::new(width, height))],
+        None => open_screens(&rules)?,
+    };
     let mut screens = Screen::all(backends, &rules)?;
     // The `windowrule` lines, which are applied when a window maps.
     let mut window_rules = crate::rules::Rules::new(&config, report);
@@ -2583,8 +2585,8 @@ fn logical(pixels: u32, scale: f64) -> i64 {
 /// Only Linux, and Ferrix through its Linux ABI, have `/dev/dri`; elsewhere
 /// the compositor is headless or it is nothing.
 #[cfg(target_os = "linux")]
-fn open_screens() -> Result<Vec<Box<dyn Backend>>, String> {
-    let screens: Vec<Box<dyn Backend>> = crate::backend::Drm::open_all()
+fn open_screens(rules: &[MonitorRule]) -> Result<Vec<Box<dyn Backend>>, String> {
+    let screens: Vec<Box<dyn Backend>> = crate::backend::Drm::open_all(rules)
         .into_iter()
         .map(|screen| Box::new(screen) as Box<dyn Backend>)
         .collect();
@@ -2602,7 +2604,7 @@ fn open_screens() -> Result<Vec<Box<dyn Backend>>, String> {
 
 /// The same, where there is no `/dev/dri`.
 #[cfg(not(target_os = "linux"))]
-fn open_screens() -> Result<Vec<Box<dyn Backend>>, String> {
+fn open_screens(_rules: &[MonitorRule]) -> Result<Vec<Box<dyn Backend>>, String> {
     Err("this host has no /dev/dri; run with --headless".to_owned())
 }
 

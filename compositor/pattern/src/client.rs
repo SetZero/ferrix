@@ -77,6 +77,96 @@ pub enum Shape {
     /// A window with an `xdg_popup` on it, this many pixels square, hanging
     /// off the window's top-left corner: what a menu is.
     Menu(u32),
+    /// A `zwlr_layer_surface_v1` on the `background` layer, anchored to all
+    /// four edges and reserving nothing: what a wallpaper asks for. It draws
+    /// the [`Picture`] it was given rather than a pattern.
+    Wallpaper,
+}
+
+/// A picture a wallpaper shows: `XRGB8888` rows with no padding.
+///
+/// Read from a file that is those rows behind a twelve-byte header -- the
+/// eight bytes [`Picture::MAGIC`], then the width and the height as
+/// little-endian `u32`s. Not a format anybody else has: decoding a JPEG is
+/// a library this client has no other use for, and whoever puts the file
+/// on the image (`cargo xtask run-compositor`) has a whole machine to
+/// convert one with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picture {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+impl Picture {
+    /// What a picture's file begins with.
+    pub const MAGIC: &'static [u8; 8] = b"FXWALL1\n";
+
+    /// A picture from its file's bytes.
+    ///
+    /// # Errors
+    ///
+    /// A sentence saying what is wrong with them.
+    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
+        let (magic, rest) = bytes
+            .split_at_checked(Self::MAGIC.len())
+            .ok_or("a picture shorter than its header")?;
+        if magic != Self::MAGIC {
+            return Err("not a picture: the file does not begin FXWALL1".to_owned());
+        }
+        let number = |at: usize| -> Option<u32> {
+            let field = rest.get(at..at.checked_add(4)?)?;
+            Some(u32::from_le_bytes(field.try_into().ok()?))
+        };
+        let (width, height) = number(0)
+            .zip(number(4))
+            .ok_or("a picture shorter than its header")?;
+        let len = usize::try_from(u64::from(width) * u64::from(height) * 4)
+            .map_err(|_| "a picture too large to hold".to_owned())?;
+        let pixels = rest
+            .get(8..)
+            .filter(|pixels| width > 0 && height > 0 && pixels.len() == len)
+            .ok_or_else(|| {
+                format!("a {width}x{height} picture whose pixels are not {len} bytes")
+            })?;
+        Ok(Self {
+            width,
+            height,
+            pixels: pixels.to_vec(),
+        })
+    }
+
+    /// The picture as a `width` by `height` buffer: scaled until it covers
+    /// the whole of it, the same amount each way, and cut evenly on the two
+    /// sides that overflow. What `swaybg -m fill` and `hyprpaper`'s `cover`
+    /// do, with the nearest pixel rather than a filter: a picture made for
+    /// the screen it is shown on is copied, and that is the case this is
+    /// for.
+    #[must_use]
+    pub fn cover(&self, width: u32, height: u32) -> Vec<u8> {
+        if (width, height) == (self.width, self.height) {
+            return self.pixels.clone();
+        }
+        let (from_w, from_h) = (u64::from(self.width), u64::from(self.height));
+        let (to_w, to_h) = (u64::from(width.max(1)), u64::from(height.max(1)));
+        // The part of the picture that has the buffer's shape: all of one
+        // direction, and the middle of the other.
+        let (part_w, part_h) = if from_w * to_h > from_h * to_w {
+            ((from_h * to_w / to_h).max(1), from_h)
+        } else {
+            (from_w, (from_w * to_h / to_w).max(1))
+        };
+        let (left, top) = ((from_w - part_w) / 2, (from_h - part_h) / 2);
+        let mut out = Vec::with_capacity(usize::try_from(to_w * to_h * 4).unwrap_or(0));
+        for y in 0..to_h {
+            let row = (top + y * part_h / to_h) * from_w;
+            for x in 0..to_w {
+                let at = usize::try_from((row + left + x * part_w / to_w) * 4).unwrap_or(0);
+                out.extend_from_slice(self.pixels.get(at..at + 4).unwrap_or(&[0, 0, 0, 0xFF]));
+            }
+        }
+        out
+    }
 }
 
 /// Connect, make a window, draw `pattern` in it, and keep drawing until the
@@ -128,6 +218,36 @@ pub fn run_shaped_on(
     title: &str,
     shape: Shape,
 ) -> Result<String, String> {
+    run_with(path, pattern, title, shape, None)
+}
+
+/// Connect to the compositor the environment names and be its wallpaper:
+/// `picture`, behind everything, until the compositor goes away.
+///
+/// # Errors
+///
+/// A sentence saying what could not be done.
+pub fn run_wallpaper(picture: Picture) -> Result<String, String> {
+    let display =
+        std::env::var("WAYLAND_DISPLAY").map_err(|_| "WAYLAND_DISPLAY is not set".to_owned())?;
+    let path = socket_path(&display).map_err(|error| format!("the socket: {error}"))?;
+    run_with(
+        &path,
+        Pattern::Checkerboard,
+        "wallpaper",
+        Shape::Wallpaper,
+        Some(picture),
+    )
+}
+
+/// The client itself: every entry point above, with what it was given.
+fn run_with(
+    path: &std::path::Path,
+    pattern: Pattern,
+    title: &str,
+    shape: Shape,
+    picture: Option<Picture>,
+) -> Result<String, String> {
     let stream = UnixStream::connect(path)
         .map_err(|error| format!("connecting to {}: {error}", path.display()))?;
     let mut connection =
@@ -151,8 +271,13 @@ pub fn run_shaped_on(
     );
     flush(&mut connection, &mut out)?;
 
+    // A wallpaper stays for as long as there is a desktop to be behind: the
+    // deadline is a test client's, there so that one a test forgot does not
+    // outlive it for ever.
+    let stays = picture.is_some();
     let mut state = Client {
         pattern,
+        picture,
         shape,
         title: title.to_owned(),
         globals: BTreeMap::new(),
@@ -174,7 +299,7 @@ pub fn run_shaped_on(
     };
 
     let started = Instant::now();
-    while started.elapsed() < DEADLINE {
+    while stays || started.elapsed() < DEADLINE {
         match connection.receive() {
             Ok(_) => {}
             Err(RecvError::WouldBlock) => {
@@ -199,6 +324,8 @@ pub fn run_shaped_on(
 /// What the client knows.
 struct Client {
     pattern: Pattern,
+    /// What is drawn instead of the pattern, for a wallpaper.
+    picture: Option<Picture>,
     shape: Shape,
     title: String,
     /// The registry's names, by interface.
@@ -584,7 +711,7 @@ impl Client {
         // `wl_seat` is wanted and not required: a compositor with nothing
         // plugged in may offer none, and a client that refused to start over
         // it would be a client that only runs on a machine with a keyboard.
-        let bar = matches!(self.shape, Shape::Bar(_));
+        let bar = matches!(self.shape, Shape::Bar(_) | Shape::Wallpaper);
         for (interface, id, want, required) in [
             ("wl_compositor", id::COMPOSITOR, 6u32, true),
             ("wl_shm", id::SHM, 1, true),
@@ -644,6 +771,9 @@ impl Client {
         );
         if let Shape::Bar(height) = self.shape {
             return self.become_bar(height, out);
+        }
+        if self.shape == Shape::Wallpaper {
+            return self.become_wallpaper(out);
         }
         request(
             out,
@@ -876,6 +1006,44 @@ impl Client {
     /// Ask for a `zwlr_layer_surface_v1` across the top edge: what a bar
     /// asks for, in the order `waybar` asks for it.
     fn become_bar(&mut self, height: u32, out: &mut Writer) -> Result<(), String> {
+        self.become_layer(
+            out,
+            (zwlr_layer_shell_v1::layer::TOP, "pattern-bar"),
+            zwlr_layer_surface_v1::anchor::TOP
+                | zwlr_layer_surface_v1::anchor::LEFT
+                | zwlr_layer_surface_v1::anchor::RIGHT,
+            // Zero across, because it is anchored to both side edges and the
+            // compositor decides; the height is the bar's own, and all of it
+            // is reserved.
+            (height, i32::try_from(height).unwrap_or(0)),
+        )
+    }
+
+    /// The `background` layer, every edge, no size of its own and `-1` for
+    /// the zone: the whole screen, under the bars as well as the windows,
+    /// which is what `swaybg`, `hyprpaper` and `mpvpaper` ask for.
+    fn become_wallpaper(&mut self, out: &mut Writer) -> Result<(), String> {
+        self.become_layer(
+            out,
+            (zwlr_layer_shell_v1::layer::BACKGROUND, "wallpaper"),
+            zwlr_layer_surface_v1::anchor::TOP
+                | zwlr_layer_surface_v1::anchor::BOTTOM
+                | zwlr_layer_surface_v1::anchor::LEFT
+                | zwlr_layer_surface_v1::anchor::RIGHT,
+            (0, -1),
+        )
+    }
+
+    /// A layer surface on `layer` under `namespace`, anchored to `anchor`,
+    /// `height` tall where it is not anchored top and bottom, with `zone`
+    /// for its exclusive zone.
+    fn become_layer(
+        &mut self,
+        out: &mut Writer,
+        (layer, namespace): (u32, &str),
+        anchor: u32,
+        (height, zone): (u32, i32),
+    ) -> Result<(), String> {
         request(
             out,
             id::LAYER_SHELL,
@@ -893,8 +1061,8 @@ impl Client {
                 // A null output: the compositor chooses, which is what a bar
                 // with no monitor configured asks for.
                 Arg::Object(ObjectId(0)),
-                Arg::Uint(zwlr_layer_shell_v1::layer::TOP),
-                Arg::Str(Some("pattern-bar")),
+                Arg::Uint(layer),
+                Arg::Str(Some(namespace)),
             ],
         );
         request(
@@ -902,19 +1070,15 @@ impl Client {
             id::LAYER_SURFACE,
             zwlr_layer_surface_v1::request::SET_ANCHOR,
             &[ArgType::Uint],
-            &[Arg::Uint(
-                zwlr_layer_surface_v1::anchor::TOP
-                    | zwlr_layer_surface_v1::anchor::LEFT
-                    | zwlr_layer_surface_v1::anchor::RIGHT,
-            )],
+            &[Arg::Uint(anchor)],
         );
         request(
             out,
             id::LAYER_SURFACE,
             zwlr_layer_surface_v1::request::SET_SIZE,
             &[ArgType::Uint, ArgType::Uint],
-            // Zero across, because it is anchored to both side edges and the
-            // compositor decides; the height is the bar's own.
+            // Zero where it is anchored to both edges, because the
+            // compositor decides.
             &[Arg::Uint(0), Arg::Uint(height)],
         );
         request(
@@ -922,7 +1086,7 @@ impl Client {
             id::LAYER_SURFACE,
             zwlr_layer_surface_v1::request::SET_EXCLUSIVE_ZONE,
             &[ArgType::Int],
-            &[Arg::Int(i32::try_from(height).unwrap_or(0))],
+            &[Arg::Int(zone)],
         );
         // A surface with a role and no buffer: the compositor answers with a
         // configure, and the first commit is what asks for it.
@@ -952,7 +1116,10 @@ impl Client {
         // A pattern change changes the format, and a `wl_buffer` cannot be
         // reinterpreted: it is made afresh for a new format as for a new
         // size.
-        let format = self.pattern.format().wl_shm();
+        let format = match self.picture {
+            Some(_) => compositor_render::Format::Xrgb8888.wl_shm(),
+            None => self.pattern.format().wl_shm(),
+        };
         let fresh = self.shared.is_none()
             || self.buffer_size != (width, height)
             || self.buffer_format != Some(format);
@@ -1009,10 +1176,14 @@ impl Client {
 
         // The pattern itself, drawn by `compositor/render` so the client and
         // the expected image are made from one piece of code.
-        let pixels = self.pattern.draw(
+        let size = (
             u32::try_from(width).unwrap_or(0),
             u32::try_from(height).unwrap_or(0),
         );
+        let pixels = match self.picture.as_ref() {
+            Some(picture) => picture.cover(size.0, size.1),
+            None => self.pattern.draw(size.0, size.1),
+        };
         if let Some(shared) = self.shared.as_mut() {
             let room = shared.bytes_mut();
             let take = pixels.len().min(room.len());
@@ -1100,3 +1271,94 @@ fn flush(connection: &mut Connection, out: &mut Writer) -> Result<(), String> {
 
 /// So the module compiles on a host without the descriptor plumbing.
 const _: fn() -> io::Result<()> = || Ok(());
+
+#[cfg(test)]
+mod tests {
+    use super::Picture;
+
+    /// A picture's file: the header, and then `pixels`.
+    fn file(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
+        let mut bytes = Picture::MAGIC.to_vec();
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.extend_from_slice(pixels);
+        bytes
+    }
+
+    /// A 4x2 picture whose every pixel says where it is: its column in the
+    /// first byte and its row in the second.
+    fn numbered() -> Picture {
+        let pixels: Vec<u8> = (0..2u8)
+            .flat_map(|y| (0..4u8).flat_map(move |x| [x, y, 0, 0xFF]))
+            .collect();
+        Picture::parse(&file(4, 2, &pixels)).expect("a picture")
+    }
+
+    /// The column and row each pixel of a buffer came from.
+    fn places(buffer: &[u8]) -> Vec<(u8, u8)> {
+        buffer
+            .chunks_exact(4)
+            .map(|pixel| (pixel[0], pixel[1]))
+            .collect()
+    }
+
+    #[test]
+    fn a_picture_is_its_header_and_exactly_its_pixels() {
+        assert!(Picture::parse(&file(2, 1, &[0; 8])).is_ok());
+        for (what, bytes) in [
+            ("no header", b"FXWALL".to_vec()),
+            (
+                "another file",
+                file(2, 1, &[0; 8]).iter().map(|byte| byte ^ 1).collect(),
+            ),
+            ("a row short", file(2, 2, &[0; 8])),
+            ("a row over", file(2, 1, &[0; 16])),
+            ("no size", file(0, 0, &[])),
+        ] {
+            assert!(
+                Picture::parse(&bytes).is_err(),
+                "{what} was taken for a picture"
+            );
+        }
+    }
+
+    /// Made for the screen it is on, a picture is copied; on a narrower one
+    /// it keeps its height and loses its sides evenly, and on a shorter one
+    /// the other way about: it covers, and is never stretched.
+    #[test]
+    fn a_picture_covers_the_screen_and_is_cut_evenly() {
+        let picture = numbered();
+        assert_eq!(
+            places(&picture.cover(4, 2)),
+            [
+                (0, 0),
+                (1, 0),
+                (2, 0),
+                (3, 0),
+                (0, 1),
+                (1, 1),
+                (2, 1),
+                (3, 1)
+            ]
+        );
+        // Two wide and two tall: the middle two columns of the four.
+        assert_eq!(
+            places(&picture.cover(2, 2)),
+            [(1, 0), (2, 0), (1, 1), (2, 1)]
+        );
+        // Eight wide and two tall: every column twice, and the middle row of
+        // what is now a picture twice as tall -- one of the two it has.
+        let wide = places(&picture.cover(8, 2));
+        assert_eq!(wide.len(), 16);
+        assert!(
+            wide.iter()
+                .map(|place| place.0)
+                .eq([0, 0, 1, 1, 2, 2, 3, 3, 0, 0, 1, 1, 2, 2, 3, 3])
+        );
+        // Twice the size each way is every pixel four times over.
+        let doubled = places(&picture.cover(8, 4));
+        assert_eq!(doubled.first(), Some(&(0, 0)));
+        assert_eq!(doubled.last(), Some(&(3, 1)));
+        assert_eq!(doubled.len(), 32);
+    }
+}

@@ -108,9 +108,27 @@ const LOCK_PATH: &str = "bin/lock";
 const VKBD_PATH: &str = "bin/vkbd";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
+/// Where `run-compositor` puts the wallpaper it carries.
+const WALLPAPER_PATH: &str = "etc/wallpaper.fxwall";
+
 /// The instance the control socket is under, which `hyprctl` finds by
 /// looking when `HYPRLAND_INSTANCE_SIGNATURE` is not set.
 const INSTANCE: &str = "ferrix";
+
+/// The picture the mode boot requires: the two windows on a screen of the
+/// size its `monitor =` line asked for.
+const MODE_EXPECTED: [(&str, &str); 1] = [(
+    "tiled on a 1920x1080 screen, which is the mode the configuration asked for",
+    "compositor/render/tests/data/dwindle-two-clients-1920x1080.xrle",
+)];
+
+/// The configuration the mode boot is given. The card prefers 1024x768, as
+/// every judged boot's does, and this asks for a size it only lists.
+const MODE_CONFIG: &str = "# Carried into the initramfs by `cargo xtask test-compositor`.
+monitor = , 1920x1080@60, auto, 1
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+";
 
 /// The picture a bar and two windows make, which the second boot requires.
 const BAR_EXPECTED: (&str, &str) = (
@@ -1343,7 +1361,7 @@ const RUN_CONFIG: &str = "# Written into the initramfs by `cargo xtask run-compo
 # type into: `/bin/term` runs a program on a pseudoterminal and `/bin/zinc`
 # is the shell, with the busybox applets the image carries beside it. The
 # pattern clients a gate boot tiles are a keybind away rather than started
-# here -- at 640x480 a third window leaves the shell too little room.
+# here: somebody who opened a desktop wants a shell, not a test pattern.
 exec-once = /bin/term /bin/zinc
 bind = SUPER, RETURN, exec, /bin/term /bin/zinc
 bind = SUPER, P, exec, /bin/pattern gradient another
@@ -1503,12 +1521,41 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     };
     let config = with_layout(config, args);
     let programs = Programs::build(arch)?;
-    let (image, _) = build_image(arch, &programs, &config, Carried::wanted(arch, args)?, args)?;
+    let mut carried = Carried::wanted(arch, args)?;
+    // A wallpaper, from this machine's own and from nowhere else:
+    // `crate::wallpaper` says where they come from and why a run never goes
+    // looking. It is started before anything the configuration starts, so
+    // the first thing on the screen is a desktop and not a grey one; a real
+    // `hyprland.conf` starts a wallpaper program the image does not have,
+    // so the line is added to one of those too.
+    // The screen's size, said twice. To QEMU, as the card's `xres` and
+    // `yres`, which is what a screen served over VNC is. And to the
+    // compositor, as a `monitor =` line ahead of whatever the configuration
+    // says itself: under a *window* the card prefers the window's size,
+    // which for a window QEMU has just opened is 640x480 whatever it was
+    // told, and the kernel lists the standard sizes beside that one so that
+    // such a line can pick. A configuration's own line for the monitor
+    // comes later and wins.
+    let size = args.size.unwrap_or(crate::wallpaper::SCREEN);
+    let config = format!("monitor = , {}x{}@60, auto, 1\n{config}", size.0, size.1);
+    let config = match crate::wallpaper::file(args, size) {
+        Some(picture) => {
+            carried.ports.push(crate::ports::File {
+                path: WALLPAPER_PATH.to_owned(),
+                mode: 0o644,
+                content: crate::ports::Content::Bytes(picture),
+            });
+            format!("exec-once = /{CLIENT_PATH} --wallpaper /{WALLPAPER_PATH}\n{config}")
+        }
+        None => config,
+    };
+    let (image, _) = build_image(arch, &programs, &config, carried, args)?;
     let args = Args {
         // The card, the keyboard and the tablet: `--display` is what puts a
         // virtio-gpu on the bus, and without one the compositor has no
         // `/dev/dri` to open. `test-compositor` sets it the same way.
         display: true,
+        size: Some(size),
         accel: args
             .accel
             .clone()
@@ -1613,7 +1660,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are fourteen of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 18] = [
+const BOOTS: [(&str, Boot); 19] = [
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
     ("decorations", test_decorations),
@@ -1631,6 +1678,7 @@ const BOOTS: [(&str, Boot); 18] = [
     ("lock", test_lock),
     ("menu", test_menu),
     ("pointer", test_pointer),
+    ("mode", test_mode),
     ("typing", test_typing),
 ];
 
@@ -1885,6 +1933,51 @@ fn test_pointer(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
          rate ({most} frames the most in a report) and left where the mouse was put, in every \
          one of {} pixels",
         after.width * after.height
+    );
+    Ok(())
+}
+
+/// A boot for `monitor = , WIDTHxHEIGHT`: the mode a configuration asks for
+/// is the mode the screen is set to.
+///
+/// Under a window QEMU has just opened a virtio-gpu prefers 640x480,
+/// whatever it was started with, so a desktop somebody watches is the size
+/// of a postage stamp unless its configuration can say otherwise. The
+/// kernel lists the standard sizes beside the preferred one, the compositor
+/// takes the one its `monitor =` line names, and what is required here is
+/// the whole of that: a picture 1920 by 1080, of windows tiled for a screen
+/// that size, from a card that prefers 1024x768. A compositor that set the
+/// preferred mode anyway shows a picture of another size, and the
+/// comparison says so.
+fn test_mode(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        programs,
+        MODE_CONFIG,
+        &Wanted {
+            states: &MODE_EXPECTED,
+            others: &[],
+            moving: None,
+            pointer: None,
+            awaiting: &[],
+        },
+        &[],
+        args,
+    )?;
+    let Some(screen) = screens.first() else {
+        return Err(Error::new(format!("{arch}: the mode boot took no picture")));
+    };
+    if !said.iter().any(|line| line.contains("1920x1080")) {
+        return Err(Error::new(format!(
+            "{arch}: the compositor never said its screen is 1920x1080"
+        )));
+    }
+    println!(
+        "  {arch}: the screen took the mode its `monitor =` line asked for, {}x{}, from a card \
+         that prefers 1024x768, every one of {} pixels",
+        screen.width,
+        screen.height,
+        screen.width * screen.height
     );
     Ok(())
 }

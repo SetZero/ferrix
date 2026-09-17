@@ -16,4 +16,4 @@
 
 pub mod client;
 
-pub use client::{Shape, run, run_on, run_shaped, run_shaped_on};
+pub use client::{Picture, Shape, run, run_on, run_shaped, run_shaped_on, run_wallpaper};

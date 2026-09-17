@@ -7,6 +7,11 @@ use std::io::Write;
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    // `--wallpaper <file>`: the picture in `file` behind everything, which
+    // is what `cargo xtask run-compositor` starts this as.
+    if let Some(at) = arguments.iter().position(|word| word == "--wallpaper") {
+        wallpaper(arguments.get(at + 1).map(String::as_str));
+    }
     let pattern = match arguments.first().map(String::as_str) {
         Some("checkerboard") | None => compositor_render::Pattern::Checkerboard,
         Some("gradient") => compositor_render::Pattern::Gradient,
@@ -49,6 +54,28 @@ fn main() {
         Err(error) => {
             say(&format!("pattern: failed: {error}"));
             std::process::exit(1);
+        }
+    }
+}
+
+/// Be the wallpaper `file` holds, and end when the compositor does.
+fn wallpaper(file: Option<&str>) -> ! {
+    let Some(file) = file else {
+        say("pattern: --wallpaper takes the picture's file");
+        std::process::exit(2);
+    };
+    let shown = std::fs::read(file)
+        .map_err(|error| format!("reading {file}: {error}"))
+        .and_then(|bytes| compositor_pattern::Picture::parse(&bytes))
+        .and_then(compositor_pattern::run_wallpaper);
+    match shown {
+        Ok(line) => {
+            say(&line);
+            std::process::exit(0)
+        }
+        Err(error) => {
+            say(&format!("pattern: no wallpaper: {error}"));
+            std::process::exit(1)
         }
     }
 }

@@ -1084,9 +1084,13 @@ fn attach_display(command: &mut Command, arch: Arch, args: &Args) {
             };
             let _ = command.args([
                 "-device",
+                // 1024x768 is what every judged boot's pictures are of;
+                // `run-compositor` says another.
                 &format!(
-                    "virtio-gpu-pci,id={id}{slot},disable-legacy=on,iommu_platform=on,xres=1024,yres=768",
-                    id = crate::display::device_id(index)
+                    "virtio-gpu-pci,id={id}{slot},disable-legacy=on,iommu_platform=on,xres={wide},yres={tall}",
+                    id = crate::display::device_id(index),
+                    wide = args.size.map_or(1024, |size| size.0),
+                    tall = args.size.map_or(768, |size| size.1),
                 ),
             ]);
         }

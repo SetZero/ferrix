@@ -190,7 +190,12 @@ impl Drm {
     /// Nothing: a card that will not open or a connector that will not take
     /// a mode is left out, and a machine with no screen at all is the
     /// caller's to report.
-    pub fn open_all() -> Vec<Self> {
+    ///
+    /// `rules` are the configuration's `monitor =` lines. One that names a
+    /// resolution has it taken before the mode is set, where the connector
+    /// lists it; the rest of what a rule says -- where the monitor goes, its
+    /// scale, whether it is used -- is `Screen::all`'s.
+    pub fn open_all(rules: &[compositor_config::MonitorRule]) -> Vec<Self> {
         let mut cards = Vec::new();
         let mut plans = Vec::new();
         for card in compositor_drm::cards() {
@@ -207,7 +212,25 @@ impl Drm {
         // `Virtual-1` each become `Virtual-1` and `Virtual-2`.
         compositor_drm::rename(&mut plans);
         let mut screens = Vec::new();
-        for (card, plan) in cards.into_iter().zip(plans) {
+        for (card, mut plan) in cards.into_iter().zip(plans) {
+            let description = plan
+                .edid
+                .as_ref()
+                .map(|edid| edid.describe(compositor_drm::registered))
+                .unwrap_or_default();
+            // The last rule that names this monitor, as everywhere else.
+            let rule = rules
+                .iter()
+                .rev()
+                .find(|rule| rule.matches(&plan.name, &description));
+            if let Some(compositor_config::Mode::Fixed {
+                width,
+                height,
+                refresh,
+            }) = rule.map(|rule| rule.mode)
+            {
+                let _ = plan.take((width, height), refresh);
+            }
             if let Ok(screen) = Self::on(card, plan) {
                 screens.push(screen);
             }

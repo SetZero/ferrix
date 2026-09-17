@@ -121,6 +121,8 @@ pub struct Plan {
     pub crtc_index: usize,
     /// The mode it was set to.
     pub mode: ModeInfo,
+    /// Every mode the connector lists, which [`Plan::take`] chooses among.
+    pub modes: Vec<ModeInfo>,
     /// The monitor's name, made from the connector's type and number.
     pub name: String,
     /// What the monitor says it is: its `EDID`, read. `None` for a
@@ -130,6 +132,30 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Take the listed mode that is `width` by `height`, the one nearest
+    /// `refresh` hertz where several are, and say whether there was one.
+    ///
+    /// What a `monitor = name, 1920x1080@60, ...` line asks for. A size the
+    /// connector does not list is left alone and the plan keeps the mode it
+    /// had, as Hyprland falls back to the preferred one: a mode a monitor
+    /// never offered is a black screen on real hardware.
+    pub fn take(&mut self, (width, height): (u32, u32), refresh: Option<f64>) -> bool {
+        let wanted = refresh.unwrap_or(60.0);
+        let found = self
+            .modes
+            .iter()
+            .filter(|mode| (u32::from(mode.hdisplay), u32::from(mode.vdisplay)) == (width, height))
+            .min_by(|one, other| {
+                let off = |mode: &ModeInfo| (f64::from(mode.vrefresh) - wanted).abs();
+                off(one).total_cmp(&off(other))
+            })
+            .copied();
+        if let Some(mode) = found {
+            self.mode = mode;
+        }
+        found.is_some()
+    }
+
     /// The mode's size in pixels.
     #[must_use]
     pub const fn size(&self) -> (u32, u32) {
@@ -257,6 +283,7 @@ pub fn plans(card: &Card) -> io::Result<Vec<Plan>> {
             crtc,
             crtc_index,
             mode,
+            modes,
             name: connector_name(&connector),
             // A connector that will not say what it is gets no
             // description, which is one monitor a `desc:` rule cannot

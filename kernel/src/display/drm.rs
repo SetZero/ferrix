@@ -368,6 +368,44 @@ fn write_ids(process: &Process, at: u64, capacity: u32, ids: &[u32]) -> Result<(
 
 /// The mode a scanout's preferred size makes: 60 Hz, sync pulses where a
 /// monitor would put them, named `WxH`.
+/// The sizes a connected connector offers beside the one the device prefers.
+///
+/// A virtio-gpu shows whatever size it is handed a scanout of, so the
+/// device's own mode is a preference and not a limit -- and under a window
+/// the preference is the *window's* size, which for a window QEMU has just
+/// opened is 640x480 whatever `xres` and `yres` said. Linux's `virtio_gpu`
+/// lists the standard sizes beside the preferred one for the same reason
+/// (`drm_add_modes_noedid` in `virtio_gpu_conn_get_modes`), and a
+/// `monitor = , 1920x1080, ...` line is how somebody picks one.
+const STANDARD_SIZES: [(u32, u32); 10] = [
+    (3840, 2160),
+    (2560, 1440),
+    (1920, 1200),
+    (1920, 1080),
+    (1680, 1050),
+    (1600, 900),
+    (1280, 1024),
+    (1280, 720),
+    (1024, 768),
+    (800, 600),
+];
+
+/// What a connector whose device prefers `width` by `height` lists: that
+/// mode first and marked preferred, then every standard size that is not it.
+fn listed_modes(width: u32, height: u32) -> Vec<ModeInfo> {
+    let standard = STANDARD_SIZES
+        .iter()
+        .filter(|&&size| size != (width, height))
+        .map(|&(wide, tall)| {
+            let mut mode = mode_for(wide, tall);
+            mode.r#type = drm::MODE_TYPE_DRIVER;
+            mode
+        });
+    core::iter::once(mode_for(width, height))
+        .chain(standard)
+        .collect()
+}
+
 fn mode_for(width: u32, height: u32) -> ModeInfo {
     let mut mode = ModeInfo::ZERO;
     let clamp = |value: u32| u16::try_from(value).unwrap_or(u16::MAX);
@@ -850,9 +888,8 @@ fn connector(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
     let head = head_of(card, connector.connector_id, CONNECTOR).ok_or(Errno::ENOENT)?;
     let preferred = card.modes().get(head).copied().filter(|mode| mode.enabled);
     let modes: Vec<ModeInfo> = preferred
-        .map(|mode| mode_for(mode.width, mode.height))
-        .into_iter()
-        .collect();
+        .map(|mode| listed_modes(mode.width, mode.height))
+        .unwrap_or_default();
     if connector.modes_ptr != 0 && connector.count_modes as usize >= modes.len() {
         let mut bytes = vec![0u8; modes.len() * ModeInfo::SIZE];
         for (index, mode) in modes.iter().enumerate() {

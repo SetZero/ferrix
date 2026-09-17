@@ -14,9 +14,40 @@ mod names {
             crtc: 0,
             crtc_index: 0,
             mode: <ModeInfo as Field>::ZERO,
+            modes: Vec::new(),
             name: name.to_owned(),
             edid: None,
         }
+    }
+
+    /// A mode of `width` by `height` at `refresh` hertz.
+    fn mode(width: u16, height: u16, refresh: u32) -> ModeInfo {
+        ModeInfo {
+            hdisplay: width,
+            vdisplay: height,
+            vrefresh: refresh,
+            ..<ModeInfo as Field>::ZERO
+        }
+    }
+
+    /// `monitor = , 1920x1080@60, ...` takes the listed mode of that size,
+    /// the nearest in refresh where there are two, and a size the connector
+    /// never listed leaves the plan as it was.
+    #[test]
+    fn a_plan_takes_a_mode_the_connector_lists_and_no_other() {
+        let mut plan = plan("Virtual-1");
+        plan.mode = mode(640, 480, 60);
+        plan.modes = vec![
+            mode(640, 480, 60),
+            mode(1920, 1080, 144),
+            mode(1920, 1080, 60),
+        ];
+        assert!(plan.take((1920, 1080), Some(59.94)));
+        assert_eq!((plan.size(), plan.mode.vrefresh), ((1920, 1080), 60));
+        assert!(plan.take((1920, 1080), Some(165.0)));
+        assert_eq!(plan.mode.vrefresh, 144);
+        assert!(!plan.take((1366, 768), None));
+        assert_eq!(plan.size(), (1920, 1080), "a mode nobody listed was set");
     }
 
     fn names(plans: &mut [Plan]) -> Vec<String> {

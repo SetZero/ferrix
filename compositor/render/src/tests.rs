@@ -3038,3 +3038,16 @@ fn a_region_less_a_hole_is_what_is_left() {
     );
     assert_eq!(region.without(Rect::new(500, 500, 5, 5)), region);
 }
+
+/// The two clients on a 1920x1080 screen, which is the picture a guest whose
+/// `monitor =` line asked for that mode has to show.
+///
+/// `cargo xtask test-compositor`'s mode boot is what needs it: the card there
+/// prefers 1024x768, the configuration asks for 1920x1080, and a compositor
+/// that set the preferred mode anyway shows a picture of another size.
+#[test]
+fn two_pattern_clients_on_a_1920x1080_screen_match_the_expected_image() {
+    let size = (1920, 1080);
+    let frame = frame_on(size, &plain_style(), Settings::default());
+    golden::check("dwindle-two-clients-1920x1080", size.0, size.1, &frame);
+}

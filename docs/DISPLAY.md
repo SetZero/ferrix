@@ -391,6 +391,40 @@ from `BootInfo`. What changes is what a person sees:
   accelerator, which is what `run` does too. `--config <PATH>` carries a real
   configuration instead of the small one it writes; zinc is carried at
   `/bin/zinc`, so `SUPER+RETURN` opens a shell on a pseudoterminal.
+* **A watched desktop has a wallpaper, and a run never goes looking for
+  one (2026-09-18).** Ferrix has no JPEG or video decoder, so a picture is
+  converted where one can be and kept: `cargo xtask wallpapers --from
+  <directory>`, or `--from <host>:<directory>` to have that host's `ffmpeg`
+  do it over `ssh`, writes raw `XRGB8888` pictures cut for a 1920x1080
+  screen (`--size` for another; the first frame, for a video) into
+  `~/.local/share/ferrix/wallpapers`, or `$FERRIX_WALLPAPERS`.
+  `run-compositor` reads that directory and nothing else -- it names no
+  host and opens no connection, so it is the same run offline -- carries one
+  picture at `/etc/wallpaper.fxwall`, another each run or `--wallpaper
+  <name>`, and starts `/bin/pattern --wallpaper` on it before anything the
+  configuration starts: a `background` layer surface anchored to all four
+  edges, which scales a picture cut for another screen until it covers this
+  one. `--wallpaper none`, or an empty directory, is the plain background,
+  and a line says which. A gate boot carries none and its archive is what it
+  was.
+* **A watched desktop is 1920x1080, and a `monitor =` line is how
+  (2026-09-18).** Under a window the card prefers the *window's* size --
+  the next item but one found 640x480 on Windows whatever `xres` said --
+  and until now the connector listed that one mode and the compositor set
+  it. A virtio-gpu shows whatever size it is handed a scanout of, so the
+  kernel's connector lists the standard sizes beside the preferred one, as
+  Linux's `virtio_gpu` does; `compositor_drm::Plan::take` picks a listed
+  mode by size and nearest refresh, and leaves the plan alone for a size
+  nobody listed; and `hyprix` reads its `monitor =` lines before it opens
+  the screens, so `monitor = , 1920x1080@60, auto, 1` sets that mode.
+  `run-compositor` puts that line ahead of whatever configuration it
+  carries -- a configuration's own line for the monitor comes later and
+  wins -- and gives QEMU the same size as `xres` and `yres`, which is what a
+  screen served over VNC is; `--size <W>x<H>` says another. Judged boots
+  stay 1024x768, which is what their pictures are of, except the one that
+  holds this: `test-compositor --boot mode` asks a card that prefers
+  1024x768 for 1920x1080 and requires the picture of two windows tiled on a
+  screen that size, all 2,073,600 pixels of it.
 * **Where the screen goes is asked, not assumed (2026-09-17).**
   `-display default` is no good: QEMU's `default` is whichever local backend
   was compiled in, and a build with none fails at startup rather than falling

@@ -97,6 +97,16 @@ pub(crate) struct Args {
     /// `--config <PATH>`: the `hyprland.conf` `run-compositor` carries into
     /// the guest, in place of the small one it writes itself.
     pub(crate) config: Option<String>,
+    /// `--wallpaper <NAME>`: which of the kept wallpapers `run-compositor`
+    /// shows, by any part of its name, or `none` for a plain background.
+    /// Given nothing it shows one of them, another each run.
+    pub(crate) wallpaper: Option<String>,
+    /// `--from <WHERE>`: where `wallpapers` finds pictures to convert, a
+    /// directory of this machine's or `host:directory`.
+    pub(crate) from: Option<String>,
+    /// `--size <W>x<H>`: the screen `run-compositor` gives the guest and
+    /// `wallpapers` cuts pictures for, 1920x1080 for both when not given.
+    pub(crate) size: Option<(u32, u32)>,
     /// `--boot <name>`: run only the boots of `test-compositor` whose name
     /// holds this, rather than all of them.
     ///
@@ -149,6 +159,18 @@ impl Args {
                 "--config" => args.config = Some(value(&mut items, "--config")?),
                 "--layout" => args.layout = Some(value(&mut items, "--layout")?),
                 "--variant" => args.variant = Some(value(&mut items, "--variant")?),
+                "--wallpaper" => args.wallpaper = Some(value(&mut items, "--wallpaper")?),
+                "--from" => args.from = Some(value(&mut items, "--from")?),
+                "--size" => {
+                    let raw = value(&mut items, "--size")?;
+                    let size = raw
+                        .split_once('x')
+                        .and_then(|(wide, tall)| wide.parse().ok().zip(tall.parse().ok()))
+                        .filter(|&(wide, tall): &(u32, u32)| wide > 0 && tall > 0);
+                    args.size = Some(size.ok_or_else(|| {
+                        Error::new(format!("--size wants <width>x<height>, got `{raw}`"))
+                    })?);
+                }
                 other if other.starts_with('-') => {
                     return Err(Error::new(format!("unknown option `{other}`")));
                 }
