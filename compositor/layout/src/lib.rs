@@ -1,6 +1,6 @@
 //! Hyprland's window management as a pure state machine: monitors,
-//! workspaces, the dwindle, master and monocle layouts, and the dispatchers
-//! a key binding runs.
+//! workspaces, all four of its tiling layouts, and the dispatchers a key
+//! binding runs.
 //!
 //! Nothing here is a Wayland object, a socket or a device. A window is a
 //! [`WindowId`] the protocol server chose, a monitor is a rectangle in
@@ -13,7 +13,9 @@
 //!
 //! Hyprland is the reference: the dwindle tree follows
 //! `DwindleAlgorithm.cpp`, the master layout `MasterAlgorithm.cpp`, the
-//! monocle layout `MonocleAlgorithm.cpp`, the neighbour search
+//! monocle layout `MonocleAlgorithm.cpp`, the scrolling layout
+//! `ScrollingAlgorithm.cpp` and its `ScrollTapeController`, the neighbour
+//! search
 //! `CCompositor::getWindowInDirection`, and the gap and border arithmetic
 //! `applyNodeDataToWindow`. Each module says where it departs.
 //!
@@ -24,8 +26,8 @@
 //! not understood is an [`Error`], never a panic.
 //!
 //! What is not handled yet: `dwindle:pseudotile` (the option is left unread
-//! and every tiled window fills its slot), the `scrolling` layout, the
-//! dwindle options that need a cursor (`smart_split`, `smart_resizing`,
+//! and every tiled window fills its slot), `scrolling:direction` other than
+//! `right`, the dwindle options that need a cursor (`smart_split`, `smart_resizing`,
 //! `use_active_for_splits`, `precise_mouse_move`, `permanent_direction_override`),
 //! per-node resizing in the master layout, window selectors as dispatcher
 //! arguments, and `movewindow` on a floating window, which in Hyprland
@@ -40,6 +42,7 @@ pub mod layers;
 mod master;
 mod monocle;
 pub mod popup;
+mod scrolling;
 mod settings;
 mod state;
 

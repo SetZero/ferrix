@@ -17,6 +17,94 @@ pub enum Layout {
     Master,
     /// `monocle`: every window fills the workspace and one is shown.
     Monocle,
+    /// `scrolling`: a tape of columns wider than the screen.
+    Scrolling,
+}
+
+/// How a column is brought into view: `scrolling:focus_fit_method`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FitMethod {
+    /// `0`, `center`: the column's middle goes to the screen's middle.
+    Center,
+    /// `1`, `fit`, the default: the tape moves the least it can to get the
+    /// whole column on the screen, and does not move at all when it is
+    /// already there.
+    #[default]
+    Fit,
+}
+
+/// The widths `colresize +conf` steps through, in a form [`Settings`] can
+/// stay `Copy` with.
+///
+/// `Settings` is copied for every workspace whose `workspace =` line
+/// changes an option, on every frame; a `Vec` here would be an allocation
+/// each time for a list that is four numbers long in every configuration
+/// anybody writes. Past [`Widths::MOST`] the rest are dropped, and the
+/// parser says so.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Widths {
+    held: [f64; Self::MOST],
+    count: usize,
+}
+
+impl Widths {
+    /// How many widths are kept.
+    pub const MOST: usize = 16;
+
+    /// The widths, in the order they were written.
+    #[must_use]
+    pub fn as_slice(&self) -> &[f64] {
+        self.held.get(..self.count).unwrap_or(&[])
+    }
+
+    /// Read a comma-separated list, each width clamped the way Hyprland's
+    /// own parser clamps it. Never empty: `+conf` on an empty list has
+    /// nothing to step to, so it falls back to one whole screen.
+    #[must_use]
+    pub fn parse(text: &str) -> Self {
+        let mut held = [0.0; Self::MOST];
+        let mut count = 0;
+        for width in text
+            .split(',')
+            .filter_map(|part| part.trim().parse::<f64>().ok())
+            .map(|width| width.clamp(0.1, 1.0))
+        {
+            if let Some(slot) = held.get_mut(count) {
+                *slot = width;
+                count += 1;
+            }
+        }
+        if count == 0 {
+            if let Some(slot) = held.first_mut() {
+                *slot = 1.0;
+            }
+            count = 1;
+        }
+        Self { held, count }
+    }
+}
+
+/// The scrolling layout's options.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollingSettings {
+    /// `scrolling:column_width`: how much of the screen a new column takes.
+    pub column_width: f64,
+    /// `scrolling:focus_fit_method`.
+    pub focus_fit_method: FitMethod,
+    /// `scrolling:follow_focus`: the tape moves to bring the focused
+    /// window's column into view.
+    pub follow_focus: bool,
+    /// `scrolling:fullscreen_on_one_column`: one column alone spans the
+    /// whole screen, whatever its width says.
+    pub fullscreen_on_one_column: bool,
+    /// `scrolling:wrap_focus`: moving the focus past either end of the tape
+    /// goes to the other end.
+    pub wrap_focus: bool,
+    /// `scrolling:wrap_swapcol`: the same for `layoutmsg swapcol`.
+    pub wrap_swapcol: bool,
+    /// `scrolling:explicit_column_widths`: the widths `colresize +conf` and
+    /// `-conf` step through, in the order they were written.
+    pub column_widths: Widths,
 }
 
 /// Which side of a split a new dwindle window takes: `dwindle:force_split`.
@@ -163,6 +251,8 @@ pub struct Settings {
     pub dwindle: DwindleSettings,
     /// The master layout's options.
     pub master: MasterSettings,
+    /// The scrolling layout's options.
+    pub scrolling: ScrollingSettings,
     /// `binds:workspace_back_and_forth`: asking for the workspace that is
     /// already shown goes to the one before it instead, which is what makes
     /// one key both there and back.
@@ -228,6 +318,7 @@ impl Settings {
         let layout = match config.str("general:layout") {
             Some(name) if name.eq_ignore_ascii_case("master") => Layout::Master,
             Some(name) if name.eq_ignore_ascii_case("monocle") => Layout::Monocle,
+            Some(name) if name.eq_ignore_ascii_case("scrolling") => Layout::Scrolling,
             _ => Layout::Dwindle,
         };
         let force_split = match config.int("dwindle:force_split") {
@@ -283,11 +374,31 @@ impl Settings {
                     // Monocle has no scale factor of its own, and
                     // `dwindle`'s is the one Hyprland reads for a window
                     // whose layout does not offer one.
-                    Layout::Dwindle | Layout::Monocle => "dwindle:special_scale_factor",
+                    Layout::Dwindle | Layout::Monocle | Layout::Scrolling => {
+                        "dwindle:special_scale_factor"
+                    }
                 }),
                 1.0,
             )
             .clamp(0.0, 1.0),
+            scrolling: ScrollingSettings {
+                column_width: finite(config.float("scrolling:column_width"), 0.5).clamp(0.1, 1.0),
+                focus_fit_method: match config.int("scrolling:focus_fit_method") {
+                    Some(0) => FitMethod::Center,
+                    _ => FitMethod::Fit,
+                },
+                follow_focus: config.bool("scrolling:follow_focus").unwrap_or(true),
+                fullscreen_on_one_column: config
+                    .bool("scrolling:fullscreen_on_one_column")
+                    .unwrap_or(true),
+                wrap_focus: config.bool("scrolling:wrap_focus").unwrap_or(true),
+                wrap_swapcol: config.bool("scrolling:wrap_swapcol").unwrap_or(true),
+                column_widths: Widths::parse(
+                    config
+                        .str("scrolling:explicit_column_widths")
+                        .unwrap_or_default(),
+                ),
+            },
             dwindle: DwindleSettings {
                 preserve_split: config.bool("dwindle:preserve_split").unwrap_or(false),
                 force_split,

@@ -42,6 +42,7 @@ use crate::dwindle::Dwindle;
 use crate::geometry::{self, Area, overlap, sticks};
 use crate::master::Master;
 use crate::monocle::Monocle;
+use crate::scrolling::Scrolling;
 use crate::settings::{Layout, Orientation, Settings};
 use crate::{Error, Monitor, MonitorId, Rect, WindowId, WorkspaceId};
 
@@ -147,6 +148,7 @@ enum Tiling {
     Dwindle(Dwindle),
     Master(Master),
     Monocle(Monocle),
+    Scrolling(Scrolling),
 }
 
 impl Tiling {
@@ -155,6 +157,7 @@ impl Tiling {
             Layout::Dwindle => Self::Dwindle(Dwindle::default()),
             Layout::Master => Self::Master(Master::default()),
             Layout::Monocle => Self::Monocle(Monocle::default()),
+            Layout::Scrolling => Self::Scrolling(Scrolling::default()),
         }
     }
 
@@ -171,6 +174,7 @@ impl Tiling {
             Self::Dwindle(dwindle) => dwindle.insert(new, focused, area, settings),
             Self::Master(master) => master.insert(new, focused, settings),
             Self::Monocle(monocle) => monocle.insert(new),
+            Self::Scrolling(scrolling) => scrolling.insert(new, focused, settings, area.w),
         }
     }
 
@@ -189,6 +193,7 @@ impl Tiling {
             Self::Dwindle(dwindle) => dwindle.insert_at(new, point, toward, area, settings),
             Self::Master(master) => master.insert(new, None, settings),
             Self::Monocle(monocle) => monocle.insert(new),
+            Self::Scrolling(scrolling) => scrolling.insert(new, None, settings, area.w),
         }
     }
 
@@ -197,6 +202,7 @@ impl Tiling {
             Self::Dwindle(dwindle) => dwindle.remove(window),
             Self::Master(master) => master.remove(window),
             Self::Monocle(monocle) => monocle.remove(window),
+            Self::Scrolling(scrolling) => scrolling.remove(window),
         }
     }
 
@@ -206,6 +212,7 @@ impl Tiling {
             Self::Dwindle(dwindle) => dwindle.swap(a, b),
             Self::Master(master) => master.swap(a, b),
             Self::Monocle(monocle) => monocle.swap(a, b),
+            Self::Scrolling(scrolling) => scrolling.swap(a, b),
         }
     }
 
@@ -236,6 +243,14 @@ impl Tiling {
         }
     }
 
+    /// The tape, when that is the layout.
+    const fn scrolling(&mut self) -> Option<&mut Scrolling> {
+        match self {
+            Self::Scrolling(scrolling) => Some(scrolling),
+            _ => None,
+        }
+    }
+
     /// The master list, when that is the layout.
     const fn master(&mut self) -> Option<&mut Master> {
         match self {
@@ -249,6 +264,7 @@ impl Tiling {
             Self::Dwindle(dwindle) => dwindle.contains(window),
             Self::Master(master) => master.contains(window),
             Self::Monocle(monocle) => monocle.contains(window),
+            Self::Scrolling(scrolling) => scrolling.contains(window),
         }
     }
 
@@ -257,6 +273,7 @@ impl Tiling {
             Self::Dwindle(dwindle) => dwindle.windows(),
             Self::Master(master) => master.windows(),
             Self::Monocle(monocle) => monocle.windows(),
+            Self::Scrolling(scrolling) => scrolling.windows(),
         }
     }
 
@@ -273,6 +290,7 @@ impl Tiling {
             Self::Dwindle(dwindle) => dwindle.slots(area, settings),
             Self::Master(master) => master.slots(area, settings),
             Self::Monocle(monocle) => monocle.slots(area, shown),
+            Self::Scrolling(scrolling) => scrolling.slots(area, settings, shown),
         }
     }
 
@@ -1182,6 +1200,41 @@ impl State {
         if self.settings.movefocus_cycles_fullscreen && fullscreen {
             let back = matches!(direction, Direction::Up | Direction::Left);
             return self.cycle_next(&back, &false);
+        }
+        // The scrolling layout's directions are the tape's, not the
+        // screen's: a column off the side of the screen has no rectangle
+        // for a geometric search to find, so the tape is asked instead.
+        if matches!(self.settings.layout, Layout::Scrolling) {
+            let (right, along) = match direction {
+                Direction::Left => (false, true),
+                Direction::Right => (true, true),
+                Direction::Up => (false, false),
+                Direction::Down => (true, false),
+            };
+            let along_tape = self
+                .workspace_of(window)
+                .and_then(|workspace| self.workspaces.get(&workspace))
+                .and_then(|ws| match &ws.tiling {
+                    Tiling::Scrolling(scrolling) => {
+                        scrolling.beside(window, right, along, &self.settings)
+                    }
+                    _ => None,
+                });
+            if let Some(next) = along_tape {
+                let settings = self.settings;
+                self.focus(next);
+                let across = self
+                    .workspace_of(next)
+                    .map_or(0.0, |workspace| self.work_area_of(workspace).width as f64);
+                if let Some(tape) = self
+                    .workspace_of(next)
+                    .and_then(|workspace| self.workspaces.get_mut(&workspace))
+                    .and_then(|ws| ws.tiling.scrolling())
+                {
+                    tape.follow(next, &settings, across);
+                }
+                return Vec::new();
+            }
         }
         if let Some(target) = self.window_in_direction(window, direction) {
             self.focus(target);
@@ -2950,7 +3003,90 @@ impl State {
                 "cycleprev" => self.cycle_next(&true, &true),
                 _ => Vec::new(),
             },
+            Layout::Scrolling => self.scrolling_message(word, &rest),
         }
+    }
+
+    /// The scrolling layout's own messages, which are the largest of the
+    /// four layouts'.
+    ///
+    /// `focus` moves the focus, which is the compositor's and not the
+    /// tape's, so it is answered here with the same walk `movefocus` uses;
+    /// everything else is the tape's own.
+    fn scrolling_message(&mut self, word: &str, rest: &[&str]) -> Vec<Change> {
+        let focused = self.focused_window();
+        if word == "focus" {
+            return self.scrolling_focus(rest.first().copied().unwrap_or(""));
+        }
+        let settings = self.settings;
+        let Some(workspace) = focused.and_then(|window| self.workspace_of(window)) else {
+            return Vec::new();
+        };
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a monitor's pixels are far inside f64's exact range"
+        )]
+        let across = self.work_area_of(workspace).width as f64;
+        let mut words = vec![word];
+        words.extend_from_slice(rest);
+        let Some(tape) = self
+            .workspaces
+            .get_mut(&workspace)
+            .and_then(|ws| ws.tiling.scrolling())
+        else {
+            return Vec::new();
+        };
+        if !tape.message(&words, focused, &settings, across) {
+            return Vec::new();
+        }
+        self.run(|_| Vec::new())
+    }
+
+    /// `layoutmsg focus <direction>`: the tape's own focus walk.
+    ///
+    /// `l` and `r` step between columns and `u` and `d` within one, which
+    /// is what a tape that runs sideways means by a direction.
+    fn scrolling_focus(&mut self, direction: &str) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        let Some(workspace) = self.workspace_of(window) else {
+            return Vec::new();
+        };
+        let settings = self.settings;
+        let (right, along) = match direction.chars().next() {
+            Some('l') => (false, true),
+            Some('r') => (true, true),
+            Some('u' | 't') => (false, false),
+            Some('b' | 'd') => (true, false),
+            _ => return Vec::new(),
+        };
+        let Some(next) = self
+            .workspaces
+            .get(&workspace)
+            .and_then(|ws| match &ws.tiling {
+                Tiling::Scrolling(scrolling) => scrolling.beside(window, right, along, &settings),
+                _ => None,
+            })
+        else {
+            return Vec::new();
+        };
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a monitor's pixels are far inside f64's exact range"
+        )]
+        let across = self.work_area_of(workspace).width as f64;
+        self.run(|state| {
+            state.focus(next);
+            if let Some(tape) = state
+                .workspaces
+                .get_mut(&workspace)
+                .and_then(|ws| ws.tiling.scrolling())
+            {
+                tape.follow(next, &settings, across);
+            }
+            Vec::new()
+        })
     }
 
     /// The dwindle layout's own messages, which all act on the focused

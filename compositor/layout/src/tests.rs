@@ -3256,3 +3256,152 @@ fn monocle_shows_a_window_on_an_unfocused_workspace() {
     );
     assert_eq!(rects_on(&state, M2), [(2, r(1920, 0, 1280, 1024))]);
 }
+
+// -- Scrolling ----------------------------------------------------------------
+
+/// A tape of columns, each a share of the screen's width.
+fn tape(extra: &str) -> State {
+    setup(&format!("{BARE}general:layout = scrolling\n{extra}"))
+}
+
+/// `general:layout = scrolling`: a tape of columns, each its own width, and
+/// the screen is a window onto it.
+///
+/// Hyprland's fourth tiling layout and the one no other tiling compositor
+/// has: a column's width is its own, so a wide editor and a narrow terminal
+/// sit side by side and a third column scrolls in beside them without
+/// either of the first two changing shape.
+#[test]
+fn scrolling_lays_a_tape_of_columns() {
+    let mut state = tape("");
+    // One column alone spans the screen, because
+    // `fullscreen_on_one_column` is on by default.
+    open(&mut state, &[1]);
+    assert_eq!(rects_on(&state, M1), [(1, r(0, 0, 1920, 1080))]);
+
+    // Two columns at the default `column_width` of 0.5 fill the screen.
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects_on(&state, M1),
+        [(1, r(0, 0, 960, 1080)), (2, r(960, 0, 960, 1080))]
+    );
+
+    // Three at 0.5 are a tape half again as wide as the screen, and the
+    // third is brought into view -- `fit` moves the tape the least it can,
+    // so the tape's right edge is the screen's and the first column is off
+    // the left.
+    open(&mut state, &[3]);
+    assert_eq!(
+        rects_on(&state, M1),
+        [(2, r(0, 0, 960, 1080)), (3, r(960, 0, 960, 1080))],
+        "the first column scrolled off the left"
+    );
+}
+
+/// A tape narrower than the screen is centred, which is
+/// `calculateCameraOffset`'s first rule.
+#[test]
+fn scrolling_centres_a_tape_narrower_than_the_screen() {
+    let mut state =
+        tape("scrolling:column_width = 0.25\nscrolling:fullscreen_on_one_column = false\n");
+    open(&mut state, &[1]);
+    // One column of a quarter of the screen sits in the middle of it.
+    assert_eq!(rects_on(&state, M1), [(1, r(720, 0, 480, 1080))]);
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects_on(&state, M1),
+        [(1, r(480, 0, 480, 1080)), (2, r(960, 0, 480, 1080))]
+    );
+}
+
+/// `movefocus l` and `r` step between columns and scroll the tape;
+/// `movefocus u` and `d` walk the windows of the column.
+#[test]
+fn scrolling_movefocus_walks_the_tape_and_the_column() {
+    let mut state = tape("");
+    open(&mut state, &[1, 2, 3]);
+    assert_eq!(state.focused_window(), Some(WindowId(3)));
+
+    let _left = dispatch(&mut state, "movefocus", "l");
+    assert_eq!(state.focused_window(), Some(WindowId(2)));
+    let _left = dispatch(&mut state, "movefocus", "l");
+    assert_eq!(state.focused_window(), Some(WindowId(1)));
+    // And the tape followed, so the first column is on the screen again.
+    assert_eq!(
+        rects_on(&state, M1),
+        [(1, r(0, 0, 960, 1080)), (2, r(960, 0, 960, 1080))]
+    );
+
+    // `wrap_focus` is on by default, so going further wraps to the end.
+    let _left = dispatch(&mut state, "movefocus", "l");
+    assert_eq!(state.focused_window(), Some(WindowId(3)));
+}
+
+/// `layoutmsg expel` takes the last window of a column out into one of its
+/// own, and `consume` takes the next column's first window in.
+#[test]
+fn scrolling_expel_and_consume_move_windows_between_columns() {
+    let mut state = tape("");
+    open(&mut state, &[1, 2]);
+    // `consume` pulls the second column's window into the first.
+    focus(&mut state, 1);
+    let _consumed = dispatch(&mut state, "layoutmsg", "consume");
+    assert_eq!(
+        rects_on(&state, M1),
+        [(1, r(0, 0, 1920, 540)), (2, r(0, 540, 1920, 540))],
+        "one column of two windows, spanning the screen"
+    );
+
+    // `expel` sends the last of them back out.
+    let _expelled = dispatch(&mut state, "layoutmsg", "expel");
+    assert_eq!(
+        rects_on(&state, M1),
+        [(1, r(0, 0, 960, 1080)), (2, r(960, 0, 960, 1080))]
+    );
+}
+
+/// `layoutmsg colresize` changes the focused column's width, and
+/// `colresize +conf` steps through `scrolling:explicit_column_widths`.
+#[test]
+fn scrolling_colresize_changes_one_columns_width() {
+    let mut state = tape("scrolling:explicit_column_widths = 0.25, 0.5, 1.0\n");
+    open(&mut state, &[1, 2]);
+    focus(&mut state, 1);
+
+    let _resized = dispatch(&mut state, "layoutmsg", "colresize 0.25");
+    assert_eq!(
+        rects_on(&state, M1),
+        [(1, r(240, 0, 480, 1080)), (2, r(720, 0, 960, 1080))],
+        "a tape of 0.75 of the screen, centred"
+    );
+
+    // `+conf` steps to the next width in the list above the one it has.
+    let _stepped = dispatch(&mut state, "layoutmsg", "colresize +conf");
+    assert_eq!(
+        rects_on(&state, M1),
+        [(1, r(0, 0, 960, 1080)), (2, r(960, 0, 960, 1080))]
+    );
+}
+
+/// `layoutmsg swapcol` exchanges the focused column with its neighbour, and
+/// `inhibit_scroll` stops the tape moving.
+#[test]
+fn scrolling_swapcol_and_inhibit_scroll() {
+    let mut state = tape("");
+    open(&mut state, &[1, 2]);
+    focus(&mut state, 1);
+    let _swapped = dispatch(&mut state, "layoutmsg", "swapcol r");
+    assert_eq!(
+        rects_on(&state, M1),
+        [(2, r(0, 0, 960, 1080)), (1, r(960, 0, 960, 1080))]
+    );
+
+    // With the tape inhibited, `move +col` does not move it.
+    let mut held = tape("");
+    open(&mut held, &[1, 2, 3]);
+    focus(&mut held, 1);
+    let before = rects_on(&held, M1);
+    let _inhibited = dispatch(&mut held, "layoutmsg", "inhibit_scroll");
+    let _moved = dispatch(&mut held, "layoutmsg", "move +col");
+    assert_eq!(rects_on(&held, M1), before);
+}
