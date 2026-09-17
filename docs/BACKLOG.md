@@ -163,7 +163,7 @@ alive.
 | os-05 | zinc: `zinc-next`, the port of zsh's C runtime (36k lines; it compiles and passes `check --zinc`), landing in five slices that keep the oh-my-zsh gate green: all five slices are on main (core state, expansion, signals and jobs, execution, prompt with builtins and start-up) (19 of the 40 points); the other 21 are the remaining builtins, the history ring, ZLE, completion and modules, and the swap to `zinc`; `cargo xtask busybox` and its staleness rule |
 | os-a8 (was os-b7, os-50, os-7c, os-fb, ferrix-ce) | `ferrousli/`: first the wrappers for epoll, eventfd and `FIONBIO` with a C test (3), then `docs/POSIX-2024.md`'s list from the top of what is left (996 present, 247 missing, 80 points on 2026-09-16), each landing rebuilding the busybox and passing both ferrousli gates |
 | os-26 | The event loop's kernel rows are done (epoll, eventfd, `FIONBIO`, `FIOCLEX`/`FIONCLEX`); next the wake-on-event row (5) so `poll`/`epoll` waits stop rechecking every 5 ms, then the `AF_PACKET` gaps; Windows parity for `xtask` is held |
-| os-12 | Ports onto ferrousli: curl with HTTPS through mbedTLS and btop with libc++ landed for the release; on `ports-curl-btop` the firmware clock, ChaCha20 `getrandom` (BootInfo v5) and a hermetic HTTPS `test-net` program boot on all three architectures but are not gated; git not started |
+| os-12 | Ports onto ferrousli: curl with HTTPS through mbedTLS and btop with libc++ landed for the release; the firmware clock, ChaCha20 `getrandom` (BootInfo v5), the hermetic HTTPS `test-net` program and git all landed and gated on 2026-09-17. What is left of `ports-autobuild`: building the ports when stale rather than every time (5) |
 | open | Stage 8's list (14), `AF_UNIX` 3b the in-flight cycle pass (3) and 3c credentials (2), stage 10's VT-d record (5) and BAR trust (8), `timerfd` (3), dynamic linking (39), stage 12 |
 
 The fleet restarted on the customer's Windows machine on the evening of
@@ -607,9 +607,9 @@ same day, each on its own gate:
   completion and modules 3, the swap to zinc 1. B1 starts with the
   `BIN_FG` numbering fix.
 * **Ports (os-12, session ended):** the firmware clock and ChaCha20
-  `getrandom` (BootInfo v5) landed; the ports auto-build in xtask (5), the
-  hermetic HTTPS `test-net` program (3) and git (12) are on the side refs
-  below.
+  `getrandom` (BootInfo v5) landed; the hermetic HTTPS `test-net` program
+  (3) and git (12) landed on 2026-09-17, both gated by the whole matrix.
+  The ports auto-build in xtask (5) is still on `ports-autobuild`.
 * **Flakes met and closed:** FX-0882 (the eventfd check's own reader
   reaped inside its window; `sched::wait_until_gone`, the mm task-gone row
   is now os-26's for the other sites). **Open:** FX-1004 (quiesce at a
@@ -633,11 +633,10 @@ each with a row above saying where it stands:
   `os-02/smmu`, `os-02/dead`, `os-02/unix-gc` are pre-rebase copies of
   landed commits: delete.
 * os-05: nothing on a branch; the builtins slice B1 had no code yet.
-* `os-12/ports-curl-btop` a117ee4d and `os-12/ports-autobuild` 1dd0e503,
-  pushed by the product owner from the session's local worktrees after it
-  ended: the hermetic HTTPS `test-net` program and the xtask ports
-  auto-build (staleness per port, a build lock, the Linux path, Windows
-  through WSL), state unreported; read the commits before trusting them.
+* `os-12/ports-autobuild` 1dd0e503: the xtask ports auto-build (staleness
+  per port, a build lock, the Linux path, Windows through WSL), state
+  unreported; read the commits before trusting them. `ports-curl-btop` is
+  landed and can be deleted.
 * `os-a8/long-double` 8cc17d0e: the x87 long double foundation
   (`ferrousli/src/math/ld80.rs`, 954 lines), not in `mod.rs`, never
   compiled, no tests; the commit message has the plan (10 points for the
@@ -652,6 +651,29 @@ each with a row above saying where it stands:
   renderer, 21 tests, golden image not yet blessed): both never compiled.
   **Both landed on 2026-09-17**, with the fixes their rows in the
   after-`rustc` table record; the branches can be deleted.
+
+**Every unmerged branch, surveyed against `main` on 2026-09-17.** Each was
+compared file by file and item by item, not by its subject line, because a
+branch whose base is months old diffs against `main` as though it held
+everything that landed since.
+
+*Superseded -- `main` has the same work, finished, and the branch adds
+nothing; delete them:* `ci-smmu-stage2`, `dead-driver` and `unix-gc`, whose
+patches are on `main` under other hashes (only hunk offsets and a BACKLOG row
+differ); `codex/posix-2024` and `ferrousli-netcore`, whose netdb, `inet` and
+`ifaddrs` files are each smaller than `main`'s and which would reintroduce
+`ferrousli/src/stubs.rs`, the placeholder `main` emptied one function at a
+time; `compositor-render`, `display-core` and `input-l4`, for which `main`
+defines every item they define; `stage8-filemmap`, since `MAP_SHARED` landed
+and `MAP_PRIVATE`'s shadow objects are in `kernel/src/user/space.rs`.
+
+*Not superseded, and the only copy of what they hold:* `fx0701` (the FX-0701
+diagnostics the row above says to rebuild from its description -- they exist
+here, and nothing of them is on `main`); `stage9/log-header` (`xtask/src/tree.rs`,
+for the open row that every gate log names its tree); `ferrousli-posix`
+(`ld80.rs`); `unix-creds`; `ports-autobuild`. `stage8-diag` is a diagnostic
+its own message says is not for landing, and `pre-pull-backup-2026-09-13` has
+no merge base with `main` at all.
 
 **Waiting on the customer:** ~~Smithay's core crates or from scratch for the
 compositor server~~ — settled on 2026-09-17, from scratch, in the decisions
