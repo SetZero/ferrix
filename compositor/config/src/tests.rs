@@ -1569,3 +1569,85 @@ fn the_effects_that_place_a_window_and_sample_it() {
         Ok(vec![Effect::NearestNeighbor(false)])
     );
 }
+
+/// `group ...` and `no_close_for`, the two effects that are bookkeeping
+/// rather than an action.
+///
+/// `group`'s words each turn one flag on, `always` qualifies whichever came
+/// before it, and `override` or `unset` clear everything set so far -- which
+/// is how a later rule undoes an earlier one
+/// (`CWindow::applyDynamicRules`).
+#[test]
+fn the_group_words_and_no_close_for() {
+    use crate::GroupRules;
+
+    let group = |line: &str| match WindowRule::parse(line).map(|rule| rule.effects) {
+        Ok(effects) => effects
+            .into_iter()
+            .find_map(|effect| match effect {
+                Effect::Group(rules) => Some(rules),
+                _ => None,
+            })
+            .expect("a group effect"),
+        Err(why) => panic!("{line}: {why}"),
+    };
+
+    assert_eq!(
+        group("group set"),
+        GroupRules {
+            set: true,
+            ..GroupRules::default()
+        }
+    );
+    // `new` is Hyprland's shorthand for `barred set`.
+    assert_eq!(
+        group("group new"),
+        GroupRules {
+            set: true,
+            barred: true,
+            ..GroupRules::default()
+        }
+    );
+    assert_eq!(
+        group("group set always"),
+        GroupRules {
+            set: true,
+            always: true,
+            ..GroupRules::default()
+        }
+    );
+    assert_eq!(
+        group("group lock invade deny"),
+        GroupRules {
+            lock: true,
+            invade: true,
+            deny: true,
+            ..GroupRules::default()
+        }
+    );
+    // `override` and `unset` clear what came before them.
+    assert_eq!(
+        group("group set lock override"),
+        GroupRules {
+            cleared: true,
+            ..GroupRules::default()
+        }
+    );
+    assert_eq!(
+        group("group unset set"),
+        GroupRules {
+            cleared: true,
+            ..GroupRules::default()
+        },
+        "`unset` stops reading, so the `set` after it is not read"
+    );
+    // A bare `group` is the whole effect and asks for nothing in
+    // particular, which Hyprland treats as "leave the flags alone".
+    assert_eq!(group("group"), GroupRules::default());
+
+    assert_eq!(
+        WindowRule::parse("no_close_for 3000").map(|rule| rule.effects),
+        Ok(vec![Effect::NoCloseFor(3000)])
+    );
+    assert!(WindowRule::parse("no_close_for soon").is_err());
+}

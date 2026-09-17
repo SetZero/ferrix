@@ -2520,7 +2520,18 @@ fn dispatch(
     for change in &changes {
         match change {
             compositor_layout::Change::Close(window) => {
-                close(*window, around.slots, around.sources);
+                // `windowrule = no_close_for <ms>`: a window too young to
+                // be closed is left alone, and the person is told why --
+                // a key that does nothing for no reason is worse than one
+                // that says so.
+                if around.rules.held_open(*window) {
+                    around.say(&format!(
+                        "hyprix: window {} is held open by a no_close_for rule",
+                        window.0
+                    ));
+                } else {
+                    close(*window, around.slots, around.sources);
+                }
             }
             // `workspace = 5, on-created-empty:foot`: going to a workspace
             // that has nothing on it starts the program the line names.

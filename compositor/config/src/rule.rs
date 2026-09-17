@@ -163,6 +163,13 @@ pub enum Effect {
     /// `scrolling_width <fraction>`: how much of the screen its column
     /// takes in the scrolling layout.
     ScrollingWidth(f32),
+    /// `group [set|new|lock|barred|invade|deny|override|unset] [always]`:
+    /// what the window does about groups when it opens.
+    Group(GroupRules),
+    /// `no_close_for <milliseconds>`: `killactive` will not close it until
+    /// that long after it opened, which is what a person writes for a
+    /// window they keep shutting by accident.
+    NoCloseFor(i64),
     /// `rounding <n>`: how far its corners are cut.
     Rounding(i64),
     /// `border_size <n>`.
@@ -247,6 +254,77 @@ const KNOWN: [&str; 55] = [
     "scroll_mouse",
     "scroll_touchpad",
 ];
+
+/// What `windowrule = group ...` asks for.
+///
+/// `CWindow::applyDynamicRules`' `m_groupRules`, read the same way: a list
+/// of words, each turning one flag on, with `always` qualifying whichever
+/// word came before it. `override` and `unset` clear everything set so
+/// far, which is how a later rule undoes an earlier one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GroupRules {
+    /// `set`: the window becomes a group of one when it opens, so the next
+    /// window opened on top of it joins it rather than splitting the
+    /// workspace.
+    pub set: bool,
+    /// `lock`: the group it is in or makes is locked, so nothing new joins
+    /// it.
+    pub lock: bool,
+    /// `barred`: it does not join a group it is opened onto.
+    pub barred: bool,
+    /// `invade`: it joins a *locked* group anyway.
+    pub invade: bool,
+    /// `deny`: nothing may be added to its group by being dropped on it.
+    pub deny: bool,
+    /// `set always` and `lock always`: the flag holds for every window
+    /// opened after it and not only the next.
+    pub always: bool,
+    /// `override` or `unset`: every flag an earlier rule set is cleared.
+    pub cleared: bool,
+}
+
+impl GroupRules {
+    /// Read the words after `group`.
+    #[must_use]
+    pub fn parse(text: &str) -> Self {
+        let mut held = Self::default();
+        let mut before = "";
+        for word in text.split_whitespace() {
+            match word {
+                "group" => {}
+                "set" => held.set = true,
+                // `new` is Hyprland's shorthand for `barred set`.
+                "new" => {
+                    held.set = true;
+                    held.barred = true;
+                }
+                "lock" => held.lock = true,
+                "invade" => held.invade = true,
+                "barred" => held.barred = true,
+                "deny" => held.deny = true,
+                "override" => {
+                    held = Self {
+                        cleared: true,
+                        ..Self::default()
+                    }
+                }
+                "unset" => {
+                    held = Self {
+                        cleared: true,
+                        ..Self::default()
+                    };
+                    break;
+                }
+                // `always` qualifies the word before it, and Hyprland
+                // accepts it only after `set` or `lock`.
+                "always" if matches!(before, "set" | "lock" | "group") => held.always = true,
+                _ => {}
+            }
+            before = word;
+        }
+        held
+    }
+}
 
 /// A decoration a rule can take away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -570,6 +648,10 @@ fn effect(field: &str) -> Result<Effect, String> {
                 .parse()
                 .map_err(|_| format!("invalid field scrolling_width: `{value}` is not a share"))?;
             Ok(Effect::ScrollingWidth(width.clamp(0.1, 1.0)))
+        }
+        "group" => Ok(Effect::Group(GroupRules::parse(value))),
+        "no_close_for" => {
+            number("a number of milliseconds").map(|held| Effect::NoCloseFor(held.max(0)))
         }
         // `no_initial_focus` is `no_focus` by another name: Hyprland keeps
         // them apart because one is checked when the window maps and the

@@ -41,7 +41,7 @@ pub use layer::{LayerEffect, LayerRule, Layered};
 pub use monitor::{Mode, MonitorRule, Position, Scale};
 pub use options::{OptionValue, default_of};
 pub use parse::parse;
-pub use rule::{Decoration, Effect, Length, Matcher, Window, WindowRule, is_prop};
+pub use rule::{Decoration, Effect, GroupRules, Length, Matcher, Window, WindowRule, is_prop};
 pub use value::{
     Color, Gaps, Gradient, MAX_GRADIENT_COLORS, parse_color, parse_float, parse_gaps,
     parse_gradient, parse_int,

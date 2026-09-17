@@ -32,6 +32,12 @@ pub struct Rules {
     styles: BTreeMap<WindowId, WindowStyle>,
     /// `suppress_event`: what each window asks for and does not get.
     suppressed: BTreeMap<WindowId, Vec<String>>,
+    /// `no_close_for <ms>`: when each window may first be closed, as a
+    /// moment on the monotonic clock. `killactive` on a window before
+    /// that does nothing, which is what a person writes the rule for.
+    closeable: BTreeMap<WindowId, std::time::Instant>,
+    /// `group ...`: what each window asked for about groups.
+    grouped: BTreeMap<WindowId, compositor_config::GroupRules>,
     /// Every effect a rule asked for that this compositor does not carry
     /// out, so that it can be reported rather than silently dropped.
     unhandled: Vec<String>,
@@ -51,6 +57,8 @@ impl Rules {
             rules,
             styles: BTreeMap::new(),
             suppressed: BTreeMap::new(),
+            closeable: BTreeMap::new(),
+            grouped: BTreeMap::new(),
             unhandled: Vec::new(),
         }
     }
@@ -71,6 +79,24 @@ impl Rules {
     #[must_use]
     pub fn unhandled(&self) -> &[String] {
         &self.unhandled
+    }
+
+    /// Whether `no_close_for` still holds this window open.
+    ///
+    /// `killactive` asks; a window whose moment has not come is left alone
+    /// and the person is told why, which is better than a key that does
+    /// nothing for no reason.
+    #[must_use]
+    pub fn held_open(&self, window: WindowId) -> bool {
+        self.closeable
+            .get(&window)
+            .is_some_and(|until| std::time::Instant::now() < *until)
+    }
+
+    /// What `group ...` asked for, for the window that has just opened.
+    #[must_use]
+    pub fn group_rules(&self, window: WindowId) -> compositor_config::GroupRules {
+        self.grouped.get(&window).copied().unwrap_or_default()
     }
 
     /// What each window is drawn with, for the frame.
@@ -119,6 +145,8 @@ impl Rules {
     pub fn window_gone(&mut self, window: WindowId) {
         let _ = self.styles.remove(&window);
         let _ = self.suppressed.remove(&window);
+        let _ = self.closeable.remove(&window);
+        let _ = self.grouped.remove(&window);
     }
 
     /// How many rules there are.
@@ -239,6 +267,31 @@ impl Rules {
                 }
                 Effect::FullscreenState(internal, client) => {
                     fullscreen_state = Some((*internal, *client));
+                }
+                Effect::NoCloseFor(millis) => {
+                    let _previous = self.closeable.insert(
+                        window,
+                        std::time::Instant::now()
+                            + std::time::Duration::from_millis(u64::try_from(*millis).unwrap_or(0)),
+                    );
+                }
+                // `group set`: the window becomes a group of one, so the
+                // next window opened onto it joins it rather than
+                // splitting the workspace. `lock` locks whatever group it
+                // is in, and the rest is recorded for the grouping
+                // decisions it governs.
+                Effect::Group(rules) => {
+                    let _previous = self.grouped.insert(window, *rules);
+                    if rules.set && state.group(window).is_none() {
+                        changed |= state
+                            .dispatch_str("togglegroup", "")
+                            .is_ok_and(|made| !made.is_empty());
+                    }
+                    if rules.lock {
+                        changed |= state
+                            .dispatch_str("lockactivegroup", "lock")
+                            .is_ok_and(|made| !made.is_empty());
+                    }
                 }
                 Effect::ScrollingWidth(width) => {
                     // The scrolling layout's per-window column width,
@@ -473,6 +526,27 @@ mod tests {
         // whatever window id comes next.
         rules.window_gone(WindowId(1));
         assert!(!rules.suppresses(WindowId(1), "maximize"));
+    }
+
+    /// `no_close_for` holds a window open, and `group set` makes it a
+    /// group of one so the next window opened onto it joins it.
+    #[test]
+    fn no_close_for_holds_a_window_open_and_group_set_makes_a_group() {
+        let config = config(
+            "windowrule = no_close_for 60000, match:class ^(foot)$\n\
+             windowrule = group set, match:class ^(foot)$\n",
+        );
+        let mut state = state(&config);
+        let mut rules = Rules::new(&config, &mut |_| {});
+        let _changed = rules.apply(WindowId(1), &what("foot"), &mut state, &mut |_| {});
+        assert!(rules.held_open(WindowId(1)), "a minute is a long time");
+        assert!(rules.group_rules(WindowId(1)).set);
+        assert!(state.group(WindowId(1)).is_some(), "it is a group of one");
+
+        // And both are forgotten with the window.
+        rules.window_gone(WindowId(1));
+        assert!(!rules.held_open(WindowId(1)));
+        assert!(!rules.group_rules(WindowId(1)).set);
     }
 
     /// `pin` and `tag` reach the layout, and an effect this compositor does
