@@ -147,6 +147,22 @@ pub enum Effect {
     NearestNeighbor(bool),
     /// `monitor <name>`: the window opens on that monitor.
     Monitor(String),
+    /// `min_size <w> <h>`: never smaller than this.
+    MinSize(i64, i64),
+    /// `max_size <w> <h>`: never larger.
+    MaxSize(i64, i64),
+    /// `no_max_size`: whatever maximum was set is cleared, which is what a
+    /// person writes for a window whose own protocol maximum is wrong.
+    NoMaxSize,
+    /// `keep_aspect_ratio`: the shape it was first given is the shape it
+    /// keeps.
+    KeepAspectRatio(bool),
+    /// `fullscreen_state <internal> [client]`: the fullscreen state it
+    /// opens in, as two numbers.
+    FullscreenState(i64, i64),
+    /// `scrolling_width <fraction>`: how much of the screen its column
+    /// takes in the scrolling layout.
+    ScrollingWidth(f32),
     /// `rounding <n>`: how far its corners are cut.
     Rounding(i64),
     /// `border_size <n>`.
@@ -520,6 +536,40 @@ fn effect(field: &str) -> Result<Effect, String> {
                 return Err("invalid field monitor: it takes a monitor".to_owned());
             }
             Ok(Effect::Monitor(value.to_owned()))
+        }
+        "min_size" | "max_size" => {
+            let (wide, tall) = two()?;
+            // Pixels, always: a size limit as a share of the monitor would
+            // change when a window moved between screens, which is not
+            // what a limit is for, and Hyprland reads two integers.
+            let (wide, tall) = (wide.against(0), tall.against(0));
+            if name == "min_size" {
+                Ok(Effect::MinSize(wide.max(0), tall.max(0)))
+            } else {
+                Ok(Effect::MaxSize(wide.max(0), tall.max(0)))
+            }
+        }
+        "no_max_size" => Ok(Effect::NoMaxSize),
+        "keep_aspect_ratio" => Ok(Effect::KeepAspectRatio(yes(value))),
+        "fullscreen_state" => {
+            let mut fields = value.split_whitespace();
+            let internal: i64 =
+                fields.next().unwrap_or("").parse().map_err(|_| {
+                    format!("invalid field fullscreen_state: `{value}` is not a state")
+                })?;
+            // Hyprland's second number is the state the *client* is told,
+            // and it defaults to the first.
+            let client = fields
+                .next()
+                .and_then(|text| text.parse().ok())
+                .unwrap_or(internal);
+            Ok(Effect::FullscreenState(internal, client))
+        }
+        "scrolling_width" => {
+            let width: f32 = value
+                .parse()
+                .map_err(|_| format!("invalid field scrolling_width: `{value}` is not a share"))?;
+            Ok(Effect::ScrollingWidth(width.clamp(0.1, 1.0)))
         }
         // `no_initial_focus` is `no_focus` by another name: Hyprland keeps
         // them apart because one is checked when the window maps and the

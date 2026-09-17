@@ -44,7 +44,7 @@ use crate::master::Master;
 use crate::monocle::Monocle;
 use crate::scrolling::Scrolling;
 use crate::settings::{Layout, Orientation, Settings};
-use crate::{Error, Monitor, MonitorId, Rect, WindowId, WorkspaceId};
+use crate::{Error, Limits, Monitor, MonitorId, Rect, WindowId, WorkspaceId};
 
 /// Something a change to the state did that the caller acts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -391,6 +391,13 @@ pub struct State {
     /// `pseudo`: tiled windows drawn at the size they asked for, in the
     /// middle of the slot the tiling gave them.
     pseudo: BTreeSet<WindowId>,
+    /// `min_size`, `max_size` and `keep_aspect_ratio`: how big a window
+    /// may be, by window.
+    ///
+    /// A `windowrule`'s, kept here because every size a window is given
+    /// has to respect it -- the rule that opened it, a manual resize, and
+    /// the layout putting it back where it floated.
+    limits: BTreeMap<WindowId, Limits>,
     /// `tagwindow`: the tags each window carries, which a `windowrule` can
     /// match on.
     tags: BTreeMap<WindowId, Vec<String>>,
@@ -457,6 +464,7 @@ impl State {
             groups_locked: false,
             pinned: BTreeSet::new(),
             pseudo: BTreeSet::new(),
+            limits: BTreeMap::new(),
             tags: BTreeMap::new(),
             deny_from_group: false,
         }
@@ -913,7 +921,7 @@ impl State {
             // coordinates, so that a workspace moved to another monitor
             // takes its windows with it.
             let (x, y) = state.origin(workspace);
-            let _previous = state.floating_rects.insert(
+            state.hold_floating(
                 window,
                 rect.translate(x.saturating_neg(), y.saturating_neg()),
             );
@@ -966,7 +974,7 @@ impl State {
         Ok(self.run(|state| {
             if let Some(rect) = floating {
                 let (x, y) = state.origin(workspace);
-                let _previous = state.floating_rects.insert(
+                state.hold_floating(
                     window,
                     rect.translate(x.saturating_neg(), y.saturating_neg()),
                 );
@@ -1459,7 +1467,7 @@ impl State {
             return Vec::new();
         };
         let (x, y) = self.origin(workspace);
-        let _previous = self.floating_rects.insert(
+        self.hold_floating(
             window,
             rect.translate(x.saturating_neg(), y.saturating_neg()),
         );
@@ -1661,8 +1669,8 @@ impl State {
                     self.floating_rects.get(&other).copied(),
                 );
                 if let (Some(one), Some(two)) = (one, two) {
-                    let _ = self.floating_rects.insert(window, two);
-                    let _ = self.floating_rects.insert(other, one);
+                    self.hold_floating(window, two);
+                    self.hold_floating(other, one);
                 }
             }
             // One of each is not a swap Hyprland makes either.
@@ -1948,7 +1956,7 @@ impl State {
                 width,
                 height,
             );
-            let _previous = self.floating_rects.insert(window, rect);
+            self.hold_floating(window, rect);
         }
         let Some(ws) = self.workspaces.get_mut(&workspace) else {
             return Vec::new();
@@ -2571,6 +2579,37 @@ impl State {
     }
 
     // -- Monitors -------------------------------------------------------------
+
+    /// Give `window` a floating rectangle, held down to the size its rules
+    /// allow. The rectangle is the workspace's own, as the map holds it.
+    ///
+    /// Every floating rectangle goes through here, so `min_size`,
+    /// `max_size` and `keep_aspect_ratio` hold for the rule that opened
+    /// the window, for a manual resize, and for the layout putting it back
+    /// where it floated -- which is what Hyprland's own `setSizeLimits`
+    /// does by clamping at each of those points.
+    fn hold_floating(&mut self, window: WindowId, rect: Rect) {
+        let held = self
+            .limits
+            .get(&window)
+            .copied()
+            .unwrap_or_default()
+            .hold(rect);
+        let _previous = self.floating_rects.insert(window, held);
+    }
+
+    /// `min_size`, `max_size`, `no_max_size` and `keep_aspect_ratio` for
+    /// one window, as its `windowrule`s gave them.
+    pub fn set_limits(&mut self, window: WindowId, limits: Limits) -> Vec<Change> {
+        let _previous = self.limits.insert(window, limits);
+        let Some(rect) = self.floating_rects.get(&window).copied() else {
+            return Vec::new();
+        };
+        self.run(|state| {
+            state.hold_floating(window, rect);
+            Vec::new()
+        })
+    }
 
     /// The workspace the focused monitor showed before this one.
     fn previous_workspace(&self) -> Option<WorkspaceId> {

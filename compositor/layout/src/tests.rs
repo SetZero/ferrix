@@ -2,8 +2,9 @@ use compositor_config::{Config, Gaps, NoSources, parse};
 
 use crate::Group;
 use crate::{
-    Change, Direction, Dispatcher, Error, ForceSplit, FullscreenMode, Layout, Monitor, MonitorId,
-    Move, NewStatus, Orientation, Rect, Settings, State, WindowId, WorkspaceId, WorkspaceTarget,
+    Change, Direction, Dispatcher, Error, ForceSplit, FullscreenMode, Layout, Limits, Monitor,
+    MonitorId, Move, NewStatus, Orientation, Rect, Settings, State, WindowId, WorkspaceId,
+    WorkspaceTarget,
 };
 
 /// No gaps and no border, so slots and client rectangles coincide.
@@ -3404,4 +3405,90 @@ fn scrolling_swapcol_and_inhibit_scroll() {
     let _inhibited = dispatch(&mut held, "layoutmsg", "inhibit_scroll");
     let _moved = dispatch(&mut held, "layoutmsg", "move +col");
     assert_eq!(rects_on(&held, M1), before);
+}
+
+/// `min_size`, `max_size` and `keep_aspect_ratio` hold a floating window's
+/// size wherever it is set.
+///
+/// Hyprland clamps at every point a size could change -- `setSizeLimits` --
+/// so the limits belong with the window and not with the rule that set
+/// them: the rule fires once and the window is resized many times.
+#[test]
+fn a_windows_size_limits_hold_wherever_it_is_set() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    let _floated = dispatch(&mut state, "togglefloating", "");
+
+    let _limited = state.set_limits(
+        WindowId(1),
+        Limits {
+            smallest: Some((600, 400)),
+            largest: Some((1200, 800)),
+            keep_aspect: false,
+        },
+    );
+    // The window was floated at half the monitor, 960x540, which is inside
+    // both limits and so did not move.
+    assert_eq!(rects(&state), [(1, r(480, 270, 960, 540))]);
+
+    // Too small, and it is held up to the minimum.
+    let _resized = state
+        .float_window(WindowId(1), r(0, 0, 100, 100))
+        .expect("the window");
+    assert_eq!(rects(&state), [(1, r(0, 0, 600, 400))]);
+
+    // Too large, and it is held down to the maximum.
+    let _resized = state
+        .float_window(WindowId(1), r(0, 0, 1900, 1000))
+        .expect("the window");
+    assert_eq!(rects(&state), [(1, r(0, 0, 1200, 800))]);
+
+    // `no_max_size` is the absence of a maximum, and then the same
+    // rectangle is allowed.
+    let _cleared = state.set_limits(
+        WindowId(1),
+        Limits {
+            smallest: Some((600, 400)),
+            largest: None,
+            keep_aspect: false,
+        },
+    );
+    let _resized = state
+        .float_window(WindowId(1), r(0, 0, 1900, 1000))
+        .expect("the window");
+    assert_eq!(rects(&state), [(1, r(0, 0, 1900, 1000))]);
+}
+
+/// `keep_aspect_ratio`: the shape asked for is the shape kept, held inside
+/// what the limits allow.
+#[test]
+fn keep_aspect_ratio_holds_the_shape_inside_the_limits() {
+    // A 2:1 rectangle held to at most 1000 wide comes out 1000x500 rather
+    // than 1000x800: the shape wins over the taller maximum.
+    let held = Limits {
+        smallest: None,
+        largest: Some((1000, 800)),
+        keep_aspect: true,
+    }
+    .hold(r(0, 0, 1600, 800));
+    assert_eq!(held, r(0, 0, 1000, 500));
+
+    // And a 1:2 rectangle held to at most 800 tall comes out 400x800.
+    let tall = Limits {
+        smallest: None,
+        largest: Some((1000, 800)),
+        keep_aspect: true,
+    }
+    .hold(r(0, 0, 800, 1600));
+    assert_eq!(tall, r(0, 0, 400, 800));
+
+    // With no limits at all the rectangle is its own shape already.
+    assert_eq!(
+        Limits {
+            keep_aspect: true,
+            ..Limits::default()
+        }
+        .hold(r(0, 0, 1600, 800)),
+        r(0, 0, 1600, 800)
+    );
 }

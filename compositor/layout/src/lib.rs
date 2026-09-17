@@ -160,6 +160,57 @@ pub struct Monitor {
     pub made: (String, String, String),
 }
 
+/// How big a window may be: `min_size`, `max_size`, `no_max_size` and
+/// `keep_aspect_ratio` from its `windowrule`s.
+///
+/// Hyprland clamps a window's size at every point it could change --
+/// `setSizeLimits` -- so the limits belong with the window rather than with
+/// the rule that set them: the rule fires once and the window is resized
+/// many times.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Limits {
+    /// `min_size <w> <h>`: never smaller than this.
+    pub smallest: Option<(i64, i64)>,
+    /// `max_size <w> <h>`: never larger. `no_max_size` clears it, which is
+    /// what a person writes for a window whose own protocol maximum is
+    /// wrong.
+    pub largest: Option<(i64, i64)>,
+    /// `keep_aspect_ratio`: the shape it was first given is the shape it
+    /// keeps, so a resize changes one side and the other follows.
+    pub keep_aspect: bool,
+}
+
+impl Limits {
+    /// `rect` held down to what these limits allow, about its top-left
+    /// corner.
+    #[must_use]
+    pub fn hold(self, rect: Rect) -> Rect {
+        let mut width = rect.width.max(1);
+        let mut height = rect.height.max(1);
+        if let Some((least_wide, least_tall)) = self.smallest {
+            width = width.max(least_wide.max(1));
+            height = height.max(least_tall.max(1));
+        }
+        if let Some((most_wide, most_tall)) = self.largest {
+            width = width.min(most_wide.max(1));
+            height = height.min(most_tall.max(1));
+        }
+        if self.keep_aspect && rect.width > 0 && rect.height > 0 {
+            // The shape the rectangle came in with, kept by taking the
+            // smaller of the two scales -- which is what fits inside what
+            // was asked for rather than spilling out of it.
+            let (asked_wide, asked_tall) = (rect.width, rect.height);
+            let by_width = width.saturating_mul(asked_tall) / asked_wide.max(1);
+            if by_width <= height {
+                height = by_width.max(1);
+            } else {
+                width = (height.saturating_mul(asked_wide) / asked_tall.max(1)).max(1);
+            }
+        }
+        Rect::new(rect.x, rect.y, width, height)
+    }
+}
+
 /// What a request to the layouts could not do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {

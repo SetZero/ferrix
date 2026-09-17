@@ -170,6 +170,13 @@ impl Rules {
         let mut centred = false;
         let mut pin = false;
         let mut pseudo = false;
+        // `min_size`, `max_size`, `no_max_size` and `keep_aspect_ratio`,
+        // gathered before any of them is applied: they constrain each
+        // other, so a line that writes `max_size` and then `no_max_size`
+        // means no maximum whichever order the effects are read in.
+        let mut limits = compositor_layout::Limits::default();
+        let mut limited = false;
+        let mut fullscreen_state: Option<(i64, i64)> = None;
         let mut changed = false;
         // What the window is drawn with, which starts as what every window
         // is drawn with.
@@ -213,6 +220,32 @@ impl Rules {
                 Effect::NearestNeighbor(on) => {
                     style.nearest = *on;
                     styled = true;
+                }
+                Effect::MinSize(wide, tall) => {
+                    limits.smallest = Some((*wide, *tall));
+                    limited = true;
+                }
+                Effect::MaxSize(wide, tall) => {
+                    limits.largest = Some((*wide, *tall));
+                    limited = true;
+                }
+                Effect::NoMaxSize => {
+                    limits.largest = None;
+                    limited = true;
+                }
+                Effect::KeepAspectRatio(on) => {
+                    limits.keep_aspect = *on;
+                    limited = true;
+                }
+                Effect::FullscreenState(internal, client) => {
+                    fullscreen_state = Some((*internal, *client));
+                }
+                Effect::ScrollingWidth(width) => {
+                    // The scrolling layout's per-window column width,
+                    // which only that layout reads.
+                    changed |= state
+                        .dispatch_str("layoutmsg", &format!("colresize {width}"))
+                        .is_ok_and(|made| !made.is_empty());
                 }
                 // `monitor <name>`: the window opens on that monitor,
                 // through the same call `movewindowtomonitor` makes.
@@ -298,6 +331,14 @@ impl Rules {
         if styled {
             let _ = self.styles.insert(window, style);
             changed = true;
+        }
+        if limited {
+            changed |= !state.set_limits(window, limits).is_empty();
+        }
+        if let Some((internal, client)) = fullscreen_state
+            && let Ok(made) = state.dispatch_str("fullscreenstate", &format!("{internal} {client}"))
+        {
+            changed |= !made.is_empty();
         }
 
         // Floating last, so that a `size` written after a `float` is still
