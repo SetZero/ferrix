@@ -337,6 +337,18 @@ impl Session {
                 Arg::Uint(format),
             ],
         );
+        // The pool is thrown away as soon as the buffer is made, which is
+        // what `grim` and every toolkit does: `wl_shm_pool.destroy`
+        // releases the object, and the memory stays until the last buffer
+        // made from it is gone. A compositor that unmaps at `destroy`
+        // fails this copy, so taking the screenshot is the test.
+        request(
+            &mut self.out,
+            id::POOL,
+            wl_shm_pool::request::DESTROY,
+            &[],
+            &[],
+        );
         request(
             &mut self.out,
             id::FRAME,

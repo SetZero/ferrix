@@ -29,6 +29,14 @@ pub struct Slot {
     client: Client,
     connection: Connection,
     pools: BTreeMap<ObjectId, Mapping>,
+    /// Pools the client has destroyed that still have buffers made from
+    /// them. `wl_shm_pool.destroy` releases the object, not the memory:
+    /// "the mmapped memory will be released when all buffers that have
+    /// been created from this pool are gone". A compositor that unmapped
+    /// at `destroy` hands nothing back to a client that made its buffers
+    /// and then threw the pool away, which is what almost every toolkit
+    /// does.
+    retired: std::collections::BTreeSet<ObjectId>,
     /// Windows this connection owns, so they can be closed when it goes.
     windows: Vec<(ObjectId, WindowId)>,
     /// Layer surfaces it owns, in the order it made them: wlroots places
@@ -428,6 +436,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     },
                     connection,
                     pools: BTreeMap::new(),
+                    retired: std::collections::BTreeSet::new(),
                     windows: Vec::new(),
                     layers: Vec::new(),
                     firsts: BTreeMap::new(),
@@ -1251,8 +1260,15 @@ fn serve(
                     object,
                     role: Role::ShmPool,
                 } => {
-                    let _ = slot.pools.remove(&object);
+                    let _ = slot.retired.insert(object);
+                    release_retired_pools(slot);
                 }
+                // A buffer going may be the last one of a pool the client
+                // has already destroyed, which is when the memory is
+                // finally let go.
+                Event::Destroyed {
+                    role: Role::Buffer, ..
+                } => release_retired_pools(slot),
                 Event::LayerSurfaceCreated { layer_surface, .. } => {
                     slot.layers.push(layer_surface);
                     changed = true;
@@ -1532,10 +1548,6 @@ fn serve(
                 Event::ForeignToplevelAsked { window, what } => {
                     asked.push((WindowId(window), what));
                 }
-                // A modal dialog is one the application will not let you
-                // look past, so it floats: Hyprland's own `windowrule =
-                // float, xdg_dialog` says the same thing by hand, and this
-                // is the protocol saying it for itself.
                 // A client asking to be fullscreen or maximized. Hyprland
                 // does both, and `windowrule = suppress_event` is how a
                 // person turns one off -- which is only worth writing
@@ -1550,6 +1562,10 @@ fn serve(
                         asked_states.push((*window, maximized, fullscreen));
                     }
                 }
+                // A modal dialog is one the application will not let you
+                // look past, so it floats: Hyprland's own `windowrule =
+                // float, xdg_dialog` says the same thing by hand, and this
+                // is the protocol saying it for itself.
                 Event::ToplevelModal { toplevel, modal } => {
                     if let Some((_, window)) = slot.windows.iter().find(|(top, _)| *top == toplevel)
                     {
@@ -2630,6 +2646,24 @@ enum Shot {
         /// Its rectangle on that screen.
         region: ServerRect,
     },
+}
+
+/// Let go of every pool the client destroyed that has no buffer left.
+///
+/// The two halves of `wl_shm_pool`'s lifetime: the object goes when the
+/// client says so, and the memory goes when the last buffer made from it
+/// does. Called on both, because either may be the last event.
+fn release_retired_pools(slot: &mut Slot) {
+    let done: Vec<ObjectId> = slot
+        .retired
+        .iter()
+        .copied()
+        .filter(|pool| !slot.client.pool_in_use(*pool))
+        .collect();
+    for pool in done {
+        let _ = slot.retired.remove(&pool);
+        let _ = slot.pools.remove(&pool);
+    }
 }
 
 /// Answer one half of a screenshot.

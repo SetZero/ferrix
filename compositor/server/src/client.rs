@@ -1599,6 +1599,19 @@ impl Client {
         self.buffers.get(&id)
     }
 
+    /// Whether any `wl_buffer` this client still owns was made from `pool`.
+    ///
+    /// `wl_shm_pool.destroy` does not take the memory away: "the mmapped
+    /// memory will be released when all buffers that have been created from
+    /// this pool are gone". A client is entitled to make its buffers, throw
+    /// the pool away and go on drawing with them, and most toolkits do --
+    /// `grim` does it between asking for a screenshot and taking it. So the
+    /// compositor above keeps the mapping until this says no.
+    #[must_use]
+    pub fn pool_in_use(&self, pool: ObjectId) -> bool {
+        self.buffers.values().any(|buffer| buffer.pool == pool)
+    }
+
     /// Tell the client a buffer is its own again.
     ///
     /// The compositor above calls this once it has finished reading a buffer
