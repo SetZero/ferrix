@@ -222,11 +222,16 @@ impl Workspace {
     }
 }
 
-/// A monitor and the workspace it shows.
+/// A monitor, the workspace it shows, and the special workspace over it.
+///
+/// A special workspace is not shown *instead of* the normal one: it is drawn
+/// over it, which is what makes Hyprland's scratchpad a scratchpad. A monitor
+/// shows at most one at a time.
 #[derive(Debug, Clone, PartialEq)]
 struct Output {
     monitor: Monitor,
     active: WorkspaceId,
+    special: Option<WorkspaceId>,
 }
 
 /// The part of the state [`Change`]s are derived from.
@@ -267,7 +272,15 @@ pub struct State {
     floating_rects: BTreeMap<WindowId, Rect>,
     /// Every window, most recently focused last.
     history: Vec<WindowId>,
+    /// The name of each workspace that has one, which is the special ones:
+    /// a numbered workspace's name is its number.
+    names: BTreeMap<WorkspaceId, String>,
 }
+
+/// The lowest id a special workspace has, `SPECIAL_WORKSPACE_START` in
+/// Hyprland's `macros.hpp`. Every special workspace's id is between it and
+/// −2.
+const SPECIAL_START: i64 = -99;
 
 impl State {
     /// No monitors and no windows.
@@ -281,6 +294,7 @@ impl State {
             windows: BTreeMap::new(),
             floating_rects: BTreeMap::new(),
             history: Vec::new(),
+            names: BTreeMap::new(),
         }
     }
 
@@ -325,8 +339,25 @@ impl State {
     /// The focused window.
     #[must_use]
     pub fn focused_window(&self) -> Option<WindowId> {
-        self.current_workspace()
-            .and_then(|workspace| self.focused_on(workspace))
+        // A monitor showing a scratchpad has two workspaces on it, and the
+        // focus may be on either: the most recently focused window of the
+        // two is the focused one.
+        let monitor = self.focused_monitor?;
+        let special = self.special_on(monitor).and_then(|id| self.focused_on(id));
+        let own = self
+            .active_workspace(monitor)
+            .and_then(|id| self.focused_on(id));
+        match (special, own) {
+            (Some(one), Some(other)) => {
+                let at = |window: WindowId| self.history.iter().rposition(|id| *id == window);
+                if at(one) >= at(other) {
+                    Some(one)
+                } else {
+                    Some(other)
+                }
+            }
+            (found, None) | (None, found) => found,
+        }
     }
 
     /// The workspaces that exist, in number order.
@@ -384,9 +415,24 @@ impl State {
             .map(|output| MonitorLayout {
                 monitor: output.monitor.id,
                 workspace: output.active,
-                windows: self.placements(output, focus),
+                windows: self.with_special(output, focus),
             })
             .collect()
+    }
+
+    /// A monitor's windows: its workspace's, with its special workspace's
+    /// over them.
+    fn with_special(&self, output: &Output, focus: Option<WindowId>) -> Vec<Placed> {
+        let mut windows = self.placements(output, focus);
+        if let Some(special) = output.special {
+            let over = Output {
+                monitor: output.monitor,
+                active: special,
+                special: None,
+            };
+            windows.extend(self.placements(&over, focus));
+        }
+        windows
     }
 
     // -- Monitors -------------------------------------------------------------
@@ -447,7 +493,11 @@ impl State {
                 .copied()
                 .unwrap_or_else(|| state.first_free_workspace());
             state.ensure_workspace(active, monitor.id);
-            state.outputs.push(Output { monitor, active });
+            state.outputs.push(Output {
+                monitor,
+                active,
+                special: None,
+            });
             if state.focused_monitor.is_none() {
                 state.focused_monitor = Some(monitor.id);
             }
@@ -584,7 +634,7 @@ impl State {
 
     /// Run a dispatcher.
     pub fn dispatch(&mut self, dispatcher: &Dispatcher) -> Vec<Change> {
-        let dispatcher = *dispatcher;
+        let dispatcher = dispatcher.clone();
         self.run(|state| match dispatcher {
             Dispatcher::MoveFocus(direction) => state.move_focus(direction),
             Dispatcher::MoveWindow(direction) => state.move_window(direction),
@@ -598,6 +648,7 @@ impl State {
                 .collect(),
             Dispatcher::ToggleFloating => state.toggle_floating(),
             Dispatcher::Fullscreen(mode) => state.toggle_fullscreen(mode),
+            Dispatcher::ToggleSpecialWorkspace(name) => state.toggle_special(&name),
         })
     }
 
@@ -754,6 +805,17 @@ impl State {
         }
         if let Some(monitor) = self.focused_monitor {
             self.ensure_workspace(to, monitor);
+            // A window sent to a scratchpad goes to a workspace that is
+            // shown over this one, not to one this monitor switches to.
+            if Self::is_special(to)
+                && follow
+                && let Some(output) = self
+                    .outputs
+                    .iter_mut()
+                    .find(|output| output.monitor.id == monitor)
+            {
+                output.special = Some(to);
+            }
         }
         self.move_window_to(window, to);
         if follow {
@@ -1267,7 +1329,14 @@ impl State {
                 .iter_mut()
                 .find(|output| output.monitor.id == monitor)
         {
-            output.active = workspace;
+            // Focusing a window on a special workspace shows that workspace
+            // over the monitor's own; it does not switch to it, or hiding
+            // the scratchpad again would leave the monitor showing it.
+            if Self::is_special(workspace) {
+                output.special = Some(workspace);
+            } else {
+                output.active = workspace;
+            }
             self.focused_monitor = Some(monitor);
         }
         self.history.retain(|id| *id != window);
@@ -1286,6 +1355,20 @@ impl State {
         let Some(focused) = self.focused_monitor else {
             return;
         };
+        // A special workspace is never shown *instead of* the monitor's own:
+        // `workspace special:name` puts the scratchpad over what is there,
+        // as `togglespecialworkspace` does.
+        if Self::is_special(workspace) {
+            self.ensure_workspace(workspace, focused);
+            if let Some(output) = self
+                .outputs
+                .iter_mut()
+                .find(|output| output.monitor.id == focused)
+            {
+                output.special = Some(workspace);
+            }
+            return;
+        }
         self.ensure_workspace(workspace, focused);
         let monitor = match self.workspace_monitor(workspace) {
             Some(monitor) if self.output(monitor).is_some() => monitor,
@@ -1311,6 +1394,7 @@ impl State {
     fn resolve(&self, target: WorkspaceTarget) -> Option<WorkspaceId> {
         let current = self.current_workspace()?;
         match target {
+            WorkspaceTarget::Special(name) => Some(self.special_id(&name)),
             WorkspaceTarget::Id(id) => Some(id),
             WorkspaceTarget::Relative(offset) => {
                 Some(WorkspaceId(current.0.saturating_add(offset).max(1)))
@@ -1325,6 +1409,127 @@ impl State {
         }
     }
 
+    /// The id of the special workspace called `name`, making one if there is
+    /// none.
+    ///
+    /// Hyprland's special workspaces have negative ids: `special:special` is
+    /// `SPECIAL_WORKSPACE_START`, −99, and every other counts up from there
+    /// towards −2 (`State::workspaceState()->newSpecialID()`). The name is
+    /// `special:` and the name, which is what `hyprctl` prints and what a
+    /// `workspace` rule matches.
+    fn special_id(&self, name: &str) -> WorkspaceId {
+        let full = format!("special:{name}");
+        if let Some((id, _)) = self.names.iter().find(|(_, known)| **known == full) {
+            return *id;
+        }
+        if name == "special" {
+            return WorkspaceId(SPECIAL_START);
+        }
+        // The first free id from −99 upwards, as `newSpecialID` takes the
+        // highest in use and adds one.
+        let taken = |id: i64| {
+            self.workspaces.contains_key(&WorkspaceId(id))
+                || self.names.contains_key(&WorkspaceId(id))
+        };
+        let mut id = SPECIAL_START;
+        while taken(id) && id < -2 {
+            id = id.saturating_add(1);
+        }
+        WorkspaceId(id)
+    }
+
+    /// `togglespecialworkspace`: show the special workspace over the focused
+    /// monitor, or hide it if it is the one already showing.
+    ///
+    /// The workspace is made if it does not exist, as Hyprland makes one; an
+    /// empty scratchpad is a scratchpad you can put something in.
+    fn toggle_special(&mut self, name: &str) -> Vec<Change> {
+        let Some(monitor) = self
+            .focused_monitor
+            .or_else(|| self.outputs.first().map(|output| output.monitor.id))
+        else {
+            return Vec::new();
+        };
+        let id = self.special_id(name);
+        let showing = self
+            .outputs
+            .iter()
+            .find(|output| output.monitor.id == monitor)
+            .and_then(|output| output.special);
+        if showing == Some(id) {
+            if let Some(output) = self
+                .outputs
+                .iter_mut()
+                .find(|output| output.monitor.id == monitor)
+            {
+                output.special = None;
+            }
+            // The focus goes back to the monitor's own workspace.
+            if let Some(window) = self.recent_on_monitor(monitor) {
+                self.focus(window);
+            }
+            return Vec::new();
+        }
+        self.ensure_workspace(id, monitor);
+        let _ = self.names.insert(id, format!("special:{name}"));
+        if let Some(output) = self
+            .outputs
+            .iter_mut()
+            .find(|output| output.monitor.id == monitor)
+        {
+            output.special = Some(id);
+        }
+        self.focused_monitor = Some(monitor);
+        // A special workspace with something on it takes the focus, as
+        // Hyprland's does; an empty one leaves it where it was.
+        if let Some(window) = self.recent_tiled(id).or_else(|| {
+            self.workspaces
+                .get(&id)
+                .and_then(|ws| ws.floating.last().copied())
+        }) {
+            self.focus(window);
+        }
+        Vec::new()
+    }
+
+    /// The most recently focused window on the monitor's own workspace.
+    fn recent_on_monitor(&self, monitor: MonitorId) -> Option<WindowId> {
+        let active = self
+            .outputs
+            .iter()
+            .find(|output| output.monitor.id == monitor)?
+            .active;
+        self.history
+            .iter()
+            .rev()
+            .find(|window| self.windows.get(window) == Some(&active))
+            .copied()
+    }
+
+    /// The name a workspace has, which for a numbered one is its number.
+    #[must_use]
+    pub fn workspace_name(&self, workspace: WorkspaceId) -> String {
+        self.names
+            .get(&workspace)
+            .cloned()
+            .unwrap_or_else(|| workspace.0.to_string())
+    }
+
+    /// The special workspace a monitor is showing, if any.
+    #[must_use]
+    pub fn special_on(&self, monitor: MonitorId) -> Option<WorkspaceId> {
+        self.outputs
+            .iter()
+            .find(|output| output.monitor.id == monitor)?
+            .special
+    }
+
+    /// Whether `workspace` is a special one, by Hyprland's own range.
+    #[must_use]
+    pub const fn is_special(workspace: WorkspaceId) -> bool {
+        workspace.0 >= SPECIAL_START && workspace.0 <= -2
+    }
+
     /// Record each dwindle split's direction for its current box.
     fn settle(&mut self) {
         let outputs = &self.outputs;
@@ -1337,8 +1542,12 @@ impl State {
     /// Remove workspaces that are empty and not shown.
     fn prune(&mut self) {
         let outputs = &self.outputs;
-        self.workspaces
-            .retain(|id, ws| !ws.is_empty() || outputs.iter().any(|output| output.active == *id));
+        self.workspaces.retain(|id, ws| {
+            !ws.is_empty()
+                || outputs
+                    .iter()
+                    .any(|output| output.active == *id || output.special == Some(*id))
+        });
     }
 
     /// The visible windows of what `output` shows.

@@ -76,6 +76,10 @@ pub struct Monitor {
     pub active_workspace: i32,
     /// That workspace's name.
     pub active_workspace_name: String,
+    /// The special workspace shown over it, if one is: its id and its name.
+    /// Hyprland prints `special workspace: 0 ()` for a monitor showing none,
+    /// which is what `None` becomes.
+    pub special_workspace: Option<(i32, String)>,
     /// Buffer pixels per logical pixel.
     pub scale: f64,
     /// Whether it holds the focus.

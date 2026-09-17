@@ -158,6 +158,9 @@ pub fn snapshot(
             at: (0, 0),
             active_workspace: 1,
             active_workspace_name: "1".to_owned(),
+            special_workspace: state
+                .special_on(compositor_layout::MonitorId(1))
+                .map(|id| (i32::try_from(id.0).unwrap_or(0), state.workspace_name(id))),
             scale: 1.0,
             focused: true,
         }],
@@ -197,7 +200,7 @@ pub fn snapshot(
                     i32::try_from(placed.rect.height).unwrap_or(0),
                 ),
                 workspace: i32::try_from(output.workspace.0).unwrap_or(0),
-                workspace_name: output.workspace.0.to_string(),
+                workspace_name: state.workspace_name(output.workspace),
                 floating: placed.floating,
                 fullscreen: placed.fullscreen,
                 monitor: 0,

@@ -15,6 +15,7 @@ $ hyprctl monitors
 Monitor HEADLESS-1 (ID 0):
 	1024x768@60.00000 at 0x0
 	active workspace: 1 (1)
+	special workspace: 0 ()
 	scale: 1.00
 	focused: yes
 
@@ -24,6 +25,7 @@ $ ours monitors
 Monitor HEADLESS-1 (ID 0):
 	1024x768@60.00000 at 0x0
 	active workspace: 1 (1)
+	special workspace: 0 ()
 	scale: 1.00
 	focused: yes
 

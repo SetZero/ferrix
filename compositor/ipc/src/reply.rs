@@ -148,6 +148,21 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
             out.number("id", i64::from(monitor.active_workspace));
             out.string("name", &monitor.active_workspace_name);
             out.end('}');
+            // A monitor showing no scratchpad has id 0 and an empty name,
+            // which is what Hyprland writes for one.
+            out.object_field("specialWorkspace");
+            out.number(
+                "id",
+                i64::from(monitor.special_workspace.as_ref().map_or(0, |(id, _)| *id)),
+            );
+            out.string(
+                "name",
+                monitor
+                    .special_workspace
+                    .as_ref()
+                    .map_or("", |(_, name)| name.as_str()),
+            );
+            out.end('}');
             out.field_scale(monitor.scale);
             out.boolean("focused", monitor.focused);
             out.boolean("dpmsStatus", true);
@@ -160,7 +175,7 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
     for monitor in monitors {
         let _ = writeln!(
             text,
-            "Monitor {} (ID {}):\n\t{}x{}@{:.5} at {}x{}\n\tactive workspace: {} ({})\n\tscale: {:.2}\n\tfocused: {}\n",
+            "Monitor {} (ID {}):\n\t{}x{}@{:.5} at {}x{}\n\tactive workspace: {} ({})\n\tspecial workspace: {} ({})\n\tscale: {:.2}\n\tfocused: {}\n",
             monitor.name,
             monitor.id,
             monitor.width,
@@ -170,6 +185,11 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
             monitor.at.1,
             monitor.active_workspace,
             monitor.active_workspace_name,
+            monitor.special_workspace.as_ref().map_or(0, |(id, _)| *id),
+            monitor
+                .special_workspace
+                .as_ref()
+                .map_or("", |(_, name)| name.as_str()),
             monitor.scale,
             if monitor.focused { "yes" } else { "no" },
         );

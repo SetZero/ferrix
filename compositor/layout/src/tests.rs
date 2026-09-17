@@ -1341,7 +1341,7 @@ fn bad_dispatchers_and_arguments_are_errors_not_panics() {
         ("workspace", ""),
         ("workspace", "-0x1"),
         ("workspace", "name:web"),
-        ("workspace", "special"),
+        ("workspace", "special:"),
         ("workspace", "e"),
         ("workspace", "e1"),
         ("workspace", "99999999999999999999"),
@@ -1440,4 +1440,128 @@ fn extreme_geometry_does_not_panic() {
     let _changes = dispatch(&mut state, "movewindow", "u");
     let _changes = dispatch(&mut state, "fullscreen", "1");
     let _layout = state.layout();
+}
+
+// ---------------------------------------------------------------------------
+// Special workspaces
+//
+// Hyprland's scratchpad: a workspace shown *over* the monitor's own rather
+// than instead of it, with a negative id and a `special:` name. A compositor
+// that switched to it instead of showing it over would be a compositor where
+// the scratchpad hid your work.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_special_workspace_is_shown_over_the_monitors_own() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    assert_eq!(state.layout()[0].windows.len(), 2);
+
+    // Nothing on it yet: it is shown, and the two windows are still there.
+    let _ = state.dispatch_str("togglespecialworkspace", "").unwrap();
+    assert_eq!(
+        state.special_on(M1),
+        Some(WorkspaceId(-99)),
+        "bare `special` is Hyprland's -99"
+    );
+    assert_eq!(state.workspace_name(WorkspaceId(-99)), "special:special");
+    assert_eq!(
+        state.layout()[0].windows.len(),
+        2,
+        "an empty scratchpad hid the windows"
+    );
+    assert_eq!(
+        state.layout()[0].workspace,
+        WorkspaceId(1),
+        "the monitor still shows its own workspace"
+    );
+
+    // A window moved onto it is drawn over them.
+    let _ = state.dispatch_str("movetoworkspace", "special").unwrap();
+    let windows = state.layout()[0].windows.clone();
+    assert_eq!(windows.len(), 2, "one of the two went to the scratchpad");
+    assert_eq!(
+        windows.last().map(|placed| placed.window),
+        Some(WindowId(2)),
+        "the scratchpad's window is on top: {windows:?}"
+    );
+
+    // And toggling it again hides it.
+    let _ = state.dispatch_str("togglespecialworkspace", "").unwrap();
+    assert_eq!(state.special_on(M1), None);
+    assert_eq!(state.layout()[0].windows.len(), 1);
+}
+
+#[test]
+fn a_named_special_workspace_gets_an_id_of_its_own() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+
+    let _ = state
+        .dispatch_str("togglespecialworkspace", "term")
+        .unwrap();
+    let term = state.special_on(M1).expect("a special workspace");
+    assert_eq!(state.workspace_name(term), "special:term");
+    assert!(State::is_special(term), "{term:?} is not in the range");
+
+    // Another name is another workspace, and toggling it swaps which is
+    // shown rather than showing both.
+    let _ = state
+        .dispatch_str("togglespecialworkspace", "notes")
+        .unwrap();
+    let notes = state.special_on(M1).expect("a special workspace");
+    assert_ne!(notes, term);
+    assert_eq!(state.workspace_name(notes), "special:notes");
+
+    // And the first one is still there, with its id remembered.
+    let _ = state
+        .dispatch_str("togglespecialworkspace", "term")
+        .unwrap();
+    assert_eq!(state.special_on(M1), Some(term));
+}
+
+/// Hyprland's range is −99 to −2; a numbered workspace is never special and
+/// a special one never shows in the normal rotation.
+#[test]
+fn the_special_range_is_hyprlands() {
+    assert!(State::is_special(WorkspaceId(-99)));
+    assert!(State::is_special(WorkspaceId(-2)));
+    assert!(!State::is_special(WorkspaceId(-1)));
+    assert!(!State::is_special(WorkspaceId(0)));
+    assert!(!State::is_special(WorkspaceId(1)));
+    assert!(!State::is_special(WorkspaceId(-100)));
+}
+
+/// A numbered workspace's name is its number, which is what `hyprctl
+/// workspaces` prints for one.
+#[test]
+fn a_numbered_workspace_is_named_by_its_number() {
+    let state = setup(BARE);
+    assert_eq!(state.workspace_name(WorkspaceId(1)), "1");
+    assert_eq!(state.workspace_name(WorkspaceId(7)), "7");
+}
+
+/// The scratchpad takes the focus when it has something on it, and gives it
+/// back when it is hidden.
+#[test]
+fn showing_a_scratchpad_with_a_window_focuses_it() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    let _ = state.dispatch_str("togglespecialworkspace", "").unwrap();
+    let _ = state.dispatch_str("movetoworkspace", "special").unwrap();
+    assert_eq!(state.focused_window(), Some(WindowId(2)));
+
+    let _ = state.dispatch_str("togglespecialworkspace", "").unwrap();
+    assert_eq!(
+        state.focused_window(),
+        Some(WindowId(1)),
+        "hiding it left the focus on a window nobody can see"
+    );
+
+    let _ = state.dispatch_str("togglespecialworkspace", "").unwrap();
+    assert_eq!(
+        state.focused_window(),
+        Some(WindowId(2)),
+        "showing it again did not take the focus back"
+    );
 }

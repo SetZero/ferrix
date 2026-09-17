@@ -4158,6 +4158,22 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Begun — special workspaces (2026-09-17).** Hyprland's scratchpad: a
+workspace shown *over* the monitor's own rather than instead of it, with a
+negative id and a `special:` name. `togglespecialworkspace [name]` shows and
+hides it, `workspace special:name` and `movetoworkspace special:name` reach
+it, and `hyprctl monitors` says which one a monitor has over it -- in the
+readable form and in the JSON, both in Hyprland's own shape, because a bar
+reads that field to know whether the scratchpad is up.
+
+The ids are Hyprland's: `special:special` is `SPECIAL_WORKSPACE_START`, −99,
+and every other name counts up from there towards −2. Three things had to
+change for a workspace that is shown beside another rather than instead of
+it: focusing a window on one shows it rather than switching to it, a monitor
+showing one has two workspaces the focus can be on, and an empty one is not
+pruned while it is being shown -- an empty scratchpad is a scratchpad you can
+put something in.
+
 **Begun — animations with Hyprland's curves (2026-09-17).** `compositor/anim`
 is the curves, the tree and the values they move, and it holds no window and
 no clock: a value is asked what it is at a time the caller gives it, so every

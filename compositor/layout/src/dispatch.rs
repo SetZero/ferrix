@@ -36,7 +36,7 @@ impl Direction {
 }
 
 /// Which workspace a `workspace` or `movetoworkspace` argument names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceTarget {
     /// `N`: workspace N; 0 means 1, as Hyprland clamps it.
     Id(WorkspaceId),
@@ -47,6 +47,11 @@ pub enum WorkspaceTarget {
     /// monitor, in number order, wrapping around (`m+N`, the same on the
     /// focused monitor only, is not accepted).
     Open(i64),
+    /// `special` or `special:NAME`: a workspace shown over the monitor's own
+    /// rather than instead of it. Bare `special` is Hyprland's
+    /// `special:special`, which is what `togglespecialworkspace` with no
+    /// argument toggles.
+    Special(String),
 }
 
 impl WorkspaceTarget {
@@ -61,6 +66,14 @@ impl WorkspaceTarget {
                 None
             }
         };
+        // `special` before `e`, because `special` does not start with one
+        // and a name might.
+        if text == "special" {
+            return Some(Self::Special("special".to_owned()));
+        }
+        if let Some(name) = text.strip_prefix("special:") {
+            return (!name.is_empty()).then(|| Self::Special(name.to_owned()));
+        }
         if let Some(rest) = text.strip_prefix('e') {
             return signed(rest).map(Self::Open);
         }
@@ -88,7 +101,7 @@ pub enum FullscreenMode {
 }
 
 /// A dispatcher and its argument.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dispatcher {
     /// `movefocus`: focus the neighbour in a direction, or the monitor
     /// there if there is no window, or else, unless
@@ -113,6 +126,9 @@ pub enum Dispatcher {
     ToggleFloating,
     /// `fullscreen`: toggle the focused window's fullscreen in a mode.
     Fullscreen(FullscreenMode),
+    /// `togglespecialworkspace`: show the named special workspace over the
+    /// monitor's own, or hide it if it is already showing.
+    ToggleSpecialWorkspace(String),
 }
 
 impl Dispatcher {
@@ -138,6 +154,11 @@ impl Dispatcher {
                 "" | "active" => Ok(Self::ToggleFloating),
                 _ => Err(bad()),
             },
+            "togglespecialworkspace" => Ok(Self::ToggleSpecialWorkspace(if arg.is_empty() {
+                "special".to_owned()
+            } else {
+                arg.to_owned()
+            })),
             "fullscreen" => match arg {
                 "" | "0" => Ok(Self::Fullscreen(FullscreenMode::Fullscreen)),
                 "1" => Ok(Self::Fullscreen(FullscreenMode::Maximized)),

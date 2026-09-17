@@ -257,6 +257,7 @@ fn snapshot() -> Snapshot {
             at: (0, 0),
             active_workspace: 1,
             active_workspace_name: "1".to_owned(),
+            special_workspace: None,
             scale: 1.0,
             focused: true,
         }],
@@ -1000,4 +1001,52 @@ fn fullscreen_follows_the_focused_window() {
     assert!(events.contains(&Event::Fullscreen(true)), "{events:?}");
     let events = watcher.changed(&watched(&[watched_window(1, "one")], Some(1)));
     assert!(events.contains(&Event::Fullscreen(false)), "{events:?}");
+}
+
+/// `hyprctl monitors` prints the scratchpad over a monitor, and prints a
+/// zero and an empty name for one showing none: a bar reads that field to
+/// know whether the scratchpad is up.
+#[test]
+fn a_monitor_says_which_scratchpad_is_over_it() {
+    let mut state = snapshot();
+    let readable = |state: &Snapshot| {
+        let Reply::Text(text) = answer(&Request::parse("monitors"), state, Version::default())
+        else {
+            panic!("monitors is text");
+        };
+        text
+    };
+    assert!(
+        readable(&state).contains("special workspace: 0 ()"),
+        "{}",
+        readable(&state)
+    );
+
+    if let Some(monitor) = state.monitors.first_mut() {
+        monitor.special_workspace = Some((-99, "special:special".to_owned()));
+    }
+    assert!(
+        readable(&state).contains("special workspace: -99 (special:special)"),
+        "{}",
+        readable(&state)
+    );
+
+    // And in JSON, where a bar reads it by name. The state is the one
+    // `json` answers from, so the scratchpad is put there too.
+    let Reply::Text(text) = answer(&Request::parse("j/monitors"), &state, Version::default())
+    else {
+        panic!("monitors is text");
+    };
+    let parsed = parse::parse(&text).expect("the answer is JSON");
+    let special = parsed.items()[0]
+        .get("specialWorkspace")
+        .expect("a specialWorkspace object");
+    assert_eq!(
+        special.get("name").and_then(parse::Value::text),
+        Some("special:special")
+    );
+    assert_eq!(
+        special.get("id").and_then(parse::Value::number),
+        Some(-99.0)
+    );
 }
