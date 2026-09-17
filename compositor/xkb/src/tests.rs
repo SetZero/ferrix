@@ -1,7 +1,7 @@
 //! The tables against the probe's own output, and the state against what
 //! libxkbcommon's state machine did when the probe asked it.
 
-use super::{KEYMAP, XKB_OFFSET, code_of, generated, key};
+use super::{KEYMAP, XKB_OFFSET, code_of, generated, key, layout};
 
 /// The evdev codes the tests name, from `linux/input-event-codes.h`.
 const KEY_ESC: u16 = 1;
@@ -14,6 +14,8 @@ const KEY_LEFTALT: u16 = 56;
 const KEY_CAPSLOCK: u16 = 58;
 const KEY_NUMLOCK: u16 = 69;
 const KEY_LEFTMETA: u16 = 125;
+const KEY_Y: u16 = 21;
+const KEY_Z: u16 = 44;
 
 /// The keymap is the text a client compiles, so the one thing that must be
 /// true of it is that it is a whole `xkb_keymap` block and nothing else.
@@ -62,16 +64,23 @@ fn a_key_is_found_by_its_code_and_by_its_keysyms_name() {
     assert_eq!(code_of("no such key"), None);
 }
 
-/// The table is searched by code, which only works if it is sorted; a table
-/// out of order would answer `None` for a key that is in it.
+/// Every layout's table is searched by code, which only works if it is
+/// sorted; a table out of order would answer `None` for a key that is in it.
 #[test]
 fn the_table_is_in_order_of_the_code_and_has_no_duplicate() {
-    let codes: Vec<u16> = generated::KEYS.iter().map(|key| key.code).collect();
-    let mut sorted = codes.clone();
-    sorted.sort_unstable();
-    sorted.dedup();
-    assert_eq!(codes, sorted);
-    assert!(codes.len() > 100, "only {} keys", codes.len());
+    for layout in &generated::LAYOUTS {
+        let codes: Vec<u16> = layout.keys.iter().map(|key| key.code).collect();
+        let mut sorted = codes.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(codes, sorted, "{}", layout.described());
+        assert!(
+            codes.len() > 100,
+            "{}: only {} keys",
+            layout.described(),
+            codes.len()
+        );
+    }
 }
 
 /// The bits are the keymap's, and the keymap declares them in the order
@@ -84,7 +93,57 @@ fn a_modifiers_bit_is_the_one_the_keymap_gives_it() {
     assert_eq!(generated::MOD1, 1 << 3);
     assert_eq!(generated::MOD2, 1 << 4);
     assert_eq!(generated::MOD4, 1 << 6);
-    assert!(generated::SOURCE.contains("layout us"));
+    for layout in &generated::LAYOUTS {
+        assert!(
+            layout.source.contains("rules evdev"),
+            "{}",
+            layout.described()
+        );
+    }
+}
+
+/// `input:kb_layout` and `input:kb_variant` pick a keymap, and a layout this
+/// compositor does not ship says so rather than quietly typing English.
+///
+/// The whole point of the keyword. A person with a German keyboard writes
+/// `kb_layout = de` and expects `y` where the key says `y`; a compositor
+/// that took the setting and sent the US keymap anyway would swap `y` and
+/// `z` on them and give no reason.
+#[test]
+fn a_configuration_picks_the_keymap_it_names() {
+    let described = |name: &str, variant: &str| {
+        let (layout, exact) = layout(name, variant);
+        (layout.described(), exact)
+    };
+    assert_eq!(
+        described("", ""),
+        ("us".to_owned(), true),
+        "Hyprland's default"
+    );
+    assert_eq!(described("us", ""), ("us".to_owned(), true));
+    assert_eq!(described("de", ""), ("de".to_owned(), true));
+    assert_eq!(
+        described("de", "nodeadkeys"),
+        ("de, nodeadkeys".to_owned(), true)
+    );
+    // A variant that is not shipped falls back to the same layout's plain
+    // form: a German keyboard with the wrong dead keys is far closer to
+    // right than an American one.
+    assert_eq!(described("de", "neo"), ("de".to_owned(), false));
+    // And a layout that is not shipped falls back to `us`, and says so.
+    assert_eq!(described("ru", ""), ("us".to_owned(), false));
+
+    // The letters are the keyboard's, which is the only thing that matters.
+    let (german, _) = layout("de", "nodeadkeys");
+    let (american, _) = layout("us", "");
+    assert_eq!(german.key(KEY_Y).and_then(|key| key.plain), Some("z"));
+    assert_eq!(american.key(KEY_Y).and_then(|key| key.plain), Some("y"));
+    assert_eq!(german.code_of("z"), Some(KEY_Y));
+    assert_eq!(american.code_of("z"), Some(KEY_Z));
+    assert!(
+        german.keymap.contains("nodeadkeys") || german.keymap.len() > 10_000,
+        "the German keymap is a real one"
+    );
 }
 
 /// What libxkbcommon's state machine said when the probe pressed each key.

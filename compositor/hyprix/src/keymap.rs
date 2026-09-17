@@ -2,10 +2,10 @@
 //!
 //! `wl_keyboard.keymap` carries a descriptor and a length; the client maps it
 //! read-only and compiles the text with libxkbcommon. So the compositor needs
-//! a file holding [`compositor_xkb::KEYMAP`] and a descriptor onto it, and
-//! the same one goes to every client -- which is what libwayland's own
-//! compositors do, since the file is read-only and each client maps its own
-//! copy.
+//! a file holding the keymap `input:kb_layout` asked for and a descriptor
+//! onto it, and the same one goes to every client -- which is what
+//! libwayland's own compositors do, since the file is read-only and each
+//! client maps its own copy.
 //!
 //! The file is a `memfd`, sealed against every change, as Smithay's
 //! `SealedFile` makes one (`utils/sealed_file.rs`). A client that maps a file
@@ -30,8 +30,8 @@ impl Keymap {
     /// Whatever the call said. Sealing that fails is not an error: the client
     /// then guards against a shrink it will never see, which costs it a
     /// signal handler and nothing else.
-    pub fn new() -> io::Result<Self> {
-        let text = compositor_xkb::KEYMAP.as_bytes();
+    pub fn new(layout: &compositor_xkb::generated::Layout) -> io::Result<Self> {
+        let text = layout.keymap.as_bytes();
         // The length a client is told counts the terminating NUL, which the
         // text does not carry: `xkb_keymap_new_from_string` reads a C string.
         let size = u32::try_from(text.len() + 1).map_err(|_| io::Error::other("too large"))?;

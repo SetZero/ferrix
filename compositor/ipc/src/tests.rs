@@ -1822,3 +1822,23 @@ fn the_workspace_rules_are_listed() {
     assert!(readable.contains("\tpersistent: <unset>\n"), "{readable}");
     assert!(readable.contains("\tborder: false\n"), "{readable}");
 }
+
+/// `eval` and `repl` are answered with the sentence Hyprland answers them
+/// with when it was not started from a Lua configuration.
+///
+/// The two are the last of `hyprctl`'s commands. They run a line in the
+/// configuration's own Lua interpreter, and Hyprland has one only when the
+/// configuration was written in Lua; against the file format this
+/// compositor reads, Hyprland says this and nothing else. A script that
+/// asks is entitled to the answer it would get from Hyprland, which is not
+/// the same as being told the command does not exist.
+#[test]
+fn eval_and_repl_say_what_hyprland_says_without_lua() {
+    for line in ["eval print(1)", "repl print(1)", "eval", "repl"] {
+        assert_eq!(
+            text(line),
+            "eval is only supported with the lua config manager\n",
+            "{line}"
+        );
+    }
+}

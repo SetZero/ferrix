@@ -453,7 +453,7 @@ fn send_shortcut(
         around.say("hyprix: sendshortcut takes modifiers, a key and a window");
         return false;
     };
-    let Some(code) = keycode(key.trim()) else {
+    let Some(code) = keycode(around.seat.layout(), key.trim()) else {
         around.say(&format!("hyprix: sendshortcut: {key} is not a key"));
         return false;
     };
@@ -487,7 +487,7 @@ fn send_key_state(argument: &str, state: &State, around: &mut Around<'_>) -> boo
 }
 
 /// A key by the name Hyprland lets a bind write it.
-fn keycode(text: &str) -> Option<u16> {
+fn keycode(layout: &'static compositor_xkb::generated::Layout, text: &str) -> Option<u16> {
     if let Some(number) = text.strip_prefix("code:") {
         // `code:NN` is XKB's numbering, which is eight above evdev's.
         return u16::try_from(number.trim().parse::<u32>().ok()?.checked_sub(8)?).ok();
@@ -497,7 +497,7 @@ fn keycode(text: &str) -> Option<u16> {
     {
         return u16::try_from(number).ok();
     }
-    compositor_xkb::code_of(text)
+    layout.code_of(text)
 }
 
 /// Send one key to one window, whatever has the keyboard.

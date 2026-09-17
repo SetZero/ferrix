@@ -238,7 +238,19 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // The keymap is made whether or not there is a keyboard: a client that
     // binds one on a seat that announced none is already refused, and a
     // machine whose keyboard arrives later should not need a new file.
-    let keymap = match Keymap::new() {
+    // `input:kb_layout` and `input:kb_variant`, and a sentence when the
+    // configuration asked for a layout this compositor does not ship: a
+    // person whose keyboard suddenly types English is owed a reason.
+    let (chosen, exact) = crate::seat::chosen(&config);
+    if !exact {
+        report(&format!(
+            "hyprix: no keymap for kb_layout = {}, kb_variant = {}; using {}",
+            config.str("input:kb_layout").unwrap_or_default(),
+            config.str("input:kb_variant").unwrap_or_default(),
+            chosen.described()
+        ));
+    }
+    let keymap = match Keymap::new(chosen) {
         Ok(keymap) => Some(keymap),
         Err(error) => {
             report(&format!("hyprix: no keymap: {error}"));

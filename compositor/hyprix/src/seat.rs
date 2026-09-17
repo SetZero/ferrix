@@ -37,6 +37,8 @@
 //! nothing in it is a keyboard that has stopped answering.
 
 use compositor_config::{Config, Key, Mods};
+
+use compositor_xkb::generated::Layout;
 use compositor_xkb::{Keyboard, Modifiers, generated};
 
 /// What the devices below send up, free of evdev's numbering.
@@ -233,6 +235,13 @@ pub struct Seat {
     submaps: Vec<String>,
     /// Binds that have not been resolved, with the reason, for the log.
     unresolved: Vec<String>,
+    /// The keymap in force: `input:kb_layout` and `input:kb_variant`.
+    ///
+    /// A bind is written as a keysym's *name* -- `bind = SUPER, Q, …` -- and
+    /// which key makes that keysym is the keymap's business, so a German
+    /// keyboard's `Q` and an American one's are different keys and the same
+    /// line has to find both.
+    layout: &'static Layout,
     /// Keys whose press a bind ate, so that their release is eaten too.
     ///
     /// Without this a client is told a key came up that it was never told
@@ -261,6 +270,7 @@ impl Seat {
             locked: false,
             submaps: Vec::new(),
             unresolved: Vec::new(),
+            layout: chosen(config).0,
             eaten: Vec::new(),
         };
         seat.set_binds(config);
@@ -271,6 +281,9 @@ impl Seat {
     pub fn set_binds(&mut self, config: &Config) {
         self.binds.clear();
         self.unresolved.clear();
+        // A reload may have changed the keymap, and every bind is resolved
+        // against it.
+        self.layout = chosen(config).0;
         // A reload takes away the map that was in force, as it takes away
         // the binds: a submap the new configuration does not have is one
         // nothing could leave.
@@ -282,7 +295,7 @@ impl Seat {
             {
                 self.submaps.push(submap.clone());
             }
-            let Some(trigger) = trigger_of(&bind.key) else {
+            let Some(trigger) = trigger_of(self.layout, &bind.key) else {
                 self.unresolved
                     .push(format!("{} is not a key this keymap has", bind.key));
                 continue;
@@ -308,6 +321,13 @@ impl Seat {
     #[must_use]
     pub fn binds(&self) -> (usize, &[String]) {
         (self.binds.len(), &self.unresolved)
+    }
+
+    /// The keymap in force, which is what every bind was resolved against
+    /// and what every client is handed.
+    #[must_use]
+    pub const fn layout(&self) -> &'static Layout {
+        self.layout
     }
 
     /// Say whether the session is locked.
@@ -582,10 +602,24 @@ impl Seat {
     }
 }
 
+/// The keymap `config` asks for, and whether it is the one it asked for.
+///
+/// `input:kb_layout` and `input:kb_variant`, the way Hyprland reads them.
+/// The second half is for the caller to report: a person who wrote
+/// `kb_layout = ru` and got `us` is owed a sentence saying so, because
+/// otherwise their keyboard types the wrong letters for no visible reason.
+#[must_use]
+pub fn chosen(config: &Config) -> (&'static Layout, bool) {
+    compositor_xkb::layout(
+        config.str("input:kb_layout").unwrap_or_default(),
+        config.str("input:kb_variant").unwrap_or_default(),
+    )
+}
+
 /// What sets `key` off, or `None` for a key this keymap does not have.
-fn trigger_of(key: &Key) -> Option<Trigger> {
+fn trigger_of(layout: &'static Layout, key: &Key) -> Option<Trigger> {
     Some(match key {
-        Key::Sym(name) => Trigger::Key(compositor_xkb::code_of(name)?),
+        Key::Sym(name) => Trigger::Key(layout.code_of(name)?),
         // `code:NN` is the keycode as `xev` prints it, which is XKB's and so
         // eight above evdev's. Hyprland reads it the same way.
         Key::Code(code) => {

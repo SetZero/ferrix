@@ -18,5 +18,21 @@ gcc -O0 -Wall -Werror \
     $(pkg-config --cflags xkbcommon) \
     -o "$work/keymap" "$here/keymap.c" \
     $(pkg-config --libs xkbcommon)
-"$work/keymap" > "$here/keymap.txt"
-echo "wrote $here/keymap.txt"
+
+# One file per layout the compositor ships. A person who writes
+# `kb_layout = de` gets the letters on their keyboard only if the compositor
+# was given that keymap; `us` is the default and the fallback, and the rest
+# are here because somebody asked for them.
+#
+#   <file stem>  <model>  <layout>  <variant>
+while read -r stem model layout variant; do
+    [ -n "$stem" ] || continue
+    "$work/keymap" "$model" "$layout" "$variant" > "$here/keymap-$stem.txt"
+    echo "wrote $here/keymap-$stem.txt"
+done <<'LAYOUTS'
+us pc105 us
+de pc105 de
+de-nodeadkeys pc105 de nodeadkeys
+gb pc105 gb
+fr pc105 fr
+LAYOUTS

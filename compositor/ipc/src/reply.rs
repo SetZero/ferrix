@@ -108,6 +108,13 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
         }),
         "workspacerules" => text(workspace_rules(flags, &snapshot.workspace_rules)),
         "globalshortcuts" => text(global_shortcuts(flags, &snapshot.shortcuts)),
+        // `eval` and `repl` run a line of Lua in the configuration's own
+        // interpreter, which Hyprland has only when it was started with a
+        // Lua configuration; against the file format everything else here
+        // reads, Hyprland answers this sentence and so does this. The
+        // commands are answered rather than refused because a script that
+        // asks is entitled to the same answer it would get from Hyprland.
+        "eval" | "repl" => text("eval is only supported with the lua config manager\n".to_owned()),
         "getoption" => text(option_named(
             flags,
             request.argument.trim(),

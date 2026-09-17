@@ -416,3 +416,41 @@ fn the_release_of_an_eaten_key_is_eaten_even_after_the_modifier_went() {
         }]
     );
 }
+
+/// A bind is resolved against the keymap the configuration asked for.
+///
+/// `bind = SUPER, Z, killactive` is a keysym's *name*, and which key makes
+/// that keysym is the keymap's business: on a German keyboard `z` is where
+/// an American one has `y`. A compositor that resolved every bind against
+/// the US keymap would fire the wrong bind on a German keyboard and give no
+/// reason, and `nazuna`'s own configuration is `kb_layout = de`.
+#[test]
+fn a_bind_is_resolved_against_the_keymap_the_configuration_asked_for() {
+    /// `KEY_Y` in evdev, which a German keymap calls `z`.
+    const KEY_Y: u16 = 21;
+    /// `KEY_Z` in evdev, which a German keymap calls `y`.
+    const KEY_Z: u16 = 44;
+
+    let fired = |seat: &mut Seat, code: u16| {
+        press(seat, code)
+            .iter()
+            .any(|action| matches!(action, Action::Dispatch { name, .. } if name == "killactive"))
+    };
+
+    let mut german = seat(
+        "input:kb_layout = de\n\
+         input:kb_variant = nodeadkeys\n\
+         bind = , Z, killactive\n",
+    );
+    assert_eq!(german.layout().described(), "de, nodeadkeys");
+    assert!(
+        fired(&mut german, KEY_Y),
+        "the key a German keyboard calls `z` fires the bind"
+    );
+    assert!(!fired(&mut german, KEY_Z), "and the other does not");
+
+    let mut american = seat("bind = , Z, killactive\n");
+    assert_eq!(american.layout().described(), "us");
+    assert!(fired(&mut american, KEY_Z));
+    assert!(!fired(&mut american, KEY_Y));
+}

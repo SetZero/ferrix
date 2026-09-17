@@ -13,10 +13,16 @@
 //   3. Each evdev key's name and the keysyms it produces at the first two
 //      shift levels, which is what a keybind is matched against.
 //
-// Needs a Linux host with libxkbcommon's development files and gcc. The rules
-// are `evdev` with the `us` layout and no variant or options: Hyprland's own
-// defaults (`input:kb_layout` defaults to empty, which libxkbcommon resolves
-// to `us`).
+// Needs a Linux host with libxkbcommon's development files and gcc. The
+// rules are `evdev`; the model, the layout and the variant are the three
+// arguments, and default to `pc105`, `us` and none -- Hyprland's own
+// defaults (`input:kb_layout` defaults to empty, which libxkbcommon
+// resolves to `us`).
+//
+// One run prints one layout. A person who writes `kb_layout = de` gets the
+// letters on their keyboard only if the compositor was given that keymap,
+// so the compositor ships one file per layout it knows and `keymap.sh` runs
+// this once for each.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,28 +42,32 @@ static const char *const MODIFIERS[] = {
     XKB_MOD_NAME_LOGO,  "Mod5",
 };
 
-int main(void)
+int main(int argc, char **argv)
 {
+    const char *model = argc > 1 ? argv[1] : "pc105";
+    const char *layout = argc > 2 ? argv[2] : "us";
+    const char *variant = (argc > 3 && argv[3][0]) ? argv[3] : NULL;
     struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     if (!context) {
         fprintf(stderr, "no xkb context\n");
         return 1;
     }
     struct xkb_rule_names names = {
-        .rules = "evdev", .model = "pc105", .layout = "us",
-        .variant = NULL, .options = NULL,
+        .rules = "evdev", .model = model, .layout = layout,
+        .variant = variant, .options = NULL,
     };
     struct xkb_keymap *keymap =
         xkb_keymap_new_from_names(context, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
     if (!keymap) {
-        fprintf(stderr, "no keymap for evdev/pc105/us\n");
+        fprintf(stderr, "no keymap for evdev/%s/%s/%s\n", model, layout,
+                variant ? variant : "");
         return 1;
     }
 
     // The version comes from the build, not from a runtime call:
     // libxkbcommon has no `xkb_get_version`.
-    printf("# libxkbcommon %s, rules evdev, model pc105, layout us\n",
-           XKBCOMMON_VERSION);
+    printf("# libxkbcommon %s, rules evdev, model %s, layout %s, variant %s\n",
+           XKBCOMMON_VERSION, model, layout, variant ? variant : "-");
 
     // The modifier indices. A modifier the keymap does not declare prints as
     // `-`, which the reader must treat as a mask of zero rather than as bit 0.
