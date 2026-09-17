@@ -1,6 +1,7 @@
 //! The loop: accept, read, lay out, draw, show.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use compositor_config::{Config, NoSources};
@@ -46,9 +47,9 @@ impl Slot {
 ///
 /// A sentence saying what could not be done.
 pub fn run(options: &Options) -> Result<String, String> {
-    let config = read_config(options)?;
-    let settings = Settings::from_config(&config);
-    let style = Style::from_config(&config);
+    let mut config = read_config(options)?;
+    let mut settings = Settings::from_config(&config);
+    let mut style = Style::from_config(&config);
 
     let (width, height) = options.headless.unwrap_or((1920, 1080));
     let mut backend = Headless::new(width, height);
@@ -75,6 +76,21 @@ pub fn run(options: &Options) -> Result<String, String> {
     {
         start(command, listener.path());
     }
+
+    // `hyprctl`'s socket, when one was asked for. Hyprland puts it under
+    // $XDG_RUNTIME_DIR/hypr/<instance>/, and a program looks there.
+    let control = match options.instance.as_deref() {
+        Some(instance) => {
+            let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir);
+            Some(
+                crate::control::Control::bind(&runtime, instance)
+                    .map_err(|error| format!("hyprctl's socket: {error}"))?,
+            )
+        }
+        None => None,
+    };
 
     let mut slots: Vec<Slot> = Vec::new();
     let mut sources: BTreeMap<WindowId, Source> = BTreeMap::new();
@@ -126,6 +142,21 @@ pub fn run(options: &Options) -> Result<String, String> {
             }
         }
 
+        // `hyprctl`: one request a connection, answered and closed.
+        let mut asked: Vec<compositor_ipc::Reply> = Vec::new();
+        if let Some(control) = control.as_ref()
+            && let Some(mut stream) = control.accept()
+        {
+            let snapshot = crate::control::snapshot(&state, &slots, &sources, (width, height));
+            match crate::control::serve(&mut stream, &snapshot) {
+                Ok(todo) => asked = todo,
+                Err(_) => {
+                    // A client that went away mid-request is not the
+                    // compositor's problem.
+                }
+            }
+        }
+
         let mut changed = false;
         for index in 0..slots.len() {
             if serve(
@@ -138,6 +169,20 @@ pub fn run(options: &Options) -> Result<String, String> {
                 changed = true;
             }
         }
+        for reply in asked {
+            if run_ipc(
+                &reply,
+                &mut state,
+                &mut config,
+                &mut settings,
+                &mut style,
+                &mut slots,
+                &sources,
+            ) {
+                changed = true;
+            }
+        }
+
         // A window arriving or leaving resizes every other window on the
         // workspace, and a window that is not told is one drawing at the
         // size it had before -- which the compositor then draws cropped.
@@ -306,6 +351,68 @@ fn serve(
         slot.gone = true;
     }
     Ok(changed)
+}
+
+/// Do what a `hyprctl` request asked, and say whether the layout changed.
+///
+/// `dispatch` is `compositor/layout`'s own dispatcher table, so `hyprctl
+/// dispatch movefocus l` and a keybind of the same name do the same thing.
+/// `keyword` changes one option while the compositor runs, which is what
+/// `hyprctl keyword general:gaps_in 10` is for.
+fn run_ipc(
+    reply: &compositor_ipc::Reply,
+    state: &mut State,
+    config: &mut Config,
+    settings: &mut Settings,
+    style: &mut Style,
+    slots: &mut [Slot],
+    sources: &BTreeMap<WindowId, Source>,
+) -> bool {
+    match reply {
+        compositor_ipc::Reply::Dispatch { name, argument } => {
+            match state.dispatch_str(name, argument) {
+                Ok(changes) => {
+                    // `killactive` asks a window to close, which is the
+                    // client's to obey; the layout says which window.
+                    for change in &changes {
+                        if let compositor_layout::Change::Close(window) = change {
+                            close(*window, slots, sources);
+                        }
+                    }
+                    !changes.is_empty()
+                }
+                Err(_) => false,
+            }
+        }
+        compositor_ipc::Reply::Keyword { name, value } => {
+            if config.keyword(name, value).is_err() {
+                return false;
+            }
+            *settings = Settings::from_config(config);
+            *style = Style::from_config(config);
+            let _ = state.set_settings(*settings);
+            true
+        }
+        compositor_ipc::Reply::Reload | compositor_ipc::Reply::Text(_) => false,
+    }
+}
+
+/// Ask the window's client to close it.
+fn close(window: WindowId, slots: &mut [Slot], sources: &BTreeMap<WindowId, Source>) {
+    let Some(source) = sources.get(&window) else {
+        return;
+    };
+    let Some(slot) = slots.get_mut(source.client) else {
+        return;
+    };
+    let toplevel = slot
+        .client
+        .toplevels()
+        .find(|(_, top)| top.surface == source.surface)
+        .map(|(id, _)| id);
+    if let Some(toplevel) = toplevel {
+        slot.client.close_toplevel(toplevel);
+    }
 }
 
 /// Tell every window the size the layout gives it now.

@@ -21,6 +21,7 @@
 //! Ferrix, through the same legacy mode-setting `compositor/blank` proved.
 
 pub mod backend;
+pub mod control;
 pub mod frame;
 pub mod options;
 pub mod pool;

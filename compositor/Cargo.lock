@@ -39,6 +39,14 @@ name = "compositor-config"
 version = "0.1.0"
 
 [[package]]
+name = "compositor-ipc"
+version = "0.1.0"
+dependencies = [
+ "compositor-config",
+ "compositor-layout",
+]
+
+[[package]]
 name = "compositor-layout"
 version = "0.1.0"
 dependencies = [
@@ -102,6 +110,7 @@ name = "hyprix"
 version = "0.1.0"
 dependencies = [
  "compositor-config",
+ "compositor-ipc",
  "compositor-layout",
  "compositor-pattern",
  "compositor-protocol",

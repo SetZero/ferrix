@@ -3900,6 +3900,31 @@ pixels, and exits by choice with no protocol error.
 each step of it; the record summarises the busiest frame rather than
 committing a picture of somebody else's font rendering.
 
+**Done — `hyprctl`, driven by Hyprland's own client (2026-09-17).**
+`compositor/ipc` is the request shape and the answers: the flags in front of
+a request, `[[BATCH]]`, and the JSON and readable forms of `version`,
+`monitors`, `workspaces`, `clients`, `activewindow` and `activeworkspace`,
+with Hyprland 0.56.2's field names in its own order, read from
+`src/debug/HyprCtl.cpp`. A bar reads those by name, so a missing one is a
+crash in somebody else's program. `dispatch`, `keyword` and `reload` come
+back for the compositor to run, because the crate holds no compositor and no
+socket; `compositor/hyprix` binds the socket where Hyprland binds it, under
+`$XDG_RUNTIME_DIR/hypr/<instance>/.socket.sock`, and a program looks there
+and nowhere else.
+
+The answers are checked twice. `compositor/ipc`'s tests parse them back with
+a JSON parser written in the tests -- the only way to say "this is JSON"
+without the compositor taking a dependency for it -- and require Hyprland's
+field order, that a window title holding a quote, a backslash and a newline
+comes back as it went in, and that `-j -r` and `-j` are the same document.
+Then `compositor/hyprix/probe/hyprctl.sh` runs the real `hyprctl` against the
+compositor and records what it printed: `version`, `monitors`, `workspaces`,
+`clients` and `activewindow` in Hyprland's own shapes; `dispatch movefocus l`
+moving the focus from the second window to the first; and `keyword
+general:gaps_in 40` re-tiling both windows from 485 pixels wide to 450 while
+the compositor runs. A compositor that took the keyword and did not re-tile
+would still have said `ok`, so the test requires the sizes.
+
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
 customer's order of 2026-09-16); then the protocol server, the seat, the

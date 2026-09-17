@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 compositor-config = { path = "../config" }
+compositor-ipc = { path = "../ipc" }
 compositor-layout = { path = "../layout" }
 compositor-protocol = { path = "../protocol" }
 compositor-render = { path = "../render" }

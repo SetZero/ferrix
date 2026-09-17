@@ -1,0 +1,199 @@
+# hyprctl usage: hyprctl [flags] <command> [args...|--help]
+
+$ hyprctl version
+hyprix 0.1.0
+
+no flags were set
+
+
+$ hyprctl monitors
+Monitor HEADLESS-1 (ID 0):
+	1024x768@60.00000 at 0x0
+	active workspace: 1 (1)
+	scale: 1.00
+	focused: yes
+
+
+
+$ hyprctl workspaces
+workspace ID 1 (1) on monitor HEADLESS-1:
+	windows: 2
+	hasfullscreen: 0
+
+
+
+$ hyprctl activewindow
+Window 2 -> two:
+	mapped: true
+	hidden: 0
+	at: 518,21
+	size: 485,726
+	workspace: 1 (1)
+	floating: 0
+	monitor: 0
+	class: rocks.magical.pattern
+	title: two
+	pid: 0
+	xwayland: 0
+	fullscreen: 0
+	focusHistoryID: 0
+
+
+
+$ hyprctl -j activewindow
+{
+    "address": "0x2",
+    "mapped": true,
+    "hidden": false,
+    "visible": true,
+    "acceptsInput": true,
+    "at": [518, 21],
+    "size": [485, 726],
+    "workspace": {
+        "id": 1,
+        "name": "1"
+    },
+    "floating": false,
+    "monitor": 0,
+    "class": "rocks.magical.pattern",
+    "title": "two",
+    "initialClass": "rocks.magical.pattern",
+    "initialTitle": "two",
+    "pid": 0,
+    "xwayland": false,
+    "pinned": false,
+    "fullscreen": false,
+    "fullscreenClient": 0,
+    "grouped": [],
+    "tags": [],
+    "swallowing": "0x0",
+    "focusHistoryID": 0,
+    "inhibitingIdle": false
+}
+
+
+$ hyprctl clients
+Window 1 -> one:
+	mapped: true
+	hidden: 0
+	at: 21,21
+	size: 485,726
+	workspace: 1 (1)
+	floating: 0
+	monitor: 0
+	class: rocks.magical.pattern
+	title: one
+	pid: 0
+	xwayland: 0
+	fullscreen: 0
+	focusHistoryID: -1
+
+Window 2 -> two:
+	mapped: true
+	hidden: 0
+	at: 518,21
+	size: 485,726
+	workspace: 1 (1)
+	floating: 0
+	monitor: 0
+	class: rocks.magical.pattern
+	title: two
+	pid: 0
+	xwayland: 0
+	fullscreen: 0
+	focusHistoryID: 0
+
+
+
+$ hyprctl dispatch movefocus l
+ok
+
+
+$ hyprctl activewindow
+Window 1 -> one:
+	mapped: true
+	hidden: 0
+	at: 21,21
+	size: 485,726
+	workspace: 1 (1)
+	floating: 0
+	monitor: 0
+	class: rocks.magical.pattern
+	title: one
+	pid: 0
+	xwayland: 0
+	fullscreen: 0
+	focusHistoryID: 0
+
+
+
+$ hyprctl keyword general:gaps_in 40
+ok
+
+
+$ hyprctl -j clients
+[
+    {
+        "address": "0x1",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [21, 21],
+        "size": [450, 726],
+        "workspace": {
+            "id": 1,
+            "name": "1"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "rocks.magical.pattern",
+        "title": "one",
+        "initialClass": "rocks.magical.pattern",
+        "initialTitle": "one",
+        "pid": 0,
+        "xwayland": false,
+        "pinned": false,
+        "fullscreen": false,
+        "fullscreenClient": 0,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 0,
+        "inhibitingIdle": false
+    },
+    {
+        "address": "0x2",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [553, 21],
+        "size": [450, 726],
+        "workspace": {
+            "id": 1,
+            "name": "1"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "rocks.magical.pattern",
+        "title": "two",
+        "initialClass": "rocks.magical.pattern",
+        "initialTitle": "two",
+        "pid": 0,
+        "xwayland": false,
+        "pinned": false,
+        "fullscreen": false,
+        "fullscreenClient": 0,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": -1,
+        "inhibitingIdle": false
+    }
+]
+
+
+$ hyprctl nonsense
+unknown request nonsense
+

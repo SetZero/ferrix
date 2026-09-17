@@ -21,6 +21,10 @@ pub struct Options {
     pub exec: Vec<String>,
     /// Give up after this many milliseconds, so a test can never hang.
     pub deadline: Option<u64>,
+    /// The instance name `hyprctl` finds the control socket under, in
+    /// `$XDG_RUNTIME_DIR/hypr/<instance>/`. Without one the socket is not
+    /// bound at all, which is what a test that does not want it asks for.
+    pub instance: Option<String>,
 }
 
 impl Default for Options {
@@ -33,6 +37,7 @@ impl Default for Options {
             dump: None,
             exec: Vec::new(),
             deadline: None,
+            instance: None,
         }
     }
 }
@@ -48,7 +53,8 @@ usage: hyprix [options]
   --frames <n>        stop after this many frames
   --dump <dir>        write each frame there as a PPM
   --exec <command>    start this once the socket is listening, repeatable
-  --deadline <ms>     give up after this long";
+  --deadline <ms>     give up after this long
+  --instance <name>   bind hyprctl's socket under $XDG_RUNTIME_DIR/hypr/<name>";
 
     /// Read the arguments.
     ///
@@ -75,6 +81,7 @@ usage: hyprix [options]
                     );
                 }
                 "--dump" => options.dump = Some(PathBuf::from(value()?)),
+                "--instance" => options.instance = Some(value()?),
                 "--exec" => options.exec.push(value()?),
                 "--deadline" => {
                     options.deadline = Some(
@@ -154,6 +161,13 @@ mod tests {
         assert_eq!(options.frames, Some(3));
         assert_eq!(options.exec, ["one", "two"]);
         assert_eq!(options.deadline, Some(5000));
+        assert_eq!(
+            parse(&["--instance", "ferrix"])
+                .expect("valid")
+                .instance
+                .as_deref(),
+            Some("ferrix")
+        );
     }
 
     #[test]

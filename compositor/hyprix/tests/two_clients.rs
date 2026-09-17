@@ -335,3 +335,116 @@ fn a_real_toolkit_gets_a_window_and_draws_in_it() {
         .expect("a count of colours");
     assert!(colours > 1, "the frame is one flat colour, so nothing drew");
 }
+
+// ---------------------------------------------------------------------------
+// Hyprland's own client
+//
+// `compositor/ipc`'s tests check the answers against Hyprland's source.
+// `probe/hyprctl.sh` checks them against Hyprland's client: the program people
+// type, and the one every script and bar is written around. If `hyprctl
+// clients` prints nothing here, no Hyprland script works on this compositor
+// whatever the JSON says.
+// ---------------------------------------------------------------------------
+
+/// What `probe/hyprctl.sh` recorded.
+const HYPRCTL: &str = include_str!("../probe/hyprctl.txt");
+
+/// What `hyprctl <command>` printed, up to the next command.
+fn hyprctl(command: &str) -> &'static str {
+    let marker = format!("\n$ hyprctl {command}\n");
+    let start = HYPRCTL
+        .find(&marker)
+        .unwrap_or_else(|| panic!("{command:?} is not in probe/hyprctl.txt"))
+        + marker.len();
+    let rest = HYPRCTL.get(start..).unwrap_or("");
+    let end = rest.find("\n$ hyprctl ").unwrap_or(rest.len());
+    rest.get(..end).unwrap_or("")
+}
+
+#[test]
+fn hyprlands_own_client_reads_this_compositor() {
+    // The commands a person types and a script calls.
+    assert!(
+        hyprctl("version").contains("hyprix"),
+        "version said nothing"
+    );
+    assert!(
+        hyprctl("monitors").contains("Monitor HEADLESS-1 (ID 0):"),
+        "monitors: {}",
+        hyprctl("monitors")
+    );
+    assert!(
+        hyprctl("monitors").contains("1024x768@60.00000 at 0x0"),
+        "the mode is not in Hyprland's own shape"
+    );
+    assert!(
+        hyprctl("workspaces").contains("workspace ID 1 (1) on monitor HEADLESS-1:"),
+        "workspaces: {}",
+        hyprctl("workspaces")
+    );
+    assert!(
+        hyprctl("workspaces").contains("windows: 2"),
+        "both windows should be on the workspace"
+    );
+
+    // Both clients are there, with the titles and the app id they set.
+    let clients = hyprctl("clients");
+    assert!(clients.contains("title: one"), "clients: {clients}");
+    assert!(clients.contains("title: two"), "clients: {clients}");
+    assert!(clients.contains("class: rocks.magical.pattern"));
+}
+
+#[test]
+fn a_dispatcher_typed_at_hyprctl_moves_the_focus() {
+    // The focus starts on the window opened last, and `movefocus l` is what
+    // every Hyprland configuration binds.
+    assert!(
+        hyprctl("activewindow").contains("title: two"),
+        "the focus should start on the second window"
+    );
+    assert_eq!(hyprctl("dispatch movefocus l").trim(), "ok");
+    // The second `activewindow` in the record is after the dispatch.
+    let after = HYPRCTL
+        .rsplit_once("\n$ hyprctl activewindow\n")
+        .map(|(_, rest)| rest)
+        .expect("a second activewindow");
+    assert!(
+        after.contains("title: one"),
+        "movefocus did not move the focus:\n{after}"
+    );
+}
+
+#[test]
+fn an_option_changed_at_hyprctl_re_tiles_every_window() {
+    assert_eq!(hyprctl("keyword general:gaps_in 40").trim(), "ok");
+    // Before: 485 wide with the default gaps. After: 450, and both windows
+    // moved. A compositor that took the keyword and did not re-tile would
+    // still say `ok`.
+    let before = hyprctl("-j activewindow");
+    assert!(before.contains("\"size\": [485, 726]"), "before: {before}");
+    let after = HYPRCTL
+        .rsplit_once("\n$ hyprctl -j clients\n")
+        .map(|(_, rest)| rest)
+        .expect("a -j clients after the keyword");
+    assert!(
+        after.contains("\"size\": [450, 726]"),
+        "the windows were not re-tiled:\n{after}"
+    );
+    assert_eq!(
+        after.matches("\"size\": [450, 726]").count(),
+        2,
+        "both windows should have been re-tiled"
+    );
+}
+
+#[test]
+fn an_unknown_request_is_answered_rather_than_hanging_hyprctl() {
+    // Hyprland answers a line and keeps the connection. A compositor that
+    // closed it instead leaves `hyprctl` with nothing to print, which is what
+    // a person sees as a hang.
+    assert!(
+        hyprctl("nonsense").contains("unknown request nonsense"),
+        "{}",
+        hyprctl("nonsense")
+    );
+}

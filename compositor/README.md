@@ -87,6 +87,14 @@ names the part of Hyprland or hyprlang it follows.
   standard library has no stable way to do. A read gives a whole number of
   bytes and not a whole number of messages, so it keeps what has arrived and
   hands the server as much as makes messages.
+* **`ipc`** is `hyprctl`'s request shape and its answers: the flags a request
+  carries, `[[BATCH]]`, and the JSON and readable forms of `version`,
+  `monitors`, `workspaces`, `clients`, `activewindow` and `activeworkspace`,
+  with Hyprland 0.56.2's own field names in its own order. `dispatch`,
+  `keyword` and `reload` come back for the compositor to run, since this
+  crate holds no compositor. It holds no socket either, so the answers are
+  host-tested; a JSON parser in the tests is what says an answer is JSON
+  without the compositor taking a dependency for it.
 * **`render`** draws the frame: a `Canvas` over a `tiny-skia` pixmap with
   `clear`, `fill`, `border` and `composite` (`ARGB8888` source-over,
   `XRGB8888` copied and made opaque), each drawn only inside a `Damage` of
@@ -147,3 +155,7 @@ terminal built against libwayland and every other compositor, and records
 what it said. A client written against this tree's own crates can only show
 that the two halves agree; a toolkit that knows nothing about this one is
 what finds the protocols it does not offer.
+
+`hyprix/probe/hyprctl.sh` is the same idea for the IPC: it drives the
+compositor with Hyprland's own `hyprctl`, the program people type and the one
+every script and bar is written around, and records what it printed.
