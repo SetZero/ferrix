@@ -496,6 +496,14 @@ pub fn scaled(output: &MonitorLayout, origin: (i64, i64), scale: f64) -> Monitor
 
 /// [`render`], with the layer surfaces `zwlr_layer_shell_v1` put on the
 /// monitor.
+///
+/// The frame gets a backdrop of its own, drawn over the whole screen
+/// whatever the damage is, so the picture is the one [`render_onto`] draws
+/// with a kept one: a blur reads the desktop behind the windows and a
+/// frame that redraws a strip is the strip of a whole frame. The cost is
+/// one more screen's worth of background and wallpaper a call, which a
+/// caller drawing frame after frame does not pay -- it keeps the backdrop
+/// between them and calls [`render_onto`].
 pub fn render_with_layers(
     canvas: &mut Canvas,
     output: &MonitorLayout,
@@ -505,9 +513,74 @@ pub fn render_with_layers(
     layers: &[LayerFrame<'_>],
     damage: &Damage,
 ) -> Damage {
+    let mut backdrop = Canvas::new(canvas.width(), canvas.height()).ok();
+    if let Some(behind) = backdrop.as_mut() {
+        // The desktop over the whole screen, whatever this frame's damage
+        // is: a single call has no frame before it to have drawn the part
+        // the damage leaves out, and a backdrop with a hole in it is a
+        // blur that reads black.
+        desktop(
+            behind,
+            origin,
+            styles.base,
+            layers,
+            &Damage::full(behind.width(), behind.height()),
+        );
+    }
     render_onto(
-        canvas, None, output, origin, styles, surfaces, layers, damage,
+        canvas,
+        backdrop.as_mut(),
+        output,
+        origin,
+        styles,
+        surfaces,
+        layers,
+        damage,
     )
+}
+
+/// Everything behind the windows: the background, and the layer surfaces
+/// that are under them with the dim any of them asked for.
+///
+/// Which is to say: a backdrop. Drawn by [`render_onto`] onto the canvas as
+/// the start of a frame, and by [`render_with_layers`] onto a backdrop of
+/// its own, so that the two draw one picture.
+fn desktop(
+    canvas: &mut Canvas,
+    origin: (i64, i64),
+    style: &Style,
+    layers: &[LayerFrame<'_>],
+    damage: &Damage,
+) {
+    canvas.clear(style.background, damage);
+    for layer in layers.iter().filter(|layer| !layer.above) {
+        if layer.dim_around {
+            dim_behind(canvas, style, damage);
+        }
+        let rect = layer
+            .rect
+            .translate(origin.0.saturating_neg(), origin.1.saturating_neg());
+        draw_layer(canvas, None, layer, rect, style, damage);
+    }
+}
+
+/// `dim_around`: black over everything drawn *so far*, laid down just
+/// before the window or surface that asked for it.
+///
+/// Hyprland dims what is behind such a thing; drawing in order means
+/// "behind" is "already drawn", so one fill in the right place is the whole
+/// of it -- no second pass and no second canvas.
+fn dim_behind(canvas: &mut Canvas, style: &Style, damage: &Damage) {
+    if style.dim_around <= 0.0 {
+        return;
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a share between zero and one becomes a byte of alpha"
+    )]
+    let alpha = (style.dim_around.clamp(0.0, 1.0) * 255.0).round() as u32;
+    canvas.fill(canvas.bounds(), Color(alpha << 24), damage);
 }
 
 /// The same, with a canvas for the blur's backdrop.
@@ -537,39 +610,19 @@ pub fn render_onto(
 ) -> Damage {
     let style = styles.base;
     let local = |rect: Rect| rect.translate(origin.0.saturating_neg(), origin.1.saturating_neg());
-    canvas.clear(style.background, damage);
-    // `dim_around`: black over everything drawn *so far*, laid down just
-    // before the window or surface that asked for it. Hyprland dims what
-    // is behind such a thing; drawing in order means "behind" is "already
-    // drawn", so one fill in the right place is the whole of it -- no
-    // second pass and no second canvas.
-    let dim_behind = |canvas: &mut Canvas, damage: &Damage| {
-        if style.dim_around <= 0.0 {
-            return;
-        }
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a share between zero and one becomes a byte of alpha"
-        )]
-        let alpha = (style.dim_around.clamp(0.0, 1.0) * 255.0).round() as u32;
-        canvas.fill(canvas.bounds(), Color(alpha << 24), damage);
-    };
-    for layer in layers.iter().filter(|layer| !layer.above) {
-        if layer.dim_around {
-            dim_behind(canvas, damage);
-        }
-        draw_layer(canvas, None, layer, local(layer.rect), style, damage);
-    }
+    desktop(canvas, origin, style, layers, damage);
     // Everything behind the windows is drawn; that is the backdrop, and it
-    // is taken now, before a window goes over it.
+    // is taken now, before a window goes over it. Only the damaged part:
+    // the rest of it is what the frames before drew, which is the same
+    // desktop -- nothing outside the damage has changed, or it would be in
+    // it.
     if let Some(behind) = backdrop.as_deref_mut() {
         behind.take_from(canvas, damage);
     }
     let behind = backdrop.as_deref();
     for placed in &output.windows {
         if styles.of(placed.window).dim_around {
-            dim_behind(canvas, damage);
+            dim_behind(canvas, style, damage);
         }
         window(
             canvas,
@@ -583,7 +636,7 @@ pub fn render_onto(
     }
     for layer in layers.iter().filter(|layer| layer.above) {
         if layer.dim_around {
-            dim_behind(canvas, damage);
+            dim_behind(canvas, style, damage);
         }
         draw_layer(canvas, behind, layer, local(layer.rect), style, damage);
     }

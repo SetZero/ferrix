@@ -4,9 +4,7 @@ use std::collections::BTreeMap;
 
 use compositor_layout::Rect;
 use compositor_layout::{MonitorLayout, WindowId};
-use compositor_render::{
-    Canvas, Damage, Format, LayerFrame, Style, Surface, Target, render_with_layers,
-};
+use compositor_render::{Canvas, Damage, Format, LayerFrame, Style, Surface, Target, render_onto};
 use compositor_server::Client;
 use compositor_wire::ObjectId;
 
@@ -21,6 +19,17 @@ use crate::state::Slot;
 pub struct Output<'a> {
     /// The canvas the frame is composed on.
     pub canvas: &'a mut Canvas,
+    /// The canvas a blur reads: everything *behind* the windows, kept from
+    /// frame to frame and never drawn over.
+    ///
+    /// It is Hyprland's `blurFB`, which `decoration:blur:new_optimizations`
+    /// fills -- on by default -- and it is what lets a blur be drawn over
+    /// the damage alone: the pixels it reads outside what it writes are
+    /// the desktop's, not the last frame's picture of the surface drawn
+    /// over it. Hyprland fills it in the same place, after the background
+    /// and the layer surfaces under the windows and before the windows
+    /// (`IHyprRenderer::renderWorkspace`, `preBlurForCurrentMonitor`).
+    pub backdrop: &'a mut Canvas,
     /// The screen it is shown on.
     pub backend: &'a mut dyn Backend,
     /// Where the monitor is in the global space.
@@ -299,6 +308,7 @@ fn draw_windows(
 ) -> Result<(), String> {
     let Output {
         canvas,
+        backdrop,
         backend,
         origin,
         style,
@@ -353,7 +363,16 @@ fn draw_windows(
         base: style,
         windows: styles,
     };
-    let _ = render_with_layers(canvas, output, origin, &styles, &surfaces, &drawn, damage);
+    let _ = render_onto(
+        canvas,
+        Some(&mut **backdrop),
+        output,
+        origin,
+        &styles,
+        &surfaces,
+        &drawn,
+        damage,
+    );
 
     // The drag icon under the pointer and over everything else: what a
     // drag looks like is a thing following the pointer, and a compositor
@@ -446,19 +465,6 @@ pub(crate) fn local(rect: Rect, origin: (i64, i64), scale: f64) -> Rect {
         at.width,
         at.height,
     )
-}
-
-/// Whether a surface can be seen through, which is half of what decides
-/// whether the renderer draws a blur behind it.
-///
-/// A format with alpha may be translucent anywhere; one without it never
-/// is. A surface with nothing committed shows nothing, and nothing is
-/// blurred behind it.
-pub(crate) fn translucent(clients: &[Slot], client: usize, surface: ObjectId) -> bool {
-    clients
-        .get(client)
-        .and_then(|slot| pixels(slot.client(), slot.pools(), surface))
-        .is_some_and(|pixels| pixels.format() == Format::Argb8888)
 }
 
 /// Where the surface a drag is carrying is drawn, in the screen's own

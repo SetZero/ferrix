@@ -29,10 +29,21 @@
 //!
 //! # The blur reads more than it writes
 //!
-//! Then the region is grown once more, for the one thing a frame draws that
-//! reads the canvas outside what it writes: the blur behind a translucent
-//! surface. [`Plan::blurs_whole`] says what that costs and why there is no
-//! cheaper way to be exact about it.
+//! There is one thing a frame draws that *reads* outside what it writes:
+//! the blur behind a translucent surface, which takes a kernel's reach of
+//! pixels from around the part it redraws. Nothing here grows the region
+//! for it, because what it reads is not this canvas: the compositor keeps a
+//! backdrop canvas per screen holding everything behind the windows, and
+//! nothing is ever drawn over that (`crate::frame::Output::backdrop`,
+//! Hyprland's `decoration:blur:new_optimizations`). Its pixels outside the
+//! damage are the ones the frames before put there, which are the ones
+//! this frame would have -- anything that changed them is in the damage --
+//! so a blur over a strip reads what a whole frame's blur would and writes
+//! the same pixels.
+//!
+//! Before the backdrop this region had to grow until every blurred surface
+//! it touched was redrawn whole, which made a near-fullscreen translucent
+//! window cost a near-fullscreen frame.
 //!
 //! # Two buffers, two frames
 //!
@@ -262,11 +273,6 @@ pub(crate) struct Plan {
     pub(crate) cursor: Option<(Cursor, Rect)>,
     /// The surface a drag is carrying, the same way.
     pub(crate) drag_icon: Option<(Placed, Rect)>,
-    /// The surfaces this frame draws a blur behind, in the screen's own
-    /// pixels: the rectangle each blur is written into. Worked out where
-    /// the clients' buffers are, because whether a surface can be seen
-    /// through is half of the renderer's condition for blurring behind it.
-    pub(crate) blurred: Vec<Rect>,
 }
 
 impl Plan {
@@ -435,68 +441,6 @@ impl Plan {
         }
     }
 
-    /// Grow `region` until every blur it asks for can be drawn exactly.
-    ///
-    /// This is the one thing a frame draws that *reads* the canvas beyond
-    /// what it writes: `Canvas::blur` takes the pixels behind a surface
-    /// from the canvas, and what it reads reaches a whole kernel outside
-    /// the part of the surface being redrawn. Inside the damage the canvas
-    /// holds what this frame has drawn under the surface; outside it, it
-    /// still holds the *last* frame -- including the surface's own pixels,
-    /// drawn over that blur. A blur that read those would be a blur of
-    /// itself, which is the ghosting a person sees around a translucent
-    /// window and cannot explain.
-    ///
-    /// So a blurred surface the damage touches is redrawn whole, with a
-    /// kernel's reach of the frame around it: then everything the blur
-    /// reads has been drawn by this frame, and the pixels are the ones a
-    /// whole frame would have produced. Hyprland grows its damage for the
-    /// same reason and by a kernel or two of the same reach
-    /// (`CRenderPass::begin` in `src/render/pass/Pass.cpp`, whose comment
-    /// -- "moving a window over blur shows the edges being wonk" -- is
-    /// this artifact); it stops at the reach and keeps the edges, because
-    /// on a GPU the whole window is cheap. Here the whole surface is the
-    /// price of being exact, and being exact is what the blessed frames
-    /// ask for.
-    ///
-    /// Growing one surface may reach another, which is why this runs until
-    /// nothing more is added.
-    fn blurs_whole(&self, region: &mut Damage) {
-        let Some(blur) = self
-            .style
-            .blur
-            .filter(|blur| blur.size > 0 && blur.passes > 0)
-        else {
-            return;
-        };
-        // What `Canvas::blur` reads around what it writes: a tap at `size`
-        // on level *k* of the pyramid is `size * 2^k` source pixels, which
-        // summed down and back up is twice `size * (2^passes - 1)`. The
-        // lattice the pyramid halves on is added because the region read is
-        // snapped out to it.
-        let lattice = 1_i64 << blur.passes.min(6);
-        let reach = blur
-            .size
-            .saturating_mul(lattice)
-            .saturating_mul(2)
-            .saturating_add(lattice);
-        let mut left: Vec<Rect> = self.blurred.clone();
-        while !left.is_empty() {
-            let touched: Vec<Rect> = left
-                .iter()
-                .copied()
-                .filter(|rect| !region.clipped(*rect).is_empty())
-                .collect();
-            if touched.is_empty() {
-                return;
-            }
-            left.retain(|rect| !touched.contains(rect));
-            for rect in touched {
-                region.add(grown(rect, (reach, reach)));
-            }
-        }
-    }
-
     /// The pointer and the drag icon, each where it was and where it is.
     fn pointer_since(&self, old: &Self, region: &mut Damage) {
         if old.cursor != self.cursor {
@@ -545,10 +489,6 @@ impl Watch {
             _ => Damage::full(width, height),
         };
         region.extend(told);
-        // And whatever the blur has to read to come out the same as a whole
-        // frame's would, which is the last thing added: it grows around
-        // everything else.
-        plan.blurs_whole(&mut region);
         let region = region.clipped(Rect::new(0, 0, i64::from(width), i64::from(height)));
         let mut screen = region.clone();
         screen.extend(&self.previous);
