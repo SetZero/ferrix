@@ -6,7 +6,7 @@ fn owned(lines: &[&str]) -> Vec<String> {
 
 /// Every command the kernel runs, the criterion's and then the applets.
 fn every_command() -> impl Iterator<Item = &'static Command> {
-    COMMANDS.iter().chain(APPLETS).chain(UTILITIES)
+    COMMANDS.iter().chain(APPLETS).chain(SHELL).chain(UTILITIES)
 }
 
 /// The log a kernel that passes every command would write.
@@ -76,12 +76,13 @@ fn the_list_refuses_what_its_encoding_cannot_carry() {
 }
 
 #[test]
-fn every_program_is_an_applet_the_initramfs_links() {
+fn every_program_is_a_name_the_initramfs_links() {
     for command in every_command() {
+        let name = command.argv[0];
         assert!(
-            crate::initramfs::APPLETS.contains(&command.argv[0]),
-            "{} is not linked in /bin",
-            command.argv[0]
+            crate::initramfs::APPLETS.contains(&name)
+                || crate::initramfs::ZINC_NAMES.contains(&name),
+            "{name} is not linked in /bin"
         );
     }
 }
@@ -224,19 +225,19 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
         17,
         &[
             "uid=1000(ferrix) gid=1000(ferrix) groups=1000(ferrix)",
-            "cat: can't open '/tmp/dac-private': Permission denied",
+            "cat: /tmp/dac-private: Permission denied",
             "owned by 1000 1000",
-            "rm: can't remove '/tmp/dac-private': Operation not permitted",
-            "chmod: /tmp/dac-private: Operation not permitted",
-            "ls: can't open '/tmp/dac-closed': Permission denied",
+            "rm: cannot remove '/tmp/dac-private': Permission denied",
+            "chmod: Operation not permitted (os error 1)",
+            "ls: cannot open directory '/tmp/dac-closed': Permission denied",
             "zsh:7: permission denied: /tmp/dac-noexec",
             "proc self owned by 1000 1000",
             "listed its own descriptors",
             "Uid:\t1000\t1000\t1000\t1000",
             "set-user-id gives uid 1000 euid 0",
-            "hostname: sethostname: Operation not permitted",
+            "hostname: failed to set hostname: Permission denied",
             "zsh:kill:13: kill 1 failed: operation not permitted",
-            "mknod: /tmp/dac-null: Operation not permitted",
+            "mknod: Operation not permitted (os error 1)",
             "login shell -zsh in /home/ferrix as 1000",
             "root still reads: secret",
         ],

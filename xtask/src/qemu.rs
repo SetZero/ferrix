@@ -373,7 +373,7 @@ pub(crate) fn test_shell(arch: Arch, image: &Path, kernel: &Path, args: &Args) -
         )));
     }
     println!(
-        "  {arch}: busybox ran the script and exited with {}",
+        "  {arch}: the shell ran the script and exited with {}",
         crate::shell::STATUS
     );
     Ok(())
@@ -386,15 +386,18 @@ pub(crate) fn test_shell(arch: Arch, image: &Path, kernel: &Path, args: &Args) -
 pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> Result<()> {
     let commands = crate::vfs::COMMANDS;
     let applets = crate::vfs::APPLETS;
+    let shell = crate::vfs::SHELL;
     let utilities: &[crate::vfs::Command] = if crate::vfs::carries_utilities(arch) {
         crate::vfs::UTILITIES
     } else {
         &[]
     };
     println!(
-        "  {arch}: running {} programs, {} applets and {} uutils commands under QEMU (timeout {}s)",
+        "  {arch}: running {} programs, {} applets, {} shell and {} uutils commands \
+         under QEMU (timeout {}s)",
         commands.len(),
         applets.len(),
+        shell.len(),
         utilities.len(),
         args.timeout
     );
@@ -432,8 +435,14 @@ pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> 
             "stage 8's applets all passed",
         ),
         (
-            utilities,
+            shell,
             commands.len() + applets.len(),
+            "shell commands",
+            "/bin/sh is zinc",
+        ),
+        (
+            utilities,
+            commands.len() + applets.len() + shell.len(),
             "uutils commands",
             "uutils/coreutils ran on Ferrix",
         ),

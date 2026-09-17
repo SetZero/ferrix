@@ -232,14 +232,20 @@ fn run() -> Result<()> {
             Ok(())
         }
         "test-shell" => {
-            let init = args.init.as_deref().ok_or_else(|| {
-                Error::new(
-                    "test-shell needs --init PATH, a static busybox for each architecture; \
-                     `{arch}` in the path is replaced by the architecture's name",
-                )
-            })?;
             for arch in args.arches()? {
-                let program = program_for(init, arch)?;
+                // The shell the kernel starts. zinc, the shell this tree has,
+                // unless `--init` names another: the same script under a
+                // static busybox is what measures the ABI against somebody
+                // else's binary, and both are worth running.
+                let program = match args.init.as_deref() {
+                    Some(init) => program_for(init, arch)?,
+                    None => zinc::built(arch)?.ok_or_else(|| {
+                        Error::new(format!(
+                            "zinc is not built for {arch}; give --init PATH, a static \
+                             shell for each architecture, instead"
+                        ))
+                    })?,
+                };
                 let loader = cargo::build_loader(arch, args.release)?;
                 let kernel =
                     cargo::build_kernel_with_init(arch, args.release, &program, shell::SCRIPT)?;

@@ -14,9 +14,12 @@
 //! where a check that the unpack happened can find it.
 //!
 //! Given a program — `test-vfs`, or `build` and `run` with `--init` or
-//! `FERRIX_INIT` — the archive also carries it at `/bin/busybox`, and a
-//! symbolic link to it in `/bin` for every name in [`APPLETS`]. Without one it
-//! is the same bytes it was before programs could be added.
+//! `FERRIX_INIT` — the archive also carries it at `/bin/busybox`, zinc at
+//! `/bin/zinc` and uutils/coreutils at `/bin/coreutils`, and a link in `/bin`
+//! for every name each of them owns: `sh` is zinc's, the hundred names in
+//! [`UTILITIES`] are uutils', and busybox gets the rest of [`APPLETS`].
+//! Without a program it is the same bytes it was before programs could be
+//! added.
 
 use std::path::Path;
 
@@ -223,16 +226,15 @@ pub(crate) const APPLETS: &[&str] = &[
 /// Where uutils/coreutils goes: one multicall binary, as busybox is.
 pub(crate) const UUTILS_PATH: &str = "bin/coreutils";
 
-/// The directory its utility names are linked in.
+/// The directory its utility names are linked in: `/bin`, which is `PATH`.
 ///
-/// `/usr/bin`, not `/bin`, because `/bin` is busybox's: almost every name
-/// below is one busybox also answers to, and a link can only point at one of
-/// them. Which of the two owns `/bin` is the next slice's question
-/// (`docs/UUTILS.md` S4), and until it is answered both are in the image and
-/// reachable, uutils by its own path. `PATH` is `/bin` (`kernel/src/init.rs`),
-/// so nothing finds these by name yet, which is the point: no gate changes
-/// what it runs.
-pub(crate) const UUTILS_DIR: &str = "usr/bin";
+/// It was `/usr/bin` for one slice, so that uutils could be in the image
+/// without any gate running it by accident. Now a name uutils provides is
+/// uutils': `ls`, `cat`, `cp` and the hundred others are the Rust
+/// implementations, and busybox keeps only the names uutils has not got --
+/// `sysctl`, `fdisk`, `top`, `su`, the networking, and the rest of the list
+/// in `docs/UUTILS.md` §5.
+pub(crate) const UUTILS_DIR: &str = "bin";
 
 /// Every utility uutils/coreutils 0.9.0 provides, each linked in
 /// [`UUTILS_DIR`] beside the program: `coreutils --list`, as the binary this
@@ -262,6 +264,18 @@ pub(crate) const UTILITIES: &[&str] = &[
 
 /// Where zinc, the zsh-compatible shell, goes beside a program.
 pub(crate) const ZINC_PATH: &str = "bin/zinc";
+
+/// The names zinc owns in `/bin` when it is in the image, and busybox
+/// therefore does not get a link for.
+///
+/// `sh` is the one that matters: it is what every script in the image and in
+/// `cargo xtask test-vfs` is run by, so this line is what makes zinc the
+/// shell rather than a program sitting beside busybox. `zsh` is zinc's own
+/// name, which busybox never answers to.
+///
+/// Not `ash` or `static-sh`: those are busybox's own names for its own shell,
+/// and a person who asks for busybox's shell by name should get it.
+pub(crate) const ZINC_NAMES: &[&str] = &["sh", "zsh"];
 
 /// Where busybox's `udhcpc` looks for the script it runs as a lease changes.
 const UDHCPC_SCRIPT_PATH: &str = "usr/share/udhcpc/default.script";
@@ -435,13 +449,24 @@ fn build_with_shell(
         archive.directory_owned("home/ferrix", 0o755, USER)?;
         archive.file(PROGRAM_PATH, 0o755, program)?;
         for applet in APPLETS {
+            // A name in `/bin` can only be one program. zinc owns `sh`, and
+            // uutils owns every name it implements; busybox gets the rest,
+            // which is still most of the list.
+            if zinc.is_some() && ZINC_NAMES.contains(applet) {
+                continue;
+            }
+            if uutils.is_some() && UTILITIES.contains(applet) {
+                continue;
+            }
             archive.symlink(&format!("bin/{applet}"), "busybox")?;
         }
         // Only beside a program too: zinc is a shell a person starts from
         // the busybox one, and the boot check's archive stays the same bytes.
         if let Some(zinc) = zinc {
             archive.file(ZINC_PATH, 0o755, zinc)?;
-            archive.symlink("bin/zsh", "zinc")?;
+            for name in ZINC_NAMES {
+                archive.symlink(&format!("bin/{name}"), "zinc")?;
+            }
         }
         // uutils/coreutils, beside a program for the same reason zinc is: the
         // boot check carries none and its archive stays the bytes it was. The
@@ -449,15 +474,10 @@ fn build_with_shell(
         // directory they are in.
         if let Some(uutils) = uutils {
             archive.file(UUTILS_PATH, 0o755, uutils)?;
-            // `usr` itself is made above, with `usr/share/udhcpc`; a second
-            // entry for it would be a second `mkdir` of a directory that is
-            // already there.
-            archive.directory(UUTILS_DIR, 0o755)?;
+            // Relative, as busybox's are, now that the links are in the
+            // directory the program is in.
             for utility in UTILITIES {
-                archive.symlink(
-                    &format!("{UUTILS_DIR}/{utility}"),
-                    &format!("/{UUTILS_PATH}"),
-                )?;
+                archive.symlink(&format!("{UUTILS_DIR}/{utility}"), "coreutils")?;
             }
         }
     }
@@ -593,31 +613,81 @@ mod tests {
     }
 
     #[test]
-    fn uutils_goes_in_bin_with_its_names_linked_in_usr_bin() {
+    fn sh_is_zinc_when_zinc_is_there_and_busybox_when_it_is_not() {
+        let with = build_with_shell(Some(b"program"), &[], Some(b"shell"), None, &[]).unwrap();
+        let archive = ferrix_cpio::Archive::new(&with);
+        for name in ZINC_NAMES {
+            assert_eq!(
+                archive
+                    .find(&format!("bin/{name}"))
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("bin/{name} is linked"))
+                    .symlink_target(),
+                Some("zinc"),
+                "bin/{name}"
+            );
+        }
+        // busybox's own name for its own shell is still busybox's.
+        assert_eq!(
+            archive.find("bin/ash").unwrap().unwrap().symlink_target(),
+            Some("busybox")
+        );
+        // And with no zinc in the image, `sh` is busybox's again, so an image
+        // built for an architecture zinc is not compiled for still has one.
+        let without = build_with_shell(Some(b"program"), &[], None, None, &[]).unwrap();
+        assert_eq!(
+            ferrix_cpio::Archive::new(&without)
+                .find("bin/sh")
+                .unwrap()
+                .unwrap()
+                .symlink_target(),
+            Some("busybox")
+        );
+    }
+
+    #[test]
+    fn uutils_owns_the_names_it_provides_and_busybox_keeps_the_rest() {
         let with = build_with_shell(Some(b"program"), &[], None, Some(b"utilities"), &[]).unwrap();
         let archive = ferrix_cpio::Archive::new(&with);
         let found = archive.find(UUTILS_PATH).unwrap().unwrap();
         assert_eq!(found.data, b"utilities");
         assert_eq!(found.mode & 0o777, 0o755, "it has to be runnable");
 
-        // Every name is a link to it, and an absolute one: the links are not
-        // in the directory the program is in, as busybox's are.
+        // Every name uutils provides is a link to it.
         for utility in ["ls", "cat", "uname", "wc"] {
             let link = archive
-                .find(&format!("{UUTILS_DIR}/{utility}"))
+                .find(&format!("bin/{utility}"))
                 .unwrap()
                 .unwrap_or_else(|| panic!("{utility} is linked"));
+            assert_eq!(link.symlink_target(), Some("coreutils"), "bin/{utility}");
+        }
+
+        // And a name it does not provide is still busybox's.
+        for applet in ["sysctl", "fdisk", "top", "su", "ifconfig"] {
+            assert!(
+                !UTILITIES.contains(&applet),
+                "{applet} is not uutils' to give"
+            );
             assert_eq!(
-                link.symlink_target(),
-                Some("/bin/coreutils"),
-                "{UUTILS_DIR}/{utility}"
+                archive
+                    .find(&format!("bin/{applet}"))
+                    .unwrap()
+                    .unwrap()
+                    .symlink_target(),
+                Some("busybox"),
+                "bin/{applet}"
             );
         }
 
-        // /bin stays busybox's: the names are in both places, and the link in
-        // /bin is the one PATH finds. Changing that is S4's, not this.
+        // Without uutils the name is busybox's, so an image for an
+        // architecture without it still has an `ls`.
+        let no_uutils = build_with_shell(Some(b"program"), &[], None, None, &[]).unwrap();
         assert_eq!(
-            archive.find("bin/ls").unwrap().unwrap().symlink_target(),
+            ferrix_cpio::Archive::new(&no_uutils)
+                .find("bin/ls")
+                .unwrap()
+                .unwrap()
+                .symlink_target(),
             Some("busybox")
         );
 

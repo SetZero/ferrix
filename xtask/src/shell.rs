@@ -19,12 +19,22 @@
 //! that fails. Descriptor 1 is now an open file in a descriptor table, and the
 //! line below is what proves `fcntl` answers it.
 //!
-//! # Why the program is not in the repository
+//! # Which shell runs it
 //!
-//! A static busybox is a binary built by somebody else, for each architecture,
-//! and which one to trust is a decision for whoever runs this. `--init` names
-//! it. Alpine's `busybox-static` package is what this was first run against:
+//! zinc, the shell in `zinc/`, unless `--init` names another. Both are worth
+//! running and the gate runs both: zinc is the image's shell, and a static
+//! busybox is *somebody else's* binary, which is what stage 7's exit was
+//! about — a shell written against this kernel works by construction and
+//! proves less about the ABI.
+//!
+//! A static busybox is built by somebody else for each architecture, and
+//! which one to trust is a decision for whoever runs this; `--init` names it.
+//! Alpine's `busybox-static` package is what this was first run against:
 //! static musl, one build per architecture, and no knowledge of Ferrix.
+//!
+//! The transcript below is the same under either. It did not move when zinc
+//! took over, which is the whole of what `docs/UUTILS.md` S4 had to prove
+//! about the script.
 
 /// The script `sh -c` runs.
 pub(crate) const SCRIPT: &str = r#"echo "script: started"
