@@ -133,6 +133,29 @@
 //! arithmetic without fast-math flags, which rustc never sets, so musl's
 //! `x + toint - toint` survives as written. The unit tests check the
 //! exceptions of every table case in both the debug and the release build.
+//!
+//! # `long double`
+//!
+//! On x86-64 a `long double` is the x87's 80-bit extended type: a 64-bit
+//! significand with an explicit integer bit, and a 15-bit exponent. Rust has
+//! no such type — `f64` is the widest it can name here — so [`ld80::F80`]
+//! holds the ten bytes, and every operation on one is an `asm!` block of x87
+//! instructions rather than a Rust operator. That is not a workaround but the
+//! point: the hardware rounds to 64 bits and raises the exceptions, so the
+//! results are the ones musl's own x87 code gives, in every rounding mode,
+//! without this library having to reimplement extended arithmetic.
+//!
+//! The calling convention is the other half. C passes a `long double`
+//! argument in the caller's stack frame and returns one in `st(0)`, neither
+//! of which a Rust signature can express, so each exported function is a
+//! naked shim that hands the stack slots' addresses to a Rust adapter. The
+//! shims are what `tests/c/math/longdouble.c` exercises: a wrong offset in
+//! one is invisible to a Rust unit test, which calls the body directly.
+//!
+//! [`ld80`] holds the type and the shims; the functions themselves sit in its
+//! submodules, beside the `double` and `float` families they mirror. The
+//! transcendentals are not there yet — they are ports of musl's, not single
+//! instructions — and `docs/POSIX-2024.md` lists which are still absent.
 
 pub mod acos;
 pub mod acosh;
@@ -158,6 +181,8 @@ pub mod j0f;
 pub mod j1;
 pub mod j1f;
 pub mod jn;
+#[cfg(target_arch = "x86_64")]
+pub mod ld80;
 pub mod lgamma;
 pub mod lgammaf;
 pub mod log;
