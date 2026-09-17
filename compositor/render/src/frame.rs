@@ -47,6 +47,40 @@ impl Style {
     /// Hyprland's `misc:background_color` default.
     pub const BACKGROUND: Color = Color(0xFF11_1111);
 
+    /// The same style on a monitor at `scale`: every length in buffer
+    /// pixels rather than logical ones.
+    ///
+    /// Hyprland scales its decorations by the monitor's scale -- a rounding
+    /// of 12 on a screen at `scale = 2` cuts 24 buffer pixels -- and a
+    /// renderer that scaled the windows and not the decorations would draw
+    /// a hairline border round a doubled window.
+    #[must_use]
+    pub fn at_scale(&self, scale: f64) -> Self {
+        if (scale - 1.0).abs() < f64::EPSILON {
+            return *self;
+        }
+        let grow = |value: i64| -> i64 {
+            #[expect(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                reason = "a decoration's pixels are far inside f64's exact range"
+            )]
+            let scaled = (value as f64 * scale).round() as i64;
+            scaled
+        };
+        Self {
+            rounding: grow(self.rounding),
+            shadow: self.shadow.map(|shadow| Shadow {
+                rounding: grow(shadow.rounding),
+                range: grow(shadow.range),
+                offset: (grow(shadow.offset.0), grow(shadow.offset.1)),
+                ..shadow
+            }),
+            blur: self.blur.map(|(size, passes)| (grow(size), passes)),
+            ..*self
+        }
+    }
+
     /// The colours `config` gives. A border gradient is drawn as its first
     /// colour until gradients are written.
     #[must_use]
@@ -196,6 +230,46 @@ pub fn render(
     damage: &Damage,
 ) -> Damage {
     render_with_layers(canvas, output, origin, style, surfaces, &[], damage)
+}
+
+/// A monitor's layout in the buffer pixels a scaled screen draws.
+///
+/// Hyprland lays a scaled monitor out in logical pixels -- a 1024x768 screen
+/// at `scale = 2` tiles its windows in 512x384 -- and draws every one of
+/// them as `scale` buffer pixels. Everything above the renderer therefore
+/// works in logical pixels, and this is where they become the screen's own:
+/// each rectangle grows away from the monitor's corner, so a window at the
+/// monitor's top left stays there.
+///
+/// The decorations scale with it, which is what [`Style::at_scale`] is for:
+/// a border one logical pixel wide is two buffer pixels at `scale = 2`, as
+/// it is in Hyprland.
+#[must_use]
+pub fn scaled(output: &MonitorLayout, origin: (i64, i64), scale: f64) -> MonitorLayout {
+    if (scale - 1.0).abs() < f64::EPSILON {
+        return output.clone();
+    }
+    let grow = |value: i64| -> i64 {
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            reason = "a screen's pixels are far inside f64's exact range, and a scaled length is                       rounded to the pixel it lands on"
+        )]
+        let scaled = (value as f64 * scale).round() as i64;
+        scaled
+    };
+    let at = |value: i64, from: i64| from.saturating_add(grow(value.saturating_sub(from)));
+    let mut out = output.clone();
+    for placed in &mut out.windows {
+        placed.rect = Rect::new(
+            at(placed.rect.x, origin.0),
+            at(placed.rect.y, origin.1),
+            grow(placed.rect.width),
+            grow(placed.rect.height),
+        );
+        placed.border = grow(placed.border);
+    }
+    out
 }
 
 /// [`render`], with the layer surfaces `zwlr_layer_shell_v1` put on the

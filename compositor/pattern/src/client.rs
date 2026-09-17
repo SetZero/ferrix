@@ -37,6 +37,7 @@ mod id {
     pub(super) const LAYER_SHELL: ObjectId = ObjectId(15);
     pub(super) const LAYER_SURFACE: ObjectId = ObjectId(16);
     pub(super) const SEAT: ObjectId = ObjectId(12);
+    pub(super) const OUTPUT: ObjectId = ObjectId(17);
     pub(super) const KEYBOARD: ObjectId = ObjectId(13);
     pub(super) const POINTER: ObjectId = ObjectId(14);
 }
@@ -150,6 +151,7 @@ pub fn run_shaped_on(
         released: 0,
         keys: 0,
         seat: false,
+        scale: 1,
     };
 
     let started = Instant::now();
@@ -193,6 +195,13 @@ struct Client {
     /// and a buffer may not be reinterpreted.
     buffer_format: Option<u32>,
     released: u32,
+    /// The buffer scale to draw at: the largest any `wl_output` announced.
+    ///
+    /// A toolkit picks a surface's scale from the outputs it has entered;
+    /// this client has one window and takes the largest scale offered,
+    /// which on a machine whose screens all have the same scale is that
+    /// scale, and on a mixed one is the sharper of the two.
+    scale: i32,
     /// How many keys have been pressed, which also says which pattern is
     /// drawn: the client draws a different one after each key, so that a key
     /// arriving is visible on the screen and not only in a log line.
@@ -244,6 +253,7 @@ impl Client {
             id::POINTER => &core::WL_POINTER,
             id::SHELL => &xdg_shell::XDG_WM_BASE,
             id::BUFFER => &core::WL_BUFFER,
+            id::OUTPUT => &core::WL_OUTPUT,
             _ => return None,
         })
     }
@@ -312,6 +322,16 @@ impl Client {
             }
             id::BUFFER if opcode == core::wl_buffer::event::RELEASE => {
                 self.released = self.released.saturating_add(1);
+            }
+            id::OUTPUT if opcode == core::wl_output::event::SCALE => {
+                let scale = args.first().and_then(Arg::as_int).unwrap_or(1);
+                if scale > self.scale {
+                    self.scale = scale;
+                    say(&format!("pattern: output scale {scale}"));
+                    // The buffer is the wrong size now, and the window's
+                    // logical size has not changed: draw it again.
+                    self.draw(out)?;
+                }
             }
             id::SEAT if opcode == wl_seat::event::CAPABILITIES => {
                 self.seat(args.first().and_then(Arg::as_uint).unwrap_or(0), out);
@@ -472,6 +492,10 @@ impl Client {
             ("wl_shm", id::SHM, 1, true),
             ("xdg_wm_base", id::SHELL, !bar as u32 * 6, !bar),
             ("wl_seat", id::SEAT, 7, false),
+            // `wl_output` for its scale: a client on a scaled monitor draws
+            // a buffer that many times the size and says so, or the
+            // compositor has to stretch what it sent.
+            ("wl_output", id::OUTPUT, 4, false),
             ("zwlr_layer_shell_v1", id::LAYER_SHELL, 5, bar),
         ] {
             if want == 0 {
@@ -609,7 +633,15 @@ impl Client {
         if !self.acked || self.width <= 0 || self.height <= 0 {
             return Ok(());
         }
-        let (width, height) = (self.width, self.height);
+        // The window's size is in logical pixels; the buffer is in the
+        // screen's own, which on a monitor at `scale = 2` is twice as many
+        // each way. `set_buffer_scale` is what tells the compositor that the
+        // larger buffer is the same window and not a larger one.
+        let scale = self.scale.max(1);
+        let (width, height) = (
+            self.width.saturating_mul(scale),
+            self.height.saturating_mul(scale),
+        );
         let stride = width.saturating_mul(4);
         let len = usize::try_from(stride.saturating_mul(height))
             .map_err(|_| "a window too large to draw".to_owned())?;
@@ -688,6 +720,13 @@ impl Client {
             }
         }
 
+        request(
+            out,
+            id::SURFACE,
+            wl_surface::request::SET_BUFFER_SCALE,
+            &[ArgType::Int],
+            &[Arg::Int(scale)],
+        );
         request(
             out,
             id::SURFACE,

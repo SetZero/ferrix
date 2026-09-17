@@ -21,6 +21,7 @@
 //! `source`, and keyed categories such as `device[name] { … }`.
 
 mod bind;
+mod monitor;
 mod options;
 mod parse;
 mod value;
@@ -33,6 +34,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub use bind::{Bind, BindFlags, Key, Mods};
+pub use monitor::{Mode, MonitorRule, Position, Scale};
 pub use options::OptionValue;
 pub use parse::parse;
 pub use value::{

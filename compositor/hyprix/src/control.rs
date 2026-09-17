@@ -169,7 +169,7 @@ pub fn snapshot(
             special_workspace: state
                 .special_on(monitor.id)
                 .map(|id| (i32::try_from(id.0).unwrap_or(0), state.workspace_name(id))),
-            scale: 1.0,
+            scale: monitor.scale,
             focused: Some(monitor.id) == state.focused_monitor(),
         });
     }

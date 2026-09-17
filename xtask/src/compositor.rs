@@ -198,6 +198,25 @@ bind = SUPER, C, exec, /bin/hyprctl --batch monitors ; clients
 bind = SUPER, W, exec, /bin/hyprctl activewindow
 ";
 
+/// The picture a scaled monitor makes, which the sixth boot requires.
+const SCALED_EXPECTED: (&str, &str) = (
+    "every logical pixel drawn as two on a monitor at scale 2",
+    "compositor/render/tests/data/scaled-two-clients.xrle",
+);
+
+/// The configuration the sixth boot is given: one monitor at scale 2, where
+/// the windows tile in 512x384 logical pixels and are drawn as 1024x768.
+///
+/// The clients read `wl_output.scale` and send buffers twice the size, which
+/// is what a client on a scaled monitor does and what the expected image is
+/// blessed with.
+const SCALED_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+monitor = , preferred, auto, 2
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+";
+
 /// The configuration the second boot is given: a bar through
 /// `zwlr_layer_shell_v1`, and the same two windows.
 ///
@@ -584,6 +603,11 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
                 "rounded corners, a shadow, a dimmed window and a blurred background",
                 DECORATED_CONFIG,
                 DECORATED_EXPECTED,
+            ),
+            (
+                "a monitor at scale 2, tiling in logical pixels and drawing in the screen's own",
+                SCALED_CONFIG,
+                SCALED_EXPECTED,
             ),
         ] {
             let (screens, _) = boot_and_dump(

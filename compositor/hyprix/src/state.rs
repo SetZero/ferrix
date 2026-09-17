@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use compositor_config::{Config, NoSources};
+use compositor_config::{Config, MonitorRule, NoSources, Position};
 use compositor_layout::{Monitor, MonitorId, Rect, Settings, State, WindowId};
 use compositor_protocol::{core, xdg_shell};
 use compositor_render::{Canvas, Damage, Style};
@@ -83,7 +83,17 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         Some((width, height)) => vec![Box::new(Headless::new(width, height))],
         None => open_screens()?,
     };
-    let mut screens = Screen::all(backends)?;
+    // The `monitor =` lines, which say where a monitor goes, how it is
+    // scaled and whether it is used at all. A line that cannot be read is
+    // said and the rest apply, as everywhere else in the configuration.
+    let mut rules = Vec::new();
+    for raw in &config.monitors {
+        match MonitorRule::parse(&raw.value) {
+            Ok(rule) => rules.push(rule),
+            Err(why) => report(&format!("hyprix: monitor = {}: {why}", raw.value)),
+        }
+    }
+    let mut screens = Screen::all(backends, &rules)?;
     // What the whole desktop covers, which is what the pointer moves over.
     let (width, height) = Screen::desktop(&screens);
 
@@ -172,6 +182,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 name: screen.name.clone(),
                 rect: screen.rect,
                 reserved: compositor_layout::Gaps::default(),
+                scale: screen.scale,
             })
             .map_err(|error| format!("the monitor: {error:?}"))?;
     }
@@ -448,6 +459,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     backend: screen.backend.as_mut(),
                     origin: (screen.rect.x, screen.rect.y),
                     style: &style,
+                    scale: screen.scale,
                 };
                 crate::frame::draw(&mut target, output, &slots, &sources, &placed_layers, &full)?;
             }
@@ -656,10 +668,13 @@ struct Screen {
     canvas: Canvas,
     /// The monitor it is, in the layout.
     monitor: MonitorId,
-    /// Where it is in the space every window's rectangle is in.
+    /// Where it is and how big, in the logical pixels every window's
+    /// rectangle is in: the screen's own size divided by the scale.
     rect: Rect,
     /// What it is called: the connector's name.
     name: String,
+    /// How many buffer pixels one logical pixel is: `monitor = ..., 2`.
+    scale: f64,
 }
 
 impl Screen {
@@ -670,26 +685,45 @@ impl Screen {
     /// position goes to the right of the ones already placed, so two
     /// 1024-wide screens cover 0..1024 and 1024..2048 and the pointer walks
     /// from one to the other.
-    fn all(backends: Vec<Box<dyn Backend>>) -> Result<Vec<Self>, String> {
+    fn all(backends: Vec<Box<dyn Backend>>, rules: &[MonitorRule]) -> Result<Vec<Self>, String> {
         let mut screens = Vec::with_capacity(backends.len());
         let mut x = 0i64;
-        for (index, backend) in backends.into_iter().enumerate() {
+        let mut id = 0u32;
+        for backend in backends {
+            let name = backend.name();
+            // The last rule that names this monitor, or the last rule with
+            // no name at all: Hyprland reads the file top to bottom and a
+            // later line wins.
+            let rule = rules.iter().rev().find(|rule| rule.matches(&name));
+            if rule.is_some_and(|rule| rule.disabled) {
+                continue;
+            }
+            let scale = rule.map_or(1.0, MonitorRule::scale_factor);
             let (width, height) = backend.size();
             let canvas =
                 Canvas::new(width, height).map_err(|error| format!("a canvas: {error:?}"))?;
-            let id = u32::try_from(index)
-                .ok()
-                .and_then(|index| index.checked_add(1))
-                .ok_or_else(|| "too many monitors".to_owned())?;
-            let rect = Rect::new(x, 0, i64::from(width), i64::from(height));
-            x = x.saturating_add(i64::from(width));
+            // The monitor is laid out in logical pixels: a 1024x768 screen
+            // at `scale = 2` tiles its windows in 512x384, as Hyprland's
+            // does.
+            let (logical_width, logical_height) = (logical(width, scale), logical(height, scale));
+            let (at_x, at_y) = match rule.map(|rule| rule.position) {
+                Some(Position::At(x, y)) => (x, y),
+                // `auto`, which puts it to the right of the ones placed.
+                _ => (x, 0),
+            };
+            x = at_x.saturating_add(logical_width);
+            id = id.saturating_add(1);
             screens.push(Self {
-                name: backend.name(),
+                name,
                 backend,
                 canvas,
                 monitor: MonitorId(id),
-                rect,
+                rect: Rect::new(at_x, at_y, logical_width, logical_height),
+                scale,
             });
+        }
+        if screens.is_empty() {
+            return Err("every monitor is disabled".to_owned());
         }
         Ok(screens)
     }
@@ -724,17 +758,40 @@ impl Screen {
     }
 
     /// What `wl_output` tells a client this screen is.
+    ///
+    /// The mode is in buffer pixels, which is what `wl_output.mode` carries;
+    /// the position is logical, as `wl_output.geometry`'s is. The scale is
+    /// the protocol's integer one, rounded up from a fractional scale: a
+    /// client drawing at 2 on a screen at 1.5 is scaled down to fit, which
+    /// is what a compositor without `wp_fractional_scale_v1` can offer.
     fn output(&self) -> compositor_server::Output {
         let (width, height) = self.size();
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a monitor's scale is a small positive number"
+        )]
+        let scale = self.scale.ceil().max(1.0) as i32;
         compositor_server::Output {
             x: i32::try_from(self.rect.x).unwrap_or(0),
             y: i32::try_from(self.rect.y).unwrap_or(0),
             width: i32::try_from(width).unwrap_or(0),
             height: i32::try_from(height).unwrap_or(0),
+            scale,
             name: self.name.clone(),
             ..compositor_server::Output::default()
         }
     }
+}
+
+/// A screen's size in the logical pixels a monitor at `scale` is laid out
+/// in, never below one pixel.
+fn logical(pixels: u32, scale: f64) -> i64 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a screen's pixels are far inside f64's exact range"
+    )]
+    let logical = (f64::from(pixels) / scale).round() as i64;
+    logical.max(1)
 }
 
 /// Open every screen the machine has, or say why there is none.

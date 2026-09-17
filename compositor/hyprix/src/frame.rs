@@ -27,6 +27,10 @@ pub struct Output<'a> {
     pub origin: (i64, i64),
     /// The colours a window is drawn with.
     pub style: &'a Style,
+    /// How many buffer pixels one logical pixel is: `monitor = ..., 2`.
+    /// Everything above the renderer works in logical pixels, and this is
+    /// where they become the screen's own.
+    pub scale: f64,
 }
 
 /// Where one layer surface is, and whose it is.
@@ -74,8 +78,13 @@ pub fn draw(
         backend,
         origin,
         style,
+        scale,
     } = target;
-    let origin = *origin;
+    let (origin, scale) = (*origin, *scale);
+    // The layout, the decorations and the layer surfaces are all in logical
+    // pixels; a scaled monitor draws each of them as `scale` buffer pixels.
+    let output = &compositor_render::scaled(output, origin, scale);
+    let style = &style.at_scale(scale);
     // Gather every window's pixels first: `render` takes them all at once, so
     // each borrow of a mapping has to live as long as the call.
     let mut surfaces: BTreeMap<WindowId, Surface<'_>> = BTreeMap::new();
@@ -96,7 +105,7 @@ pub fn draw(
     let drawn: Vec<LayerFrame<'_>> = layers
         .iter()
         .map(|placed| LayerFrame {
-            rect: placed.rect,
+            rect: scale_rect(placed.rect, origin, scale),
             above: placed.above,
             surface: clients
                 .get(placed.client)
@@ -116,6 +125,29 @@ pub fn draw(
         .present(&mut target, damage)
         .map_err(|error| format!("the frame does not fit the screen: {error:?}"))?;
     backend.present().map_err(|error| error.to_string())
+}
+
+/// One rectangle in the buffer pixels of a monitor at `scale`, grown away
+/// from the monitor's own corner, as `compositor_render::scaled` grows a
+/// window's.
+fn scale_rect(rect: Rect, origin: (i64, i64), scale: f64) -> Rect {
+    if (scale - 1.0).abs() < f64::EPSILON {
+        return rect;
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        reason = "a screen's pixels are far inside f64's exact range, and a scaled length is \
+                  rounded to the pixel it lands on"
+    )]
+    let grow = |value: i64| (value as f64 * scale).round() as i64;
+    let at = |value: i64, from: i64| from.saturating_add(grow(value.saturating_sub(from)));
+    Rect::new(
+        at(rect.x, origin.0),
+        at(rect.y, origin.1),
+        grow(rect.width),
+        grow(rect.height),
+    )
 }
 
 /// The pixels a surface is showing, if it is showing any.

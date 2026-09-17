@@ -4158,6 +4158,30 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Begun — scaled monitors (2026-09-17).** `monitor = name, resolution,
+position, scale` is read: the name (empty for every monitor no other rule
+names), `disable`, the resolution as `preferred` or `WxH[@R]`, the position
+as `auto` or `XxY`, and the scale as `auto` or a number. What is not done --
+`transform`, `mirror`, `auto-left` and the rest -- says so rather than being
+read as if it were not there.
+
+A scaled monitor is laid out in logical pixels and drawn in the screen's
+own: a 1024x768 screen at `scale = 2` tiles its windows in 512x384 and draws
+each of those pixels as two, with the border, the rounding, the shadow and
+the blur scaled with them, as Hyprland scales its decorations by the
+monitor's scale. Everything above the renderer -- the layouts, the
+dispatchers, `hyprctl`, the layer surfaces -- works in logical pixels and
+never learns the difference.
+
+The clients are told: each `wl_output` carries its own scale, and
+`compositor/pattern` now reads it, sends a buffer that many times the size
+and says so with `wl_surface.set_buffer_scale`, which is what a client on a
+scaled monitor does. `hyprctl monitors` prints the scale it is at.
+
+`cargo xtask test-compositor` boots a sixth time with `monitor = ,
+preferred, auto, 2` and requires the picture `compositor/render`'s own tests
+bless for a scaled monitor, pixel for pixel, on x86-64 and on AArch64.
+
 **Begun — more than one monitor (2026-09-17).** A screen a connected
 connector, across every card: the compositor opens every `/dev/dri/cardN`,
 takes each connected connector with a mode and a CRTC of its own, and drives
@@ -4332,10 +4356,8 @@ Vulkan driver exists — the choice is the customer's, recorded in
 software fallback with a stated frame-time bound, so the compositor is never
 GPU-only.
 
-**What this stage still owes, in the order it is worth doing.** Per-monitor
-scaling, which is `monitor = name, res, pos, scale` and a renderer that draws
-a logical pixel as more than one. The plugin-shaped extension points. And the
-GPU, which is the largest thing left
+**What this stage still owes, in the order it is worth doing.** The
+plugin-shaped extension points. And the GPU, which is the largest thing left
 in this tree: virtio-gpu's 3D commands through a render node,
 `zwp_linux_dmabuf`, GBM-shaped allocation, and a driver stack -- Mesa's virgl
 and Venus on ferrousli, or a Rust path over Vulkan -- that does not exist on

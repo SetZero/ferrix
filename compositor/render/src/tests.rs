@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use compositor_config::{Gaps, NoSources, parse};
-use compositor_layout::{Monitor, MonitorId, MonitorLayout, Settings, State, WindowId};
+use compositor_layout::{Monitor, MonitorId, MonitorLayout, Placed, Settings, State, WindowId};
 
 use crate::golden::{self, Mismatch};
 use crate::{
@@ -56,6 +56,7 @@ fn two_clients() -> (State, MonitorLayout) {
     let mut state = State::new(Settings::default());
     let _ = state
         .add_monitor(Monitor {
+            scale: 1.0,
             name: "Virtual-1".to_owned(),
             id: MonitorId(1),
             rect: Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT)),
@@ -154,6 +155,98 @@ fn frame_dispatching(style: &Style, after: &[(&str, &str)], must_change: bool) -
     bytes
 }
 
+/// A 1024x768 screen at `monitor = , preferred, auto, 2`: the windows tiled
+/// in 512x384 logical pixels and drawn as 1024x768 buffer pixels, with the
+/// clients' own buffers at the size a client that read `wl_output.scale`
+/// sends.
+fn scaled_frame() -> (Vec<u8>, Placed) {
+    const SCALE: f64 = 2.0;
+    let mut state = State::new(Settings::default());
+    let _ = state
+        .add_monitor(Monitor {
+            scale: 1.0,
+            name: "Virtual-1".to_owned(),
+            id: MonitorId(1),
+            // The logical size: what the screen is, divided by the scale.
+            rect: Rect::new(0, 0, i64::from(WIDTH) / 2, i64::from(HEIGHT) / 2),
+            reserved: Gaps::all(0),
+        })
+        .unwrap();
+    let _ = state.open_window(CHECKERBOARD).unwrap();
+    let _ = state.open_window(GRADIENT).unwrap();
+    let layout = crate::scaled(&state.layout().remove(0), (0, 0), SCALE);
+    let buffers = client_buffers(&layout);
+    let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+    let full = Damage::full(WIDTH, HEIGHT);
+    let produced = render(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        &Style::default().at_scale(SCALE),
+        &surfaces(&buffers),
+        &full,
+    );
+    assert_eq!(produced, full);
+    let placed = *layout
+        .windows
+        .iter()
+        .find(|placed| placed.window == CHECKERBOARD)
+        .expect("the checkerboard");
+    (canvas.data().to_vec(), placed)
+}
+
+/// A scaled monitor draws every logical pixel as two: the same tiling, the
+/// same gaps and the same borders, each twice the size.
+///
+/// This is the picture `cargo xtask test-compositor` requires from a
+/// screendump of a guest booted with `monitor = , preferred, auto, 2`.
+#[test]
+fn a_scaled_monitor_draws_each_logical_pixel_twice() {
+    let (frame, placed) = scaled_frame();
+    golden::check("scaled-two-clients", WIDTH, HEIGHT, &frame);
+
+    // Not the unscaled picture: the same two windows tiled the same way,
+    // but every gap and every border twice as wide.
+    assert_ne!(frame, two_client_frame(), "the scale changed nothing");
+
+    // The border is two buffer pixels at scale two, where it is one at
+    // scale one: `general:border_size` is in logical pixels, as every
+    // length a person writes is.
+    assert_eq!(placed.border, 2, "the scaled border is not two pixels");
+    let at = |x: i64, y: i64| -> u32 {
+        let start = ((y * i64::from(WIDTH) + x) * 4) as usize;
+        u32::from_le_bytes([
+            frame[start],
+            frame[start + 1],
+            frame[start + 2],
+            frame[start + 3],
+        ])
+    };
+    // The window's left edge, and the two columns of border in front of it,
+    // taken well down the edge so the corner is not in the way. The colour
+    // is Hyprland's translucent `col.inactive_border` over the background,
+    // so what is checked is that the two columns match one another and that
+    // the third is something else: two pixels of border, not one and not
+    // three.
+    let left = placed.rect.x;
+    let row = placed.rect.y + placed.rect.height / 2;
+    assert_eq!(
+        at(left - 1, row),
+        at(left - 2, row),
+        "the border is not two pixels wide"
+    );
+    assert_ne!(
+        at(left - 3, row),
+        at(left - 2, row),
+        "the border is wider than two pixels"
+    );
+    assert_ne!(
+        at(left, row),
+        at(left - 1, row),
+        "the window's own pixel is the border's colour"
+    );
+}
+
 /// Two 1024x768 monitors side by side, with the gradient moved to the second
 /// one: a frame each, drawn the way the compositor draws them -- one canvas
 /// a monitor, each with its own origin in the space the windows' rectangles
@@ -163,6 +256,7 @@ fn two_monitor_frames() -> (Vec<u8>, Vec<u8>) {
     for (index, x) in [(1u32, 0i64), (2, i64::from(WIDTH))] {
         let _ = state
             .add_monitor(Monitor {
+                scale: 1.0,
                 name: format!("Virtual-{index}"),
                 id: MonitorId(index),
                 rect: Rect::new(x, 0, i64::from(WIDTH), i64::from(HEIGHT)),
@@ -279,6 +373,7 @@ fn bar_and_two_clients_frame() -> Vec<u8> {
     let mut state = State::new(Settings::default());
     let _ = state
         .add_monitor(Monitor {
+            scale: 1.0,
             name: "Virtual-1".to_owned(),
             id: MonitorId(1),
             rect: monitor,
@@ -1141,6 +1236,7 @@ fn a_layout_on_a_monitor_away_from_the_origin_is_drawn_in_its_coordinates() {
     let mut state = State::new(Settings::default());
     let _ = state
         .add_monitor(Monitor {
+            scale: 1.0,
             name: "Virtual-1".to_owned(),
             id: MonitorId(7),
             rect: Rect::new(1920, 100, 200, 100),
@@ -1266,7 +1362,7 @@ fn only_a_translucent_window_has_its_background_blurred() {
         &[],
     );
 
-    let inside = |placed: &compositor_layout::Placed, x: i64, y: i64| {
+    let inside = |placed: &Placed, x: i64, y: i64| {
         x >= placed.rect.x
             && x < placed.rect.x + placed.rect.width
             && y >= placed.rect.y

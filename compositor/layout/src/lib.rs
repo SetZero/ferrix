@@ -119,7 +119,9 @@ impl Rect {
 }
 
 /// A monitor as the layouts see it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Not `Eq`: its scale is a float, as Hyprland's is.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Monitor {
     /// Its id.
     pub id: MonitorId,
@@ -133,6 +135,13 @@ pub struct Monitor {
     /// reserve, which tiled windows stay out of: Hyprland's
     /// `vecReservedTopLeft` and `vecReservedBottomRight`.
     pub reserved: Gaps,
+    /// How many buffer pixels one logical pixel is on it: `monitor =
+    /// name, res, pos, 2`.
+    ///
+    /// Nothing in the layouts reads it -- `rect` is already in the logical
+    /// pixels they work in -- but it is part of what a monitor is, and
+    /// `hyprctl monitors` prints it.
+    pub scale: f64,
 }
 
 /// What a request to the layouts could not do.

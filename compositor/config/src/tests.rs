@@ -840,3 +840,95 @@ fn the_example_configuration() {
     );
     assert_eq!(config.window_rules.len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// `monitor =` lines
+//
+// The form is Hyprland's `ConfigManager::handleMonitor`: a name, a
+// resolution, a position and a scale, with an empty name standing for every
+// monitor no other rule names.
+// ---------------------------------------------------------------------------
+
+use crate::{Mode, MonitorRule, Position, Scale};
+
+#[test]
+fn a_monitor_line_is_a_name_a_mode_a_place_and_a_scale() {
+    let rule = MonitorRule::parse("Virtual-1, 1920x1080@60, 0x0, 2").unwrap();
+    assert_eq!(rule.name, "Virtual-1");
+    assert!(!rule.disabled);
+    assert_eq!(
+        rule.mode,
+        Mode::Fixed {
+            width: 1920,
+            height: 1080,
+            refresh: Some(60.0),
+        }
+    );
+    assert_eq!(rule.position, Position::At(0, 0));
+    assert_eq!(rule.scale, Scale::Fixed(2.0));
+    assert!((rule.scale_factor() - 2.0).abs() < f64::EPSILON);
+
+    // The line every example configuration carries: no name, so it is the
+    // rule for whatever monitor there is.
+    let any = MonitorRule::parse(", preferred, auto, 1").unwrap();
+    assert!(any.name.is_empty());
+    assert!(any.matches("Virtual-1"));
+    assert!(any.matches("DP-3"));
+    assert_eq!(any.mode, Mode::Preferred);
+    assert_eq!(any.position, Position::Auto);
+
+    // A named rule is that monitor's and no other's.
+    assert!(rule.matches("Virtual-1"));
+    assert!(!rule.matches("Virtual-2"));
+
+    // A position without a refresh rate, and `auto` for the scale.
+    let placed = MonitorRule::parse("DP-1, 2560x1440, 1920x0, auto").unwrap();
+    assert_eq!(placed.position, Position::At(1920, 0));
+    assert_eq!(placed.scale, Scale::Auto);
+    assert!((placed.scale_factor() - 1.0).abs() < f64::EPSILON);
+
+    // `highres` and `highrr` choose between the modes a connector has, and
+    // virtio-gpu has one: all three words are the preferred mode here.
+    for word in ["preferred", "highres", "highrr"] {
+        assert_eq!(
+            MonitorRule::parse(&format!("Virtual-1, {word}, auto, 1"))
+                .unwrap()
+                .mode,
+            Mode::Preferred
+        );
+    }
+}
+
+#[test]
+fn a_monitor_can_be_disabled_and_a_bad_field_is_refused() {
+    let off = MonitorRule::parse("Virtual-2, disable").unwrap();
+    assert!(off.disabled);
+    assert_eq!(off.name, "Virtual-2");
+
+    for bad in [
+        "Virtual-1, 1920, auto, 1",
+        "Virtual-1, 1920x1080@sixty, auto, 1",
+        "Virtual-1, preferred, over-there, 1",
+        "Virtual-1, preferred, auto, 0",
+        "Virtual-1, preferred, auto, -2",
+        "Virtual-1, preferred, auto, half",
+    ] {
+        assert!(MonitorRule::parse(bad).is_err(), "{bad} was read");
+    }
+
+    // What is not done says so rather than being ignored.
+    let transform = MonitorRule::parse("Virtual-1, preferred, auto, 1, transform, 1");
+    assert!(
+        transform
+            .as_ref()
+            .is_err_and(|why| why.contains("not done yet")),
+        "{transform:?}"
+    );
+    let auto_left = MonitorRule::parse("Virtual-1, preferred, auto-left, 1");
+    assert!(
+        auto_left
+            .as_ref()
+            .is_err_and(|why| why.contains("not done yet")),
+        "{auto_left:?}"
+    );
+}
