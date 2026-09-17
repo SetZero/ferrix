@@ -353,9 +353,8 @@ impl Canvas {
             #[expect(clippy::cast_precision_loss, reason = "as above")]
             let nx = ((x - box_rect.x) as f32 + 0.5) / wide;
             #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "a progress between zero and one over an index of a few thousand"
+                clippy::cast_precision_loss,
+                reason = "an index of a few thousand, which an f32 holds exactly"
             )]
             let at = crate::exact::nearest(axis.at(nx, ny) * last as f32);
             let Some(color) = ramp.get(at.min(last)) else {
