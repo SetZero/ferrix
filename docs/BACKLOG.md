@@ -505,6 +505,65 @@ Dated, newest first. A decision here is final until the customer says otherwise.
 
 ---
 
+## The compositor of 2026-09-17: stage 18's exit passes on the card
+
+Twelve landings on one branch, each gated whole. The compositor runs: `cargo
+xtask test-compositor` boots `hyprix` as init on Ferrix and two Wayland
+clients tile on `/dev/dri/card0`, every one of 786,432 pixels the image
+`compositor/render`'s own tests bless, on x86-64 and AArch64.
+
+**What landed, in order.** Input L4 and the renderer, both from the
+wind-down's side refs. Then `compositor/wire`, the Wayland wire protocol with
+no libwayland; `compositor/protocol`, the interface tables generated from the
+XML; `compositor/server`, the protocol itself, in four landings --
+connection, surfaces and shared memory, `xdg_shell` and the socket, and the
+interfaces a real toolkit asks for; `compositor/hyprix` and
+`compositor/pattern`, the compositor and its test client;
+`compositor/ipc`, `hyprctl`'s shape; `compositor/drm`, the card lifted out of
+`compositor/blank`; and the two-client picture on the screen.
+
+**How each was checked.** Every layer is pinned to an implementation this
+tree did not write, because a test written against its own crates only shows
+the two halves agree:
+
+* `compositor/wire/probe/wire.c` drives a real libwayland client and server
+  and records their bytes; this crate writes the same ones.
+* `compositor/protocol/probe/interfaces.c` links libwayland's own compiled
+  `wl_*_interface` tables; the generated ones agree, 31 interfaces and 194
+  messages.
+* `compositor/server/probe/live.c` is a libwayland client that completes the
+  whole startup handshake against `examples/serve.rs` over a real socket.
+* `compositor/hyprix/probe/real-client.sh` runs **foot**, a real Wayland
+  terminal. It found four gaps nothing else could:
+  `wl_data_device_manager` not offered, `wl_subcompositor` advertised
+  without `get_subsurface`, `wl_output` describing nothing, and `wl_seat`
+  announcing what it had no path for. **Run it after any protocol change.**
+* `compositor/hyprix/probe/hyprctl.sh` drives the compositor with
+  Hyprland's own `hyprctl`: `clients`, `monitors`, `workspaces`,
+  `activewindow`, `dispatch movefocus l` and `keyword general:gaps_in 40`
+  all work, the last re-tiling both windows while it runs.
+
+**The Smithay decision is settled**, delegated by the customer's order to
+work without stopping for questions: the server is written from scratch. The
+reasoning is in the decisions above.
+
+**What the compositor still owes, in the order it needs them:**
+
+* **Input.** `wl_seat` announces no capabilities, because there is none to
+  announce: the input iteration's L5 (`user/input` and the kernel's input
+  core), L6 (`/dev/input/eventN`) and L7 are not started. Until they are, a
+  keybind parses and nothing can fire it, and a keymap needs `xkbcommon` or
+  a committed XKB file. This is the largest single thing between here and a
+  compositor a person can use.
+* **The event socket** `.socket2.sock`, which a bar subscribes to (3).
+* **`zwlr_layer_shell_v1`**, which has tables and is not offered, so no bar
+  can place itself (5).
+* **Stage 19 entire** (144): animations with Hyprland's bezier curves,
+  rounded corners, blur, shadows, opacity rules, special workspaces, groups,
+  multi-monitor, the plugin-shaped extension points, and the GPU. This is
+  what makes it Hyprland rather than a tiling compositor, and none of it is
+  begun.
+
 ## Wind-down of 2026-09-17, about 00:10: the fleet moves to another machine
 
 The customer wound the fleet down after the release to move it to another
