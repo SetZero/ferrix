@@ -1177,11 +1177,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 };
                 // And the clients' own pixels: where on this screen each
                 // commit since the last frame landed.
-                let (told, everything) = commits.on(&plan, &sources);
-                let frame = screen.watch.frame(plan, &told, everything);
+                let heard = commits.on(&plan, &sources);
+                let frame = screen.watch.frame(plan, &heard);
                 redrew = redrew.saturating_add(frame.canvas.area());
                 let mut target = crate::frame::Output {
                     canvas: &mut screen.canvas,
+                    backdrop: &mut screen.backdrop,
                     backend: screen.backend.as_mut(),
                     origin,
                     style: &style,
@@ -2384,6 +2385,8 @@ struct Screen {
     backend: Box<dyn Backend>,
     /// What the frame is composed on.
     canvas: Canvas,
+    /// What is behind its windows, and the blur of that.
+    backdrop: compositor_render::Backdrop,
     /// The monitor it is, in the layout.
     monitor: MonitorId,
     /// Where it is and how big, in the logical pixels every window's
@@ -2435,6 +2438,8 @@ impl Screen {
             let (width, height) = backend.size();
             let canvas =
                 Canvas::new(width, height).map_err(|error| format!("a canvas: {error:?}"))?;
+            let backdrop = compositor_render::Backdrop::new(width, height)
+                .map_err(|error| format!("a backdrop: {error:?}"))?;
             // The monitor is laid out in logical pixels: a 1024x768 screen
             // at `scale = 2` tiles its windows in 512x384, as Hyprland's
             // does.
@@ -2452,6 +2457,7 @@ impl Screen {
                 made: backend.made(),
                 backend,
                 canvas,
+                backdrop,
                 monitor: MonitorId(id),
                 rect: Rect::new(at_x, at_y, logical_width, logical_height),
                 scale,
@@ -2974,15 +2980,16 @@ fn painted(client: &Client, index: usize, surface: ObjectId) -> crate::damage::P
     }
 }
 
-/// The rectangles this frame draws a blur behind, in the screen's own
-/// pixels.
+/// The surfaces this frame draws a blur behind, in the screen's own
+/// pixels, and which kind of blur each is.
 ///
 /// The renderer's own condition, because the damage has to know exactly
-/// which surfaces read the canvas rather than only writing to it
-/// (`crate::damage::Plan::blurs_whole` says why): the style has a blur, no
-/// rule turned it off for this surface, and the surface can be seen through
-/// -- a buffer in a format with alpha, or a window drawn at less than full
-/// opacity, which is translucent everywhere.
+/// which surfaces read further than they write (`crate::damage` says what
+/// each kind is owed): the style has a blur, no rule turned it off for this
+/// surface, and the surface can be seen through -- a buffer in a format
+/// with alpha, or a window drawn at less than full opacity, which is
+/// translucent everywhere. And the renderer's own rule for the kind:
+/// `compositor_render::reads_backdrop`.
 ///
 /// `layout` is already in the screen's own pixels; the layer surfaces are
 /// in the logical space every rectangle above the renderer is in.
@@ -2994,15 +3001,20 @@ fn blurs_behind(
     sources: &BTreeMap<WindowId, Source>,
     styles: &BTreeMap<WindowId, compositor_render::WindowStyle>,
     screen: ((i64, i64), f64),
-) -> Vec<Rect> {
+) -> Vec<crate::damage::Blurred> {
     if style.blur.is_none() {
         return Vec::new();
     }
     let (origin, scale) = screen;
+    let drawn_with = compositor_render::Styles {
+        base: style,
+        windows: styles,
+    };
     let windows = layout
         .windows
         .iter()
-        .filter(|placed| {
+        .enumerate()
+        .filter(|(_, placed)| {
             let own = styles.get(&placed.window).copied().unwrap_or_default();
             let opacity = own
                 .opacity
@@ -3013,17 +3025,21 @@ fn blurs_behind(
                         crate::frame::translucent(slots, source.client, source.surface)
                     }))
         })
-        .map(|placed| {
-            placed
+        .map(|(at, placed)| crate::damage::Blurred {
+            rect: placed
                 .rect
-                .translate(origin.0.saturating_neg(), origin.1.saturating_neg())
+                .translate(origin.0.saturating_neg(), origin.1.saturating_neg()),
+            live: !compositor_render::reads_backdrop(&layout.windows, at, &drawn_with),
         });
     let layers = layers
         .iter()
         .filter(|placed| {
             placed.rules.blur && crate::frame::translucent(slots, placed.client, placed.surface)
         })
-        .map(|placed| crate::frame::local(placed.rect, origin, scale));
+        .map(|placed| crate::damage::Blurred {
+            rect: crate::frame::local(placed.rect, origin, scale),
+            live: true,
+        });
     windows.chain(layers).collect()
 }
 

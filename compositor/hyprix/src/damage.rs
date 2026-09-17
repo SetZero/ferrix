@@ -30,9 +30,21 @@
 //! # The blur reads more than it writes
 //!
 //! Then the region is grown once more, for the one thing a frame draws that
-//! reads the canvas outside what it writes: the blur behind a translucent
-//! surface. [`Plan::blurs_whole`] says what that costs and why there is no
-//! cheaper way to be exact about it.
+//! reads further than it writes: the blur behind a translucent surface.
+//! There are two kinds ([`Blurred::live`]) and each is owed something else.
+//!
+//! A tiled window takes its blur from `compositor_render::Backdrop`, which
+//! keeps what is behind the windows and the blur of it from frame to frame.
+//! Nothing is drawn over that, so a strip of such a window can be redrawn
+//! alone -- which is what makes a pointer crossing a translucent terminal,
+//! or a letter typed into one, cost what it changes and not a blur of the
+//! whole window. It is owed more only where what is *behind* the windows
+//! changed, because a changed pixel shows in the blur a kernel's reach
+//! away: [`Plan::behind_reaches`].
+//!
+//! Everything else blurs the frame as it stands, and is owed a whole
+//! redraw whenever the damage touches it: [`Plan::blurs_whole`] says why
+//! there is no cheaper way to be exact about that.
 //!
 //! # Two buffers, two frames
 //!
@@ -109,6 +121,9 @@ pub(crate) enum Landed {
     /// Into this rectangle of the screen, which the surface's buffer is
     /// drawn into whole.
     In(Rect),
+    /// The same, for a layer surface under the windows: what it draws is
+    /// part of what a window's blur is a blur of.
+    Behind(Rect),
     /// Somewhere this screen cannot place: a subsurface, a cursor surface
     /// that is not the one being drawn, a window that has not been mapped
     /// yet. The whole screen, then, which is the rule the module comment
@@ -163,8 +178,9 @@ impl Told {
         &self,
         plan: &Plan,
         sources: &BTreeMap<WindowId, crate::frame::Source>,
-    ) -> (Damage, bool) {
+    ) -> Heard {
         let mut region = Damage::new();
+        let mut behind = Damage::new();
         let mut everything = self.everything;
         for painted in &self.painted {
             match plan.landed(painted, sources) {
@@ -175,10 +191,33 @@ impl Told {
                         region.add(part);
                     }
                 }
+                Landed::Behind(rect) => {
+                    for part in painted.parts(rect) {
+                        region.add(part);
+                        behind.add(part);
+                    }
+                }
             }
         }
-        (region, everything)
+        Heard {
+            region,
+            behind,
+            everything,
+        }
     }
+}
+
+/// What the clients said, on one screen and in its own pixels.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Heard {
+    /// Every part of the screen a commit changed.
+    pub(crate) region: Damage,
+    /// The parts of that which are *behind* the windows -- a wallpaper's
+    /// commit and not a terminal's -- which is what a blur taken from the
+    /// backdrop has to be told about.
+    pub(crate) behind: Damage,
+    /// Whether any of it is beyond placing, which is the whole screen.
+    pub(crate) everything: bool,
 }
 
 /// Where a damaged rectangle of a buffer lands on the screen.
@@ -262,11 +301,22 @@ pub(crate) struct Plan {
     pub(crate) cursor: Option<(Cursor, Rect)>,
     /// The surface a drag is carrying, the same way.
     pub(crate) drag_icon: Option<(Placed, Rect)>,
-    /// The surfaces this frame draws a blur behind, in the screen's own
-    /// pixels: the rectangle each blur is written into. Worked out where
-    /// the clients' buffers are, because whether a surface can be seen
-    /// through is half of the renderer's condition for blurring behind it.
-    pub(crate) blurred: Vec<Rect>,
+    /// The surfaces this frame draws a blur behind. Worked out where the
+    /// clients' buffers are, because whether a surface can be seen through
+    /// is half of the renderer's condition for blurring behind it.
+    pub(crate) blurred: Vec<Blurred>,
+}
+
+/// One surface a frame draws a blur behind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Blurred {
+    /// The rectangle the blur is written into, in the screen's own pixels.
+    pub(crate) rect: Rect,
+    /// Whether it is a blur of the frame as it stands when the surface is
+    /// drawn, rather than one taken from the kept backdrop:
+    /// `compositor_render::reads_backdrop` is the rule, and the module
+    /// comment says what each is owed.
+    pub(crate) live: bool,
 }
 
 impl Plan {
@@ -296,7 +346,12 @@ impl Plan {
             .iter()
             .find(|placed| named(placed.client, placed.surface))
         {
-            return Landed::In(self.local(placed.rect));
+            let at = self.local(placed.rect);
+            return if placed.above {
+                Landed::In(at)
+            } else {
+                Landed::Behind(at)
+            };
         }
         if let Some((_, at)) = self
             .drag_icon
@@ -363,7 +418,9 @@ impl Plan {
     /// size, where it is, its scale, the style, a night-light's ramps,
     /// `dpms`, the lock -- because each of those is drawn into every pixel
     /// and none of them happens often enough to be worth a region.
-    fn since(&self, old: &Self) -> Damage {
+    ///
+    /// What of it is behind the windows is added to `behind`.
+    fn since(&self, old: &Self, behind: &mut Damage) -> Damage {
         let (width, height) = self.size;
         if self.size != old.size
             || self.origin != old.origin
@@ -377,9 +434,27 @@ impl Plan {
         }
         let mut region = Damage::new();
         self.windows_since(old, &mut region);
-        self.layers_since(old, &mut region);
+        self.layers_since(old, &mut region, behind);
         self.pointer_since(old, &mut region);
+        self.blurs_since(old, &mut region);
         region
+    }
+
+    /// A surface whose blur is another kind than it was, or that has one
+    /// and had none: a window a floating one was dragged off, which blurred
+    /// that window and now takes the backdrop's. The two kinds differ by
+    /// what was under the surface, all over it, so all of it is drawn again.
+    fn blurs_since(&self, old: &Self, region: &mut Damage) {
+        if old.blurred == self.blurred {
+            return;
+        }
+        for (one, other) in [(old, self), (self, old)] {
+            for blurred in &one.blurred {
+                if !other.blurred.contains(blurred) {
+                    region.add(blurred.rect);
+                }
+            }
+        }
     }
 
     /// The windows: what `compositor_render::damage_between` says moved,
@@ -415,7 +490,7 @@ impl Plan {
     }
 
     /// The bars, the menus and the lock's own surfaces.
-    fn layers_since(&self, old: &Self, region: &mut Damage) {
+    fn layers_since(&self, old: &Self, region: &mut Damage, behind: &mut Damage) {
         if old.layers == self.layers {
             return;
         }
@@ -431,23 +506,64 @@ impl Plan {
             }
             for placed in was.into_iter().chain(now) {
                 region.add(self.local(placed.rect));
+                if !placed.above {
+                    behind.add(self.local(placed.rect));
+                }
             }
         }
     }
 
-    /// Grow `region` until every blur it asks for can be drawn exactly.
+    /// The blur the style asks for, if it asks for one that does anything.
+    fn blur(&self) -> Option<compositor_render::Blur> {
+        self.style
+            .blur
+            .filter(|blur| blur.size > 0 && blur.passes > 0)
+    }
+
+    /// Grow `region` by what a change `behind` the windows does to the
+    /// blurs taken from the backdrop.
     ///
-    /// This is the one thing a frame draws that *reads* the canvas beyond
-    /// what it writes: `Canvas::blur` takes the pixels behind a surface
-    /// from the canvas, and what it reads reaches a whole kernel outside
-    /// the part of the surface being redrawn. Inside the damage the canvas
-    /// holds what this frame has drawn under the surface; outside it, it
-    /// still holds the *last* frame -- including the surface's own pixels,
-    /// drawn over that blur. A blur that read those would be a blur of
-    /// itself, which is the ghosting a person sees around a translucent
+    /// A pixel of a blur is made from everything within
+    /// `compositor_render::Blur::reach` of it, so a wallpaper that repainted
+    /// a square has changed the blur that far outside the square -- under a
+    /// window the commit never touched. Only under a window that takes its
+    /// blur from the backdrop: one that blurs the frame as it stands is
+    /// redrawn whole, which [`Plan::blurs_whole`] sees to.
+    ///
+    /// Nothing else is owed. A pointer over such a window, a letter typed
+    /// into it, its neighbour closing: none of them changes what is behind
+    /// the windows, so the blur they uncover is the one already kept.
+    fn behind_reaches(&self, behind: &Damage, region: &mut Damage) {
+        let Some(blur) = self.blur() else {
+            return;
+        };
+        let reach = blur.reach();
+        for blurred in self.blurred.iter().filter(|blurred| !blurred.live) {
+            for changed in behind.rects() {
+                for part in Damage::from(grown(*changed, (reach, reach)))
+                    .clipped(blurred.rect)
+                    .rects()
+                {
+                    region.add(*part);
+                }
+            }
+        }
+    }
+
+    /// Grow `region` until every blur of the frame as it stands can be
+    /// drawn exactly.
+    ///
+    /// Such a blur is the one thing a frame draws that *reads* the canvas
+    /// beyond what it writes: `Canvas::blur` takes the pixels behind a
+    /// surface from the canvas, and what it reads reaches a whole kernel
+    /// outside the part of the surface being redrawn. Inside the damage the
+    /// canvas holds what this frame has drawn under the surface; outside
+    /// it, it still holds the *last* frame -- including the surface's own
+    /// pixels, drawn over that blur. A blur that read those would be a blur
+    /// of itself, which is the ghosting a person sees around a translucent
     /// window and cannot explain.
     ///
-    /// So a blurred surface the damage touches is redrawn whole, with a
+    /// So such a surface the damage touches is redrawn whole, with a
     /// kernel's reach of the frame around it: then everything the blur
     /// reads has been drawn by this frame, and the pixels are the ones a
     /// whole frame would have produced. Hyprland grows its damage for the
@@ -459,28 +575,22 @@ impl Plan {
     /// price of being exact, and being exact is what the blessed frames
     /// ask for.
     ///
+    /// It is a price only a floating window, a scratchpad's and a blurred
+    /// layer surface pay: a tiled window's blur comes from the backdrop.
+    ///
     /// Growing one surface may reach another, which is why this runs until
     /// nothing more is added.
     fn blurs_whole(&self, region: &mut Damage) {
-        let Some(blur) = self
-            .style
-            .blur
-            .filter(|blur| blur.size > 0 && blur.passes > 0)
-        else {
+        let Some(blur) = self.blur() else {
             return;
         };
-        // What `Canvas::blur` reads around what it writes: a tap at `size`
-        // on level *k* of the pyramid is `size * 2^k` source pixels, which
-        // summed down and back up is twice `size * (2^passes - 1)`. The
-        // lattice the pyramid halves on is added because the region read is
-        // snapped out to it.
-        let lattice = 1_i64 << blur.passes.min(6);
-        let reach = blur
-            .size
-            .saturating_mul(lattice)
-            .saturating_mul(2)
-            .saturating_add(lattice);
-        let mut left: Vec<Rect> = self.blurred.clone();
+        let reach = blur.reach();
+        let mut left: Vec<Rect> = self
+            .blurred
+            .iter()
+            .filter(|blurred| blurred.live)
+            .map(|blurred| blurred.rect)
+            .collect();
         while !left.is_empty() {
             let touched: Vec<Rect> = left
                 .iter()
@@ -536,18 +646,21 @@ impl Watch {
     /// The damage for the frame `plan` describes, given what the clients
     /// said they drew.
     ///
-    /// `told` is already in this screen's own pixels: only the caller knows
+    /// `heard` is already in this screen's own pixels: only the caller knows
     /// where a surface's rectangle is.
-    pub(crate) fn frame(&mut self, plan: Plan, told: &Damage, everything: bool) -> Frame {
+    pub(crate) fn frame(&mut self, plan: Plan, heard: &Heard) -> Frame {
         let (width, height) = plan.size;
+        let mut behind = heard.behind.clone();
         let mut region = match self.plan.as_ref() {
-            Some(old) if !everything => plan.since(old),
+            Some(old) if !heard.everything => plan.since(old, &mut behind),
             _ => Damage::full(width, height),
         };
-        region.extend(told);
-        // And whatever the blur has to read to come out the same as a whole
+        region.extend(&heard.region);
+        // And whatever the blurs are owed to come out the same as a whole
         // frame's would, which is the last thing added: it grows around
-        // everything else.
+        // everything else. The backdrop's first, since what that adds may
+        // touch a surface the second has to redraw whole.
+        plan.behind_reaches(&behind, &mut region);
         plan.blurs_whole(&mut region);
         let region = region.clipped(Rect::new(0, 0, i64::from(width), i64::from(height)));
         let mut screen = region.clone();

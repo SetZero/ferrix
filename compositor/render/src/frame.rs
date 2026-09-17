@@ -6,7 +6,10 @@ use std::collections::BTreeMap;
 use compositor_config::Config;
 use compositor_layout::{MonitorLayout, Placed, WindowId};
 
-use crate::{Blur, Canvas, Color, Damage, Format, Gradient, Rect, Rounding, Shadow, Surface};
+use crate::damage::intersect;
+use crate::{
+    Backdrop, Blur, Canvas, Color, Damage, Format, Gradient, Rect, Rounding, Shadow, Surface,
+};
 
 /// The colours a frame is drawn in, and the decorations it is drawn with.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -505,29 +508,66 @@ pub fn render_with_layers(
     layers: &[LayerFrame<'_>],
     damage: &Damage,
 ) -> Damage {
+    // With a backdrop of its own, made for the one frame: a tiled window
+    // takes its blur from what is behind the windows whoever draws it, so
+    // that a frame drawn here from nothing and the frame a compositor has
+    // kept up to date with [`render_onto`] are one picture. Only where a
+    // blur is asked for, since a backdrop is two canvases.
+    let mut behind = styles
+        .base
+        .blur
+        .and_then(|_| Backdrop::new(canvas.width(), canvas.height()).ok());
+    // A backdrop made now has seen no frame, and a blur reads further than
+    // the damage: so it is shown the whole of what is behind the windows,
+    // drawn aside, which is what one kept from frame to frame would hold.
+    if let Some(behind) = behind.as_mut()
+        && let Ok(mut aside) = Canvas::new(canvas.width(), canvas.height())
+    {
+        let whole = Damage::from(aside.bounds());
+        behind_windows(&mut aside, origin, styles.base, layers, &whole);
+        behind.take(&aside, &whole);
+    }
     render_onto(
-        canvas, None, output, origin, styles, surfaces, layers, damage,
+        canvas,
+        behind.as_mut(),
+        output,
+        origin,
+        styles,
+        surfaces,
+        layers,
+        damage,
     )
 }
 
-/// The same, with a canvas for the blur's backdrop.
+/// The same, with somewhere to keep the blur's backdrop.
 ///
-/// `backdrop` is what [`Canvas::blur_from`] reads: a second canvas holding
-/// everything *behind* the windows, kept between frames. Nothing is ever
-/// drawn over it, so a strip of it is the same pixels a whole frame would
-/// have put there -- which is what lets a blur be drawn over the damage
-/// alone rather than over the whole of every translucent window. It is
-/// Hyprland's `decoration:blur:new_optimizations`, which is on by default.
+/// `backdrop` is a [`Backdrop`]: everything *behind* the windows, kept
+/// between frames, and the blur of it. A window [`reads_backdrop`] says yes
+/// to takes its blur from there, which costs a copy; every other blurred
+/// surface blurs the frame as it stands, as all of them do without one.
 ///
-/// Without one, a blur reads the canvas and the caller has to redraw each
-/// blurred surface whole.
+/// The two are not the same picture, and the backdrop's is Hyprland's. A
+/// blur of the frame as it stands has the window's own shadow in it --
+/// the shadow is drawn whole, under the window
+/// (`CHyprDropShadowDecoration::render`) -- and whatever of its neighbour
+/// is within the kernel's reach; `m_blurFB` has neither, and is drawn over
+/// both. So [`render_with_layers`] makes a backdrop for the frame it draws
+/// rather than passing none.
+///
+/// A blur of the frame as it stands reads a kernel's reach outside what it
+/// writes, and outside the damage the canvas holds the *last* frame with the
+/// surface drawn over its own blur. So the caller owes such a surface a
+/// whole redraw whenever its damage touches it, and owes a window that
+/// reads the backdrop only the damage -- grown by [`Blur::reach`] where
+/// what is *behind* the windows changed, since that is how far a changed
+/// pixel shows in the blur.
 #[expect(
     clippy::too_many_arguments,
     reason = "a frame is its canvas, its backdrop, its layout, its styles, its pixels and its damage"
 )]
 pub fn render_onto(
     canvas: &mut Canvas,
-    mut backdrop: Option<&mut Canvas>,
+    mut backdrop: Option<&mut Backdrop>,
     output: &MonitorLayout,
     origin: (i64, i64),
     styles: &Styles<'_>,
@@ -537,43 +577,21 @@ pub fn render_onto(
 ) -> Damage {
     let style = styles.base;
     let local = |rect: Rect| rect.translate(origin.0.saturating_neg(), origin.1.saturating_neg());
-    canvas.clear(style.background, damage);
-    // `dim_around`: black over everything drawn *so far*, laid down just
-    // before the window or surface that asked for it. Hyprland dims what
-    // is behind such a thing; drawing in order means "behind" is "already
-    // drawn", so one fill in the right place is the whole of it -- no
-    // second pass and no second canvas.
-    let dim_behind = |canvas: &mut Canvas, damage: &Damage| {
-        if style.dim_around <= 0.0 {
-            return;
-        }
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a share between zero and one becomes a byte of alpha"
-        )]
-        let alpha = (style.dim_around.clamp(0.0, 1.0) * 255.0).round() as u32;
-        canvas.fill(canvas.bounds(), Color(alpha << 24), damage);
-    };
-    for layer in layers.iter().filter(|layer| !layer.above) {
-        if layer.dim_around {
-            dim_behind(canvas, damage);
-        }
-        draw_layer(canvas, None, layer, local(layer.rect), style, damage);
-    }
+    behind_windows(canvas, origin, style, layers, damage);
     // Everything behind the windows is drawn; that is the backdrop, and it
     // is taken now, before a window goes over it.
     if let Some(behind) = backdrop.as_deref_mut() {
-        behind.take_from(canvas, damage);
+        behind.take(canvas, damage);
     }
-    let behind = backdrop.as_deref();
-    for placed in &output.windows {
+    for (at, placed) in output.windows.iter().enumerate() {
         if styles.of(placed.window).dim_around {
-            dim_behind(canvas, damage);
+            dim_behind(canvas, style, damage);
         }
         window(
             canvas,
-            behind,
+            backdrop
+                .as_deref_mut()
+                .filter(|_| reads_backdrop(&output.windows, at, styles)),
             placed,
             local(placed.rect),
             styles,
@@ -583,22 +601,96 @@ pub fn render_onto(
     }
     for layer in layers.iter().filter(|layer| layer.above) {
         if layer.dim_around {
-            dim_behind(canvas, damage);
+            dim_behind(canvas, style, damage);
         }
-        draw_layer(canvas, behind, layer, local(layer.rect), style, damage);
+        draw_layer(canvas, layer, local(layer.rect), style, damage);
     }
     damage.clipped(canvas.bounds())
 }
 
+/// Everything behind the windows: the background, and the layer surfaces
+/// under them. What a [`Backdrop`] is a copy of.
+fn behind_windows(
+    canvas: &mut Canvas,
+    origin: (i64, i64),
+    style: &Style,
+    layers: &[LayerFrame<'_>],
+    damage: &Damage,
+) {
+    canvas.clear(style.background, damage);
+    for layer in layers.iter().filter(|layer| !layer.above) {
+        if layer.dim_around {
+            dim_behind(canvas, style, damage);
+        }
+        let rect = layer
+            .rect
+            .translate(origin.0.saturating_neg(), origin.1.saturating_neg());
+        draw_layer(canvas, layer, rect, style, damage);
+    }
+}
+
+/// `dim_around`: black over everything drawn *so far*, laid down just
+/// before the window or surface that asked for it. Hyprland dims what is
+/// behind such a thing; drawing in order means "behind" is "already drawn",
+/// so one fill in the right place is the whole of it -- no second pass and
+/// no second canvas.
+fn dim_behind(canvas: &mut Canvas, style: &Style, damage: &Damage) {
+    if style.dim_around <= 0.0 {
+        return;
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a share between zero and one becomes a byte of alpha"
+    )]
+    let alpha = (style.dim_around.clamp(0.0, 1.0) * 255.0).round() as u32;
+    canvas.fill(canvas.bounds(), Color(alpha << 24), damage);
+}
+
+/// Whether the blur behind `windows[at]` is taken from the [`Backdrop`]
+/// rather than from the frame as it stands.
+///
+/// Hyprland's rule is `IHyprRenderer::shouldUseNewBlurOptimizations` in
+/// `src/render/Renderer.cpp`: a window that is not floating and not on a
+/// special workspace. Both of those are ways of saying *nothing but the
+/// desktop is behind it*, and a layout's answer carries the first and not
+/// the second, so this asks the question itself: a tiled window with no
+/// window drawn under it. A scratchpad's window over the workspace it was
+/// called up on has one, and blurs it, as Hyprland's does.
+///
+/// A window a `dim_around` rule darkened the desktop for, or one drawn after
+/// such a window, is behind a fill the backdrop does not hold.
+///
+/// The caller's damage has to know the answer ([`render_onto`] says what
+/// each kind is owed), which is why this is not the renderer's own secret.
+#[must_use]
+pub fn reads_backdrop(windows: &[Placed], at: usize, styles: &Styles<'_>) -> bool {
+    let Some(placed) = windows.get(at) else {
+        return false;
+    };
+    !placed.floating
+        && windows
+            .iter()
+            .take(at.saturating_add(1))
+            .all(|drawn| !styles.of(drawn.window).dim_around)
+        && windows
+            .iter()
+            .take(at)
+            .all(|under| intersect(outer(under), placed.rect).is_none())
+}
+
 /// One layer surface: the blur behind it, where a `layerrule` asked for
 /// one, and then its pixels.
+///
+/// The blur is of the frame as it stands, whichever side of the windows the
+/// surface is on: a menu over a window blurs the window, and Hyprland keeps
+/// its `m_blurFB` from a layer surface unless a `layerrule = xray` asks.
 ///
 /// No border, no rounding and no shadow: a bar draws its own corners, and a
 /// compositor that put a border round a wallpaper would be drawing a line
 /// across the screen.
 fn draw_layer(
     canvas: &mut Canvas,
-    backdrop: Option<&Canvas>,
     layer: &LayerFrame<'_>,
     rect: Rect,
     style: &Style,
@@ -612,7 +704,7 @@ fn draw_layer(
     if let Some(blur) = style.blur.filter(|_| layer.blur)
         && surface.format() == Format::Argb8888
     {
-        canvas.blur_from(backdrop, rect, Rounding::none(), &blur, damage);
+        canvas.blur(rect, Rounding::none(), &blur, damage);
     }
     canvas.composite(surface, rect, damage);
 }
@@ -621,7 +713,7 @@ fn draw_layer(
 /// and the dim over them, with whatever a `windowrule` changed.
 fn window(
     canvas: &mut Canvas,
-    backdrop: Option<&Canvas>,
+    backdrop: Option<&mut Backdrop>,
     placed: &Placed,
     rect: Rect,
     styles: &Styles<'_>,
@@ -709,7 +801,10 @@ fn window(
     if let Some(blur) = style.blur.filter(|_| own.blur)
         && translucent
     {
-        canvas.blur_from(backdrop, rect, rounding, &blur, damage);
+        match backdrop {
+            Some(behind) => behind.blur_onto(canvas, rect, rounding, &blur, damage),
+            None => canvas.blur(rect, rounding, &blur, damage),
+        }
     }
     if let Some(surface) = surfaces.get(&placed.window) {
         // Scaled, which is the exact path when the surface is already the

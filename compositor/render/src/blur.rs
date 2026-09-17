@@ -135,6 +135,24 @@ impl Blur {
         }
     }
 
+    /// How far from a pixel anything that changes its blur can be, in
+    /// pixels of the canvas.
+    ///
+    /// Each level of the pyramid is half the one above it, so a tap at
+    /// `size` on level *k* is `size * 2^k` source pixels. Going down that
+    /// sums to `size * (2^passes - 1)` and coming back up to the same, so
+    /// the kernel reaches `2 * size * (2^passes - 1)`, which is inside
+    /// `2 * size * 2^passes`. Twice the lattice the pyramid halves on is
+    /// added, because what is read is snapped out to it at either end.
+    #[must_use]
+    pub const fn reach(&self) -> i64 {
+        let lattice = 1_i64 << if self.passes < 6 { self.passes } else { 6 };
+        self.size
+            .saturating_mul(lattice)
+            .saturating_mul(2)
+            .saturating_add(lattice.saturating_mul(2))
+    }
+
     /// The same shape with every grading value at the one that does
     /// nothing: the two kernels and no colour change at all.
     ///

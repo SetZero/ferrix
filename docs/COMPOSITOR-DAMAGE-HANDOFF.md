@@ -1,13 +1,14 @@
 # Handoff: the compositor's frame time
 
-Written 2026-09-17, at the end of the session that landed damage tracking.
-This is what is done, what is measured, and the one change that is left —
-with the reasoning behind it, so that whoever picks it up does not have to
-rediscover any of it.
+Written 2026-09-17, at the end of the session that landed damage tracking,
+and brought up to date the same night by the session that finished it. This
+is what was done and what was measured, with the reasoning behind it, so
+that whoever touches it next does not have to rediscover any of it.
 
-The short version: **an opaque window is now cheap (42 ms → 0.24 ms a
-frame). A translucent one still costs a full frame, and the fix is written
-but not wired up.**
+The short version: **a frame that changes a little costs a little, whatever
+is on the screen: 120 ms → 0.06 ms for a terminal rewriting a line,
+translucent or not. What is left is a wallpaper that changes every frame,
+which is a blur every frame (§2.4).**
 
 ---
 
@@ -111,82 +112,118 @@ full-screen layer surface, committing 1920x1080 of damage every frame.** In
 that run the damage genuinely *is* the screen and no amount of tracking can
 move the number. Measure with a static wallpaper or none.
 
-Row 2 is the open problem.
+Row 2 was the open problem, and §2 is what closed it.
 
 ---
 
-## 2. The open problem, and the fix
+## 2. What made a translucent window cost a full frame, and what fixed it
 
-### Why a translucent window still costs a full frame
+This was the open problem when the first half of this document was written.
+It was worse than it looked: `foot` commits `ARGB8888` buffers whatever its
+opacity, and the renderer's condition for blurring behind a window is a
+format with alpha, so *every* terminal was a translucent window. And
+`hyprix`'s loop reads its input once a frame, so a 120 ms frame is a pointer
+that moves eight times a second and letters that arrive in bursts.
+
+### 2.1 Why
 
 `Canvas::blur` reads the canvas a kernel's reach outside what it writes.
-Outside the damage the canvas still holds the **last** frame — and the last
+Outside the damage the canvas still holds the **last** frame -- and the last
 frame has the translucent surface drawn *over* the blur. So blurring a strip
 is blurring the previous blur plus the surface: a smear that grows every
-frame.
+frame. `Plan::blurs_whole` in `compositor/hyprix/src/damage.rs` answered
+that by growing the damage until every blurred surface it touched was
+redrawn whole, plus a reach. Correct, and a near-fullscreen frame for every
+pointer motion over a near-fullscreen window.
 
-`Plan::blurs_whole` in `compositor/hyprix/src/damage.rs` answers this by
-growing the damage until every blurred surface the damage touches is redrawn
-whole, plus a reach. That is correct and it is what makes row 2 flat: a
-near-fullscreen translucent window means a near-fullscreen frame.
-
-It was found the honest way — it cost a step or two of a channel over 8604
+It was found the honest way -- it cost a step or two of a channel over 8604
 pixels of `dwindle-two-clients`, which is the golden-image suite catching
 it.
 
-Hyprland has the same artifact and stops at the reach; see `CRenderPass::begin`
-and its comment, "moving a window over blur shows the edges being wonk".
+### 2.2 The backdrop (`compositor/render/src/backdrop.rs`)
 
-### The fix, half of which is landed
+Hyprland's answer is `decoration:blur:new_optimizations`, **on by default**:
+the monitor keeps `m_blurFB`, the background and the layer surfaces under
+the windows *already blurred*, blurs it again only when one of those changes
+(`CHyprOpenGLImpl::preRender`), and a tiled window samples it
+(`IHyprRenderer::shouldUseNewBlurOptimizations`).
 
-Hyprland's actual answer is `decoration:blur:new_optimizations`, which is
-**on by default**: keep the blurred backdrop in its own framebuffer rather
-than blurring the live one.
+`compositor_render::Backdrop` is that. Two canvases a screen: `sharp`, what
+is behind the windows, brought up to date within each frame's damage; and
+`blurred`, the blur of it in 64-pixel tiles, each blurred the first time a
+window needs it and again only after the pixels it was blurred from have
+*changed* -- which `Backdrop::take` finds by comparing, because a frame's
+damage says what was drawn again and not what came out different. A pointer
+crossing a window damages the wallpaper under it and changes none of it.
 
-`compositor/render` has this now (commit `39634520`):
+* `render_onto(canvas, Some(backdrop), …)` is what `hyprix` calls; a
+  `Screen` owns the backdrop beside its canvas.
+* `reads_backdrop(windows, at, styles)` is the rule for which windows take
+  it: tiled, nothing drawn under it, no `dim_around` fill behind it. That is
+  Hyprland's "not floating and not on a special workspace" asked of a layout
+  that does not say which workspace a window came from.
+* Everything else -- a floating window, a scratchpad's over the workspace
+  under it, a blurred layer surface -- still blurs the frame as it stands
+  and is still redrawn whole: `Plan::blurs_whole`, now only for those.
+* The damage owes a backdrop reader one thing: where what is *behind* the
+  windows changed (a commit on a layer surface under them, or one of those
+  moving), the damage inside the window grows by `Blur::reach`.
+  `Plan::behind_reaches`.
 
-- `Canvas::blur_from(backdrop, rect, rounding, blur, damage)` — reads
-  `backdrop` instead of `self`.
-- `Canvas::take_from(other, damage)` — how the backdrop is kept: copies the
-  damaged pixels out of the live canvas.
-- `render_onto(canvas, backdrop, …)` — `render_with_layers` with one. It
-  takes the snapshot **after the layer surfaces below the windows and before
-  the windows**, which is exactly where Hyprland's optimisation takes it.
+`render` and `render_with_layers` make a backdrop for the one frame they
+draw, shown the whole of what is behind the windows, so that a frame drawn
+from nothing and the frame a compositor kept up to date are one picture.
+`hyprix`'s integration tests hold that: many partial frames, compared byte
+for byte with the renderer's one.
 
-Nothing ever draws over the backdrop, so a strip of it holds the same pixels
-a whole frame would have put there, and a blur over that strip is exact.
+**Twelve expected images moved**, every difference inside a translucent
+tiled window, every one darker. A blur of the frame as it stands had the
+window's *own* decorations in it: its shadow, drawn whole under it (lighter
+than the default `0x111111` background, hence darker without), and under a
+rounded window the border's fill, which the rounded path lays over the whole
+box. `m_blurFB` has neither, and Hyprland draws it over both. Toward
+Hyprland's default, not away from it. What is given up is what Hyprland's
+optimisation gives up: nothing, for a tiled window, since nothing but the
+desktop is behind one.
 
-**Nothing calls `render_onto` yet.** `render_with_layers` passes no backdrop,
-so every pixel is what it was and no expected image moves.
+### 2.3 The copy nobody had timed (`Canvas::blend`)
 
-### What is left to do
+With the blur gone the same frame still cost 5 ms, all of it before a pixel
+was drawn: a client's padded buffer was gathered into tight rows **whole**
+for every blend. `foot` hands over a 1878-pixel row in a stride of 7680
+bytes, so that is every `foot`. `blend` gathers the part the clips cover
+now, cut on whole pixels with the pattern moved by the same, so each canvas
+pixel takes the surface pixel it took.
 
-1. **A backdrop canvas per screen.** `Screen` in
-   `compositor/hyprix/src/state.rs` already owns a `Canvas`; give it a
-   second one of the same size, made and resized alongside the first.
-2. **`frame::Output` gains `backdrop: &'a mut Canvas`**, and
-   `crate::frame::draw_windows` calls `render_onto` with `Some(backdrop)`
-   instead of `render_with_layers`. The edit was started and is *not* in the
-   tree — it was interrupted deliberately, so start clean.
-3. **Drop `Plan::blurs_whole`** from `compositor/hyprix/src/damage.rs`, or
-   reduce it to the reach around the damage rather than the whole surface.
-   This is the change that buys the time; do it *after* 1 and 2 and check
-   the goldens at each step.
-4. **Re-measure row 2** with the recipe in §3 and put the number in the
-   commit message.
+**Measured, release, 1920x1080, `size 8, passes 3`, steady state, same
+machine.** One `foot` rewriting a line five times a second:
 
-### What it gives up, and why that is the right trade
+| configuration | before | backdrop | and the gather |
+|---|---|---|---|
+| `foot` as it comes (opaque, `ARGB8888`) | 120 ms | 5.3 ms | **0.06 ms** |
+| `foot -o colors.alpha=0.8` | 120 ms | 5.2 ms | **0.06 ms** |
+| two of those | 131 ms | 4.6 ms | **0.09 ms** |
+| waybar and one | 119 ms | 5.2 ms | **0.06 ms** |
 
-A window blurring the *window* behind it. The backdrop stops at the layer
-surfaces, so two translucent windows one over the other each blur the
-desktop rather than each other. Hyprland's own optimisation gives up exactly
-this, and it is what a person gets from Hyprland out of the box — so
-matching it is not a compromise, it is the fidelity.
+The compositor's share of a core over ten seconds of the last row: 62% →
+6%, most of what is left being a loop that wakes every 2 ms.
 
-It may move expected images that have a translucent window over another
-window. `only_a_translucent_window_has_its_background_blurred` is the one to
-look at first. If an image moves, say so in the commit message and say which
-way: toward Hyprland's default, not away from it.
+### 2.4 What is left
+
+* **A wallpaper that changes every frame** (`mpvpaper`) changes what is
+  behind every window every frame, and the blur of it is owed every frame:
+  95 ms behind a full-screen window. No tracking can move that. What could:
+  a cheaper kernel, or blurring on another thread -- the second only where
+  there is a second core, which under `whpx` there is not.
+* **A floating translucent window, and a blurred bar,** are still redrawn
+  whole when touched. A bar is 8.6 ms. A large floating terminal is the case
+  that would be felt.
+* **The loop polls**, 2 ms at a time, and builds a description of every
+  window each pass while a bar is watching. Not the frame time, but it is a
+  core that is never idle on a machine with one.
+* **`composite_scaled` still gathers a whole surface**, for a window
+  part-way through an animation. The whole window is damaged then, so it is
+  proportionate; it is also 3 ms a window a frame.
 
 ---
 
@@ -220,7 +257,11 @@ frames of the run and will not move however good the tracking gets. The
 final line also ends `smallest frame N of M pixels`, which is the number the
 damage test reads.
 
-Two traps, both of which cost time in this session:
+Three traps, each of which cost time:
+
+- An `exec-once = foot sh -c '…'` line with quotes inside the quotes opened a
+  window and closed it again. Put the loop in a script and `exec-once = foot
+  /path/to/it`.
 
 - The user's real configuration runs `mpvpaper`, which damages the whole
   screen every frame. Use the config above instead.
@@ -237,6 +278,15 @@ Two traps, both of which cost time in this session:
   25 ms rather than the window's 95. Both halves matter: the first is the
   licence to take the shortcut and the second is that the shortcut was
   taken.
+- `a_tiled_window_keeps_the_blur_of_what_is_behind_it` (same file) -- the
+  backdrop. A strip of a translucent window redrawn alone is the whole
+  frame's pixels *and ran no blur* (`Backdrop::blurs` is the count); a
+  square repainted behind the window, redrawn a reach around, is the whole
+  frame's pixels and one blur; and the square alone is **not**, which is the
+  control that says the reach is owed.
+- `only_a_window_over_the_desktop_alone_reads_the_backdrop` -- the rule.
+- `a_padded_surface_draws_as_a_tight_one` -- now also two cells of a padded
+  buffer, away from its corner, at two opacities.
 - `a_full_screen_blur_is_inside_the_stated_bound` (same file, release only)
   — the 220 ms ceiling, deliberately more than twice the 85 ms measurement
   so that a slower machine passes and a change that made the blur several

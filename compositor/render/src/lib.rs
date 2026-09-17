@@ -88,6 +88,7 @@
 
 #![forbid(unsafe_code)]
 
+mod backdrop;
 mod blur;
 mod buffer;
 mod canvas;
@@ -106,6 +107,7 @@ mod tests;
 
 use core::fmt;
 
+pub use backdrop::Backdrop;
 pub use blur::Blur;
 pub use buffer::{Format, Surface, Target};
 pub use canvas::{Canvas, MAX_SIZE, Rounding, Shadow};
@@ -113,8 +115,8 @@ pub use compositor_config::Color;
 pub use compositor_layout::Rect;
 pub use damage::Damage;
 pub use frame::{
-    LayerFrame, Style, Styles, WindowStyle, damage_between, outer, render, render_onto,
-    render_with_layers, scaled,
+    LayerFrame, Style, Styles, WindowStyle, damage_between, outer, reads_backdrop, render,
+    render_onto, render_with_layers, scaled,
 };
 pub use gradient::Gradient;
 pub use patterns::Pattern;

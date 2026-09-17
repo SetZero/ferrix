@@ -5,8 +5,9 @@ use compositor_layout::{Monitor, MonitorId, MonitorLayout, Placed, Settings, Sta
 
 use crate::golden::{self, Mismatch};
 use crate::{
-    Blur, Canvas, Color, Damage, Error, Format, Gradient, LayerFrame, Pattern, Rect, Rounding,
-    Style, Styles, Surface, Target, cursor, damage_between, outer, render, render_with_layers,
+    Backdrop, Blur, Canvas, Color, Damage, Error, Format, Gradient, LayerFrame, Pattern, Rect,
+    Rounding, Style, Styles, Surface, Target, cursor, damage_between, outer, reads_backdrop,
+    render, render_onto, render_with_layers,
 };
 
 const BG: u32 = 0x0020_4060;
@@ -1458,6 +1459,34 @@ fn a_padded_surface_draws_as_a_tight_one() {
             &full,
         );
         assert_eq!(a.data(), b.data(), "{format:?}");
+
+        // And a part of it, which is all of a padded buffer that is
+        // gathered: two cells of a terminal, away from the surface's corner
+        // and from each other, come out as the whole surface drew them, at
+        // an opacity that takes the opaque one off the copying path too.
+        let cells: Damage = [Rect::new(9, 5, 7, 4), Rect::new(30, 17, 6, 3)]
+            .into_iter()
+            .collect();
+        for opacity in [1.0, 0.5] {
+            let mut whole = canvas(50, 30);
+            let mut part = canvas(50, 30);
+            let surface = Surface::new(&padded, width, height, stride, format).unwrap();
+            whole.composite_with(&surface, rect, Rounding::none(), opacity, &full);
+            part.composite_with(&surface, rect, Rounding::none(), opacity, &cells);
+            let untouched = canvas(50, 30);
+            for (x, y) in (0..30).flat_map(|y| (0..50).map(move |x| (x, y))) {
+                let from = if cells.contains(i64::from(x), i64::from(y)) {
+                    &whole
+                } else {
+                    &untouched
+                };
+                assert_eq!(
+                    part.pixel(x, y),
+                    from.pixel(x, y),
+                    "{format:?} {opacity} at {x},{y}"
+                );
+            }
+        }
     }
 }
 
@@ -2219,12 +2248,67 @@ fn graded_style() -> Style {
 /// same ones; only the screen is smaller.
 const SMALL: (u32, u32) = (512, 384);
 
+/// The two clients on the small monitor, over a checkerboard wallpaper,
+/// drawn with `style`.
+///
+/// Over a wallpaper because a tiled window's blur is a blur of what is
+/// behind the windows and nothing else, and behind these two with no
+/// wallpaper is one colour: a blur of that is the colour, and a dither seen
+/// through a window a quarter transparent rounds away to nothing.
+fn graded_frame(style: &Style) -> Vec<u8> {
+    let (width, height) = SMALL;
+    let (_, layout) = two_clients_on(SMALL, Settings::default());
+    let buffers = client_buffers(&layout);
+    let wallpaper = Pattern::Checkerboard.draw(width, height);
+    let layers = [LayerFrame {
+        rect: Rect::new(0, 0, i64::from(width), i64::from(height)),
+        above: false,
+        surface: Some(
+            Surface::new(
+                &wallpaper,
+                width,
+                height,
+                width * 4,
+                Pattern::Checkerboard.format(),
+            )
+            .unwrap(),
+        ),
+        dim_around: false,
+        blur: false,
+    }];
+    let mut canvas = Canvas::new(width, height).unwrap();
+    let full = Damage::full(width, height);
+    let produced = render_with_layers(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        &Styles::plain(style),
+        &surfaces(&buffers),
+        &layers,
+        &full,
+    );
+    assert_eq!(produced, full);
+    canvas.data().to_vec()
+}
+
 /// The frame that configuration's `decoration` block draws: the blur behind
 /// the window that can be seen through, graded the way its five values ask
 /// for, dither and all.
 #[test]
 fn the_graded_blur_matches_the_expected_image() {
-    let frame = frame_on(SMALL, &graded_style(), Settings::default());
+    let style = graded_style();
+    let frame = graded_frame(&style);
+    // Dither and all: the image is the one place a dither is held, so it is
+    // checked to be holding one.
+    let blur = style.blur.expect("the blur is on");
+    let undithered = graded_frame(&Style {
+        blur: Some(Blur { noise: 0.0, ..blur }),
+        ..style
+    });
+    assert_ne!(
+        frame, undithered,
+        "no dither can be seen in the graded frame"
+    );
     golden::check("graded-blur-two-clients", SMALL.0, SMALL.1, &frame);
 }
 
@@ -2679,4 +2763,228 @@ fn dim_around_darkens_what_is_behind_and_not_what_is_in_front() {
         (100..=160).contains(&behind),
         "the window behind it is {behind} and half of white is about 128"
     );
+}
+
+// -- The kept backdrop -------------------------------------------------------
+
+/// A wallpaper that is not flat, so that a blur of it is not the wallpaper:
+/// the checkerboard over the whole screen, with a white square at `square`
+/// when there is one -- which is a wallpaper that repainted part of itself.
+fn wallpaper(square: Option<Rect>) -> Vec<u8> {
+    let mut bytes = Pattern::Checkerboard.draw(WIDTH, HEIGHT);
+    let Some(rect) = square else {
+        return bytes;
+    };
+    for y in rect.y..rect.bottom() {
+        let at = ((y * i64::from(WIDTH) + rect.x) * 4) as usize;
+        bytes[at..at + rect.width as usize * 4].fill(0xFF);
+    }
+    bytes
+}
+
+/// One frame of the two clients over `wallpaper`, with a backdrop.
+fn frame_over(
+    canvas: &mut Canvas,
+    backdrop: &mut Backdrop,
+    wallpaper: &[u8],
+    style: &Style,
+    damage: &Damage,
+) {
+    let (_, layout) = two_clients();
+    let buffers = client_buffers(&layout);
+    let layers = [LayerFrame {
+        rect: Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT)),
+        above: false,
+        surface: Some(
+            Surface::new(
+                wallpaper,
+                WIDTH,
+                HEIGHT,
+                WIDTH * 4,
+                Pattern::Checkerboard.format(),
+            )
+            .unwrap(),
+        ),
+        dim_around: false,
+        blur: false,
+    }];
+    let _ = render_onto(
+        canvas,
+        Some(backdrop),
+        &layout,
+        (0, 0),
+        &Styles::plain(style),
+        &surfaces(&buffers),
+        &layers,
+        damage,
+    );
+}
+
+/// A tiled window's blur is kept, and is blurred again only when what is
+/// behind the windows changes.
+///
+/// This is what makes a blurred desktop usable on a CPU. A pointer crossing
+/// a translucent terminal damages a few hundred pixels of it, and a letter
+/// typed into it a few hundred more; if either costs a blur, the pointer
+/// moves six times a second and the letters arrive like a tty's over a bad
+/// line. With the backdrop both cost a copy.
+///
+/// Three frames, each compared byte for byte with a whole frame drawn from
+/// nothing, because a strip that comes out a step of a channel away from
+/// the whole frame's is a seam a person can see:
+///
+/// 1. something was drawn over the window and the strip is redrawn -- the
+///    same pixels, and *no blur was run*;
+/// 2. the wallpaper repainted a square under the window, and the damage is
+///    the square grown by [`Blur::reach`] -- the same pixels, one blur;
+/// 3. the same with the damage *not* grown, which must come out wrong: that
+///    is what says the reach is owed and the second frame did not pass by
+///    drawing the same thing either way.
+#[test]
+fn a_tiled_window_keeps_the_blur_of_what_is_behind_it() {
+    let blur = Blur::new(8, 2);
+    let style = Style {
+        blur: Some(blur),
+        ..plain_style()
+    };
+    let full = Damage::full(WIDTH, HEIGHT);
+    let (_, layout) = two_clients();
+    let at = layout
+        .windows
+        .iter()
+        .position(|placed| placed.window == GRADIENT)
+        .unwrap();
+    assert!(
+        reads_backdrop(&layout.windows, at, &Styles::plain(&style)),
+        "a tiled window with nothing under it takes its blur from the backdrop"
+    );
+    let window = layout.windows[at].rect;
+
+    let whole = |wallpaper: &[u8]| {
+        let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+        let mut backdrop = Backdrop::new(WIDTH, HEIGHT).unwrap();
+        frame_over(&mut canvas, &mut backdrop, wallpaper, &style, &full);
+        canvas.data().to_vec()
+    };
+    let plain = wallpaper(None);
+    let expected = whole(&plain);
+
+    let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+    let mut backdrop = Backdrop::new(WIDTH, HEIGHT).unwrap();
+    frame_over(&mut canvas, &mut backdrop, &plain, &style, &full);
+    assert_eq!(canvas.data(), expected.as_slice());
+    let first = backdrop.blurs();
+    assert!(first > 0, "the first frame blurred nothing");
+
+    // The gradient's bottom half is the half that can be seen through, so
+    // that is where a blur shows and where all of this happens.
+    let seen_through = window.y + window.height / 2;
+
+    // 1. A pointer's worth of the window, drawn over and then drawn again.
+    let strip = Rect::new(window.x + 40, seen_through + 60, 24, 24);
+    canvas.fill(strip, Color(0xFFFF_FFFF), &full);
+    assert_ne!(canvas.data(), expected.as_slice());
+    frame_over(
+        &mut canvas,
+        &mut backdrop,
+        &plain,
+        &style,
+        &Damage::from(strip),
+    );
+    assert!(
+        canvas.data() == expected.as_slice(),
+        "a strip of the window redrawn alone is not the whole frame's pixels"
+    );
+    assert_eq!(
+        backdrop.blurs(),
+        first,
+        "redrawing a strip of the window ran a blur, and nothing behind it had changed"
+    );
+
+    // 2. The wallpaper repaints a square under the window.
+    let square = Rect::new(window.x + 200, seen_through + 150, 40, 40);
+    let repainted = wallpaper(Some(square));
+    let expected = whole(&repainted);
+    let reach = blur.reach();
+    let owed = Rect::new(
+        square.x - reach,
+        square.y - reach,
+        square.width + reach * 2,
+        square.height + reach * 2,
+    );
+    let mut kept = (canvas.clone(), backdrop.clone());
+    frame_over(
+        &mut kept.0,
+        &mut kept.1,
+        &repainted,
+        &style,
+        &Damage::from(owed),
+    );
+    assert!(
+        kept.0.data() == expected.as_slice(),
+        "a change behind the window, redrawn a reach around, is not the whole frame's pixels"
+    );
+    assert_eq!(
+        kept.1.blurs(),
+        first + 1,
+        "a change behind the window is one more blur"
+    );
+
+    // 3. And without the reach it is not: the blur of the square spreads
+    // past the square.
+    frame_over(
+        &mut canvas,
+        &mut backdrop,
+        &repainted,
+        &style,
+        &Damage::from(square),
+    );
+    assert!(
+        canvas.data() != expected.as_slice(),
+        "the square alone came out as the whole frame, so nothing here tests the reach"
+    );
+}
+
+/// Which windows take the backdrop's blur: Hyprland's
+/// `shouldUseNewBlurOptimizations`, asked of a layout.
+#[test]
+fn only_a_window_over_the_desktop_alone_reads_the_backdrop() {
+    let placed = |window: u64, rect: Rect, floating: bool| Placed {
+        window: WindowId(window),
+        rect,
+        border: 2,
+        focused: false,
+        floating,
+        fullscreen: false,
+    };
+    let style = plain_style();
+    let windows = [
+        placed(1, Rect::new(10, 10, 300, 300), false),
+        placed(2, Rect::new(330, 10, 300, 300), false),
+        // A scratchpad's window, tiled over the two of them.
+        placed(3, Rect::new(100, 100, 400, 100), false),
+        placed(4, Rect::new(700, 400, 100, 100), true),
+    ];
+    let reads = |at: usize| reads_backdrop(&windows, at, &Styles::plain(&style));
+    assert!(reads(0) && reads(1), "tiled, and nothing under either");
+    assert!(!reads(2), "a window over other windows blurs them");
+    assert!(!reads(3), "a floating window blurs what it floats over");
+    assert!(!reads(4), "and no window is no window");
+
+    // A window `dim_around` darkened the desktop for is behind a fill the
+    // backdrop does not hold, and so is everything drawn after it.
+    let mut ruled = BTreeMap::new();
+    let _previous = ruled.insert(
+        WindowId(1),
+        crate::WindowStyle {
+            dim_around: true,
+            ..crate::WindowStyle::default()
+        },
+    );
+    let dimmed = Styles {
+        base: &style,
+        windows: &ruled,
+    };
+    assert!(!reads_backdrop(&windows, 0, &dimmed));
+    assert!(!reads_backdrop(&windows, 1, &dimmed));
 }
