@@ -178,6 +178,22 @@ pub enum Event {
         /// The window that left.
         address: u64,
     },
+    /// A keyboard's layout group changed: `activelayout` with the
+    /// keyboard's name and the layout's, in that order and separated by a
+    /// comma (`src/managers/input/InputManager.cpp:1731`). There is no `v2`
+    /// form.
+    ///
+    /// This is what a bar's keyboard-layout widget reads, and it is the
+    /// only thing a client is told about a layout switch other than the
+    /// group in `wl_keyboard.modifiers`.
+    ActiveLayout {
+        /// The keyboard, by the normalised name `hyprctl devices` prints:
+        /// Hyprland's payload is `m_hlName`, and a widget written against
+        /// it compares against what `hyprctl devices` gave it.
+        keyboard: String,
+        /// What the group it is in now is called, such as `German`.
+        layout: String,
+    },
 }
 
 /// A window as `activewindow` names it: what it is, and where.
@@ -291,6 +307,9 @@ impl Event {
             Self::MoveOutOfGroup { address } => {
                 vec![line("moveoutofgroup", &format!("{address:x}"))]
             }
+            Self::ActiveLayout { keyboard, layout } => {
+                vec![line("activelayout", &format!("{keyboard},{layout}"))]
+            }
         }
     }
 }
@@ -341,8 +360,9 @@ impl Watcher {
         let mut events = Vec::new();
         let before = self.seen.take().unwrap_or_default();
 
-        // Monitors, then workspaces, then windows, then the focus: a reader
-        // is told a thing exists before it is told that thing is focused.
+        // Monitors, then keyboards, then workspaces, then windows, then the
+        // focus: a reader is told a thing exists before it is told that
+        // thing is focused.
         for monitor in &now.monitors {
             if !before.monitors.iter().any(|old| old.id == monitor.id) {
                 events.push(Event::MonitorAdded {
@@ -358,6 +378,35 @@ impl Watcher {
                     id: monitor.id,
                     name: monitor.name.clone(),
                     description: String::new(),
+                });
+            }
+        }
+
+        // A keyboard whose group changed, and a keyboard that has just
+        // appeared. Hyprland posts `activelayout` from two places and both
+        // are this: `onKeyboardMod` posts it when the group it is about to
+        // send differs from the one it sent last
+        // (`src/managers/input/InputManager.cpp:1731`), which is the group
+        // changing, and the keymap listener posts it while a keyboard is
+        // being set up (`:1189`), which is the keyboard being new. A
+        // keyboard whose keymap was rebuilt under it -- a reload naming
+        // other layouts -- changes the layout's name without changing the
+        // group, and that is a switch to a reader even though the index
+        // stands still, so both are compared.
+        for keyboard in &now.devices.keyboards {
+            let was = before
+                .devices
+                .keyboards
+                .iter()
+                .find(|old| old.device.address == keyboard.device.address);
+            let changed = was.is_none_or(|old| {
+                old.active_layout_index != keyboard.active_layout_index
+                    || old.active_keymap != keyboard.active_keymap
+            });
+            if changed {
+                events.push(Event::ActiveLayout {
+                    keyboard: keyboard.device.name.clone(),
+                    layout: keyboard.active_keymap.clone(),
                 });
             }
         }

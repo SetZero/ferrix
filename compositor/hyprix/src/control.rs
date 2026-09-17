@@ -132,8 +132,11 @@ pub fn serve(
             compositor_ipc::Reply::Text(text) => answer.push_str(&text),
             other => {
                 // Hyprland answers `ok` for a request that did something and
-                // leaves the doing to the compositor; so does this.
-                answer.push_str("ok\n");
+                // leaves the doing to the compositor; so does this, unless
+                // the reply brought an answer of its own -- which
+                // `switchxkblayout all` does when it moved some keyboards
+                // and had a reason for the others.
+                answer.push_str(other.said().unwrap_or("ok\n"));
                 todo.push(other);
             }
         }
@@ -205,7 +208,7 @@ pub fn snapshot(
     let mut snapshot = describe_all(state, clients, sources, reported.styles, reported.submap);
     snapshot.plugins = reported.plugins.listed();
     snapshot.binds = reported.binds.iter().map(described_bind).collect();
-    snapshot.devices = described_devices(reported.devices);
+    snapshot.devices = described_devices(reported.devices, reported.config, reported.keyboard);
     snapshot.layers = described_layers(state, clients, reported.layers);
     snapshot.cursor = reported.cursor;
     snapshot.locked = reported.locked;
@@ -253,6 +256,11 @@ pub struct Reported<'a> {
     pub binds: &'a [compositor_config::Bind],
     /// The input devices the seat reads.
     pub devices: &'a crate::devices::Devices,
+    /// The seat's keyboard state: which layout group it is in, how many the
+    /// keymap has, and which locks are on. `hyprctl devices` prints all
+    /// three, and `switchxkblayout` works out the group it asks for from
+    /// the first two.
+    pub keyboard: &'a compositor_xkb::Keyboard,
     /// Where each layer surface was placed this pass.
     pub layers: &'a [crate::frame::Placed],
     /// The plugins that are loaded.
@@ -356,25 +364,82 @@ fn described_bind(bind: &compositor_config::Bind) -> compositor_ipc::Bind {
 }
 
 /// The input devices, in the groups `hyprctl devices` prints.
-fn described_devices(devices: &crate::devices::Devices) -> compositor_ipc::Devices {
+///
+/// # Why every keyboard reports the same group
+///
+/// Hyprland's layout group belongs to the keyboard: two keyboards may sit
+/// on different layouts, and what the clients are told is the group of
+/// whichever one was last typed on. This compositor's seat has one XKB
+/// state for every device it reads, so every keyboard here honestly reports
+/// the same group -- they share it -- and `switchxkblayout` naming one of
+/// them moves the seat. That is reported rather than hidden: the group and
+/// the keymap name are the same in every row, so a person reading the
+/// answer can see that the keyboards are not separate layouts pretending to
+/// be one.
+fn described_devices(
+    devices: &crate::devices::Devices,
+    config: &compositor_config::Config,
+    keyboard: &compositor_xkb::Keyboard,
+) -> compositor_ipc::Devices {
+    let layouts = crate::seat::chosen_layouts(config);
+    let group = keyboard.group();
+    // Whether the locks are on. Hyprland reads only the *locked* mask
+    // (`getModState`, `src/debug/HyprCtl.cpp:800`), so a keyboard with
+    // `Caps Lock` held down -- which capitalises every letter the client
+    // receives -- is reported as having it off. The effective mask is read
+    // here instead, which is the state the keys are actually typed in and
+    // the question `capsLock` is asking. `Num Lock` is `Mod2`, as
+    // `XKB_MOD_NAME_NUM` is in every keymap this compositor ships.
+    let modifiers = keyboard.modifiers();
+    let effective = modifiers.depressed | modifiers.latched | modifiers.locked;
+    // The rules as the configuration wrote them, whole: Hyprland reports
+    // `m_currentRules`, which is what it passed
+    // `xkb_keymap_new_from_names`, so `kb_layout = de,us` is reported as
+    // `de,us` and not as the group in force
+    // (`src/debug/HyprCtl.cpp:799`). The model and rules this compositor
+    // would pass if it had libxkbcommon to pass them to are the ones the
+    // keymaps were probed with.
+    let option = |name: &str| config.str(name).unwrap_or_default().to_owned();
+    let rules = match option("input:kb_rules") {
+        empty if empty.is_empty() => "evdev".to_owned(),
+        written => written,
+    };
+    let model = match option("input:kb_model") {
+        empty if empty.is_empty() => "pc105".to_owned(),
+        written => written,
+    };
     let mut out = compositor_ipc::Devices::default();
-    for (address, name, keyboard) in devices.listed() {
+    // The names a device is given are Hyprland's: normalised, and told
+    // apart when two devices say they are the same thing. Mice and
+    // keyboards are numbered in the one series, as `getNameForNewDevice`
+    // numbers them, because it looks at every device it has named.
+    let mut named: Vec<String> = Vec::new();
+    let groups = keyboard.groups();
+    for (address, name, types_keys) in devices.listed() {
+        let name = compositor_ipc::new_device_name(&name, &named);
+        named.push(name.clone());
         let device = compositor_ipc::Device { address, name };
-        if keyboard {
+        if types_keys {
             out.keyboards.push(compositor_ipc::Keyboard {
                 device,
-                // What `compositor/xkb` is: one built-in keymap, and the
-                // names the compositor would pass `xkb_keymap_new_from_names`
-                // if it had libxkbcommon to pass them to.
-                rules: "evdev".to_owned(),
-                model: "pc105".to_owned(),
-                layout: "us".to_owned(),
-                variant: String::new(),
-                options: String::new(),
-                active_layout_index: 0,
-                active_keymap: "English (US)".to_owned(),
-                caps_lock: false,
-                num_lock: false,
+                rules: rules.clone(),
+                model: model.clone(),
+                layout: option("input:kb_layout"),
+                variant: option("input:kb_variant"),
+                options: option("input:kb_options"),
+                active_layout_index: Some(group),
+                active_keymap: layouts
+                    .get(group as usize)
+                    .map_or_else(|| "none".to_owned(), |(layout, _)| group_name(layout)),
+                groups,
+                caps_lock: effective & compositor_xkb::generated::LOCK != 0,
+                num_lock: effective & compositor_xkb::generated::MOD2 != 0,
+                // The first keyboard listed. Hyprland's `main` is the one
+                // that last produced an event, and this seat does not
+                // record which that was; with one state shared by every
+                // keyboard, `main` and any other are the same keyboard to
+                // switch, so naming the first is a choice with no
+                // consequence rather than a claim about the hardware.
                 main: out.keyboards.is_empty(),
             });
         } else {
@@ -382,6 +447,28 @@ fn described_devices(devices: &crate::devices::Devices) -> compositor_ipc::Devic
         }
     }
     out
+}
+
+/// What a layout's group is called, as `xkb_keymap_layout_get_name` would
+/// answer it.
+///
+/// Hyprland's `active_keymap` is that name -- `English (US)`, `German` --
+/// and not the `us` a configuration wrote
+/// (`src/devices/IKeyboard.cpp:306`), because it is what a bar's layout
+/// widget shows a person. libxkbcommon reads it out of the keymap's
+/// `name[Group1]` line, which is in the keymap text this compositor ships,
+/// so this reads it from the same place rather than keeping a second table
+/// that could disagree with the keymap a client compiles.
+fn group_name(layout: &'static compositor_xkb::generated::Layout) -> String {
+    let named = layout
+        .keymap
+        .find("name[1]=\"")
+        .and_then(|at| layout.keymap.get(at + "name[1]=\"".len()..))
+        .and_then(|rest| rest.split_once('"'))
+        .map(|(name, _)| name);
+    // A keymap with no name for its group: say what the configuration
+    // called it, which is more use than Hyprland's own `error`.
+    named.map_or_else(|| layout.described(), str::to_owned)
 }
 
 /// Every layer surface, with the monitor and the level `hyprctl layers`

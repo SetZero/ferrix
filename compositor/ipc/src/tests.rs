@@ -335,18 +335,23 @@ fn snapshot() -> Snapshot {
             dispatcher: "killactive".to_owned(),
             ..Bind::default()
         }],
+        // The names are the normalised ones, because a device has no other:
+        // Hyprland keeps `m_hlName` and prints that, and a selector matches
+        // against it. `QEMU Virtio Keyboard` is what the kernel said.
         devices: Devices {
             mice: vec![Device {
                 address: 1,
-                name: "QEMU Virtio Tablet".to_owned(),
+                name: "qemu-virtio-tablet".to_owned(),
             }],
             keyboards: vec![Keyboard {
                 device: Device {
                     address: 0,
-                    name: "QEMU Virtio Keyboard".to_owned(),
+                    name: "qemu-virtio-keyboard".to_owned(),
                 },
                 layout: "us".to_owned(),
+                active_layout_index: Some(0),
                 active_keymap: "English (US)".to_owned(),
+                groups: 1,
                 main: true,
                 ..Keyboard::default()
             }],
@@ -666,7 +671,7 @@ fn the_rest_of_what_hyprctl_answers_carries_hyprlands_own_fields() {
     let keyboard = &json.get("keyboards").expect("keyboards").items()[0];
     assert_eq!(
         keyboard.get("name").and_then(parse::Value::text),
-        Some("QEMU Virtio Keyboard")
+        Some("qemu-virtio-keyboard")
     );
     assert_eq!(
         keyboard.get("layout").and_then(parse::Value::text),
@@ -1086,18 +1091,23 @@ fn watched(windows: &[Window], active: Option<u64>) -> Snapshot {
             dispatcher: "killactive".to_owned(),
             ..Bind::default()
         }],
+        // The names are the normalised ones, because a device has no other:
+        // Hyprland keeps `m_hlName` and prints that, and a selector matches
+        // against it. `QEMU Virtio Keyboard` is what the kernel said.
         devices: Devices {
             mice: vec![Device {
                 address: 1,
-                name: "QEMU Virtio Tablet".to_owned(),
+                name: "qemu-virtio-tablet".to_owned(),
             }],
             keyboards: vec![Keyboard {
                 device: Device {
                     address: 0,
-                    name: "QEMU Virtio Keyboard".to_owned(),
+                    name: "qemu-virtio-keyboard".to_owned(),
                 },
                 layout: "us".to_owned(),
+                active_layout_index: Some(0),
                 active_keymap: "English (US)".to_owned(),
+                groups: 1,
                 main: true,
                 ..Keyboard::default()
             }],
@@ -1718,7 +1728,6 @@ fn a_notification_comes_back_with_its_message() {
 #[test]
 fn the_commands_with_nothing_to_act_on_say_so() {
     for (line, wanted) in [
-        ("switchxkblayout kb next", "one layout"),
         ("output create headless", "the card's"),
         ("setcursor Adwaita 24", "no theme"),
         ("kill", "click-to-kill"),
@@ -1841,4 +1850,490 @@ fn eval_and_repl_say_what_hyprland_says_without_lua() {
             "{line}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// `switchxkblayout`
+//
+// `switchXKBLayoutRequest` (`src/debug/HyprCtl.cpp:1359`). Every answer here
+// is Hyprland's own string, character for character, because a script reads
+// them: `hyprctl switchxkblayout … | grep -q ok` is how people check whether
+// a switch worked, and a reworded answer is a script that stops working.
+// ---------------------------------------------------------------------------
+
+/// One keyboard with `groups` layouts, sitting in group `active`.
+fn keyboard(address: u64, name: &str, groups: u32, active: Option<u32>) -> Keyboard {
+    Keyboard {
+        device: Device {
+            address,
+            name: name.to_owned(),
+        },
+        layout: "de,us,fr".to_owned(),
+        active_layout_index: active,
+        active_keymap: match active {
+            Some(0) => "German".to_owned(),
+            Some(1) => "English (US)".to_owned(),
+            Some(2) => "French".to_owned(),
+            _ => "none".to_owned(),
+        },
+        groups,
+        main: address == 0,
+        ..Keyboard::default()
+    }
+}
+
+/// Answer `switchxkblayout <argument>` against `keyboards` and nothing else.
+fn switch(argument: &str, keyboards: &[Keyboard]) -> Reply {
+    let request = Request::parse(&format!("switchxkblayout {argument}"));
+    let snapshot = Snapshot {
+        devices: Devices {
+            keyboards: keyboards.to_vec(),
+            ..Devices::default()
+        },
+        ..Snapshot::default()
+    };
+    answer(&request, &snapshot, Version::default())
+}
+
+/// What the answer says, for a reply that carries one.
+fn says(argument: &str, keyboards: &[Keyboard]) -> String {
+    switch(argument, keyboards)
+        .said()
+        .unwrap_or_else(|| panic!("{argument:?} said nothing"))
+        .to_owned()
+}
+
+/// Which keyboards the answer moves, and to which group.
+fn moves(argument: &str, keyboards: &[Keyboard]) -> Vec<(u64, u32)> {
+    match switch(argument, keyboards) {
+        Reply::SwitchLayout { groups, .. } => groups,
+        _ => Vec::new(),
+    }
+}
+
+/// `main`, `active` and `current` all mean the keyboard that last typed.
+///
+/// Three words for one thing in Hyprland (`HyprCtl.cpp:1394`), and a person
+/// who learned one of them from a wiki page should not find that the other
+/// two do nothing.
+#[test]
+fn main_active_and_current_all_name_the_seats_keyboard() {
+    let keyboards = [
+        keyboard(1, "other-keyboard", 3, Some(0)),
+        keyboard(0, "qemu-virtio-keyboard", 3, Some(0)),
+    ];
+    for selector in ["main", "active", "current"] {
+        let line = format!("{selector} next");
+        assert_eq!(says(&line, &keyboards), "ok\n", "{selector}");
+        // Address 0 is the one with `main` set, and it is second in the
+        // list: the answer is the seat's keyboard and not the first one.
+        assert_eq!(moves(&line, &keyboards), [(0, 1)], "{selector}");
+    }
+}
+
+/// A seat with keyboards but none active is `no device`, which is a
+/// different sentence from a name that matched nothing.
+#[test]
+fn a_seat_with_no_active_keyboard_says_no_device() {
+    let keyboards = [Keyboard {
+        main: false,
+        ..keyboard(3, "some-keyboard", 2, Some(0))
+    }];
+    assert_eq!(says("main next", &keyboards), "no device\n");
+    assert!(moves("main next", &keyboards).is_empty());
+}
+
+/// A device is named by its normalised name, whatever case and spacing the
+/// person wrote.
+#[test]
+fn a_device_is_named_by_its_normalised_name() {
+    let keyboards = [keyboard(0, "qemu-virtio-keyboard", 3, Some(0))];
+    // The name as `hyprctl devices` prints it, and the name as the kernel
+    // said it with the spaces that `deviceNameToInternalString` replaces --
+    // except that a space splits the arguments, so what a person can write
+    // is the dashed form in any case they like.
+    for written in ["qemu-virtio-keyboard", "QEMU-Virtio-Keyboard"] {
+        assert_eq!(
+            says(&format!("{written} 2"), &keyboards),
+            "ok\n",
+            "{written}"
+        );
+        assert_eq!(moves(&format!("{written} 2"), &keyboards), [(0, 2)]);
+    }
+}
+
+/// A name nothing has is `device not found`.
+#[test]
+fn a_name_no_keyboard_has_is_not_found() {
+    let keyboards = [keyboard(0, "qemu-virtio-keyboard", 3, Some(0))];
+    assert_eq!(
+        says("no-such-keyboard next", &keyboards),
+        "device not found\n"
+    );
+    assert!(moves("no-such-keyboard next", &keyboards).is_empty());
+}
+
+/// An empty device is a device, and it is not `all`.
+///
+/// `CVarList` keeps its empty fields, so `switchxkblayout  next` written
+/// with two spaces asks for a keyboard called nothing and is answered
+/// `device not found` -- not "every keyboard", which is the answer a reader
+/// might expect from a missing argument and which would switch the layout
+/// of a machine whose script had a typo in it.
+#[test]
+fn an_empty_device_is_not_every_device() {
+    let keyboards = [keyboard(0, "qemu-virtio-keyboard", 3, Some(0))];
+    for argument in ["", " next", "next"] {
+        assert_eq!(
+            says(argument, &keyboards),
+            "device not found\n",
+            "{argument:?}"
+        );
+        assert!(moves(argument, &keyboards).is_empty(), "{argument:?}");
+    }
+}
+
+/// `all` moves every keyboard and answers `ok`.
+#[test]
+fn all_moves_every_keyboard() {
+    let keyboards = [
+        keyboard(0, "one-keyboard", 3, Some(0)),
+        keyboard(1, "two-keyboard", 3, Some(2)),
+    ];
+    assert_eq!(says("all next", &keyboards), "ok\n");
+    assert_eq!(moves("all next", &keyboards), [(0, 1), (1, 0)]);
+    // A seat with no keyboard at all: nothing failed, so `ok`.
+    assert_eq!(says("all next", &[]), "ok\n");
+}
+
+/// `all` where one keyboard cannot take the command moves the rest and
+/// answers with the reasons, a line each.
+///
+/// Hyprland concatenates them and answers `ok` only when every keyboard
+/// took it (`HyprCtl.cpp:1405`). The keyboards that could be moved are
+/// moved either way, which is the behaviour worth keeping: a second
+/// keyboard with a one-layout keymap should not stop the first from
+/// switching.
+#[test]
+fn all_answers_with_the_keyboards_that_failed_and_moves_the_rest() {
+    let keyboards = [
+        keyboard(0, "three-layouts", 3, Some(0)),
+        keyboard(1, "one-layout", 1, Some(0)),
+    ];
+    assert_eq!(
+        says("all 2", &keyboards),
+        "layout idx out of range of 1\n",
+        "the one-layout keyboard is the only failure"
+    );
+    assert_eq!(moves("all 2", &keyboards), [(0, 2)]);
+
+    // Two failures are two lines, and then nothing is moved at all.
+    let both = [
+        keyboard(0, "one-layout", 1, Some(0)),
+        keyboard(1, "another-one-layout", 1, Some(0)),
+    ];
+    assert_eq!(
+        says("all 2", &both),
+        "layout idx out of range of 1\nlayout idx out of range of 1\n"
+    );
+    assert!(moves("all 2", &both).is_empty());
+}
+
+/// `next` runs off the last group and back to the first.
+#[test]
+fn next_wraps_off_the_last_group() {
+    let last = [keyboard(0, "three-layouts", 3, Some(2))];
+    assert_eq!(moves("main next", &last), [(0, 0)]);
+    let middle = [keyboard(0, "three-layouts", 3, Some(1))];
+    assert_eq!(moves("main next", &middle), [(0, 2)]);
+    // One layout is a keyboard `next` cannot move, and Hyprland does not
+    // range-check `next`: it answers `ok` and the group stays where it is.
+    let one = [keyboard(0, "one-layout", 1, Some(0))];
+    assert_eq!(says("main next", &one), "ok\n");
+    assert_eq!(moves("main next", &one), [(0, 0)]);
+}
+
+/// `prev` runs off the first group and round to the last.
+#[test]
+fn prev_wraps_off_the_first_group() {
+    let first = [keyboard(0, "three-layouts", 3, Some(0))];
+    assert_eq!(moves("main prev", &first), [(0, 2)]);
+    let middle = [keyboard(0, "three-layouts", 3, Some(1))];
+    assert_eq!(moves("main prev", &middle), [(0, 0)]);
+    assert_eq!(says("main prev", &first), "ok\n");
+}
+
+/// A keyboard with no active group at all is moved as Hyprland moves it.
+///
+/// Its scan for the active group runs off the end and leaves the count,
+/// which its wrapping then reads as the first group, so `next` lands on the
+/// second and `prev` on the last. Reachable only for a keyboard whose state
+/// has no group; the arithmetic is written down because it is the one place
+/// where Hyprland's answer is not the obvious one.
+#[test]
+fn a_keyboard_with_no_active_group_is_moved_from_the_first() {
+    let none = [keyboard(0, "three-layouts", 3, None)];
+    assert_eq!(moves("main next", &none), [(0, 1)]);
+    assert_eq!(moves("main prev", &none), [(0, 2)]);
+}
+
+/// A numeric argument counts from zero and is range-checked.
+#[test]
+fn a_numeric_argument_is_an_index_from_zero() {
+    let keyboards = [keyboard(0, "three-layouts", 3, Some(0))];
+    for (written, group) in [("0", 0), ("1", 1), ("2", 2)] {
+        assert_eq!(says(&format!("main {written}"), &keyboards), "ok\n");
+        assert_eq!(moves(&format!("main {written}"), &keyboards), [(0, group)]);
+    }
+}
+
+/// An index past the end names the count, not the last index.
+///
+/// `layout idx out of range of 3` for a keyboard with three layouts, whose
+/// last index is two: the sentence is Hyprland's and tells a person how
+/// many there are rather than what the largest index is.
+#[test]
+fn an_index_out_of_range_names_how_many_layouts_there_are() {
+    let keyboards = [keyboard(0, "three-layouts", 3, Some(0))];
+    for written in ["3", "4", "-1", "2147483647"] {
+        assert_eq!(
+            says(&format!("main {written}"), &keyboards),
+            "layout idx out of range of 3\n",
+            "{written}"
+        );
+        assert!(
+            moves(&format!("main {written}"), &keyboards).is_empty(),
+            "{written}"
+        );
+    }
+}
+
+/// Anything that is not `next`, `prev` or a number is `invalid arg 2`.
+///
+/// Including nothing at all, which is what `switchxkblayout main` on its
+/// own leaves: Hyprland's `CVarList` answers an absent field with an empty
+/// string and `std::stoi` throws on it.
+#[test]
+fn an_argument_that_is_no_command_and_no_number_is_invalid() {
+    let keyboards = [keyboard(0, "three-layouts", 3, Some(0))];
+    for written in ["", "forward", "NEXT", "x2", "99999999999999999999"] {
+        let line = format!("main {written}");
+        assert_eq!(says(&line, &keyboards), "invalid arg 2\n", "{written:?}");
+        assert!(moves(&line, &keyboards).is_empty(), "{written:?}");
+    }
+    // `std::stoi` reads the digits it finds and stops, so a number with
+    // something after it is that number. Written down because it is a
+    // reading a person might rely on by accident and the answer must not
+    // change under them.
+    assert_eq!(moves("main 2x", &keyboards), [(0, 2)]);
+}
+
+/// The names a device is given, and what happens to two of the same.
+#[test]
+fn a_device_name_is_lowercased_and_its_spaces_commas_and_newlines_dashed() {
+    assert_eq!(
+        crate::device_name("QEMU Virtio Keyboard"),
+        "qemu-virtio-keyboard"
+    );
+    // The three that are replaced are the three that would make the name
+    // unusable: a space splits the arguments, a comma splits the
+    // `activelayout` payload, and a newline ends an event line.
+    assert_eq!(crate::device_name("a b,c\nd"), "a-b-c-d");
+    // Everything else is left alone, lower-cased where ASCII says so.
+    assert_eq!(
+        crate::device_name("Logitech_K280e-2.4"),
+        "logitech_k280e-2.4"
+    );
+
+    // Two of the same model get told apart, as `getNameForNewDevice` tells
+    // them apart, or `switchxkblayout <device>` could name only the first.
+    let mut taken: Vec<String> = Vec::new();
+    for wanted in ["keychron-k2", "keychron-k2-1", "keychron-k2-2"] {
+        let given = crate::new_device_name("Keychron K2", &taken);
+        assert_eq!(given, wanted);
+        taken.push(given);
+    }
+    // A device that gave no name at all still gets one.
+    assert_eq!(crate::new_device_name("", &[]), "unknown-device");
+    assert_eq!(
+        crate::new_device_name("", &["unknown-device".to_owned()]),
+        "unknown-device-1"
+    );
+}
+
+/// `hyprctl devices` carries every keyboard field Hyprland's does, under
+/// its own name and in its own order.
+#[test]
+fn devices_carries_hyprlands_own_keyboard_fields() {
+    let devices = json("j/devices");
+    let keyboard = &devices.get("keyboards").expect("keyboards").items()[0];
+    assert_eq!(
+        keyboard.keys(),
+        [
+            "address",
+            "name",
+            "rules",
+            "model",
+            "layout",
+            "variant",
+            "options",
+            "active_layout_index",
+            "active_keymap",
+            "capsLock",
+            "numLock",
+            "main",
+        ]
+    );
+    assert_eq!(
+        keyboard
+            .get("active_layout_index")
+            .and_then(parse::Value::number),
+        Some(0.0)
+    );
+    assert_eq!(
+        keyboard.get("active_keymap").and_then(parse::Value::text),
+        Some("English (US)")
+    );
+    let readable = text("devices");
+    assert!(readable.contains("active layout index: 0"), "{readable}");
+    assert!(
+        readable.contains("active keymap: English (US)"),
+        "{readable}"
+    );
+}
+
+/// A keyboard with no active group is still an answer a bar can parse.
+///
+/// Hyprland writes the word `none` into the `active_layout_index` field
+/// without quoting it (`HyprCtl.cpp:793`), which makes the whole document
+/// invalid JSON: a bar does not lose the layout field, it loses every
+/// field. Quoted here, so the one case Hyprland breaks is the one case a
+/// bar reads a string.
+#[test]
+fn a_keyboard_with_no_active_group_is_still_json() {
+    let request = Request::parse("j/devices");
+    let snapshot = Snapshot {
+        devices: Devices {
+            keyboards: vec![keyboard(0, "three-layouts", 3, None)],
+            ..Devices::default()
+        },
+        ..Snapshot::default()
+    };
+    let written = match answer(&request, &snapshot, Version::default()) {
+        Reply::Text(written) => written,
+        other => panic!("devices asked for {other:?}"),
+    };
+    let parsed = parse::parse(&written).unwrap_or_else(|error| panic!("{error}\n{written}"));
+    let listed = &parsed.get("keyboards").expect("keyboards").items()[0];
+    assert_eq!(
+        listed
+            .get("active_layout_index")
+            .and_then(parse::Value::text),
+        Some("none")
+    );
+    assert_eq!(
+        listed.get("active_keymap").and_then(parse::Value::text),
+        Some("none")
+    );
+
+    let request = Request::parse("devices");
+    let readable = match answer(&request, &snapshot, Version::default()) {
+        Reply::Text(written) => written,
+        other => panic!("devices asked for {other:?}"),
+    };
+    assert!(readable.contains("active layout index: none"), "{readable}");
+}
+
+/// The event a switch puts on the socket: `activelayout`, the keyboard's
+/// name, a comma, the layout's name.
+#[test]
+fn a_layout_switch_is_one_activelayout_line() {
+    assert_eq!(
+        lines(&Event::ActiveLayout {
+            keyboard: "qemu-virtio-keyboard".to_owned(),
+            layout: "German".to_owned(),
+        }),
+        ["activelayout>>qemu-virtio-keyboard,German\n"]
+    );
+}
+
+/// The watcher says `activelayout` when a keyboard's group changed, and
+/// when a keyboard arrived.
+///
+/// Hyprland posts it from `onKeyboardMod` when the group differs from the
+/// last one sent (`InputManager.cpp:1731`) and from the keymap listener
+/// while a keyboard is being set up (`:1189`). Both are a difference
+/// between two snapshots here, which is how every other event on this
+/// socket is found.
+#[test]
+fn the_watcher_says_activelayout_for_a_group_that_moved() {
+    let with = |keyboards: Vec<Keyboard>| Snapshot {
+        devices: Devices {
+            keyboards,
+            ..Devices::default()
+        },
+        ..Snapshot::default()
+    };
+    let mut watcher = Watcher::new();
+
+    // A keyboard that has just appeared is a layout a bar has not been told
+    // about, so it is told.
+    let events = watcher.changed(&with(vec![keyboard(0, "one-keyboard", 3, Some(0))]));
+    assert_eq!(
+        events,
+        [Event::ActiveLayout {
+            keyboard: "one-keyboard".to_owned(),
+            layout: "German".to_owned(),
+        }]
+    );
+
+    // Nothing moved, nothing said.
+    assert!(
+        watcher
+            .changed(&with(vec![keyboard(0, "one-keyboard", 3, Some(0))]))
+            .is_empty()
+    );
+
+    // The group moved: one line, naming the keyboard and the layout it is
+    // in now.
+    let events = watcher.changed(&with(vec![keyboard(0, "one-keyboard", 3, Some(1))]));
+    assert_eq!(
+        events,
+        [Event::ActiveLayout {
+            keyboard: "one-keyboard".to_owned(),
+            layout: "English (US)".to_owned(),
+        }]
+    );
+
+    // A second keyboard appearing is one line for it and none for the one
+    // that was already there.
+    let events = watcher.changed(&with(vec![
+        keyboard(0, "one-keyboard", 3, Some(1)),
+        keyboard(1, "two-keyboard", 3, Some(2)),
+    ]));
+    assert_eq!(
+        events,
+        [Event::ActiveLayout {
+            keyboard: "two-keyboard".to_owned(),
+            layout: "French".to_owned(),
+        }]
+    );
+
+    // A reload that rebuilt the keymap under a keyboard leaves it in the
+    // same group with another layout in it, which is a switch to a reader.
+    let renamed = Keyboard {
+        active_keymap: "Russian".to_owned(),
+        ..keyboard(0, "one-keyboard", 3, Some(1))
+    };
+    let events = watcher.changed(&with(vec![
+        renamed,
+        keyboard(1, "two-keyboard", 3, Some(2)),
+    ]));
+    assert_eq!(
+        events,
+        [Event::ActiveLayout {
+            keyboard: "one-keyboard".to_owned(),
+            layout: "Russian".to_owned(),
+        }]
+    );
 }

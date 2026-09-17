@@ -35,7 +35,8 @@
 //!
 //! The commands `hyprctl` is most used for and a bar needs: `version`,
 //! `monitors`, `workspaces`, `clients`, `activewindow`, `activeworkspace`,
-//! `dispatch`, `keyword`, `reload` and `splash`. What is not answered is
+//! `dispatch`, `keyword`, `reload`, `splash` and `switchxkblayout`. What is
+//! not answered is
 //! answered as Hyprland answers an unknown command -- with a line saying so,
 //! not by closing the connection -- so a program that asks for something
 //! newer keeps working for everything else it asks.
@@ -52,7 +53,7 @@ pub use reply::{Reply, Version, answer};
 pub use request::{Flags, Format, Request};
 pub use state::{
     Animation, Bezier, Bind, Device, Devices, Keyboard, Layer, Monitor, Opt, Plugin, Shortcut,
-    Snapshot, Style, System, Window, Workspace,
+    Snapshot, Style, System, Window, Workspace, device_name, new_device_name,
 };
 
 /// Hyprland's own socket names inside its instance directory.

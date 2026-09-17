@@ -310,7 +310,13 @@ pub struct Device {
     /// Hyprland prints the object's address; this is the node's number,
     /// printed the same way, so that two devices are told apart.
     pub address: u64,
-    /// What the device calls itself.
+    /// What the device is called, as [`device_name`] writes it.
+    ///
+    /// Hyprland keeps one name for a device and it is the normalised one:
+    /// `m_hlName`, which `hyprctl devices` prints, which a `device =`
+    /// section matches, and which `switchxkblayout <device>` selects on.
+    /// The raw name the kernel gave is not kept anywhere, so this is the
+    /// name, not a display form of one.
     pub name: String,
 }
 
@@ -320,6 +326,11 @@ pub struct Keyboard {
     /// The device.
     pub device: Device,
     /// The XKB rules, model, layout, variant and options.
+    ///
+    /// The strings the configuration wrote, whole: `input:kb_layout =
+    /// de,us` is reported as `de,us` and not as the group this keyboard is
+    /// in, because Hyprland reports `m_currentRules`, which is what it
+    /// passed `xkb_keymap_new_from_names` (`src/debug/HyprCtl.cpp:799`).
     pub rules: String,
     /// The model.
     pub model: String,
@@ -329,16 +340,93 @@ pub struct Keyboard {
     pub variant: String,
     /// The options.
     pub options: String,
-    /// Which layout is active.
-    pub active_layout_index: i32,
-    /// What that layout is called.
+    /// Which layout group is active, counting from zero, or `None` for a
+    /// keyboard whose state has none.
+    ///
+    /// `IKeyboard::getActiveLayoutIndex` (`src/devices/IKeyboard.cpp:293`)
+    /// returns an empty optional when no group is active, and `hyprctl
+    /// devices` prints the word `none` for it.
+    pub active_layout_index: Option<u32>,
+    /// What that group is called: `xkb_keymap_layout_get_name`, which for
+    /// `us` is `English (US)`. `none` where there is no active group, which
+    /// is what `IKeyboard::getActiveLayout` answers
+    /// (`src/devices/IKeyboard.cpp:306`).
     pub active_keymap: String,
+    /// How many layout groups its keymap has:
+    /// `xkb_keymap_num_layouts`, which `switchxkblayout` range-checks a
+    /// numeric argument against and wraps `next` and `prev` around.
+    ///
+    /// A keymap has at least one group, so a zero here is read as one:
+    /// Hyprland range-checks against `LAYOUTS - 1` in unsigned arithmetic
+    /// (`src/debug/HyprCtl.cpp:1387`), where a zero count lets every index
+    /// through, and answering as though there were one group is the same
+    /// answer for the only keymap that can exist.
+    pub groups: u32,
     /// Whether Caps Lock is on.
     pub caps_lock: bool,
     /// Whether Num Lock is on.
     pub num_lock: bool,
-    /// Whether it is the seat's main keyboard.
+    /// Whether it is the seat's keyboard: the one that last produced an
+    /// event, which is Hyprland's `m_active` and what `main`, `active` and
+    /// `current` name (`src/managers/SeatManager.cpp:166`).
     pub main: bool,
+}
+
+/// A device's name, as Hyprland writes every device's name.
+///
+/// `deviceNameToInternalString` (`src/helpers/MiscFunctions.cpp:777`): lower
+/// case, with a space, a newline or a comma replaced by a dash. The three
+/// that are replaced are the three that would make the name unusable where
+/// it is used -- a space splits `switchxkblayout <device> <cmd>`'s
+/// arguments, a comma splits the `activelayout` event's payload, and a
+/// newline ends an event line -- so the normalisation is not cosmetic and a
+/// compositor that skipped it would have devices nothing can name.
+///
+/// Lower-casing is ASCII only. Hyprland calls `std::tolower` on each byte,
+/// which in the `C` locale every compositor runs under changes `A`-`Z` and
+/// nothing else; doing it per character rather than per byte differs only
+/// for names holding non-ASCII letters, where Hyprland would mangle the
+/// bytes of one character apart and this leaves them alone.
+#[must_use]
+pub fn device_name(raw: &str) -> String {
+    raw.chars()
+        .map(|character| match character {
+            ' ' | '\n' | ',' => '-',
+            other => other.to_ascii_lowercase(),
+        })
+        .collect()
+}
+
+/// The name to give a device that has just appeared, given the names
+/// already taken.
+///
+/// `CInputManager::getNameForNewDevice`
+/// (`src/managers/input/InputManager.cpp:2119`): the normalised name, or
+/// `unknown-device` when the device gave none, and then `-1`, `-2` and so
+/// on until it is nobody else's. Two identical keyboards -- which is what a
+/// machine with a built-in keyboard and a USB one of the same model has --
+/// would otherwise share a name, and `switchxkblayout <device>` could name
+/// only the first of them.
+#[must_use]
+pub fn new_device_name(raw: &str, taken: &[String]) -> String {
+    let normalised = device_name(raw);
+    let stem = if normalised.is_empty() {
+        "unknown-device"
+    } else {
+        &normalised
+    };
+    let mut dupe = 0u32;
+    loop {
+        let candidate = if dupe == 0 {
+            stem.to_owned()
+        } else {
+            format!("{stem}-{dupe}")
+        };
+        if !taken.contains(&candidate) {
+            return candidate;
+        }
+        dupe = dupe.saturating_add(1);
+    }
 }
 
 /// One layer surface: a bar, a wallpaper, a launcher.
