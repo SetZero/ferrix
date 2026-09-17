@@ -4164,6 +4164,62 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Done — a person's own configuration, run (2026-09-17).** The test of a
+clone is not a checklist, it is somebody's real file. This one is
+`~/.config/hypr/hyprland.conf` on `nazuna`: 377 lines, 55 binds, two window
+rules, a bar, a dock, a wallpaper daemon and a desktop-effects daemon. It
+runs, with no diagnostic at all, and the screenshot has waybar across the
+top, the wallpaper behind it and a terminal tiled under it with the
+gradient border and the graded blur the file asks for.
+
+Getting there found six things, each of which was a person's configuration
+being read and quietly not obeyed.
+
+* **The window and layer rules were 0.55's.** 0.56 merged `windowrulev2`
+  into `windowrule` and gave `layerrule` the same grammar -- comma-separated
+  fields, `match:` for what a thing must be, snake_case names -- and this
+  read the older one. `layerrule = ignore_alpha 0.2, match:namespace waybar`
+  was refused as a line. Both halves are `Rule.cpp`'s whole matcher list and
+  `WindowRuleEffectContainer.cpp`'s whole effect table now, and an effect
+  Hyprland has that this compositor does not carry out is kept by name
+  rather than refused: one unsupported word must not cost a person the
+  matchers written beside it.
+* **`suppress_event maximize` had nothing to suppress.** A client asking
+  `xdg_toplevel.set_maximized` reached the loop and nothing read it, so the
+  rule -- the first line the file writes -- was a rule about a thing that
+  never happened. A client asking for fullscreen or maximize gets it now,
+  unless a rule says otherwise.
+* **`wl_shm_pool.destroy` unmapped the memory.** The protocol says the
+  mapping goes when the last *buffer* made from the pool does, and a client
+  that makes its buffers and throws the pool away is not unusual -- it is
+  what `grim` does between asking for a screenshot and taking it, and what
+  most toolkits do. Nothing could take a screenshot of this compositor but
+  its own client.
+* **`wl_output.description` was a fixed sentence.** A bar told to be on one
+  screen matches on the description, not the connector: waybar's `"output"`
+  is `Lenovo Group Limited R27qe Gen2 UTP03KBB`, it matched nothing, and
+  waybar correctly drew no bar and said nothing about it. A monitor's
+  description comes out of its `EDID` now, read through
+  `DRM_IOCTL_MODE_GETPROPBLOB`, and `monitor = desc:` matches the start of
+  it as `CMonitor::matchesStaticSelector` does.
+* **`input:kb_layout = de` was read and never looked at.** Every client was
+  handed the `us` keymap and every bind resolved against it, so a German
+  keyboard typed `y` where its key says `z`. The probe takes a layout now
+  and the compositor ships one keymap per layout, `layout()` picks one, and
+  a layout that is not shipped says so rather than quietly typing English.
+* **The option table held 71 of Hyprland's 348.** A configuration naming any
+  of the other 277 was told `config option does not exist`, which is the
+  right answer for a typo and the wrong one for an option Hyprland has. Of
+  the 71 that were there, 70 already held Hyprland's default exactly.
+
+And the blur, which is the compositor's whole frame budget, ran over the
+whole window whatever the damage said: a terminal's cursor blinking cost 92
+milliseconds of a 1920x1080 screen where blurring what changed costs 1.8.
+The pixels are the same either way, because a blurred pixel depends on
+nothing further than the kernel's reach -- which turned out to be twice what
+was being read, so the outermost ring of every blurred window was a blur of
+the region's clamped edge rather than of the frame.
+
 **Done — the rest of Hyprland's dispatcher table (2026-09-17).**
 Twenty-seven names in Hyprland's `m_dispMap` had no answer here; every one
 of them does now. The split is by what they touch. `compositor/layout`
