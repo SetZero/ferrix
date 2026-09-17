@@ -349,6 +349,71 @@ pub struct Hello {
     pub axes: [AxisRange; AXES],
 }
 
+impl Default for Hello {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+impl Hello {
+    /// A hello that says nothing: no device, no name, nothing declared.
+    ///
+    /// Every field is zero, so building one costs a `memset` rather than a
+    /// copy from a constant, which matters where a hello is put straight
+    /// onto the heap.
+    pub const EMPTY: Self = Self {
+        version: 0,
+        location: 0,
+        id: DeviceId {
+            bustype: 0,
+            vendor: 0,
+            product: 0,
+            version: 0,
+        },
+        name: Text::NONE,
+        serial: Text::NONE,
+        bits: Bitmaps::EMPTY,
+        axes: [AxisRange {
+            minimum: 0,
+            maximum: 0,
+            fuzz: 0,
+            flat: 0,
+            resolution: 0,
+        }; AXES],
+    };
+
+    /// Decode a HELLO into `place`, writing each field where it belongs
+    /// instead of returning a hello.
+    ///
+    /// A `Hello` carries every bitmap a device can declare and every axis's
+    /// range: 1672 bytes. [`Message::decode`] returns one inside a `Message`
+    /// by value, and each step out of `decode_hello` adds another copy of
+    /// that size to the frame -- around six kilobytes in all. A kernel task
+    /// has four pages of stack, and running out of it is a double fault, so
+    /// the one caller that has to decode a hello on a kernel stack uses this
+    /// and keeps the hello itself on the heap.
+    ///
+    /// # Errors
+    ///
+    /// The same judgements [`Message::decode`] makes, refusing anything that
+    /// is not exactly one well-formed HELLO.
+    pub fn decode_into(bytes: &[u8], place: &mut Self) -> Result<(), MessageError> {
+        let kind = get32(bytes, 0).ok_or(MessageError::Short)?;
+        let length = get32(bytes, 4).ok_or(MessageError::Short)? as usize;
+        if kind != HELLO {
+            return Err(MessageError::Type(kind));
+        }
+        let expected = Message::length_of(HELLO).ok_or(MessageError::Type(kind))?;
+        if length != expected || bytes.len() != expected {
+            return Err(MessageError::Length);
+        }
+        if get16(bytes, 10) != Some(0) || get32(bytes, 28) != Some(0) {
+            return Err(MessageError::Field);
+        }
+        decode_hello_into(bytes, place).ok_or(MessageError::Field)
+    }
+}
+
 /// Why the core refuses a driver.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
@@ -736,22 +801,41 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
 }
 
 fn decode_hello(bytes: &[u8]) -> Option<Hello> {
+    let mut hello = Hello::EMPTY;
+    decode_hello_into(bytes, &mut hello)?;
+    Some(hello)
+}
+
+fn decode_hello_into(bytes: &[u8], place: &mut Hello) -> Option<()> {
+    place.version = get16(bytes, 8)?;
+    place.location = get32(bytes, 12)?;
+    place.id = DeviceId {
+        bustype: get16(bytes, 16)?,
+        vendor: get16(bytes, 18)?,
+        product: get16(bytes, 20)?,
+        version: get16(bytes, 22)?,
+    };
+    place.name.len = get16(bytes, 24)?;
+    place.name.bytes = bytes.get(NAME_AT..SERIAL_AT)?.try_into().ok()?;
+    place.serial.len = get16(bytes, 26)?;
+    place.serial.bytes = bytes.get(SERIAL_AT..BITS_AT)?.try_into().ok()?;
+
     let mut at = BITS_AT;
     let mut take = |len: usize| {
         let field = bytes.get(at..at.checked_add(len)?);
         at += len;
         field
     };
-    let props = take(PROP_BYTES)?.try_into().ok()?;
-    let types = take(TYPE_BYTES)?.try_into().ok()?;
-    let keys = take(KEY_BYTES)?.try_into().ok()?;
-    let rels = take(REL_BYTES)?.try_into().ok()?;
-    let abs = take(ABS_BYTES)?.try_into().ok()?;
-    let msc = take(MSC_BYTES)?.try_into().ok()?;
-    let sw = take(SW_BYTES)?.try_into().ok()?;
-    let leds = take(LED_BYTES)?.try_into().ok()?;
-    let mut axes = [AxisRange::default(); AXES];
-    for (index, range) in axes.iter_mut().enumerate() {
+    place.bits.props = take(PROP_BYTES)?.try_into().ok()?;
+    place.bits.types = take(TYPE_BYTES)?.try_into().ok()?;
+    place.bits.keys = take(KEY_BYTES)?.try_into().ok()?;
+    place.bits.rels = take(REL_BYTES)?.try_into().ok()?;
+    place.bits.abs = take(ABS_BYTES)?.try_into().ok()?;
+    place.bits.msc = take(MSC_BYTES)?.try_into().ok()?;
+    place.bits.sw = take(SW_BYTES)?.try_into().ok()?;
+    place.bits.leds = take(LED_BYTES)?.try_into().ok()?;
+
+    for (index, range) in place.axes.iter_mut().enumerate() {
         let at = AXES_AT + index * AXIS_BYTES;
         let field = |offset: usize| get32(bytes, at + offset).map(u32::cast_signed);
         *range = AxisRange {
@@ -762,35 +846,7 @@ fn decode_hello(bytes: &[u8]) -> Option<Hello> {
             resolution: field(16)?,
         };
     }
-    Some(Hello {
-        version: get16(bytes, 8)?,
-        location: get32(bytes, 12)?,
-        id: DeviceId {
-            bustype: get16(bytes, 16)?,
-            vendor: get16(bytes, 18)?,
-            product: get16(bytes, 20)?,
-            version: get16(bytes, 22)?,
-        },
-        name: Text {
-            len: get16(bytes, 24)?,
-            bytes: bytes.get(NAME_AT..SERIAL_AT)?.try_into().ok()?,
-        },
-        serial: Text {
-            len: get16(bytes, 26)?,
-            bytes: bytes.get(SERIAL_AT..BITS_AT)?.try_into().ok()?,
-        },
-        bits: Bitmaps {
-            props,
-            types,
-            keys,
-            rels,
-            abs,
-            msc,
-            sw,
-            leds,
-        },
-        axes,
-    })
+    Some(())
 }
 
 fn get16(bytes: &[u8], at: usize) -> Option<u16> {

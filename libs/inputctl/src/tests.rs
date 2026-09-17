@@ -1050,3 +1050,60 @@ fn bitmaps_and_strings_are_copied_as_evdev_copies_them() {
     assert_eq!(copy_text(&name, 64, &mut out[..4]), Ok(None));
     assert_eq!(copy_text(&Text::NONE, 64, &mut out), Err(NoEntry));
 }
+
+/// `Hello::decode_into` exists so the kernel's input core can decode a hello
+/// without three of them on one stack frame; it must judge a message exactly
+/// as `Message::decode` does, or the core would accept what the protocol
+/// refuses.
+#[test]
+fn decoding_into_a_place_judges_what_decode_judges() {
+    let whole = Message::Hello(hello()).encode().as_bytes().to_vec();
+    let mut place = Hello::EMPTY;
+    assert_eq!(Hello::decode_into(&whole, &mut place), Ok(()));
+    assert_eq!(Message::decode(&whole), Ok(Message::Hello(place)));
+
+    // A message of another type, a short one, one whose length field lies,
+    // and one with a byte set in the padding the format reserves.
+    let ready = Message::Ready(Ready { node: 0 })
+        .encode()
+        .as_bytes()
+        .to_vec();
+    assert_eq!(
+        Hello::decode_into(&ready, &mut place),
+        Err(MessageError::Type(READY))
+    );
+    assert_eq!(
+        Hello::decode_into(&whole[..4], &mut place),
+        Err(MessageError::Short)
+    );
+    let mut lying = whole.clone();
+    lying[4] = 0;
+    assert_eq!(
+        Hello::decode_into(&lying, &mut place),
+        Err(MessageError::Length)
+    );
+    for at in [10, 28] {
+        let mut dirty = whole.clone();
+        dirty[at] = 1;
+        assert_eq!(
+            Hello::decode_into(&dirty, &mut place),
+            Err(MessageError::Field)
+        );
+        assert_eq!(Message::decode(&dirty), Err(MessageError::Field));
+    }
+}
+
+/// The place a hello is decoded into keeps nothing of what it held: a core
+/// that reused one would otherwise take the last device's bitmaps for this
+/// one's.
+#[test]
+fn decoding_into_a_place_overwrites_all_of_it() {
+    let whole = Message::Hello(hello()).encode().as_bytes().to_vec();
+    let mut place = hello();
+    place.name = Text::new(b"something else").expect("a name");
+    set(&mut place.bits.keys, KEY_MAX);
+    place.axes[usize::from(ABS_Y)].maximum = 9999;
+
+    assert_eq!(Hello::decode_into(&whole, &mut place), Ok(()));
+    assert_eq!(place, hello());
+}
