@@ -8,6 +8,25 @@ Mod2 4
 Mod3 5
 Mod4 6
 Mod5 7
+## all-modifiers
+0 Shift
+1 Lock
+2 Control
+3 Mod1
+4 Mod2
+5 Mod3
+6 Mod4
+7 Mod5
+8 NumLock
+9 Alt
+10 LevelThree
+11 Super
+12 LevelFive
+13 Meta
+14 Hyper
+15 ScrollLock
+## groups 1
+0 English (UK)
 ## keys
 1 ESC Escape - 0 0
 2 AE01 1 exclam 0 0
@@ -467,6 +486,1154 @@ Mod5 7
 698 I706 XF86KbdLcdMenu3 - 0 0
 699 I707 XF86KbdLcdMenu4 - 0 0
 700 I708 XF86KbdLcdMenu5 - 0 0
+## key-levels mods-for-level
+key 1 ESC 1 1 none none
+level 1 0 0 Escape none
+key 2 AE01 1 4 none none
+level 2 0 0 1 none
+level 2 0 1 exclam Shift
+level 2 0 2 onesuperior Mod5
+level 2 0 3 exclamdown Shift+Mod5
+key 3 AE02 1 4 none none
+level 3 0 0 2 none
+level 3 0 1 quotedbl Shift
+level 3 0 2 twosuperior Mod5
+level 3 0 3 oneeighth Shift+Mod5
+key 4 AE03 1 4 none none
+level 4 0 0 3 none
+level 4 0 1 sterling Shift
+level 4 0 2 threesuperior Mod5
+level 4 0 3 sterling Shift+Mod5
+key 5 AE04 1 4 none none
+level 5 0 0 4 none
+level 5 0 1 dollar Shift
+level 5 0 2 EuroSign Mod5
+level 5 0 3 onequarter Shift+Mod5
+key 6 AE05 1 4 none none
+level 6 0 0 5 none
+level 6 0 1 percent Shift
+level 6 0 2 onehalf Mod5
+level 6 0 3 threeeighths Shift+Mod5
+key 7 AE06 1 4 none none
+level 7 0 0 6 none
+level 7 0 1 asciicircum Shift
+level 7 0 2 threequarters Mod5
+level 7 0 3 fiveeighths Shift+Mod5
+key 8 AE07 1 4 none none
+level 8 0 0 7 none
+level 8 0 1 ampersand Shift
+level 8 0 2 braceleft Mod5
+level 8 0 3 seveneighths Shift+Mod5
+key 9 AE08 1 4 none none
+level 9 0 0 8 none
+level 9 0 1 asterisk Shift
+level 9 0 2 bracketleft Mod5
+level 9 0 3 trademark Shift+Mod5
+key 10 AE09 1 4 none none
+level 10 0 0 9 none
+level 10 0 1 parenleft Shift
+level 10 0 2 bracketright Mod5
+level 10 0 3 plusminus Shift+Mod5
+key 11 AE10 1 4 none none
+level 11 0 0 0 none
+level 11 0 1 parenright Shift
+level 11 0 2 braceright Mod5
+level 11 0 3 degree Shift+Mod5
+key 12 AE11 1 4 none none
+level 12 0 0 minus none
+level 12 0 1 underscore Shift
+level 12 0 2 backslash Mod5
+level 12 0 3 questiondown Shift+Mod5
+key 13 AE12 1 4 none none
+level 13 0 0 equal none
+level 13 0 1 plus Shift
+level 13 0 2 dead_cedilla Mod5
+level 13 0 3 dead_ogonek Shift+Mod5
+key 14 BKSP 1 2 none none
+level 14 0 0 BackSpace none
+level 14 0 1 BackSpace Shift
+key 15 TAB 1 2 none none
+level 15 0 0 Tab none
+level 15 0 1 ISO_Left_Tab Shift
+key 16 AD01 1 4 none none
+level 16 0 0 q none,Shift+Lock
+level 16 0 1 Q Shift,Lock
+level 16 0 2 at Mod5,Lock+Mod5
+level 16 0 3 Greek_OMEGA Shift+Mod5,Shift+Lock+Mod5
+key 17 AD02 1 4 none none
+level 17 0 0 w none,Shift+Lock
+level 17 0 1 W Shift,Lock
+level 17 0 2 U017F Mod5,Lock+Mod5
+level 17 0 3 section Shift+Mod5,Shift+Lock+Mod5
+key 18 AD03 1 4 none none
+level 18 0 0 e none,Shift+Lock
+level 18 0 1 E Shift,Lock
+level 18 0 2 e Mod5,Shift+Lock+Mod5
+level 18 0 3 E Shift+Mod5,Lock+Mod5
+key 19 AD04 1 4 none none
+level 19 0 0 r none,Shift+Lock
+level 19 0 1 R Shift,Lock
+level 19 0 2 paragraph Mod5,Lock+Mod5
+level 19 0 3 registered Shift+Mod5,Shift+Lock+Mod5
+key 20 AD05 1 4 none none
+level 20 0 0 t none,Shift+Lock
+level 20 0 1 T Shift,Lock
+level 20 0 2 tslash Mod5,Shift+Lock+Mod5
+level 20 0 3 Tslash Shift+Mod5,Lock+Mod5
+key 21 AD06 1 4 none none
+level 21 0 0 y none,Shift+Lock
+level 21 0 1 Y Shift,Lock
+level 21 0 2 leftarrow Mod5,Lock+Mod5
+level 21 0 3 yen Shift+Mod5,Shift+Lock+Mod5
+key 22 AD07 1 4 none none
+level 22 0 0 u none,Shift+Lock
+level 22 0 1 U Shift,Lock
+level 22 0 2 downarrow Mod5,Lock+Mod5
+level 22 0 3 uparrow Shift+Mod5,Shift+Lock+Mod5
+key 23 AD08 1 4 none none
+level 23 0 0 i none,Shift+Lock
+level 23 0 1 I Shift,Lock
+level 23 0 2 rightarrow Mod5,Lock+Mod5
+level 23 0 3 idotless Shift+Mod5,Shift+Lock+Mod5
+key 24 AD09 1 4 none none
+level 24 0 0 o none,Shift+Lock
+level 24 0 1 O Shift,Lock
+level 24 0 2 oslash Mod5,Shift+Lock+Mod5
+level 24 0 3 Oslash Shift+Mod5,Lock+Mod5
+key 25 AD10 1 4 none none
+level 25 0 0 p none,Shift+Lock
+level 25 0 1 P Shift,Lock
+level 25 0 2 thorn Mod5,Shift+Lock+Mod5
+level 25 0 3 THORN Shift+Mod5,Lock+Mod5
+key 26 AD11 1 4 none none
+level 26 0 0 bracketleft none
+level 26 0 1 braceleft Shift
+level 26 0 2 dead_diaeresis Mod5
+level 26 0 3 dead_abovering Shift+Mod5
+key 27 AD12 1 4 none none
+level 27 0 0 bracketright none
+level 27 0 1 braceright Shift
+level 27 0 2 dead_tilde Mod5
+level 27 0 3 dead_macron Shift+Mod5
+key 28 RTRN 1 1 none none
+level 28 0 0 Return none
+key 29 LCTL 1 1 Control none
+level 29 0 0 Control_L none
+key 30 AC01 1 4 none none
+level 30 0 0 a none,Shift+Lock
+level 30 0 1 A Shift,Lock
+level 30 0 2 ae Mod5,Shift+Lock+Mod5
+level 30 0 3 AE Shift+Mod5,Lock+Mod5
+key 31 AC02 1 4 none none
+level 31 0 0 s none,Shift+Lock
+level 31 0 1 S Shift,Lock
+level 31 0 2 ssharp Mod5,Shift+Lock+Mod5
+level 31 0 3 U1E9E Shift+Mod5,Lock+Mod5
+key 32 AC03 1 4 none none
+level 32 0 0 d none,Shift+Lock
+level 32 0 1 D Shift,Lock
+level 32 0 2 eth Mod5,Shift+Lock+Mod5
+level 32 0 3 ETH Shift+Mod5,Lock+Mod5
+key 33 AC04 1 4 none none
+level 33 0 0 f none,Shift+Lock
+level 33 0 1 F Shift,Lock
+level 33 0 2 dstroke Mod5,Lock+Mod5
+level 33 0 3 ordfeminine Shift+Mod5,Shift+Lock+Mod5
+key 34 AC05 1 4 none none
+level 34 0 0 g none,Shift+Lock
+level 34 0 1 G Shift,Lock
+level 34 0 2 eng Mod5,Shift+Lock+Mod5
+level 34 0 3 ENG Shift+Mod5,Lock+Mod5
+key 35 AC06 1 4 none none
+level 35 0 0 h none,Shift+Lock
+level 35 0 1 H Shift,Lock
+level 35 0 2 hstroke Mod5,Shift+Lock+Mod5
+level 35 0 3 Hstroke Shift+Mod5,Lock+Mod5
+key 36 AC07 1 4 none none
+level 36 0 0 j none,Shift+Lock
+level 36 0 1 J Shift,Lock
+level 36 0 2 dead_hook Mod5,Lock+Mod5
+level 36 0 3 dead_horn Shift+Mod5,Shift+Lock+Mod5
+key 37 AC08 1 4 none none
+level 37 0 0 k none,Shift+Lock
+level 37 0 1 K Shift,Lock
+level 37 0 2 kra Mod5,Lock+Mod5
+level 37 0 3 ampersand Shift+Mod5,Shift+Lock+Mod5
+key 38 AC09 1 4 none none
+level 38 0 0 l none,Shift+Lock
+level 38 0 1 L Shift,Lock
+level 38 0 2 lstroke Mod5,Shift+Lock+Mod5
+level 38 0 3 Lstroke Shift+Mod5,Lock+Mod5
+key 39 AC10 1 4 none none
+level 39 0 0 semicolon none
+level 39 0 1 colon Shift
+level 39 0 2 dead_acute Mod5
+level 39 0 3 dead_doubleacute Shift+Mod5
+key 40 AC11 1 4 none none
+level 40 0 0 apostrophe none
+level 40 0 1 at Shift
+level 40 0 2 dead_circumflex Mod5
+level 40 0 3 dead_caron Shift+Mod5
+key 41 TLDE 1 4 none none
+level 41 0 0 grave none
+level 41 0 1 notsign Shift
+level 41 0 2 bar Mod5
+level 41 0 3 bar Shift+Mod5
+key 42 LFSH 1 1 Shift none
+level 42 0 0 Shift_L none
+key 43 BKSL 1 4 none none
+level 43 0 0 numbersign none
+level 43 0 1 asciitilde Shift
+level 43 0 2 dead_grave Mod5
+level 43 0 3 dead_breve Shift+Mod5
+key 44 AB01 1 4 none none
+level 44 0 0 z none,Shift+Lock
+level 44 0 1 Z Shift,Lock
+level 44 0 2 guillemotleft Mod5,Lock+Mod5
+level 44 0 3 less Shift+Mod5,Shift+Lock+Mod5
+key 45 AB02 1 4 none none
+level 45 0 0 x none,Shift+Lock
+level 45 0 1 X Shift,Lock
+level 45 0 2 guillemotright Mod5,Lock+Mod5
+level 45 0 3 greater Shift+Mod5,Shift+Lock+Mod5
+key 46 AB03 1 4 none none
+level 46 0 0 c none,Shift+Lock
+level 46 0 1 C Shift,Lock
+level 46 0 2 cent Mod5,Lock+Mod5
+level 46 0 3 copyright Shift+Mod5,Shift+Lock+Mod5
+key 47 AB04 1 4 none none
+level 47 0 0 v none,Shift+Lock
+level 47 0 1 V Shift,Lock
+level 47 0 2 doublelowquotemark Mod5,Lock+Mod5
+level 47 0 3 singlelowquotemark Shift+Mod5,Shift+Lock+Mod5
+key 48 AB05 1 4 none none
+level 48 0 0 b none,Shift+Lock
+level 48 0 1 B Shift,Lock
+level 48 0 2 leftdoublequotemark Mod5,Lock+Mod5
+level 48 0 3 leftsinglequotemark Shift+Mod5,Shift+Lock+Mod5
+key 49 AB06 1 4 none none
+level 49 0 0 n none,Shift+Lock
+level 49 0 1 N Shift,Lock
+level 49 0 2 rightdoublequotemark Mod5,Lock+Mod5
+level 49 0 3 rightsinglequotemark Shift+Mod5,Shift+Lock+Mod5
+key 50 AB07 1 4 none none
+level 50 0 0 m none,Shift+Lock
+level 50 0 1 M Shift,Lock
+level 50 0 2 mu Mod5,Lock+Mod5
+level 50 0 3 masculine Shift+Mod5,Shift+Lock+Mod5
+key 51 AB08 1 4 none none
+level 51 0 0 comma none
+level 51 0 1 less Shift
+level 51 0 2 U2022 Mod5
+level 51 0 3 multiply Shift+Mod5
+key 52 AB09 1 4 none none
+level 52 0 0 period none
+level 52 0 1 greater Shift
+level 52 0 2 periodcentered Mod5
+level 52 0 3 division Shift+Mod5
+key 53 AB10 1 4 none none
+level 53 0 0 slash none
+level 53 0 1 question Shift
+level 53 0 2 dead_belowdot Mod5
+level 53 0 3 dead_abovedot Shift+Mod5
+key 54 RTSH 1 1 Shift none
+level 54 0 0 Shift_R none
+key 55 KPMU 1 5 none none
+level 55 0 0 KP_Multiply none,Control,Mod1
+level 55 0 1 KP_Multiply Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 55 0 2 KP_Multiply Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 55 0 3 KP_Multiply Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 55 0 4 XF86ClearGrab Control+Mod1
+key 56 LALT 1 1 Mod1 none
+level 56 0 0 Alt_L none
+key 57 SPCE 1 1 none none
+level 57 0 0 space none
+key 58 CAPS 1 1 Lock Lock
+level 58 0 0 Caps_Lock none
+key 59 FK01 1 5 none none
+level 59 0 0 F1 none,Control,Mod1
+level 59 0 1 F1 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 59 0 2 F1 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 59 0 3 F1 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 59 0 4 XF86Switch_VT_1 Control+Mod1
+key 60 FK02 1 5 none none
+level 60 0 0 F2 none,Control,Mod1
+level 60 0 1 F2 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 60 0 2 F2 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 60 0 3 F2 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 60 0 4 XF86Switch_VT_2 Control+Mod1
+key 61 FK03 1 5 none none
+level 61 0 0 F3 none,Control,Mod1
+level 61 0 1 F3 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 61 0 2 F3 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 61 0 3 F3 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 61 0 4 XF86Switch_VT_3 Control+Mod1
+key 62 FK04 1 5 none none
+level 62 0 0 F4 none,Control,Mod1
+level 62 0 1 F4 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 62 0 2 F4 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 62 0 3 F4 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 62 0 4 XF86Switch_VT_4 Control+Mod1
+key 63 FK05 1 5 none none
+level 63 0 0 F5 none,Control,Mod1
+level 63 0 1 F5 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 63 0 2 F5 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 63 0 3 F5 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 63 0 4 XF86Switch_VT_5 Control+Mod1
+key 64 FK06 1 5 none none
+level 64 0 0 F6 none,Control,Mod1
+level 64 0 1 F6 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 64 0 2 F6 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 64 0 3 F6 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 64 0 4 XF86Switch_VT_6 Control+Mod1
+key 65 FK07 1 5 none none
+level 65 0 0 F7 none,Control,Mod1
+level 65 0 1 F7 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 65 0 2 F7 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 65 0 3 F7 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 65 0 4 XF86Switch_VT_7 Control+Mod1
+key 66 FK08 1 5 none none
+level 66 0 0 F8 none,Control,Mod1
+level 66 0 1 F8 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 66 0 2 F8 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 66 0 3 F8 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 66 0 4 XF86Switch_VT_8 Control+Mod1
+key 67 FK09 1 5 none none
+level 67 0 0 F9 none,Control,Mod1
+level 67 0 1 F9 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 67 0 2 F9 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 67 0 3 F9 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 67 0 4 XF86Switch_VT_9 Control+Mod1
+key 68 FK10 1 5 none none
+level 68 0 0 F10 none,Control,Mod1
+level 68 0 1 F10 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 68 0 2 F10 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 68 0 3 F10 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 68 0 4 XF86Switch_VT_10 Control+Mod1
+key 69 NMLK 1 1 Mod2 Mod2
+level 69 0 0 Num_Lock none
+key 70 SCLK 1 1 none none
+level 70 0 0 Scroll_Lock none
+key 71 KP7 1 2 none none
+level 71 0 0 KP_Home none,Shift+Mod2
+level 71 0 1 KP_7 Mod2
+key 72 KP8 1 2 none none
+level 72 0 0 KP_Up none,Shift+Mod2
+level 72 0 1 KP_8 Mod2
+key 73 KP9 1 2 none none
+level 73 0 0 KP_Prior none,Shift+Mod2
+level 73 0 1 KP_9 Mod2
+key 74 KPSU 1 5 none none
+level 74 0 0 KP_Subtract none,Control,Mod1
+level 74 0 1 KP_Subtract Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 74 0 2 KP_Subtract Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 74 0 3 KP_Subtract Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 74 0 4 XF86Prev_VMode Control+Mod1
+key 75 KP4 1 2 none none
+level 75 0 0 KP_Left none,Shift+Mod2
+level 75 0 1 KP_4 Mod2
+key 76 KP5 1 2 none none
+level 76 0 0 KP_Begin none,Shift+Mod2
+level 76 0 1 KP_5 Mod2
+key 77 KP6 1 2 none none
+level 77 0 0 KP_Right none,Shift+Mod2
+level 77 0 1 KP_6 Mod2
+key 78 KPAD 1 5 none none
+level 78 0 0 KP_Add none,Control,Mod1
+level 78 0 1 KP_Add Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 78 0 2 KP_Add Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 78 0 3 KP_Add Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 78 0 4 XF86Next_VMode Control+Mod1
+key 79 KP1 1 2 none none
+level 79 0 0 KP_End none,Shift+Mod2
+level 79 0 1 KP_1 Mod2
+key 80 KP2 1 2 none none
+level 80 0 0 KP_Down none,Shift+Mod2
+level 80 0 1 KP_2 Mod2
+key 81 KP3 1 2 none none
+level 81 0 0 KP_Next none,Shift+Mod2
+level 81 0 1 KP_3 Mod2
+key 82 KP0 1 2 none none
+level 82 0 0 KP_Insert none,Shift+Mod2
+level 82 0 1 KP_0 Mod2
+key 83 KPDL 1 2 none none
+level 83 0 0 KP_Delete none,Shift+Mod2
+level 83 0 1 KP_Decimal Mod2
+key 84 LVL3 1 1 Mod5 none
+level 84 0 0 ISO_Level3_Shift none
+key 85 ZEHA 1 1 none none
+level 85 0 0 XF86TouchpadToggle none
+key 86 LSGT 1 4 none none
+level 86 0 0 backslash none
+level 86 0 1 bar Shift
+level 86 0 2 bar Mod5
+level 86 0 3 brokenbar Shift+Mod5
+key 87 FK11 1 5 none none
+level 87 0 0 F11 none,Control,Mod1
+level 87 0 1 F11 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 87 0 2 F11 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 87 0 3 F11 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 87 0 4 XF86Switch_VT_11 Control+Mod1
+key 88 FK12 1 5 none none
+level 88 0 0 F12 none,Control,Mod1
+level 88 0 1 F12 Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 88 0 2 F12 Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 88 0 3 F12 Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 88 0 4 XF86Switch_VT_12 Control+Mod1
+key 90 KATA 1 1 none none
+level 90 0 0 Katakana none
+key 91 HIRA 1 1 none none
+level 91 0 0 Hiragana none
+key 92 HENK 1 1 none none
+level 92 0 0 Henkan_Mode none
+key 93 HKTG 1 1 none none
+level 93 0 0 Hiragana_Katakana none
+key 94 MUHE 1 1 none none
+level 94 0 0 Muhenkan none
+key 96 KPEN 1 1 none none
+level 96 0 0 KP_Enter none
+key 97 RCTL 1 1 Control none
+level 97 0 0 Control_R none
+key 98 KPDV 1 5 none none
+level 98 0 0 KP_Divide none,Control,Mod1
+level 98 0 1 KP_Divide Shift,Shift+Control,Shift+Mod1,Shift+Control+Mod1
+level 98 0 2 KP_Divide Mod5,Control+Mod5,Mod1+Mod5,Control+Mod1+Mod5
+level 98 0 3 KP_Divide Shift+Mod5,Shift+Control+Mod5,Shift+Mod1+Mod5,Shift+Control+Mod1+Mod5
+level 98 0 4 XF86Ungrab Control+Mod1
+key 99 PRSC 1 2 none none
+level 99 0 0 Print none
+level 99 0 1 Sys_Req Mod1
+key 100 RALT 1 1 Mod5 none
+level 100 0 0 ISO_Level3_Shift none
+key 101 LNFD 1 1 none none
+level 101 0 0 Linefeed none
+key 102 HOME 1 1 none none
+level 102 0 0 Home none
+key 103 UP 1 1 none none
+level 103 0 0 Up none
+key 104 PGUP 1 1 none none
+level 104 0 0 Prior none
+key 105 LEFT 1 1 none none
+level 105 0 0 Left none
+key 106 RGHT 1 1 none none
+level 106 0 0 Right none
+key 107 END 1 1 none none
+level 107 0 0 End none
+key 108 DOWN 1 1 none none
+level 108 0 0 Down none
+key 109 PGDN 1 1 none none
+level 109 0 0 Next none
+key 110 INS 1 1 none none
+level 110 0 0 Insert none
+key 111 DELE 1 1 none none
+level 111 0 0 Delete none
+key 113 MUTE 1 1 none none
+level 113 0 0 XF86AudioMute none
+key 114 VOL- 1 1 none none
+level 114 0 0 XF86AudioLowerVolume none
+key 115 VOL+ 1 1 none none
+level 115 0 0 XF86AudioRaiseVolume none
+key 116 POWR 1 1 none none
+level 116 0 0 XF86PowerOff none
+key 117 KPEQ 1 1 none none
+level 117 0 0 KP_Equal none
+key 118 I126 1 1 none none
+level 118 0 0 plusminus none
+key 119 PAUS 1 2 none none
+level 119 0 0 Pause none
+level 119 0 1 Break Control
+key 120 I128 1 1 none none
+level 120 0 0 XF86LaunchA none
+key 121 I129 1 2 none none
+level 121 0 0 KP_Decimal none,Shift+Mod2
+level 121 0 1 KP_Decimal Mod2
+key 122 HNGL 1 1 none none
+level 122 0 0 Hangul none
+key 123 HJCV 1 1 none none
+level 123 0 0 Hangul_Hanja none
+key 125 LWIN 1 1 Mod4 none
+level 125 0 0 Super_L none
+key 126 RWIN 1 1 Mod4 none
+level 126 0 0 Super_R none
+key 127 COMP 1 1 none none
+level 127 0 0 Menu none
+key 128 STOP 1 1 none none
+level 128 0 0 Cancel none
+key 129 AGAI 1 1 none none
+level 129 0 0 Redo none
+key 130 PROP 1 1 none none
+level 130 0 0 SunProps none
+key 131 UNDO 1 1 none none
+level 131 0 0 Undo none
+key 132 FRNT 1 1 none none
+level 132 0 0 SunFront none
+key 133 COPY 1 1 none none
+level 133 0 0 XF86Copy none
+key 134 OPEN 1 1 none none
+level 134 0 0 XF86Open none
+key 135 PAST 1 1 none none
+level 135 0 0 XF86Paste none
+key 136 FIND 1 1 none none
+level 136 0 0 Find none
+key 137 CUT 1 1 none none
+level 137 0 0 XF86Cut none
+key 138 HELP 1 1 none none
+level 138 0 0 Help none
+key 139 I147 1 1 none none
+level 139 0 0 XF86MenuKB none
+key 140 I148 1 1 none none
+level 140 0 0 XF86Calculator none
+key 142 I150 1 1 none none
+level 142 0 0 XF86Sleep none
+key 143 I151 1 1 none none
+level 143 0 0 XF86WakeUp none
+key 144 I152 1 1 none none
+level 144 0 0 XF86Explorer none
+key 145 I153 1 1 none none
+level 145 0 0 XF86Send none
+key 147 I155 1 1 none none
+level 147 0 0 XF86Xfer none
+key 148 I156 1 1 none none
+level 148 0 0 XF86Launch1 none
+key 149 I157 1 1 none none
+level 149 0 0 XF86Launch2 none
+key 150 I158 1 1 none none
+level 150 0 0 XF86WWW none
+key 151 I159 1 1 none none
+level 151 0 0 XF86DOS none
+key 152 I160 1 1 none none
+level 152 0 0 XF86ScreenSaver none
+key 153 I161 1 1 none none
+level 153 0 0 XF86RotateWindows none
+key 154 I162 1 1 none none
+level 154 0 0 XF86TaskPane none
+key 155 I163 1 1 none none
+level 155 0 0 XF86Mail none
+key 156 I164 1 1 none none
+level 156 0 0 XF86Favorites none
+key 157 I165 1 1 none none
+level 157 0 0 XF86MyComputer none
+key 158 I166 1 1 none none
+level 158 0 0 XF86Back none
+key 159 I167 1 1 none none
+level 159 0 0 XF86Forward none
+key 161 I169 1 1 none none
+level 161 0 0 XF86Eject none
+key 162 I170 1 1 none none
+level 162 0 0 XF86Eject none
+key 163 I171 1 1 none none
+level 163 0 0 XF86AudioNext none
+key 164 I172 1 2 none none
+level 164 0 0 XF86AudioPlay none
+level 164 0 1 XF86AudioPause Shift
+key 165 I173 1 1 none none
+level 165 0 0 XF86AudioPrev none
+key 166 I174 1 2 none none
+level 166 0 0 XF86AudioStop none
+level 166 0 1 XF86Eject Shift
+key 167 I175 1 1 none none
+level 167 0 0 XF86AudioRecord none
+key 168 I176 1 1 none none
+level 168 0 0 XF86AudioRewind none
+key 169 I177 1 1 none none
+level 169 0 0 XF86Phone none
+key 171 I179 1 1 none none
+level 171 0 0 XF86Tools none
+key 172 I180 1 1 none none
+level 172 0 0 XF86HomePage none
+key 173 I181 1 1 none none
+level 173 0 0 XF86Reload none
+key 174 I182 1 1 none none
+level 174 0 0 XF86Close none
+key 177 I185 1 1 none none
+level 177 0 0 XF86ScrollUp none
+key 178 I186 1 1 none none
+level 178 0 0 XF86ScrollDown none
+key 179 I187 1 1 none none
+level 179 0 0 parenleft none
+key 180 I188 1 1 none none
+level 180 0 0 parenright none
+key 181 I189 1 1 none none
+level 181 0 0 XF86New none
+key 182 I190 1 1 none none
+level 182 0 0 Redo none
+key 183 FK13 1 1 none none
+level 183 0 0 XF86Tools none
+key 184 FK14 1 1 none none
+level 184 0 0 XF86Launch5 none
+key 185 FK15 1 1 none none
+level 185 0 0 XF86Launch6 none
+key 186 FK16 1 1 none none
+level 186 0 0 XF86Launch7 none
+key 187 FK17 1 1 none none
+level 187 0 0 XF86Launch8 none
+key 188 FK18 1 1 none none
+level 188 0 0 XF86Launch9 none
+key 190 FK20 1 1 none none
+level 190 0 0 XF86AudioMicMute none
+key 191 FK21 1 1 none none
+level 191 0 0 XF86TouchpadToggle none
+key 192 FK22 1 1 none none
+level 192 0 0 XF86TouchpadOn none
+key 193 FK23 1 2 none none
+level 193 0 0 XF86TouchpadOff none
+level 193 0 1 XF86Assistant Shift+Mod4
+key 195 LVL5 1 1 Mod3 none
+level 195 0 0 ISO_Level5_Shift none
+key 196 ALT 1 2 none none
+level 196 0 0 - none
+level 196 0 1 Alt_L Shift
+key 197 META 1 2 none none
+level 197 0 0 - none
+level 197 0 1 Meta_L Shift
+key 198 SUPR 1 2 none none
+level 198 0 0 - none
+level 198 0 1 Super_L Shift
+key 199 HYPR 1 2 none none
+level 199 0 0 - none
+level 199 0 1 Hyper_L Shift
+key 200 I208 1 1 none none
+level 200 0 0 XF86AudioPlay none
+key 201 I209 1 1 none none
+level 201 0 0 XF86AudioPause none
+key 202 I210 1 1 none none
+level 202 0 0 XF86Launch3 none
+key 203 I211 1 1 none none
+level 203 0 0 XF86Launch4 none
+key 204 I212 1 1 none none
+level 204 0 0 XF86LaunchB none
+key 205 I213 1 1 none none
+level 205 0 0 XF86Suspend none
+key 206 I214 1 1 none none
+level 206 0 0 XF86Close none
+key 207 I215 1 1 none none
+level 207 0 0 XF86AudioPlay none
+key 208 I216 1 1 none none
+level 208 0 0 XF86AudioForward none
+key 210 I218 1 1 none none
+level 210 0 0 Print none
+key 212 I220 1 1 none none
+level 212 0 0 XF86WebCam none
+key 213 I221 1 1 none none
+level 213 0 0 XF86AudioPreset none
+key 215 I223 1 1 none none
+level 215 0 0 XF86Mail none
+key 216 I224 1 1 none none
+level 216 0 0 XF86Messenger none
+key 217 I225 1 1 none none
+level 217 0 0 XF86Search none
+key 218 I226 1 1 none none
+level 218 0 0 XF86Go none
+key 219 I227 1 1 none none
+level 219 0 0 XF86Finance none
+key 220 I228 1 1 none none
+level 220 0 0 XF86Game none
+key 221 I229 1 1 none none
+level 221 0 0 XF86Shop none
+key 223 I231 1 1 none none
+level 223 0 0 Cancel none
+key 224 I232 1 1 none none
+level 224 0 0 XF86MonBrightnessDown none
+key 225 I233 1 1 none none
+level 225 0 0 XF86MonBrightnessUp none
+key 226 I234 1 1 none none
+level 226 0 0 XF86AudioMedia none
+key 227 I235 1 1 none none
+level 227 0 0 XF86Display none
+key 228 I236 1 1 none none
+level 228 0 0 XF86KbdLightOnOff none
+key 229 I237 1 1 none none
+level 229 0 0 XF86KbdBrightnessDown none
+key 230 I238 1 1 none none
+level 230 0 0 XF86KbdBrightnessUp none
+key 231 I239 1 1 none none
+level 231 0 0 XF86Send none
+key 232 I240 1 1 none none
+level 232 0 0 XF86Reply none
+key 233 I241 1 1 none none
+level 233 0 0 XF86MailForward none
+key 234 I242 1 1 none none
+level 234 0 0 XF86Save none
+key 235 I243 1 1 none none
+level 235 0 0 XF86Documents none
+key 236 I244 1 1 none none
+level 236 0 0 XF86Battery none
+key 237 I245 1 1 none none
+level 237 0 0 XF86Bluetooth none
+key 238 I246 1 1 none none
+level 238 0 0 XF86WLAN none
+key 239 I247 1 1 none none
+level 239 0 0 XF86UWB none
+key 241 I249 1 1 none none
+level 241 0 0 XF86Next_VMode none
+key 242 I250 1 1 none none
+level 242 0 0 XF86Prev_VMode none
+key 243 I251 1 1 none none
+level 243 0 0 XF86MonBrightnessCycle none
+key 244 I252 1 1 none none
+level 244 0 0 XF86BrightnessAuto none
+key 245 I253 1 1 none none
+level 245 0 0 XF86DisplayOff none
+key 246 I254 1 1 none none
+level 246 0 0 XF86WWAN none
+key 247 I255 1 1 none none
+level 247 0 0 XF86RFKill none
+key 248 I256 1 1 none none
+level 248 0 0 XF86AudioMicMute none
+key 352 I360 1 1 none none
+level 352 0 0 XF86OK none
+key 353 I361 1 1 none none
+level 353 0 0 XF86Select none
+key 354 I362 1 1 none none
+level 354 0 0 XF86GoTo none
+key 355 I363 1 1 none none
+level 355 0 0 XF86Clear none
+key 357 I365 1 1 none none
+level 357 0 0 XF86Option none
+key 358 I366 1 1 none none
+level 358 0 0 XF86Info none
+key 359 I367 1 1 none none
+level 359 0 0 XF86Time none
+key 360 I368 1 1 none none
+level 360 0 0 XF86VendorLogo none
+key 362 I370 1 1 none none
+level 362 0 0 XF86MediaSelectProgramGuide none
+key 363 I371 1 1 none none
+level 363 0 0 XF86NextFavorite none
+key 364 I372 1 1 none none
+level 364 0 0 XF86Favorites none
+key 365 I373 1 1 none none
+level 365 0 0 XF86MediaSelectProgramGuide none
+key 366 I374 1 1 none none
+level 366 0 0 XF86MediaSelectHome none
+key 368 I376 1 1 none none
+level 368 0 0 XF86MediaLanguageMenu none
+key 369 I377 1 1 none none
+level 369 0 0 XF86MediaTitleMenu none
+key 370 I378 1 1 none none
+level 370 0 0 XF86Subtitle none
+key 371 I379 1 1 none none
+level 371 0 0 XF86CycleAngle none
+key 372 I380 1 1 none none
+level 372 0 0 XF86FullScreen none
+key 373 I381 1 1 none none
+level 373 0 0 XF86AudioChannelMode none
+key 374 I382 1 1 none none
+level 374 0 0 XF86Keyboard none
+key 375 I383 1 1 none none
+level 375 0 0 XF86AspectRatio none
+key 376 I384 1 1 none none
+level 376 0 0 XF86MediaSelectPC none
+key 377 I385 1 1 none none
+level 377 0 0 XF86MediaSelectTV none
+key 378 I386 1 1 none none
+level 378 0 0 XF86MediaSelectCable none
+key 379 I387 1 1 none none
+level 379 0 0 XF86MediaSelectVCR none
+key 380 I388 1 1 none none
+level 380 0 0 XF86MediaSelectVCRPlus none
+key 381 I389 1 1 none none
+level 381 0 0 XF86MediaSelectSatellite none
+key 383 I391 1 1 none none
+level 383 0 0 XF86CD none
+key 384 I392 1 1 none none
+level 384 0 0 XF86MediaSelectTape none
+key 385 I393 1 1 none none
+level 385 0 0 XF86MediaSelectRadio none
+key 386 I394 1 1 none none
+level 386 0 0 XF86MediaSelectTuner none
+key 387 I395 1 1 none none
+level 387 0 0 XF86MediaPlayer none
+key 388 I396 1 1 none none
+level 388 0 0 XF86MediaSelectTeletext none
+key 389 I397 1 1 none none
+level 389 0 0 XF86DVD none
+key 390 I398 1 1 none none
+level 390 0 0 XF86MediaSelectAuxiliary none
+key 392 I400 1 1 none none
+level 392 0 0 XF86Audio none
+key 393 I401 1 1 none none
+level 393 0 0 XF86Video none
+key 396 I404 1 1 none none
+level 396 0 0 XF86Memo none
+key 397 I405 1 1 none none
+level 397 0 0 XF86Calendar none
+key 398 I406 1 1 none none
+level 398 0 0 XF86Red none
+key 399 I407 1 1 none none
+level 399 0 0 XF86Green none
+key 400 I408 1 1 none none
+level 400 0 0 XF86Yellow none
+key 401 I409 1 1 none none
+level 401 0 0 XF86Blue none
+key 402 I410 1 1 none none
+level 402 0 0 XF86ChannelUp none
+key 403 I411 1 1 none none
+level 403 0 0 XF86ChannelDown none
+key 409 I417 1 1 none none
+level 409 0 0 XF86MediaPlaySlow none
+key 410 I418 1 1 none none
+level 410 0 0 XF86AudioRandomPlay none
+key 411 I419 1 1 none none
+level 411 0 0 XF86Break none
+key 413 I421 1 1 none none
+level 413 0 0 XF86NumberEntryMode none
+key 416 I424 1 1 none none
+level 416 0 0 XF86VideoPhone none
+key 417 I425 1 1 none none
+level 417 0 0 XF86Game none
+key 418 I426 1 1 none none
+level 418 0 0 XF86ZoomIn none
+key 419 I427 1 1 none none
+level 419 0 0 XF86ZoomOut none
+key 420 I428 1 1 none none
+level 420 0 0 XF86ZoomReset none
+key 421 I429 1 1 none none
+level 421 0 0 XF86Word none
+key 422 I430 1 1 none none
+level 422 0 0 XF86Editor none
+key 423 I431 1 1 none none
+level 423 0 0 XF86Excel none
+key 424 I432 1 1 none none
+level 424 0 0 XF86GraphicsEditor none
+key 425 I433 1 1 none none
+level 425 0 0 XF86Presentation none
+key 426 I434 1 1 none none
+level 426 0 0 XF86Database none
+key 427 I435 1 1 none none
+level 427 0 0 XF86News none
+key 428 I436 1 1 none none
+level 428 0 0 XF86Voicemail none
+key 429 I437 1 1 none none
+level 429 0 0 XF86Addressbook none
+key 430 I438 1 1 none none
+level 430 0 0 XF86Messenger none
+key 431 I439 1 1 none none
+level 431 0 0 XF86DisplayToggle none
+key 432 I440 1 1 none none
+level 432 0 0 XF86SpellCheck none
+key 433 I441 1 1 none none
+level 433 0 0 XF86LogOff none
+key 434 I442 1 1 none none
+level 434 0 0 dollar none
+key 435 I443 1 1 none none
+level 435 0 0 EuroSign none
+key 436 I444 1 1 none none
+level 436 0 0 XF86FrameBack none
+key 437 I445 1 1 none none
+level 437 0 0 XF86FrameForward none
+key 438 I446 1 1 none none
+level 438 0 0 XF86ContextMenu none
+key 439 I447 1 1 none none
+level 439 0 0 XF86MediaRepeat none
+key 440 I448 1 1 none none
+level 440 0 0 XF8610ChannelsUp none
+key 441 I449 1 1 none none
+level 441 0 0 XF8610ChannelsDown none
+key 442 I450 1 1 none none
+level 442 0 0 XF86Images none
+key 444 I452 1 1 none none
+level 444 0 0 XF86NotificationCenter none
+key 445 I453 1 1 none none
+level 445 0 0 XF86PickupPhone none
+key 446 I454 1 1 none none
+level 446 0 0 XF86HangupPhone none
+key 464 I472 1 1 none none
+level 464 0 0 XF86Fn none
+key 465 I473 1 1 none none
+level 465 0 0 XF86Fn_Esc none
+key 485 I493 1 1 none none
+level 485 0 0 XF86FnRightShift none
+key 497 I505 1 1 none none
+level 497 0 0 braille_dot_1 none
+key 498 I506 1 1 none none
+level 498 0 0 braille_dot_2 none
+key 499 I507 1 1 none none
+level 499 0 0 braille_dot_3 none
+key 500 I508 1 1 none none
+level 500 0 0 braille_dot_4 none
+key 501 I509 1 1 none none
+level 501 0 0 braille_dot_5 none
+key 502 I510 1 1 none none
+level 502 0 0 braille_dot_6 none
+key 503 I511 1 1 none none
+level 503 0 0 braille_dot_7 none
+key 504 I512 1 1 none none
+level 504 0 0 braille_dot_8 none
+key 505 I513 1 1 none none
+level 505 0 0 braille_dot_9 none
+key 506 I514 1 1 none none
+level 506 0 0 braille_dot_1 none
+key 512 I520 1 1 none none
+level 512 0 0 XF86Numeric0 none
+key 513 I521 1 1 none none
+level 513 0 0 XF86Numeric1 none
+key 514 I522 1 1 none none
+level 514 0 0 XF86Numeric2 none
+key 515 I523 1 1 none none
+level 515 0 0 XF86Numeric3 none
+key 516 I524 1 1 none none
+level 516 0 0 XF86Numeric4 none
+key 517 I525 1 1 none none
+level 517 0 0 XF86Numeric5 none
+key 518 I526 1 1 none none
+level 518 0 0 XF86Numeric6 none
+key 519 I527 1 1 none none
+level 519 0 0 XF86Numeric7 none
+key 520 I528 1 1 none none
+level 520 0 0 XF86Numeric8 none
+key 521 I529 1 1 none none
+level 521 0 0 XF86Numeric9 none
+key 522 I530 1 1 none none
+level 522 0 0 XF86NumericStar none
+key 523 I531 1 1 none none
+level 523 0 0 XF86NumericPound none
+key 524 I532 1 1 none none
+level 524 0 0 XF86NumericA none
+key 525 I533 1 1 none none
+level 525 0 0 XF86NumericB none
+key 526 I534 1 1 none none
+level 526 0 0 XF86NumericC none
+key 527 I535 1 1 none none
+level 527 0 0 XF86NumericD none
+key 528 I536 1 1 none none
+level 528 0 0 XF86CameraFocus none
+key 529 I537 1 1 none none
+level 529 0 0 XF86WPSButton none
+key 530 I538 1 1 none none
+level 530 0 0 XF86TouchpadToggle none
+key 531 I539 1 1 none none
+level 531 0 0 XF86TouchpadOn none
+key 532 I540 1 1 none none
+level 532 0 0 XF86TouchpadOff none
+key 533 I541 1 1 none none
+level 533 0 0 XF86CameraZoomIn none
+key 534 I542 1 1 none none
+level 534 0 0 XF86CameraZoomOut none
+key 535 I543 1 1 none none
+level 535 0 0 XF86CameraUp none
+key 536 I544 1 1 none none
+level 536 0 0 XF86CameraDown none
+key 537 I545 1 1 none none
+level 537 0 0 XF86CameraLeft none
+key 538 I546 1 1 none none
+level 538 0 0 XF86CameraRight none
+key 539 I547 1 1 none none
+level 539 0 0 XF86AttendantOn none
+key 540 I548 1 1 none none
+level 540 0 0 XF86AttendantOff none
+key 541 I549 1 1 none none
+level 541 0 0 XF86AttendantToggle none
+key 542 I550 1 1 none none
+level 542 0 0 XF86LightsToggle none
+key 560 I568 1 1 none none
+level 560 0 0 XF86ALSToggle none
+key 561 I569 1 1 none none
+level 561 0 0 XF86RotationLockToggle none
+key 562 I570 1 1 none none
+level 562 0 0 XF86RefreshRateToggle none
+key 576 I584 1 1 none none
+level 576 0 0 XF86Buttonconfig none
+key 577 I585 1 1 none none
+level 577 0 0 XF86Taskmanager none
+key 578 I586 1 1 none none
+level 578 0 0 XF86Journal none
+key 579 I587 1 1 none none
+level 579 0 0 XF86ControlPanel none
+key 580 I588 1 1 none none
+level 580 0 0 XF86AppSelect none
+key 581 I589 1 1 none none
+level 581 0 0 XF86Screensaver none
+key 582 I590 1 1 none none
+level 582 0 0 XF86VoiceCommand none
+key 583 I591 1 1 none none
+level 583 0 0 XF86Assistant none
+key 584 I592 1 1 none none
+level 584 0 0 ISO_Next_Group none
+key 585 I593 1 1 none none
+level 585 0 0 XF86EmojiPicker none
+key 586 I594 1 1 none none
+level 586 0 0 XF86Dictate none
+key 587 I595 1 1 none none
+level 587 0 0 XF86CameraAccessEnable none
+key 588 I596 1 1 none none
+level 588 0 0 XF86CameraAccessDisable none
+key 589 I597 1 1 none none
+level 589 0 0 XF86CameraAccessToggle none
+key 590 I598 1 1 none none
+level 590 0 0 XF86Accessibility none
+key 591 I599 1 1 none none
+level 591 0 0 XF86DoNotDisturb none
+key 592 I600 1 1 none none
+level 592 0 0 XF86BrightnessMin none
+key 593 I601 1 1 none none
+level 593 0 0 XF86BrightnessMax none
+key 608 I616 1 1 none none
+level 608 0 0 XF86KbdInputAssistPrev none
+key 609 I617 1 1 none none
+level 609 0 0 XF86KbdInputAssistNext none
+key 610 I618 1 1 none none
+level 610 0 0 XF86KbdInputAssistPrevgroup none
+key 611 I619 1 1 none none
+level 611 0 0 XF86KbdInputAssistNextgroup none
+key 612 I620 1 1 none none
+level 612 0 0 XF86KbdInputAssistAccept none
+key 613 I621 1 1 none none
+level 613 0 0 XF86KbdInputAssistCancel none
+key 614 I622 1 1 none none
+level 614 0 0 XF86RightUp none
+key 615 I623 1 1 none none
+level 615 0 0 XF86RightDown none
+key 616 I624 1 1 none none
+level 616 0 0 XF86LeftUp none
+key 617 I625 1 1 none none
+level 617 0 0 XF86LeftDown none
+key 618 I626 1 1 none none
+level 618 0 0 XF86RootMenu none
+key 619 I627 1 1 none none
+level 619 0 0 XF86MediaTopMenu none
+key 620 I628 1 1 none none
+level 620 0 0 XF86Numeric11 none
+key 621 I629 1 1 none none
+level 621 0 0 XF86Numeric12 none
+key 622 I630 1 1 none none
+level 622 0 0 XF86AudioDesc none
+key 623 I631 1 1 none none
+level 623 0 0 XF863DMode none
+key 624 I632 1 1 none none
+level 624 0 0 XF86NextFavorite none
+key 625 I633 1 1 none none
+level 625 0 0 XF86StopRecord none
+key 626 I634 1 1 none none
+level 626 0 0 XF86PauseRecord none
+key 627 I635 1 1 none none
+level 627 0 0 XF86VOD none
+key 628 I636 1 1 none none
+level 628 0 0 XF86Unmute none
+key 629 I637 1 1 none none
+level 629 0 0 XF86FastReverse none
+key 630 I638 1 1 none none
+level 630 0 0 XF86SlowReverse none
+key 631 I639 1 1 none none
+level 631 0 0 XF86Data none
+key 632 I640 1 1 none none
+level 632 0 0 XF86OnScreenKeyboard none
+key 633 I641 1 1 none none
+level 633 0 0 XF86PrivacyScreenToggle none
+key 634 I642 1 1 none none
+level 634 0 0 XF86SelectiveScreenshot none
+key 635 I643 1 1 none none
+level 635 0 0 XF86NextElement none
+key 636 I644 1 1 none none
+level 636 0 0 XF86PreviousElement none
+key 637 I645 1 1 none none
+level 637 0 0 XF86AutopilotEngageToggle none
+key 638 I646 1 1 none none
+level 638 0 0 XF86MarkWaypoint none
+key 639 I647 1 1 none none
+level 639 0 0 XF86Sos none
+key 640 I648 1 1 none none
+level 640 0 0 XF86NavChart none
+key 641 I649 1 1 none none
+level 641 0 0 XF86FishingChart none
+key 642 I650 1 1 none none
+level 642 0 0 XF86SingleRangeRadar none
+key 643 I651 1 1 none none
+level 643 0 0 XF86DualRangeRadar none
+key 644 I652 1 1 none none
+level 644 0 0 XF86RadarOverlay none
+key 645 I653 1 1 none none
+level 645 0 0 XF86TraditionalSonar none
+key 646 I654 1 1 none none
+level 646 0 0 XF86ClearvuSonar none
+key 647 I655 1 1 none none
+level 647 0 0 XF86SidevuSonar none
+key 648 I656 1 1 none none
+level 648 0 0 XF86NavInfo none
+key 649 I657 1 1 none none
+level 649 0 0 XF86BrightnessAdjust none
+key 656 I664 1 1 none none
+level 656 0 0 XF86Macro1 none
+key 657 I665 1 1 none none
+level 657 0 0 XF86Macro2 none
+key 658 I666 1 1 none none
+level 658 0 0 XF86Macro3 none
+key 659 I667 1 1 none none
+level 659 0 0 XF86Macro4 none
+key 660 I668 1 1 none none
+level 660 0 0 XF86Macro5 none
+key 661 I669 1 1 none none
+level 661 0 0 XF86Macro6 none
+key 662 I670 1 1 none none
+level 662 0 0 XF86Macro7 none
+key 663 I671 1 1 none none
+level 663 0 0 XF86Macro8 none
+key 664 I672 1 1 none none
+level 664 0 0 XF86Macro9 none
+key 665 I673 1 1 none none
+level 665 0 0 XF86Macro10 none
+key 666 I674 1 1 none none
+level 666 0 0 XF86Macro11 none
+key 667 I675 1 1 none none
+level 667 0 0 XF86Macro12 none
+key 668 I676 1 1 none none
+level 668 0 0 XF86Macro13 none
+key 669 I677 1 1 none none
+level 669 0 0 XF86Macro14 none
+key 670 I678 1 1 none none
+level 670 0 0 XF86Macro15 none
+key 671 I679 1 1 none none
+level 671 0 0 XF86Macro16 none
+key 672 I680 1 1 none none
+level 672 0 0 XF86Macro17 none
+key 673 I681 1 1 none none
+level 673 0 0 XF86Macro18 none
+key 674 I682 1 1 none none
+level 674 0 0 XF86Macro19 none
+key 675 I683 1 1 none none
+level 675 0 0 XF86Macro20 none
+key 676 I684 1 1 none none
+level 676 0 0 XF86Macro21 none
+key 677 I685 1 1 none none
+level 677 0 0 XF86Macro22 none
+key 678 I686 1 1 none none
+level 678 0 0 XF86Macro23 none
+key 679 I687 1 1 none none
+level 679 0 0 XF86Macro24 none
+key 680 I688 1 1 none none
+level 680 0 0 XF86Macro25 none
+key 681 I689 1 1 none none
+level 681 0 0 XF86Macro26 none
+key 682 I690 1 1 none none
+level 682 0 0 XF86Macro27 none
+key 683 I691 1 1 none none
+level 683 0 0 XF86Macro28 none
+key 684 I692 1 1 none none
+level 684 0 0 XF86Macro29 none
+key 685 I693 1 1 none none
+level 685 0 0 XF86Macro30 none
+key 688 I696 1 1 none none
+level 688 0 0 XF86MacroRecordStart none
+key 689 I697 1 1 none none
+level 689 0 0 XF86MacroRecordStop none
+key 690 I698 1 1 none none
+level 690 0 0 XF86MacroPresetCycle none
+key 691 I699 1 1 none none
+level 691 0 0 XF86MacroPreset1 none
+key 692 I700 1 1 none none
+level 692 0 0 XF86MacroPreset2 none
+key 693 I701 1 1 none none
+level 693 0 0 XF86MacroPreset3 none
+key 696 I704 1 1 none none
+level 696 0 0 XF86KbdLcdMenu1 none
+key 697 I705 1 1 none none
+level 697 0 0 XF86KbdLcdMenu2 none
+key 698 I706 1 1 none none
+level 698 0 0 XF86KbdLcdMenu3 none
+key 699 I707 1 1 none none
+level 699 0 0 XF86KbdLcdMenu4 none
+key 700 I708 1 1 none none
+level 700 0 0 XF86KbdLcdMenu5 none
 ## keymap 35583
 xkb_keymap {
 xkb_keycodes "evdev_aliases(qwerty)" {
