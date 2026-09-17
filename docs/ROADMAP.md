@@ -46,6 +46,9 @@ sectors through the block ring with VT-d on x86-64 and the `SMMUv3` on AArch64
 translating, and a deliberate out-of-domain write faulted on both; ARMv7-A runs
 it in degraded trusted mode, as decided. What the stage still owes — `devmgr`
 the program, trusting decoding-off BARs — is after the exit in its section.
+Stages 17 and 18 have begun, and the compositor runs: `cargo xtask
+test-compositor` boots it as init on Ferrix, and two Wayland clients tile on
+the card, pixel for pixel as the renderer draws them, on x86-64 and AArch64.
 Stage 17, display and input, has begun. Its first display iteration is done:
 `/dev/dri/card0` served by a ring-3 virtio-gpu driver, with `cargo xtask
 test-display` requiring a compositor's colour pixel for pixel on x86-64 and
@@ -3949,10 +3952,28 @@ set, and a machine that has just booted has neither, so a bare display name
 falls back to `/tmp` rather than the compositor refusing to start -- which
 would be a compositor that only runs where something else ran first.
 
-The two-client picture on the card waits on the initramfs: the kernel embeds
-one program (`kernel/build.rs`), so the compositor has nothing to start.
-`compositor/hyprix/tests/two_clients.rs` is that picture on the host until
-then, and it is compared against the same expected image.
+**And stage 18's exit criterion passes on the card.** The initramfs carries
+`compositor/pattern` at `/bin/pattern` and the compositor's own `exec-once`
+starts two of them, so what reaches the screen is two real Wayland clients,
+tiled dwindle-style with the configured gaps and borders, drawn from the
+shared memory they committed. `cargo xtask test-compositor` compares QEMU's
+screendump against the same expected image `compositor/render`'s own tests
+bless and `compositor/hyprix/tests/two_clients.rs` compares against on the
+host: every one of 786,432 pixels, on x86-64 and on AArch64. Its negative
+control, not committed: with one client started instead of two, 362,542
+pixels differ and the test says the picture is not the one the renderer
+blesses.
+
+Carrying the clients meant one change outside the compositor. `xtask`'s
+initramfs wrote the files a caller asked for only when a shell was going in
+beside them, and the reason given was that the boot check's archive must not
+change -- but the boot check asks for no files at all, so what kept its bytes
+the same was the empty list and never the branch. The files go in either way
+now, and the test that named the old rule says the new one.
+
+What this stage still owes: `wl_seat`, so a window can be typed into, which
+waits on the input iteration's L5 to L7; the event socket a bar subscribes
+to; and a terminal client, which waits on a pty.
 
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the

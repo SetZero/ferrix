@@ -98,7 +98,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         .map(String::as_str)
         .chain(options.exec.iter().map(String::as_str))
     {
-        start(command, listener.path());
+        match start(command, listener.path()) {
+            Ok(pid) => report(&format!("hyprix: started {command} as {pid}")),
+            // A program that will not start is the person's to fix, not a
+            // reason to have no compositor; Hyprland logs it and carries on.
+            Err(error) => report(&format!("hyprix: {command} did not start: {error}")),
+        }
     }
 
     // `hyprctl`'s socket, when one was asked for. Hyprland puts it under
@@ -571,13 +576,19 @@ fn read_config(options: &Options) -> Result<Config, String> {
 }
 
 /// Start a program with `WAYLAND_DISPLAY` pointing at this compositor.
-fn start(command: &str, socket: &std::path::Path) {
+///
+/// # Errors
+///
+/// A sentence saying why it did not start, which the caller logs: a program
+/// that will not start is the person's to fix, not a reason to have no
+/// compositor.
+fn start(command: &str, socket: &std::path::Path) -> Result<u32, String> {
     let mut parts = command.split_whitespace();
-    let Some(program) = parts.next() else {
-        return;
-    };
-    let _ = std::process::Command::new(program)
+    let program = parts.next().ok_or_else(|| "an empty command".to_owned())?;
+    std::process::Command::new(program)
         .args(parts)
         .env("WAYLAND_DISPLAY", socket)
-        .spawn();
+        .spawn()
+        .map(|child| child.id())
+        .map_err(|error| error.to_string())
 }

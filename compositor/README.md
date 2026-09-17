@@ -133,7 +133,8 @@ names the part of Hyprland or hyprlang it follows.
   card, with two dumb buffers drawn into in turn and shown with a page flip;
   `--headless WxH` draws into memory instead, and `--dump <dir>` writes each
   frame as a PPM. `cargo xtask test-compositor` boots it as init on Ferrix
-  and requires its background on every pixel of QEMU's screendump.
+  with two `pattern` clients in the initramfs, and requires QEMU's screendump
+  to be the same picture the host test makes, pixel for pixel.
 * **`pattern`** is a Wayland client in one file, over `wire` and `socket`
   rather than a toolkit, that draws one of `render`'s test patterns. It is
   what the compositor's tests put on screen, and it exercises the same crates

@@ -108,16 +108,29 @@ impl Options {
     /// is not an option it has.
     ///
     /// `-i` alone means "nothing was asked for", which is the compositor's
-    /// own defaults. `-c <words>` means "run this", and for a compositor
-    /// what is run is itself, so the words are its arguments.
+    /// own defaults. `-c <words>` means "run this", and for a compositor what
+    /// is run is itself, so the words are its arguments.
+    ///
+    /// A script holding a newline is one argument a line, because an
+    /// argument may hold a space: `--exec /bin/pattern checkerboard one` is
+    /// one argument and four words. A script on one line is split on
+    /// whitespace, which is what somebody typing one means.
     fn unshell(args: Vec<String>) -> Vec<String> {
+        let words = |script: &String| -> Vec<String> {
+            if script.contains('\n') {
+                script
+                    .split('\n')
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            } else {
+                script.split_whitespace().map(str::to_owned).collect()
+            }
+        };
         match args.split_first() {
             Some((first, rest)) if first == "-i" && rest.is_empty() => Vec::new(),
-            Some((first, rest)) if first == "-c" => rest
-                .iter()
-                .flat_map(|script| script.split_whitespace())
-                .map(str::to_owned)
-                .collect(),
+            Some((first, rest)) if first == "-c" => rest.iter().flat_map(words).collect(),
             _ => args,
         }
     }
@@ -219,6 +232,12 @@ mod tests {
         let options = parse(&["-c", "--headless 800x600 --frames 2"]).expect("valid");
         assert_eq!(options.headless, Some((800, 600)));
         assert_eq!(options.frames, Some(2));
+        // An argument that holds a space needs a line of its own, since a
+        // script has no quoting.
+        let options =
+            parse(&["-c", "--exec\n/bin/pattern checkerboard one\n--frames\n1"]).expect("valid");
+        assert_eq!(options.exec, ["/bin/pattern checkerboard one"]);
+        assert_eq!(options.frames, Some(1));
         // `-i` is only the shell's when it is the whole command line; a
         // compositor given it beside real options is a mistake worth saying.
         assert!(parse(&["-i", "--frames", "1"]).is_err());

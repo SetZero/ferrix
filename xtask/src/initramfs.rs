@@ -357,25 +357,29 @@ fn build_with_shell(
             archive.file(ZINC_PATH, 0o755, zinc)?;
             archive.symlink("bin/zsh", "zinc")?;
         }
-        // The ports, beside a program for the same reason. `bin` and `etc`
-        // are made above; any other directory a port's file is in is made
-        // the first time a file needs it.
-        let mut made = vec!["bin".to_owned(), "etc".to_owned()];
-        for file in ports {
-            let mut directory = String::new();
-            let parents = file.path.split('/').collect::<Vec<_>>();
-            for name in parents.iter().take(parents.len().saturating_sub(1)) {
-                if !directory.is_empty() {
-                    directory.push('/');
-                }
-                directory.push_str(name);
-                if !made.contains(&directory) {
-                    archive.directory(&directory, 0o755)?;
-                    made.push(directory.clone());
-                }
+    }
+    // The files a caller asked to carry: the ports, and whatever else a test
+    // needs beside init -- `cargo xtask test-compositor` carries the
+    // compositor's clients this way. Outside the branch above, because a file
+    // named here is one the caller means to be there whether or not a shell
+    // is; the boot check's archive is unchanged either way, since it names
+    // none. `bin` and `etc` are made above; any other directory a file is in
+    // is made the first time one needs it.
+    let mut made = vec!["bin".to_owned(), "etc".to_owned()];
+    for file in ports {
+        let mut directory = String::new();
+        let parents = file.path.split('/').collect::<Vec<_>>();
+        for name in parents.iter().take(parents.len().saturating_sub(1)) {
+            if !directory.is_empty() {
+                directory.push('/');
             }
-            archive.file(file.path, file.mode, &file.bytes)?;
+            directory.push_str(name);
+            if !made.contains(&directory) {
+                archive.directory(&directory, 0o755)?;
+                made.push(directory.clone());
+            }
         }
+        archive.file(file.path, file.mode, &file.bytes)?;
     }
     archive.finish()
 }
@@ -383,6 +387,35 @@ fn build_with_shell(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_asked_for_is_carried_without_a_shell_beside_it() {
+        // `cargo xtask test-compositor` boots the compositor as init, with no
+        // busybox at all, and its clients have to be in the archive. They were
+        // not until this moved out of the branch that needs a program.
+        let carried = [ports::File {
+            path: "bin/pattern",
+            mode: 0o755,
+            bytes: b"\x7fELF not really".to_vec(),
+        }];
+        let bytes = build(None, &[], None, &carried).unwrap();
+        let archive = ferrix_cpio::Archive::new(&bytes);
+        let found = archive.find("bin/pattern").unwrap().unwrap();
+        assert_eq!(found.data, carried[0].bytes);
+        assert_eq!(found.mode & 0o777, 0o755, "it has to be runnable");
+        // And an archive that was asked for none is the one it always was,
+        // which is what keeps the boot check's bytes the same.
+        assert_eq!(
+            build(None, &[], None, &[]).unwrap(),
+            build(None, &[], None, &[]).unwrap()
+        );
+        assert!(
+            ferrix_cpio::Archive::new(&build(None, &[], None, &[]).unwrap())
+                .find("bin/pattern")
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[test]
     fn the_archive_is_the_same_bytes_every_time() {
@@ -447,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn ports_go_at_their_paths_with_their_directories_only_beside_a_program() {
+    fn ports_go_at_their_paths_with_their_directories_made_once() {
         let files = [
             ports::File {
                 path: "bin/curl",
@@ -476,13 +509,20 @@ mod tests {
                 "{directory} is made once"
             );
         }
+        // A file named here is carried whether or not a shell is beside it.
+        // It used not to be, and the reason given was that the boot check's
+        // archive must not change -- but the boot check names no files at
+        // all, so what kept its bytes the same was the empty list and never
+        // the branch. `cargo xtask test-compositor` boots the compositor as
+        // init with no busybox, and its clients have to be somewhere.
         let without = build_with_shell(None, &[], None, &files).unwrap();
-        assert!(
+        assert_eq!(
             ferrix_cpio::Archive::new(&without)
                 .find("bin/curl")
                 .unwrap()
-                .is_none(),
-            "without a program the archive is the one the boot check reads"
+                .unwrap()
+                .data,
+            b"curl"
         );
     }
 
