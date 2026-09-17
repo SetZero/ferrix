@@ -606,9 +606,47 @@ impl Canvas {
     /// clamps at the region's edge -- and the region already reaches a
     /// whole blur past what is written.
     pub fn blur(&mut self, rect: Rect, rounding: Rounding, blur: &Blur, damage: &Damage) {
+        self.blur_from(None, rect, rounding, blur, damage);
+    }
+
+    /// The same, reading `backdrop` rather than this canvas.
+    ///
+    /// What makes a blurred desktop cheap. Blurring a strip of this canvas
+    /// is wrong: outside the damage the canvas still holds the *last*
+    /// frame, and the last frame has the translucent surface drawn over
+    /// the blur -- so the blur would be a blur of itself, which is a smear
+    /// that grows with every frame. Growing the damage until the whole
+    /// surface is redrawn is one answer and costs a full frame for a
+    /// near-fullscreen window.
+    ///
+    /// A `backdrop` is the other, and is Hyprland's own
+    /// `decoration:blur:new_optimizations`, which is on by default: a
+    /// second canvas holding what is *behind* the windows -- the
+    /// background and the layer surfaces under them -- kept between
+    /// frames and brought up to date within the damage. Nothing is ever
+    /// drawn over it, so a strip of it is the same pixels a whole frame
+    /// would have put there, and a blur over that strip is exact.
+    ///
+    /// What is given up is a window blurring the *window* behind it: the
+    /// backdrop stops at the layers, so two translucent windows one over
+    /// the other each blur the desktop rather than each other. That is
+    /// what Hyprland's own optimisation gives up too, and it is the
+    /// behaviour a person gets from Hyprland out of the box.
+    pub fn blur_from(
+        &mut self,
+        backdrop: Option<&Self>,
+        rect: Rect,
+        rounding: Rounding,
+        blur: &Blur,
+        damage: &Damage,
+    ) {
         if blur.size <= 0 || blur.passes == 0 || is_empty(rect) {
             return;
         }
+        // A backdrop of another size is not this screen's, and reading it
+        // would draw one monitor's pixels onto another.
+        let backdrop =
+            backdrop.filter(|from| (from.width(), from.height()) == (self.width(), self.height()));
         let clips = if !rounding.is_square() {
             self.rounded_clips(rect, rounding, damage)
         } else {
@@ -668,11 +706,12 @@ impl Canvas {
         let (wide, tall) = (index(read.width), index(read.height));
         let stride = index(i64::from(self.width())) * 4;
         let mut block = vec![0_u8; wide * tall * 4];
+        let source = backdrop.map_or_else(|| self.pixmap.data(), |from| from.pixmap.data());
         for row in 0..tall {
             let from = (index(read.y) + row) * stride + index(read.x) * 4;
             let to = row * wide * 4;
             if let (Some(source), Some(target)) = (
-                self.pixmap.data().get(from..from + wide * 4),
+                source.get(from..from + wide * 4),
                 block.get_mut(to..to + wide * 4),
             ) {
                 target.copy_from_slice(source);
@@ -777,6 +816,32 @@ impl Canvas {
         );
         let paint = paint(shader, BlendMode::SourceOver);
         self.fill_clips(clips, &paint);
+    }
+
+    /// Copy the pixels in `damage` out of `other`, which must be this
+    /// canvas's size.
+    ///
+    /// How the blur's backdrop is kept: everything behind the windows is
+    /// drawn onto this canvas and then copied into the backdrop, within
+    /// the damage, so the backdrop holds the same pixels a whole frame
+    /// would have put there.
+    pub fn take_from(&mut self, other: &Self, damage: &Damage) {
+        if (other.width(), other.height()) != (self.width(), self.height()) {
+            return;
+        }
+        let width = index(i64::from(self.width()));
+        for clip in damage.clipped(self.bounds()).rects() {
+            let len = index(clip.width) * 4;
+            for y in clip.y..clip.bottom() {
+                let start = (index(y) * width + index(clip.x)) * 4;
+                if let (Some(source), Some(target)) = (
+                    other.pixmap.data().get(start..start + len),
+                    self.pixmap.data_mut().get_mut(start..start + len),
+                ) {
+                    target.copy_from_slice(source);
+                }
+            }
+        }
     }
 
     /// Copy the pixels in `damage` into `target`, which must be the canvas's

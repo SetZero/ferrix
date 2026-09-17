@@ -113,8 +113,8 @@ pub use compositor_config::Color;
 pub use compositor_layout::Rect;
 pub use damage::Damage;
 pub use frame::{
-    LayerFrame, Style, Styles, WindowStyle, damage_between, outer, render, render_with_layers,
-    scaled,
+    LayerFrame, Style, Styles, WindowStyle, damage_between, outer, render, render_onto,
+    render_with_layers, scaled,
 };
 pub use gradient::Gradient;
 pub use patterns::Pattern;

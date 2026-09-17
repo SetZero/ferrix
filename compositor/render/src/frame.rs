@@ -505,6 +505,36 @@ pub fn render_with_layers(
     layers: &[LayerFrame<'_>],
     damage: &Damage,
 ) -> Damage {
+    render_onto(
+        canvas, None, output, origin, styles, surfaces, layers, damage,
+    )
+}
+
+/// The same, with a canvas for the blur's backdrop.
+///
+/// `backdrop` is what [`Canvas::blur_from`] reads: a second canvas holding
+/// everything *behind* the windows, kept between frames. Nothing is ever
+/// drawn over it, so a strip of it is the same pixels a whole frame would
+/// have put there -- which is what lets a blur be drawn over the damage
+/// alone rather than over the whole of every translucent window. It is
+/// Hyprland's `decoration:blur:new_optimizations`, which is on by default.
+///
+/// Without one, a blur reads the canvas and the caller has to redraw each
+/// blurred surface whole.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a frame is its canvas, its backdrop, its layout, its styles, its pixels and its damage"
+)]
+pub fn render_onto(
+    canvas: &mut Canvas,
+    mut backdrop: Option<&mut Canvas>,
+    output: &MonitorLayout,
+    origin: (i64, i64),
+    styles: &Styles<'_>,
+    surfaces: &BTreeMap<WindowId, Surface<'_>>,
+    layers: &[LayerFrame<'_>],
+    damage: &Damage,
+) -> Damage {
     let style = styles.base;
     let local = |rect: Rect| rect.translate(origin.0.saturating_neg(), origin.1.saturating_neg());
     canvas.clear(style.background, damage);
@@ -529,19 +559,33 @@ pub fn render_with_layers(
         if layer.dim_around {
             dim_behind(canvas, damage);
         }
-        draw_layer(canvas, layer, local(layer.rect), style, damage);
+        draw_layer(canvas, None, layer, local(layer.rect), style, damage);
     }
+    // Everything behind the windows is drawn; that is the backdrop, and it
+    // is taken now, before a window goes over it.
+    if let Some(behind) = backdrop.as_deref_mut() {
+        behind.take_from(canvas, damage);
+    }
+    let behind = backdrop.as_deref();
     for placed in &output.windows {
         if styles.of(placed.window).dim_around {
             dim_behind(canvas, damage);
         }
-        window(canvas, placed, local(placed.rect), styles, surfaces, damage);
+        window(
+            canvas,
+            behind,
+            placed,
+            local(placed.rect),
+            styles,
+            surfaces,
+            damage,
+        );
     }
     for layer in layers.iter().filter(|layer| layer.above) {
         if layer.dim_around {
             dim_behind(canvas, damage);
         }
-        draw_layer(canvas, layer, local(layer.rect), style, damage);
+        draw_layer(canvas, behind, layer, local(layer.rect), style, damage);
     }
     damage.clipped(canvas.bounds())
 }
@@ -554,6 +598,7 @@ pub fn render_with_layers(
 /// across the screen.
 fn draw_layer(
     canvas: &mut Canvas,
+    backdrop: Option<&Canvas>,
     layer: &LayerFrame<'_>,
     rect: Rect,
     style: &Style,
@@ -567,7 +612,7 @@ fn draw_layer(
     if let Some(blur) = style.blur.filter(|_| layer.blur)
         && surface.format() == Format::Argb8888
     {
-        canvas.blur(rect, Rounding::none(), &blur, damage);
+        canvas.blur_from(backdrop, rect, Rounding::none(), &blur, damage);
     }
     canvas.composite(surface, rect, damage);
 }
@@ -576,6 +621,7 @@ fn draw_layer(
 /// and the dim over them, with whatever a `windowrule` changed.
 fn window(
     canvas: &mut Canvas,
+    backdrop: Option<&Canvas>,
     placed: &Placed,
     rect: Rect,
     styles: &Styles<'_>,
@@ -663,7 +709,7 @@ fn window(
     if let Some(blur) = style.blur.filter(|_| own.blur)
         && translucent
     {
-        canvas.blur(rect, rounding, &blur, damage);
+        canvas.blur_from(backdrop, rect, rounding, &blur, damage);
     }
     if let Some(surface) = surfaces.get(&placed.window) {
         // Scaled, which is the exact path when the surface is already the
