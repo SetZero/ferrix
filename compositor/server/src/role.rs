@@ -35,6 +35,8 @@ pub enum Role {
     XdgWmBase,
     /// `zxdg_decoration_manager_v1`.
     DecorationManager,
+    /// `zxdg_toplevel_decoration_v1`: who draws one window's title bar.
+    ToplevelDecoration,
     /// `zwlr_layer_shell_v1`.
     LayerShell,
     /// `zwlr_layer_surface_v1`: a bar, a wallpaper, a launcher.

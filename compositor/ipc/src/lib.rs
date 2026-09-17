@@ -50,7 +50,9 @@ pub use events::{Event, MAX_DATA, Watcher, WindowRef};
 pub use json::Json;
 pub use reply::{Reply, Version, answer};
 pub use request::{Flags, Format, Request};
-pub use state::{Monitor, Plugin, Snapshot, Window, Workspace};
+pub use state::{
+    Bind, Device, Devices, Keyboard, Layer, Monitor, Plugin, Snapshot, Window, Workspace,
+};
 
 /// Hyprland's own socket names inside its instance directory.
 ///

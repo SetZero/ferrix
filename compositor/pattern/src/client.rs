@@ -10,6 +10,9 @@ use compositor_protocol::core::{
     wl_shm_pool, wl_surface,
 };
 use compositor_protocol::layer_shell::{self, zwlr_layer_shell_v1, zwlr_layer_surface_v1};
+use compositor_protocol::xdg_decoration::{
+    self, zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
+};
 use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
 use compositor_render::Pattern;
 use compositor_socket::{Connection, RecvError, socket_path};
@@ -40,6 +43,8 @@ mod id {
     pub(super) const OUTPUT: ObjectId = ObjectId(17);
     pub(super) const KEYBOARD: ObjectId = ObjectId(13);
     pub(super) const POINTER: ObjectId = ObjectId(14);
+    pub(super) const DECORATIONS: ObjectId = ObjectId(18);
+    pub(super) const DECORATION: ObjectId = ObjectId(19);
 }
 
 /// How long to run before giving up, so a test can never hang.
@@ -254,6 +259,7 @@ impl Client {
             id::SHELL => &xdg_shell::XDG_WM_BASE,
             id::BUFFER => &core::WL_BUFFER,
             id::OUTPUT => &core::WL_OUTPUT,
+            id::DECORATION => &xdg_decoration::ZXDG_TOPLEVEL_DECORATION_V1,
             _ => return None,
         })
     }
@@ -327,6 +333,20 @@ impl Client {
                 );
                 self.acked = true;
                 self.draw(out)?;
+            }
+            id::DECORATION if opcode == zxdg_toplevel_decoration_v1::event::CONFIGURE => {
+                // Which side draws this window's decorations. Said out loud
+                // because it is the only way to see it: a compositor that
+                // never answers and one that answers `server_side` look the
+                // same on the screen until a toolkit draws its own title
+                // bar.
+                let mode = args.first().and_then(Arg::as_uint).unwrap_or(0);
+                let side = if mode == zxdg_toplevel_decoration_v1::mode::SERVER_SIDE {
+                    "server_side"
+                } else {
+                    "client_side"
+                };
+                say(&format!("pattern: {} decorations {side}", self.title));
             }
             id::TOPLEVEL if opcode == xdg_toplevel::event::CLOSE => {
                 // Which window, because a test that asks for one to be
@@ -514,6 +534,16 @@ impl Client {
             // compositor has to stretch what it sent.
             ("wl_output", id::OUTPUT, 4, false),
             ("zwlr_layer_shell_v1", id::LAYER_SHELL, 5, bar),
+            // Who draws the title bar. Wanted rather than required, as
+            // every toolkit treats it: a compositor that offers none is one
+            // where the client draws its own -- which is exactly what this
+            // asks in order to find out.
+            (
+                "zxdg_decoration_manager_v1",
+                id::DECORATIONS,
+                !bar as u32,
+                false,
+            ),
         ] {
             if want == 0 {
                 continue;
@@ -583,6 +613,18 @@ impl Client {
             &[ArgType::Str { nullable: false }],
             &[Arg::Str(Some("rocks.magical.pattern"))],
         );
+        // Who draws this window's title bar, if the compositor has an
+        // opinion. A toolkit asks before its first frame, because the answer
+        // decides how much of its own surface it has to leave for a bar.
+        if self.globals.contains_key("zxdg_decoration_manager_v1") {
+            request(
+                out,
+                id::DECORATIONS,
+                zxdg_decoration_manager_v1::request::GET_TOPLEVEL_DECORATION,
+                &[ArgType::NewId, ArgType::Object { nullable: false }],
+                &[Arg::NewId(id::DECORATION), Arg::Object(id::TOPLEVEL)],
+            );
+        }
         // The first commit carries no buffer: it asks to be configured.
         request(out, id::SURFACE, wl_surface::request::COMMIT, &[], &[]);
         Ok(())

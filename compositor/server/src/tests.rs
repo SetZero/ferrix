@@ -2529,3 +2529,108 @@ fn closing_a_layer_surface_says_so_once() {
     client.close_layer(ObjectId(13));
     assert!(sent(&mut client).is_empty());
 }
+
+/// A toolkit that asks who draws the title bar is told the compositor does.
+///
+/// `zxdg_decoration_manager_v1` has to be *offered* for that to happen at
+/// all: a toolkit that does not find it assumes the job is its own and
+/// draws a title bar, a shadow and a resize border inside the rectangle the
+/// tiling gave it. GTK and Qt both do.
+#[test]
+fn a_window_that_asks_about_its_decorations_is_told_the_compositor_draws_them() {
+    use compositor_protocol::xdg_decoration::{
+        zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
+    };
+
+    let mut globals = Globals::new();
+    for (interface, version, role) in [
+        (&core::WL_COMPOSITOR, 6, Role::Compositor),
+        (&xdg_shell::XDG_WM_BASE, 6, Role::XdgWmBase),
+        (
+            &compositor_protocol::xdg_decoration::ZXDG_DECORATION_MANAGER_V1,
+            1,
+            Role::DecorationManager,
+        ),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_compositor", 6, 4));
+    bytes.extend(bind(2, 2, "xdg_wm_base", 6, 5));
+    bytes.extend(bind(2, 3, "zxdg_decoration_manager_v1", 1, 6));
+    bytes.extend(create_surface(3));
+    bytes.extend(request(
+        5,
+        xdg_shell::xdg_wm_base::request::GET_XDG_SURFACE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(7)), Arg::Object(ObjectId(3))],
+    ));
+    bytes.extend(request(
+        7,
+        xdg_shell::xdg_surface::request::GET_TOPLEVEL,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(8))],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let _ = sent(&mut client);
+
+    // The decoration is configured the moment it is made, which is what the
+    // protocol allows and what saves a round trip before the first frame.
+    let bytes = request(
+        6,
+        zxdg_decoration_manager_v1::request::GET_TOPLEVEL_DECORATION,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(9)), Arg::Object(ObjectId(8))],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let events = sent(&mut client);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].sender, ObjectId(9));
+    assert_eq!(
+        events[0].opcode,
+        zxdg_toplevel_decoration_v1::event::CONFIGURE
+    );
+    assert_eq!(
+        events[0].args.first().map(String::as_str),
+        Some(format!("Uint({})", zxdg_toplevel_decoration_v1::mode::SERVER_SIDE).as_str())
+    );
+
+    // And a client that asks for client-side decorations is told the same:
+    // the answer does not depend on what was asked, and a client that
+    // believed otherwise would draw a title bar.
+    let bytes = request(
+        9,
+        zxdg_toplevel_decoration_v1::request::SET_MODE,
+        &[ArgType::Uint],
+        &[Arg::Uint(zxdg_toplevel_decoration_v1::mode::CLIENT_SIDE)],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let events = sent(&mut client);
+    assert_eq!(
+        events
+            .first()
+            .and_then(|event| event.args.first())
+            .map(String::as_str),
+        Some(format!("Uint({})", zxdg_toplevel_decoration_v1::mode::SERVER_SIDE).as_str()),
+        "{events:?}"
+    );
+
+    // A mode that is not one of the two is the interface's own error.
+    let bytes = request(
+        9,
+        zxdg_toplevel_decoration_v1::request::SET_MODE,
+        &[ArgType::Uint],
+        &[Arg::Uint(77)],
+    );
+    let _ = client.read(&bytes, &[]);
+    assert!(
+        matches!(client.fatal(), Some(Fatal::Interface { code, .. })
+            if *code == zxdg_toplevel_decoration_v1::error::INVALID_MODE),
+        "{:?}",
+        client.fatal()
+    );
+}

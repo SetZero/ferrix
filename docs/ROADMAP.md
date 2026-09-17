@@ -4193,6 +4193,54 @@ grid, printed a row at a time.
 /bin/hyprctl` and requires the picture the terminal makes, pixel for pixel,
 on x86-64 and on AArch64.
 
+**Done — who draws the title bar (2026-09-17).**
+`zxdg_decoration_manager_v1` was vendored, generated and checked against
+libwayland, and never offered: the compositor's list of globals did not have
+it. That is a gap a screenshot does not show and a person notices at once,
+because a toolkit that does not find the manager assumes the job is its own
+and draws a title bar, a shadow and a resize border *inside* the rectangle
+the tiling gave it. GTK and Qt both do.
+
+It is offered now, and the answer is always `server_side`: a tiling
+compositor draws the border and the client draws nothing. The decoration is
+configured the moment it is made, which the protocol allows and which saves
+a round trip before the first frame, and a client that asks for
+`client_side` is told `server_side` just the same -- the answer does not
+depend on what was asked. A mode that is neither is the interface's own
+`invalid_mode`.
+
+**Done — the rest of what `hyprctl` reads (2026-09-17).** Seven more
+commands, which between them are what a bar and a script ask for that is not
+a window: `binds`, `devices`, `layers`, `cursorpos`, `locked`,
+`workspacerules` and `globalshortcuts`. Each is answered in Hyprland's own
+shape, readable and JSON, with its field names -- a script reads them by
+name, and a close-enough name is a script that prints nothing.
+
+`binds` lists what the *configuration* parsed rather than what the seat
+resolved, as Hyprland's does, so a bind naming a key this keymap does not
+have is still listed -- which is what makes the list worth reading when a
+bind is not firing. `devices` puts each `/dev/input/eventN` in the group its
+capabilities put it in, which is libinput's rule and the one the seat
+already uses. `layers` groups by monitor and then by
+`zwlr_layer_shell_v1`'s four levels, which is how a bar finds its own
+surface. The last two have nothing to list -- there is no `workspacerule`
+keyword yet and no global-shortcuts protocol -- and are answered with an
+empty list rather than `unknown request`, because a bar asking for them
+should get an empty answer and carry on.
+
+What is still not answered is `getoption`, `animations`, `systeminfo`,
+`rollinglog`, `configerrors`, `descriptions` and `status`, and the ones that
+change something: `notify`, `seterror`, `switchxkblayout`, `output`,
+`setcursor` and `decorations`.
+
+The second boot of `cargo xtask test-compositor` has the bar, so it is the
+one that asks: a keybind runs `hyprctl --batch binds ; devices ; layers ;
+cursorpos ; locked`, and the transcript must name the bind's dispatcher and
+key, the keyboard QEMU published, the bar's own layer at level 2 under the
+namespace it asked for, and the pointer in the middle of the screen -- with
+the picture unchanged, because asking a compositor about itself must move
+nothing.
+
 **Done — screenshots (2026-09-17).** `zwlr_screencopy_v1`, which is what
 `grim` speaks, what `hyprshot` wraps, and what every screen recorder and
 screen-sharing portal on wlroots goes through. The compositor says what
@@ -4652,9 +4700,7 @@ Of the protocols and keywords a Hyprland setup uses, what is left is:
 on-screen keyboard needs, `zwp_pointer-constraints` and
 `relative-pointer` (a game that grabs the pointer), `viewporter` and
 `presentation-time`, drag-and-drop -- the other half of the four interfaces
-the clipboard already uses -- and the rest of `hyprctl`'s read-only
-commands, of which `binds`, `devices`, `layers` and `getoption` are the ones
-a bar or a script asks for. Each is a protocol or a table rather than a
+the clipboard already uses -- and `hyprctl getoption`. Each is a protocol or a table rather than a
 subsystem, and each is written the way the four above were: the XML
 vendored, the tables checked against libwayland's own, a program in
 `compositor/` that speaks it with no screen, a host test against the image

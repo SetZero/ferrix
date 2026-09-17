@@ -4,7 +4,7 @@ use core::fmt::Write;
 
 use crate::json::Json;
 use crate::request::{Flags, Format, Request};
-use crate::state::{Monitor, Plugin, Snapshot, Window, Workspace};
+use crate::state::{Bind, Devices, Layer, Monitor, Plugin, Snapshot, Window, Workspace};
 
 /// What the compositor calls itself in `hyprctl version`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -83,6 +83,32 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
             })
         }
         "splash" => text("a compositor, on an operating system, in Rust\n".to_owned()),
+        "binds" => text(binds(flags, &snapshot.binds)),
+        "devices" => text(devices(flags, &snapshot.devices)),
+        "layers" => text(layers(flags, snapshot)),
+        "cursorpos" => text(cursor_position(flags, snapshot.cursor)),
+        "locked" => text(if flags.format() == Format::Json {
+            let mut out = Json::new(pretty(flags));
+            out.object();
+            out.boolean("locked", snapshot.locked);
+            out.end('}');
+            finish(out, flags)
+        } else {
+            format!("{}\n", snapshot.locked)
+        }),
+        // Neither has anything to list, and both are answered rather than
+        // refused: a bar asking for them should get an empty list, not
+        // `unknown request`. `workspacerules` has no `workspacerule` keyword
+        // to fill it yet, and `globalshortcuts` needs a protocol this
+        // compositor does not offer.
+        "workspacerules" | "globalshortcuts" => text(if flags.format() == Format::Json {
+            let mut out = Json::new(pretty(flags));
+            out.array();
+            out.end(']');
+            finish(out, flags)
+        } else {
+            String::new()
+        }),
         "dispatch" => {
             let (name, argument) = split(&request.argument);
             Reply::Dispatch { name, argument }
@@ -104,6 +130,254 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
         // keeps working for everything else it asks.
         other => text(format!("unknown request {other}\n")),
     }
+}
+
+/// `hyprctl binds`, in Hyprland's own shape.
+///
+/// The letters after `bind` are the flags the line was written with, in
+/// `bindsRequest`'s own order, and the fields under them are its.
+fn binds(flags: Flags, binds: &[Bind]) -> String {
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.array();
+        for bind in binds {
+            out.object();
+            out.boolean("locked", bind.locked);
+            out.boolean("mouse", bind.mouse);
+            out.boolean("release", bind.release);
+            out.boolean("repeat", bind.repeat);
+            out.boolean("longPress", bind.long_press);
+            out.boolean("non_consuming", bind.non_consuming);
+            out.boolean("has_description", bind.has_description);
+            out.number("modmask", i64::from(bind.modmask));
+            out.string("submap", &bind.submap);
+            out.boolean("submap_universal", bind.submap_universal);
+            out.string("key", &bind.key);
+            out.number("keycode", i64::from(bind.keycode));
+            out.boolean("catch_all", bind.catch_all);
+            out.string("description", &bind.description);
+            out.string("dispatcher", &bind.dispatcher);
+            out.string("arg", &bind.arg);
+            out.end('}');
+        }
+        out.end(']');
+        return finish(out, flags);
+    }
+    let mut text = String::new();
+    for bind in binds {
+        let mut letters = String::from("bind");
+        for (on, letter) in [
+            (bind.locked, 'l'),
+            (bind.mouse, 'm'),
+            (bind.release, 'r'),
+            (bind.repeat, 'e'),
+            (bind.non_consuming, 'n'),
+            (bind.has_description, 'd'),
+        ] {
+            if on {
+                letters.push(letter);
+            }
+        }
+        let _ = writeln!(
+            text,
+            "{letters}\n\tmodmask: {}\n\tsubmap: {}\n\tkey: {}\n\tkeycode: {}\n\tcatchall: \
+             {}\n\tdescription: {}\n\tdispatcher: {}\n\targ: {}\n",
+            bind.modmask,
+            bind.submap,
+            bind.key,
+            bind.keycode,
+            bind.catch_all,
+            bind.description,
+            bind.dispatcher,
+            bind.arg,
+        );
+    }
+    text
+}
+
+/// `hyprctl devices`, in Hyprland's own shape.
+///
+/// The five groups it prints, in its order. What this compositor has no
+/// notion of -- a pointer's acceleration, a tablet's physical size -- is
+/// left out of the readable form and given its zero in the JSON, because a
+/// bar reading a field that is always missing is worse than one reading a
+/// field that is always zero.
+fn devices(flags: Flags, devices: &Devices) -> String {
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.object();
+        out.array_field("mice");
+        for mouse in &devices.mice {
+            out.object();
+            out.string("address", &format!("0x{:x}", mouse.address));
+            out.string("name", &mouse.name);
+            out.end('}');
+        }
+        out.end(']');
+        out.array_field("keyboards");
+        for keyboard in &devices.keyboards {
+            out.object();
+            out.string("address", &format!("0x{:x}", keyboard.device.address));
+            out.string("name", &keyboard.device.name);
+            out.string("rules", &keyboard.rules);
+            out.string("model", &keyboard.model);
+            out.string("layout", &keyboard.layout);
+            out.string("variant", &keyboard.variant);
+            out.string("options", &keyboard.options);
+            out.number(
+                "active_layout_index",
+                i64::from(keyboard.active_layout_index),
+            );
+            out.string("active_keymap", &keyboard.active_keymap);
+            out.boolean("capsLock", keyboard.caps_lock);
+            out.boolean("numLock", keyboard.num_lock);
+            out.boolean("main", keyboard.main);
+            out.end('}');
+        }
+        out.end(']');
+        for (name, group) in [
+            ("tablets", &devices.tablets),
+            ("touch", &devices.touch),
+            ("switches", &devices.switches),
+        ] {
+            out.array_field(name);
+            for device in group {
+                out.object();
+                out.string("address", &format!("0x{:x}", device.address));
+                out.string("name", &device.name);
+                out.end('}');
+            }
+            out.end(']');
+        }
+        out.end('}');
+        return finish(out, flags);
+    }
+    let mut text = String::from("mice:\n");
+    for mouse in &devices.mice {
+        let _ = writeln!(text, "\tMouse at {:x}:\n\t\t{}", mouse.address, mouse.name);
+    }
+    let _ = write!(text, "\n\nKeyboards:\n");
+    for keyboard in &devices.keyboards {
+        let _ = writeln!(
+            text,
+            "\tKeyboard at {:x}:\n\t\t{}\n\t\t\trules: r \"{}\", m \"{}\", l \"{}\", v \"{}\", o \
+             \"{}\"\n\t\t\tactive layout index: {}\n\t\t\tactive keymap: \
+             {}\n\t\t\tcapsLock: {}\n\t\t\tnumLock: {}\n\t\t\tmain: {}",
+            keyboard.device.address,
+            keyboard.device.name,
+            keyboard.rules,
+            keyboard.model,
+            keyboard.layout,
+            keyboard.variant,
+            keyboard.options,
+            keyboard.active_layout_index,
+            keyboard.active_keymap,
+            yes_no(keyboard.caps_lock),
+            yes_no(keyboard.num_lock),
+            yes_no(keyboard.main),
+        );
+    }
+    for (heading, group, what) in [
+        ("Tablets", &devices.tablets, "Tablet"),
+        ("Touch", &devices.touch, "Touch Device"),
+        ("Switches", &devices.switches, "Switch Device"),
+    ] {
+        let _ = write!(text, "\n\n{heading}:\n");
+        for device in group {
+            let _ = writeln!(
+                text,
+                "\t{what} at {:x}:\n\t\t{}",
+                device.address, device.name
+            );
+        }
+    }
+    text
+}
+
+/// `hyprctl layers`: every layer surface, by monitor and then by level.
+fn layers(flags: Flags, snapshot: &Snapshot) -> String {
+    /// `zwlr_layer_shell_v1`'s four, in its order.
+    const LEVELS: [&str; 4] = ["background", "bottom", "top", "overlay"];
+    let monitors: Vec<&str> = snapshot
+        .monitors
+        .iter()
+        .map(|monitor| monitor.name.as_str())
+        .collect();
+    fn on<'a>(snapshot: &'a Snapshot, monitor: &'a str, level: u32) -> Vec<&'a Layer> {
+        snapshot
+            .layers
+            .iter()
+            .filter(|layer| layer.monitor == monitor && layer.level == level)
+            .collect()
+    }
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.object();
+        for monitor in &monitors {
+            out.object_field(monitor);
+            out.object_field("levels");
+            for level in 0..4u32 {
+                out.array_field(&level.to_string());
+                for layer in on(snapshot, monitor, level) {
+                    out.object();
+                    out.string("address", &format!("0x{:x}", layer.address));
+                    out.number("x", i64::from(layer.at.0));
+                    out.number("y", i64::from(layer.at.1));
+                    out.number("w", i64::from(layer.size.0));
+                    out.number("h", i64::from(layer.size.1));
+                    out.string("namespace", &layer.namespace);
+                    out.number("pid", i64::from(layer.pid));
+                    out.end('}');
+                }
+                out.end(']');
+            }
+            out.end('}');
+            out.end('}');
+        }
+        out.end('}');
+        return finish(out, flags);
+    }
+    let mut text = String::new();
+    for monitor in &monitors {
+        let _ = writeln!(text, "Monitor {monitor}:");
+        for (level, name) in LEVELS.iter().enumerate() {
+            let level = u32::try_from(level).unwrap_or(0);
+            let _ = writeln!(text, "\tLayer level {level} ({name}):");
+            for layer in on(snapshot, monitor, level) {
+                let _ = writeln!(
+                    text,
+                    "\t\tLayer {:x}: xywh: {} {} {} {}, namespace: {}, pid: {}",
+                    layer.address,
+                    layer.at.0,
+                    layer.at.1,
+                    layer.size.0,
+                    layer.size.1,
+                    layer.namespace,
+                    layer.pid,
+                );
+            }
+        }
+        let _ = write!(text, "\n\n");
+    }
+    text
+}
+
+/// `hyprctl cursorpos`: where the pointer is.
+fn cursor_position(flags: Flags, at: (i32, i32)) -> String {
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.object();
+        out.number("x", i64::from(at.0));
+        out.number("y", i64::from(at.1));
+        out.end('}');
+        return finish(out, flags);
+    }
+    format!("{}, {}\n", at.0, at.1)
+}
+
+/// `yes` or `no`, which is what the readable form prints for a flag.
+const fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }
 
 /// `hyprctl plugin list`, in Hyprland's own shape.

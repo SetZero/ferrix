@@ -92,8 +92,10 @@ names the part of Hyprland or hyprlang it follows.
   hands the server as much as makes messages.
 * **`ipc`** is `hyprctl`'s request shape and its answers: the flags a request
   carries, `[[BATCH]]`, and the JSON and readable forms of `version`,
-  `monitors`, `workspaces`, `clients`, `activewindow` and `activeworkspace`,
-  with Hyprland 0.56.2's own field names in its own order. `dispatch`,
+  `monitors`, `workspaces`, `clients`, `activewindow`, `activeworkspace`,
+  `submap`, `binds`, `devices`, `layers`, `cursorpos`, `locked`,
+  `workspacerules` and `globalshortcuts`, with Hyprland 0.56.2's own field
+  names in its own order. `dispatch`,
   `keyword` and `reload` come back for the compositor to run, since this
   crate holds no compositor. It holds no socket either, so the answers are
   host-tested; a JSON parser in the tests is what says an answer is JSON

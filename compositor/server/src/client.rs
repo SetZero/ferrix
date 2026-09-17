@@ -12,6 +12,9 @@ use compositor_protocol::foreign_toplevel::{
 };
 use compositor_protocol::layer_shell::{self, zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use compositor_protocol::screencopy::{self, zwlr_screencopy_frame_v1, zwlr_screencopy_manager_v1};
+use compositor_protocol::xdg_decoration::{
+    self, zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
+};
 use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
 use compositor_wire::{
     Arg, ArgType, Error as WireError, Fd, Fixed, ObjectError, ObjectId, Objects, Reader, Writer,
@@ -1240,6 +1243,8 @@ impl Client {
             Role::XdgWmBase => self.xdg_wm_base(version, opcode, args),
             Role::XdgSurface => self.xdg_surface_request(sender, version, opcode, args),
             Role::XdgToplevel => self.xdg_toplevel_request(sender, opcode, args),
+            Role::DecorationManager => self.decoration_manager(version, opcode, args),
+            Role::ToplevelDecoration => self.toplevel_decoration(sender, opcode, args),
             Role::ScreencopyManager => self.screencopy_manager(version, opcode, args),
             Role::ScreencopyFrame => self.screencopy_frame(sender, opcode, args),
             Role::ForeignToplevelManager => self.toplevel_manager(sender, opcode),
@@ -2045,6 +2050,83 @@ impl Client {
             }
             _ => {}
         }
+    }
+
+    /// `zxdg_decoration_manager_v1`: `get_toplevel_decoration`.
+    ///
+    /// A tiling compositor draws the border and the client draws nothing, so
+    /// the answer is always `server_side` and it is sent at once rather than
+    /// waited for: the protocol says a compositor may configure a decoration
+    /// as soon as it is made, and a client that asked for `client_side` and
+    /// is told `server_side` draws no title bar, which is the point of
+    /// offering this at all.
+    ///
+    /// Offering it matters more than it looks. A toolkit that finds no
+    /// `zxdg_decoration_manager_v1` assumes client-side decorations and
+    /// draws a title bar, a shadow and a resize border into its own surface
+    /// -- inside the rectangle the tiling gave it.
+    fn decoration_manager(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != zxdg_decoration_manager_v1::request::GET_TOPLEVEL_DECORATION {
+            return;
+        }
+        let (Some(id), Some(toplevel)) = (
+            args.first().and_then(Arg::as_object),
+            args.get(1).and_then(Arg::as_object),
+        ) else {
+            return;
+        };
+        if !self.toplevels.contains_key(&toplevel) {
+            self.fail(Fatal::WrongInterface {
+                object: toplevel,
+                wanted: "xdg_toplevel",
+            });
+            return;
+        }
+        if !self.make(
+            id,
+            &xdg_decoration::ZXDG_TOPLEVEL_DECORATION_V1,
+            version,
+            Role::ToplevelDecoration,
+        ) {
+            return;
+        }
+        self.configure_decoration(id);
+    }
+
+    /// `zxdg_toplevel_decoration_v1`: `set_mode` and `unset_mode`.
+    ///
+    /// Both are answered the same way, because the answer does not depend on
+    /// what was asked: this compositor draws the decorations.
+    fn toplevel_decoration(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        use zxdg_toplevel_decoration_v1::request;
+        match opcode {
+            request::SET_MODE => {
+                let mode = args.first().and_then(Arg::as_uint).unwrap_or(0);
+                if mode != zxdg_toplevel_decoration_v1::mode::CLIENT_SIDE
+                    && mode != zxdg_toplevel_decoration_v1::mode::SERVER_SIDE
+                {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: zxdg_toplevel_decoration_v1::error::INVALID_MODE,
+                        text: format!("{mode} is not a decoration mode"),
+                    });
+                    return;
+                }
+                self.configure_decoration(sender);
+            }
+            request::UNSET_MODE => self.configure_decoration(sender),
+            _ => {}
+        }
+    }
+
+    /// Tell a decoration it is the compositor's to draw.
+    fn configure_decoration(&mut self, decoration: ObjectId) {
+        let _ = self.out.write(
+            decoration,
+            zxdg_toplevel_decoration_v1::event::CONFIGURE,
+            &[ArgType::Uint],
+            &[Arg::Uint(zxdg_toplevel_decoration_v1::mode::SERVER_SIDE)],
+        );
     }
 
     /// `zwlr_screencopy_manager_v1`: `capture_output` and

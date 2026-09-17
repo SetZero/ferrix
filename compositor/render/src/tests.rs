@@ -5,8 +5,8 @@ use compositor_layout::{Monitor, MonitorId, MonitorLayout, Placed, Settings, Sta
 
 use crate::golden::{self, Mismatch};
 use crate::{
-    Canvas, Color, Damage, Error, Format, Pattern, Rect, Style, Surface, Target, damage_between,
-    outer, render,
+    Canvas, Color, Damage, Error, Format, LayerFrame, Pattern, Rect, Style, Styles, Surface,
+    Target, damage_between, outer, render, render_with_layers,
 };
 
 const BG: u32 = 0x0020_4060;
@@ -380,11 +380,11 @@ fn ruled_frame() -> Vec<u8> {
     let style = Style::default();
     let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
     let full = Damage::full(WIDTH, HEIGHT);
-    let produced = crate::render_with_layers(
+    let produced = render_with_layers(
         &mut canvas,
         &layout,
         (0, 0),
-        &crate::Styles {
+        &Styles {
             base: &style,
             windows: &windows,
         },
@@ -469,7 +469,7 @@ fn a_window_a_rule_styled_is_drawn_with_it() {
             base: &style,
             windows,
         };
-        let _ = crate::render_with_layers(
+        let _ = render_with_layers(
             &mut canvas,
             &layout,
             (0, 0),
@@ -587,16 +587,16 @@ fn bar_and_two_clients_frame() -> Vec<u8> {
 
     let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
     let full = Damage::full(WIDTH, HEIGHT);
-    let layers = [crate::LayerFrame {
+    let layers = [LayerFrame {
         rect: bar.rect,
         above: true,
         surface: Some(bar_surface),
     }];
-    let produced = crate::render_with_layers(
+    let produced = render_with_layers(
         &mut canvas,
         &layout,
         (0, 0),
-        &crate::Styles::plain(&Style::default()),
+        &Styles::plain(&Style::default()),
         &surfaces(&buffers),
         &layers,
         &full,

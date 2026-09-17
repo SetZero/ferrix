@@ -110,6 +110,128 @@ pub struct Snapshot {
     /// The submap in force, empty for the global map, which is what
     /// `hyprctl submap` prints and what the `submap` event carries.
     pub submap: String,
+    /// Every key binding, in the order the configuration wrote them.
+    pub binds: Vec<Bind>,
+    /// The input devices, which `hyprctl devices` prints.
+    pub devices: Devices,
+    /// Every layer surface, which `hyprctl layers` prints by monitor and
+    /// level.
+    pub layers: Vec<Layer>,
+    /// Where the pointer is, in the space all monitors share.
+    pub cursor: (i32, i32),
+    /// Whether a session lock is up.
+    pub locked: bool,
+}
+
+/// One key binding, with the fields `hyprctl binds` prints.
+///
+/// The names are Hyprland's JSON keys, which is what a script reads.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Bind {
+    /// `l`: works while the session is locked.
+    pub locked: bool,
+    /// `m`: a mouse binding.
+    pub mouse: bool,
+    /// `r`: fires on release.
+    pub release: bool,
+    /// `e`: repeats while held.
+    pub repeat: bool,
+    /// `o`: fires on a long press.
+    pub long_press: bool,
+    /// `n`: the key still reaches the focused client.
+    pub non_consuming: bool,
+    /// `d`: a description was given.
+    pub has_description: bool,
+    /// The modifiers, as the bits a keymap gives.
+    pub modmask: u32,
+    /// The submap it is in, empty for the global map.
+    pub submap: String,
+    /// `u`: it fires in every submap.
+    pub submap_universal: bool,
+    /// The key as it was written.
+    pub key: String,
+    /// The keycode, for a `code:NN` binding; zero otherwise.
+    pub keycode: i32,
+    /// Whether it fires whatever modifiers are held, which is the `i` flag
+    /// and what Hyprland calls a catch-all.
+    pub catch_all: bool,
+    /// The description, empty unless one was given.
+    pub description: String,
+    /// The dispatcher's name.
+    pub dispatcher: String,
+    /// Its argument, as written.
+    pub arg: String,
+}
+
+/// The input devices, as `hyprctl devices` groups them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Devices {
+    /// Pointers.
+    pub mice: Vec<Device>,
+    /// Keyboards.
+    pub keyboards: Vec<Keyboard>,
+    /// Tablets, which this compositor reports as pointers of their own.
+    pub tablets: Vec<Device>,
+    /// Touchscreens.
+    pub touch: Vec<Device>,
+    /// Lid and tablet-mode switches.
+    pub switches: Vec<Device>,
+}
+
+/// One input device.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Device {
+    /// Hyprland prints the object's address; this is the node's number,
+    /// printed the same way, so that two devices are told apart.
+    pub address: u64,
+    /// What the device calls itself.
+    pub name: String,
+}
+
+/// One keyboard, which carries its keymap as well.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Keyboard {
+    /// The device.
+    pub device: Device,
+    /// The XKB rules, model, layout, variant and options.
+    pub rules: String,
+    /// The model.
+    pub model: String,
+    /// The layout.
+    pub layout: String,
+    /// The variant.
+    pub variant: String,
+    /// The options.
+    pub options: String,
+    /// Which layout is active.
+    pub active_layout_index: i32,
+    /// What that layout is called.
+    pub active_keymap: String,
+    /// Whether Caps Lock is on.
+    pub caps_lock: bool,
+    /// Whether Num Lock is on.
+    pub num_lock: bool,
+    /// Whether it is the seat's main keyboard.
+    pub main: bool,
+}
+
+/// One layer surface: a bar, a wallpaper, a launcher.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Layer {
+    /// The monitor it is on, by name.
+    pub monitor: String,
+    /// Which of `zwlr_layer_shell_v1`'s four levels it is on.
+    pub level: u32,
+    /// Hyprland prints an address; this is the compositor's own handle.
+    pub address: u64,
+    /// Its top-left, in the space all monitors share.
+    pub at: (i32, i32),
+    /// Its size.
+    pub size: (i32, i32),
+    /// The namespace it was made with, which is what a rule matches on.
+    pub namespace: String,
+    /// The process, when the compositor started it; zero otherwise.
+    pub pid: i32,
 }
 
 /// One plugin, as `hyprctl plugin list` prints it.

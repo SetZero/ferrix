@@ -200,12 +200,154 @@ pub fn snapshot(
     state: &State,
     clients: &[crate::state::Slot],
     sources: &BTreeMap<WindowId, Source>,
-    plugins: &crate::plugins::Plugins,
-    submap: &str,
+    reported: &Reported<'_>,
 ) -> Snapshot {
-    let mut snapshot = describe_all(state, clients, sources, submap);
-    snapshot.plugins = plugins.listed();
+    let mut snapshot = describe_all(state, clients, sources, reported.submap);
+    snapshot.plugins = reported.plugins.listed();
+    snapshot.binds = reported.binds.iter().map(described_bind).collect();
+    snapshot.devices = described_devices(reported.devices);
+    snapshot.layers = described_layers(state, clients, reported.layers);
+    snapshot.cursor = reported.cursor;
+    snapshot.locked = reported.locked;
     snapshot
+}
+
+/// What `hyprctl` answers about that the layout does not know.
+///
+/// The seat, the configuration and the input devices, gathered into one
+/// value because they are read together and only by [`snapshot`]: a bar
+/// reading `zwlr_foreign_toplevel_management_v1` wants none of them, and
+/// `describe_all` is what answers that.
+#[derive(Clone, Copy, Debug)]
+pub struct Reported<'a> {
+    /// The submap in force, empty for the global map.
+    pub submap: &'a str,
+    /// Every bind the configuration holds, in the order it wrote them.
+    pub binds: &'a [compositor_config::Bind],
+    /// The input devices the seat reads.
+    pub devices: &'a crate::devices::Devices,
+    /// Where each layer surface was placed this pass.
+    pub layers: &'a [crate::frame::Placed],
+    /// The plugins that are loaded.
+    pub plugins: &'a crate::plugins::Plugins,
+    /// Where the pointer is.
+    pub cursor: (i32, i32),
+    /// Whether a session lock is up, which this compositor has no protocol
+    /// for and so never is.
+    pub locked: bool,
+}
+
+/// One bind, as `hyprctl binds` prints it.
+///
+/// The configuration's own value: Hyprland lists what it parsed rather than
+/// what the seat resolved, so a bind naming a key this keymap does not have
+/// is still listed -- which is what makes the list worth reading when a
+/// bind is not firing.
+fn described_bind(bind: &compositor_config::Bind) -> compositor_ipc::Bind {
+    compositor_ipc::Bind {
+        locked: bind.flags.locked,
+        mouse: bind.flags.mouse,
+        release: bind.flags.release,
+        repeat: bind.flags.repeat,
+        long_press: bind.flags.long_press,
+        non_consuming: bind.flags.non_consuming,
+        has_description: bind.flags.description,
+        modmask: bind.mods.0,
+        submap: bind.submap.clone().unwrap_or_default(),
+        submap_universal: bind.flags.submap_universal,
+        key: bind.key.to_string(),
+        keycode: match bind.key {
+            compositor_config::Key::Code(code) => i32::try_from(code).unwrap_or(0),
+            _ => 0,
+        },
+        catch_all: bind.flags.ignore_mods,
+        description: bind.description.clone(),
+        dispatcher: bind.dispatcher.clone(),
+        arg: bind.arg.clone(),
+    }
+}
+
+/// The input devices, in the groups `hyprctl devices` prints.
+fn described_devices(devices: &crate::devices::Devices) -> compositor_ipc::Devices {
+    let mut out = compositor_ipc::Devices::default();
+    for (address, name, keyboard) in devices.listed() {
+        let device = compositor_ipc::Device { address, name };
+        if keyboard {
+            out.keyboards.push(compositor_ipc::Keyboard {
+                device,
+                // What `compositor/xkb` is: one built-in keymap, and the
+                // names the compositor would pass `xkb_keymap_new_from_names`
+                // if it had libxkbcommon to pass them to.
+                rules: "evdev".to_owned(),
+                model: "pc105".to_owned(),
+                layout: "us".to_owned(),
+                variant: String::new(),
+                options: String::new(),
+                active_layout_index: 0,
+                active_keymap: "English (US)".to_owned(),
+                caps_lock: false,
+                num_lock: false,
+                main: out.keyboards.is_empty(),
+            });
+        } else {
+            out.mice.push(device);
+        }
+    }
+    out
+}
+
+/// Every layer surface, with the monitor and the level `hyprctl layers`
+/// groups them by.
+fn described_layers(
+    state: &State,
+    clients: &[crate::state::Slot],
+    placed: &[crate::frame::Placed],
+) -> Vec<compositor_ipc::Layer> {
+    let mut out = Vec::new();
+    for (index, slot) in clients.iter().enumerate() {
+        for (id, surface) in slot.client().layer_surfaces() {
+            let Some(at) = placed
+                .iter()
+                .find(|placed| placed.client == index && placed.surface == surface.surface)
+            else {
+                continue;
+            };
+            // Which monitor it landed on: the one whose rectangle holds its
+            // top-left, since a layer surface is placed inside one monitor.
+            let monitor = state
+                .monitors()
+                .find(|monitor| {
+                    monitor.rect.x <= at.rect.x
+                        && at.rect.x < monitor.rect.x.saturating_add(monitor.rect.width)
+                })
+                .map(|monitor| monitor.name.clone())
+                .unwrap_or_default();
+            out.push(compositor_ipc::Layer {
+                monitor,
+                level: match surface.layer {
+                    compositor_server::Layer::Background => 0,
+                    compositor_server::Layer::Bottom => 1,
+                    compositor_server::Layer::Top => 2,
+                    compositor_server::Layer::Overlay => 3,
+                },
+                // Hyprland prints the object's address; this is the
+                // connection and the object, which is as unique and as
+                // opaque.
+                address: (u64::try_from(index).unwrap_or(0) << 32) | u64::from(id.0),
+                at: (
+                    i32::try_from(at.rect.x).unwrap_or(0),
+                    i32::try_from(at.rect.y).unwrap_or(0),
+                ),
+                size: (
+                    i32::try_from(at.rect.width).unwrap_or(0),
+                    i32::try_from(at.rect.height).unwrap_or(0),
+                ),
+                namespace: surface.namespace.clone(),
+                pid: 0,
+            });
+        }
+    }
+    out
 }
 
 /// The same, without the plugins.

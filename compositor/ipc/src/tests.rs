@@ -9,7 +9,7 @@
 use crate::json::Json;
 use crate::reply::{Reply, Version, answer};
 use crate::request::{Flags, Format, Request};
-use crate::state::{Monitor, Snapshot, Window, Workspace};
+use crate::state::{Bind, Device, Devices, Keyboard, Layer, Monitor, Snapshot, Window, Workspace};
 
 /// A small parser, so a test can say "this answer is JSON" and look inside
 /// it without the compositor taking a JSON crate.
@@ -312,6 +312,45 @@ fn snapshot() -> Snapshot {
         active_window: Some(1),
         active_workspace: 1,
         submap: String::new(),
+        // One of each of the things a bar reads that is not a window, so
+        // that every answer this crate writes has something in it.
+        binds: vec![Bind {
+            release: true,
+            modmask: 64,
+            submap: "resize".to_owned(),
+            submap_universal: true,
+            key: "Q".to_owned(),
+            dispatcher: "killactive".to_owned(),
+            ..Bind::default()
+        }],
+        devices: Devices {
+            mice: vec![Device {
+                address: 1,
+                name: "QEMU Virtio Tablet".to_owned(),
+            }],
+            keyboards: vec![Keyboard {
+                device: Device {
+                    address: 0,
+                    name: "QEMU Virtio Keyboard".to_owned(),
+                },
+                layout: "us".to_owned(),
+                active_keymap: "English (US)".to_owned(),
+                main: true,
+                ..Keyboard::default()
+            }],
+            ..Devices::default()
+        },
+        layers: vec![Layer {
+            monitor: "HEADLESS-1".to_owned(),
+            level: 2,
+            address: 7,
+            at: (0, 0),
+            size: (1024, 32),
+            namespace: "bar".to_owned(),
+            pid: 0,
+        }],
+        cursor: (512, 384),
+        locked: false,
     }
 }
 
@@ -553,6 +592,114 @@ fn monitors_and_workspaces_carry_what_a_bar_reads() {
     assert_eq!(value.get("id").and_then(parse::Value::number), Some(1.0));
 }
 
+/// What a bar and a script read that is not a window: the bindings, the
+/// input devices, the layer surfaces, the pointer and the lock.
+///
+/// Each field name is Hyprland's, because a script reads them by name and a
+/// close-enough name is a script that prints nothing.
+#[test]
+fn the_rest_of_what_hyprctl_answers_carries_hyprlands_own_fields() {
+    let ask = |line: &str| text(line);
+
+    // `binds`: the letters after `bind` are the flags, and the fields are
+    // Hyprland's own.
+    let readable = ask("binds");
+    assert!(
+        readable.starts_with(
+            "bindr
+"
+        ),
+        "{readable}"
+    );
+    for wanted in [
+        "	modmask: 64",
+        "	submap: resize",
+        "	key: Q",
+        "	dispatcher: killactive",
+    ] {
+        assert!(readable.contains(wanted), "binds: {readable}");
+    }
+    let json = parse::parse(&ask("j/binds")).expect("binds is json");
+    let first = &json.items()[0];
+    assert_eq!(first.get("key").and_then(parse::Value::text), Some("Q"));
+    assert_eq!(
+        first.get("modmask").and_then(parse::Value::number),
+        Some(64.0)
+    );
+    assert_eq!(
+        first.get("submap").and_then(parse::Value::text),
+        Some("resize")
+    );
+    assert_eq!(
+        first.get("release").and_then(parse::Value::boolean),
+        Some(true)
+    );
+    assert_eq!(
+        first.get("mouse").and_then(parse::Value::boolean),
+        Some(false)
+    );
+
+    // `devices`: the five groups, in Hyprland's order and under its names.
+    let json = parse::parse(&ask("j/devices")).expect("devices is json");
+    for group in ["mice", "keyboards", "tablets", "touch", "switches"] {
+        assert!(json.get(group).is_some(), "devices has no {group}");
+    }
+    let keyboard = &json.get("keyboards").expect("keyboards").items()[0];
+    assert_eq!(
+        keyboard.get("name").and_then(parse::Value::text),
+        Some("QEMU Virtio Keyboard")
+    );
+    assert_eq!(
+        keyboard.get("layout").and_then(parse::Value::text),
+        Some("us")
+    );
+    assert_eq!(
+        keyboard.get("main").and_then(parse::Value::boolean),
+        Some(true)
+    );
+    let readable = ask("devices");
+    assert!(
+        readable.starts_with(
+            "mice:
+"
+        ),
+        "{readable}"
+    );
+    assert!(readable.contains("Keyboards:"), "{readable}");
+    assert!(readable.contains("			main: yes"), "{readable}");
+
+    // `layers`: by monitor, then by level, which is how a bar finds its own.
+    let json = parse::parse(&ask("j/layers")).expect("layers is json");
+    let levels = json
+        .get("HEADLESS-1")
+        .and_then(|monitor| monitor.get("levels"))
+        .expect("the monitor's levels");
+    assert_eq!(levels.get("0").map(|level| level.items().len()), Some(0));
+    let top = &levels.get("2").expect("the top level").items()[0];
+    assert_eq!(
+        top.get("namespace").and_then(parse::Value::text),
+        Some("bar")
+    );
+    assert_eq!(top.get("h").and_then(parse::Value::number), Some(32.0));
+    let readable = ask("layers");
+    assert!(readable.contains("Monitor HEADLESS-1:"), "{readable}");
+    assert!(readable.contains("	Layer level 2 (top):"), "{readable}");
+    assert!(readable.contains("namespace: bar"), "{readable}");
+
+    // `cursorpos` and `locked`, which a script asks for on one line.
+    assert_eq!(ask("cursorpos"), "512, 384\n");
+    let json = parse::parse(&ask("j/cursorpos")).expect("cursorpos is json");
+    assert_eq!(json.get("x").and_then(parse::Value::number), Some(512.0));
+    assert_eq!(ask("locked"), "false\n");
+
+    // And the two that have nothing to list are empty rather than unknown.
+    for command in ["workspacerules", "globalshortcuts"] {
+        let json = parse::parse(&ask(&format!("j/{command}")))
+            .unwrap_or_else(|error| panic!("{command}: {error}"));
+        assert_eq!(json.items().len(), 0, "{command} listed something");
+    }
+}
+
 /// `submapRequest`: the name on a line, `default` for the global map, and a
 /// bare JSON string rather than an object.
 #[test]
@@ -664,6 +811,12 @@ fn every_answer_this_crate_writes_is_json_when_json_was_asked_for() {
         "clients",
         "activewindow",
         "activeworkspace",
+        "binds",
+        "devices",
+        "layers",
+        "cursorpos",
+        "locked",
+        "submap",
     ] {
         for flags in ["j", "jr", "ja"] {
             let line = format!("{flags}/{command}");
@@ -902,6 +1055,45 @@ fn watched(windows: &[Window], active: Option<u64>) -> Snapshot {
         active_window: active,
         active_workspace: 1,
         submap: String::new(),
+        // One of each of the things a bar reads that is not a window, so
+        // that every answer this crate writes has something in it.
+        binds: vec![Bind {
+            release: true,
+            modmask: 64,
+            submap: "resize".to_owned(),
+            submap_universal: true,
+            key: "Q".to_owned(),
+            dispatcher: "killactive".to_owned(),
+            ..Bind::default()
+        }],
+        devices: Devices {
+            mice: vec![Device {
+                address: 1,
+                name: "QEMU Virtio Tablet".to_owned(),
+            }],
+            keyboards: vec![Keyboard {
+                device: Device {
+                    address: 0,
+                    name: "QEMU Virtio Keyboard".to_owned(),
+                },
+                layout: "us".to_owned(),
+                active_keymap: "English (US)".to_owned(),
+                main: true,
+                ..Keyboard::default()
+            }],
+            ..Devices::default()
+        },
+        layers: vec![Layer {
+            monitor: "HEADLESS-1".to_owned(),
+            level: 2,
+            address: 7,
+            at: (0, 0),
+            size: (1024, 32),
+            namespace: "bar".to_owned(),
+            pid: 0,
+        }],
+        cursor: (512, 384),
+        locked: false,
     }
 }
 

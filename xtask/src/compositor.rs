@@ -542,7 +542,21 @@ const BAR_CONFIG: &str = "\
 exec-once = /bin/pattern checkerboard bar --bar 30
 exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
+bind = , A, exec, /bin/hyprctl --batch binds ; devices ; layers ; cursorpos ; locked
 ";
+
+/// The keys the bar boot presses: one, which asks for everything `hyprctl`
+/// answers about that is not a window.
+///
+/// No modifier, for the reason `TASKBAR_BINDS` gives.
+const BAR_BINDS: [(&str, &[&str]); 1] = [(
+    "A, which asks hyprctl for the binds, the devices and the layers",
+    &["a"],
+)];
+
+/// The bar boot's two pictures, which are the same one: asking `hyprctl`
+/// about the compositor must change nothing on the screen.
+const BAR_PICTURES: [(&str, &str); 2] = [BAR_EXPECTED, BAR_EXPECTED];
 
 /// The configuration carried into the initramfs.
 ///
@@ -1211,16 +1225,74 @@ fn test_dispatchers(arch: Arch, programs: &Programs, args: &Args) -> Result<()> 
     Ok(())
 }
 
-/// The second boot: a bar through `zwlr_layer_shell_v1`.
+/// The second boot: a bar through `zwlr_layer_shell_v1`, and what
+/// `hyprctl` says about everything that is not a window.
+///
+/// The bar is here because this is the boot that has one: `hyprctl layers`
+/// is what a bar reads to find its own surface, and a compositor with no
+/// layer surface would answer it with an empty list whatever it did wrong.
+/// The binds, the devices, the pointer and the lock are asked for in the
+/// same batch, because each is one line and a boot is minutes.
 fn test_bar(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
-    one_picture(
+    let (screens, said) = boot_and_dump(
         arch,
         programs,
-        args,
-        "a bar reserved its strip and the windows tiled under it",
         BAR_CONFIG,
-        BAR_EXPECTED,
-    )
+        &Wanted {
+            states: &BAR_PICTURES,
+            others: &[],
+            moving: None,
+            awaiting: &["Layer level 2 (top)"],
+        },
+        &BAR_BINDS,
+        args,
+    )?;
+    let Some(screen) = screens.first() else {
+        return Err(Error::new(format!("{arch}: the bar boot took no picture")));
+    };
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    for wanted in [
+        // `binds`: the one this configuration has, with the letters and the
+        // fields Hyprland prints.
+        "\tdispatcher: exec",
+        "\tkey: A",
+        // `devices`: the two QEMU publishes, in their groups.
+        "Keyboards:",
+        "QEMU Virtio Keyboard",
+        "\t\t\tmain: yes",
+        // `layers`: the bar, on the level and under the namespace it asked
+        // for.
+        "Layer level 2 (top)",
+        "namespace: pattern-bar",
+        // `cursorpos`, which starts in the middle of the screen, and
+        // `locked`, which without a session lock protocol is never true.
+        "512, 384",
+        "false",
+    ] {
+        if !has(wanted) {
+            // The last of what the guest said, which is where the reason is:
+            // a batch that stopped at the first unknown request prints
+            // nothing after it.
+            let tail: Vec<&str> = said
+                .iter()
+                .rev()
+                .take(20)
+                .rev()
+                .map(|line| said_on_its_own(line))
+                .collect();
+            return Err(Error::new(format!(
+                "{arch}: `hyprctl` never said `{wanted}`; the guest's last lines:\n    {}",
+                tail.join("\n    ")
+            )));
+        }
+    }
+    println!(
+        "  {arch}: a bar reserved its strip and the windows tiled under it, every one of {} \
+         pixels, and `hyprctl` named its binds, its devices and the bar's own layer from inside \
+         the guest",
+        screen.width * screen.height
+    );
+    Ok(())
 }
 
 /// The third boot: Hyprland's two window decorations.
@@ -1793,6 +1865,12 @@ fn the_sockets_said(arch: Arch, said: &[String]) -> Result<()> {
         "title: one",
         "title: two",
         "class: rocks.magical.pattern",
+        // And both were told who draws their title bar, which is the only
+        // way to see it: a compositor that never answers and one that
+        // answers `server_side` look the same on the screen until a toolkit
+        // draws a title bar of its own.
+        "pattern: one decorations server_side",
+        "pattern: two decorations server_side",
         // The focused one, from `activewindow`, on the workspace it is on.
         "workspace: 1 (1)",
     ] {

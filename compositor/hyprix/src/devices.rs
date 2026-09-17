@@ -126,6 +126,33 @@ impl Devices {
             .collect()
     }
 
+    /// What each device is, for `hyprctl devices`: the node's number, its
+    /// name, and which of Hyprland's five groups it belongs in.
+    ///
+    /// The grouping is [`Self::capabilities`]'s, which is libinput's for a
+    /// device with no `INPUT_PROP_*` to go on: keys and no axes is a
+    /// keyboard, axes is a pointer. A tablet reports absolute axes and is a
+    /// pointer here, as it is everywhere else in this compositor -- Hyprland
+    /// has a group of its own for one because it drives a stylus, which
+    /// nothing here does.
+    #[must_use]
+    pub fn listed(&self) -> Vec<(u64, String, bool)> {
+        self.open
+            .iter()
+            .enumerate()
+            .map(|(at, open)| {
+                let description = open.device.description();
+                let axes =
+                    description.types.contains(&EV_REL) || description.types.contains(&EV_ABS);
+                (
+                    u64::try_from(at).unwrap_or(0),
+                    description.name.clone(),
+                    !axes && description.types.contains(&EV_KEY),
+                )
+            })
+            .collect()
+    }
+
     /// How many devices are open.
     #[must_use]
     pub fn len(&self) -> usize {

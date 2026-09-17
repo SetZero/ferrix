@@ -348,15 +348,23 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // window of every monitor -- so it is made only when there is a
         // plugin to answer.
         if !plugins.is_empty() {
-            let snapshot =
-                crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
+            let snapshot = crate::control::snapshot(
+                &state,
+                &slots,
+                &sources,
+                &as_reported(&config, &seat, &devices, &placed_layers, &plugins),
+            );
             asked.extend(plugins.poll(&snapshot));
         }
         if let Some(control) = control.as_ref()
             && let Some(mut stream) = control.accept()
         {
-            let snapshot =
-                crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
+            let snapshot = crate::control::snapshot(
+                &state,
+                &slots,
+                &sources,
+                &as_reported(&config, &seat, &devices, &placed_layers, &plugins),
+            );
             match crate::control::serve(&mut stream, &snapshot, &mut plugins) {
                 Ok(todo) => asked.extend(todo),
                 Err(_) => {
@@ -531,8 +539,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // different things.
         let watched = slots.iter().any(|slot| slot.client().watches_toplevels());
         if events.is_some() || !plugins.is_empty() || watched {
-            let snapshot =
-                crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
+            let snapshot = crate::control::snapshot(
+                &state,
+                &slots,
+                &sources,
+                &as_reported(&config, &seat, &devices, &placed_layers, &plugins),
+            );
             if let Some(socket) = events.as_mut() {
                 socket.publish(&snapshot);
             }
@@ -1434,6 +1446,32 @@ fn now_monotonic() -> (u64, u32) {
     (since.as_secs(), since.subsec_nanos())
 }
 
+/// Everything `hyprctl` answers about that the layout does not know.
+///
+/// Gathered here rather than at each call so that the three places that ask
+/// for a snapshot cannot disagree about what the seat and the configuration
+/// say.
+fn as_reported<'a>(
+    config: &'a Config,
+    seat: &'a Seat,
+    devices: &'a Devices,
+    layers: &'a [crate::frame::Placed],
+    plugins: &'a crate::plugins::Plugins,
+) -> crate::control::Reported<'a> {
+    let (x, y) = seat.pointer();
+    crate::control::Reported {
+        submap: seat.submap(),
+        binds: &config.binds,
+        devices,
+        layers,
+        plugins,
+        cursor: (x as i32, y as i32),
+        // There is no session lock protocol here yet, so nothing can be
+        // locked.
+        locked: false,
+    }
+}
+
 /// Where each slot will be once the ones that have gone are taken out.
 ///
 /// `None` for a slot that is going. The compositor holds a client by its
@@ -1726,6 +1764,14 @@ fn globals(outputs: usize) -> Globals {
         (&core::WL_SEAT, 7, Role::Seat),
         (&core::WL_DATA_DEVICE_MANAGER, 3, Role::DataDeviceManager),
         (&xdg_shell::XDG_WM_BASE, 6, Role::XdgWmBase),
+        // Who draws the title bar, which for a tiling compositor is always
+        // the compositor: a toolkit that finds no manager here assumes it is
+        // its own job and draws one inside the rectangle the tiling gave it.
+        (
+            &compositor_protocol::xdg_decoration::ZXDG_DECORATION_MANAGER_V1,
+            1,
+            Role::DecorationManager,
+        ),
         // The bars, wallpapers, launchers and notification daemons: every
         // one of them is a `zwlr_layer_shell_v1` client, and a compositor
         // that does not offer it is one a Hyprland setup does not start on.
